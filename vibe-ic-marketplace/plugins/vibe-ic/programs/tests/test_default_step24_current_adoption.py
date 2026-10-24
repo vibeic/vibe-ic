@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import _opensta_current as sta_current
 import em_current_density_check as emc
 import execution_adapters_backend as adapters
 import execution_backend_producers as backend
@@ -14,6 +15,7 @@ import phase3_one_shot_runner as runner
 import step_output_collector as versions
 from test_backend_input_contract_sdc import _project
 from test_pad_connected_pdn_ring import _pdk
+from test_d57_current_native_odb import _current_scene as _sta_scene, _record as _sta_record
 
 
 def _write(root, rel, text):
