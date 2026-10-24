@@ -30,8 +30,10 @@ def _ir(project, lib=None, scale=None):
 def _old_library():
     lib = copy.deepcopy(a2.LIBRARY["delta_sigma"])
     lib["spec_knobs"] = []
+    lib.pop("input_drain_cascodes", None)
     lib["loop_probe"]["follows_integrating"]["cc{i}"] = "miller_fraction_of_load"
     for group in lib["stage"]:
+        group.pop("input_drain_cascodes", None)
         for row in group.get("param_exprs", []):
             for key in ("expr", "ff_expr"):
                 if key in row:

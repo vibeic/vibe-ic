@@ -2414,7 +2414,17 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
         "spec_knobs": [{"name": "ota_compensation_scale",
                         "expr": "ota_compensation_scale", "default": 1.0,
                         "unit": "ratio",
-                        "rationale": "explicit OTA compensation sizing; scales only each integrator's Miller capacitor, with native stability and settling still required"}],
+                        "rationale": "explicit OTA compensation sizing; scales only each integrator's Miller capacitor, with native stability and settling still required"},
+                       {"name": "ota_input_drain_cascodes",
+                        "expr": "ota_input_drain_cascodes", "default": False,
+                        "type": "boolean",
+                        "rationale": "optional input-drain cascodes with a real resistive bias; explicit device sizing and native headroom, stability and settling remain required"}],
+        "input_drain_cascodes": {
+            "enable_knob": "ota_input_drain_cascodes",
+            "bias": {"net": "ncas_bias", "upper": "vdd", "lower": "vcm",
+                     "body": "vss", "top_device": "r_cas_top",
+                     "bottom_device": "r_cas_bottom"},
+        },
         "device_param_exprs": [
             {"device": "caz", "param": "l",
              "expr": cap_l_expr("autozero_over_sampling_cap * ("
@@ -2778,6 +2788,12 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # separating those two makes the parity a consequence instead of
             # an assumption.
             "feedback_selectors": {"neg": "", "pos": "b"},
+            "input_drain_cascodes": [
+                {"source": "mn_in{i}", "cascode": "mn_cas_in{i}",
+                 "midpoint": "ncas_mid_in{i}"},
+                {"source": "mn_ref{i}", "cascode": "mn_cas_ref{i}",
+                 "midpoint": "ncas_mid_ref{i}"},
+            ],
             "internal_nets": ["ntail{i}", "nd1_{i}", "nd2_{i}", "vsum{i}",
                               "nsmp{i}", "ndacs{i}",
                               # the SUMMING-NODE plate of each switched
@@ -5983,25 +5999,26 @@ def read_sizing_inputs(project: Path, block: str) -> Dict[str, Any]:
     return data
 
 
-def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
+def _positive_sizing_number(value: Any, label: str) -> float:
+    if (not isinstance(value, (int, float)) or isinstance(value, bool)
+            or not math.isfinite(value) or value <= 0):
+        raise SizingInputsInvalid(f"{label} must be a finite positive number")
+    return float(value)
+
+
+def _apply_sizing_knobs(sizing: Dict[str, Any], knobs: Dict[str, Any],
                         sources: Dict[str, str], defaulted: List[str],
-                        devices: List[Dict[str, Any]], exprs: List[Dict[str, Any]],
-                        minima: Dict[str, Any], maxima: Dict[str, Any]) -> None:
-    """Apply only declared free knobs and directly represented geometry.
-
-    Expression-owned geometry must be changed through its declared knob. This
-    avoids a direct override silently losing to A3's expression evaluation.
-    """
-    def positive(value: Any, label: str) -> float:
-        if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                or not math.isfinite(value) or value <= 0):
-            raise SizingInputsInvalid(f"{label} must be a finite positive number")
-        return float(value)
-
+                        declarations: Optional[List[Dict[str, Any]]] = None) -> None:
+    declared = {row["name"]: row for row in declarations or []}
     for name, value in sizing.get("knobs", {}).items():
         if name not in knobs:
             raise SizingInputsInvalid(f"unknown sizing knob {name!r}")
-        number = positive(value, f"knob {name}")
+        if declared.get(name, {}).get("type") == "boolean":
+            if not isinstance(value, bool):
+                raise SizingInputsInvalid(f"knob {name} must be a boolean")
+            number = value
+        else:
+            number = _positive_sizing_number(value, f"knob {name}")
         if sources.get(name) == "spec":
             if not math.isclose(number, float(knobs[name]), rel_tol=1e-12):
                 raise SizingInputsInvalid(f"knob {name} is bound by the source specification")
@@ -6010,6 +6027,109 @@ def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
         sources[name] = "explicit_design_sizing"
         if name in defaulted:
             defaulted.remove(name)
+
+
+def expand_input_drain_cascodes(lib: Dict[str, Any], spec_values: Dict[str, float],
+                               knobs: Dict[str, Any], devices: List[Dict[str, Any]],
+                               nets: List[str], sizing: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Expand only a declared, explicitly enabled drain-cascode topology.
+
+    MOS geometry starts with its source device and remains ordinary sizing.
+    The two physical resistor geometries must be supplied through that same
+    sizing input; this constructor supplies neither a voltage source nor a
+    case-specific bias/geometry default. Invalid enabled inputs stop A2.
+    """
+    declaration = lib.get("input_drain_cascodes")
+    if not declaration:
+        return None
+    if not isinstance(declaration, dict):
+        raise SizingInputsInvalid("invalid input-drain cascode declaration")
+    enable = declaration.get("enable_knob")
+    knob = next((row for row in lib.get("spec_knobs", [])
+                 if row.get("name") == enable), {})
+    if knob.get("type") != "boolean" or not isinstance(knobs.get(enable), bool):
+        raise SizingInputsInvalid("input-drain cascodes require a declared boolean enable knob")
+    if not knobs[enable]:
+        return None
+
+    def identifier(value: Any) -> str:
+        if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+            raise SizingInputsInvalid("invalid input-drain cascode identifier")
+        return value
+
+    bias = declaration.get("bias") or {}
+    required = {"net", "upper", "lower", "body", "top_device", "bottom_device"}
+    if not isinstance(bias, dict) or set(bias) != required:
+        raise SizingInputsInvalid("input-drain cascodes require two declared real bias resistors")
+    bias = {key: identifier(value) for key, value in bias.items()}
+    known_nets = {str(net).casefold() for net in list(lib.get("ports", [])) + nets}
+    if (bias["upper"].casefold() == bias["lower"].casefold()
+            or any(bias[key].casefold() not in known_nets for key in ("upper", "lower", "body"))):
+        raise SizingInputsInvalid("cascode bias endpoints must be distinct declared nets")
+    if bias["net"].casefold() in known_nets:
+        raise SizingInputsInvalid("cascode bias net collides with an existing net")
+    names = {str(device["name"]).casefold() for device in devices}
+    if len(names) != len(devices):
+        raise SizingInputsInvalid("cascode source devices have duplicate identities")
+    by_name = {str(device["name"]).casefold(): device for device in devices}
+    known_nets.add(bias["net"].casefold())
+    added, branches, selected = [], [], set()
+    for group in _stage_groups(lib):
+        for index in range(1, _group_count(group, spec_values) + 1):
+            for row in group.get("input_drain_cascodes", []):
+                if not isinstance(row, dict) or set(row) != {"source", "cascode", "midpoint"}:
+                    raise SizingInputsInvalid("invalid declared input-drain cascode branch")
+                try:
+                    branch = {key: identifier(value.format(i=index)) for key, value in row.items()}
+                except (AttributeError, KeyError, ValueError) as exc:
+                    raise SizingInputsInvalid("invalid input-drain cascode stage template") from exc
+                source = by_name.get(branch["source"].casefold())
+                if (source is None or source.get("role") != "nmos"
+                        or len(source.get("nets", [])) != ROLE_TERMINALS["nmos"]
+                        or branch["source"].casefold() in selected):
+                    raise SizingInputsInvalid("cascode target must identify one distinct four-terminal NMOS")
+                if branch["cascode"].casefold() in names or branch["midpoint"].casefold() in known_nets:
+                    raise SizingInputsInvalid("cascode device or midpoint collides with an existing identity")
+                names.add(branch["cascode"].casefold())
+                known_nets.add(branch["midpoint"].casefold())
+                selected.add(branch["source"].casefold())
+                original_drain, _gate, _source, bulk = source["nets"]
+                cascode = {key: source[key] for key in ("w", "l", "m", "ng") if key in source}
+                cascode.update(name=branch["cascode"], role="nmos",
+                    function="input-drain cascode for " + source["name"],
+                    nets=[original_drain, bias["net"], branch["midpoint"], bulk])
+                added.append(cascode)
+                branches.append(dict(branch, original_drain=original_drain, bulk=bulk))
+    if not branches:
+        raise SizingInputsInvalid("enabled input-drain cascodes declare no stage targets")
+    for key, endpoints in (("top_device", [bias["upper"], bias["net"], bias["body"]]),
+                           ("bottom_device", [bias["net"], bias["lower"], bias["body"]])):
+        name = bias[key]
+        if name.casefold() in names:
+            raise SizingInputsInvalid("cascode bias device collides with an existing identity")
+        geometry = sizing.get("device_parameters", {}).get(name, {})
+        if not isinstance(geometry, dict) or not {"w", "l"} <= set(geometry):
+            raise SizingInputsInvalid(name + ": real bias resistor requires explicit w/l sizing")
+        names.add(name.casefold())
+        added.append({"name": name, "role": "res", "function": "real cascode bias divider",
+                      "nets": endpoints, "w": None, "l": None})
+    # No partial mutation on a malformed declaration or missing bias sizing.
+    for branch in branches:
+        by_name[branch["source"].casefold()]["nets"] = [branch["midpoint"]] + list(
+            by_name[branch["source"].casefold()]["nets"][1:])
+    devices.extend(added)
+    nets.extend([bias["net"]] + [row["midpoint"] for row in branches])
+    return {"enable_knob": enable, "bias": bias, "branches": branches,
+            "geometry_source": "ordinary device_parameters; MOS starts with source geometry"}
+
+
+def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
+                        sources: Dict[str, str], defaulted: List[str],
+                        devices: List[Dict[str, Any]], exprs: List[Dict[str, Any]],
+                        minima: Dict[str, Any], maxima: Dict[str, Any],
+                        knob_declarations: Optional[List[Dict[str, Any]]] = None) -> None:
+    """Apply declared free knobs and geometry; expression-owned values refuse."""
+    _apply_sizing_knobs(sizing, knobs, sources, defaulted, knob_declarations)
     by_name = {d["name"]: d for d in devices}
     expression_owned = {(e.get("device"), e.get("param")) for e in exprs}
     for name, parameters in sizing.get("device_parameters", {}).items():
@@ -6024,7 +6144,7 @@ def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
                 raise SizingInputsInvalid(f"{name}.ng is valid only for MOS devices")
             if (name, parameter) in expression_owned:
                 raise SizingInputsInvalid(f"{name}.{parameter} is expression-owned; change its declared sizing knob")
-            number = positive(value, f"{name}.{parameter}")
+            number = _positive_sizing_number(value, f"{name}.{parameter}")
             if parameter in ("m", "ng") and number != int(number):
                 raise SizingInputsInvalid(f"{name}.{parameter} must be an integer")
             normalized[parameter] = int(number) if parameter == "ng" else number
@@ -6037,7 +6157,7 @@ def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
         if "ng" in normalized:
             dimensions.add("w")
         for parameter in dimensions:
-            number = positive(candidate.get(parameter), f"{name}.{parameter}")
+            number = _positive_sizing_number(candidate.get(parameter), f"{name}.{parameter}")
             # Width is the total across fingers, whereas native PCell width
             # bounds describe one finger. Multiplicity remains independent.
             if parameter == "w":
@@ -6051,6 +6171,84 @@ def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
                 if high is not None and number > float(high):
                     raise SizingInputsInvalid(f"{name}.{parameter}={number}um exceeds PDK maximum {high}um")
         device.update(normalized)
+
+
+def input_drain_cascode_problems(ir: Dict[str, Any], project: Optional[Path]) -> List[str]:
+    """Reconstruct an enabled option's actual graph at the A3/read boundary.
+
+    An informational expansion record cannot stand in for devices. Legacy
+    typed designs with no enabled option/record retain their existing path;
+    this check neither regenerates them nor credits library-emission history.
+    """
+    try:
+        lib = LIBRARY.get(_canonical_type(ir.get("block_type"))) or {}
+        declaration = lib.get("input_drain_cascodes") or {}
+        enabled_names = {row["input_drain_cascodes"]["enable_knob"]
+            for row in LIBRARY.values() if isinstance(row.get("input_drain_cascodes"), dict)}
+        knobs = ir.get("knobs") or {}
+        record = ir.get("input_drain_cascodes")
+        if not declaration:
+            if record or any(knobs.get(name) is True for name in enabled_names):
+                raise SizingInputsInvalid("input-drain cascodes are not declared for this topology")
+            return []
+        enable = declaration["enable_knob"]
+        value = knobs.get(enable, False)
+        if not isinstance(value, bool):
+            raise SizingInputsInvalid("input-drain cascode enable must be a boolean")
+        sizing = read_sizing_inputs(Path(project), ir["block"]) if project is not None else {}
+        if enable in sizing.get("knobs", {}):
+            requested = sizing["knobs"][enable]
+            if not isinstance(requested, bool) or requested != value:
+                raise SizingInputsInvalid("cascode enable disagrees with ordinary sizing")
+        if not value:
+            if record:
+                raise SizingInputsInvalid("disabled input-drain cascodes carry an enabled expansion record")
+            return []
+        if project is None:
+            raise SizingInputsInvalid("enabled input-drain cascodes require current project sizing and specification")
+        project = Path(project)
+        values, _ = bound_spec_values(project, ir["block"])
+        expected, nets, _exprs, _stages = expand_stages(lib, values)
+        expected_record = expand_input_drain_cascodes(lib, values, knobs, expected, nets, sizing)
+        # The ordinary A2 port rename is allowed; it must still map the full
+        # library interface bijectively onto this typed design's interface.
+        renames = (ir.get("port_binding") or {}).get("renamed") or {}
+        ports = list(ir.get("ports") or [])
+        if (not isinstance(renames, dict) or set(renames) - set(lib["ports"])
+                or len({str(renames.get(port, port)).casefold() for port in lib["ports"]}) != len(lib["ports"])
+                or {str(renames.get(port, port)).casefold() for port in lib["ports"]} != {str(port).casefold() for port in ports}):
+            raise SizingInputsInvalid("cascode topology has inconsistent library-port binding")
+        expected = _rename_nets(expected, renames)
+        expected_record = _rename_nets(expected_record, renames)
+        actual = {str(device["name"]).casefold(): device for device in ir.get("devices", [])}
+        if len(actual) != len(ir.get("devices", [])):
+            raise SizingInputsInvalid("cascode topology contains duplicate device identities")
+        expected_by_name = {device["name"].casefold(): device for device in expected}
+        checked = []
+        for branch in expected_record["branches"]:
+            checked.extend([branch["source"], branch["cascode"]])
+        bias = expected_record["bias"]
+        checked.extend([bias["top_device"], bias["bottom_device"]])
+        for name in checked:
+            want, device = expected_by_name[name.casefold()], actual.get(name.casefold())
+            if (device is None or device.get("role") != want["role"]
+                    or [str(net).casefold() for net in device.get("nets", [])]
+                    != [str(net).casefold() for net in want["nets"]]):
+                raise SizingInputsInvalid(name + ": actual device does not realise the declared cascode/bias graph")
+        for name in (bias["top_device"], bias["bottom_device"]):
+            device = actual[name.casefold()]
+            requested = sizing["device_parameters"][name]
+            for parameter in ("w", "l"):
+                number = _positive_sizing_number(requested[parameter], name + "." + parameter)
+                if (isinstance(device.get(parameter), bool) or device.get(parameter) != number
+                        or any(row.get("device", "").casefold() == name.casefold() and row.get("param") == parameter
+                               for row in ir.get("device_param_exprs", []))):
+                    raise SizingInputsInvalid(name + ": real bias geometry disagrees with ordinary sizing")
+        if record is not None and any(record.get(key) != expected_record[key] for key in ("bias", "branches", "enable_knob")):
+            raise SizingInputsInvalid("cascode expansion record disagrees with the declared physical graph")
+        return []
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return ["INPUT_DRAIN_CASCODE_INVALID: " + str(exc)]
 
 
 def build_ir(block: str, btype: str, entry: Dict[str, Any],
@@ -6120,12 +6318,18 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         constants[_res_stim_delay_key()] = float(_fb_delay)
     # An entry with no `stage` key comes back with its own lists untouched,
     # so every pre-existing entry takes the identical path it always did.
+    sizing_inputs = read_sizing_inputs(project, block)
+    # Optional topology is selected before device sizing: newly introduced
+    # devices then use exactly the same geometry/fingering path as all others.
+    _apply_sizing_knobs(sizing_inputs, knobs, knob_sources, defaulted,
+                        lib.get("spec_knobs"))
     devices, internal_nets, param_exprs, stage_rec = expand_stages(
         lib, spec_values)
-    sizing_inputs = read_sizing_inputs(project, block)
+    cascodes = expand_input_drain_cascodes(lib, spec_values, knobs,
+                                          devices, internal_nets, sizing_inputs)
     apply_sizing_inputs(sizing_inputs, knobs, knob_sources, defaulted,
                         devices, param_exprs, role_minima,
-                        dict(role_maxima or {}))
+                        dict(role_maxima or {}), lib.get("spec_knobs"))
     # A counter group's WINDOW — the number of clock periods its ripple chain
     # takes to come back to zero — is computed during expansion and is not
     # otherwise nameable: the expression grammar has no logarithm, so nothing
@@ -6424,6 +6628,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                 "sizing solution and does not re-solve the block."),
         },
     }
+    if cascodes:
+        ir["input_drain_cascodes"] = cascodes
     # THE DESIGN'S OWN PORT NAMES, when it declares them. The library names
     # ports after the circuit; the design declares them after the role they
     # play at chip level. Binding here — before the IR reaches A3, A5, A6 and
@@ -6437,7 +6643,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     if _renames:
         for _key in ("ports", "rails", "internal_nets", "devices",
                      "constants", "device_param_exprs", "measurements",
-                     "testbench", "stimulus"):
+                     "testbench", "stimulus", "input_drain_cascodes"):
             if _key in ir:
                 ir[_key] = _rename_nets(ir[_key], _renames)
     ir["port_binding"] = {

@@ -165,7 +165,7 @@ def validate(project, block, pdk, container=""):
         if sizing:
             knobs, devices = copy.deepcopy(ir.get("knobs") or {}), copy.deepcopy(ir["devices"])
             emitter._a2.apply_sizing_inputs(sizing, knobs, dict(ir.get("knob_sources") or {}), [],
-                devices, ir.get("device_param_exprs") or [], {}, {})
+                devices, ir.get("device_param_exprs") or [], {}, {}, ir.get("spec_knobs"))
             if knobs != (ir.get("knobs") or {}) or devices != ir["devices"]:
                 raise ValueError("ordinary sizing inputs disagree with the frozen typed IR")
         context = _context(project, block, ir, pdk, container)
