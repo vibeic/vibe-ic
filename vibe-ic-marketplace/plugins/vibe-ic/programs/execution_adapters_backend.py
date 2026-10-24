@@ -736,37 +736,199 @@ def default_step24_physical_subject(project: Path, *,
     }
 
 
+def _default_step24_current_subject(project: Path, *,
+                                    execution_mode: str = "default") -> dict | None:
+    """Resolve Step 24's already-validated current native owner.
+
+    The current STAPostPNR record is an assertion of ownership, not a hint.
+    Once present it must either reopen the exact State/receipt/readset and its
+    selected views or refuse.  In particular, an invalid current owner never
+    falls through to the historical ``routed.def``/``pdn.done`` bridge.
+
+    External retained views stay at their original read-only paths.  The
+    existing current-owner validator authorizes those paths through its
+    digest-bound transport record; this issuer carries the project-local
+    State, receipt and authority files that make the worker repeat that proof.
+    """
+    if execution_mode != "default":
+        return None
+
+    root = Path(project).resolve(strict=True)
+    import librelane_ir_antenna as ir
+    record_path = root / ir.CURRENT_STA_RECORD
+    if not record_path.is_file():
+        return None
+
+    import _opensta_current as current
+    import librelane_postroute as postroute
+    try:
+        folder, state = postroute.stapostpnr_state(root)
+        config_path = folder / "config.json"
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        top = config.get("DESIGN_NAME")
+        if not isinstance(top, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_$]*", top):
+            raise ValueError("current STAPostPNR config has no valid DESIGN_NAME")
+        subject, tool = current.tool_subject(root, top)
+        if Path(tool.get("state") or "").resolve(strict=True) != (folder / "state_out.json").resolve():
+            raise ValueError("current STAPostPNR resolver selected another State")
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError(f"Step-24 current STAPostPNR owner is invalid: {exc}") from exc
+
+    rows = subject.get("inputs") if isinstance(subject, Mapping) else None
+    if not isinstance(rows, list):
+        raise ValueError("Step-24 current STAPostPNR subject has no input readset")
+    by_role: dict[str, Mapping] = {}
+    for row in rows:
+        role = row.get("role") if isinstance(row, Mapping) else None
+        if not isinstance(role, str) or role in by_role:
+            raise ValueError("Step-24 current STAPostPNR readset has malformed/duplicate roles")
+        by_role[role] = row
+
+    receipt_row = by_role.get("tool_receipt")
+    receipt_path = Path(receipt_row.get("path") or "") if receipt_row else Path()
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        fingerprint = receipt["input"]["state_files"]
+    except (OSError, UnicodeError, ValueError, KeyError, TypeError) as exc:
+        raise ValueError("Step-24 current STAPostPNR receipt/readset is unreadable") from exc
+    if not isinstance(fingerprint, Mapping):
+        raise ValueError("Step-24 current STAPostPNR state readset is malformed")
+
+    def selected_view(state_key: str, role: str | None = None) -> Path:
+        raw = state.get(state_key)
+        if not isinstance(raw, str) or not raw:
+            raise ValueError(f"Step-24 current STAPostPNR State lacks {state_key}")
+        named = Path(raw)
+        path = named if named.is_absolute() else root / named
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"Step-24 current STAPostPNR {state_key} view is absent") from exc
+        recorded = (fingerprint.get(str(named)) or fingerprint.get(str(path))
+                    or fingerprint.get(str(resolved)))
+        if path.is_symlink() or not resolved.is_file() or recorded != em.digest(resolved):
+            raise ValueError(f"Step-24 current STAPostPNR {state_key} view changed")
+        if role is not None:
+            row = by_role.get(role)
+            if not isinstance(row, Mapping):
+                raise ValueError(f"Step-24 current STAPostPNR readset lacks {role}")
+            try:
+                role_path = Path(row.get("path") or "").resolve(strict=True)
+            except OSError as exc:
+                raise ValueError(f"Step-24 current STAPostPNR {role} binding is absent") from exc
+            if role_path != resolved or row.get("sha256") != recorded:
+                raise ValueError(f"Step-24 current STAPostPNR {role} role is mismatched")
+        return resolved
+
+    views = {
+        "odb": selected_view("odb"), "def": selected_view("def"),
+        "netlist": selected_view("nl", "netlist"),
+        "sdc": selected_view("sdc", "sdc"),
+    }
+    spef_rows = state.get("spef")
+    spef_values = ([spef_rows] if isinstance(spef_rows, str)
+                   else list(spef_rows.values()) if isinstance(spef_rows, Mapping) else [])
+    spef_role = by_role.get("spef")
+    if not isinstance(spef_role, Mapping):
+        raise ValueError("Step-24 current STAPostPNR readset lacks spef")
+    try:
+        named_spef = Path(spef_role.get("path") or "")
+        selected_spef = named_spef.resolve(strict=True)
+        state_spefs = {(Path(raw) if Path(raw).is_absolute() else root / raw).resolve(strict=True)
+                       for raw in spef_values if isinstance(raw, str) and raw}
+    except OSError as exc:
+        raise ValueError("Step-24 current STAPostPNR SPEF view is absent") from exc
+    if (selected_spef not in state_spefs or named_spef.is_symlink()
+            or not selected_spef.is_file()
+            or fingerprint.get(str(selected_spef)) != em.digest(selected_spef)
+            or spef_role.get("sha256") != em.digest(selected_spef)):
+        raise ValueError("Step-24 current STAPostPNR SPEF role is mismatched")
+    views["spef"] = selected_spef
+
+    # Carry only paths inside the worker project. External retained checkpoint
+    # bytes remain at the exact original paths authorized by input_transport;
+    # copying or inventing aliases would change the selected physical subject.
+    carried: list[str] = []
+    for row in rows:
+        path = Path(row["path"])
+        try:
+            resolved = path.resolve(strict=True)
+        except OSError as exc:
+            raise ValueError(f"Step-24 current STAPostPNR input is absent: {path}") from exc
+        if resolved.is_relative_to(root):
+            carried.append(resolved.relative_to(root).as_posix())
+    for path in views.values():
+        if path.is_relative_to(root):
+            carried.append(path.relative_to(root).as_posix())
+    # These files are transitive authorities read by current.tool_subject but
+    # are not themselves semantic STA roles.
+    for path in (root / "phase3/librelane_pdk_root.provenance.json",
+                 folder / "pdk_root.json",
+                 root / ir.PAD_PLAN_REL):
+        if path.is_file() and not path.is_symlink():
+            carried.append(path.relative_to(root).as_posix())
+
+    return {"top": top, "views": views,
+            "inputs": tuple(dict.fromkeys(carried)),
+            "transport": subject.get("input_transport")}
+
+
 def backend_canonical_input_contract(project: Path, step_id: str, declarations,
                                      *, execution_mode: str = "ultra") -> tuple[object, ...]:
-    """Select Step 24's real routed subject on an attested self-tapeout.
+    """Select Step 24's current native owner or attested self-tapeout subject.
 
-    The canonical row's historical ``routed.def`` name is the logical-core
-    route.  A die with an ``io_pad_chip_top_gen`` handoff instead ships the
-    handoff's physical top, while retaining the logical name on its gate
-    netlist and RCX publication.  Operator/shuttle and uncertain routes keep
-    the canonical declarations byte-for-byte; absence never selects this arm.
+    A valid current STAPostPNR owner takes precedence and replaces both the
+    obsolete routed-DEF and PDN-marker requirements with its exact final ODB
+    subject/readset.  Without that owner, the existing self-tapeout mapping
+    may select the pad top.  Operator/shuttle and uncertain routes keep the
+    canonical declarations byte-for-byte; absence never selects either arm.
     """
     values = tuple(declarations or ())
     if str(step_id) != "24":
         return values
-    subject = default_step24_physical_subject(
+    current = _default_step24_current_subject(
         project, execution_mode=execution_mode)
+    subject = (None if current is not None else default_step24_physical_subject(
+        project, execution_mode=execution_mode))
+    if current is not None:
+        selected: list[object] = []
+        replacements = {
+            "phase3/stage3/pnr/routed.def": current["views"]["def"],
+            "phase3/stage3/pnr/pdn.tcl OR phase3/stage3/pnr/pdn.done": current["views"]["odb"],
+        }
+        for item in values:
+            path = item.get("path") if isinstance(item, Mapping) else None
+            if path not in replacements:
+                selected.append(item)
+                continue
+            replacement = replacements[path]
+            # Project-local selected objects remain ordinary exact manifest
+            # members. External objects are reopened through the validated
+            # retained-owner transport rather than copied into a false alias.
+            if replacement.is_relative_to(Path(project).resolve()):
+                row = dict(item)
+                row["path"] = replacement.relative_to(Path(project).resolve()).as_posix()
+                selected.append(row)
+        selected.extend(current["inputs"])
+        values = tuple(selected)
     if subject is None:
-        return values
-
-    selected: list[object] = []
-    for item in values:
-        if (isinstance(item, Mapping)
-                and item.get("path") == "phase3/stage3/pnr/routed.def"):
-            replacement = dict(item)
-            replacement["path"] = subject["def"]
-            selected.append(replacement)
-        else:
-            selected.append(item)
-    selected.extend(subject[key] for key in ("handoff", "wrapper", "netlist", "sdc", "spef"))
+        if current is None:
+            return values
+    else:
+        selected = []
+        for item in values:
+            if (isinstance(item, Mapping)
+                    and item.get("path") == "phase3/stage3/pnr/routed.def"):
+                replacement = dict(item)
+                replacement["path"] = subject["def"]
+                selected.append(replacement)
+            else:
+                selected.append(item)
+        selected.extend(subject[key] for key in ("handoff", "wrapper", "netlist", "sdc", "spef"))
+        values = tuple(selected)
     unique: list[object] = []
     seen: set[str] = set()
-    for item in selected:
+    for item in values:
         key = (json.dumps(item, sort_keys=True, separators=(",", ":"))
                if isinstance(item, Mapping) else str(item))
         if key not in seen:
