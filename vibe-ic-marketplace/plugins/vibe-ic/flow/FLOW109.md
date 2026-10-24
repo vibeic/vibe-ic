@@ -230,3 +230,19 @@ inputs are bound. Only the self-contained single-rail scalar subset is
 implemented. See `docs/flow109/D55-functional-activity.md` for its inputs and
 retained producer/consumer evidence. This prepares activity evidence without
 claiming final post-route power adoption or all D55 obligations.
+
+## M05 tool inventory (availability only)
+
+The EDA 0.4.43 read-only inventory measured kpex 0.3.12, a FasterCap executable
+(version not measured), Magic 8.3.685 and ngspice 47. It also found a real
+openEMS ELF executable at `/foss/tools/openems/bin/openEMS` (17,560 bytes),
+with `--help` returning 0 and version `v0.0.36-209-ge9b47b5`, plus Python
+module 0.0.36. This corrects the 2026-10-25 addendum's factual claim that only
+the openEMS Python module was installed.
+
+Availability does not qualify a substrate extraction/model. kpex's FasterCap
+engine offers experimental supply-capacitance tooling, not a production
+substrate model. M05 remains `UNSUPPORTED_OPEN_DEFAULT`; no substrate or
+supply-coupling simulation was run for this inventory. Any later authorized
+supply-only evidence must retain `supply_coupling_only` scope and cannot
+complete the substrate obligation.

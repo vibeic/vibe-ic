@@ -13077,7 +13077,7 @@
           "id": "default",
           "select_when": "otherwise",
           "provider": "other",
-          "tools": "UNSUPPORTED in open-source Default: no qualified substrate extraction/model; ngspice consumer only",
+          "tools": "Supply-capacitance tools available through kpex/FasterCap (experimental, not production qualified); no qualified substrate extraction/model; ngspice consumer only",
           "native_steps": [
             "mixed_signal_interface_si_check"
           ],
@@ -13101,9 +13101,15 @@
           }
         }
       ],
-      "complementary_tools": [],
+      "complementary_tools": [
+        "kpex 0.3.12 executable (KLayout-PEX)",
+        "FasterCap executable (version not measured)",
+        "Magic 8.3.685 executable",
+        "ngspice 47 executable",
+        "openEMS v0.0.36-209-ge9b47b5 native ELF and Python module 0.0.36"
+      ],
       "capability_status": "UNSUPPORTED_OPEN_DEFAULT",
-      "availability_status": "NOT_INVENTORIED_THIS_UPDATE",
+      "availability_status": "INVENTORIED_EDA_0_4_43",
       "source_components": [
         "mixed_signal_interface_si_check"
       ],
