@@ -2173,14 +2173,13 @@ class Sites:
             for r in rows:
                 s = self.geo.metal_space(layer, box, r["box"])
                 if "lcomp" not in r:
-                    # this emitter's own paint. One conductor is one net
-                    # here, so a same-net rectangle is skipped and every
-                    # other one is an obstacle like any device's.
-                    if net is not None and r["net"] == net:
-                        continue
                     b = r["box"]
                     dx = max(b[0] - box[2], box[0] - b[2], 0)
                     dy = max(b[1] - box[3], box[1] - b[3], 0)
+                    # A remote same-net connection does not excuse a local
+                    # notch. Only overlap/touch is exempt from spacing.
+                    if net is not None and r["net"] == net and not (dx or dy):
+                        continue
                     if dx < s and dy < s:
                         return False
                     continue
@@ -2418,10 +2417,13 @@ def _collect_close_plain_rows(groups: List[dict], bbox: Sequence[int],
         if geo.wire[3] / geo.lam > rule["width_gt_um"]:
             route_space = max(route_space, int(math.ceil(rule["spacing_um"] * geo.lam)))
     spacing = geo.wire[3] + route_space
-    if not any(not g["strapped"] for g in plain) or not any(
+    close_rows = any(
             g["net"] != other["net"]
             and 0 < abs(g["escape_y"] - other["escape_y"]) < spacing
-            for g in plain for other in groups):
+            for g in plain for other in groups)
+    tight_islands = any(_terminal_access_width(g, plain, geo) < geo.wire[3]
+                        for g in plain)
+    if not any(not g["strapped"] for g in plain) or not (close_rows or tight_islands):
         return False
     split = (min(g["y"] for g in plain) + max(g["y"] for g in plain)) / 2
     below = above = 0
@@ -2444,7 +2446,7 @@ def _body_escape_side(group: dict, bbox: Sequence[int], dense: bool, default: st
 
 
 def _terminal_access_width(group: dict, groups: Sequence[dict], geo: Geo) -> int:
-    """Use a native minimum only where the requested terminal squares clash."""
+    """Compact only where the emitted preferred island cannot clear a stub."""
     requested = geo.wire[3]
     minimum_um = geo.rules["metal_width_um"].get(3)
     if group.get("body_tap") or minimum_um is None:
@@ -2452,12 +2454,35 @@ def _terminal_access_width(group: dict, groups: Sequence[dict], geo: Geo) -> int
     minimum = int(math.ceil(minimum_um * geo.lam - 1e-9))
     if minimum >= requested:
         return requested
-    clearance = requested + geo.metal_space("metal3")
-    tight = any(other["net"] != group["net"]
-                and max(abs(label["x"] - peer["x"]), abs(label["y"] - peer["y"])) < clearance
-                for label in group["labels"] for other in groups
-                if not other.get("body_tap") for peer in other["labels"])
-    return minimum if tight else requested
+    half = max((requested + 1) // 2, 1)
+    for label in group["labels"]:
+        level = label.get("level", group.get("level", 3))
+        if level > 3:
+            # These terminals leave on their native electrode layer before
+            # descending outside the cell; no M3 island is emitted here.
+            continue
+        preferred = Plan()
+        # Read the preferred footprint from the same stack emitter, with no
+        # placement search or native execution. Do not substitute wire width
+        # for the larger source-derived surround/minimum-area island.
+        _via_stack(preferred, "<preferred access>", 0, 0, level, geo, top=3)
+        boxes = [r["box"] for r in preferred.shapes if r["layer"] == "metal3"]
+        box = (min(b[0] for b in boxes), min(b[1] for b in boxes),
+               max(b[2] for b in boxes), max(b[3] for b in boxes)) if boxes else (-half, -half, half, half)
+        island = (label["x"] + box[0], label["y"] + box[1],
+                  label["x"] + box[2], label["y"] + box[3])
+        for other in groups:
+            if other.get("body_tap") or other["net"] == group["net"]:
+                continue
+            for peer in other["labels"]:
+                stub = (peer["x"] - half, peer["y"] - half,
+                        peer["x"] + half, peer["y"] + half)
+                space = geo.metal_space("metal3", island, stub)
+                dx = max(island[0] - stub[2], stub[0] - island[2], 0)
+                dy = max(island[1] - stub[3], stub[1] - island[3], 0)
+                if dx < space and dy < space:
+                    return minimum
+    return requested
 
 
 def _paint_terminal_stub(plan: Plan, group: dict, dev: dict, cx: int, cy: int,
@@ -2825,9 +2850,13 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                 # this group's endpoints. Use the placed via coordinates,
                 # including a local M2 connection if its island moved.
                 xs = []
+                landing_boxes = []
                 for sx, sy in g["stub_endpoints"]:
+                    first_paint = len(plan.shapes)
                     cx, cy = _via_stack(plan, net, sx, sy, 3, geo, top=2,
                                         sites=sites, dev=d["dev"])
+                    landing_boxes.extend(r["box"] for r in plan.shapes[first_paint:]
+                                         if r["layer"] == "metal2")
                     plan.paint(net, "metal3", min(sx, cx) - hw3, sy - hw3,
                                max(sx, cx) + hw3, sy + hw3)
                     plan.paint(net, "metal3", cx - hw3, min(sy, cy) - hw3,
@@ -2835,8 +2864,14 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                     plan.paint(net, "metal2", cx - hw2, min(cy, ey) - hw2,
                                cx + hw2, max(cy, ey) + hw2)
                     xs.append(cx)
-                plan.paint(net, "metal2", min(xs) - hw2, ey - hw2,
-                           max(xs) + hw2, ey + hw2)
+                # Cover the actual emitted landings, including any native
+                # placement offset. A thinner strap left 0.08-by-0.06 um
+                # same-polygon notches between adjacent gate via islands.
+                plan.paint(net, "metal2",
+                           min([min(xs) - hw2] + [b[0] for b in landing_boxes]),
+                           min([ey - hw2] + [b[1] for b in landing_boxes]),
+                           max([max(xs) + hw2] + [b[2] for b in landing_boxes]),
+                           max([ey + hw2] + [b[3] for b in landing_boxes]))
                 joint = max(xs) if g["side"] == "right" else min(xs)
             elif g["level"] > ROUTE_LEVEL:
                 # THE TERMINAL IS DELIVERED ABOVE THE ROUTING LAYER, and

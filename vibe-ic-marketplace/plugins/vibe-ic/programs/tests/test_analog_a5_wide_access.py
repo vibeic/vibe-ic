@@ -34,6 +34,44 @@ def test_same_native_polygon_can_acquire_a_new_illegal_notch():
     assert sites.clear((10, 10, 59, 80), ["metal2"], ("unit", 1))
 
 
+def test_remote_same_net_paint_still_cannot_form_the_measured_collection_notch():
+    # Native gate landings are .8x.72 on .88 um pitch. A .6 um strap
+    # connects them remotely but leaves the measured .08x.06 local notch.
+    g = geo()
+    sites = layout.Sites([], g)
+    sites.add({"net": "gate", "layer": "metal2", "box": (-40, -36, 40, 36)})
+    sites.add({"net": "gate", "layer": "metal2", "box": (-30, -30, 118, 30)})
+    assert not sites.clear((48, -36, 128, 36), ["metal2"], None, "gate")
+    # Covering the actual complete landing band connects it without a notch.
+    assert sites.clear((-40, -36, 128, 36), ["metal2"], None, "gate")
+
+
+def test_preferred_native_island_and_neighbor_stub_need_compact_access():
+    g = geo()
+    g.rules["metal_width_um"][3] = .24
+    g.rules["via_surround_dir_um"] = {(2, 2): .045, (2, 3): .045}
+    g = layout.Geo(g.rules, .21, 100, .6, .35)
+    preferred = layout.Plan()
+    layout._via_stack(preferred, "drain", 0, 0, 2, g, top=3)
+    assert next(r["box"] for r in preferred.shapes if r["layer"] == "metal3") == (-40, -36, 40, 36)
+    groups = rows()[:3]
+    for group in groups:
+        for label in group["labels"]:
+            label["level"] = 2
+    # The .6 um squares alone clear: .88-.6=.28>.21. The actual preferred
+    # island against the neighbor's stub leaves .88-.4-.3=.18<.21.
+    assert layout._terminal_access_width(groups[0], groups, g) == 24
+    assert layout._collect_close_plain_rows(groups, (-141, -305, 141, 305), g)
+    assert all(group["strapped"] for group in groups)
+    narrow = rows()[:3]
+    for group in narrow:
+        for label in group["labels"]:
+            label["level"] = 2
+    original = copy.deepcopy(narrow)
+    assert not layout._collect_close_plain_rows(narrow, (-141, -305, 141, 305), geo(.3, .15))
+    assert narrow == original
+
+
 def test_actual_subminimum_contact_plus_fallback_pad_is_not_minimum_area():
     # Translated native M2.d marker: .088 um2 pad plus .0242 um2 extension.
     sites = layout.Sites([native_row((0, 0, 20, 44))], geo())

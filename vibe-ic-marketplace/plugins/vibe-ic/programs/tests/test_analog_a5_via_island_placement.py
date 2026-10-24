@@ -165,8 +165,9 @@ def test_d2_the_emitters_own_paint_is_an_obstacle_too():
     assert sites.clear((60, 0, 95, 40), ["metal2"], None, "mine") is False, (
         "an island placed clear of every device and into the island of the "
         "terminal next door has not been placed either")
-    # its own net is one conductor here
-    assert sites.clear((60, 0, 95, 40), ["metal2"], None, "other") is True
+    # A remote connection to the same net cannot excuse this 5-grid notch.
+    assert sites.clear((60, 0, 95, 40), ["metal2"], None, "other") is False
+    assert sites.clear((60, 0, 105, 40), ["metal2"], None, "other") is True
 
 
 # ── 5. the escape pitch is built from the WIDEST thing painted ──────────
