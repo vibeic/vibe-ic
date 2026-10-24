@@ -101,6 +101,7 @@ CONTEXT = "context.json"
 CURRENT = "current.json"
 LEDGER = "candidates.json"
 REPORT_REL = "reports/phase3/librelane_postroute_repair.json"
+CONTINUATION_REL = "phase3/tool_arms/32/candidate_continuations"
 DECLARED_REPAIR_REL = "phase3/stage3/postroute_timing_repair"
 #: The controllers this step runs, in order: setup, then hold (hold after
 #: setup), then design rules. Each is declared in the actuator registry.
@@ -1843,6 +1844,354 @@ def _validate_resume_readset(project: Path, current: Dict[str, Any],
         raise _ll.Refusal("LL_PRR_RESUME_READSET_STALE", str(exc)) from exc
 
 
+def _retained_candidate_finishing_inputs(project: Path, candidate: str) -> Dict[str, Any]:
+    """Validate the immutable producer/readset chain of one density refusal.
+
+    This is deliberately separate from :func:`resume_drv`: the retained
+    candidate has already run repair, antenna, RCX and STA.  Requiring the
+    old producer receipts here permits only the missing GDS finishing/PV
+    consumer; it does not admit the changed source as a reason to replay the
+    physical actuator.
+    """
+    import librelane_contract as _ll
+
+    arm = project / ARM_REL
+    impl = arm / IMPL_DIR
+    try:
+        ctx = _load(impl / CONTEXT)
+        current = _load(impl / CURRENT)
+        report_path = project / REPORT_REL
+        report = _load(report_path)
+        ledger_path = arm / LEDGER
+        rows = _load(ledger_path)["candidates"]
+    except (OSError, ValueError, KeyError) as exc:
+        raise _ll.Refusal("LL_PRR_FINISHING_STATE_ABSENT", str(exc)) from exc
+    matches = [row for row in rows if row.get("candidate") == candidate]
+    if len(matches) != 1:
+        raise _ll.Refusal("LL_PRR_FINISHING_CANDIDATE_UNKNOWN",
+                          f"{candidate!r}: {len(matches)} ledger rows")
+    row = matches[0]
+    signoff = row.get("native_signoff") or {}
+    drc, lvs = signoff.get("drc") or {}, signoff.get("lvs") or {}
+    metrics = drc.get("metrics") or {}
+    clean_non_density = all(
+        (metrics.get(name) or {}).get("value") == 0
+        for name in ("magic__drc_error__count", "klayout__drc_error__count"))
+    density = (metrics.get("klayout__density_error__count") or {}).get("value")
+    if (row.get("from") != current.get("candidate") or row.get("decision") != "REFUSED"
+            or row.get("reason") != "fresh sign-off DRC is FAIL"
+            or not clean_non_density or type(density) is not int or density <= 0
+            or lvs.get("verdict") != "PASS"):
+        raise _ll.Refusal("LL_PRR_FINISHING_NOT_DENSITY_REFUSAL", candidate)
+    if report.get("adopted") != current.get("candidate"):
+        raise _ll.Refusal("LL_PRR_FINISHING_CURRENT_MISMATCH", candidate)
+
+    # The adopted route must still be the live route.  This is the accepted
+    # 5c guard; continuation does not weaken or bypass it.
+    current_freshness = _validate_resume_subject(project, current, ctx)
+
+    def host(value: str) -> Path:
+        return _resume_host_path(project, ctx, value).resolve()
+
+    try:
+        repair_state = host(row["repair_state"])
+        config = host(row["config"])
+        state = _load(repair_state)
+        repair_receipt = _ll.validate_step_receipt(repair_state.parent, REPAIR_STEP)
+        measurement = row["measurement"]
+        rcx = measurement["rcx_binding"]
+        chain = {
+            "antenna": (host(measurement["antenna_state"]), "OpenROAD.CheckAntennas"),
+            "rcx": (host(rcx["state"]), "OpenROAD.RCX"),
+            "sta": (host(measurement["sta_state"]), "OpenROAD.STAPostPNR"),
+        }
+        receipts = {name: _ll.validate_step_receipt(path.parent, producer)
+                    for name, (path, producer) in chain.items()}
+        stream_state = (project / "phase3/librelane" / f"{candidate}-pv-stream" /
+                        "01-klayout-streamout/state_out.json")
+        stream_receipt = _ll.validate_step_receipt(
+            stream_state.parent, "KLayout.StreamOut")
+        streamed = _load(stream_state)
+        gds = host(streamed.get("klayout_gds") or streamed["gds"])
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise _ll.Refusal("LL_PRR_FINISHING_READSET_STALE", str(exc)) from exc
+
+    paths = {"repair_state": repair_state, "config": config,
+             "repair_receipt": repair_state.parent / "vibeic_receipt.json",
+             "stream_state": stream_state,
+             "stream_receipt": stream_state.parent / "vibeic_receipt.json",
+             "gds": gds}
+    paths.update({f"{name}_state": value[0] for name, value in chain.items()})
+    paths.update({f"{name}_receipt": value[0].parent / "vibeic_receipt.json"
+                  for name, value in chain.items()})
+    for view in ("def", "odb", "nl", "sdc"):
+        paths[view] = host(state[view])
+    if state.get("pnl"):
+        paths["pnl"] = host(state["pnl"])
+    try:
+        hashes = {name: _ll.digest(path) for name, path in paths.items()}
+    except (OSError, ValueError) as exc:
+        raise _ll.Refusal("LL_PRR_FINISHING_READSET_STALE", str(exc)) from exc
+
+    old_gds = (drc.get("scope") or {}).get("gds_sha256")
+    def_sha = hashes["def"]
+    odb_sha = hashes["odb"]
+    sdc_sha = hashes["sdc"]
+    expected = [
+        (repair_receipt.get("input", {}).get("image"), ctx.get("image"), "image"),
+        (repair_receipt.get("input", {}).get("config"), hashes["config"], "config"),
+        (hashes["repair_state"], rcx.get("basis_state_sha256"), "repair state"),
+        (hashes["rcx_state"], rcx.get("state_sha256"), "RCX state"),
+        (hashes["sta_state"], measurement.get("sta_state_sha256"), "STA state"),
+        (hashes["odb"], measurement.get("native_odb_sha256"), "native ODB"),
+        (hashes["sdc"], measurement.get("native_sdc_sha256"), "native SDC"),
+        (def_sha, (rcx.get("route_sha256") or {}).get("def"), "RCX DEF"),
+        (odb_sha, (rcx.get("route_sha256") or {}).get("odb"), "RCX ODB"),
+        (sdc_sha, (rcx.get("route_sha256") or {}).get("sdc"), "RCX SDC"),
+        (hashes["gds"], old_gds, "stream GDS"),
+        (def_sha, (drc.get("scope") or {}).get("def_sha256"), "DRC DEF"),
+        (hashes["gds"], (lvs.get("scope") or {}).get("gds_sha256"), "LVS GDS"),
+        (def_sha, (lvs.get("scope") or {}).get("def_sha256"), "LVS DEF"),
+    ]
+    # Every retained consumer names the preceding native State.  Receipt
+    # validation checked its own output bytes; these comparisons bind the
+    # chain rather than accepting three individually valid but unrelated runs.
+    expected.extend([
+        (receipts["antenna"].get("input", {}).get("state"),
+         hashes["repair_state"], "antenna input"),
+        (receipts["rcx"].get("input", {}).get("state"),
+         hashes["antenna_state"], "RCX input"),
+        (receipts["sta"].get("input", {}).get("state"),
+         hashes["rcx_state"], "STA input"),
+        (stream_receipt.get("input", {}).get("state"),
+         hashes["repair_state"], "stream input"),
+    ])
+    mismatch = [name for actual, wanted, name in expected
+                if not actual or actual != wanted]
+    if mismatch:
+        raise _ll.Refusal("LL_PRR_FINISHING_READSET_STALE", ", ".join(mismatch))
+    if measurement.get("antenna_nets") != 0 or measurement.get("antenna_pins") != 0:
+        raise _ll.Refusal("LL_PRR_FINISHING_ANTENNA_NOT_CLEAN", candidate)
+    return {"ctx": ctx, "current": current, "row": row,
+            "report": report, "report_path": report_path,
+            "ledger_path": ledger_path, "paths": paths, "hashes": hashes,
+            "current_freshness": current_freshness,
+            "density_before": density}
+
+
+def _finished_candidate_pv(ctx: Dict[str, Any], retained: Dict[str, Any],
+                           finished: Dict[str, Any], lane: str) -> Dict[str, Any]:
+    """Run full DRC and full LVS on exactly the helper's finished GDS."""
+    import librelane_contract as _ll
+    import librelane_pv_signoff as _pv
+
+    project = Path(ctx["project"])
+    pdk_root = next((Path(host) for host, guest in ctx["mounts"]
+                     if guest == _ll.PDK_GUEST_ROOT), None)
+    if pdk_root is None:
+        raise _ll.Refusal("LL_PRR_PV_PDK_UNBOUND", "no /pdk mount in context")
+    state = _load(retained["paths"]["repair_state"])
+    root = project / ARM_REL / "candidate_signoff" / lane
+    return {half: _pv.run_half(
+                project, ctx["image"], pdk_root, ctx["pdk"], half,
+                gds=Path(finished["gds"]), routed_def=retained["paths"]["def"],
+                netlist=retained["paths"]["nl"], sdc=retained["paths"]["sdc"],
+                powered_netlist=(retained["paths"].get("pnl")
+                                 if state.get("pnl") else None),
+                lane_prefix=f"{lane}-pv", record=root / f"{half}.json")
+            for half in ("drc", "lvs")}
+
+
+def _finished_candidate_gate_reason(finished: Dict[str, Any], pv: Dict[str, Any],
+                                    retained: Dict[str, Any]) -> Optional[str]:
+    """Return the named refusal; ``None`` alone means the normal gate may run."""
+    density = finished.get("density") or {}
+    if (density.get("klayout__density_error__count") != 0
+            or density.get("checker_error")):
+        return "LL_PRR_FINISHING_DENSITY_FAILED"
+    gds_sha = finished.get("gds_sha256")
+    if not gds_sha:
+        return "LL_PRR_FINISHING_GDS_UNBOUND"
+    def_sha = retained["hashes"]["def"]
+    for half in ("drc", "lvs"):
+        result = pv.get(half) or {}
+        if result.get("verdict") != "PASS":
+            return f"LL_PRR_FINISHING_{half.upper()}_{result.get('verdict') or 'NOT_MEASURED'}"
+        scope = result.get("scope") or {}
+        if scope.get("gds_sha256") != gds_sha or scope.get("def_sha256") != def_sha:
+            return f"LL_PRR_FINISHING_{half.upper()}_SUBJECT_MISMATCH"
+        if half == "lvs" and (scope.get("magic_ext_use_gds") is not True
+                              or scope.get("extracted_gds_sha256") != gds_sha):
+            return "LL_PRR_FINISHING_LVS_SUBJECT_MISMATCH"
+    return None
+
+
+def _adopt_finished_candidate(impl: Path, record: Path) -> int:
+    """Controller actuator: publish only a sealed, still-current READY record."""
+    import librelane_contract as _ll
+    try:
+        doc = _load(record)
+        ctx = _load(impl / CONTEXT)
+        project = Path(ctx["project"])
+        current_path = impl / CURRENT
+        ledger_path = project / ARM_REL / LEDGER
+        if doc.get("schema") != "vibeic.prr.candidate_finishing.v1" \
+                or doc.get("verdict") != "READY_FOR_CONTROLLER":
+            raise ValueError("record is not READY_FOR_CONTROLLER")
+        if _ll.digest(current_path) != doc["current_before_sha256"]:
+            raise ValueError("adopted pointer changed after finishing")
+        if _ll.digest(ledger_path) != doc["ledger_sha256"]:
+            raise ValueError("candidate ledger changed after finishing")
+        for path, sha in (doc.get("sealed_inputs") or {}).items():
+            actual = _resume_host_path(project, ctx, path)
+            if _ll.digest(actual) != sha:
+                raise ValueError(f"sealed input changed: {path}")
+        candidate = doc["candidate"]
+        row = next(row for row in _load(ledger_path)["candidates"]
+                   if row.get("candidate") == candidate)
+        if row.get("from") != _load(current_path).get("candidate"):
+            raise ValueError("candidate is not based on the adopted pointer")
+        repair_state = _resume_host_path(project, ctx, row["repair_state"])
+        if _ll.digest(repair_state) != doc["repair_state_sha256"]:
+            raise ValueError("candidate repair State changed")
+    except (OSError, ValueError, TypeError, KeyError, StopIteration) as exc:
+        print(f"LL_PRR_FINISHING_RECORD_STALE: {exc}", file=sys.stderr)
+        return 2
+    write_json(current_path, {
+        "candidate": candidate, "repair_input": str(repair_state),
+        "repair_state": str(repair_state), "repair_folder": str(repair_state.parent),
+        "measurement": row["measurement"], "supply_ownership": row["supply_ownership"],
+        "finished_gds": doc["finished_gds"],
+        "finished_gds_sha256": doc["finished_gds_sha256"],
+        "finishing_record": str(record)})
+    return 0
+
+
+def _run_finished_candidate_controller(project: Path, record: Path, *,
+                                       registry: Optional[Path] = None,
+                                       programs_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """Use the existing DRV controller's measurements/rollback for adoption."""
+    from _ppa import closure as _cl
+
+    impl = project / ARM_REL / IMPL_DIR
+    reg = _cl.load_registry(registry, programs_dir=programs_dir)
+    base_ctl = reg.controllers["postroute.repair_drv"]
+    base_act = reg.actuators[base_ctl.actuator_id]
+    action_id = "timing.adopt_finished_candidate"
+    reg.actuators[action_id] = replace(
+        base_act, action_id=action_id, parameters={},
+        argv_template=("adopt-finished", "--record", str(record)))
+    reg.controllers[base_ctl.controller_id] = replace(
+        base_ctl, actuator_id=action_id, plan=({},), max_iterations=1,
+        plateau_patience=1)
+    return _cl.ClosureController(
+        reg, impl, project / ARM_REL / "candidate_finishing_closure").run_controller(
+            base_ctl.controller_id).to_record()
+
+
+def resume_candidate_finishing(project: Path, candidate: str, lane: str, *,
+                               registry: Optional[Path] = None,
+                               programs_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """Finish/PV one retained density refusal, then run normal DRV adoption.
+
+    Repair, routing, antenna, RCX and STA are immutable inputs.  Only the
+    candidate-local fill/density chain and full PV execute before the existing
+    controller measures the retained PPA and either promotes or rolls back.
+    """
+    import librelane_contract as _ll
+    import librelane_fill_dfm as _fill
+
+    project = Path(project).resolve()
+    retained = _retained_candidate_finishing_inputs(project, candidate)
+    ctx = retained["ctx"]
+    root = project / CONTINUATION_REL / lane
+    if not lane or root.exists():
+        raise _ll.Refusal("LL_PRR_FINISHING_LANE_EXISTS", str(root))
+    root.mkdir(parents=True, exist_ok=False)
+    record = root / "ready.json"
+    decision = root / "decision.json"
+    pdk_root = next((Path(host) for host, guest in ctx["mounts"]
+                     if guest == _ll.PDK_GUEST_ROOT), None)
+    if pdk_root is None:
+        raise _ll.Refusal("LL_PRR_PV_PDK_UNBOUND", "no /pdk mount in context")
+    current_path = project / ARM_REL / IMPL_DIR / CURRENT
+    current_sha = _ll.digest(current_path)
+    ledger_sha = _ll.digest(retained["ledger_path"])
+    try:
+        finished = _fill.finish_candidate_gds(
+            project, ctx["image"], pdk_root, ctx["pdk"],
+            gds=retained["paths"]["gds"], state=retained["paths"]["repair_state"],
+            config=retained["paths"]["config"], lane=lane)
+        pv = _finished_candidate_pv(ctx, retained, finished, lane)
+        refusal = _finished_candidate_gate_reason(finished, pv, retained)
+    except (OSError, ValueError, _ll.Refusal) as exc:
+        write_json(decision, {"schema": "vibeic.prr.candidate_finishing_decision.v1",
+                              "candidate": candidate, "lane": lane,
+                              "decision": "REFUSED", "reason": str(exc),
+                              "current_before_sha256": current_sha})
+        raise
+    sealed = {str(path): sha for name, path in retained["paths"].items()
+              for sha in (retained["hashes"][name],)}
+    sealed[str(Path(finished["gds"]))] = finished["gds_sha256"]
+    if refusal:
+        write_json(decision, {"schema": "vibeic.prr.candidate_finishing_decision.v1",
+                              "candidate": candidate, "lane": lane,
+                              "decision": "REFUSED", "reason": refusal,
+                              "finished": finished, "pv": pv,
+                              "current_before_sha256": current_sha})
+        raise _ll.Refusal(refusal, candidate)
+    write_json(record, {
+        "schema": "vibeic.prr.candidate_finishing.v1",
+        "candidate": candidate, "from": retained["current"].get("candidate"),
+        "lane": lane, "verdict": "READY_FOR_CONTROLLER",
+        "current_before_sha256": current_sha, "ledger_sha256": ledger_sha,
+        "repair_state_sha256": retained["hashes"]["repair_state"],
+        "sealed_inputs": sealed, "current_freshness": retained["current_freshness"],
+        "prior_density_errors": retained["density_before"],
+        "finished_gds": finished["gds"],
+        "finished_gds_sha256": finished["gds_sha256"],
+        "finishing": finished, "pv": pv,
+        "scope": "prefill PPA retained; fill-aware final electrical pending"})
+    run = _run_finished_candidate_controller(
+        project, record, registry=registry, programs_dir=programs_dir)
+    current = _load(current_path)
+    promoted = (run.get("outcome") == "CONVERGED"
+                and current.get("candidate") == candidate)
+    write_json(decision, {
+        "schema": "vibeic.prr.candidate_finishing_decision.v1",
+        "candidate": candidate, "lane": lane,
+        "decision": "PROMOTED" if promoted else "REFUSED",
+        "reason": run.get("reason"), "ready_record": str(record),
+        "ready_record_sha256": _ll.digest(record), "run": run,
+        "adopted": current.get("candidate"),
+        "current_after_sha256": _ll.digest(current_path)})
+
+    report = retained["report"]
+    report.setdefault("continuations", []).append({
+        "kind": "retained_candidate_finishing", "candidate": candidate,
+        "prior_decision": retained["row"].get("decision"),
+        "ready_record": str(record), "decision_record": str(decision),
+        "run": run, "final_electrical": "NOT_MEASURED"})
+    report.setdefault("closure", []).append(run)
+    report["adopted"] = current.get("candidate")
+    report["final"] = current.get("measurement")
+    report["final_antenna"] = (current.get("measurement") or {}).get("antenna_nets")
+    report["final_supply_ownership"] = current.get("supply_ownership")
+    report["adopted_state"] = current.get("repair_state")
+    report["candidate_finishing"] = {
+        "verdict": "PASS" if promoted else "FAIL",
+        "candidate": candidate, "finished_gds": finished["gds"],
+        "finished_gds_sha256": finished["gds_sha256"],
+        "density": 0, "drc": pv["drc"].get("verdict"),
+        "lvs": pv["lvs"].get("verdict"),
+        "final_electrical": "NOT_MEASURED"}
+    _stamp_verdict(report)
+    _step32_drv_signoff(project, report)
+    write_json(retained["report_path"], report)
+    _publish_declared_repair(project, report, retained["report_path"])
+    return report
+
+
 def _attempted_by_current_actuator(project: Path, ctx: Dict[str, Any],
                                    row: Dict[str, Any],
                                    current_plugin: Dict[str, str]) -> bool:
@@ -2022,10 +2371,26 @@ def main(argv: Optional[List[str]] = None) -> int:
                              _bool_arg if name in {"bounded_drive_strength",
                                                   "targeted_cap_buffer"} else float),
                        default=None)
+    f = sub.add_parser("finish-candidate",
+                       help="finish/PV one retained density-refused candidate")
+    f.add_argument("--project", type=Path, required=True)
+    f.add_argument("--candidate", required=True)
+    f.add_argument("--lane", required=True)
+    adopt = sub.add_parser("adopt-finished", help=argparse.SUPPRESS)
+    adopt.add_argument("--record", type=Path, required=True)
     args = parser.parse_args(argv)
     impl = Path.cwd()
     if args.command == "measure":
         return measure(impl, args.domain, args.json)
+    if args.command == "finish-candidate":
+        report = resume_candidate_finishing(args.project, args.candidate, args.lane)
+        print(json.dumps({"verdict": report.get("verdict"),
+                          "adopted": report.get("adopted"),
+                          "candidate_finishing": report.get("candidate_finishing")},
+                         sort_keys=True))
+        return 0
+    if args.command == "adopt-finished":
+        return _adopt_finished_candidate(impl, args.record)
     params = {k: getattr(args, k) for k in PARAM_VARS}
     return actuate(impl, params)
 

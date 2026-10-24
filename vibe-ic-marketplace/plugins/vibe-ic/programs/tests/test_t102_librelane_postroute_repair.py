@@ -2582,3 +2582,139 @@ def test_routed_wire_bound_reuses_shared_def_geometry_spellings(tmp_path):
         except ValueError:
             observed.append("REJECTED")
     assert observed == [800.0, 800.0]
+
+
+# ---------------- retained density-refused candidate finishing continuation --
+
+def _finishing_controller_fixture(tmp_path):
+    project = tmp_path / 'project'
+    impl = project / prr.ARM_REL / prr.IMPL_DIR
+
+    def candidate_state(name, drv, members):
+        root = project / f'phase3/librelane/{name}/01-vibeic-postrouterepair'
+        odb = write(root / 'top.odb', f'{name} odb\n')
+        state = put(root / 'state_out.json', {'odb': str(odb)})
+        sta = put(project / f'phase3/librelane/{name}/04-openroad-stapostpnr/state_out.json',
+                  {'metrics': {}})
+        return state, {
+            'sta_state': str(sta), 'sta_state_sha256': contract.digest(sta),
+            'native_odb_sha256': contract.digest(odb),
+            'setup_ws_min': 1.0, 'hold_ws_min': 0.5,
+            'drv_count': drv, 'drv_members': members,
+            'antenna_nets': 0, 'antenna_pins': 0,
+        }
+
+    old_state, old_measurement = candidate_state('32-cand01', 1, [['u/Z', 'cap']])
+    new_state, new_measurement = candidate_state('32-cand09', 0, [])
+    put(impl / prr.CONTEXT, {'project': str(project), 'floors': {}})
+    put(impl / prr.CURRENT, {
+        'candidate': '32-cand01', 'repair_input': str(old_state),
+        'repair_state': str(old_state), 'repair_folder': str(old_state.parent),
+        'measurement': old_measurement})
+    ledger = project / prr.ARM_REL / prr.LEDGER
+    put(ledger, {'candidates': [{
+        'candidate': '32-cand09', 'from': '32-cand01',
+        'repair_state': str(new_state), 'measurement': new_measurement,
+        'supply_ownership': {'verdict': 'PASS'}}]})
+    finished = write(tmp_path / 'finished.gds', 'finished geometry\n')
+    current = impl / prr.CURRENT
+    record = put(tmp_path / 'ready.json', {
+        'schema': 'vibeic.prr.candidate_finishing.v1',
+        'verdict': 'READY_FOR_CONTROLLER', 'candidate': '32-cand09',
+        'current_before_sha256': contract.digest(current),
+        'ledger_sha256': contract.digest(ledger),
+        'repair_state_sha256': contract.digest(new_state),
+        'sealed_inputs': {str(finished): contract.digest(finished)},
+        'finished_gds': str(finished),
+        'finished_gds_sha256': contract.digest(finished)})
+    return project, impl, current, record, finished
+
+
+def test_finished_candidate_uses_normal_controller_measurement_and_promotes(tmp_path):
+    project, _impl, current, record, _finished = _finishing_controller_fixture(tmp_path)
+    run = prr._run_finished_candidate_controller(
+        project, record, registry=REGISTRY, programs_dir=PROGRAMS)
+    assert run['outcome'] == 'CONVERGED'
+    assert run['iterations'][0]['decision'] == 'PROMOTED'
+    assert run['iterations'][0]['objective_before'] == 1
+    assert run['iterations'][0]['objective_after'] == 0
+    adopted = json.loads(current.read_text())
+    assert adopted['candidate'] == '32-cand09'
+    assert adopted['finished_gds_sha256'] == contract.digest(
+        Path(adopted['finished_gds']))
+
+
+def test_finished_candidate_stale_sealed_input_never_enters_adopted_state(tmp_path):
+    project, _impl, current, record, finished = _finishing_controller_fixture(tmp_path)
+    before = current.read_bytes()
+    finished.write_text('stale geometry\n')
+    run = prr._run_finished_candidate_controller(
+        project, record, registry=REGISTRY, programs_dir=PROGRAMS)
+    assert run['outcome'] == 'NOT_MEASURED'
+    assert run['iterations'][0]['decision'] == 'ACTUATOR_FAILED'
+    assert current.read_bytes() == before
+
+
+def test_finished_candidate_wrong_identity_refuses_before_any_native_consumer(tmp_path):
+    project = tmp_path / 'project'
+    impl = project / prr.ARM_REL / prr.IMPL_DIR
+    put(impl / prr.CONTEXT, {'project': str(project)})
+    put(impl / prr.CURRENT, {'candidate': '32-cand01'})
+    put(project / prr.REPORT_REL, {'adopted': '32-cand01'})
+    put(project / prr.ARM_REL / prr.LEDGER, {'candidates': []})
+    before = (impl / prr.CURRENT).read_bytes()
+    with pytest.raises(contract.Refusal, match='LL_PRR_FINISHING_CANDIDATE_UNKNOWN'):
+        prr._retained_candidate_finishing_inputs(project, '32-cand08')
+    assert (impl / prr.CURRENT).read_bytes() == before
+
+
+@pytest.mark.parametrize('case,reason', [
+    ('density', 'LL_PRR_FINISHING_DENSITY_FAILED'),
+    ('lvs_scope', 'LL_PRR_FINISHING_LVS_SUBJECT_MISMATCH'),
+])
+def test_finishing_or_pv_refusal_never_calls_controller_or_changes_pointer(
+        tmp_path, monkeypatch, case, reason):
+    project = tmp_path / 'project'
+    impl = project / prr.ARM_REL / prr.IMPL_DIR
+    current = put(impl / prr.CURRENT, {'candidate': '32-cand01'})
+    before = current.read_bytes()
+    state = put(tmp_path / 'state.json', {})
+    config = put(tmp_path / 'config.json', {})
+    gds = write(tmp_path / 'before.gds', 'before\n')
+    finished_gds = write(tmp_path / 'after.gds', 'after\n')
+    retained = {
+        'ctx': {'project': str(project), 'image': 'image', 'pdk': 'processA',
+                'mounts': [[str(tmp_path / 'pdk'), contract.PDK_GUEST_ROOT]]},
+        'current': {'candidate': '32-cand01'},
+        'row': {'decision': 'REFUSED'}, 'report': {},
+        'report_path': project / prr.REPORT_REL,
+        'ledger_path': put(project / prr.ARM_REL / prr.LEDGER, {'candidates': []}),
+        'paths': {'repair_state': state, 'config': config, 'gds': gds},
+        'hashes': {'repair_state': contract.digest(state),
+                   'config': contract.digest(config), 'gds': contract.digest(gds),
+                   'def': 'd' * 64},
+        'current_freshness': {'verdict': 'PASS'}, 'density_before': 3,
+    }
+    monkeypatch.setattr(prr, '_retained_candidate_finishing_inputs',
+                        lambda *_a, **_k: retained)
+    fill = importlib.import_module('librelane_fill_dfm')
+    density = 1 if case == 'density' else 0
+    monkeypatch.setattr(fill, 'finish_candidate_gds', lambda *_a, **_k: {
+        'gds': str(finished_gds), 'gds_sha256': contract.digest(finished_gds),
+        'density': {'klayout__density_error__count': density,
+                    'checker_error': None}})
+    lvs_scope = {'gds_sha256': contract.digest(finished_gds),
+                 'def_sha256': 'd' * 64, 'magic_ext_use_gds': True,
+                 'extracted_gds_sha256': (('e' * 64) if case == 'lvs_scope'
+                                           else contract.digest(finished_gds))}
+    monkeypatch.setattr(prr, '_finished_candidate_pv', lambda *_a, **_k: {
+        'drc': {'verdict': 'PASS', 'scope': {
+            'gds_sha256': contract.digest(finished_gds), 'def_sha256': 'd' * 64}},
+        'lvs': {'verdict': 'PASS', 'scope': lvs_scope}})
+    entered = []
+    monkeypatch.setattr(prr, '_run_finished_candidate_controller',
+                        lambda *_a, **_k: entered.append(True))
+    with pytest.raises(contract.Refusal, match=reason):
+        prr.resume_candidate_finishing(project, '32-cand09', f'lane-{case}')
+    assert entered == []
+    assert current.read_bytes() == before
