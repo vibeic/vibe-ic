@@ -96,7 +96,10 @@ def _native_call(operation: str, step: str, project: Path, name: str,
                       doc.get("outputs", []))
     # Keep the previous attempts; only a newly returned terminal result can
     # become the current producer record consumed by the following step.
-    _write(work / f"{step}.json", doc)
+    # Full POST PVT validates a different analysis population. Keep the
+    # nominal POST baseline that already-produced statistical draws consumed.
+    if not (step == "A14" and operation == "pvt"):
+        _write(work / f"{step}.json", doc)
     doc.setdefault("outputs", []).append(str(report))
     doc["executions"] = [execution]
     return doc
@@ -135,6 +138,14 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
         if not isinstance(post_inputs, dict):
             return _result("NOT_MEASURED", "post-layout execution inputs must be an object")
         cfg = {**post_inputs, **cfg}
+    if step_id == "A14" and (bdir / "post_pvt_inputs.json").is_file():
+        try:
+            post_pvt = json.loads((bdir / "post_pvt_inputs.json").read_bytes())
+        except (OSError, ValueError) as exc:
+            return _result("NOT_MEASURED", f"POST PVT execution inputs unreadable: {exc}")
+        if not isinstance(post_pvt, dict):
+            return _result("NOT_MEASURED", "POST PVT execution inputs must be an object")
+        cfg = {**post_pvt, **cfg}
     if step_id == "A16":
         # Like nominal measurement studies, mission/report inputs may be
         # supplied beside the block without changing all upstream inputs.
@@ -196,6 +207,9 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                   "A15": "statistics", "A16": "reliability"}
     if step_id not in operations:
         return _result("NOT_APPLICABLE", f"{step_id} is not a physical analog step")
+    if step_id == "A14" and cfg.get("kind") != "incremental_capture" and isinstance(cfg.get("pvt"), dict):
+        return _native_call("pvt", step_id, project, name, options, run,
+                            {**cfg["pvt"], "_expected_stage": "POST"})
     # Reliability reads the source PDF here and keeps native analyses on the
     # explicit --container transport, like the other measured-input readers.
     return _native_call(operations[step_id], step_id, project, name, options, run, cfg,
@@ -1106,6 +1120,14 @@ def _population(project: Path, name: str, container: str, image: str, pdk: str, 
 
 def _pvt_studies(project: Path, name: str, container: str, image: str, pdk: str, cfg: dict) -> dict:
     from analog_native_pvt import run_pvt_studies
+    if cfg.get("_expected_stage") == "POST":
+        reference = cfg.get("result")
+        if not isinstance(reference, dict) or not reference.get("path"):
+            return _result("NOT_MEASURED", "POST PVT requires its actual result manifest")
+        path = Path(reference["path"])
+        path = path if path.is_absolute() else project / path
+        if _read(path).get("stage") != "POST":
+            return _result("NOT_MEASURED", "A14 requires POST PVT; PRE results cannot substitute")
     return run_pvt_studies(project, name, cfg.get("result"))
 
 

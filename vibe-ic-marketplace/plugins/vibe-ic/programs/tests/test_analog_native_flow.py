@@ -27,6 +27,33 @@ def project(tmp_path):
     return tmp_path
 
 
+@pytest.mark.parametrize("step,leaf,key", [("A08", "pvt_inputs.json", "pvt"),
+                                         ("A09", "statistics_inputs.json", "statistics"),
+                                         ("A14", "post_pvt_inputs.json", "pvt")])
+def test_local_execution_manifest_changes_only_its_native_step_and_signoff(tmp_path, step, leaf, key):
+    root = project(tmp_path)
+    manifest = root / "completed-native-contexts.json"
+    manifest.write_text('{"contexts": ["actual-native-record"]}')
+    declaration = root / "phase3/analog/cell_alpha" / leaf
+    declaration.write_text(json.dumps({key: {"result": {"path": str(manifest),
+                                                       "sha256": native._sha(manifest)}}}))
+    before = {sid: native._input_views(root, "cell_alpha", sid) for sid in native.STEPS}
+    manifest.write_text('{"contexts": ["a-different-native-record"]}')
+    after = {sid: native._input_views(root, "cell_alpha", sid) for sid in native.STEPS}
+    assert {sid for sid in native.STEPS if before[sid] != after[sid]} == {step, "A19"}
+    assert str(declaration) in before[step]
+    assert str(manifest) in before[step]
+
+
+@pytest.mark.parametrize("step,leaf", [("A08", "pvt_inputs.json"), ("A09", "statistics_inputs.json"),
+                                    ("A14", "post_pvt_inputs.json")])
+def test_malformed_local_execution_declaration_is_hashed_for_the_ordinary_loader(tmp_path, step, leaf):
+    root = project(tmp_path)
+    declaration = root / "phase3/analog/cell_alpha" / leaf
+    declaration.write_text("{malformed")
+    assert native._input_views(root, "cell_alpha", step)[str(declaration)] == native._sha(declaration)
+
+
 def args(entry="A06", exit_="A06"):
     return SimpleNamespace(entry_step=entry, exit_step=exit_, blocks="", container="", pdk="")
 

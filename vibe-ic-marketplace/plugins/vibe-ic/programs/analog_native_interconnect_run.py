@@ -144,15 +144,18 @@ def prepare(project,block,settings,work,init_text=''):
     deck=work/'op.sp'
     import analog_a8_hardmacro_emit as a8
     native_options=settings.get('native_options',[])
-    if any(not re.fullmatch(r'[a-zA-Z]\w*=[-+\d.eE]+',value) for value in native_options):
-        raise ValueError('explicit numeric native options required')
+    if any(not re.fullmatch(r'(?:method=(?:gear|trap)|(?!method=)[a-zA-Z]\w*=[-+\d.eE]+)',
+                            value,flags=re.I) for value in native_options):
+        raise ValueError('explicit numeric native options or method=gear|trap required')
     options=['.options '+value for value in native_options]
     precision,precision_record=a8._native_op_precision((body+'\n'+'\n'.join(options)).splitlines())
-    solver,solver_record=a8._native_op_solver(body.splitlines())
+    solver,solver_record=a8._native_op_solver((body+'\n'+'\n'.join(options)).splitlines())
     capture=work/('op.raw' if kind=='OP' else 'tran.raw')
+    # ngspice case-folds `run` arguments, even quoted absolute filenames.
+    # The native process already runs in this exact work directory.
     deck.write_text(body+f'\n.temp {analysis["temperature_c"]:.17g}\n'+
                    '\n'.join([*solver,*options,*precision])+f'\n.save all\n{command}\n'+
-                   f'.control\nset num_threads=1\nset filetype=binary\nrun {capture}\nquit\n.endc\n.end\n')
+                   f'.control\nset num_threads=1\nset filetype=binary\nrun {capture.name}\nquit\n.endc\n.end\n')
     init=work/'.spiceinit'
     # Initialization files are command streams. Preserve their commands,
     # rather than sourcing them as though they were a SPICE circuit.

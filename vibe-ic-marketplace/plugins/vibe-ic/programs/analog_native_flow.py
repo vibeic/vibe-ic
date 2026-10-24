@@ -64,6 +64,29 @@ def _input_views(project, name, step=None):
         paths.append(directory / "post_layout_inputs.json")
     if step in ("A06", "A07"):
         paths.append(directory / "measurement_studies.json")
+    if step in ("A08", "A09", "A14", "A19"):
+        def execution_references(value, key=None):
+            if isinstance(value, dict):
+                for field, item in value.items():
+                    execution_references(item, field)
+            elif isinstance(value, list):
+                for item in value:
+                    execution_references(item, key)
+            elif isinstance(value, str) and value and key in ("path", "result", "manifest", "references"):
+                declared = Path(value)
+                paths.append(declared if declared.is_absolute() else project / declared)
+        for selected, leaf in (("A08", "pvt_inputs.json"), ("A09", "statistics_inputs.json"),
+                               ("A14", "post_pvt_inputs.json")):
+            if step not in (selected, "A19"):
+                continue
+            declaration = directory / leaf
+            paths.append(declaration)
+            try:
+                execution_references(_read(declaration, {}))
+            except (OSError, ValueError):
+                # Retain its bytes; the step's ordinary loader reports a
+                # malformed declaration without launching native work.
+                pass
     if step == "A16":
         paths.append(directory / "reliability_inputs.json")
     if step == "A17":

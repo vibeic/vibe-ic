@@ -606,6 +606,17 @@ def run_step(step_id, project, block, options, run):
     if not name or Path(name).name != name or name in (".", ".."):
         return _result("NOT_MEASURED", "analog block name is absent or invalid")
     config = _config(options, block, step_id)
+    sidecar_name = {"A08": "pvt_inputs.json", "A09": "statistics_inputs.json"}.get(step_id)
+    if sidecar_name:
+        sidecar = project / "phase3" / "analog" / name / sidecar_name
+        if sidecar.is_file():
+            try:
+                defaults = json.loads(sidecar.read_bytes())
+            except (OSError, ValueError) as exc:
+                return _result("NOT_MEASURED", f"{sidecar_name} execution inputs unreadable: {exc}")
+            if not isinstance(defaults, dict):
+                return _result("NOT_MEASURED", f"{sidecar_name} execution inputs must be an object")
+            config = {**defaults, **config}
     if step_id == "A10":
         calibration = config.get("calibration")
         features = options.get("features") or (options.get("config") or {}).get("features") or {}

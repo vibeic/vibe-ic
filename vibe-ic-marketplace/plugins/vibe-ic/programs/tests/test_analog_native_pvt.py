@@ -271,3 +271,100 @@ def test_actual_ac_failure_keeps_precedence_over_other_missing_coverage(case, fa
     data["rows"].pop()  # Missing another context cannot hide actual AC failure.
     put(manifest, data)
     assert consume(case)["status"] == "FAIL"
+
+
+@pytest.fixture
+def post_case(case):
+    project, pre_manifest = case
+    add_ac_contexts(case)
+    directory = project / 'phase3/analog/cell'; net = directory/'cell.sp'; tb = directory/'tb_cell.sp'
+    gds = put(directory/'cell.gds', 'software fixture layout identity')
+    tech = put(project/'native.tech', 'extract\nstyle ngspice variants (), (fast)\nend\n')
+    work = project/'phase3/librelane/analog/cell/native_analog'
+    corners, styles = [], []
+    source_body = net.read_text()[net.read_text().index('.subckt'):]
+    for style in ('ngspice()', 'ngspice(fast)'):
+        root = project/'post'/physical._sha(tech)[:8]/pvt.spice._style_slug(style);root.mkdir(parents=True)
+        raw = put(root/'actual.spice', source_body.replace('.ends cell',
+            'Rpex vin branch 5\nCpex branch vss 1p\n.ends cell'))
+        corners.append({'style':style,'extracted_netlist':str(raw),'sha256':physical._sha(raw)})
+        base = root/'cell.sp'
+        text, mapping = pvt.spice.post_layout_netlist('cell',pvt.spice.subckt_ports(net.read_text(),'cell'),raw.read_text(),
+            pvt.spice.model_binding_lines(net.read_text(),directory,root))
+        put(base,text)
+        post_tb = put(root/'tb_cell.sp',pvt.spice.post_layout_testbench(tb.read_text(),'cell',base.name,directory,root))
+        styles.append({'style':style,'source_post_netlist':view(base),'source_post_testbench':view(post_tb),'rows':[]})
+    extraction = put(work/'A13.json',{'status':'PASS','native_inputs':{'net':view(net),'gds':view(gds)},'metrics':{
+        'netlist_sha256':physical._sha(net),'layout_sha256':physical._sha(gds),'magic_tech':str(tech),'corners':corners}})
+    original = json.loads(pre_manifest.read_text())['rows']
+    for group,corner in zip(styles,corners):
+        base = Path(group['source_post_netlist']['path']);root=base.parent
+        for index,entry in enumerate(original):
+            prior = json.loads(Path(entry['result']).read_text());process=prior['bindings']['integration_condition']['process']
+            folder=root/f'case-{index}';folder.mkdir()
+            selected=put(folder/'cell.sp',base.read_text().replace('device_tt',process))
+            template=put(folder/'template.sp',Path(prior['native_inputs']['testbench']['path']).read_text()
+                .replace(prior['native_inputs']['netlist']['path'],str(selected)))
+            binding=prior['bindings'];bindings=put(folder/'bindings.json',binding)
+            def run(program,argv,**kwargs):
+                log=put(folder/'native.log',Path(prior['executions'][0]['log']).read_text())
+                return {'returncode':0,'log':str(log),'log_sha256':physical._sha(log)}
+            record=bound.run_measurements(project,selected,template,binding,folder/'native',run)
+            assert record['status']=='PASS',record
+            record['native_inputs'].update(bindings=view(bindings),source_netlist=view(net),source_post_netlist=view(base),
+                raw_extraction={'path':corner['extracted_netlist'],'sha256':corner['sha256']},extraction_record=view(extraction))
+            result=put(folder/'native/result.json',record);group['rows'].append({'result':str(result)})
+    manifest=put(project/'post-pvt.json',{'stage':'POST','source_netlist':view(net),'extraction':view(extraction),'styles':styles})
+    return project,manifest
+
+
+def test_complete_post_pvt_validates_every_actual_rc_style_and_source_context(post_case):
+    result=consume(post_case)
+    assert result['status']=='PASS',result
+    assert result['metrics']['stage']=='POST'
+    assert result['metrics']['total_corners']==result['metrics']['corners_executed']==90
+    assert len(result['metrics']['corners'])==2
+    assert all(group['result']['metrics']['psrr_measurement_frequency_hz']==1000 for group in result['metrics']['corners'])
+
+
+@pytest.mark.parametrize('mutation',['old_raw','changed_base','wrong_source_role','missing_style','missing_context','wrong_layout'])
+def test_post_pvt_old_rc_or_incomplete_current_inputs_cannot_pass(post_case,mutation):
+    project,manifest=post_case;data=json.loads(manifest.read_text());group=data['styles'][0]
+    if mutation=='missing_style':data['styles'].pop()
+    elif mutation=='missing_context':group['rows']=group['rows'][:-2]
+    elif mutation=='wrong_layout':(project/'phase3/analog/cell/cell.gds').write_text('different actual layout')
+    elif mutation=='changed_base':
+        path=Path(group['source_post_netlist']['path']);path.write_text(path.read_text().replace('Rpex','Rchanged'))
+        group['source_post_netlist']=view(path)
+    else:
+        path=Path(group['rows'][0]['result']);record=json.loads(path.read_text())
+        role='raw_extraction' if mutation=='old_raw' else 'source_netlist'
+        record['native_inputs'][role]=view(project/'phase3/analog/cell/tb_cell.sp')
+        put(path,record)
+    put(manifest,data)
+    result=consume(post_case)
+    assert result['status']=='NOT_MEASURED'
+    assert result['metrics'].get('full_pvt_sweep_executed') is not True
+
+
+def test_post_native_failure_dominates_another_missing_extraction_style(post_case):
+    _project,manifest=post_case;data=json.loads(manifest.read_text());data['styles'].pop()
+    path=Path(data['styles'][0]['rows'][0]['result']);record=json.loads(path.read_text())
+    log=Path(record['executions'][0]['log']);log.write_text(log.read_text()+';;RESIDUAL_FAIL actual native failure\n')
+    record['executions'][0]['log_sha256']=physical._sha(log);put(path,record);put(manifest,data)
+    assert consume(post_case)['status']=='FAIL'
+
+
+def test_post_styles_cannot_claim_one_psrr_scope_from_different_frequency_points(post_case):
+    _project,manifest=post_case;data=json.loads(manifest.read_text())
+    for entry in data['styles'][1]['rows']:
+        path=Path(entry['result']);record=json.loads(path.read_text());binding=record['bindings']
+        if binding['analysis']['kind']!='AC':continue
+        binding['measurements']['rejection_at_default_point']['frequency_hz']=100
+        bindings=Path(record['native_inputs']['bindings']['path']);put(bindings,binding)
+        template=Path(record['native_inputs']['testbench']['path']);deck=Path(record['native_inputs']['deck']['path'])
+        deck.write_text(bound.emit_deck(bound.contextual_template(template.read_text(),template.parent),binding,deck.parent/'curve.dat'))
+        record['native_inputs'].update(bindings=view(bindings),deck=view(deck));put(path,record)
+    result=consume(post_case)
+    assert result['status']=='NOT_MEASURED'
+    assert any('frequency differs between extraction styles' in gap['detail'] for gap in result['metrics']['gaps'])

@@ -443,6 +443,57 @@ def test_a08_invalid_bound_manifest_refuses_before_native_launch(project):
     assert result['status'] == 'NOT_MEASURED'
 
 
+@pytest.mark.parametrize('step', ['A08', 'A09'])
+@pytest.mark.parametrize('state', ['PASS', 'FAIL'])
+def test_execution_input_sidecar_routes_existing_native_consumers(project, step, state):
+    directory = project / 'phase3/analog/stage'
+    (directory/'spec.json').write_text(json.dumps({'specs':[{'name':'vout','min':.9,'max':1.1,'unit':'V'}]}))
+    reference = {'path':'actual-native.json','sha256':'bound-native-source'}
+    key, filename = ('pvt','pvt_inputs.json') if step == 'A08' else ('statistics','statistics_inputs.json')
+    settings = {'result':reference} if step == 'A08' else {'n':3,'references':[reference]}
+    (directory/filename).write_text(json.dumps({key:settings}))
+    seen = []
+    def run(program, argv, **kwargs):
+        seen.append(program)
+        assert program == 'analog_native_physical.py'
+        selected = json.loads(argv[argv.index('--settings')+1])
+        expected = {'result':dict(reference,path=str(project/reference['path']))} if step == 'A08' else {
+            'stage':'PRE','samples':3,'references':[dict(reference,path=str(project/reference['path']))]}
+        assert selected == expected
+        metrics = {'stage':'PRE','verdict':state,'mc_runs':3,
+            'spec_yield':{'vout':{'runs_scored':3,'yield_pct':100}},'total_corners':9,'corners_executed':9,
+            'full_pvt_sweep_executed':True,'design_traceable':True,
+            'source_context_coverage':{'vout':{'required_contexts':9,'measured_contexts':9,'missing_contexts':[]}}}
+        Path(kwargs['outputs'][0]).write_text(json.dumps({'status':state,'metrics':metrics,'outputs':[]}))
+        return {'returncode':0 if state == 'PASS' else 1}
+    result = sim.run_step(step,project,{'name':'stage'},_options(previous_results={'A07':{'stage':{'status':'PASS'}}}),run)
+    assert result['status'] == state and len(seen) == 1
+
+
+@pytest.mark.parametrize('step', ['A08', 'A09'])
+@pytest.mark.parametrize('location', ['block', 'global_step', 'block_step'])
+def test_execution_input_explicit_configuration_overrides_sidecar_defaults(project, step, location):
+    directory = project / 'phase3/analog/stage'
+    key, filename = ('pvt','pvt_inputs.json') if step == 'A08' else ('statistics','statistics_inputs.json')
+    sidecar = {'result':{'path':'unused.json','sha256':'unused'}} if step == 'A08' else {'n':3,'references':[{'path':'unused.json','sha256':'unused'}]}
+    (directory/filename).write_text(json.dumps({key:sidecar}))
+    # An explicit invalid reference must refuse; it cannot fall back to the valid local default.
+    explicit = {key:{'result':{}} if step == 'A08' else {'n':1,'references':[{'path':'explicit','sha256':'h'}]}}
+    config = {'blocks':{'stage':explicit}} if location == 'block' else {'steps':{step:explicit}} if location == 'global_step' else {'blocks':{'stage':{'steps':{step:explicit}}}}
+    result = sim.run_step(step,project,{'name':'stage'},_options(config=config,
+        previous_results={'A07':{'stage':{'status':'PASS'}}}),_never)
+    assert result['status'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('step', ['A08', 'A09'])
+@pytest.mark.parametrize('body', ['{', '[]', 'null'])
+def test_execution_input_malformed_sidecar_refuses_before_native(project, step, body):
+    filename = 'pvt_inputs.json' if step == 'A08' else 'statistics_inputs.json'
+    (project/'phase3/analog/stage'/filename).write_text(body)
+    result = sim.run_step(step,project,{'name':'stage'},_options(previous_results={'A07':{'stage':{'status':'PASS'}}}),_never)
+    assert result['status'] == 'NOT_MEASURED' and filename in result['detail']
+
+
 def _incremental_pvt_manifest(project, fault=None):
     bdir = project / 'phase3/analog/stage'
     (bdir / 'spec.json').write_text(json.dumps({'specs': [

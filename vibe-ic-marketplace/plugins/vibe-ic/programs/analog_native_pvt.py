@@ -77,7 +77,7 @@ def _circuit_lines(path):
             and not re.match(r"(?i)^\s*\.(?:temp|save|op|dc|ac|tran|noise|meas|measure)\b", line)]
 
 
-def _template_conditions(net, template, canonical_tb, binding, name):
+def _template_conditions(net, template, canonical_tb, binding, name, canonical_net=None):
     netlines = spice._joined_lines(net.read_text())
     pins = next((line.split()[2:] for line in netlines
                  if re.match(r"(?i)^\s*\.subckt\s+" + re.escape(name) + r"\s", line)), [])
@@ -161,7 +161,7 @@ def _template_conditions(net, template, canonical_tb, binding, name):
             command = tokens[0].casefold()
             if command in (".include", ".inc") and len(tokens) == 2:
                 # Only the exact corresponding DUT include may vary.
-                expected_net = net if path == template else canonical_tb.parent / (name + ".sp")
+                expected_net = net if path == template else canonical_net or canonical_tb.parent / (name + ".sp")
                 tokens = [".include", "<DUT>" if Path(tokens[1]).resolve() == expected_net.resolve() else tokens[1]]
             elif command in selected.values():
                 tokens = [*tokens[:3], "<condition>"]
@@ -173,10 +173,25 @@ def _template_conditions(net, template, canonical_tb, binding, name):
 
 
 def run_pvt_studies(project: Path, name: str, reference: dict) -> dict:
-    """Derive current PRE PVT evidence from an ordinary native-results manifest."""
+    """Derive actual PRE or A13-bound POST PVT evidence without rerunning it."""
+    if isinstance(reference, dict) and reference.get("path"):
+        path = (Path(project) / reference["path"]).resolve()
+        declared_stage = physical._read(path).get("stage")
+        if declared_stage == "POST":
+            return _post_pvt_studies(Path(project).resolve(), name, reference)
+        if declared_stage not in (None, "PRE"):
+            return physical._result("NOT_MEASURED", "PVT manifest stage is neither PRE nor POST")
+    return _consume_pvt_studies(project, name, reference)
+
+
+def _consume_pvt_studies(project, name, reference, context=None):
     project = Path(project).resolve()
     bdir, _work = physical._paths(project, name)
     net, spec, tb = bdir / (name + ".sp"), bdir / "spec.json", bdir / ("tb_" + name + ".sp")
+    stage, base_role = "PRE", "source_netlist"
+    if context:
+        net, tb = Path(context["netlist"]), Path(context["testbench"])
+        stage, base_role = "POST", "source_post_netlist"
     consumed, outputs, rows, gaps, seen, failed = {}, [], [], [], set(), False
     measured_contexts, psrr_frequency = set(), None
     try:
@@ -186,6 +201,8 @@ def run_pvt_studies(project: Path, name: str, reference: dict) -> dict:
         if not physical._current_native_views({"manifest": {**reference, "path": str(manifest_path)}}):
             raise ValueError("PVT manifest is absent or its referenced hash changed")
         manifest = physical._read(manifest_path)
+        if context:
+            manifest = context["manifest"]
         base = manifest.get("source_netlist") or {}
         if not net.is_file() or base.get("sha256") != physical._sha(net) or not physical._current_native_views({"base": base}):
             raise ValueError("PVT manifest source base is not the current canonical PRE DUT")
@@ -203,7 +220,7 @@ def run_pvt_studies(project: Path, name: str, reference: dict) -> dict:
         if not isinstance(entries, list) or not entries:
             raise ValueError("PVT manifest has no actual native context records")
     except (OSError, ValueError, TypeError, KeyError) as exc:
-        return physical._result("NOT_MEASURED", str(exc), native_inputs=consumed, metrics={"stage": "PRE"})
+        return physical._result("NOT_MEASURED", str(exc), native_inputs=consumed, metrics={"stage": stage})
 
     limits = physical._required_limits(project, name)
     required = sorted(limits)
@@ -218,15 +235,18 @@ def run_pvt_studies(project: Path, name: str, reference: dict) -> dict:
             declared = binding.get("integration_condition") or {}
             if not physical._current_native_views(views):
                 raise ValueError("native PVT consumed inputs changed or are absent")
-            if variant.resolve() != net.resolve() and (views.get("source_netlist") or {}).get("sha256") != consumed["source_netlist"]["sha256"]:
+            if variant.resolve() != net.resolve() and (views.get(base_role) or {}).get("sha256") != consumed["source_netlist"]["sha256"]:
                 raise ValueError("PVT variant lacks its exact canonical source-base input")
+            if context and any(views.get(role) != value for role, value in context["required_inputs"].items()):
+                raise ValueError("POST PVT record does not consume the current A13 raw extraction/source base")
             signature, process, selections = _net_signature(variant)
             if signature != base_signature:
                 raise ValueError("PVT variant electrical cards/model paths differ beyond declared process selection")
             declared_process = str(declared.get("process", declared.get("mos_corner", ""))).casefold()
             if declared_process not in {process, *(section for _path, section, _process in selections)}:
                 raise ValueError("PVT process declaration differs from its actual model section")
-            actual = _template_conditions(variant, Path(views["testbench"]["path"]), tb, binding, name)
+            actual = _template_conditions(variant, Path(views["testbench"]["path"]), tb, binding, name,
+                                          canonical_net=net if context else None)
             temperature = binding["analysis"].get("temperature_c")
             if not _number(temperature) or not _number(declared.get("temp_c")) or temperature != declared["temp_c"]:
                 raise ValueError("PVT temperature declarations differ or are absent")
@@ -299,10 +319,10 @@ def run_pvt_studies(project: Path, name: str, reference: dict) -> dict:
     if not physical._current_native_views(consumed):
         gaps.append({"detail": "PVT consumed files changed during reference-only derivation"})
     status = "FAIL" if failed else "NOT_MEASURED" if gaps or missing_contexts or missing_outputs else "PASS"
-    return physical._result(status, "current PRE native PVT study measurements" +
+    return physical._result(status, "current " + stage + " native PVT study measurements" +
         ("; missing source outputs: " + ", ".join(missing_outputs) if missing_outputs else ""),
         sorted({path for path in outputs if path}), native_inputs=consumed,
-        metrics={"stage": "PRE", "total_corners": len(expected), "corners_executed": len(seen),
+        metrics={"stage": stage, "total_corners": len(expected), "corners_executed": len(seen),
                  "psrr_measurement_frequency_hz": psrr_frequency,
                  "psrr_scope": "rejection only at the declared measurement point; no source-provided/all-frequency band is inferred",
                  "full_pvt_sweep_executed": not missing_contexts and not gaps,
@@ -312,3 +332,105 @@ def run_pvt_studies(project: Path, name: str, reference: dict) -> dict:
                                                  "missing": missing_outputs},
                  "source_context_coverage": matrix, "missing_contexts": [list(key) for key in missing_contexts],
                  "gaps": gaps, "contexts": rows})
+
+
+def _post_pvt_studies(project, name, reference):
+    """Validate every actual extraction style against its current native RC body."""
+    bdir, work = physical._paths(project, name)
+    net, tb, gds = bdir / (name + ".sp"), bdir / ("tb_" + name + ".sp"), bdir / (name + ".gds")
+    consumed, outputs, groups, gaps = {}, [], [], []
+    failed = False
+    try:
+        path = (project / reference["path"]).resolve()
+        if not physical._current_native_views({"manifest": {**reference, "path": str(path)}}):
+            raise ValueError("POST PVT manifest is absent or changed")
+        manifest = physical._read(path)
+        source = {"path": str(net.resolve()), "sha256": physical._sha(net)}
+        if manifest.get("source_netlist") != source:
+            raise ValueError("POST PVT canonical source differs from the current delivered DUT")
+        extraction = manifest.get("extraction") or {}
+        if Path(extraction.get("path", "")).resolve() != (work / "A13.json").resolve() \
+                or not physical._current_native_views({"A13": extraction}):
+            raise ValueError("POST PVT requires the current delivered A13 record")
+        record = physical._read(Path(extraction["path"])); data = record.get("metrics") or {}
+        if record.get("status") != "PASS" or data.get("netlist_sha256") != source["sha256"] \
+                or not gds.is_file() or data.get("layout_sha256") != physical._sha(gds) \
+                or not physical._current_native_views(record.get("native_inputs")):
+            raise ValueError("A13 does not bind the current source, layout and extraction inputs")
+        technology = Path(data.get("magic_tech") or "__absent_technology__")
+        if not technology.is_file():
+            technology = work / "magic_tech.flat"
+        expected_styles = spice.extraction_styles(technology)
+        if not expected_styles or len(set(expected_styles)) != len(expected_styles):
+            raise ValueError("actual A13 technology style inventory is unavailable or ambiguous")
+        corners = data.get("corners") or []
+        if len({row["style"] for row in corners}) != len(corners):
+            raise ValueError("A13 extraction styles are duplicated")
+        consumed = {"manifest": {**reference, "path": str(path)}, "A13": extraction,
+                    "canonical_source": source, "layout": {"path": str(gds), "sha256": physical._sha(gds)},
+                    "canonical_spec": {"path": str(bdir / "spec.json"), "sha256": physical._sha(bdir / "spec.json")}}
+        expected_contexts = len(_conditions(physical._read(bdir / "spec.json"))[1]) * len(sweep.PVT_PROCESS) * len(sweep.PVT_TEMPS)
+        outputs = [str(path), str(extraction["path"])]
+        styles = manifest.get("styles")
+        if not isinstance(styles, list) or not styles:
+            raise ValueError("POST PVT has no actual extracted-style context records")
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return physical._result("NOT_MEASURED", str(exc), native_inputs=consumed, metrics={"stage": "POST"})
+    seen = set()
+    for group in styles:
+        style = group.get("style")
+        try:
+            if style not in expected_styles:
+                raise ValueError("POST PVT style is outside the actual extraction technology")
+            if style in seen:
+                gaps.append({"style": style, "detail": "duplicate POST PVT style"})
+            seen.add(style)
+            corner = next((row for row in corners if row["style"] == style), None)
+            if not corner:
+                raise ValueError("A13 did not measure this required extraction style")
+            raw = {"path": str(Path(corner["extracted_netlist"]).resolve()), "sha256": corner["sha256"]}
+            views = {"base": group.get("source_post_netlist"), "template": group.get("source_post_testbench"), "raw": raw}
+            if not physical._current_native_views(views):
+                raise ValueError("POST PVT actual raw/base/testbench is absent or changed")
+            base, template = Path(views["base"]["path"]), Path(views["template"]["path"])
+            raw_text = Path(raw["path"]).read_text()
+            expected, mapping = spice.post_layout_netlist(name, spice.subckt_ports(net.read_text(), name), raw_text,
+                spice.model_binding_lines(net.read_text(), bdir, base.parent))
+            expected_tb = spice.post_layout_testbench(tb.read_text(), name, base.name, bdir, base.parent)
+            ports, internal = spice.rcx_nets(raw_text, name)
+            expected_tb, _dropped = spice.remap_probes(expected_tb, name, ports, internal, mapping)
+            if base.read_text() != expected or template.read_text() != expected_tb:
+                raise ValueError("POST PVT base/template differs from the current A13 electrical body and source stimulus")
+            context = {"netlist": str(base), "testbench": str(template),
+                "manifest": {"source_netlist": views["base"], "rows": group.get("rows")},
+                "required_inputs": {"source_netlist": source, "source_post_netlist": views["base"],
+                                    "raw_extraction": raw, "extraction_record": extraction}}
+            result = _consume_pvt_studies(project, name, reference, context)
+            failed |= result["status"] == "FAIL"
+            if result["status"] != "PASS":
+                gaps.append({"style": style, "detail": result["detail"]})
+            groups.append({"style": style, "status": result["status"], "result": result})
+            consumed.update({style + ":" + key: value for key, value in result.get("native_inputs", {}).items()})
+            consumed.update({style + ":" + key: value for key, value in views.items()})
+            outputs += result.get("outputs", [])
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            gaps.append({"style": style, "detail": str(exc)})
+    missing = sorted(set(expected_styles) - seen)
+    if missing:
+        gaps.append({"detail": "required POST PVT styles not measured: " + ", ".join(missing)})
+    frequencies = {group["result"].get("metrics", {}).get("psrr_measurement_frequency_hz") for group in groups}
+    frequencies.discard(None)
+    if len(frequencies) > 1:
+        gaps.append({"detail": "POST PVT PSRR measurement frequency differs between extraction styles"})
+    if not physical._current_native_views(consumed):
+        gaps.append({"detail": "POST PVT source/evidence changed during derivation"})
+    complete = not gaps and len(groups) == len(expected_styles)
+    return physical._result("FAIL" if failed else "PASS" if complete else "NOT_MEASURED",
+        "current A13-bound native POST PVT measurements across every extraction style", sorted(set(outputs)),
+        native_inputs=consumed, metrics={"stage": "POST", "full_pvt_sweep_executed": complete,
+            "design_traceable": not gaps, "required_styles": expected_styles, "missing_styles": missing,
+            "psrr_measurement_frequency_hz": next(iter(frequencies)) if len(frequencies) == 1 else None,
+            "total_corners": len(expected_styles) * expected_contexts,
+            "corners_executed": sum(group["result"].get("metrics", {}).get("corners_executed", 0) for group in groups),
+            "corners": groups, "gaps": gaps,
+            "scope": "actual source PVT and supply/load contexts; PSRR only at its declared measurement point, no all-band claim"})

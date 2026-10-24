@@ -37,7 +37,7 @@ def test_producer_keeps_actual_source_stimulus_and_one_native_analysis(source_ca
     text=deck.read_text()
     assert 'v1 a 0 PWL(0 0 1n 1)' in text
     assert text.count('.control')==1 and '100u' not in text
-    assert 'set num_threads=1' in text and f'run {work / "tran.raw"}' in text
+    assert 'set num_threads=1' in text and 'run tran.raw\n' in text
     assert text.count('.tran ')==1 and '.temp 105' in text
     assert len(bindings)==1 and bindings[0][2]==1
     assert str(deck) in rec['inputs_before'] and str(project/'rc.spice') in rec['inputs_before']
@@ -49,6 +49,44 @@ def test_unbound_original_dut_include_is_refused(source_case):
     settings['testbench_dut']=str(project/'wrong.sp')
     with pytest.raises(ValueError,match='original DUT include'):
         producer.prepare(project,'unit',settings,work)
+
+
+@pytest.mark.parametrize('kind,filename',[('TRAN','tran.raw'),('OP','op.raw')])
+def test_native_run_filename_preserves_uppercase_space_work_directory(source_case,kind,filename):
+    project,settings,_=source_case
+    work=project/'MixedCase with spaces';work.mkdir()
+    settings['analysis']['kind']=kind
+    producer.write(work/'settings.json',settings)
+    rec,_,deck=producer.prepare(project,'unit',settings,work)
+    control=deck.read_text().split('.control\n',1)[1]
+    assert 'run '+filename+'\n' in control
+    assert str(work) not in control
+    assert Path(rec['deck']).parent==work
+
+
+@pytest.mark.parametrize('method',['gear','trap'])
+def test_explicit_standard_method_controls_effective_deck_and_metadata(source_case,method):
+    project,settings,work=source_case
+    tb=Path(settings['testbench'])
+    tb.write_text('.options method=trap reltol=1e-6 vntol=1e-8 abstol=1e-15\n'+tb.read_text())
+    settings['native_options']=['klu=1','method='+method,'maxord=2']
+    rec,_,deck=producer.prepare(project,'unit',settings,work)
+    text=deck.read_text()
+    assert rec['solver']['method']==method
+    assert text.rfind('.options method='+method)>text.index('.options method=trap reltol=1e-6')
+    assert '.options klu=1' in text and '.options maxord=2' in text
+    assert 'reltol=1e-6 vntol=1e-8 abstol=1e-15' in text
+    assert 'v1 a 0 PWL(0 0 1n 1)' in text and text.count('.tran ')==1
+
+
+@pytest.mark.parametrize('option',['method=euler','method=1','method=gear maxord=2',
+                                  'method=gear;gshunt=1','method=gear\n.options gshunt=1'])
+def test_unsupported_method_and_option_injection_refused(source_case,option):
+    project,settings,work=source_case
+    settings['native_options']=[option]
+    with pytest.raises(ValueError,match='method=gear'):
+        producer.prepare(project,'unit',settings,work)
+    assert not (work/'op.sp').exists()
 
 
 def test_execution_command_is_durable_before_metadata_processing(tmp_path):

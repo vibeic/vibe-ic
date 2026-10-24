@@ -14,7 +14,7 @@ class NativeRaw:
                 line=stream.readline()
                 if not line or stream.tell()>4*1024*1024:
                     raise ValueError('native raw header incomplete')
-                decoded=line.decode('ascii').strip();header.append(decoded)
+                decoded=line.decode('utf-8').strip();header.append(decoded)
                 if decoded in ('Binary:','Values:'):
                     offset=stream.tell();mode=decoded;break
         self.plot=next((l.split(':',1)[1].strip() for l in header if l.startswith('Plotname:')),'')

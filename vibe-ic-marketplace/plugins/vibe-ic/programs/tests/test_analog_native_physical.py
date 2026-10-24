@@ -27,6 +27,45 @@ def project(tmp_path):
     return project
 
 
+@pytest.mark.parametrize("status", ["PASS", "FAIL"])
+def test_full_post_pvt_publication_preserves_the_nominal_baseline_consumed_by_statistics(project, status):
+    bdir, work = physical._paths(project, "unit")
+    baseline = put(work / "A14.json", {"status": "PASS", "metrics": {"corners": ["actual nominal POST"]}})
+    before = physical._sha(baseline)
+    reference = {"path": "actual-post-pvt.json", "sha256": "a" * 64}
+    put(bdir / "post_pvt_inputs.json", {"pvt": {"result": reference}})
+    calls = []
+    def run(_program, argv, **kwargs):
+        calls.append(argv)
+        put(Path(argv[argv.index("--json") + 1]), {"status": status, "outputs": []})
+        return {"returncode": 0 if status == "PASS" else 1}
+    result = physical.run_step("A14", project, {"name": "unit"}, {}, run)
+    assert result["status"] == status
+    assert calls[0][0] == "pvt"
+    assert json.loads(calls[0][calls[0].index("--settings") + 1]) == {
+        "result": reference, "_expected_stage": "POST"}
+    assert physical._sha(baseline) == before
+
+
+def test_post_pvt_execution_input_does_not_change_the_statistical_population(project, monkeypatch):
+    bdir, _ = physical._paths(project, "unit")
+    put(bdir / "post_pvt_inputs.json", {"pvt": {"result": {"path": "full-post-pvt.json"}}})
+    calls = []
+    monkeypatch.setattr(physical, "_native_call", lambda *a, **k:
+        calls.append((a[0], a[-1])) or {"status": "NOT_MEASURED", "outputs": []})
+    physical.run_step("A15", project, {"name": "unit"}, {}, None)
+    assert calls == [("statistics", {})]
+
+
+def test_post_pvt_cannot_publish_pre_corner_results_as_a14(project, monkeypatch):
+    import analog_native_pvt as pvt
+    path = put(project / "pre-only.json", {"stage": "PRE"})
+    monkeypatch.setattr(pvt, "run_pvt_studies", lambda *a: pytest.fail("PRE reached A14 POST reader"))
+    result = physical._pvt_studies(project, "unit", "container", "image", "pdk",
+        {"result": {"path": str(path), "sha256": physical._sha(path)}, "_expected_stage": "POST"})
+    assert result["status"] == "NOT_MEASURED"
+
+
 @pytest.mark.parametrize("selector", ["_pre_layout_measurements", "_adopted_studies"])
 @pytest.mark.parametrize("explicit", [True, False])
 def test_explicit_pre_adoption_is_authoritative_over_historical_public_rows(project, monkeypatch, selector, explicit):

@@ -8,12 +8,37 @@ import pytest
 from analog_native_waveform import NativeRaw, window_statistics,product_statistics
 
 
-def capture(path,times,values):
+def capture(path,times,values,title='native grid fixture'):
     matrix=np.column_stack([times,values,np.zeros(len(times))]).astype('<f8')
-    header=(f'Title: native grid fixture\nPlotname: Transient Analysis\nFlags: real\n'
+    header=(f'Title: {title}\nPlotname: Transient Analysis\nFlags: real\n'
             f'No. Variables: 3\nNo. Points: {len(times)}\nVariables:\n'
             '0 time time\n1 v(a) voltage\n2 v(b) voltage\nBinary:\n')
     path.write_bytes(header.encode()+matrix.tobytes());return NativeRaw(path)
+
+
+@pytest.mark.parametrize('title',[
+    'native grid fixture',
+    '* tb_delta_sigma — stimulus for the a3 block netlist',
+])
+def test_utf8_native_title_preserves_binary_payload_and_math(tmp_path,title):
+    path=tmp_path/'native.raw'
+    raw=capture(path,[0,.1,1,2],[-1,-.8,1,3],title=title)
+    before=path.read_bytes()
+    assert raw.shape==(4,3)
+    assert raw.row(-1)=={'time':2.,'a':3.,'b':0.,'0':0.}
+    actual=window_statistics(raw,[0,2],[('a','b',1)])[0]
+    assert actual['avg']==pytest.approx(1)
+    assert actual['rms']==pytest.approx(math.sqrt(7/3))
+    assert path.read_bytes()==before
+    assert before.split(b'Binary:\n',1)[1]==np.column_stack([
+        [0,.1,1,2],[-1,-.8,1,3],[0,0,0,0],
+    ]).astype('<f8').tobytes()
+
+
+def test_invalid_utf8_native_header_is_refused(tmp_path):
+    path=tmp_path/'native.raw';capture(path,[0,1],[0,1])
+    path.write_bytes(path.read_bytes().replace(b'native grid fixture',b'\xff'))
+    with pytest.raises(UnicodeDecodeError):NativeRaw(path)
 
 
 def test_nonuniform_native_grid_is_time_integrated_not_point_averaged(tmp_path):
