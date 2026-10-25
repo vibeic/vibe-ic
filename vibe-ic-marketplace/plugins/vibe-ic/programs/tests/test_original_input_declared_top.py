@@ -103,7 +103,7 @@ def test_original_ordinary_step1_through_step2_uses_same_public_top(tmp_path, ov
     assert solving["status"] == "PASS", solving
     assert validate["status"] == "PASS", validate
     invocation = validate["extras"]["command"]
-    assert invocation[invocation.index("--top") + 1] == "cedar_vote"
+    assert invocation[invocation.index("--top-module") + 1] == "cedar_vote"
     ledger = dispatch._required_gate_ledger({
         "exit": "2", "phases": {"phase3_verifying": fpa.phase3_verifying(report, None)}})
     (root / "reports/required_gate_ledger.json").write_text(json.dumps(ledger, indent=2))

@@ -142,8 +142,8 @@ def test_standalone_checker_selects_same_contract(tmp_path, capsys):
 
 @pytest.mark.parametrize("broken", [False, True])
 def test_original_direct_step2_runs_native_hygiene_without_future_synthesis(tmp_path, broken):
-    if not shutil.which("yosys"):
-        pytest.skip("fresh native driver elaboration requires Yosys")
+    if not shutil.which("verilator"):
+        pytest.skip("fresh native RTL lint requires Verilator")
     root = project(tmp_path, prompt="Module name: unit\nCombinational one-bit input a and output y. y follows a.\n")
     rtl = root / "phase2/stage1/rtl/unit.sv"
     rtl.parent.mkdir(parents=True)
@@ -158,12 +158,12 @@ def test_original_direct_step2_runs_native_hygiene_without_future_synthesis(tmp_
     assert result.name == "rtl_validate"
     assert result.status == ("FAIL" if broken else "PASS"), result
     assert result.extras["producer"] == "rtl_lint_tool"
-    assert result.extras["checker"] == "rtl_hygiene_lint"
+    assert result.extras["checker"] == "verilator_lint_gate"
     assert result.extras["tool_mode"] == "direct"
     assert result.extras["exit_code"] == int(broken)
     assert "--project" not in result.extras["command"]
     report = root / "reports/phase2/lint/rtl_hygiene.json"
-    findings = json.loads(report.read_text())
+    findings = json.loads(report.read_text())["blocking"]
     assert bool(findings) is broken
     assert not (root / "phase2/stage2/synth/yosys.log").exists()
     # Consume the real ordinary report, including its actual entry sentinel.
@@ -187,7 +187,7 @@ def test_original_direct_step2_runs_native_hygiene_without_future_synthesis(tmp_
     assert ledger["eligibility"] == ("INELIGIBLE" if broken else "ELIGIBLE"), ledger
     assert ledger["in_scope"]["rtl_validate"] == ("FAIL" if broken else "PASS")
     final_findings = json.loads(report.read_text())
-    assert bool(final_findings["findings"]) is broken
+    assert bool(final_findings["blocking"]) is broken
     assert not (root / "phase2/stage2/synth/yosys.log").exists()
     pl.select_rtl_input(root, "structured")
     assert runner.step_rtl_lint_tool(root, top_name="unit") is None
