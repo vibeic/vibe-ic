@@ -2300,6 +2300,17 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                             "result stays an interface defect: it authorizes "
                             "repair, never a runtime FAIL or a PASS"),
                         "schema": _INTERFACE_PROOF_SCHEMA,
+                        "_parameter_override_alternative": (
+                            "For a source-declared public parameter made "
+                            "localparam by the candidate, add kind='parameter_override' "
+                            "and parameter='<identifier>'; omit port/direction/width. "
+                            "The exact excerpt must declare parameter NAME = VALUE, "
+                            "the source must uniquely name this module, the test "
+                            "must override that instance's parameter by name or "
+                            "defparam, and every native compile diagnostic must "
+                            "be its Cannot override localparam rejection. The "
+                            "same hashes apply; a compile defect is "
+                            "CANDIDATE_BROKEN, never runtime FAIL."),
                         "module": "<module the public input names>",
                         "port": "<required port identifier>",
                         "direction": "<input|output|inout>",
@@ -2826,6 +2837,97 @@ def _gate_escalation_disposition_reasons(task: dict, review: dict,
 
 _INTERFACE_PROOF_SCHEMA = "vibeic.benchmark.interface_proof.v1"
 _DIRECTIONS = ("input", "output", "inout")
+
+
+def _interface_parameter_kind(source: str, module: str,
+                              parameter: str) -> str | None:
+    """A unique module-owned declaration; unsupported/scoped claims refuse.
+
+    Reuse the existing balanced module/list readers and parameter grammar.
+    A helper module, comment, duplicate owner or procedural localparam cannot
+    establish this module's public parameter defect.
+    """
+    import module_port_audit as ports                     # noqa: PLC0415
+    from _specrtl_common import _PARAM_ASSIGN             # noqa: PLC0415
+    issues = []
+    regions = list(ports.module_regions(source, issues))
+    owners = [row for row in regions if row[0] == module]
+    if issues or len(owners) != 1:
+        return None
+    try:
+        clean = ports.lexical_mask(source, attributes=True)
+    except ValueError:
+        return None
+    _, start, body_start, end = owners[0]
+    header, body = clean[start:body_start], clean[body_start:end]
+    groups = []
+    marker = re.search(r"#\s*\(", header)
+    if marker:
+        balanced = ports.extract_balanced(header, marker.end() - 1)
+        if balanced is None:
+            return None
+        groups.append(balanced[0])
+    for match in re.finditer(r"\b(?:parameter|localparam)\b[^;]+;", body):
+        if re.search(r"\b(?:begin|generate|function|task|class)\b",
+                     body[:match.start()]):
+            continue
+        groups.append(match.group()[:-1])
+    kinds = []
+    for group in groups:
+        kind = None
+        for item in ports.split_top_level(group):
+            keyword = re.match(r"\s*(parameter|localparam)\b", item)
+            if keyword:
+                kind = keyword[1]
+                item = item[keyword.end():]
+            if kind:
+                declaration = _PARAM_ASSIGN.match(kind + " " + item.strip())
+                if declaration and declaration[1] == parameter:
+                    kinds.append(kind)
+    return kinds[0] if len(kinds) == 1 else None
+
+
+def _interface_parameter_instances(source: str, module: str,
+                                   parameter: str) -> set[str]:
+    """Direct named overrides/defparams of this module in the challenge top."""
+    import module_port_audit as ports                     # noqa: PLC0415
+    try:
+        clean = ports.lexical_mask(source, attributes=True)
+    except ValueError:
+        return set()
+    issues = []
+    owners = [row for row in ports.module_regions(clean, issues)
+              if row[0] == "vibeic_ai_challenge_tb"]
+    if issues or len(owners) != 1:
+        return set()
+    _, _, start, end = owners[0]
+    body = clean[start:end]
+    declared = {item.instance_name for item in
+                ports.parse_instantiations(body, "", 1)
+                if item.module_name == module}
+    found = set()
+    for match in re.finditer(rf"\b{re.escape(module)}\s*(#\s*\()?", body):
+        overrides, rest = "", body[match.end():]
+        if match[1]:
+            balanced = ports.extract_balanced(body, match.end() - 1)
+            if balanced is None:
+                continue
+            overrides, close = balanced
+            rest = body[close + 1:]
+        instance = re.match(r"\s*([A-Za-z_]\w*)\s*\(", rest)
+        if instance is None or instance[1] not in declared:
+            continue
+        named = any(re.fullmatch(rf"\s*\.\s*{re.escape(parameter)}\s*\(.+\)\s*",
+                                 item, re.S)
+                    for item in ports.split_top_level(overrides))
+        deferred = re.search(
+            rf"\bdefparam\s+{re.escape(instance[1])}\s*\.\s*"
+            rf"{re.escape(parameter)}\s*=", body)
+        if named or deferred:
+            found.add("vibeic_ai_challenge_tb." + instance[1])
+    return found
+
+
 def _declared_ports(source: str, module: str) -> set[str] | None:
     """Identifiers in `module <name> ( ... );`, or None if it is not declared.
 
@@ -2876,6 +2978,21 @@ def _interface_proof_internal_reasons(proof) -> list:
     left loose in the other (vibe-ic#2210).
     """
     reasons = []
+    kind = proof.get("kind", "port_omission")
+    if kind == "parameter_override":
+        from _specrtl_common import _PARAM_ASSIGN         # noqa: PLC0415
+        from _prose_polarity import is_denied             # noqa: PLC0415
+        parameter = str(proof.get("parameter") or "")
+        excerpt = " ".join(str(proof.get("excerpt") or "").split())
+        declarations = [match[1] for match in _PARAM_ASSIGN.finditer(excerpt)
+                        if match.group().startswith("parameter")]
+        if (not re.fullmatch(r"[A-Za-z_]\w*", parameter)
+                or parameter not in declarations or is_denied(excerpt)):
+            reasons.append("interface_proof.excerpt must explicitly declare "
+                           "the claimed parameter, not a localparam or mention")
+        return reasons
+    if kind != "port_omission":
+        return ["interface_proof.kind is unsupported"]
     port = str(proof.get("port") or "")
     direction = str(proof.get("direction") or "").lower()
     width = proof.get("width")
@@ -2909,7 +3026,13 @@ def _interface_proof_internal_reasons(proof) -> list:
 def _interface_proof_from_review(raw, task: dict, prompt_text: str,
                                  challenge_source: str,
                                  ) -> tuple[dict | None, list[str]]:
-    """Validate a typed, prompt-bound proof that a REQUIRED port was omitted.
+    """Validate a prompt-bound omitted-port/non-overridable-parameter proof.
+
+    The backward-compatible parameter_override kind requires an explicit
+    public parameter declaration and a unique source module. Its current
+    candidate must instead declare that name as localparam, and the challenge
+    must attempt a named override or direct instance defparam. The compiler
+    half accepts only the exact localparam rejection, never arbitrary errors.
 
     THE PROBLEM THIS EXISTS FOR (#2210). A candidate that omits a required
     public port and a test that invents a port name produce the SAME compiler
@@ -2962,13 +3085,14 @@ def _interface_proof_from_review(raw, task: dict, prompt_text: str,
     direction = str(raw.get("direction") or "").lower()
     if not re.fullmatch(r"[A-Za-z_]\w*", module):
         reasons.append("interface_proof.module must be an identifier")
-    if not re.fullmatch(r"[A-Za-z_]\w*", port):
+    parameter_proof = raw.get("kind") == "parameter_override"
+    if not parameter_proof and not re.fullmatch(r"[A-Za-z_]\w*", port):
         reasons.append("interface_proof.port must be an identifier")
-    if direction not in _DIRECTIONS:
+    if not parameter_proof and direction not in _DIRECTIONS:
         reasons.append("interface_proof.direction must be one of "
                        + ", ".join(_DIRECTIONS))
     width = raw.get("width")
-    if not isinstance(width, int) or isinstance(width, bool) or width < 1:
+    if not parameter_proof and (not isinstance(width, int) or isinstance(width, bool) or width < 1):
         reasons.append("interface_proof.width must be a positive integer")
     if raw.get("prompt_sha256") != task.get("prompt_sha256"):
         reasons.append("interface_proof.prompt_sha256 is not the reviewed prompt")
@@ -2996,6 +3120,33 @@ def _interface_proof_from_review(raw, task: dict, prompt_text: str,
     candidate_text = "\n".join(
         Path(p).read_text(errors="replace")
         for p in (task.get("rtl_paths") or []) if Path(p).is_file())
+    if parameter_proof:
+        from design_one_shot_runner import _phase1_declared_module_name  # noqa: PLC0415
+        parameter = str(raw.get("parameter") or "")
+        if _phase1_declared_module_name(prompt_text) != module:
+            reasons.append("the public input does not uniquely declare this module")
+        prompt_path = Path(str(task.get("prompt_path") or ""))
+        if (not prompt_path.is_file() or prompt_path.is_symlink()
+                or _sha256_text(prompt_path.read_text(errors="replace")) != task.get("prompt_sha256")
+                or _sha256_text(prompt_text) != task.get("prompt_sha256")):
+            reasons.append("interface_proof prompt source is absent or changed")
+        if _interface_parameter_kind(candidate_text, module, parameter) != "localparam":
+            reasons.append("the candidate has no unique module-owned localparam "
+                           "declaration for this public parameter")
+        if not _interface_parameter_instances(challenge_source, module, parameter):
+            reasons.append("the challenge does not override this module's parameter")
+        if reasons:
+            return None, reasons
+        return {
+            "schema": _INTERFACE_PROOF_SCHEMA, "kind": "parameter_override",
+            "module": module, "parameter": parameter,
+            "excerpt": verified[0]["excerpt"], "supports": verified[0]["supports"],
+            "prompt_path": str(prompt_path.resolve()),
+            "prompt_sha256": task.get("prompt_sha256"),
+            "public_source_sha256": raw.get("public_source_sha256"),
+            "candidate_rtl_sha256": task.get("rtl_sha256"),
+            "challenge_sha256": _sha256_text(challenge_source),
+        }, []
     ports = _declared_ports(candidate_text, module) if module else None
     if ports is None:
         reasons.append(f"the candidate declares no module {module!r}, so this "
@@ -3279,7 +3430,8 @@ def _interface_omission_reason(candidate: dict, challenge: dict,
         return None
     port = str(proof.get("port") or "")
     module = str(proof.get("module") or "")
-    if not port or not module:
+    parameter_proof = proof.get("kind") == "parameter_override"
+    if (not parameter_proof and not port) or not module:
         return None
     if proof.get("candidate_rtl_sha256") != candidate.get("rtl_sha256"):
         return None
@@ -3301,6 +3453,41 @@ def _interface_omission_reason(candidate: dict, challenge: dict,
     # attributed record assert an interface the excerpt does not support.
     if _interface_proof_internal_reasons(proof):
         return None
+    if parameter_proof:
+        parameter = str(proof.get("parameter") or "")
+        try:
+            prompt_path = Path(str(proof.get("prompt_path") or ""))
+            prompt_text = prompt_path.read_text(errors="replace")
+            test_source = Path(challenge["path"]).read_text(errors="replace")
+        except (OSError, KeyError):
+            return None
+        # Unlike the legacy port proof, the parameter kind carries its canonical
+        # prompt path, so the same freeze validator can re-earn the source quote,
+        # module ownership and all material hashes on every inherited compile.
+        _, reasons = _interface_proof_from_review(
+            proof, {**candidate, "prompt_path": str(prompt_path),
+                    "prompt_sha256": challenge.get("prompt_sha256")},
+            prompt_text, test_source)
+        if reasons:
+            return None
+        instances = _interface_parameter_instances(test_source, module, parameter)
+        diagnostics = []
+        for line in errors.splitlines():
+            if not line.strip() or re.fullmatch(r"\d+ error\(s\) during elaboration\.", line):
+                continue
+            diagnostic = re.fullmatch(
+                r".+:\d+: error: Cannot override localparam `([^`]+)` in `([^`]+)`\.", line)
+            if diagnostic is None or diagnostic[1] != parameter or diagnostic[2] not in instances:
+                return None
+            diagnostics.append(diagnostic)
+        if not diagnostics:
+            return None
+        return (f"joint compile rejected the REQUIRED public parameter interface: "
+                f"module {module!r} declares {parameter!r} as localparam, so the "
+                f"source-required parameter override cannot elaborate; public "
+                f"excerpt {proof.get('excerpt')!r}, current prompt, candidate, "
+                "challenge, module declaration and native localparam diagnostic "
+                "were re-earned; this is CANDIDATE_BROKEN, not runtime FAIL")
     if port not in _ports_absent_from_dut(errors):
         return None
     try:
