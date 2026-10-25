@@ -9,17 +9,18 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import benchmark_dispatch as dispatch
 
 
-def test_original_reentry_preserves_family_and_bounded_verification(tmp_path):
+@pytest.mark.parametrize('terminal, resumed_entry', [('1', '1'), ('2', '2')])
+def test_original_reentry_preserves_family_and_bounded_verification(tmp_path, terminal, resumed_entry):
     runner = Path('/programs/vibe_ic_one_shot_runner.py')
-    first = dispatch._solver_argv(runner, tmp_path, '1', '2', 'ic', 'original')
-    resumed = dispatch._resume_solver_argv(runner, tmp_path, True, '1', '2', 'ic', 'original')
+    first = dispatch._solver_argv(runner, tmp_path, '1', terminal, 'ic', 'original')
+    resumed = dispatch._resume_solver_argv(runner, tmp_path, True, '1', terminal, 'ic', 'original')
     for argv in (first, resumed):
         assert argv[argv.index('--route') + 1] == 'ic'
-        assert argv[argv.index('--exit-step') + 1] == '2'
+        assert argv[argv.index('--exit-step') + 1] == terminal
         assert argv[argv.index('--rtl-input') + 1] == 'original'
         assert '--skip-phase3' in argv
     assert first[first.index('--entry-step') + 1] == '1'
-    assert resumed[resumed.index('--entry-step') + 1] == '2'
+    assert resumed[resumed.index('--entry-step') + 1] == resumed_entry
     structured = dispatch._solver_argv(runner, tmp_path, 'D1', '4', 'ip')
     assert '--rtl-input' not in structured
 

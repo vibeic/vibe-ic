@@ -5409,7 +5409,7 @@ def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
     step.  The routing exit is unchanged: re-entry must not expand a lint or
     behavioural task into synthesis/DFT/LEC work.
     """
-    effective_entry = "2" if supplied_rtl else entry
+    effective_entry = "2" if supplied_rtl and str(exit_step) != "1" else entry
     return _solver_argv(runner, proj, effective_entry, exit_step, delivery_route,
                         input_contract)
 
