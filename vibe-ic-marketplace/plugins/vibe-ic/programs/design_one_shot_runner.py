@@ -7598,7 +7598,30 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
         extras["declaration_contract"] = decl_contract_path
         extras["declaration_field_count"] = n_decl_fields
         extras["declaration_required_count"] = n_decl_required
-    return lessons_hint + consumed_hint + db_hint + decl_hint, extras
+    refinement_hint = ""
+    l6_path = _pl.generated_docs_dir(project) / "L6_CONTROL_LOGIC.json"
+    if l6_path.is_file():
+        try:
+            l6 = json.loads(l6_path.read_text())
+        except (OSError, ValueError):
+            l6 = {}
+        if isinstance(l6, dict) and "behavioral_refinement" in l6:
+            # Carry the actual proposal and provenance in the existing author
+            # handoff. This does not admit a proposal or choose any behavior.
+            extras["behavioral_refinement"] = {
+                "l6_path": str(l6_path),
+                "provenance": l6["behavioral_refinement"],
+                "fsm_transitions": l6.get("fsm_transitions", []),
+            }
+            refinement_hint = (
+                f"\nBEHAVIORAL PROPOSAL: read `{l6_path}` including "
+                "`fsm_transitions` and `behavioral_refinement`. These are "
+                "source-bound inferred/proposed design choices with explicit "
+                "assumptions, not source-stated facts. Preserve all explicit "
+                "source requirements; independent review must reject any "
+                "incompatible choice. Structural validation does not establish "
+                "RTL behavior (NOT_MEASURED until implementation is tested).")
+    return lessons_hint + consumed_hint + db_hint + decl_hint + refinement_hint, extras
 
 
 def _record_supply(result: StepResult, project: Path,

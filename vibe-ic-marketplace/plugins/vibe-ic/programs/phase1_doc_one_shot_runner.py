@@ -39421,6 +39421,14 @@ def gen_l6_control_logic(project: Path,
         # MUST exist so the schema is stable.
         "fsm_tokens": fsm_tokens[:64],
     }
+    from _phase1_behavioral_refinement import project as _project_refinement
+    try:
+        _project_refinement(project, content, _l6_edge_candidates)
+    except Exception:
+        # Preserve current source facts, not a stale earlier proposal, while
+        # the normal runner records the producer failure through its watchdog.
+        _write_l_doc(project, "L6_CONTROL_LOGIC", content, evidence)
+        raise
     return _write_l_doc(project, "L6_CONTROL_LOGIC", content, evidence)
 
 

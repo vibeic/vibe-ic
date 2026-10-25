@@ -634,6 +634,14 @@ steps:
           the user's natural-language prompt or dialogue fact-graph (Path B)
           or the supplied datasheets / specs (Path A), at any of the staged
           entry points this runner reads
+      - from: external
+        path: "phase1/behavioral_refinement.facts.yaml"
+        check: none
+        what: >-
+          optional AI-authored FactGraph v1 behavioral proposal, distinct from
+          raw design input; absence preserves ordinary extraction. When present
+          the L6 producer validates source binding and typed guard coverage;
+          independent D1 review still judges source compatibility.
     # THE SEVENTEEN PER-LAYER DOC-GEN NAMES ARE GONE, AND THEY WERE THE
     # LARGEST GHOST CLUSTER IN THIS FILE. This list used to name 18 skills --
     # datasheet-gen, frs-gen, cmd-protocol-gen, regmap-gen, adi-spec-gen,

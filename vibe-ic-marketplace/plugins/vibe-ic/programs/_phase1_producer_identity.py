@@ -117,6 +117,9 @@ KNOB_NAMES = ("ic_name", "pdk", "mode")
 # Other plugin_input files are not made Phase-1 inputs by these boundaries.
 QUALIFIED_OUTPUT_INPUT = "plugin_input/qualified-outputs.json"
 INTERFACE_BINDING_INPUT = "plugin_input/interface-bindings.json"
+BEHAVIORAL_REFINEMENT_INPUT = "phase1/behavioral_refinement.facts.yaml"
+FIXED_AUTHOR_INPUTS = (QUALIFIED_OUTPUT_INPUT, INTERFACE_BINDING_INPUT,
+                      BEHAVIORAL_REFINEMENT_INPUT)
 INTERFACE_CONTEXT = "plugin_input/interface_context"
 
 
@@ -532,7 +535,7 @@ def input_tree_snapshot(project: Path) -> Dict[str, Tuple[Optional[str], int]]:
             h = (_fixed_author_input_hash(project, rel)
                  if rel.startswith(INTERFACE_CONTEXT + "/") else _sha256(f))
             out[rel] = (h, mt)
-    for rel in (QUALIFIED_OUTPUT_INPUT, INTERFACE_BINDING_INPUT):
+    for rel in FIXED_AUTHOR_INPUTS:
         author = project / rel
         if author.exists() or author.is_symlink():
             out[rel] = (_fixed_author_input_hash(project, rel), author.lstat().st_mtime_ns)
@@ -582,9 +585,9 @@ def design_input_record(project: Path, io: Dict[str, Set[str]],
             rel = _rel(project, q)
             if rel is not None and not _oracle_reason(rel):
                 listed.add(rel)
-    # Only these two author inputs and the fixed package-context root belong
+    # Only these fixed author inputs and the fixed package-context root belong
     # to Phase 1. Record absent paths too, detecting first admission/addition.
-    files.update((QUALIFIED_OUTPUT_INPUT, INTERFACE_BINDING_INPUT))
+    files.update(FIXED_AUTHOR_INPUTS)
     listed.add(INTERFACE_CONTEXT)
     # The external elaborator opens package files outside Python's read hook.
     # Bind the entire fixed context even before the first author manifest, so
@@ -629,7 +632,7 @@ def inputs_digest(project: Path, record: Optional[Dict[str, Any]] = None,
     parts = []
     for rel in record.get("files") or ():
         h = (_fixed_author_input_hash(project, rel)
-             if rel in (QUALIFIED_OUTPUT_INPUT, INTERFACE_BINDING_INPUT)
+             if rel in FIXED_AUTHOR_INPUTS
              or rel.startswith(INTERFACE_CONTEXT + "/") else _sha256(project / rel))
         parts.append(f"f\0{rel}\0{h or 'ABSENT'}")
     for rel in record.get("listed_dirs") or ():

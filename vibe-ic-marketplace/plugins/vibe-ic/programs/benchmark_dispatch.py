@@ -336,6 +336,18 @@ def _runner_material_snapshot(project: Path) -> dict:
                         **({"link": os.readlink(path)} if path.is_symlink() else {}),
                     }
         material[label] = files
+    # A fixed optional author input lives outside input/: it must affect the
+    # existing invocation's material binding without being called user source.
+    from _phase1_producer_identity import BEHAVIORAL_REFINEMENT_INPUT
+    author = project / BEHAVIORAL_REFINEMENT_INPUT
+    if author.exists() or author.is_symlink():
+        author.resolve().relative_to(project)
+        if author.is_symlink() or not author.is_file() or author.parent.is_symlink():
+            raise ValueError("runner behavioral refinement input is not a regular file")
+        raw = author.read_bytes()
+        material["behavioral_refinement_input"] = {
+            "path": BEHAVIORAL_REFINEMENT_INPUT,
+            "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
     prompt = project / "input" / "phase1_prompt.md"
     material["prompt_sha256"] = (_sha256_text(prompt.read_text(errors="replace"))
                                   if prompt.is_file() else None)
@@ -5919,6 +5931,7 @@ class _D1EvidenceSnapshot:
     directories: tuple
     activation_sha256: str | None
     digest: str
+    author_inputs: tuple = ()
 
 
 _D1_LAUNCH_CONTEXT = threading.local()
@@ -5962,6 +5975,9 @@ def _capture_d1_evidence(project: Path) -> _D1EvidenceSnapshot:
     prompt = capture(project / "input" / "phase1_prompt.md")
     report = capture(report_path)
     ldocs = tuple(capture(p) for p in sorted(docs.glob("L*.json")))
+    from _phase1_producer_identity import BEHAVIORAL_REFINEMENT_INPUT
+    author = project / BEHAVIORAL_REFINEMENT_INPUT
+    author_inputs = (capture(author),) if author.exists() or author.is_symlink() else ()
     if not ldocs:
         raise ValueError('D1_SNAPSHOT_LDOCS_MISSING' + f": {docs}: glob L*.json yielded no D1 layer documents")
     try:
@@ -5971,10 +5987,10 @@ def _capture_d1_evidence(project: Path) -> _D1EvidenceSnapshot:
     digest = _receipt_sha256_json({
         "project": str(project),
         "files": [{"path": str(p), "sha256": hashlib.sha256(b).hexdigest(),
-                   "generation": g} for p, b, g in (prompt, report, *ldocs)],
+                   "generation": g} for p, b, g in (prompt, report, *ldocs, *author_inputs)],
     })
     snapshot = _D1EvidenceSnapshot(project, report, prompt, ldocs,
-                                   tuple(directories), activation_sha, digest)
+                                   tuple(directories), activation_sha, digest, author_inputs)
     _assert_d1_snapshot_current(snapshot)
     return snapshot
 
@@ -5990,7 +6006,13 @@ def _assert_d1_snapshot_current(snapshot: _D1EvidenceSnapshot) -> None:
     docs = snapshot.project / "phase1" / "generated_docs"
     if tuple(sorted(docs.glob("L*.json"))) != tuple(p for p, _, _ in snapshot.ldocs):
         raise ValueError("D1_SNAPSHOT_LDOC_SET_CHANGED")
-    for path, _, generation in (snapshot.prompt, snapshot.report, *snapshot.ldocs):
+    from _phase1_producer_identity import BEHAVIORAL_REFINEMENT_INPUT
+    author = snapshot.project / BEHAVIORAL_REFINEMENT_INPUT
+    current_author = (author,) if author.exists() or author.is_symlink() else ()
+    if current_author != tuple(p for p, _, _ in snapshot.author_inputs):
+        raise ValueError("D1_SNAPSHOT_AUTHOR_INPUT_SET_CHANGED")
+    for path, _, generation in (snapshot.prompt, snapshot.report, *snapshot.ldocs,
+                                *snapshot.author_inputs):
         if _d1_file_generation(path) != generation:
             raise ValueError("D1_SNAPSHOT_GENERATION_CHANGED")
 

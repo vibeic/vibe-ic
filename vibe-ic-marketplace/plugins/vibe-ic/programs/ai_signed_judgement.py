@@ -53,6 +53,7 @@ def evidence(project: Path, step_id: str) -> list[Path]:
                           + _intent_files(project)))
     if sid == "D1":
         return _files(project, *DESIGN_INPUT_GLOBS,
+                      "phase1/behavioral_refinement.facts.yaml",
                       "plugin_input/qualified-outputs.json",
                       "plugin_input/interface-bindings.json",
                       "plugin_input/interface_context/**/*",
