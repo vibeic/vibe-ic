@@ -13962,10 +13962,11 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
         t0 = time.time()
         from _rtl_include_hub import silicon_rtl_selection
         report = project / "reports/phase2/lint/rtl_hygiene.json"
-        extras = {"input_contract": "original", "tool_mode": "direct"}
+        extras = {"input_contract": "original", "tool_mode": "direct",
+                  "producer": "rtl_lint_tool", "checker": "rtl_hygiene_lint"}
         rtl = silicon_rtl_selection(_pl.rtl_dir(project))
         if not rtl or not top_name:
-            return StepResult("rtl_lint_tool", "FAIL", time.time() - t0,
+            return StepResult("rtl_validate", "FAIL", time.time() - t0,
                               "original RTL lint requires selected RTL sources and its top",
                               extras=extras)
         report.parent.mkdir(parents=True, exist_ok=True)
@@ -13976,12 +13977,12 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
         try:
             run = _pr.run(command, capture_output=True, text=True)
         except (OSError, subprocess.SubprocessError) as exc:
-            return StepResult("rtl_lint_tool", "NOT_MEASURED", time.time() - t0,
+            return StepResult("rtl_validate", "NOT_MEASURED", time.time() - t0,
                               f"original RTL hygiene could not run: {exc}",
                               extras=extras, reason_class="execution_error")
         extras.update(exit_code=run.returncode, command=command)
         status = "PASS" if run.returncode == 0 else "NOT_MEASURED" if run.returncode == 2 else "FAIL"
-        return StepResult("rtl_lint_tool", status, time.time() - t0,
+        return StepResult("rtl_validate", status, time.time() - t0,
                           (run.stdout or run.stderr or f"rc={run.returncode}").strip(),
                           [str(report)] if report.is_file() else [], extras=extras,
                           reason_class="execution_error" if run.returncode == 2 else "")
@@ -24542,7 +24543,7 @@ def step_emit_phase2_manifests(project: Path,
     rtl_dir = _pl.rtl_dir(project)
 
     # Step 2: lint
-    _original_hygiene = (by_name.get("rtl_lint_tool", _ABSENT_STEP).extras or {}).get("input_contract") == "original"
+    _original_hygiene = (by_name.get("rtl_validate", _ABSENT_STEP).extras or {}).get("input_contract") == "original"
     if not _original_hygiene and ((project / "reports").is_dir() or by_name.get("yosys_synth", _ABSENT_STEP).status == _V.Verdict.PASS.value):
         # THREE DEFECTS IN FIVE LINES, all measured on run21 (a signed
         # serial-parallel multiplier that lints clean), where step 2 FAILed

@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import subprocess
 from pathlib import Path
 import sys
 
@@ -14,7 +15,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _flow_yaml as fy
 import _path_layout as pl
 import benchmark_io_adapter as bio
+import benchmark_dispatch as dispatch
 import design_one_shot_runner as runner
+import flow_phase_attribution as fpa
 import lesson_consumption_check as lessons
 import step_preflight as preflight
 import step_required_inputs_check as sri
@@ -30,10 +33,10 @@ def restore_contract():
     pl._RTL_INPUT = previous
 
 
-def project(tmp_path, context=None):
+def project(tmp_path, context=None, prompt=PROMPT):
     root = tmp_path / "unit"
     bio.stage("cvdp", {"id": "unit", "record": {"input": {
-        "prompt": PROMPT, "context": context or {}}}}, root)
+        "prompt": prompt, "context": context or {}}}}, root)
     return root
 
 
@@ -141,7 +144,7 @@ def test_standalone_checker_selects_same_contract(tmp_path, capsys):
 def test_original_direct_step2_runs_native_hygiene_without_future_synthesis(tmp_path, broken):
     if not shutil.which("yosys"):
         pytest.skip("fresh native driver elaboration requires Yosys")
-    root = project(tmp_path)
+    root = project(tmp_path, prompt="Module name: unit\nCombinational one-bit input a and output y. y follows a.\n")
     rtl = root / "phase2/stage1/rtl/unit.sv"
     rtl.parent.mkdir(parents=True)
     rtl.write_text("module unit(input a, output y);\n"
@@ -152,13 +155,39 @@ def test_original_direct_step2_runs_native_hygiene_without_future_synthesis(tmp_
     switch.write_text('{"steps":{"2":"direct"}}')
     pl.select_rtl_input(root, "original", "2", "2")
     result = runner.step_rtl_lint_tool(root, top_name="unit")
+    assert result.name == "rtl_validate"
     assert result.status == ("FAIL" if broken else "PASS"), result
+    assert result.extras["producer"] == "rtl_lint_tool"
+    assert result.extras["checker"] == "rtl_hygiene_lint"
     assert result.extras["tool_mode"] == "direct"
     assert result.extras["exit_code"] == int(broken)
     assert "--project" not in result.extras["command"]
     report = root / "reports/phase2/lint/rtl_hygiene.json"
     findings = json.loads(report.read_text())
     assert bool(findings) is broken
+    assert not (root / "phase2/stage2/synth/yosys.log").exists()
+    # Consume the real ordinary report, including its actual entry sentinel.
+    # No AI review, D1 PASS or site-status fixture is authored by this test.
+    program = Path(runner.__file__).parent / "vibe_ic_one_shot_runner.py"
+    invocation = subprocess.run([
+        sys.executable, str(program), str(root), "--entry-step", "2", "--exit-step", "2",
+        "--rtl-input", "original", "--route", "ip", "--top-name", "unit",
+        "--skip-analog", "--skip-hardware", "--skip-phase3", "--no-dashboard",
+    ], capture_output=True, text=True)
+    report_path = root / "reports/orchestrator/phase2_one_shot.json"
+    assert report_path.is_file(), invocation.stderr
+    measured = json.loads(report_path.read_text())
+    site = next(row for row in measured["steps"] if row["name"] == "rtl_validate")
+    assert site["status"] == ("FAIL" if broken else "PASS"), site
+    assert site["extras"]["producer"] == "rtl_lint_tool"
+    assert site["extras"]["exit_code"] == int(broken)
+    ledger = dispatch._required_gate_ledger({
+        "exit": "2", "phases": {"phase3_verifying": fpa.phase3_verifying(measured, None)}})
+    (root / "reports/required_gate_ledger.json").write_text(json.dumps(ledger, indent=2))
+    assert ledger["eligibility"] == ("INELIGIBLE" if broken else "ELIGIBLE"), ledger
+    assert ledger["in_scope"]["rtl_validate"] == ("FAIL" if broken else "PASS")
+    final_findings = json.loads(report.read_text())
+    assert bool(final_findings["findings"]) is broken
     assert not (root / "phase2/stage2/synth/yosys.log").exists()
     pl.select_rtl_input(root, "structured")
     assert runner.step_rtl_lint_tool(root, top_name="unit") is None
