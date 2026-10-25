@@ -206,6 +206,132 @@ def test_semantic_counter_named_clock_is_not_a_clock_view(tmp_path):
 from programs.phase1_one_shot_runner import _ic_name_from_docs
 
 
+def test_memory_profile_public_prose_explicit_array(tmp_path):
+    """#3581: exercise the intake's real public bytes through ordinary L9."""
+    from programs import phase1_doc_one_shot_runner as producer
+    from _hostpaths import require_repo
+    fixture = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "phase1_local", "memory_profile_public_prose",
+        "memory_geometry.txt")
+    result = producer.gen_l9_integration_spec(
+        tmp_path, {fixture.name: fixture.read_text()}, {})
+    doc = json.loads(Path(result.path).read_text())
+    geometry = [(m.get("width"), m.get("depth")) for m in doc["memories"]]
+    assert geometry == [(16, 256)], doc
+    assert not doc["memory_candidates"], doc
+
+
+def test_memory_profile_public_prose_conflicting_geometry(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    body = ("Implement a dual-port RAM with a depth of 12 and a bit width of 5 bits.\n"
+            "WIDTH = 5;\nDEPTH = 12;\n"
+            "RAM Array: reg [DEPTH - 1 : 0] bank [2**WIDTH-1:0];\n")
+    result = producer.gen_l9_integration_spec(tmp_path, {"array.md": body}, {})
+    memories = json.loads(Path(result.path).read_text())["memories"]
+    assert len(memories) == 1, memories
+    row = memories[0]
+    assert (row.get("width"), row.get("depth")) == (None, None), row
+    assert row.get("geometry_status") == "SOURCE_CONFLICT", row
+    assert {(v["width"], v["depth"]) for v in row["geometry_claims"]} == {(5, 12), (12, 32)}
+    assert all(v["source_text"] in body for v in row["geometry_claims"])
+    assert row["low_confidence"] is True
+
+
+def test_memory_profile_public_prose_array_control(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    body = "A ROM stores lookup data.\nMemory Array:\nreg [11:0] values [47:0];"
+    result = producer.gen_l9_integration_spec(tmp_path, {"array.md": body}, {})
+    rows = json.loads(Path(result.path).read_text())["memories"]
+    assert [(m.get("width"), m.get("depth")) for m in rows] == [(12, 48)], rows
+
+
+@pytest.mark.parametrize("description, expected", [
+    ("Implement an ALU for a 32-bit MIPS-ISA CPU.", "digital_arithmetic_primitive"),
+    ("Implement an arithmetic logic unit for a RISC-V processor.", "digital_arithmetic_primitive"),
+    ("Implement a RISC-V CPU with an ALU, instruction fetch and program counter.", "processor_cpu"),
+])
+def test_memory_profile_public_prose_primary_subject(tmp_path, description, expected):
+    from programs.ic_class_profile import infer_ic_class_uncached
+    gd = tmp_path / "phase1/generated_docs"
+    gd.mkdir(parents=True)
+    (gd / "L1_DATASHEET.json").write_text(json.dumps({"description": description}))
+    (gd / "L2_FRS.json").write_text("{}")
+    assert infer_ic_class_uncached(tmp_path)["ic_class"] == expected
+
+
+def test_memory_profile_public_prose_temporal_in(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    body = ("The waveform keeps 31 in that clock cycle.\n"
+            "The waveform keeps 0 in that clock cycle.\n"
+            "Package width is 2 in; package height is 4mm.\n")
+    producer.gen_l1_datasheet(tmp_path, {"notes.md": body})
+    producer._harvest_vendor_short_literals(tmp_path, {"notes.md": body})
+    doc = json.loads((tmp_path / "phase1/generated_docs/L1_DATASHEET.json").read_text())
+    dimensions = {r["literal"] for r in doc.get("vendor_short_literals", [])
+                  if r["kind"] == "dimension"}
+    assert dimensions == {"2in", "4mm"}, dimensions
+    producer._harvest_vendor_short_literals(
+        tmp_path, {"notes.md": "The waveform keeps 31 in that clock cycle."})
+    doc = json.loads((tmp_path / "phase1/generated_docs/L1_DATASHEET.json").read_text())
+    assert doc.get("vendor_short_literals") == [], doc
+
+
+def test_memory_profile_public_prose_multiple_arrays_are_not_a_conflict(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    body = ("reg [7:0] first [0:15]: ROM data storage.\n"
+            "reg [15:0] second [0:31]: ROM metadata storage.\n")
+    result = producer.gen_l9_integration_spec(tmp_path, {"arrays.md": body}, {})
+    rows = json.loads(Path(result.path).read_text())["memories"]
+    assert rows and all(r["geometry_status"] == "UNRESOLVED" for r in rows), rows
+    assert all(r["width"] is None and r["depth"] is None for r in rows), rows
+    assert {c["source_text"] for r in rows for c in r["geometry_claims"]} == {
+        "reg [7:0] first [0:15]", "reg [15:0] second [0:31]"}
+
+
+@pytest.mark.parametrize("separator", [";", "；"])
+def test_memory_profile_followup_independent_processor_clause(tmp_path, separator):
+    from programs.ic_class_profile import infer_ic_class_uncached
+    gd = tmp_path / "phase1/generated_docs"
+    gd.mkdir(parents=True)
+    description = ("Implement an ALU for a RISC-V processor" + separator +
+                   " additionally implement a CPU with instruction fetch and a program counter.")
+    (gd / "L1_DATASHEET.json").write_text(json.dumps({"description": description}))
+    (gd / "L2_FRS.json").write_text("{}")
+    assert infer_ic_class_uncached(tmp_path)["ic_class"] == "processor_cpu"
+
+
+def test_memory_profile_followup_negated_array(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    body = "Implement a ROM.\nDo not use reg [15:0] obsolete [0:31];\n"
+    result = producer.gen_l9_integration_spec(tmp_path, {"array.md": body}, {})
+    assert json.loads(Path(result.path).read_text())["memories"] == []
+    result = producer.gen_l9_integration_spec(
+        tmp_path, {"array.md": body.replace("Do not use", "Use")}, {})
+    rows = json.loads(Path(result.path).read_text())["memories"]
+    assert [(m["width"], m["depth"]) for m in rows] == [(16, 32)]
+
+
+@pytest.mark.parametrize("local_parameters", [False, True])
+def test_memory_profile_followup_module_parameter_scope(tmp_path, local_parameters):
+    from programs import phase1_doc_one_shot_runner as producer
+    body = ("module unrelated;\nparameter WIDTH = 9;\nparameter DEPTH = 13;\nendmodule\n"
+            "module storage;\n// ROM lookup storage\n")
+    if local_parameters:
+        body += "parameter WIDTH = 5;\nparameter DEPTH = 11;\n"
+    body += "reg [WIDTH-1:0] values [0:DEPTH-1];\nendmodule\n"
+    result = producer.gen_l9_integration_spec(tmp_path, {"array.md": body}, {})
+    rows = json.loads(Path(result.path).read_text())["memories"]
+    assert len(rows) == 1, rows
+    if local_parameters:
+        assert (rows[0]["width"], rows[0]["depth"]) == (5, 11), rows
+        assert rows[0]["low_confidence"] is False
+    else:
+        assert (rows[0]["width"], rows[0]["depth"]) == (None, None), rows
+        assert rows[0]["geometry_status"] == "UNRESOLVED", rows
+        assert rows[0]["low_confidence"] is True
+
+
 _FIXTURE_DIR = Path(__file__).parent / "phase1_fixtures"
 
 

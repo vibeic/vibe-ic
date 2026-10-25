@@ -49474,6 +49474,104 @@ def _doc_declares_not_applicable(text) -> bool:
     return m.group(1).strip().lower() in _DOC_STATUS_NOT_APPLICABLE
 
 
+def _memory_declared_geometry(text: str, kind: str) -> dict:
+    """Read explicit array ranges; preserve conflicting claims without choosing.
+
+    Associate a locally named memory kind, or the document's sole declared
+    kind. Range arithmetic uses the existing closed linear grammar, plus 2**N;
+    unresolved expressions remain source evidence rather than default sizes.
+    """
+    kind_re = {"rom": r"\bROM\b", "ram": r"\b(?:RAM|SRAM|DRAM)\b"}.get(kind)
+    if kind_re is None:
+        return {}
+    declared_kinds = {
+        _v1_6_426_normalise_kind(m.group("type"))
+        for m in _V1_6_426_RE_MEMORY_PROSE.finditer(text)
+        if _v1_6_426_normalise_kind(m.group("type")) in {"rom", "ram"}
+        and not _v0_1_62_analog_kw_negated(text, m.start(), m.end())}
+    def parameters(scope):
+        params, conflicts = {}, set()
+        for m in re.finditer(
+                r"(?im)^\s*(?:(?:localparam|parameter)\s+)?"
+                r"([A-Za-z_]\w*)\s*=\s*(\d{1,10})\s*;", scope):
+            if _v0_1_62_analog_kw_negated(scope, m.start(), m.end()):
+                continue
+            name, value = m.group(1), int(m.group(2))
+            if name in params and params[name] != value:
+                conflicts.add(name)
+            params[name] = value
+        for name in conflicts:
+            params.pop(name, None)
+        return params
+
+    # A document is one prose scope only when it declares no RTL modules.
+    # Within module-shaped input, defaults from a sibling never size an array.
+    module_scopes = list(re.finditer(
+        r"(?ms)^[ \t]*module\s+[A-Za-z_]\w*\b.*?\bendmodule\b", text))
+    params = parameters(text) if not module_scopes else {}
+
+    def term(raw):
+        expression = re.sub(r"\s+", "", raw)
+        power = re.match(r"^2\*\*([A-Za-z_]\w*|\d+)(.*)$", expression)
+        if power:
+            exponent = (int(power.group(1)) if power.group(1).isdigit()
+                        else params.get(power.group(1)))
+            if exponent is None or not 0 <= exponent <= 30:
+                return None
+            expression = str(2 ** exponent) + power.group(2)
+        value = _v1_11_91_eval_linear_term(expression, params)
+        return value if value is not None and 0 <= value <= 2 ** 31 else None
+
+    def extent(left, right):
+        a, b = term(left), term(right)
+        return abs(a - b) + 1 if a is not None and b is not None else None
+
+    arrays = re.compile(
+        r"\b(?:reg|logic)\s*\[([^\]\n:]+):([^\]\n]+)\]\s*"
+        r"([A-Za-z_]\w*)\s*\[([^\]\n:]+):([^\]\n]+)\]")
+    claims, names = [], set()
+    for m in arrays.finditer(text):
+        if _v0_1_62_analog_kw_negated(text, m.start(), m.end()):
+            continue
+        line = text[text.rfind("\n", 0, m.start()) + 1:
+                    text.find("\n", m.end()) if "\n" in text[m.end():] else len(text)]
+        if (declared_kinds != {kind}
+                and not re.search(kind_re, line, re.IGNORECASE)):
+            continue
+        if module_scopes:
+            owner = next((s for s in module_scopes
+                          if s.start() <= m.start() and m.end() <= s.end()), None)
+            params = parameters(owner.group(0)) if owner is not None else {}
+        claims.append({"width": extent(m.group(1), m.group(2)),
+                       "depth": extent(m.group(4), m.group(5)),
+                       "source_text": m.group(0), "kind": "array_declaration"})
+        names.add(m.group(3))
+        if len(claims) >= 32:
+            break
+    if not claims:
+        return {}
+    prose = re.compile(
+        kind_re + r"\s+with\s+(?:a\s+)?depth\s+of\s+(\d+)\s+and\s+"
+        r"(?:a\s+)?(?:bit\s+)?width\s+of\s+(\d+)\s*bits?", re.IGNORECASE)
+    for m in prose.finditer(text):
+        if not _v0_1_62_analog_kw_negated(text, m.start(), m.end()):
+            claims.append({"width": int(m.group(2)), "depth": int(m.group(1)),
+                           "source_text": m.group(0), "kind": "prose_geometry"})
+    pairs = {(c["width"], c["depth"]) for c in claims
+             if c["width"] is not None and c["depth"] is not None}
+    unresolved = any(c["width"] is None or c["depth"] is None for c in claims)
+    # Different named arrays may legitimately have different geometries.
+    # This document-wide association cannot select between them; preserve
+    # their declarations as unresolved rather than inventing a contradiction.
+    status = ("UNRESOLVED" if len(names) != 1 else
+              "SOURCE_CONFLICT" if len(pairs) > 1 else
+              "UNRESOLVED" if unresolved else "RESOLVED")
+    width, depth = next(iter(pairs)) if status == "RESOLVED" else (None, None)
+    return {"name": next(iter(names)) if len(names) == 1 else None,
+            "width": width, "depth": depth, "geometry_status": status,
+            "geometry_claims": claims}
+
+
 def _v1_6_426_extract_memories_from_text(
         text: str, source_fname: str,
         l9_top_module: Optional[str] = None) -> List[Dict[str, Any]]:
@@ -49505,6 +49603,7 @@ def _v1_6_426_extract_memories_from_text(
         text = text[:5_000_000]
     out: List[Dict[str, Any]] = []
     seen: set = set()
+    declared_geometry = {}
     for m in _V1_6_426_RE_MEMORY_PROSE.finditer(text):
         # ORGANIC signal 2 (SENTENCE level) — reuse the analog path's own
         # negation predicate so this file has exactly ONE definition of
@@ -49584,6 +49683,12 @@ def _v1_6_426_extract_memories_from_text(
                 else:
                     name = back_name
                     name_origin_v1_6_468 = back_strategy
+        if kind not in declared_geometry:
+            declared_geometry[kind] = _memory_declared_geometry(text, kind)
+        geometry = declared_geometry[kind]
+        if geometry:
+            name = geometry.get("name") or name
+            depth, width = geometry["depth"], geometry["width"]
         key = (
             name.lower(),
             kind,
@@ -49612,6 +49717,9 @@ def _v1_6_426_extract_memories_from_text(
         if name_origin_v1_6_468:
             entry["name_origin"] = name_origin_v1_6_468
             entry["low_confidence"] = True
+        if geometry:
+            entry.update(geometry)
+            entry["low_confidence"] = geometry["geometry_status"] != "RESOLVED"
         out.append(entry)
         if len(out) >= 32:
             break
@@ -50214,6 +50322,10 @@ def _v1_6_441_is_useful_memory_entry(entry, staged_macro_names=None) -> bool:
     if not isinstance(entry, dict):
         return False
     if any(entry.get(k) for k in ("depth", "width", "port_count")):
+        return True
+    if entry.get("geometry_claims"):
+        # A contradictory or unresolved declaration is real source evidence.
+        # Its low_confidence marker retains the existing downstream refusal.
         return True
     name = entry.get("name")
     if name and _MEMORY_NAME_TOKEN_RE.search(str(name)):
@@ -51032,6 +51144,7 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
                     # artefact on disk.
                     if (not any(entry.get(k) for k in
                                 ("depth", "width", "port_count"))
+                            and not entry.get("geometry_claims")
                             and not _MEMORY_NAME_TOKEN_RE.search(
                                 str(entry.get("name") or ""))):
                         entry["promotion_evidence"] = (
@@ -55973,6 +56086,12 @@ def _harvest_vendor_short_literals(project: Path,
             (rx_short_hex, "short_hex"),
         ):
             for m in rx.finditer(text):
+                if (kind == "dimension" and m.group(2).lower() == "in"
+                        and re.match(r"\s+(?:(?:that|this|the|each)\s+)?"
+                                     r"(?:clock\s+)?cycles?\b",
+                                     text[m.end():], re.IGNORECASE)):
+                    # English timing preposition, not an inch unit.
+                    continue
                 lit_full = m.group(0).replace(" ", "")
                 key = (lit_full, kind)
                 if key in seen:
@@ -56017,12 +56136,13 @@ def _harvest_vendor_short_literals(project: Path,
                     "source": fname,
                 })
 
-    if short_lits:
-        d["vendor_short_literals"] = short_lits[:512]
-        try:
-            _stamp.dump(l1, d)
-        except Exception:
-            pass
+    # Recomputing the same derived field must retire literals from an earlier
+    # input, including when the corrected source carries no short literals.
+    d["vendor_short_literals"] = short_lits[:512]
+    try:
+        _stamp.dump(l1, d)
+    except Exception:
+        pass
 
 
 # v1.6.81 — closes issue #12 follow-up. Sentinel signatures of the

@@ -1,0 +1,7 @@
+Memory Array:
+    reg [15:0] mem [0:255]: Defines a ROM with 256 locations, each 16 bits wide.
+Initial Block:
+    The initial block is used to pre-load the ROM with fixed data. In this example, memory locations 0 through 3 are initialized with specific values (16'hA0A0, 16'hB1B1, 16'hC2C2, 16'hD3D3). Other locations can be initialized as needed.
+Behavior:
+    The always @(*) block continuously outputs the data stored in the ROM at the memory location specified by addr.
+Since ROM is read-only, this module includes only read operations.

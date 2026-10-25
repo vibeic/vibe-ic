@@ -1297,6 +1297,14 @@ def _looks_like_processor_cpu(l1, l2) -> bool:
     text = "\n".join(parts)
     if not text:
         return False
+    # A named datapath subject may mention the ISA/CPU it serves. Remove
+    # that host-context clause before counting processor evidence; independent
+    # instruction-fetch/architectural-state requirements remain available.
+    text = re.sub(
+        r"\b(?:implement|design|build|create)\s+(?:an?\s+)?"
+        r"(?:\d+[- ]bit\s+)?(?:ALU|arithmetic\s+logic\s+unit)\s+for\s+"
+        r"[^\n.!?;；。！？]*\b(?:CPU|processor|microprocessor)\b[^\n.!?;；。！？]*",
+        "", text, flags=re.IGNORECASE)
     hit_names = {name for name, pat in _PROCESSOR_CPU_FEATURES
                  if pat.search(text)}
     if not ({"isa_family", "instruction_semantics"} & hit_names):

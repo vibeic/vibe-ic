@@ -471,5 +471,16 @@
     "version_observed": "1.31.58, base d1a134de8353b95860e173798b50b6c0c9a59af0 with report-binding PR3576 head54f700a467d126f9d91fbb1fde717d14893a7372 applied locally.",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/phase1_semantic_catalog_contract/state_heading_catalog.txt"
+  },
+  {
+    "issue": 3581,
+    "project": "memory_profile_public_prose",
+    "layer": "L1_DATASHEET, L9_INTEGRATION_SPEC and ordinary IC class profile",
+    "field": "memory_candidates; memories; vendor_short_literals; ic_class",
+    "expected": "The explicit ROM array has width16 and depth256 and is not rejected for lacking structural geometry. The related primary-subject, temporal-dimension and contradictory-RAM contracts above must preserve their exact public source facts; conflicting geometry remains explicitly unresolved rather than guessed or scalarized.",
+    "actual": "L9 rejects the ROM as low-information with missing depth/width/port_count, despite the explicit declaration. Other actual consumer-field defects and exact source snippets are listed above.",
+    "version_observed": "1.31.58 at base d1a134de8353b95860e173798b50b6c0c9a59af0 plus locally applied report-binding PR3576 head54f700a467d126f9d91fbb1fde717d14893a7372.",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/memory_profile_public_prose/memory_geometry.txt"
   }
 ]
