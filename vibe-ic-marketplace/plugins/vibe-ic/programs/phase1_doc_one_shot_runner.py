@@ -38003,6 +38003,33 @@ def _l6_state_evidence_source(state: Dict[str, Any]) -> str:
     return _L6_EVIDENCE_LABEL_SUFFIX_RE.sub("", ev).strip()
 
 
+def _fsm_state_definition_rows(text: str):
+    """Read a closed colon-definition list only under an explicit state heading.
+
+    Short legal state identifiers are meaningful in this grammar; the loose
+    prose walker's length floor must not discard them. A different section
+    or any non-definition content closes the list, so nearby opcode lists do
+    not become state catalogs.
+    """
+    active = False
+    heading = re.compile(
+        r"(?:\b(?:FSM|state\s+machine)\b[^\n]*\bstates|"
+        r"^(?:FSM\s+)?states)\s*:\s*$", re.IGNORECASE)
+    row = re.compile(r"^\s*(?:[-*]\s+)?`?([A-Z][A-Z0-9_]*)`?"
+                     r"\s*:\s*(\S.*)$")
+    for line in (text or "").splitlines():
+        if heading.search(line.strip().lstrip('#').strip()):
+            active = True
+            continue
+        if not active or not line.strip():
+            continue
+        match = row.match(line)
+        if not match:
+            active = False
+            continue
+        yield match.group(1), line.strip()
+
+
 def _l6_fsm_machine_id(state: Dict[str, Any]) -> str:
     """Identity of the state machine ONE extracted L6 state belongs to.
 
@@ -38366,6 +38393,20 @@ def gen_l6_control_logic(project: Path,
         r"(?:->|=>|→)\s*([A-Z][A-Z0-9_]{3,30})\b",
     )
     seen_state_names: Set[str] = {s["name"] for s in extracted_states}
+    for fname, text in extracted.items():
+        if _L6_FSM_SOURCE_DENY.search(fname or ""):
+            continue
+        for name, literal in _fsm_state_definition_rows(text):
+            if name in seen_state_names:
+                continue
+            seen_state_names.add(name)
+            extracted_states.append({
+                "name": name, "transitions": [], "actions": [],
+                "evidence": f"input/docs/{fname} (explicit state definition)",
+                "extraction_strategy": "state_heading_definition",
+            })
+            evidence.setdefault(f"input/docs/{fname}", []).append({
+                "literal": literal, "label": "explicit FSM state definition"})
     # Edges observed by the state-to-state walker. Collected here, filtered
     # against the FINAL state set at emit time — see
     # `_l6_attach_declared_transitions`.
@@ -41498,12 +41539,55 @@ def _v1_6_434_normalize_port_basename(name) -> str:
     return stripped
 
 
+def _declared_input_clock_names(project, l9):
+    """Resolve clock roles against actual input ports and their own prose."""
+    ports = l9.get("top_ports") or l9.get("ports") or []
+    extracted = _load_extracted_docs_for_post_pass(project)
+    text = "\n".join(extracted.values())
+    names = []
+    for port in ports:
+        if not isinstance(port, dict):
+            continue
+        if str(port.get("direction") or port.get("mode") or "").lower() not in (
+                "input", "in"):
+            continue
+        name = str(port.get("name") or "").strip()
+        if not name:
+            continue
+        base = _v1_6_434_normalize_port_basename(name.lower())
+        conventional = (base in ("clk", "clock") or base.endswith("_clk")
+                        or bool(_V1_6_574_CLOCK_PORT_RE.fullmatch(name)))
+        # A port definition may state its role with an arbitrary identifier;
+        # a word containing "clock" or an unrelated clock mention cannot.
+        definition = re.compile(
+            r"^\s*" + re.escape(name) + r"\s*:\s*"
+            r"(?:[A-Za-z-]+\s+)?clock(?:\s+(?:signal|input)|[.,]|\s*$)",
+            re.IGNORECASE | re.MULTILINE)
+        if conventional or definition.search(text):
+            names.append(name)
+    return names
+
+
 def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     """v1.6.88 (#20 Bug 4 P0 BLOCKER) — augment each existing
     `clock_domains[]` entry with the typed-shape required by
     l8_clock_domains_typed_check (name + freq + role/source). When
     `clock_domains` is empty, synthesise a default primary domain
     from L9.top_ports clk-shaped pins. Chip-AGNOSTIC."""
+    l9_doc = _try_load_l_doc(project, "L9_INTEGRATION_SPEC")
+    clk_pins = (_declared_input_clock_names(project, l9_doc)
+                if isinstance(l9_doc, dict) else [])
+    # The prose fmax walker calls an unnamed primary domain "clk". Bind that
+    # placeholder only when the design declares exactly one input clock.
+    # Never spread one frequency mention over several independent inputs.
+    for domain in clock_domains:
+        if (isinstance(domain, dict) and len(clk_pins) == 1
+                and domain.get("extraction_strategy") == "clock_domain_doc_prose_fmax"
+                and str(domain.get("name") or "").lower() in ("clk", "clock")
+                and domain.get("name") not in clk_pins):
+            domain["name"] = clk_pins[0]
+            domain["source_pin"] = clk_pins[0]
+            domain["domain_kind"] = "primary"
     # Augment existing entries.
     for d in clock_domains:
         if not isinstance(d, dict):
@@ -41530,93 +41614,26 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
             d["role"] = "master" if d.get("domain_kind") == "primary" else "derived"
         if "source_pin" not in d:
             d["source_pin"] = d.get("name")
-    # If empty AND L9 declares clk-shaped pins, synthesise a default.
-    if clock_domains:
-        return
-    l9_doc = _try_load_l_doc(project, "L9_INTEGRATION_SPEC")
+    # Fill only declared input-clock identities missing from the existing
+    # evidence. Output clocks require their own generated-clock relation.
     if not isinstance(l9_doc, dict):
         return
-    top_ports = l9_doc.get("top_ports") or l9_doc.get("ports") or []
-    if not isinstance(top_ports, list):
-        return
-    clk_pins = []
-    #: Ports admitted ONLY by the C4 reach fix below — i.e. ports that on the
-    #: pre-fix code produce NO clock_domains record at all. Labelling changes
-    #: are confined to these, which is what keeps the fix strictly ADDITIVE:
-    #: no record that exists today can change its domain_kind/role/freq.
-    _c4_widened_pins: Set[str] = set()
-    for p in top_ports:
-        if not isinstance(p, dict):
-            continue
-        nm = (p.get("name") or "").strip()
-        if not nm:
-            continue
-        nm_l = nm.lower()
-        # v1.6.434 — for #311 P3 ORGANIC. Strip Verilog/SV port-name
-        # direction prefix (`i_`/`o_`) + suffix (`_i`/`_in`/`_input`/
-        # `_o`/`_out`/`_output`/`_ni`) BEFORE clock-shape matching so
-        # canonical lowRISC `clk_i` / `rst_ni` / Quartus-style `i_clk`
-        # ports also synthesise primary clock domains. The fmax /
-        # period derivation already works once the synthesizer picks
-        # up the port. Chip-AGNOSTIC: pure Verilog naming convention.
-        nm_base = _v1_6_434_normalize_port_basename(nm_l)
-        if nm_base == "clk" or nm_base.endswith("_clk") or nm_base == "clock":
-            clk_pins.append(nm)
-        elif _V1_6_574_CLOCK_PORT_RE.match(nm):
-            _c4_widened_pins.add(nm)
-            # C4/2026-07-31 — REACH fix, purely ADDITIVE. v1.6.574 widened
-            # the clock-port matcher "so analog multiphase ports (`CK1`..
-            # `CK6`) seed" — but the widening was applied ONLY to the
-            # sibling that fills `L8.clocks[]`. This function fills
-            # `L8.clock_domains[]`, which is the list `sdc_gen` and
-            # `l8_sta_clock_period_design_owned_check` actually read, and it
-            # kept the pre-v1.6.574 three-way string test. Measured
-            # consequence on a real cell: L9.top_ports held `ck4/ck5/ck6`,
-            # the sibling accepted all three, this test accepted none,
-            # `clock_domains` stayed `[]`, `_derive_primary_clk_freq_hz`
-            # (which resolves the design's own stated 1.0 MHz correctly) was
-            # never reached, and the emitted SDC carried the plugin's 50 MHz
-            # default — a 50x wrong period. Reusing the SIBLING'S predicate
-            # rather than restating it is what stops the two drifting again.
-            clk_pins.append(nm)
+    clock_input_count = len(clk_pins)
+    known = {str(d.get("source_pin") or d.get("name") or "")
+             for d in clock_domains if isinstance(d, dict)}
+    clk_pins = [name for name in clk_pins if name not in known]
     if not clk_pins:
         return
-    # Try to derive primary frequency from timing_constants (look for
-    # CLK_FREQ_HZ / FREQ_MHZ / similar). Fall back to 50 MHz default
-    # (the open-source benchmark consensus reference clock for
-    # FPGA-eval-driven AID-class designs; the gate accepts any freq
-    # so long as the entry is typed).
+    # A shared timing constant can size a sole input clock. Multiple inputs
+    # need individually bound source evidence; their missing rates stay null.
     primary_freq_hz = _derive_primary_clk_freq_hz(timing_constants)
     for pin in clk_pins:
-        # Normalize via _v1_6_434_normalize_port_basename so `clk_i`
-        # / `i_clk` / `clk_in` are recognised as primary domains.
-        _pin_base = _v1_6_434_normalize_port_basename(pin.lower())
-        is_primary = (_pin_base == "clk" or _pin_base == "clock")
-        # Frequency stays gated on the CANONICAL name test: handing
-        # `primary_freq_hz` to every clock port would assert that they all run
-        # at the one timing constant the layer happens to carry, which is a
-        # fabrication on any genuinely multi-rate design. Evidence-bound
-        # frequencies arrive from `l8_doc_clock_freq_synth`, per document row.
-        freq_hz = primary_freq_hz if is_primary else None
-        # C4/2026-07-31 — domain_kind/role by PROPERTY, for widened pins only.
-        # `primary`/`master` vs `secondary`/`derived` was decided by whether
-        # the port is spelled `clk` — a PROXY. The property is: this loop
-        # synthesises domains from TOP-LEVEL PORTS, and a top-level clock port
-        # is not derived from anything; `derived` means generated from another
-        # clock (PLL / divider), which the code marks with `derived_from`.
-        # This matters concretely: `clock_contract.entry_is_derived` treats
-        # `role: derived` as OUT of the one-name-one-period contract, so
-        # `sdc_validator_check` skipped all three of this design's clocks and
-        # reported `1 SDC file(s) OK` having cross-checked ZERO of them — a
-        # VACUOUS PASS I produced myself and caught by reading its own count
-        # line. Confined to `_c4_widened_pins` so no record that exists on the
-        # pre-fix code can change label.
-        _c4_property_primary = (is_primary or pin in _c4_widened_pins)
+        freq_hz = primary_freq_hz if clock_input_count == 1 else None
         entry = {
             "name": pin,
             "source_pin": pin,
-            "domain_kind": "primary" if _c4_property_primary else "secondary",
-            "role": "master" if _c4_property_primary else "derived",
+            "domain_kind": "primary",
+            "role": "master",
             "source": "synthesised-from-L9.top_ports",
             "evidence": "L9.top_ports",
             "reset_strategy": "unspecified",
@@ -52063,6 +52080,30 @@ def gen_l9_integration_spec(project: Path,
                     break
             if len(submodules) >= 32:
                 break
+    # An explicit subject-name declaration is stronger than a mention in a
+    # library/example sentence. Keep the actual identifier and the existing
+    # requirement contract; do not invent instances or local interface ports.
+    for fname, text in extracted.items():
+        if not text or _is_vendor_tool_doc(fname):
+            continue
+        for match in re.finditer(
+                r"[`\"]([A-Za-z_][A-Za-z0-9_$]*)[`\"]\s+submodule\s+"
+                r"(?:is|shall\s+be|must\s+be)\s+"
+                r"(?:used|instantiated|implemented)\b", text, re.IGNORECASE):
+            name = match.group(1)
+            if name in seen_submods or not _is_codespan_submodule_name(name):
+                continue
+            from l9_l19_contract_carrythrough import submodule_requirement
+            entry = {
+                "name": name, "type": "explicit prose submodule declaration",
+                "role": "documented submodule",
+                "extraction_strategy": "explicit_named_submodule",
+                "evidence": f"input/docs/{fname}",
+            }
+            entry.update(submodule_requirement(text, name, f"input/docs/{fname}"))
+            submodules.append(entry)
+            seen_submods.add(name)
+
     # v1.0.38 — for #648. Strategy A0c — prose `X instantiates
     # [exactly] one|N `Y`` sentences + wrapper→child markdown
     # port-map tables. Integration / hierarchy docs declare the
@@ -61950,6 +61991,13 @@ def _post_emit_typed_clock_domains(project: Path) -> None:
         wfm = None
     if isinstance(wfm, dict):
         wfm_cd = wfm.get("clock_domains") or []
+        if isinstance(wfm_cd, list) and wfm_cd:
+            before_domains = json.dumps(wfm_cd, sort_keys=True)
+            _emit_typed_clock_domains(project, wfm_cd, timing_constants)
+            if json.dumps(wfm_cd, sort_keys=True) != before_domains:
+                wfm["clock_domains"] = wfm_cd
+                _stamp.dump(_pl.generated_docs_dir(project)
+                            / "L8_TIMING_WAVEFORM.json", wfm)
         if (isinstance(wfm_cd, list) and not wfm_cd
                 and clock_domains):
             wfm["clock_domains"] = list(clock_domains)
@@ -62939,6 +62987,17 @@ def _post_emit_mirror_clock_resets_to_l9_v1_6_311(
     if not isinstance(l9, dict):
         return []
     changed = False
+    # The final prose-port fallback runs after the early reset-domain pass.
+    # Reuse the canonical explicit-reset reader on the final input interface;
+    # arbitrary declared reset names must not depend on a naming convention.
+    if not l9.get("reset_domains"):
+        _v1_6_369_emit_reset_domains(l9, _load_extracted_docs_for_post_pass(project))
+        changed = bool(l9.get("reset_domains"))
+    if isinstance(l9.get("clock_domains"), list) and l9["clock_domains"]:
+        before_domains = json.dumps(l9["clock_domains"], sort_keys=True)
+        _emit_typed_clock_domains(project, l9["clock_domains"], [])
+        changed = (json.dumps(l9["clock_domains"], sort_keys=True)
+                   != before_domains) or changed
     conflicts: List[Dict[str, Any]] = []
     l8_cds = (l8 or {}).get("clock_domains") or []
     if isinstance(l8_cds, list) and l8_cds:
@@ -63152,6 +63211,8 @@ def _post_emit_mirror_clock_resets_to_l9_v1_6_311(
     top_ports = l9.get("top_ports") or []
     if isinstance(top_ports, list):
         resets: List[Dict[str, Any]] = []
+        declared_resets = {row.get("name"): row for row in
+                           l9.get("reset_domains", []) if isinstance(row, dict)}
         seen: Set[str] = set()
         for p in top_ports:
             if not isinstance(p, dict):
@@ -63164,7 +63225,8 @@ def _post_emit_mirror_clock_resets_to_l9_v1_6_311(
             # lowRISC canonical `rst_ni` and `rstn_*` shapes; the
             # legacy `_RE_RESET_PORT_v1_6_311` (kept above as a
             # historical marker) missed `_ni` entirely.
-            if not _RE_RESET_PORT_v1_6_316.match(name_lc):
+            declared = declared_resets.get(name_raw)
+            if not declared and not _RE_RESET_PORT_v1_6_316.match(name_lc):
                 continue
             if name_raw in seen:
                 continue
@@ -63172,7 +63234,8 @@ def _post_emit_mirror_clock_resets_to_l9_v1_6_311(
             # v1.6.316 — for #215 P3: explicit polarity helper
             # correctly resolves `rstn_i` → active_low (was
             # active_high under the v1.6.311 substring heuristic).
-            polarity = _v1_6_316_reset_polarity(name_lc)
+            polarity = (declared.get("polarity", "unknown") if declared
+                        else _v1_6_316_reset_polarity(name_lc))
             resets.append({
                 "name": name_raw,
                 "polarity": polarity,
@@ -63244,6 +63307,9 @@ def _post_emit_derive_l9_clocks_v1_6_323(project: Path) -> None:
         if not isinstance(name_raw, str) or not name_raw:
             continue
         name_lc = name_raw.lower()
+        # A packed counter/data bus does not become a clock from its name.
+        if isinstance(p.get("width"), int) and p["width"] != 1:
+            continue
         if not _RE_CLOCK_PORT_v1_6_323.match(name_lc):
             continue
         if name_raw in seen:

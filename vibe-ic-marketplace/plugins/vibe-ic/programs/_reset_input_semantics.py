@@ -408,7 +408,7 @@ def explicit_reset_port(name, text):
     role_first = re.compile(r'\breset(?:\s+(?:input|signal|port))?\s*(?:is|:|=)\s*' + port, re.I)
     name_first = re.compile(
         r'(?<![\w])' + port + r'\s*(?:is|:)\s*'
-        r'(?:(?:an?|the|current|external|global|system|input|asynchronous|synchronous|'
+        r'(?:(?:an?|the|current|external|global|system|input|read|write|asynchronous|synchronous|'
         r'active[- _]?(?:low|high))\s+)*reset\b', re.I)
     for raw in text.splitlines():
         for clause in re.split(r'[;；。]|(?<=[a-zA-Z])\.\s+', raw):
@@ -437,6 +437,20 @@ def declarations(text, name=None):
         # become a second assertion declaration through the generic fallback.
         if number in phase_lines:
             continue
+        # A port-definition row owns its whole description, including a
+        # second sentence defining the reset's active/inactive binary levels.
+        # Keep the exact port scope; a separate row cannot lend its polarity.
+        if name and re.match(r'^\s*`?' + re.escape(name) + r'`?\s*:', raw):
+            levels = set()
+            if explicit_reset_port(name, raw):
+                for match in re.finditer(
+                        r'\b([01])\s+for\s+reset\s+and\s+([01])\s+for\s+'
+                        r'(?:reset\s+)?signal\s+inactive\b', current_clause(raw), re.I):
+                    if match[1] != match[2]:
+                        levels.add('active_low' if match[1] == '0' else 'active_high')
+            if levels:
+                yield {'line': number, 'evidence': raw.strip(),
+                       'sync_values': set(), 'polarity_values': levels}
         for clause in re.split(r'[;；。]|(?<=[a-zA-Z])\.\s+', raw):
             line = current_clause(clause)
             if not line or (port and not port.search(line)):

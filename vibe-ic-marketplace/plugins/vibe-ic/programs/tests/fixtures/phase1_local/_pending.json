@@ -460,5 +460,16 @@
     "version_observed": "1.31.58 at d1a134de8353b95860e173798b50b6c0c9a59af0; also observed with report-binding PR3576 applied (head54f700a467d126f9d91fbb1fde717d14893a7372).",
     "version_lkg": "Not measured for this exact typed-field contract. Published historical benchmark scores do not prove this current extractor contract passed.",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_port_fields/design_description.txt"
+  },
+  {
+    "issue": 3579,
+    "project": "phase1_semantic_catalog_contract",
+    "layer": "L6_CONTROL_LOGIC and L9_INTEGRATION_SPEC; source clock fields also consumed by L8",
+    "field": "fsm_states; fsm_machines; notes; submodules; clock_domains; resets",
+    "expected": "L6 and L9 state catalogs carry the five explicitly declared FSM members IDLE,S1,S2,S3,S4. The additional source-note, structural-submodule and clock/reset field contracts and exact source snippets above belong to the same source repair lane; none authorizes changing port-parser ownership or guessing unspecified rates.",
+    "actual": "L6 and L9 retain only IDLE (state_count=1). Additional measured source-note, submodule and clock/reset defects are listed above, with actual fields and explicit public input evidence.",
+    "version_observed": "1.31.58, base d1a134de8353b95860e173798b50b6c0c9a59af0 with report-binding PR3576 head54f700a467d126f9d91fbb1fde717d14893a7372 applied locally.",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/phase1_semantic_catalog_contract/state_heading_catalog.txt"
   }
 ]

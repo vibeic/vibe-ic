@@ -33,6 +33,176 @@ import json
 
 import pytest
 
+
+def _semantic_project(tmp_path, text, ports=()):
+    """Stage ordinary input and final interface for late semantic emitters."""
+    source = tmp_path / 'input/docs/contract.txt'
+    source.parent.mkdir(parents=True)
+    source.write_text(text)
+    generated = tmp_path / 'phase1/generated_docs'
+    generated.mkdir(parents=True)
+    (generated / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({
+        'top_ports': list(ports), 'ports': list(ports),
+    }))
+    return generated
+
+
+def test_semantic_state_heading_catalog_from_intake(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    from programs.tests._hostpaths import require_repo
+    fixture = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
+                           'programs', 'tests', 'fixtures', 'phase1_local',
+                           'phase1_semantic_catalog_contract',
+                           'state_heading_catalog.txt')
+    result = producer.gen_l6_control_logic(tmp_path, {fixture.name: fixture.read_text()})
+    actual = json.loads(result.path.read_text())
+    names = {state['name'] for state in actual['fsm_states']}
+    assert names == {'IDLE', 'S1', 'S2', 'S3', 'S4'}, actual
+    assert actual['fsm_machines'][0]['state_count'] == 5, actual
+
+
+@pytest.mark.parametrize('text,expected', [
+    ('State machine has the following states:\n'
+     'A0: Waiting for request.\nA1: Capturing data.\n'
+     'Implementation:\nOP_ADD: Addition opcode.\n', {'A0', 'A1'}),
+    ('The controller has an FSM.\nALU operation codes:\n'
+     'A0: Addition opcode.\nA1: Subtraction opcode.\n', set()),
+])
+def test_semantic_state_heading_scope_is_finite(tmp_path, text, expected):
+    from programs import phase1_doc_one_shot_runner as producer
+    result = producer.gen_l6_control_logic(tmp_path, {'control.txt': text})
+    actual = json.loads(result.path.read_text())
+    assert {state['name'] for state in actual['fsm_states']} == expected, actual
+
+
+def test_semantic_explicit_submodule_reaches_actual_consumer(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    from programs import l9_submodule_conformance_check as consumer
+    text = ('Module name:\n    NeutralTop\nInput ports:\n'
+            '    sample_i: Input data signal.\nOutput ports:\n'
+            '    sample_o: Output data signal.\nImplementation:\n'
+            'The `select_pair` submodule is used to select between two inputs.\n')
+    _semantic_project(tmp_path, text)
+    producer.gen_l1_datasheet(tmp_path, {'contract.txt': text})
+    producer.gen_l9_integration_spec(tmp_path, {'contract.txt': text}, {})
+    rtl = tmp_path / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    top = rtl / 'top.v'
+    top.write_text('module NeutralTop(input sample_i, output sample_o); '
+                   'assign sample_o=sample_i; endmodule\n')
+    missing, findings, census, _ = consumer.audit_report(tmp_path)
+    assert missing == 'FAIL', (missing, census, findings)
+    assert any(f.rule == 'SUBMODULE_FILE_MISSING' for f in findings), findings
+    (rtl / 'child.v').write_text('module select_pair(input d, output q); '
+                                'assign q=d; endmodule\n')
+    unbound, findings, _, _ = consumer.audit_report(tmp_path)
+    assert unbound == 'FAIL', findings
+    assert any(f.rule == 'SUBMODULE_NOT_INSTANTIATED' for f in findings), findings
+    top.write_text('module NeutralTop(input sample_i, output sample_o); '
+                   'select_pair u_select(.d(sample_i),.q(sample_o)); endmodule\n')
+    assert consumer.audit_report(tmp_path)[0] == 'PASS'
+
+
+def test_semantic_submodule_mention_is_not_a_structure_requirement(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    text = ('Module name:\nNeutralTop\n'
+            'The library documentation mentions `select_pair` as an example.\n'
+            'The `select_pair` submodule is not used in this design.\n')
+    result = producer.gen_l9_integration_spec(tmp_path, {'overview.txt': text}, {})
+    actual = json.loads(result.path.read_text())
+    assert 'select_pair' not in {row['name'] for row in actual['submodules']}, actual
+
+
+def test_semantic_primary_clock_uses_actual_input_identity(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    ports = [{'name': 'sample_clock', 'direction': 'input', 'width': 1},
+             {'name': 'shifted_clock', 'direction': 'output', 'width': 1}]
+    _semantic_project(tmp_path, 'Input ports:\n'
+                      'sample_clock: Input clock signal.\n', ports)
+    domains = [{'name': 'clk', 'freq_mhz': 80,
+                'extraction_strategy': 'clock_domain_doc_prose_fmax'}]
+    producer._emit_typed_clock_domains(tmp_path, domains, [])
+    assert [(d['name'], d['source_pin']) for d in domains] == [
+        ('sample_clock', 'sample_clock')], domains
+    assert domains[0]['period_ns'] == 12.5, domains
+
+
+def test_semantic_primary_binding_reaches_every_existing_view(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    generated = _semantic_project(tmp_path, 'Input ports:\n'
+                      'sample_clock: Input clock signal.\n', [
+                          {'name': 'sample_clock', 'direction': 'input', 'width': 1}])
+    for layer in ('L8_RTL_CONSTANTS', 'L8_TIMING_WAVEFORM', 'L9_INTEGRATION_SPEC'):
+        path = generated / (layer + '.json')
+        data = json.loads(path.read_text()) if path.exists() else {}
+        data['clock_domains'] = [{'name': 'clk', 'freq_mhz': 80,
+            'extraction_strategy': 'clock_domain_doc_prose_fmax'}]
+        path.write_text(json.dumps(data))
+    producer._post_emit_typed_clock_domains(tmp_path)
+    producer._post_emit_mirror_clock_resets_to_l9_v1_6_311(tmp_path)
+    for layer in ('L8_RTL_CONSTANTS', 'L8_TIMING_WAVEFORM', 'L9_INTEGRATION_SPEC'):
+        data = json.loads((generated / (layer + '.json')).read_text())
+        assert [(d['name'], d['source_pin'], d['period_ns']) for d in
+                data['clock_domains']] == [('sample_clock', 'sample_clock', 12.5)], data
+
+
+def test_semantic_output_clock_does_not_become_primary_input(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    _semantic_project(tmp_path, 'Output ports:\n'
+                      'out_clk: Output clock signal.\n', [
+                          {'name': 'out_clk', 'direction': 'output', 'width': 1}])
+    domains = []
+    producer._emit_typed_clock_domains(tmp_path, domains, [])
+    assert domains == [], domains
+
+
+def test_semantic_two_named_input_clocks_and_resets_stay_distinct(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    text = ('Input ports:\n'
+            'load_tick: Write clock signal.\n'
+            'unload_tick: Read clock signal.\n'
+            'load_reset: Write reset signal, active low.\n'
+            'unload_reset: Read reset signal, active high.\n')
+    ports = [{'name': name, 'direction': 'input', 'width': 1}
+             for name in ('load_tick', 'unload_tick', 'load_reset', 'unload_reset')]
+    generated = _semantic_project(tmp_path, text, ports)
+    (generated / 'L8_RTL_CONSTANTS.json').write_text('{}')
+    (generated / 'L8_TIMING_WAVEFORM.json').write_text('{}')
+    producer._post_emit_typed_clock_domains(tmp_path)
+    producer._post_emit_mirror_clock_resets_to_l9_v1_6_311(tmp_path)
+    actual = json.loads((generated / 'L9_INTEGRATION_SPEC.json').read_text())
+    domains = actual.get('clock_domains', [])
+    assert {d['name'] for d in domains} == {'load_tick', 'unload_tick'}, actual
+    assert all(d['freq_hz'] is None and d['period_ns'] is None for d in domains), actual
+    assert {r['name']: r['polarity'] for r in actual.get('resets', [])} == {
+        'load_reset': 'active_low', 'unload_reset': 'active_high'}, actual
+
+
+@pytest.mark.parametrize('name,description,polarity', [
+    ('rst', 'Active low reset signal.', 'active_low'),
+    ('rst_n', 'Active high reset signal.', 'active_high'),
+    ('clear_request', 'Write reset signal. Defined as 0 for reset and 1 for reset signal inactive.', 'active_low'),
+])
+def test_semantic_explicit_reset_level_overrides_name(tmp_path, name, description, polarity):
+    from programs import phase1_doc_one_shot_runner as producer
+    text = f'Input ports:\n{name}: {description}\n'
+    generated = _semantic_project(tmp_path, text, [
+        {'name': name, 'direction': 'input', 'width': 1}])
+    producer._post_emit_mirror_clock_resets_to_l9_v1_6_311(tmp_path)
+    actual = json.loads((generated / 'L9_INTEGRATION_SPEC.json').read_text())
+    assert {r['name']: r['polarity'] for r in actual.get('resets', [])} == {
+        name: polarity}, actual
+
+
+def test_semantic_counter_named_clock_is_not_a_clock_view(tmp_path):
+    from programs import phase1_doc_one_shot_runner as producer
+    generated = _semantic_project(tmp_path, 'Output ports:\n'
+                      'clock [7:0]: Eight-bit cycle counter data.\n', [
+                          {'name': 'clock', 'direction': 'output', 'width': 8}])
+    producer._post_emit_derive_l9_clocks_v1_6_323(tmp_path)
+    actual = json.loads((generated / 'L9_INTEGRATION_SPEC.json').read_text())
+    assert actual.get('clocks', []) == [], actual
+
 from programs.phase1_one_shot_runner import _ic_name_from_docs
 
 

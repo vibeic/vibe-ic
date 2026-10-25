@@ -1,0 +1,6 @@
+    State Machine: The sequence detector uses a finite state machine (FSM) with the following states:
+    IDLE: Waiting for the start of the sequence.
+    S1: The first bit of the desired sequence is detected.
+    S2: The second bit of the desired sequence is detected.
+    S3: The third bit of the desired sequence is detected.
+    S4: The fourth and final bit of the desired sequence is detected, and the output sequence_detected is set high.
