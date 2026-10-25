@@ -90,7 +90,13 @@ def load(path: Optional[os.PathLike] = None, *, encoding: Optional[str] = None,
         while len(_CACHE) >= _MAX_ENTRIES:
             del _CACHE[next(iter(_CACHE))]
         _CACHE[key] = doc
-    return copy.deepcopy(_CACHE[key])
+    result = copy.deepcopy(_CACHE[key])
+    import _path_layout
+    if _path_layout.active_rtl_input() != "structured" and isinstance(result, dict):
+        from step_required_inputs_check import input_contract
+        result["steps"] = [input_contract(row, _path_layout.active_rtl_input())
+                           for row in result.get("steps", [])]
+    return result
 
 
 def clear_cache() -> None:

@@ -363,6 +363,8 @@ def main(argv: List[str] | None = None) -> int:
         description="Verify that a strongly-matched captured lesson was CONSUMED, "
                     "not merely staged (ORGANIC #733 enforced program-first).")
     ap.add_argument("--prompt", help="prompt / spec text file")
+    ap.add_argument("--rtl-input", choices=("structured", "original"), default="structured",
+                    help="the input contract named by the ordinary RTL handoff")
     ap.add_argument("--project",
                     help="score this design's WHOLE gathered spec text — the same "
                          "`_path_layout.gather_spec_text` the runner scored (#2086). "
@@ -385,6 +387,16 @@ def main(argv: List[str] | None = None) -> int:
     ap.add_argument("--top", type=int, default=5, help="how many matches to report")
     ap.add_argument("--json", help="write the evidence report here (dual-track input)")
     a = ap.parse_args(argv)
+
+    if a.rtl_input == "original":
+        if not a.project:
+            print("error: --rtl-input original requires --project", file=sys.stderr)
+            return 2
+        try:
+            _pl.select_rtl_input(Path(a.project), "original", "1", "2")
+        except (OSError, ValueError) as exc:
+            print(f"error: original input: {exc}", file=sys.stderr)
+            return 2
 
     if not a.prompt and not a.project:
         print("error: name a spec source — --project <dir> (the whole gathered "

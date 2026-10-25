@@ -29,6 +29,9 @@ PROGRAMS = Path(__file__).resolve().parent
 FLOW = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
 ROUTE_RECEIPT_SCHEMA = "vibeic.route_decision_receipt.v1"
+# Semantic derivation changes must invalidate the existing routing-contract
+# digest even when the structured dependency edges themselves are unchanged.
+ROUTE_DERIVATION_RULES_VERSION = "2-original-rtl-input"
 SEMANTIC_PAYLOAD_SCHEMA = "vibeic.route_semantic_payload.v1"
 COORDINATOR_BINDING_SCHEMA = "vibeic.route_coordinator_binding.v1"
 D1_ACTIVATION_SCHEMA = "vibeic.route_d1_activation.v1"
@@ -78,7 +81,7 @@ def _clean_step(value: Any) -> str:
     return text
 
 
-def canonical_dag(path: Path | None = None) -> dict:
+def canonical_dag(path: Path | None = None, *, input_contract: str = "structured") -> dict:
     """Parse the canonical YAML steps and their declared input dependencies.
 
     ``blocks_on`` is the ordering edge.  ``required_inputs.from`` is the data
@@ -87,6 +90,10 @@ def canonical_dag(path: Path | None = None) -> dict:
     checks, so folded and multiline YAML values cannot silently disappear in a
     regex-only projection.
     """
+    if input_contract not in {"structured", "original"}:
+        raise ValueError(f"unknown route input contract: {input_contract!r}")
+    from step_required_inputs_check import input_contract as project_inputs  # noqa: PLC0415
+
     path = Path(path or FLOW)
     if yaml is None:
         raise ValueError("PyYAML is required to parse the canonical flow")
@@ -103,6 +110,7 @@ def canonical_dag(path: Path | None = None) -> dict:
     for row in rows:
         if not isinstance(row, Mapping) or "id" not in row:
             continue
+        row = project_inputs(row, input_contract)
         sid = _clean_step(row["id"])
         raw_blocks = row.get("blocks_on") or []
         if not isinstance(raw_blocks, (list, tuple)):
@@ -130,7 +138,9 @@ def canonical_dag(path: Path | None = None) -> dict:
     if unknown:
         raise ValueError(f"canonical flow has unknown dependencies: {unknown}")
     edges = [[sid, dep] for sid in steps for dep in deps[sid]]
-    body = {"steps": steps, "blocks_on": deps,
+    body = {"input_contract": input_contract,
+            "derivation_rules_version": ROUTE_DERIVATION_RULES_VERSION,
+            "steps": steps, "blocks_on": deps,
             "required_inputs_from": inputs_from, "edges": edges}
     return {**body, "sha256": sha256_json(body), "source": str(path.resolve())}
 
@@ -304,6 +314,38 @@ def _route_join(minimums: Iterable[str], *, dag: dict) -> dict:
     return dependency_closed_join(values, dag=dag)
 
 
+def _contract_dag(dag: dict | None, input_contract: str) -> dict:
+    """Use the same canonical source when selecting its declared alternative."""
+    if dag is None:
+        return canonical_dag(input_contract=input_contract)
+    if dag.get("input_contract", "structured") == input_contract:
+        return dag
+    source = dag.get("source")
+    if not source:
+        raise ValueError("a projected route DAG requires its canonical source")
+    return canonical_dag(Path(source), input_contract=input_contract)
+
+
+def _derive_route(*, nature: str, requested_evidence: str, delivery_target: str,
+                  nature_table: Mapping[str, Any], evidence_table: Mapping[str, Any],
+                  delivery_table: Mapping[str, Any], dag: dict | None = None) -> dict:
+    """Derive source authority from trusted semantics, never receipt metadata."""
+    entry, evidence_min, target_min, answer = _minimum_from_maps(
+        nature, requested_evidence, delivery_target,
+        nature_table, evidence_table, delivery_table)
+    selected = _contract_dag(dag, "structured")
+    joined = _route_join((entry, evidence_min, target_min), dag=selected)
+    input_contract = "structured"
+    if (nature == "spec_generation" and delivery_target == "rtl"
+            and joined["step"] in {"1", "2"}):
+        input_contract = "original"
+        entry = "1"
+        selected = _contract_dag(dag, input_contract)
+        joined = _route_join((entry, evidence_min, target_min), dag=selected)
+    return {"entry_step": entry, "answer_step": answer,
+            "input_contract": input_contract, "dag": selected, "joined": joined}
+
+
 @dataclass(frozen=True)
 class RouteDecisionReceipt:
     """A typed decision over the fixed DAG."""
@@ -322,10 +364,14 @@ class RouteDecisionReceipt:
     dag_sha256: str
     receipt_sha256: str
     schema: str = ROUTE_RECEIPT_SCHEMA
+    input_contract: str = "structured"
+    derivation_rules_version: str = ROUTE_DERIVATION_RULES_VERSION
 
     def to_dict(self) -> dict:
         return {
             "schema": self.schema,
+            "input_contract": self.input_contract,
+            "derivation_rules_version": self.derivation_rules_version,
             "entry_step": self.entry_step,
             "answer_step": self.answer_step,
             "verify_through": self.verify_through,
@@ -438,11 +484,11 @@ def make_route_receipt(*, nature: str, requested_evidence: str,
                        explicit_user_evidence: Any = None,
                        dag: dict | None = None) -> dict:
     """Derive all executable steps; semantic AI never supplies step ids."""
-    dag = dag or canonical_dag()
-    entry, evidence_min, target_min, answer = _minimum_from_maps(
-        nature, requested_evidence, delivery_target,
-        nature_table, evidence_table, delivery_table)
-    joined = _route_join((entry, evidence_min, target_min), dag=dag)
+    derived = _derive_route(
+        nature=nature, requested_evidence=requested_evidence,
+        delivery_target=delivery_target, nature_table=nature_table,
+        evidence_table=evidence_table, delivery_table=delivery_table, dag=dag)
+    dag, joined = derived["dag"], derived["joined"]
     mode = mode_intent(
         semantic_request={"nature": nature, "requested_evidence": requested_evidence,
                           "delivery_target": delivery_target,
@@ -450,8 +496,10 @@ def make_route_receipt(*, nature: str, requested_evidence: str,
         explicit_user_evidence=explicit_user_evidence)
     body = {
         "schema": ROUTE_RECEIPT_SCHEMA,
-        "entry_step": entry,
-        "answer_step": answer,
+        "input_contract": derived["input_contract"],
+        "derivation_rules_version": ROUTE_DERIVATION_RULES_VERSION,
+        "entry_step": derived["entry_step"],
+        "answer_step": derived["answer_step"],
         "verify_through": joined["step"],
         "verify_closed_steps": joined["closed_steps"],
         "minimum_steps": joined["minimums"],
@@ -467,10 +515,38 @@ def make_route_receipt(*, nature: str, requested_evidence: str,
 
 
 def validate_route_receipt(receipt: Mapping[str, Any], *, dag: dict | None = None) -> list[str]:
-    dag = dag or canonical_dag()
     errors: list[str] = []
     if receipt.get("schema") != ROUTE_RECEIPT_SCHEMA:
         errors.append("ROUTE_RECEIPT_SCHEMA")
+    if receipt.get("derivation_rules_version") != ROUTE_DERIVATION_RULES_VERSION:
+        errors.append("ROUTE_RECEIPT_DERIVATION_RULES_MISMATCH")
+    # Re-derive all minima from the trusted product tables.  Receipt fields are
+    # evidence of what was emitted, never authority for lowering the route.
+    try:
+        import task_nature_route as _tnr  # noqa: PLC0415
+        derived = _derive_route(
+            nature=str(receipt.get("task_nature")),
+            requested_evidence=str(receipt.get("requested_evidence")),
+            delivery_target=str(receipt.get("delivery_target")),
+            nature_table=_tnr.NATURE_ENTRY, evidence_table=_tnr.EVIDENCE_EXIT,
+            delivery_table=_tnr.DELIVERY_TARGETS, dag=dag)
+        dag, trusted_join = derived["dag"], derived["joined"]
+    except (ImportError, KeyError, TypeError, ValueError):
+        errors.append("ROUTE_RECEIPT_TRUSTED_TABLES_INVALID")
+        dag = _contract_dag(dag, "structured")
+    else:
+        if receipt.get("input_contract") != derived["input_contract"]:
+            errors.append("ROUTE_RECEIPT_INPUT_CONTRACT_NOT_SEMANTIC_BOUND")
+        if receipt.get("entry_step") != derived["entry_step"]:
+            errors.append("ROUTE_RECEIPT_ENTRY_NOT_TABLE_BOUND")
+        if receipt.get("answer_step") != derived["answer_step"]:
+            errors.append("ROUTE_RECEIPT_ANSWER_NOT_TABLE_BOUND")
+        if receipt.get("verify_through") != trusted_join["step"]:
+            errors.append("ROUTE_RECEIPT_VERIFY_BELOW_MINIMUM")
+        if receipt.get("minimum_steps") != trusted_join["minimums"]:
+            errors.append("ROUTE_RECEIPT_MINIMUMS_NOT_TABLE_BOUND")
+        if receipt.get("verify_closed_steps") != trusted_join["closed_steps"]:
+            errors.append("ROUTE_RECEIPT_CLOSURE_NOT_DEPENDENCY_CLOSED")
     if receipt.get("dag_sha256") != dag["sha256"]:
         errors.append("ROUTE_RECEIPT_DAG_MISMATCH")
     for key in ("entry_step", "answer_step", "verify_through"):
@@ -479,32 +555,9 @@ def validate_route_receipt(receipt: Mapping[str, Any], *, dag: dict | None = Non
     closed = receipt.get("verify_closed_steps")
     if not isinstance(closed, list) or any(str(x) not in dag["steps"] for x in closed):
         errors.append("ROUTE_RECEIPT_CLOSURE_INVALID")
-    # Re-derive all minima from the trusted product tables.  Receipt fields are
-    # evidence of what was emitted, never authority for lowering the route.
-    try:
-        import task_nature_route as _tnr  # noqa: PLC0415
-        entry, evidence_min, target_min, answer = _minimum_from_maps(
-            str(receipt.get("task_nature")),
-            str(receipt.get("requested_evidence")),
-            str(receipt.get("delivery_target")),
-            _tnr.NATURE_ENTRY, _tnr.EVIDENCE_EXIT, _tnr.DELIVERY_TARGETS)
-        trusted_join = _route_join(
-            (entry, evidence_min, target_min), dag=dag)
-    except (ImportError, KeyError, TypeError, ValueError):
-        errors.append("ROUTE_RECEIPT_TRUSTED_TABLES_INVALID")
-    else:
-        if receipt.get("entry_step") != entry:
-            errors.append("ROUTE_RECEIPT_ENTRY_NOT_TABLE_BOUND")
-        if receipt.get("answer_step") != answer:
-            errors.append("ROUTE_RECEIPT_ANSWER_NOT_TABLE_BOUND")
-        if receipt.get("verify_through") != trusted_join["step"]:
-            errors.append("ROUTE_RECEIPT_VERIFY_BELOW_MINIMUM")
-        if receipt.get("minimum_steps") != trusted_join["minimums"]:
-            errors.append("ROUTE_RECEIPT_MINIMUMS_NOT_TABLE_BOUND")
-        if closed != trusted_join["closed_steps"]:
-            errors.append("ROUTE_RECEIPT_CLOSURE_NOT_DEPENDENCY_CLOSED")
     body = {k: receipt.get(k) for k in (
-        "schema", "entry_step", "answer_step", "verify_through",
+        "schema", "input_contract", "derivation_rules_version",
+        "entry_step", "answer_step", "verify_through",
         "verify_closed_steps", "minimum_steps", "task_nature", "requested_evidence",
         "delivery_target", "mode_intent", "semantic_payload_sha256",
         "source_sha256", "dag_sha256")}

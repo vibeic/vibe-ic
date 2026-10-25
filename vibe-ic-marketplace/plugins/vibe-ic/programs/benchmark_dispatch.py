@@ -2099,7 +2099,8 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
     if candidate_origin == "PROGRAM":
         program_candidate = candidate
     import emit_attestation as emit_attestation          # noqa: PLC0415
-    phase1_provenance = emit_attestation.phase1_provenance(project)
+    phase1_provenance = emit_attestation.input_provenance(
+        project, _invocation_rtl_input(runner_invocation))
     challenges = verification_challenges or []
     review_key = review_key or (f"{_safe_problem_id(candidate_origin).lower()}-"
                                f"r{len(challenges)}-{candidate['rtl_sha256']}")
@@ -4475,10 +4476,10 @@ def _shape_c_task_binding_reasons(task: dict, run_p: Path,
             break
 
     expected_phase1 = task.get("phase1_provenance")
-    current_phase1 = emit_attestation.phase1_provenance(expected_project)
+    current_phase1 = emit_attestation.input_provenance(expected_project, _task_rtl_input(task))
     if (not isinstance(expected_phase1, dict)
-            or expected_phase1.get("ran") is not True):
-        reasons.append("task lacks hash-bound Phase-1 provenance")
+            or not emit_attestation.provenance_is_current(expected_phase1)):
+        reasons.append("task lacks current input provenance")
     elif current_phase1 != expected_phase1:
         reasons.append("Phase-1 L-doc provenance changed after task creation")
 
@@ -4630,9 +4631,9 @@ def _export_accepted_shape_c_task(task: dict, samples: Path,
         reasons.append("staged prompt bytes do not match the reviewed hash")
 
     project = Path(str(task.get("project") or ""))
-    provenance = emit_attestation.phase1_provenance(project)
-    if provenance.get("ran") is not True:
-        reasons.append("Phase-1 L-doc provenance is absent")
+    provenance = emit_attestation.input_provenance(project, _task_rtl_input(task))
+    if not emit_attestation.provenance_is_current(provenance):
+        reasons.append("current input provenance is absent")
     if shutil.which("iverilog") is None:
         reasons.append("standalone compile capability is unavailable")
     if reasons:
@@ -4663,7 +4664,8 @@ def _export_accepted_shape_c_task(task: dict, samples: Path,
                 record.get("sha256")
                 == emit_attestation.sha256_file(destination)
                 and record.get("shape") == "C"
-                and (record.get("phase1") or {}).get("ran") is True
+                and record.get("phase1") == provenance
+                and emit_attestation.provenance_is_current(provenance)
             )
         except (OSError, ValueError, TypeError) as exc:
             destination.unlink(missing_ok=True)
@@ -4898,7 +4900,8 @@ def _export_accepted_shape_b_samples(bench: str, dataset: Path,
             paths[0].parent, pid, samples,
             dataset=dataset, design=design,
             prompt=Path(str(task.get("prompt_path") or "")),
-            project=Path(str(task.get("project") or "")))
+            project=Path(str(task.get("project") or "")),
+            rtl_input=_task_rtl_input(task))
         if result.get("verdict") != "PASS":
             failures.append(
                 f"{pid}: {result.get('reason') or 'emit rejected'}: "
@@ -5328,16 +5331,41 @@ def _rtl_gen_waive(project: Path) -> dict | None:
     except (OSError, ValueError):
         return None
     for st in d.get("steps") or []:
-        if st.get("name") == "rtl_gen" and st.get("status") == "WAIVED":
+        if (st.get("name") == "rtl_gen"
+                and (st.get("status") == "WAIVED" or
+                     (st.get("status") == "NOT_MEASURED"
+                      and st.get("program_status") in {"WAIVED", "PASS_WITH_WAIVERS"}
+                      and st.get("reason_class") == "awaiting_signed_judgement"))):
             ex = st.get("extras") or {}
             if ex.get("fallback_skill"):
                 return {"fallback_skill": ex["fallback_skill"],
-                        "detail": st.get("detail", "")}
+                        "detail": st.get("detail", ""),
+                        **({"input_authority": "original"}
+                           if ex.get("input_authority") == "original" else {})}
     return None
 
 
+def _invocation_rtl_input(invocation: dict | None) -> str:
+    """Read the input selection the ordinary runner actually received."""
+    argv = (invocation or {}).get("argv") or []
+    if "--rtl-input" not in argv:
+        return "structured"
+    index = argv.index("--rtl-input")
+    if argv.count("--rtl-input") != 1 or index + 1 >= len(argv):
+        raise ValueError("RUNNER_RTL_INPUT_INVALID")
+    kind = argv[index + 1]
+    if kind not in ("original", "structured"):
+        raise ValueError("RUNNER_RTL_INPUT_INVALID")
+    return kind
+
+
+def _task_rtl_input(task: dict) -> str:
+    return _invocation_rtl_input(
+        (task.get("program_verification") or {}).get("runner_invocation"))
+
+
 def _solver_argv(runner: Path, proj: Path, entry, exit_step,
-                 delivery_route: str = "ip") -> list:
+                 delivery_route: str = "ip", input_contract: str = "structured") -> list:
     """One problem's runner argv, assembled from the routing verdict.
 
     Open RTL evaluations deliver IP/module evidence, so explicitly choose the
@@ -5354,6 +5382,10 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
         raise ValueError(f"invalid delivery runner route: {delivery_route!r}")
     argv = [sys.executable, str(runner), str(proj),
             "--route", delivery_route, "--skip-analog", "--skip-hardware"]
+    if input_contract == "original":
+        argv += ["--rtl-input", "original"]
+    elif input_contract != "structured":
+        raise ValueError("unknown RTL input contract")
     if exit_step and exit_step in tnr.flow_step_ids():
         order = {s: i for i, s in enumerate(tnr.flow_step_ids())}
         if order.get(exit_step, 99) < order.get("15", 99):
@@ -5369,7 +5401,8 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
 
 
 def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
-                        entry, exit_step, delivery_route: str = "ip") -> list:
+                        entry, exit_step, delivery_route: str = "ip",
+                        input_contract: str = "structured") -> list:
     """Re-enter one routed problem without losing its declared exit.
 
     AI backup/repair supplies RTL, so it resumes at the first RTL-validation
@@ -5377,7 +5410,8 @@ def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
     behavioural task into synthesis/DFT/LEC work.
     """
     effective_entry = "2" if supplied_rtl else entry
-    return _solver_argv(runner, proj, effective_entry, exit_step, delivery_route)
+    return _solver_argv(runner, proj, effective_entry, exit_step, delivery_route,
+                        input_contract)
 
 
 def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
@@ -6053,6 +6087,25 @@ def _run_from_d1_snapshot(budget, argv: list, snapshot: _D1EvidenceSnapshot,
                           *, authority_project: Path | None = None,
                           expected_repaired_output_sha256: str | None = None):
     """Validate one captured generation and bind that generation to submission."""
+    if receipt.get("input_contract") == "original":
+        # Original-source requests use the same runner/material binding. They
+        # do not manufacture a D1 activation or claim document qualification.
+        try:
+            owner_project = Path(authority_project or argv[2]).resolve()
+            run_p = owner_project.parent.parent
+            task = _read_json_regular(run_p / "ai_route_tasks" / f"{task_sha}.json")
+            _require_route_admission(run_p, task, receipt, require_d1=False)
+            if _read_current_receipt(owner_project, "route_decision")["receipt"] != receipt:
+                raise ValueError("ROUTE_REENTRY_ROUTE_RECEIPT_STALE")
+            if _invocation_rtl_input({"argv": argv}) != "original":
+                raise ValueError("RUNNER_RTL_INPUT_INVALID")
+            process = budget.run(
+                argv, **({"expected_repaired_output_sha256": expected_repaired_output_sha256}
+                         if expected_repaired_output_sha256 is not None else {}))
+            _require_route_admission(run_p, task, receipt, require_d1=False)
+            return process
+        except (OSError, ValueError, TypeError) as exc:
+            return _ProcessOutcome(rc=None, error=f"ORIGINAL_INPUT_LAUNCH_REFUSED: {exc}")
     try:
         owner_project = Path(authority_project or snapshot.project).resolve()
         run_p = owner_project.parent.parent
@@ -6172,6 +6225,17 @@ def _validated_route_reentry_state(*, bench: str, dataset: str | Path | None,
         return {"status": "REFUSED", "reason": "ROUTE_REENTRY_ROUTE_MUTATION"}
     if result.get("entry") is not None and str(result.get("entry")) != str(receipt["entry_step"]):
         return {"status": "REFUSED", "reason": "ROUTE_REENTRY_ENTRY_MUTATION"}
+
+    if receipt.get("input_contract") == "original":
+        try:
+            _require_route_admission(run_p, task, receipt, require_d1=False)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            return {"status": "REFUSED", "reason": str(exc)}
+        return {"status": "ACTIVE", "route_receipt": receipt, "task": task,
+                "project": project, "activation": None,
+                "input_contract": "original", "entry_step": str(receipt["entry_step"]),
+                "exit_step": expected_exit, "delivery_route": expected_route,
+                "effective_entry": "2" if supplied_rtl else str(receipt["entry_step"])}
 
     current_activation = None
     try:
@@ -6555,6 +6619,10 @@ def _require_route_admission(run_p: Path, task: dict, receipt: dict,
         raise ValueError("ROUTE_ADMISSION_AI_RESPONSE_CHANGED")
     if receipt != sealed.get("route_receipt"):
         raise ValueError("ROUTE_ADMISSION_ROUTE_OR_MODE_REPLACED")
+    if receipt.get("input_contract") == "original":
+        if require_d1:
+            raise ValueError("ORIGINAL_RTL_INPUT_HAS_NO_D1_ADMISSION")
+        return
     import route_decision as _rd                   # noqa: PLC0415
     pending = _read_current_receipt(Path(task["project"]), "d1_pending")["receipt"]
     expected_pending = _rd.write_d1_pending(
@@ -6981,6 +7049,8 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
         # route declaration is ordered, so its first member is the primary;
         # `declared_skills` keeps every authorised alternative visible.
         "skill": skills[0],
+        "input_authority": ((_rtl_gen_waive(project) or {}).get("input_authority")
+                            or "structured"),
         "declared_skills": list(skills),
         "handoff_source": source,
         "prompt_sha256": _sha256_text(prompt_text),
@@ -7409,34 +7479,45 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             ev = str(route_receipt["requested_evidence"])
             exit_step = str(route_receipt["verify_through"])
             route_backup = _declared_route_ai_backup(verdict)
-            # Every accepted response is normalized into the Program receipt,
-            # and every newly executed route crosses the same two-stage D1
-            # barrier.  Response shape cannot opt into a legacy bypass.
-            phase1_frontdoor, pending, activation = _activate_route_d1(
-                proj, route_task, route_receipt, runner, runner_budget,
-                run_scope=run_scope,
-                delivery_route=str(verdict.get("delivery_route") or "ip"))
-            if entry == "D1":
-                nature_row = tnr.NATURE_ENTRY[verdict["entry_nature"]]
-                candidates = [str(x) for x in nature_row.get("then") or []]
-                order = {sid: i for i, sid in enumerate(rd.canonical_dag()["steps"])}
-                effective_entry = next(
-                    (sid for sid in candidates
-                     if sid in order and order[sid] <= order[exit_step]), None)
-            else:
+            input_contract = str(route_receipt.get("input_contract") or "structured")
+            if input_contract == "original":
+                _seal_route_admission(run_p, route_task, verdict)
+                _require_route_admission(run_p, route_task, route_receipt, require_d1=False)
+                phase1_frontdoor = {"status": "NOT_IN_SCOPE", "input_contract": "original",
+                                    "reason": "bounded RTL uses the unchanged original request"}
                 effective_entry = entry
-            rd.require_d1_activation(
-                activation, route_receipt, task_sha256=route_task["task_sha256"],
-                ldoc_root_handle=_sha256_text(str((proj / "phase1" / "generated_docs").resolve())))
-            planned_snapshot = _validate_live_d1_for_launch(
-                proj, route_receipt, activation, route_task["task_sha256"])
-            admitted_steps = rd.admit_route_closure(
-                pending=pending, activation=activation,
-                route_receipt=route_receipt,
-                task_sha256=route_task["task_sha256"],
-                source_sha256=route_receipt["source_sha256"],
-                ldoc_root_handle=_sha256_text(
-                    str((proj / "phase1" / "generated_docs").resolve())))
+                activation = None
+                planned_snapshot = None
+                admitted_steps = list(route_receipt["verify_closed_steps"])
+            else:
+                # Every accepted response is normalized into the Program receipt,
+                # and every newly executed route crosses the same two-stage D1
+                # barrier.  Response shape cannot opt into a legacy bypass.
+                phase1_frontdoor, pending, activation = _activate_route_d1(
+                    proj, route_task, route_receipt, runner, runner_budget,
+                    run_scope=run_scope,
+                    delivery_route=str(verdict.get("delivery_route") or "ip"))
+                if entry == "D1":
+                    nature_row = tnr.NATURE_ENTRY[verdict["entry_nature"]]
+                    candidates = [str(x) for x in nature_row.get("then") or []]
+                    order = {sid: i for i, sid in enumerate(rd.canonical_dag()["steps"])}
+                    effective_entry = next(
+                        (sid for sid in candidates
+                         if sid in order and order[sid] <= order[exit_step]), None)
+                else:
+                    effective_entry = entry
+                rd.require_d1_activation(
+                    activation, route_receipt, task_sha256=route_task["task_sha256"],
+                    ldoc_root_handle=_sha256_text(str((proj / "phase1" / "generated_docs").resolve())))
+                planned_snapshot = _validate_live_d1_for_launch(
+                    proj, route_receipt, activation, route_task["task_sha256"])
+                admitted_steps = rd.admit_route_closure(
+                    pending=pending, activation=activation,
+                    route_receipt=route_receipt,
+                    task_sha256=route_task["task_sha256"],
+                    source_sha256=route_receipt["source_sha256"],
+                    ldoc_root_handle=_sha256_text(
+                        str((proj / "phase1" / "generated_docs").resolve())))
             if effective_entry is None:
                 # A D1-only proof still has a receipt and activation but no
                 # downstream runner span to launch.
@@ -7446,9 +7527,9 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             else:
                 argv = _solver_argv(
                     runner, proj, effective_entry, exit_step,
-                    str(verdict.get("delivery_route") or "ip"))
-                d1_snapshot = _capture_d1_evidence(proj)
-                if d1_snapshot.digest != planned_snapshot.digest:
+                    str(verdict.get("delivery_route") or "ip"), input_contract)
+                d1_snapshot = None if input_contract == "original" else _capture_d1_evidence(proj)
+                if d1_snapshot is not None and d1_snapshot.digest != planned_snapshot.digest:
                     raise ValueError("D1_SNAPSHOT_PLANNED_GENERATION_CHANGED")
                 process = _run_from_d1_snapshot(
                     runner_budget, argv, d1_snapshot, route_receipt, activation,
@@ -7874,6 +7955,17 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             continue
         proj = run_p / "projects" / re.sub(r"[^\w.-]", "_", pid)
         task = task_by_id.get(pid)
+        receipt = result.get("route_receipt") or {}
+        if receipt.get("input_contract") == "original":
+            admission = _route_reentry_state(pid, result, allow_d1_only=False)
+            if admission.get("status") != "ACTIVE":
+                phase1_blocked[pid] = str(admission.get("reason") or "ROUTE_REENTRY_REFUSED")
+            elif isinstance(task, dict):
+                expected = task.get("phase1_provenance")
+                current = emit_attestation.input_provenance(proj, "original")
+                if current != expected:
+                    phase1_blocked[pid] = "original design input changed after task creation"
+            continue
         expected = (task.get("phase1_provenance")
                     if isinstance(task, dict) else None)
         current = emit_attestation.phase1_provenance(proj)
@@ -7943,7 +8035,9 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         # The caller performs a state check before constructing a job. Repeat
         # it here at the actual fan-out seam so a pointer/anchor mutation after
         # planning cannot turn a valid plan into a later-span bypass.
-        d1_snapshot = _capture_d1_evidence(proj)
+        receipt = (result_by_id.get(str(pid)) or {}).get("route_receipt") or {}
+        d1_snapshot = (None if receipt.get("input_contract") == "original"
+                       else _capture_d1_evidence(proj))
         state = _route_reentry_state(str(pid), result_by_id.get(str(pid)) or {},
                                      allow_d1_only=False, d1_snapshot=d1_snapshot)
         if state.get("status") != "ACTIVE":
@@ -7969,7 +8063,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         # exit still applies; otherwise resume expands a step-2/4 task into LEC.
         argv = _resume_solver_argv(
             runner, proj, supplied_rtl, state["entry_step"],
-            state["exit_step"], state["delivery_route"])
+            state["exit_step"], state["delivery_route"],
+            str(state["route_receipt"].get("input_contract") or "structured"))
         process = _run_from_d1_snapshot(
             runner_budget, argv, d1_snapshot, state["route_receipt"],
             state["activation"], state["task"]["task_sha256"],

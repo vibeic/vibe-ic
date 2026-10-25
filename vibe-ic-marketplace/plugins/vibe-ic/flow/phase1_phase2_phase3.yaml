@@ -1524,6 +1524,12 @@ steps:
     required_inputs:
       - from: D1
         outputs: all
+    input_contracts:
+      original:
+        required_inputs:
+          - from: external
+            path: "input/phase1_prompt.md"
+        blocks_on: []
     # The content gate below rejects empty or incomplete module sources.
     # Design fidelity remains with the downstream spec/RTL checks and P0.
     skills: [spec-to-rtl]
@@ -1705,6 +1711,14 @@ steps:
         path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
       - from: D1
         path: "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    input_contracts:
+      original:
+        required_inputs:
+          - from: 1
+            path: "phase2/stage1/rtl/*.sv OR phase2/stage1/rtl/*.v"
+          - from: external
+            path: "input/phase1_prompt.md"
+        blocks_on: [1]
     closed_loop:
       fallback_to: 1
       trigger: >-

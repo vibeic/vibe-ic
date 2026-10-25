@@ -670,7 +670,7 @@ def decide(project: Path, runner: str, site: str,
     steps, err = _ric.load_flow(fd)
     if err:
         return _unavailable(runner, site, span, err)
-    by_id = {str(s.get("id")): s for s in steps}
+    by_id = {str(s.get("id")): _ric.project_input_contract(project, s) for s in steps}
 
     missing_ids = [i for i in span if i not in by_id]
     if missing_ids:
@@ -1184,7 +1184,9 @@ def _begin_retained_rows(project: Path, dec: Decision) -> list:
     import execution_policy
     import execution_backend_worker as worker
     import step_output_collector as versions
-    canonical = {str(row['id']): row for row in _flow_yaml.load()['steps']}
+    from step_required_inputs_check import project_input_contract
+    canonical = {str(row['id']): project_input_contract(project, row)
+                 for row in _flow_yaml.load()['steps']}
     rows = []
     freshness = {}
     for sid in dec.flow_steps:

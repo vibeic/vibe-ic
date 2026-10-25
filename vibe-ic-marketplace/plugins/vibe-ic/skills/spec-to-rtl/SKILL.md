@@ -21,7 +21,16 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
 
 …the AI MUST:
 
-1. **Read the L docs the runner just emitted**:
+1. **Read the input contract named by the runner handoff**. For the explicit
+   bounded Step 1/2 `input_authority=original` contract, read the **entire**
+   `read_prompt_from` file and every `read_context_from` file. Verify their
+   recorded SHA-256 values before authoring or reviewing. These are the
+   authoritative source bytes; do not substitute generated Ldocs or require a
+   D1 document review for this RTL-only request. A changed or missing source
+   requires returning to the ordinary runner, not silently adopting it. This
+   handoff asserts neither D1 PASS nor measured RTL behavior.
+
+   For the default structured contract, **read the L docs the runner emitted**:
    - `<project>/phase1/generated_docs/L1_*.json` (product metadata, IC name, target clock)
    - `<project>/phase1/generated_docs/L2_*.json` (functional spec)
    - `<project>/phase1/generated_docs/L3_*.json` (external interface — ports)

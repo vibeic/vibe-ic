@@ -2202,6 +2202,8 @@ def detect_ic_class(project: Path) -> Tuple[str, str]:
     Adapter shape: keep the Tuple[str, str] contract used by the
     registry lookup and step_rtl_gen so no other call sites change.
     """
+    if _pl.rtl_input(project) == "original":
+        return ("unknown", "original-input RTL contract; structured Ldocs are not consumed")
     gd = _pl.generated_docs_dir(project)
     if not gd.is_dir():
         return ("unknown", "generated_docs/ not present — Phase 1 (doc-extraction) not run")
@@ -2768,6 +2770,8 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
     Spec is looked for at the conventional locations below; its ``module`` field
     names the emitted ``rtl/<module>.sv``."""
     _phase1_project_checkpoint(project)
+    if _pl.rtl_input(project) == "original":
+        return None  # this emitter requires the separately selected structured-spec contract
     spec = None
     for cand in ("phase2/stage1/rtl_spec.json", "phase2/rtl_spec.json",
                  "input/rtl_spec.json", "phase2/stage1/rtl_spec.yaml",
@@ -3200,7 +3204,9 @@ def _gather_phase1_plain_spec_text(
             f"the project provenance boundary could not be resolved: {exc}")
     if project_binding is not None:
         project_binding.require_current()
-    for directory in (_pl.input_prompt_dir(project), _pl.input_doc_dir(project)):
+    directories = ((_pl.input_prompt_dir(project), _pl.input_doc_dir(project))
+                   if _pl.rtl_input(project) == "structured" else (project / "input",))
+    for directory in directories:
         if project_binding is not None:
             project_binding.require_current()
         try:
@@ -3225,7 +3231,9 @@ def _gather_phase1_plain_spec_text(
                     "the operator-prose source root is not a directory")
             allowed_root = directory.resolve(strict=True)
             allowed_root.relative_to(project_root)
-            entries = sorted(allowed_root.rglob("*"))
+            entries = (_pl.original_input_sources(project)
+                       if _pl.rtl_input(project) == "original"
+                       else sorted(allowed_root.rglob("*")))
         except ValueError as exc:
             return _phase1_plain_spec_gather_refusal(
                 project, directory, _PHASE1_PROSE_PROVENANCE_REFUSED,
@@ -3285,7 +3293,9 @@ def _gather_phase1_plain_spec_text(
                 # would silently change the grammar the deterministic parser sees.
                 if project_binding is not None:
                     project_binding.require_current()
-                _chunk_text = resolved.read_text(encoding="utf-8")
+                _chunk_text = (resolved.read_bytes().decode("utf-8")
+                               if _pl.rtl_input(project) == "original"
+                               else resolved.read_text(encoding="utf-8"))
                 if project_binding is not None:
                     project_binding.require_current()
             except UnicodeError as exc:
@@ -7470,7 +7480,11 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
     n_decl_fields = 0
     n_decl_required = 0
     try:
-        _p, _contracts = _decl.stage_contract(project)
+        # This advisory producer reads structured Ldocs. The original-input
+        # author receives every source clause directly rather than an old
+        # generated declaration contract from a different input authority.
+        _p, _contracts = (_decl.stage_contract(project)
+                          if _pl.rtl_input(project) == "structured" else (None, []))
         if _contracts:
             decl_contract_path = str(_p)
             _names = {f["name"]: f for c in _contracts for f in c["fields"]}
@@ -7577,6 +7591,7 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
            f"(`--project`, not one file out of the set; #2086):\n"
            f"    python3 plugins/vibe-ic/programs/lesson_consumption_check.py "
            f"--project {project} --digest {digest_path} --ack {ack_path}"
+         + (" --rtl-input original" if _pl.rtl_input(project) == "original" else "")
          + (f" \\\n        --scoring-record {scoring_record_path}"
             if scoring_record_path else "")
          + f" --strict"
@@ -7586,6 +7601,19 @@ def _stage_author_knowledge_digests(project: Path) -> Tuple[str, Dict[str, Any]]
         if strong_titles and ack_path else "")
     extras: Dict[str, Any] = {"lessons_digest": digest_path,
                               "lessons_count": n_lessons}
+    if _pl.rtl_input(project) == "original":
+        original = project / "input/phase1_prompt.md"
+        context = _pl.original_input_sources(project)[1:]
+        extras.update(input_authority="original", read_prompt_from=str(original),
+                      original_prompt_sha256=hashlib.sha256(original.read_bytes()).hexdigest(),
+                      original_prompt_bytes=original.stat().st_size,
+                      read_context_from=[{"path": str(p), "sha256": hashlib.sha256(p.read_bytes()).hexdigest()}
+                                         for p in context])
+        lessons_hint += ("\nINPUT AUTHORITY: read the COMPLETE original prompt at "
+                         f"`{original}` and every supplied context file named in the handoff. "
+                         "The original specification controls ports and behavior; generated Ldocs "
+                         "are not the input contract for this bounded RTL authoring request. "
+                         "No D1 document-quality PASS or RTL behavior PASS is asserted.")
     if strong_titles:
         extras["lessons_strong_matches"] = strong_titles
         extras["lessons_ack_path"] = ack_path
@@ -8139,9 +8167,10 @@ def step_rtl_gen(project: Path, ic_class: str,
             _RTL_SESSION_BINDING = None
             if prior_owned and prior_project == project:
                 _RTL_SESSION_PROJECT = stage_project
-            result = _step_rtl_gen_bound(
-                stage_project, ic_class, force_regen, t0, stage_binding,
-                snapshot_manifest=baseline)
+            with _pl.rtl_input_view(stage_project, _pl.rtl_input(project)):
+                result = _step_rtl_gen_bound(
+                    stage_project, ic_class, force_regen, t0, stage_binding,
+                    snapshot_manifest=baseline)
             stage_binding.require_current()
             # #2183 — THE FILES, not only the StepResult. Every generator above
             # ran against `stage_project` and any of them may have recorded
@@ -26500,6 +26529,8 @@ def main() -> int:
                    help="Forward --skip-analog to final_audit so analog A1-A8 "
                         "file-existence checks don't FAIL a digital-only project. "
                         "Captured from v0.1.53 CVDP run.")
+    p.add_argument("--rtl-input", choices=("structured", "original"), default="structured",
+                   help="Use the complete original specification as Step 1/2 authority; structured remains the default.")
     p.add_argument("--entry-step", default=None,
                    help="START the flow at this canonical step id instead of "
                         "the beginning (e.g. 4 for a debug task, 2 for an "
@@ -26581,6 +26612,7 @@ def main() -> int:
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
     try:
+        _pl.select_rtl_input(project, args.rtl_input, args.entry_step, args.exit_step)
         _activate_runtime_program_tree(project)
     except Exception as exc:
         print(f"REFUSED: runtime program tree: {exc}", file=sys.stderr)
@@ -26881,7 +26913,7 @@ def main() -> int:
 
     _canonical = _canonical_admission.admit_span(
         project, "phase2", PROGRAMS_DIR, args.container,
-        {"top_name": args.top_name, "pdk": args.pdk,
+        {"top_name": args.top_name, "pdk": args.pdk, "rtl_input": args.rtl_input,
          "max_rtl_repair_retries": args.max_rtl_repair_retries,
          "skip_hardware": args.skip_hardware, "skip_phase3": args.skip_phase3,
          "skip_analog": args.skip_analog, "entry_step": args.entry_step,
@@ -26962,7 +26994,7 @@ def main() -> int:
     # admission above already checked the DECLARED inputs of the entry span —
     # a narrower and more accurate question — so do not re-impose the step-1
     # precondition on a run that is not entering at step 1.
-    if L_count < 13 and not _entry_site:
+    if L_count < 13 and not _entry_site and args.rtl_input != "original":
         # ORGANIC-20260606-phase1-prompt-mode-nested-generated-docs (#424):
         # name the one-level-too-deep layout explicitly when present, so a
         # caller on a pre-fix phase1 artefact sees the structural cause
@@ -26993,14 +27025,20 @@ def main() -> int:
     _p1_note = ""
     try:
         import _phase1_producer_identity as _p1id_mod
-        _fr = _p1id_mod.assess(project, PROGRAMS_DIR)
+        _fr = (_p1id_mod.assess(project, PROGRAMS_DIR)
+               if args.rtl_input != "original" else {"state": _p1id_mod.REUSE})
         if _fr.get("state") != _p1id_mod.REUSE:
             _p1_note = (f"; STALE_GENERATED_DOCS: {_fr.get('state')} "
                         f"({_fr.get('reason')}): {_fr.get('why')}")
     except Exception:                                      # noqa: BLE001
         pass
-    plan.append(StepResult("phase1_precheck", "PASS", 0.0,
-                           f"{L_count}/13 L docs present{_p1_note}"))
+    if args.rtl_input == "original":
+        plan.append(StepResult("phase1_precheck", "NOT_APPLICABLE", 0.0,
+                               "bounded original-input RTL contract; D1 documents are not consumed",
+                               declared_by="--rtl-input original"))
+    else:
+        plan.append(StepResult("phase1_precheck", "PASS", 0.0,
+                               f"{L_count}/13 L docs present{_p1_note}"))
 
     # Step 1 — class detect (always)
     ic_class, evidence = detect_ic_class(project)

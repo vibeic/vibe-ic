@@ -1160,7 +1160,8 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
            dataset: Optional[Path] = None,
            design: Optional[str] = None,
            prompt: Optional[Path] = None,
-           project: Optional[Path] = None) -> dict:
+           project: Optional[Path] = None,
+           rtl_input: str = "structured") -> dict:
     """Deterministic Shape-B export. Returns a result dict; writes
     `samples/<leaf>.v` on a passing guard. Never mutates rtl_dir.
 
@@ -1173,6 +1174,17 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
     TB-failing one (the §4.05 invariant), independent of any genre policy. When
     NO testbench is locatable, the verbatim spec-order is kept (the genre guess
     is a last resort, still protected by the standalone guard)."""
+    # The explicit project remains authoritative for immutable candidate
+    # snapshots outside its ordinary RTL tree. Original input is opt-in and
+    # binds the canonical prompt before any export work; it never fabricates
+    # Phase-1 execution from missing L-docs.
+    _proj = (Path(project) if project is not None else
+             (rtl_dir.parents[2] if len(rtl_dir.parents) >= 3 else None))
+    try:
+        provenance = _ea.input_provenance(_proj, rtl_input)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return {"verdict": "FAIL", "reason": "input_provenance_invalid",
+                "note": str(exc), "exported": None}
     src, top, note = resolve_tb_facing_file(rtl_dir, leaf, spec_module)
     if src is None:
         return {"verdict": "FAIL", "reason": "no_tb_facing_top", "note": note,
@@ -1237,8 +1249,9 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
     # here, reusing the §4.05-safe detectors verbatim (so it inherits Part A's
     # baseline false-fire fix — ring_counter / parallel2serial DISARM). Reads
     # ONLY the design's spec/prompt prose + the RTL; NEVER the hidden testbench.
-    spec_text = resolve_prompt_text(rtl_dir, leaf, prompt, dataset, design,
-                                    project)
+    spec_text = (Path(provenance["prompt_path"]).read_text(encoding="utf-8")
+                 if rtl_input == "original" else
+                 resolve_prompt_text(rtl_dir, leaf, prompt, dataset, design, project))
     block_reason = shift_rotate_emit_block(spec_text, original, top)
     if block_reason:
         # Do NOT write the sample — an emit-BLOCK means the sample is rejected so
@@ -1374,14 +1387,17 @@ def export(rtl_dir: Path, leaf: str, samples_dir: Path,
         # snapshot outside the project tree.  In that case the explicit
         # project is the provenance authority.  Keep the legacy layout
         # derivation for ordinary <project>/phase2/stage1/rtl callers.
-        _proj = (Path(project).resolve() if project is not None else
-                 (rtl_dir.parents[2] if len(rtl_dir.parents) >= 3 else None))
+        if rtl_input == "original" and not _ea.provenance_is_current(provenance):
+            raise ValueError("original input changed during export")
         _ea.record(samples_dir, dst,
                    gates=["shape_b_guard_export",
                           "port_reorder" if (reordered != original and not reorder_reverted) else "verbatim"],
-                   shape="B", phase1=_proj)
-    except Exception:
-        pass
+                   shape="B", phase1=provenance)
+    except Exception as exc:
+        if rtl_input == "original":
+            dst.unlink(missing_ok=True)
+            return {"verdict": "FAIL", "reason": "input_provenance_invalid",
+                    "note": str(exc), "exported": None}
     return {"verdict": "PASS", "tb_facing_top": top,
             "source_file": str(src), "note": note,
             "exported": str(dst),
@@ -1398,6 +1414,10 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--project", help="per-design Path-A project "
                     "(<RUNDIR>/work/<leaf>); rtl_dir resolved via _path_layout")
+    ap.add_argument("--rtl-input", choices=("structured", "original"),
+                    default="structured",
+                    help="explicit ordinary RTL input contract; original binds "
+                         "the project's full input/phase1_prompt.md without claiming D1 ran")
     ap.add_argument("--rtl-dir", help="runner RTL dir (overrides --project)")
     ap.add_argument("--leaf", required=True,
                     help="design leaf (last path component of <design>); the "
@@ -1459,7 +1479,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                  dataset=(Path(a.dataset) if a.dataset else None),
                  design=a.design,
                  prompt=(Path(a.prompt) if a.prompt else None),
-                 project=(Path(a.project) if a.project else None))
+                 project=(Path(a.project) if a.project else None),
+                 rtl_input=a.rtl_input)
     if a.json:
         Path(a.json).write_text(json.dumps(res, indent=2) + "\n")
     print(json.dumps(res, indent=2))

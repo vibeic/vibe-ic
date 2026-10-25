@@ -105,6 +105,24 @@ except ImportError:                                     # pragma: no cover
     print("step_required_inputs_check: PyYAML required", file=sys.stderr)
     sys.exit(2)
 
+def input_contract(step: Dict[str, Any], kind: str = "structured") -> Dict[str, Any]:
+    """Project the Step 1/2 source alternative declared in the canonical YAML."""
+    canonical = step.get("_structured_input_contract")
+    if canonical is not None:
+        step = dict(step, **canonical)
+        step.pop("_structured_input_contract")
+    if kind == "structured":
+        return step
+    alternative = (step.get("input_contracts") or {}).get(kind)
+    if not isinstance(alternative, dict):
+        return step
+    return dict(step, _structured_input_contract={
+                    "required_inputs": step.get("required_inputs"),
+                    "blocks_on": step.get("blocks_on")},
+                required_inputs=alternative["required_inputs"],
+                blocks_on=alternative["blocks_on"])
+
+
 # Resolver parity with the OUTPUT side. Imported, never reimplemented: two
 # notions of "this artefact exists" is how the two halves of one contract end
 # up disagreeing about the same file.
@@ -187,6 +205,11 @@ def declaration_defects(steps: List[Dict[str, Any]]) -> List[Dict[str, str]]:
     return out
 
 
+def project_input_contract(project: Path, step: Dict[str, Any]) -> Dict[str, Any]:
+    import _path_layout
+    return input_contract(step, _path_layout.rtl_input(project))
+
+
 def expand(entry: Dict[str, Any],
            by_id: Dict[str, Dict[str, Any]]) -> List[Tuple[str, str]]:
     """(producer, declared-output-spec) pairs this entry requires."""
@@ -232,6 +255,7 @@ def check_one(project: Path, step: Dict[str, Any],
               by_id: Dict[str, Dict[str, Any]],
               waivers: Dict[Any, Dict[str, str]],
               ledger: Optional[Dict[str, set]]) -> Dict[str, Any]:
+    step = project_input_contract(project, step)
     sid = str(step.get("id"))
     rec: Dict[str, Any] = {
         "id": sid, "name": step.get("name", ""),
@@ -399,11 +423,20 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="judge exactly this step id (the pre-flight call "
                          "made immediately before dispatching it)")
     ap.add_argument("--flow-def", type=Path, default=DEFAULT_FLOW_DEF)
+    ap.add_argument("--rtl-input", choices=("structured", "original"), default="structured",
+                    help="the explicit bounded Step 1/2 source contract")
     ap.add_argument("--json", type=Path, default=None)
     ap.add_argument("--strict-attribution", action="store_true",
                     help="escalate ledger attribution advisories to a failure")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args(argv)
+
+    import _path_layout
+    try:
+        _path_layout.select_rtl_input(a.project, a.rtl_input, a.step, a.step)
+    except (OSError, ValueError) as exc:
+        print(f"required-inputs: {exc}", file=sys.stderr)
+        return 2
 
     report, rc = build(a.project.resolve(), a.flow_def, a.step,
                        a.strict_attribution)

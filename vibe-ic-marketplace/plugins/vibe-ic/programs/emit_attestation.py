@@ -79,16 +79,71 @@ def phase1_provenance(src: Union[Path, str, None]) -> dict:
     }
 
 
+def input_provenance(project: Union[Path, str, None],
+                     input_contract: str = "structured") -> dict:
+    """Fingerprint the explicitly selected ordinary RTL input contract.
+
+    The default preserves the Phase-1 contract.  ``original`` binds the exact
+    staged prompt and, when present, the existing verified public-input
+    manifest.  It records that Phase 1 did NOT run; missing L-docs never select
+    this contract implicitly.
+    """
+    if input_contract == "structured":
+        return phase1_provenance(project)
+    if input_contract != "original" or project is None:
+        raise ValueError("INPUT_PROVENANCE_INVALID: unknown or missing input contract")
+    root = Path(project).absolute()
+    prompt = root / "input" / "phase1_prompt.md"
+    if any(p.is_symlink() for p in (prompt, *prompt.parents)):
+        raise ValueError("INPUT_PROVENANCE_INVALID: original prompt is a symbolic link")
+    root = root.resolve(strict=True)
+    prompt = root / "input" / "phase1_prompt.md"
+    data = prompt.read_bytes()
+    if not data.decode("utf-8").strip():
+        raise ValueError("INPUT_PROVENANCE_INVALID: original prompt is empty")
+    prompt_sha = hashlib.sha256(data).hexdigest()
+    public = None
+    manifest = root / "input" / "public_original" / "manifest.json"
+    if manifest.exists() or manifest.is_symlink():
+        # Reuse the input adapter's existing path, identity and byte checks;
+        # do not invent another context manifest or copy a current candidate.
+        import benchmark_io_adapter as bio
+        if any(p.is_symlink() for p in (manifest, *manifest.parents)):
+            raise ValueError("INPUT_PROVENANCE_INVALID: public manifest is a symbolic link")
+        declared = json.loads(manifest.read_text(encoding="utf-8"))
+        public = bio.public_original_input(root, declared["id"], prompt_sha)
+    return {"ran": False, "input_contract": "original",
+            "prompt_path": str(prompt), "prompt_sha256": prompt_sha,
+            "prompt_bytes": len(data), "public_original_input": public}
+
+
+def provenance_is_current(provenance: dict) -> bool:
+    """Validate an existing emit/input fingerprint without minting a D1 PASS."""
+    if not isinstance(provenance, dict):
+        return False
+    contract = provenance.get("input_contract", "structured")
+    if contract == "structured":
+        return provenance.get("ran") is True
+    if contract != "original" or provenance.get("ran") is not False:
+        return False
+    try:
+        prompt = Path(provenance["prompt_path"])
+        if not prompt.is_absolute() or prompt.parts[-2:] != ("input", "phase1_prompt.md"):
+            return False
+        return input_provenance(prompt.parent.parent, "original") == provenance
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
 def record(samples_dir: Path, sample_path: Path, gates: Iterable[str],
            shape: str = "",
            phase1: Union[Path, str, dict, None] = None) -> None:
     """Append an emit attestation for `sample_path` (already written under samples_dir).
 
-    `phase1` records Phase-1 provenance — REQUIRED for a canonical attestation: a
-    sample whose RTL did NOT flow through `(doc|prompt) → Phase1(L*.json) → Phase2`
-    is non-canonical. Pass the project root / `generated_docs/` dir (fingerprinted
-    via `phase1_provenance`) or a pre-computed provenance dict. Omitting it leaves
-    the "phase1" key absent, which `verify()` flags as ungated by default."""
+    `phase1` records the selected input provenance. Pass a project/docs path for
+    the default structured contract, or a pre-computed ``input_provenance``
+    dict for an explicitly selected original-input run. Omitting it leaves the
+    "phase1" key absent, which `verify()` flags as ungated by default."""
     samples_dir = Path(samples_dir)
     sample_path = Path(sample_path)
     if not sample_path.is_file():
@@ -130,10 +185,10 @@ def verify(samples_dir: Path, exts: Iterable[str] = SAMPLE_EXTS,
     """Return (ok, ungated, total). `ungated` = scoreable samples that are NOT canonical:
       • NO attestation, or a sha256 that no longer matches the on-disk bytes
         (authored-direct into samples/ / mutated after emit), OR
-      • (default) an attestation lacking Phase-1 provenance / `phase1.ran != True` —
-        the RTL did not flow through `(doc|prompt) → Phase1(L*.json) → Phase2`.
+      • (default) an attestation lacking structured Phase-1 provenance or an
+        explicitly selected original-input fingerprint whose bytes are current.
 
-    Phase-1 provenance is REQUIRED for canonical by default; pass
+    Input provenance is REQUIRED for canonical by default; pass
     `require_phase1=False` only for offline inspection of a pre-provenance run."""
     samples_dir = Path(samples_dir)
     att = _load(samples_dir)
@@ -145,7 +200,7 @@ def verify(samples_dir: Path, exts: Iterable[str] = SAMPLE_EXTS,
         if not rec or rec.get("sha256") != sha256_file(s):
             ungated.append(s.name)
             continue
-        if require_phase1 and not (rec.get("phase1") or {}).get("ran"):
+        if require_phase1 and not provenance_is_current(rec.get("phase1")):
             ungated.append(s.name)
     return (len(ungated) == 0, ungated, len(samples))
 

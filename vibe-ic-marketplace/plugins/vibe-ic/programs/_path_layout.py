@@ -84,6 +84,88 @@ def phase1_dir(project: Path) -> Path:
     return project / "phase1"
 
 
+_RTL_INPUT = (None, "structured")
+
+
+def original_input_sources(project: Path):
+    """The complete original prompt and its existing public context sources."""
+    import hashlib
+    import json
+    project = Path(project)
+    prompt = project / "input/phase1_prompt.md"
+    manifest = project / "input/public_original/manifest.json"
+    if any(p.is_symlink() for p in (prompt, *prompt.parents)):
+        raise ValueError("original input source is a symbolic link")
+    data = prompt.read_bytes()
+    if not data.decode("utf-8").strip():
+        raise ValueError("original input prompt is empty")
+    if manifest.exists() or manifest.is_symlink():
+        import benchmark_io_adapter as bio
+        if any(p.is_symlink() for p in (manifest, *manifest.parents)):
+            raise ValueError("original input manifest is a symbolic link")
+        declared = json.loads(manifest.read_bytes().decode("utf-8"))
+        public = bio.public_original_input(project, declared["id"],
+                                           hashlib.sha256(data).hexdigest())
+        context = [manifest.parent / "files" / item["relative_path"]
+                   for item in public["files"]]
+    else:
+        root = project / "input/rtl"
+        entries = [root, *sorted(root.rglob("*"))] if root.exists() or root.is_symlink() else []
+        if any(p.is_symlink() for p in entries):
+            raise ValueError("original input context is a symbolic link")
+        context = [p for p in entries if p.is_file()]
+    return [prompt, *context]
+
+
+def select_rtl_input(project: Path, kind: str, entry_step=None, exit_step=None) -> None:
+    """Select the existing RTL owner's input for one bounded invocation."""
+    global _RTL_INPUT
+    if kind not in ("structured", "original"):
+        raise ValueError("unknown RTL input contract")
+    if kind == "original":
+        if str(entry_step) not in ("1", "2") or str(exit_step) not in ("1", "2"):
+            raise ValueError("original RTL input requires a bounded Step 1/2 window")
+        prompt = Path(project) / "input/phase1_prompt.md"
+        if not prompt.is_file() or any(p.is_symlink() for p in
+                                      (Path(project), Path(project) / "input", prompt)):
+            raise ValueError("original RTL input requires its regular original prompt")
+        import task_nature_route as nature
+        text = prompt.read_bytes().decode("utf-8")
+        if nature.prompt_embeds_rtl(text) or nature.prompt_embeds_partial_rtl(text):
+            raise ValueError("original RTL generation cannot replace a supplied RTL transform")
+        if any(p.suffix.lower() in (".v", ".sv", ".vhd", ".vhdl")
+               for p in original_input_sources(project)[1:]):
+            raise ValueError("original RTL generation cannot replace a supplied RTL transform")
+        for source in (Path(project) / "input/rtl", Path(project) / "input/vendor_rtl"):
+            if source.is_dir() and any(p.suffix.lower() in (".v", ".sv", ".vhd", ".vhdl")
+                                       for p in source.rglob("*")):
+                raise ValueError("original RTL generation cannot consume supplied RTL as a new specification")
+    _RTL_INPUT = (str(Path(project).resolve()), kind)
+
+
+def rtl_input(project: Path) -> str:
+    return _RTL_INPUT[1] if _RTL_INPUT[0] == str(Path(project).resolve()) else "structured"
+
+
+def active_rtl_input() -> str:
+    return _RTL_INPUT[1]
+
+
+def rtl_input_view(project: Path, kind: str):
+    """Carry an already selected owner input into its existing private copy."""
+    import contextlib
+    @contextlib.contextmanager
+    def view():
+        global _RTL_INPUT
+        previous = _RTL_INPUT
+        _RTL_INPUT = (str(Path(project).resolve()), kind)
+        try:
+            yield
+        finally:
+            _RTL_INPUT = previous
+    return view()
+
+
 def input_doc_dir(project: Path) -> Path:
     """Path A entry: verbatim extracts from vendor docs (was phase1/input_doc)."""
     return project / "phase1/input_doc"
@@ -125,6 +207,8 @@ def spec_text_sources(project: Path):
     then the generated L-doc JSON. Deterministic and total: a consumer that
     reports a denominator over this set can name every file that produced it.
     """
+    if rtl_input(project) == "original":
+        return original_input_sources(project)
     out = []
     for d in (input_prompt_dir(project), input_doc_dir(project)):
         if d.is_dir():
@@ -152,7 +236,7 @@ def gather_spec_text(project: Path, phase1_plain_text=None) -> str:
     chunks = []
     generated = []
     gd = generated_docs_dir(project)
-    if gd.is_dir():
+    if rtl_input(project) == "structured" and gd.is_dir():
         generated = sorted(gd.glob("L*.json"))
     if phase1_plain_text is not None:
         if phase1_plain_text:
@@ -162,7 +246,8 @@ def gather_spec_text(project: Path, phase1_plain_text=None) -> str:
         files = spec_text_sources(project)
     for f in files:
         try:
-            chunks.append(f.read_text(errors="replace"))
+            chunks.append(f.read_bytes().decode("utf-8") if rtl_input(project) == "original"
+                          else f.read_text(errors="replace"))
         except OSError:
             pass
     return "\n\n".join(chunks)

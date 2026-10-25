@@ -2547,6 +2547,8 @@ def _main() -> int:
                         "rung cap only to Phase-2 Step 13 LEC. Omitted keeps "
                         "LEC unbounded; this is not a wall-clock timeout.")
     p.add_argument("--skip-hardware", action="store_true")
+    p.add_argument("--rtl-input", choices=("structured", "original"), default="structured",
+                   help="Step 1/2 input authority; original consumes the complete original specification in a bounded RTL-only window.")
     p.add_argument("--entry-step", default=None,
                    help="START the flow at this canonical step id. The step "
                         "decides WHICH runner owns the entry, and THIS "
@@ -2705,6 +2707,7 @@ def _main() -> int:
         return 2
 
     try:
+        _pl.select_rtl_input(project, args.rtl_input, args.entry_step, args.exit_step)
         _activate_runtime_program_tree(project)
     except Exception as exc:
         print(f"REFUSED: runtime program tree: {exc}", file=sys.stderr)
@@ -3121,7 +3124,8 @@ def _main() -> int:
     # FX_STALE_LDOCS — the knobs THIS run hands phase 1, so a doc written
     # under another `--pdk` / `--ic-name` is not reused (review wave8 MAJOR).
     _p1_knobs = {"ic_name": args.ic_name, "pdk": args.pdk, "mode": "docs"}
-    _p1_checkpoint = _execution.request()['mode'] == 'default'
+    _p1_checkpoint = (_execution.request()['mode'] == 'default'
+                      and args.rtl_input != "original")
     run_phase1, p1_mode = _phase1_decision(
         project, _force_skip_p1, _p1_knobs, checkpoint=_p1_checkpoint)
     # What the generated L docs on disk ARE, asked once and carried into the
@@ -3171,7 +3175,7 @@ def _main() -> int:
         _p1_skipped_by = "the expert second pass re-extracts nothing"
     else:
         _p1_skipped_by = "its entry step is past phase 1"
-    _p1_stale_why = _stale_generated_docs_note(
+    _p1_stale_why = None if args.rtl_input == "original" else _stale_generated_docs_note(
         _p1_regenerating or (run_phase1 and p1_mode == "docs"),
         _p1_fresh, _p1_design_input, _p1_skipped_by)
     if _p1_stale_why:
@@ -3401,7 +3405,7 @@ def _main() -> int:
             halted_at = 'phase1'
     else:
         plan.append(("phase1", "SKIPPED", 0))
-        if (_execution.request()['mode'] == 'default'
+        if (args.rtl_input != "original" and _execution.request()['mode'] == 'default'
                 and _p1_fresh is not None
                 and _p1_fresh['state'] in (_p1id.REUSE, _p1id.REVALIDATE)):
             # Producer freshness preserves the checkpoint; the current expert
@@ -3681,6 +3685,8 @@ def _main() -> int:
                 args.ic_name
                 if _phase3_rederives_top(flow_top, top_name_explicit)
                 else None))
+        if args.rtl_input == "original":
+            p2_args += ["--rtl-input", "original"]
         if args.skip_analog:
             p2_args.append("--skip-analog")
         elif not run_analog:
@@ -3688,6 +3694,7 @@ def _main() -> int:
         p2_admission = _canonical_admission.admit_span(
             project, "phase2", PROGRAMS_DIR, args.container,
             {"top_name": flow_top, "max_rtl_repair_retries": args.max_rtl_repair_retries,
+             "rtl_input": args.rtl_input,
              "skip_hardware": args.skip_hardware, "skip_phase3": args.skip_phase3,
              "skip_analog": "--skip-analog" in p2_args,
              "entry_step": (phase2_entry if _prelayout_entry else args.entry_step),

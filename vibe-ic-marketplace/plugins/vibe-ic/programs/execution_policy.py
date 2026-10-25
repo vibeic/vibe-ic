@@ -543,12 +543,13 @@ def _fixed_inputs(runtime, step_id: str, *, parameters=None) -> dict:
         if issued is not None:
             return issued
     import _flow_yaml
-    from step_required_inputs_check import expand
+    from step_required_inputs_check import expand, project_input_contract
     root = runtime['project']
     by_id = {str(r['id']): r for r in _flow_yaml.load()['steps']}
     row = by_id.get(step_id)
     if row is None:
         raise Refusal('UNKNOWN_CANONICAL_STEP', step_id)
+    row = project_input_contract(root, row)
     declarations = list(row.get('required_inputs') or ())
     from execution_provider_catalog import BACKEND_IDS
     if str(step_id) in BACKEND_IDS:
