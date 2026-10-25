@@ -482,5 +482,16 @@
     "version_observed": "1.31.58 at base d1a134de8353b95860e173798b50b6c0c9a59af0 plus locally applied report-binding PR3576 head54f700a467d126f9d91fbb1fde717d14893a7372.",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/memory_profile_public_prose/memory_geometry.txt"
+  },
+  {
+    "issue": 3587,
+    "project": "plain_design_source_provenance",
+    "layer": "L10_TEST_CASES; L20_DFT_SCAN_TOPOLOGY; L22_VERIFICATION_PLAN",
+    "field": "test_cases_present; fields.notes; derived verification category provenance",
+    "expected": "The ordinary generic overlay may suggest verification work, but must identify its recommendations as program-derived and unmeasured. It cannot assert that input contains waveform figures/descriptions, that an unstated register state exists, or that the original source lacks a formal plan when its API has not established those claims. Existing populated source-backed fields and actual test cases remain authoritative. This is metadata provenance, not an excuse to remove input requirements or claim verification PASS.",
+    "actual": "Ordinary Phase1 at exact candidate5045b259dc2da2daf38d627eb41c6cd29f03394d emits L10.test_cases_present='partial - the spec provides functional descriptions and waveform figures ...', L22.fields.notes='... categories above are derived from the spec\\'s functional and waveform descriptions', and L20.fields.notes='... The register state of this design is amenable to standard scan insertion.' The quoted plain combinational source contains neither figures nor register state. Independent fresh D1 review exposed the claims on the current generated artifacts; no reference RTL/testbench/oracle was read. Read-only attribution identifies spi_protocol_synth._apply_universal, which is used for non-SPI blocks too.",
+    "version_observed": "1.31.59 landed main e5c73058576d84797745636d6683975d500e4cc7 plus version-less PR3585 head5045b259dc2da2daf38d627eb41c6cd29f03394d. The generic overlay statements predate this candidate; no last-known-good release is asserted.",
+    "version_lkg": "Not measured.\n\n## 驗收\n```bash\nbash tools/ci/run_suite_in_eda_image.sh --image ghcr.io/vibeic/vibeic-eda@sha256:a6713464903bd9f6c3de15cea8653cb0cf1388a24915632190ad64ce3fc2c3d5 --scratch /tmp/plain-source-provenance -- programs/tests/test_phase1_fixtures_regression.py -k plain_design_source_provenance -q --tb=short\n```\n\nFreeze baseline failures before source edits. Exercise the actual shared overlay for empty generated records, and reverse controls retaining real prepopulated test cases and source-backed notes. No baseline weakening, artifact fabrication, gate waiver, main push or version assignment. The final ordinary producer and current D1 review must consume the repaired output separately.",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/plain_design_source_provenance/plain_combinational_input.txt"
   }
 ]

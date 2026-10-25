@@ -1055,3 +1055,53 @@ def test_neutral_functional_preamble_reaches_l2(tmp_path):
     sentence = "The cipher can either encrypt or decrypt, but not both at the same time."
     content = "\n".join(row.get("content", "") for row in actual["frs_sections"])
     assert sentence in content, actual["frs_sections"]
+
+
+@pytest.mark.parametrize('is_spi', [False, True])
+@pytest.mark.parametrize('filename,field,unsupported', [
+    ('L10_TEST_CASES.json', 'test_cases_present', 'waveform figures'),
+    ('L20_DFT_SCAN_TOPOLOGY.json', 'notes', 'The register state of this design'),
+    ('L22_VERIFICATION_PLAN.json', 'notes', "the spec's functional and waveform descriptions"),
+])
+def test_plain_design_source_provenance_does_not_invent_source_facts(
+        tmp_path, is_spi, filename, field, unsupported):
+    from programs import spi_protocol_synth as producer
+    source = _load_fixture('plain_design_source_provenance')
+    assert all('waveform' not in text.lower() for text in source.values())
+    generated = tmp_path / 'phase1/generated_docs'
+    generated.mkdir(parents=True)
+    for name in ('L10_TEST_CASES.json', 'L20_DFT_SCAN_TOPOLOGY.json',
+                 'L22_VERIFICATION_PLAN.json'):
+        (generated / name).write_text(json.dumps({'test_cases': [], 'fields': {}}))
+    producer.apply_spi_synth(generated, is_spi, None)
+    document = json.loads((generated / filename).read_text())
+    actual = document.get('fields', {}).get(field, document.get(field))
+    print({'produced_field': field, 'actual': actual, 'is_spi': is_spi})
+    assert isinstance(actual, str) and actual, actual
+    assert unsupported not in actual, actual
+    assert 'NOT_MEASURED' in actual, actual
+
+
+@pytest.mark.parametrize('is_spi', [False, True])
+def test_plain_design_source_provenance_preserves_existing_source_records(tmp_path, is_spi):
+    from programs import spi_protocol_synth as producer
+    generated = tmp_path / 'phase1/generated_docs'
+    generated.mkdir(parents=True)
+    l10 = {'test_cases': [{'id': 'input_case', 'expected': 'output matches input'}],
+           'test_cases_present': 'present', 'notes': 'Source supplied a test plan.'}
+    l20 = {'fields': {'dft_present': True, 'notes': 'Source declares a scan chain.'}}
+    l22 = {'fields': {'verification_plan_present': 'present',
+                      'notes': 'Source supplies a formal verification plan.',
+                      'coverage_goals': [{'metric': 'source criterion'}]}}
+    for name, body in [('L10_TEST_CASES.json', l10), ('L20_DFT_SCAN_TOPOLOGY.json', l20),
+                       ('L22_VERIFICATION_PLAN.json', l22)]:
+        (generated / name).write_text(json.dumps(body))
+    producer.apply_spi_synth(generated, is_spi, None)
+    actual10 = json.loads((generated / 'L10_TEST_CASES.json').read_text())
+    actual20 = json.loads((generated / 'L20_DFT_SCAN_TOPOLOGY.json').read_text())
+    actual22 = json.loads((generated / 'L22_VERIFICATION_PLAN.json').read_text())
+    assert actual10['test_cases'] == l10['test_cases']
+    assert actual10['test_cases_present'] == 'present'
+    assert actual20['fields'] == l20['fields']
+    assert actual22['fields']['notes'] == l22['fields']['notes']
+    assert actual22['fields']['verification_plan_present'] == 'present'

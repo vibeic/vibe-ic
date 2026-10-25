@@ -135,18 +135,13 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
     p = gd / "L10_TEST_CASES.json"
     if p.is_file():
         d = _read(p)
-        # H4 fix: `test_cases_present` was HARD-ASSIGNED (d[k]=v) with the
-        # SPI-flavored wording for EVERY protocol, forcing ~28 per-protocol
-        # force-overrides downstream. The "partial — spec gives functional
-        # descriptions + waveform figures that map to compliance scenarios
-        # but no formal test plan / testbench" framing is actually
-        # class-universal (true of every block guide), so emit it via
-        # setdefault (a downstream protocol synth's value still wins; a
-        # protocol with no opinion gets this NEUTRAL framing, not SPI's).
+        # This generic API has generated records, not the original source.
+        # It can suggest verification work, but cannot establish the presence
+        # of a source test plan or figures. Existing populated facts win.
         d.setdefault("test_cases_present", "present" if d.get('test_cases') else (
-            "partial - the spec provides functional descriptions and "
-            "waveform figures that map to compliance test scenarios "
-            "but does not provide a formal test plan or testbench."))
+            "NOT_MEASURED - source test-plan and waveform presence are not "
+            "established by this generic overlay; derived categories are "
+            "proposed verification work, not completed tests."))
         if is_spi:
             # H4: these derived_compliance_test_categories are SPI-SPECIFIC
             # (clock polarity/phase, MSB/LSB byte ordering, baud-rate divisor
@@ -209,7 +204,7 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
     # own synth rather than inheriting SPI's.
     _l22_payload = {
         "verification_plan_present": "implicit",
-        "notes": "Spec does not include a formal verification plan; categories above are derived from the spec's functional and waveform descriptions.",
+        "notes": "Program-suggested verification categories; source plan/waveform presence and verification completion are NOT_MEASURED.",
     }
     verification = facts('L22_VERIFICATION_PLAN.json')
     if any(verification.get(k) for k in ('coverage_goals', 'test_cases', 'regression_matrix', 'assertions')):
@@ -269,9 +264,12 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
     if is_spi:
         _l19_notes = ("Block-level peripheral spec does not include PDK / timing "
                       "constraints; these are deferred to the SoC integration spec.")
-        _l20_notes = ("Block guide does not specify DFT/scan topology; this is "
-                      "deferred to SoC integration. The peripheral register file "
-                      "is amenable to standard scan insertion at the SoC level.")
+        _l20_notes = ("Conditional integration guidance, applicable only after "
+                      "sequential register-file and scan eligibility are established: "
+                      "The peripheral register file is amenable to standard scan "
+                      "insertion at the SoC level. Applicability and DFT/scan "
+                      "topology are NOT_MEASURED here; this is not a source "
+                      "or signoff claim.")
         _l23_notes = ("Block guide does not specify confidentiality / integrity / "
                       "authentication requirements for the serial peripheral. Any "
                       "access-control (e.g. privileged-mode register access) is "
@@ -279,9 +277,9 @@ def _apply_universal(gd: Path, is_spi: bool = False) -> None:
     else:
         _l19_notes = ("Spec does not state PDK / timing constraints; these are "
                       "deferred to integration.")
-        _l20_notes = ("Spec does not specify DFT/scan topology; this is deferred "
-                      "to integration. The register state of this design is "
-                      "amenable to standard scan insertion.")
+        _l20_notes = ("DFT/scan topology is NOT_MEASURED here; integration must "
+                      "establish applicable sequential state and scan "
+                      "requirements from design evidence.")
         _l23_notes = ("Spec does not specify confidentiality / integrity / "
                       "authentication requirements. Any access control is "
                       "deferred to integration.")
