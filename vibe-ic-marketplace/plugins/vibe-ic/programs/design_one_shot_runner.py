@@ -13943,14 +13943,16 @@ def step_crosslayer_rewrite_fidelity(project: Path) -> StepResult:
 
 
 def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
-                       top_name: Optional[str] = None) -> Optional[StepResult]:
+                       top_name: Optional[str] = None,
+                       container: str = _pin.default_container_name()) -> Optional[StepResult]:
     """Flow Step 2 lint through the tool: LibreLane Verilator.Lint + its gate.
 
     Default selects LibreLane with the PDK declared by Phase 2; the image is
     `librelane_contract.resolve_image` and the PDK root `pdk_root_resolution`.
     An explicit `direct` selection keeps the structured path unchanged. The
-    original-input contract runs the existing source/top hygiene checker here,
-    without depending on a later synthesis transcript. `librelane` judges Verilator.Lint with
+    original-input contract runs timing-aware native RTL lint here, using the
+    existing Verilator transcript judge without synthesis admission or a later
+    synthesis transcript. `librelane` judges Verilator.Lint with
     `verilator_lint_gate`; `dual` also runs `rtl_hygiene_lint --severity ERROR`
     and blocks on the union, recording which arm found what. The linted files
     are the step-9 synthesis input (`silicon_rtl_selection`), so a lint of a
@@ -13965,31 +13967,63 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
             return None
         t0 = time.time()
         from _rtl_include_hub import silicon_rtl_selection
+        import verilator_lint_gate as _vlg
+        import instrument_calibration as _calibration
         report = project / "reports/phase2/lint/rtl_hygiene.json"
+        transcript = report.with_name("native-verilator.log")
         extras = {"input_contract": "original", "tool_mode": "direct",
-                  "producer": "rtl_lint_tool", "checker": "rtl_hygiene_lint"}
+                  "producer": "rtl_lint_tool", "checker": _vlg.GATE}
         rtl = silicon_rtl_selection(_pl.rtl_dir(project))
         if not rtl or not top_name:
             return StepResult("rtl_validate", "FAIL", time.time() - t0,
                               "original RTL lint requires selected RTL sources and its top",
                               extras=extras)
         report.parent.mkdir(parents=True, exist_ok=True)
-        command = [sys.executable, str(PROGRAMS_DIR / "rtl_hygiene_lint.py"),
-                   *map(str, rtl), "--top", top_name, "--define", "SYNTHESIS",
-                   "--severity", "ERROR", "--json", str(report)]
-        _verify_runtime_command(command)
+        support = sorted(p for p in _pl.rtl_dir(project).rglob("*")
+                         if p.is_file() and p.suffix.lower() in (".v", ".sv", ".vh", ".svh", ".h"))
+        inputs = list(dict.fromkeys([*_pl.original_input_sources(project), *support]))
+        command = ["verilator", "--lint-only", "--timing", "--Wall", "-Wno-fatal",
+                   "--top-module", top_name,
+                   *["-I" + str(p) for p in sorted({p.parent for p in support})], *map(str, rtl)]
+        measured = {"gate": _vlg.GATE, "tool": "verilator", "top": top_name,
+                    "command": command, "transcript": str(transcript),
+                    "blocking_warning_codes": sorted(_vlg.BLOCKING_WARNINGS)}
         try:
-            run = _pr.run(command, capture_output=True, text=True)
-        except (OSError, subprocess.SubprocessError) as exc:
-            return StepResult("rtl_validate", "NOT_MEASURED", time.time() - t0,
-                              f"original RTL hygiene could not run: {exc}",
-                              extras=extras, reason_class="execution_error")
-        extras.update(exit_code=run.returncode, command=command)
-        status = "PASS" if run.returncode == 0 else "NOT_MEASURED" if run.returncode == 2 else "FAIL"
+            hashes = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in inputs}
+            measured["input_sha256"] = hashes
+            execute = _verilator_stage_exec(container)
+            version_rc, version_out, version_err = execute(["verilator", "--version"], project)
+            measured["tool_version"] = version_out.strip() if version_rc == 0 else None
+            rc, out, err = execute(command, project)
+            _aa.write_text(transcript, out + err)
+            measured["exit_code"] = rc
+            parsed = _vlg.parse_transcript(out + err)
+            design_paths = [str(p) for p in support]
+            design_paths += [_to_container_path(str(p), container) for p in support]
+            blocked = _vlg.blocking(parsed["diagnostics"], design_paths)
+            measured.update(findings=parsed["diagnostics"], blocking=blocked)
+            current_inputs = list(dict.fromkeys([*_pl.original_input_sources(project),
+                *(p for p in _pl.rtl_dir(project).rglob("*") if p.is_file()
+                  and p.suffix.lower() in (".v", ".sv", ".vh", ".svh", ".h"))]))
+            current = {str(p): hashlib.sha256(p.read_bytes()).hexdigest() for p in current_inputs}
+            if hashes != current:
+                status, detail = "FAIL", "original RTL/input changed during native lint"
+            elif blocked:
+                status, detail = "FAIL", f"native RTL lint reported {len(blocked)} blocking diagnostic(s)"
+            elif rc or parsed["exiting_errors"]:
+                status, detail = "NOT_MEASURED", f"native RTL lint did not complete (rc={rc})"
+            else:
+                status, detail = "PASS", "native timing-aware RTL lint completed without blocking diagnostics"
+        except (OSError, ValueError, subprocess.SubprocessError, _calibration.Uncalibrated) as exc:
+            status, detail = "NOT_MEASURED", f"original RTL lint could not be measured: {exc}"
+        measured.update(verdict=status, reason=detail)
+        _aa.write_json(report, measured)
+        extras.update(command=command, exit_code=measured.get("exit_code"),
+                      input_sha256=measured.get("input_sha256"),
+                      tool_version=measured.get("tool_version"))
         return StepResult("rtl_validate", status, time.time() - t0,
-                          (run.stdout or run.stderr or f"rc={run.returncode}").strip(),
-                          [str(report)] if report.is_file() else [], extras=extras,
-                          reason_class="execution_error" if run.returncode == 2 else "")
+                          detail, [str(p) for p in (report, transcript) if p.is_file()],
+                          extras=extras, reason_class="execution_error" if status == "NOT_MEASURED" else "")
     from _rtl_include_hub import silicon_rtl_selection
     import verilator_lint_gate as _vlg
     t0 = time.time()
@@ -27241,7 +27275,8 @@ def main() -> int:
     elif _after_exit("rtl_validate"):
         plan.append(_exit_sentinel("rtl_lint_tool"))
     else:
-        _tool_lint = step_rtl_lint_tool(project, pdk_name=args.pdk, top_name=args.top_name)
+        _tool_lint = step_rtl_lint_tool(project, pdk_name=args.pdk, top_name=args.top_name,
+                                       container=args.container)
         if _tool_lint is not None:
             plan.append(_tool_lint)
 
