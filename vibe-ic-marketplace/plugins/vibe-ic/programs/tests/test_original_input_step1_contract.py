@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import shutil
 from pathlib import Path
 import sys
 
@@ -133,3 +135,30 @@ def test_standalone_checker_selects_same_contract(tmp_path, capsys):
     assert sri.main([str(root), "--step", "1", "--rtl-input", "original", "--quiet"]) == 0
     assert sri.main([str(root), "--step", "1", "--quiet"]) == 1
     assert sri.main([str(root), "--step", "4", "--rtl-input", "original", "--quiet"]) == 2
+
+
+@pytest.mark.parametrize("broken", [False, True])
+def test_original_direct_step2_runs_native_hygiene_without_future_synthesis(tmp_path, broken):
+    if not shutil.which("yosys"):
+        pytest.skip("fresh native driver elaboration requires Yosys")
+    root = project(tmp_path)
+    rtl = root / "phase2/stage1/rtl/unit.sv"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module unit(input a, output y);\n"
+                   + ("missing_cell u(.a(a),.y(y));\n" if broken else "assign y = a;\n")
+                   + "endmodule\n")
+    switch = root / "phase3/librelane_switch.json"
+    switch.parent.mkdir(parents=True)
+    switch.write_text('{"steps":{"2":"direct"}}')
+    pl.select_rtl_input(root, "original", "2", "2")
+    result = runner.step_rtl_lint_tool(root, top_name="unit")
+    assert result.status == ("FAIL" if broken else "PASS"), result
+    assert result.extras["tool_mode"] == "direct"
+    assert result.extras["exit_code"] == int(broken)
+    assert "--project" not in result.extras["command"]
+    report = root / "reports/phase2/lint/rtl_hygiene.json"
+    findings = json.loads(report.read_text())
+    assert bool(findings) is broken
+    assert not (root / "phase2/stage2/synth/yosys.log").exists()
+    pl.select_rtl_input(root, "structured")
+    assert runner.step_rtl_lint_tool(root, top_name="unit") is None

@@ -13938,13 +13938,15 @@ def step_crosslayer_rewrite_fidelity(project: Path) -> StepResult:
                       extras={"exit_code": rc})
 
 
-def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None) -> Optional[StepResult]:
+def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
+                       top_name: Optional[str] = None) -> Optional[StepResult]:
     """Flow Step 2 lint through the tool: LibreLane Verilator.Lint + its gate.
 
     Default selects LibreLane with the PDK declared by Phase 2; the image is
     `librelane_contract.resolve_image` and the PDK root `pdk_root_resolution`.
-    An explicit `direct` selection returns None and
-    the step is unchanged. `librelane` judges Verilator.Lint with
+    An explicit `direct` selection keeps the structured path unchanged. The
+    original-input contract runs the existing source/top hygiene checker here,
+    without depending on a later synthesis transcript. `librelane` judges Verilator.Lint with
     `verilator_lint_gate`; `dual` also runs `rtl_hygiene_lint --severity ERROR`
     and blocks on the union, recording which arm found what. The linted files
     are the step-9 synthesis input (`silicon_rtl_selection`), so a lint of a
@@ -13955,7 +13957,34 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None) -> Opti
     except _ll.Refusal as exc:
         return StepResult("rtl_lint_tool", "FAIL", 0.0, str(exc))
     if mode == "direct":
-        return None
+        if _pl.rtl_input(project) != "original":
+            return None
+        t0 = time.time()
+        from _rtl_include_hub import silicon_rtl_selection
+        report = project / "reports/phase2/lint/rtl_hygiene.json"
+        extras = {"input_contract": "original", "tool_mode": "direct"}
+        rtl = silicon_rtl_selection(_pl.rtl_dir(project))
+        if not rtl or not top_name:
+            return StepResult("rtl_lint_tool", "FAIL", time.time() - t0,
+                              "original RTL lint requires selected RTL sources and its top",
+                              extras=extras)
+        report.parent.mkdir(parents=True, exist_ok=True)
+        command = [sys.executable, str(PROGRAMS_DIR / "rtl_hygiene_lint.py"),
+                   *map(str, rtl), "--top", top_name, "--define", "SYNTHESIS",
+                   "--severity", "ERROR", "--json", str(report)]
+        _verify_runtime_command(command)
+        try:
+            run = _pr.run(command, capture_output=True, text=True)
+        except (OSError, subprocess.SubprocessError) as exc:
+            return StepResult("rtl_lint_tool", "NOT_MEASURED", time.time() - t0,
+                              f"original RTL hygiene could not run: {exc}",
+                              extras=extras, reason_class="execution_error")
+        extras.update(exit_code=run.returncode, command=command)
+        status = "PASS" if run.returncode == 0 else "NOT_MEASURED" if run.returncode == 2 else "FAIL"
+        return StepResult("rtl_lint_tool", status, time.time() - t0,
+                          (run.stdout or run.stderr or f"rc={run.returncode}").strip(),
+                          [str(report)] if report.is_file() else [], extras=extras,
+                          reason_class="execution_error" if run.returncode == 2 else "")
     from _rtl_include_hub import silicon_rtl_selection
     import verilator_lint_gate as _vlg
     t0 = time.time()
@@ -24513,7 +24542,8 @@ def step_emit_phase2_manifests(project: Path,
     rtl_dir = _pl.rtl_dir(project)
 
     # Step 2: lint
-    if (project / "reports").is_dir() or by_name.get("yosys_synth", _ABSENT_STEP).status == _V.Verdict.PASS.value:
+    _original_hygiene = (by_name.get("rtl_lint_tool", _ABSENT_STEP).extras or {}).get("input_contract") == "original"
+    if not _original_hygiene and ((project / "reports").is_dir() or by_name.get("yosys_synth", _ABSENT_STEP).status == _V.Verdict.PASS.value):
         # THREE DEFECTS IN FIVE LINES, all measured on run21 (a signed
         # serial-parallel multiplier that lints clean), where step 2 FAILed
         # EVIDENCE_MISSING (#433): "reports/phase2/lint/rtl_hygiene.json →
@@ -27200,7 +27230,7 @@ def main() -> int:
     elif _after_exit("rtl_validate"):
         plan.append(_exit_sentinel("rtl_lint_tool"))
     else:
-        _tool_lint = step_rtl_lint_tool(project, pdk_name=args.pdk)
+        _tool_lint = step_rtl_lint_tool(project, pdk_name=args.pdk, top_name=args.top_name)
         if _tool_lint is not None:
             plan.append(_tool_lint)
 
