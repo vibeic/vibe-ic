@@ -2857,56 +2857,205 @@ def _clock_target_mhz(item: ChecklistItem) -> Optional[float]:
     return value * factor if factor is not None else None
 
 
+def _tb_bound_clock_ports(rtl_text: Optional[str], tb_code: str) -> tuple:
+    """Clock-only view of the existing unambiguous DUT binding.
+
+    Keep the bus consumer's role dictionary unchanged. Measurements belong to
+    the module containing that DUT, never to a same-named helper-module net.
+    """
+    roles = _tb_bound_port_roles(rtl_text, tb_code)
+    if not roles:
+        return {}, ""
+    from module_port_audit import lexical_mask
+    try:
+        rtl_code = lexical_mask(rtl_text)
+        code = lexical_mask(tb_code)
+        modules = set(re.findall(r"\bmodule\s+([A-Za-z_]\w*)\b", rtl_code))
+        top, = _tb_instantiated_module_types(code, modules)
+        _, ports = _SRC.parse_rtl_ports(rtl_code, top)
+    except (ValueError, TypeError):
+        return {}, ""
+    instance = re.compile(
+        rf"\b{re.escape(top)}\s*(?:#\s*\(.*?\)\s*)?"
+        r"[A-Za-z_]\w*\s*\(.*?\)\s*;", re.DOTALL)
+    scopes = [m for m in re.finditer(r"\bmodule\b.*?\bendmodule\b", code, re.S)
+              if instance.search(m.group(0))]
+    if len(scopes) != 1:
+        return {}, ""
+    clocks: Dict[str, str] = {}
+    for port in ports:
+        name = port.name.lower()
+        if (name in roles and port.direction.lower() in {"input", "output"}
+                and re.search(r"(?:^|_)(?:clk|clock)(?:$|_)", name)):
+            local = roles[name]
+            if local in clocks:
+                return {}, ""  # aliased DUT clocks are not independent evidence
+            clocks[local] = port.direction.lower()
+    # The last preceding directive owns this module's measurement time units.
+    directives = list(re.finditer(r"`timescale[^\n]*", code[:scopes[0].start()], re.I))
+    directive = directives[-1].group(0) if directives else ""
+    return clocks, directive + "\n" + scopes[0].group(0)
+
+
+def _clock_target_direction(item: ChecklistItem) -> Optional[str]:
+    """Use the source's qualifier at this frequency, not port-name digits."""
+    number, unit = item.coverage_tokens[:2]
+    matches = list(re.finditer(
+        rf"(?<![\w.]){re.escape(number)}\s*{re.escape(unit)}\b",
+        item.evidence, re.I))
+    if len(matches) != 1:
+        return None
+    qualifiers = re.findall(r"\b(input|output)s?\b",
+                            item.evidence[:matches[0].start()], re.I)
+    return qualifiers[-1].lower() if qualifiers else None
+
+
+def _tb_has_other_clock_driver(rtl_text: str, tb_code: str,
+                               scope: str, clock: str) -> bool:
+    """Resolve only helper port ownership, never helper implementation.
+
+    A helper may observe a DUT clock through an input. An output, inout, or
+    unresolved direction sharing that net makes its measured owner ambiguous.
+    """
+    from module_port_audit import lexical_mask, parse_modules, parse_instantiations
+    try:
+        rtl_text = lexical_mask(rtl_text)
+        tb_code = lexical_mask(tb_code)
+        helpers = {module.name: module for module in parse_modules(tb_code, "<testbench>")}
+        instances = parse_instantiations(scope, "<testbench>", 1)
+    except (ValueError, TypeError):
+        return True
+    design_types = set(re.findall(r"\bmodule\s+(\w+)\b", rtl_text, re.I))
+    connected = lambda actual: re.search(rf"\b{re.escape(clock)}\b", actual, re.I)
+    for instance in instances:
+        if instance.module_name in design_types:
+            continue
+        actuals = ([connection.wire_expr for connection in instance.connections]
+                   + instance.positional_actuals)
+        if not instance.is_implicit and not any(connected(actual) for actual in actuals):
+            continue
+        helper = helpers.get(instance.module_name)
+        if (helper is None or helper.discovery_issues or instance.is_implicit
+                or instance.has_mixed_connections or instance.malformed_connections):
+            return True
+        if instance.connections:
+            bindings = {connection.port_name: connection.wire_expr
+                        for connection in instance.connections}
+            if len(bindings) != len(instance.connections):
+                return True
+        else:
+            if len(instance.positional_actuals) != len(helper.port_order):
+                return True
+            bindings = dict(zip(helper.port_order, instance.positional_actuals))
+        for formal, actual in bindings.items():
+            if not connected(actual):
+                continue
+            port = helper.ports.get(formal)
+            if port is None or port.direction.lower() != "input":
+                return True
+    return False
+
+
+def _direct_clock_periods(code: str, clock: str) -> List[float]:
+    """Recognize a bounded inline proof on the successful sequential path.
+
+    This is deliberately not helper elaboration or general SV execution. A
+    proof must wait for two equal-polarity edges, capture time between them,
+    and fatally reject the wrong difference. It must run at the top level of
+    the sole finishing initial block; disabled observers cannot earn credit.
+    """
+    if len(re.findall(r"\$finish\b", code, re.I)) != 1 or re.search(r"\$stop\b", code, re.I):
+        return []
+    edge = rf"@\s*\(\s*(?P<edge>posedge|negedge)\s+{re.escape(clock)}\s*\)\s*;"
+    proof = re.compile(
+        edge + r"\s*(?P<stamp>[A-Za-z_]\w*)\s*=\s*"
+        r"(?P<timer>\$(?:realtime|time))\s*;\s*"
+        rf"@\s*\(\s*(?P=edge)\s+{re.escape(clock)}\s*\)\s*;\s*"
+        r"if\s*\(\s*\(*\s*(?P=timer)\s*-\s*(?P=stamp)\s*\)*\s*"
+        r"(?:!==|!=)\s*(?P<period>\d+(?:\.\d+)?)\s*\)\s*"
+        r"(?:begin\s+)?(?:\$display\s*\([^;]*\)\s*;\s*)?"
+        r"\$fatal\s*\([^;]*\)\s*;", re.I)
+    periods: List[float] = []
+    boundary = r"(?:^|;|\bend\b|\bbegin\b|\bendtask\b|\bendfunction\b)\s*$"
+    for initial in re.finditer(r"\binitial\s+begin\b", code, re.I):
+        prefix = code[:initial.start()]
+        outer_depth = sum(1 if t.group(0).lower() == "begin" else -1
+                          for t in re.finditer(r"\bbegin\b|\bend\b", prefix, re.I))
+        if outer_depth or not re.search(boundary, prefix, re.I):
+            continue  # e.g. an implicit generate-if disabling this initial
+        depth = 1
+        body_end = None
+        for token in re.finditer(r"\bbegin\b|\bend\b", code[initial.end():], re.I):
+            depth += 1 if token.group(0).lower() == "begin" else -1
+            if depth == 0:
+                body_end = initial.end() + token.start()
+                break
+        if body_end is None:
+            continue
+        body = code[initial.end():body_end]
+        finish = re.search(r"\$finish\b", body, re.I)
+        if not finish:
+            continue
+        for match in proof.finditer(body):
+            before = body[:match.start()]
+            nesting = sum(1 if t.group(0).lower() == "begin" else -1
+                          for t in re.finditer(r"\bbegin\b|\bend\b", before, re.I))
+            if nesting or not re.search(boundary, before, re.I):
+                continue
+            if match.end() < finish.start():
+                periods.append(float(match.group("period")))
+    return periods
+
+
 def _tb_proves_clock_frequency(item: ChecklistItem, tb_code: str,
                                rtl_text: Optional[str]) -> tuple:
+    """BLOCKING structural minimum; unresolved or inactive proofs stay gaps."""
     target_mhz = _clock_target_mhz(item)
-    roles = _tb_bound_port_roles(rtl_text, tb_code)
-    clock = roles.get("clock")
-    if target_mhz is None or target_mhz <= 0 or not clock:
+    clocks, code = _tb_bound_clock_ports(rtl_text, tb_code)
+    if target_mhz is None or target_mhz <= 0 or not clocks:
         return False, "no unambiguous DUT clock binding for a measured period proof"
+    direction = _clock_target_direction(item)
+    if direction is None:
+        # Preserve the established unspecified-clock input contract. Output
+        # frequency credit needs the source to identify an output requirement.
+        legacy = _tb_bound_port_roles(rtl_text, tb_code).get("clock")
+        clocks = {name: kind for name, kind in clocks.items() if name == legacy}
+    else:
+        clocks = {name: kind for name, kind in clocks.items() if kind == direction}
     timescale = re.search(
         r"`timescale\s+(\d+(?:\.\d+)?)\s*(s|ms|us|ns|ps|fs)\b",
-        tb_code, re.I)
+        code, re.I)
     scale_ns = (float(timescale.group(1)) * _time_unit_ns(timescale.group(2))
                 if timescale and _time_unit_ns(timescale.group(2)) is not None
                 else None)
-    delay = re.search(
-        rf"\balways\s*#\s*(\d+(?:\.\d+)?)\s*(s|ms|us|ns|ps|fs)?\s*"
-        rf"\b{re.escape(clock)}\b\s*=\s*~\s*\b{re.escape(clock)}\b",
-        tb_code, re.I)
-    if not delay:
-        return False, "no periodic drive of the bound DUT clock"
-    if delay.group(2):
-        unit_ns = _time_unit_ns(delay.group(2))
-    else:
-        unit_ns = scale_ns
-    if unit_ns is None:
-        return False, "clock delay has no resolvable time unit"
-    generated_period_ns = 2.0 * float(delay.group(1)) * unit_ns
-    edges = len(re.findall(
-        rf"@\s*\(\s*(?:pos|neg)edge\s+{re.escape(clock)}\b", tb_code, re.I))
-    if edges < 2:
-        return False, "no two-edge measurement on the bound DUT clock"
-    for prior in re.finditer(r"\b([A-Za-z_]\w*)\s*=\s*\$time\b", tb_code, re.I):
-        stamp = prior.group(1)
-        measured = re.search(
-            rf"\$time\s*-\s*{re.escape(stamp)}\s*\)?\s*"
-            rf"(?:!==|!=)\s*(\d+(?:\.\d+)?)",
-            tb_code[prior.end():], re.I)
-        if not measured:
-            continue
-        tail = tb_code[prior.end() + measured.end():
-                       prior.end() + measured.end() + 120]
-        if not re.search(r"\$(?:fatal|error)\b", tail, re.I):
-            continue
-        measured_period_ns = float(measured.group(1)) * (scale_ns or unit_ns)
-        target_period_ns = 1000.0 / target_mhz
-        tolerance = max(1e-9, target_period_ns * 1e-6)
-        if (abs(generated_period_ns - measured_period_ns) <= tolerance
-                and abs(measured_period_ns - target_period_ns) <= tolerance):
+    if scale_ns is None:
+        return False, "clock measurement has no resolvable time unit"
+    target_period_ns = 1000.0 / target_mhz
+    tolerance = max(1e-9, target_period_ns * 1e-6)
+    for clock, kind in clocks.items():
+        generated_period_ns = None
+        if kind == "input":
+            delay = re.search(
+                rf"\balways\s*#\s*(\d+(?:\.\d+)?)\s*(s|ms|us|ns|ps|fs)?\s*"
+                rf"\b{re.escape(clock)}\b\s*=\s*~\s*\b{re.escape(clock)}\b", code, re.I)
+            if not delay:
+                continue
+            unit_ns = _time_unit_ns(delay.group(2)) if delay.group(2) else scale_ns
+            generated_period_ns = 2 * float(delay.group(1)) * unit_ns
+        elif (_assigned_expressions(code, clock)
+              or re.search(rf"\bforce\s+{re.escape(clock)}\b", code, re.I)
+              or _tb_has_other_clock_driver(rtl_text, tb_code, code, clock)):
+            continue  # a TB-driven output is synthetic, not DUT evidence
+        for period in _direct_clock_periods(code, clock):
+            measured_period_ns = period * scale_ns
+            if abs(measured_period_ns - target_period_ns) > tolerance:
+                continue
+            if (generated_period_ns is not None
+                    and abs(generated_period_ns - measured_period_ns) > tolerance):
+                continue
             return True, (f"TB proves actual DUT clock `{clock}` with a measured "
                           f"{measured_period_ns:g} ns period equivalent to "
-                          f"{target_mhz:g} MHz")
+                          f"{target_mhz:g} MHz ({kind})")
     return False, "no fatal-backed two-edge period measurement matches the current clock target"
 
 
