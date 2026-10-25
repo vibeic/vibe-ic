@@ -41577,6 +41577,10 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     l9_doc = _try_load_l_doc(project, "L9_INTEGRATION_SPEC")
     clk_pins = (_declared_input_clock_names(project, l9_doc)
                 if isinstance(l9_doc, dict) else [])
+    from _reset_input_semantics import clock_edge_semantics
+    event_sources = {
+        (str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}"): text
+        for fname, text in _load_extracted_docs_for_post_pass(project).items()}
     # The prose fmax walker calls an unnamed primary domain "clk". Bind that
     # placeholder only when the design declares exactly one input clock.
     # Never spread one frequency mention over several independent inputs.
@@ -41614,6 +41618,12 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
             d["role"] = "master" if d.get("domain_kind") == "primary" else "derived"
         if "source_pin" not in d:
             d["source_pin"] = d.get("name")
+        if d.get("source_pin") in clk_pins:
+            stated = clock_edge_semantics(d["source_pin"], event_sources)
+            if (not d.get("edge") or
+                    (d.get("semantic_provenance") or {}).get("edge", {}).get("kind") == "convention" or
+                    d.get("source") == "synthesised-from-L9.top_ports"):
+                d.update(stated)
     # Fill only declared input-clock identities missing from the existing
     # evidence. Output clocks require their own generated-clock relation.
     if not isinstance(l9_doc, dict):
@@ -41637,6 +41647,7 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
             "source": "synthesised-from-L9.top_ports",
             "evidence": "L9.top_ports",
             "reset_strategy": "unspecified",
+            **clock_edge_semantics(pin, event_sources),
         }
         if freq_hz:
             entry["freq_hz"] = freq_hz
@@ -56102,10 +56113,11 @@ def _harvest_vendor_short_literals(project: Path,
         ):
             for m in rx.finditer(text):
                 if (kind == "dimension" and m.group(2).lower() == "in"
-                        and re.match(r"\s+(?:(?:that|this|the|each)\s+)?"
-                                     r"(?:clock\s+)?cycles?\b",
+                        and re.match(r"\s+(?:(?:(?:that|this|the|each)\s+)?"
+                                     r"(?:clock\s+)?cycles?\b|"
+                                     r"(?:the|this|that|each|an?)\s+[A-Za-z])",
                                      text[m.end():], re.IGNORECASE)):
-                    # English timing preposition, not an inch unit.
+                    # English timing/location preposition, not an inch unit.
                     continue
                 lit_full = m.group(0).replace(" ", "")
                 key = (lit_full, kind)
@@ -62944,17 +62956,32 @@ def _v1_6_369_emit_reset_domains(l9: dict, extracted: dict) -> None:
         polarity = _v1_6_369_classify_reset_polarity(
             _stem_v1_6_382.lower()) if m_reset else "unknown"
         from _reset_input_semantics import reset_semantics
-        explicit = reset_semantics(name, evidence_joined)
+        # Event-role definitions belong to their own input file. A reset in
+        # one document cannot lend its identity to unnamed events elsewhere.
+        declarations = [reset_semantics(name, text)
+                        for text in (extracted or {}).values()]
+        explicit = {}
+        for field in ("sync", "polarity"):
+            values = {row[field] for row in declarations if field in row}
+            if values:
+                explicit[field] = next(iter(values)) if len(values) == 1 else "unknown"
         polarity = explicit.get("polarity", polarity)
         sync = explicit.get("sync", "unknown")
-        from _reset_input_semantics import reset_domain_bindings
-        bindings = reset_domain_bindings(name, {
+        from _reset_input_semantics import reset_semantic_provenance
+        sources = {
             (str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}"): text
-            for fname, text in (extracted or {}).items()})
+            for fname, text in (extracted or {}).items()}
+        provenance = reset_semantic_provenance(name, sources)
+        if "polarity" not in explicit and m_reset:
+            provenance["polarity"] = {
+                "kind": "convention", "rule": "reset_port_name_polarity"}
+        from _reset_input_semantics import reset_domain_bindings
+        bindings = reset_domain_bindings(name, sources)
         out.append({
             "name": name,
             "polarity": polarity,
             "sync": sync,
+            "semantic_provenance": provenance,
             "scan_prefixed": name.lower().startswith("scan_")
                 or _stem_v1_6_382.lower().startswith("scan_"),
             "direction_prefix": _dirpref_v1_6_382,
@@ -63374,6 +63401,10 @@ def _post_emit_mirror_clock_resets_to_l9_v1_6_311(
             resets.append({
                 "name": name_raw,
                 "polarity": polarity,
+                **({"sync": declared.get("sync", "unknown"),
+                    "semantic_provenance": declared.get("semantic_provenance", {})}
+                   if declared else {"semantic_provenance": {"polarity": {
+                       "kind": "convention", "rule": "reset_port_name_polarity"}}}),
                 "extraction_strategy":
                     "l9_top_port_reset_derive",
             })
@@ -63450,9 +63481,12 @@ def _post_emit_derive_l9_clocks_v1_6_323(project: Path) -> None:
         if name_raw in seen:
             continue
         seen.add(name_raw)
+        from _reset_input_semantics import clock_edge_semantics
+        sources = {(str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}"): text
+                   for fname, text in _load_extracted_docs_for_post_pass(project).items()}
         _entry: Dict[str, Any] = {
             "name": name_raw,
-            "edge": "posedge",
+            **clock_edge_semantics(name_raw, sources),
             "extraction_strategy":
                 "l9_top_port_clock_derive",
         }
@@ -63642,7 +63676,7 @@ def _post_emit_seed_l8b_clocks_from_l1_v1_6_571(project: Path) -> None:
             # says WHICH PORT this clock is on, and it is what lets a
             # consumer match a create_clock by target port when the names
             # differ only in case.
-            for _k in ("freq_hz", "freq_mhz", "period_ns",
+            for _k in ("freq_hz", "freq_mhz", "period_ns", "edge", "semantic_provenance",
                        "role", "source", "domain_kind", "source_pin"):
                 if _cd_src.get(_k) is not None and entry.get(_k) is None:
                     entry[_k] = _cd_src[_k]

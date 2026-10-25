@@ -419,12 +419,116 @@ def explicit_reset_port(name, text):
     return False
 
 
+def event_declarations(text):
+    """Finite named/role-bound edge events, not an RTL or prose parser.
+
+    An unnamed ``the reset signal`` binds only to a unique explicitly
+    defined reset input. Only an OR/comma event list containing a clock
+    edge supplies asynchronous assertion; release timing is never inferred.
+    """
+    from _prose_polarity import is_denied
+    roles = {'clock': set(), 'reset': set()}
+    for raw in text.splitlines():
+        definition = re.match(r'^\s*[-*]?\s*`?([A-Za-z_][\w$]*)`?\s*:', raw)
+        if not definition:
+            continue
+        name = definition[1]
+        current = current_clause(raw)
+        if explicit_reset_port(name, current):
+            roles['reset'].add(name)
+        if re.match(r'^\s*(?:(?:the|chip|input|primary|system)\s+)*clock\b',
+                    current[definition.end():], re.I) and not is_denied(current):
+            roles['clock'].add(name)
+    edge = re.compile(
+        r'\b(?:(?P<rtl>posedge|negedge)\s+(?P<name>[A-Za-z_][\w$]*)|'
+        r'(?P<prose>positive|rising|negative|falling)\s+edge\s+of\s+'
+        r'(?:the\s+)?(?P<role>clock|reset)(?:\s+signal)?'
+        r'(?:\s*\(\s*(?:posedge\s+|negedge\s+)?'
+        r'(?P<bound>[A-Za-z_][\w$]*)\s*\))?)', re.I)
+    for number, raw in enumerate(text.splitlines(), 1):
+        for clause in re.split(r'[;；。]|(?<=[a-zA-Z])\.\s+', raw):
+            line = current_clause(clause)
+            matches = list(edge.finditer(line))
+            if not matches or is_denied(line[:matches[-1].end()], ignore_bracketed=False):
+                continue
+            events = []
+            for m in matches:
+                role = (m['role'] or '').lower()
+                name = m['name'] or m['bound']
+                if not name and len(roles.get(role, ())) == 1:
+                    name = next(iter(roles[role]))
+                if not name:
+                    continue
+                if not role:
+                    role = next((r for r, names in roles.items() if name in names), '')
+                if not role:
+                    continue
+                value = (m['rtl'] or m['prose']).lower()
+                events.append((m, name, role,
+                               'posedge' if value in ('posedge', 'positive', 'rising') else 'negedge'))
+            for match, name, role, value in events:
+                clocks = [m for m, _, r, _ in events if r == 'clock']
+                asynchronous = role == 'reset' and any(
+                    re.search(r'\bor\b|,', line[min(m.end(), match.end()):max(m.start(), match.start())], re.I)
+                    for m in clocks)
+                yield {'name': name, 'role': role, 'edge': value,
+                       'asynchronous': bool(asynchronous), 'line': number,
+                       'evidence': raw.strip()}
+
+
+def clock_edge_semantics(name, extracted):
+    """Read exact input edges and attach source authority per field."""
+    rows = []
+    for source, text in extracted.items():
+        for row in event_declarations(text):
+            if row['name'] == name and row['role'] == 'clock':
+                rows.append((source, text, row))
+    values = {row['edge'] for _, _, row in rows}
+    if not values:
+        return {'edge': 'posedge', 'semantic_provenance': {'edge': {
+            'kind': 'convention', 'rule': 'default_positive_clock_edge'}}}
+    return {'edge': next(iter(values)) if len(values) == 1 else 'unknown',
+            'semantic_provenance': {'edge': {
+                'kind': 'explicit' if len(values) == 1 else 'conflict',
+                'basis': [{'file': str(source), 'line': row['line'],
+                           'quote': row['evidence'],
+                           'sha256': hashlib.sha256(text.encode()).hexdigest()}
+                          for source, text, row in rows]}}}
+
+
+def reset_semantic_provenance(name, extracted):
+    """Separate explicit source facts from an emitter's compatibility default."""
+    rows = [(source, text, row) for source, text in extracted.items()
+            for row in declarations(text, name)]
+    result = {}
+    for field in ('sync', 'polarity'):
+        found = [(source, text, row) for source, text, row in rows
+                 if row[field + '_values']]
+        values = set().union(*(row[field + '_values'] for _, _, row in found))
+        if values:
+            result[field] = {
+                'kind': 'explicit' if len(values) == 1 and 'unknown' not in values else 'conflict',
+                'basis': [{'file': str(source), 'line': row['line'],
+                           'quote': row['evidence'],
+                           'sha256': hashlib.sha256(text.encode()).hexdigest()}
+                          for source, text, row in found]}
+        else:
+            result[field] = {'kind': 'unspecified'}
+    return result
+
+
 def declarations(text, name=None):
     """Yield source-line-bound reset declarations; never borrow another port."""
     port = re.compile(r'(?<![\w])' + re.escape(name) + r'(?![\w])', re.I) if name else None
     phases = {row['line']: row for row in phase_declarations(text)}
     phased = any(name is None or row['reset'] == name for row in phases.values())
     phase_lines = {number for number, _, _, _ in _phase_table_rows(text)}
+    for event in event_declarations(text):
+        if (event['role'] == 'reset' and event['asynchronous']
+                and (name is None or event['name'] == name)):
+            yield {'line': event['line'], 'evidence': event['evidence'],
+                   'sync_values': {'asynchronous'},
+                   'polarity_values': {'active_high' if event['edge'] == 'posedge' else 'active_low'}}
     for number, raw in enumerate(text.splitlines(), 1):
         phase = phases.get(number)
         if phase is not None:

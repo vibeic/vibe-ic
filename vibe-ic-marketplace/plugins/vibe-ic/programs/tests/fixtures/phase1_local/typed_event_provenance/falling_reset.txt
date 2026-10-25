@@ -1,0 +1,1 @@
+On every positive edge of the clock signal (clk) or the falling edge of the reset signal (rst_n), the shift count register (i) is updated.

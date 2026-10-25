@@ -134,6 +134,8 @@ def _described_clock_edges(l9: Dict[str, Any]) -> Dict[str, str]:
 def _refresh_existing_edges(existing: Dict[str, Any], l9: Dict[str, Any]) -> bool:
     """Fill only absent retained clock edges from unambiguous L9 authority."""
     edges = _clock_edges(l9)
+    edge_provenance = {row.get("name"): row.get("semantic_provenance")
+                       for row in _records(l9, "clocks", "clock_domains")}
     for name, edge in _described_clock_edges(l9).items():
         edges.setdefault(name, edge)
     changed = False
@@ -147,6 +149,8 @@ def _refresh_existing_edges(existing: Dict[str, Any], l9: Dict[str, Any]) -> boo
         if edge:
             row["edge"] = edge
             row["edge_derived_from"] = L9_REL
+            if edge_provenance.get(row.get("name")):
+                row["semantic_provenance"] = edge_provenance[row["name"]]
             changed = True
     return changed
 
@@ -159,6 +163,8 @@ def _project(l8: Dict[str, Any], l9: Dict[str, Any]) -> Optional[Dict[str, Any]]
         return None
 
     edges = _clock_edges(l9)
+    edge_provenance = {row.get("name"): row.get("semantic_provenance")
+                       for row in _records(l9, "clocks", "clock_domains")}
     for name, edge in _described_clock_edges(l9).items():
         if name not in edges:
             edges[name] = edge
@@ -168,11 +174,14 @@ def _project(l8: Dict[str, Any], l9: Dict[str, Any]) -> Optional[Dict[str, Any]]
         rec = _copy_stated(row, (
             "name", "edge", "period_ns", "freq_mhz", "pdk_scoped_target",
             "reset_strategy", "reset_bindings",
+            "semantic_provenance",
         ))
         name = rec.get("name")
         if "edge" not in rec and isinstance(name, str) and name in edges:
             rec["edge"] = edges[name]
             rec["edge_derived_from"] = L9_REL
+            if edge_provenance.get(name):
+                rec["semantic_provenance"] = edge_provenance[name]
         if rec:
             clock_rows.append(rec)
 
@@ -180,6 +189,7 @@ def _project(l8: Dict[str, Any], l9: Dict[str, Any]) -> Optional[Dict[str, Any]]
     for row in resets:
         rec = _copy_stated(row, (
             "name", "polarity", "sync", "synchrony", "edge", "domain_bindings",
+            "semantic_provenance",
         ))
         name = rec.get("name")
         if isinstance(name, str) and name in descriptions:
