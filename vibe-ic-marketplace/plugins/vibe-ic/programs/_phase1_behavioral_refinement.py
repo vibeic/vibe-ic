@@ -19,7 +19,7 @@ from phase1_expert_parse_track import input_text_report, SKIP_ORACLE_PATH
 import phase1_port_extract
 
 
-def _owned_ports(extracted: dict, machine: dict, refuse) -> dict:
+def _owned_ports(extracted: dict, machine: dict, refuse, state_catalog) -> dict:
     """Use the FSM's source document, never a corpus-wide module union.
 
     Existing lexical scopes identify a single subject. This optional producer
@@ -42,8 +42,7 @@ def _owned_ports(extracted: dict, machine: dict, refuse) -> dict:
     if owners:
         prefix = narrative[:scopes[0][0]]
         if (phase1_port_extract.extract_ports(prefix)
-                or any(re.search(r"\b" + re.escape(name) + r"\b", prefix)
-                       for name in machine["states"])):
+                or set(machine["states"]) & {name for name, _ in state_catalog(prefix)}):
             refuse("FSM or interface precedes the only declared module owner")
     clean = phase1_port_extract.strip_hdl_comments_and_strings(text)
     # Count headers even when a source snippet has no endmodule. The existing
@@ -56,6 +55,13 @@ def _owned_ports(extracted: dict, machine: dict, refuse) -> dict:
         module_name = re.match(r"module\s+(\w+)", next(iter(modules.values())).group())[1]
         if module_name != owners[0]:
             refuse("prose and HDL interface owners disagree")
+    if owners:
+        # Compare actual declaration rows with the same catalog the source
+        # producer used. A number in an introductory range is not a state.
+        owned_states = {name for name, _ in state_catalog(text[scopes[0][0]:])}
+        if (not set(machine["states"]).issubset(owned_states)
+                and not (machine.get("closed") and len(modules) == 1)):
+            refuse("FSM declarations cannot be attributed to the interface owner")
     prose_ports = phase1_port_extract.extract_ports(narrative)
     if code_spans and prose_ports:
         # A sibling HDL header cannot shadow the source's prose interface.
@@ -78,7 +84,8 @@ def _owned_ports(extracted: dict, machine: dict, refuse) -> dict:
     return ports
 
 
-def project(project: Path, content: dict, explicit_edges: list, extracted: dict) -> None:
+def project(project: Path, content: dict, explicit_edges: list, extracted: dict,
+            state_catalog) -> None:
     """Validate all choices, then attach them without replacing source fields."""
     path = project / BEHAVIORAL_REFINEMENT_INPUT
     if not path.exists() and not path.is_symlink():
@@ -143,7 +150,7 @@ def project(project: Path, content: dict, explicit_edges: list, extracted: dict)
         refuse("proposal must address the exact current source machine and states")
     if explicit_edges or any(s.get("transitions") for s in states):
         refuse("explicit source transitions cannot be supplemented or overwritten")
-    ports = _owned_ports(extracted, machine, refuse)
+    ports = _owned_ports(extracted, machine, refuse, state_catalog)
     rows = fact.value
     if not isinstance(rows, list) or not rows:
         refuse("transitions must be a nonempty typed row list")

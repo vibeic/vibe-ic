@@ -39423,7 +39423,8 @@ def gen_l6_control_logic(project: Path,
     }
     from _phase1_behavioral_refinement import project as _project_refinement
     try:
-        _project_refinement(project, content, _l6_edge_candidates, extracted)
+        _project_refinement(project, content, _l6_edge_candidates, extracted,
+                            _fsm_explicit_catalog)
     except Exception:
         # Preserve current source facts, not a stale earlier proposal, while
         # the normal runner records the producer failure through its watchdog.

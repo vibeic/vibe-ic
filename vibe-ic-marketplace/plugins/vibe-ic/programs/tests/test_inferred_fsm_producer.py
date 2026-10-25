@@ -365,6 +365,19 @@ def test_default_only_proposal_without_owned_interface_is_refused(tmp_path):
         _produce(tmp_path)
 
 
+def test_numeric_range_before_owner_heading_is_not_a_state_declaration(tmp_path):
+    source = tmp_path / "input/docs/control.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("The output word ranges from 0 to 31.\n\nModule name: subject\n"
+                      "The controller uses a state machine.\n"
+                      "If the state is 0, the counter is inactive.\n"
+                      "If the state is 1, the counter is active.\n" + INTERFACE)
+    original = _produce(tmp_path)
+    assert [(s["name"], s["encoding_value"]) for s in original["fsm_states"]] == [("0", 0), ("1", 1)]
+    _proposal(tmp_path, original, "wave", 31)
+    assert len(_produce(tmp_path)["fsm_transitions"]) == 4
+
+
 def test_retained_ordinary_d1_producer_uses_bound_factgraph_schema(tmp_path):
     import benchmark_dispatch as dispatch
     source = tmp_path / "input/docs/control.md"
