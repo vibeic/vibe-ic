@@ -376,6 +376,7 @@ def _material_matches_repaired_output(expected: dict, current: dict) -> bool:
 
 def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
                         project: Path, *, require_phase2: bool = True,
+                        source_consumer: str | None = None,
                         allow_repaired_output: bool = False,
                         repaired_output_sha256: str | None = None) -> dict | None:
     """Disclose pre-gate refusals without interpreting rc as a gate verdict.
@@ -425,7 +426,7 @@ def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
                     "reason_class": "RUNNER_MATERIAL_UNBOUND",
                     "reason": "RUNNER_MATERIAL_UNBOUND: input or output file population/content changed after invocation"}
         if not (receipt["source_before"] == receipt["source_after"]
-                == _runner_source_snapshot(argv)):
+                == _runner_source_snapshot(argv, consumer=source_consumer)):
             return {**diagnostic, "status": "SOURCE_MISMATCH",
                     "reason_class": "RUNNER_SOURCE_UNBOUND",
                     "reason": "RUNNER_SOURCE_UNBOUND: actual runner executable/source/options changed"}
@@ -572,11 +573,18 @@ def _runner_reentry_reason(task: dict, result: dict, *,
 def _stored_runner_diagnostics(invocation: dict, *,
                                allow_repaired_output: bool = False,
                                repaired_output_sha256: str | None = None) -> dict | None:
-    """Re-use the live collection contract for a frozen invocation record."""
+    """Revalidate the actual issuer of a frozen invocation, not this auditor.
+
+    All source bytes must still match. Only the recorded issuer path selects
+    the consumer source; live collection keeps its current-dispatcher default.
+    """
     path = Path(invocation["record_path"])
     raw = path.read_bytes()
     if _strict_json_loads(raw) != invocation:
         raise ValueError("invocation record changed")
+    issued_consumer = invocation["source_before"]["consumer"]["path"]
+    if not isinstance(issued_consumer, str) or not issued_consumer:
+        raise ValueError("issued consumer path is absent")
     process = _ProcessOutcome(
         rc=invocation["rc"], error=invocation["error"],
         stdout=invocation["stdout"], stderr=invocation["stderr"],
@@ -584,6 +592,7 @@ def _stored_runner_diagnostics(invocation: dict, *,
         receipt_sha256=hashlib.sha256(raw).hexdigest(), invocation=invocation)
     diagnostic = _runner_diagnostics(
         process, invocation["argv"], Path(invocation["project"]),
+        source_consumer=issued_consumer,
         allow_repaired_output=allow_repaired_output,
         repaired_output_sha256=repaired_output_sha256)
     if process.error:
