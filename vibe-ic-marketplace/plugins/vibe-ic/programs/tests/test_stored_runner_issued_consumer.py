@@ -151,6 +151,25 @@ def test_actual_ordinary_duplicate_wrapper_preserves_measured_phase2(ordinary_du
     assert current._runner_diagnostics(duplicate, argv, project)["status"] == "STALE_RUNNER_REPORT"
 
 
+def test_duplicate_wrapper_with_additional_phase2_failure_is_rejected(ordinary_duplicate):
+    # Adversarial report fixture, not a claimed native failure measurement.
+    # Keep the whole receipt/report binding consistent so the phase census,
+    # rather than an unrelated hash mismatch, must reject the mixed account.
+    root, project, argv, measured, duplicate = ordinary_duplicate
+    assert not current._stored_runner_diagnostics(measured.invocation).get("reason")
+    path = project / "reports/orchestrator/vibe_ic_one_shot.json"
+    wrapper = json.loads(path.read_text())
+    wrapper["phases"].append({"name": "phase2", "verdict": "FAIL", "rc": 1})
+    path.write_text(json.dumps(wrapper))
+    later_path = Path(duplicate.receipt_path)
+    later = json.loads(later_path.read_text())
+    later["reports_after"] = current._runner_report_snapshot(project)
+    later_path.write_text(json.dumps(later))
+    diagnostic = current._stored_runner_diagnostics(measured.invocation)
+    (root / "mixed-phase2-failure.json").write_text(json.dumps(diagnostic, indent=2))
+    assert diagnostic.get("reason"), diagnostic
+
+
 @contextmanager
 def restore_bytes(paths):
     # Only private fixture inputs/receipts/source copies, never a source WT or RUN.

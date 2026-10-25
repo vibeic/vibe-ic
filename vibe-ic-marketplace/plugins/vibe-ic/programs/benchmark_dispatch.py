@@ -508,11 +508,14 @@ def _stored_duplicate_wrapper(receipt: dict, latest: dict, project: Path, *,
         if not diagnostic or diagnostic.get("reason") or diagnostic["status"] != "REPORTS_AVAILABLE":
             return None
         wrapper = _read_json_regular(project / "reports/orchestrator" / wrapper_name)
+        phases = wrapper.get("phases")
+        if not isinstance(phases, list) or any(not isinstance(row, dict) for row in phases):
+            return None
         if (wrapper.get("halted_at") != "phase2"
-                or not any(row == {"name": "phase2", "verdict": "REFUSED-CANONICAL-ADMISSION", "rc": 2}
-                           for row in wrapper.get("phases") or [])
+                or [row for row in phases if row.get("name") == "phase2"]
+                != [{"name": "phase2", "verdict": "REFUSED-CANONICAL-ADMISSION", "rc": 2}]
                 or any(row.get("name") != "phase2" and (row.get("verdict"), row.get("rc")) != ("SKIPPED", 0)
-                       for row in wrapper.get("phases") or [])):
+                       for row in phases)):
             return None
         scene = _stored_duplicate_scene(receipt, later, wrapper, project)
         if scene is None:
