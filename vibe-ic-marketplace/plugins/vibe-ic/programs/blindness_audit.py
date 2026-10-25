@@ -294,17 +294,20 @@ def _harvest_tool_strings_cov(obj, calls: list[dict] | None = None
     uninspected: list[dict] = []
     for frame in _iter_call_frames(obj):
         got = _harvest_frame_strings(frame)
+        communication = _collaboration_inspection_credit(frame)
+        inspected = bool(got) if communication is None else communication
         record = {
             "envelope_type": frame.get("type"),
             "tool_name": frame.get("name") or frame.get("tool_name"),
+            "tool_namespace": frame.get("namespace"),
             "call_id": frame.get("call_id") or frame.get("id"),
             "keys": sorted(k for k in frame if isinstance(k, str)),
         }
         if calls is not None:
-            calls.append({**record, "inspected": bool(got), "fragments": got})
+            calls.append({**record, "inspected": inspected, "fragments": got})
         if got:
             out.extend(got)
-        else:
+        if not inspected:
             uninspected.append(record)
     # de-dup while preserving first-seen order: the same field can be reached
     # both as a sub-scope of its parent and again when recursion descends into
@@ -370,6 +373,32 @@ def _iter_call_frames(obj) -> list[dict]:
     return found
 
 
+def _collaboration_inspection_credit(node) -> bool | None:
+    """Closed communication schemas, not a blanket exemption for text tools.
+
+    Invalid/unknown collaboration calls remain uninspected even when their
+    command/path fields yield findings. Other tools retain the existing
+    actionable-payload contract. Empty list_agents arguments are fully read
+    metadata, rather than an opaque filesystem operation.
+    """
+    name = node.get("name") or node.get("tool_name")
+    if node.get("namespace") != "collaboration":
+        return False if name in {"send_message", "list_agents"} else None
+    if node.get("type") != "function_call":
+        return False
+    try:
+        payload = json.loads(node.get("arguments"))
+    except (TypeError, ValueError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    if name == "send_message":
+        return set(payload) == {"target", "message"} and all(
+            isinstance(payload[key], str) and bool(payload[key].strip())
+            for key in ("target", "message"))
+    return name == "list_agents" and payload == {}
+
+
 def _harvest_frame_strings(node, depth: int = 0) -> list[str]:
     """Read declared call payloads, never frame descriptions or opaque fields.
 
@@ -393,6 +422,17 @@ def _harvest_frame_strings(node, depth: int = 0) -> list[str]:
             return [payload] if payload.strip() else []
         if not isinstance(payload, dict):
             return []
+        if node.get("namespace") == "collaboration":
+            # Scan the complete communication text AND the existing nested
+            # command/path vocabulary. Extra executable fields never hide
+            # behind a schema error, and never earn inspection credit above.
+            out = _harvest_frame_strings(payload, depth + 1)
+            if (node.get("name") or node.get("tool_name")) == "send_message":
+                out.extend(payload[key] for key in ("target", "message")
+                           if isinstance(payload.get(key), str) and payload[key].strip())
+            elif (node.get("name") or node.get("tool_name")) == "list_agents" and payload == {}:
+                out.append(node["arguments"])  # the actual decoded empty payload
+            return out
         return _harvest_frame_strings(payload, depth + 1)
     if isinstance(node, dict):
         out: list[str] = []
