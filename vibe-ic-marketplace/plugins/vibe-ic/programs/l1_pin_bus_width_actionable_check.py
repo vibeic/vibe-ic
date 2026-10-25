@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """l1_pin_bus_width_actionable_check.py — L1 consumer-contract gate.
 
+An input-owned declaration with no numeric default can qualify only as a
+PARAMETRIC_INTERFACE: the module emitter preserves its legal range and
+parameter declarations, while concrete_width_qualification stays NOT_MEASURED.
+The input is re-read independently; producer fields alone cannot earn this
+qualification. Numeric/physical consumers still need an instance binding.
+
 VERDICT SEMANTICS: **BLOCKS** (exit 1 on FAIL).
 ------------------------------------------------------------------
 Why blocking and not advisory: the artefact this gate protects is the
@@ -422,11 +428,49 @@ def derive_bus_evidence(
 
 def _self_declares_bus(pin: Dict[str, Any]) -> bool:
     """L1's own width/msb/lsb value is prose carrying a bit range."""
+    if pin.get('width_unresolved'):
+        return True
     for key in ("width", "msb", "lsb"):
         v = pin.get(key)
         if isinstance(v, str) and _RANGE_ANY.search(v):
             return True
     return False
+
+
+def _source_parametric_interfaces(project: Path, owner: str) -> Dict[str, Dict]:
+    """Re-read INPUT declarations; L1/L9 cannot self-certify a symbolic bus."""
+    import phase1_port_extract as px
+    from _specrtl_common import declared_parametric_range
+    found, conflicts = {}, set()
+    for path in _iter_input_files(project):
+        try:
+            text = path.read_text(encoding='utf-8')
+        except (OSError, UnicodeError):
+            continue
+        for lo, hi, source_owner in px._prose_module_scopes(text):
+            if not owner or source_owner != owner:
+                continue
+            body = text[lo:hi]
+            parameters = px.extract_prose_parameters(body)
+            for port in px.extract_prose_ports(body):
+                if port.get('width') != 0 or port.get('width_unresolved'):
+                    continue
+                packed = declared_parametric_range(
+                    port.get('width_symbolic'), parameters, owner)
+                if not port.get('width_symbolic'):
+                    continue
+                name = port['name']
+                source_range = packed or port['width_symbolic']
+                if name in found and found[name]['range'] != source_range:
+                    conflicts.add(name)
+                found[name] = {'range': source_range, 'module_owner': owner,
+                               'type_actionable': packed is not None,
+                               'source': str(path.relative_to(project)) if path.is_relative_to(project) else str(path),
+                               'parameters': parameters}
+    for name in conflicts:
+        found[name]['type_actionable'] = False
+        found[name]['source_conflict'] = True
+    return found
 
 
 def _waived(project: Path) -> bool:
@@ -500,6 +544,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
     violations: List[Dict[str, Any]] = []
     resolved_symbolically: List[Dict[str, Any]] = []
     resolved_from_binding: List[Dict[str, Any]] = []
+    parametric_interfaces: List[Dict[str, Any]] = []
     physical: Dict[str, Any] = {}
     # A verified physical L9 is a consuming view, not a second raw L1. Do
     # not trust a numeric L9 field or ledger status on its own. Reuse native
@@ -516,6 +561,8 @@ def evaluate(project: Path) -> Dict[str, Any]:
     except (OSError, ValueError, TypeError, KeyError) as exc:
         violations.append({"pin": None, "kind": "native_binding_not_current",
                            "detail": str(exc)})
+    source_parametric = _source_parametric_interfaces(
+        project, l9.get('top_module') or l1.get('ic_name') or '')
     bus_confirmed = 0
     for pin in pin_table:
         if not isinstance(pin, dict):
@@ -524,7 +571,12 @@ def evaluate(project: Path) -> Dict[str, Any]:
         if not isinstance(name, str) or not name.strip():
             continue
         name = name.strip()
-        got = _resolved_width(pin, params)
+        contract = source_parametric.get(name)
+        # A current prose module's unresolved range cannot borrow the global
+        # default of an unrelated HDL module found elsewhere in input/.
+        got = _resolved_width(pin, None if contract else params)
+        if pin.get('width_unresolved'):
+            got = None
         bound = physical.get(name)
         if bound is not None:
             if got is not None and got != bound["width"]:
@@ -538,6 +590,19 @@ def evaluate(project: Path) -> Dict[str, Any]:
                                               "consuming_field": "L9.top_ports/ports",
                                               "proof": l9["interface_binding_authoring"]["proof"]})
         lower = numeric.get(name)
+        parametric_ok = False
+        if contract and bound is None:
+            # A source declaration without a default is not a measured 1-bit
+            # interface. Neither numeric producer fields nor a bare symbol
+            # erase the independent input contract.
+            if got is not None:
+                violations.append({'pin': name, 'kind': 'unbound_parameter_concretized',
+                                   'l1_width': got, 'source_contract': contract})
+            else:
+                from _specrtl_common import declared_parametric_range
+                parametric_ok = bool(contract['type_actionable']) and (declared_parametric_range(
+                    pin.get('width_symbolic'), contract['parameters'],
+                    contract['module_owner']) == contract['range'])
         # Disclose every width that came from a resolved parameter rather
         # than from an integer L1 already carried: it is the weaker of the
         # two provenances and a reader must be able to audit the number.
@@ -577,7 +642,10 @@ def evaluate(project: Path) -> Dict[str, Any]:
                 })
         elif name in symbolic or _self_declares_bus(pin):
             bus_confirmed += 1
-            if got is None:
+            if got is None and parametric_ok:
+                parametric_interfaces.append({'pin': name, **contract,
+                                              'concrete_width': None})
+            elif got is None:
                 src = ("parameterised bit range in design inputs"
                        if name in symbolic
                        else "L1's own width field carries a bit range as prose")
@@ -600,7 +668,12 @@ def evaluate(project: Path) -> Dict[str, Any]:
         "violations": violations,
         "symbolic_widths_resolved": resolved_symbolically,
         "native_binding_widths_resolved": resolved_from_binding,
+        "parametric_interfaces": parametric_interfaces,
+        "qualification": "PARAMETRIC_INTERFACE" if parametric_interfaces else "CONCRETE_WIDTH",
+        "concrete_width_qualification": "NOT_MEASURED" if parametric_interfaces else "DECLARED_NUMERIC",
     }
+    if violations or not bus_confirmed:
+        report['concrete_width_qualification'] = 'NOT_MEASURED'
     if not violations:
         if bus_confirmed == 0:
             report.update(verdict="VACUOUS_PASS", rc=0, reason=(
@@ -609,8 +682,9 @@ def evaluate(project: Path) -> Dict[str, Any]:
                 f"({files_read} file(s) scanned) — nothing to assert."))
         else:
             report.update(verdict="PASS", rc=0, reason=(
-                f"{bus_confirmed} bus-confirmed pin(s) all resolve to an "
-                f"actionable integer bit width."))
+                f"{bus_confirmed} bus-confirmed pin(s) have actionable "
+                f"integer widths or source-owned parametric module interfaces; "
+                f"{len(parametric_interfaces)} require instance binding for concrete widths."))
         return report
     if _waived(project):
         report.update(verdict="PASS_WITH_WAIVER", rc=0, reason=(

@@ -505,6 +505,74 @@ def extract_ports(prompt: str) -> List[Dict]:
     return _dedup_ports(fallback)
 
 
+_PROSE_MODULE_NAME = re.compile(
+    r'(?im)^[ \t]*(?:#{1,6}[ \t]*)?Module[ \t]+name[ \t]*:[ \t]*'
+    r'(?:`?([A-Za-z_]\w*)`?[ \t]*$|\n[ \t]*`?([A-Za-z_]\w*)`?[ \t]*$)')
+
+
+def _prose_module_scopes(prompt: str) -> List[tuple]:
+    """Lexical module-name sections, never a corpus-wide parameter namespace."""
+    headers = list(_PROSE_MODULE_NAME.finditer(prompt))
+    if not headers:
+        return [(0, len(prompt), None)]
+    return [(m.start(), headers[i + 1].start() if i + 1 < len(headers)
+             else len(prompt), m.group(1) or m.group(2))
+            for i, m in enumerate(headers)]
+
+
+def extract_prose_parameters(prompt: str) -> List[Dict]:
+    """Declared prose parameters, including declarations with NO default.
+
+    Only an explicit parameter heading admits rows. Descriptive colon rows do
+    not acquire a guessed numeric value. Module-name sections retain ownership.
+    """
+    rows = []
+    for lo, hi, owner in _prose_module_scopes(prompt):
+        active = False
+        for line in prompt[lo:hi].splitlines():
+            core = re.sub(r'[^a-z ]', '', line.strip().lower()).strip()
+            if core in ('parameter', 'parameters', 'input parameters',
+                        'parameterized values'):
+                active = True
+                continue
+            if not active or not line.strip():
+                continue
+            match = re.fullmatch(
+                r'\s*(?:[-*]\s*)?`?([A-Za-z_]\w*)`?\s*(=|:)\s*(.+?)\s*', line)
+            if not match:
+                active = False
+                continue
+            name, sep, value = match.groups()
+            # An unindented named heading is not a parameter description.
+            if sep == ':' and not line[:1].isspace() and not line.lstrip().startswith(('-', '*')):
+                active = False
+                continue
+            row = {'name': name, 'default': value.rstrip('; ,').strip() if sep == '=' else None,
+                   'declaration_kind': 'parameter',
+                   'extraction_strategy': 'headed_prose_parameter_declaration',
+                   'literal': line.strip()}
+            if sep == ':':
+                row['description'] = value
+            if owner is not None:
+                row['module_owner'] = owner
+            rows.append(row)
+    # A descriptive declaration and a separately stated default are one
+    # parameter, not contradictory defaults. Two different stated values stay
+    # separate so the owning producer can refuse the real conflict.
+    merged = []
+    for row in rows:
+        prior = next((p for p in merged if (p.get('module_owner'), p['name']) ==
+                      (row.get('module_owner'), row['name'])), None)
+        if prior is not None and (prior.get('default') is None or row.get('default') is None):
+            if prior.get('default') is None and row.get('default') is not None:
+                prior.update(row)
+            elif row.get('description'):
+                prior.setdefault('description', row['description'])
+        else:
+            merged.append(row)
+    return merged
+
+
 def extract_params(prompt: str) -> List[Dict]:
     out: Dict[str, str] = {}
     for m in _PARAM_DECL.finditer(prompt):
@@ -513,20 +581,8 @@ def extract_params(prompt: str) -> List[Dict]:
     # Verilog keyword: `Parameter:` followed by `WIDTH = 8`. Only this explicit
     # section admits bare assignments; implementation assignments are not
     # parameter declarations.
-    parameter_section = False
-    for line in prompt.splitlines():
-        core = re.sub(r'[^a-z ]', '', line.strip().lower()).strip()
-        if core in ("parameter", "parameters", "parameterized values"):
-            parameter_section = True
-            continue
-        if not parameter_section or not line.strip():
-            continue
-        assignment = re.fullmatch(
-            r'\s*(?:[-*]\s*)?`?([A-Za-z_]\w*)`?\s*=\s*(.+?)\s*[;,]?\s*', line)
-        if assignment:
-            out.setdefault(assignment.group(1), assignment.group(2).strip())
-        else:
-            parameter_section = False
+    for row in extract_prose_parameters(prompt):
+        out.setdefault(row['name'], row['default'])
     # markdown parameter table: a 2+-column row whose 1st cell is an identifier
     # and 2nd is a pure integer/expr default (and the row is NOT a port row — a
     # port row's 2nd cell is a direction in/out/input/output).
@@ -817,6 +873,13 @@ def _prose_port_dimension(match, desc: str, name: str, prompt: str,
             return {"width": WIDTH_UNKNOWN, "width_symbolic": f"[{rng}]"}
         hi, lo = (_safe_eval_int(part, params) for part in rng.split(':'))
         return {"width": width, "msb": hi, "lsb": lo}
+    count = re.search(r'\b(?:data\s+)?width\s+of\s+(.+?)\s+bits?\b', desc, re.I)
+    if count:
+        expr = re.sub(r'["`]', '', count.group(1)).strip()
+        width = _safe_eval_int(expr, params)
+        if width is not None and width > 0:
+            return {'width': width}
+        return {'width': WIDTH_UNKNOWN, 'width_symbolic': f'[({expr})-1:0]'}
     bit_count = re.search(r'\b(\d+)\s*-?\s*bits?\b', desc, re.I)
     if bit_count:
         return {"width": int(bit_count.group(1))}
@@ -830,6 +893,12 @@ def _prose_port_dimension(match, desc: str, name: str, prompt: str,
     if indexed:
         hi = max(int(value) for value in indexed)
         return {"width": hi + 1, "msb": hi, "lsb": 0}
+    if re.search(r'\baddress\s+for\s+(?:the\s+)?(?:read|write|memory)\b|'
+                 r'\bdata\s+(?:to\s+be\s+written\s+to|read\s+from)\s+'
+                 r'(?:the\s+)?(?:ram|memory)\b|\b(?:data|address)\s+(?:bus|vector)\b',
+                 desc, re.I):
+        return {'width': WIDTH_UNKNOWN, 'width_unresolved': {
+            'reason': 'bus_width_not_stated', 'source': desc.strip()}}
     return {"width": 1}
 
 
@@ -842,32 +911,55 @@ def extract_prose_ports(prompt: str) -> List[Dict]:
     signal does not match)."""
     out: List[Dict] = []
     seen = set()
-    params: Dict[str, int] = {}
-    defaults = extract_params(prompt)
-    for _ in range(len(defaults) + 1):
-        previous = len(params)
+    scoped = []
+    for lo, hi, owner in _prose_module_scopes(prompt):
+        body = prompt[lo:hi]
+        # A sibling HDL module's defaults cannot dimension a prose interface.
+        defaults = extract_prose_parameters(body)
+        if not _VERILOG_MODULE_HDR.search(body):
+            defaults += [{'name': m.group(1), 'default': m.group(2).strip()}
+                         for m in _PARAM_DECL.finditer(body)]
+        raw = {}
+        conflicts = set()
         for item in defaults:
-            if item["name"] not in params:
-                value = _safe_eval_int(item["default"], params)
-                if value is not None:
-                    params[item["name"]] = value
-        if len(params) == previous:
-            break
+            name, value = item['name'], item.get('default')
+            if name in raw and raw[name] != value:
+                conflicts.add(name)
+            raw[name] = value
+        params: Dict[str, int] = {}
+        for _ in range(len(raw) + 1):
+            previous = len(params)
+            for name, value in raw.items():
+                if name not in params and name not in conflicts and isinstance(value, str):
+                    resolved = _safe_eval_int(value, params)
+                    if resolved is not None:
+                        params[name] = resolved
+            if len(params) == previous:
+                break
+        scoped.append((lo, hi, params))
     section = None  # 'input' | 'output' | 'inout' | None
-    for line in prompt.splitlines():
+    after_blank = False
+    offset = 0
+    for source_line in prompt.splitlines(keepends=True):
+        line = source_line.rstrip('\r\n')
+        params = next((env for lo, hi, env in scoped if lo <= offset < hi), {})
+        offset += len(source_line)
         # a short header line that names Inputs/Outputs sets the section — strip
         # leading bullets (`- `, `* `, `•`), markdown emphasis, numbering and the
         # trailing colon, then match the alphanumeric core.
         core = re.sub(r'[^a-z ]', '', line.strip().lower()).strip()
         if core in ("inputs", "input port", "input ports", "input signal", "input signals", "input",
                     "input interface"):
-            section = "input"; continue
+            section = "input"; after_blank = False; continue
         if core in ("outputs", "output port", "output ports", "output signal", "output signals", "output",
                     "output interface"):
-            section = "output"; continue
+            section = "output"; after_blank = False; continue
         if core in ("inouts", "inout port", "inout ports", "inout signal", "inout signals", "inout",
                     "inout interface"):
-            section = "inout"; continue
+            section = "inout"; after_blank = False; continue
+        if section is not None and not line.strip():
+            after_blank = True
+            continue
         m = _PROSE_SIG.match(line)
         if m is None and section is not None:
             # INSIDE a declared port section the definition lines often carry NO
@@ -882,9 +974,20 @@ def extract_prose_ports(prompt: str) -> List[Dict]:
                 # later `Implementation:` paragraph cannot inherit `section`
                 # and turn its prose into ports.
                 section = None
+                after_blank = False
+                continue
+        if m is not None and section is not None and after_blank:
+            desc = line[m.end():]
+            # Apply the same blank-boundary rule to both bullet spellings.
+            if (not line[:1].isspace() or not
+                    (m.group(1) or m.group(3) or m.group(4)
+                     or re.search(r'\b(?:input|output|inout)\b', desc, re.I))):
+                section = None
+                after_blank = False
                 continue
         if not m:
             continue
+        after_blank = False
         names = re.split(r'\s*,\s*', m.group(2))
         desc = line[m.end():]
         paren = m.group(4) if m.lastindex and m.lastindex >= 4 else None

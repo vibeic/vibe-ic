@@ -45082,6 +45082,32 @@ def gen_l8_timing_waveform(project: Path,
             + (f" = {p_default}" if p_default is not None else ""),
             p_entry.get("extraction_strategy") or "")
 
+    # Headed prose is a declaration too, including a parameter whose source
+    # supplies no default. Keep its module owner; never flatten sibling scopes.
+    _prose_owner, _saw_prose_owner = _issue3234_explicit_parameter_owner(extracted)
+    _prose_defaults = {}
+    for fname, text in extracted.items():
+        for p_entry in _ppx.extract_prose_parameters(text or ''):
+            if not _issue3234_position_is_current(text, text.find(p_entry['literal'])):
+                continue
+            if _saw_prose_owner and _prose_owner is None:
+                raise ValueError('L8_PARAMETER_OWNER_UNRESOLVED: conflicting explicit top modules')
+            owner = p_entry.get('module_owner')
+            if owner is not None and _prose_owner is not None and owner != _prose_owner:
+                continue
+            p_name, p_default = p_entry['name'], p_entry.get('default')
+            scoped_name = (owner, p_name)
+            if scoped_name in _prose_defaults and _prose_defaults[scoped_name] != p_default:
+                raise ValueError('L8_PARAMETER_DEFAULT_CONFLICT: ' + p_name)
+            _prose_defaults[scoped_name] = p_default
+            key = (p_name.upper(), p_default if p_default is not None else '')
+            if key in _l8_param_seen:
+                continue
+            _l8_param_seen.add(key)
+            _l8_parameters.append(dict(p_entry, source=fname))
+            _v1_6_395_push_l8_evidence(evidence, fname, p_entry['literal'],
+                                     p_entry['extraction_strategy'])
+
     for fname, text in extracted.items():
         for p_entry in _v1_6_321_extract_design_parameters(text or ""):
             p_name = (p_entry.get("name") or "").strip()
@@ -51875,6 +51901,8 @@ def _czl9_prose_port_fallback(content: Dict[str, Any],
             entry["msb"], entry["lsb"] = row["msb"], row["lsb"]
         if "width_symbolic" in row:
             entry["width_symbolic"] = row["width_symbolic"]
+        if "width_unresolved" in row:
+            entry["width_unresolved"] = row["width_unresolved"]
         target.append(entry)
     content["top_module_pins_source"] = "prose_port_definition_list"
 
@@ -64367,7 +64395,7 @@ def _v1_6_555_crosswalk_l9_ports_to_l1_pin_table(
             "extraction_strategy":
                 "cross_walk_from_l9_ports_v1_6_555",
         }
-        for key in ("type_ref", "width_symbolic"):
+        for key in ("type_ref", "width_symbolic", "width_unresolved"):
             if port.get(key) is not None:
                 row[key] = port[key]
         if _is_req_rsp_interface(port):
@@ -64397,6 +64425,8 @@ def _v1_6_555_crosswalk_l9_ports_to_l1_pin_table(
             row["width"] = _w
             row["msb"] = _w - 1
             row["lsb"] = 0
+        elif _w == 0 and port.get('width_unresolved'):
+            row['width'] = 0
         new_rows.append(row)
     if not new_rows:
         return False

@@ -294,3 +294,321 @@ def test_port_section_does_not_promote_later_internal_or_context_definitions():
             "Implementation:\n    red, yellow, green: Internal signals.\n")
     assert {row["name"]: row["dir"]
             for row in PX.extract_prose_ports(text)} == {"Clk": "input"}
+
+
+# Same issue3578 family: source-owned parametric interface, including refusal.
+def _parametric_contract_fixture(name):
+    from programs.tests._hostpaths import require_repo
+    return require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+                        "tests", "fixtures", "phase1_local",
+                        "neutral_parametric_interface", name + ".md").read_text()
+
+
+def _parametric_contract_generate(tmp_path, text, expected_rc=0):
+    import json
+    import subprocess
+    import phase1_doc_one_shot_runner as producer
+    source = tmp_path / "input/docs/current.md"
+    source.parent.mkdir(parents=True)
+    source.write_text(text)
+    run = subprocess.run([sys.executable, producer.__file__, str(tmp_path)],
+                         capture_output=True, text=True)
+    assert run.returncode == expected_rc, run.stdout + run.stderr
+    return {name: json.loads((tmp_path / "phase1/generated_docs" /
+                             (name + ".json")).read_text()) for name in
+            ("L1_DATASHEET", "L8_RTL_CONSTANTS", "L9_INTEGRATION_SPEC")}
+
+
+def _parametric_contract_aliases(docs):
+    l9 = docs["L9_INTEGRATION_SPEC"]
+    return [docs["L1_DATASHEET"]["pin_table"],
+            *(l9[key] for key in ("ports", "top_ports", "top_module_pins"))]
+
+
+def test_parametric_contract_declaration_reader_keeps_absent_defaults():
+    text = ('Input parameters:\n    FRACTION: Number of fractional bits.\n'
+            '    TOTAL: Total number of bits.\nInput ports:\n'
+            '    operand[TOTAL-1:0]: Input data.\n')
+    assert [(p['name'], p.get('default')) for p in PX.extract_params(text)] == [
+        ('FRACTION', None), ('TOTAL', None)]
+
+
+@pytest.mark.parametrize('default_first', [False, True])
+def test_parametric_contract_description_and_explicit_default_are_one_declaration(tmp_path, default_first):
+    import json
+    import phase1_doc_one_shot_runner as producer
+    description = 'Input parameters:\n    SPAN: Number of data bits.\n'
+    default = 'Parameter:\n    SPAN = 7\n'
+    text = ('Module name:\n    neutral_core\n' +
+            (default + description if default_first else description + default) +
+            'Input ports:\n    payload[SPAN-1:0]: Input data.\n')
+    assert [(p['name'], p.get('default')) for p in PX.extract_params(text)] == [('SPAN', '7')]
+    assert [(p['name'], p['width']) for p in PX.extract_prose_ports(text)] == [('payload', 7)]
+    result = producer.gen_l8_timing_waveform(tmp_path, {'current.md': text})
+    doc = json.loads(result.path.read_text())
+    assert [(p['name'], p.get('default')) for p in doc['parameters']] == [('SPAN', '7')]
+
+
+def test_parametric_contract_public_bit_counts_reach_actual_consumer(tmp_path):
+    import phase2_scaffold_gen as consumer
+    docs = _parametric_contract_generate(
+        tmp_path, _parametric_contract_fixture("arithmetic_width_prose"))
+    for rows in _parametric_contract_aliases(docs):
+        assert {r["name"]: r["width"] for r in rows} == {
+            "clk": 1, "rst_n": 1, "mul_a": 4, "mul_b": 4, "mul_out": 8}
+    assert [(r["name"], r.get("default")) for r in
+            docs["L8_RTL_CONSTANTS"]["parameters"]] == [("size", "4")]
+    signals = consumer.derive_signals({}, docs["L9_INTEGRATION_SPEC"])
+    assert {r["name"]: r["width"] for r in signals if r["name"].startswith("mul_")} == {
+        "mul_a": 4, "mul_b": 4, "mul_out": 8}
+    rendered = consumer.emit_top_v("neutral_top", signals, [])
+    assert "[3:0] mul_a" in rendered and "[3:0] mul_b" in rendered
+    assert "[7:0] mul_out" in rendered
+
+
+@pytest.mark.parametrize("fixture", ["declared_precision", "blank_separated_interface"])
+def test_parametric_contract_no_default_declarations_survive(tmp_path, fixture):
+    docs = _parametric_contract_generate(tmp_path, _parametric_contract_fixture(fixture))
+    assert [(r["name"], r.get("default")) for r in
+            docs["L8_RTL_CONSTANTS"]["parameters"]] == [("Q", None), ("N", None)]
+    assert [(r["name"], r.get("default")) for r in
+            docs["L9_INTEGRATION_SPEC"]["parameters"]] == [("Q", None), ("N", None)]
+    for rows in _parametric_contract_aliases(docs):
+        assert {r["name"] for r in rows} == {"a", "b", "c"}
+        assert all(r.get("width_symbolic") in ("[N-1:0]", "N-1:0") for r in rows)
+        assert all(r.get("width") in (None, 0) for r in rows)
+
+
+@pytest.mark.parametrize('fixture', ['declared_precision', 'blank_separated_interface'])
+def test_parametric_contract_declared_interface_emits_and_binds_in_native_tool(tmp_path, fixture):
+    import shutil
+    import subprocess
+    import phase2_scaffold_gen as consumer
+    import l1_pin_bus_width_actionable_check as gate
+    docs = _parametric_contract_generate(
+        tmp_path, _parametric_contract_fixture(fixture))
+    assert [(p["name"], p.get("default")) for p in
+            docs["L8_RTL_CONSTANTS"]["parameters"]] == [("Q", None), ("N", None)]
+    report = gate.evaluate(tmp_path)
+    assert report["verdict"] == "PASS", report
+    assert report["qualification"] == "PARAMETRIC_INTERFACE"
+    assert report["concrete_width_qualification"] == "NOT_MEASURED"
+    signals = consumer.derive_signals({}, docs["L9_INTEGRATION_SPEC"])
+    assert {r["name"]: r["width"] for r in signals if r["name"] in {"a", "b", "c"}} == {
+        "a": None, "b": None, "c": None}
+    with pytest.raises(consumer.UnresolvedPortWidth):
+        consumer.emit_top_v("neutral_top", signals, [])
+    top = docs["L9_INTEGRATION_SPEC"]["top_module"]
+    rendered = consumer.emit_top_v(
+        top, signals, docs['L1_DATASHEET']['ic_name'],
+        parameters=docs["L9_INTEGRATION_SPEC"]["parameters"])
+    assert "[N-1:0]" in rendered
+    assert "parameter Q" in rendered and "parameter N" in rendered
+    assert "parameter N =" not in rendered and "parameter Q =" not in rendered
+    assert shutil.which("iverilog") and shutil.which("vvp"), "pinned native tools required"
+    rtl = tmp_path / "declared_interface.sv"
+    rtl.write_text(rendered)
+    native_receipts = []
+    for n, q in [(5, 2), (13, 7)]:
+        probe = tmp_path / f"probe_{n}.sv"
+        probe.write_text(
+            f"module Probe; wire [{n-1}:0] a, b, c;\n"
+            f"{top} #(.N({n}), .Q({q})) dut(.a(a), .b(b), .c(c));\n"
+            "initial begin\n"
+            f"if ($bits(dut.a)!={n} || $bits(dut.b)!={n} || $bits(dut.c)!={n}) $fatal;\n"
+            '$display("BOUND_PARAMETER_INTERFACE_OK"); $finish; end\nendmodule\n')
+        image = tmp_path / f"probe_{n}.vvp"
+        compiled = subprocess.run(["iverilog", "-g2012", "-s", "Probe", "-o",
+                                   str(image), str(rtl), str(probe)],
+                                  capture_output=True, text=True)
+        assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+        simulated = subprocess.run(["vvp", str(image)], capture_output=True, text=True)
+        assert simulated.returncode == 0, simulated.stdout + simulated.stderr
+        assert "BOUND_PARAMETER_INTERFACE_OK" in simulated.stdout
+        native_receipts.extend([{'argv': compiled.args, 'rc': compiled.returncode,
+                                 'stdout': compiled.stdout, 'stderr': compiled.stderr},
+                                {'argv': simulated.args, 'rc': simulated.returncode,
+                                 'stdout': simulated.stdout, 'stderr': simulated.stderr}])
+    # Reverse the emitted interface itself. The same native probe must catch
+    # a fabricated scalar even though Icarus merely warns at the connection.
+    broken = tmp_path / 'scalarized_interface.sv'
+    assert '[N-1:0] a' in rendered
+    broken.write_text(rendered.replace('[N-1:0] a', '[0:0] a', 1))
+    bad_image = tmp_path / 'scalarized.vvp'
+    compiled = subprocess.run(['iverilog', '-g2012', '-s', 'Probe', '-o',
+                              str(bad_image), str(broken), str(probe)],
+                             capture_output=True, text=True)
+    assert compiled.returncode == 0, compiled.stdout + compiled.stderr
+    rejected = subprocess.run(['vvp', str(bad_image)], capture_output=True, text=True)
+    assert rejected.returncode != 0, rejected.stdout + rejected.stderr
+    native_receipts.extend([{'argv': compiled.args, 'rc': compiled.returncode,
+                             'stdout': compiled.stdout, 'stderr': compiled.stderr},
+                            {'argv': rejected.args, 'rc': rejected.returncode,
+                             'stdout': rejected.stdout, 'stderr': rejected.stderr,
+                             'expected_failure': 'the same bound probe rejects a scalarized input'}])
+    import json
+    (tmp_path / 'native-binding-receipts.json').write_text(json.dumps(native_receipts, indent=2))
+    # Numeric-width emitters still cannot consume an unbound interface.
+    with pytest.raises(consumer.UnresolvedPortWidth):
+        consumer.emit_tb_v(top, signals)
+    with pytest.raises(consumer.UnresolvedPortWidth):
+        consumer.emit_scaffold(tmp_path)
+    report = consumer.emit_scaffold(tmp_path, skip_tb=True, skip_cocotb=True,
+                                    skip_soc=True, skip_regs=True)
+    assert report["status"] == "ok"
+    emitted = tmp_path / "phase2/stage1/scaffold" / (top + "_top.v")
+    assert emitted.read_text() == rendered
+
+
+def test_parametric_contract_conflicting_geometry_does_not_become_scalars(tmp_path):
+    import phase2_scaffold_gen as consumer
+    source = _parametric_contract_fixture("conflicting_memory_geometry")
+    docs = _parametric_contract_generate(tmp_path, source, expected_rc=1)
+    buses = {"write_addr", "read_addr", "write_data", "read_data"}
+    for rows in _parametric_contract_aliases(docs):
+        actual = {r["name"]: r for r in rows if r["name"] in buses}
+        assert set(actual) == buses
+        assert {n: r.get("width") for n, r in actual.items()} == dict.fromkeys(buses, 0)
+        assert all(r.get("width_unresolved") for r in actual.values())
+    assert docs["L9_INTEGRATION_SPEC"]["notes"] == source.strip()
+    signals = consumer.derive_signals({}, docs["L9_INTEGRATION_SPEC"])
+    assert {r["name"]: r["width"] for r in signals if r["name"] in buses} == dict.fromkeys(buses)
+    with pytest.raises(consumer.UnresolvedPortWidth):
+        consumer.emit_top_v("neutral_top", signals, [])
+
+
+@pytest.mark.parametrize("expr,expected", [('"LANES"', 7), ('2*LANES', 14),
+                                            ('(LANES + 2)', 9)])
+def test_parametric_contract_bit_count_expression(expr, expected):
+    text = ("Module name:\n    neutral_core\nInput ports:\n"
+            f"    value: Input operand with a data width of {expr} bits.\n"
+            "Parameter:\n    LANES = 7\n")
+    assert [(r["name"], r["width"]) for r in PX.extract_prose_ports(text)] == [
+        ("value", expected)]
+
+
+def test_parametric_contract_unsupported_expression_is_preserved_and_refused():
+    import phase2_scaffold_gen as consumer
+    rows = PX.extract_prose_ports(
+        "Input ports:\n    payload: Input data with a data width of mystery(W) bits.\n"
+        "Parameter:\n    W = 5\n")
+    assert [(r["name"], r["width"]) for r in rows] == [("payload", 0)]
+    l9 = {"top_ports": [dict(r, direction=r["dir"]) for r in rows]}
+    signals = consumer.derive_signals({}, l9)
+    assert next(s for s in signals if s["name"] == "payload")["width"] is None
+    with pytest.raises(consumer.UnresolvedPortWidth):
+        consumer.emit_top_v("neutral_top", signals, [])
+
+
+def test_parametric_contract_sibling_parameter_cannot_size_current_module():
+    text = ("Module name:\n    selected_core\nInput ports:\n"
+            "    payload[SPAN-1:0]: Input data.\n"
+            "Module name:\n    sibling_core\nParameter:\n    SPAN = 23\n")
+    assert [(r["name"], r["width"]) for r in PX.extract_prose_ports(text)] == [
+        ("payload", 0)]
+
+
+def test_parametric_contract_blank_line_only_preserves_port_definition_grammar():
+    text = ("Output ports:\n\n    result[COUNT-1:0]: N-bit output.\n\n"
+            "Namespace: Metadata for the output package.\n"
+            "    internal[31:0]: Internal storage.\n")
+    assert [(r["name"], r["dir"], r["width"]) for r in PX.extract_prose_ports(text)] == [
+        ("result", "output", 0)]
+
+
+def test_parametric_contract_blank_line_does_not_authorize_metadata_bullets():
+    assert PX.extract_prose_ports(
+        'Output ports:\n\n- Namespace: Metadata for the output package.\n'
+        '    storage[31:0]: Internal storage.\n') == []
+
+
+def test_parametric_contract_conflicting_owned_defaults_are_refused(tmp_path):
+    import phase1_doc_one_shot_runner as producer
+    text = ('Module name:\n    neutral_core\nParameter:\n'
+            '    SPAN = 3\n    SPAN = 11\nInput ports:\n'
+            '    payload[SPAN-1:0]: Input data.\n')
+    assert [(r['name'], r['width']) for r in PX.extract_prose_ports(text)] == [('payload', 0)]
+    with pytest.raises(ValueError, match='L8_PARAMETER_DEFAULT_CONFLICT'):
+        producer.gen_l8_timing_waveform(tmp_path, {'current.md': text})
+
+
+def test_parametric_contract_marker_refuses_even_if_a_numeric_alias_is_added():
+    import phase2_scaffold_gen as consumer
+    l9 = {"top_ports": [{"name": "entries", "direction": "output", "width": 1,
+                         "width_unresolved": {"reason": "bus_width_not_stated",
+                                              "source": "Data read from memory."}}]}
+    signals = consumer.derive_signals({}, l9)
+    assert next(s for s in signals if s["name"] == "entries")["width"] is None
+    with pytest.raises(consumer.UnresolvedPortWidth):
+        consumer.emit_top_v("neutral_top", signals, [])
+
+
+@pytest.mark.parametrize('expression,owner', [('M-1:0', 'neutral_top'),
+                                            ('N//2:0', 'neutral_top'),
+                                            ('unknown(N):0', 'neutral_top'),
+                                            ('N-1:0', 'sibling_top')])
+def test_parametric_contract_module_emitter_rejects_undeclared_illegal_or_foreign(expression, owner):
+    import phase2_scaffold_gen as consumer
+    params = [{'name': 'N', 'default': None, 'module_owner': owner}]
+    signals = consumer.derive_signals({}, {'top_ports': [
+        {'name': 'bus_o', 'direction': 'output', 'width': 0,
+         'width_symbolic': expression}]})
+    assert next(s for s in signals if s['name'] == 'bus_o')['width'] is None
+    with pytest.raises(consumer.UnresolvedPortWidth):
+        consumer.emit_top_v('neutral_top', signals, 'neutral', parameters=params)
+
+
+@pytest.mark.parametrize('declared', [True, False])
+def test_parametric_contract_gate_does_not_borrow_a_sibling_hdl_default(tmp_path, declared):
+    import json
+    import l1_pin_bus_width_actionable_check as gate
+    text = ('Module name:\n    selected_core\n' +
+            ('Input parameters:\n    N: Data bus width.\n' if declared else '') +
+            'Input ports:\n    payload[N-1:0]: Input data.\n')
+    source = tmp_path / 'input/docs/current.md'
+    source.parent.mkdir(parents=True)
+    source.write_text(text)
+    foreign = tmp_path / 'input/rtl/sibling.sv'
+    foreign.parent.mkdir(parents=True)
+    foreign.write_text('module sibling #(parameter N = 23) (); endmodule\n')
+    generated = tmp_path / 'phase1/generated_docs'
+    generated.mkdir(parents=True)
+    (generated / 'L1_DATASHEET.json').write_text(json.dumps({
+        'ic_name': 'selected_core', 'pin_table': [
+            {'name': 'payload', 'mode': 'in', 'width': 0, 'width_symbolic': '[N-1:0]'}]}))
+    report = gate.evaluate(tmp_path)
+    assert report['verdict'] == ('PASS' if declared else 'FAIL'), report
+    if declared:
+        assert report['qualification'] == 'PARAMETRIC_INTERFACE'
+        assert report['concrete_width_qualification'] == 'NOT_MEASURED'
+        assert report['symbolic_widths_resolved'] == []
+
+
+@pytest.mark.parametrize('mutation', ['scalar', 'different_symbol'])
+def test_parametric_contract_gate_rederives_source_instead_of_trusting_fields(tmp_path, mutation):
+    import json
+    import l1_pin_bus_width_actionable_check as gate
+    source = tmp_path / 'input/docs/current.md'
+    source.parent.mkdir(parents=True)
+    source.write_text('Module name:\n    neutral_top\nInput parameters:\n'
+                      '    N: Data width.\nInput ports:\n'
+                      '    payload[N-1:0]: Input data.\n')
+    generated = tmp_path / 'phase1/generated_docs'
+    generated.mkdir(parents=True)
+    row = {'name': 'payload', 'mode': 'in', 'width': 0, 'width_symbolic': '[N-1:0]'}
+    if mutation == 'scalar': row['width'] = 1
+    else: row['width_symbolic'] = '[M-1:0]'
+    (generated / 'L1_DATASHEET.json').write_text(json.dumps({
+        'ic_name': 'neutral_top', 'pin_table': [row]}))
+    assert gate.evaluate(tmp_path)['verdict'] == 'FAIL'
+
+
+def test_parametric_contract_existing_projection_cannot_turn_unknown_zero_into_scalar():
+    import phase2_scaffold_gen as consumer
+    rows = PX.extract_ports('Input ports:\n    payload[UNDECLARED-1:0]: Input data.\n')
+    assert rows == [{'name': 'payload', 'dir': 'input', 'width': 0}]
+    signals = consumer.derive_signals({}, {'top_ports': [
+        dict(row, direction=row['dir']) for row in rows]})
+    assert [(s['name'], s['width']) for s in signals if s['name'] == 'payload'] == [('payload', None)]
+    with pytest.raises(consumer.UnresolvedPortWidth):
+        consumer.emit_top_v('neutral_top', signals, 'neutral')
