@@ -38014,8 +38014,9 @@ def _fsm_state_definition_rows(text: str):
     active = False
     heading = re.compile(
         r"(?:\b(?:FSM|state\s+machine)\b[^\n]*\bstates|"
-        r"^(?:FSM\s+)?states)\s*:\s*$", re.IGNORECASE)
-    row = re.compile(r"^\s*(?:[-*]\s+)?`?([A-Z][A-Z0-9_]*)`?"
+        r"^(?:FSM\s+)?states|\bsummary\s+of\s+each\s+state)\s*:\s*$",
+        re.IGNORECASE)
+    row = re.compile(r"^\s*(?:[-*]\s+)?`?([A-Za-z_][A-Za-z0-9_]*)`?"
                      r"\s*:\s*(\S.*)$")
     for line in (text or "").splitlines():
         if heading.search(line.strip().lstrip('#').strip()):
@@ -38028,6 +38029,81 @@ def _fsm_state_definition_rows(text: str):
             active = False
             continue
         yield match.group(1), line.strip()
+
+
+def _fsm_explicit_catalog(text: str):
+    """Identifiers belong to an FSM only when their declaration says so.
+
+    Preserve source case, including identifiers differing only by case. Numeric
+    case-state prose publishes the literal value, never a fabricated enum name.
+    """
+    declared = list(_fsm_state_definition_rows(text))
+    for line in (text or "").splitlines():
+        match = re.fullmatch(
+            r"\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)+)\s*:\s*"
+            r"Enumeration\s+values\s+representing\s+different\s+states\b.*",
+            line, re.IGNORECASE)
+        if match:
+            for name in re.split(r"\s*,\s*", match.group(1)):
+                declared.append((name, line.strip()))
+        match = re.match(r"\s*If\s+(?:the\s+)?state\s+is\s+(\d+)\s*,", line,
+                         re.IGNORECASE)
+        if match:
+            declared.append((match.group(1), line.strip()))
+    names = {name for name, _ in declared}
+    for match in re.finditer(
+            r"\bparameter\s+([A-Za-z_]\w*)\s*=\s*\d+'\s*[bdho][0-9a-f_xz]+",
+            text or "", re.IGNORECASE):
+        if _fsm_parameter_has_state_owner(text, match, names):
+            declared.append((match.group(1), match.group(0)))
+    yield from declared
+
+
+def _fsm_definition_edges(text: str, source: str):
+    """Keep only a transition stated inside an explicitly owned state row.
+
+    The sentence is retained verbatim as a prose trigger, not translated into
+    executable logic. A state mention, an absent guard, or an unknown target
+    cannot manufacture behavior for the Phase-2 author.
+    """
+    transition = re.compile(
+        r"\b(?:transition(?:s|ing)?\s+to|remains?\s+in)\s+"
+        r"(?:the\s+)?([A-Za-z_]\w*)\s+state\b", re.IGNORECASE)
+    for name, literal in _fsm_state_definition_rows(text):
+        body = literal.split(":", 1)[1]
+        for sentence in re.split(r"(?<=[.!?])\s+", body.strip()):
+            for match in transition.finditer(sentence):
+                # Negating a guard ("if not ready") still declares an edge;
+                # only a negated transition relation is an absence statement.
+                if re.search(
+                        r"\b(?:not|never|no|cannot|can't|won't)"
+                        r"(?:\s+(?:ever|directly))?\s*$",
+                        sentence[:match.start()], re.IGNORECASE):
+                    continue
+                yield {"from": name, "to": match.group(1),
+                       "trigger": sentence.strip(), "source_literal": literal,
+                       "evidence": f"input/docs/{source} (explicit state transition)"}
+
+
+def _fsm_parameter_has_state_owner(text: str, match: "re.Match",
+                                   declared_names: Set[str]) -> bool:
+    """A generic RTL parameter is an encoding only with state ownership.
+
+    Width and capitalization also describe opcodes, masks and addresses. State
+    naming syntax, an explicit catalog, or a local state-encoding heading is
+    required; a distant FSM word elsewhere in the document is insufficient.
+    """
+    name = match.group(1)
+    if re.match(r"(?:STATE_|S_)", name, re.IGNORECASE) or name in declared_names:
+        return True
+    preceding = text[:match.start()].splitlines()
+    for line in reversed(preceding):
+        if not line.strip() or re.match(r"\s*parameter\b", line, re.IGNORECASE):
+            continue
+        return bool(re.fullmatch(
+            r"\s*[#* ]*(?:(?:FSM|state\s+machine)\s+)?state\s+"
+            r"(?:encodings?|parameters?)\s*:\s*", line, re.IGNORECASE))
+    return False
 
 
 def _l6_fsm_machine_id(state: Dict[str, Any]) -> str:
@@ -38111,12 +38187,23 @@ def _l6_attach_declared_transitions(
     by_name: Dict[str, Dict[str, Any]] = {}
     for st in fsm_states:
         if isinstance(st, dict) and isinstance(st.get("name"), str):
-            by_name[st["name"].upper()] = st
+            by_name[st["name"]] = st
+
+    def resolve(name: str) -> str:
+        if name in by_name:
+            return name
+        # Older prose walkers canonicalize inferred names to uppercase. Keep
+        # compatibility only when that spelling identifies exactly one state.
+        aliases = [key for key in by_name if key.upper() == name.upper()]
+        return aliases[0] if len(aliases) == 1 else ""
+
     attached = 0
     for e in edges:
-        src = str(e.get("from") or "").upper()
-        dst = str(e.get("to") or "").upper()
-        if not src or not dst or src == dst:
+        src = str(e.get("from") or "")
+        dst = str(e.get("to") or "")
+        if not e.get("source_literal"):
+            src, dst = resolve(src), resolve(dst)
+        if not src or not dst:
             continue
         if src not in by_name or dst not in by_name:
             continue
@@ -38125,15 +38212,19 @@ def _l6_attach_declared_transitions(
         if not isinstance(lst, list):
             lst = []
             st["transitions"] = lst
-        if any(isinstance(t, dict) and str(t.get("to", "")).upper() == dst
+        if any(isinstance(t, dict) and str(t.get("to", "")) == dst
+               and str(t.get("trigger") or "") == str(e.get("trigger") or "")
                for t in lst):
             continue
-        lst.append(_l6_transition_entry(
+        entry = _l6_transition_entry(
             by_name[src].get("name") or src,
             by_name[dst].get("name") or dst,
             str(e.get("trigger") or ""),
             str(e.get("evidence") or ""),
-        ))
+        )
+        if e.get("source_literal"):
+            entry["source_literal"] = e["source_literal"]
+        lst.append(entry)
         attached += 1
     return attached
 
@@ -38393,24 +38484,37 @@ def gen_l6_control_logic(project: Path,
         r"(?:->|=>|→)\s*([A-Z][A-Z0-9_]{3,30})\b",
     )
     seen_state_names: Set[str] = {s["name"] for s in extracted_states}
+    _l6_declared_names_by_source: Dict[str, Set[str]] = {}
     for fname, text in extracted.items():
         if _L6_FSM_SOURCE_DENY.search(fname or ""):
             continue
-        for name, literal in _fsm_state_definition_rows(text):
+        declared = _l6_declared_names_by_source.setdefault(fname, set())
+        for name, literal in _fsm_explicit_catalog(text):
+            declared.add(name)
             if name in seen_state_names:
                 continue
             seen_state_names.add(name)
-            extracted_states.append({
+            entry = {
                 "name": name, "transitions": [], "actions": [],
                 "evidence": f"input/docs/{fname} (explicit state definition)",
                 "extraction_strategy": "state_heading_definition",
-            })
+            }
+            if name.isdecimal():
+                entry["extraction_strategy"] = "numeric_case_state"
+                entry["encoding"] = name
+                entry["encoding_value"] = int(name)
+            elif re.match(r"parameter\b", literal, re.IGNORECASE):
+                entry["extraction_strategy"] = "state_owned_parameter"
+            extracted_states.append(entry)
             evidence.setdefault(f"input/docs/{fname}", []).append({
                 "literal": literal, "label": "explicit FSM state definition"})
     # Edges observed by the state-to-state walker. Collected here, filtered
     # against the FINAL state set at emit time — see
     # `_l6_attach_declared_transitions`.
     _l6_edge_candidates: List[Dict[str, str]] = []
+    for fname, text in extracted.items():
+        if not _L6_FSM_SOURCE_DENY.search(fname or ""):
+            _l6_edge_candidates.extend(_fsm_definition_edges(text, fname))
 
     def _add_state(name: str, fname: str, label: str,
                    extraction_strategy: str = "") -> None:
@@ -38425,6 +38529,11 @@ def gen_l6_control_logic(project: Path,
         # field (default empty string keeps the legacy 3-arg signature
         # working for non-prose-walker callsites).
         if not name or len(name) < 4:
+            return
+        # A source declaration owns spelling. The older inference walkers may
+        # corroborate it, but must not add an uppercased duplicate.
+        if any(name.upper() == item.upper()
+               for item in _l6_declared_names_by_source.get(fname, set())):
             return
         # v1.6.96 (issue #28 Bug 3a) — operating-mode / power-domain
         # tokens scooped up by the `state: <NAME>` text regex must NOT
@@ -38573,6 +38682,9 @@ def gen_l6_control_logic(project: Path,
         inside the `evidence` substring before, which was invisible
         to dict-field readers."""
         if not name:
+            return
+        if any(name.upper() == item.upper()
+               for item in _l6_declared_names_by_source.get(fname, set())):
             return
         # ORGANIC #606 — reject register / address-map identifiers the prose
         # walker can latch from data-movement sentences ("write X to
@@ -38764,6 +38876,13 @@ def gen_l6_control_logic(project: Path,
         # regex already requires `FSM`/`state machine`/`state` in
         # the body so a window-anchor recheck is unnecessary.
         for m in _V1_6_484_FSM_INIT_RE.finditer(text):
+            # In "on reset, the state register is cleared", register is the
+            # object being reset, not the name of an initial state. An explicit
+            # "FSM is in REGISTER" remains legal.
+            if (m.group("state").lower() == "register"
+                    and re.search(r"\bstate\s*$", text[m.start():m.start("state")],
+                                  re.IGNORECASE)):
+                continue
             _v1_6_484_add_prose_state(
                 m.group("state"), fname,
                 "prose init v1.6.484",
@@ -38838,6 +38957,10 @@ def gen_l6_control_logic(project: Path,
                           (_prose_state_re_a, "prose 'in X state'"),
                           (_prose_state_re_b, "prose 'X state:'")):
             for m in rx.finditer(text):
+                if (rx is _verilog_state_re
+                        and not _fsm_parameter_has_state_owner(
+                            text, m, _l6_declared_names_by_source.get(fname, set()))):
+                    continue
                 _add_state(m.group(1), fname, label)
         # v1.6.254 — mask C-pointer-deref spans so the arrow regex
         # doesn't see them at all.

@@ -939,6 +939,13 @@ def evaluate(project: Path) -> Dict[str, Any]:
         "gate": "l6_fsm_scaffold_actionable_check",
         "verdict": "SKIP",
         "reason": "",
+        # Part A assesses a reference source contract. The scaffold is an
+        # oracle-only module; neither its enum nor a PASS here implements the
+        # behavioral RTL consumed later by the production runner.
+        "assessment_scope": "source_fsm_scaffold_contract",
+        "fsm_contract_is_counterfactual": True,
+        "actual_rtl_entrypoint": "design_one_shot_runner.step_rtl_gen",
+        "behavioral_implementation_status": "NOT_MEASURED",
         "fsm_checked": False,
         "derived_states": [],
         # v1.7.74 — for #505. The derived set broken out per machine, so
@@ -956,9 +963,9 @@ def evaluate(project: Path) -> Dict[str, Any]:
         # Never a failure: an input-level claim and an authored artefact are
         # claims about different objects and cannot contradict each other.
         "authored_fsm_advisories": [],
-        # #504 — Part A's consumer model, made explicit in the report rather
-        # than assumed. True means phase2_scaffold_gen.emit_fsm_v() really is
-        # what builds this design's FSM, so Part A's requirements bind.
+        # #504 legacy name: this is contract applicability, NOT proof that the
+        # oracle ran in production. Keep its existing admission semantics; the
+        # explicit scope/entrypoint/status above disclose what was measured.
         "scaffold_consumer_runs": True,
         "deferred_to_staged_rtl": [],
     }
@@ -1195,10 +1202,10 @@ def evaluate(project: Path) -> Dict[str, Any]:
                     "transitions[] and no top-level fsm_transitions[]) "
                     f"for any of the {len(machines) or 1} state "
                     f"machine(s) it describes — {_per_machine}. "
-                    "emit_fsm_v()'s body is literally '// TODO — "
-                    "transition logic per L6.fsm_transitions', so a "
-                    "conforming phase 2 would receive a state enum with "
-                    "no transition information at all")
+                    "the source scaffold contract requires a declared "
+                    "transition catalog. The oracle emit_fsm_v() emits a "
+                    "TODO body even when transitions are present; this "
+                    "check does not measure production RTL behavior")
 
             # A3 — no dangling transition targets.
             if derived and transitions:
@@ -1398,7 +1405,8 @@ def evaluate(project: Path) -> Dict[str, Any]:
         if "fsm" in parts_run:
             bits.append(f"{len(out['derived_states'])} state(s) / "
                         f"{out['transitions_declared']} transition(s) "
-                        "satisfy the phase2_scaffold_gen contract")
+                        "satisfy the phase2_scaffold_gen source contract; "
+                        "behavioral RTL implementation NOT_MEASURED")
         if "reject_rules" in parts_run:
             bits.append(f"{out['reject_rules_checked']} reject_rule(s) "
                         "machine-matchable by the L11/L12 coverage gate")

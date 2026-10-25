@@ -881,12 +881,14 @@ def emit_fsm_v(top: str, states: list[str]) -> str:
         "    // State encoding",
     ]
     for i, s in enumerate(states):
-        lines.append(f"    localparam [{w-1}:0] S_{s.upper()} = {w}'d{i};")
+        # Verilog identifiers are case-sensitive. Canonicalizing a declared
+        # `idle` / `Idle` pair would emit the same localparam twice.
+        lines.append(f"    localparam [{w-1}:0] S_{s} = {w}'d{i};")
     lines += [
         "",
         "    always @(posedge clk or negedge rst_n) begin",
         "        if (!rst_n) begin",
-        f"            state <= S_{states[0].upper()};",
+        f"            state <= S_{states[0]};",
         "        end else begin",
         "            // TODO — transition logic per L6.fsm_transitions",
         "        end",
