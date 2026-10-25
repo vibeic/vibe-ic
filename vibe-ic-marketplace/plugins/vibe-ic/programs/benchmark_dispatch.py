@@ -5868,6 +5868,43 @@ def _task_rtl_input(task: dict) -> str:
         (task.get("program_verification") or {}).get("runner_invocation"))
 
 
+def _review_collection_supplied_rtl(task: dict, result: dict) -> bool:
+    """Derive supplied input from a measured canonical re-entry, not authorship.
+
+    A Program re-entry keeps its PROGRAM origin. It may consume the existing
+    supplied-RTL collection contract only with a current receipt and explicit
+    Step 2 -> 2 argv. Native FAIL stays a measured failure for the unchanged
+    required-gate ledger; unavailable/blocked validation supplies no authority.
+    """
+    if result.get("candidate_origin") in {"AI_BACKUP", "AI_REPAIR"}:
+        return True
+    if task.get("candidate_origin") != "PROGRAM" or result.get("candidate_origin") != "PROGRAM":
+        return False
+    verification = task.get("program_verification") or {}
+    invocation = verification.get("runner_invocation")
+    if (not isinstance(invocation, dict)
+            or invocation.get("schema") != "vibeic.runner_invocation.v1"
+            or invocation.get("status") != "COMPLETED"
+            or verification.get("rtl_gen") != "NOT_APPLICABLE"):
+        return False
+    argv = invocation.get("argv") or []
+    if len(argv) < 3 or Path(argv[1]).name != "vibe_ic_one_shot_runner.py":
+        return False
+    for option in ("--entry-step", "--exit-step"):
+        if argv.count(option) != 1 or any(arg.startswith(option + "=") for arg in argv):
+            return False
+        index = argv.index(option)
+        if index + 1 >= len(argv) or argv[index + 1] != "2":
+            return False
+    if _runner_reentry_reason(task, result) is not None:
+        return False
+    import flow_phase_attribution as fpa                  # noqa: PLC0415
+    report, _ = fpa.step_report(Path(task["project"]))
+    validation = [row for row in (report or {}).get("steps") or []
+                  if row.get("name") == "rtl_validate"]
+    return len(validation) == 1 and validation[0].get("status") in {"PASS", "FAIL"}
+
+
 def _solver_argv(runner: Path, proj: Path, entry, exit_step,
                  delivery_route: str = "ip", input_contract: str = "structured") -> list:
     """One problem's runner argv, assembled from the routing verdict.
@@ -9468,8 +9505,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                         "a fresh AI review for the new hash"),
                 })
             continue
-        supplied_rtl = result.get("candidate_origin") in {
-            "AI_BACKUP", "AI_REPAIR"}
+        supplied_rtl = _review_collection_supplied_rtl(task, result)
         # Only an authenticated explicit reentry may supply a PROGRAM-owned
         # postimage declaration. Ordinary author repairs retain their exact
         # signed candidate contract, including every immutable hash check.
