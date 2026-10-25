@@ -169,26 +169,33 @@ def test_correct_design_is_left_alone():
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="oracle needs iverilog")
-def test_clocked_registered_output_is_repaired_not_deferred():
-    """It used to DEFER here: the oracle SKIPped because the spec's prose said the
-    output is assigned inside the clocked block, so the one-cycle-late RTL was
-    shipped unrepaired. The oracle now reads its verdict at the example's own
-    alignment, so the same defect reaches the same transform as the non-clocked
-    spelling of the same spec."""
+def test_clocked_registered_output_is_not_deregistered():
+    """The public clocked output owns sampling and cannot be rewritten away."""
     res = G.repair(RTL_MOORE, SPEC_CLOCKED)
-    assert res["verdict"] == "REPAIRED", res
-    assert res["defect"] == "output-cycle-alignment"
-    assert res["transform"] == "deregister_output"
+    assert res["verdict"] == "NOT_APPLICABLE", res
+    assert res["rtl"] is None
+    assert res["transform"] is None
     import worked_example_sequence_oracle_check as W
-    assert W.analyze(res["rtl"], SPEC_CLOCKED)["verdict"] == "PASS"
+    assert W.analyze(RTL_MOORE, SPEC_CLOCKED)["verdict"] == "PASS"
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="oracle needs iverilog")
-def test_phase_ambiguity_does_not_mask_independent_history_escalation():
-    res = G.repair(RTL_FALLING_EDGE_WITH_CONSTANT_HISTORY_RESET, SPEC_CLOCKED)
-    assert res["verdict"] == "ESCALATE", res
-    assert res["defect"] == "edge-history-reset-to-constant"
-    assert res["evidence"]["gate"] == "edge_history_reset_phantom_check"
+@pytest.mark.parametrize("ambiguous", [False, True])
+def test_phase_ambiguity_does_not_mask_independent_history_escalation(ambiguous):
+    # An explicit conflicting output clause is genuinely phase-ambiguous;
+    # a merely pre-edge/post-edge difference cannot cancel a clocked contract.
+    spec = SPEC_CLOCKED + ("\n\nOutput data_out is combinational." if ambiguous else "")
+    res = G.repair(RTL_FALLING_EDGE_WITH_CONSTANT_HISTORY_RESET, spec)
+    assert res["rtl"] is None and res["transform"] is None
+    if ambiguous:
+        assert res["verdict"] == "ESCALATE", res
+        assert res["defect"] == "edge-history-reset-to-constant"
+        assert res["evidence"]["gate"] == "edge_history_reset_phantom_check"
+    else:
+        assert res["verdict"] == "NO_REPAIR", res
+        assert res["evidence"]["one_cycle_late"] is False
+        assert "clocked output" in res["reason"] and "register" in res["reason"]
+        assert res["evidence"]["gate"] == "worked_example_sequence_oracle_check"
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="oracle needs iverilog")
@@ -198,7 +205,8 @@ def test_mismatch_that_is_not_a_one_cycle_shift_is_not_misrouted_as_alignment_re
     assert res["defect"] == "worked-example-mismatch-not-a-cycle-shift"
     assert res["evidence"]["one_cycle_late"] is False
     assert res["attempts"] == []
-    assert "would be a guess" in res["reason"]
+    assert ("clocked output" in res["reason"] and "cannot authorise" in res["reason"]
+            and "register" in res["reason"])
 
 
 @pytest.mark.skipif(not _HAS_IVERILOG, reason="oracle needs iverilog")

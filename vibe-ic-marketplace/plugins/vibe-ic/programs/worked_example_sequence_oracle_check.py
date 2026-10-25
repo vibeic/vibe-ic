@@ -19,23 +19,14 @@ WHAT it does — given the spec prose + the authored RTL:
   1. Parse a HIGH-CONFIDENCE worked example: `if <inport> is <bits>, ... <outport> is <bits>`
      with two EQUAL-LENGTH ≥3-bit [01] strings, where <inport>/<outport> are real 1-bit
      ports of the module (one input, one output) and a clk + reset port exist.
-  2. Build a tiny self-TB that releases reset and replays the disclosed trace AT THE
-     EXAMPLE'S OWN ALIGNMENT: in[i] is presented and out[i] is read with NO active clock
-     edge in between.  Prose about WHERE the output is assigned ("inside an always block",
-     "output generation") selects the TB's DRIVE style (negedge-driven, so the first vector
-     is present when reset releases) — it never moves the alignment the verdict is read at,
-     because the alignment is a property of the EXAMPLE, not of the code's shape.
-  3. iverilog/vvp it.  BLOCK (rc 1) on a mismatch at that alignment.  A second,
-     one-cycle-SHIFTED replay ("post-edge": out[i] read after the edge that consumed in[i])
-     is run for DIAGNOSTICS ONLY: when it passes while the aligned replay blocks, the RTL
-     is exactly one cycle late and `one_cycle_late` says so, which is what names the repair
-     direction for `gate_directed_rtl_repair`.  It is never an escape from the verdict.
-
-     WHY THE ALIGNED REPLAY IS NOT "MEALY-PREFERRING" (measured, 4 of 4 cells):
-       example 01010 -> 00101 (same-cycle):  Mealy RTL PASS,  registered RTL BLOCK
-       example 01010 -> 00010 (one late):    Mealy RTL BLOCK, registered RTL PASS
-     The aligned replay lets the disclosed TRACE decide whether out[i] may use in[i]; the
-     shifted replay hard-codes one cycle of latency and is wrong in 2 of those 4 cells.
+  2. Bind sampling to the PUBLIC OUTPUT contract. When the selected output is explicitly
+     generated in an edge-clocked always block, drive before the edge and sample after
+     its nonblocking updates. Keep the pre-edge replay as diagnostic evidence only;
+     an equal-length example or generic "same/end cycle" phrase cannot remove that
+     stated register boundary. Unbound/conflicting output timing is SKIP, never guessed.
+  3. Otherwise retain the same-cycle combinational replay. BLOCK (rc 1) on a mismatch
+     at the selected source alignment. A clocked-output mismatch cannot authorise
+     deregister_output: removing the register would violate the public contract.
 
 §4.05 SAFETY — the load-bearing half is the NEGATIVE no-leak: the gate SKIPs (rc 0, advisory)
 unless it can build an UNAMBIGUOUS oracle that drives EVERY relevant input. It BLOCKs ONLY when:
@@ -74,6 +65,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Optional
 
 
 def _strip(src: str) -> str:
@@ -153,17 +145,30 @@ def _find_clk_reset(ports):
     return clk, rst, pol
 
 
-def _requires_clocked_output(spec: str, outp: str) -> bool:
-    """True only for an explicit clocked-output implementation contract."""
-    text = re.sub(r"\s+", " ", spec).lower()
-    edge = "positive edge" in text or "posedge" in text
-    block = "always block" in text or "always_ff" in text
-    output_contract = (
-        "output generation" in text
-        or re.search(rf"\b(?:set|assign|update|drive)\s+{re.escape(outp.lower())}\b",
-                     text) is not None
-    )
-    return edge and block and output_contract
+def _requires_clocked_output(spec: str, outp: str) -> Optional[bool]:
+    """Bind the selected public output to its implementation paragraph, not DUT shape."""
+    port = re.escape(outp.lower())
+    clocked = combinational = unbound = False
+    comb_output = re.compile(
+        rf"\b(?:output\s+)?{port}\s+(?:is|must be|shall be)\s+(?:purely\s+)?combinational\b"
+        rf"|\bcombinational\s+(?:output\s+)?{port}\b")
+    for paragraph in re.split(r"\n\s*\n", spec):
+        text = re.sub(r"\s+", " ", paragraph).lower()
+        clauses = re.split(r"(?<=[.;])\s+", text)
+        combinational |= any(comb_output.search(clause) for clause in clauses)
+        text = " ".join(clause for clause in clauses if not comb_output.search(clause))
+        edge = "positive edge" in text or "posedge" in text
+        block = "always block" in text or "always_ff" in text
+        generation = "output generation" in text or bool(re.search(
+            rf"\b(?:set|assign|update|drive)\s+{port}\b", text))
+        if edge and block and generation:
+            if re.search(rf"\b{port}\b", text):
+                clocked = True
+            else:
+                unbound = True
+    if clocked and combinational:
+        return None
+    return True if clocked else False if combinational or not unbound else None
 
 
 def _build_tb(modname, clk, rst, pol, inp, outp, in_bits, out_bits,
@@ -325,9 +330,12 @@ def analyze(rtl: str, spec: str) -> dict:
     if not _iverilog():
         res["reason"] = "iverilog unavailable"; return res
     clocked_output = _requires_clocked_output(spec, outp)
+    if clocked_output is None:
+        res["reason"] = "selected output timing is unbound or conflicts in the public specification"
+        return res
     res.update(applicable=True, inport=inp, outport=outp, in_bits=in_bits,
                out_bits=out_bits, clk=clk, rst=rst, pol=pol, module=modname,
-               sampling_semantics=("index-aligned-replay-clocked-drive"
+               sampling_semantics=("clocked-output-post-edge"
                                    if clocked_output
                                    else "same-cycle-combinational"))
     with tempfile.TemporaryDirectory() as td:
@@ -351,21 +359,13 @@ def analyze(rtl: str, spec: str) -> dict:
     res["phase_verdicts"] = {
         phase: result["verdict"] for phase, result in phase_results.items()
     }
-    # THE VERDICT IS THE INDEX-ALIGNED REPLAY'S. `pre-edge` presents in[0..i] and
-    # reads out[i] with NO active clock edge in between, so it replays the example
-    # AT THE ALIGNMENT THE EXAMPLE STATES and lets the TRACE — not the harness —
-    # decide whether out[i] may use in[i]. `post-edge` reads out[i] after the edge
-    # that consumed in[i], i.e. it builds a one-cycle shift into the harness, so it
-    # answers a question the example did not ask. It is kept as DIAGNOSTIC evidence
-    # (it names the repair direction) and never as an escape from the verdict.
-    primary = phase_results["pre-edge"]
-    shifted = phase_results["post-edge"]
-    one_cycle_late = (primary["verdict"] == "BLOCK"
-                      and shifted["verdict"] == "PASS")
-    res["one_cycle_late"] = one_cycle_late
+    # The public edge-clocked output owns the sampling phase. A pre-edge
+    # difference is not evidence permitting removal of that declared register.
+    primary = phase_results["post-edge"]
+    res["one_cycle_late"] = False
     if primary["verdict"] == "SKIP":
         res.update(verdict="SKIP",
-                   reason=f"pre-edge sampling unavailable: "
+                   reason=f"post-edge sampling unavailable: "
                           f"{primary.get('reason', 'skip')}")
     elif primary["verdict"] == "PASS":
         res["verdict"] = "PASS"
@@ -374,12 +374,7 @@ def analyze(rtl: str, spec: str) -> dict:
         res["log"] = "\n".join(
             f"[{phase}] {result.get('log', '')}"
             for phase, result in phase_results.items())[:800]
-        res["reason"] = (
-            "the RTL reproduces the disclosed trace ONE CYCLE LATE (a registered "
-            "output where the example asserts it in the same cycle as its trigger)"
-            if one_cycle_late else
-            "the RTL does not reproduce the disclosed trace at the example's own "
-            "cycle alignment")
+        res["reason"] = "the RTL does not reproduce the disclosed trace after its declared output clock edge"
     return res
 
 

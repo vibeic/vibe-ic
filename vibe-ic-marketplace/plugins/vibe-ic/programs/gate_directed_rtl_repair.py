@@ -618,10 +618,11 @@ def repair(rtl: str, spec: str) -> dict:
                           "outport": before.get("outport"),
                           "in_bits": before.get("in_bits"),
                           "expected_out_bits": before.get("out_bits")},
-                reason="the one-cycle-shifted replay mismatches too, so the "
-                       "oracle does not establish a single-cycle alignment "
-                       "defect and the deregister_output transform would be a "
-                       "guess")
+                reason=("the public contract requires a clocked output; a mismatching "
+                        "trace cannot authorise removing its register"
+                        if before.get("sampling_semantics") == "clocked-output-post-edge" else
+                        "the one-cycle-shifted replay mismatches too, so the oracle does not "
+                        "establish a single-cycle alignment defect and deregister_output would guess"))
             return res
         res.update(defect="output-cycle-alignment",
                    evidence={"gate": "worked_example_sequence_oracle_check",
