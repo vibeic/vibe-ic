@@ -1780,17 +1780,42 @@ def _program_review_coverage_result(prompt_text: str, candidate: dict,
 
     rtl_text = _candidate_text(
         [Path(str(p)) for p in candidate.get("rtl_paths") or []])
-    test_parts = []
+    stations = {"user_prompt": prompt_text}
+    catalog = coverage.run(stations, rtl_text, None, None, True)
+    reports = []
     for challenge in challenges:
         path = Path(str(challenge.get("path") or ""))
         text = path.read_text(errors="replace")
         if _sha256_text(text) != challenge.get("sha256"):
             raise ValueError(
                 f"active verification challenge hash changed at {path}")
-        test_parts.append(text)
-    report = coverage.run(
-        {"user_prompt": prompt_text}, rtl_text,
-        "\n\n".join(test_parts), None, True)
+        reports.append((challenge["sha256"], coverage.run(
+            stations, rtl_text, text, None, True)))
+    # One complete standalone test must prove an obligation. Concatenating
+    # separately compiled tops invents duplicate bindings and can also join
+    # a drive from one test to an observer from another. Source eligibility
+    # remains the fixed catalog's, never the most permissive test's gloss.
+    by_test = [(sha, {_review_obligation_id(item): item
+                     for item in report.get("items") or []})
+               for sha, report in reports]
+    items, covered_by = [], {}
+    for source_item in catalog.get("items") or []:
+        item = dict(source_item)
+        oid = _review_obligation_id(item)
+        winner = next(((sha, rows[oid]) for sha, rows in by_test
+                       if rows.get(oid, {}).get("covered") is True), None)
+        item["covered"] = winner is not None
+        if winner:
+            covered_by[oid] = winner[0]
+            item["coverage_note"] = winner[1].get("coverage_note")
+        items.append(item)
+    report = {
+        "items": items, "checklist_items": len(items),
+        "covered": sum(item["covered"] for item in items),
+        "coverage_gaps": sum(not item["covered"] for item in items),
+        "blocking_gaps": sum(not item["covered"] and item.get("block_eligible", True)
+                             for item in items),
+    }
     gaps = []
     for item in report.get("items") or []:
         if item.get("covered") is not False \
@@ -1810,12 +1835,55 @@ def _program_review_coverage_result(prompt_text: str, candidate: dict,
         "actor": "programs/spec_coverage_check.py",
         "status": "PASS" if not gaps else "FAIL",
         "active_challenge_sha256": [c.get("sha256") for c in challenges],
+        "covered_by_challenge": covered_by,
         "checklist_items": report.get("checklist_items"),
         "covered": report.get("covered"),
         "coverage_gaps": report.get("coverage_gaps"),
         "blocking_gaps": report.get("blocking_gaps"),
         "blocking_gap_items": gaps,
     }
+
+
+def _refresh_retained_measurement_result(task: dict, result: dict,
+                                         collected: dict) -> bool:
+    """Re-derive metadata only for the exact validated later duplicate attempt.
+
+    The current collector has already read the measured candidate; no gate or
+    acceptance is manufactured. Changed evidence still reaches the unchanged
+    freshness/required-gate checks after this owner correction.
+    """
+    import flow_phase_attribution as fpa                  # noqa: PLC0415
+    try:
+        invocation = task["program_verification"]["runner_invocation"]
+        diagnostic = _stored_runner_diagnostics(invocation)
+        retained = (diagnostic or {}).get("retained_after_duplicate")
+        phase3 = (result.get("phases") or {}).get("phase3_verifying") or {}
+        if (not retained or diagnostic.get("reason") or not collected.get("ok")
+                or Path(task["project"]).resolve() != Path(invocation["project"]).resolve()
+                or _sha256_text(str(collected.get("completion") or "")) != task.get("rtl_sha256")
+                or phase3.get("status") != "NOT_MEASURED"
+                or phase3.get("reason") != "RUNNER_REPORT_NOT_FRESH"
+                or (result.get("runner_diagnostics") or {}).get("reason_class") != "RUNNER_REPORT_NOT_FRESH"):
+            return False
+        attempt = _read_json_regular(Path(retained["receipt_path"]))
+        if (result.get("runner_invocation") != attempt
+                or hashlib.sha256(Path(retained["receipt_path"]).read_bytes()).hexdigest()
+                != retained["receipt_sha256"]):
+            return False
+        phases = fpa.attribute(
+            Path(task["project"]), routing=result.get("routing_verdict") or {},
+            entry=result.get("entry"), evidence=result.get("evidence"),
+            exit_step=result.get("exit"), artefact_collected=True)
+        first = result.get("program_first_phases") or {}
+        for key in ("phase2_solving", "phase4_debugging"):
+            if isinstance(first.get(key), dict):
+                phases[key] = dict(first[key])
+        result.update(phases=phases, runner_invocation=invocation,
+                      runner_diagnostics=diagnostic, rc=invocation["rc"],
+                      ok=True, candidate_ready=True)
+        return True
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def _rtl_files(project: Path) -> list[Path]:
@@ -9432,6 +9500,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                            "awaiting_ai_review": True,
                            "ai_repair_required": True})
             continue
+        if _refresh_retained_measurement_result(task, result, got):
+            _attach_ai_review_attribution(result, verdict, task)
         if task.get("candidate_origin") == "AI_REPAIR":
             recovery = _verified_program_recovery(task, result, verdict)
             enhancement_by_key[(
