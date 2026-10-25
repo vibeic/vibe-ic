@@ -2023,7 +2023,7 @@ class Sites:
         return out
 
     def clear(self, box: Sequence[int], layers: Sequence[str],
-              friendly, net: Optional[str] = None) -> bool:
+              friendly, net: Optional[str] = None, *, island: bool = False) -> bool:
         """True when a box on `layers` keeps the deck's space from every
         conductor but `friendly`, and touches none of them.
 
@@ -2045,10 +2045,26 @@ class Sites:
                     merged.add(r["lcomp"])
             for r in rows:
                 if "lcomp" not in r:
-                    # this emitter's own paint. One conductor is one net
-                    # here, so a same-net rectangle is skipped and every
-                    # other one is an obstacle like any device's.
+                    # Electrical clearance may join its own net. An island
+                    # also has to keep cut spacing and avoid landing notches;
+                    # a pin's enclosing search box is not its actual paint.
                     if net is not None and r["net"] == net:
+                        b = r["box"]
+                        dx = max(b[0] - box[2], box[0] - b[2], 0)
+                        dy = max(b[1] - box[3], box[1] - b[3], 0)
+                        # Disjoint same-net landings can form a forbidden
+                        # notch even when a thinner wire connects them.
+                        if island and _METAL_RE.match(layer) and (dx > 0 or dy > 0) \
+                                and dx < s and dy < s:
+                            return False
+                        # Cut spacing still applies within one electrical
+                        # net. Reusing an existing cut footprint is harmless;
+                        # enlarging/adding a nearby cut needs its deck space.
+                        if island and _VIA_RE.match(layer):
+                            contained = (b[0] <= box[0] and b[1] <= box[1]
+                                         and box[2] <= b[2] and box[3] <= b[3])
+                            if not contained and dx < s and dy < s:
+                                return False
                         continue
                     b = r["box"]
                     dx = max(b[0] - box[2], box[0] - b[2], 0)
@@ -2120,7 +2136,8 @@ def _island_candidates(span: int):
 
 def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                top: int = 3, sites: Optional["Sites"] = None,
-               friendly=None, dev: Optional[dict] = None) -> Tuple[int, int]:
+               friendly=None, dev: Optional[dict] = None,
+               departure=None) -> Tuple[int, int]:
     """Carry a terminal from the metal the gencell delivered it on to the
     routing layer, and give every cut the metal the deck demands around it.
 
@@ -2143,6 +2160,13 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
     leaves it starts where it is rather than where it was asked for."""
     lo, hi = min(level, top), max(level, top)
     if lo == hi:
+        if departure is not None and sites is not None and any(
+                not sites.clear(b, [layer], friendly, net)
+                for layer, b in departure(x, y)):
+            plan.deviate(dev or {}, "via_island_clearance_lambda",
+                         geo.metal_space(lo), 0,
+                         "direct terminal departure composite is not clear; "
+                         "DRAWN and recorded for native DRC and the short audit")
         return x, y
     metals = list(range(lo, hi + 1))
     vias = list(range(lo, hi))
@@ -2197,9 +2221,13 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
         for (ax, ay, p) in shapes:
             for (dx, dy) in _island_candidates(ISLAND_SEARCH_LAMBDA):
                 box = (x + dx - ax, y + dy - ay, x + dx + ax, y + dy + ay)
-                if not sites.clear(box, layers, friendly, net):
+                if not sites.clear(box, layers, friendly, net, island=True):
                     continue
                 if not sites.touches(box, term_layer, friendly):
+                    continue
+                if departure is not None and any(
+                        not sites.clear(b, [layer], friendly, net)
+                        for layer, b in departure(x + dx, y + dy)):
                     continue
                 placed = (x + dx, y + dy, ax, ay, p)
                 break
@@ -2214,7 +2242,8 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                          f"(smallest {2 * shapes[-1][0]}x{2 * shapes[-1][1]} "
                          f"lambda) clear of the neighbouring device geometry "
                          f"while still overlapping this terminal's own "
-                         f"metal; DRAWN at the terminal and recorded, never "
+                         f"metal and clearing the complete departure composite; "
+                         f"DRAWN at the terminal and recorded, never "
                          f"moved off it")
         else:
             cx, cy, hx, hy, ph = placed
@@ -2239,6 +2268,14 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     m1_space = geo.default_space
     hw2 = max(geo.wire[2] // 2, 1)
     hw3 = max(geo.wire[3] // 2, 1)
+    local_width = geo.rules["metal_width_um"].get(3)
+    # The preferred global wire can be wider than the separation of two
+    # native terminal landings. Keep the near-device jog and escape at the
+    # deck's own legal width; the outside lane/trunk keeps its preferred
+    # width. High-plane and multi-terminal straps are unchanged.
+    local_hw3 = (max(1, int(math.ceil(local_width * geo.lam / 2)))
+                 if local_width else hw3)
+    plan.local_escape_width_um = 2 * local_hw3 / geo.lam
     min_gap = 4 * pitch
 
     # ── nets and their rails ──────────────────────────────────────────
@@ -2544,6 +2581,8 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     for d in per_dev:
         for g in d["groups"]:
             net, ey, lane = g["net"], g["abs_escape_y"], g["lane_x"]
+            escape_hw3 = (local_hw3 if not g["strapped"] and g["level"] <= ROUTE_LEVEL
+                          else hw3)
             tap_contact = g.get("body_tap_contact")
             tap_metal_contact = g.get("body_tap_metal_contact")
             tap_local = g.get("body_tap_local")
@@ -2642,15 +2681,31 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                                     dev=d["dev"])
                 joint = cx
                 if cy != ey:
-                    plan.paint(net, "metal3", cx - hw3, min(cy, ey) - hw3,
-                               cx + hw3, max(cy, ey) + hw3)
+                    plan.paint(net, "metal3", cx - escape_hw3, min(cy, ey) - escape_hw3,
+                               cx + escape_hw3, max(cy, ey) + escape_hw3)
             else:
                 lx, ly, level = g["abs_labels"][0]
                 fr = friendly_conductor(d["rows"], f"metal{level}", lx, ly,
                                         reach=geo.default_space)
+                def departure(cx, cy):
+                    # Validate the exact geometry the caller paints below,
+                    # including the displaced landing's departure jog.
+                    boxes = []
+                    if cy != ey:
+                        boxes.append(("metal3", (cx - escape_hw3,
+                            min(cy, ey) - escape_hw3, cx + escape_hw3,
+                            max(cy, ey) + escape_hw3)))
+                    boxes.append(("metal3", (min(cx, lane) - escape_hw3,
+                        ey - escape_hw3, max(cx, lane) + escape_hw3,
+                        ey + escape_hw3)))
+                    ry = row_rails[d["row"]][net]
+                    boxes.append(("metal3", (lane - hw3, min(ry, ey),
+                                             lane + hw3, max(ry, ey))))
+                    return boxes
                 cx, cy = _via_stack(plan, net, lx, ly, level, geo,
                                     top=ROUTE_LEVEL,
-                                    sites=sites, friendly=fr, dev=d["dev"])
+                                    sites=sites, friendly=fr, dev=d["dev"],
+                                    departure=departure)
                 joint = cx
                 if cy != ey:
                     # a metal3 jog back to the escape height. Metal3 is the
@@ -2658,11 +2713,11 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                     # jog is free of the geometry the island had to leave —
                     # and keeping the escape at its own height is what stops
                     # one moved island from re-ordering every lane.
-                    plan.paint(net, "metal3", cx - hw3, min(cy, ey) - hw3,
-                               cx + hw3, max(cy, ey) + hw3)
+                    plan.paint(net, "metal3", cx - escape_hw3, min(cy, ey) - escape_hw3,
+                               cx + escape_hw3, max(cy, ey) + escape_hw3)
             # across to the lane on metal3, then straight down to the rail
-            plan.paint(net, "metal3", min(joint, lane) - hw3, ey - hw3,
-                       max(joint, lane) + hw3, ey + hw3)
+            plan.paint(net, "metal3", min(joint, lane) - escape_hw3, ey - escape_hw3,
+                       max(joint, lane) + escape_hw3, ey + escape_hw3)
             ry = row_rails[d["row"]][net]
             plan.paint(net, "metal3", lane - hw3, ry, lane + hw3, ey)
             _via_stack(plan, net, lane, ry, 2, geo, top=3,
@@ -3569,6 +3624,7 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
         snapshot.write_text(facts.cell_lef_text, encoding="utf-8")
         pins_basis["core_pg"]["snapshot"] = str(snapshot.relative_to(project))
     plan = build_plan(devs, ports, cells, facts, geo, tap_clear, pin_spec)
+    report["generator_geometry_um"]["local_metal3_escape_width"] = plan.local_escape_width_um
     report["placement_rows"] = plan.placement_rows
     clearance_deviations(plan, geo, devs)
     # A GEOMETRY THE PDK'S GENCELL CLAMPED. Recorded like every other

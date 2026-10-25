@@ -1115,3 +1115,95 @@ def test_device_footprint_wraps_without_changing_device_population(tmp_path, mon
     assert doc['blocks']['blk']['devices'] == 240
     assert len(plan.placement_rows) > 1
     assert not A5E.net_shorts(plan)
+
+
+def test_native_inverter_terminal_escape_does_not_short_gate_to_supply():
+    """Captured native contact geometry reproduces the gate/supply M3 short."""
+    import ast
+    from copy import deepcopy
+    data = json.loads((Path(__file__).parent / 'fixtures/a5_native_contact_escape/inverter.json').read_text())
+    tech = data['technology_text']
+    facts = A5E.PdkFacts()
+    facts.layers = A5L.layer_identity(tech, 'captured native technology')
+    facts.layers.contact_heads = [
+        (t[0], tuple(t[1:])) for line in A5L._tech_sections(tech).get('contact', [])
+        if len(t := line.split()) >= 3 and t[0] != 'stackable']
+    facts.gencells = data['gencells']
+    devs = [
+        {'name': 'mp', 'model': 'sg13_lv_pmos', 'nets': ['q', 'g', 'vp', 'vp'],
+         'pars': {'w': 1., 'l': .5}, 'class': 'mosfet'},
+        {'name': 'mn', 'model': 'sg13_lv_nmos', 'nets': ['q', 'g', 'vn', 'vn'],
+         'pars': {'w': .5, 'l': .5}, 'class': 'mosfet'}]
+    cells = {}
+    for dev, text, delta in zip(devs, data['cells_mag'], data['deltas']):
+        cell = A5E.parse_cell(text, facts.layers)
+        cell['delta'] = delta
+        cells[A5E.config_key(dev)] = cell
+    rules = {key: {ast.literal_eval(k): v for k, v in values.items()}
+             for key, values in data['routing_rules'].items()}
+    geo = A5E.Geo(rules, .18, 100, .6, .35)
+    plan = A5E.build_plan(devs, ['q', 'g', 'vp', 'vn'], cells, facts, geo, 88)
+    assert len(A5E.net_shorts(plan)) == 0
+    assert geo.wire[3] == 60, 'the preferred outer lane width is unchanged'
+    # An incompatible minimum is not silently ignored to turn this case green.
+    strict = deepcopy(rules)
+    strict['metal_width_um'][3] = .6
+    blocked = A5E.build_plan(devs, ['q', 'g', 'vp', 'vn'], cells, facts,
+                             A5E.Geo(strict, .18, 100, .6, .35), 88)
+    assert A5E.net_shorts(blocked)
+
+
+def test_same_net_vias_keep_native_cut_spacing_but_allow_exact_reuse():
+    rules = {'metal_space_um': {}, 'metal_width_um': {}, 'metal_area_um2': {},
+             'via_width_um': {2: .2}, 'via_space_um': {2: .21},
+             'via_surround_um': {}, 'via_surround_dir_um': {}}
+    geo = A5E.Geo(rules, .18, 100, .6, .35)
+    sites = A5E.Sites([{'net': 'vn', 'layer': 'via2', 'box': (0, 0, 20, 20)}], geo)
+    assert sites.clear((25, 0, 45, 20), ['via2'], None, 'vn', island=True) is False
+    assert sites.clear((50, 0, 70, 20), ['via2'], None, 'vn', island=True) is True
+    assert sites.clear((0, 0, 20, 20), ['via2'], None, 'vn', island=True) is True
+
+
+def test_same_net_landing_gap_is_not_a_spacing_waiver():
+    rules = {'metal_space_um': {3: .21}, 'metal_width_um': {}, 'metal_area_um2': {},
+             'via_width_um': {}, 'via_space_um': {},
+             'via_surround_um': {}, 'via_surround_dir_um': {}}
+    geo = A5E.Geo(rules, .18, 100, .6, .35)
+    sites = A5E.Sites([
+        {'net': 'q', 'layer': 'metal3', 'box': (0, 0, 80, 72)},
+        {'net': 'q', 'layer': 'metal3', 'box': (0, 10, 300, 60)}], geo)
+    assert sites.clear((100, 0, 180, 72), ['metal3'], None, 'q', island=True) is False
+    assert sites.clear((110, 0, 190, 72), ['metal3'], None, 'q', island=True) is True
+    assert sites.clear((70, 0, 150, 72), ['metal3'], None, 'q', island=True) is True
+
+
+def test_via_candidate_clears_the_complete_departure_not_only_the_island():
+    rules = {'metal_space_um': {2: .21, 3: .21},
+             'metal_width_um': {2: .24, 3: .24},
+             'metal_area_um2': {2: .144, 3: .144},
+             'via_width_um': {2: .2}, 'via_space_um': {2: .21},
+             'via_surround_um': {}, 'via_surround_dir_um': {(2, 2): .045, (2, 3): .045}}
+    geo = A5E.Geo(rules, .18, 100, .6, .1)
+    def context():
+        plan = A5E.Plan()
+        plan.paint('supply', 'metal3', 0, 0, 300, 60)
+        plan.paint('signal', 'metal2', -200, 60, 200, 250)
+        sites = A5E.Sites(plan.shapes, geo)
+        plan.sites = sites
+        return plan, sites
+    def departure(x, y):
+        half = geo.wire[3] // 2
+        return [('metal3', (x - half, min(y, 148) - half,
+                            x + half, max(y, 148) + half))]
+    mutant, old_sites = context()
+    x, y = A5E._via_stack(mutant, 'signal', 0, 84, 2, geo, top=3, sites=old_sites)
+    assert not all(old_sites.clear(box, [layer], None, 'signal')
+                   for layer, box in departure(x, y))
+    fixed, sites = context()
+    x, y = A5E._via_stack(fixed, 'signal', 0, 84, 2, geo, top=3,
+                          sites=sites, departure=departure)
+    assert all(sites.clear(box, [layer], None, 'signal')
+               for layer, box in departure(x, y))
+    for layer, box in departure(x, y):
+        fixed.paint('signal', layer, *box)
+    assert A5E.net_shorts(fixed) == []

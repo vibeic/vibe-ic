@@ -1,0 +1,170 @@
+{
+  "provenance": "Two native open-PDK MOS PCells arranged as a generic inverter; no ADC source/netlist is included. Captures terminal access geometry and the native deck facts.",
+  "technology_text": "########################################################################\n#\n# Copyright 2025 IHP PDK Authors\n#\n# Licensed under the Apache License, Version 2.0 (the \"License\");\n# you may not use this file except in compliance with the License.\n# You may obtain a copy of the License at\n#\n#    https://www.apache.org/licenses/LICENSE-2.0\n#\n# Unless required by applicable law or agreed to in writing, software\n# distributed under the License is distributed on an \"AS IS\" BASIS,\n# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.\n# See the License for the specific language governing permissions and\n# limitations under the License.\n#\n########################################################################\n\n#------------------------------------------------------------------------\n# This file is an Open Source foundry process describing the IHP SG13G2\n# BiCMOS 0.13um fabrication process.\n#\n# Created by Tim Edwards, Open Circuit Design, LLC, for IHP GmbH\n#------------------------------------------------------------------------\n\ntech\n  format 35\n  ihp-sg13g2\nend\n\nversion\n version 1.0.1\n description \"IHP SG13G2: Open Source rules and DRC\"\n requires magic-8.3.617\nend\n\n#------------------------------------------------------------------------\n# Status Feb. 26, 2026: Version 1.0.0 (beta): Development release\n# Status Mar. 10, 2026: Version 1.0.1 (beta): Development release\n#------------------------------------------------------------------------\n\n#------------------------------------------------------------------------\n# Known device types\n#------------------------------------------------------------------------\n# device name\t\t\tmagic ID layer\tdescription\n#------------------------------------------------------------------------\n# cap_cmim\t\t\tmimcap\t\tMiM cap\n# cap_rfcmim\t\t\t\t\tRF model for MiM cap\n#\n# dantenna\t\t\tndiode\t\tndiff to psub diode (marked device)\n# dpantenna\t\t\tpdiode\t\tpdiff to nwell diode (marked device)\n# schottky\t\t\tschottky\tSchottky diode\n# isolbox\t\t\tisolbox\t\tparasitic diode model of deep nwell\n#\n# ptap1\t\t\t\t\t\tsubstrate tie resistance\n# ntap1\t\t\t\t\t\twell tie resistance\n# rsil\t\t\t \tnres\t\tSalicided n+ poly\n# rppd\t\t\t\tpres\t\tUnsalicided p+ poly\n# rhigh\t\t\t\txres\t\tUnsalicided n poly\n#\n# npn13g2\t\t\tnpn\t\tNPN W=0.07um L=0.9um\n# npn13g2l\t\t\tnpn\t\tNPN W=0.07um L=1.0-2.5um\n# npn13g2v\t\t\tnpn\t\tHVNPN W=0.12um L=1.0-5.0um\n# pnpMPA\t\t\tpnp\n#\n# sg13_hv_nmos\t\t\thvnfet\t\tThick-oxide nFET\n# sg13_hv_pmos\t\t\thvpfet\t\tThick-oxide pFET\n# sg13_lv_nmos\t\t\tnfet\t\tThin-oxide nFET\n# sg13_lv_pmos\t\t\tpfet\t\tThin-oxide pFET\n# nmosi\t\t\t\tnfet\t\tThin-oxide nFET in deep nwell pwell\n# nmosiHV\t\t\thvnfet\t\tThick-oxide nFET in deep nwell pwell\n# nmoscl_2\t\t\thvnfetesd\tExtended-drain ESD thick-oxide nFET\n# nmoscl_4\t\t\thvnfetesd\tExtended-drain ESD thick-oxide nFET\n# scr1\t\t\t\thvnfetesd\tSilicon-controlled rectifier\n# \n# Rparasitic\t\t\t\t\tParasitic resistance, not used\n# cparasitic\t\t\t\t\tParasitic capacitances, not used\n#------------------------------------------------------------------------\n\n#-----------------------------------------------------------------------\n# Tile planes\n#-----------------------------------------------------------------------\n\nplanes\n  dwell,dw\n  well,w\n  active,a\n  poly,po\n  metal1,m1\n  metal2,m2\n  metal3,m3\n  metal4,m4\n  metal5,m5\n  cap1,c1\n  metal6,m6\n  metal7,m7\n  passiv,p\n  comment,c\nend\n\n#-----------------------------------------------------------------------\n# Tile types\n#-----------------------------------------------------------------------\n\ntypes\n# Deep nwell\n  dwell dnwell,dnw\n  dwell digisub\n\n# Wells\n  well nwell,nw\n  well pwell,pw\n  well pblock,pblk\n -well obswell\n  well pbase,npn\n  well nbase,pnp\n  well isolbox\n\n# Transistors\n  active nmos,ntransistor,nfet\n  active pmos,ptransistor,pfet\n  active hvnmos,hvntransistor,hvnfet\n  active hvpmos,hvptransistor,hvpfet\n -active hvnmosesd,hvntransistoresd,hvnfetesd\n -active hvpmosesd,hvptransistoresd,hvpfetesd\n  active varactor,varact,var\n  active varcontact,varc\n  active pvaractor,pvaract,pvar\n -active sealcont,sealc\n\n# Diffusions\n -active difffill\n  active ndiff,ndiffusion,ndif\n  active pdiff,pdiffusion,pdif\n  active pbasec,pbcontact,pbc\n  active nemitter,nemit,ne\n  active nemitterc,nemitc,necontact,nec\n  active gemitterc,gemitc,gecontact,gec\n  active hvnemitter,hvnemit,hvne\n  active hvnemitterc,hvnemitc,hvnecontact,hvnec\n  active hvndiff,hvndiffusion,hvndif\n  active hvpdiff,hvpdiffusion,hvpdif\n  active ndiffc,ndcontact,ndc\n  active pdiffc,pdcontact,pdc\n  active hvndiffc,hvndcontact,hvndc\n  active hvpdiffc,hvpdcontact,hvpdc\n  active psubdiff,psubstratepdiff,ppdiff,ppd,psd\n  active nsubdiff,nsubstratendiff,nndiff,nnd,nsd\n  active ptapdiff,ptap\n  active ntapdiff,ntap\n  active hvpsubdiff,hvpsubstratepdiff,hvppdiff,hvppd,hvpsd\n  active hvnsubdiff,hvnsubstratendiff,hvnndiff,hvnnd,hvnsd\n  active hvptapdiff,hvptap\n  active hvntapdiff,hvntap\n  active psubdiffcont,psubstratepcontact,psc\n  active nsubdiffcont,nsubstratencontact,nsc\n  active ptapdiffcont,ptapc\n  active ntapdiffcont,ntapc\n  active hvpsubdiffcont,hvpsubstratepcontact,hvpsc\n  active hvnsubdiffcont,hvnsubstratencontact,hvnsc\n  active hvptapdiffcont,hvptapc\n  active hvntapdiffcont,hvntapc\n -active obsactive\n\n# Poly\n  active poly,p,polysilicon\n  active polycont,pc,pcontact,polycut,polyc\n -poly obspoly\n -poly polyfill\n\n# Resistors\n  active npolyres,nres,rsil\n  active ppolyres,pres,rppd\n  active xpolyres,xres,rhigh\n  # Used in scr1, nmoscl_2, and nmoscl_4\n  active hvndiffres,hvrnd,hvrndiff\n  # Used in ptapSB\n  active isodiffres,risodiff,riso\n  # Used in scr1\n  active hvisodiffres,hvrisodiff,hvriso\n\n# Diodes\n  active pdiode,pdi\n  active ndiode,ndi\n  active pdiodecont,pdiodec,pdic\n  active ndiodecont,ndiodec,ndic\n  active schottky,sdi\n  active schottkycont,schottkyc,sdic\n\n# Metal 1\n  metal1 metal1,m1,met1\n  metal1 rmetal1,rm1,rmet1\n  metal1 via1,m2contact,m2cut,m2c,via,v,v1\n -metal1 obsm1\n -metal1 m1fill\n -metal1 iprobe\n -metal1 diffprobe\n -metal1 sealvia1,sealv1\n\n# Metal 2\n  metal2 metal2,m2,met2\n  metal2 rmetal2,rm2,rmet2\n  metal2 via2,m3contact,m3cut,m3c,v2\n -metal2 obsm2\n -metal2 m2fill\n -metal2 sealvia2,sealv2\n\n# Metal 3\n  metal3 metal3,m3,met3\n  metal3 rmetal3,rm3,rmet3\n -metal3 obsm3\n  metal3 via3,v3\n -metal3 m3fill\n -metal3 sealvia3,sealv3\n\n# Metal 4\n  metal4 metal4,m4,met4\n  metal4 rmetal4,rm4,rmet4\n -metal4 obsm4\n  metal4 via4,v4\n -metal4 m4fill\n -metal4 sealvia4,sealv4\n\n# Metal 5\n  metal5 metal5,m5,met5\n  metal5 rm5,rmetal5,rmet5\n -metal5 obsm5\n  metal5 via5,v5\n -metal5 m5fill\n -metal5 sealvia5,sealv5\n\n# MiM cap\n  cap1 mimcap,mim,capm\n  cap1 mimcapcontact,mimcapc,mimcc,capmc\n\n# Metal 6\n  metal6 metal6,m6,met6\n  metal6 rm6,rmetal6,rmet6\n -metal6 obsm6\n  metal6 via6,v6\n -metal6 m6fill\n -metal6 sealvia6,sealv6\n\n# Metal 7\n  metal7 metal7,m7,met7\n  metal7 rm7,rmetal7,rmet7\n -metal7 obsm7\n -metal7 m7fill\n\n# Passivation cut\n -passiv pillar,cu\n -passiv solder,sbump\n -passiv seal\n  passiv glass\n\n# Miscellaneous\n  comment fillblock\n  comment thruvia,tsv\n  comment inductor\n  comment comment\n\nend\n\n#-----------------------------------------------------------------------\n# Magic contact types\n#-----------------------------------------------------------------------\n\ncontact\n  pc       poly       metal1\n  ndc      ndiff      metal1\n  pdc      pdiff      metal1\n  nsc      nsd        metal1\n  psc      psd        metal1\n  ndic     ndiode     metal1\n  pdic     pdiode     metal1\n  sdic     schottky   metal1\n  nec\t   nemitter   metal1\n  ntapc\t   ntap\t      metal1\n  ptapc\t   ptap\t      metal1\n  varc     varact     metal1\n\n  hvndc    hvndiff   metal1\n  hvpdc    hvpdiff   metal1\n  hvnsc    hvnsd     metal1\n  hvpsc    hvpsd     metal1\n  hvntapc  hvntap    metal1\n  hvptapc  hvptap    metal1\n  hvnec\t   hvnemitter metal1\n\n  via1   metal1 metal2\n  via2   metal2 metal3\n  via3   metal3 metal4\n  via4   metal4 metal5\n  via5   metal5 metal6\n  via6   metal6 metal7\n\n  mimcc  mimcap metal6\n\n  stackable\nend\n\n#-----------------------------------------------------------------------\n# Layer aliases\n#-----------------------------------------------------------------------\n\naliases\n\n  allwellplane     nwell,pwell,pblock,obswell,pbase,nbase,isolbox\n  allnwell\t   nwell,obswell,pnp,isolbox\n\n  allnfets\t   nfet,hvnfet,hvnfetesd\n  allpfets\t   pfet,hvpfet,hvpfetesd\n  allfets\t   allnfets,allpfets,*var,pvar\n  allfetsstd\t   nfet,hvnfet,hvnfetesd,pfet,hvpfet,hvpfetesd\n\n  allnactivenonfet *ndiff,*nsd,*ndiode,*hvndiff,*hvnsd,hvndiffres,*ntap,*hvntap\n  allnactive\t   allnactivenonfet,allnfets\n  allnactivenontap *ndiff,*ndiode,*hvndiff,allnfets\n  allnactivetap\t   *nsd,*hvnsd,*var,*ntap,*hvntap\n\n  allpactivenonfet *pdiff,*psd,*pdiode,*hvpdiff,*hvpsd,*ptap,*hvptap\n  allpactive\t   allpactivenonfet,allpfets\n  allpactivenontap *pdiff,*pdiode,*hvpdiff,allpfets\n  allpactivetap    *psd,*hvpsd,*ptap,*hvptap\n\n  allactivenonfet  allnactivenonfet,allpactivenonfet\n  allactive\t   allactivenonfet,allfets\n\n  allndifflv       *ndif,*nsd,*ndiode,nfet,*ntap,*var\n  allpdifflv       *pdif,*psd,*pdiode,pfet,*ptap,pvar\n  alldifflv        allndifflv,allpdifflv\n  allndifflvnonfet *ndif,*nsd,*ndiode,*ntap\n  allpdifflvnonfet *pdif,*psd,*pdiode,*ptap\n  alldifflvnonfet  allndifflvnonfet,allpdifflvnonfet\n\n  allndiffhv       *hvndif,*hvnsd,hvnfet,hvnfetesd,hvndiffres,*hvntap\n  allpdiffhv       *hvpdif,*hvpsd,hvpfet,hvpfetesd,*hvptap\n  alldiffhv        allndiffhv,allpdiffhv\n  allndiffhvnontap *hvndif,hvnfet,hvnfetesd\n  allpdiffhvnontap *hvpdif,hvpfet,hvpfetesd\n  alldiffhvnontap  allndiffhvnontap,allpdiffhvnontap\n  allndiffhvnonfet *hvndif,*hvnsd,hvndiffres,*hvntap\n  allpdiffhvnonfet *hvpdif,*hvpsd,*hvptap\n  alldiffhvnonfet  allndiffhvnonfet,allpdiffhvnonfet\n\n  alldiffnonfet\t   alldifflvnonfet,alldiffhvnonfet\n  alldiffnonvar\t   alldiffhv,alldifflvnonfet,nfet,pfet\n  alldiff\t   alldifflv,alldiffhv\n\n  allpolyres\t   pres,nres,xres\n  allpolynonfet\t   *poly,allpolyres\n  allpolynonres\t   *poly,allfets\n\n  allpoly\t   allpolynonfet,allfets\n  allpolynoncap\t   *poly,allfets,allpolyres\n\n  allndiffcontlv   ndc,nsc,ndic,ntapc\n  allpdiffcontlv   pdc,psc,pdic,ptapc\n  allndiffconthv   hvndc,hvnsc,hvntapc\n  allpdiffconthv   hvpdc,hvpsc,hvptapc\n  allndiffcont\t   allndiffcontlv,allndiffconthv\n  allpdiffcont\t   allpdiffcontlv,allpdiffconthv\n  alldiffcontlv\t   allndiffcontlv,allpdiffcontlv\n  alldiffconthv\t   allndiffconthv,allpdiffconthv\n  alldiffcont\t   alldiffcontlv,alldiffconthv\n\n  allcont\talldiffcont,pc,varc\n\n  allres\tallpolyres,hvndiffres,isodiffres,hvisodiffres\n\n  allm1\t\t*m1,rm1,iprobe\n  allm2\t\t*m2,rm2\n  allm3\t\t*m3,rm3\n  allm4\t   \t*m4,rm4\n  allm5\t   \t*m5,rm5\n  allm6\t   \t*m6,rm6\n  allm7\t   \t*m7,rm7\n\n  psub\t\tpwell\n\n  obstypes\tobswell,obsactive,obspoly,obsm1,obsm2,obsm3,obsm4,obsm5,obsm6,obsm7\n  blocktypes\tfillblock\n  \nend\n\n#-----------------------------------------------------------------------\n# Layer drawing styles\n#-----------------------------------------------------------------------\n\nstyles\n styletype mos\n  dnwell    cwell\n  digisub   subcircuit\n  nwell     nwell\n  isolbox   nwell\tsubstrate_field_implant\n  pwell\t    pwell\n  pblock    hvpdiff_mask\n  ndiff     ndiffusion\n  difffill  ndiffusion\n  pdiff     pdiffusion\n  nsd       ndiff_in_nwell\n  psd       pdiff_in_pwell\n  ntap      ndiff_in_nwell\n  ptap      pdiff_in_pwell\n  nfet      ntransistor    ntransistor_stripes\n  pfet      ptransistor    ptransistor_stripes\n  ndc       ndiffusion     metal1  contact_X'es\n  pdc       pdiffusion     metal1  contact_X'es\n  nsc       ndiff_in_nwell metal1  contact_X'es\n  psc       pdiff_in_pwell metal1  contact_X'es\n  ntapc     ndiff_in_nwell metal1  contact_X'es\n  ptapc     pdiff_in_pwell metal1  contact_X'es\n  sealc     pdiff_in_pwell metal1  contact_X'es\n\n  pnp\t    nwell ntransistor_stripes\n  npn\t    pwell ptransistor_stripes\n  nemitter  emitter\n  hvnemitter  emitter  hvndiff_mask\n  pbc\t    pbase metal1 contact_X'es\n  nec\t    emitter metal1 contact_X'es\n  gec\t    emitter metal1 contact_X'es\n  hvnec\t    emitter hvndiff_mask metal1 contact_X'es\n  hvndiffres  ndiffusion ndop_stripes hvndiff_mask\n  riso\t    ndiff_in_nwell pdiff_in_pwell substrate_field_implant\n  hvriso    ndiff_in_nwell pdiff_in_pwell substrate_field_implant hvndiff_mask\n\n  hvndiff   ndiffusion     hvndiff_mask\n  hvpdiff   pdiffusion     hvpdiff_mask\n  hvnsd     ndiff_in_nwell hvndiff_mask\n  hvpsd     pdiff_in_pwell hvpdiff_mask\n  hvntap    ndiff_in_nwell hvndiff_mask\n  hvptap    pdiff_in_pwell hvpdiff_mask\n  hvnfet    ntransistor    ntransistor_stripes hvndiff_mask\n  hvnfetesd ntransistor    ntransistor_stripes hvndiff_mask\n  hvpfet    ptransistor    ptransistor_stripes\n  hvpfetesd ptransistor    ptransistor_stripes\n  hvndc     ndiffusion     metal1  contact_X'es hvndiff_mask\n  hvpdc     pdiffusion     metal1  contact_X'es hvpdiff_mask\n  hvnsc     ndiff_in_nwell metal1  contact_X'es hvndiff_mask\n  hvpsc     pdiff_in_pwell metal1  contact_X'es hvpdiff_mask\n  hvntapc   ndiff_in_nwell metal1  contact_X'es hvndiff_mask\n  hvptapc   pdiff_in_pwell metal1  contact_X'es hvpdiff_mask\n  var\t    polysilicon\t   ndiff_in_nwell\n  pvar\t    polysilicon\t   pdiff_in_pwell\n  varc      polysilicon\t   metal1  ndiff_in_nwell contact_X'es\n\n  poly      polysilicon \n  polyfill  polysilicon\n  pc        polysilicon    metal1  contact_X'es\n  nres\t    polysilicon\t   poly_resist_stripes\n  pres      poly_resist    silicide_block\n  xres      poly_resist\t   hvpdiff_mask\n\n  pdiode    pdiffusion     pselect2\n  ndiode    ndiffusion     nselect2\n  pdiodec   pdiffusion     pselect2 metal1 contact_X'es\n  ndiodec   ndiffusion     nselect2 metal1 contact_X'es\n  schottky  pdiffusion\t   pselect\n  sdic\t    pdiffusion\t   pselect contact_X'es\n\n  metal1    metal1\n  m1fill    metal1\n  iprobe    metal1\t   electrode\n  diffprobe metal1\t   electrode\n  rm1       metal1         poly_resist_stripes\n  obsm1     metal1\n  m2c       metal1         metal2  via1arrow\n  sealv1    metal1\t   metal2  via1arrow\n\n  metal2    metal2\n  m2fill    metal2\n  rm2       metal2         poly_resist_stripes\n  obsm2     metal2\n  m3c       metal2         metal3  via2arrow\n  sealv2    metal2\t   metal3  via2arrow\n\n  metal3    metal3\n  m3fill    metal3\n  rm3       metal3         poly_resist_stripes\n  obsm3     metal3\n  via3      metal3         metal4  via3alt\n  sealv3    metal3\t   metal4  via3alt\n\n  metal4    metal4\n  m4fill    metal4\n  rm4       metal4         poly_resist_stripes\n  obsm4     metal4\n  via4      metal4         metal5  via4\n  sealv4    metal4\t   metal5  via4\n\n  metal5    metal5\n  m5fill    metal5\n  rm5       metal5         poly_resist_stripes\n  obsm5     metal5\n  via5      metal5         metal6  via5\n  sealv5    metal5\t   metal6  via5\n\n  mimcap    metal5         mems\n  mimcc     metal6         contact_X'es mems\n\n  metal6    metal6\n  m6fill    metal6\n  rm6       metal6         poly_resist_stripes\n  obsm6     metal6\n  via6      metal6         metal7  via6\n  sealv6    metal6\t   metal7  via6\n\n  metal7    metal7\n  m7fill    metal7\n  rm7       metal7         poly_resist_stripes\n  obsm7     metal7\n  pillar    mems\t   overglass\n  solder    mems\t   overglass\n  glass\t    mems\t   overglass\n  seal\t    overglass\t   mems\n\n  comment   comment\n  error_p   error_waffle\n  error_s   error_waffle\n  error_ps  error_waffle\n  fillblock cwell\n  thruvia   mems\timplant1\n  inductor  implant2\n\n  obswell   cwell\n  obsactive implant4\n  obspoly   implant3\n\n  magnet    substrate_field_implant\n  rotate    via3alt\n  fence     via5\nend\n\n#-----------------------------------------------------------------------\n# Special paint/erase rules\n#-----------------------------------------------------------------------\n\ncompose\n  compose  nfet  poly  ndiff\n  compose  pfet  poly  pdiff\n  compose  var   poly  nsd\n  compose  pvar  poly  psd\n\n  compose  hvnfet  poly  hvndiff\n  compose  hvpfet  poly  hvpdiff\n\n  decompose hvnfetesd poly hvndiff\n  decompose hvpfetesd poly hvpdiff\n\n  paint  ndc     nwell  pdc\n  paint  nfet    nwell  pfet\n  paint  ndiff   nwell  pdiff\n  paint  psd     nwell  nsd\n  paint  psc     nwell  nsc\n  paint  ptap    nwell  ntap\n  paint  ptapc   nwell  ntapc\n\n  paint  pdc     pwell  ndc\n  paint  pfet    pwell  nfet\n  paint  pdiff   pwell  ndiff\n  paint  nsd     pwell  psd\n  paint  nsc     pwell  psc\n  paint  ntap    pwell  ptap\n  paint  ntapc   pwell  ptapc\n\n  paint  m1      obsm1  m1\n  paint  m2      obsm2  m2\n  paint  m3      obsm3  m3\n  paint  m4      obsm4  m4\n  paint  m5      obsm5  m5\n  paint  m6      obsm5  m6\n  paint  m7      obsm5  m7\n\n  # Seal ring contacts are not really contacts in\n  # the database, so use compose rules instead.\n  paint  sealc\t psd\tsealc\n  paint  sealv1\t m1\tsealv1\n  paint  sealv2\t m2\tsealv2\n  paint  sealv3\t m3\tsealv3\n  paint  sealv4\t m4\tsealv4\n  paint  sealv5\t m5\tsealv5\n  paint  sealv6\t m6\tsealv6\n\n  # To preserve keep-out areas for pattern fill,\n  # do not allow comment to overwrite fillblock or inductor.\n  paint  fillblock comment fillblock\n  paint  inductor comment inductor\n\n  # nwell itself is a p-implant blocker, so don't erase\n  # nwell when painting pblock, even though overlap is\n  # technically allowed according to the documentation.\n  paint  nwell  pblock  nwell\n  paint  isolbox pblock isolbox\n\nend\n\n#-----------------------------------------------------------------------\n# Electrical connectivity\n#-----------------------------------------------------------------------\n\nconnect\n  *nwell,*nsd,*ntap,*hvnsd,*hvntap,dnwell,pnp,isolbox \\\n\t *nwell,*nsd,*ntap,*hvnsd,*hvntap,dnwell,pnp,isolbox\n  pwell,*psd,*ptap,*hvpsd,*hvptap,digisub pwell,*psd,*ptap,*hvpsd,*hvptap,digisub\n  # Note:  This connects butting taps even without a metal strap.\n  *nsd,*hvnsd\t*pdiff,*hvpdiff\n  *psd,*hvpsd\t*ndiff,*hvndiff\n  *ntap,*hvntap\t*pdiff,*hvpdiff\n  *ptap,*hvptap\t*ndiff,*hvndiff\n  npn,pbc\tnpn,pbc\n  pbc,*m1\tpbc,*m1\n  schottky,sdic\tschottky,sdic\n  sdic,*m1\tsdic,*m1\n  *m1,m1fill,iprobe,diffprobe\t*m1,m1fill,iprobe,diffprobe\n  *m2,m2fill\t*m2,m2fill\n  *m3,m3fill\t*m3,m3fill\n  *m4,m4fill\t*m4,m4fill\n  *m5,m5fill\t*m5,m5fill\n  *m6,m6fill\t*m6,m6fill\n  *m7,m7fill    *m7,m7fill\n  *mimcap       *mimcap\n   allnactivenonfet\tallnactivenonfet\n   # Resistor to isolated pwell tap\n   isodiffres\t*ndiff,*psd\n   # Note:  This creates a short through hvndiffres resistors.\n   *pdiff,*psd,*pdiode,*hvpdiff,*hvpsd *pdiff,*psd,*pdiode,*hvpdiff,*hvpsd\n  *poly,allfets,polyfill\t*poly,allfets,polyfill\nend\n\n#-----------------------------------------------------------------------\n# cifoutput section\n#-----------------------------------------------------------------------\ninclude ihp-sg13g2-cifout\n\n#-----------------------------------------------------------------------\n# cifinput section\n#-----------------------------------------------------------------------\ninclude ihp-sg13g2-cifin\n\n#-----------------------------------------------------------------------\n# Digital flow maze router cost parameters\n#-----------------------------------------------------------------------\nmzrouter\nend\n\n#-----------------------------------------------------------------------\n# Vendor DRC rules\n#-----------------------------------------------------------------------\ninclude ihp-sg13g2-drc\n\n#-----------------------------------------------------------------------\n# LEF format definitions\n#-----------------------------------------------------------------------\n\nlef\n\n# Vendor standard cells are fully contacted to nwell and substrate\n# so masterslice layers for nwell/pwell are not required.\n\nmasterslice poly  GatPoly\n\nrouting m1\tMetal1\nrouting m2\tMetal2\nrouting m3\tMetal3\nrouting m4\tMetal4\nrouting m5\tMetal5\nrouting m6\tTopMetal1\nrouting m7\tTopMetal2\n\ncut via1\tVia1\ncut via2\tVia2\ncut via3\tVia3\ncut via4\tVia4\ncut via5\tTopVia1\ncut via6\tTopVia2\n\nobs obsm1\tMetal1\nobs obsm2\tMetal2\nobs obsm3\tMetal3\nobs obsm4\tMetal4\nobs obsm5\tMetal5\nobs obsm6\tTopMetal1\nobs obsm7\tTopMetal2\n\nobs obsm1,obsm2\tVia1\nobs obsm2,obsm3\tVia2\nobs obsm3,obsm4\tVia3\nobs obsm4,obsm5\tVia4\nobs obsm5,obsm6\tTopVia1\nobs obsm6,obsm7\tTopVia2\n\nend\n\n#-----------------------------------------------------------------------\n# Device and Parasitic extraction\n#-----------------------------------------------------------------------\ninclude ihp-sg13g2-extract\n\n#-----------------------------------------------------------------------\n# Wiring tool definitions\n#-----------------------------------------------------------------------\n\nwiring\n # All wiring values are in nanometers\n scalefactor 10\n\n contact v1  200 m1 5 45 m2   0 45\n contact v2  200 m2 0 45 m3   0 45\n contact v3  200 m3 0 45 m4   0 45\n contact v4  200 m4 0 45 m5   0 45\n contact v5  620 m5 0    m6 320 \n contact v6 1900 m6 0    m7   0\n\n contact pc  160  poly 70 70 m1 0 50\n contact pdc 160 pdiff 70 70 m1 0 50\n contact ndc 160 ndiff 70 70 m1 0 50\n contact psc 160   psd 70 70 m1 0 50\n contact nsc 160   nsd 70 70 m1 0 50\n contact ptapc 160 ptap 70 70 m1 0 50\n contact ntapc 160 ntap 70 70 m1 0 50\n\nend\n\n#-----------------------------------------------------------------------\n# Plain old router. . . \n#-----------------------------------------------------------------------\n\nrouter\nend\n\n#-----------------------------------------------------------------------\n# Plowing (restored in magic 8.2, need to fill this section)\n#-----------------------------------------------------------------------\n\nplowing\nend\n\n#-----------------------------------------------------------------------\n# No special plot layers defined (use default PNM color choices)\n#-----------------------------------------------------------------------\n\nplot\n  style pnm\n     default\n     draw fillblock no_color_at_all\n     draw obsactive no_color_at_all\n     draw obsm1 no_color_at_all\n     draw obsm2 no_color_at_all\n     draw obsm3 no_color_at_all\n     draw obsm4 no_color_at_all\n     draw obsm5 no_color_at_all\n     draw obsm6 no_color_at_all\n     draw obsm7 no_color_at_all\n     draw difffill no_color_at_all\n     draw polyfill no_color_at_all\n     draw m1fill no_color_at_all\n     draw m2fill no_color_at_all\n     draw m3fill no_color_at_all\n     draw m4fill no_color_at_all\n     draw m5fill no_color_at_all\n     draw m6fill no_color_at_all\n     draw m7fill no_color_at_all\n     draw digisub no_color_at_all\n     draw pblock  no_color_at_all\n     draw nwell cwell\n     draw isolbox cwell\nend\n\n#-----------------------------------------------------------------------\n",
+  "technology_sha256": "0a0e1666da3fa38d7faefe340576102ddc558727a3f6f7f666e92f50a1dc568d",
+  "gencells": {
+    "sg13_lv_pmos": {
+      "namespace": "sg13g2",
+      "source": "captured native open PDK",
+      "params": [
+        "botc",
+        "ccols",
+        "class",
+        "compatible",
+        "conn_gates",
+        "diffcov",
+        "doports",
+        "doverlap",
+        "full_metal",
+        "gate_ring",
+        "gbc",
+        "glc",
+        "grc",
+        "gtc",
+        "guard",
+        "l",
+        "lmin",
+        "m",
+        "ng",
+        "polycov",
+        "poverlap",
+        "rlcov",
+        "tbcov",
+        "topc",
+        "viadrn",
+        "viagate",
+        "viagb",
+        "viagl",
+        "viagr",
+        "viagt",
+        "viasrc",
+        "w",
+        "wmin"
+      ],
+      "class": "mosfet",
+      "lmin": 0.13,
+      "wmin": 0.15,
+      "lmax": null,
+      "wmax": null
+    },
+    "sg13_lv_nmos": {
+      "namespace": "sg13g2",
+      "source": "captured native open PDK",
+      "params": [
+        "botc",
+        "ccols",
+        "class",
+        "compatible",
+        "conn_gates",
+        "diffcov",
+        "doports",
+        "doverlap",
+        "full_metal",
+        "gate_ring",
+        "gbc",
+        "glc",
+        "grc",
+        "gtc",
+        "guard",
+        "l",
+        "lmin",
+        "m",
+        "ng",
+        "polycov",
+        "poverlap",
+        "rlcov",
+        "tbcov",
+        "topc",
+        "viadrn",
+        "viagate",
+        "viagb",
+        "viagl",
+        "viagr",
+        "viagt",
+        "viasrc",
+        "w",
+        "wmin"
+      ],
+      "class": "mosfet",
+      "lmin": 0.13,
+      "wmin": 0.15,
+      "lmax": null,
+      "wmax": null
+    }
+  },
+  "cells_mag": [
+    "magic\ntech ihp-sg13g2\nmagscale 1 2\ntimestamp 1792904899\n<< nwell >>\nrect -282 -310 282 310\n<< pmos >>\nrect -50 -100 50 100\n<< pdiff >>\nrect -118 86 -50 100\nrect -118 -86 -104 86\nrect -72 -86 -50 86\nrect -118 -100 -50 -86\nrect 50 86 118 100\nrect 50 -86 72 86\nrect 104 -86 118 86\nrect 50 -100 118 -86\n<< pdiffc >>\nrect -104 -86 -72 86\nrect 72 -86 104 86\n<< nsubdiff >>\nrect -220 234 220 248\nrect -220 202 -128 234\nrect 128 202 220 234\nrect -220 188 220 202\nrect -220 156 -160 188\nrect -220 -156 -206 156\nrect -174 -156 -160 156\nrect 160 156 220 188\nrect -220 -188 -160 -156\nrect 160 -156 174 156\nrect 206 -156 220 156\nrect 160 -188 220 -156\nrect -220 -202 220 -188\nrect -220 -234 -128 -202\nrect 128 -234 220 -202\nrect -220 -248 220 -234\n<< nsubdiffcont >>\nrect -128 202 128 234\nrect -206 -156 -174 156\nrect 174 -156 206 156\nrect -128 -234 128 -202\n<< poly >>\nrect -50 160 50 174\nrect -50 128 -28 160\nrect 28 128 50 160\nrect -50 100 50 128\nrect -50 -128 50 -100\nrect -50 -160 -28 -128\nrect 28 -160 50 -128\nrect -50 -174 50 -160\n<< polycont >>\nrect -28 128 28 160\nrect -28 -160 28 -128\n<< metal1 >>\nrect -206 202 -128 234\nrect 128 202 206 234\nrect -206 156 -174 202\nrect -43 164 43 165\nrect -43 124 -28 164\nrect 28 124 43 164\nrect -43 123 43 124\nrect 174 156 206 202\nrect -118 85 -104 86\nrect -72 85 -58 86\nrect -118 -85 -108 85\nrect -68 -85 -58 85\nrect -118 -86 -104 -85\nrect -72 -86 -58 -85\nrect 58 85 72 86\nrect 104 85 118 86\nrect 58 -85 68 85\nrect 108 -85 118 85\nrect 58 -86 72 -85\nrect 104 -86 118 -85\nrect -206 -202 -174 -156\nrect -43 -124 43 -123\nrect -43 -164 -28 -124\nrect 28 -164 43 -124\nrect -43 -165 43 -164\nrect 174 -202 206 -156\nrect -206 -234 -128 -202\nrect 128 -234 206 -202\n<< via1 >>\nrect -28 160 28 164\nrect -28 128 28 160\nrect -28 124 28 128\nrect -108 -85 -104 85\nrect -104 -85 -72 85\nrect -72 -85 -68 85\nrect 68 -85 72 85\nrect 72 -85 104 85\nrect 104 -85 108 85\nrect -28 -128 28 -124\nrect -28 -160 28 -128\nrect -28 -164 28 -160\n<< metal2 >>\nrect -28 164 28 173\nrect -28 115 28 124\nrect -108 85 -68 94\nrect -108 -94 -68 -85\nrect 68 85 108 94\nrect 68 -94 108 -85\nrect -28 -124 28 -115\nrect -28 -173 28 -164\n<< labels >>\nrlabel nsubdiffcont 0 -218 0 -218 0 B\nport 77 nsew\nrlabel pdiffc -88 0 -88 0 0 D\nport 78 nsew\nrlabel pdiffc 88 0 88 0 0 S\nport 79 nsew\nrlabel polycont 0 144 0 144 0 G\nport 80 nsew\n<< properties >>\nstring FIXED_BBOX -190 -218 190 218\nstring gencell sg13_lv_pmos\nstring library sg13g2\nstring parameters w 1 l 0.5 m 1 ng 1 diffcov 100 polycov 100 guard 1 glc 1 grc 1 gtc 1 gbc 1 tbcov 100 rlcov 100 topc 1 botc 1 poverlap 0 doverlap 1 lmin 0.13 wmin 0.15 class mosfet compatible {sg13_lv_pmos sg13_hv_pmos} full_metal 1 conn_gates 0 gate_ring 0 ccols 1 viasrc 100 viadrn 100 viagate 100 viagb 0 viagr 0 viagl 0 viagt 0 doports 1\n<< end >>\n",
+    "magic\ntech ihp-sg13g2\nmagscale 1 2\ntimestamp 1792904899\n<< pwell >>\nrect -282 -260 282 260\n<< nmos >>\nrect -50 -50 50 50\n<< ndiff >>\nrect -118 36 -50 50\nrect -118 -36 -104 36\nrect -72 -36 -50 36\nrect -118 -50 -50 -36\nrect 50 36 118 50\nrect 50 -36 72 36\nrect 104 -36 118 36\nrect 50 -50 118 -36\n<< ndiffc >>\nrect -104 -36 -72 36\nrect 72 -36 104 36\n<< psubdiff >>\nrect -220 184 220 198\nrect -220 152 -128 184\nrect 128 152 220 184\nrect -220 138 220 152\nrect -220 106 -160 138\nrect -220 -106 -206 106\nrect -174 -106 -160 106\nrect 160 106 220 138\nrect -220 -138 -160 -106\nrect 160 -106 174 106\nrect 206 -106 220 106\nrect 160 -138 220 -106\nrect -220 -152 220 -138\nrect -220 -184 -128 -152\nrect 128 -184 220 -152\nrect -220 -198 220 -184\n<< psubdiffcont >>\nrect -128 152 128 184\nrect -206 -106 -174 106\nrect 174 -106 206 106\nrect -128 -184 128 -152\n<< poly >>\nrect -50 110 50 124\nrect -50 78 -28 110\nrect 28 78 50 110\nrect -50 50 50 78\nrect -50 -78 50 -50\nrect -50 -110 -28 -78\nrect 28 -110 50 -78\nrect -50 -124 50 -110\n<< polycont >>\nrect -28 78 28 110\nrect -28 -110 28 -78\n<< metal1 >>\nrect -206 152 -128 184\nrect 128 152 206 184\nrect -206 106 -174 152\nrect -43 114 43 115\nrect -43 74 -28 114\nrect 28 74 43 114\nrect -43 73 43 74\nrect 174 106 206 152\nrect -118 35 -104 36\nrect -72 35 -58 36\nrect -118 -35 -108 35\nrect -68 -35 -58 35\nrect -118 -36 -104 -35\nrect -72 -36 -58 -35\nrect 58 35 72 36\nrect 104 35 118 36\nrect 58 -35 68 35\nrect 108 -35 118 35\nrect 58 -36 72 -35\nrect 104 -36 118 -35\nrect -206 -152 -174 -106\nrect -43 -74 43 -73\nrect -43 -114 -28 -74\nrect 28 -114 43 -74\nrect -43 -115 43 -114\nrect 174 -152 206 -106\nrect -206 -184 -128 -152\nrect 128 -184 206 -152\n<< via1 >>\nrect -28 110 28 114\nrect -28 78 28 110\nrect -28 74 28 78\nrect -108 -35 -104 35\nrect -104 -35 -72 35\nrect -72 -35 -68 35\nrect 68 -35 72 35\nrect 72 -35 104 35\nrect 104 -35 108 35\nrect -28 -78 28 -74\nrect -28 -110 28 -78\nrect -28 -114 28 -110\n<< metal2 >>\nrect -28 114 28 123\nrect -28 65 28 74\nrect -108 35 -68 44\nrect -108 -44 -68 -35\nrect 68 35 108 44\nrect 68 -44 108 -35\nrect -28 -74 28 -65\nrect -28 -123 28 -114\n<< labels >>\nrlabel psubdiffcont 0 -168 0 -168 0 B\nport 77 nsew\nrlabel ndiffc -88 0 -88 0 0 D\nport 78 nsew\nrlabel ndiffc 88 0 88 0 0 S\nport 79 nsew\nrlabel polycont 0 94 0 94 0 G\nport 80 nsew\n<< properties >>\nstring FIXED_BBOX -190 -168 190 168\nstring gencell sg13_lv_nmos\nstring library sg13g2\nstring parameters w 0.5 l 0.5 m 1 ng 1 diffcov 100 polycov 100 guard 1 glc 1 grc 1 gtc 1 gbc 1 tbcov 100 rlcov 100 topc 1 botc 1 poverlap 0 doverlap 1 lmin 0.13 wmin 0.15 class mosfet compatible {sg13_lv_nmos sg13_hv_nmos} full_metal 1 conn_gates 0 gate_ring 0 doports 1 viasrc 100 viadrn 100 viagate 100 ccols 1 viagb 0 viagr 0 viagl 0 viagt 0\n<< end >>\n"
+  ],
+  "cell_sha256": [
+    "30b5ea5e0282c20e8281951af72389bae1388265b237b0cb18700101d1f317e9",
+    "86b1fdfc0ba22b3d3d6d4486d6352f12d9185b0cbfd3d1c34fdb68e5ba1c0b4a"
+  ],
+  "deltas": [
+    [
+      141,
+      155
+    ],
+    [
+      141,
+      130
+    ]
+  ],
+  "routing_rules": {
+    "metal_space_um": {
+      "1": 0.18,
+      "2": 0.21,
+      "3": 0.21,
+      "4": 0.21,
+      "5": 0.21,
+      "6": 1.64,
+      "7": 2.0
+    },
+    "metal_width_um": {
+      "1": 0.2,
+      "2": 0.24,
+      "3": 0.24,
+      "4": 0.24,
+      "5": 0.24,
+      "6": 1.64,
+      "7": 2.0
+    },
+    "metal_area_um2": {
+      "1": 0.09,
+      "2": 0.144,
+      "3": 0.144,
+      "4": 0.144,
+      "5": 0.144
+    },
+    "via_width_um": {
+      "1": 0.2,
+      "2": 0.2,
+      "3": 0.2,
+      "4": 0.2,
+      "5": 0.62,
+      "6": 1.9
+    },
+    "via_space_um": {
+      "1": 0.21,
+      "2": 0.21,
+      "3": 0.21,
+      "4": 0.21,
+      "5": 0.22,
+      "6": 0.06
+    },
+    "via_surround_um": {
+      "(1, 1)": 0.005,
+      "(5, 6)": 0.32
+    },
+    "via_surround_dir_um": {
+      "(1, 1)": 0.045,
+      "(1, 2)": 0.045,
+      "(2, 2)": 0.045,
+      "(2, 3)": 0.045,
+      "(3, 3)": 0.045,
+      "(3, 4)": 0.045,
+      "(4, 4)": 0.045,
+      "(4, 5)": 0.045
+    }
+  }
+}
