@@ -10,6 +10,7 @@ import copy
 import hashlib
 import importlib.util
 from pathlib import Path
+import re
 import sys
 import yaml
 
@@ -18,7 +19,66 @@ from phase1_expert_parse_track import input_text_report, SKIP_ORACLE_PATH
 import phase1_port_extract
 
 
-def project(project: Path, content: dict, explicit_edges: list) -> None:
+def _owned_ports(extracted: dict, machine: dict, refuse) -> dict:
+    """Use the FSM's source document, never a corpus-wide module union.
+
+    Existing lexical scopes identify a single subject. This optional producer
+    refuses ambiguous sibling interfaces rather than selecting one by name.
+    """
+    sources = [text for name, text in extracted.items()
+               if machine["source"] in (name, "input/docs/" + name)]
+    if len(sources) != 1:
+        refuse("FSM interface owner cannot be located in current extracted source")
+    text = sources[0]
+    narrative = list(text)
+    code_spans = phase1_port_extract._verilog_region_spans(text)
+    for start, end in code_spans:
+        narrative[start:end] = ["\n" if c == "\n" else " " for c in text[start:end]]
+    narrative = "".join(narrative)
+    scopes = phase1_port_extract._prose_module_scopes(narrative)
+    owners = [owner for _, _, owner in scopes if owner is not None]
+    if len(owners) > 1:
+        refuse("FSM source has multiple interface owners")
+    if owners:
+        prefix = narrative[:scopes[0][0]]
+        if (phase1_port_extract.extract_ports(prefix)
+                or any(re.search(r"\b" + re.escape(name) + r"\b", prefix)
+                       for name in machine["states"])):
+            refuse("FSM or interface precedes the only declared module owner")
+    clean = phase1_port_extract.strip_hdl_comments_and_strings(text)
+    # Count headers even when a source snippet has no endmodule. The existing
+    # complete-module grammar additionally recognizes non-ANSI declarations.
+    modules = {m.start(): m for m in phase1_port_extract._MODULE_SPAN.finditer(clean)}
+    modules.update({m.start(): m for m in phase1_port_extract._VERILOG_MODULE_HDR.finditer(clean)})
+    if len(modules) > 1:
+        refuse("FSM source has multiple HDL module owners")
+    if modules and owners:
+        module_name = re.match(r"module\s+(\w+)", next(iter(modules.values())).group())[1]
+        if module_name != owners[0]:
+            refuse("prose and HDL interface owners disagree")
+    prose_ports = phase1_port_extract.extract_ports(narrative)
+    if code_spans and prose_ports:
+        # A sibling HDL header cannot shadow the source's prose interface.
+        code_ports = [dict(name=p.name, dir=p.direction, width=p.width)
+                      for start, end in code_spans
+                      for p in phase1_port_extract.parse_verilog_ports(
+                          text[start:end], phase1_port_extract._parse_module_params(text[start:end]))]
+        signature = lambda ps: {(p["name"], p["dir"], p["width"]) for p in ps}
+        if signature(prose_ports) != signature(code_ports):
+            refuse("source has distinct prose and HDL interfaces with ambiguous ownership")
+    ports = {}
+    for port in phase1_port_extract.extract_ports(text):
+        name, width = port.get("name"), port.get("width")
+        if name in ports and ports[name] != width:
+            refuse("conflicting source port widths")
+        if port.get("dir") in ("input", "output", "inout"):
+            ports[name] = width
+    if not ports:
+        refuse("FSM source has no confirmed owned interface")
+    return ports
+
+
+def project(project: Path, content: dict, explicit_edges: list, extracted: dict) -> None:
     """Validate all choices, then attach them without replacing source fields."""
     path = project / BEHAVIORAL_REFINEMENT_INPUT
     if not path.exists() and not path.is_symlink():
@@ -83,13 +143,7 @@ def project(project: Path, content: dict, explicit_edges: list) -> None:
         refuse("proposal must address the exact current source machine and states")
     if explicit_edges or any(s.get("transitions") for s in states):
         refuse("explicit source transitions cannot be supplemented or overwritten")
-    ports = {}
-    for port in phase1_port_extract.extract_ports(report["text"]):
-        name, width = port.get("name"), port.get("width")
-        if name in ports and ports[name] != width:
-            refuse("conflicting source port widths")
-        if port.get("dir") in ("input", "output", "inout"):
-            ports[name] = width
+    ports = _owned_ports(extracted, machine, refuse)
     rows = fact.value
     if not isinstance(rows, list) or not rows:
         refuse("transitions must be a nonempty typed row list")

@@ -39,8 +39,9 @@ def _l6(project):
 
 
 def _produce(project):
-    text = (project / "input/docs/control.md").read_text()
-    phase1.gen_l6_control_logic(project, {"control.md": text})
+    extracted = {p.name: p.read_text() for p in sorted((project / "input/docs").glob("*.md"))}
+    phase1.gen_l1_datasheet(project, extracted)
+    phase1.gen_l6_control_logic(project, extracted)
     return _l6(project)
 
 
@@ -302,6 +303,66 @@ def test_symlink_author_input_is_refused_without_replacing_source_facts(tmp_path
     with pytest.raises(ValueError, match="symlink"):
         _produce(tmp_path)
     assert _l6(tmp_path) == original
+
+
+@pytest.mark.parametrize("foreign_location", ["other_document", "sibling_code", "sibling_prose", "two_code_modules", "incomplete_sibling_code"])
+def test_guard_cannot_borrow_a_foreign_interface(tmp_path, foreign_location):
+    _source(tmp_path)
+    foreign_code = "\n```verilog\nmodule helper(input foreign_guard); endmodule\n```\n"
+    if foreign_location == "other_document":
+        (tmp_path / "input/docs/helper.md").write_text(foreign_code)
+    else:
+        source = tmp_path / "input/docs/control.md"
+        foreign = (foreign_code if foreign_location == "sibling_code" else
+                   "\nModule name: helper\n" + INTERFACE.replace("bit_in", "foreign_guard"))
+        if foreign_location == "two_code_modules":
+            foreign = ("\n```verilog\nmodule subject(input bit_in, output [4:0] wave); "
+                       "endmodule\nmodule helper(input foreign_guard); endmodule\n```\n")
+        elif foreign_location == "incomplete_sibling_code":
+            foreign = "\n```verilog\nmodule helper(input foreign_guard);\n```\n"
+        source.write_text(source.read_text() + foreign)
+    original = _produce(tmp_path)
+    _proposal(tmp_path, original, "foreign_guard", 1)
+    with pytest.raises(ValueError, match="BEHAVIORAL_REFINEMENT_REFUSED"):
+        _produce(tmp_path)
+    assert _l6(tmp_path) == original
+
+
+def test_own_prose_guard_survives_an_unrelated_document_module(tmp_path):
+    source = tmp_path / "input/docs/control.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("Module name: subject\n" + SOURCE +
+                      "\nInputs:\n- bit_in: 1-bit input bit.\nOutputs:\n- wave [4:0]: 5-bit output word.\n")
+    (tmp_path / "input/docs/helper.md").write_text(
+        "```verilog\nmodule helper(input foreign_guard); endmodule\n```\n")
+    original = _produce(tmp_path)
+    _proposal(tmp_path, original, "wave", 31)
+    assert len(_produce(tmp_path)["fsm_transitions"]) == 6
+
+
+@pytest.mark.parametrize("interface,port,value", [
+    (INTERFACE, "bit_in", 1),
+    ("\nInputs:\n- bit_in: 1-bit input bit.\nOutputs:\n- wave [4:0]: 5-bit output word.\n", "wave", 31),
+])
+def test_single_subject_source_owned_interface_still_projects(tmp_path, interface, port, value):
+    source = tmp_path / "input/docs/control.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("Module name: neutral_subject\n\n" + SOURCE + interface)
+    original = _produce(tmp_path)
+    _proposal(tmp_path, original, port, value)
+    assert len(_produce(tmp_path)["fsm_transitions"]) == 6
+
+
+def test_default_only_proposal_without_owned_interface_is_refused(tmp_path):
+    source = tmp_path / "input/docs/control.md"
+    source.parent.mkdir(parents=True)
+    source.write_text(SOURCE)
+    original = _produce(tmp_path)
+    path, data = _proposal(tmp_path, original)
+    data["facts"][0]["value"] = [row for row in data["facts"][0]["value"] if row.get("default")]
+    _save(path, data)
+    with pytest.raises(ValueError, match="confirmed owned interface"):
+        _produce(tmp_path)
 
 
 def test_retained_ordinary_d1_producer_uses_bound_factgraph_schema(tmp_path):
