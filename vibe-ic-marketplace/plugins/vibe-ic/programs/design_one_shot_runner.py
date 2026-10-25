@@ -2709,9 +2709,13 @@ def _try_spec_artifact_registry_rtl(
 
     top = "chip_top"
     ifc = ""
+    if _pl.rtl_input(project) == "original":
+        top = _phase1_declared_module_name(text)
+        if top is None:
+            return None
     try:
         _l9 = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
-        if _l9.is_file():
+        if _pl.rtl_input(project) != "original" and _l9.is_file():
             ifc = _l9.read_text(errors="replace")
             top = json.loads(ifc).get("top_module") or "chip_top"
     except (OSError, ValueError):
