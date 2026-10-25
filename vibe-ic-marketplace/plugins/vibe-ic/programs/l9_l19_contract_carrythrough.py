@@ -74,6 +74,28 @@ def submodule_requirement(text: str, name: str, source: str) -> Dict[str, Any]:
                 bullet_context = False
             elif _RE_L9_BULLET_SUBMOD_HEADING.search(line):
                 bullet_context = True
+            if not matches:
+                # The affirmative prose writer also declares modules outside
+                # headings/bullets. Its usage qualifier owns optionality; a
+                # parameter mentioned later in the sentence does not.
+                prose = re.search(
+                    r'(?:(?P<leading>optional|required|mandatory)\s+)?'
+                    r'[`"]' + re.escape(name) + r'[`"]\s+submodule\s+'
+                    r'(?:is|shall\s+be|must\s+be)\s+'
+                    r'(?:used|instantiated|implemented)\b(?P<tail>[^\n]*)',
+                    line, re.I)
+                if prose:
+                    tail = prose.group('tail').strip().rstrip('.').strip()
+                    q = ''
+                    if re.match(r'(?:only\s+)?(?:when|if)\b', tail, re.I):
+                        q = tail
+                    elif re.fullmatch(r'optionally|\(optional\)', tail, re.I):
+                        q = 'optional'
+                    elif prose.group('leading') and not re.search(
+                            r'\b(?:not|no)\s+$', line[:prose.start()], re.I):
+                        q = prose.group('leading')
+                    title = '(' + q + ')' if q else ''
+                    matches = True
         if matches:
             # Only a declaration's leading qualifier owns implementation
             # optionality. ``core (required); optional ECC parameter`` stays

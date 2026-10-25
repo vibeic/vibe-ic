@@ -41624,11 +41624,11 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     clk_pins = [name for name in clk_pins if name not in known]
     if not clk_pins:
         return
-    # A shared timing constant can size a sole input clock. Multiple inputs
-    # need individually bound source evidence; their missing rates stay null.
-    primary_freq_hz = _derive_primary_clk_freq_hz(timing_constants)
     for pin in clk_pins:
-        freq_hz = primary_freq_hz if clock_input_count == 1 else None
+        # A sole input does not own every CLK-named constant. Require an
+        # exact source binding or an explicitly primary/input constant.
+        freq_hz = (_derive_primary_clk_freq_hz(timing_constants, pin)
+                   if clock_input_count == 1 else None)
         entry = {
             "name": pin,
             "source_pin": pin,
@@ -41751,33 +41751,48 @@ def _emit_secondary_clock_domains_from_docs(
             })
 
 
-def _derive_primary_clk_freq_hz(timing_constants):
-    """v1.6.88 (#20 Bug 4) — try to derive primary-clock frequency
-    from L8.timing_constants. Look for entries whose name contains
-    CLK + FREQ / HZ / MHZ. Returns Hz int or None.
-    Chip-AGNOSTIC: no chip-specific vocabulary."""
+def _derive_primary_clk_freq_hz(timing_constants, source_pin=None):
+    """Read only rates bound to this input, without choosing a conflict.
+
+    A frequency constant may name its exact source port, carry that typed
+    binding, or explicitly designate the primary/input clock. A substring
+    CLK in an output/derived constant supplies no such authority.
+    """
     if not isinstance(timing_constants, list):
         return None
+    rates = set()
     for entry in timing_constants:
         if not isinstance(entry, dict):
             continue
         nm = (entry.get("name") or "").upper()
-        if "CLK" not in nm:
+        bindings = [entry[key] for key in ("source_pin", "clock", "clock_name")
+                    if entry.get(key) not in (None, "")]
+        if bindings and any(value != source_pin for value in bindings):
             continue
+        if (entry.get("derived_from") or str(entry.get("role") or "").lower()
+                in ("output", "derived", "secondary")):
+            continue
+        if not bindings:
+            stem = re.sub(r"_(?:(?:FREQ|FREQUENCY)(?:_[MK]?HZ)?|[MK]?HZ)$", "", nm)
+            if (stem != str(source_pin or "").upper()
+                    and not re.fullmatch(r"(?:PRIMARY|INPUT)_(?:CLK|CLOCK)", stem)):
+                continue
         try:
             val = float(entry.get("value"))
         except (TypeError, ValueError):
             continue
+        if not 0 < val < float("inf"):
+            continue
         unit = (entry.get("unit") or "").lower()
         if "MHZ" in nm or unit == "mhz":
-            return int(val * 1_000_000)
-        if "KHZ" in nm or unit == "khz":
-            return int(val * 1_000)
-        if "HZ" in nm or unit == "hz":
-            return int(val)
-        if "FREQ" in nm and val > 1000:
-            return int(val)
-    return None
+            rates.add(int(val * 1_000_000))
+        elif "KHZ" in nm or unit == "khz":
+            rates.add(int(val * 1_000))
+        elif "HZ" in nm or unit == "hz":
+            rates.add(int(val))
+        elif "FREQ" in nm and val > 1000:
+            rates.add(int(val))
+    return next(iter(rates)) if len(rates) == 1 else None
 
 
 # v1.6.294 — for #177 ORGANIC. URL-aware sentence boundary + Markdown

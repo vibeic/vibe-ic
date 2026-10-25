@@ -203,6 +203,70 @@ def test_semantic_counter_named_clock_is_not_a_clock_view(tmp_path):
     actual = json.loads((generated / 'L9_INTEGRATION_SPEC.json').read_text())
     assert actual.get('clocks', []) == [], actual
 
+
+@pytest.mark.parametrize('constant,expected_hz', [
+    ({'name': 'DIV_CLK_FREQ_MHZ', 'value': 25, 'unit': 'MHz',
+      'source': 'input/docs/clocking.txt: div_clk output'}, None),
+    ({'name': 'REF_TICK_FREQ_MHZ', 'value': 80, 'unit': 'MHz',
+      'source_pin': 'ref_tick'}, 80_000_000),
+    ({'name': 'PRIMARY_CLK_FREQ_MHZ', 'value': 40, 'unit': 'MHz'}, 40_000_000),
+    ({'name': 'PRIMARY_CLK_FREQ_MHZ', 'value': 25, 'unit': 'MHz',
+      'source_pin': 'div_clk'}, None),
+])
+def test_review_followup_clock_rate_stays_with_its_source(tmp_path, constant, expected_hz):
+    from programs import phase1_doc_one_shot_runner as producer
+    from programs import sdc_gen as consumer
+    text = ('Input ports:\nref_tick: Input clock signal.\n'
+            'Output ports:\ndiv_clk: Output clock signal.\n')
+    _semantic_project(tmp_path, text, [
+        {'name': 'ref_tick', 'direction': 'input', 'width': 1},
+        {'name': 'div_clk', 'direction': 'output', 'width': 1}])
+    domains = []
+    producer._emit_typed_clock_domains(tmp_path, domains, [constant])
+    assert [(d['name'], d['freq_hz']) for d in domains] == [
+        ('ref_tick', expected_hz)], domains
+    expected_mhz = expected_hz / 1_000_000 if expected_hz else None
+    assert consumer._clock_mhz_from_l8_domains({'clock_domains': domains}) == expected_mhz
+
+
+@pytest.mark.parametrize('suffix,role,verdict,rule', [
+    ('is used to select the sample.', 'required', 'FAIL', 'SUBMODULE_FILE_MISSING'),
+    ('is not used.', None, 'VACUOUS_PASS', None),
+    ('is used optionally.', 'optional', 'VACUOUS_PASS', None),
+    ('is used only when checksum mode is enabled.', 'conditional', 'FAIL',
+     'SUBMODULE_CONDITION_UNRESOLVED'),
+    ('is used only when top_module = NeutralTop.', 'conditional', 'FAIL',
+     'SUBMODULE_FILE_MISSING'),
+    ('is used only when top_module = OtherTop.', 'conditional', 'VACUOUS_PASS', None),
+])
+def test_review_followup_submodule_qualifier_reaches_actual_consumer(
+        tmp_path, suffix, role, verdict, rule):
+    from programs import phase1_doc_one_shot_runner as producer
+    from programs import l9_submodule_conformance_check as consumer
+    declaration = 'The "filter_cell" submodule ' + suffix
+    text = ('Module name:\nNeutralTop\nInput ports:\n'
+            'sample_i: Input data signal.\nOutput ports:\n'
+            'sample_o: Output data signal.\nImplementation:\n' + declaration + '\n')
+    _semantic_project(tmp_path, text)
+    producer.gen_l1_datasheet(tmp_path, {'contract.txt': text})
+    result = producer.gen_l9_integration_spec(tmp_path, {'contract.txt': text}, {})
+    doc = json.loads(result.path.read_text())
+    rtl = tmp_path / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    (rtl / 'top.v').write_text('module NeutralTop(input sample_i, output sample_o); '
+                              'assign sample_o=sample_i; endmodule\n')
+    actual, findings, census, _ = consumer.audit_report(tmp_path)
+    assert actual == verdict, (actual, findings, census, doc['submodules'])
+    if rule:
+        assert rule in {f.rule for f in findings}, findings
+    if role is None:
+        assert doc['submodules'] == []
+    else:
+        entry = next(row for row in doc['submodules'] if row['name'] == 'filter_cell')
+        assert entry.get('implementation_requirement', 'required') == role, entry
+        if role == 'conditional':
+            assert entry['requirement_evidence'][0]['evidence'] == declaration
+
 from programs.phase1_one_shot_runner import _ic_name_from_docs
 
 
