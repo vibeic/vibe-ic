@@ -612,3 +612,83 @@ def test_parametric_contract_existing_projection_cannot_turn_unknown_zero_into_s
     assert [(s['name'], s['width']) for s in signals if s['name'] == 'payload'] == [('payload', None)]
     with pytest.raises(consumer.UnresolvedPortWidth):
         consumer.emit_top_v('neutral_top', signals, 'neutral')
+
+
+_PARAMETRIC_LITERAL_CASES = [
+    ('range_hex', 'N+0x10-1:0', None, True),
+    ('range_binary', 'N+0b10000-1:0', None, True),
+    ('range_octal', 'N+0o20-1:0', None, True),
+    ('default_hex', 'N-1:0', '0x10', True),
+    ('decimal', 'N+16-1:0', '16', False),
+]
+
+
+@pytest.mark.parametrize('case,expression,default,unsupported', _PARAMETRIC_LITERAL_CASES)
+def test_parametric_literal_admitted_module_compiles_natively(tmp_path, case, expression, default, unsupported):
+    import json
+    import subprocess
+    import phase2_scaffold_gen as consumer
+    params = [{'name': 'N', 'default': None, 'module_owner': 'neutral_top'}]
+    if default is not None:
+        params.append({'name': 'K', 'default': default, 'module_owner': 'neutral_top'})
+    signals = consumer.derive_signals({}, {'top_ports': [
+        {'name': 'payload', 'direction': 'input', 'width': 0,
+         'width_symbolic': '[' + expression + ']'}]})
+    receipts = []
+    try:
+        text = consumer.emit_top_v('neutral_top', signals, 'neutral', parameters=params)
+    except consumer.UnresolvedPortWidth as exc:
+        assert unsupported, str(exc)
+        (tmp_path / 'native-literal-receipt.json').write_text(json.dumps({
+            'case': case, 'status': 'REFUSED_BEFORE_EMIT', 'reason': str(exc)}))
+        return
+    source = tmp_path / 'emitted.sv'
+    source.write_text(text)
+    for n in (5, 13):
+        width = n if case == 'default_hex' else n + 16
+        probe = tmp_path / f'probe_{n}.sv'
+        probe.write_text(
+            f'module Probe; wire [{width-1}:0] payload;\n'
+            f'neutral_top #(.N({n})) dut(.payload(payload));\n'
+            f'initial begin if ($bits(dut.payload)!={width}) $fatal; '
+            '$display("LITERAL_INTERFACE_BOUND_OK"); $finish; end\nendmodule\n')
+        image = tmp_path / f'probe_{n}.vvp'
+        run = subprocess.run(['iverilog', '-g2012', '-s', 'Probe', '-o',
+                              str(image), str(source), str(probe)],
+                             capture_output=True, text=True)
+        receipts.append({'argv': run.args, 'rc': run.returncode,
+                         'stdout': run.stdout, 'stderr': run.stderr})
+        (tmp_path / 'native-literal-receipt.json').write_text(json.dumps({
+            'case': case, 'status': 'EMITTED', 'receipts': receipts}, indent=2))
+        assert run.returncode == 0, run.stdout + run.stderr
+        sim = subprocess.run(['vvp', str(image)], capture_output=True, text=True)
+        receipts.append({'argv': sim.args, 'rc': sim.returncode,
+                         'stdout': sim.stdout, 'stderr': sim.stderr})
+        (tmp_path / 'native-literal-receipt.json').write_text(json.dumps({
+            'case': case, 'status': 'EMITTED', 'receipts': receipts}, indent=2))
+        assert sim.returncode == 0, sim.stdout + sim.stderr
+        assert 'LITERAL_INTERFACE_BOUND_OK' in sim.stdout
+
+
+@pytest.mark.parametrize('case,expression,default,unsupported', _PARAMETRIC_LITERAL_CASES)
+def test_parametric_literal_gate_rejects_unemittable_source(tmp_path, case, expression, default, unsupported):
+    import json
+    import l1_pin_bus_width_actionable_check as gate
+    source = tmp_path / 'input/docs/current.md'
+    source.parent.mkdir(parents=True)
+    source.write_text('Module name:\n    neutral_top\nInput parameters:\n'
+                      '    N: Payload width.\n' +
+                      (f'Parameter:\n    K = {default}\n' if default is not None else '') +
+                      'Input ports:\n    payload[' + expression + ']: Input data.\n')
+    generated = tmp_path / 'phase1/generated_docs'
+    generated.mkdir(parents=True)
+    (generated / 'L1_DATASHEET.json').write_text(json.dumps({
+        'ic_name': 'neutral_top', 'pin_table': [{'name': 'payload', 'mode': 'in',
+            'width': 0, 'width_symbolic': '[' + expression + ']'}]}))
+    report = gate.evaluate(tmp_path)
+    assert report['verdict'] == ('FAIL' if unsupported else 'PASS'), report
+    if unsupported:
+        assert report['qualification'] != 'PARAMETRIC_INTERFACE'
+    else:
+        assert report['qualification'] == 'PARAMETRIC_INTERFACE'
+        assert report['concrete_width_qualification'] == 'NOT_MEASURED'

@@ -339,7 +339,7 @@ def declared_parametric_range(symbolic, parameters, module_owner):
             return None
         default = row.get('default')
         if default is not None and (isinstance(default, bool) or not
-                re.fullmatch(r'[+-]?(?:\d+|0[xX][0-9a-fA-F]+)', str(default))):
+                re.fullmatch(r'[+-]?[0-9]+', str(default))):
             return None
         names.add(row['name'])
     text = symbolic.strip()
@@ -348,20 +348,25 @@ def declared_parametric_range(symbolic, parameters, module_owner):
     if text.count(':') != 1:
         return None
     used = set()
-    def legal(node):
+    def legal(node, source):
         if isinstance(node, ast.Constant):
-            return isinstance(node.value, int) and not isinstance(node.value, bool)
+            # Python's AST erases spelling: 0x10/0b10000/0o20 all become
+            # integer 16, but raw insertion is not legal Verilog. Admit only
+            # decimal spellings here; numeric evaluation elsewhere is distinct.
+            return (isinstance(node.value, int) and not isinstance(node.value, bool)
+                    and re.fullmatch(r'[0-9][0-9_]*',
+                                     ast.get_source_segment(source, node) or '') is not None)
         if isinstance(node, ast.Name):
             used.add(node.id)
             return node.id in names
         if isinstance(node, ast.BinOp):
             return (type(node.op) in _SAFE_BINOPS and not isinstance(node.op, ast.FloorDiv)
-                    and legal(node.left) and legal(node.right))
+                    and legal(node.left, source) and legal(node.right, source))
         if isinstance(node, ast.UnaryOp):
-            return type(node.op) in _SAFE_UNARYOPS and legal(node.operand)
+            return type(node.op) in _SAFE_UNARYOPS and legal(node.operand, source)
         return False
     try:
-        if not all(legal(ast.parse(term.strip(), mode='eval').body)
+        if not all(legal(ast.parse(term.strip(), mode='eval').body, term.strip())
                    for term in text.split(':')):
             return None
     except (SyntaxError, ValueError):
