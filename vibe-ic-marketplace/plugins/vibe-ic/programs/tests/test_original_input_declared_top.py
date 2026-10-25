@@ -1,5 +1,6 @@
 """Original public module metadata reaches the existing deterministic producer."""
 import re
+import json
 import shutil
 import subprocess
 import sys
@@ -10,6 +11,8 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _path_layout as pl
 import design_one_shot_runner as runner
+import benchmark_dispatch as dispatch
+import flow_phase_attribution as fpa
 import port_parser
 
 
@@ -64,3 +67,44 @@ def test_original_program_emit_uses_only_unique_public_module_name(tmp_path, dec
                                    "-o", str(tmp_path / "native.vvp"), str(files[0])],
                                   capture_output=True, text=True)
         assert compiled.returncode == 0, compiled.stderr
+
+
+@pytest.mark.parametrize("override", [None, "wrong_owner"])
+def test_original_ordinary_step1_through_step2_uses_same_public_top(tmp_path, override):
+    if not shutil.which("yosys"):
+        pytest.skip("fresh native hygiene elaboration requires Yosys")
+    root = tmp_path / "unrelated_container_name"
+    source = root / "input/phase1_prompt.md"
+    source.parent.mkdir(parents=True)
+    source.write_text("Module name: cedar_vote\n" + BODY)
+    switch = root / "phase3/librelane_switch.json"
+    switch.parent.mkdir(parents=True)
+    switch.write_text('{"steps":{"2":"direct"}}')
+    program = Path(runner.__file__).parent / "vibe_ic_one_shot_runner.py"
+    command = [sys.executable, str(program), str(root), "--entry-step", "1", "--exit-step", "2",
+               "--rtl-input", "original", "--route", "ip", "--skip-analog",
+               "--skip-hardware", "--skip-phase3", "--no-dashboard"]
+    if override:
+        command += ["--top-name", override]
+    native = subprocess.run(command, capture_output=True, text=True)
+    rtl = list((root / "phase2/stage1/rtl").glob("*.sv"))
+    if override:
+        assert native.returncode != 0
+        assert "ORIGINAL_TOP_CONFLICT" in native.stderr
+        assert not rtl
+        return
+    assert [path.name for path in rtl] == ["cedar_vote.sv"]
+    inputs, outputs = port_parser.parse_ports(rtl[0].read_text())
+    assert set(inputs) == {("x3", 1), ("x2", 1), ("x1", 1)}
+    assert set(outputs) == {("f", 1)}
+    report = json.loads((root / "reports/orchestrator/phase2_one_shot.json").read_text())
+    solving = next(row for row in report["steps"] if row["name"] == "rtl_gen")
+    validate = next(row for row in report["steps"] if row["name"] == "rtl_validate")
+    assert solving["status"] == "PASS", solving
+    assert validate["status"] == "PASS", validate
+    invocation = validate["extras"]["command"]
+    assert invocation[invocation.index("--top") + 1] == "cedar_vote"
+    ledger = dispatch._required_gate_ledger({
+        "exit": "2", "phases": {"phase3_verifying": fpa.phase3_verifying(report, None)}})
+    (root / "reports/required_gate_ledger.json").write_text(json.dumps(ledger, indent=2))
+    assert ledger["eligibility"] == "ELIGIBLE", ledger

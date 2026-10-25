@@ -26648,6 +26648,12 @@ def main() -> int:
         return 2
     try:
         _pl.select_rtl_input(project, args.rtl_input, args.entry_step, args.exit_step)
+        if args.rtl_input == "original":
+            source_top = _phase1_declared_module_name(_gather_phase1_plain_spec_text(project).text)
+            if source_top and args.top_name not in ("chip_top", source_top):
+                raise ValueError(f"ORIGINAL_TOP_CONFLICT: --top-name {args.top_name} conflicts with original {source_top}")
+            if source_top:
+                args.top_name = source_top
         _activate_runtime_program_tree(project)
     except Exception as exc:
         print(f"REFUSED: runtime program tree: {exc}", file=sys.stderr)
