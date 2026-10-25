@@ -374,9 +374,160 @@ def _material_matches_repaired_output(expected: dict, current: dict) -> bool:
             != current.get("output_rtl_sha256"))
 
 
+def _stored_admission_source(project: Path, current_digest: str,
+                             measured_output: dict) -> str | None:
+    """Project only an already admitted RTL delta back to its measured hashes.
+
+    This mirrors the existing admission source projection and first checks it
+    against that producer's current digest. A changed admission contract fails
+    closed; neither additional inputs nor an unverified output delta disappear.
+    """
+    roots = ("input", "phase1/input_doc", "SOURCE_MANIFEST.md",
+             "phase2/stage1/rtl", "phase2/stage2/constraints",
+             "input/constraints", "phase3/librelane_switch.json")
+    current, measured = [], []
+    for relative in roots:
+        root = project / relative
+        files = [root] if root.is_file() else sorted(
+            path for path in root.rglob("*") if path.is_file()) if root.is_dir() else []
+        rows = [(str(path.relative_to(project)), hashlib.sha256(path.read_bytes()).hexdigest())
+                for path in files]
+        current.extend(rows)
+        if relative == "phase2/stage1/rtl":
+            measured.extend((relative + "/" + name, value["sha256"])
+                            for name, value in sorted(measured_output.items()))
+        else:
+            measured.extend(rows)
+    def digest(rows):
+        h = hashlib.sha256(b"canonical-run-source/v1\n")
+        for name, value in rows:
+            h.update(name.encode("utf-8", "surrogateescape") + b"\0"
+                     + value.encode("ascii") + b"\n")
+        return h.hexdigest()
+    return digest(measured) if digest(current) == current_digest else None
+
+
+def _stored_duplicate_scene(receipt: dict, later: dict, wrapper: dict,
+                             project: Path) -> dict | None:
+    """Re-earn the existing admitted scene; never write/admit a new scene."""
+    import calendar                                      # noqa: PLC0415
+    import canonical_run_admission as admission           # noqa: PLC0415
+    image = wrapper.get("container_image") or {}
+    reference = re.fullmatch(r".+@(sha256:[0-9a-f]{64})", str(image.get("image_ref") or ""))
+    if not reference or image.get("status") != "ok" or image.get("running") is not True:
+        return None
+    actual, _ = _runtime_pair._pin.container_image_digest(image["container"])
+    actual_id, _ = _runtime_pair._pin.container_image_id(image["container"])
+    if actual != reference[1] or actual_id != image.get("image_id"):
+        return None
+    path = admission.ledger_path(project)
+    if path.is_symlink() or not path.is_file():
+        return None
+    path.resolve().relative_to(project)
+    with path.open() as handle:
+        rows = admission._read_ledger(handle)
+    programs = Path(receipt["source_before"]["runner"]["path"]).parent
+    later_programs = Path(later["source_before"]["runner"]["path"]).parent
+    keys = {"top_name", "max_rtl_repair_retries", "rtl_input", "skip_hardware",
+            "skip_phase3", "skip_analog", "entry_step", "exit_step",
+            "force_rtl_regen", "dry_run", "lec_max_completed_rungs"}
+    matches = []
+    for row in rows:
+        identity = row["identity"]
+        if admission.identity_sha256(identity) != row["identity_sha256"]:
+            return None
+        if (identity.get("span") != "phase2"
+                or set(identity.get("dispatch_config") or {}) != keys):
+            continue  # a child admission is not the front door's admission
+        admitted = calendar.timegm(time.strptime(row["admitted_at"], "%Y-%m-%dT%H:%M:%SZ"))
+        if not receipt["started_ns"] // 10**9 <= admitted <= receipt["finished_ns"] // 10**9:
+            continue
+        current = admission.build_identity(
+            project, "phase2", container_image=actual,
+            config=identity["dispatch_config"],
+            program_paths=admission.canonical_program_paths(programs))
+        if current["source_input_sha256"] != identity.get("source_input_sha256"):
+            # Current output admission is checked by the caller's existing
+            # exact/admitted-hash material rule, never by this projection.
+            current["source_input_sha256"] = _stored_admission_source(
+                project, current["source_input_sha256"],
+                receipt["material_after"]["output_rtl"])
+        if (current == identity and identity["program_source_sha256"] ==
+                admission._program_digest(admission.canonical_program_paths(later_programs))):
+            matches.append({"identity_sha256": row["identity_sha256"],
+                            "container_image": actual})
+    return matches[0] if len(matches) == 1 else None
+
+
+def _stored_duplicate_wrapper(receipt: dict, latest: dict, project: Path, *,
+                              allow_repaired_output: bool,
+                              repaired_output_sha256: str | None) -> dict | None:
+    """Only a proven later duplicate refusal may leave a measurement current.
+
+    The later attempt gets no gate verdict. Its actual receipt, logs, sources,
+    canonical scene and sole newly written wrapper must all validate first.
+    """
+    try:
+        later_path = (project / "reports/orchestrator/runner_invocations"
+                      / (str(latest["invocation_id"]) + ".json"))
+        later = _read_json_regular(later_path)
+        if (later["invocation_id"] == receipt["invocation_id"]
+                or later["status"] != "COMPLETED" or later["rc"] != 1 or later["error"] is not None
+                or later["started_ns"] < receipt["finished_ns"]
+                or later["finished_ns"] < later["started_ns"]
+                or receipt["argv"][2:] != later["argv"][2:]
+                or receipt["project"] != later["project"]):
+            return None
+        for name in ("runner", "executable"):
+            if receipt["source_before"][name]["sha256"] != later["source_before"][name]["sha256"]:
+                return None
+        expected = ("REFUSED: canonical Phase-2 admission: DUPLICATE_NO_NEW_EVIDENCE "
+                    "(same canonical source/receipt/program/image/config already admitted)")
+        if (later["stderr"] or "").strip() != expected:
+            return None
+        if not (later["material_before"] == later["material_after"] == receipt["material_after"]):
+            return None
+        wrapper_name = "vibe_ic_one_shot.json"
+        if ("phase2_one_shot.json" not in _runner_fresh_reports(
+                receipt["reports_before"], receipt["reports_after"])
+                or later["reports_before"] != receipt["reports_after"]
+                or _runner_fresh_reports(later["reports_before"], later["reports_after"]) != [wrapper_name]
+                or {k: v for k, v in later["reports_after"].items() if k != wrapper_name}
+                != {k: v for k, v in receipt["reports_after"].items() if k != wrapper_name}):
+            return None
+        raw = later_path.read_bytes()
+        process = _ProcessOutcome(later["rc"], later["error"], later["stdout"], later["stderr"],
+                                  later["invocation_id"], str(later_path),
+                                  hashlib.sha256(raw).hexdigest(), later)
+        # Strict live validation of this later attempt: no recursive retention.
+        diagnostic = _runner_diagnostics(
+            process, later["argv"], project, require_phase2=False,
+            source_consumer=later["source_before"]["consumer"]["path"],
+            allow_repaired_output=allow_repaired_output,
+            repaired_output_sha256=repaired_output_sha256)
+        if not diagnostic or diagnostic.get("reason") or diagnostic["status"] != "REPORTS_AVAILABLE":
+            return None
+        wrapper = _read_json_regular(project / "reports/orchestrator" / wrapper_name)
+        if (wrapper.get("halted_at") != "phase2"
+                or not any(row == {"name": "phase2", "verdict": "REFUSED-CANONICAL-ADMISSION", "rc": 2}
+                           for row in wrapper.get("phases") or [])
+                or any(row.get("name") != "phase2" and (row.get("verdict"), row.get("rc")) != ("SKIPPED", 0)
+                       for row in wrapper.get("phases") or [])):
+            return None
+        scene = _stored_duplicate_scene(receipt, later, wrapper, project)
+        if scene is None:
+            return None
+        return {"invocation_id": later["invocation_id"], "receipt_path": str(later_path),
+                "receipt_sha256": hashlib.sha256(raw).hexdigest(), **scene,
+                "reason": "later duplicate wrapper is not a new Phase-2 measurement"}
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
                         project: Path, *, require_phase2: bool = True,
                         source_consumer: str | None = None,
+                        stored_measurement: bool = False,
                         allow_repaired_output: bool = False,
                         repaired_output_sha256: str | None = None) -> dict | None:
     """Disclose pre-gate refusals without interpreting rc as a gate verdict.
@@ -399,13 +550,22 @@ def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
         latest = _strict_json_loads((project / "reports" / "orchestrator" / "runner_invocations"
                              / "latest.json").read_bytes())
         if not (hashlib.sha256(raw).hexdigest() == process.receipt_sha256
-                and receipt["invocation_id"] == process.invocation_id == latest["invocation_id"]
-                and receipt["argv"] == latest["argv"] == list(argv)
-                and receipt["project"] == latest["project"] == str(project)
+                and receipt["invocation_id"] == process.invocation_id
+                and receipt["argv"] == list(argv)
+                and receipt["project"] == str(project)
                 and receipt["rc"] == process.rc and receipt["error"] == process.error
-                and receipt["stdout"] == process.stdout and receipt["stderr"] == process.stderr
-                and receipt["reports_after"] == _runner_report_snapshot(project)):
+                and receipt["stdout"] == process.stdout and receipt["stderr"] == process.stderr):
             raise ValueError("runner binding changed")
+        if not (receipt["invocation_id"] == latest["invocation_id"]
+                and receipt["argv"] == latest["argv"]
+                and receipt["project"] == latest["project"]
+                and receipt["reports_after"] == _runner_report_snapshot(project)):
+            retained = (_stored_duplicate_wrapper(
+                receipt, latest, project, allow_repaired_output=allow_repaired_output,
+                repaired_output_sha256=repaired_output_sha256) if stored_measurement else None)
+            if retained is None:
+                raise ValueError("runner binding changed")
+            diagnostic["retained_after_duplicate"] = retained
         current_material = _runner_material_snapshot(project)
         if (allow_repaired_output
                 and (not isinstance(repaired_output_sha256, str)
@@ -593,6 +753,7 @@ def _stored_runner_diagnostics(invocation: dict, *,
     diagnostic = _runner_diagnostics(
         process, invocation["argv"], Path(invocation["project"]),
         source_consumer=issued_consumer,
+        stored_measurement=True,
         allow_repaired_output=allow_repaired_output,
         repaired_output_sha256=repaired_output_sha256)
     if process.error:
