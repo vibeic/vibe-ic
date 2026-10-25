@@ -2928,6 +2928,59 @@ def _interface_parameter_instances(source: str, module: str,
     return found
 
 
+def _interface_parameter_source_owned(source: str, module: str,
+                                      parameter: str) -> bool:
+    """Bound an explicit declaration to the unique public module's scope.
+
+    A bare mention in another cell's prose is not the top's requirement.
+    Plain specs may put a standalone declaration table before the module-name
+    heading; keep that form, while refusing an explicitly foreign owner in
+    the declaration's paragraph. This is deliberately narrower than general
+    prose interpretation: unknown ownership does not authorize repair.
+    """
+    import module_port_audit as ports                     # noqa: PLC0415
+    from _specrtl_common import _PARAM_ASSIGN             # noqa: PLC0415
+    try:
+        scanned = ports.lexical_mask(source, attributes=True)
+    except ValueError:
+        return False
+    regions = list(ports.module_regions(scanned))
+    for match in _PARAM_ASSIGN.finditer(scanned):
+        if match[1] != parameter or not match.group().startswith("parameter"):
+            continue
+        owners = [name for name, start, _, end in regions
+                  if start <= match.start() < end]
+        if owners:
+            if owners == [module] and _interface_parameter_kind(source, module, parameter) == "parameter":
+                return True
+            continue
+        line_start = source.rfind("\n", 0, match.start()) + 1
+        line_end = source.find("\n", match.end())
+        line_end = len(source) if line_end < 0 else line_end
+        prefix = source[line_start:match.start()].strip()
+        tail = source[match.end():line_end].strip()
+        # An isolated HDL declaration or a direct instruction about the public
+        # interface supplies ownership; an inline auxiliary-cell mention does not.
+        standalone = prefix in ("", "-", "*", "`") and tail in (";", ";`")
+        directive = (prefix.lower() == "declare" and re.search(
+            r"\bin the public module interface\b", match.group(), re.I))
+        if not standalone and not directive:
+            continue
+        before = list(re.finditer(r"\n\s*\n", source[:line_start]))
+        block_start = before[-1].end() if before else 0
+        after = re.search(r"\n\s*\n", source[line_end:])
+        block_end = line_end + after.start() if after else len(source)
+        block = source[block_start:block_end]
+        if re.search(r"\b(?:auxiliary|helper|other|another|child|sub)\s+"
+                     r"(?:module|cell|block)\b", block, re.I):
+            continue
+        foreign = re.findall(r"\bmodule\s+([A-Za-z_]\w*)\s*(?=[:;#(])", block)
+        if any(name != module for name in foreign):
+            continue
+        return True
+    return False
+
+
 def _declared_ports(source: str, module: str) -> set[str] | None:
     """Identifiers in `module <name> ( ... );`, or None if it is not declared.
 
@@ -3125,6 +3178,9 @@ def _interface_proof_from_review(raw, task: dict, prompt_text: str,
         parameter = str(raw.get("parameter") or "")
         if _phase1_declared_module_name(prompt_text) != module:
             reasons.append("the public input does not uniquely declare this module")
+        if not _interface_parameter_source_owned(prompt_text, module, parameter):
+            reasons.append("the public parameter declaration has no unambiguous "
+                           "ownership by this module")
         prompt_path = Path(str(task.get("prompt_path") or ""))
         if (not prompt_path.is_file() or prompt_path.is_symlink()
                 or _sha256_text(prompt_path.read_text(errors="replace")) != task.get("prompt_sha256")

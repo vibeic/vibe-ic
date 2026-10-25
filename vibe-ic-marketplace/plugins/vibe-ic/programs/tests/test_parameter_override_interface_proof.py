@@ -48,15 +48,15 @@ endmodule
 """
 
 
-def proof(candidate, source, **changes):
+def proof(candidate, source, *, prompt=PROMPT, **changes):
     prompt_path = Path(candidate["manifest_path"]).parent / "public-prompt.md"
-    prompt_path.write_text(PROMPT)
+    prompt_path.write_text(prompt)
     result = {
         "schema": bd._INTERFACE_PROOF_SCHEMA,
         "kind": "parameter_override", "module": "configurable_link",
         "parameter": "BIAS", "excerpt": EXCERPT,
         "supports": "BIAS is explicitly a public overridable parameter.",
-        "prompt_sha256": bd._sha256_text(PROMPT),
+        "prompt_sha256": bd._sha256_text(prompt),
         "prompt_path": str(prompt_path),
         "candidate_rtl_sha256": candidate["rtl_sha256"],
         "challenge_sha256": bd._sha256_text(source),
@@ -65,21 +65,21 @@ def proof(candidate, source, **changes):
     return result
 
 
-def task(candidate):
-    return {"id": candidate["id"], "prompt_sha256": bd._sha256_text(PROMPT),
+def task(candidate, prompt=PROMPT):
+    return {"id": candidate["id"], "prompt_sha256": bd._sha256_text(prompt),
             "prompt_path": str(Path(candidate["manifest_path"]).parent / "public-prompt.md"),
             "rtl_sha256": candidate["rtl_sha256"],
             "rtl_paths": candidate["rtl_paths"], "public_original_input": None}
 
 
-def run(tmp_path, rtl=RTL, source=None, **changes):
+def run(tmp_path, rtl=RTL, source=None, prompt=PROMPT, **changes):
     candidate = _candidate(tmp_path, "neutral", rtl)
     source = challenge() if source is None else source
     path = tmp_path / "challenge.sv"
     path.write_text(source)
     bound = {"path": str(path), "sha256": bd._sha256_text(source),
-             "prompt_sha256": bd._sha256_text(PROMPT),
-             "interface_proof": proof(candidate, source, **changes)}
+             "prompt_sha256": bd._sha256_text(prompt),
+             "interface_proof": proof(candidate, source, prompt=prompt, **changes)}
     result = bd._run_verification_challenge(candidate, bound)
     (tmp_path / "execution.json").write_text(json.dumps(result, indent=2))
     return candidate, bound, result
@@ -161,6 +161,31 @@ def test_freeze_requires_current_public_source_hash_and_exact_declaration(tmp_pa
         other = _candidate(tmp_path / bd._sha256_text(rtl), "neutral", rtl)
         assert bd._interface_proof_from_review(
             proof(other, challenge()), task(other), PROMPT, challenge())[0] is None
+
+
+@pytest.mark.parametrize("description", [
+    "An auxiliary cell uses parameter BIAS = 3. The top BIAS is implementation-local.",
+    "Auxiliary cell parameters:\n    parameter BIAS = 3;",
+])
+def test_foreign_source_parameter_cannot_be_borrowed_for_unique_top(tmp_path, description):
+    public = "Module name: configurable_link\n" + description + "\n"
+    candidate, bound, result = run(tmp_path, prompt=public, excerpt="parameter BIAS = 3")
+    assert result["status"] == "INVALID", result
+    frozen, reasons = bd._interface_proof_from_review(
+        bound["interface_proof"], task(candidate, public), public, challenge())
+    assert frozen is None and "ownership" in " ".join(reasons)
+
+
+def test_main_parameter_table_before_unique_module_heading_is_owned(tmp_path):
+    public = ("The supported choices and corresponding values are shown below:\n"
+              "    parameter BIAS = 3;\n    parameter OTHER = 4;\n\n"
+              "Module name:\n    configurable_link\n\n"
+              "Implementation:\nThe module uses parameters for selectable behavior.\n")
+    candidate, bound, result = run(tmp_path, prompt=public, excerpt="parameter BIAS = 3;")
+    assert result["status"] == bd._CHALLENGE_CANDIDATE_BROKEN, result
+    frozen, reasons = bd._interface_proof_from_review(
+        bound["interface_proof"], task(candidate, public), public, challenge())
+    assert not reasons and frozen["parameter"] == "BIAS"
 
 
 def test_actual_review_validator_and_resume_emit_existing_repair_task(tmp_path):
