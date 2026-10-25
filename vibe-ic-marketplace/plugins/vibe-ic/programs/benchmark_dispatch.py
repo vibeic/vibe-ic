@@ -6159,10 +6159,12 @@ def _validated_route_reentry_state(*, bench: str, dataset: str | Path | None,
         return {"status": "REFUSED", "reason": str(exc)}
 
     expected_exit = str(receipt["verify_through"])
+    # The evidence window can end at RTL even when the issued input declares
+    # an IC delivery family. Reuse that immutable input declaration, as the
+    # first route decision does; a shallow target cannot flip the family.
     expected_route = _tnr.delivery_route_for_target(
         str(receipt["delivery_target"]),
-        "DIE" if str(receipt["delivery_target"]) in
-        {"gds", "shippable_gds", "foundry_handoff"} else None)
+        (task.get("prompt_delivery_requirements") or {}).get("route_family"))
     if result.get("exit") is not None and str(result.get("exit")) != expected_exit:
         return {"status": "REFUSED", "reason": "ROUTE_REENTRY_EXIT_MUTATION"}
     if (result.get("delivery_route") is not None

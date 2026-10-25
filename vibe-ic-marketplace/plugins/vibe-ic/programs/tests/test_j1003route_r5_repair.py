@@ -81,6 +81,37 @@ def _ready_backup(tmp_path, monkeypatch, prompt=None):
 frozen = SimpleNamespace(issue=_issue, resume=_resume)
 prior = SimpleNamespace(ready_backup=_ready_backup)
 
+
+@pytest.mark.parametrize("mutate_route", [False, True])
+def test_rtl_window_retains_the_issued_die_family_on_backup_reentry(
+        tmp_path, monkeypatch, mutate_route):
+    # A bounded RTL proof does not change the input's declared IC delivery
+    # family. Exercise issuance, D1, backup completion and ordinary resume.
+    prompt = ("Design a complete IC with module top_module, input a and "
+              "output y wired directly to a. Supply the RTL implementation.")
+    dataset, run, task, calls = prior.ready_backup(
+        tmp_path, monkeypatch, prompt=prompt)
+    solve_path = run / "solve_report.json"
+    solve = json.loads(solve_path.read_text())
+    row = solve["results"][0]
+    assert task["prompt_delivery_requirements"]["route_family"] == "DIE"
+    assert row["route_receipt"]["delivery_target"] == "rtl"
+    assert row["delivery_route"] == "ic"
+    if mutate_route:
+        row["delivery_route"] = "ip"
+        solve_path.write_text(json.dumps(solve))
+
+    rc = frozen.resume(dataset, run)
+    assert rc == 2
+    if mutate_route:
+        assert calls == []
+        current = json.loads(solve_path.read_text())["results"][0]
+        assert "ROUTE_REENTRY_ROUTE_MUTATION" in str(current)
+    else:
+        assert len(calls) == 1
+        assert calls[0][calls[0].index("--route") + 1] == "ic"
+        assert calls[0][calls[0].index("--exit-step") + 1] == "2"
+
 IC_PROMPTS=[
     'Design a complete chip containing an IP hardmacro and deliver a shippable GDS.',
     'Build a complete IC that incorporates a hardmacro and deliver a GDS.',
