@@ -1,0 +1,93 @@
+{
+  "producer": "native Magic PR9 zero-sheet-material control",
+  "producer_commit": "5f291d6666a1a1dc927b0fafe2c68bae462b37f3",
+  "geometry_sha256": "c9f73201f1f974f0d8a3a511a101299b6907f6aa780264a4c4593bbe174460c3",
+  "spice_sha256": "25b7caed2604b7f948dc3697e3ce6a25c7aff162c5a2d3ae1ab47aef830da015",
+  "header": {
+    "format": "magic.resistor-segments.v1",
+    "length_unit": "um",
+    "resistance_unit": "ohm",
+    "scale_um": 0.0010000000474974513,
+    "resist_scale": 1000,
+    "simplified": false,
+    "reader_resistance_offset_ohm": 0,
+    "zero_resistance": "ideal-equivalence",
+    "scale_um_numerator": 10,
+    "scale_um_denominator": 10000
+  },
+  "geometry": [
+    {
+      "network": "A",
+      "node_a": "B",
+      "node_b": "A.n1",
+      "type": "met2",
+      "type_long": "met2",
+      "resistance_ohm": 0.0625,
+      "ext_resistance_value": 0.0625,
+      "is_contact": false,
+      "node_a_um": [
+        0.5000000237487257,
+        0.2500000118743628
+      ],
+      "node_b_um": [
+        0.2500000118743628,
+        0.2500000118743628
+      ],
+      "ideal_short": false,
+      "width_grid": 500,
+      "length_grid": 250,
+      "width_um": 0.5000000237487257,
+      "length_um": 0.2500000118743628,
+      "sheet_resistance_ohm_per_square": 0.125,
+      "diagonal": false
+    },
+    {
+      "network": "A",
+      "node_a": "A",
+      "node_b": "A.n0",
+      "type": "met1",
+      "type_long": "met1",
+      "resistance_ohm": 0,
+      "ext_resistance_value": 0,
+      "is_contact": false,
+      "node_a_um": [
+        0,
+        0.2500000118743628
+      ],
+      "node_b_um": [
+        0.2500000118743628,
+        0.2500000118743628
+      ],
+      "ideal_short": true,
+      "width_grid": 500,
+      "length_grid": 250,
+      "width_um": 0.5000000237487257,
+      "length_um": 0.2500000118743628,
+      "sheet_resistance_ohm_per_square": 0,
+      "diagonal": false
+    },
+    {
+      "network": "A",
+      "node_a": "A.n1",
+      "node_b": "A.n0",
+      "type": "via1",
+      "type_long": "via1",
+      "resistance_ohm": 0.5,
+      "ext_resistance_value": 0.5,
+      "is_contact": true,
+      "node_a_um": [
+        0.2500000118743628,
+        0.2500000118743628
+      ],
+      "node_b_um": [
+        0.2500000118743628,
+        0.2500000118743628
+      ],
+      "ideal_short": false,
+      "cuts_x": 3,
+      "cuts_y": 3,
+      "per_cut_currents": null
+    }
+  ],
+  "spice": "* NGSPICE file created from array.ext - technology: round\n\n.option scale=50p\n\n.subckt array A B A.n1\nR0 A.n1 A 0.5\nR1 B A.n1 0.0625\n.ends\n"
+}

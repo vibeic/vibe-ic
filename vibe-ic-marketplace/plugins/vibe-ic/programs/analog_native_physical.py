@@ -1003,6 +1003,16 @@ def _reliability(project: Path, name: str, container: str, image: str, pdk: str,
     # invent a thermal solution, an EM current or an aging corner.
     for key, module in (("thermal", thermal), ("ir", ir), ("em", em), ("aging", aging)):
         setting = cfg.get(key) or {}
+        if key == "em" and "cases" in setting:
+            import analog_native_em
+            measured = analog_native_em.run(project, name, setting, container=container)
+            records[key] = {"status": measured["status"], "result": measured}
+            outputs.extend(Path(path) for path in measured.get("outputs", []))
+            native_inputs.update({"interconnect:" + role: view for role, view in
+                                  measured.get("native_inputs", {}).items()})
+            for index, path in enumerate(measured.get("outputs", [])):
+                remember("interconnect_output:" + str(index), Path(path))
+            continue
         report = project / str(setting.get("report") or f"__missing_{key}_report__")
         if not report.is_file():
             feature = "requires_" + key
