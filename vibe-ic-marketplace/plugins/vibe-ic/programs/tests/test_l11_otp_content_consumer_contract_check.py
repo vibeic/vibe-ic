@@ -18,6 +18,10 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 sys.path.insert(0, str(SCRIPT.parent))
 
 import l11_otp_content_consumer_contract_check as chk  # noqa: E402
+import ic_class_profile as ic_profile  # noqa: E402
+import l_doc_structured_field_count_check as field_count  # noqa: E402
+import phase1_doc_one_shot_runner as phase1  # noqa: E402
+import spi_protocol_synth  # noqa: E402
 
 CANON = "L11_OTP_CONTENT.json"
 
@@ -65,6 +69,54 @@ _AGREE = {"siteA": CANON, "siteB": CANON}
 
 def _run(tmp_path):
     return chk.main([str(tmp_path)])
+
+
+def _produce_l11(tmp_path, source_text):
+    """Run the actual L11 producer and its two normal post-producer writers."""
+    project = tmp_path / "producer_project"
+    docs = project / "input" / "docs"
+    docs.mkdir(parents=True)
+    (docs / "design.md").write_text(source_text, encoding="utf-8")
+    generated = project / "phase1" / "generated_docs"
+    generated.mkdir(parents=True)
+    (generated / "L4_REGMAP.json").write_text(json.dumps({
+        "otp_layout": None,
+        "no_otp_layout_in_input": False,
+    }))
+    phase1.gen_l11_otp_content(project, {"design.md": source_text})
+    phase1._post_emit_l11_fsm_strict_gate(project)
+    spi_protocol_synth.apply_spi_synth(generated, False, None)
+    return json.loads((generated / CANON).read_text())
+
+
+def test_source_silence_stays_unknown_through_actual_l11_writers(tmp_path):
+    doc = _produce_l11(tmp_path, "A small synchronous counter.\n")
+    assert doc["otp_layout"] is None
+    assert doc["no_otp_layout_in_input"] is False
+    assert doc["no_otp_fsm_in_input"] is False
+    assert doc["otp_present"] is None
+    assert field_count._has_honest_no_otp(doc) is False
+    assert field_count._has_explicit_no_otp_flag(doc) is False
+    assert ic_profile._l4_has_otp({"otp_layout": None}, doc, None) is False
+
+
+def test_explicit_source_bound_no_otp_authorizes_absence(tmp_path):
+    doc = _produce_l11(
+        tmp_path, "No OTP is included.\n")
+    assert doc["otp_layout"] is None
+    assert doc["no_otp_layout_in_input"] is True
+    assert doc["no_otp_fsm_in_input"] is True
+    assert doc["otp_present"] is False
+    assert field_count._has_honest_no_otp(doc) is True
+    assert field_count._has_explicit_no_otp_flag(doc) is True
+
+
+def test_unresolved_otp_prose_does_not_authorize_absence(tmp_path):
+    doc = _produce_l11(
+        tmp_path, "OTP availability is not yet determined by the owner.\n")
+    assert doc["no_otp_layout_in_input"] is False
+    assert doc["no_otp_fsm_in_input"] is False
+    assert doc["otp_present"] is None
 
 
 # ---------------------------------------------------------------------------

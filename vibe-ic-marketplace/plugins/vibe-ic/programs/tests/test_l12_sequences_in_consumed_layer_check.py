@@ -20,6 +20,8 @@ sys.path.insert(0, str(SCRIPT.parent))
 
 import l12_sequences_in_consumed_layer_check as chk  # noqa: E402
 import l12_sequence_implementation_check as consumer  # noqa: E402
+import l_doc_structured_field_count_check as field_count  # noqa: E402
+import phase1_doc_one_shot_runner as phase1  # noqa: E402
 
 L12 = "L12_BEHAVIORAL_SEQUENCES.json"
 OTHER = "L11_OTP_CONTENT.json"
@@ -61,6 +63,48 @@ def _cats(tmp_path):
 
 def _run(tmp_path):
     return chk.main([str(tmp_path)])
+
+
+def _produce_l12(tmp_path, source_text, l3=None):
+    project = tmp_path / "producer_project"
+    docs = project / "input" / "docs"
+    docs.mkdir(parents=True)
+    (docs / "design.md").write_text(source_text, encoding="utf-8")
+    phase1.gen_l12_behavioral(
+        project, {"design.md": source_text}, l3 or {"opcodes": []})
+    path = (project / "phase1" / "generated_docs"
+            / "L12_BEHAVIORAL_SEQUENCES.json")
+    return json.loads(path.read_text())
+
+
+def test_calibration_silence_stays_unknown_and_cannot_escape_consumer(tmp_path):
+    doc = _produce_l12(tmp_path, "A small synchronous counter.\n")
+    assert doc["no_calibration"] is False
+    assert "derived_no_calibration_source" not in doc.get(
+        "extraction_evidence", {})
+    ok, reason = field_count._check_l_doc(12, doc, ic_class="unknown")
+    assert ok is False
+    assert "no_calibration" in reason
+
+
+def test_explicit_source_bound_no_calibration_authorizes_escape(tmp_path):
+    doc = _produce_l12(
+        tmp_path, "This design requires no calibration or trimming.\n")
+    assert doc["no_calibration"] is True
+    assert "input/docs/design.md" in doc.get("extraction_evidence", {})
+    assert field_count._check_l_doc(12, doc, ic_class="unknown")[0] is True
+
+
+def test_positive_calibration_source_does_not_become_absence(tmp_path):
+    doc = _produce_l12(
+        tmp_path, "A calibration procedure writes a trim register.\n")
+    assert doc["no_calibration"] is False
+    assert field_count._check_l_doc(12, doc, ic_class="unknown")[0] is False
+
+
+def test_incidental_trim_word_does_not_authorize_absence(tmp_path):
+    doc = _produce_l12(tmp_path, "Trim whitespace before parsing.\n")
+    assert doc["no_calibration"] is False
 
 
 # ---------------------------------------------------------------------------
