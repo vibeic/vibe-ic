@@ -798,6 +798,95 @@ def test_native_cone_and_whole_model_answers_match_every_identity_and_arm(tmp_pa
     assert answers(left) == answers(right)
 
 
+def test_issue3391_domain_query_uses_the_measured_reset_row_cone(tmp_path):
+    """The batch-level reachability witness must not import unrelated logic."""
+    _yosys()
+    rtl = tmp_path / "m.v"
+    chain = ["wire [31:0] n0 = a;"]
+    for index in range(64):
+        chain.append(
+            f"wire [31:0] n{index + 1} = (n{index} + 32'd{index + 1}) ^ "
+            f"{{n{index}[30:0], n{index}[31]}};"
+        )
+    rtl.write_text(
+        "module m(input clk,rst,input [31:0] a,d,output reg q,output [31:0] noise);\n"
+        + "\n".join(chain)
+        + "\nassign noise = n64;\n"
+        + "always @(posedge clk) if(rst) q<=1'b0; else q<=d[0];\nendmodule\n"
+    )
+    rec = fsc.check(
+        [rtl], "m",
+        [{"rule": "reset_polarity", "signal": "rst", "value": "active_high"}],
+        tmp_path,
+    )
+    mapping = rec["claims"][0]["reset_control_mapping"]
+    assert mapping["native_row_cone"] == {
+        "eligible": True, "reason": "single-driver-total-boolean-dag"
+    }, mapping
+    transition = tmp_path / "reset_transition_0_727374"
+    model = json.loads((transition / "transition_pair.json").read_text())
+    assert len(model["modules"]["transition_pair"]["cells"]) > 250
+    lines = (transition / "transition_pair.ys").read_text().splitlines()
+    domain = lines.index("log VIBEIC_TRANSITION_QUERY domain")
+    complete = lines.index("log VIBEIC_TRANSITION_COMPLETE domain")
+    assert lines[domain - 2] == "select -module transition_pair"
+    assert lines[domain - 1].startswith("select w:") and lines[domain - 1].endswith(" %% %ci*")
+    assert lines[complete + 1] == "select -clear"
+    assert sum(line.startswith("log VIBEIC_TRANSITION_QUERY ") for line in lines) == \
+        mapping["query_progress"]["planned"]
+    print("ISSUE3391_DOMAIN_SCOPE " + json.dumps({
+        "paired_cells": len(model["modules"]["transition_pair"]["cells"]),
+        "domain_selection": lines[domain - 1],
+        "planned_queries": mapping["query_progress"]["planned"],
+        "completed_queries": mapping["query_progress"]["completed"],
+        "verdict": rec["verdict"],
+    }, sort_keys=True))
+
+
+@pytest.mark.parametrize("operator,cell_kind", [(">=", "$ge"), ("<=", "$le")])
+def test_issue3391_native_comparators_remain_exact_row_cones(tmp_path, operator, cell_kind):
+    _yosys()
+    rtl = tmp_path / "m.v"
+    rtl.write_text(
+        "module m(input clk,rst,input [7:0] a,b,output reg q);\n"
+        f"always @(posedge clk) if(rst) q<=1'b0; else q <= (a {operator} b);\n"
+        "endmodule\n"
+    )
+    rec = fsc.check(
+        [rtl], "m",
+        [{"rule": "reset_polarity", "signal": "rst", "value": "active_high"}],
+        tmp_path,
+    )
+    mapping = rec["claims"][0]["reset_control_mapping"]
+    transition = tmp_path / "reset_transition_0_727374" / "transition_pair.json"
+    model = json.loads(transition.read_text())["modules"]["transition_pair"]
+    assert cell_kind in {cell["type"] for cell in model["cells"].values()}
+    assert mapping["native_row_cone"] == {
+        "eligible": True, "reason": "single-driver-total-boolean-dag"
+    }, mapping
+    assert mapping["query_progress"]["completed"] == mapping["query_progress"]["planned"]
+
+
+def test_issue3391_malformed_comparator_shape_still_refuses_cone_scope():
+    model = {"modules": {"transition_pair": {
+        "ports": {
+            "a": {"direction": "input", "bits": [2]},
+            "b": {"direction": "input", "bits": [3]},
+            "y": {"direction": "output", "bits": [4]},
+        },
+        "cells": {"bad": {
+            "type": "$ge",
+            "parameters": {"A_WIDTH": 1, "B_WIDTH": 1,
+                           "A_SIGNED": 0, "B_SIGNED": 0},
+            "port_directions": {"A": "input", "B": "input", "Y": "output"},
+            "connections": {"A": [2], "B": [3], "Y": [4]},
+        }},
+    }}}
+    assert fsc._reset_row_cone_eligibility(model) == {
+        "eligible": False, "reason": "malformed-total-cell-shape"
+    }
+
+
 def test_native_host_progress_finishes_past_recorded_batch_budget(tmp_path):
     """Real progressing Python child, not a simulator or mocked supervisor."""
     import time
