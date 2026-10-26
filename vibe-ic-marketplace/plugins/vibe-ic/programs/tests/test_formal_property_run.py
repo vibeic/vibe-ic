@@ -1177,3 +1177,43 @@ def test_chip_read_refuses_post_execution_input_drift(tmp_path, monkeypatch, mut
     persisted = json.loads((formal / "formal_authoring_request.json").read_text())
     assert persisted["verdict"] == "INCOMPLETE" and persisted["reason"] == result["reason"]
     assert not (formal / "results.json").exists()
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["canonical-order", "reversed-order"])
+def test_authored_chip_read_preserves_elaboration_order(tmp_path, monkeypatch, reverse):
+    import _chip_synth_read as csr
+    rtl, harness, formal, task, kwargs, calls = _authored_chip_fixture(tmp_path, monkeypatch)
+    package = rtl.parent / "pkg.sv"
+    package.write_text("package fixture_pkg; parameter WIDTH = 1; endpackage\n")
+    canonical = [package, rtl]
+    selected = list(reversed(canonical)) if reverse else canonical
+    kwargs["rtl"] = selected
+    emitted = FPR.run(tmp_path, emit_only=True, **kwargs)
+    task = tmp_path / emitted["sby"]
+    current = csr.current_chip_read(tmp_path, "sample")
+    record = csr.chip_read_record(selected, [], "sample")
+    assert [r["name"] for r in current["files"]] == ["pkg.sv", "sample.v"]
+    assert csr.chip_read_differences(record, current) == []  # same unordered bytes
+    assert [line.split()[-1] for line in task.read_text().splitlines()
+            if line.startswith("read_verilog -sv ")] == [p.name for p in selected]
+    assert all(FPR._sha256_file(formal / p.name) == FPR._sha256_file(p)
+               for p in selected)
+    execute = FPR._run_sby
+    def staged_transcript(sby, *args, **kw):
+        transcript = execute(sby, *args, **kw)
+        for name in FPR.parse_sby_config(sby.read_text()):
+            shutil.copy2(formal / package.name,
+                         formal / f"{sby.stem}_{name}" / "src" / package.name)
+        return transcript
+    monkeypatch.setattr(FPR, "_run_sby", staged_transcript)
+    result = FPR.run(tmp_path, sby=task, **kwargs)
+    print(json.dumps({"fixture_only": True, "reverse": reverse,
+                      "canonical": current, "selected": record, "observed": result}))
+    if reverse:
+        assert result["verdict"] == "INCOMPLETE" and result["rc"] == 2, result
+        assert result["all_proved"] is False and not result.get("chip_read")
+        assert "ordered RTL read identity differs" in result["reason"]
+        assert not calls, "reversed elaboration must refuse before the solver seam"
+    else:
+        assert result["verdict"] == "PASS" and result["chip_read"] == current, result
+        assert len(calls) == 1

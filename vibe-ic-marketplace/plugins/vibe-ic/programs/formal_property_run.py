@@ -2556,7 +2556,12 @@ def _authored_chip_read(project, formal_dir, sby, harness, rtl, top):
         raise ValueError("authoritative chip_read_top does not bind the harness/DUT top")
     macros = csr.staged_macro_files(project)
     record = csr.chip_read_record(rtl, macros, chip_top)
-    differences = csr.chip_read_differences(record, csr.current_chip_read(project, chip_top))
+    current = csr.current_chip_read(project, chip_top)
+    differences = csr.chip_read_differences(record, current)
+    # Yosys elaboration depends on read order, not just the name/hash set.
+    if ([(r["name"], r["sha256"]) for r in record["files"]]
+            != [(r["name"], r["sha256"]) for r in current["files"]]):
+        differences.append("ordered RTL read identity differs")
     if differences or any(row["sha256"] == "unreadable" for row in record["files"]):
         raise ValueError("declared RTL differs from current chip read: " + str(differences))
     # A canonical read uses basename staging, not aliases or a second source.
