@@ -1088,6 +1088,58 @@ def _finish_selected_native_owner(project: Path, native_step: str,
     }]})
 
 
+def _complete_step8_early_preflight(project: Path) -> dict:
+    """Run only Step 8's registered netlist-independent owner consumer."""
+    import design_one_shot_runner as design
+    import flow109
+
+    row = design.step_sdc_validation(project)
+    extras = dict(row.extras)
+    status = row.status
+    if extras.get('early_preflight') is not True:
+        status = 'NOT_MEASURED'
+    try:
+        finished = flow109.finish_native_window(project, {'steps': [{
+            'status': status,
+            'extras': {**extras, 'step_id': '8', 'default_row_status': status,
+                       'completed': status == 'PASS', 'detail': row.detail,
+                       'output_files': list(row.output_files)},
+        }]})
+    except flow109.Flow109Error as exc:
+        finished = None
+        finalization_detail = f'D20_FINALIZATION_REFUSED: {exc}'
+    except FileExistsError as exc:
+        attempt = os.environ.get(flow109.ATTEMPT_ENV)
+        expected = Path(attempt) / 'result.json' if attempt else None
+        if exc.filename is None or expected is None or Path(exc.filename) != expected:
+            raise
+        finished = None
+        finalization_detail = ('D20_FINALIZATION_REFUSED: '
+                               'FLOW109_ATTEMPT_RESULT_EXISTS: immutable attempt '
+                               'result already exists')
+    else:
+        finalization_detail = 'D20_FINALIZATION_RESULT_INVALID'
+    components = finished.get('components') if isinstance(finished, Mapping) else None
+    component = components[0] if isinstance(components, list) and len(components) == 1 else {}
+    finalized = (finished if isinstance(finished, Mapping)
+                 and finished.get('schema') == 'vibeic.flow109.window-attempt-result.v1'
+                 and finished.get('default_row_status') in ('PASS', 'FAIL', 'NOT_MEASURED')
+                 and finished.get('whole_flow_acceptance') == 'NOT_MEASURED'
+                 and finished.get('delivery_accepted') is False
+                 and component.get('step_id') == 'D20'
+                 and component.get('default_row_status') == finished.get('default_row_status')
+                 and component.get('completed') is (finished.get('default_row_status') == 'PASS')
+                 else None)
+    status = (finalized or {}).get('default_row_status', 'NOT_MEASURED')
+    if finalized is not None:
+        finalization_detail = row.detail
+    return {'verdict': status, 'detail': finalization_detail,
+            'early_preflight': extras.get('early_preflight') is True,
+            'deferred_until': extras.get('deferred_until'),
+            'mapped_path_claimed': False, 'frontend_dispatched': False,
+            'outputs': list(row.output_files)}
+
+
 def _complete_step11_dft(project: Path, top: str, container: str) -> dict:
     """Run the existing Step-11 producer on the current Step-9 subject."""
     import design_one_shot_runner as design
@@ -3252,8 +3304,13 @@ def _main() -> int:
     _entry_runner = None
     _prelayout_entry = (str(getattr(args, 'entry_step', None)) == '10'
                         and execution_policy_value['mode'] == 'default')
+    _flow109_owner_entry = bool(os.environ.get('VIBEIC_FLOW109_CONTEXT'))
+    _sdc_early_entry = (str(getattr(args, 'entry_step', None)) == '8'
+                        and execution_policy_value['mode'] == 'default'
+                        and _flow109_owner_entry)
     _sdc_postcheck_entry = (str(getattr(args, 'entry_step', None)) == '8'
-                            and execution_policy_value['mode'] == 'default')
+                            and execution_policy_value['mode'] == 'default'
+                            and not _flow109_owner_entry)
     _dft_entry = (str(getattr(args, 'entry_step', None)) == '11'
                   and execution_policy_value['mode'] == 'default')
     _post_dft_entry = (str(getattr(args, 'entry_step', None)) == '12'
@@ -3266,7 +3323,8 @@ def _main() -> int:
                   file=sys.stderr)
             return 2
         _entry_runner = _spf_o.runner_for_step(str(args.entry_step))
-        if _prelayout_entry or _sdc_postcheck_entry or _dft_entry or _post_dft_entry:
+        if (_prelayout_entry or _sdc_early_entry or _sdc_postcheck_entry
+                or _dft_entry or _post_dft_entry):
             # These retained Default owners have complete consumers and do
             # not need the larger dispatch span that normally contains them.
             _entry_runner = 'design_one_shot_runner'
@@ -3300,6 +3358,10 @@ def _main() -> int:
         _record_continuation_evidence(
             project, str(args.entry_step), args.exit_step,
             (str(_resume_plan.get("reason")) if _resume_plan is not None else None))
+        if _sdc_early_entry and str(args.exit_step) != '8':
+            print('REFUSED: Default Step8 early preflight needs --exit-step 8', file=sys.stderr)
+            lock.release()
+            return 2
         if _sdc_postcheck_entry and str(args.exit_step) != '8':
             print('REFUSED: Default Step8 postcheck needs --exit-step 8', file=sys.stderr)
             lock.release()
@@ -3989,6 +4051,22 @@ def _main() -> int:
     # ---------------- Phase 2 ----------------
     _phase2_pad_top_deferred = None
     if not halted_at:
+        if _sdc_early_entry:
+            step8_acceptance = _complete_step8_early_preflight(project)
+            status = step8_acceptance['verdict']
+            rc = 0 if status == 'PASS' else 1 if status == 'FAIL' else 2
+            out = _pl.report_path(project, 'vibe_ic_one_shot.json')
+            out.parent.mkdir(parents=True, exist_ok=True)
+            _write_runner_summary(out, {
+                'program': 'vibe_ic_one_shot_runner', 'bounded': True,
+                **_delivery_route.report_label(project), 'verdict': status,
+                'halted_at': None if status == 'PASS' else 'phase2',
+                'declared_window': {'entry_step': '8', 'exit_step': '8'},
+                'phases': [{'name': n, 'verdict': v, 'rc': code} for n, v, code in plan],
+                'step8_early_preflight': step8_acceptance,
+                'whole_flow_verdict': 'NOT_MEASURED'}, project)
+            lock.release()
+            return rc
         if _sdc_postcheck_entry:
             step8_acceptance = _complete_step8_postcheck(project, flow_top)
             status = step8_acceptance['verdict']
@@ -4000,7 +4078,8 @@ def _main() -> int:
                 **_delivery_route.report_label(project), 'verdict': status,
                 'halted_at': None if status == 'PASS' else 'phase2',
                 'declared_window': {'entry_step': '8', 'exit_step': '8'},
-                'phases': [{'name': n, 'verdict': v, 'rc': code} for n, v, code in plan],
+                'phases': [{'name': n, 'verdict': v, 'rc': code}
+                           for n, v, code in plan],
                 'step8_postcheck': step8_acceptance,
                 'whole_flow_verdict': 'NOT_MEASURED'}, project)
             lock.release()

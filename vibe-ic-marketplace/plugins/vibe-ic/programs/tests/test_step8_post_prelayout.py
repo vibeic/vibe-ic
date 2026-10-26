@@ -1,7 +1,10 @@
 """Step 8 waits for its tool producer, then consumes current evidence directly."""
 import ast
+import copy
 import json
+import os
 import shutil
+import sys
 from dataclasses import asdict
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +16,7 @@ import execution_policy as E
 import librelane_contract as LC
 import librelane_prelayout as LP
 import phase3_one_shot_runner as P
+import vibe_ic_one_shot_runner as V
 
 
 def put(path, value):
@@ -104,6 +108,191 @@ def test_tool_step8_early_preflight_refuses_missing_or_unjustified_constraints(
     row = D.step_sdc_validation(tmp_path)
     assert row.status == 'FAIL'
     assert row.extras['early_preflight'] is True
+
+
+@pytest.mark.parametrize('case', ['valid', 'missing_sdc', 'unjustified_exception'])
+def test_public_d20_owner_entry_runs_only_early_preflight(
+        tmp_path, monkeypatch, case):
+    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'8': 'dual'}})
+    put(tmp_path / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json', {
+        'clock_domains': [{'name': 'clk', 'source_pin': 'clk', 'period_ns': 10}]})
+    if case != 'missing_sdc':
+        text = ('create_clock -name clk -period 10 [get_ports clk]\n'
+                'set_input_delay 1 -clock clk [get_ports d]\n'
+                'set_output_delay 1 -clock clk [get_ports q]\n')
+        if case == 'unjustified_exception':
+            text += 'set_false_path -from [get_clocks clk] -to [get_clocks foreign]\n'
+        put(tmp_path / 'phase2/stage2/constraints/neutral.asic.sdc', text)
+    put(tmp_path / 'phase2/stage1/rtl/neutral.v',
+        'module neutral(input clk, d, output q); assign q=d; endmodule\n')
+    monkeypatch.setattr(E, '_ordinary_runtime', {
+        'project': tmp_path.resolve(), 'policy': {'mode': 'default'}, 'parameters': {}})
+    monkeypatch.setattr(E, 'dispatch_fixed_step', lambda *_a, **_k:
+                        pytest.fail('D20 early entry dispatched a frontend worker'))
+    finished = []
+    import flow109
+    def finish(project, report):
+        finished.append((project, report))
+        status = report['steps'][0]['status']
+        return {'schema': 'vibeic.flow109.window-attempt-result.v1',
+                'default_row_status': status, 'whole_flow_acceptance': 'NOT_MEASURED',
+                'delivery_accepted': False, 'components': [{
+                    'step_id': 'D20', 'default_row_status': status,
+                    'completed': status == 'PASS'}]}
+    monkeypatch.setattr(flow109, 'finish_native_window', finish)
+    result = V._complete_step8_early_preflight(tmp_path)
+    expected = 'PASS' if case == 'valid' else 'FAIL'
+    assert result['verdict'] == expected, result
+    assert result['early_preflight'] is True
+    assert result['mapped_path_claimed'] is False
+    assert result['frontend_dispatched'] is False
+    assert ('no mapped-path claim' in result['detail']) == (case == 'valid')
+    assert finished[0][1]['steps'][0]['extras']['step_id'] == '8'
+    assert finished[0][1]['steps'][0]['extras']['completed'] is (case == 'valid')
+
+
+@pytest.mark.parametrize('finalization', ['none', 'wrong_d20_identity', 'refused'])
+def test_public_d20_owner_entry_refuses_unbound_finalization(
+        tmp_path, monkeypatch, finalization):
+    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'8': 'dual'}})
+    put(tmp_path / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json', {
+        'clock_domains': [{'name': 'clk', 'source_pin': 'clk', 'period_ns': 10}]})
+    put(tmp_path / 'phase2/stage2/constraints/neutral.asic.sdc',
+        'create_clock -name clk -period 10 [get_ports clk]\n'
+        'set_input_delay 1 -clock clk [get_ports d]\n'
+        'set_output_delay 1 -clock clk [get_ports q]\n')
+    monkeypatch.setattr(E, '_ordinary_runtime', {
+        'project': tmp_path.resolve(), 'policy': {'mode': 'default'}, 'parameters': {}})
+    monkeypatch.setattr(E, 'dispatch_fixed_step', lambda *_a, **_k:
+                        pytest.fail('D20 refusal dispatched a frontend worker'))
+    import flow109
+    if finalization == 'none':
+        returned = None
+    elif finalization == 'refused':
+        def refuse(*_args, **_kwargs):
+            raise flow109.Flow109Error('FLOW109_ATTEMPT_REQUEST_INVALID',
+                                       'immutable attempt request identity differs')
+        monkeypatch.setattr(flow109, 'finish_native_window', refuse)
+        returned = None
+    else:
+        returned = {'schema': 'vibeic.flow109.window-attempt-result.v1',
+                    'default_row_status': 'PASS',
+                    'whole_flow_acceptance': 'NOT_MEASURED',
+                    'delivery_accepted': False, 'components': [{
+                        'step_id': 'D26', 'default_row_status': 'PASS',
+                        'completed': True}]}
+    if finalization != 'refused':
+        monkeypatch.setattr(flow109, 'finish_native_window', lambda *_a, **_k: returned)
+    result = V._complete_step8_early_preflight(tmp_path)
+    assert result['verdict'] == 'NOT_MEASURED'
+    if finalization == 'refused':
+        assert result['detail'].startswith(
+            'D20_FINALIZATION_REFUSED: FLOW109_ATTEMPT_REQUEST_INVALID:')
+    else:
+        assert result['detail'] == 'D20_FINALIZATION_RESULT_INVALID'
+    assert result['early_preflight'] is True
+    assert result['mapped_path_claimed'] is False
+    assert result['frontend_dispatched'] is False
+
+
+def test_public_d20_wrapper_none_finalization_is_rc2_not_measured(
+        tmp_path, monkeypatch):
+    import flow109
+    features = copy.deepcopy(next(
+        item['features'] for item in flow109.load_registry()['reference_profiles']
+        if item['name'] == 'Small digital IC without DFT'))
+    manifest = put(tmp_path / 'flow109-manifest.json', {'features': features})
+    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'8': 'dual'}})
+    put(tmp_path / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json', {
+        'clock_domains': [{'name': 'clk', 'source_pin': 'clk', 'period_ns': 10}]})
+    put(tmp_path / 'phase2/stage2/constraints/neutral.asic.sdc',
+        'create_clock -name clk -period 10 [get_ports clk]\n'
+        'set_input_delay 1 -clock clk [get_ports d]\n'
+        'set_output_delay 1 -clock clk [get_ports q]\n')
+    put(tmp_path / 'phase2/stage1/rtl/neutral.v',
+        'module neutral(input clk, d, output q); assign q=d; endmodule\n')
+    monkeypatch.setattr(V, '_activate_runtime_program_tree', lambda _project: None)
+    monkeypatch.setattr(V, '_capture_container_image', lambda *_a, **_k: {
+        'verdict': 'PASS'})
+    monkeypatch.setattr(flow109, 'finish_native_window', lambda *_a, **_k: None)
+    monkeypatch.setattr(sys, 'argv', [str(Path(V.__file__)), str(tmp_path),
+                        '--flow', '109', '--flow109-manifest', str(manifest),
+                        '--entry-step', 'D20', '--exit-step', 'D20',
+                        '--route', 'ic', '--no-dashboard'])
+    assert V._main() == 2
+    summary = json.loads((tmp_path / 'reports/orchestrator/vibe_ic_one_shot.json').read_text())
+    assert summary['verdict'] == 'NOT_MEASURED'
+    assert summary['step8_early_preflight']['verdict'] == 'NOT_MEASURED'
+    assert summary['step8_early_preflight']['detail'] == 'D20_FINALIZATION_RESULT_INVALID'
+    assert summary['whole_flow_verdict'] == 'NOT_MEASURED'
+    assert summary['halted_at'] == 'phase2'
+    attempts = list((tmp_path / 'reports/flow109/attempts').glob('window-*'))
+    assert len(attempts) == 1 and not (attempts[0] / 'result.json').exists()
+
+
+def test_public_d20_wrapper_preexisting_result_is_named_rc2_without_overwrite(
+        tmp_path, monkeypatch):
+    import flow109
+    features = copy.deepcopy(next(
+        item['features'] for item in flow109.load_registry()['reference_profiles']
+        if item['name'] == 'Small digital IC without DFT'))
+    manifest = put(tmp_path / 'flow109-manifest.json', {'features': features})
+    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'8': 'dual'}})
+    put(tmp_path / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json', {
+        'clock_domains': [{'name': 'clk', 'source_pin': 'clk', 'period_ns': 10}]})
+    put(tmp_path / 'phase2/stage2/constraints/neutral.asic.sdc',
+        'create_clock -name clk -period 10 [get_ports clk]\n'
+        'set_input_delay 1 -clock clk [get_ports d]\n'
+        'set_output_delay 1 -clock clk [get_ports q]\n')
+    put(tmp_path / 'phase2/stage1/rtl/neutral.v',
+        'module neutral(input clk, d, output q); assign q=d; endmodule\n')
+    monkeypatch.setattr(V, '_activate_runtime_program_tree', lambda _project: None)
+    monkeypatch.setattr(V, '_capture_container_image', lambda *_a, **_k: {
+        'verdict': 'PASS'})
+    finish = flow109.finish_native_window
+    tampered = '{"status":"PASS","delivery_accepted":true}\n'
+    def preexisting(project, report):
+        result = Path(os.environ[flow109.ATTEMPT_ENV]) / 'result.json'
+        result.write_text(tampered)
+        return finish(project, report)
+    monkeypatch.setattr(flow109, 'finish_native_window', preexisting)
+    monkeypatch.setattr(sys, 'argv', [str(Path(V.__file__)), str(tmp_path),
+                        '--flow', '109', '--flow109-manifest', str(manifest),
+                        '--entry-step', 'D20', '--exit-step', 'D20',
+                        '--route', 'ic', '--no-dashboard'])
+    try:
+        rc = V._main()
+        escaped = 'NO_EXCEPTION'
+    except FileExistsError as exc:
+        rc, escaped = None, type(exc).__name__
+    assert escaped == 'NO_EXCEPTION', {'escaped_exception': escaped, 'rc': rc}
+    assert rc == 2
+    summary = json.loads((tmp_path / 'reports/orchestrator/vibe_ic_one_shot.json').read_text())
+    early = summary['step8_early_preflight']
+    assert summary['verdict'] == early['verdict'] == 'NOT_MEASURED'
+    assert early['detail'].startswith(
+        'D20_FINALIZATION_REFUSED: FLOW109_ATTEMPT_RESULT_EXISTS:')
+    assert summary['whole_flow_verdict'] == 'NOT_MEASURED'
+    assert summary['halted_at'] == 'phase2'
+    attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
+    assert (attempt / 'result.json').read_text() == tampered
+
+
+def test_public_step8_branch_selects_early_not_postprelayout_consumer():
+    tree = ast.parse(Path(V.__file__).read_text())
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == '_main')
+    branch = next(node for node in ast.walk(main) if isinstance(node, ast.If)
+                  and isinstance(node.test, ast.Name)
+                  and node.test.id == '_sdc_early_entry')
+    calls = {node.func.id for node in ast.walk(branch)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    assert '_complete_step8_early_preflight' in calls
+    assert '_complete_step8_postcheck' not in calls
+    source = ast.unparse(main)
+    assert "VIBEIC_FLOW109_CONTEXT" in source
+    assert '_sdc_early_entry = ' in source and 'and _flow109_owner_entry' in source
+    assert '_sdc_postcheck_entry = ' in source and 'not _flow109_owner_entry' in source
 
 
 def test_flow109_d20_d26_split_keeps_stable_obligations():
