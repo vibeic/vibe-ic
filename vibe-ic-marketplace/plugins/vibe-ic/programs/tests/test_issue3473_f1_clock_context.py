@@ -194,6 +194,17 @@ def test_named_edge_never_borrows_a_foreign_clock():
     }
 
 
+def test_trailing_denial_does_not_publish_explicit_named_edge():
+    result = clock_edge_semantics(
+        "clk_i", {"input/docs/phase1_prompt.md":
+                  "A rising `clk_i` edge is not used.\n"})
+    assert result["edge"] == "posedge"
+    provenance = result["semantic_provenance"]["edge"]
+    assert provenance["kind"] == "convention"
+    assert provenance["rule"] == "default_positive_clock_edge"
+    assert "basis" not in provenance
+
+
 def test_conflicting_named_edge_sentences_remain_ambiguous():
     text = ("On a rising `clk_i` edge, sample the input.\n"
             "On a falling `clk_i` edge, update the output.\n")

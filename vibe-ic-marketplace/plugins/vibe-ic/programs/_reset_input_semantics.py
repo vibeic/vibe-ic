@@ -485,7 +485,9 @@ def event_declarations(text, clock_name=None):
                        'evidence': raw.strip()}
             for match in (named_clock_edge.finditer(line)
                           if named_clock_edge is not None else ()):
-                if is_denied(line[:match.end()], ignore_bracketed=False):
+                # The bounded clause owns the declaration: a trailing denial
+                # must not be discarded merely because it follows the edge.
+                if is_denied(line, ignore_bracketed=False):
                     continue
                 value = match['prose'].lower()
                 yield {'name': clock_name, 'role': 'clock',
