@@ -85,8 +85,8 @@ Usage:
 
 Exit codes:
     0 = PASS
-    1 = FAIL (blocking)
-    2 = SKIP / input missing
+    1 = FAIL / REFUSED (blocking)
+    2 = typed NOT_APPLICABLE, or an unusable project argument
 
 Honors waiver ``l10_test_case_oracle_anchor_intentional`` (>=40 chars).
 """
@@ -369,14 +369,55 @@ def audit(l10_path: Path, docs_dir: Path) -> Dict:
         })
         return report
 
+    if not isinstance(data, dict):
+        report["findings"].append({
+            "severity": "ERROR", "category": "INVALID_ROOT",
+            "case": "", "message": "L10 root must be a JSON object.",
+        })
+        return report
+
     cases: List[dict] = []
+    declared_population = sum(
+        len(data.get(k)) for k in _CASE_ARRAY_KEYS
+        if isinstance(data.get(k), list))
     for k in _CASE_ARRAY_KEYS:
-        v = data.get(k) if isinstance(data, dict) else None
+        v = data.get(k)
         if isinstance(v, list) and v:
             cases = [c for c in v if isinstance(c, dict)]
+            if len(cases) != len(v):
+                report["findings"].append({
+                    "severity": "ERROR", "category": "INVALID_CASE_ENTRY",
+                    "case": "", "message": (
+                        f"{k} contains a non-object case entry."),
+                })
             break
-    report["summary"]["cases_total"] = len(cases)
-    if not cases:
+    report["summary"]["cases_total"] = declared_population
+
+    declared_zero = data.get("no_test_cases_in_input") is True
+    test_cases = data.get("test_cases")
+    report["zero_case_declaration"] = {
+        "no_test_cases_in_input": data.get("no_test_cases_in_input"),
+        "test_cases_is_list": isinstance(test_cases, list),
+        "test_cases_count": len(test_cases) if isinstance(test_cases, list) else None,
+    }
+    if declared_zero and declared_population:
+        report["findings"].append({
+            "severity": "ERROR",
+            "category": "CONFLICTING_ZERO_CASE_DECLARATION",
+            "case": "",
+            "message": ("no_test_cases_in_input=true conflicts with a "
+                        "non-zero declared case population."),
+        })
+    if declared_population == 0:
+        if test_cases != [] or not declared_zero:
+            report["findings"].append({
+                "severity": "ERROR",
+                "category": "UNAUTHORIZED_ZERO_CASE_DECLARATION",
+                "case": "",
+                "message": ("zero executable cases require both the typed "
+                            "test_cases=[] population and the source-bound "
+                            "no_test_cases_in_input=true declaration."),
+            })
         return report
 
     observables = harvest_observables(docs_dir)
@@ -500,23 +541,55 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     l10 = _find_l10(project)
     if l10 is None:
-        print("[SKIP] l10_test_case_oracle_anchor_check: "
+        report = {
+            "program": "l10_test_case_oracle_anchor_check",
+            "version": "1.0.0",
+            "verdict": "FAIL",
+            "findings": [{
+                "severity": "ERROR", "category": "MISSING_L10",
+                "case": "", "message": "L10_TEST_CASES.json not found",
+            }],
+        }
+        if args.json_out:
+            outp = Path(args.json_out)
+            outp.parent.mkdir(parents=True, exist_ok=True)
+            outp.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+        print("[FAIL] l10_test_case_oracle_anchor_check: "
               "L10_TEST_CASES.json not found")
-        return 2
+        return 1
 
     report = audit(l10, l10.parent)
-    if args.json_out:
-        outp = Path(args.json_out)
-        outp.parent.mkdir(parents=True, exist_ok=True)
-        outp.write_text(json.dumps(report, indent=2, ensure_ascii=False))
-
     s = report["summary"]
     errs = [f for f in report["findings"] if f["severity"] == "ERROR"]
     report["summary"]["pass"] = not errs
 
-    if s["cases_total"] == 0:
-        print("[SKIP] l10_test_case_oracle_anchor_check: "
-              "L10 declares no test_cases[]")
+    if not errs and s["cases_total"] == 0:
+        # Cleanly inapplicable is not a PASS. Keep the top-level verdict and
+        # the legacy summary boolean in agreement so no receipt reader can
+        # mistake an accepted typed N/A for a successful oracle check.
+        report["summary"]["pass"] = False
+        report.update({
+            "verdict": "NOT_APPLICABLE",
+            "reason_class": "DESIGN_DECLARED_NA",
+            "reason": ("L10 source-declares a zero test-case population; "
+                       "there is no executable case requiring an oracle anchor."),
+            "applicability_evidence": {
+                "kind": "design-declared-zero-population",
+                "declaration_path": str(l10.relative_to(project)),
+                "population_paths": list(_CASE_ARRAY_KEYS),
+                "declared_population": 0,
+                "assertions": [
+                    {"path": "no_test_cases_in_input", "equals": True},
+                    {"path": "test_cases", "equals": []},
+                ],
+            },
+        })
+        if args.json_out:
+            outp = Path(args.json_out)
+            outp.parent.mkdir(parents=True, exist_ok=True)
+            outp.write_text(json.dumps(report, indent=2, ensure_ascii=False))
+        print("NOT_APPLICABLE [DESIGN_DECLARED_NA]: L10 source-declares "
+              "test_cases=[] and no_test_cases_in_input=true")
         return 2
 
     if errs:
@@ -530,15 +603,31 @@ def main(argv: Optional[List[str]] = None) -> int:
         body = "\n".join(f"  - [{f['category']}] {f['case']}: {f['message']}"
                          for f in errs[:8])
         if waived:
+            report["verdict"] = "PASS_WITH_WAIVERS"
+            if args.json_out:
+                outp = Path(args.json_out)
+                outp.parent.mkdir(parents=True, exist_ok=True)
+                outp.write_text(json.dumps(report, indent=2,
+                                           ensure_ascii=False))
             print(f"[PASS] l10_test_case_oracle_anchor_check: waived "
                   f"({WAIVER_KEY}; {len(errs)} finding(s) suppressed)")
             return 0
+        report["verdict"] = "FAIL"
+        if args.json_out:
+            outp = Path(args.json_out)
+            outp.parent.mkdir(parents=True, exist_ok=True)
+            outp.write_text(json.dumps(report, indent=2, ensure_ascii=False))
         print(head)
         print(body)
         if len(errs) > 8:
             print(f"  ... {len(errs) - 8} more")
         return 1
 
+    report["verdict"] = "PASS"
+    if args.json_out:
+        outp = Path(args.json_out)
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        outp.write_text(json.dumps(report, indent=2, ensure_ascii=False))
     print(f"[PASS] l10_test_case_oracle_anchor_check: "
           f"{s['cases_anchored']}/{s['cases_executable']} executable case(s) "
           f"carry an oracle anchor; {s['cases_doc_kind_skipped']} doc-kind "

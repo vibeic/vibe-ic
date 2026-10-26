@@ -20,6 +20,7 @@ assert SCRIPT.exists(), f"Script not found: {SCRIPT}"
 sys.path.insert(0, str(SCRIPT.parent))
 
 import l10_test_case_oracle_anchor_check as chk  # noqa: E402
+import flow_compliance_check as consumer  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -42,9 +43,12 @@ def _write_sibling(docs, name="L17_CHANNEL_SIGNal.json", signals=None):
         {"signals": [{"name": s, "direction": "output"} for s in signals]}))
 
 
-def _write_l10(docs, cases):
+def _write_l10(docs, cases, *, no_test_cases_in_input=None):
+    payload = {"test_cases": cases}
+    if no_test_cases_in_input is not None:
+        payload["no_test_cases_in_input"] = no_test_cases_in_input
     (docs / "L10_TEST_CASES.json").write_text(
-        json.dumps({"test_cases": cases}, ensure_ascii=False))
+        json.dumps(payload, ensure_ascii=False))
 
 
 def _run(tmp_path):
@@ -55,6 +59,13 @@ def _errors(tmp_path):
     docs = _docs(tmp_path)
     rep = chk.audit(docs / "L10_TEST_CASES.json", docs)
     return [f["category"] for f in rep["findings"] if f["severity"] == "ERROR"]
+
+
+def _consume(tmp_path):
+    return consumer._check_program_exit_zero(
+        tmp_path,
+        "l10_test_case_oracle_anchor_check . --json "
+        "reports/phase1/gates/l10_test_case_oracle_anchor.json")
 
 
 # ---------------------------------------------------------------------------
@@ -230,15 +241,80 @@ def test_NEGATIVE_control_same_entry_as_functional_vector_fails(tmp_path):
 # ---------------------------------------------------------------------------
 # 5. SKIP paths must not masquerade as PASS
 # ---------------------------------------------------------------------------
-def test_missing_l10_skips(tmp_path):
+def test_missing_l10_refuses(tmp_path):
     _docs(tmp_path)
-    assert chk.main([str(tmp_path)]) == 2
+    assert chk.main([str(tmp_path)]) == 1
 
 
-def test_empty_case_array_skips(tmp_path):
+def test_empty_case_array_without_source_declaration_refuses(tmp_path):
     docs = _docs(tmp_path)
     _write_l10(docs, [])
-    assert chk.main([str(tmp_path)]) == 2
+    assert chk.main([str(tmp_path)]) == 1
+    assert "UNAUTHORIZED_ZERO_CASE_DECLARATION" in _errors(tmp_path)
+
+
+def test_source_declared_zero_cases_is_typed_not_applicable(tmp_path):
+    docs = _docs(tmp_path)
+    _write_l10(docs, [], no_test_cases_in_input=True)
+
+    result = _consume(tmp_path)
+    assert result.exit_code == 2
+    assert result.structured_verdict == "NOT_APPLICABLE"
+    assert result.verdict == "NOT_APPLICABLE"
+    assert result.reason_class == "DESIGN_DECLARED_NA"
+
+    report = json.loads((tmp_path / "reports/phase1/gates/"
+                         "l10_test_case_oracle_anchor.json").read_text())
+    assert report["summary"]["pass"] is False
+    assert report["applicability_evidence"] == {
+        "kind": "design-declared-zero-population",
+        "declaration_path": "phase1/generated_docs/L10_TEST_CASES.json",
+        "population_paths": ["test_cases", "cases", "tests", "vectors"],
+        "declared_population": 0,
+        "assertions": [
+            {"path": "no_test_cases_in_input", "equals": True},
+            {"path": "test_cases", "equals": []},
+        ],
+    }
+
+
+def test_missing_l10_is_not_accepted_as_typed_zero_case(tmp_path):
+    _docs(tmp_path)
+    result = _consume(tmp_path)
+    assert result.exit_code == 1
+    assert result.structured_verdict == "FAIL"
+    assert result.verdict == "FAIL"
+    assert result.reason_class != "DESIGN_DECLARED_NA"
+
+
+def test_malformed_l10_refuses_through_consumer(tmp_path):
+    docs = _docs(tmp_path)
+    (docs / "L10_TEST_CASES.json").write_text("{not-json")
+    result = _consume(tmp_path)
+    assert result.exit_code == 1
+    assert result.structured_verdict == "FAIL"
+    assert result.verdict == "FAIL"
+
+
+def test_executable_case_without_anchor_still_fails_through_consumer(tmp_path):
+    docs = _docs(tmp_path)
+    _write_l10(docs, [{"name": "tc_unanchored", "kind": "functional_vector",
+                       "stimulus": "drive request",
+                       "expected": "behaves as described"}])
+    result = _consume(tmp_path)
+    assert result.exit_code == 1
+    assert result.structured_verdict == "FAIL"
+    assert result.verdict == "FAIL"
+
+
+def test_forged_zero_declaration_with_a_case_refuses(tmp_path):
+    docs = _docs(tmp_path)
+    _write_l10(docs, [dict(_GOOD_CASE)], no_test_cases_in_input=True)
+    result = _consume(tmp_path)
+    assert result.exit_code == 1
+    assert result.structured_verdict == "FAIL"
+    assert result.verdict == "FAIL"
+    assert "CONFLICTING_ZERO_CASE_DECLARATION" in _errors(tmp_path)
 
 
 # ---------------------------------------------------------------------------
