@@ -69,6 +69,7 @@ import shutil
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Tuple
 import _path_layout as _pl
@@ -1124,13 +1125,17 @@ def _flow109_selected_row(row_id: str) -> bool:
             and context.get('requested_step') == row_id)
 
 
-def _d09_bound_phase2_evidence(project: Path, report: Mapping) -> tuple[str, dict, str]:
+def _d09_bound_phase2_evidence(
+        project: Path, report: Mapping, invocation: Mapping,
+        *, published_current: bool) -> tuple[str, dict, str]:
     """Judge D09 only from one source/material-bound Phase-2 owner report."""
     import benchmark_dispatch as dispatch
 
     project = Path(project).resolve()
     report_path = _pl.report_path(project, 'phase2_one_shot.json')
     try:
+        if published_current is not True:
+            raise ValueError('Phase-2 report was not published by this child invocation')
         if report_path.is_symlink() or not report_path.is_file():
             raise ValueError('fresh Phase-2 report is absent or a symlink')
         if json.loads(report_path.read_text(encoding='utf-8')) != report:
@@ -1138,18 +1143,30 @@ def _d09_bound_phase2_evidence(project: Path, report: Mapping) -> tuple[str, dic
         binding = report['runner_binding']
         argv = binding['argv']
         source = binding['source']
-        if (binding.get('schema') != 'vibeic.runner_report_binding.v1'
+        expected = dict(invocation)
+        if (set(expected) != {'invocation_id', 'argv', 'project', 'source'}
+                or expected.get('project') != str(project)
+                or not expected.get('invocation_id')
+                or binding.get('schema') != 'vibeic.runner_report_binding.v1'
+                or binding.get('invocation_id') != expected['invocation_id']
                 or binding.get('project') != str(project)
+                or binding.get('argv') != expected['argv']
+                or binding.get('source') != expected['source']
                 or binding.get('report_name') != 'phase2_one_shot.json'
-                or not binding.get('invocation_id')
                 or not isinstance(argv, list) or len(argv) < 3
                 or str(Path(argv[2]).resolve()) != str(project)
-                or Path(argv[1]).name != 'design_one_shot_runner.py'
-                or binding.get('producer') != source.get('runner')
+                or Path(argv[1]).name != 'phase2_one_shot_runner.py'
                 or source != dispatch._runner_source_snapshot(
                     argv, consumer=source['consumer']['path'])
                 or binding.get('material') != dispatch._runner_material_snapshot(project)):
             raise ValueError('report project, invocation, source, input, or RTL binding differs')
+        producer = binding.get('producer') or {}
+        producer_path = Path(str(producer.get('path') or ''))
+        if (producer_path.name != 'design_one_shot_runner.py'
+                or not producer_path.is_file()
+                or hashlib.sha256(producer_path.read_bytes()).hexdigest()
+                != producer.get('sha256')):
+            raise ValueError('report producer is not the current Phase-2 author')
         entry = argv.index('--entry-step')
         exit_ = argv.index('--exit-step')
         declared = report.get('declared_window') or {}
@@ -1234,15 +1251,21 @@ def _d09_bound_phase2_evidence(project: Path, report: Mapping) -> tuple[str, dic
     return 'PASS', evidence, 'complete same-invocation D09 owner evidence'
 
 
-def _finish_d09_selected_owner(project: Path, report: Mapping) -> dict:
+def _finish_d09_selected_owner(
+        project: Path, report: Mapping, invocation: Mapping, *,
+        published_current: bool) -> dict:
     """Finalize D09 once; never promote raw authoring or wrapper success."""
     import flow109
 
     project = Path(project)
+    launched_id = (invocation.get('invocation_id')
+                   if isinstance(invocation, Mapping) else None)
     if not _flow109_selected_row('D09'):
         return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',
+                'launched_invocation_id': launched_id,
                 'detail': 'D09_FINALIZATION_REFUSED: selected context is absent, stale, or foreign'}
-    status, evidence, detail = _d09_bound_phase2_evidence(project, report)
+    status, evidence, detail = _d09_bound_phase2_evidence(
+        project, report, invocation, published_current=published_current)
     try:
         finished = flow109.finish_native_window(project, {'steps': [{
             'status': status,
@@ -1274,6 +1297,7 @@ def _finish_d09_selected_owner(project: Path, report: Mapping) -> dict:
     if valid is None:
         status = 'NOT_MEASURED'
     return {'verdict': status, 'whole_flow_verdict': 'NOT_MEASURED',
+            'launched_invocation_id': launched_id,
             'detail': detail, 'evidence': evidence}
 
 
@@ -1549,7 +1573,8 @@ def _need_analog(project: Path, force_skip: bool) -> bool:
 
 def _run_phase(label: str, runner: Path, args: List[str],
                env: Optional[Dict[str, str]] = None, *,
-               _retain_mixed: bool = True) -> int:
+               _retain_mixed: bool = True,
+               invocation: Optional[Dict[str, Any]] = None) -> int:
     mixed_step = {"mixed_signal_top_lvs_run.py": "M1",
                   "mixed_signal_power_domain_run.py": "M2",
                   "mixed_signal_m3_run.py": "M3",
@@ -1562,7 +1587,8 @@ def _run_phase(label: str, runner: Path, args: List[str],
         import step_preflight
         return step_preflight.retained_call(
             Path(args[0]), retained_id, _run_phase, label, runner, args,
-            env=env, _retain_mixed=False, canonical_acceptance=True)
+            env=env, _retain_mixed=False, invocation=invocation,
+            canonical_acceptance=True)
     history = None
     if stage_analog and _retain_mixed and '--json' in args:
         import execution_policy
@@ -1597,7 +1623,22 @@ def _run_phase(label: str, runner: Path, args: List[str],
     try:
         command = [sys.executable, str(runner), *args]
         _verify_runtime_command(command)
-        cp = subprocess.run(command, env=env,
+        child_env = env
+        if invocation is not None:
+            import benchmark_dispatch as dispatch
+
+            context = {
+                "invocation_id": uuid.uuid4().hex,
+                "argv": command,
+                "project": str(Path(args[0]).resolve()),
+                "source": dispatch._runner_source_snapshot(command),
+            }
+            invocation.clear()
+            invocation.update(context)
+            child_env = dict(env or os.environ)
+            child_env[dispatch._RUNNER_CONTEXT_ENV] = json.dumps(
+                context, sort_keys=True)
+        cp = subprocess.run(command, env=child_env,
                             pass_fds=(_execution.child_pass_fds()
                                        if supports_execution_policy else ()))
         return cp.returncode
@@ -4447,16 +4488,24 @@ def _main() -> int:
         else:
             p2_env = _canonical_admission.child_env(
                 p2_admission.identity_sha256, _phase_env)
+            d09_selected = _flow109_selected_row('D09')
+            d09_invocation: Dict[str, Any] = {}
             _phase_started["phase2"] = time.time()
-            rc = _run_phase("PHASE 2 (= 2a + 2b)", runner, p2_args, env=p2_env)
+            rc = _run_phase(
+                "PHASE 2 (= 2a + 2b)", runner, p2_args, env=p2_env,
+                invocation=d09_invocation if d09_selected else None)
             verdict, _fresh_why = _row_verdict(
                 project, "phase2_one_shot.json", rc,
                 _phase_started.get("phase2", t0), "phase2")
             if _fresh_why:
                 advisories.append(_fresh_why)
             rep = _read_report(_phase_report_path(project, "phase2_one_shot.json"))
-            if _flow109_selected_row('D09'):
-                d09_acceptance = _finish_d09_selected_owner(project, rep)
+            if d09_selected:
+                d09_acceptance = _finish_d09_selected_owner(
+                    project, rep, d09_invocation,
+                    published_current=_pl.published_here(
+                        _phase_report_path(project, "phase2_one_shot.json"),
+                        _phase_started["phase2"]))
                 reports['d09_finalization'] = d09_acceptance
                 verdict = d09_acceptance['verdict']
                 rc = 0 if verdict == 'PASS' else 1 if verdict == 'FAIL' else 2
