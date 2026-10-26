@@ -46,6 +46,7 @@ from decimal import Decimal
 from pathlib import Path as FilePath
 from typing import Any, Dict, Optional, Sequence, Tuple, Type
 
+from librelane.common import Path
 from librelane.config import Variable
 from librelane.state import DesignFormat, State
 from librelane.steps.openroad import (
@@ -75,6 +76,13 @@ class PostRouteRepair(ResizerStep):
         + [v for v in DetailedRouting.config_vars if v.name in _DRT_VARS]
         + [v for v in RCX.config_vars if v.name == "RCX_RULESETS"]
         + [
+            Variable(
+                "VIBEIC_PRR_DIAGNOSTIC_SPEFS",
+                Optional[Dict[str, Path]],
+                "Explicit corner-pattern to SPEF map for a diagnostic routed "
+                "electrical fixture. Every declared STA corner must match "
+                "exactly one SPEF; unset keeps ordinary OpenRCX extraction.",
+            ),
             Variable(
                 "VIBEIC_PRR_SETUP_MARGIN",
                 Decimal,

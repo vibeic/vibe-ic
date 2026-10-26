@@ -1608,6 +1608,19 @@ def test_every_variable_the_script_reads_is_declared_by_the_step():
     assert set(prr.PARAM_VARS.values()) <= declared
 
 
+def test_diagnostic_spef_is_explicit_complete_and_does_not_replace_openrcx():
+    src = (STEP_DIR / 'postroute_repair.py').read_text()
+    tcl = (STEP_DIR / 'postroute_repair.tcl').read_text()
+    assert 'VIBEIC_PRR_DIAGNOSTIC_SPEFS' in src
+    assert 'Optional[Dict[str, Path]]' in src
+    assert 'PRR_DIAGNOSTIC_SPEF_MISSING' in tcl
+    assert 'PRR_DIAGNOSTIC_SPEF_AMBIGUOUS' in tcl
+    assert 'PRR_DIAGNOSTIC_SPEF_UNUSED' in tcl
+    diagnostic = tcl.index('if {$diagnostic}')
+    ordinary = tcl.index('extract_parasitics -ext_model_file', diagnostic)
+    assert diagnostic < ordinary < tcl.index('set read 0', ordinary)
+
+
 def test_bounded_strength_is_only_the_drv_recovery_and_keeps_existing_judges():
     main = (STEP_DIR / 'postroute_repair.tcl').read_text()
     helper = (STEP_DIR / 'bounded_drive_strength.tcl').read_text()
