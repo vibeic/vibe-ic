@@ -34,6 +34,21 @@ def _run(tmp_path, source):
     return result, report
 
 
+def _run_retained(tmp_path):
+    rtl = Path(os.environ["ISSUE3368_RETAINED_RTL"])
+    expected = Path(os.environ["ISSUE3368_RETAINED_REPORT"])
+    out = Path(os.environ.get(
+        "ISSUE3368_RETAINED_OUT", str(tmp_path / "retained-out")))
+    out.mkdir()
+    result = subprocess.run([
+        sys.executable, str(SCRIPT), "--rtl-dir", str(rtl),
+        "--top-module", "subservient", "--out-dir", str(out),
+    ], capture_output=True, text=True)
+    return (result,
+            json.loads((out / "encoding_audit_report.json").read_text()),
+            json.loads(expected.read_text()))
+
+
 def _consume(tmp_path):
     shared = PROGRAMS.parent / "_shared"
     sys.path.insert(0, str(shared))
@@ -68,6 +83,21 @@ def _semantic_role(source, widths):
         modules["neutral"], modules, instances)
 
 
+def _predicate_role(source, widths):
+    audit._DISCOVERY_ISSUES.clear()
+    audit._CONFIGURATION.clear()
+    audit._CONFIGURATION["native"] = {"status": "MEASURED"}
+    modules = {}
+    for module in audit.parse_modules(audit.strip_comments(source), "neutral.sv"):
+        module.native_widths = widths[module.name]
+        modules[module.name] = module
+    instances = audit.parse_instances(modules["neutral"].body, "neutral",
+                                      native_checked=True)
+    return audit._whole_scalar_predicate(
+        "link", modules["source"], "payload", modules["sink"], "payload",
+        modules["neutral"], modules, instances)
+
+
 def test_closed_boolean_and_opaque_grammars_are_not_scalar_defaults():
     boolean = r"""
 module source(input en, rst, output payload); assign payload = en & ~rst; endmodule
@@ -97,6 +127,83 @@ endmodule
               "neutral": {"link": 8}}
     producer, consumer = _semantic_role(opaque, widths)
     assert producer.encoding == consumer.encoding == "OPAQUE_VALUE"
+
+
+def test_fixed_slice_equality_alias_is_a_bounded_boolean_source_domain():
+    source = r"""
+module source(input [2:0] funct3, output payload);
+  wire comparison = funct3[2:1] == 2'b00;
+  assign payload = comparison;
+endmodule
+module sink(input payload, input left, right, output accepted);
+  assign accepted = payload ? left : right;
+endmodule
+module neutral;
+  wire link; source a(.funct3(3'b000),.payload(link));
+  sink b(.payload(link),.left(1'b0),.right(1'b1),.accepted());
+endmodule
+"""
+    widths = {"source": {"funct3": 3, "comparison": 1, "payload": 1},
+              "sink": {"payload": 1, "left": 1, "right": 1,
+                       "accepted": 1},
+              "neutral": {"link": 1}}
+    consumer, producer_evidence = _predicate_role(source, widths)
+    assert consumer.encoding == "PREDICATE"
+    assert "fixed slice equality" in producer_evidence
+
+
+@pytest.mark.parametrize("expression", [
+    "funct3[2:1] + 2'b00",
+    "funct3[2]",
+    "funct3[dynamic:1] == 2'b00",
+    "funct3[2:1] == 1'b0",
+])
+def test_noncomparison_dynamic_or_width_mismatched_alias_stays_unknown(expression):
+    source = r"""
+module source(input [2:0] funct3, input dynamic, output payload);
+  wire comparison = EXPRESSION;
+  assign payload = comparison;
+endmodule
+module sink(input payload, input left, right, output accepted);
+  assign accepted = payload ? left : right;
+endmodule
+module neutral;
+  wire link; source a(.funct3(3'b000),.dynamic(1'b0),.payload(link));
+  sink b(.payload(link),.left(1'b0),.right(1'b1),.accepted());
+endmodule
+""".replace("EXPRESSION", expression)
+    widths = {"source": {"funct3": 3, "dynamic": 1, "comparison": 1,
+                         "payload": 1},
+              "sink": {"payload": 1, "left": 1, "right": 1,
+                       "accepted": 1},
+              "neutral": {"link": 1}}
+    assert _predicate_role(source, widths) is None
+
+
+@_NATIVE
+def test_retained_259_ids_admit_only_source_bound_comparison_selectors(tmp_path):
+    result, report, expected = _run_retained(tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    def identity(row):
+        return tuple(row[key] for key in (
+            "wire_name", "producer_module", "producer_port",
+            "consumer_module", "consumer_port"))
+
+    assert len(report["interfaces"]) == 259
+    assert sorted(map(identity, report["interfaces"])) == sorted(
+        map(identity, expected["interfaces"]))
+    target, = [row for row in report["interfaces"]
+               if row["wire_name"] == "alu_cmp_eq"
+               and row["producer_port"] == "o_alu_cmp_eq"
+               and row["consumer_port"] == "i_cmp_eq"]
+    assert (target["producer_encoding"], target["consumer_encoding"],
+            target["status"]) == ("BIT_VALUE", "PREDICATE", "MATCH")
+    assert "fixed slice equality" in target["producer_evidence"]
+    unrelated, = [row for row in report["interfaces"]
+                  if row["wire_name"] == "immdec_ctrl"
+                  and row["producer_port"] == "o_immdec_ctrl"]
+    assert unrelated["status"] == "UNKNOWN"
 
 
 @pytest.mark.parametrize("change", [

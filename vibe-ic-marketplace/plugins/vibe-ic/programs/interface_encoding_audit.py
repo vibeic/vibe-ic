@@ -1031,6 +1031,81 @@ def _domain_local_roots(module, *, target=None, expression=None):
     return roots
 
 
+def _fixed_slice_equality_alias_domain(module, target):
+    """Prove one closed Boolean producer grammar through local aliases.
+
+    The terminal must be ``word[fixed:fixed] == N'b...`` with an explicit,
+    fully-known literal whose width equals the selected width.  Every value
+    above it is a whole one-bit alias and has no reference outside that chain.
+    This proves that the boundary value is an equality predicate; it does not
+    infer the encoding of ``word`` and deliberately excludes dynamic selects,
+    inequalities, arithmetic and partial writes.
+    """
+    if module.native_widths.get(target) != 1:
+        return None
+    assignments = {}
+    for match in re.finditer(
+            r'(?<![\w$])([A-Za-z_]\w*)\s*(?:<=|=(?!=))\s*([^;]+);',
+            module.body, re.MULTILINE | re.DOTALL):
+        assignments.setdefault(match.group(1), []).append(match)
+
+    aliases = []
+    proven = {}
+    visiting = set()
+
+    def visit(name):
+        if module.native_widths.get(name) != 1 or name in visiting:
+            return None
+        rows = assignments.get(name, [])
+        if len(rows) != 1:
+            return None
+        assignment = rows[0]
+        expression = assignment.group(2).strip()
+        visiting.add(name)
+        alias = re.fullmatch(r'([A-Za-z_]\w*)', expression)
+        if alias is not None:
+            peer = alias.group(1)
+            result = visit(peer)
+            if result is not None:
+                aliases.append((name, peer))
+                proven.setdefault(name, set()).add(assignment.span(1))
+                proven.setdefault(peer, set()).add(assignment.span(2))
+        else:
+            equality = re.fullmatch(
+                r'([A-Za-z_]\w*)\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*'
+                r'==\s*(\d+)\s*\'\s*[bB]\s*([01_]+)', expression)
+            result = None
+            if equality is not None:
+                base, high, low, literal_width, bits = equality.groups()
+                high, low, literal_width = map(int, (high, low, literal_width))
+                selected_width = abs(high - low) + 1
+                base_width = module.native_widths.get(base)
+                if (isinstance(base_width, int)
+                        and max(high, low) < base_width
+                        and literal_width == selected_width
+                        and len(bits.replace('_', '')) == literal_width):
+                    result = (base, high, low, literal_width, bits,
+                              module.body.count('\n', 0, assignment.start()) + 1)
+                    proven.setdefault(name, set()).add(assignment.span(1))
+        visiting.remove(name)
+        return result
+
+    terminal = visit(target)
+    if terminal is None:
+        return None
+    for name, spans in proven.items():
+        refs = {match.span() for match in re.finditer(
+            r'(?<![\w$])' + re.escape(name) + r'(?![\w$])', module.body)}
+        if refs != spans:
+            return None
+    base, high, low, width, bits, line = terminal
+    chain = ' -> '.join([f'{left}={right}' for left, right in reversed(aliases)])
+    return (
+        f'native fixed slice equality {base}[{high}:{low}] == {width}\'b{bits} '
+        f'at body line {line} through complete one-bit alias chain {chain}; '
+        'equality result is a predicate and source-word encoding is not inferred')
+
+
 def _domain_parent_expression(module, expression, modules, instances, trail):
     """Trace a scalar actual through parent bindings to external one-bit roots."""
     roots = _domain_local_roots(module, expression=expression)
@@ -1075,7 +1150,7 @@ def _producer_one_bit_source_domain(producer, producer_port, parent,
         return None
     roots = _domain_local_roots(producer, target=producer_port)
     if roots is None:
-        return None
+        return _fixed_slice_equality_alias_domain(producer, producer_port)
     external = set()
     for boundary in boundaries:
         for root in roots:
