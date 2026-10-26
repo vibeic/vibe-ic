@@ -521,7 +521,7 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
                     f"not compile as a set, so this candidate cannot be "
                     f"scored: {str(bundle_compile.get('reason') or '')[:400]}")}
 
-    # NORMAL REPAIR CONSUMER (issues #2852/#2853).  benchmark_dispatch.py
+    # NORMAL REPAIR CONSUMER (issues #2852/#2853/#3655). benchmark_dispatch.py
     # already routes every ordinary completion through this adapter; keeping
     # the binding here gives the declaration one consumer for both contracts
     # without changing the dispatcher stack.  A declaration is opt-in for
@@ -550,6 +550,8 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
                 contract = {"preservation": contract}
             elif isinstance(contract, dict) and contract.get("schema") == "vibeic.public_elaboration_matrix.v1":
                 contract = {"elaboration_matrix": contract}
+            elif isinstance(contract, dict) and contract.get("schema") == "vibeic.native_structural_contract.v1":
+                contract = {"structural": contract}
             original_root = project / "input" / "public_original" / "files"
             original_sources: Dict[str, str] = {}
             symlink_refused = False
@@ -571,12 +573,18 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
                 candidate_sources[key] = body
             matrix = contract.get("elaboration_matrix", contract.get("public_elaboration_matrix")) \
                 if isinstance(contract, dict) else None
+            structural = contract.get("structural", contract.get("native_structural_contract")) \
+                if isinstance(contract, dict) else None
             top = None
             if isinstance(matrix, dict):
                 top = matrix.get("top", matrix.get("top_module"))
+            if isinstance(structural, dict):
+                top = structural.get("top") or top
             top = top or required_top
             source_for_matrix = None
             matrix_candidate_path = None
+            source_for_structural = None
+            structural_candidate_path = None
             repair_report = None
             if isinstance(matrix, dict):
                 wanted = matrix.get("source_path", matrix.get("source"))
@@ -616,21 +624,48 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
                 if (matrix_candidate_path is None and not require_repair_contract
                         and len(rtl) == 1):
                     matrix_candidate_path = rtl[0]
+            if isinstance(structural, dict):
+                wanted = structural.get("source_path")
+                if isinstance(wanted, str):
+                    wanted = wanted[4:] if wanted.startswith("rtl/") else wanted
+                    if wanted in original_sources and wanted in candidate_sources:
+                        source_for_structural = original_sources[wanted]
+                        for source_path in rtl:
+                            if str(source_path.relative_to(rtl_dir)) == wanted:
+                                structural_candidate_path = source_path
+                                break
+                    else:
+                        repair_report = {"verdict": "REFUSED", "findings": [{
+                            "code": "STRUCTURAL_SOURCE_PATH_INVALID",
+                            "message": "structural source_path is absent from exact original and candidate maps"}]}
+            if (matrix_candidate_path is not None and structural_candidate_path is not None
+                    and matrix_candidate_path != structural_candidate_path):
+                repair_report = {"verdict": "REFUSED", "findings": [{
+                    "code": "REPAIR_CONTRACT_SOURCE_AMBIGUOUS",
+                    "message": "elaboration and structural proof select different candidate sources"}]}
             with tempfile.TemporaryDirectory(prefix="rtl_repair_consumer_") as temp_dir:
                 candidate_path = Path(temp_dir) / "candidate.sv"
-                if matrix_candidate_path is not None:
+                selected_candidate_path = matrix_candidate_path or structural_candidate_path
+                if selected_candidate_path is not None:
                     # Freeze exactly the selected file once; matrix execution
                     # must never compile the concatenated multi-file answer.
-                    candidate_path.write_bytes(matrix_candidate_path.read_bytes())
+                    candidate_path.write_bytes(selected_candidate_path.read_bytes())
                 else:
                     candidate_path.write_text("")
+                requirement_sources = {}
+                prompt_path = project / "input" / "phase1_prompt.md"
+                if (prompt_path.is_file() and not prompt_path.is_symlink()
+                        and not any(parent.is_symlink() for parent in prompt_path.parents)):
+                    requirement_sources["input/phase1_prompt.md"] = \
+                        prompt_path.read_text(errors="replace")
                 repair_report = (repair_report if isinstance(repair_report, dict) and repair_report.get("verdict") == "REFUSED" else ({"verdict": "REFUSED", "findings": [{
                     "code": "SOURCE_SYMLINK", "message": "public source manifest contains a symlink"}]}
                     if symlink_refused else validate_normal_repair_contract(
                         original_sources, candidate_sources, contract,
                         candidate_path=candidate_path,
-                        original_source=source_for_matrix,
+                        original_source=source_for_matrix or source_for_structural,
                         top=top,
+                        requirement_sources=requirement_sources,
                         require=True)))
         # Ordinary benchmark dispatch must consume both independently-bound
         # contracts immediately before completion; a single opt-in half is not

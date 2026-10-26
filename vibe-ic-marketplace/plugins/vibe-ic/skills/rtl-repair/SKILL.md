@@ -122,6 +122,24 @@ policy. Re-run the original independent challenge, normal gates and fresh
 review before claiming repair acceptance. A prepared product capture is not
 closed while those checks or publication are pending.
 
+## Source-bound structural-only repair evidence
+
+When an explicit implementation structure is part of the public input but the
+candidate is functionally equivalent, do not manufacture a simulation failure.
+Use the existing normal repair contract consumer with a
+`vibeic.native_structural_contract.v1` declaration. It binds the unique public
+requirement quote, original and candidate source hashes, top, immutable native
+tool image, and typed cell expectations. The consumer replays the fixed
+`read_verilog; hierarchy; proc; opt; write_json` proof at
+`RTLIL_AFTER_PROC_OPT`; authors cannot inject a synthesis mapping or command.
+
+An absent structural declaration means the design is unconstrained and must not
+fail for choosing an equivalent architecture. A present declaration with an
+ambiguous requirement, abstraction, top, or scope is `NOT_MEASURED` and cannot
+authorize repair. A structural repair must still pass the ordinary functional
+challenge and Program gates, then replay the same hash-bound structural proof;
+structural evidence never substitutes for functional evidence.
+
 ## Do not
 
 - Do not silently change module interfaces — if a port must change, flag it explicitly

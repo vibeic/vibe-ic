@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """Source-bound contracts for bounded RTL repair.
 
-The two contracts in this module are deliberately narrow.  The preservation
+The contracts in this module are deliberately narrow.  The preservation
 contract proves that a declared executable fragment from the supplied source is
 still present, or that its complete source span is inside an AI-authorized edit
 region.  The elaboration contract runs each *declared* public configuration
-through the native standalone compiler and records the exact invocation.
+through the native standalone compiler and records the exact invocation.  The
+structural contract replays a declared, source-bound Yosys RTLIL observation;
+it never treats functional equivalence or an author's assertion as structure.
 
-Neither contract infers an author's intent, treats a filename as evidence, or
+None of these contracts infers an author's intent, treats a filename as evidence, or
 claims semantic equivalence.  A malformed/incomplete declaration is a refusal;
 an executable candidate that the native compiler rejects is a measured FAIL.
 """
@@ -28,6 +30,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 
 SCHEMA_PRESERVATION = "vibeic.rtl_preservation_declaration.v1"
 SCHEMA_MATRIX = "vibeic.public_elaboration_matrix.v1"
+SCHEMA_STRUCTURAL = "vibeic.native_structural_contract.v1"
+STRUCTURAL_ABSTRACTION = "RTLIL_AFTER_PROC_OPT"
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
 _SAFE_VALUE = re.compile(r"^[A-Za-z0-9_.$'()+*/%\-\s]+$")
@@ -657,6 +661,215 @@ def run_elaboration_matrix(
     return report
 
 
+def _docker_image_id(image: str, timeout: int) -> Tuple[Optional[str], Optional[str]]:
+    docker = shutil.which("docker")
+    if docker is None:
+        return None, "docker is unavailable"
+    try:
+        completed = subprocess.run(
+            [docker, "image", "inspect", image, "--format", "{{.Id}}"],
+            capture_output=True, text=True, timeout=min(timeout, 30))
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, str(exc)
+    image_id = completed.stdout.strip()
+    if completed.returncode != 0 or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id):
+        return None, (completed.stderr or completed.stdout or
+                      "docker image identity is unavailable").strip()
+    return image_id, None
+
+
+def run_structural_contract(
+    candidate_path: Path,
+    declaration: Any,
+    *,
+    original_source: Optional[str],
+    requirement_sources: Optional[Mapping[str, str]] = None,
+    timeout: int = 300,
+) -> Dict[str, Any]:
+    """Replay a source-bound structural observation with a fixed Yosys recipe.
+
+    The author declares cell-type expectations, but cannot provide a Yosys
+    script or synthesis mapping.  Absent structure is handled as not applicable
+    by the outer consumer; ambiguous declared scope is blocking NOT_MEASURED.
+    """
+    report: Dict[str, Any] = {
+        "schema": SCHEMA_STRUCTURAL, "verdict": "PASS",
+        "abstraction": STRUCTURAL_ABSTRACTION, "findings": [],
+    }
+
+    def finish(verdict: str, code: str, message: str) -> Dict[str, Any]:
+        report["verdict"] = verdict
+        report["findings"].append({"code": code, "message": message})
+        return report
+
+    if not isinstance(declaration, Mapping) or declaration.get("schema") != SCHEMA_STRUCTURAL:
+        return finish("REFUSED", "STRUCTURAL_SCHEMA_UNSUPPORTED",
+                      "unsupported or missing native structural contract schema")
+    if any(key in declaration for key in ("script", "command", "passes")):
+        return finish("REFUSED", "STRUCTURAL_COMMAND_INJECTION_REFUSED",
+                      "structural authors cannot provide a Yosys script, command, or pass list")
+    if declaration.get("abstraction") != STRUCTURAL_ABSTRACTION:
+        return finish("NOT_MEASURED", "STRUCTURAL_SCOPE_AMBIGUOUS",
+                      "structural abstraction must be RTLIL_AFTER_PROC_OPT")
+    if declaration.get("scope") != "top_module_cells":
+        return finish("NOT_MEASURED", "STRUCTURAL_SCOPE_AMBIGUOUS",
+                      "structural scope must explicitly be top_module_cells")
+
+    source_path = _safe_path(declaration.get("source_path"))
+    if source_path is None or original_source is None:
+        return finish("REFUSED", "STRUCTURAL_SOURCE_MISSING",
+                      "structural proof lacks its exact original source")
+    if declaration.get("source_sha256") != sha256_text(original_source):
+        return finish("REFUSED", "STRUCTURAL_SOURCE_HASH_MISMATCH",
+                      "structural contract original source hash is stale or wrong")
+
+    candidate_path = Path(candidate_path).resolve()
+    try:
+        candidate_source = candidate_path.read_text(errors="replace")
+    except OSError as exc:
+        return finish("REFUSED", "STRUCTURAL_CANDIDATE_MISSING", str(exc))
+    candidate_hash = sha256_text(candidate_source)
+    if declaration.get("candidate_sha256") != candidate_hash:
+        return finish("REFUSED", "STRUCTURAL_CANDIDATE_HASH_MISMATCH",
+                      "structural contract candidate hash is stale or wrong")
+
+    requirement = declaration.get("requirement_source")
+    if not isinstance(requirement, Mapping):
+        return finish("NOT_MEASURED", "STRUCTURAL_REQUIREMENT_AMBIGUOUS",
+                      "structural scope lacks a source-bound requirement")
+    requirement_path = _safe_path(requirement.get("path"))
+    requirement_text = (requirement_sources or {}).get(requirement_path or "")
+    quote = requirement.get("quote")
+    if (requirement_path is None or requirement_text is None
+            or not isinstance(quote, str) or not quote.strip()):
+        return finish("NOT_MEASURED", "STRUCTURAL_REQUIREMENT_AMBIGUOUS",
+                      "structural requirement path and exact nonempty quote are required")
+    if requirement.get("sha256") != sha256_text(requirement_text):
+        return finish("REFUSED", "STRUCTURAL_REQUIREMENT_HASH_MISMATCH",
+                      "structural requirement source hash is stale or wrong")
+    if requirement.get("quote_sha256") != sha256_text(quote) or requirement_text.count(quote) != 1:
+        return finish("NOT_MEASURED", "STRUCTURAL_REQUIREMENT_AMBIGUOUS",
+                      "structural requirement quote is stale, absent, or ambiguous")
+
+    top = declaration.get("top")
+    if not isinstance(top, str) or not _IDENT.fullmatch(top):
+        return finish("NOT_MEASURED", "STRUCTURAL_SCOPE_AMBIGUOUS",
+                      "structural contract lacks one legal top module")
+    expectations = declaration.get("expectations")
+    if not isinstance(expectations, Mapping):
+        return finish("NOT_MEASURED", "STRUCTURAL_EXPECTATION_AMBIGUOUS",
+                      "structural contract lacks typed expectations")
+    required = expectations.get("required_cell_types")
+    forbidden = expectations.get("forbidden_cell_types")
+    allow_other = expectations.get("allow_other_cell_types")
+    if (not isinstance(required, Mapping) or not required
+            or any(not isinstance(name, str) or not name.startswith("$")
+                   or not isinstance(count, int) or isinstance(count, bool) or count < 1
+                   for name, count in required.items())
+            or not isinstance(forbidden, list)
+            or any(not isinstance(name, str) or not name.startswith("$") for name in forbidden)
+            or not isinstance(allow_other, bool)):
+        return finish("NOT_MEASURED", "STRUCTURAL_EXPECTATION_AMBIGUOUS",
+                      "cell expectations require positive minima, a forbidden list, and allow_other_cell_types")
+    if set(required) & set(forbidden):
+        return finish("REFUSED", "STRUCTURAL_EXPECTATION_CONTRADICTORY",
+                      "a cell type cannot be both required and forbidden")
+
+    backend = declaration.get("backend")
+    if not isinstance(backend, Mapping) or backend.get("kind") != "docker":
+        return finish("NOT_MEASURED", "STRUCTURAL_BACKEND_AMBIGUOUS",
+                      "native structural proof requires a declared docker backend")
+    image = backend.get("image")
+    image_id = backend.get("image_id")
+    if (not isinstance(image, str)
+            or not re.fullmatch(r"[^\s@]+@sha256:[0-9a-f]{64}", image)
+            or not isinstance(image_id, str)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", image_id)):
+        return finish("REFUSED", "STRUCTURAL_TOOL_IDENTITY_INVALID",
+                      "backend must pin an immutable image digest and image id")
+    actual_image_id, identity_error = _docker_image_id(image, timeout)
+    if identity_error:
+        return finish("NOT_MEASURED", "STRUCTURAL_TOOL_UNAVAILABLE", identity_error)
+    if actual_image_id != image_id:
+        return finish("REFUSED", "STRUCTURAL_TOOL_IDENTITY_MISMATCH",
+                      f"declared image id {image_id} differs from local {actual_image_id}")
+
+    docker = str(Path(shutil.which("docker") or "docker").resolve())
+    script = (f"read_verilog -sv /work/candidate.sv; "
+              f"hierarchy -check -top {top}; proc; opt; "
+              "write_json /out/rtlil.json")
+    with tempfile.TemporaryDirectory(prefix="rtl_structural_") as temp_dir:
+        root = Path(temp_dir)
+        frozen = root / "candidate.sv"
+        output = root / "out"
+        output.mkdir()
+        frozen.write_text(candidate_source)
+        command = [
+            docker, "run", "--rm", "--cpus=2", "--memory=4g",
+            "--pids-limit=128", "--network=none", "--read-only",
+            "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
+            "-v", f"{frozen}:/work/candidate.sv:ro",
+            "-v", f"{output}:/out:rw", image,
+            "--skip", "yosys", "-Q", "-p", script,
+        ]
+        try:
+            completed = subprocess.run(
+                command, capture_output=True, text=True,
+                timeout=min(max(timeout, 1), 300))
+        except subprocess.TimeoutExpired as exc:
+            report["execution"] = {"command": command, "returncode": 124,
+                                   "stdout": exc.stdout or "", "stderr": exc.stderr or ""}
+            return finish("NOT_MEASURED", "STRUCTURAL_PROOF_TIMEOUT",
+                          "native Yosys structural proof timed out")
+        except (OSError, subprocess.SubprocessError) as exc:
+            return finish("NOT_MEASURED", "STRUCTURAL_TOOL_UNAVAILABLE", str(exc))
+        report["execution"] = {
+            "command": command, "returncode": completed.returncode,
+            "stdout": completed.stdout, "stderr": completed.stderr,
+            "script": script, "script_sha256": sha256_text(script),
+            "candidate_sha256": candidate_hash, "image": image,
+            "image_id": actual_image_id,
+            "limits": {"cpus": 2, "memory": "4g",
+                       "timeout_seconds": min(max(timeout, 1), 300),
+                       "network": "none"},
+        }
+        if completed.returncode != 0:
+            return finish("FAIL", "STRUCTURAL_PROOF_EXECUTION_FAILED",
+                          (completed.stderr or completed.stdout or "yosys failed").strip()[-1200:])
+        if sha256_text(frozen.read_text(errors="replace")) != candidate_hash:
+            return finish("REFUSED", "STRUCTURAL_CANDIDATE_CHANGED_DURING_EXECUTION",
+                          "frozen structural input changed during native proof")
+        try:
+            netlist = json.loads((output / "rtlil.json").read_text())
+            cells = netlist["modules"][top].get("cells", {})
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return finish("NOT_MEASURED", "STRUCTURAL_OUTPUT_INVALID", str(exc))
+
+    counts: Dict[str, int] = {}
+    for cell in cells.values():
+        cell_type = cell.get("type") if isinstance(cell, Mapping) else None
+        if isinstance(cell_type, str):
+            counts[cell_type] = counts.get(cell_type, 0) + 1
+    report["observation"] = {"top": top, "cell_type_counts": dict(sorted(counts.items()))}
+    violations = []
+    for cell_type, minimum in required.items():
+        if counts.get(cell_type, 0) < minimum:
+            violations.append(f"{cell_type} count {counts.get(cell_type, 0)} is below {minimum}")
+    for cell_type in forbidden:
+        if counts.get(cell_type, 0):
+            violations.append(f"forbidden {cell_type} count is {counts[cell_type]}")
+    if not allow_other:
+        extras = sorted(set(counts) - set(required))
+        if extras:
+            violations.append("undeclared cell types present: " + ", ".join(extras))
+    if violations:
+        report["verdict"] = "FAIL"
+        report["findings"].extend(
+            {"code": "STRUCTURAL_CONTRACT_VIOLATION", "message": item}
+            for item in violations)
+    return report
+
+
 def load_json(value: Any) -> Any:
     if isinstance(value, (str, Path)):
         def reject_duplicates(pairs):
@@ -682,9 +895,10 @@ def validate_normal_repair_contract(
     candidate_path: Optional[Path] = None,
     original_source: Optional[str] = None,
     top: Optional[str] = None,
+    requirement_sources: Optional[Mapping[str, str]] = None,
     require: bool = True,
 ) -> Dict[str, Any]:
-    """Single blocking consumer binding both declarations before an emit is accepted.
+    """Single blocking consumer binding declared proofs before an emit is accepted.
 
     Any REFUSED, FAIL, or NOT_MEASURED result is returned to the caller as a
     non-accepted completion; legacy projects may omit the contract only when
@@ -699,11 +913,12 @@ def validate_normal_repair_contract(
                                                       "message": "normal repair contract is not an object"}]}
     preservation = contract.get("preservation", contract.get("preservation_declaration"))
     matrix = contract.get("elaboration_matrix", contract.get("public_elaboration_matrix"))
-    if preservation is None and matrix is None:
+    structural = contract.get("structural", contract.get("native_structural_contract"))
+    if preservation is None and matrix is None and structural is None:
         return {"verdict": "REFUSED", "findings": [{"code": "DECLARATION_INCOMPLETE",
-                                                      "message": "normal repair contract declares neither preservation nor elaboration matrix"}]}
+                                                      "message": "normal repair contract declares no preservation, elaboration, or structural proof"}]}
     result: Dict[str, Any] = {"verdict": "PASS", "preservation": None, "elaboration_matrix": None,
-                              "findings": []}
+                              "structural": None, "findings": []}
     preservation_required = bool(contract.get("require_preservation", preservation is not None))
     if preservation is not None or preservation_required:
         result["preservation"] = validate_preservation_declaration(
@@ -724,4 +939,16 @@ def validate_normal_repair_contract(
     elif require and contract.get("require_elaboration_matrix"):
         result["verdict"] = "REFUSED"
         result["findings"].append({"code": "MATRIX_MISSING", "message": "public elaboration matrix is required"})
+    if structural is not None:
+        if candidate_path is None:
+            result["structural"] = {"verdict": "REFUSED", "findings": [{
+                "code": "STRUCTURAL_INPUT_MISSING",
+                "message": "structural consumer lacks an exact candidate path"}]}
+        else:
+            result["structural"] = run_structural_contract(
+                candidate_path, structural, original_source=original_source,
+                requirement_sources=requirement_sources)
+        if result["structural"]["verdict"] != "PASS" and result["verdict"] == "PASS":
+            result["verdict"] = result["structural"]["verdict"]
+        result["findings"].extend(result["structural"].get("findings", []))
     return result
