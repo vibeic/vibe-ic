@@ -54667,8 +54667,9 @@ def _harvest_test_cases_from_input_tables(
                         _native_measurement = bool(re.fullmatch(
                             r'\s*native\s+line\s*,\s*branch\s*,?\s+and\s+'
                             r'toggle\s+coverage\s+'
-                            r'(?:is|are|must|shall|should|will)\s+'
-                            r'(?:be\s+)?measured\s+and\s+reported'
+                            r'(?:(?:is|are)\s+|'
+                            r'(?:must|shall|should|will)\s+be\s+)'
+                            r'measured\s+and\s+reported'
                             r'(?:\s*(?:;|,)?\s*(?:without\s+inventing\s+'
                             r'(?:a\s+)?threshold|no\s+(?:percentage\s+)?'
                             r'threshold\s+(?:is\s+)?declared))?\s*[.!]?\s*',

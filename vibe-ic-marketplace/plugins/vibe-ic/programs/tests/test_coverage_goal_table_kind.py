@@ -213,3 +213,27 @@ def test_conditional_measurement_clause_stays_functional(tmp_path):
     assert [finding['category'] for finding in oracle['findings']] == [
         'NO_ORACLE_ANCHOR']
     assert goal is None
+
+
+def test_malformed_modal_measurement_clause_stays_functional(tmp_path):
+    expected = ('Native line, branch, and toggle coverage must measured and '
+                'reported.')
+    row, oracle, goal = _single_case_chain(
+        tmp_path, 'malformed_modal', expected)
+    assert [row['kind'], row['expected']] == ['functional_vector', expected]
+    assert oracle['summary']['cases_executable'] == 1
+    assert [finding['category'] for finding in oracle['findings']] == [
+        'NO_ORACLE_ANCHOR']
+    assert goal is None
+
+
+def test_malformed_copular_measurement_clause_stays_functional(tmp_path):
+    expected = ('Native line, branch, and toggle coverage is be measured and '
+                'reported.')
+    row, oracle, goal = _single_case_chain(
+        tmp_path, 'malformed_copular', expected)
+    assert [row['kind'], row['expected']] == ['functional_vector', expected]
+    assert oracle['summary']['cases_executable'] == 1
+    assert [finding['category'] for finding in oracle['findings']] == [
+        'NO_ORACLE_ANCHOR']
+    assert goal is None
