@@ -626,7 +626,8 @@ def _backend_input_contract(step_id: str, spec: Mapping[str, object]) -> tuple[o
         "input/docs", "input/project.json", "input/step_0_5ic_answers.json", "input/submission_template",
         {"from": "external", "path": "input/submission_template_source", "required": False},
         "phase1/generated_docs", "phase1/pdk_staging_read.json",
-        "phase1/merged_docs", "phase2/stage1/rtl", "phase2/stage2", "reports/phase2/dft",
+        "phase1/generated_docs/L19_CONSTRAINTS_PDK.json",
+        "phase2/stage1/rtl", "phase2/stage2", "reports/phase2/dft",
         "phase2/stage2/synth/synth_inputs.json",
         "reports/pdk_via_patch_legalization.json",
     ]
