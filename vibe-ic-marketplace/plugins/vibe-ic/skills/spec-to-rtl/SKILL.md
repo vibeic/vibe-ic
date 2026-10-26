@@ -232,30 +232,25 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    a genuine floor. The structural extraction + routing is deterministic;
    deciding whether a prose sentence is a distinct *testable* requirement (so
    you can author its stimulus) is your LLM judgment.
-7. **Tell the orchestrator you're done, then stop**. D09 at position 17 is the
-   current RTL-authoring responsibility. Its source-owned
-   `canonical_owner_window` now reaches `design_one_shot_runner` authoring
-   through the public Flow109 entry. This is partial dispatch, not a completed
-   handoff: it does not yet consume or complete its author-self-validation
-   evidence from D11 at position 19 (hygiene/lint) and D13 at position 21
-   (reference testbench), and the ordinary authoring path does not finalize the
-   Flow109 component result. Naming that evidence grants no row credit,
-   metrics, delivery acceptance, or whole-flow acceptance to those or adjacent
-   responsibilities.
+7. **Tell the orchestrator you're done, then stop**. Public D09 position 17
+   completes its author-self-validation component only from the same invocation's
+   authored RTL, D11 position 19 validation/lint, D12 position 20 CDC/RDC, and
+   D13 position 21 reference-testbench receipts, with the exact child invocation
+   and report publication bound to the public Flow109 entry.
 
-   Therefore preserve the authored RTL and handoff as **unconsumed**, keep D09
-   position 17 and later rows `NOT_MEASURED`/not executed, and stop until the separately
-   owned completion wiring is independently accepted. Do not report
-   `FLOW109_PRODUCER_UNIMPLEMENTED`: the producer is wired and reaches
-   authoring; the missing authority is a context-bound completion that consumes
-   the hygiene/lint and reference-testbench results and finalizes the component
-   without promoting raw authoring success.
+   Until that public path produces a current completed component `PASS`, preserve
+   the authored RTL and handoff as **unconsumed**. Missing, stale, foreign, or
+   changed evidence must refuse or remain `NOT_MEASURED`; a bound failing check
+   remains `FAIL`, according to the accepted consumer contract. Component
+   completion grants no D11 position 19, D12 position 20, or D13 position 21 row
+   credit, metrics, delivery acceptance, downstream acceptance, or whole-flow
+   acceptance.
 
-   After that dependency is accepted, the only permitted continuation contract
-   is the sole public `vibe_ic_one_shot_runner.py` entry with the original
-   project and route, exact validated `--flow109-manifest`, `--flow 109`, the
-   selected current D09 position 17 window, and `--execution-mode default`. The
-   public resolver must accept that window before native work. Never call
+   The only permitted continuation contract is the sole public
+   `vibe_ic_one_shot_runner.py` entry with the original project and route, exact
+   validated `--flow109-manifest`, `--flow 109`, the selected current D09
+   position 17 stable-ID window, and `--execution-mode default`. The public
+   resolver must accept that window before work begins. Never call
    `design_one_shot_runner.py` directly as a public substitute, never invoke a
    native helper directly, and never pass a Flow109 D-id to a native helper.
 
