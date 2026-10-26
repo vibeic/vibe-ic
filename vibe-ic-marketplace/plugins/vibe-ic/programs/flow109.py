@@ -506,11 +506,15 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
     logical_top = current_pre["top"]
     physical_top = final_manifest.get("top")
     physical_input = None
-    if physical_top != logical_top:
+    baseline, _ = _bound_project_json(
+        project, Path(final["baseline"]["path"]), "FLOW109_D44_BASELINE_UNBOUND")
+    transforms = baseline.get("transformations")
+    if transforms == []:
+        if physical_top != logical_top:
+            raise Flow109Error("FLOW109_D44_FINAL_NETLIST_FOREIGN",
+                               f"D30={logical_top}, D44={physical_top}")
+    else:
         import flow109_final_lec_physical as physical
-        baseline, _ = _bound_project_json(
-            project, Path(final["baseline"]["path"]), "FLOW109_D44_BASELINE_UNBOUND")
-        transforms = baseline.get("transformations")
         if (not isinstance(transforms, list) or len(transforms) != 1
                 or final_manifest.get("transformations") != transforms
                 or not isinstance(transforms[0], Mapping)
@@ -540,13 +544,9 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
             or final_record.get("sha256") != _file_digest(final_path)):
         raise Flow109Error("FLOW109_D44_FINAL_NETLIST_UNBOUND", str(final_record))
     pre = current_pre["adopted_netlist"]
-    if physical_input is None:
-        baseline, _ = _bound_project_json(
-            project, Path(final["baseline"]["path"]), "FLOW109_D44_BASELINE_UNBOUND")
     pre_source = _d44_pre_source_binding(
-        project, baseline, pre, final_record, physical_top=(physical_top
-                                                            if physical_top != logical_top
-                                                            else None),
+        project, baseline, pre, final_record,
+        physical_top=(physical_top if physical_input is not None else None),
         logical_top=logical_top, physical_input=physical_input)
 
     sta, sta_ref = _bound_project_json(
@@ -572,7 +572,7 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
     if timing["sha256"]["sta_netlist"] != final_record["sha256"]:
         raise Flow109Error("FLOW109_D49_TIMING_NETLIST_MISMATCH",
                            f"D44={final_record['sha256']}, D49={timing['sha256']['sta_netlist']}")
-    if physical_top != logical_top:
+    if physical_input is not None:
         try:
             config_rel = (state_path.resolve().parent / "config.json").relative_to(project)
         except ValueError as exc:

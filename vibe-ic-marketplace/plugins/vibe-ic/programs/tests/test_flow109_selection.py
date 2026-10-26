@@ -583,14 +583,23 @@ def _final_timing_case(project, monkeypatch):
     return context, final_netlist, baseline, state
 
 
-def _physical_wrapper_timing_case(project, monkeypatch):
+def _physical_wrapper_timing_case(project, monkeypatch, *, same_name=False,
+                                  same_final_bytes=False):
     """Use the real physical producer's relevant top/path receipt schema."""
     import flow109_final_lec as final_lec
     import flow109_final_lec_physical as physical
     context, final_netlist, baseline, state = _final_timing_case(project, monkeypatch)
-    logical_top, physical_top = "neutral_unit", "chip_top"
-    final_netlist.write_text(
-        "module chip_top(input clk, output sout); assign sout=clk; endmodule\n")
+    logical_top = "neutral_unit"
+    physical_top = logical_top if same_name else "chip_top"
+    rows = project / "reports/flow109/default_rows"
+    d30 = json.loads((rows / "D30.json").read_text())["dft_preroute_admission"]
+    if same_final_bytes:
+        final_netlist.write_bytes(
+            (project / d30["adopted_netlist"]["path"]).read_bytes())
+    else:
+        final_netlist.write_text(
+            f"module {physical_top}(input clk, output sout); "
+            "assign sout=clk; endmodule\n")
     final_record = final_lec._record(project, final_netlist)
 
     physical_input = project / "input/flow109/physical.json"
@@ -599,8 +608,6 @@ def _physical_wrapper_timing_case(project, monkeypatch):
         "logical_top": logical_top}))
     physical_input_record = final_lec._record(project, physical_input)
 
-    rows = project / "reports/flow109/default_rows"
-    d30 = json.loads((rows / "D30.json").read_text())["dft_preroute_admission"]
     transform = project / "reports/flow109/D44/physical-transform.json"
     transform.write_text(json.dumps({
         "schema": physical.SCHEMA,
@@ -689,6 +696,74 @@ def test_d50_physical_wrapper_refuses_wrong_logical_or_physical_top(
         paths["sta_config"].write_text(json.dumps(config))
 
     with pytest.raises(flow109.Flow109Error, match=code):
+        flow109.dft_final_timing_admission(tmp_path, context)
+
+
+def test_d50_same_name_physical_transform_accepts_full_top_trace(
+        tmp_path, monkeypatch):
+    context, _final, _baseline, _state, tops = _physical_wrapper_timing_case(
+        tmp_path, monkeypatch, same_name=True)
+
+    result = flow109.dft_final_timing_admission(tmp_path, context)
+
+    assert result["logical_top"] == tops["logical_top"]
+    assert result["physical_top"] == tops["physical_top"]
+    assert result["physical_transform"] is not None
+    assert result["D44_pre_source"]["mode"] == "D44_TRANSFORM_SOURCE"
+
+
+@pytest.mark.parametrize("damage, code", [
+    ("wrong_logical_top", "FLOW109_D44_LOGICAL_TOP_MISMATCH"),
+    ("wrong_preparation_top", "FLOW109_D44_PHYSICAL_TOP_MISMATCH"),
+    ("wrong_timing_top", "FLOW109_D49_TIMING_TOP_MISMATCH"),
+])
+def test_d50_same_name_physical_transform_refuses_wrong_top_trace(
+        tmp_path, monkeypatch, damage, code):
+    context, _final, baseline, _state, paths = _physical_wrapper_timing_case(
+        tmp_path, monkeypatch, same_name=True)
+    if damage in {"wrong_logical_top", "wrong_preparation_top"}:
+        transform = paths["transform"]
+        body = json.loads(transform.read_text())
+        body["logical_top" if damage == "wrong_logical_top" else "top"] = "foreign_top"
+        transform.write_text(json.dumps(body))
+        baseline_body = json.loads(baseline.read_text())
+        import flow109_final_lec as final_lec
+        baseline_body["transformation_receipt"] = final_lec._record(tmp_path, transform)
+        baseline.write_text(json.dumps(baseline_body))
+        d44 = tmp_path / "reports/flow109/default_rows/D44.json"
+        d44_body = json.loads(d44.read_text())
+        d44_body["common_baseline"] = final_lec._record(tmp_path, baseline)
+        d44.write_text(json.dumps(d44_body))
+    else:
+        config = json.loads(paths["sta_config"].read_text())
+        config["DESIGN_NAME"] = "foreign_top"
+        paths["sta_config"].write_text(json.dumps(config))
+
+    with pytest.raises(flow109.Flow109Error, match=code):
+        flow109.dft_final_timing_admission(tmp_path, context)
+
+
+def test_d50_same_name_same_bytes_transform_still_checks_preparation_top(
+        tmp_path, monkeypatch):
+    context, final_netlist, baseline, _state, paths = _physical_wrapper_timing_case(
+        tmp_path, monkeypatch, same_name=True, same_final_bytes=True)
+    d30 = json.loads((tmp_path / "reports/flow109/default_rows/D30.json").read_text())
+    assert (__import__("hashlib").sha256(final_netlist.read_bytes()).hexdigest()
+            == d30["dft_preroute_admission"]["adopted_netlist"]["sha256"])
+    transform = paths["transform"]
+    body = json.loads(transform.read_text())
+    body["logical_top"] = "foreign_top"
+    transform.write_text(json.dumps(body))
+    import flow109_final_lec as final_lec
+    baseline_body = json.loads(baseline.read_text())
+    baseline_body["transformation_receipt"] = final_lec._record(tmp_path, transform)
+    baseline.write_text(json.dumps(baseline_body))
+    d44 = tmp_path / "reports/flow109/default_rows/D44.json"
+    d44_body = json.loads(d44.read_text())
+    d44_body["common_baseline"] = final_lec._record(tmp_path, baseline)
+    d44.write_text(json.dumps(d44_body))
+
+    with pytest.raises(flow109.Flow109Error, match="FLOW109_D44_LOGICAL_TOP_MISMATCH"):
         flow109.dft_final_timing_admission(tmp_path, context)
 
 
