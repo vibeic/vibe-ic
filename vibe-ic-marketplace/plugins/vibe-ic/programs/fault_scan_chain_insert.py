@@ -172,17 +172,18 @@ def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=Non
         if not intent['scan_test']:
             return binding, []
         definitions = intent.get('test_port_def', {})
-        native = {'scan_enable': 'shift', 'scan_in': 'sin', 'scan_out': SCAN_OUT_PORT}
+        native = {'scan_enable': 'shift', 'scan_in': 'sin', 'scan_out': SCAN_OUT_PORT,
+                  'test': 'test', 'tck': 'tck'}
         ports = {}
         if set(definitions) != set(native):
-            raise ValueError('three applicable test_port_def bindings are required')
+            raise ValueError('all five native test_port_def bindings are required')
         for role, name in native.items():
             entry = definitions[role]
             if (not isinstance(entry, dict) or entry.get('native') != name
                     or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', str(entry.get('public', '')))):
                 raise ValueError('unsupported public/native test port binding: ' + role)
             ports[role] = entry['public']
-        if len(set(ports.values())) != 3:
+        if len(set(ports.values())) != 5:
             raise ValueError('public scan interface ports must be distinct')
         mode = intent.get('test_mode', {})
         clock = mode.get('clock')
@@ -192,6 +193,16 @@ def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=Non
             raise ValueError('unsupported or unknown clock/domain/edge strategy')
         if expected_clock is not None and clock != expected_clock:
             raise ValueError('test clock differs from the actual caller clock')
+        selector = mode.get('clock_select', {})
+        if (mode.get('scan_clock') != native['tck']
+                or mode.get('scan_clock_domains') != [native['tck']]
+                or mode.get('scan_edge') != 'rising'
+                or selector.get('native') != native['test']
+                or type(selector.get('functional_value')) is not int
+                or type(selector.get('scan_value')) is not int
+                or selector['functional_value'] != 0 or selector['scan_value'] != 1
+                or clock in native.values()):
+            raise ValueError('explicit distinct functional/scan clock and test-select roles required')
         if (reset.get('style') != 'synchronous' or type(reset.get('active_level')) is not int
                 or reset['active_level'] not in (0, 1)
                 or type(reset.get('shift_value')) is not int
@@ -206,6 +217,66 @@ def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=Non
         return binding, []
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return None, ['D09_DFT_AUTHORITY_INVALID: ' + str(exc)]
+
+
+def _native_clock_controls(text: str, liberty_text: str, intent: dict) -> dict:
+    """BLOCKING native evidence: prove the actual mux and every DFF clock.
+
+    Reuse the existing netlist/Liberty readers and Boolean evaluator. Names
+    in D09 are authority, not evidence that a mux or clock wire exists.
+    """
+    from itertools import product
+    from lec_post_layout_check import (
+        _parse_netlist_instances, _parse_liberty_pins, _LIB_CELL_RE, _brace_block, _LibertyFn)
+    mode = intent['test_mode']
+    functional, scan, select = mode['clock'], mode['scan_clock'], mode['clock_select']['native']
+    for role, definition in intent['test_port_def'].items():
+        direction = 'output' if role == 'scan_out' else 'input'
+        if not re.search(r'\b' + direction + r'\s+(?:wire\s+)?'
+                         + re.escape(definition['native']) + r'\s*;', text):
+            raise ValueError('native test port absent/wrong direction: ' + role)
+    if not re.search(r'\binput\s+(?:wire\s+)?' + re.escape(functional) + r'\s*;', text):
+        raise ValueError('native functional clock is not an input')
+    instances = _parse_netlist_instances(text)
+    sequential = _fatpg.liberty_sequential_cells(liberty_text)
+    clock_pins = {}
+    for match in _LIB_CELL_RE.finditer(liberty_text):
+        if match.group(1) not in sequential:
+            continue
+        body, _ = _brace_block(liberty_text, match.end())
+        clock = re.search(r'\bclocked_on\s*:\s*"([A-Za-z_][A-Za-z0-9_$]*)"', body)
+        if clock:
+            clock_pins[match.group(1)] = clock.group(1)
+    flops = {name: (cell, pins) for name, (cell, pins) in instances.items() if cell in sequential}
+    if not flops or any(cell not in clock_pins for cell, _ in flops.values()):
+        raise ValueError('native sequential clock semantics unsupported/absent')
+    clocks = {pins.get(clock_pins[cell]) for cell, pins in flops.values()}
+    if len(clocks) != 1 or None in clocks:
+        raise ValueError('native flops do not share the authorized clock-source domain')
+    clock_net = next(iter(clocks))
+    library = _parse_liberty_pins(liberty_text)
+    matches = []
+    for name, (cell, pins) in instances.items():
+        if cell in sequential or cell not in library:
+            continue
+        inputs = library[cell]['inputs']
+        if (len(inputs) != 3 or {pins.get(pin) for pin in inputs} != {functional, scan, select}):
+            continue
+        for output, expression in library[cell]['outputs'].items():
+            if pins.get(output) != clock_net or not isinstance(expression, str):
+                continue
+            fn = _LibertyFn(expression)
+            if ''.join(fn.toks) != re.sub(r'\s+', '', expression):
+                continue
+            if all(fn({pin: dict(zip((functional, scan, select), values))[pins[pin]] for pin in inputs})
+                   == (values[1] if values[2] else values[0])
+                   for values in product((False, True), repeat=3)):
+                matches.append({'instance': name, 'cell': cell, 'output_pin': output})
+    if len(matches) != 1:
+        raise ValueError('native clock mux does not implement the declared clk/tck/test selection')
+    return {'functional_clock': functional, 'scan_clock': scan, 'clock_select': select,
+            'functional_value': 0, 'scan_value': 1, 'clock_net': clock_net,
+            'mux': matches[0], 'flop_clocks': {name: clock_net for name in sorted(flops)}}
 
 
 def load_l20_scan_contract(project: Path, expected_clock: str | None = None,
@@ -357,7 +428,14 @@ def l20_binding_is_current(project: Path, report: dict) -> tuple[bool, str]:
             if (report.get('published') and hashlib.sha256(
                     (project / SCAN_NETLIST_REL).read_bytes()).hexdigest() != native_output):
                 return False, 'published scan netlist differs from the native output'
-        except (OSError, KeyError, TypeError):
+            proof = _native_clock_controls(
+                (project / 'phase2/stage2/dft/scan_chain_work/chained.v').read_text(),
+                (project / report['clock_control_library']).read_text(), current_d09['intent'])
+            if (proof != report.get('native_clock_controls')
+                    or report.get('functional_clock') != proof['functional_clock']
+                    or report.get('clock') != proof['scan_clock']):
+                return False, 'native clock/control roles differ from source authority/receipt'
+        except (OSError, ValueError, KeyError, TypeError):
             return False, 'native scan artifact/report binding is missing'
     recorded = report.get("l20_contract") if isinstance(report, dict) else None
     if not isinstance(recorded, dict):
@@ -1263,6 +1341,23 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         if problems or current != d09_contract:
             return 1, {**report, 'published': False,
                        'problems': ['D09 authority changed during native insertion']}
+        try:
+            if Path(liberty).is_file():
+                library_text = Path(liberty).read_text()
+            else:
+                import shlex
+                lib_rc, library_text, _ = _fatpg._run_docker(
+                    project, ['cat', shlex.quote(liberty)], pdk_dir=pdk_dir)
+                if lib_rc:
+                    raise ValueError('native control Liberty cannot be read')
+            proof = _native_clock_controls(chained_text, library_text, d09_contract['intent'])
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            return 1, {**report, 'published': False,
+                       'problems': ['D23_NATIVE_CONTROL_AUTHORITY: ' + str(exc)]}
+        library_rel = work_rel + '/clock_control.lib'
+        atomic.write_text(project / library_rel, library_text)
+        report.update(functional_clock=clock, clock=proof['scan_clock'],
+                      native_clock_controls=proof, clock_control_library=library_rel)
         # The existing L20 producer stamp records a derivation. Its length
         # is the native measurement above, never an author/pre-synthesis value.
         l20_path = _pl.generated_docs_dir(project) / 'L20_DFT_SCAN_TOPOLOGY.json'
@@ -1270,18 +1365,21 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         raw_log = work_rel + '/native_chain.log'
         atomic.write_text(project / raw_log, log)
         measured = {out_rel: hashlib.sha256(produced.read_bytes()).hexdigest(),
-                    raw_log: hashlib.sha256((project / raw_log).read_bytes()).hexdigest()}
+                    raw_log: hashlib.sha256((project / raw_log).read_bytes()).hexdigest(),
+                    library_rel: hashlib.sha256((project / library_rel).read_bytes()).hexdigest()}
         doc.update(applicability='APPLICABLE', extraction_status='EXTRACTED',
                    source_documents=[d09_contract['path']],
-                   extraction_evidence={'d09_contract': d09_contract, 'native_artifacts': measured})
+                   extraction_evidence={'d09_contract': d09_contract, 'native_artifacts': measured,
+                                        'native_clock_controls': proof})
         fields = doc.setdefault('fields', {})
         fields.pop('dft_intent_status', None)
         fields.update(dft_present=True, scan_chains=[{
             'name': meta['sin'], 'length': report['internal_chain_length'],
-            'scan_in': meta['sin'], 'scan_out': meta['sout'], 'clock': clock}],
+            'scan_in': meta['sin'], 'scan_out': meta['sout'], 'clock': proof['scan_clock'],
+            'functional_clock': clock}],
             notes='Native mapped scan topology; timing and coverage are separate measurements.')
         stamp.dump(l20_path, doc)
-        l20_contract, problems = load_l20_scan_contract(project, clock, report['internal_chain_length'])
+        l20_contract, problems = load_l20_scan_contract(project, proof['scan_clock'], report['internal_chain_length'])
         if problems:
             return 1, {**report, 'published': False, 'problems': problems}
         report.update(d09_contract=d09_contract, l20_contract=l20_contract,

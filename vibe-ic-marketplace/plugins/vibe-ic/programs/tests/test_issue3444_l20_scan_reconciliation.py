@@ -146,6 +146,8 @@ def test_reconciliation_rejects_measured_length_port_and_clock_mutations(tmp_pat
 # D09 planned intent -> the EXISTING run_chain consumer. Native I/O is a
 # neutral payload replay, never a claimed new native D23 acceptance result.
 import pytest
+import os
+import hashlib
 import spec_declaration_emit as DECL
 import librelane_contract as LL
 
@@ -155,8 +157,12 @@ def _intent():
             'test_port_def': {
                 'scan_enable': {'public': 'scan_enable', 'native': 'shift'},
                 'scan_in': {'public': 'scan_in', 'native': 'sin'},
-                'scan_out': {'public': 'scan_out', 'native': 'sout'}},
+                'scan_out': {'public': 'scan_out', 'native': 'sout'},
+                'test': {'public': 'test_mode', 'native': 'test'},
+                'tck': {'public': 'scan_clock', 'native': 'tck'}},
             'test_mode': {'clock': 'clk', 'clock_domains': ['clk'], 'edge': 'rising',
+                          'scan_clock': 'tck', 'scan_clock_domains': ['tck'], 'scan_edge': 'rising',
+                          'clock_select': {'native': 'test', 'functional_value': 0, 'scan_value': 1},
                           'reset': {'signal': 'rst', 'style': 'synchronous',
                                     'active_level': 1, 'shift_value': 0}}}
 
@@ -195,7 +201,12 @@ def _planned(project, intent=None):
 
 def _native_payload(project, monkeypatch, *, actual=2):
     calls = []
+    retained = Path(os.environ['VIBEIC_RETAINED_D23_CONTROL'])
+    if actual == 2:
+        (project / 'phase2/stage2/synth/netlist.v').write_bytes(
+            (retained / 'phase2/stage2/synth/netlist.v').read_bytes())
     def native(project, argv, **kwargs):
+        assert argv[:2] == ['fault', 'chain']  # no new native/tool path
         calls.append(argv)
         metadata = {'sin': 'sin', 'sout': 'sout', 'shift': 'shift',
                     'internalCount': 2, 'boundaryCount': 0,
@@ -204,6 +215,13 @@ def _native_payload(project, monkeypatch, *, actual=2):
         artifact = ('/* FAULT METADATA: \'' + json.dumps(metadata)
                     + '\' END FAULT METADATA */\n' + _mapped(actual, scan=True))
         path = project / 'phase2/stage2/dft/scan_chain_work/chained.v'
+        if actual == 2:
+            path.write_bytes((retained / 'phase2/stage2/dft/scan_chain_work/chained.v').read_bytes())
+            log = (retained / 'phase2/stage2/dft/scan_chain_work/native_chain.log').read_text()
+            # Preserve the exact combined native log bytes used by run_chain.
+            out, separator, err = log.rpartition('\n')
+            assert separator
+            return 0, out, err
         path.write_text(artifact)
         return 0, ('Internal scan chain successfully constructed. Length: 2\n'
                    'Boundary scan cells successfully chained. Length: 0\n'
@@ -234,14 +252,21 @@ def test_d09_native_measurement_publishes_existing_l20_receipt(tmp_path, monkeyp
     project = _planned(tmp_path)
     calls = _native_payload(project, monkeypatch)
     rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
-                             reset='rst', require_l20_contract=True)
+                             reset='rst', skip_boundary='on', top_module='neutral_unit',
+                             require_l20_contract=True)
     assert rc == 0 and report['published'] is True and len(calls) == 1
     assert report['internal_chain_length'] == 2
     assert report['l20_reconciliation']['ok'] is True
     assert S.l20_binding_is_current(project, report)[0] is True
+    assert report['functional_clock'] == 'clk' and report['clock'] == 'tck'
+    proof = report['native_clock_controls']
+    assert proof['mux']['instance'] == '_4_' and len(proof['flop_clocks']) == 2
+    assert set(proof['flop_clocks'].values()) == {'__clk_source__'}
     assert report['test_port_def'] == _intent()['test_port_def']
     l20 = json.loads((project / report['l20_contract']['path']).read_text())
     assert l20['fields']['scan_chains'][0]['length'] == 2
+    assert l20['fields']['scan_chains'][0]['clock'] == 'tck'
+    assert l20['fields']['scan_chains'][0]['functional_clock'] == 'clk'
     assert l20['extraction_evidence']['d09_contract'] == report['d09_contract']
     assert set(report['dft_ports']) == set(S.DFT_PORTS)  # explicit native binding, no renaming
     (project / S.SCAN_NETLIST_REL).write_text(_mapped())
@@ -311,3 +336,99 @@ def test_d09_incomplete_native_mapping_does_not_publish(tmp_path, monkeypatch):
     assert any('D23_INCOMPLETE_MAPPING' in p for p in report['problems'])
     assert (project / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json').read_bytes() == before
     assert not (project / S.SCAN_NETLIST_REL).exists()
+
+
+# Return1: complete clock-control authority, consuming the exact retained native
+# two-DFF artifact. No Fault invocation is executed by these source controls.
+def test_d09_old_three_role_intent_must_refuse(tmp_path, monkeypatch):
+    intent = _intent()
+    for role in ('test', 'tck'):
+        intent['test_port_def'].pop(role)
+    for key in ('scan_clock', 'scan_clock_domains', 'scan_edge', 'clock_select'):
+        intent['test_mode'].pop(key)
+    project = _planned(tmp_path, intent)
+    monkeypatch.setattr(S._fatpg, '_run_docker', lambda *a, **k: pytest.fail('native started'))
+    refused = False
+    try:
+        allowed, _ = D.dft_scan_insertion_contract(project)
+    except LL.Refusal:
+        refused, allowed = True, False
+    assert allowed is False  # parent returns True: substantive observed VALUE
+    assert refused is True  # unknown/incomplete is not a scan-test:false skip
+
+
+@pytest.mark.parametrize('damage', [
+    'missing_test', 'missing_tck', 'changed_test', 'changed_tck',
+    'aliased_public_control', 'aliased_public_clock', 'missing_scan_clock',
+    'changed_scan_clock', 'aliased_clock_domain', 'missing_select',
+    'changed_select', 'swapped_mode_values',
+])
+def test_d09_complete_control_authority_rejects_damage(tmp_path, monkeypatch, damage):
+    intent = _intent()
+    defs, mode = intent['test_port_def'], intent['test_mode']
+    if damage == 'missing_test': defs.pop('test')
+    if damage == 'missing_tck': defs.pop('tck')
+    if damage == 'changed_test': defs['test']['native'] = 'shift'
+    if damage == 'changed_tck': defs['tck']['native'] = 'clk'
+    if damage == 'aliased_public_control': defs['test']['public'] = defs['scan_enable']['public']
+    if damage == 'aliased_public_clock': defs['tck']['public'] = 'clk'
+    if damage == 'missing_scan_clock': mode.pop('scan_clock')
+    if damage == 'changed_scan_clock': mode['scan_clock'] = 'clk'
+    if damage == 'aliased_clock_domain': mode['scan_clock_domains'] = ['clk']
+    if damage == 'missing_select': mode.pop('clock_select')
+    if damage == 'changed_select': mode['clock_select']['native'] = 'shift'
+    if damage == 'swapped_mode_values': mode['clock_select'].update(functional_value=1, scan_value=0)
+    project = _planned(tmp_path, intent)
+    monkeypatch.setattr(S._fatpg, '_run_docker', lambda *a, **k: pytest.fail('native started'))
+    binding, problems = S.load_d09_dft_contract(project)
+    assert binding is None and problems[0].startswith('D09_DFT_AUTHORITY_INVALID:')
+    with pytest.raises(LL.Refusal, match='D09_DFT_AUTHORITY_INVALID'):
+        D.dft_scan_insertion_contract(project)
+
+
+def _wrong_control(text, mutation):
+    if mutation == 'mux_scan_input': return text.replace('.A1(tck)', '.A1(clk)')
+    if mutation == 'mux_select': return text.replace('.S(test)', '.S(shift)')
+    if mutation == 'flop_clock': return text.replace('.CLK(__clk_source__)', '.CLK(clk)', 1)
+    raise AssertionError(mutation)
+
+
+@pytest.mark.parametrize('mutation', ['mux_scan_input', 'mux_select', 'flop_clock'])
+def test_d09_actual_native_clock_wiring_blocks_publication(tmp_path, monkeypatch, mutation):
+    project = _planned(tmp_path)
+    _native_payload(project, monkeypatch)
+    replay = S._fatpg._run_docker
+    def corrupt(project, argv, **kwargs):
+        result = replay(project, argv, **kwargs)
+        path = project / 'phase2/stage2/dft/scan_chain_work/chained.v'
+        before = path.read_text()
+        after = _wrong_control(before, mutation)
+        assert after != before
+        path.write_text(after)
+        return result
+    monkeypatch.setattr(S._fatpg, '_run_docker', corrupt)
+    before = (project / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json').read_bytes()
+    rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
+                             reset='rst', skip_boundary='on', top_module='neutral_unit',
+                             require_l20_contract=True)
+    assert rc == 1 and report['published'] is False
+    assert report['problems'][0].startswith('D23_NATIVE_CONTROL_AUTHORITY:')
+    assert (project / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json').read_bytes() == before
+    assert not (project / S.SCAN_NETLIST_REL).exists()
+
+
+@pytest.mark.parametrize('mutation', ['mux_scan_input', 'mux_select', 'flop_clock'])
+def test_d09_native_currentness_rederives_controls_after_rehash(tmp_path, monkeypatch, mutation):
+    project = _planned(tmp_path)
+    _native_payload(project, monkeypatch)
+    rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
+                             reset='rst', skip_boundary='on', top_module='neutral_unit',
+                             require_l20_contract=True)
+    assert rc == 0 and report['published'] and S.l20_binding_is_current(project, report)[0]
+    path = project / 'phase2/stage2/dft/scan_chain_work/chained.v'
+    changed = _wrong_control(path.read_text(), mutation)
+    path.write_text(changed)
+    (project / S.SCAN_NETLIST_REL).write_text(changed)
+    # A fresh digest/old passing label is insufficient: semantics are re-read.
+    report['measured_artifacts'][str(path.relative_to(project))] = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert S.l20_binding_is_current(project, report)[0] is False
