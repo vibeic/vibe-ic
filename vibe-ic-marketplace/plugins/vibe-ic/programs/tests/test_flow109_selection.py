@@ -235,7 +235,7 @@ def test_frontend_rows_route_stable_ids_to_existing_default_owner_sites():
     expected = {
         "D01": ("D1", "phase1_one_shot_runner", "D1", "D1"),
         "D02": ("0.5ic", "phase1_one_shot_runner", "D1", "D1"),
-        "D09": ("1", "design_one_shot_runner", "1", "1"),
+        "D09": ("1", "design_one_shot_runner", "1", "4"),
         "D10": ("P0", "design_one_shot_runner", "1", "1"),
         "D11": ("2", "design_one_shot_runner", "2", "2"),
         "D12": ("3", "design_one_shot_runner", "2", "3"),
@@ -931,6 +931,67 @@ def test_owner_route_uses_native_span_without_generic_qualification_registry(
     assert immutable["context_sha256"] == request["context_sha256"]
     assert immutable["registry_sha256"] == request["registry_sha256"]
     assert immutable["planner_sha256"] == request["planner_sha256"]
+
+
+def test_d09_owner_span_routes_validation_without_neighbor_row_credit(
+        tmp_path, monkeypatch):
+    """D09 may consume the native span, but only D09 receives a row result."""
+    plan = flow109.resolve_plan(profile())
+    row = flow109.resolve_step(plan, "D09")
+    assert row["position"] == 17
+    assert row["profile"]["dispatch"] == {
+        "kind": "canonical_owner_window",
+        "owner_runner": "design_one_shot_runner",
+        "native_step_id": "1",
+        "owner_entry_step": "1",
+        "owner_exit_step": "4",
+        "producer": "design_one_shot_runner.py:step_rtl_gen",
+        "consumer": "design_one_shot_runner rtl_gen retained acceptance",
+        "engine_families": [],
+        "acceptance_scope": "existing_native_component_only",
+        "flow109_metrics_status": "UNIMPLEMENTED",
+    }
+
+    monkeypatch.setenv(flow109.CONTEXT_ENV, "")
+    monkeypatch.delenv(flow109.ATTEMPT_ENV, raising=False)
+    import _delivery_route
+    assert _delivery_route.admit(tmp_path, "ic") is None
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"features": profile()}))
+    args = SimpleNamespace(flow="109", flow109_manifest=manifest,
+                           flow109_plan_only=False, execution_mode="default",
+                           entry_step="D09", exit_step="D09")
+
+    assert flow109.prepare_front_door(args, tmp_path) is None
+    assert (args.entry_step, args.exit_step) == ("1", "4")
+    route = json.loads((tmp_path / "reports/flow109/owner_route.json").read_text())
+    assert route["owner_runner"] == "design_one_shot_runner"
+    assert (route["native_step_id"], route["entry_step"], route["exit_step"]) == (
+        "1", "1", "4")
+    request = json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text())
+    report = {"steps": [{
+        "status": "PASS", "extras": {"step_id": "1",
+        "context_sha256": request["context_sha256"],
+        "default_row_status": "PASS", "completed": True}}, *[
+        {"status": "PASS", "extras": {"step_id": native,
+         "context_sha256": request["context_sha256"],
+         "default_row_status": "PASS", "completed": True,
+         "metrics": {"must_not_be_credited": native}}}
+        for native in ("2", "3", "4")
+    ]]}
+
+    result = flow109.finish_native_window(tmp_path, report)
+
+    assert [item["step_id"] for item in result["components"]] == ["D09"]
+    assert result["default_row_status"] == "PASS"
+    assert result["flow109_acceptance"] == "NOT_MEASURED"
+    assert result["whole_flow_acceptance"] == "NOT_MEASURED"
+    assert result["delivery_accepted"] is False
+    assert not any((tmp_path / "reports/flow109/default_rows" / f"{step}.json").exists()
+                   for step in ("D11", "D12", "D13"))
+    assert not any((tmp_path / "reports/flow109/components" / f"{step}.json").exists()
+                   for step in ("D11", "D12", "D13"))
+    assert "metrics" not in result["components"][0]
 
 
 @pytest.mark.parametrize("step, adapter, component_scope", [
