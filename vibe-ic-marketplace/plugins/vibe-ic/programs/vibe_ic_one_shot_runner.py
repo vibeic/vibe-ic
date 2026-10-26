@@ -1108,6 +1108,15 @@ def _complete_step8_early_preflight(project: Path) -> dict:
     except flow109.Flow109Error as exc:
         finished = None
         finalization_detail = f'D20_FINALIZATION_REFUSED: {exc}'
+    except FileExistsError as exc:
+        attempt = os.environ.get(flow109.ATTEMPT_ENV)
+        expected = Path(attempt) / 'result.json' if attempt else None
+        if exc.filename is None or expected is None or Path(exc.filename) != expected:
+            raise
+        finished = None
+        finalization_detail = ('D20_FINALIZATION_REFUSED: '
+                               'FLOW109_ATTEMPT_RESULT_EXISTS: immutable attempt '
+                               'result already exists')
     else:
         finalization_detail = 'D20_FINALIZATION_RESULT_INVALID'
     components = finished.get('components') if isinstance(finished, Mapping) else None
