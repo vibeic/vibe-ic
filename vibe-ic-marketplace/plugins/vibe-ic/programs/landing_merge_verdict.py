@@ -1743,11 +1743,18 @@ def service_ready(repo: Path, manifest: Path, writer: str,
         bindings = {p: git("ls-tree", now_base, "--", p) for p in watch}
         return head, affected, bindings
 
+    # Admit the complete queue before running any acceptance work. Stable
+    # partitioning preserves input order only within the same readiness class.
+    admitted = []
     for entry in plan["candidates"]:
         if not isinstance(entry, dict):
             raise ValueError("candidate admission is not an object")
         try:
-            head, affected, bindings = inspect(entry)
+            admitted.append((entry, *inspect(entry)))
+        except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as exc:
+            refused.append({"id": entry.get("id"), "reason": str(exc)})
+    for entry, head, affected, bindings in sorted(admitted, key=lambda row: bool(row[2])):
+        try:
             performed = []
             commands = {}
             for path in sorted(affected):

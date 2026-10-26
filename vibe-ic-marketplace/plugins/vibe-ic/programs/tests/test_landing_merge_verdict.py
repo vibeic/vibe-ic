@@ -4096,3 +4096,34 @@ def test_ready_service_enforces_writer_and_short_serial_final_lock(ready_service
         assert not marker.exists()
     rc, result = run()
     assert rc.returncode == 0 and marker.exists()
+
+
+def test_ready_service_prefers_reusable_receipt_before_unrelated_impacted_checks(ready_service):
+    root, git, entry, receipt, run, marker = ready_service
+    (root / "dependency.py").write_text("changed named input\n")
+    git("add", "."); git("commit", "-qm", "changed input")
+    current_base = git("rev-parse", "HEAD")
+    impacted = root.parent / "earlier-impacted-marker"
+    candidate_a = dict(entry, id="A", checks={"dependency.py": [{
+        "id": "A-impacted", "argv": [sys.executable, "-c",
+        "import pathlib; pathlib.Path(" + repr(str(impacted)) + ").write_text('ran')"]}]})
+    git("checkout", "-qb", "independent")
+    (root / "independent.py").write_text("independent candidate\n")
+    git("add", "."); git("commit", "-qm", "independent candidate")
+    independent_head = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    doc = json.loads(receipt.read_text())
+    doc.update(base_sha=current_base, head_sha=independent_head)
+    doc.pop("receipt_sha256")
+    doc["receipt_sha256"] = hashlib.sha256(json.dumps(
+        doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    independent_receipt = root.parent / "independent-accepted.json"
+    independent_receipt.write_text(json.dumps(doc))
+    candidate_b = {"id": "B", "head": independent_head,
+                   "receipt": str(independent_receipt),
+                   "receipt_sha256": hashlib.sha256(independent_receipt.read_bytes()).hexdigest()}
+    rc, result = run([candidate_a, candidate_b])
+    assert rc.returncode == 0 and result["id"] == "B"
+    assert result["receipt_reused"] is True and result["impacted_checks"] == []
+    assert json.loads(marker.read_text())["head"] == independent_head
+    assert not impacted.exists()
