@@ -216,6 +216,25 @@ Step 2.9.
 > deny-list, the version invariants, the full-suite gate) is already in
 > the machine gates; Step-2.7 is the single LLM residue.
 
+### Completed V2 receipts: executable ready-first delivery
+
+Use `programs/landing_merge_verdict.py --service-ready <root-admission.json>
+--repo <checkout> --writer <sole-writer> --final-command <delivery argv...>`
+for independently accepted work. The input is root-owned, not a PR payload:
+`writer`, `candidates[]` with `id`, `head`, `receipt`, independently accepted
+`receipt_sha256`, optional `holds`, `shared_conflicts`, `failed_gates`, landed
+commit `dependencies`, and `checks[path]=[{"id": ..., "argv": [...]}]`.
+Pins must come from the independent accepted packet, never the receipt itself.
+This actual consumer reasserts evidence, passes unrelated blocked work, refuses
+missing/tampered/mismatched pins, and requests only named impacted checks.
+Checks run outside its short common-repository final-write lock. Delivery argv
+is supplied only by the designated sole writer; the consumer neither grants a
+source worker landing authority nor treats mergeable status as acceptance.
+Do not repeat acceptance due to waiting, handoff, identity, unrelated base
+movement, or version assignment. Genuine holds/dependencies/shared ownership
+and failed gates remain blocking. This binding path supersedes unconditional
+re-run/enqueue wording in the legacy procedure and cron template below.
+
 ### Step 2.9 — serialized merge queue (the lock + rebase + re-run)
 
 A green PR does **not** merge immediately. It **enqueues** to a

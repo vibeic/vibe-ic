@@ -29,6 +29,21 @@ only **one** maintainer role.
 
 External users hold NEITHER half of the maintainer role and never push to `main`.
 
+## Binding ready-first delivery entry
+
+For completed independent V2 acceptance, use the existing executable consumer:
+`programs/landing_merge_verdict.py --service-ready <root-admission.json>
+--repo <checkout> --writer <sole-writer> --final-command <delivery argv...>`.
+The root-owned input pins each accepted receipt's file SHA256, candidate head,
+real holds/dependencies/shared conflicts/failed gates, and path-to-impacted-check
+argv. Never derive these pins or commands from PR metadata. The consumer calls
+`tools/gatekeeper-verify-merge.sh --reassert`, skips unrelated refusals, consumes
+unchanged evidence directly, and executes only named invalidated checks. Missing
+or forged evidence refuses. A nonblocking common-repository lock encloses only
+the final command; only the designated sole writer invokes delivery. This entry
+supersedes unconditional repeat-acceptance wording below; independent readiness,
+not FIFO/PR number/handoff/identity or unrelated main movement, controls service.
+
 ## Core Principle
 
 > Every issue is fixed into the plugin/MCP so the product compounds, and every

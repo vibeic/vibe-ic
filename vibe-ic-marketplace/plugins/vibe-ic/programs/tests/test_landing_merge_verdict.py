@@ -3959,3 +3959,140 @@ def test_the_forced_fallback_is_the_only_thing_the_env_var_can_do(sandbox, tmp_p
     assert natural.returncode == forced.returncode == 1
     assert doc_n["verdict"] == doc_f["verdict"] == "REFUSE"
     assert doc_f["verification_tier"] == V.TIER_REBASE_REPLAY
+
+# Actual one-shot receipt consumer; no acceptance arm/forge/network in fixtures.
+@pytest.fixture()
+def ready_service(tmp_path):
+    import os
+    import shutil
+    root = tmp_path / "ready-repo"
+    root.mkdir()
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(root), *args], text=True).strip()
+    git("init", "-q", "-b", "main")
+    git("config", "user.email", "test@example.invalid")
+    git("config", "user.name", "test")
+    (root / "tools").mkdir()
+    verifier = _VERIFY
+    shutil.copyfile(verifier, root / "tools/gatekeeper-verify-merge.sh")
+    (root / "dependency.py").write_text("initial dependency\n")
+    git("add", "."); git("commit", "-qm", "base")
+    base = git("rev-parse", "HEAD")
+    git("checkout", "-qb", "candidate")
+    (root / "feature.py").write_text("candidate\n")
+    git("add", "."); git("commit", "-qm", "candidate")
+    head = git("rev-parse", "HEAD")
+    git("checkout", "-q", "main")
+    receipt = tmp_path / "accepted.json"
+    doc = {"receipt_schema": "vibeic.landing-acceptance.v1", "verdict": "LAND_OK",
+           "base_sha": base, "head_sha": head,
+           "selected_files": ["dependency.py"], "base_selected_files": [], "gate_edited": []}
+    doc["receipt_sha256"] = hashlib.sha256(json.dumps(
+        doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    receipt.write_text(json.dumps(doc))
+    entry = {"id": "ready", "head": head, "receipt": str(receipt),
+             "receipt_sha256": hashlib.sha256(receipt.read_bytes()).hexdigest()}
+    manifest = tmp_path / "admission.json"
+    final_marker = tmp_path / "final.json"
+    program = Path(os.environ.get("GATEKEEPER_SERVICE_UNDER_TEST", str(
+        Path(__file__).resolve().parents[1] / "landing_merge_verdict.py")))
+    final = [sys.executable, "-c", "import os,json,pathlib; pathlib.Path(" + repr(str(final_marker))
+             + ").write_text(json.dumps({'id':os.environ['GATEKEEPER_READY_ID'],"
+               "'head':os.environ['GATEKEEPER_READY_HEAD']}))"]
+    def run(entries=None, writer="root", final_command=None):
+        manifest.write_text(json.dumps({"writer": "root", "candidates": entries or [entry]}))
+        result = subprocess.run([sys.executable, str(program), "--service-ready", str(manifest),
+            "--repo", str(root), "--base", "main", "--writer", writer,
+            "--final-command", *(final if final_command is None else final_command)],
+            capture_output=True, text=True)
+        return result, json.loads(result.stdout)
+    return root, git, entry, receipt, run, final_marker
+
+
+def test_ready_service_skips_unrelated_conflict_and_reuses_without_acceptance(ready_service):
+    root, git, entry, receipt, run, marker = ready_service
+    first = dict(entry, id="earlier", shared_conflicts=["other live source owner"], number=1)
+    entry.update(number=999, mergeable="UNKNOWN", author="another-owner", waited_days=30)
+    rc, result = run([first, entry])
+    assert rc.returncode == 0 and result["id"] == "ready"
+    assert result["receipt_reused"] is True and result["impacted_checks"] == []
+    assert json.loads(marker.read_text())["head"] == entry["head"]
+    assert result["refused"][0]["id"] == "earlier"
+
+
+def test_ready_service_unrelated_base_movement_does_not_rerun(ready_service):
+    root, git, entry, receipt, run, marker = ready_service
+    (root / "unrelated.txt").write_text("independent landing")
+    git("add", "."); git("commit", "-qm", "unrelated")
+    rc, result = run()
+    assert rc.returncode == 0 and result["receipt_reused"] is True
+    assert result["affected_paths"] == [] and result["impacted_checks"] == []
+
+
+def test_ready_service_named_dependency_runs_only_impacted_check_outside_lock(ready_service):
+    root, git, entry, receipt, run, marker = ready_service
+    (root / "dependency.py").write_text("changed dependency\n")
+    git("add", "."); git("commit", "-qm", "dependency")
+    impacted = root.parent / "impacted"
+    check = [sys.executable, "-c", "import fcntl,pathlib; "
+             "f=open('.git/gatekeeper-final.lock','a'); "
+             "fcntl.flock(f,fcntl.LOCK_EX|fcntl.LOCK_NB); "
+             "pathlib.Path(" + repr(str(impacted)) + ").write_text('measured')"]
+    entry["checks"] = {"dependency.py": [{"id": "dependency-consumer", "argv": check}],
+                       "unrelated.txt": [{"id": "must-not-run", "argv": ["false"]}]}
+    rc, result = run()
+    assert rc.returncode == 0 and impacted.read_text() == "measured"
+    assert result["impacted_checks"] == ["dependency-consumer"]
+    assert result["affected_paths"] == ["dependency.py"]
+
+
+@pytest.mark.parametrize("kind", ["missing", "tampered", "forged-resealed", "head-mismatch"])
+def test_ready_service_invalid_receipt_refuses_without_final_write(ready_service, kind):
+    root, git, entry, receipt, run, marker = ready_service
+    if kind == "missing":
+        receipt.unlink()
+    elif kind == "head-mismatch":
+        entry["head"] = "main"
+    else:
+        doc = json.loads(receipt.read_text())
+        doc["selected_files"] = []
+        if kind == "forged-resealed":
+            doc.pop("receipt_sha256")
+            doc["receipt_sha256"] = hashlib.sha256(json.dumps(
+                doc, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        receipt.write_text(json.dumps(doc))
+    rc, result = run()
+    assert rc.returncode != 0 and result["status"] == "BLOCKED_NO_ACCEPTED_CANDIDATE"
+    assert not marker.exists()
+
+
+@pytest.mark.parametrize("blocker", ["holds", "shared_conflicts", "failed_gates", "dependencies"])
+def test_ready_service_real_hold_dependency_or_shared_owner_still_blocks(ready_service, blocker):
+    root, git, entry, receipt, run, marker = ready_service
+    entry[blocker] = [entry["head"] if blocker == "dependencies" else "named actual blocker"]
+    rc, result = run()
+    assert rc.returncode != 0 and not marker.exists()
+    assert result["status"] == "BLOCKED_NO_ACCEPTED_CANDIDATE"
+
+
+def test_ready_service_missing_impacted_check_refuses_no_broad_fallback(ready_service):
+    root, git, entry, receipt, run, marker = ready_service
+    (root / "dependency.py").write_text("changed\n")
+    git("add", "."); git("commit", "-qm", "dependency")
+    rc, result = run()
+    assert rc.returncode != 0 and not marker.exists()
+    assert "no impacted check" in result["refused"][0]["reason"]
+
+
+def test_ready_service_enforces_writer_and_short_serial_final_lock(ready_service):
+    import fcntl
+    root, git, entry, receipt, run, marker = ready_service
+    rc, result = run(writer="source-prep")
+    assert rc.returncode != 0 and result["status"] == "BLOCKED_ADMISSION_INPUT"
+    with (root / ".git/gatekeeper-final.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        rc, result = run()
+        assert rc.returncode != 0 and result["status"] == "BLOCKED_SOLE_WRITER_LOCK"
+        assert not marker.exists()
+    rc, result = run()
+    assert rc.returncode == 0 and marker.exists()
