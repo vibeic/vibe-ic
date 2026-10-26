@@ -129,6 +129,192 @@ def _accepted_row(project: Path, relative: Path, step: str) -> tuple[dict, dict]
     return body, ref
 
 
+def _current_project_ref(project: Path, value: Mapping, code: str) -> dict:
+    """Verify a producer path/SHA reference against current project bytes."""
+    if (not isinstance(value, Mapping) or set(value) != {"path", "sha256"}
+            or not isinstance(value.get("path"), str)
+            or not isinstance(value.get("sha256"), str)):
+        raise Flow109Error(code, "expected exact path/sha256 reference")
+    project = Path(project).resolve()
+    path = project / value["path"]
+    try:
+        relative = path.resolve().relative_to(project).as_posix()
+    except (OSError, ValueError) as exc:
+        raise Flow109Error(code, str(path)) from exc
+    if (path.is_symlink() or not path.is_file() or relative != value["path"]
+            or _file_digest(path) != value["sha256"]):
+        raise Flow109Error(code, value["path"])
+    return dict(value)
+
+
+def _d26_timed_arm(project: Path, arm: Mapping, intent: Mapping,
+                   adopted: Mapping, mode: str) -> dict:
+    """Reopen one producer-defined D26 arm and bind its real native inputs."""
+    if not isinstance(arm, Mapping) or arm.get("status") != "PASS":
+        raise Flow109Error("FLOW109_D26_SCAN_TIMING_NOT_MEASURED", mode)
+    expected_subject = {key: adopted[key] for key in ("path", "sha256")}
+    if arm.get("adopted_netlist") != expected_subject:
+        raise Flow109Error("FLOW109_D26_SCAN_NETLIST_MISMATCH", mode)
+    _current_project_ref(project, expected_subject, "FLOW109_D26_SCAN_NETLIST_STALE")
+    constraint = arm.get("constraint")
+    if not isinstance(constraint, Mapping) or constraint.get("mode") != mode:
+        raise Flow109Error("FLOW109_D26_SCAN_CONSTRAINT_MISMATCH", mode)
+    constraint_ref = _current_project_ref(
+        project, {key: constraint.get(key) for key in ("path", "sha256")},
+        "FLOW109_D26_SCAN_CONSTRAINT_STALE")
+    d09 = intent["source_binding"]["intent"]
+    if mode == "functional":
+        selector = d09["test_mode"]["clock_select"]
+        reset = d09["test_mode"]["reset"]
+        expected = {
+            "clock": d09["test_mode"]["clock"],
+            "clock_select": selector["native"], "clock_select_value": 0,
+            "scan_enable": d09["test_port_def"]["scan_enable"]["native"],
+            "scan_enable_value": 0,
+            "scan_input": d09["test_port_def"]["scan_in"]["native"],
+            "scan_input_value": 0,
+            "scan_clock": d09["test_port_def"]["tck"]["native"],
+            "scan_clock_value": 0,
+            "reset": reset["signal"], "reset_value": 1 - reset["active_level"],
+            "d09_path": intent["source_binding"]["path"],
+            "d09_sha256": intent["source_binding"]["sha256"],
+        }
+        if any(constraint.get(key) != value for key, value in expected.items()):
+            raise Flow109Error("FLOW109_D26_MODE_VALIDATOR_MISMATCH", mode)
+        _current_project_ref(project, constraint.get("base_sdc"),
+                             "FLOW109_D26_SCAN_CONSTRAINT_STALE")
+    deck = (Path(project) / constraint_ref["path"]).read_text(errors="replace")
+    expected_clock = (d09["test_mode"]["clock"] if mode == "functional"
+                      else d09["test_mode"]["scan_clock"])
+    test_signal = d09["test_port_def"]["test"]["native"]
+    expected_value = 0 if mode == "functional" else 1
+    if (f"[get_ports {{{expected_clock}}}]" not in deck
+            or f"set_case_analysis {expected_value} [get_ports {{{test_signal}}}]" not in deck):
+        raise Flow109Error("FLOW109_D26_MODE_VALIDATOR_MISMATCH", mode)
+    if mode == "scan":
+        shift = d09["test_port_def"]["scan_enable"]["native"]
+        if f"set_case_analysis 1 [get_ports {{{shift}}}]" not in deck:
+            raise Flow109Error("FLOW109_D26_MODE_VALIDATOR_MISMATCH", mode)
+    native = arm.get("native")
+    if not isinstance(native, Mapping) or native.get("input_step") != "OpenROAD.STAPrePNR":
+        raise Flow109Error("FLOW109_D26_SCAN_NATIVE_MISSING", mode)
+    folder = (Path(project) / str(native.get("folder") or "")).resolve()
+    try:
+        folder.relative_to(Path(project).resolve())
+    except ValueError as exc:
+        raise Flow109Error("FLOW109_D26_SCAN_NATIVE_STALE", mode) from exc
+    native_ref = _current_project_ref(
+        project, native.get("receipt"), "FLOW109_D26_SCAN_NATIVE_STALE")
+    if (not folder.is_dir()
+            or (Path(project) / native_ref["path"]).resolve()
+            != folder / "vibeic_receipt.json"):
+        raise Flow109Error("FLOW109_D26_SCAN_NATIVE_STALE", mode)
+    import librelane_contract
+    try:
+        librelane_contract.validate_step_receipt(folder, "OpenROAD.STAPrePNR")
+        config = json.loads((folder / "config.json").read_text())
+        state_path = folder / "state_out.json"
+        state = json.loads(state_path.read_text())
+    except Exception as exc:
+        raise Flow109Error("FLOW109_D26_SCAN_NATIVE_STALE", mode) from exc
+    if (Path(str(config.get("PNR_SDC_FILE") or "")).resolve()
+            != (Path(project) / constraint_ref["path"]).resolve()
+            or Path(str(state.get("nl") or "")).resolve()
+            != (Path(project) / adopted["path"]).resolve()):
+        raise Flow109Error("FLOW109_D26_SCAN_NATIVE_MISMATCH", mode)
+    for gate_name in ("sdc_gate", "slack_gate"):
+        gate_ref = arm.get(gate_name)
+        current_gate = _current_project_ref(
+            project, {key: gate_ref.get(key) for key in ("path", "sha256")}
+            if isinstance(gate_ref, Mapping) else gate_ref,
+            "FLOW109_D26_SCAN_GATE_STALE")
+        gate, _ = _bound_project_json(
+            project, Path(current_gate["path"]), "FLOW109_D26_SCAN_GATE_STALE")
+        if (gate.get("verdict") != "PASS"
+                or gate.get("state_out_sha256") != _file_digest(state_path)
+                or gate_ref.get("verdict") != gate.get("verdict")
+                or gate_ref.get("findings") != gate.get("findings")
+                or gate_ref.get("corners") != gate.get("corners")):
+            raise Flow109Error("FLOW109_D26_SCAN_GATE_FAIL", f"{mode}.{gate_name}")
+        if (gate_name == "sdc_gate"
+                and (gate.get("netlist_sha256") != adopted["sha256"]
+                     or gate.get("sdc_sha256") != constraint["sha256"])):
+            raise Flow109Error("FLOW109_D26_SCAN_GATE_MISMATCH", mode)
+        if not isinstance(gate.get("corners"), Mapping) or not gate["corners"]:
+            raise Flow109Error("FLOW109_D26_SCAN_TIMING_NOT_MEASURED",
+                               f"{mode}.{gate_name} has no corner evidence")
+    return dict(arm)
+
+
+def _d26_timing_modes_binding(project: Path, d26: Mapping, intent: Mapping,
+                              top: str, *, report: Mapping | None = None,
+                              report_ref: Mapping | None = None,
+                              adopted: Mapping | None = None) -> dict:
+    """Reopen the exact released D26 timing_modes_receipt and fail closed."""
+    reference = d26.get("timing_modes_receipt")
+    if (not isinstance(reference, Mapping)
+            or set(reference) != {"path", "sha256"}
+            or not isinstance(reference.get("path"), str)):
+        raise Flow109Error("FLOW109_D26_TIMING_MODES_MISSING", "timing_modes_receipt")
+    timing, current_ref = _bound_project_json(
+        project, Path(reference["path"]), "FLOW109_D26_TIMING_MODES_MISSING")
+    if dict(reference) != current_ref:
+        raise Flow109Error("FLOW109_D26_TIMING_MODES_STALE", reference["path"])
+    baseline = timing.get("functional_baseline")
+    if (timing.get("schema") != "vibeic.flow109.d26-timing-modes.v1"
+            or timing.get("step_id") != "D26" or timing.get("position") != 38
+            or timing.get("top") != top or timing.get("aggregate_status") != "PASS"
+            or not isinstance(baseline, Mapping) or baseline.get("status") != "PASS"
+            or baseline.get("canonical_pass") is not True
+            or baseline.get("current_inputs") is not True
+            or baseline.get("canonical_consumer_status") != "PASS"):
+        raise Flow109Error("FLOW109_D26_TIMING_MODES_INVALID", "schema/PASS baseline")
+    scan = timing.get("scan")
+    if not isinstance(scan, Mapping) or scan.get("d09_binding") != intent["source_binding"]:
+        raise Flow109Error("FLOW109_D26_SCAN_D09_MISMATCH", "D09 binding")
+    if not intent["scan_test"]:
+        if (scan.get("applicability") != "NOT_APPLICABLE"
+                or scan.get("status") != "NOT_APPLICABLE"
+                or timing.get("post_scan_arms") != {}
+                or timing.get("modes_measured") != ["functional_baseline"]):
+            raise Flow109Error("FLOW109_D26_SCAN_APPLICABILITY_INVALID", "no-scan receipt")
+        return {"receipt": current_ref, "functional_baseline": dict(baseline),
+                "scan": dict(scan), "modes_measured": list(timing["modes_measured"])}
+    arms = timing.get("post_scan_arms")
+    if (scan.get("applicability") != "APPLICABLE" or scan.get("status") != "PASS"
+            or not isinstance(arms, Mapping) or set(arms) != {"functional", "scan"}
+            or timing.get("modes_measured") != [
+                "functional_baseline", "post_scan_functional", "post_scan_scan"]
+            or report is None or report_ref is None or adopted is None):
+        raise Flow109Error("FLOW109_D26_SCAN_TIMING_NOT_MEASURED", "mode population")
+    chain = scan.get("scan_chain_report")
+    if (not isinstance(chain, Mapping)
+            or {key: chain.get(key) for key in ("path", "sha256")} != dict(report_ref)
+            or chain.get("published") is not True or chain.get("current") is not True
+            or chain.get("d09_contract") != report.get("d09_contract")
+            or chain.get("measured_artifacts") != report.get("measured_artifacts")
+            or chain.get("native_clock_controls") != report.get("native_clock_controls")):
+        raise Flow109Error("FLOW109_D26_SCAN_REPORT_MISMATCH", "D23 report")
+    scan_constraint = dict(scan.get("constraint") or {})
+    if scan_constraint.pop("mode", None) != "scan" \
+            or scan_constraint != report.get("scan_mode_constraint"):
+        raise Flow109Error("FLOW109_D26_SCAN_CONSTRAINT_MISMATCH", "D23 scan SDC")
+    d24 = scan.get("adopted_d24")
+    if (not isinstance(d24, Mapping) or d24.get("path") != adopted["path"]
+            or d24.get("sha256") != adopted["sha256"]
+            or d24.get("current") is not True or d24.get("is_scan_inserted") is not True
+            or d24.get("native_step") != "12" or d24.get("flow109_step") != "D24"
+            or d24.get("position") != 36):
+        raise Flow109Error("FLOW109_D26_SCAN_NETLIST_MISMATCH", "D24 adoption")
+    functional = _d26_timed_arm(project, arms["functional"], intent, adopted, "functional")
+    measured_scan = _d26_timed_arm(project, arms["scan"], intent, adopted, "scan")
+    if functional["native"]["receipt"] == measured_scan["native"]["receipt"]:
+        raise Flow109Error("FLOW109_D26_SCAN_NATIVE_MISMATCH", "arms share receipt")
+    return {"receipt": current_ref, "functional_baseline": dict(baseline),
+            "post_scan_arms": {"functional": functional, "scan": measured_scan},
+            "scan": dict(scan), "modes_measured": list(timing["modes_measured"])}
+
+
 def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     """Re-open D24/D25/D26's actual consumers before D30 native handoff."""
     project = Path(project).resolve()
@@ -187,6 +373,9 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
                  "internal_chain_length": values[0],
                  "boundary_chain_length": values[1],
                  "input_flop_count": values[2]}
+    timing_modes = _d26_timing_modes_binding(
+        project, _d26, intent, top, report=report, report_ref=report_ref,
+        adopted=adopted)
     return {
         "schema": "vibeic.flow109.dft-preroute-admission.v1",
         "consumer_step": "D30", "consumer_position": 42,
@@ -195,6 +384,7 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
         "pre_route_timing": {
             "owner_step": "D26", "owner_position": 38,
             "D26_result": d26_ref,
+            "timing_modes": timing_modes,
             "applicable_modes": (["functional", "scan"]
                                  if intent["scan_test"] else ["functional"]),
             "scope": "timing applicability; D25 functional LEC grants no timing credit"},
@@ -203,6 +393,45 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
         "identity_agreement": "D24_D25_D30_MATCH" if is_scan else "D22_D25_D30_MATCH",
         "flow109_acceptance": "NOT_MEASURED",
     }
+
+
+def _d44_pre_source_binding(project: Path, baseline: Mapping,
+                            pre_route: Mapping, final_record: Mapping) -> dict:
+    """Reopen D44's validated transform source and bind it to D30 bytes."""
+    if final_record.get("sha256") == pre_route.get("sha256"):
+        return {"mode": "UNCHANGED_D30_BYTES", **dict(pre_route)}
+    transforms = baseline.get("transformations")
+    receipt_ref = baseline.get("transformation_receipt")
+    if (not isinstance(transforms, list) or not transforms
+            or not isinstance(receipt_ref, Mapping)):
+        raise Flow109Error("FLOW109_D44_PRE_SOURCE_MISSING",
+                           "changed final bytes require D44 transformation authority")
+    path = receipt_ref.get("path")
+    if not isinstance(path, str) or not path:
+        raise Flow109Error("FLOW109_D44_PRE_SOURCE_MISSING",
+                           "D44 transformation receipt path")
+    receipt, current_ref = _bound_project_json(
+        project, Path(path), "FLOW109_D44_PRE_SOURCE_MISSING")
+    if dict(receipt_ref) != current_ref:
+        raise Flow109Error("FLOW109_D44_PRE_SOURCE_STALE", path)
+    raw = receipt.get("raw_adopted_netlist")
+    if (not isinstance(raw, Mapping) or not isinstance(raw.get("path"), str)
+            or not isinstance(raw.get("sha256"), str)):
+        raise Flow109Error("FLOW109_D44_PRE_SOURCE_MISSING",
+                           "D44 transformation carries no bound raw source")
+    raw_path = project / raw["path"]
+    try:
+        raw_rel = raw_path.resolve().relative_to(Path(project).resolve()).as_posix()
+    except (OSError, ValueError) as exc:
+        raise Flow109Error("FLOW109_D44_PRE_SOURCE_FOREIGN", str(raw_path)) from exc
+    if (raw_path.is_symlink() or not raw_path.is_file()
+            or raw_rel != raw["path"] or _file_digest(raw_path) != raw["sha256"]):
+        raise Flow109Error("FLOW109_D44_PRE_SOURCE_STALE", str(raw.get("path")))
+    if raw["sha256"] != pre_route.get("sha256"):
+        raise Flow109Error("FLOW109_D44_PRE_SOURCE_MISMATCH",
+                           f"D30={pre_route.get('sha256')}, D44={raw['sha256']}")
+    return {"mode": "D44_TRANSFORM_SOURCE", **dict(raw),
+            "transformation_receipt": current_ref}
 
 
 def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
@@ -245,12 +474,7 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
     pre = current_pre["adopted_netlist"]
     baseline, _ = _bound_project_json(
         project, Path(final["baseline"]["path"]), "FLOW109_D44_BASELINE_UNBOUND")
-    if final_record["sha256"] != pre["sha256"]:
-        transforms = baseline.get("transformations")
-        if (not isinstance(transforms, list) or not transforms
-                or not baseline.get("transformation_receipt")):
-            raise Flow109Error("FLOW109_D44_FINAL_TRANSFORM_MISSING",
-                               "final bytes differ from D30 without adopted transform")
+    pre_source = _d44_pre_source_binding(project, baseline, pre, final_record)
 
     sta, sta_ref = _bound_project_json(
         project, Path("reports/phase3/sta_postpnr_signoff.json"),
@@ -295,6 +519,7 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
         "D30": d30_ref, "D44": d44_ref, "D49": d49_ref,
         **({"D50": d50_ref} if d50_ref is not None else {}),
         "pre_route_netlist": pre, "final_adopted_netlist": dict(final_record),
+        "D44_pre_source": pre_source,
         "physical_transform": baseline.get("transformation_receipt"),
         "functional_equivalence_trace": {
             "D25": current_pre["functional_equivalence"],

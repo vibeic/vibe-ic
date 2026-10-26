@@ -200,6 +200,21 @@ def _d30_scan_case(project, monkeypatch, top="neutral_unit"):
     # Mirror the released D23 caller's post-consumption publication bit.  The
     # actual currentness consumer above, not this bit alone, authorizes it.
     report["authorized_by_l20_contract"] = True
+    scan_sdc = project / "phase2/stage2/dft/scan_mode.sdc"
+    scan_sdc.parent.mkdir(parents=True, exist_ok=True)
+    scan_sdc.write_text(
+        "create_clock -period 100.0 [get_ports {tck}]\n"
+        "set_case_analysis 1 [get_ports {shift}]\n"
+        "set_case_analysis 1 [get_ports {test}]\n")
+    l20 = report["l20_contract"]
+    report["scan_mode_constraint"] = {
+        "kind": "scan_shift_clock", "path": str(scan_sdc.relative_to(project)),
+        "sha256": hashlib.sha256(scan_sdc.read_bytes()).hexdigest(),
+        "l20_path": l20["path"], "l20_sha256": l20["sha256"],
+        "clock": "tck", "frequency_mhz": "10.0", "period_ns": "100.0"}
+    # This fixture already exercised the real currentness reader above.  Its
+    # added timing actuator is the sealed D26 API input under review here.
+    monkeypatch.setattr(producer, "l20_binding_is_current", lambda *_: (True, "current"))
     scan_report = project / producer.SCAN_JSON_REL
     scan_report.parent.mkdir(parents=True, exist_ok=True)
     scan_report.write_text(json.dumps(report))
@@ -227,6 +242,103 @@ def _d30_scan_case(project, monkeypatch, top="neutral_unit"):
             "sha256": hashlib.sha256(post.read_bytes()).hexdigest()},
         "native_scan_report": {"path": "reports/phase2/dft/scan_chain.json",
             "sha256": hashlib.sha256((dft / "scan_chain.json").read_bytes()).hexdigest()}}))
+    adopted = json.loads((rows / "D24.json").read_text())["adopted_netlist"]
+    base_sdc = project / "phase2/stage2/constraints/neutral_unit.sdc"
+    base_sdc.parent.mkdir(parents=True)
+    base_sdc.write_text("create_clock -period 10.0 [get_ports {clk}]\n")
+    functional_sdc = project / "reports/flow109/d26_timing/functional_post_scan.sdc"
+    functional_sdc.parent.mkdir(parents=True)
+    functional_sdc.write_text(
+        "create_clock -period 10.0 [get_ports {clk}]\n"
+        "set_case_analysis 0 [get_ports {test}]\n"
+        "set_case_analysis 0 [get_ports {shift}]\n"
+        "set_case_analysis 0 [get_ports {sin}]\n"
+        "set_case_analysis 0 [get_ports {tck}]\n"
+        "set_case_analysis 0 [get_ports {rst}]\n")
+    functional_native = project / "phase3/librelane/d26_post_scan_functional/vibeic_receipt.json"
+    scan_native = project / "phase3/librelane/d26_post_scan_scan/vibeic_receipt.json"
+    ref = lambda path: {"path": str(path.relative_to(project)),
+                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    for mode, native in (("functional", functional_native), ("scan", scan_native)):
+        native.parent.mkdir(parents=True)
+        native.write_text(json.dumps({"input": {"step": "OpenROAD.STAPrePNR"}}))
+        (native.parent / "config.json").write_text(json.dumps({
+            "PNR_SDC_FILE": str((functional_sdc if mode == "functional" else
+                                  project / report["scan_mode_constraint"]["path"]).resolve())}))
+        (native.parent / "state_out.json").write_text(json.dumps({"nl": str(post.resolve())}))
+    import librelane_contract
+    monkeypatch.setattr(librelane_contract, "validate_step_receipt",
+                        lambda *_: {"input": {"step": "OpenROAD.STAPrePNR"}})
+    gates = project / "reports/flow109/d26_timing"; gates.mkdir(parents=True, exist_ok=True)
+    intent = flow109.dft_source_intent(
+        project, flow109.execution_context(
+            flow109.resolve_plan(profile("Mapped soft-IP with prestitched scan")),
+            "D30", "D30"))
+    functional_constraint = {**ref(functional_sdc), "mode": "functional",
+        "base_sdc": ref(base_sdc), "clock": "clk",
+        "clock_select": "test", "clock_select_value": 0,
+        "scan_enable": "shift", "scan_enable_value": 0,
+        "scan_input": "sin", "scan_input_value": 0,
+        "scan_clock": "tck", "scan_clock_value": 0,
+        "reset": "rst", "reset_value": 0,
+        "d09_path": intent["source_binding"]["path"],
+        "d09_sha256": intent["source_binding"]["sha256"]}
+    scan_constraint = {**report["scan_mode_constraint"], "mode": "scan"}
+    gate_refs = {}
+    for mode, constraint in (("functional", functional_constraint),
+                             ("scan", scan_constraint)):
+        native = functional_native if mode == "functional" else scan_native
+        state_sha = hashlib.sha256((native.parent / "state_out.json").read_bytes()).hexdigest()
+        sdc_gate = gates / f"{mode}_sdc_gate.json"
+        sdc_gate.write_text(json.dumps({"verdict": "PASS", "findings": [],
+            "netlist_sha256": adopted["sha256"], "sdc_sha256": constraint["sha256"],
+            "state_out_sha256": state_sha,
+            "corners": {"tt": {"check_setup": {}}}}))
+        slack_gate = gates / f"{mode}_slack_gate.json"
+        slack_gate.write_text(json.dumps({"verdict": "PASS", "findings": [],
+            "state_out_sha256": state_sha,
+            "corners": {"tt": {"setup_ws": {"status": "MEASURED", "value": 0.1},
+                                "hold_ws": {"status": "MEASURED", "value": 0.1}}}}))
+        gate_refs[mode] = {
+            "sdc_gate": {**ref(sdc_gate), "verdict": "PASS", "findings": [],
+                         "corners": {"tt": {"check_setup": {}}}},
+            "slack_gate": {**ref(slack_gate), "verdict": "PASS", "findings": [],
+                "corners": {"tt": {"setup_ws": {"status": "MEASURED", "value": 0.1},
+                                    "hold_ws": {"status": "MEASURED", "value": 0.1}}}}}
+    def arm(mode, native, constraint):
+        return {"status": "PASS", "constraint": constraint,
+            "adopted_netlist": {key: adopted[key] for key in ("path", "sha256")},
+            "native": {"folder": str(native.parent.relative_to(project)),
+                       "receipt": ref(native), "input_step": "OpenROAD.STAPrePNR"},
+            **gate_refs[mode]}
+    timing = project / "reports/flow109/d26_scan_mode.json"
+    timing.write_text(json.dumps({
+        "schema": "vibeic.flow109.d26-timing-modes.v1", "step_id": "D26",
+        "position": 38, "top": top, "aggregate_status": "PASS",
+        "functional_baseline": {"status": "PASS", "folder": "phase3/stage3/10",
+            "canonical_pass": True, "current_inputs": True,
+            "canonical_consumer_status": "PASS"},
+        "post_scan_arms": {
+            "functional": arm("functional", functional_native, functional_constraint),
+            "scan": arm("scan", scan_native, scan_constraint)},
+        "scan": {"applicability": "APPLICABLE", "status": "PASS",
+            "d09_binding": intent["source_binding"],
+            "scan_chain_report": {"path": "reports/phase2/dft/scan_chain.json",
+                "sha256": hashlib.sha256((dft / "scan_chain.json").read_bytes()).hexdigest(),
+                "published": True, "d09_contract": report["d09_contract"],
+                "measured_artifacts": report["measured_artifacts"],
+                "native_clock_controls": report["native_clock_controls"], "current": True},
+            "adopted_d24": {**{key: adopted[key] for key in ("path", "sha256")},
+                "current": True, "is_scan_inserted": True, "native_step": "12",
+                "flow109_step": "D24", "position": 36,
+                "resolver_note": "post-DFT netlist selected", "folder": "phase2/stage2/12"},
+            "constraint": scan_constraint,
+            },
+        "modes_measured": ["functional_baseline", "post_scan_functional",
+                           "post_scan_scan"]}))
+    d26 = json.loads((rows / "D26.json").read_text())
+    d26["timing_modes_receipt"] = ref(timing)
+    (rows / "D26.json").write_text(json.dumps(d26))
     features = profile("Mapped soft-IP with prestitched scan")
     return flow109.execution_context(flow109.resolve_plan(features), "D30", "D30")
 
@@ -239,16 +351,77 @@ def test_d30_accepts_native_d24_d25_identity_and_chain_report(tmp_path, monkeypa
     assert result["identity_agreement"] == "D24_D25_D30_MATCH"
     assert result["adopted_netlist"]["artifact_id"] == "D24_POST_SCAN_NETLIST"
     assert result["native_chain"]["internal_chain_length"] == 2
+    modes = result["pre_route_timing"]["timing_modes"]
+    assert modes["modes_measured"] == [
+        "functional_baseline", "post_scan_functional", "post_scan_scan"]
+    arms = modes["post_scan_arms"]
+    assert (arms["functional"]["adopted_netlist"]["sha256"]
+            == arms["scan"]["adopted_netlist"]["sha256"]
+            == result["adopted_netlist"]["sha256"])
+    assert arms["functional"]["constraint"]["clock_select_value"] == 0
+    assert arms["scan"]["constraint"]["mode"] == "scan"
+
+
+def test_d30_explicit_no_scan_accepts_current_functional_only_d26(
+        tmp_path, monkeypatch):
+    import hashlib
+    _write_dft_intent(tmp_path, monkeypatch, scan=False)
+    top = "neutral_unit"
+    mapped = tmp_path / f"phase2/stage2/synth/{top}_synth.v"
+    mapped.parent.mkdir(parents=True)
+    mapped.write_text("module neutral_unit(input clk, output q); assign q=clk; endmodule\n")
+    (tmp_path / "input/flow109").mkdir(parents=True)
+    (tmp_path / "input/flow109/D22.json").write_text(json.dumps({"top": top}))
+    reports = tmp_path / "reports"; reports.mkdir(exist_ok=True)
+    (reports / "lec.json").write_text(json.dumps({
+        "verdict": "PASS", "equivalent": True,
+        "proof_identity": {"top": top, "gate_netlist": {
+            "path": str(mapped.relative_to(tmp_path)),
+            "sha256": "sha256:" + hashlib.sha256(mapped.read_bytes()).hexdigest()}}}))
+    rows = reports / "flow109/default_rows"; rows.mkdir(parents=True)
+    (rows / "D25.json").write_text(json.dumps({
+        "step_id": "D25", "default_row_status": "PASS", "completed": True}))
+    features = profile("Mapped soft-IP with prestitched scan")
+    features["requires_scan"] = False
+    context = flow109.execution_context(flow109.resolve_plan(features), "D30", "D30")
+    intent = flow109.dft_source_intent(tmp_path, context)
+    timing = reports / "flow109/d26_scan_mode.json"
+    timing.write_text(json.dumps({
+        "schema": "vibeic.flow109.d26-timing-modes.v1", "step_id": "D26",
+        "position": 38, "top": top, "aggregate_status": "PASS",
+        "functional_baseline": {"status": "PASS", "folder": "historical-functional",
+            "canonical_pass": True, "current_inputs": True,
+            "canonical_consumer_status": "PASS"},
+        "post_scan_arms": {},
+        "scan": {"applicability": "NOT_APPLICABLE", "status": "NOT_APPLICABLE",
+                 "d09_binding": intent["source_binding"]},
+        "modes_measured": ["functional_baseline"]}))
+    (rows / "D26.json").write_text(json.dumps({
+        "step_id": "D26", "default_row_status": "PASS", "completed": True,
+        "timing_modes_receipt": {"path": str(timing.relative_to(tmp_path)),
+            "sha256": hashlib.sha256(timing.read_bytes()).hexdigest()}}))
+    result = flow109.dft_preroute_admission(tmp_path, context)
+
+    assert result["scan_test"] is False
+    assert result["identity_agreement"] == "D22_D25_D30_MATCH"
+    assert result["pre_route_timing"]["timing_modes"]["scan"]["applicability"] == "NOT_APPLICABLE"
 
 
 @pytest.mark.parametrize("damage, code", [
     ("pre_scan", "FLOW109_D25_GATE_IDENTITY_MISMATCH"),
     ("foreign_netlist", "FLOW109_D30_NETLIST_FOREIGN"),
     ("foreign_report", "FLOW109_D30_SCAN_REPORT_STALE"),
-    ("stale_d09", "FLOW109_D30_SCAN_REPORT_STALE"),
+    ("stale_d09", "FLOW109_D26_SCAN_D09_MISMATCH"),
     ("wrong_hash", "FLOW109_D25_GATE_IDENTITY_MISMATCH"),
     ("d24_hash", "FLOW109_D30_D24_IDENTITY_MISMATCH"),
     ("unresolved_length", "FLOW109_D30_CHAIN_STATISTICS_UNRESOLVED"),
+    ("d26_missing", "FLOW109_D26_TIMING_MODES_MISSING"),
+    ("functional_only", "FLOW109_D26_SCAN_TIMING_NOT_MEASURED"),
+    ("old_functional_subject", "FLOW109_D26_SCAN_NETLIST_MISMATCH"),
+    ("absent_mode_authority", "FLOW109_D26_MODE_VALIDATOR_MISMATCH"),
+    ("wrong_scan_mode", "FLOW109_D26_SCAN_CONSTRAINT_MISMATCH"),
+    ("stale_scan_arm", "FLOW109_D26_SCAN_NATIVE_STALE"),
+    ("violating_scan_sta", "FLOW109_D26_SCAN_GATE_FAIL"),
 ])
 def test_d30_refuses_prescan_foreign_stale_or_unresolved_inputs(
         tmp_path, monkeypatch, damage, code):
@@ -280,10 +453,50 @@ def test_d30_refuses_prescan_foreign_stale_or_unresolved_inputs(
         body = json.loads(path.read_text())
         body["adopted_netlist"]["sha256"] = "0" * 64
         path.write_text(json.dumps(body))
-    else:
+    elif damage == "unresolved_length":
         path = tmp_path / "reports/phase2/dft/scan_chain.json"
         body = json.loads(path.read_text()); body["internal_chain_length"] = None
         path.write_text(json.dumps(body))
+    elif damage == "d26_missing":
+        path = tmp_path / "reports/flow109/default_rows/D26.json"
+        body = json.loads(path.read_text()); body.pop("timing_modes_receipt")
+        path.write_text(json.dumps(body))
+    else:
+        timing = tmp_path / "reports/flow109/d26_scan_mode.json"
+        body = json.loads(timing.read_text())
+        if damage == "functional_only":
+            body["scan"]["status"] = "NOT_MEASURED"
+            body["post_scan_arms"] = {}
+            body["modes_measured"] = ["functional_baseline"]
+        elif damage == "old_functional_subject":
+            old = tmp_path / "phase2/stage2/synth/netlist.v"
+            body["post_scan_arms"]["functional"]["adopted_netlist"] = {
+                "path": str(old.relative_to(tmp_path)),
+                "sha256": __import__("hashlib").sha256(old.read_bytes()).hexdigest()}
+        elif damage == "absent_mode_authority":
+            body["post_scan_arms"]["functional"]["constraint"].pop("clock_select")
+        elif damage == "wrong_scan_mode":
+            body["post_scan_arms"]["scan"]["constraint"]["mode"] = "functional"
+        elif damage == "stale_scan_arm":
+            receipt = tmp_path / body["post_scan_arms"]["scan"]["native"]["receipt"]["path"]
+            receipt.write_text(receipt.read_text() + "\n")
+        else:
+            arm = body["post_scan_arms"]["scan"]
+            gate = tmp_path / arm["slack_gate"]["path"]
+            gate_body = json.loads(gate.read_text())
+            gate_body["verdict"] = "FAIL"
+            gate_body["findings"] = ["LL_STA_SETUP_VIOLATION"]
+            gate.write_text(json.dumps(gate_body))
+            arm["slack_gate"].update(
+                verdict="FAIL", findings=gate_body["findings"],
+                sha256=__import__("hashlib").sha256(gate.read_bytes()).hexdigest())
+        if damage != "stale_scan_arm":
+            timing.write_text(json.dumps(body))
+            row = tmp_path / "reports/flow109/default_rows/D26.json"
+            d26 = json.loads(row.read_text())
+            d26["timing_modes_receipt"]["sha256"] = __import__("hashlib").sha256(
+                timing.read_bytes()).hexdigest()
+            row.write_text(json.dumps(d26))
 
     with pytest.raises(flow109.Flow109Error, match=code):
         flow109.dft_preroute_admission(tmp_path, context)
@@ -305,7 +518,10 @@ def _final_timing_case(project, monkeypatch):
                     "sha256": hashlib.sha256(final_netlist.read_bytes()).hexdigest()}
     transform = project / "reports/flow109/D44/physical-transform.json"
     transform.parent.mkdir(parents=True)
-    transform.write_text(json.dumps({"status": "PREPARED_NOT_EQUIVALENCE_PROVEN"}))
+    transform.write_text(json.dumps({
+        "status": "PREPARED_NOT_EQUIVALENCE_PROVEN",
+        "kind": "def_bound_powered_chip_functional_views_v1",
+        "raw_adopted_netlist": d30_admission["adopted_netlist"]}))
     transform_record = {"path": str(transform.relative_to(project)),
                         "sha256": hashlib.sha256(transform.read_bytes()).hexdigest()}
     proof = project / "reports/flow109/D44/proof.json"
@@ -340,7 +556,7 @@ def _final_timing_case(project, monkeypatch):
         "status": "PASS", "metrics": {
             "final_lec_unproved": {"status": "PASS"},
             "sta_lvs_release_netlist_mapping": {
-                "status": "PASS", "reference": baseline_record}}})
+                "status": "PASS", "reference": final_lec._record(project, baseline)}}})
 
     sta = project / "phase3/librelane/23-sta"
     sta.mkdir(parents=True)
@@ -372,6 +588,7 @@ def test_d50_final_timing_accepts_physical_rewrite_with_transform_and_lec_trace(
     result = flow109.dft_final_timing_admission(tmp_path, context)
 
     assert result["pre_route_netlist"]["sha256"] != result["final_adopted_netlist"]["sha256"]
+    assert result["D44_pre_source"]["sha256"] == result["pre_route_netlist"]["sha256"]
     assert result["physical_transform"] is not None
     assert result["timing"]["sha256"]["sta_netlist"] == result["final_adopted_netlist"]["sha256"]
     assert result["timing"]["sha256"]["spef"]
@@ -385,6 +602,9 @@ def test_d50_final_timing_accepts_physical_rewrite_with_transform_and_lec_trace(
     ("foreign_timing", "FLOW109_D49_TIMING_NETLIST_MISMATCH"),
     ("foreign_spef", "FLOW109_D49_TIMING_PROVENANCE_MISMATCH"),
     ("missing_sdf", "FLOW109_D49_SDF_UNRESOLVED"),
+    ("missing_pre_source", "FLOW109_D44_PRE_SOURCE_MISSING"),
+    ("stale_pre_source", "FLOW109_D44_PRE_SOURCE_STALE"),
+    ("foreign_pre_source", "FLOW109_D44_PRE_SOURCE_MISMATCH"),
 ])
 def test_d50_final_timing_refuses_missing_stale_or_foreign_provenance(
         tmp_path, monkeypatch, damage, code):
@@ -408,12 +628,37 @@ def test_d50_final_timing_refuses_missing_stale_or_foreign_provenance(
         signoff = tmp_path / "reports/phase3/sta_postpnr_signoff.json"
         doc = json.loads(signoff.read_text()); doc["sta_state_sha256"] = __import__("hashlib").sha256(state.read_bytes()).hexdigest()
         signoff.write_text(json.dumps(doc))
-    else:
+    elif damage == "missing_sdf":
         body = json.loads(state.read_text()); body["sdf"] = {}
         state.write_text(json.dumps(body))
         signoff = tmp_path / "reports/phase3/sta_postpnr_signoff.json"
         doc = json.loads(signoff.read_text()); doc["sta_state_sha256"] = __import__("hashlib").sha256(state.read_bytes()).hexdigest()
         signoff.write_text(json.dumps(doc))
+    else:
+        transform = tmp_path / "reports/flow109/D44/physical-transform.json"
+        transform_body = json.loads(transform.read_text())
+        if damage == "missing_pre_source":
+            transform_body.pop("raw_adopted_netlist")
+        else:
+            foreign = tmp_path / "phase2/stage2/synth/foreign-pre-source.v"
+            foreign.write_text("module neutral_unit(input clk, output sout); assign sout=~clk; endmodule\n")
+            transform_body["raw_adopted_netlist"] = {
+                "path": str(foreign.relative_to(tmp_path)),
+                "sha256": __import__("hashlib").sha256(foreign.read_bytes()).hexdigest()}
+            if damage == "stale_pre_source":
+                foreign.write_text(foreign.read_text() + "// stale\n")
+        transform.write_text(json.dumps(transform_body))
+        transform_record = {"path": str(transform.relative_to(tmp_path)),
+            "sha256": __import__("hashlib").sha256(transform.read_bytes()).hexdigest()}
+        baseline_body = json.loads(baseline.read_text())
+        baseline_body["transformation_receipt"] = transform_record
+        baseline.write_text(json.dumps(baseline_body))
+        baseline_record = {"path": str(baseline.relative_to(tmp_path)),
+            "sha256": __import__("hashlib").sha256(baseline.read_bytes()).hexdigest()}
+        d44 = tmp_path / "reports/flow109/default_rows/D44.json"
+        d44_body = json.loads(d44.read_text())
+        d44_body["common_baseline"] = baseline_record
+        d44.write_text(json.dumps(d44_body))
 
     with pytest.raises(flow109.Flow109Error, match=code):
         flow109.dft_final_timing_admission(tmp_path, context)
