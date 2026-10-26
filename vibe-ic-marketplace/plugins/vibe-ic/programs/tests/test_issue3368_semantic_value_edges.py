@@ -83,7 +83,7 @@ def _semantic_role(source, widths):
         modules["neutral"], modules, instances)
 
 
-def _predicate_role(source, widths):
+def _predicate_role(source, widths, port="payload"):
     audit._DISCOVERY_ISSUES.clear()
     audit._CONFIGURATION.clear()
     audit._CONFIGURATION["native"] = {"status": "MEASURED"}
@@ -94,7 +94,7 @@ def _predicate_role(source, widths):
     instances = audit.parse_instances(modules["neutral"].body, "neutral",
                                       native_checked=True)
     return audit._whole_scalar_predicate(
-        "link", modules["source"], "payload", modules["sink"], "payload",
+        "link", modules["source"], port, modules["sink"], port,
         modules["neutral"], modules, instances)
 
 
@@ -178,6 +178,30 @@ endmodule
                        "accepted": 1},
               "neutral": {"link": 1}}
     assert _predicate_role(source, widths) is None
+
+
+def test_for_condition_relational_less_equal_is_not_an_assignment():
+    source = r"""
+module source(input [2:0] funct3, output a);
+  wire b = funct3[2:1] == 2'b00;
+  integer i;
+  reg c;
+  always @* for (i = 0; i < 1 && a <= b; i = i + 1) c = 1'b0;
+endmodule
+module sink(input a, input left, right, output accepted);
+  assign accepted = a ? left : right;
+endmodule
+module neutral;
+  wire link; source p(.funct3(3'b000),.a(link));
+  sink q(.a(link),.left(1'b0),.right(1'b1),.accepted());
+endmodule
+"""
+    widths = {"source": {"funct3": 3, "a": 1, "b": 1, "c": 1},
+              "sink": {"a": 1, "left": 1, "right": 1, "accepted": 1},
+              "neutral": {"link": 1}}
+    role = _predicate_role(source, widths, "a")
+    observed = "UNKNOWN" if role is None else role[0].encoding
+    assert observed == "UNKNOWN"
 
 
 @_NATIVE

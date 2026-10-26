@@ -1044,8 +1044,12 @@ def _fixed_slice_equality_alias_domain(module, target):
     if module.native_widths.get(target) != 1:
         return None
     assignments = {}
+    # The retained grammar needs declaration/continuous initializers and one
+    # simple blocking alias.  Bare ``<=`` is intentionally absent: outside a
+    # parsed procedural owner it is also the relational operator, so a legal
+    # for-condition such as ``a <= b`` must never manufacture a write to a.
     for match in re.finditer(
-            r'(?<![\w$])([A-Za-z_]\w*)\s*(?:<=|=(?!=))\s*([^;]+);',
+            r'(?<![\w$])([A-Za-z_]\w*)\s*=(?!=)\s*([^;]+);',
             module.body, re.MULTILINE | re.DOTALL):
         assignments.setdefault(match.group(1), []).append(match)
 
