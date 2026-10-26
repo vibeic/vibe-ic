@@ -46,7 +46,7 @@ import sys
 from decimal import Decimal
 from fnmatch import fnmatchcase
 from pathlib import Path as FilePath
-from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Type
+from typing import Any, Dict, Mapping, Optional, Sequence, Tuple, Type
 
 from librelane.common import Path
 from librelane.config import Variable
@@ -82,7 +82,8 @@ def _tcl_word(value: str) -> str:
     return "{" + value + "}"
 
 
-def _diagnostic_spef_env(config: Mapping[str, Any], odb: Any) -> Dict[str, str]:
+def _diagnostic_spef_env(
+        config: Mapping[str, Any], odb: Any, netlist: Any) -> Dict[str, str]:
     """Validate fixture-only electrical evidence, never extracted-RCX/signoff authority."""
     authority_value = config.get("VIBEIC_PRR_DIAGNOSTIC_SPEF_AUTHORITY")
     if authority_value is None:
@@ -99,11 +100,8 @@ def _diagnostic_spef_env(config: Mapping[str, Any], odb: Any) -> Dict[str, str]:
             raise ValueError("design identity mismatch")
         if authority["input_odb"] != _identity(odb):
             raise ValueError("input ODB identity mismatch")
-        netlists = config.get("VIBEIC_PRR_DIAGNOSTIC_NETLISTS") or []
-        if not isinstance(netlists, (list, tuple)) or not netlists:
-            raise ValueError("current input netlist identity is absent")
-        if authority["input_netlists"] != [_identity(path) for path in netlists]:
-            raise ValueError("input netlist identity mismatch")
+        if authority["input_netlists"] != [_identity(netlist)]:
+            raise ValueError("canonical State NETLIST identity mismatch")
         corners = config.get("STA_CORNERS") or []
         if not isinstance(corners, (list, tuple)) or not corners or not all(
                 isinstance(corner, str) and corner for corner in corners):
@@ -145,7 +143,7 @@ class PostRouteRepair(ResizerStep):
     id = "Vibeic.PostRouteRepair"
     name = "Post-Route Timing Repair (vibe-ic step 32)"
 
-    inputs = [DesignFormat.ODB]
+    inputs = [DesignFormat.ODB, DesignFormat.NETLIST]
     outputs = [DesignFormat.ODB, DesignFormat.DEF, DesignFormat.NETLIST,
                DesignFormat.POWERED_NETLIST]
 
@@ -158,15 +156,10 @@ class PostRouteRepair(ResizerStep):
                 "VIBEIC_PRR_DIAGNOSTIC_SPEF_AUTHORITY",
                 Optional[Path],
                 "Receipt binding diagnostic SPEF hashes and scenes to the "
-                "exact design, input ODB and input netlists. Unset keeps "
+                "exact design, input ODB and canonical State NETLIST. The "
+                "receipt describes that netlist but cannot select it. Unset keeps "
                 "ordinary OpenRCX extraction. This fixture-only evidence is "
                 "never native-extracted RCX or tapeout/signoff authority.",
-            ),
-            Variable(
-                "VIBEIC_PRR_DIAGNOSTIC_NETLISTS",
-                Optional[List[Path]],
-                "Exact input netlists used to build the diagnostic input ODB; "
-                "required and receipt-bound only in diagnostic SPEF mode.",
             ),
             Variable(
                 "VIBEIC_PRR_SETUP_MARGIN",
@@ -311,7 +304,11 @@ class PostRouteRepair(ResizerStep):
         kwargs, env = self.extract_env(kwargs)
         env.pop("VIBEIC_PRR_DIAGNOSTIC_SPEFS", None)
         env.pop("VIBEIC_PRR_DIAGNOSTIC_AUTHORITY_SHA256", None)
-        env.update(_diagnostic_spef_env(self.config, state_in[DesignFormat.ODB]))
+        env.update(_diagnostic_spef_env(
+            self.config,
+            state_in[DesignFormat.ODB],
+            state_in[DesignFormat.NETLIST],
+        ))
         env["DRT_THREADS"] = env.get("DRT_THREADS", str(_get_process_limit()))
         views, metrics = super().run(state_in, env=env, **kwargs)
         if metrics.get("vibeic__prr__changed") == 0:

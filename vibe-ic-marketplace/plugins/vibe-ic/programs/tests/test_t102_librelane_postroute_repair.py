@@ -1631,15 +1631,14 @@ def _diagnostic_authority(tmp_path):
             {'pattern': 'min_*', 'corners': ['min_ff'], 'spef': identity(low_spef)},
         ]})
     config = {'VIBEIC_PRR_DIAGNOSTIC_SPEF_AUTHORITY': receipt,
-              'VIBEIC_PRR_DIAGNOSTIC_NETLISTS': [netlist],
               'DESIGN_NAME': 'neutral',
               'STA_CORNERS': corners}
-    return _diagnostic_spef_env, config, odb, receipt, max_spef
+    return _diagnostic_spef_env, config, odb, netlist, receipt, max_spef
 
 
 def test_diagnostic_spef_authority_binds_subject_hashes_and_scenes(tmp_path):
-    validate, config, odb, _, _ = _diagnostic_authority(tmp_path)
-    result = validate(config, odb)
+    validate, config, odb, netlist, _, _ = _diagnostic_authority(tmp_path)
+    result = validate(config, odb, netlist)
     assert set(result) == {'VIBEIC_PRR_DIAGNOSTIC_SPEFS',
                            'VIBEIC_PRR_DIAGNOSTIC_AUTHORITY_SHA256'}
     assert 'max_*' in result['VIBEIC_PRR_DIAGNOSTIC_SPEFS']
@@ -1649,19 +1648,38 @@ def test_diagnostic_spef_authority_binds_subject_hashes_and_scenes(tmp_path):
 def test_diagnostic_spef_authority_refuses_changed_foreign_or_incomplete_subject(
         tmp_path, damage):
     from librelane.steps.step import StepError
-    validate, config, odb, receipt, spef = _diagnostic_authority(tmp_path)
+    validate, config, odb, netlist, receipt, spef = _diagnostic_authority(tmp_path)
     if damage == 'spef':
         spef.write_text('foreign')
     elif damage == 'odb':
         odb.write_text('stale route')
     elif damage == 'netlist':
-        Path(config['VIBEIC_PRR_DIAGNOSTIC_NETLISTS'][0]).write_text('foreign netlist')
+        netlist.write_text('foreign netlist')
     elif damage == 'design':
         config['DESIGN_NAME'] = 'foreign'
     else:
         config['STA_CORNERS'].append('max_ff')
     with pytest.raises(StepError, match='PRR_DIAGNOSTIC_AUTHORITY_REFUSED'):
-        validate(config, odb)
+        validate(config, odb, netlist)
+
+
+def test_diagnostic_receipt_cannot_replace_canonical_state_netlist(tmp_path):
+    from librelane.state import DesignFormat
+    from librelane.steps.step import StepError
+    from librelane_plugin_vibeic.postroute_repair import PostRouteRepair
+    validate, config, odb, canonical, receipt, _ = _diagnostic_authority(tmp_path)
+    foreign = write(tmp_path / 'foreign.v', 'module foreign; endmodule')
+    forged = json.loads(receipt.read_text())
+    forged['input_netlists'] = [
+        {'path': str(foreign.resolve()), 'sha256': _sha(foreign)}]
+    receipt.write_text(json.dumps(forged))
+
+    assert DesignFormat.NETLIST in PostRouteRepair.inputs
+    assert canonical.read_text() == 'module neutral; endmodule'
+    with pytest.raises(
+            StepError, match='canonical State NETLIST identity mismatch'):
+        validate(config, odb, canonical)
+    assert canonical.read_text() == 'module neutral; endmodule'
 
 
 def test_diagnostic_spef_is_explicit_complete_and_does_not_replace_openrcx():
@@ -1670,6 +1688,8 @@ def test_diagnostic_spef_is_explicit_complete_and_does_not_replace_openrcx():
     assert 'VIBEIC_PRR_DIAGNOSTIC_SPEF_AUTHORITY' in src
     assert 'Optional[Path]' in src
     assert 'PRR_DIAGNOSTIC_AUTHORITY_REFUSED' in src
+    assert 'VIBEIC_PRR_DIAGNOSTIC_NETLISTS' not in src
+    assert 'state_in[DesignFormat.NETLIST]' in src
     assert 'never native-extracted RCX or tapeout/signoff authority' in src
     assert 'PRR_DIAGNOSTIC_SPEF_MISSING' in tcl
     assert 'PRR_DIAGNOSTIC_SPEF_AMBIGUOUS' in tcl
