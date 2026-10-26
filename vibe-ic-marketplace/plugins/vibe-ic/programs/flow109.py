@@ -419,18 +419,35 @@ def _d44_pre_source_binding(project: Path, baseline: Mapping,
             or not isinstance(raw.get("sha256"), str)):
         raise Flow109Error("FLOW109_D44_PRE_SOURCE_MISSING",
                            "D44 transformation carries no bound raw source")
-    raw_path = project / raw["path"]
+    project_root = Path(project).resolve()
+    declared = Path(raw["path"])
+    if ".." in declared.parts:
+        raise Flow109Error("FLOW109_D44_PRE_SOURCE_FOREIGN", str(declared))
+    raw_path = declared if declared.is_absolute() else project_root / declared
     try:
-        raw_rel = raw_path.resolve().relative_to(Path(project).resolve()).as_posix()
+        raw_resolved = raw_path.resolve()
+        raw_rel = raw_resolved.relative_to(project_root).as_posix()
     except (OSError, ValueError) as exc:
         raise Flow109Error("FLOW109_D44_PRE_SOURCE_FOREIGN", str(raw_path)) from exc
-    if (raw_path.is_symlink() or not raw_path.is_file()
-            or raw_rel != raw["path"] or _file_digest(raw_path) != raw["sha256"]):
+    if (raw_path.is_symlink() or not raw_resolved.is_file()
+            or _file_digest(raw_resolved) != raw["sha256"]):
         raise Flow109Error("FLOW109_D44_PRE_SOURCE_STALE", str(raw.get("path")))
-    if raw["sha256"] != pre_route.get("sha256"):
+    pre_declared = Path(str(pre_route.get("path") or ""))
+    pre_path = pre_declared if pre_declared.is_absolute() else project_root / pre_declared
+    try:
+        pre_resolved = pre_path.resolve()
+        pre_rel = pre_resolved.relative_to(project_root).as_posix()
+    except (OSError, ValueError) as exc:
+        raise Flow109Error("FLOW109_D44_PRE_SOURCE_FOREIGN", str(pre_path)) from exc
+    if (pre_path.is_symlink() or not pre_resolved.is_file()
+            or _file_digest(pre_resolved) != pre_route.get("sha256")):
+        raise Flow109Error("FLOW109_D44_PRE_SOURCE_STALE", str(pre_route.get("path")))
+    if (raw_resolved != pre_resolved or raw["sha256"] != pre_route.get("sha256")):
         raise Flow109Error("FLOW109_D44_PRE_SOURCE_MISMATCH",
-                           f"D30={pre_route.get('sha256')}, D44={raw['sha256']}")
+                           f"D30={pre_rel}@{pre_route.get('sha256')}, "
+                           f"D44={raw_rel}@{raw['sha256']}")
     return {"mode": "D44_TRANSFORM_SOURCE", **dict(raw),
+            "resolved_path": raw_rel,
             "transformation_receipt": current_ref}
 
 

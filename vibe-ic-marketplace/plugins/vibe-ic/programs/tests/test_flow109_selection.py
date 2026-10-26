@@ -505,6 +505,7 @@ def test_d30_refuses_prescan_foreign_stale_or_unresolved_inputs(
 def _final_timing_case(project, monkeypatch):
     import hashlib
     import flow109_final_lec as final_lec
+    import flow109_final_lec_physical as physical
     d30_context = _d30_scan_case(project, monkeypatch, top="neutral_unit")
     d30_admission = flow109.dft_preroute_admission(project, d30_context)
     rows = project / "reports/flow109/default_rows"
@@ -521,7 +522,8 @@ def _final_timing_case(project, monkeypatch):
     transform.write_text(json.dumps({
         "status": "PREPARED_NOT_EQUIVALENCE_PROVEN",
         "kind": "def_bound_powered_chip_functional_views_v1",
-        "raw_adopted_netlist": d30_admission["adopted_netlist"]}))
+        "raw_adopted_netlist": physical.record(
+            (project / d30_admission["adopted_netlist"]["path"]).resolve())}))
     transform_record = {"path": str(transform.relative_to(project)),
                         "sha256": hashlib.sha256(transform.read_bytes()).hexdigest()}
     proof = project / "reports/flow109/D44/proof.json"
@@ -589,6 +591,8 @@ def test_d50_final_timing_accepts_physical_rewrite_with_transform_and_lec_trace(
 
     assert result["pre_route_netlist"]["sha256"] != result["final_adopted_netlist"]["sha256"]
     assert result["D44_pre_source"]["sha256"] == result["pre_route_netlist"]["sha256"]
+    assert Path(result["D44_pre_source"]["path"]).is_absolute()
+    assert result["D44_pre_source"]["resolved_path"] == result["pre_route_netlist"]["path"]
     assert result["physical_transform"] is not None
     assert result["timing"]["sha256"]["sta_netlist"] == result["final_adopted_netlist"]["sha256"]
     assert result["timing"]["sha256"]["spef"]
@@ -605,6 +609,9 @@ def test_d50_final_timing_accepts_physical_rewrite_with_transform_and_lec_trace(
     ("missing_pre_source", "FLOW109_D44_PRE_SOURCE_MISSING"),
     ("stale_pre_source", "FLOW109_D44_PRE_SOURCE_STALE"),
     ("foreign_pre_source", "FLOW109_D44_PRE_SOURCE_MISMATCH"),
+    ("outside_pre_source", "FLOW109_D44_PRE_SOURCE_FOREIGN"),
+    ("traversal_pre_source", "FLOW109_D44_PRE_SOURCE_FOREIGN"),
+    ("hash_mismatch", "FLOW109_D44_PRE_SOURCE_STALE"),
 ])
 def test_d50_final_timing_refuses_missing_stale_or_foreign_provenance(
         tmp_path, monkeypatch, damage, code):
@@ -635,16 +642,23 @@ def test_d50_final_timing_refuses_missing_stale_or_foreign_provenance(
         doc = json.loads(signoff.read_text()); doc["sta_state_sha256"] = __import__("hashlib").sha256(state.read_bytes()).hexdigest()
         signoff.write_text(json.dumps(doc))
     else:
+        import flow109_final_lec_physical as physical
         transform = tmp_path / "reports/flow109/D44/physical-transform.json"
         transform_body = json.loads(transform.read_text())
         if damage == "missing_pre_source":
             transform_body.pop("raw_adopted_netlist")
+        elif damage == "hash_mismatch":
+            transform_body["raw_adopted_netlist"]["sha256"] = "0" * 64
+        elif damage in {"outside_pre_source", "traversal_pre_source"}:
+            outside = tmp_path.parent / (tmp_path.name + "-outside-pre-source.v")
+            outside.write_text("module neutral_unit(input clk, output sout); assign sout=clk; endmodule\n")
+            transform_body["raw_adopted_netlist"] = physical.record(outside.resolve())
+            if damage == "traversal_pre_source":
+                transform_body["raw_adopted_netlist"]["path"] = "../" + outside.name
         else:
             foreign = tmp_path / "phase2/stage2/synth/foreign-pre-source.v"
             foreign.write_text("module neutral_unit(input clk, output sout); assign sout=~clk; endmodule\n")
-            transform_body["raw_adopted_netlist"] = {
-                "path": str(foreign.relative_to(tmp_path)),
-                "sha256": __import__("hashlib").sha256(foreign.read_bytes()).hexdigest()}
+            transform_body["raw_adopted_netlist"] = physical.record(foreign.resolve())
             if damage == "stale_pre_source":
                 foreign.write_text(foreign.read_text() + "// stale\n")
         transform.write_text(json.dumps(transform_body))
