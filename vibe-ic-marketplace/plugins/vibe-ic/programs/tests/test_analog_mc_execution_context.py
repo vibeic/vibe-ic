@@ -1,7 +1,6 @@
 """MC wrapper relocation controls; no native yield is claimed by these fakes."""
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -40,91 +39,132 @@ def test_omitted_seam_preserves_resolver_probe_launch_and_return_shape(monkeypat
 
 
 def test_selected_native_binary_reaches_capability_probe_launch_and_is_hash_bound(
-        tmp_path, monkeypatch):
-    binary = tmp_path / "native-engine"
-    binary.write_bytes(b"selected native executable fixture")
+        monkeypatch):
+    binary = "/runtime-only/tools/ngspice"
+    remote_hash = "a" * 64
     deck = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic",
                         "programs", "calibration",
                         "ngspice47_cal_meas_rows.sp")
-    seen = {"probe": [], "launch": []}
+    assert not Path(binary).exists()
+    commands = []
     monkeypatch.setattr(
         mc._ars, "_resolve_ngspice",
         lambda *args: pytest.fail("explicit selection must bypass resolution"))
 
-    def probe(container, selected):
-        seen["probe"].append((container, selected))
-        return False
-
-    def launch(container, command, timeout):
-        seen["launch"].append((container, command, timeout))
+    def transport(container, command, timeout=None):
+        commands.append((container, command, timeout))
+        if command.startswith("test -x "):
+            return SimpleNamespace(
+                returncode=0, stdout=f"{remote_hash}  {binary}\n")
+        if command.startswith("sha256sum "):
+            return SimpleNamespace(
+                returncode=0, stdout=f"{remote_hash}  {binary}\n")
+        if "--json-measure=/dev/null" in command:
+            assert binary in command
+            return SimpleNamespace(
+                returncode=0, stdout="unrecognized option --json-measure\n")
+        assert binary in command and " -b " in command
         return SimpleNamespace(returncode=0, stdout="MEAS vout=1.2\n")
 
-    monkeypatch.setattr(mc._ars, "_supports_json_measure", probe)
-    monkeypatch.setattr(mc._ars, "_docker", launch)
+    monkeypatch.setattr(mc._ars, "_docker", transport)
     ok, values, _log, state = mc._ars._run_ngspice(
         "container", str(deck), cwd="/project",
-        ngspice_bin=str(binary))
-    assert seen["probe"] == [("container", str(binary))]
-    assert str(binary) in seen["launch"][0][1]
-    assert state["argv"] == [str(binary), "-b", str(deck)]
+        ngspice_bin=binary)
+    assert binary in commands[1][1] and "--json-measure=/dev/null" in commands[1][1]
+    assert binary in commands[2][1] and " -b " in commands[2][1]
+    assert state["argv"] == [binary, "-b", str(deck)]
     assert ok and values["vout"] == 1.2
-    expected = hashlib.sha256(binary.read_bytes()).hexdigest()
     assert state["native_binary"] == {
-        "path": str(binary), "sha256": expected, "sha256_after": expected}
+        "path": binary, "sha256": remote_hash, "sha256_after": remote_hash}
 
 
-def test_selected_native_binary_mutation_cannot_keep_measurements(tmp_path, monkeypatch):
-    binary = tmp_path / "native-engine"
-    binary.write_bytes(b"first executable")
-    monkeypatch.setattr(mc._ars, "_supports_json_measure", lambda *args: False)
+def test_selected_container_binary_mutation_cannot_keep_measurements(monkeypatch):
+    binary = "/runtime-only/tools/ngspice-mutable"
+    before, after = "b" * 64, "c" * 64
+    mutated = False
 
-    def launch(*args, **kwargs):
-        binary.write_bytes(b"different executable")
+    def transport(container, command, timeout=None):
+        nonlocal mutated
+        if command.startswith("test -x "):
+            return SimpleNamespace(
+                returncode=0, stdout=f"{before}  {binary}\n")
+        if command.startswith("sha256sum "):
+            digest = after if mutated else before
+            return SimpleNamespace(
+                returncode=0, stdout=f"{digest}  {binary}\n")
+        if "--json-measure=/dev/null" in command:
+            return SimpleNamespace(
+                returncode=0, stdout="unrecognized option --json-measure\n")
+        mutated = True
         return SimpleNamespace(returncode=0, stdout="MEAS vout=1.2\n")
 
-    monkeypatch.setattr(mc._ars, "_docker", launch)
+    monkeypatch.setattr(mc._ars, "_docker", transport)
     ok, values, _log, state = mc._ars._run_ngspice(
-        "container", "/project/deck.sp", ngspice_bin=str(binary))
+        "container", "/project/deck.sp", ngspice_bin=binary)
     assert not ok and values["vout"] is None
     assert state["changed_inputs"] == ["native_binary"]
+    assert state["native_binary"] == {
+        "path": binary, "sha256": before, "sha256_after": after}
 
 
-def test_unusable_selected_binary_is_a_native_failure_not_a_measurement(
-        tmp_path, monkeypatch):
-    binary = tmp_path / "native-engine"
-    binary.write_bytes(b"present but unusable executable fixture")
-    monkeypatch.setattr(mc._ars, "_supports_json_measure", lambda *args: False)
+def test_unusable_selected_container_binary_refuses_before_launch(monkeypatch):
+    binary = "/runtime-only/tools/not-executable"
+    commands = []
+
+    def transport(container, command, timeout=None):
+        commands.append(command)
+        return SimpleNamespace(returncode=126, stdout="")
+
     monkeypatch.setattr(
-        mc._ars, "_docker",
-        lambda *args, **kwargs: SimpleNamespace(
-            returncode=126,
-            stdout="permission denied: selected native engine\n"))
-    ok, values, raw, state = mc._ars._run_ngspice(
-        "container", "/project/deck.sp", ngspice_bin=str(binary))
-    assert not ok and state["rc"] == 126
-    assert values == {}
-    assert "permission denied" in raw
-    assert state["native_binary"]["sha256"] == state["native_binary"]["sha256_after"]
+        mc._ars, "_docker", transport)
+    with pytest.raises(ValueError, match="not executable or hashable in container"):
+        mc._ars._run_ngspice(
+            "container", "/project/deck.sp", ngspice_bin=binary)
+    assert commands == [f"test -x {binary} && sha256sum {binary} 2>/dev/null"]
 
 
-@pytest.mark.parametrize("selected", ["relative-engine", "/missing/native-engine"])
-def test_selected_native_binary_requires_absolute_existing_input(
-        tmp_path, monkeypatch, selected):
+def test_selected_native_binary_requires_absolute_container_path(
+        tmp_path, monkeypatch):
     monkeypatch.setattr(
         mc, "_run_block",
         lambda *args, **kwargs: pytest.fail("do not launch invalid selection"))
     result = mc.run_block(
-        tmp_path, "cell", "container", "process", 2, ngspice_bin=selected)
+        tmp_path, "cell", "container", "process", 2,
+        ngspice_bin="relative-engine")
     assert result["verdict"] == "NOT_MEASURED"
     assert result["rc"] == 2 and result["mc_runs"] == 0
+
+
+def test_host_only_file_cannot_stand_in_for_container_executable(
+        tmp_path, monkeypatch):
+    host_only = tmp_path / "host-only-engine"
+    host_only.write_bytes(b"host bytes do not establish container identity")
+    monkeypatch.setattr(
+        mc._ars, "_docker",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout=""))
+    monkeypatch.setattr(
+        mc, "_run_block",
+        lambda *args, **kwargs: pytest.fail("container refusal must precede MC"))
+    result = mc.run_block(
+        tmp_path, "cell", "container", "process", 2,
+        ngspice_bin=str(host_only))
+    assert host_only.is_file()
+    assert result["verdict"] == "NOT_MEASURED"
+    assert "not executable or hashable in container" in result["reason"]
 
 
 def test_mc_forwards_selected_binary_for_every_sample_and_retains_argv(
         tmp_path, monkeypatch):
     _case(tmp_path, monkeypatch)
-    binary = tmp_path / "native-engine"
-    binary.write_bytes(b"selected native executable fixture")
+    binary = "/runtime-only/tools/ngspice"
+    remote_hash = "d" * 64
     seen = []
+    monkeypatch.setattr(
+        mc._ars, "_selected_ngspice_binary",
+        lambda container, selected: {"path": selected, "sha256": remote_hash})
+    monkeypatch.setattr(
+        mc._ars, "_container_binary_sha256",
+        lambda container, selected: remote_hash)
 
     def execute(container, deck, cwd=None, ngspice_bin=None):
         seen.append(ngspice_bin)
@@ -136,11 +176,11 @@ def test_mc_forwards_selected_binary_for_every_sample_and_retains_argv(
     monkeypatch.setattr(mc._ars, "_run_ngspice", execute)
     result = mc.run_block(
         tmp_path, "cell_alpha", "container", "process_alpha", 2,
-        ngspice_bin=str(binary))
+        ngspice_bin=binary)
     assert result["verdict"] == "PASS"
-    assert seen == [str(binary)] * 2
+    assert seen == [binary] * 2
     assert len(result["mc_executions"]) == 2
-    assert all(row["argv"][0] == str(binary)
+    assert all(row["argv"][0] == binary
                for row in result["mc_executions"])
     assert (result["mc_native_binary"]["sha256"]
             == result["mc_native_binary"]["sha256_after"])
@@ -150,8 +190,14 @@ def test_mc_forwards_selected_binary_for_every_sample_and_retains_argv(
 def test_consumed_input_drift_is_incomplete_and_preserves_native_failure(
         tmp_path, monkeypatch, native_failure):
     _case(tmp_path, monkeypatch)
-    binary = tmp_path / "native-engine"
-    binary.write_bytes(b"stable executable")
+    binary = "/runtime-only/tools/ngspice"
+    remote_hash = "e" * 64
+    monkeypatch.setattr(
+        mc._ars, "_selected_ngspice_binary",
+        lambda container, selected: {"path": selected, "sha256": remote_hash})
+    monkeypatch.setattr(
+        mc._ars, "_container_binary_sha256",
+        lambda container, selected: remote_hash)
 
     def execute(container, deck, cwd=None, ngspice_bin=None):
         return False, {"vout": None}, (
@@ -165,7 +211,7 @@ def test_consumed_input_drift_is_incomplete_and_preserves_native_failure(
     monkeypatch.setattr(mc._ars, "_run_ngspice", execute)
     result = mc.run_block(
         tmp_path, "cell_alpha", "container", "process_alpha", 2,
-        ngspice_bin=str(binary))
+        ngspice_bin=binary)
     assert result["verdict"] == ("FAIL" if native_failure else "NOT_MEASURED")
     assert result["mc_native_failed"] == (2 if native_failure else 0)
     assert len(result["mc_input_drift_logs"]) == 2

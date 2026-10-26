@@ -495,14 +495,28 @@ def run_block(project: Path, block: str, container: str, pdk: str,
     its own verdict, its own rc — and writes no yield number of any kind.
     """
     if ngspice_bin is not None and (not isinstance(ngspice_bin, str)
-            or not Path(ngspice_bin).is_absolute()
-            or not Path(ngspice_bin).is_file()):
+            or not Path(ngspice_bin).is_absolute()):
         return {"verdict": "NOT_MEASURED", "rc": 2, "mc_runs": 0,
-                "reason": "selected ngspice_bin must be an absolute existing file"}
+                "reason": "selected ngspice_bin must be an absolute container path"}
+    selected_binary = None
+    if ngspice_bin:
+        try:
+            selected_binary = _ars._selected_ngspice_binary(
+                container, ngspice_bin)
+        except ValueError as exc:
+            return {"verdict": "NOT_MEASURED", "rc": 2, "mc_runs": 0,
+                    "reason": str(exc)}
+        except _container_exec.ContainerImageMismatch as exc:
+            return {"verdict": ENV_REFUSED_VERDICT,
+                    "rc": _container_exec.EX_ENV_REFUSED, "mc_runs": 0,
+                    "reason": (f"{_container_exec.IMAGE_REFUSAL_MARK}{exc} — "
+                               f"nothing was simulated; this is NOT a statement "
+                               f"about the design and NOT a missing simulator")}
     try:
         return _run_block(
             project, block, container, pdk, n,
-            **({"ngspice_bin": ngspice_bin} if ngspice_bin else {}))
+            **({"ngspice_bin": ngspice_bin,
+                "_selected_binary": selected_binary} if ngspice_bin else {}))
     except _container_exec.ContainerImageMismatch as exc:
         return {"verdict": ENV_REFUSED_VERDICT,
                 "rc": _container_exec.EX_ENV_REFUSED, "mc_runs": 0,
@@ -518,11 +532,9 @@ def run_block(project: Path, block: str, container: str, pdk: str,
 
 
 def _run_block(project: Path, block: str, container: str, pdk: str,
-               n: int, *, ngspice_bin: str | None = None) -> dict:
-    selected_binary = ({
-        "path": ngspice_bin,
-        "sha256": hashlib.sha256(Path(ngspice_bin).read_bytes()).hexdigest(),
-    } if ngspice_bin else None)
+               n: int, *, ngspice_bin: str | None = None,
+               _selected_binary: dict | None = None) -> dict:
+    selected_binary = _selected_binary
     deck, deck_rank = _find_deck(project, block)
     if deck is None:
         # ORGANIC #142 — distinguish "no deck at all" from "only a bare
@@ -656,10 +668,24 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
         # The wrapper is emitted in mc_runs/, but a delivered DUT include is
         # relative to the ORIGINAL testbench directory. Preserve that native
         # resolution context instead of running N batches that cannot load it.
-        _ret = _ars._run_ngspice(
-            container, _ars._container_path(container, host_root, wrap),
-            cwd=_ars._container_path(container, host_root, deck.parent),
-            **({"ngspice_bin": ngspice_bin} if ngspice_bin else {}))
+        try:
+            _ret = _ars._run_ngspice(
+                container, _ars._container_path(container, host_root, wrap),
+                cwd=_ars._container_path(container, host_root, deck.parent),
+                **({"ngspice_bin": ngspice_bin} if ngspice_bin else {}))
+        except ValueError as exc:
+            _ret = (False, {}, "SELECTED_NATIVE_BINARY_REFUSED: " + str(exc) + "\n", {
+                "partial": True,
+                "warnings": [str(exc)],
+                "rc": None,
+                "changed_inputs": ["native_binary"],
+                "native_binary": {
+                    **(selected_binary or {"path": ngspice_bin, "sha256": None}),
+                    "sha256_after": None,
+                },
+                "argv": [],
+                "cwd": _ars._container_path(container, host_root, deck.parent),
+            })
         if len(_ret) == 4:
             ok, meas, raw, sim_status = _ret
         else:
@@ -689,8 +715,7 @@ def _run_block(project: Path, block: str, container: str, pdk: str,
            if input_drift else {}),
     }
     if selected_binary:
-        after = (hashlib.sha256(Path(ngspice_bin).read_bytes()).hexdigest()
-                 if Path(ngspice_bin).is_file() else None)
+        after = _ars._container_binary_sha256(container, ngspice_bin)
         native_evidence.update(
             mc_native_binary={**selected_binary, "sha256_after": after},
             mc_executions=[{"seed": row["seed"], "log": row["log"],
