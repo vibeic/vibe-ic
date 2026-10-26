@@ -80,6 +80,15 @@ status: not-applicable
 `spm` **無 SW-visible registers**。
 """
 
+_CROSS_CLAUSE_REGISTER_PRESENCE = """\
+---
+ic: spm
+---
+# Register Map
+`spm` **無 SW-visible registers**。
+The register map is present.
+"""
+
 _ACTUAL_L6_OTP_NEGATIVE = """\
 ---
 layer: L6
@@ -175,6 +184,21 @@ def test_exact_markdown_ic_absence_does_not_override_positive_register(
     gen_l4_regmap(tmp_path, {"L5_register_map.md": text})
     l4 = _read_l4(tmp_path)
     assert l4["registers"]
+    assert l4["no_registers_in_input"] is False
+    assert l4.get("register_map_present") is not False
+    assert _p0_zero_population_evidence(
+        tmp_path, "l4_regmap_phase2_emitter_contract_check") is None
+
+
+def test_separate_positive_register_presence_vetoes_document_absence(
+        tmp_path: Path) -> None:
+    """A later complete positive clause keeps the whole document unknown."""
+    gen_l4_regmap(
+        tmp_path,
+        {"L5_register_map.md": _CROSS_CLAUSE_REGISTER_PRESENCE},
+    )
+    l4 = _read_l4(tmp_path)
+    assert l4["registers"] == []
     assert l4["no_registers_in_input"] is False
     assert l4.get("register_map_present") is not False
     assert _p0_zero_population_evidence(

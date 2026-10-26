@@ -2168,12 +2168,17 @@ _OTP_DOUBLE_NEGATION_CLAUSE_RE = re.compile(
     r"(?:\bOTP\b|\bone[-\s]?time[-\s]?programmable\b|"
     r"\bfuse(?:s|map|bit)?\b|\beFuse\b|\bantifuse\b)"
 )
-_L4_DENIED_DESIGN_MEMBER_PATTERN = (
+_L4_REGISTER_MAP_MEMBER_PATTERN = (
     r"(?:"
     r"(?:(?:software|sw)[-\s]*visible\s+)?"
     r"(?:chip[-\s]*(?:level)?\s+)?registers?|"
     r"(?:control|status|configuration|config|interrupt)\s+registers?|"
-    r"register\s+(?:file|map)|address\s+map|interrupts?|"
+    r"register\s+(?:file|map)|address\s+map|interrupts?"
+    r")"
+)
+_L4_DENIED_DESIGN_MEMBER_PATTERN = (
+    rf"(?:"
+    rf"{_L4_REGISTER_MAP_MEMBER_PATTERN}|"
     r"(?:otp|one[-\s]*time[-\s]*programmable|efuse|antifuse)"
     r"(?:-based\s+calibration|[-\s]+"
     r"(?:array|bank|bits?|fuses?|interface|layout|memory))?|"
@@ -2192,6 +2197,16 @@ _L4_DENIAL_BODY_PATTERN = (
     rf"(?:(?:\s*,\s*(?:(?:and|or)\s+)?|\s*、\s*)"
     rf"{_L4_DENIED_DESIGN_MEMBER_PATTERN})+\s*(?:等)?"
     rf")"
+)
+_L4_REGISTER_PRESENCE_SENTENCE_RE = re.compile(
+    rf"(?ix)^\s*(?:[-*+]\s*)?(?:"
+    rf"(?:(?:the|this)\s+)?(?:design|device|chip|ic|system)\s+"
+    rf"(?:has|have|contains|uses)\s+(?:an?\s+)?"
+    rf"{_L4_REGISTER_MAP_MEMBER_PATTERN}|"
+    rf"(?:(?:the|this|an?)\s+)?{_L4_REGISTER_MAP_MEMBER_PATTERN}\s+"
+    rf"(?:is|are)\s+"
+    rf"(?:present|used|required|provided|included|implemented|supported|available)"
+    rf")\s*(?:[.;!?。；！？]|$)\s*$"
 )
 _L4_ABSENCE_SENTENCE_RE = re.compile(
     rf"(?ix)^\s*(?:[-*+]\s*)?(?:"
@@ -33189,9 +33204,10 @@ def _l4_explicit_no_regmap_sources(
             continue
         if not isinstance(text, str):
             continue
+        clauses = _otp_clauses(text)
         matches = [
             (clause, match)
-            for clause in _otp_clauses(text)
+            for clause in clauses
             if (match := _RE_L4_NO_REGMAP.search(clause)) is not None
         ]
         has_complete = any(
@@ -33202,7 +33218,11 @@ def _l4_explicit_no_regmap_sources(
             not _l4_absence_claim_is_complete(clause, ic_name=ic_name)
             for clause, match in matches
         )
-        if has_complete and not has_unresolved:
+        has_positive = any(
+            _L4_REGISTER_PRESENCE_SENTENCE_RE.fullmatch(clause)
+            for clause in clauses
+        )
+        if has_complete and not has_unresolved and not has_positive:
             sources.append(name)
     return sources
 
