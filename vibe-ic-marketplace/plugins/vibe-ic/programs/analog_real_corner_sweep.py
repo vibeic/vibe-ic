@@ -1408,7 +1408,7 @@ def _corner_reservation(container):
 
 def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
                  run_to_completion=False, corner_job=None, deadline_s=None,
-                 budget_source=None):
+                 budget_source=None, ngspice_bin=None):
     """Run ngspice -b on a deck. `cwd` (optional) runs ngspice FROM that
     directory — the model lib's own directory, so any deck-relative output /
     scratch file lands beside it.
@@ -1453,7 +1453,18 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
             raise ValueError(
                 f"_run_ngspice: deadline_s={deadline_s!r} is `timeout 0` -- "
                 f"no deadline at all; a stated budget must be positive")
-    ngspice_bin = _resolve_ngspice(container) or "ngspice"
+    selected_binary = None
+    if ngspice_bin is not None:
+        selected_path = Path(ngspice_bin)
+        if not selected_path.is_absolute() or not selected_path.is_file():
+            raise ValueError("selected ngspice_bin must be an absolute existing file")
+        selected_binary = {
+            "path": str(selected_path),
+            "sha256": hashlib.sha256(selected_path.read_bytes()).hexdigest(),
+        }
+        ngspice_bin = str(selected_path)
+    else:
+        ngspice_bin = _resolve_ngspice(container) or "ngspice"
     prefix = f"cd {shlex.quote(cwd)} && " if cwd else ""
     # (A) Ask for the STRUCTURED per-.measure sidecar when this build supports
     # it (ngspice fork #29). Capability-probed, never assumed — a stock build
@@ -1613,6 +1624,27 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
             tran_stop_ns(deck_text or "") * 1e-9
             if tran_stop_ns(deck_text or "") is not None else None),
     }
+    if selected_binary is not None:
+        after = (hashlib.sha256(Path(ngspice_bin).read_bytes()).hexdigest()
+                 if Path(ngspice_bin).is_file() else None)
+        sim_status.update(
+            native_binary={**selected_binary, "sha256_after": after},
+            argv=[ngspice_bin, "-b",
+                  *(["--json-measure=" + json_path] if json_path else []),
+                  str(sp_in_container)],
+            cwd=cwd,
+            command=command,
+        )
+        if after != selected_binary["sha256"]:
+            failed_analyses.add("*")
+            for key in meas:
+                meas[key] = None
+            sim_status.update(
+                partial=True,
+                failed_analyses=sorted(failed_analyses),
+                nulled_metrics=sorted(meas),
+                changed_inputs=["native_binary"],
+            )
     # #438(a): return the FULL transcript — run_block persists it as the
     # per-run ngspice invocation log that substantiates simulator_run.
     return cp.returncode == 0 and "*" not in failed_analyses, meas, txt, sim_status
