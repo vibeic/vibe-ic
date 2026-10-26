@@ -697,7 +697,8 @@ def _input_carries_subject(l_doc_code: str,
             r"(?:\s+(?:is|are)\s+"
             r"(?:required|planned|intended|performed))?"
             r")"
-            r"(?:\s+(?:for|to)\s+(?:this|the)\s+[^,;.!?]+)?"
+            r"(?:\s+(?:for|to)\s+(?:this|the)\s+"
+            r"(?:design|block|device|part|chip|model|ip))?"
             r"\s*[.!?]?\s*"
         )
         root = Path(project_dir)

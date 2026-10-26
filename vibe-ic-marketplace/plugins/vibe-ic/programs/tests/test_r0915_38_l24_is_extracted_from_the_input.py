@@ -342,6 +342,15 @@ def test_qualified_signoff_prefix_cannot_hide_mandatory_tapeout(tmp_path):
     assert "applicability_evidence" not in doc
 
 
+def test_activity_scoped_signoff_refusal_stays_applicable(tmp_path):
+    proj = _project(
+        tmp_path,
+        spec_md="Sign-off is not required for this RTL simulation.\n")
+    doc = _emit_l24(proj)
+    assert doc["applicability"] == "APPLICABLE"
+    assert "applicability_evidence" not in doc
+
+
 def test_structured_self_tapeout_die_is_applicable_even_without_doc_keywords(
         tmp_path):
     proj = _project(tmp_path, spec_md="An eight-bit counter.\n")
