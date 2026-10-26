@@ -1,5 +1,6 @@
 """Default dispatch controls; mocked native transport is not IC evidence."""
 import json
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -388,6 +389,7 @@ def test_routing_resolves_flow_gates_before_native_execution(tmp_path, monkeypat
                         (runner, ll, SimpleNamespace(name='unit'), ''))
     monkeypatch.setattr(ll, 'flow_segment', lambda *args, **kwargs:
                         ['Odb.HeuristicDiodeInsertion', 'OpenROAD.GlobalRouting',
+                         'OpenROAD.ResizerTimingPostGRT',
                          'OpenROAD.DetailedRouting', 'Checker.TrDRC',
                          'Odb.ReportDisconnectedPins', 'Checker.DisconnectedPins'])
 
@@ -395,10 +397,17 @@ def test_routing_resolves_flow_gates_before_native_execution(tmp_path, monkeypat
         config_root = project / 'phase3/librelane' / kwargs['folder']
         config_root.mkdir(parents=True)
         (config_root / 'flow_gates.json').write_text(json.dumps({
-            'Odb.HeuristicDiodeInsertion': {'RUN_HEURISTIC_DIODE_INSERTION': False}}))
+            'Odb.HeuristicDiodeInsertion': {'RUN_HEURISTIC_DIODE_INSERTION': False},
+            'OpenROAD.ResizerTimingPostGRT': {
+                'RUN_POST_GRT_RESIZER_TIMING':
+                    kwargs['overlay']['RUN_POST_GRT_RESIZER_TIMING'][0]},
+        }))
         resolved = {sid: config_root / (sid + '.json') for sid in ids}
         for config in resolved.values():
-            config.write_text(json.dumps({'DESIGN_NAME': 'unit'}))
+            config.write_text(json.dumps({
+                'DESIGN_NAME': 'unit',
+                'STA_CORNERS': ['source_tt', 'source_ss'],
+            }))
         return resolved
 
     state = tmp_path / 'current_post_hold_state.json'
@@ -411,15 +420,21 @@ def test_routing_resolves_flow_gates_before_native_execution(tmp_path, monkeypat
         ids = [sid for sid, config, input_state in chain]
         assert 'Odb.HeuristicDiodeInsertion' not in ids
         assert 'OpenROAD.GlobalRouting' in ids and 'OpenROAD.DetailedRouting' in ids
+        assert 'OpenROAD.ResizerTimingPostGRT' in ids
         assert 'Checker.TrDRC' in ids
         assert 'Odb.ReportDisconnectedPins' not in ids and 'Checker.DisconnectedPins' not in ids
         assert all(input_state == state for sid, config, input_state in chain)
         nvr_config = next(config for sid, config, _ in chain
                           if sid == 'Vibeic.NamedViolationReroute')
         nvr = json.loads(nvr_config.read_text())
-        assert nvr['VIBEIC_NVR_DRC_REPORT'].endswith('/02-openroad-detailedrouting/unit.drc')
+        assert nvr['VIBEIC_NVR_DRC_REPORT'].endswith('/03-openroad-detailedrouting/unit.drc')
         assert Path(nvr['VIBEIC_NVR_TCL']).is_file()
         assert nvr['VIBEIC_NVR_REPORT_PATH'].endswith(runner.ROUTER_DRC_REPORT_NAME)
+        timing_config = next(config for sid, config, _ in chain
+                             if sid == 'OpenROAD.ResizerTimingPostGRT')
+        timing = json.loads(timing_config.read_text())
+        assert timing['PNR_CORNERS'] == ['source_tt', 'source_ss']
+        assert timing['RUN_POST_GRT_RESIZER_TIMING'] is True
         raise RuntimeError('native boundary reached with resolved flow gates')
 
     monkeypatch.setattr(ll, 'run_chain', native)
@@ -1808,6 +1823,18 @@ def test_default_route_supplies_required_post_grt_policy_to_native_chain(
     import drv_signoff_judge as drv
     import librelane_contract as ll
     import librelane_route as route
+    from _hostpaths import require_repo
+
+    # Actual retained native receipt provenance, not a corner population
+    # authored alongside this repair.  The archive itself is intentionally not
+    # required for this config-emission test; its byte manifest names the
+    # three source-resolved scenes the ordinary config must preserve.
+    provenance = require_repo(
+        'vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs', 'tests',
+        'fixtures', 'default_prelayout_native', 'PROVENANCE.md').read_text()
+    source_corners = sorted(set(re.findall(
+        r'\b(nom_(?:tt|ss|ff)_[^/\s]+)/(?:checks|clock|sta)\.', provenance)))
+    assert len(source_corners) == 3
 
     segment = ['Odb.HeuristicDiodeInsertion', 'OpenROAD.GlobalRouting',
                route.POST_GRT_REPAIR, 'OpenROAD.ResizerTimingPostGRT', route.DRT]
@@ -1833,11 +1860,16 @@ def test_default_route_supplies_required_post_grt_policy_to_native_chain(
             route.POST_GRT_REPAIR: {'RUN_POST_GRT_DESIGN_REPAIR':
                 overlay.get('RUN_POST_GRT_DESIGN_REPAIR', (False, 'image default'))[0]},
             'Odb.HeuristicDiodeInsertion': {'RUN_HEURISTIC_DIODE_INSERTION': False},
-            'OpenROAD.ResizerTimingPostGRT': {'RUN_POST_GRT_RESIZER_TIMING': False}}
+            'OpenROAD.ResizerTimingPostGRT': {'RUN_POST_GRT_RESIZER_TIMING':
+                overlay.get('RUN_POST_GRT_RESIZER_TIMING',
+                            (False, 'image default'))[0]}}
         (root / 'flow_gates.json').write_text(json.dumps(gates))
         configs = {sid: root / (sid + '.json') for sid in ids}
         for config in configs.values():
-            config.write_text(json.dumps({'DESIGN_NAME': 'unit'}))
+            config.write_text(json.dumps({
+                'DESIGN_NAME': 'unit', 'STA_CORNERS': source_corners,
+                **{key: value[0] for key, value in overlay.items()},
+            }))
         return configs
 
     monkeypatch.setattr(ll, 'resolve_step_configs', resolve)
@@ -1848,6 +1880,8 @@ def test_default_route_supplies_required_post_grt_policy_to_native_chain(
     def native(project, image, chain, **kwargs):
         observed['ordered_steps'] = [sid for sid, _, _ in chain]
         observed['input_states'] = [str(value) for _, _, value in chain]
+        observed['configs'] = {
+            sid: json.loads(Path(config).read_text()) for sid, config, _ in chain}
         root = project / 'phase3/librelane/execution-backend-21-config'
         observed['flow_gates'] = json.loads((root / 'flow_gates.json').read_text())
         if case == 'tool_failure':
@@ -1875,7 +1909,7 @@ def test_default_route_supplies_required_post_grt_policy_to_native_chain(
     expected = case not in ('caller_false', 'missing_stage')
     assert (route.POST_GRT_REPAIR in ids) is expected, observed
     assert 'Odb.HeuristicDiodeInsertion' not in ids, observed
-    assert 'OpenROAD.ResizerTimingPostGRT' not in ids, observed
+    assert 'OpenROAD.ResizerTimingPostGRT' in ids, observed
     assert observed['input_states'] == [str(state)] * len(ids), observed
     if caller:
         assert observed['overlay']['RUN_POST_GRT_DESIGN_REPAIR'] == \
@@ -1883,6 +1917,12 @@ def test_default_route_supplies_required_post_grt_policy_to_native_chain(
     elif case != 'missing_stage':
         assert observed['overlay']['RUN_POST_GRT_DESIGN_REPAIR'] == \
             route.POST_GRT_DESIGN_REPAIR['RUN_POST_GRT_DESIGN_REPAIR']
+    timing = observed['configs']['OpenROAD.ResizerTimingPostGRT']
+    assert timing['PNR_CORNERS'] == source_corners
+    assert timing['RUN_POST_GRT_RESIZER_TIMING'] is True
+    assert timing['TIMING_VIOLATION_CORNERS'] == ['*']
+    assert timing['SETUP_VIOLATION_CORNERS'] == ['*']
+    assert timing['HOLD_VIOLATION_CORNERS'] == ['*']
     if expected:
         assert ids.index(route.POST_GRT_REPAIR) < ids.index(route.DRT), observed
     else:
@@ -1890,6 +1930,46 @@ def test_default_route_supplies_required_post_grt_policy_to_native_chain(
                             'stages': [], 'pins': {}, 'scenes': []})
         assert judged['verdict'] == 'FAIL'
         assert 'post_grt_repair: required stage absent' in judged['failures']
+
+
+def test_default_route_refuses_before_native_when_resolved_corners_are_absent(
+        tmp_path, monkeypatch):
+    """Meaningful negative: no DEFAULT-corner fallback reaches the tool."""
+    import librelane_contract as ll
+    import librelane_route as route
+
+    segment = ['OpenROAD.GlobalRouting', route.POST_GRT_REPAIR,
+               'OpenROAD.ResizerTimingPostGRT', route.DRT]
+    monkeypatch.setattr(producers, '_parameters', lambda *args:
+                        (runner, ll, SimpleNamespace(name='unit'), ''))
+    monkeypatch.setattr(ll, 'flow_segment', lambda *args, **kwargs: list(segment))
+    monkeypatch.setattr(runner, '_resolved_cell_policy',
+                        lambda configs, *args: (configs, {}))
+    state = tmp_path / 'current_post_hold_state.json'
+    state.write_text('{}')
+    monkeypatch.setattr(producers, '_predecessor_state', lambda *args: state)
+
+    def resolve(project, image, pdk, ids, **kwargs):
+        root = project / 'phase3/librelane' / kwargs['folder']
+        root.mkdir(parents=True)
+        (root / 'flow_gates.json').write_text(json.dumps({
+            route.POST_GRT_REPAIR: {'RUN_POST_GRT_DESIGN_REPAIR': True},
+            'OpenROAD.ResizerTimingPostGRT': {
+                'RUN_POST_GRT_RESIZER_TIMING': True},
+        }))
+        configs = {sid: root / (sid + '.json') for sid in ids}
+        for config in configs.values():
+            config.write_text(json.dumps({'DESIGN_NAME': 'unit',
+                                          'STA_CORNERS': []}))
+        return configs
+
+    monkeypatch.setattr(ll, 'resolve_step_configs', resolve)
+    monkeypatch.setattr(ll, 'run_chain',
+                        lambda *args, **kwargs: pytest.fail('native must not run'))
+    params = {'step_id': '21', 'top': 'unit', 'pdk_name': 'unit',
+              'image_id': 'unit-image', 'pdk_root': str(tmp_path), 'overlay': {}}
+    with pytest.raises(ll.Refusal, match='LL_STRICT_TIMING_CORNERS_UNDECLARED'):
+        producers.produce_pnr(tmp_path, params)
 
 
 @pytest.mark.parametrize('refuse', [False, True])

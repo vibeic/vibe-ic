@@ -805,6 +805,13 @@ def _state_chain(project, params, ids, predecessor, overlay=None, *, respect_flo
     lane = 'execution-backend-' + params['step_id'].replace('.', '-')
     configs = ll.resolve_step_configs(project, image, pdk, ids,
                     pdk_root=root, folder=lane + '-config', overlay=overlay)
+    if params['step_id'] == '21':
+        # The route owner binds the already-resolved source corner population
+        # before flow-gate filtering or native execution.  This is the
+        # ordinary backend seam; retired generic/legacy config owners remain
+        # untouched.
+        import librelane_route as route
+        configs = route.bind_strict_timing_corners(configs)
     if respect_flow_gates:
         gated_off = ll.flow_gated_off(project / 'phase3/librelane' / (lane + '-config'))
         ids = [sid for sid in ids if sid not in gated_off]
@@ -1573,7 +1580,8 @@ def produce_pnr(project, params):
     elif sid == '21':
         import librelane_route as route
         ids = route.chain_ids(params['image_id'], canonical_routing_only=True)
-        overlay = {**route.POST_GRT_DESIGN_REPAIR, **overlay}
+        overlay = {**route.POST_GRT_DESIGN_REPAIR, **overlay,
+                   **route.STRICT_NATIVE_TIMING}
         ll, configs, by = _state_chain(project, params, ids, 'post_hold.def', overlay,
                                        respect_flow_gates=True)
         _handoff(project, ll, list(by.values())[-1], {'def': PNR + 'routed.def', 'odb': PNR + 'routed.odb',

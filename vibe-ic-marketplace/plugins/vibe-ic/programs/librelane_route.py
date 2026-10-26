@@ -299,6 +299,53 @@ POST_GRT_DESIGN_REPAIR: Dict[str, Tuple[Any, str]] = {
     "RUN_POST_GRT_DESIGN_REPAIR": (
         True, "R-0929-POSTGRT: the DRV standard's required post_grt_repair stage")}
 
+# The ordinary backend is strict about the timing population the design
+# already declared.  These are native LibreLane keys, not replacement
+# thresholds: every declared corner is loaded for repair and the native
+# timing selectors remain all-corner.  ``bind_strict_timing_corners``
+# supplies PNR_CORNERS after resolution, from that run's own STA_CORNERS.
+STRICT_NATIVE_TIMING: Dict[str, Tuple[Any, str]] = {
+    "RUN_POST_GRT_RESIZER_TIMING": (
+        True, "issue3562 ordinary backend: run native post-GRT timing repair"),
+    "TIMING_VIOLATION_CORNERS": (
+        ["*"], "issue3562 ordinary backend: enforce every source-declared corner"),
+    "SETUP_VIOLATION_CORNERS": (
+        ["*"], "issue3562 ordinary backend: enforce setup at every declared corner"),
+    "HOLD_VIOLATION_CORNERS": (
+        ["*"], "issue3562 ordinary backend: enforce hold at every declared corner"),
+}
+
+
+def bind_strict_timing_corners(configs: Dict[str, Path]) -> Dict[str, Path]:
+    """Bind post-GRT repair to the resolved run's complete corner population.
+
+    The existing step config is the authority.  Missing, malformed or
+    duplicate ``STA_CORNERS`` refuses before native execution; no DEFAULT
+    corner or caller-authored fallback is manufactured.
+    """
+    import librelane_contract as _ll
+    step = "OpenROAD.ResizerTimingPostGRT"
+    source = configs.get(step)
+    if source is None:
+        raise _ll.Refusal("LL_STRICT_TIMING_STEP_ABSENT", step)
+    try:
+        doc = json.loads(Path(source).read_text())
+    except (OSError, ValueError, TypeError) as exc:
+        raise _ll.Refusal("LL_STRICT_TIMING_CONFIG_UNREADABLE", str(source)) from exc
+    corners = doc.get("STA_CORNERS") if isinstance(doc, dict) else None
+    if (not isinstance(corners, list) or not corners
+            or any(not isinstance(corner, str) or not corner for corner in corners)
+            or len(set(corners)) != len(corners)):
+        raise _ll.Refusal("LL_STRICT_TIMING_CORNERS_UNDECLARED", str(source))
+    output = Path(source).with_name(Path(source).stem + "@strict-native.json")
+    configs = dict(configs)
+    configs[step] = _ll.derive_step_config(source, output, {
+        **STRICT_NATIVE_TIMING,
+        "PNR_CORNERS": (
+            list(corners), "resolved STA_CORNERS from the same native step config"),
+    })
+    return configs
+
 
 def overlay(R, project: Path, sdc: Path, scratch: Path) -> Dict[str, Tuple[Any, str]]:
     """Declared step-21 config for LibreLane, each value with its source.
@@ -307,8 +354,10 @@ def overlay(R, project: Path, sdc: Path, scratch: Path) -> Dict[str, Tuple[Any, 
       (`librelane_cts_hold.signoff_scene_sdc`): the post-GRT timing repair
       works in the scene the sign-off judges, as steps 19/20 do (T98).
     * the route checkers record only (`CHECKER_RECORD_ONLY`).
-    * the post-GRT design repair runs (`POST_GRT_DESIGN_REPAIR`).
-    * a PPA candidate's `route_knobs` (`PPA_KNOBS`) win over the above.
+    * the post-GRT design and timing repairs run
+      (`POST_GRT_DESIGN_REPAIR`, `STRICT_NATIVE_TIMING`).
+    * a PPA candidate's non-timing `route_knobs` (`PPA_KNOBS`) apply; a
+      conflicting timing override refuses rather than weakening the contract.
     """
     import librelane_cts_hold as _cts
     scene = _cts.signoff_scene_sdc(R, sdc, scratch)
@@ -318,7 +367,16 @@ def overlay(R, project: Path, sdc: Path, scratch: Path) -> Dict[str, Tuple[Any, 
                          "(phase3_one_shot_runner._FLAT_OCV_DERATE_EARLY/LATE)")}
     out.update(CHECKER_RECORD_ONLY)
     out.update(POST_GRT_DESIGN_REPAIR)
-    out.update(switch_knobs(project))
+    knobs = switch_knobs(project)
+    conflicting = sorted(key for key in STRICT_NATIVE_TIMING
+                         if key in knobs
+                         and knobs[key][0] != STRICT_NATIVE_TIMING[key][0])
+    if conflicting:
+        raise ValueError(f"LL_STRICT_TIMING_OVERRIDE_FORBIDDEN: {conflicting}")
+    out.update(knobs)
+    # The source-required strict policy wins over an equivalent caller value,
+    # so its provenance cannot be mislabeled as a PPA choice.
+    out.update(STRICT_NATIVE_TIMING)
     return out
 
 
