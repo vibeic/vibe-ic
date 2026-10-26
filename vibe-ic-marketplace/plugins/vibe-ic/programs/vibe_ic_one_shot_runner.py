@@ -1107,6 +1107,176 @@ def _finish_selected_native_owner(project: Path, native_step: str,
     }]})
 
 
+def _flow109_selected_row(row_id: str) -> bool:
+    """Whether the validated current public request selects ``row_id``."""
+    import flow109
+
+    path = os.environ.get(flow109.CONTEXT_ENV)
+    if not path:
+        return False
+    try:
+        context = flow109.validate_execution_context(
+            json.loads(Path(path).read_text(encoding='utf-8')))
+    except (OSError, ValueError, flow109.Flow109Error):
+        return False
+    rows = context.get('resolved_rows') or [context.get('resolved_row', {})]
+    return (len(rows) == 1 and rows[0].get('id') == row_id
+            and context.get('requested_step') == row_id)
+
+
+def _d09_bound_phase2_evidence(project: Path, report: Mapping) -> tuple[str, dict, str]:
+    """Judge D09 only from one source/material-bound Phase-2 owner report."""
+    import benchmark_dispatch as dispatch
+
+    project = Path(project).resolve()
+    report_path = _pl.report_path(project, 'phase2_one_shot.json')
+    try:
+        if report_path.is_symlink() or not report_path.is_file():
+            raise ValueError('fresh Phase-2 report is absent or a symlink')
+        if json.loads(report_path.read_text(encoding='utf-8')) != report:
+            raise ValueError('supplied Phase-2 report differs from the published report')
+        binding = report['runner_binding']
+        argv = binding['argv']
+        source = binding['source']
+        if (binding.get('schema') != 'vibeic.runner_report_binding.v1'
+                or binding.get('project') != str(project)
+                or binding.get('report_name') != 'phase2_one_shot.json'
+                or not binding.get('invocation_id')
+                or not isinstance(argv, list) or len(argv) < 3
+                or str(Path(argv[2]).resolve()) != str(project)
+                or Path(argv[1]).name != 'design_one_shot_runner.py'
+                or binding.get('producer') != source.get('runner')
+                or source != dispatch._runner_source_snapshot(
+                    argv, consumer=source['consumer']['path'])
+                or binding.get('material') != dispatch._runner_material_snapshot(project)):
+            raise ValueError('report project, invocation, source, input, or RTL binding differs')
+        entry = argv.index('--entry-step')
+        exit_ = argv.index('--exit-step')
+        declared = report.get('declared_window') or {}
+        if (argv[entry + 1] != '1' or argv[exit_ + 1] != '4'
+                or str(declared.get('entry_step')) != '1'
+                or str(declared.get('exit_step')) != '4'
+                or not {'1', '2', '3', '4'}.issubset(
+                    {str(item) for item in declared.get('dispatched_step_ids', ())})):
+            raise ValueError('Phase-2 report does not own the complete native 1..4 span')
+        material = binding['material']
+        rtl = material.get('output_rtl')
+        if not isinstance(rtl, dict) or not rtl:
+            raise ValueError('bound RTL inventory is empty')
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        return 'NOT_MEASURED', {}, f'D09_REPORT_UNBOUND: {exc}'
+
+    steps = report.get('steps')
+    if not isinstance(steps, list) or not all(isinstance(row, Mapping) for row in steps):
+        return 'NOT_MEASURED', {}, 'D09_REQUIRED_EVIDENCE_ABSENT: invalid step population'
+
+    def unique(names: tuple[str, ...]) -> Mapping | None:
+        found = [row for row in steps if row.get('name') in names]
+        return found[0] if len(found) == 1 else None
+
+    author = unique(('rtl_gen',))
+    lint = unique(('rtl_lint_tool', 'rtl_validate'))
+    manifests = unique(('phase2_manifests',))
+    reference = unique(('reference_tb',))
+    required_names = {'rtl_gen', 'rtl_lint_tool', 'rtl_validate',
+                      'phase2_manifests', 'reference_tb'}
+    failures = sorted({str(row.get('name')) for row in steps
+                       if row.get('name') in required_names
+                       and row.get('status') == 'FAIL'})
+    if failures:
+        return 'FAIL', {}, 'D09_REQUIRED_CHECK_FAILED: ' + ', '.join(failures)
+    if (author is None or lint is None or manifests is None or reference is None
+            or author.get('status') != 'PASS_WITH_WAIVERS'
+            or (author.get('extras') or {}).get('preserved') is not True
+            or lint.get('status') != 'PASS'
+            or manifests.get('status') != 'PASS'
+            or reference.get('status') != 'PASS'):
+        return ('NOT_MEASURED', {},
+                'D09_REQUIRED_EVIDENCE_ABSENT: preserved authored RTL, '
+                'validation/lint PASS, manifests PASS, and reference-TB PASS are required')
+
+    cdc_paths = tuple(f'reports/phase2/cdc/{name}.json'
+                      for name in ('crossing', 'async_input', 'reset_dep'))
+    if not set(cdc_paths).issubset(set(manifests.get('output_files') or ())):
+        return 'NOT_MEASURED', {}, 'D09_REQUIRED_EVIDENCE_ABSENT: CDC/RDC outputs undeclared'
+    cdc_receipts = []
+    for relative in cdc_paths:
+        path = project / relative
+        try:
+            if path.is_symlink() or not path.is_file():
+                raise ValueError('absent or symlink')
+            raw = path.read_bytes()
+            body = json.loads(raw)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            return 'NOT_MEASURED', {}, f'D09_REQUIRED_EVIDENCE_ABSENT: {relative}: {exc}'
+        if not isinstance(body, Mapping):
+            return 'NOT_MEASURED', {}, f'D09_REQUIRED_EVIDENCE_ABSENT: {relative} is not an object'
+        if body.get('verdict') == 'FAIL':
+            return 'FAIL', {}, f'D09_REQUIRED_CHECK_FAILED: {relative}'
+        if body.get('verdict') != 'PASS':
+            return 'NOT_MEASURED', {}, f'D09_REQUIRED_EVIDENCE_ABSENT: {relative} is not PASS'
+        cdc_receipts.append({'path': relative,
+                             'sha256': hashlib.sha256(raw).hexdigest()})
+
+    inventory = [{'path': path, **record} for path, record in sorted(rtl.items())]
+    evidence = {
+        'runner_invocation_id': binding['invocation_id'],
+        'runner_source': source,
+        'producer': binding['producer'],
+        'material_sha256': hashlib.sha256(json.dumps(
+            material, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
+        'rtl_inventory': inventory,
+        'input_inventory': material.get('input', {}),
+        'cdc_rdc_receipts': cdc_receipts,
+        'phase2_report': {'path': str(report_path.relative_to(project)),
+                          'sha256': hashlib.sha256(report_path.read_bytes()).hexdigest()},
+    }
+    return 'PASS', evidence, 'complete same-invocation D09 owner evidence'
+
+
+def _finish_d09_selected_owner(project: Path, report: Mapping) -> dict:
+    """Finalize D09 once; never promote raw authoring or wrapper success."""
+    import flow109
+
+    project = Path(project)
+    if not _flow109_selected_row('D09'):
+        return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',
+                'detail': 'D09_FINALIZATION_REFUSED: selected context is absent, stale, or foreign'}
+    status, evidence, detail = _d09_bound_phase2_evidence(project, report)
+    try:
+        finished = flow109.finish_native_window(project, {'steps': [{
+            'status': status,
+            'extras': {'step_id': '1', 'default_row_status': status,
+                       'completed': status == 'PASS', 'detail': detail,
+                       'evidence': evidence},
+        }]})
+    except flow109.Flow109Error as exc:
+        finished = None
+        detail = f'D09_FINALIZATION_REFUSED: {exc}'
+    except FileExistsError as exc:
+        attempt = os.environ.get(flow109.ATTEMPT_ENV)
+        expected = Path(attempt) / 'result.json' if attempt else None
+        if exc.filename is None or expected is None or Path(exc.filename) != expected:
+            raise
+        finished = None
+        detail = ('D09_FINALIZATION_REFUSED: FLOW109_ATTEMPT_RESULT_EXISTS: '
+                  'immutable attempt result already exists')
+    components = finished.get('components') if isinstance(finished, Mapping) else None
+    component = components[0] if isinstance(components, list) and len(components) == 1 else {}
+    valid = (finished if isinstance(finished, Mapping)
+             and finished.get('schema') == 'vibeic.flow109.window-attempt-result.v1'
+             and finished.get('default_row_status') == status
+             and finished.get('whole_flow_acceptance') == 'NOT_MEASURED'
+             and finished.get('delivery_accepted') is False
+             and component.get('step_id') == 'D09'
+             and component.get('default_row_status') == status
+             and component.get('completed') is (status == 'PASS') else None)
+    if valid is None:
+        status = 'NOT_MEASURED'
+    return {'verdict': status, 'whole_flow_verdict': 'NOT_MEASURED',
+            'detail': detail, 'evidence': evidence}
+
+
 def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
     """Finalize the selected D26 attempt and validate its immutable result."""
     import flow109
@@ -4285,6 +4455,11 @@ def _main() -> int:
             if _fresh_why:
                 advisories.append(_fresh_why)
             rep = _read_report(_phase_report_path(project, "phase2_one_shot.json"))
+            if _flow109_selected_row('D09'):
+                d09_acceptance = _finish_d09_selected_owner(project, rep)
+                reports['d09_finalization'] = d09_acceptance
+                verdict = d09_acceptance['verdict']
+                rc = 0 if verdict == 'PASS' else 1 if verdict == 'FAIL' else 2
             plan.append(("phase2", verdict, rc))
             reports["phase2"] = rep
             if (verdict == 'NOT_MEASURED' and _execution.request()['mode'] == 'default'
@@ -4524,6 +4699,7 @@ def _main() -> int:
             "halted_at": halted_at or None,
             "advisories": advisories,
             "phase1_checkpoint_review": _phase1_checkpoint_review,
+            "d09_finalization": reports.get("d09_finalization"),
             "audit_scope": "bounded; whole-flow audit not refreshed",
             "completion_audit_axis": {"state": "NOT_MEASURED",
                                       "reason": "bounded; whole-flow audit not refreshed"},

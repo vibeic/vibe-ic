@@ -5,6 +5,7 @@ These are configuration/dispatch tests, not EDA qualification or IC PASS.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -534,6 +535,147 @@ def test_bounded_owner_finish_does_not_change_legacy_execution(tmp_path, monkeyp
     assert runner._finish_selected_native_owner(
         tmp_path, "11", {"verdict": "PASS"}) is None
     assert not (tmp_path / "reports/flow109/default_rows").exists()
+
+
+def _d09_owner_report(tmp_path, monkeypatch, *, lint="PASS", reference="PASS",
+                      cdc="PASS"):
+    """Build the same source/material-bound shape the Phase-2 writer emits."""
+    import benchmark_dispatch as dispatch
+    import vibe_ic_one_shot_runner as runner
+
+    rtl = tmp_path / "phase2/stage1/rtl/chip_top.sv"
+    rtl.parent.mkdir(parents=True, exist_ok=True)
+    rtl.write_text("module chip_top(input logic clk); endmodule\n")
+    source_input = tmp_path / "input/spec.md"
+    source_input.parent.mkdir(parents=True, exist_ok=True)
+    source_input.write_bytes(require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "flow",
+        "flow109.json").read_bytes())
+    evidence = []
+    for name in ("crossing", "async_input", "reset_dep"):
+        path = tmp_path / f"reports/phase2/cdc/{name}.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"verdict": cdc}) + "\n")
+        evidence.append(str(path.relative_to(tmp_path)))
+    argv = [sys.executable, str(Path(runner.PROGRAMS_DIR) /
+            "design_one_shot_runner.py"), str(tmp_path),
+            "--entry-step", "1", "--exit-step", "4"]
+    source = dispatch._runner_source_snapshot(argv)
+    report = {
+        "project": str(tmp_path.resolve()),
+        "declared_window": {"entry_step": "1", "exit_step": "4",
+                            "dispatched_step_ids": ["1", "2", "3", "4"]},
+        "steps": [
+            {"name": "rtl_gen", "status": "PASS_WITH_WAIVERS",
+             "extras": {"preserved": True, "rtl_provenance": "AUTHORED"}},
+            {"name": "rtl_lint_tool", "status": lint, "extras": {}},
+            {"name": "phase2_manifests", "status": "PASS",
+             "output_files": evidence, "extras": {}},
+            {"name": "reference_tb", "status": reference, "extras": {}},
+        ],
+        "runner_binding": {
+            "schema": "vibeic.runner_report_binding.v1",
+            "invocation_id": "d09-focused-invocation",
+            "project": str(tmp_path.resolve()), "argv": argv,
+            "source": source, "report_name": "phase2_one_shot.json",
+            "producer": source["runner"],
+            "material": dispatch._runner_material_snapshot(tmp_path),
+        },
+    }
+    out = tmp_path / "reports/orchestrator/phase2_one_shot.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2) + "\n")
+    context = flow109.execution_context(flow109.resolve_plan(profile()),
+                                        "D09", "D09")
+    request = tmp_path / "d09-request.json"
+    request.write_text(json.dumps(context))
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(request))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV,
+                       str(flow109._new_attempt(tmp_path, context)))
+    return runner, report, rtl, source_input
+
+
+def test_d09_completion_requires_full_bound_owner_report_and_preserves_rtl(
+        tmp_path, monkeypatch):
+    runner, report, rtl, _ = _d09_owner_report(tmp_path, monkeypatch)
+    before = rtl.read_bytes()
+
+    answer = runner._finish_d09_selected_owner(tmp_path, report)
+
+    assert answer["verdict"] == "PASS"
+    assert rtl.read_bytes() == before
+    terminal = json.loads((Path(os.environ[flow109.ATTEMPT_ENV]) /
+                           "result.json").read_text())
+    assert terminal["default_row_status"] == "PASS"
+    assert terminal["whole_flow_acceptance"] == "NOT_MEASURED"
+    assert terminal["delivery_accepted"] is False
+    component = terminal["components"][0]
+    assert component["step_id"] == "D09"
+    assert component["completed"] is True
+    assert answer["evidence"]["rtl_inventory"][0]["path"] == "chip_top.sv"
+
+
+@pytest.mark.parametrize("case,expected", [
+    ("missing_lint", "NOT_MEASURED"),
+    ("missing_handoff", "NOT_MEASURED"),
+    ("lint_fail", "FAIL"),
+    ("reference_fail", "FAIL"),
+    ("cdc_fail", "FAIL"),
+    ("changed_rtl", "NOT_MEASURED"),
+    ("changed_input", "NOT_MEASURED"),
+    ("foreign_report", "NOT_MEASURED"),
+    ("foreign_attempt", "NOT_MEASURED"),
+    ("foreign_native", "NOT_MEASURED"),
+])
+def test_d09_completion_fails_closed_on_missing_failed_or_foreign_evidence(
+        tmp_path, monkeypatch, case, expected):
+    runner, report, rtl, source_input = _d09_owner_report(
+        tmp_path, monkeypatch,
+        lint="FAIL" if case == "lint_fail" else "PASS",
+        reference="FAIL" if case == "reference_fail" else "PASS",
+        cdc="FAIL" if case == "cdc_fail" else "PASS")
+    if case == "missing_lint":
+        report["steps"] = [row for row in report["steps"]
+                           if row["name"] != "rtl_lint_tool"]
+    elif case == "missing_handoff":
+        report["steps"][0]["extras"]["preserved"] = False
+    elif case == "changed_rtl":
+        rtl.write_text("module changed; endmodule\n")
+    elif case == "changed_input":
+        source_input.write_text("changed input\n")
+    elif case == "foreign_report":
+        report["runner_binding"]["project"] = str(tmp_path / "foreign")
+    elif case == "foreign_attempt":
+        monkeypatch.setenv(flow109.ATTEMPT_ENV, str(tmp_path / "foreign"))
+    elif case == "foreign_native":
+        context_path = Path(os.environ[flow109.CONTEXT_ENV])
+        context = json.loads(context_path.read_text())
+        context["resolved_row"]["profile"]["dispatch"]["native_step_id"] = "2"
+        context["context_sha256"] = flow109.digest(
+            {key: value for key, value in context.items()
+             if key != "context_sha256"})
+        context_path.write_text(json.dumps(context))
+    (tmp_path / "reports/orchestrator/phase2_one_shot.json").write_text(
+        json.dumps(report, indent=2) + "\n")
+
+    answer = runner._finish_d09_selected_owner(tmp_path, report)
+
+    assert answer["verdict"] == expected
+    assert answer["whole_flow_verdict"] == "NOT_MEASURED"
+
+
+def test_d09_completion_does_not_overwrite_existing_attempt_result(
+        tmp_path, monkeypatch):
+    runner, report, _, _ = _d09_owner_report(tmp_path, monkeypatch)
+    result = Path(os.environ[flow109.ATTEMPT_ENV]) / "result.json"
+    retained = b'{"immutable":"existing"}\n'
+    result.write_bytes(retained)
+
+    answer = runner._finish_d09_selected_owner(tmp_path, report)
+
+    assert answer["verdict"] == "NOT_MEASURED"
+    assert "FLOW109_ATTEMPT_RESULT_EXISTS" in answer["detail"]
+    assert result.read_bytes() == retained
 
 
 @pytest.mark.parametrize("case,status,rc", [
