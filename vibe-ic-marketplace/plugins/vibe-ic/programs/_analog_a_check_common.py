@@ -921,9 +921,19 @@ def netlist_content(block_dir) -> BoundedContent:
     one. Exempting silence here is precisely how silence became cheaper than
     disclosure.
     """
-    return content_class_bounded(
-        [(Path(block_dir) / NETLIST_PROVENANCE_ARTEFACT,
-          NETLIST_CONTENT_KEYS)])
+    sidecar = Path(block_dir) / NETLIST_PROVENANCE_ARTEFACT
+    result = content_class_bounded([(sidecar, NETLIST_CONTENT_KEYS)])
+    if result.klass == CONTENT_UNDISCLOSED and not sidecar.is_file():
+        # A current read validation discloses an existing typed design without
+        # pretending that the validator historically emitted its frozen bytes.
+        # A present A3 sidecar remains authoritative even when it is silent.
+        import analog_existing_design_validate as existing
+        validated = existing.consume(Path(block_dir))
+        if validated is not None:
+            klass = classify_design_content(validated.get(DESIGN_CONTENT_FIELD))
+            source = Path(block_dir) / existing.RECEIPT
+            return BoundedContent(klass, source, klass, source, None)
+    return result
 
 
 def _a8_declared_content(block_dir: Path) -> Optional[BoundedContent]:
@@ -954,7 +964,9 @@ def _a8_declared_content(block_dir: Path) -> Optional[BoundedContent]:
         content = measurement.get(DESIGN_CONTENT_FIELD)
         if not content_disclosed(content) or content != binding[DESIGN_CONTENT_FIELD]:
             return None
-        for field in ("netlist_provenance", "a3_netlist", "topology", "spec",
+        subject_record = ("existing_design_validation" if binding.get("source") ==
+                          "existing_design_read_validation" else "netlist_provenance")
+        for field in (subject_record, "a3_netlist", "topology", "spec",
                       "declared_block_list"):
             hit, _ = producer._project_file(project, binding[field], field=field)
             if hit is None:

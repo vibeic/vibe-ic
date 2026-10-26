@@ -143,3 +143,26 @@ def test_real_or_ambiguous_examples_remain_blocking(case: str):
     assert report["blocked"] is True
     assert all(item["covered"] is False for item in examples)
     assert all(item["block_eligible"] is True for item in examples)
+
+
+@pytest.mark.parametrize("suffix,eligible", [
+    (".", False),
+    (", because the lowest high bit determines the position.", False),
+    (" and the implementation must satisfy this example.", True),
+    (", because the implementation must satisfy this example.", True),
+])
+def test_worded_hdl_literals_retain_separate_width_owner(suffix, eligible):
+    rtl = _rtl()
+    spec = _spec(rtl, "For example, a 12-bit priority encoder given the input "
+                 "12'b000100000000 would output 4'd8" + suffix)
+    report, examples = _worked(spec, rtl)
+    assert all(item["block_eligible"] is eligible for item in examples)
+
+
+@pytest.mark.parametrize("owner_width,candidate_width", [(8, 8), (12, 4)])
+def test_worded_illustration_never_waives_real_or_changed_interface(owner_width, candidate_width):
+    source_rtl = _rtl()
+    spec = _spec(source_rtl, f"For example, a {owner_width}-bit encoder given the input "
+                 "12'd256 would output 4'd8.")
+    _, examples = _worked(spec, _rtl(str(candidate_width)))
+    assert all(item["block_eligible"] for item in examples)

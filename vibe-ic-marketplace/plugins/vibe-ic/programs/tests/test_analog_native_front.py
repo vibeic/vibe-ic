@@ -230,6 +230,44 @@ def test_a05_failed_existing_consumer_blocks_native_launch(tmp_path):
     assert all(program != '@ngspice' for program, _, _ in commands.calls)
 
 
+@pytest.mark.parametrize('validation_rc,expected', [
+    (0, 'PASS'), (1, 'FAIL'), (2, 'NOT_MEASURED')])
+def test_a05_validates_current_typed_dut_without_fabricating_emission_or_rewriting_sources(
+        tmp_path, validation_rc, expected):
+    project, declared, testbench = _op_project(tmp_path)
+    bdir = testbench.parent
+    _put(project, 'phase3/analog/cell_alpha/topology.json',
+         {'block': declared['name'], 'devices': []})
+    before = {path.name: path.read_bytes()
+              for path in (testbench, bdir / 'cell_alpha.sp',
+                           bdir / 'topology.json')}
+    commands = Commands(native=OP_LOG, mock_checks=True)
+    calls = []
+
+    def run(program, argv, **kwargs):
+        calls.append(program)
+        if program == 'analog_existing_design_validate.py':
+            assert argv[argv.index('--pdk') + 1] == 'source-process'
+            return {'returncode': validation_rc,
+                    'stdout': 'current read validation'}
+        return commands(program, argv, **kwargs)
+
+    result = front.run_step(
+        'A05', project, declared, {'pdk': 'source-process'}, run)
+    assert result['status'] == expected
+    assert calls[0] == 'analog_existing_design_validate.py'
+    assert 'analog_a3_netlist_emit.py' not in calls
+    assert not (bdir / 'netlist_provenance.json').exists()
+    assert all((bdir / name).read_bytes() == data
+               for name, data in before.items())
+    if validation_rc:
+        assert ('analog_a3_netlist_gen_check.py' not in calls
+                and '@ngspice' not in calls)
+    else:
+        assert (calls.index('analog_existing_design_validate.py')
+                < calls.index('analog_a3_netlist_gen_check.py'))
+
+
 @pytest.mark.parametrize(('text', 'expected'), [
     ('native exit without measurements\n', 'NOT_MEASURED'),
     (OP_LOG + 'fatal error: model load failed\n', 'FAIL'),

@@ -266,12 +266,20 @@ def _standalone_rtl(tmp_path):
 
 
 @pytest.mark.parametrize('valid', [True, False])
-@pytest.mark.parametrize('declared_top', ['plain', None])
-def test_bounded_no_pdk_consumes_native_project_lint(tmp_path, valid, declared_top):
+@pytest.mark.parametrize('declared_top', ['plain', None, 'original'])
+def test_bounded_no_pdk_consumes_native_project_lint(tmp_path, monkeypatch, valid, declared_top):
     project, src = _standalone_rtl(tmp_path)
     spec_path = project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
     put(spec_path, {'top_module': declared_top})
-    before = spec_path.read_bytes()
+    if declared_top == 'original':
+        layout = importlib.import_module('_path_layout')
+        monkeypatch.setattr(layout, '_RTL_INPUT', layout._RTL_INPUT)
+        spec_path.unlink()  # This fixture deliberately has only an original prompt.
+        prompt = project / 'input/phase1_prompt.md'
+        prompt.parent.mkdir(parents=True)
+        prompt.write_text('Module name: plain\nInvert the eight-bit input value_i into value_o.\n')
+        layout.select_rtl_input(project, 'original', '2', '2')
+    before = spec_path.read_bytes() if spec_path.exists() else None
     if not valid:
         src.write_text('module plain(input [7:0] value_i, output [7:0] value_o); '
                        'assign value_o = ; endmodule\n')
@@ -283,7 +291,8 @@ def test_bounded_no_pdk_consumes_native_project_lint(tmp_path, valid, declared_t
     assert context['defines'] == []
     assert context['native_returncode'] == context['transport_returncode']
     assert context['native_returncode'] == (0 if valid else 1)
-    assert spec_path.read_bytes() == before
+    assert (spec_path.read_bytes() if spec_path.exists() else None) == before
+    assert row.name == ('rtl_validate' if declared_top == 'original' else 'rtl_lint_tool')
     assert isinstance(json.loads((project / 'reports/phase2/lint/rtl_hygiene.json').read_text()), list)
     assert not (project / 'phase3/librelane/step2/lint_config.json').exists()
 

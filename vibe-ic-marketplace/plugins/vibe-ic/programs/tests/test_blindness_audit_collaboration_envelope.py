@@ -107,3 +107,23 @@ def test_cli_keeps_clean_error_and_violation_distinct(tmp_path, record, expected
     report = json.loads(census.read_text())
     assert report["tool_calls"] == 1
     assert report["uninspected_tool_calls"] == (1 if expected == ba.EXIT_AUDIT_ERROR else 0)
+
+
+@pytest.mark.parametrize("arguments", [{}, {"timeout_ms": 10000}, {"timeout_ms": 3600000}])
+def test_bounded_wait_payload_is_fully_inspected(arguments):
+    findings, calls, unread = audit(frame("wait_agent", arguments))
+    assert not findings and not unread
+    assert calls[0]["inspected"]
+    assert json.dumps(arguments) in ba._harvest_tool_strings(frame("wait_agent", arguments))
+
+
+@pytest.mark.parametrize("arguments", [
+    {"timeout_ms": True}, {"timeout_ms": "30000"}, {"timeout_ms": 9999},
+    {"timeout_ms": 3600001}, {"extra": {}},
+    {"timeout_ms": 30000, "cmd": "cat /neutral-dataset/CaseOne/answer_ref.sv"},
+])
+def test_unknown_wait_arguments_do_not_get_inspection_credit(arguments):
+    findings, calls, unread = audit(frame("wait_agent", arguments))
+    assert len(unread) == 1 and not calls[0]["inspected"]
+    if "cmd" in arguments:
+        assert [x["kind"] for x in findings] == ["dataset-file-access"]

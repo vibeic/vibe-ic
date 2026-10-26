@@ -13978,7 +13978,9 @@ def _step_rtl_hygiene_native(project: Path) -> StepResult:
     try:
         from _rtl_include_hub import silicon_rtl_selection
         selected = [str(path.resolve()) for path in silicon_rtl_selection(_pl.rtl_dir(project))]
-        spec = json.loads((project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_text())
+        original = _pl.rtl_input(project) == "original"
+        spec = ({} if original else json.loads(
+            (project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_text()))
         top = spec.get("top_module")
         cmd = [
             sys.executable, str(PROGRAMS_DIR / "rtl_hygiene_lint.py"),
@@ -14024,7 +14026,8 @@ def _step_rtl_hygiene_native(project: Path) -> StepResult:
     except (OSError, ValueError, TypeError, subprocess.SubprocessError) as exc:
         detail = str(exc)
     return StepResult(
-        "rtl_lint_tool", status, time.time() - t0, detail, outputs,
+        "rtl_validate" if _pl.rtl_input(project) == "original" else "rtl_lint_tool",
+        status, time.time() - t0, detail, outputs,
         extras={"producer": "rtl_hygiene_lint", "step_id": "2",
                 "default_row_status": status, "completed": status == "PASS",
                 "native_context": context, "input_sha256": context.get("input_sha256", {})},

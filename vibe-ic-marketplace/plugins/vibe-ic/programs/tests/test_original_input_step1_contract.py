@@ -191,3 +191,20 @@ def test_original_direct_step2_runs_native_hygiene_without_future_synthesis(tmp_
     assert not (root / "phase2/stage2/synth/yosys.log").exists()
     pl.select_rtl_input(root, "structured")
     assert runner.step_rtl_lint_tool(root, top_name="unit") is None
+
+
+@pytest.mark.parametrize("prose,allowed", [
+    ("Write a new module lane_cell with input d and output q. The supplied module is context.", True),
+    ("Fix this module.", False),
+    ("Optimize this module for area.", False),
+    ("Complete this module.", False),
+])
+def test_embedded_context_uses_existing_task_nature(tmp_path, prose, allowed):
+    prompt = prose + "\n```verilog\nmodule wrapper(input d,output q);\nassign q=d;\nendmodule\n```\n"
+    root = project(tmp_path, prompt=prompt)
+    if allowed:
+        pl.select_rtl_input(root, "original", "1", "2")
+        assert pl.gather_spec_text(root).startswith(prompt)
+    else:
+        with pytest.raises(ValueError, match="supplied RTL"):
+            pl.select_rtl_input(root, "original", "1", "2")

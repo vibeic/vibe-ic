@@ -1040,54 +1040,64 @@ def _declared_a3_subject_binding(project: Path, block: str, bdir: Path,
                                  ) -> Tuple[Optional[Dict[str, object]], str]:
     """Read, never infer, the existing A3 subject declaration.
 
-    A8 binds its native measurement only when the block is declared and A3's
-    producer sidecar names the same netlist, topology, and spec bytes.  The R3
-    open fixture lacks this sidecar and stays design-content undisclosed.
+    A8 uses the emitter's source declaration or the existing current typed-DUT
+    read validation. These remain distinct sources; neither invents emission
+    history. Without either source the design content remains undisclosed.
     """
     declared = load_block_list(project)
     if not declared or block not in declared:
         return None, ""
     sidecar = bdir / "netlist_provenance.json"
-    if not sidecar.is_file():
-        return None, "declared block has no A3 netlist_provenance.json"
-    try:
-        doc = json.loads(sidecar.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return None, f"A3 netlist_provenance.json is unreadable: {exc}"
-    if not isinstance(doc, dict) or doc.get("block") != block:
-        return None, "A3 netlist provenance names a different block"
-    prov = doc.get("_provenance")
-    if not isinstance(prov, dict):
-        return None, "A3 netlist provenance has no _provenance object"
-    content = prov.get(DESIGN_CONTENT_FIELD)
-    if not content_disclosed(content):
-        return None, "A3 netlist provenance has no disclosed design_content"
-
     topology_path = bdir / "topology.json"
     spec_path = bdir / "spec.json"
     netlist_path = bdir / f"{block}.sp"
-    rendered = prov.get("rendered_from")
-    if not isinstance(rendered, dict):
-        return None, "A3 netlist provenance has no rendered_from inputs"
-    topology_claim = rendered.get("topology_json")
-    spec_claim = rendered.get("spec_json")
-    if not isinstance(topology_claim, dict) or not isinstance(spec_claim, dict):
-        return None, "A3 netlist provenance has no topology/spec source claims"
-    for path, claim, expected in (
-        (topology_path, topology_claim, topology_path),
-        (spec_path, spec_claim, spec_path),
-    ):
-        if claim.get("path") != str(expected.relative_to(project)):
-            return None, f"A3 source claim does not name {expected.name}"
-        if not path.is_file() or _sha256(path) != str(
-                claim.get("sha256") or "").lower():
-            return None, f"A3 source claim is stale for {expected.name}"
-    if not netlist_path.is_file():
-        return None, "A3 declared netlist is absent"
-    artifact_hash = str(prov.get("artifact_sha256") or "").lower()
-    if not re.fullmatch(r"[0-9a-f]{64}", artifact_hash) \
-            or _sha256(netlist_path) != artifact_hash:
-        return None, "A3 declared netlist hash is stale or missing"
+    source_kind, source_field = "a3_netlist_provenance", "netlist_provenance"
+    if not sidecar.is_file():
+        import analog_existing_design_validate as existing
+        validated = existing.consume(bdir)
+        if validated is None:
+            return None, ("declared block has no A3 netlist_provenance.json "
+                          "or current typed-design validation")
+        sidecar = bdir / existing.RECEIPT
+        source_kind = "existing_design_read_validation"
+        source_field = "existing_design_validation"
+        content = validated.get(DESIGN_CONTENT_FIELD)
+        artifact_hash = validated["inputs"]["netlist"]["sha256"]
+    else:
+        try:
+            doc = json.loads(sidecar.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return None, f"A3 netlist_provenance.json is unreadable: {exc}"
+        if not isinstance(doc, dict) or doc.get("block") != block:
+            return None, "A3 netlist provenance names a different block"
+        prov = doc.get("_provenance")
+        if not isinstance(prov, dict):
+            return None, "A3 netlist provenance has no _provenance object"
+        content = prov.get(DESIGN_CONTENT_FIELD)
+        if not content_disclosed(content):
+            return None, "A3 netlist provenance has no disclosed design_content"
+        rendered = prov.get("rendered_from")
+        if not isinstance(rendered, dict):
+            return None, "A3 netlist provenance has no rendered_from inputs"
+        topology_claim = rendered.get("topology_json")
+        spec_claim = rendered.get("spec_json")
+        if not isinstance(topology_claim, dict) or not isinstance(spec_claim, dict):
+            return None, "A3 netlist provenance has no topology/spec source claims"
+        for path, claim in ((topology_path, topology_claim),
+                            (spec_path, spec_claim)):
+            if claim.get("path") != str(path.relative_to(project)):
+                return None, f"A3 source claim does not name {path.name}"
+            if not path.is_file() or _sha256(path) != str(
+                    claim.get("sha256") or "").lower():
+                return None, f"A3 source claim is stale for {path.name}"
+        if not netlist_path.is_file():
+            return None, "A3 declared netlist is absent"
+        artifact_hash = str(prov.get("artifact_sha256") or "").lower()
+        if not re.fullmatch(r"[0-9a-f]{64}", artifact_hash) \
+                or _sha256(netlist_path) != artifact_hash:
+            return None, "A3 declared netlist hash is stale or missing"
+    if not content_disclosed(content):
+        return None, "current typed-design validation has no disclosed design_content"
     try:
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
@@ -1109,11 +1119,11 @@ def _declared_a3_subject_binding(project: Path, block: str, bdir: Path,
         return None, "declared analog block list disappeared"
     binding: Dict[str, object] = {
         "producer": "analog_a8_hardmacro_emit",
-        "source": "a3_netlist_provenance",
+        "source": source_kind,
         "block": block,
         DESIGN_CONTENT_FIELD: content,
-        "netlist_provenance": str(sidecar.relative_to(project)),
-        "netlist_provenance_sha256": _sha256(sidecar),
+        source_field: str(sidecar.relative_to(project)),
+        source_field + "_sha256": _sha256(sidecar),
         "a3_netlist": str(netlist_path.relative_to(project)),
         "a3_netlist_sha256": artifact_hash,
         "topology": str(topology_path.relative_to(project)),

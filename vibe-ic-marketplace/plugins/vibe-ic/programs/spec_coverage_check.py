@@ -1632,7 +1632,8 @@ def _worked_example_is_covered_parent_gloss(coverage_tokens: List[str],
 _SEPARATE_WIDTH_ILLUSTRATION_RE = re.compile(
     r"\s*(?:for\s+example|for\s+instance|as\s+an?\s+illustration)\s*,?\s*"
     r"(?:consider\s+)?(?:a|an)\s+(\d+)\s*[- ]\s*bit\s+"
-    r"(?:vector|word|value|operand|example|illustration)\b"
+    r"(?:vector|word|value|operand|example|illustration|"
+    r"(?:priority\s+)?encoder|decoder|adder|multiplier|shifter|comparator)\b"
     r"\s*,?\s*(?:given|with)\s+(?:the\s+)?input\s*",
     re.I)
 
@@ -1664,32 +1665,32 @@ def _worked_example_is_separate_width_illustration(
             != {(p.name, p.direction, p.width) for p in contract.ports}):
         return False
 
-    for match in _WORKED_EXAMPLE_RE.finditer(spec):
-        if [match.group(1).lower(), match.group(3).lower()] != [
-                token.lower() for token in it.coverage_tokens]:
+    import spec_worked_example_extract as worked
+    pairs = [(m, m.group(1), m.group(3)) for m in _WORKED_EXAMPLE_RE.finditer(spec)]
+    pairs += [(m, m.group(1), m.group(2)) for m in worked._WORDED_IO_RE.finditer(spec)]
+    for match, lhs, rhs in pairs:
+        if [lhs.lower(), rhs.lower()] != [token.lower() for token in it.coverage_tokens]:
             continue
         lo, hi = _prose_sentence_scope(spec, match.start(), match.end())
         clause = spec[lo:hi]
         owner = _SEPARATE_WIDTH_ILLUSTRATION_RE.fullmatch(
-            clause[:match.start() - lo])
+            clause[:match.start(1) - lo])
         trailing = spec[match.end():]
         if (owner is None or _prose_is_denied(clause)
                 or re.match(
-                    r"[ \t]*(?:[.!?]+(?=\s|$)|\Z)", trailing) is None):
+                    r"[ \t]*(?:[.!?]+(?=\s|$)|\Z|,\s+because\b)", trailing) is None
+                or re.search(r"\b(?:must|shall|should|has\s+to|needs?\s+to)\b", clause, re.I)):
             continue
         width = int(owner.group(1))
         if width <= 1 or width in {inputs[0].width, outputs[0].width}:
             continue
         values = []
         for token in it.coverage_tokens:
-            clean = token.replace("_", "")
-            try:
-                values.append(int(clean, 16) if clean.lower().startswith("0x")
-                              else int(clean, 2) if clean.lower().startswith("0b")
-                              else int(clean, 10))
-            except ValueError:
+            value = _parse_hdl_int(token)
+            if value is None:
                 values = []
                 break
+            values.append(value)
         if values and all(0 <= value < (1 << width) for value in values):
             return True
     return False

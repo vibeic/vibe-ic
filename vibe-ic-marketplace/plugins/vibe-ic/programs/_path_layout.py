@@ -131,7 +131,15 @@ def select_rtl_input(project: Path, kind: str, entry_step=None, exit_step=None) 
             raise ValueError("original RTL input requires its regular original prompt")
         import task_nature_route as nature
         text = prompt.read_bytes().decode("utf-8")
-        if nature.prompt_embeds_rtl(text) or nature.prompt_embeds_partial_rtl(text):
+        # Quoted HDL is an artefact, not a request to transform that artefact.
+        # Use the same nature decision as the front door; a new module may be
+        # specified with an existing module as context.
+        embedded = nature.prompt_embeds_rtl(text) or nature.prompt_embeds_partial_rtl(text)
+        new_unit = re.search(
+            r"\b(?:create|write|implement|design|build)\s+(?:(?:a|the)\s+)?"
+            r"(?:new\s+module|submodule)\b", nature._prose_view(text), re.I)
+        if embedded and (not new_unit
+                         or nature.route_task(text).get("nature") != "spec_generation"):
             raise ValueError("original RTL generation cannot replace a supplied RTL transform")
         if any(p.suffix.lower() in (".v", ".sv", ".vhd", ".vhdl")
                for p in original_input_sources(project)[1:]):

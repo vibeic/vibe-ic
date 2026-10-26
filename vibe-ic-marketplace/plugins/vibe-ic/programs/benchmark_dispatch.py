@@ -4028,14 +4028,65 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
     disagreement = _timescale_disagreement(rtl_paths, declared)
     if disagreement is not None:
         return finish({"status": "INVALID", "reasons": [disagreement]})
-    # Native scratch must be in the candidate's measured bind mount, not the
-    # host's unrelated /tmp. Longest-prefix mapping also supports unlike roots.
+    # Keep the declared CID even when the caller's project is not mounted.
+    # Self-contained frozen inputs can be copied into an existing writable
+    # bind; source hashes, native commands and verdict rules stay unchanged.
     scratch_root = str(Path(candidate["manifest_path"]).parent) if native else None
+    stage_inputs = False
+    if native:
+        try:
+            for path in [scratch_root, *rtl_paths, test_path]:
+                mapped(path)
+        except ValueError:
+            try:
+                external = any(_challenge_forbidden_hit(Path(p).read_text(errors="replace"))
+                               for p in rtl_paths)
+            except OSError as exc:
+                return finish({"status": "UNAVAILABLE", "reasons": [
+                    f"native input staging unavailable: {exc}"]})
+            if external:
+                return finish({"status": "UNAVAILABLE", "reasons": [
+                    "unmounted native RTL has external dependencies; mount its inputs"]})
+            writable = sorted({str(Path(m["Source"]).resolve()) for m in mounts
+                               if m.get("Type") == "bind" and m.get("RW")
+                               and Path(m["Source"]).is_dir()
+                               and os.access(m["Source"], os.W_OK | os.X_OK)},
+                              key=lambda p: (len(Path(p).parts), p))
+            if not writable:
+                return finish({"status": "UNAVAILABLE", "reasons": [
+                    "native backend has no writable bind for verified input staging"]})
+            scratch_root, stage_inputs = writable[0], True
     try:
         scratch = tempfile.TemporaryDirectory(prefix="vibeic-ai-challenge-", dir=scratch_root)
     except OSError as exc:
         return finish({"status": "UNAVAILABLE", "reasons": [f"challenge scratch unavailable: {exc}"]})
     with scratch as td:
+        if stage_inputs:
+            staged = []
+            receipt["input_staging"] = {"method": "verified_bind_copy", "files": staged}
+            def stage(path):
+                original = Path(path).resolve()
+                target = Path(td) / "inputs" / original.relative_to(original.anchor)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                data = original.read_bytes()
+                target.write_bytes(data)
+                digest = hashlib.sha256(data).hexdigest()
+                if hashlib.sha256(target.read_bytes()).hexdigest() != digest:
+                    raise ValueError("native staged input byte hash differs")
+                staged.append({"source": str(original), "copy": str(target),
+                               "native_path": mapped(target), "sha256": digest})
+                return str(target)
+            try:
+                rtl_paths = [stage(path) for path in rtl_paths]
+                test_path = Path(stage(test_path))
+                if (_sha256_text(_candidate_text([Path(p) for p in rtl_paths]))
+                        != candidate.get("rtl_sha256")
+                        or _sha256_text(test_path.read_text(errors="replace"))
+                        != challenge.get("sha256")):
+                    raise ValueError("frozen input hash changed before native staging")
+            except (OSError, ValueError) as exc:
+                return finish({"status": "UNAVAILABLE", "reasons": [
+                    f"native input staging unavailable: {exc}"]})
         out = Path(td) / "simv"
         prelude = []
         if declared is not None:

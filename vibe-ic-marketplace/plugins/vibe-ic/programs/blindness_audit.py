@@ -383,7 +383,7 @@ def _collaboration_inspection_credit(node) -> bool | None:
     """
     name = node.get("name") or node.get("tool_name")
     if node.get("namespace") != "collaboration":
-        return False if name in {"send_message", "list_agents"} else None
+        return False if name in {"send_message", "list_agents", "wait_agent"} else None
     if node.get("type") != "function_call":
         return False
     try:
@@ -396,6 +396,11 @@ def _collaboration_inspection_credit(node) -> bool | None:
         return set(payload) == {"target", "message"} and all(
             isinstance(payload[key], str) and bool(payload[key].strip())
             for key in ("target", "message"))
+    if name == "wait_agent":
+        # Waiting consumes only a bounded duration, never a file or command.
+        return (payload == {} or (set(payload) == {"timeout_ms"}
+                and type(payload["timeout_ms"]) is int
+                and 10000 <= payload["timeout_ms"] <= 3600000))
     return name == "list_agents" and payload == {}
 
 
@@ -430,7 +435,8 @@ def _harvest_frame_strings(node, depth: int = 0) -> list[str]:
             if (node.get("name") or node.get("tool_name")) == "send_message":
                 out.extend(payload[key] for key in ("target", "message")
                            if isinstance(payload.get(key), str) and payload[key].strip())
-            elif (node.get("name") or node.get("tool_name")) == "list_agents" and payload == {}:
+            elif ((node.get("name") or node.get("tool_name")) in {"list_agents", "wait_agent"}
+                  and _collaboration_inspection_credit(node)):
                 out.append(node["arguments"])  # the actual decoded empty payload
             return out
         return _harvest_frame_strings(payload, depth + 1)

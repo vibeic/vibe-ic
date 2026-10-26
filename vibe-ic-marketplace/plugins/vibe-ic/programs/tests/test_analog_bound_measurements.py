@@ -98,6 +98,50 @@ def test_native_endpoint_binding_reads_actual_last_sample_without_extrapolation(
     assert ".save v(out)" in deck and ".save v(other)" in deck
 
 
+def test_transient_analysis_preserves_physical_stimulus_and_native_time_average():
+    template = ("* original poweron\nv_supply vdd 0 pwl(0 0 100n 1.2)\n"
+                ".options trtol=1\n.control\ntran 1n 28m\n.endc\n.end\n")
+    bindings = {"analysis": {"kind": "TRAN", "step_s": 5e-9, "stop_s": 9.1e-6},
+        "measurements": {"idd": {"analysis": "TRAN", "expression": "-i(v_supply)",
+            "statistic": "AVG", "from_s": 7e-6, "to_s": 9e-6}},
+        "execution": {"threads": 1, "wait_policy": "PASSIVE",
+            "numerical_options": {"reltol": 1e-6, "vntol": 1e-8, "abstol": 1e-15}}}
+    deck = measurements.emit_deck(template, bindings)
+    assert "v_supply vdd 0 pwl(0 0 100n 1.2)" in deck and ".options trtol=1" in deck
+    assert f"tran {5e-9:.17g} {9.1e-6:.17g} 0" in deck and "28m" not in deck
+    assert "meas TRAN idd AVG bound_idd" in deck and ".save i(v_supply)" in deck
+    assert "set num_threads=1" in deck and "vntol=" in deck
+
+
+@pytest.mark.parametrize("analysis", [{"step_s": 0}, {"stop_s": -1},
+    {"step_s": float("nan")}, {"stop_s": float("inf")}, {"start_s": -1},
+    {"start_s": 10e-6}, {"start_s": 8e-6}])
+def test_invalid_transient_analysis_cannot_launch_native(analysis):
+    binding = {"analysis": {"kind": "TRAN", "step_s": 5e-9, "stop_s": 9.1e-6, **analysis},
+        "measurements": {"idd": {"analysis": "TRAN", "expression": "-i(v_supply)",
+            "statistic": "AVG", "from_s": 7e-6, "to_s": 9e-6}}}
+    with pytest.raises(ValueError):
+        measurements.emit_deck(".end\n", binding)
+
+
+def test_literal_transient_statistic_still_cannot_fake_a_dut_measurement(tmp_path):
+    net = tmp_path / "unit.sp"
+    net.write_text(".subckt unit a b\nr1 a b 1k\n.ends unit\n")
+    template = tmp_path / "tb.sp"
+    template.write_text(f'.include "{net}"\nxdut in out unit\nv1 in 0 1\n.end\n')
+    bindings = {"analysis": {"kind": "TRAN", "step_s": 1e-9, "stop_s": 1e-6},
+        "measurements": {"pretend": {"analysis": "TRAN", "expression": "1.2",
+            "statistic": "AVG", "from_s": 0, "to_s": 1e-6}}}
+    calls = []
+    def run(*args, **kwargs):
+        calls.append((args, kwargs))
+        return {"returncode": 0, "stdout": "MEAS pretend=1.2\n"}
+    result = measurements.run_measurements(tmp_path, net, template, bindings,
+        tmp_path / "result", run)
+    assert result["status"] == "NOT_MEASURED"
+    assert "pretend" in result["detail"] and calls == []
+
+
 def test_execution_choice_survives_replaced_controls_and_reaches_native_process(tmp_path):
     net = tmp_path / "unit.sp"
     net.write_text(".subckt unit a b\nr1 a b 1k\n.ends unit\n")
@@ -122,7 +166,8 @@ def test_execution_choice_survives_replaced_controls_and_reaches_native_process(
 
 @pytest.mark.parametrize("execution", [{"threads": 0}, {"threads": True},
     {"threads": 1.5}, {"wait_policy": "PASSIVE;other"}, {"method": "gear;other"},
-    {"ngspice_bin": "relative/ngspice"}, []])
+    {"ngspice_bin": "relative/ngspice"}, {"numerical_options": []},
+    {"numerical_options": {"reltol": 0}}, {"numerical_options": {"unknown": 1e-6}}, []])
 def test_invalid_execution_settings_refuse_before_native_launch(execution):
     with pytest.raises(ValueError):
         measurements.emit_deck(".end\n", {"analysis": {"kind": "OP"}, "measurements": {

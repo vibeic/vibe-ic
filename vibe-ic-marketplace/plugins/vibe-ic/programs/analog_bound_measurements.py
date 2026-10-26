@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run explicit source-bound OP/DC/AC measurements on a delivered DUT.
+"""Run explicit source-bound OP/DC/AC/TRAN measurements on a delivered DUT.
 
 The supplied testbench owns the stimulus and conditions. This producer only
 replaces its analysis controls with the declared analysis/measurements. Its
@@ -70,6 +70,34 @@ def contextual_template(text: str, directory: Path) -> str:
     return pattern.sub(replace, text)
 
 
+def measurement_commands(name: str, binding: dict, start_s: float, stop_s: float):
+    """Bind TRAN locally while retaining the current shared generator for OP/DC/AC."""
+    if not isinstance(binding, dict):
+        raise ValueError("measurement name/binding is invalid")
+    if str(binding.get("analysis", "")).upper() != "TRAN":
+        return generator.measurement_commands(name, binding)
+    if not re.fullmatch(r"[A-Za-z_]\w*", name):
+        raise ValueError("measurement name/binding is invalid")
+    expression = binding.get("expression")
+    if not isinstance(expression, str) or not expression.strip():
+        raise ValueError("explicit TRAN analysis and native expression required")
+    if any(char in expression for char in "\r\n;"):
+        raise ValueError("measurement expression must be a single native expression")
+    statistic = str(binding.get("statistic", "")).upper()
+    first, last = binding.get("from_s"), binding.get("to_s")
+    if statistic not in ("AVG", "RMS", "MAX", "MIN", "INTEG"):
+        raise ValueError("explicit native TRAN statistic required")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float))
+           or not math.isfinite(value) for value in (first, last)) or not first < last:
+        raise ValueError("finite nonempty TRAN measurement window required")
+    if first < start_s or last > stop_s:
+        raise ValueError("TRAN measurement window exceeds the retained analysis interval")
+    vector = "bound_" + name
+    return ([f"let {vector} = {expression}",
+             f"meas TRAN {name} {statistic} {vector} FROM={first:.17g} TO={last:.17g}"],
+            "TRAN")
+
+
 def emit_deck(template: str, bindings: dict, capture_path: Path | None = None) -> str:
     analysis = bindings.get("analysis")
     if not isinstance(analysis, dict):
@@ -82,6 +110,14 @@ def emit_deck(template: str, bindings: dict, capture_path: Path | None = None) -
     kind = str(analysis.get("kind", "")).upper()
     if kind == "OP":
         command = "op"
+    elif kind == "TRAN":
+        step, stop, start = (analysis.get("step_s"), analysis.get("stop_s"),
+                             analysis.get("start_s", 0.0))
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) for value in (step, stop, start)) or not (
+                   step > 0 and 0 <= start < stop):
+            raise ValueError("positive finite TRAN step/stop and retained start interval required")
+        command = f"tran {step:.17g} {stop:.17g} {start:.17g}"
     elif kind in ("DC", "AC"):
         source = analysis.get("source")
         values = [analysis.get(key) for key in ("start", "stop", "step")]
@@ -99,7 +135,7 @@ def emit_deck(template: str, bindings: dict, capture_path: Path | None = None) -
                 raise ValueError("AC points and positive frequency bounds required")
             command = f"ac dec {int(values[0])} {values[1]:.17g} {values[2]:.17g}"
     else:
-        raise ValueError("only explicit OP/DC/AC analysis is supported")
+        raise ValueError("only explicit OP/DC/AC/TRAN analysis is supported")
     measurements = bindings.get("measurements")
     if not isinstance(measurements, dict) or not measurements:
         raise ValueError("nonempty explicit measurement bindings required")
@@ -120,7 +156,9 @@ def emit_deck(template: str, bindings: dict, capture_path: Path | None = None) -
     # caller's scheduling choice in the actual derived native control block.
     commands = ([f"set num_threads={threads}"] if threads is not None else []) + [command]
     for name, binding in measurements.items():
-        emitted, measure_kind = generator.measurement_commands(name, binding)
+        emitted, measure_kind = (measurement_commands(name, binding, start, stop)
+                                 if kind == "TRAN" else
+                                 generator.measurement_commands(name, binding))
         if measure_kind != kind:
             raise ValueError("measurement analysis differs from declared analysis")
         commands += emitted
@@ -166,6 +204,15 @@ def emit_deck(template: str, bindings: dict, capture_path: Path | None = None) -
         body = re.sub(r"(?im)^\s*\.options?\b[^\n]*", lambda match:
             re.sub(r"(?i)\bmethod\s*=\s*\S+", "", match[0]), body)
         body += "\n.options method=" + execution["method"] + "\n"
+    numerical = execution.get("numerical_options", {})
+    if not isinstance(numerical, dict) or set(numerical) - {"reltol", "vntol", "abstol"}:
+        raise ValueError("numerical_options accepts reltol/vntol/abstol only")
+    if any(isinstance(value, bool) or not isinstance(value, (int, float))
+           or not math.isfinite(value) or value <= 0 for value in numerical.values()):
+        raise ValueError("finite positive numerical accuracy settings required")
+    if numerical:
+        body += "\n.options " + " ".join(
+            f"{key}={value:.17g}" for key, value in numerical.items()) + "\n"
     return title + "\n" + body.rstrip() + "\n.control\n" + "\n".join(commands) + "\n.endc\n.end\n"
 
 
@@ -178,6 +225,18 @@ def run_measurements(project: Path, netlist: Path, template: Path, bindings: dic
     deck.write_text(emit_deck(text, bindings, capture_path))
     status, detail, required = sim._validate_deck(netlist, deck,
         {"required_measurements": list(bindings.get("measurements", {}))})
+    # A native .meas name alone does not establish that its vector is native:
+    # e.g. AVG of ``let bound_x=1.2`` is still a fabricated DUT value. Reuse
+    # the existing OP expression classifier for every explicit analysis kind.
+    expression_controls = []
+    for name, binding in bindings.get("measurements", {}).items():
+        controls, _ = generator.measurement_commands(name,
+            {"analysis": "OP", "expression": binding.get("expression")})
+        expression_controls.extend(controls)
+    bound_names = set(sim._measurement_names("\n".join(expression_controls)))
+    unbound = sorted(set(required) - bound_names)
+    if status == "PASS" and unbound:
+        status, detail = "NOT_MEASURED", "measurements lack native expressions: " + ", ".join(unbound)
     report = {"status": status, "detail": detail, "scope": "explicit native measurement bindings only",
               "native_inputs": {role: {"path": str(path.resolve()), "sha256": sha(path)} for role, path in
                                 (("netlist", netlist), ("testbench", template), ("deck", deck))},

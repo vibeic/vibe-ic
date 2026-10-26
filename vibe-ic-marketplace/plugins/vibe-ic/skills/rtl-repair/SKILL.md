@@ -185,3 +185,18 @@ handoff lines, tool invocations.
 **Your task is not complete until the audit returns PASS.** Missing
 elements are the single largest source of skill-execution non-determinism
 across different agents.
+
+## Completion flags and source waveform timing
+
+Before repairing a receive or packet FSM, separate three events: accepting the
+last payload item, updating the payload registers, and exposing the completion
+flag. Derive their relative edges and settled intervals from the current public
+specification; the payload length alone does not determine completion latency.
+
+Keep source rows on both sides of each relevant edge in the regression test.
+Check settled flag/data values as well as edge-triggered state changes, so an
+active-region/nonblocking-assignment race cannot explain away a genuine early
+completion. Preserve the original failing challenge and check consecutive
+transactions, payload retention during completion, and the stated reset mode.
+If the source supplies only simultaneous input/clock transitions without a
+sampling rule, retain that ambiguity instead of inventing a universal delay.

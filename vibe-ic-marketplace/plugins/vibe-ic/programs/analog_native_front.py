@@ -296,6 +296,20 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
             return finish('NOT_MEASURED', 'A05_NETLIST_ABSENT')
         if _stale(project, _read(provenance)):
             return finish('NOT_MEASURED', 'A05_NETLIST_INPUT_CHANGED: retained design requires reconciliation')
+        if not provenance.is_file() and (bdir / 'topology.json').is_file():
+            # A sized, delivered circuit can predate this runner's emission
+            # sidecar. Validate its actual cards; do not manufacture history
+            # or regenerate bytes consumed by an ongoing native analysis.
+            from analog_existing_design_validate import RECEIPT
+            validation = bdir / RECEIPT
+            args = [project, '--block', name, '--pdk', options.get('pdk', '')]
+            if options.get('container'):
+                args.extend(['--container', options['container']])
+            failure = failed(call('analog_existing_design_validate.py', args,
+                                  artefacts=[validation]),
+                             'A05_EXISTING_DESIGN_VALIDATION')
+            if failure:
+                return failure
         failure = check('analog_a3_netlist_gen_check.py')
         if failure:
             return failure

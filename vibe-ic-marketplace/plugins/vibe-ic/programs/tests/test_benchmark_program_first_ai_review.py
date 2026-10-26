@@ -3017,11 +3017,12 @@ def test_live_native_challenge_ignores_foreign_real_host_path(tmp_path, monkeypa
     task = bd._make_ai_review_task(task["id"], project, got, ROUTING, 0, run, "PROGRAM")
     _write_review(task, _valid_review(task))
     seen = []
-    real_run = bd.subprocess.run
-    def recording(argv, *args, **kwargs):
-        seen.append(list(argv))
-        return real_run(argv, *args, **kwargs)
-    monkeypatch.setattr(bd.subprocess, "run", recording)
+    real_run = bd._challenge_exec.run_in_container_supervised
+    def recording(*args, **kwargs):
+        cp = real_run(*args, **kwargs)
+        seen.append(list(cp.args))
+        return cp
+    monkeypatch.setattr(bd._challenge_exec, "run_in_container_supervised", recording)
     verdict = bd._validate_ai_review(task)
     # Pre-fix native declaration is ignored and this actual argv names host.
     compile_argv = next(a for a in seen if "-g2012" in a or any("-g2012" in v for v in a))
@@ -3058,16 +3059,16 @@ def test_live_native_identity_drift_invalidates_completed_raw_proof(tmp_path, mo
     task = bd._make_ai_review_task(task["id"], project, got, ROUTING, 0, run, "PROGRAM")
     _write_review(task, _valid_review(task))
     drift = [False]
-    real_id, real_run = _ce.container_id, bd.subprocess.run
+    real_id = _ce.container_id
+    real_run = bd._challenge_exec.run_in_container_supervised
     monkeypatch.setattr(_ce, "container_id", lambda name: "bc" * 32 if drift[0] else real_id(name))
-    def recording(argv, *args, **kwargs):
-        cp = real_run(argv, *args, **kwargs)
-        command = argv[-1] if argv[:2] == ["docker", "exec"] else ""
+    def recording(container, command, **kwargs):
+        cp = real_run(container, command, **kwargs)
         if (stage == "compile" and "-g2012" in command) or (
                 stage == "runtime" and "/simv" in command and "-g2012" not in command):
             drift[0] = True  # Inject readback drift, never recreate the container.
         return cp
-    monkeypatch.setattr(bd.subprocess, "run", recording)
+    monkeypatch.setattr(bd._challenge_exec, "run_in_container_supervised", recording)
     verdict = bd._validate_ai_review(task)
     assert verdict["status"] == bd._NOT_MEASURED, verdict
     proof = verdict["challenge_result"]

@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1498
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1498)
+- **Total programs (excluding helpers / shims):** 1502
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1502)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1489 |
+| `any` | 1493 |
 
 ## Alphabetical listing
 
@@ -76,7 +76,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_block_coverage_check` | any | — | deterministic gate for analog block design coverage |
 | `analog_block_list_emit_check` | any | — | master block-list schema gate. |
 | `analog_block_type_classify` | any | — | deterministic name→type taxonomy lookup. |
-| `analog_bound_measurements` | any | — | Run explicit source-bound OP/DC/AC measurements on a delivered DUT. |
+| `analog_bound_measurements` | any | — | Run explicit source-bound OP/DC/AC/TRAN measurements on a delivered DUT. |
 | `analog_content_detected_must_emit_l5_check` | any | Wave 47 | Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when |
 | `analog_converter_density_grade` | any | — | R-0915-45: EVALUATE the density pass condition the analog harness already DECLARES, on the run's own bitstream. |
 | `analog_corner_admission` | any | — | Fail-closed aggregate-RAM admission for independently launched PVT corners. |
@@ -85,6 +85,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_corner_sweep_check` | any | — | deterministic gate for PVT corner coverage |
 | `analog_deck_vector_retention` | any | — | retain the vectors a deck MEASURES, and only those. |
 | `analog_digital_interface_check` | any | — | deterministic gate for digital-analog interface validation |
+| `analog_existing_design_validate` | any | — | Read-validate an existing analog DUT against its current typed design. |
 | `analog_flow_compliance_check` | any | — | analog track compliance gate (A1-A9) |
 | `analog_hardmacro_check` | any | — | deterministic gate for analog hardmacro deliverables |
 | `analog_hardmacro_gds_emit` | any | — | the A8 GDS PRODUCER that was missing. |
@@ -98,7 +99,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_hw_tb_de10lite_budget_check` | any | — | DE10-Lite board-budget gate. |
 | `analog_incremental_capture` | any | — | Native held-input incremental conversions and coherent SNDR/ENOB. |
 | `analog_incremental_decimator` | any | — | R-0915-70: the matched decimator for an INCREMENTAL converter, DERIVED from the loop's own recurrence. |
+| `analog_incremental_pvt` | any | — | Prepare, run, or independently collect actual incremental ADC PVT series. |
 | `analog_incremental_resolution` | any | — | what resolution an INCREMENTAL loop can actually reach, MEASURED on its own recurrence. |
+| `analog_incremental_statistics` | any | — | Prepare and replay foundry-mismatch incremental ADC chip cohorts. |
 | `analog_interface_classify` | any | — | structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141). |
 | `analog_lef_gds_outline_check` | any | — | Codifies the EXTRACT-NEW spot-check in |
 | `analog_liberty_nonzero_delay_check` | any | — | deterministic Liberty non-degeneracy gate. |
@@ -109,6 +112,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_mc_yield_run` | any | — | REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1). |
 | `analog_meas_from_spec_gen` | any | — | deterministic `.meas` statement generator from an analog block spec.json. |
 | `analog_mos_geometry` | any | — | Source-bound calibrated MOS geometry and declared wrapper finger counts. |
+| `analog_native_em` | any | — | Grade native OP/TRAN interconnect currents against source-provided PDK limits. |
 | `analog_native_erc` | any | — | Native well/tap electrical connectivity checks using the IHP LVS extractor. |
 | `analog_native_flow` | any | — | Run the A01-A19 analog track with existing native producers. |
 | `analog_native_front` | any | — | A01--A05 Default execution using the existing analog producers and consumers. |
@@ -1570,7 +1574,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1489 programs)
+### `any` (1493 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1622,7 +1626,7 @@ _(no programs in this group)_
 - `analog_block_coverage_check` — deterministic gate for analog block design coverage
 - `analog_block_list_emit_check` — master block-list schema gate.
 - `analog_block_type_classify` — deterministic name→type taxonomy lookup.
-- `analog_bound_measurements` — Run explicit source-bound OP/DC/AC measurements on a delivered DUT.
+- `analog_bound_measurements` — Run explicit source-bound OP/DC/AC/TRAN measurements on a delivered DUT.
 - `analog_content_detected_must_emit_l5_check` — Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when  _[Wave 47]_
 - `analog_converter_density_grade` — R-0915-45: EVALUATE the density pass condition the analog harness already DECLARES, on the run's own bitstream.
 - `analog_corner_admission` — Fail-closed aggregate-RAM admission for independently launched PVT corners.
@@ -1631,6 +1635,7 @@ _(no programs in this group)_
 - `analog_corner_sweep_check` — deterministic gate for PVT corner coverage
 - `analog_deck_vector_retention` — retain the vectors a deck MEASURES, and only those.
 - `analog_digital_interface_check` — deterministic gate for digital-analog interface validation
+- `analog_existing_design_validate` — Read-validate an existing analog DUT against its current typed design.
 - `analog_flow_compliance_check` — analog track compliance gate (A1-A9)
 - `analog_hardmacro_check` — deterministic gate for analog hardmacro deliverables
 - `analog_hardmacro_gds_emit` — the A8 GDS PRODUCER that was missing.
@@ -1644,7 +1649,9 @@ _(no programs in this group)_
 - `analog_hw_tb_de10lite_budget_check` — DE10-Lite board-budget gate.
 - `analog_incremental_capture` — Native held-input incremental conversions and coherent SNDR/ENOB.
 - `analog_incremental_decimator` — R-0915-70: the matched decimator for an INCREMENTAL converter, DERIVED from the loop's own recurrence.
+- `analog_incremental_pvt` — Prepare, run, or independently collect actual incremental ADC PVT series.
 - `analog_incremental_resolution` — what resolution an INCREMENTAL loop can actually reach, MEASURED on its own recurrence.
+- `analog_incremental_statistics` — Prepare and replay foundry-mismatch incremental ADC chip cohorts.
 - `analog_interface_classify` — structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141).
 - `analog_lef_gds_outline_check` — Codifies the EXTRACT-NEW spot-check in
 - `analog_liberty_nonzero_delay_check` — deterministic Liberty non-degeneracy gate.
@@ -1655,6 +1662,7 @@ _(no programs in this group)_
 - `analog_mc_yield_run` — REAL Monte-Carlo yield execution for the analog track (flow-completeness review P1-1).
 - `analog_meas_from_spec_gen` — deterministic `.meas` statement generator from an analog block spec.json.
 - `analog_mos_geometry` — Source-bound calibrated MOS geometry and declared wrapper finger counts.
+- `analog_native_em` — Grade native OP/TRAN interconnect currents against source-provided PDK limits.
 - `analog_native_erc` — Native well/tap electrical connectivity checks using the IHP LVS extractor.
 - `analog_native_flow` — Run the A01-A19 analog track with existing native producers.
 - `analog_native_front` — A01--A05 Default execution using the existing analog producers and consumers.
