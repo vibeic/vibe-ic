@@ -206,7 +206,7 @@ function ensureDeps() {
       if (!lstatSync(DEPS_SEAL).isFile()) throw new Error("invalid dependency integrity seal");
       const sealed = JSON.parse(readFileSync(DEPS_SEAL, "utf8"));
       for (const [path, value] of Object.entries(before)) {
-        if (path in sealed && sealed[path] !== value) throw new Error(`dependency integrity mismatch: ${path}`);
+        if (!Object.hasOwn(sealed, path) || sealed[path] !== value) throw new Error(`dependency integrity mismatch: ${path}`);
       }
       if (missingPackages(PKG_ROOT)?.length === 0 && JSON.stringify(before) !== JSON.stringify(sealed)) {
         throw new Error("dependency integrity mismatch");
