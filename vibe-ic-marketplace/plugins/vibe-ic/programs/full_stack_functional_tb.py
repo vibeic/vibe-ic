@@ -718,6 +718,165 @@ def arithmetic_plan_for_top(project: Path, case: dict, ic_class: str,
     return plan
 
 
+def _refresh_stale_observation_binding(project: Path, top: dict, models: list,
+                                       ic_class: str) -> Dict[str, Any]:
+    """Re-key one stale carrier-local wrapper locator to current provenance.
+
+    The observation schedule is author input.  The binding is generated
+    provenance: on a retained carrier it can still name the prior carrier's
+    absolute path even though the ordinary pad producer has written the same
+    canonical project-relative wrapper in this carrier.  Refresh only that
+    locator, after the normal producer and model resolver have proved the whole
+    current source population.  The arithmetic consumer below still rechecks
+    exact equality and owns every functional verdict.
+    """
+    result: Dict[str, Any] = {"state": "NOT_APPLICABLE",
+                              "provenance": "generated"}
+    if not top.get("pad_ring"):
+        return result
+
+    import arith_oracle_tb_gen as arith
+    spec, _why = arith.extract_serial_arith_spec(project, ic_class)
+    if spec is None:
+        return result
+
+    project_root = project.resolve()
+    declaration_path = project / "plugin_output" / "declaration.json"
+    pad_record_path = project / CHIP_TOP_RECORD_REL
+
+    def refuse(reason: str) -> Dict[str, Any]:
+        return {"state": "REFUSED", "provenance": "generated",
+                "reason": reason}
+
+    if (declaration_path.is_symlink()
+            or not declaration_path.resolve().is_relative_to(project_root)):
+        return refuse("observation declaration is a symlink or outside the project")
+    try:
+        original = declaration_path.read_bytes()
+        declaration = json.loads(original)
+        pad_record = _read_json(pad_record_path)
+    except (OSError, ValueError, TypeError) as exc:
+        return refuse(f"observation declaration is unavailable: {type(exc).__name__}: {exc}")
+    if not isinstance(declaration, dict):
+        return refuse("observation declaration is not a JSON object")
+    if not pad_record or pad_record.get("verdict") != "WROTE":
+        return refuse("canonical pad producer record is absent or not WROTE")
+    if (pad_record.get("chip_top_module") != top.get("module")
+            or pad_record.get("chip_top_verilog") != top.get("source")):
+        return refuse("selected full-stack top differs from the canonical pad producer record")
+
+    wrapper_rel = Path(str(pad_record["chip_top_verilog"]))
+    if wrapper_rel.is_absolute() or ".." in wrapper_rel.parts:
+        return refuse("canonical pad producer wrapper locator is not project-relative")
+    wrapper = (project / wrapper_rel).resolve()
+    if (not wrapper.is_file() or not wrapper.is_relative_to(project_root)
+            or sha256_file(wrapper) != top.get("source_sha256")):
+        return refuse("canonical pad producer wrapper is absent, uncontained, or changed")
+
+    stimuli = declaration.get("verification_stimuli")
+    choices = stimuli.get("arithmetic_observation") if isinstance(stimuli, dict) else None
+    choice = choices.get(top["module"]) if isinstance(choices, dict) else None
+    if not isinstance(choice, dict):
+        return refuse("selected top has no mapping-shaped author observation choice")
+    binding = choice.get("binding")
+    if not isinstance(binding, dict) or not binding:
+        return refuse("author observation binding is missing or not a non-empty mapping")
+    # Reuse the ordinary consumer for clock/output/schedule and binding-shape
+    # validation. Current wrapper/model equality is proved below because the
+    # declared map intentionally still contains the old carrier locator here.
+    _observation, why = arith.arithmetic_observation(
+        project, spec, top=top["module"], sources=binding)
+    if _observation is None:
+        return refuse(why)
+
+    normalized: Dict[str, Tuple[str, str]] = {}
+    for raw, digest in binding.items():
+        try:
+            resolved = str((project / raw).resolve())
+        except (TypeError, ValueError):
+            return refuse("observation binding contains an unsupported path")
+        if resolved in normalized:
+            return refuse("observation binding contains duplicate locators for one source")
+        normalized[resolved] = (raw, str(digest))
+
+    model_actual: Dict[str, Tuple[str, str]] = {}
+    for model in models:
+        if not isinstance(model, dict):
+            return refuse("selected model record is malformed")
+        source, staged_rel, digest = (model.get("source"), model.get("path"),
+                                      model.get("sha256"))
+        if not isinstance(source, str) or not isinstance(staged_rel, str) \
+                or not re.fullmatch(r"[0-9a-f]{64}", str(digest)):
+            return refuse("selected model record lacks source, staged path, or digest")
+        staged = (project / staged_rel).resolve()
+        if (not staged.is_file() or not staged.is_relative_to(project_root)
+                or sha256_file(staged) != digest):
+            return refuse("selected staged model is absent, uncontained, or changed")
+        resolved = str((project / source).resolve())
+        if resolved in model_actual:
+            return refuse("selected model population contains duplicate source locators")
+        model_actual[resolved] = (source, str(digest))
+    if not model_actual:
+        return refuse("selected wrapper has no resolved model population")
+
+    for resolved, (_source, digest) in model_actual.items():
+        if resolved not in normalized or normalized[resolved][1] != digest:
+            return refuse("declared model binding differs from the selected current model bytes")
+    extras = [(resolved, raw, digest)
+              for resolved, (raw, digest) in normalized.items()
+              if resolved not in model_actual]
+    if len(extras) != 1:
+        return refuse("wrapper binding is missing, duplicated, or mixed with extra sources")
+
+    resolved_wrapper, stale_raw, stale_digest = extras[0]
+    if resolved_wrapper == str(wrapper) and stale_digest == sha256_file(wrapper):
+        return {"state": "CURRENT", "provenance": "generated",
+                "wrapper": str(wrapper_rel)}
+    stale_path = Path(stale_raw)
+    suffix = wrapper_rel.parts
+    if (not stale_path.is_absolute() or len(stale_path.parts) < len(suffix)
+            or stale_path.parts[-len(suffix):] != suffix
+            or stale_digest != sha256_file(wrapper)):
+        return refuse("sole extra binding is not the same-byte canonical wrapper at a stale carrier locator")
+
+    replacement = dict(binding)
+    replacement.pop(stale_raw)
+    replacement[str(wrapper_rel)] = sha256_file(wrapper)
+    expected = {str(wrapper): sha256_file(wrapper),
+                **{resolved: digest for resolved, (_source, digest) in model_actual.items()}}
+    actual = {str((project / raw).resolve()): str(digest)
+              for raw, digest in replacement.items()}
+    if actual != expected:
+        return refuse("replacement binding does not equal the current wrapper/model population")
+
+    updated = json.loads(json.dumps(declaration))
+    updated["verification_stimuli"]["arithmetic_observation"][top["module"]][
+        "binding"] = replacement
+    unchanged = json.loads(json.dumps(updated))
+    unchanged["verification_stimuli"]["arithmetic_observation"][top["module"]][
+        "binding"] = binding
+    if unchanged != declaration:
+        return refuse("provenance refresh would change an author or unrelated declaration value")
+    if declaration_path.read_bytes() != original:
+        return refuse("declaration changed while provenance refresh was being prepared")
+
+    history = (project / "plugin_output" / "declaration_history" /
+               str(time.time_ns()) / "declaration.json")
+    try:
+        history.parent.mkdir(parents=True, exist_ok=False)
+        history.write_bytes(original)
+        _atomic_write_text(
+            declaration_path,
+            json.dumps(updated, indent=2, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        return refuse(f"could not publish atomic provenance refresh: {exc}")
+    return {"state": "UPDATED", "provenance": "generated",
+            "wrapper": str(wrapper_rel),
+            "previous_wrapper": stale_raw,
+            "previous_declaration": str(history.relative_to(project)),
+            "binding": replacement}
+
+
 def arithmetic_case_evidence(project: Path, case: dict, ic_class: str, top: dict,
                              models: list, entry: dict, sources: list) -> Tuple[Optional[dict], str]:
     """Actual nonzero scenario population, current plan and consumed sources.
@@ -992,6 +1151,12 @@ def generate(project: Path, container: Optional[str] = None,
 
     ic_class = _tbg._detect_ic_class(project)
     rec["ic_class"] = ic_class
+    observation_refresh = _refresh_stale_observation_binding(
+        project, top, rec["models"], ic_class)
+    if observation_refresh["state"] != "NOT_APPLICABLE":
+        # This is producer provenance, not a stage verdict.  The scenario plan
+        # below rereads the declaration and remains the exact-map authority.
+        rec["observation_provenance_refresh"] = observation_refresh
     report: Dict[str, Any] = {}
     step4: Dict[str, Any] = {}
     try:
