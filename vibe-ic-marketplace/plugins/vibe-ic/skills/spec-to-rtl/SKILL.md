@@ -232,24 +232,29 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    a genuine floor. The structural extraction + routing is deterministic;
    deciding whether a prose sentence is a distinct *testable* requirement (so
    you can author its stimulus) is your LLM judgment.
-7. **Tell the orchestrator you're done**. The caller must return through the
-   sole public Flow109 entry, preserving the original route, validated manifest
-   and selected current stable-ID window. For a bounded RTL-authoring re-entry:
+7. **Tell the orchestrator you're done, then stop**. D09/17 is the current
+   RTL-authoring responsibility and maps to retained native helper Step 1, but
+   that responsibility map is not execution authority. Position 17 is display
+   metadata only. **Current disposition: REFUSE public continuation for this
+   handoff as `FLOW109_PRODUCER_UNIMPLEMENTED`.** Do not publish or run a
+   `--entry-step D09 --exit-step D09` command until a separately owned change
+   wires D09 as an executable public row and that wiring is independently
+   accepted.
 
-   ```bash
-   python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py <project> \
-     --route <ic|ip> --flow 109 --flow109-manifest <manifest.json> \
-     --entry-step D09 --exit-step D09 --execution-mode default
-   ```
+   The exact dependency is source-owned D09 row dispatch whose public resolver
+   accepts the selected profile and whose registered owner consumes this AI
+   handoff without bypassing its existing producer/consumer checks. This skill
+   does not own that registry/runtime change.
 
-   D09/17 is the current RTL-authoring responsibility; position 17 is
-   display metadata only. The public runner resolves D09 to the registered
-   native owner, which detects the RTL at the expected path and applies only the
-   selected row's existing producer/consumer contract. Never pass D09 to
-   `design_one_shot_runner.py`, and never infer that unselected validation,
-   synthesis, testbench or audit rows ran. If the original request selected
-   later work, re-enter that exact current stable-ID window through the same
-   public entry and preserve each row's actual PASS/FAIL/NOT_MEASURED state.
+   Once that dependency lands, the only permitted continuation contract is the
+   sole public `vibe_ic_one_shot_runner.py` entry with the original project and
+   route, exact validated `--flow109-manifest`, `--flow 109`, the original
+   selected current stable-ID `--entry-step`/`--exit-step` window, and
+   `--execution-mode default`. The public resolver must accept the window before
+   native work. Until then preserve the authored RTL and handoff as unconsumed,
+   keep later rows NOT_MEASURED/not executed, and report the refusal. Never call
+   `design_one_shot_runner.py` as a public substitute and never pass a D-id to
+   that native helper.
 
 ## What this skill IS NOT
 
