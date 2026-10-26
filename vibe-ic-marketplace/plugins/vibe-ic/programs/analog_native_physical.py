@@ -675,6 +675,7 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
     import analog_a7_post_layout_emit as a7
     import analog_real_corner_sweep as ars
     import ams_analysis_select
+    import analog_meas_from_spec_gen as meas
     import _designs_root as dr
     from corner_yield_vs_spec_check import _spec_limits, _violates
 
@@ -714,12 +715,16 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
     limits = _spec_limits(source)
     _analyses, mapping = ams_analysis_select.select(source)
     normalize = lambda key: ars.normalize_spec_label(key) or str(key).casefold()
-    required_outputs = {normalize(row["key"]) for row in mapping}
-    if required_outputs:
-        # Supply/load conditions are source inputs, not measured outputs.
-        # Keep the existing all-limit behavior for unclassified custom specs.
-        limits = {normalize(key): bound for key, bound in limits.items()
-                  if normalize(key) in required_outputs}
+    typed_rc, typed_summary, _typed_deck = meas.run(bdir / "spec.json")
+    typed = typed_summary.get("emitted", []) if typed_rc == 0 else []
+    required_outputs = ({ars.normalize_spec_label(row["key"]) for row in mapping
+                         if ars.normalize_spec_label(row["key"]) is not None}
+                        | {normalize(row["key"]) for row in typed})
+    # The selector owns ordinary performance outputs; only the validated public
+    # generator result owns custom outputs. Refused or untyped source rows are
+    # operating conditions, not post-layout measurements.
+    limits = {normalize(key): bound for key, bound in limits.items()
+              if normalize(key) in required_outputs}
     if not limits:
         return _result("NOT_MEASURED", "post-layout acceptance has no declared numeric spec bounds")
     for corner in corners:

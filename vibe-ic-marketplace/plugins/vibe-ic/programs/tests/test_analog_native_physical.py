@@ -429,7 +429,8 @@ def test_a14_keeps_unclassified_custom_output_limit(project, monkeypatch):
     extraction = physical._extract(project, "unit", "container", "image", "process", {})
     bdir, work = physical._paths(project, "unit")
     put(work / "A13.json", extraction)
-    put(bdir / "spec.json", {"specs": [{"name": "custom_level", "min": 1.1, "max": 1.3}]})
+    put(bdir / "spec.json", {"specs": [{"name": "custom_level", "min": 1.1, "max": 1.3,
+        "unit": "V", "measurement": {"analysis": "OP", "expression": "v(b)"}}]})
     monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
     monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
     monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: (True, {"vout": 1.2}, "native measured outputs", {}))
@@ -437,6 +438,36 @@ def test_a14_keeps_unclassified_custom_output_limit(project, monkeypatch):
         "_pre_result": _pre_state(project)})
     assert result["status"] == "NOT_MEASURED"
     assert result["metrics"]["corners"][0]["missing"] == ["custom_level"]
+
+
+@pytest.mark.parametrize("source_specs", [
+    [{"name": "Vin", "min": 1.6, "max": 2.0},
+     {"name": "Iout", "min": 0.1, "max": 1.0}],
+    [{"name": "temperature_c", "min": -40, "max": 125}],
+    [{"name": "load_capacitance", "min": 1e-12, "max": 1e-9}],
+    [{"name": "input_slew", "min": 1e-9, "max": 5e-9}],
+], ids=["supply-load", "temperature", "load-capacitance", "input-slew"])
+def test_a14_source_conditions_without_output_role_never_launch_native(
+        project, monkeypatch, source_specs):
+    import analog_real_corner_sweep as ars
+    import _designs_root as dr
+    _extraction_project(project, monkeypatch)
+    extraction = physical._extract(project, "unit", "container", "image", "process", {})
+    bdir, work = physical._paths(project, "unit")
+    put(work / "A13.json", extraction)
+    put(bdir / "spec.json", {"specs": source_specs})
+    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
+    monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
+    native_calls = []
+    monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k:
+        native_calls.append((a, k)) or (True, {}, "native source conditions", {}))
+
+    result = physical._resim(project, "unit", "container", "image", "process", {
+        "_pre_result": _pre_state(project)})
+
+    assert native_calls == []
+    assert result["status"] == "NOT_MEASURED"
+    assert result["detail"] == "post-layout acceptance has no declared numeric spec bounds"
 
 
 def test_a14_changed_extracted_bytes_never_simulates(project, monkeypatch):
