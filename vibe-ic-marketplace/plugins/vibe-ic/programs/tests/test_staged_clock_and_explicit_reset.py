@@ -205,7 +205,10 @@ def test_qualified_or_alternative_sole_clock_clause_is_not_authority(
      '- `clk` is the sole clock, with a 10 ns period.\n'),
     ('- Clock mode:\n'
      '  - `clk` is the sole clock, with a 10 ns period.\n'),
-], ids=['reviewer_multiline_conditional', 'nested_list'])
+    ('If debug mode is disabled:\n\n'
+     '- `clk` is the sole clock, with a 10 ns period.\n'),
+], ids=['reviewer_multiline_conditional', 'nested_list',
+        'reviewer_blankline_parent'])
 def test_nonflat_structural_block_cannot_detach_clock_authority(
         tmp_path, prose):
     generated = _empty_l8_sdc_project(
@@ -225,6 +228,23 @@ def test_nonflat_structural_block_cannot_detach_clock_authority(
     print('CLOCK_AUTHORITY_STRUCTURAL_REFUSAL ' + json.dumps({
         'prose': prose.strip(), 'clock_domains': observed,
         'consumer_refusal': str(refusal.value)}, sort_keys=True))
+
+
+def test_colon_heading_does_not_become_a_list_parent_qualifier(tmp_path):
+    generated = _empty_l8_sdc_project(
+        tmp_path,
+        '# Clock configuration:\n\n'
+        '- `clk` is the sole clock, with a 10 ns period.\n',
+        'create_clock -name clk -period 10 [get_ports clk]\n')
+    D._post_emit_sdc_constraints(tmp_path)
+    rows = json.loads(
+        (generated / 'L8_TIMING_WAVEFORM.json').read_text())['clock_domains']
+    assert [(row['source_pin'], row['period_ns']) for row in rows] == [
+        ('clk', 10.0)]
+    emitted = LC.emit_config(
+        tmp_path, 'neutral', tmp_path / 'phase3/librelane/config.json',
+        synthesis_only=True)
+    assert (emitted['CLOCK_PORT'], emitted['CLOCK_PERIOD']) == ('clk', 10.0)
 
 
 def test_explicit_reset_role_without_timing_does_not_invent_semantics():

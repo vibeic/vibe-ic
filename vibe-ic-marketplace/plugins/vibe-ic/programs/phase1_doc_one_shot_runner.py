@@ -62673,6 +62673,7 @@ _EXPLICIT_SOLE_CLOCK_PERIOD = re.compile(
 )
 _TOP_LEVEL_MARKDOWN_LIST_ITEM = re.compile(
     r"^(?:[-*+]|\d+[.)]) (?P<content>.*\S|)$")
+_ATX_MARKDOWN_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+\S.*$")
 
 
 def _explicit_clock_authority_clauses(text: str) -> List[str]:
@@ -62686,14 +62687,27 @@ def _explicit_clock_authority_clauses(text: str) -> List[str]:
     policy and does not attempt general Markdown parsing.
     """
     clauses: List[str] = []
-    for block in re.split(r"\n[ \t]*\n+", text):
+    blocks = [block for block in re.split(r"\n[ \t]*\n+", text)
+              if block.strip()]
+
+    def introduced_by_prose(block_index: int) -> bool:
+        if not block_index:
+            return False
+        parent_lines = blocks[block_index - 1].splitlines()
+        parent_final = parent_lines[-1].strip() if parent_lines else ""
+        parent_is_heading = (
+            len(parent_lines) == 1
+            and _ATX_MARKDOWN_HEADING.fullmatch(parent_lines[0]) is not None)
+        return not parent_is_heading and parent_final.endswith(":")
+
+    for block_index, block in enumerate(blocks):
         lines = block.splitlines()
         if not lines:
             continue
         if len(lines) == 1:
             line = lines[0].rstrip()
             item = _TOP_LEVEL_MARKDOWN_LIST_ITEM.fullmatch(line)
-            if item is not None:
+            if item is not None and not introduced_by_prose(block_index):
                 clauses.append(item.group("content"))
             elif line == line.lstrip():
                 clauses.append(line)
@@ -62705,6 +62719,8 @@ def _explicit_clock_authority_clauses(text: str) -> List[str]:
                 items = []
                 break
             items.append(item.group("content"))
+        if items and introduced_by_prose(block_index):
+            items = []
         clauses.extend(items)
     return clauses
 
