@@ -486,6 +486,66 @@ def test_inline_value_stops_at_the_punctuation_that_wraps_it():
         ("FANOUT_LIMIT_MAX", "5")], got
 
 
+def test_recognized_table_rows_are_owned_only_by_the_scoped_table_parser(
+        tmp_path):
+    """L7 status rows must not erase L9's per-library authority slots."""
+    _mk(
+        tmp_path,
+        "# L9 — Constraints\n\n"
+        "## Synthesis Fanout Limit\n\n"
+        "| library | `MAX_FANOUT_CONSTRAINT` |\n"
+        "|---|---|\n"
+        "| `sky130_fd_sc_ls` | 5 |\n"
+        "| `gf180mcu_*` | 4 |\n",
+    )
+    (tmp_path / "input" / "docs" / "L7_verification_plan.md").write_text(
+        "# L7 — Verification Plan\n\n"
+        "## Timing constraints sign-off\n\n"
+        "| library | clock | setup | fanout |\n"
+        "|---|---|---|---|\n"
+        "| `sky130_fd_sc_ls` | 10 ns | met | "
+        "met(MAX_FANOUT_CONSTRAINT = 5) |\n"
+        "| `gf180mcu_*` | 24 ns | met | "
+        "met(MAX_FANOUT_CONSTRAINT = 4) |\n",
+        encoding="utf-8",
+    )
+
+    assert getattr(R, HELPER)(tmp_path) == 2
+    rows = [
+        row for row in _l19(tmp_path)["fields"]["constraint_declarations"]
+        if row["token"] == "MAX_FANOUT_CONSTRAINT"
+    ]
+    assert {(row["scope"], row["value"]) for row in rows} == {
+        ("sky130_fd_sc_ls", "5"), ("gf180mcu_*", "4")}, rows
+    assert {row["extraction_strategy"] for row in rows} == {
+        "l19_constraint_token_emit:column"}
+
+
+def test_inline_parser_keeps_prose_but_refuses_unbound_or_ambiguous_mentions():
+    text = (
+        "MAX_FANOUT_CONSTRAINT = 6 is the synthesis limit.\n"
+        "MALFORMED_SETTING =\n"
+        "AMBIGUOUS_SETTING is either 4 or 5.\n"
+    )
+    got = CPT.inline_bindings(text)
+    assert [(row["token"], row["value"]) for row in got] == [
+        ("MAX_FANOUT_CONSTRAINT", "6")]
+
+
+def test_non_table_inline_authority_conflict_still_refuses(tmp_path):
+    _mk(
+        tmp_path,
+        "# L9 — Constraints\n\n"
+        "## Synthesis constraints\n\n"
+        "MAX_FANOUT_CONSTRAINT = 5\n"
+        "MAX_FANOUT_CONSTRAINT = 4\n",
+    )
+    with pytest.raises(SystemExit, match=(
+            r"L19_CONSTRAINT_AUTHORITY_CONFLICT: "
+            r"MAX_FANOUT_CONSTRAINT@<global>")):
+        getattr(R, HELPER)(tmp_path)
+
+
 def test_emphasis_is_stripped_only_when_symmetric():
     assert CPT.strip_ornament("**20**") == "20"
     assert CPT.strip_ornament("`KEY_NAME`") == "KEY_NAME"

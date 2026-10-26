@@ -184,6 +184,138 @@ def test_missing_observation_cli_publishes_existing_author_request(tmp_path, mon
     assert calls == [], 'CLI must publish the request before any simulator dispatch'
 
 
+def _stale_wrapper_observation_project(tmp_path):
+    project, cases, _models, calls, transport = _observation_project(
+        tmp_path, period=24, delay=1)
+    models = {
+        "/neutral/models/input_pad.v":
+            "module OBSIN(input PAD, output Y); buf #1(Y,PAD); endmodule\n",
+        "/neutral/models/output_pad.v":
+            "module OBSOUT(input A, output PAD); buf #1(PAD,A); endmodule\n",
+        "/neutral/models/closure.v":
+            "module NEUTRAL_MODEL_CLOSURE(input A, output Y); assign Y=A; endmodule\n",
+    }
+    fs = _fsf()
+    record = json.loads((project / fs.CHIP_TOP_RECORD_REL).read_text())
+    wrapper_rel = Path(record["chip_top_verilog"])
+    wrapper = project / wrapper_rel
+    stale = Path("/retained/previous/carrier") / wrapper_rel
+    declaration_path = project / "plugin_output/declaration.json"
+    declaration = json.loads(declaration_path.read_text())
+    binding = {str(stale): fs.sha256_file(wrapper)}
+    binding.update({source: hashlib.sha256(text.encode()).hexdigest()
+                    for source, text in models.items()})
+    declaration["unrelated_owner_choice"] = {"preserve": [1, 2, 3]}
+    declaration.setdefault("verification_stimuli", {}).setdefault(
+        "arithmetic_observation", {})[record["chip_top_module"]] = {
+            "clock": "clk", "output": "p", "settle_ns": 2,
+            "sample_offset_ns": 3, "binding": binding}
+    original = json.dumps(declaration, separators=(",", ":"), ensure_ascii=False) + "\n"
+    declaration_path.write_text(original)
+    return project, cases, models, calls, transport, stale, wrapper_rel, original
+
+
+def test_stale_carrier_wrapper_locator_rekeys_generated_provenance_only(
+        tmp_path, monkeypatch):
+    project, _cases, models, calls, transport, stale, wrapper_rel, original = (
+        _stale_wrapper_observation_project(tmp_path))
+    fs = _fsf(); tbg = importlib.import_module("testbench_gen")
+    monkeypatch.setattr(tbg, "_detect_ic_class",
+                        lambda _project: "digital_arithmetic_primitive")
+
+    result = fs.generate(
+        project, route="DIE", dispatch=transport,
+        model_resolver=lambda *_args: (models, "neutral exact three-model population"))
+
+    assert "observation_provenance_refresh" in result, result
+    refresh = result["observation_provenance_refresh"]
+    assert refresh["state"] == "UPDATED" and refresh["provenance"] == "generated"
+    assert refresh["previous_wrapper"] == str(stale)
+    assert refresh["wrapper"] == str(wrapper_rel)
+    history = project / refresh["previous_declaration"]
+    assert history.read_text() == original
+    current = json.loads((project / "plugin_output/declaration.json").read_text())
+    prior = json.loads(original)
+    choice = current["verification_stimuli"]["arithmetic_observation"]["neutral_pad_surface"]
+    prior_choice = prior["verification_stimuli"]["arithmetic_observation"]["neutral_pad_surface"]
+    assert {key: choice[key] for key in ("clock", "output", "settle_ns", "sample_offset_ns")} == {
+        key: prior_choice[key] for key in ("clock", "output", "settle_ns", "sample_offset_ns")}
+    assert current["unrelated_owner_choice"] == prior["unrelated_owner_choice"]
+    assert str(stale) not in choice["binding"]
+    assert choice["binding"][str(wrapper_rel)] == fs.sha256_file(project / wrapper_rel)
+    assert {source: choice["binding"][source] for source in models} == {
+        source: hashlib.sha256(text.encode()).hexdigest()
+        for source, text in models.items()}
+    assert calls, "ordinary scenario dispatch must remain the consumer after provenance refresh"
+    assert result["verdict"] == "NOT_MEASURED"  # transport refusal, never promoted by refresh
+
+
+@pytest.mark.parametrize("mutation", [
+    "stale_model", "missing_model", "extra_model", "duplicate_wrapper",
+    "foreign_wrapper", "malformed_choice", "non_wrote", "uncontained_current",
+    "no_stale",
+])
+def test_stale_wrapper_provenance_refuses_ambiguous_or_unproved_inputs(
+        tmp_path, monkeypatch, mutation):
+    project, _cases, models, calls, transport, stale, wrapper_rel, _original = (
+        _stale_wrapper_observation_project(tmp_path))
+    fs = _fsf(); tbg = importlib.import_module("testbench_gen")
+    monkeypatch.setattr(tbg, "_detect_ic_class",
+                        lambda _project: "digital_arithmetic_primitive")
+    declaration_path = project / "plugin_output/declaration.json"
+    declaration = json.loads(declaration_path.read_text())
+    choice = declaration["verification_stimuli"]["arithmetic_observation"][
+        "neutral_pad_surface"]
+    record_path = project / fs.CHIP_TOP_RECORD_REL
+    record = json.loads(record_path.read_text())
+    if mutation == "stale_model":
+        choice["binding"][next(iter(models))] = "0" * 64
+    elif mutation == "missing_model":
+        choice["binding"].pop(next(iter(models)))
+    elif mutation == "extra_model":
+        choice["binding"]["/foreign/extra_model.v"] = "1" * 64
+    elif mutation == "duplicate_wrapper":
+        choice["binding"][str(Path("/another/old/carrier") / wrapper_rel)] = (
+            fs.sha256_file(project / wrapper_rel))
+    elif mutation == "foreign_wrapper":
+        digest = choice["binding"].pop(str(stale))
+        choice["binding"]["/foreign/not_the_canonical_wrapper.v"] = digest
+    elif mutation == "malformed_choice":
+        choice.pop("sample_offset_ns")
+    elif mutation == "non_wrote":
+        record["verdict"] = "REFUSE"
+    elif mutation == "uncontained_current":
+        outside = tmp_path / "outside" / wrapper_rel.name
+        _write(outside, (project / wrapper_rel).read_text())
+        record["chip_top_verilog"] = str(outside)
+    elif mutation == "no_stale":
+        digest = choice["binding"].pop(str(stale))
+        choice["binding"][str(wrapper_rel)] = digest
+    declaration_path.write_text(json.dumps(declaration, sort_keys=True))
+    record_path.write_text(json.dumps(record, sort_keys=True))
+    before = declaration_path.read_bytes()
+    history_root = project / "plugin_output/declaration_history"
+    history_before = sorted(history_root.rglob("*")) if history_root.exists() else []
+
+    result = fs.generate(
+        project, route="DIE", dispatch=transport,
+        model_resolver=lambda *_args: (models, "neutral exact three-model population"))
+
+    assert declaration_path.read_bytes() == before
+    history_after = sorted(history_root.rglob("*")) if history_root.exists() else []
+    assert history_after == history_before
+    if mutation == "no_stale":
+        assert calls, "an already-current declaration remains for the ordinary consumer"
+    else:
+        assert calls == [], "unproved provenance must refuse before simulator dispatch"
+    assert result["verdict"] == "NOT_MEASURED"
+    if mutation == "no_stale":
+        assert result["observation_provenance_refresh"]["state"] == "CURRENT"
+    elif mutation not in ("non_wrote",):
+        refresh = result.get("observation_provenance_refresh") or {}
+        assert refresh.get("state") == "REFUSED", (mutation, result)
+
+
 def test_direct_core_scenario_schedule_and_strict_comparators_stay_unchanged(tmp_path, monkeypatch):
     project, cases, models, calls, transport = _observation_project(tmp_path)
     tbg = importlib.import_module('testbench_gen')
