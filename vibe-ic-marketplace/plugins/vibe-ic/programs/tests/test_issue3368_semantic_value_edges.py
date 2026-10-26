@@ -249,6 +249,81 @@ endmodule
     assert _semantic_role(source, widths) is None
 
 
+def _whole_copy_edge(consumer_statement):
+    source = r"""
+module source(input [7:0] data, output [7:0] payload);
+  assign payload = data;
+endmodule
+module sink(input [7:0] payload, input [7:0] limit,
+            output reg [7:0] accepted, output reg [7:0] i);
+  STATEMENT
+endmodule
+module neutral;
+  wire [7:0] link;
+  source a(.data(8'h5a), .payload(link));
+  sink b(.payload(link), .limit(8'h7f), .accepted(), .i());
+endmodule
+""".replace("STATEMENT", consumer_statement)
+    widths = {"source": {"data": 8, "payload": 8},
+              "sink": {"payload": 8, "limit": 8,
+                       "accepted": 8, "i": 8},
+              "neutral": {"link": 8}}
+    return source, widths
+
+
+@_NATIVE
+def test_native_genuine_nonblocking_whole_copy_remains_opaque_value(tmp_path):
+    source, widths = _whole_copy_edge(
+        "always @* begin accepted <= payload; end")
+    producer, consumer = _semantic_role(source, widths)
+    assert producer.encoding == consumer.encoding == "OPAQUE_VALUE"
+    result, report = _run(tmp_path, source)
+    assert result.returncode == 0, result.stdout + result.stderr
+    row, = report["interfaces"]
+    assert (row["producer_encoding"], row["consumer_encoding"],
+            row["status"]) == (
+                "OPAQUE_VALUE", "OPAQUE_VALUE", "NOT_APPLICABLE")
+    assert _consume(tmp_path).state == "PASS"
+
+
+@pytest.mark.parametrize("statement", [
+    "always @* for (i = 0; i <= payload; i = i + 1) accepted = i;",
+    "always @* for (i = payload; i < limit; i = i + 1) accepted = i;",
+    "assign accepted = i <= payload;",
+])
+def test_relational_and_control_header_uses_are_not_whole_copies(statement):
+    source, widths = _whole_copy_edge(statement)
+    assert _semantic_role(source, widths) is None
+
+
+def test_whole_copy_after_closed_control_header_remains_opaque_value():
+    source, widths = _whole_copy_edge(
+        "always @* if (limit == 8'h7f) accepted <= payload;")
+    producer, consumer = _semantic_role(source, widths)
+    assert producer.encoding == consumer.encoding == "OPAQUE_VALUE"
+
+
+@pytest.mark.parametrize("statement", [
+    '`define COPY_TEXT "accepted <= payload;"',
+    "always @* begin /* accepted <= payload; */ accepted = 8'h00; end",
+])
+def test_assignment_text_in_string_or_comment_is_not_a_whole_copy(statement):
+    source, widths = _whole_copy_edge(statement)
+    assert _semantic_role(source, widths) is None
+
+
+@_NATIVE
+def test_native_relational_le_reaches_report_and_receipt_consumer(tmp_path):
+    source, _ = _whole_copy_edge("assign accepted = i <= payload;")
+    result, report = _run(tmp_path, source)
+    assert result.returncode == 0, result.stdout + result.stderr
+    row, = report["interfaces"]
+    assert (row["consumer_encoding"], row["status"]) == (
+        "UNKNOWN", "UNKNOWN")
+    assert report["semantic_coverage"]["complete"] is False
+    assert _consume(tmp_path).state == "NOT_MEASURED"
+
+
 def test_receipt_verdict_counts_not_applicable_but_never_unknown_as_complete():
     shared = PROGRAMS.parent / "_shared"
     sys.path.insert(0, str(shared))

@@ -1266,6 +1266,37 @@ def _whole_copy_assignments(module, signal, *, source=False):
         r'(?<![\w$])([A-Za-z_]\w*)\s*(?:<=|=(?!=))\s*'
         r'([A-Za-z_]\w*)\s*;', module.body, re.MULTILINE)
     for assignment in assignments:
+        # ``<=`` is also relational.  A complete assignment cannot begin in a
+        # string or control-header parenthesis, nor in the expression after a
+        # different assignment (for example ``assign y = a <= signal;``).
+        # Keep the grammar lexical and closed rather than guessing from widths.
+        depth = 0
+        quoted = False
+        escaped = False
+        statement_start = 0
+        for offset, char in enumerate(module.body[:assignment.start()]):
+            if quoted:
+                if escaped:
+                    escaped = False
+                elif char == '\\':
+                    escaped = True
+                elif char == '"':
+                    quoted = False
+            elif char == '"':
+                quoted = True
+            elif char == '(':
+                depth += 1
+            elif char == ')':
+                depth = max(0, depth - 1)
+                if depth == 0:
+                    statement_start = offset + 1
+            elif char == ';' and depth == 0:
+                statement_start = offset + 1
+        leader = module.body[statement_start:assignment.start()].strip()
+        if (quoted or depth or not re.fullmatch(
+                r'(?:assign|begin|always(?:_\w+)?(?:\s*@\s*\*)?'
+                r'(?:\s+begin)?)?', leader)):
+            continue
         target, value = assignment.group(1), assignment.group(2)
         if source and target == signal:
             peer, span = value, assignment.span(1)
