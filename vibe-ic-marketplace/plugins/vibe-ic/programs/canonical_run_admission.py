@@ -177,6 +177,80 @@ def _subject_id(project: Path) -> str:
     return f"source-manifest:{digest}" if digest else f"project:{project.name}"
 
 
+def _phase2_step1_judgement_binding(project: Path) -> Optional[Dict[str, Any]]:
+    """Return one current, checker-approved Step-1 review binding.
+
+    Reports remain excluded from the general admission identity.  This one
+    fixed-path receipt is different: it can buy exactly one Phase-2 re-entry
+    only after the existing signed-judgement consumer accepts it over the
+    current Step-1 subject bytes.  Invalid or stale receipts are therefore
+    indistinguishable from an absent receipt for admission purposes.
+    """
+    import ai_signed_judgement as judgement
+
+    accepted, detail = judgement.check(project, "1")
+    prefix = "signed judgement bound to evidence sha256:"
+    if not accepted or not detail.startswith(prefix):
+        return None
+
+    receipt_path = project / "reports/audit/ai_judgements/1.json"
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    fd: Optional[int] = None
+    try:
+        if receipt_path.is_symlink():
+            return None
+        fd = os.open(receipt_path, os.O_RDONLY | nofollow)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        with os.fdopen(fd, "rb") as handle:
+            fd = None
+            receipt_bytes = handle.read()
+        receipt = json.loads(receipt_bytes)
+    except (OSError, ValueError, TypeError):
+        return None
+    finally:
+        if fd is not None:
+            os.close(fd)
+    if not isinstance(receipt, dict):
+        return None
+
+    subjects: list[dict[str, str]] = []
+    evidence_digest = hashlib.sha256()
+    try:
+        for path in judgement.evidence(project, "1"):
+            rel = path.relative_to(project).as_posix()
+            data = path.read_bytes()
+            encoded_rel = rel.encode()
+            evidence_digest.update(len(encoded_rel).to_bytes(8, "big"))
+            evidence_digest.update(encoded_rel)
+            evidence_digest.update(len(data).to_bytes(8, "big"))
+            evidence_digest.update(data)
+            subjects.append({"path": rel, "sha256": _sha256_bytes(data)})
+    except (OSError, ValueError):
+        return None
+    evidence_sha256 = evidence_digest.hexdigest() if subjects else None
+    if not evidence_sha256 or detail != prefix + evidence_sha256:
+        return None
+    if not (receipt.get("schema") == judgement.SCHEMA
+            and receipt.get("step_id") == "1"
+            and receipt.get("evidence_sha256") == evidence_sha256
+            and receipt.get("verdict") == "PASS"
+            and isinstance(receipt.get("signed_by"), str)
+            and receipt["signed_by"].strip()
+            and isinstance(receipt.get("judgement"), str)
+            and receipt["judgement"].strip()):
+        return None
+    return {
+        "schema": "vibeic.canonical-signed-judgement-binding.v1",
+        "step_id": "1",
+        "receipt_path": "reports/audit/ai_judgements/1.json",
+        "receipt_sha256": _sha256_bytes(receipt_bytes),
+        "evidence_sha256": evidence_sha256,
+        "subject_count": len(subjects),
+        "subjects": subjects,
+    }
+
+
 def build_identity(project: Path, span: str, *, container_image: str,
                    config: Dict[str, Any], program_paths: Iterable[Path],
                    program_source_sha256: Optional[str] = None) -> Dict[str, Any]:
@@ -213,6 +287,11 @@ def build_identity(project: Path, span: str, *, container_image: str,
         "dispatch_config": config,
     }
     if span == "phase2":
+        judgement_binding = _phase2_step1_judgement_binding(project)
+        if judgement_binding is not None:
+            identity["current_consumer_evidence_bindings"] = {
+                "step1_signed_judgement": judgement_binding,
+            }
         # professional_tb_gen reads this persistent authored source beside
         # its regenerated bundle. Hash that exact input name, never the
         # sim_professional subtree (JUnit, waves and generated TBs are outputs).
