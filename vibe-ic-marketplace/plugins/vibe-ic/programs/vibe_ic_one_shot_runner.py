@@ -2915,8 +2915,10 @@ def _main() -> int:
     _line_buffer_own_stream()
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
-    p.add_argument("--flow", choices=("70", "109"), default="70",
-                   help="Explicitly select the source-owned 109 proposal implementation; omitted preserves the existing flow.")
+    p.add_argument("--flow", choices=("109",), default="109",
+                   help="Canonical public runtime flow (default: 109). The "
+                        "former 70 identity is historical evidence only and "
+                        "is not an executable public mode.")
     p.add_argument("--flow109-manifest", type=Path,
                    help="JSON containing explicit Boolean features, step_profiles, runtime_tool_uses and qualification_registry.")
     p.add_argument("--flow109-plan-only", action="store_true",

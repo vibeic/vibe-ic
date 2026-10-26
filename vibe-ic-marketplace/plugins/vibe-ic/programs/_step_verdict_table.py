@@ -171,10 +171,13 @@ SUBJECT_AUDIT_REPLAY = "audit_replay"
 SUBJECT_REAL_IC_GATE = "real_ic_gate"
 
 #: Flags that do not change WHICH steps a compliance pass measures, so two
-#: invocations differing only in these are still comparable. Everything else —
-#: `--stage`, `--stage-id`, `--phase`, `--exclude-step`, `--skip-*` — narrows the
-#: population and makes the two tables answers to different questions.
-_SCOPE_NEUTRAL_FLAGS = {"--json", "--read-only", "--flow", "--flow-def"}
+#: invocations differing only in these are still comparable. `--flow 109` is
+#: handled explicitly in `_scope_flags`: it is equal to the omitted current
+#: default, while a historical public flow name remains part of the frozen
+#: experiment's identity. Everything else — `--stage`, `--stage-id`, `--phase`,
+#: `--exclude-step`, `--skip-*` — narrows the population and makes the two
+#: tables answers to different questions.
+_SCOPE_NEUTRAL_FLAGS = {"--json", "--read-only", "--flow-def"}
 
 
 #: Cached so a consumer that builds many tables pays the owning module's import
@@ -424,6 +427,21 @@ def _scope_flags(argv: Optional[List[Any]]) -> Optional[Tuple[str, frozenset]]:
         tok = str(argv[i])
         if tok.startswith("-"):
             name = tok.split("=", 1)[0]
+            if name == "--flow":
+                if "=" in tok:
+                    value = tok.split("=", 1)[1]
+                elif i + 1 < len(argv) and not str(argv[i + 1]).startswith("-"):
+                    value = str(argv[i + 1])
+                    i += 1
+                else:
+                    value = "<missing>"
+                # 109 is the sole current public runtime identity, whether the
+                # caller spells it or relies on the public default. Retain any
+                # other value only to keep immutable old evidence distinguishable.
+                if value != "109":
+                    flags.add("--flow=" + value)
+                i += 1
+                continue
             if name not in _SCOPE_NEUTRAL_FLAGS:
                 # A narrowing flag carries its VALUE into the identity:
                 # `--exclude-step 39` and `--exclude-step 7` scope differently.
