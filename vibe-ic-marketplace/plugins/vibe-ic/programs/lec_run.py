@@ -5011,7 +5011,7 @@ def _bound_synthesis_liberty(project: Path) -> Optional[Dict[str, str]]:
             'host': str(target),
             'synthesis_guest': str(library),
             'pdk': pdk,
-            'pdk_relative': str(library.relative_to(pdk_guest)),
+            'pdk_relative': str(target.relative_to(selected)),
             'sha256': recorded,
         }
     except (OSError, ValueError, KeyError, TypeError, AttributeError, LC.Refusal) as exc:

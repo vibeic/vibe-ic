@@ -20,6 +20,15 @@ import pdk_revision_resolve as P
 import synth_handoff_netlist_check as H
 
 
+def resolution_outcome(project):
+    """Observe success or the actual named refusal through the public consumer."""
+    try:
+        return L.resolve_liberty(project, L.DEFAULT_LIBERTY,
+                                 lambda path: Path(path).is_file())
+    except ValueError as exc:
+        return None, str(exc)
+
+
 @pytest.fixture
 def fixture(tmp_path, monkeypatch):
     project = tmp_path / 'project'
@@ -57,20 +66,21 @@ def test_resolved_install_path_binds_selected_symlink(fixture):
     project, _, roots, _, library, config, _, _, refresh = fixture
     config['CELL_LIBS']['*'] = ['/pdk/' + str(library.relative_to(roots))]
     refresh()
-    got, source = L.resolve_liberty(project, L.DEFAULT_LIBERTY,
-                                   lambda path: Path(path).is_file())
-    assert got == str(library.resolve()) and source == 'run_synth'
+    got, source = resolution_outcome(project)
+    assert source == 'run_synth'
+    assert got == str(library.resolve())
 
 
 def test_direct_selected_path_still_binds(fixture):
     project, _, _, _, library, _, _, _, _ = fixture
-    got, source = L.resolve_liberty(project, L.DEFAULT_LIBERTY,
-                                   lambda path: Path(path).is_file())
-    assert got == str(library.resolve()) and source == 'run_synth'
+    got, source = resolution_outcome(project)
+    assert source == 'run_synth'
+    assert got == str(library.resolve())
 
 
 @pytest.mark.parametrize('damage', ['foreign_symlink', 'changed', 'missing',
-                                  'missing_hash', 'ambiguous_mount'])
+                                  'missing_hash', 'ambiguous_mount', 'sibling_root',
+                                  'mount_escape', 'traversal'])
 def test_foreign_changed_missing_or_ambiguous_library_refuses(fixture, damage):
     project, folder, roots, _, library, _, root_record, receipt, refresh = fixture
     if damage == 'foreign_symlink':
@@ -80,6 +90,19 @@ def test_foreign_changed_missing_or_ambiguous_library_refuses(fixture, damage):
         library.unlink()
         library.symlink_to(foreign)
         refresh()
+    elif damage in ('sibling_root', 'mount_escape'):
+        destination = ((library.parents[2].with_name('process-sibling'))
+                       if damage == 'sibling_root' else roots.parent / 'outside')
+        foreign = destination / 'libs.ref/cells/typical.lib'
+        foreign.parent.mkdir(parents=True)
+        foreign.write_bytes(library.read_bytes())
+        library.unlink()
+        library.symlink_to(foreign)
+        refresh()
+    elif damage == 'traversal':
+        config = json.loads((folder / 'config.json').read_text())
+        config['CELL_LIBS']['*'] = ['/pdk/process/../process/libs.ref/cells/typical.lib']
+        (folder / 'config.json').write_text(json.dumps(config))
     elif damage == 'changed':
         library.write_text('library (changed) { }\n')
     elif damage == 'missing':
@@ -107,8 +130,8 @@ def test_current_native_receipt_selects_exact_library():
     config = json.loads((folder / 'config.json').read_text())
     recorded = next(iter(config['CELL_LIBS'].values()))[0]
     expected = P.Fs(None).realpath(recorded)
-    got, source = L.resolve_liberty(project, L.DEFAULT_LIBERTY,
-                                   lambda path: Path(path).is_file())
+    got, source = resolution_outcome(project)
     receipt = json.loads((folder / 'vibeic_receipt.json').read_text())
-    assert got == expected and source == 'run_synth'
+    assert source == 'run_synth'
+    assert got == expected
     assert LC.digest(Path(got)) == receipt['input']['config_files'][recorded]
