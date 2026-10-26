@@ -83,6 +83,7 @@ set_dont_touch_objects
 
 # ---- 2. the input census --------------------------------------------------
 set ::vic_before [dict create]
+set ::vic_before_nets [dict create]
 set ::vic_at [dict create]
 set ::vic_fillers 0
 foreach inst [$::block getInsts] {
@@ -92,6 +93,11 @@ foreach inst [$::block getInsts] {
     }
     dict set ::vic_before [$inst getName] [[$inst getMaster] getName]
     dict set ::vic_at [$inst getName] [list {*}[$inst getLocation] [$inst getOrient]]
+}
+foreach net [$::block getNets] {
+    if {![$net isSpecial] && [$net getSigType] ni {POWER GROUND}} {
+        dict set ::vic_before_nets [$net getName] 1
+    }
 }
 vic_say "input instances=[dict size $::vic_before] fillers=$::vic_fillers"
 vic_metric vibeic__prr__input_fillers $::vic_fillers
@@ -103,34 +109,74 @@ remove_fillers
 # ---- 3. parasitics from the router's wires, per STA corner ---------------
 proc vic_annotate {tag} {
     set spefs [dict create]
-    foreach {pattern ruleset} $::env(RCX_RULESETS) {
-        set sane [string map {* x} $pattern]
-        set out "$::env(STEP_DIR)/${tag}_${sane}.spef"
-        define_process_corner -ext_model_index 0 X
-        if {[catch {extract_parasitics -ext_model_file $ruleset -lef_res} err]} {
-            puts stderr "VIBEIC_PRR_EXTRACTION_FAILED: $pattern: $err"
+    set diagnostic [expr {[info exists ::env(VIBEIC_PRR_DIAGNOSTIC_SPEFS)]
+                          && $::env(VIBEIC_PRR_DIAGNOSTIC_SPEFS) ne ""}]
+    if {$diagnostic} {
+        if {![info exists ::env(VIBEIC_PRR_DIAGNOSTIC_AUTHORITY_SHA256)]
+            || ![regexp {^[0-9a-f]{64}$} $::env(VIBEIC_PRR_DIAGNOSTIC_AUTHORITY_SHA256)]} {
+            puts stderr "PRR_DIAGNOSTIC_AUTHORITY_REFUSED: validated receipt hash is absent"
             exit 1
         }
-        write_spef $out
-        dict set spefs $pattern $out
+        foreach {pattern spef} $::env(VIBEIC_PRR_DIAGNOSTIC_SPEFS) {
+            if {![file isfile $spef]} {
+                puts stderr "PRR_DIAGNOSTIC_SPEF_MISSING: $pattern: $spef"
+                exit 1
+            }
+            dict set spefs $pattern $spef
+        }
+    } else {
+        foreach {pattern ruleset} $::env(RCX_RULESETS) {
+            set sane [string map {* x} $pattern]
+            set out "$::env(STEP_DIR)/${tag}_${sane}.spef"
+            define_process_corner -ext_model_index 0 X
+            if {[catch {extract_parasitics -ext_model_file $ruleset -lef_res} err]} {
+                puts stderr "VIBEIC_PRR_EXTRACTION_FAILED: $pattern: $err"
+                exit 1
+            }
+            write_spef $out
+            dict set spefs $pattern $out
+        }
     }
     set read 0
     set names [lln::get_corner_names]
+    set used [dict create]
     foreach name $names {
+        set matches 0
         dict for {pattern spef} $spefs {
             if {[string match $pattern $name]} {
-                read_spef -corner $name $spef
-                incr read
-                break
+                incr matches
+                set selected $spef
+                dict set used $pattern 1
             }
         }
+        if {$matches == 1} {
+            read_spef -corner $name $selected
+            incr read
+        } elseif {$diagnostic && $matches != 1} {
+            puts stderr "PRR_DIAGNOSTIC_SPEF_AMBIGUOUS: $name matches $matches inputs"
+            exit 1
+        } elseif {$matches > 0} {
+            dict for {pattern spef} $spefs {
+                if {[string match $pattern $name]} {
+                    read_spef -corner $name $spef
+                    incr read
+                    break
+                }
+            }
+        }
+    }
+    if {$diagnostic && [dict size $used] != [dict size $spefs]} {
+        puts stderr "PRR_DIAGNOSTIC_SPEF_UNUSED: [dict size $used] of [dict size $spefs] inputs matched"
+        exit 1
     }
     if {$read != [llength $names]} {
         puts stderr "VIBEIC_PRR_CORNER_UNANNOTATED: $read of [llength $names] corners have a ruleset"
         exit 1
     }
     estimate_parasitics -detailed_routing
-    vic_say "$tag parasitics: [dict size $spefs] ruleset(s) over $read corner(s)"
+    set authority [expr {$diagnostic ? "diagnostic SPEF" : "ruleset"}]
+    set receipt [expr {$diagnostic ? " receipt=$::env(VIBEIC_PRR_DIAGNOSTIC_AUTHORITY_SHA256)" : ""}]
+    vic_say "$tag parasitics: [dict size $spefs] $authority input(s) over $read corner(s)$receipt"
 }
 
 proc vic_census {tag} {
@@ -1126,6 +1172,28 @@ if {$::vic_fillers > 0} {
     global_connect
 }
 
+if {[info exists ::env(VIBEIC_PRR_DIAGNOSTIC_SPEFS)]
+    && $::env(VIBEIC_PRR_DIAGNOSTIC_SPEFS) ne ""} {
+    set ::vic_after_nets [dict create]
+    foreach net [$::block getNets] {
+        if {![$net isSpecial] && [$net getSigType] ni {POWER GROUND}} {
+            dict set ::vic_after_nets [$net getName] 1
+        }
+    }
+    set ::vic_new_nets [list]
+    set ::vic_removed_nets [list]
+    dict for {name _} $::vic_after_nets {
+        if {![dict exists $::vic_before_nets $name]} { lappend ::vic_new_nets $name }
+    }
+    dict for {name _} $::vic_before_nets {
+        if {![dict exists $::vic_after_nets $name]} { lappend ::vic_removed_nets $name }
+    }
+    if {[llength $::vic_created] || $::vic_removed
+        || [llength $::vic_new_nets] || [llength $::vic_removed_nets]} {
+        puts stderr "PRR_DIAGNOSTIC_SPEF_TOPOLOGY_STALE: created_cells=[llength $::vic_created] removed_cells=$::vic_removed new_nets=[llength $::vic_new_nets] removed_nets=[llength $::vic_removed_nets]; fixed pre-change diagnostic/non-signoff SPEF cannot measure the candidate; fresh topology-current native parasitics are required"
+        exit 1
+    }
+}
 vic_annotate after
 # The consumer runs RCX + STAPostPNR on both changed and no-op candidates.
 # Its fresh per-corner OpenROAD processes count max-fanout violations and
