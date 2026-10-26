@@ -1,0 +1,48 @@
+[
+  {
+    "bucket": "A",
+    "step": "phase2.lint",
+    "design": "original-source input contract",
+    "rule_name": "original_native_lint_contract",
+    "pattern": "Original-source RTL is validated by a generated-spec consumer that requires an absent generated document and publishes the wrong consumer row name.",
+    "actual_program": "programs/design_one_shot_runner.py",
+    "docstring": "Native lint must consume the selected original RTL contract without requiring generated specification documents.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Reuse the existing native lint producer and emit the row expected by the original-input consumer; retain malformed RTL, ambiguous top, native identity and transport failures.",
+    "status": "REUSE_MERGED_FIX",
+    "implementation_commit": "aabd3ca3e8dc7c0f49dd312411c7176fb1ed08f6",
+    "upstream": "https://github.com/vibeic/vibe-ic/pull/3654",
+    "validation": "Root-accepted landing verification (SHA-256 2105050f3712e02236b667937a68ca3d7394ca1a25d1f9ffae67027cf9516e96) records PR head 6421a53329d6328dd741b9531425fdd0a327827d landed as merge d49e29e39dc75f3965f944d74c4b463419a46c56 at plugin version 1.32.14. Recovered exact source, command, runtime and completed per-ID results were reused; missing historical shell exits are NOT_RECORDED. No valid V2 control was rerun or independently requalified in this capture.",
+    "forward_validation": "Re-enter the normal native gate on frozen current input; never relabel an old report from a different producer."
+  },
+  {
+    "bucket": "C",
+    "step": "benchmark.aggregate_verdict",
+    "design": "general evidence scope and score admission",
+    "title": "Define score admission separately from complete specification acceptance",
+    "pattern": "A source-bound review records multiple plausible interpretations without proving a candidate defect, while a batch coordinator treats the unresolved specification question as a global scoring prerequisite; otherwise evaluable frozen candidates never receive a functional measurement.",
+    "suggested_fix": "Review the existing dispatcher admission contract and reports together. Retain distinct source-review, structural-conformance, product-gate and official-functional-score states. Where a declared evaluation contract permits measurement with unresolved source questions, preserve those questions and frozen samples while invoking the unchanged official scorer; do not grant semantic acceptance. Keep strict product signoff blocking. Decide this behavior explicitly before implementation, with neutral positive and negative consumer tests. Never infer a source definition from a historical PASS.",
+    "why_not_bucket_a": "This is a proposed contract change rather than an established recovery: the program can preserve independent evidence states, but public source plus historical scores cannot establish which assumptions or measurement scope are authorized. Cross-consumer admission behavior and score labels need review and substantive controls before deterministic implementation.",
+    "backlog_slug": "independent-review-and-functional-measurement-scope",
+    "backlog_type": "enhancement",
+    "severity": "P1",
+    "component": "programs/benchmark_dispatch.py",
+    "session_context": "Post-run evidence comparison only. No candidate or test changed, no official scorer run, and no policy bypass implemented. See adjacent RESULT.md for evidence boundaries and neutral acceptance cases.",
+    "status": "PROPOSED_NOT_RECOVERED"
+  },
+  {
+    "bucket": "C",
+    "step": "phase2.spec_conformance",
+    "design": "general architecture proof lifecycle",
+    "title": "Reuse source-bound native structural proof in the existing repair lifecycle",
+    "pattern": "An implementation satisfies binary functional tests but violates an explicit implementation architecture, while a repair API accepts only simulation counterexamples and cannot admit the measured structural defect.",
+    "suggested_fix": "Reuse the upstream structural-proof work and its existing review lifecycle. Bind source obligation, parent RTL, tool identity, command, abstraction and graph evidence; retain all functional challenges and fresh independent review. An unconstrained equivalent circuit must remain valid; a constrained circuit must meet the declared structure. Verify minimum-count claims under a source-authorized model rather than generic synthesis cell counts alone.",
+    "why_not_bucket_a": "The gap is assigned to existing upstream work. A deterministic graph check needs an explicit source-owned abstraction and transformation policy; a native cell list cannot itself select that contract. Reuse and validate that implementation before introducing any additional rule.",
+    "backlog_slug": "reuse-source-bound-structural-repair-proof",
+    "backlog_type": "enhancement",
+    "severity": "P1",
+    "component": "verification/structural-contract",
+    "session_context": "Existing issue https://github.com/vibeic/vibe-ic/issues/3655 was observed CLOSED during capture. Do not duplicate or reopen it automatically; current local run predates any verified follow-up. Verify the actual landed producer and normal-entry continuation.",
+    "status": "REUSE_EXISTING_UPSTREAM_WORK_LOCAL_VALIDATION_UNMEASURED"
+  }
+]
