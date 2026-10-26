@@ -219,7 +219,11 @@ Step 2.9.
 ### Completed V2 receipts: executable ready-first delivery
 
 Use `programs/landing_merge_verdict.py --service-ready <root-admission.json>
---repo <checkout> --writer <sole-writer> --final-command <delivery argv...>`
+--repo <checkout> --base origin/main --writer repo-gatekeeper --receipt-root
+<git-common-dir>/gatekeeper-ready-receipts --candidates-json
+<root-owned-accepted-candidate-array> --final-command
+python3 programs/landing_merge_verdict.py --service-final-write --repo <checkout>
+--base origin/main`
 for independently accepted work. The input is root-owned, not a PR payload:
 `writer`, `candidates[]` with `id`, `head`, `receipt`, independently accepted
 `receipt_sha256`, optional `holds`, `shared_conflicts`, `failed_gates`, landed
@@ -234,6 +238,14 @@ Do not repeat acceptance due to waiting, handoff, identity, unrelated base
 movement, or version assignment. Genuine holds/dependencies/shared ownership
 and failed gates remain blocking. This binding path supersedes unconditional
 re-run/enqueue wording in the legacy procedure and cron template below.
+
+The canonical cron stores exact accepted receipt bytes below
+`<git-common-dir>/gatekeeper-ready-receipts/`, verifies their independently
+supplied outer pins, and publishes `root-admission.json` as a mode-0600 sibling
+temporary followed by flush, `os.fsync`, and `os.replace`. It never regenerates
+an already accepted receipt. The bound final writer rechecks
+`GATEKEEPER_READY_ID`, `GATEKEEPER_READY_HEAD`, and `GATEKEEPER_READY_BASE` and
+uses `--match-head-commit`; it never merges a PR number remembered by the caller.
 
 ### Step 2.9 — serialized merge queue (the lock + rebase + re-run)
 
@@ -323,8 +335,8 @@ would land several commits).
 
 ```bash
 tools/gatekeeper-verify-merge.sh <num> --json /tmp/verify-<num>.json   # MUST exit 0
-gh pr merge <num> --squash --delete-branch
-tools/gatekeeper-verify-merge.sh --reassert /tmp/verify-<num>.json     # if time passed
+# Root atomically admits these exact bytes to root-admission.json; the canonical
+# cron below invokes --service-ready and only its READY-bound final writer merges.
 ```
 
 **This is not a reminder, it is the only gate on this path.** Measured
@@ -572,37 +584,32 @@ Each tick must:
 4. If rc=1 → for each PR in `actionable[]` (ready-first). The PR author is
    irrelevant — the gatekeeper MAY merge its OWN authored PR; the gates are
    the quality guarantee, not identity separation:
-     a. git fetch origin; run gatekeeper_review.py --version-by-gatekeeper
-        (machine gates; the PR is VERSION-LESS so the version gate DEFERS)
-        on base=origin/main head=<headRef>. Before repeating an already
-        completed V2 acceptance, run `tools/gatekeeper-verify-merge.sh
-        --reassert <verdict.json> --reassert-head <headRef> --base origin/main`. A valid unchanged
-        receipt is consumed directly. Unrelated base movement also reuses the
-        receipt. Only concrete changed candidate/evidence/dependency paths
-        trigger bounded revalidation of the impacted checks; missing,
-        tampered, or mismatched receipts fail closed. Waiting, handoff, agent
-        identity, or base movement alone never requests a repeat acceptance.
-        - RED → gh pr review --request-changes with the verbatim failing
-          output in the 繁中 5-section comment; continue.
-     b. GREEN → Step-2.7 adversarial review on the PR diff
-        (General-not-overfit / §4.05 no-leak / root-cause-not-bypass).
-        Only a REPRODUCIBLE HIGH blocks → request-changes with the
-        reproduction; continue.
-     c. GREEN + no reproducible HIGH → enqueue to the SERIALIZED merge
-        queue: acquire .merge.lock (_runner_lock.py); rebase onto current
-        origin/main; RE-RUN required checks (--version-by-gatekeeper) on the
-        rebased tree;
-        - rebased GREEN → ASSIGN THE VERSION:
-          gatekeeper_assign_version.py --write (next monotonic version →
-          plugin.json + marketplace.json), commit it, then RE-RUN
-          gatekeeper_review.py WITHOUT the flag (version bump now ENFORCED,
-          cadence-correct suite — FULL on the x.y.0 milestone you assigned).
-          - enforced run GREEN → gh pr merge <num> --squash --delete-branch
-            (one PR = one squash commit = one gatekeeper-assigned version bump).
-          - enforced run RED → eject: request-changes; do NOT merge.
-        - rebased RED → eject: request-changes with the post-rebase
-          failure; do NOT merge.
-        Release the lock (always, even on eject/exception); next PR.
+     a. Inspect the complete population and FIRST invoke the actual consumer
+        over every already accepted packet:
+        `python3 programs/landing_merge_verdict.py --service-ready
+        <git-common-dir>/gatekeeper-ready-receipts/root-admission.json --repo
+        <checkout> --base origin/main --writer repo-gatekeeper --final-command
+        python3 programs/landing_merge_verdict.py --service-final-write --repo
+        <checkout> --base origin/main`, including `--receipt-root
+        <git-common-dir>/gatekeeper-ready-receipts --candidates-json
+        <root-owned-accepted-candidate-array>` before `--final-command`.
+        Each accepted candidate pins decimal PR id, exact head, receipt path,
+        independently supplied outer SHA256, blockers/dependencies, and named
+        impacted-check argv. Do not infer authority from PR metadata or a
+        receipt self-digest.
+        It admits the complete queue ready-first, reuses unchanged receipts,
+        runs only named impacted checks outside `gatekeeper-final.lock`, and
+        refuses missing/tampered/mismatched receipts and genuine blockers.
+        Under the short lock the final writer binds READY_ID/HEAD/BASE, then
+        invokes the existing squash writer with `--match-head-commit`.
+     b. `DELIVERED` or any possibly-partial final-write status ends the tick.
+        Only `BLOCKED_NO_ACCEPTED_CANDIDATE` permits bounded preparation of a
+        candidate without a receipt: run its existing machine gates, Step-2.7,
+        version assignment and `gatekeeper-verify-merge.sh --json` once. Red
+        requests changes; green exact bytes enter the next atomic manifest.
+        Never make an accepted later candidate wait behind this preparation,
+        and never rerun acceptance due to waiting, handoff, identity or
+        unrelated base movement.
 Hard rules: never --admin/--force/--no-verify, squash-only, always release
 the lock. Self-merge of an ordinary gated PR is ALLOWED. A PR that fixes a
 wedged gate uses the documented BREAK-GLASS path (scoped diff + recorded
