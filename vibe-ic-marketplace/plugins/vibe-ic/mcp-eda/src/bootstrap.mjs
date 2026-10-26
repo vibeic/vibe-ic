@@ -4,10 +4,9 @@
  *
  * Why this file exists (v1.6.18 Fix Prevention):
  * The plugin ships with a `package.json` and depends on
- * @modelcontextprotocol/sdk, but no `node_modules/`. The post_install.sh
- * SessionStart hook is supposed to run `npm install` on first plugin load,
- * but it only fires on a fresh Claude Code session — `/plugin install`
- * + `/reload-plugins` in an existing session leaves the deps un-installed,
+ * @modelcontextprotocol/sdk, but no `node_modules/`. SessionStart is read-only;
+ * this entry prepares a content-bound external snapshot before installing deps.
+ * `/plugin install` + `/reload-plugins` can leave deps un-installed,
  * and the next `/mcp` reconnect fails with ERR_MODULE_NOT_FOUND. The MCP
  * client surfaces this as the cryptic "Failed to reconnect to
  * plugin:vibe-ic:eda-tools".
@@ -36,19 +35,89 @@
  * always invokes the bootstrap, never `index.js` directly.
  */
 
-import { existsSync, mkdirSync, readdirSync, realpathSync, rmSync, rmdirSync,
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync,
+         readdirSync, readlinkSync, realpathSync, renameSync, rmSync, rmdirSync,
          unlinkSync, writeFileSync } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
-import { dirname, join, resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import { homedir } from "node:os";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { spawnSync } from "node:child_process";
-import { missingPackages, clearNeedsAuthCacheEntry } from "./deps_complete.mjs";
+import { missingPackages } from "./deps_complete.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const PKG_ROOT = realpathSync(resolve(__dirname, ".."));
-const PKG_JSON = join(PKG_ROOT, "package.json");
-const NODE_MODULES = join(PKG_ROOT, "node_modules");
-const INSTALL_LOCK = join(PKG_ROOT, ".bootstrap-install.lock");
+const SOURCE = realpathSync(resolve(__dirname, "../.."));
+let PKG_ROOT, PKG_JSON, NODE_MODULES, INSTALL_LOCK, DEPS_SEAL;
+
+// Bind shipped source, including package/lock/server and relative program
+// imports, not a version label. Inspect excluded source dependencies too:
+// never hide a symlink from the installed tree's independent trust consumer.
+function sourceIdentity(root, runtime = false) {
+  const hash = createHash("sha256");
+  function walk(dir, excluded = false) {
+    for (const name of readdirSync(dir).sort()) {
+      const path = join(dir, name), rel = relative(root, path);
+      let st;
+      try { st = lstatSync(path); }
+      catch (error) {
+        if (runtime && error.code === "ENOENT" &&
+            [join("mcp-eda", "node_modules"), join("mcp-eda", ".bootstrap-install.lock")].includes(rel)) continue;
+        throw error;
+      }
+      if (!st.isDirectory() && !st.isFile()) throw new Error(`unsupported source entry: ${path}`);
+      if (runtime && rel === join("mcp-eda", ".bootstrap-deps.json")) continue;
+      if (runtime && rel === join("mcp-eda", ".bootstrap-install.lock")) {
+        if (!st.isDirectory()) throw new Error(`invalid runtime lock: ${path}`);
+        continue;
+      }
+      const deps = excluded || rel === join("mcp-eda", "node_modules");
+      if (!deps) {
+        hash.update(JSON.stringify([rel, st.mode, st.isDirectory() ? "directory" : "file"]));
+        if (st.isFile()) hash.update(createHash("sha256").update(readFileSync(path)).digest());
+      }
+      // Only external npm state may contain bin links.
+      if (st.isDirectory() && !(runtime && deps)) walk(path, deps);
+    }
+  }
+  walk(root);
+  return hash.digest("hex");
+}
+
+function materializeRuntime() {
+  const identity = sourceIdentity(SOURCE);
+  const cache = process.env.XDG_CACHE_HOME || join(homedir(), ".cache");
+  if (!isAbsolute(cache)) throw new Error("XDG_CACHE_HOME must be absolute");
+  const base = join(cache, "vibe-ic", "mcp-runtime");
+  // Resolve existing ancestors before mkdir, including a symlinked cache home.
+  let ancestor = base;
+  while (!existsSync(ancestor)) ancestor = dirname(ancestor);
+  const canonical = resolve(realpathSync(ancestor), relative(ancestor, base));
+  if (canonical === SOURCE || canonical.startsWith(SOURCE + sep)) {
+    throw new Error("external runtime must be outside the installed plugin");
+  }
+  mkdirSync(canonical, { recursive: true, mode: 0o700 });
+  const destination = join(canonical, identity);
+  if (!existsSync(destination)) {
+    const staging = mkdtempSync(join(canonical, ".stage-"));
+    try {
+      cpSync(SOURCE, staging, { recursive: true,
+        filter: path => path !== join(SOURCE, "mcp-eda", "node_modules") });
+      if (sourceIdentity(staging) !== identity || sourceIdentity(SOURCE) !== identity) {
+        throw new Error("plugin source changed while materializing runtime");
+      }
+      try { renameSync(staging, destination); }
+      catch (error) {
+        if (!["EEXIST", "ENOTEMPTY"].includes(error.code)) throw error;
+      }
+    } finally {
+      rmSync(staging, { recursive: true, force: true }); // only our unique stage
+    }
+  }
+  if (!lstatSync(destination).isDirectory() || sourceIdentity(destination, true) !== identity) {
+    throw new Error(`runtime source identity mismatch: ${destination}`);
+  }
+  return join(destination, "mcp-eda");
+}
 
 // #3357: npm's incremental repair and #1931's wipe must be one transaction
 // across clients of this package. Never evict a live owner based on lock age.
@@ -129,14 +198,62 @@ function npmInstall(label) {
 }
 
 function ensureDeps() {
-  const missing = missingPackages(PKG_ROOT);
-  if (missing !== null && missing.length === 0 && !existsSync(INSTALL_LOCK)) return;
   const release = acquireInstallLock();
   try {
+    // No-follow inspection precedes even the existence-only completeness probe.
+    const before = dependencyEntries();
+    if (existsSync(DEPS_SEAL)) {
+      if (!lstatSync(DEPS_SEAL).isFile()) throw new Error("invalid dependency integrity seal");
+      const sealed = JSON.parse(readFileSync(DEPS_SEAL, "utf8"));
+      for (const [path, value] of Object.entries(before)) {
+        if (!Object.hasOwn(sealed, path) || sealed[path] !== value) throw new Error(`dependency integrity mismatch: ${path}`);
+      }
+      if (missingPackages(PKG_ROOT)?.length === 0 && JSON.stringify(before) !== JSON.stringify(sealed)) {
+        throw new Error("dependency integrity mismatch");
+      }
+    } else if (missingPackages(PKG_ROOT)?.length === 0) {
+      throw new Error("complete dependencies have no integrity seal");
+    }
     repairDeps(); // re-probe: another client may have completed the repair
+    const entries = dependencyEntries();
+    writeFileSync(DEPS_SEAL, JSON.stringify(entries), { mode: 0o600 });
   } finally {
     release(); // includes npm nonzero, missing npm and an unrepairable tree
   }
+}
+
+function dependencyEntries() {
+  const entries = {}, bins = new Map();
+  const lock = JSON.parse(readFileSync(PKG_JSON.replace(/package.json$/, "package-lock.json"), "utf8"));
+  if (!lock.packages || typeof lock.packages !== "object") throw new Error("required package lock missing packages");
+  for (const [pkg, metadata] of Object.entries(lock.packages)) {
+    if (!pkg.startsWith("node_modules/") || !metadata.bin) continue;
+    for (const [name, target] of Object.entries(metadata.bin)) {
+      const destination = resolve(PKG_ROOT, pkg, target);
+      if (name.includes("/") || !destination.startsWith(resolve(PKG_ROOT, pkg) + sep)) {
+        throw new Error("invalid locked dependency bin");
+      }
+      bins.set(join(pkg.slice(0, pkg.lastIndexOf("node_modules/") + "node_modules".length), ".bin", name), destination);
+    }
+  }
+  function walk(path) {
+    const rel = relative(PKG_ROOT, path), st = lstatSync(path);
+    if (st.isSymbolicLink()) {
+      const target = bins.get(rel);
+      if (!target || resolve(dirname(path), readlinkSync(path)) !== target ||
+          realpathSync(target) !== target || !lstatSync(target).isFile()) {
+        throw new Error(`unsupported dependency entry: ${rel}`);
+      }
+      entries[rel] = "link:" + readlinkSync(path);
+    } else if (st.isDirectory()) {
+      entries[rel] = `directory:${st.mode}`;
+      for (const name of readdirSync(path).sort()) walk(join(path, name));
+    } else if (st.isFile()) {
+      entries[rel] = `file:${st.mode}:` + createHash("sha256").update(readFileSync(path)).digest("hex");
+    } else throw new Error(`unsupported dependency entry: ${rel}`);
+  }
+  if (existsSync(NODE_MODULES)) walk(NODE_MODULES);
+  return entries;
 }
 
 function repairDeps() {
@@ -178,21 +295,24 @@ function repairDeps() {
       );
     }
   }
-  // A repair happened and the tree is now complete. The MCP client may have
-  // cached the previous FATALs (mcp-needs-auth-cache.json) — drop our stale
-  // entry so the repaired server is retried rather than stay marked broken.
-  if (clearNeedsAuthCacheEntry()) {
-    process.stderr.write(`[bootstrap] cleared stale needs-auth cache entry\n`);
-  }
+  // Dependency repair owns only the external runtime, never client auth state.
   process.stderr.write(`[bootstrap] npm install OK — starting server\n`);
 }
 
 try {
+  PKG_ROOT = materializeRuntime();
+  PKG_JSON = join(PKG_ROOT, "package.json");
+  NODE_MODULES = join(PKG_ROOT, "node_modules");
+  INSTALL_LOCK = join(PKG_ROOT, ".bootstrap-install.lock");
+  DEPS_SEAL = join(PKG_ROOT, ".bootstrap-deps.json");
   ensureDeps();
+  if (sourceIdentity(dirname(PKG_ROOT), true) !== dirname(PKG_ROOT).split(sep).pop()) {
+    throw new Error("runtime source changed during dependency repair");
+  }
 } catch (error) {
   const message = error.message;
   process.stderr.write(message.startsWith("[bootstrap] FATAL:")
     ? message : `[bootstrap] FATAL: ${message}\n`);
   process.exit(1);
 }
-await import("./index.js");
+await import(pathToFileURL(join(PKG_ROOT, "src", "index.js")).href);
