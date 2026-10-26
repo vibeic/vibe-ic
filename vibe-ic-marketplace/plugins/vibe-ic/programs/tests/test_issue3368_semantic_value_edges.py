@@ -126,6 +126,11 @@ endmodule
         "unsupported": ("data[1:0] == 2'b00", "data[0] + data[1]"),
         "transform": ("payload = flags;", "payload = flags ^ 4'b0001;"),
         "reference": ("extra = 4'b0000;", "extra = payload;"),
+        "wrong_lane": ("flags[3] = data[4]", "flags[2] = data[4]"),
+        "order": ("wire [3:0] flags;", "wire [0:3] flags;"),
+        "root_transform": ("assign flags[3] = data[4];",
+            "wire [4:0] transformed; assign transformed = data + 5'b00001; "
+            "assign flags[3] = transformed[4];"),
     }
     if change:
         source = source.replace(*substitutions[change])
@@ -186,7 +191,8 @@ def test_native_bitfield_source_freshness_is_required(tmp_path):
 
 
 @_NATIVE
-@pytest.mark.parametrize("change", ["partial", "unsupported", "transform", "reference"])
+@pytest.mark.parametrize("change", ["partial", "unsupported", "transform", "reference",
+                                    "wrong_lane", "order", "root_transform"])
 def test_native_bitfield_partial_unsupported_transform_or_reference_refuses(tmp_path, change):
     result, report = _run(tmp_path, _bitfield_fixture(change))
     assert result.returncode in (0, 2), result.stdout + result.stderr

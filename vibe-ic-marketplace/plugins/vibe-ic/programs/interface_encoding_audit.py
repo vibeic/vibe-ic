@@ -1390,6 +1390,31 @@ def _whole_nonencoding_value(wire, producer, producer_port, consumer,
 # ---------------------------------------------------------------------------
 # Closed typed control bitfields
 # ---------------------------------------------------------------------------
+def _bitfield_source_word(module, name):
+    """A lane source is an input word or one unmodified whole input capture."""
+    if module.native.get('ports', {}).get(name, {}).get('direction') == 'input':
+        return True
+    if re.search(r'\b' + re.escape(name) + r'\s*\[[^]]+\]\s*(?:<=|=(?!=))', module.body):
+        return False
+    writes = list(re.finditer(r'(?<![\w$])' + re.escape(name) +
+                               r'\s*(?:<=|=(?!=))\s*([^;]+);', module.body))
+    if len(writes) != 1:
+        return False
+    rhs = re.fullmatch(r'([A-Za-z_]\w*)(?:\s*\[\s*(\d+)\s*:\s*(\d+)\s*\])?',
+                       writes[0].group(1).strip())
+    if rhs is None:
+        return False
+    peer, high, low = rhs.groups()
+    port = module.native.get('ports', {}).get(peer, {})
+    if port.get('direction') != 'input' or port.get('upto'):
+        return False
+    if high is None:
+        return len(port['bits']) == module.native_widths.get(name)
+    high, low = int(high), int(low)
+    return (port.get('offset', 0) <= low <= high < port.get('offset', 0) + len(port['bits'])
+            and high - low + 1 == module.native_widths.get(name))
+
+
 def _bitfield_boolean(expression, module):
     """Width-check a closed Boolean grammar; no numeric encoding is inferred."""
     expression = expression.strip()
@@ -1416,7 +1441,7 @@ def _bitfield_boolean(expression, module):
     if select:
         name, index = select.groups()
         spec = module.native.get('netnames', {}).get(name, {})
-        return (not spec.get('upto') and
+        return (_bitfield_source_word(module, name) and not spec.get('upto') and
                 spec.get('offset', 0) <= int(index) <
                 spec.get('offset', 0) + len(spec.get('bits', [])))
     equality = re.fullmatch(
@@ -1426,7 +1451,8 @@ def _bitfield_boolean(expression, module):
         name, high, low, width, bits = equality.groups()
         high, low, width = int(high), int(low), int(width)
         spec = module.native.get('netnames', {}).get(name, {})
-        return (not spec.get('upto') and high >= low >= spec.get('offset', 0)
+        return (_bitfield_source_word(module, name) and not spec.get('upto')
+                and high >= low >= spec.get('offset', 0)
                 and high < spec.get('offset', 0) + len(spec.get('bits', []))
                 and high - low + 1 == width == len(bits.replace('_', '')))
     return expression in {"1'b0", "1'b1"}
@@ -1475,7 +1501,9 @@ def _bitfield_control_proof(wire, producer, producer_port, consumer,
             or operator >= 2 and tokens[operator - 2][0] == 'assign')):
         return None
     leaf = alias.group(2)
-    if producer.native_widths.get(leaf) != width:
+    leaf_spec = producer.native.get('netnames', {}).get(leaf, {})
+    if (producer.native_widths.get(leaf) != width or leaf_spec.get('upto')
+            or leaf_spec.get('offset', 0) != 0 or leaf_spec.get('bits') != specs[0]['bits']):
         return None
     occurrences = lambda text, name: {m.span() for m in re.finditer(
         r'(?<![\w$])' + re.escape(name) + r'(?![\w$])', text)}
