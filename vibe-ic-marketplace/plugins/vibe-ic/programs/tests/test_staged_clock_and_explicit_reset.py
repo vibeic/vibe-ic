@@ -173,6 +173,33 @@ def test_explicit_sole_clock_does_not_override_ambiguous_or_mismatched_sdc(
             synthesis_only=True)
 
 
+@pytest.mark.parametrize('prose', [
+    'If debug mode is disabled, `clk` is the sole clock, with a 10 ns period.\n',
+    'It is not true that `clk` is the sole clock, with a 10 ns period.\n',
+    ('`clk` is the sole clock, with a 10 ns period, or `aux` is the sole '
+     'clock, with a 20 ns period.\n'),
+], ids=['reviewer_conditional', 'outer_negated', 'alternative'])
+def test_qualified_or_alternative_sole_clock_clause_is_not_authority(
+        tmp_path, prose):
+    generated = _empty_l8_sdc_project(
+        tmp_path, prose,
+        'create_clock -name clk -period 10 [get_ports clk]\n')
+    D._post_emit_sdc_constraints(tmp_path)
+    observed = {}
+    for name in ('L8_RTL_CONSTANTS', 'L8_TIMING_WAVEFORM'):
+        observed[name] = json.loads(
+            (generated / f'{name}.json').read_text())['clock_domains']
+        assert observed[name] == []
+    with pytest.raises(
+            LC.Refusal, match='LL_CLOCK_AMBIGUOUS: 0 primary clocks') as refusal:
+        LC.emit_config(
+            tmp_path, 'neutral', tmp_path / 'phase3/librelane/config.json',
+            synthesis_only=True)
+    print('CLOCK_AUTHORITY_REFUSAL_OBSERVATION ' + json.dumps({
+        'prose': prose.strip(), 'clock_domains': observed,
+        'consumer_refusal': str(refusal.value)}, sort_keys=True))
+
+
 def test_explicit_reset_role_without_timing_does_not_invent_semantics():
     doc = {'ports': [{'name': 'clear_i', 'direction': 'input', 'width': 1}]}
     D._v1_6_369_emit_reset_domains(doc, {'current.md': 'The current reset is clear_i.'})

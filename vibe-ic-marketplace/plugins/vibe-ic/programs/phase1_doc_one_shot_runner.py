@@ -62668,9 +62668,10 @@ def _post_emit_enforce_clock_contract(project: Path) -> List[str]:
 _EXPLICIT_SOLE_CLOCK_PERIOD = re.compile(
     r"`?(?P<name>[A-Za-z_]\w*)`?\s+is\s+the\s+sole\s+clock\s*,?\s*"
     r"(?:with|at)\s+(?:a\s+)?(?P<period>\d+(?:\.\d+)?)\s*"
-    r"(?P<unit>ps|ns|us|µs|μs)\s+period\b",
+    r"(?P<unit>ps|ns|us|µs|μs)\s+period\.?",
     re.IGNORECASE,
 )
+_MARKDOWN_LIST_ITEM_PREFIX = re.compile(r"^(?:[-*+] |\d+[.)] )")
 
 
 def _single_explicit_document_clock(project: Path) -> Optional[dict]:
@@ -62698,7 +62699,11 @@ def _single_explicit_document_clock(project: Path) -> Optional[dict]:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        for match in _EXPLICIT_SOLE_CLOCK_PERIOD.finditer(text):
+        for raw_line in text.splitlines():
+            clause = _MARKDOWN_LIST_ITEM_PREFIX.sub("", raw_line.strip(), count=1)
+            match = _EXPLICIT_SOLE_CLOCK_PERIOD.fullmatch(clause)
+            if match is None:
+                continue
             try:
                 value = float(match.group("period"))
             except (TypeError, ValueError):
