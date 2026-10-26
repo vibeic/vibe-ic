@@ -62720,7 +62720,8 @@ def _explicit_clock_authority_clauses(text: str) -> List[str]:
             item = _TOP_LEVEL_MARKDOWN_LIST_ITEM.fullmatch(line)
             if item is not None and not introduced_by_prose(block_index):
                 clauses.append(item.group("content"))
-            elif line == line.lstrip():
+            elif (line == line.lstrip()
+                  and not introduced_by_prose(block_index)):
                 clauses.append(line)
             continue
         items = []
