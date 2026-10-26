@@ -1861,14 +1861,39 @@
           "id": "default",
           "select_when": "otherwise",
           "provider": "openroad",
-          "tools": "OpenROAD read_upf/evaluate_upf + Python UPF emitter",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "tools": "OpenROAD read_upf/eval_upf + Python UPF emitter",
+          "native_steps": [
+            "OpenROAD.read_upf",
+            "OpenROAD.eval_upf"
+          ],
+          "execution_status": "NATIVE_COMPONENT_ONLY_ROW_METRICS_NOT_MEASURED",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "flow109_frontend",
+            "native_step_id": "flow109.D05",
+            "producer": "l21_to_upf_emit.py:main",
+            "consumer": "flow109_frontend.py:_execute_d05",
+            "engine_families": [
+              "openroad"
+            ],
+            "engine_executables": {
+              "openroad": "openroad"
+            },
+            "engine_steps": {
+              "openroad": [
+                "OpenROAD.read_upf",
+                "OpenROAD.eval_upf"
+              ]
+            },
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "NOT_MEASURED_NATIVE_METHOD_UNAVAILABLE"
+          }
         }
       ],
       "complementary_tools": [],
-      "capability_status": "SELECTED_NOT_ROUTE_QUALIFIED",
-      "availability_status": "NOT_INVENTORIED_THIS_UPDATE",
+      "capability_status": "STRUCTURAL_NATIVE_DEFAULT_DISPATCH",
+      "availability_status": "NATIVE_FRONTDOOR_AVAILABLE_ROW_METRICS_NOT_MEASURED",
       "source_components": [
         "l21_to_upf_emit",
         "power_domain_crossing_check"
@@ -1891,7 +1916,7 @@
             "checker.power_intent.semantic_demand_coverage",
             "producer.power_intent.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "NOT_MEASURED_NATIVE_METHOD_UNAVAILABLE"
         },
         {
           "id": "power_intent.illegal_power_states",
@@ -1911,7 +1936,7 @@
             "checker.power_intent.illegal_power_states",
             "producer.power_intent.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "NOT_MEASURED_NATIVE_METHOD_UNAVAILABLE"
         },
         {
           "id": "power_intent.supply_cell_assignments",
@@ -1930,10 +1955,10 @@
             "checker.power_intent.supply_cell_assignments",
             "producer.power_intent.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "NOT_MEASURED_NATIVE_METHOD_UNAVAILABLE"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "NOT_MEASURED_NATIVE_METHOD_UNAVAILABLE",
       "gate_layer_ids": [
         "G1",
         "G2",

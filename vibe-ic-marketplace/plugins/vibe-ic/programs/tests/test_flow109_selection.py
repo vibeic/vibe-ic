@@ -25,6 +25,31 @@ def profile(name="Small digital IC without DFT"):
     return copy.deepcopy(next(p["features"] for p in registry["reference_profiles"] if p["name"] == name))
 
 
+def test_d05_position5_routes_only_structural_native_evidence_to_existing_frontend():
+    features = profile()
+    features["has_power_intent"] = True
+    plan = flow109.resolve_plan(features)
+    row = flow109.resolve_step(plan, "D05")
+
+    assert row["profile"]["execution_status"] == (
+        "NATIVE_COMPONENT_ONLY_ROW_METRICS_NOT_MEASURED")
+    dispatch = flow109.source_owned_native_dispatch(row)
+
+    assert row["position"] == 5
+    assert dispatch["adapter"] == "flow109_frontend"
+    assert dispatch["producer"] == "l21_to_upf_emit.py:main"
+    assert dispatch["consumer"] == "flow109_frontend.py:_execute_d05"
+    assert row["profile"]["native_steps"] == [
+        "OpenROAD.read_upf", "OpenROAD.eval_upf"]
+    assert row["metric_acceptance_status"] == (
+        "NOT_MEASURED_NATIVE_METHOD_UNAVAILABLE")
+    assert {item["metric"]: item["status"] for item in row["obligations"]} == {
+        "semantic_demand_coverage": "NOT_MEASURED_NATIVE_METHOD_UNAVAILABLE",
+        "illegal_power_states": "NOT_MEASURED_NATIVE_METHOD_UNAVAILABLE",
+        "supply_cell_assignments": "NOT_MEASURED_NATIVE_METHOD_UNAVAILABLE",
+    }
+
+
 def test_source_mapping_preserves_native_identity_and_unfiltered_position():
     source = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "flow", "phase1_phase2_phase3.yaml")
     import yaml

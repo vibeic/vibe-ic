@@ -3728,9 +3728,9 @@ def _main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
     p.add_argument("--flow", choices=("109",), default="109",
-                   help="Canonical public runtime flow (default: 109). The "
-                        "former 70 identity is historical evidence only and "
-                        "is not an executable public mode.")
+                   help="Flow109 canonical public runtime (default: 109), "
+                        "using current D01..D81, A01..A19 and M01..M09 row "
+                        "IDs from flow/flow109.json.")
     p.add_argument("--flow109-manifest", type=Path,
                    help="JSON containing explicit Boolean features, step_profiles, runtime_tool_uses and qualification_registry.")
     p.add_argument("--flow109-plan-only", action="store_true",
@@ -3758,30 +3758,27 @@ def _main() -> int:
                         "LEC unbounded; this is not a wall-clock timeout.")
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--rtl-input", choices=("structured", "original"), default="structured",
-                   help="Step 1/2 input authority; original consumes the complete original specification in a bounded RTL-only window.")
+                   help="RTL authoring input authority; original consumes the complete original specification in a bounded RTL-only window.")
     p.add_argument("--entry-step", default=None,
-                   help="START the flow at this canonical step id. The step "
-                        "decides WHICH runner owns the entry, and THIS "
-                        "orchestrator can be entered at D1 for Phase 1, "
-                        "2/4/1/9/11 for Phase 2, and Phase-3 (15..22/31/37) "
-                        "with --exit-step for a bounded backend window. "
-                        "Analog (A1..A9) steps are owned by "
-                        "analog_one_shot_runner and are REFUSED here: run "
-                        "that runner directly. Only a step that HEADS a "
-                        "dispatch span is enterable; a mid-span step is "
-                        "refused rather than approximated, except Default's "
-                        "native backend rows, which have individual checkpoints. "
-                        "With a window, rc reflects the DISPATCHED STEPS ONLY; whole-flow verdicts come from --refresh-only or an unbounded run.")
+                   help="START an explicit Flow109 window at a current "
+                        "canonical row ID: D01..D81, A01..A19 or M01..M09. "
+                        "The row must be selected and applicable in the "
+                        "--flow109-manifest; the registry routes it to its "
+                        "existing owner or adapter and refuses unsupported "
+                        "owner crossings or unimplemented rows. Supply "
+                        "--exit-step; for one row, pass the same ID to both "
+                        "bounds. Internal numeric/native keys are not public "
+                        "step IDs. Window rc covers dispatched rows only, "
+                        "separate from Flow109 and whole-flow acceptance.")
     p.add_argument("--exit-step", default=None,
-                   help="STOP dispatch after this canonical step id. Phase-2 "
-                        "exits are forwarded to the phase2 runner; Phase-3 "
-                        "entries require an exit and are forwarded to the "
-                        "phase3 runner as a bounded backend window. Sites "
-                        "wholly past the exit are SKIPPED-BY-EXIT (the site "
-                        "holding the exit still runs in full). Omitted: "
-                        "unbounded behavior. With a window, rc reflects the "
-                        "DISPATCHED STEPS ONLY; whole-flow verdicts come from "
-                        "--refresh-only or an unbounded run.")
+                   help="END the explicit Flow109 window inclusively at a "
+                        "current canonical Dxx, Axx or Mxx row ID. It is "
+                        "required with --entry-step; both bounds must be "
+                        "selected and applicable, ordered by the current "
+                        "registry, and supported by compatible registered "
+                        "dispatch owners. Rows outside the window are not "
+                        "dispatched. Window rc covers dispatched rows only, "
+                        "separate from Flow109 and whole-flow acceptance.")
     p.add_argument("--resume-request", type=Path,
                    help="JSON ordinary-recovery request. Retained per-step "
                         "input/output hashes select at most the next "
