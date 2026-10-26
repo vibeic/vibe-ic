@@ -84,10 +84,10 @@ is a fresh, independent tick:
 3. machine-green → run the **one agent gate** (Step-2.7 adversarial
    review). Only a **reproducible HIGH** finding blocks → request-changes;
    continue.
-4. green + no reproducible HIGH → **enqueue to the serialized merge
-   queue**: acquire `.merge.lock`, rebase onto current `origin/main`,
-   **re-run** the required checks on the rebased tree, squash-merge,
-   release the lock, next.
+4. green + no reproducible HIGH → publish the accepted receipt bytes and
+   their independently supplied outer SHA256 pin, then return to the canonical
+   `--service-ready` consumer. Only its READY-bound final writer may acquire
+   the short final lock and perform the squash merge.
 
 The loop is **chip-AGNOSTIC**: every gate and queue rule reads generic PR
 metadata + program verdicts; nothing references `PR-A`, any IC name,
@@ -247,73 +247,14 @@ an already accepted receipt. The bound final writer rechecks
 `GATEKEEPER_READY_ID`, `GATEKEEPER_READY_HEAD`, and `GATEKEEPER_READY_BASE` and
 uses `--match-head-commit`; it never merges a PR number remembered by the caller.
 
-### Step 2.9 — serialized merge queue (the lock + rebase + re-run)
+### Step 2.9 — serialized merge queue (READY-bound final writer)
 
-A green PR does **not** merge immediately. It **enqueues** to a
-**serialized merge queue**: at most one PR merges at a time, repo-wide,
-so two green PRs can't both rebase-and-merge against the same base and
-land a **semantic conflict** that neither one's checks saw. Serialise
-with a repo-level `.merge.lock` reusing the `_runner_lock.py` PID-lock
-pattern (the same single-driver mechanism the one-shot runners use):
-
-```python
-import sys
-sys.path.insert(0, "plugins/vibe-ic/programs")
-import _runner_lock
-
-# repo root is the "project" the lock keys on; runner_name names the queue.
-lock = _runner_lock.acquire(repo_root, runner_name="gatekeeper-merge-queue")
-if lock is None:
-    # Another gatekeeper instance holds the queue (CONCURRENT_RUN_REFUSED
-    # was printed, naming the live holder pid). There must only ever be
-    # ONE gatekeeper, so this means a previous tick is still mid-merge —
-    # back off and retry this PR next tick. NEVER force the lock.
-    sys.exit(0)
-try:
-    #   1. git fetch origin
-    #   2. rebase the PR branch onto CURRENT origin/main (not the base it
-    #      was opened against — the queue may have moved main since)
-    #   3. RE-RUN the required checks on the REBASED tree with
-    #      --version-by-gatekeeper (the PR is VERSION-LESS — the version gate
-    #      DEFERS): gatekeeper_review.py --base origin/main --head <branch>
-    #      --role <author-role> --version-by-gatekeeper. A 3-way merge can be
-    #      clean yet the rebased code semantically conflict (e.g. a function
-    #      this PR calls was renamed by a PR that merged five minutes ago);
-    #      only a re-run on the rebased tree catches it.
-    #   3.05 STALE-BRANCH / phantom-revert (gatekeeper_stale_branch_check — now
-    #      a gatekeeper_review required gate): a PR forked from an OLDER base
-    #      than the current origin/main tip that ALSO touches a file which
-    #      LANDED since the fork (verdict STALE_OVERLAP, rc 1) has a phantom-
-    #      revert trap — a naive `origin/main..HEAD` diff shows a REVERT of that
-    #      landed work, so NEVER land it by a blind `git checkout HEAD -- <f>`
-    #      (or "just take the PR's file versions"). The rebase in step 2 is
-    #      safe because it REPLAYS the PR's commits; when you instead apply a
-    #      delta by hand, cherry-pick the PR's OWN delta
-    #      (`git diff <merge-base>..HEAD`), then grep the intervening fix's
-    #      symbols to prove no false revert. STALE_ADVISORY (rc 0, no shared
-    #      file — the #247 orthogonal shape) cannot phantom-revert; cherry-pick
-    #      of the true delta is still the drift-free default. (Learned #246/#247.)
-    #   3.5 GREEN -> ASSIGN THE VERSION (this is the gatekeeper's sole right):
-    #      gatekeeper_assign_version.py --write reads the CURRENT origin/main
-    #      version and writes the next strictly-monotonic version (patch 0..99;
-    #      x.y.99 -> x.(y+1).0) into plugin.json + marketplace.json on the
-    #      rebased branch; commit it ("vX.Y.Z — assign version for #<n>").
-    #      Because the queue is serialized and rebased onto the latest main,
-    #      this version cannot collide with a sibling PR's.
-    #   3.6 RE-RUN gatekeeper_review.py WITHOUT the flag on the now-versioned
-    #      tree: the monotonic+equality bump is now fully ENFORCED, and the
-    #      cadence-correct suite is required (FULL on an x.y.0 milestone the
-    #      gatekeeper just assigned, TARGETED on a patch). This is the
-    #      gatekeeper OWNING the milestone-cadence decision the author could
-    #      not know.
-    #   4a. both runs GREEN -> squash-merge (one squash commit = the one
-    #      gatekeeper-assigned version bump).
-    #   4b. any run RED     -> EJECT: request-changes with the failure, do NOT
-    #       merge. The PR goes back to the author (version assignment is
-    #       reverted with the branch — it lands only on a clean merge).
-finally:
-    lock.release()   # ALWAYS release — even on eject/exception
-```
+A green PR does **not** merge directly. An accepted receipt enters the
+root-owned atomic manifest and returns to `--service-ready`; only its selected
+READY_ID/HEAD/BASE reaches `--service-final-write` under the short
+`gatekeeper-final.lock`. If no accepted receipt is deliverable, the bounded
+preparation branch may produce one, but it must return here instead of merging
+or repeating acceptance inline. This is the only executable landing route.
 
 The **squash-merge** is load-bearing: **one PR = one squash commit = one
 gatekeeper-assigned version bump**, honoring the **one-version-per-push**
@@ -409,9 +350,9 @@ that also moved on `main` — the phantom-revert shape), verify it on `.112` or
 `refs/pull/<n>/merge` to exist: when the forge merged this same base it
 cross-checks the replayed tree even under the fallback.
 
-```bash
-gh pr merge <num> --squash --delete-branch
-```
+The historical direct `gh pr merge` command is not an executable instruction:
+the canonical cron must return to `--service-ready`, whose READY-bound final
+writer supplies the selected id/head/base and `--match-head-commit`.
 
 The merge uses `--squash` and NEVER `--admin` / `--force` (see §Hard
 rules). After release, the loop moves to the next ready PR. Landing remains

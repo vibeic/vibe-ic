@@ -1904,7 +1904,7 @@ def service_final_write(repo: Path, base: str = "origin/main") -> dict:
     def view():
         viewed = subprocess.run(
             ["gh", "pr", "view", ready_id, "--json",
-             "number,headRefOid,baseRefName,isDraft,state,mergeCommit"],
+             "number,headRefOid,baseRefName,baseRefOid,isDraft,state,mergeCommit"],
             cwd=repo, capture_output=True, text=True, timeout=60)
         if viewed.returncode:
             raise ValueError("cannot bind selected PR: " + viewed.stderr)
@@ -1920,6 +1920,7 @@ def service_final_write(repo: Path, base: str = "origin/main") -> dict:
     if (pr.get("number") != int(ready_id)
             or pr.get("headRefOid") != ready_head
             or pr.get("baseRefName") != "main"
+            or pr.get("baseRefOid") != ready_base
             or pr.get("isDraft") is not False
             or pr.get("state") != "OPEN"):
         raise ValueError("selected PR id/head/base/state no longer match admission")
@@ -1945,6 +1946,7 @@ def service_final_write(repo: Path, base: str = "origin/main") -> dict:
     complete = (readback.get("number") == int(ready_id)
                 and readback.get("headRefOid") == ready_head
                 and readback.get("baseRefName") == "main"
+                and readback.get("baseRefOid") == ready_base
                 and readback.get("isDraft") is False
                 and readback.get("state") == "MERGED"
                 and isinstance(merge_oid, str)

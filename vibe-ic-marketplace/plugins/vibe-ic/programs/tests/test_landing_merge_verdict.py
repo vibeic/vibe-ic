@@ -4138,7 +4138,7 @@ def test_ready_service_prefers_reusable_receipt_before_unrelated_impacted_checks
 
 
 def _fake_gh(tmp_path, monkeypatch, *, number, head, base="main",
-             final_state="MERGED"):
+             base_oid=None, final_state="MERGED"):
     calls = tmp_path / "gh-calls.jsonl"
     bindir = tmp_path / "bin"
     bindir.mkdir()
@@ -4156,6 +4156,7 @@ if args[:2] == ['pr', 'view']:
     print(json.dumps({'number': int(os.environ['FAKE_GH_NUMBER']),
                       'headRefOid': os.environ['FAKE_GH_HEAD'],
                       'baseRefName': os.environ['FAKE_GH_BASE'],
+                      'baseRefOid': os.environ['FAKE_GH_BASE_OID'],
                       'isDraft': False, 'state': state,
                       'mergeCommit': {'oid': os.environ['FAKE_GH_MERGE_OID']}
                                      if state == 'MERGED' else None}))
@@ -4170,6 +4171,7 @@ raise SystemExit(2)
     monkeypatch.setenv("FAKE_GH_NUMBER", str(number))
     monkeypatch.setenv("FAKE_GH_HEAD", head)
     monkeypatch.setenv("FAKE_GH_BASE", base)
+    monkeypatch.setenv("FAKE_GH_BASE_OID", base_oid or head)
     monkeypatch.setenv("FAKE_GH_FINAL_STATE", final_state)
     monkeypatch.setenv("FAKE_GH_MERGE_OID", "a" * 40)
     return calls
@@ -4195,7 +4197,8 @@ def test_canonical_gatekeeper_loop_calls_service_and_bound_final_writer(
     entry["id"] = "47"
     main = git("rev-parse", "main")
     git("update-ref", "refs/remotes/origin/main", main)
-    calls = _fake_gh(tmp_path, monkeypatch, number=47, head=entry["head"])
+    calls = _fake_gh(tmp_path, monkeypatch, number=47, head=entry["head"],
+                     base_oid=main)
     receipt_root = root / ".git" / "gatekeeper-ready-receipts"
     receipt_root.mkdir(mode=0o700)
     installed_receipt = receipt_root / "verify-47.json"
@@ -4239,11 +4242,11 @@ def test_canonical_gatekeeper_loop_calls_service_and_bound_final_writer(
     observed = [json.loads(line) for line in calls.read_text().splitlines()]
     assert observed == [
         ["pr", "view", "47", "--json",
-         "number,headRefOid,baseRefName,isDraft,state,mergeCommit"],
+         "number,headRefOid,baseRefName,baseRefOid,isDraft,state,mergeCommit"],
         ["pr", "merge", "47", "--squash", "--delete-branch",
          "--match-head-commit", entry["head"]],
         ["pr", "view", "47", "--json",
-         "number,headRefOid,baseRefName,isDraft,state,mergeCommit"]]
+         "number,headRefOid,baseRefName,baseRefOid,isDraft,state,mergeCommit"]]
 
 
 def test_service_final_writer_refuses_a_different_pr_head_without_merge(
@@ -4252,7 +4255,8 @@ def test_service_final_writer_refuses_a_different_pr_head_without_merge(
     entry["id"] = "48"
     main = git("rev-parse", "main")
     git("update-ref", "refs/remotes/origin/main", main)
-    calls = _fake_gh(tmp_path, monkeypatch, number=48, head=main)
+    calls = _fake_gh(tmp_path, monkeypatch, number=48, head=main,
+                     base_oid=main)
     final = [sys.executable, str(_service_program()), "--service-final-write",
              "--repo", str(root), "--base", "origin/main"]
     rc, result = run(final_command=final, base="origin/main")
@@ -4263,7 +4267,7 @@ def test_service_final_writer_refuses_a_different_pr_head_without_merge(
     assert "id/head/base/state no longer match" in bound["reason"]
     observed = [json.loads(line) for line in calls.read_text().splitlines()]
     assert observed == [["pr", "view", "48", "--json",
-                         "number,headRefOid,baseRefName,isDraft,state,mergeCommit"]]
+                         "number,headRefOid,baseRefName,baseRefOid,isDraft,state,mergeCommit"]]
 
 
 def test_service_final_writer_refuses_rc0_while_remote_is_still_open(
@@ -4273,7 +4277,7 @@ def test_service_final_writer_refuses_rc0_while_remote_is_still_open(
     main = git("rev-parse", "main")
     git("update-ref", "refs/remotes/origin/main", main)
     calls = _fake_gh(tmp_path, monkeypatch, number=49, head=entry["head"],
-                     final_state="OPEN")
+                     base_oid=main, final_state="OPEN")
     final = [sys.executable, str(_service_program()), "--service-final-write",
              "--repo", str(root), "--base", "origin/main"]
     rc, result = run(final_command=final, base="origin/main")
@@ -4285,6 +4289,42 @@ def test_service_final_writer_refuses_rc0_while_remote_is_still_open(
     observed = [json.loads(line) for line in calls.read_text().splitlines()]
     assert [row[:2] for row in observed] == [
         ["pr", "view"], ["pr", "merge"], ["pr", "view"]]
+
+
+def test_service_final_writer_refuses_a_moved_remote_base_without_merge(
+        ready_service, tmp_path, monkeypatch):
+    root, git, entry, receipt, run, marker = ready_service
+    entry["id"] = "51"
+    main = git("rev-parse", "main")
+    git("update-ref", "refs/remotes/origin/main", main)
+    calls = _fake_gh(tmp_path, monkeypatch, number=51, head=entry["head"],
+                     base_oid="b" * 40)
+    final = [sys.executable, str(_service_program()), "--service-final-write",
+             "--repo", str(root), "--base", "origin/main"]
+    rc, result = run(final_command=final, base="origin/main")
+
+    assert rc.returncode != 0 and result["status"] == "BLOCKED_FINAL_WRITE"
+    bound = json.loads(result["stdout"])
+    assert bound["status"] == "BLOCKED_FINAL_WRITE_BINDING"
+    assert "id/head/base/state no longer match" in bound["reason"]
+    observed = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert observed == [["pr", "view", "51", "--json",
+                         "number,headRefOid,baseRefName,baseRefOid,isDraft,state,mergeCommit"]]
+
+
+def test_canonical_gatekeeper_entry_has_no_legacy_unbound_writer_or_rerun():
+    skill = _GATEKEEPER_SKILL.read_text()
+    cron = skill.split("## Cron-invocation template", 1)[1].split(
+        "## Reference", 1)[0]
+    executable = "\n".join(re.findall(
+        r"```(?:bash|sh|python)?\n(.*?)```", skill, re.DOTALL))
+
+    assert not re.search(r"(?m)^\s*gh pr merge\b", executable)
+    assert "RE-RUN the required checks on the REBASED tree" not in executable
+    assert "RE-RUN gatekeeper_review.py" not in executable
+    assert "--service-ready" in cron
+    assert "--service-final-write" in cron
+    assert "BLOCKED_NO_ACCEPTED_CANDIDATE" in cron
 
 
 @pytest.mark.parametrize("kind", ["missing-outer-pin", "forged-outer-pin"])
