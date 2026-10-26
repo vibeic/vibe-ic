@@ -147,6 +147,12 @@ _PERIOD_STATEMENT = re.compile(
     r"\bclock\s+period\s+(?:is|=|:)\s*(\d+(?:\.\d+)?)\s*(ps|ns|us)\b",
     re.IGNORECASE)
 
+# Count all time values, not only repetitions of the full period phrase.
+_TIME_LITERAL = re.compile(
+    r"(?<![\w.])[+-]?\d+(?:\.\d+)?\s*(?:ps|ns|us|µs|μs|ms|s)\b", re.IGNORECASE)
+_PERIOD_ALTERNATIVE = re.compile(
+    r"(?:\b(?:or|to|min|max|minimum|maximum)\b|[-–—/])\s*[+-]?\d", re.IGNORECASE)
+
 _MD_TABLE_SEP = re.compile(r"^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$")
 
 
@@ -362,7 +368,9 @@ def derive(project: Path) -> Dict[str, Any]:
                 in_table = False
                 periods = list(_PERIOD_STATEMENT.finditer(line))
                 names = _row_clock_names([line], declared)
-                if len(periods) != 1 or len(names) != 1 or is_denied(line):
+                if (len(periods) != 1 or len(names) != 1 or is_denied(line)
+                        or len(_TIME_LITERAL.findall(line)) != 1
+                        or _PERIOD_ALTERNATIVE.search(line)):
                     continue
                 match = periods[0]
                 ns = float(match[1]) * {"ps": 0.001, "ns": 1.0, "us": 1000.0}[match[2].lower()]
