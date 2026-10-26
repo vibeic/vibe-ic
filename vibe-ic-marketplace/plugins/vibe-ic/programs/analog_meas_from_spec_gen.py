@@ -2,17 +2,14 @@
 """analog_meas_from_spec_gen.py — deterministic `.meas` statement generator
 from an analog block spec.json.
 
-Rule (from skill `analog-netlist-gen`):
-    Each spec key maps to a templated ngspice `.meas` line:
-      * a DC operating-point spec (vout_dc, vref, ...)  -> `.meas DC ...`
-      * a small-signal AC spec (gain_db, ugbw, pm, ...)  -> `.meas AC  ...`
-      * a transient timing spec (tpd, tr, tf, slew, ...) -> `.meas TRAN ...`
-    Given spec.json this is DETERMINISTIC template emission, not authoring.
+Rule: a generated command must be an explicit source-spec binding. Metric names
+may identify declarations that need bindings, but never select a node, branch,
+frequency, threshold, edge, statistic, window, unit, or analysis by themselves.
 
 This program reads `<block>/spec.json` and emits the corresponding `.meas`
 deck to stdout (or --out). It is a GENERATOR, so its "PASS" (exit 0) means
 "emitted >= 1 .meas line from real spec keys"; it FAILs honestly when the
-spec is missing/garbage/has no recognizable measurable keys.
+spec is missing/garbage or has no fully bound measurable keys.
 
 Spec key classification (case-insensitive substring / suffix):
     DC   : '_dc', 'vout', 'vref', 'vbias', 'iq', 'idd', 'idd_', 'pwr_dc'
@@ -26,27 +23,24 @@ Two input shapes are accepted:
   * canonical list: {"specs": [{"name": "tpd", "target": 5.0,
                                 "unit": "ns", ...}, ...]}
 
-Targets, bounds, and units are copied verbatim into trailing comments.  They
-are never converted, defaulted, or used as simulated values.  A canonical-list
-row with no supported measurement template (notably ENOB/SNDR, which require a
-coherent stimulus and an appropriate capture) makes the generator refuse the
-whole deck.  It never emits a partial deck that could be mistaken for coverage
-of every declared measurement.  Explicit measurement-window metadata is also
-refused until a template can apply that window, rather than silently dropping
-it.  Canonical-list DC and AC rows likewise refuse when the schema does not
-declare the required sweep point or AC frequency; the legacy map interface is
-left unchanged for its existing callers.
+Targets, bounds, and units are copied verbatim into source-binding comments.
+They are never converted, defaulted, or used as simulated values. Every
+recognized map entry and canonical-list row requires a nonempty source unit and
+an explicit ``measurement`` object. A missing, duplicated, unsupported, or
+invalid binding refuses the whole deck; the generator never emits a partial
+deck that could be mistaken for coverage of every declared measurement.
 
-Explicit ``measurement`` bindings may instead declare OP/DC/AC, the native
-expression, and the DC point or AC frequency. ``first``/``last`` selects the
-actual endpoint sample without extrapolating beyond a numerical sweep.
-They are callable through ``measurement_commands`` as well as canonical rows.
+Explicit ``measurement`` bindings declare OP/DC/AC/TRAN, the native expression,
+and the DC point, AC frequency, or transient statistic and time window.
+``first``/``last`` selects an actual endpoint sample without extrapolation.
+The exact source-file digest and normalized measurement-row digest are emitted
+with the commands so downstream evidence remains bound to its declarations.
 
 Honest-FAIL guarantees:
   * missing spec.json                       -> exit 1, no output
   * spec.json that is not valid JSON        -> exit 2
   * spec.json with no measurable keys       -> exit 1 (NO_MEASURABLE_KEYS)
-  * a valid spec with >=1 measurable key    -> exit 0 + emitted deck
+  * a valid spec with >=1 bound measurement -> exit 0 + emitted deck
 
 Usage:
     python3 analog_meas_from_spec_gen.py <spec.json>
@@ -63,6 +57,7 @@ chip-AGNOSTIC.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -79,7 +74,8 @@ TRAN_TOKENS = ("tpd", "_tr", "_tf", "slew", "settling", "rise", "fall",
                "jitter", "period", "tphl", "tplh", "delay")
 
 
-def measurement_commands(key: str, binding: dict) -> Tuple[List[str], str]:
+def measurement_commands(key: str, binding: dict, *, stop_s=None,
+                         start_s=0.0) -> Tuple[List[str], str]:
     """Emit controls for an explicitly bound native expression and point.
 
     Bindings are ordinary source/testbench inputs. No node, current branch,
@@ -89,13 +85,24 @@ def measurement_commands(key: str, binding: dict) -> Tuple[List[str], str]:
         raise ValueError("measurement name/binding is invalid")
     analysis = str(binding.get("analysis", "")).upper()
     expression = binding.get("expression")
-    if analysis not in ("OP", "DC", "AC") or not isinstance(expression, str) or not expression.strip():
-        raise ValueError("explicit OP/DC/AC analysis and native expression required")
+    if analysis not in ("OP", "DC", "AC", "TRAN") or not isinstance(expression, str) or not expression.strip():
+        raise ValueError("explicit OP/DC/AC/TRAN analysis and native expression required")
     if any(char in expression for char in "\r\n;"):
         raise ValueError("measurement expression must be a single native expression")
     vector = "bound_" + key
     lines = [f"let {vector} = {expression}"]
-    if analysis == "OP":
+    if analysis == "TRAN":
+        statistic = str(binding.get("statistic", "")).upper()
+        first, last = binding.get("from_s"), binding.get("to_s")
+        if statistic not in ("AVG", "RMS", "MAX", "MIN", "INTEG"):
+            raise ValueError("explicit native TRAN statistic required")
+        if any(isinstance(value, bool) or not isinstance(value, (int, float))
+               or not math.isfinite(value) for value in (first, last)) or not 0 <= first < last:
+            raise ValueError("finite nonempty TRAN measurement window required")
+        if first < start_s or (stop_s is not None and last > stop_s):
+            raise ValueError("TRAN measurement window exceeds the retained analysis interval")
+        lines.append(f"meas TRAN {key} {statistic} {vector} FROM={first:.17g} TO={last:.17g}")
+    elif analysis == "OP":
         lines.append(f'echo "MEAS {key}=" $&{vector}')
     else:
         point = binding.get("frequency_hz" if analysis == "AC" else "at")
@@ -124,29 +131,14 @@ def _classify(key: str) -> Optional[str]:
     return None
 
 
-def _value_comment(val) -> str:
-    if isinstance(val, dict):
-        fields = []
-        for key in ("value", "target", "min", "max", "unit"):
-            if val.get(key) is not None:
-                fields.append(f"{key}={val[key]}")
-        return "  $ " + " ".join(fields) if fields else ""
-    if isinstance(val, (int, float, str)):
-        return f"  $ target={val}"
-    return ""
-
-
-def _emit_line(key: str, kind: str, val) -> str:
-    comment = _value_comment(val)
-    if kind == "DC":
-        return f".meas DC {key} FIND V(vout) AT=last{comment}"
-    if kind == "AC":
-        if "pm" in key.lower() or "phase" in key.lower():
-            return f".meas AC {key} FIND VP(vout) WHEN VDB(vout)=0{comment}"
-        return f".meas AC {key} FIND VDB(vout) AT=1k{comment}"
-    # TRAN
-    return (f".meas TRAN {key} TRIG V(in) VAL=vmid RISE=1 "
-            f"TARG V(out) VAL=vmid FALL=1{comment}")
+def _source_binding_comment(key: str, row: dict) -> str:
+    payload = {**row, "name": key}
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                         ensure_ascii=False).encode()
+    fields = [f"{field}={row[field]}" for field in
+              ("target", "min", "max", "unit") if row.get(field) is not None]
+    fields.append("row_sha256=" + hashlib.sha256(encoded).hexdigest())
+    return "* source_measurement " + key + " " + " ".join(fields)
 
 
 def _flatten_spec(spec: dict) -> Tuple[Dict[str, object], List[dict], List[dict]]:
@@ -159,17 +151,25 @@ def _flatten_spec(spec: dict) -> Tuple[Dict[str, object], List[dict], List[dict]
     candidates: Dict[str, object] = {}
     declared: List[dict] = []
     malformed: List[dict] = []
+    seen = set()
     for key, value in spec.items():
         if key not in ("specs", "targets"):
             candidates[key] = value
+            seen.add(key.casefold())
     for container_name in ("specs", "targets"):
         container = spec.get(container_name)
         if isinstance(container, dict):
             for key, value in container.items():
                 if key not in ("specs", "targets"):
+                    owner = key.casefold()
+                    if owner in seen:
+                        malformed.append({"container": container_name,
+                                          "name": key,
+                                          "reason": "duplicate_name"})
+                        continue
                     candidates[key] = value
+                    seen.add(owner)
         elif isinstance(container, list):
-            seen = set()
             for index, row in enumerate(container):
                 if not isinstance(row, dict):
                     malformed.append({"container": container_name,
@@ -183,12 +183,13 @@ def _flatten_spec(spec: dict) -> Tuple[Dict[str, object], List[dict], List[dict]
                                       "reason": "name_missing"})
                     continue
                 name = name.strip()
-                if name in seen:
+                owner = name.casefold()
+                if owner in seen:
                     malformed.append({"container": container_name,
                                       "index": index, "name": name,
                                       "reason": "duplicate_name"})
                     continue
-                seen.add(name)
+                seen.add(owner)
                 declared.append(row)
                 candidates[name] = row
     return candidates, declared, malformed
@@ -202,6 +203,10 @@ def _unsupported_rows(rows: List[dict]) -> List[dict]:
         name = str(row["name"]).strip()
         windows = {key: row[key] for key in window_keys if key in row}
         if "measurement" in row and not windows:
+            if not isinstance(row.get("unit"), str) or not row["unit"].strip():
+                unsupported.append({"name": name,
+                                    "reason": "source_unit_not_declared"})
+                continue
             try:
                 measurement_commands(name, row["measurement"])
             except ValueError as exc:
@@ -223,6 +228,11 @@ def _unsupported_rows(rows: List[dict]) -> List[dict]:
                     "name": name,
                     "reason": "ac_frequency_binding_not_declared",
                     "unit": row.get("unit")})
+            elif kind == "TRAN":
+                unsupported.append({
+                    "name": name,
+                    "reason": "measurement_binding_not_declared",
+                    "unit": row.get("unit")})
             elif kind is None:
                 unsupported.append({
                     "name": name,
@@ -243,15 +253,13 @@ def generate(spec: dict) -> Tuple[List[str], List[Tuple[str, str]]]:
         if key in unsupported_names:
             continue
         if isinstance(candidates[key], dict) and "measurement" in candidates[key]:
+            lines.append(_source_binding_comment(key, candidates[key]))
             commands, kind = measurement_commands(key, candidates[key]["measurement"])
             lines.extend(commands)
             emitted.append((key, kind))
             continue
-        kind = _classify(key)
-        if kind is None:
-            continue
-        lines.append(_emit_line(key, kind, candidates[key]))
-        emitted.append((key, kind))
+        # A name is classification metadata, not a source-bound probe. Never
+        # invent a node, threshold, frequency, edge, or analysis from it.
     return lines, emitted
 
 
@@ -260,7 +268,8 @@ def run(spec_path: Path) -> Tuple[int, dict, str]:
         return 1, {"pass": False, "reason": "spec_missing",
                    "spec": str(spec_path)}, ""
     try:
-        raw = spec_path.read_text(encoding="utf-8", errors="replace")
+        source_bytes = spec_path.read_bytes()
+        raw = source_bytes.decode("utf-8", errors="replace")
         spec = json.loads(raw)
     except json.JSONDecodeError as exc:
         return 2, {"pass": False, "reason": f"json_error: {exc}",
@@ -272,11 +281,30 @@ def run(spec_path: Path) -> Tuple[int, dict, str]:
         return 2, {"pass": False, "reason": "spec_not_object",
                    "spec": str(spec_path)}, ""
 
-    _, declared, malformed = _flatten_spec(spec)
+    candidates, declared, malformed = _flatten_spec(spec)
     if malformed:
         return 2, {"pass": False, "reason": "malformed_measurement_rows",
                    "spec": str(spec_path), "rows": malformed}, ""
     unsupported = _unsupported_rows(declared)
+    declared_names = {str(row["name"]).strip().casefold() for row in declared}
+    for name, row in candidates.items():
+        if name.casefold() in declared_names:
+            continue
+        if isinstance(row, dict) and "measurement" in row:
+            if not isinstance(row.get("unit"), str) or not row["unit"].strip():
+                unsupported.append({"name": name,
+                                    "reason": "source_unit_not_declared"})
+                continue
+            try:
+                measurement_commands(name, row["measurement"])
+            except ValueError as exc:
+                unsupported.append({"name": name,
+                                    "reason": "invalid_measurement_binding",
+                                    "detail": str(exc)})
+        elif _classify(name) is not None:
+            unsupported.append({"name": name,
+                                "reason": "measurement_binding_not_declared",
+                                "unit": row.get("unit") if isinstance(row, dict) else None})
     deck_lines, emitted = generate(spec)
     if unsupported:
         return 1, {"pass": False, "reason": "unsupported_measurements",
@@ -286,6 +314,8 @@ def run(spec_path: Path) -> Tuple[int, dict, str]:
         return 1, {"pass": False, "reason": "no_measurable_keys",
                    "spec": str(spec_path), "meas_lines": 0}, ""
 
+    source_sha256 = hashlib.sha256(source_bytes).hexdigest()
+    deck_lines.insert(1, f"* source_spec_sha256={source_sha256}")
     deck = "\n".join(deck_lines) + "\n"
     summary = {
         "pass": True,
@@ -293,6 +323,7 @@ def run(spec_path: Path) -> Tuple[int, dict, str]:
         "meas_lines": len(emitted),
         "emitted": [{"key": k, "kind": kind} for k, kind in emitted],
         "schema": "canonical_list" if declared else "map",
+        "source_spec_sha256": source_sha256,
     }
     return 0, summary, deck
 

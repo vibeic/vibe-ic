@@ -38,6 +38,25 @@ def test_incomplete_or_multicommand_explicit_binding_is_refused(binding):
         generator.measurement_commands("output_metric", binding)
 
 
+@pytest.mark.parametrize("statistic", ["AVG", "RMS", "MAX", "MIN", "INTEG"])
+def test_explicit_transient_statistic_uses_native_time_window(statistic):
+    lines, kind = generator.measurement_commands("idd", {"analysis": "TRAN",
+        "expression": "-i(v_supply)", "statistic": statistic, "from_s": 7e-6, "to_s": 9e-6}, stop_s=9.1e-6)
+    assert kind == "TRAN" and lines[0] == "let bound_idd = -i(v_supply)"
+    assert lines[1] == f"meas TRAN idd {statistic} bound_idd FROM={7e-6:.17g} TO={9e-6:.17g}"
+    assert not any("mean(" in line or "avg(" in line for line in lines)
+
+
+@pytest.mark.parametrize("changed", [{"statistic": "mean"}, {"from_s": -1},
+    {"from_s": True}, {"from_s": float("nan")}, {"to_s": float("inf")},
+    {"to_s": 1e-6}, {"to_s": 12e-6}])
+def test_invalid_transient_statistic_or_window_is_refused(changed):
+    binding = {"analysis": "TRAN", "expression": "v(out)", "statistic": "AVG",
+               "from_s": 1e-6, "to_s": 9e-6, **changed}
+    with pytest.raises(ValueError):
+        generator.measurement_commands("metric", binding, stop_s=9.1e-6)
+
+
 def _run(spec_path: Path, out: Path = None, jpath: Path = None):
     cmd = [sys.executable, str(PROG), str(spec_path)]
     if out:
@@ -48,10 +67,14 @@ def _run(spec_path: Path, out: Path = None, jpath: Path = None):
 
 
 def test_pass_emits_dc_ac_tran(tmp_path):
-    spec = {
-        "vout_dc": {"value": 3.3, "unit": "V"},
-        "gain_db": 60,
-        "tpd": {"value": 5, "unit": "ns"},
+    spec = {"specs": [
+        {"name": "vout_dc", "value": 3.3, "unit": "V", "measurement":
+            {"analysis": "DC", "expression": "v(result)", "at": "last"}},
+        {"name": "gain_db", "value": 60, "unit": "dB", "measurement":
+            {"analysis": "AC", "expression": "vdb(result)", "frequency_hz": 1700}},
+        {"name": "tpd", "value": 5, "unit": "ns", "measurement":
+            {"analysis": "TRAN", "expression": "v(result)", "statistic": "MAX",
+             "from_s": 1e-9, "to_s": 5e-9}}],
         "name": "amp",          # non-measurable, ignored
     }
     sp = tmp_path / "spec.json"
@@ -64,13 +87,19 @@ def test_pass_emits_dc_ac_tran(tmp_path):
     assert rep["summary"]["pass"] is True
     assert rep["summary"]["meas_lines"] == 3
     deck = out.read_text()
-    assert ".meas DC vout_dc" in deck
-    assert ".meas AC gain_db" in deck
-    assert ".meas TRAN tpd" in deck
+    assert "let bound_vout_dc = v(result)" in deck
+    assert "meas AC gain_db FIND bound_gain_db AT=1700" in deck
+    assert "meas TRAN tpd MAX bound_tpd" in deck
+    assert "V(vout)" not in deck and "AT=1k" not in deck and "VAL=vmid" not in deck
 
 
 def test_pass_nested_specs_object(tmp_path):
-    spec = {"specs": {"vref": 1.2, "ugbw": 1e6}}
+    spec = {"specs": {
+        "vref": {"value": 1.2, "unit": "V", "measurement":
+                 {"analysis": "OP", "expression": "v(reference)"}},
+        "ugbw": {"value": 1e6, "unit": "Hz", "measurement":
+                 {"analysis": "AC", "expression": "vdb(result)",
+                  "frequency_hz": 1e6}}}}
     sp = tmp_path / "spec.json"
     sp.write_text(json.dumps(spec))
     jp = tmp_path / "r.json"
@@ -78,13 +107,16 @@ def test_pass_nested_specs_object(tmp_path):
     assert r.returncode == 0
     rep = json.loads(jp.read_text())
     kinds = {e["kind"] for e in rep["summary"]["emitted"]}
-    assert {"DC", "AC"} <= kinds
+    assert kinds == {"OP", "AC"}
 
 
 def test_pass_canonical_specs_list_preserves_declared_target_bounds_and_unit(
         tmp_path):
     spec = {"specs": [{"name": "tpd", "target": 5.0,
-                        "min": 4.0, "max": 6.0, "unit": "ns"}]}
+                        "min": 4.0, "max": 6.0, "unit": "ns",
+                        "measurement": {"analysis": "TRAN",
+                            "expression": "v(result)", "statistic": "MAX",
+                            "from_s": 1e-9, "to_s": 5e-9}}]}
     sp = tmp_path / "spec.json"
     sp.write_text(json.dumps(spec))
     out = tmp_path / "meas.inc"
@@ -94,26 +126,35 @@ def test_pass_canonical_specs_list_preserves_declared_target_bounds_and_unit(
     rep = json.loads(jp.read_text())
     assert rep["summary"]["schema"] == "canonical_list"
     assert rep["summary"]["emitted"] == [{"key": "tpd", "kind": "TRAN"}]
-    assert ("$ target=5.0 min=4.0 max=6.0 unit=ns" in out.read_text())
+    assert ("source_measurement tpd target=5.0 min=4.0 max=6.0 unit=ns row_sha256="
+            in out.read_text())
 
 
 def test_canonical_list_and_map_emit_the_same_measurement(tmp_path):
     map_spec = tmp_path / "map.json"
     list_spec = tmp_path / "list.json"
     map_spec.write_text(json.dumps(
-        {"tpd": {"target": 5.0, "unit": "ns"}}))
+        {"tpd": {"target": 5.0, "unit": "ns", "measurement":
+                 {"analysis": "TRAN", "expression": "v(result)",
+                  "statistic": "MAX", "from_s": 1e-9, "to_s": 5e-9}}}))
     list_spec.write_text(json.dumps(
-        {"specs": [{"name": "tpd", "target": 5.0, "unit": "ns"}]}))
+        {"specs": [{"name": "tpd", "target": 5.0, "unit": "ns",
+                    "measurement": {"analysis": "TRAN", "expression": "v(result)",
+                                    "statistic": "MAX", "from_s": 1e-9,
+                                    "to_s": 5e-9}}]}))
     map_result = _run(map_spec)
     list_result = _run(list_spec)
     assert map_result.returncode == list_result.returncode == 0
-    assert map_result.stdout == list_result.stdout
+    assert map_result.stdout.splitlines()[2:] == list_result.stdout.splitlines()[2:]
+    assert map_result.stdout.splitlines()[1] != list_result.stdout.splitlines()[1]
 
 
 def test_refuses_entire_deck_when_enob_has_no_coherent_measurement_contract(
         tmp_path):
     spec = {"specs": [
-        {"name": "tpd", "target": 5.0, "unit": "ns"},
+        {"name": "tpd", "target": 5.0, "unit": "ns", "measurement":
+            {"analysis": "TRAN", "expression": "v(result)", "statistic": "MAX",
+             "from_s": 1e-9, "to_s": 5e-9}},
         {"name": "enob", "min": 14.0, "unit": "bit"},
     ]}
     sp = tmp_path / "spec.json"
@@ -146,6 +187,81 @@ def test_refuses_explicit_window_instead_of_silently_dropping_it(tmp_path):
         "name": "settling", "reason": "unsupported_measurement_window",
         "window": {"measurement_window": {"from_s": 1e-6,
                                              "to_s": 3e-6}}}]
+
+
+def test_source_unit_mutation_refuses_instead_of_emitting_unbound_measurement(tmp_path):
+    spec = {"specs": [{"name": "settling", "max": 4.0, "unit": "us",
+        "measurement": {"analysis": "TRAN", "expression": "v(result)",
+                        "statistic": "AVG", "from_s": 1e-6, "to_s": 3e-6}}]}
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps(spec))
+    rc, summary, deck = generator.run(path)
+    assert rc == 0
+    assert summary["source_spec_sha256"] in deck
+    del spec["specs"][0]["unit"]
+    path.write_text(json.dumps(spec))
+    rc, summary, deck = generator.run(path)
+    assert rc == 1
+    assert summary["unsupported"] == [{
+        "name": "settling", "reason": "source_unit_not_declared"}]
+    assert deck == ""
+
+
+def test_recognizable_map_key_without_binding_refuses_instead_of_inventing_defaults(tmp_path):
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps({"vout_dc": {"value": 1.7, "unit": "V"}}))
+    rc, summary, deck = generator.run(path)
+    assert rc == 1
+    assert summary["unsupported"] == [{"name": "vout_dc",
+        "reason": "measurement_binding_not_declared", "unit": "V"}]
+    assert deck == ""
+
+
+def test_duplicate_measurement_name_across_source_containers_is_ambiguous(tmp_path):
+    bound = {"name": "response", "unit": "V", "measurement":
+             {"analysis": "OP", "expression": "v(result)"}}
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps({"specs": [bound], "targets": [bound]}))
+    rc, summary, deck = generator.run(path)
+    assert rc == 2
+    assert summary["rows"] == [{"container": "targets", "index": 0,
+                                 "name": "response", "reason": "duplicate_name"}]
+    assert deck == ""
+
+
+def test_custom_map_binding_requires_source_unit(tmp_path):
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps({"custom_metric": {
+        "measurement": {"analysis": "OP", "expression": "v(result)"}}}))
+    rc, summary, deck = generator.run(path)
+    assert rc == 1
+    assert summary["unsupported"] == [{
+        "name": "custom_metric", "reason": "source_unit_not_declared"}]
+    assert deck == ""
+
+
+def test_custom_map_binding_with_unit_remains_supported(tmp_path):
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps({"custom_metric": {"unit": "V",
+        "measurement": {"analysis": "OP", "expression": "v(result)"}}}))
+    rc, summary, deck = generator.run(path)
+    assert rc == 0
+    assert summary["emitted"] == [{"key": "custom_metric", "kind": "OP"}]
+    assert "source_measurement custom_metric unit=V row_sha256=" in deck
+
+
+def test_casefold_duplicate_across_source_containers_is_ambiguous(tmp_path):
+    path = tmp_path / "spec.json"
+    path.write_text(json.dumps({
+        "specs": [{"name": "Gain", "unit": "dB", "measurement":
+                   {"analysis": "OP", "expression": "v(a)"}}],
+        "targets": [{"name": "gain", "unit": "dB", "measurement":
+                     {"analysis": "OP", "expression": "v(b)"}}]}))
+    rc, summary, deck = generator.run(path)
+    assert rc == 2
+    assert summary["rows"] == [{"container": "targets", "index": 0,
+                                 "name": "gain", "reason": "duplicate_name"}]
+    assert deck == ""
 
 
 def test_fail_missing_spec(tmp_path):
