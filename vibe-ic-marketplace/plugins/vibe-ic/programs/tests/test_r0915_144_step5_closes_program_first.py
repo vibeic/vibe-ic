@@ -286,3 +286,100 @@ def test_red_a_property_over_dut_reg_is_refused_not_proved(tmp_path):
     assert "HIERARCHICAL_REFERENCE_UNBOUND" in res["refusal"]
     assert rep["verdict"] == "FAIL"
     assert any("HIERARCHICAL_REFERENCE_UNBOUND" in f for f in rep["findings"])
+
+
+def _provenance_declarations(tmp_path):
+    import hashlib
+    l8 = _l8()
+    wave = l8['clock_and_reset_waveform']
+    clock = wave['clocks'][0]
+    clock['semantic_provenance'] = {'edge': {
+        'kind': 'convention', 'rule': 'default_positive_clock_edge'}}
+    l8['clock_domains'] = [json.loads(json.dumps(clock))]
+    quote = '| `rst` | 1-bit | input | 同步 reset(**active-high**);assertion 後一個 cycle 內所有內部狀態歸零 |'
+    source = tmp_path / 'input/docs/interface.md'
+    source.parent.mkdir(parents=True)
+    source.write_text(quote + '\n')
+    basis = {'file': 'input/docs/interface.md', 'line': 1, 'quote': quote,
+             'sha256': hashlib.sha256(source.read_bytes()).hexdigest()}
+    wave['resets'][0]['semantic_provenance'] = {
+        f: {'kind': 'explicit', 'basis': [dict(basis)]} for f in ('sync', 'polarity')}
+    return l8, source
+
+
+def test_equivalent_provenance_uses_canonical_claims(tmp_path):
+    l8, _ = _provenance_declarations(tmp_path)
+    for key, text in fhg._timing_semantics(l8):
+        rule = fhg.l8_program_rule(l8, key, text, tmp_path)
+        assert rule is not None, key
+        if '.semantic_provenance.' in key:
+            parent, tail = key.split('.semantic_provenance.')
+            canonical = parent + '.' + tail.split('.')[0]
+            expected = fhg.l8_program_rule(l8, canonical, fhg._value_at(l8, canonical))
+            assert rule['claims'] == expected['claims']
+            assert rule['kind'] == 'STRUCTURAL'
+            assert rule['equivalent_to'] == 'L8.' + canonical
+            assert rule['semantic_provenance'] == fhg._value_at(l8, parent + '.semantic_provenance.' + tail.split('.')[0])
+    assert fhg.l8_program_rule(l8, 'clock_domains.0.edge', 'posedge')['claims'] == [
+        {'rule': 'clock_edge', 'signal': 'clk', 'value': 'posedge'}]
+
+
+@pytest.mark.parametrize('edge', ['negedge', 'either', 'bogus'])
+def test_clock_provenance_cannot_borrow_positive_edge(tmp_path, edge):
+    l8, _ = _provenance_declarations(tmp_path)
+    l8['clock_domains'][0]['edge'] = edge
+    assert fhg.l8_program_rule(l8, 'clock_domains.0.semantic_provenance.edge.rule',
+                               'default_positive_clock_edge', tmp_path) is None
+    direct = fhg.l8_program_rule(l8, 'clock_domains.0.edge', edge)
+    assert direct is None or direct['claims'][0]['value'] != 'posedge'
+
+
+@pytest.mark.parametrize('mutation', ['foreign', 'foreign_polarity', 'hash', 'line', 'quote', 'outside', 'polarity', 'sync', 'source_pin', 'unknown_rule'])
+def test_provenance_rejects_wrong_binding(tmp_path, mutation):
+    import hashlib
+    l8, source = _provenance_declarations(tmp_path)
+    reset = l8['clock_and_reset_waveform']['resets'][0]
+    basis = reset['semantic_provenance']['sync']['basis'][0]
+    key = 'clock_and_reset_waveform.resets.0.semantic_provenance.sync.basis.0.quote'
+    if mutation in {'foreign', 'foreign_polarity'}:
+        basis['quote'] = (basis['quote'].replace('`rst`', '`foreign_rst`')
+                          if mutation == 'foreign' else
+                          '| `rst` | 1-bit | input | 同步 reset; foreign_rst is active-high |')
+        source.write_text(basis['quote'] + '\n')
+        basis['sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
+    elif mutation == 'hash':
+        basis['sha256'] = '0' * 64
+    elif mutation == 'line':
+        basis['line'] = 2
+    elif mutation == 'quote':
+        basis['quote'] += ' modified'
+    elif mutation == 'outside':
+        basis['file'] = '../outside.md'
+    elif mutation in {'polarity', 'sync'}:
+        reset[mutation] = 'active_low' if mutation == 'polarity' else 'asynchronous'
+    else:
+        clock = l8['clock_domains'][0]
+        if mutation == 'source_pin':
+            clock['source_pin'] = 'foreign_clk'
+        else:
+            clock['semantic_provenance']['edge']['rule'] = 'any_edge'
+        key = 'clock_domains.0.semantic_provenance.edge.rule'
+    assert fhg.l8_program_rule(l8, key, fhg._value_at(l8, key), tmp_path) is None
+
+
+def test_equivalent_clock_claim_reaches_structural_consumer(tmp_path):
+    import formal_structural_check as structural
+    l8, _ = _provenance_declarations(tmp_path)
+    rtl = tmp_path / 'serial_mac.v'
+    rtl.write_text(RTL)
+    rule = fhg.l8_program_rule(l8, 'clock_domains.0.semantic_provenance.edge.rule',
+                              'default_positive_clock_edge', tmp_path)
+    assert rule is not None
+    claim = rule['claims'][0]
+    claims = [claim]
+    for field in ('sync', 'polarity'):
+        key = 'clock_and_reset_waveform.resets.0.semantic_provenance.' + field + '.basis.0.quote'
+        claims += fhg.l8_program_rule(l8, key, fhg._value_at(l8, key), tmp_path)['claims']
+    result = structural.check([rtl], 'serial_mac', claims + [dict(claim, value='negedge')], tmp_path / 'structural')
+    (tmp_path / 'consumer.json').write_text(json.dumps(result, indent=2))
+    assert [r['verdict'] for r in result['claims']] == ['PASS', 'PASS', 'PASS', 'REFUTED'], result

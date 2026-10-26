@@ -405,7 +405,7 @@ _STRUCTURAL_CLAIMS = {"clock_edge", "reset_port", "reset_sync", "reset_polarity"
 _TEMPORAL_CLAIMS = {"reset_state_zero", "state_sync"}
 
 _CR_PATH_RE = re.compile(
-    r"(?:^|\.)(?P<group>clocks|resets)\.(?P<idx>\d+)\.(?P<field>[A-Za-z_]\w*)$")
+    r"(?:^|\.)(?P<group>clocks|clock_domains|resets)\.(?P<idx>\d+)\.(?P<field>[A-Za-z_]\w*)$")
 
 
 def _norm_edge(text: str) -> Optional[str]:
@@ -556,8 +556,84 @@ def _rule(claims: List[dict]) -> dict:
     return {"kind": kind, "claims": claims, "ruling": "R-0915-144"}
 
 
-def l8_program_rule(data: dict, key: str, text: str) -> Optional[dict]:
+def _l8_provenance_rule(data: dict, key: str, text: str,
+                        project: Optional[Path]) -> Optional[dict]:
+    """Bind an equivalent fact to its canonical claim, never to a new assertion."""
+    parent, sep, tail = key.partition(".semantic_provenance.")
+    if not sep:
+        return None
+    field = tail.split(".")[0]
+    canonical = parent + "." + field
+    rec = _record_at(data, canonical)
+    if not rec or _value_at(data, key) != text:
+        return None
+    metadata = rec.get("semantic_provenance")
+    provenance = metadata.get(field) if isinstance(metadata, dict) else None
+    if not isinstance(provenance, dict):
+        return None
+    rule = l8_program_rule(data, canonical, str(rec.get(field, "")))
+    if not rule:
+        return None
+    claim = rule["claims"][0]
+    if tail == "edge.rule":
+        if (provenance != {"kind": "convention", "rule": "default_positive_clock_edge"}
+                or claim["rule"] != "clock_edge" or claim["value"] != "posedge"):
+            return None
+    elif re.fullmatch(r"(?:sync|polarity)\.basis\.\d+\.quote", tail):
+        basis = _record_at(data, key)
+        if (project is None or provenance.get("kind") != "explicit"
+                or claim["rule"] != "reset_" + field or not basis):
+            return None
+        # A citation is a claim about these exact source bytes and this line.
+        # Neither a matching keyword nor a hash of the quote is a source binding.
+        try:
+            source = (project / basis["file"]).resolve()
+            source.relative_to((project / "input").resolve())
+            raw = source.read_bytes()
+            line = basis["line"]
+            if (type(line) is not int or line < 1
+                    or hashlib.sha256(raw).hexdigest() != basis.get("sha256")
+                    or raw.decode("utf-8").splitlines()[line - 1] != text):
+                return None
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            return None
+        # Only explicitly named reset declarations qualify. A foreign signal
+        # elsewhere in a paragraph cannot lend this reset its semantics.
+        plain = text.replace("`", "").replace("**", "").strip()
+        signal = re.escape(claim["signal"])
+        subject = re.match(r"(?:-\s+" + signal + r"\s+|\|\s*" + signal
+                           + r"\s*\|\s*1-bit\s*\|\s*input\s*\|\s*)(.*)", plain)
+        if not subject:
+            return None
+        description = subject.group(1)
+        sync = re.match(r"(同步|非同步|異步|synchronous|asynchronous)\s+reset\b",
+                        description, re.I)
+        if not sync:
+            return None
+        observed_sync = _norm_sync(sync.group(1))
+        rest = description[sync.end():]
+        if _P_SYNC.search(rest) or _P_ASYNC.search(rest):
+            return None
+        polarity = re.match(r"\s*(?:\(\s*|,\s*polarity\s+(?:為|is)\s+)"
+                            r"(active[ _-](?:high|low))\b", rest, re.I)
+        observed_pol = _norm_polarity(polarity.group(1)) if polarity else None
+        if _P_HIGH.search(rest) and _P_LOW.search(rest):
+            return None
+        if (observed_sync != _norm_sync(str(rec.get("sync", "")))
+                or observed_pol != _norm_polarity(str(rec.get("polarity", "")))
+                or observed_pol is None):
+            return None
+    else:
+        return None
+    return dict(rule, equivalent_to="L8." + canonical,
+                semantic_provenance=provenance)
+
+
+def l8_program_rule(data: dict, key: str, text: str,
+                    project: Optional[Path] = None) -> Optional[dict]:
     """The program rule that answers L8 declaration `key`=`text`, or None."""
+    if ".semantic_provenance." in key:
+        return _l8_provenance_rule(data, key, text, project)
     m = _CR_PATH_RE.search(key)
     if not m:
         return None
@@ -568,7 +644,9 @@ def l8_program_rule(data: dict, key: str, text: str) -> Optional[dict]:
     name = str(rec.get("name") or "").strip()
     if not re.fullmatch(r"[A-Za-z_]\w*", name):
         return None
-    if group == "clocks":
+    if group in {"clocks", "clock_domains"}:
+        if rec.get("source_pin", name) != name:
+            return None
         if field_ == "edge":
             edge = _norm_edge(text)
             if edge:
@@ -673,7 +751,7 @@ def declaration_obligations(project: Optional[Path]) -> dict:
                     row = _obligation(
                         "L8", key, f"declared temporal behavior {key}={text}", path)
                     binding = _binding_of(row["id"], text)
-                    rule = l8_program_rule(data, key, text)
+                    rule = l8_program_rule(data, key, text, project)
                     if rule is not None:
                         # R-0915-144: a declaration a PROGRAM rule covers
                         # carries that rule, so the program answers it and the
