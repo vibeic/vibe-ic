@@ -4314,14 +4314,23 @@ def test_service_final_writer_refuses_a_moved_remote_base_without_merge(
 
 def test_canonical_gatekeeper_entry_has_no_legacy_unbound_writer_or_rerun():
     skill = _GATEKEEPER_SKILL.read_text()
+    frontmatter = skill.split("---", 2)[1]
+    description = re.search(r"(?m)^description: (.*)$", frontmatter).group(1)
     cron = skill.split("## Cron-invocation template", 1)[1].split(
         "## Reference", 1)[0]
     executable = "\n".join(re.findall(
         r"```(?:bash|sh|python)?\n(.*?)```", skill, re.DOTALL))
+    current_instructions = "\n".join((description, cron, executable))
 
-    assert not re.search(r"(?m)^\s*gh pr merge\b", executable)
-    assert "RE-RUN the required checks on the REBASED tree" not in executable
-    assert "RE-RUN gatekeeper_review.py" not in executable
+    assert not re.search(r"(?m)^\s*gh pr merge\b", current_instructions)
+    assert "RE-RUN the required checks on the REBASED tree" not in current_instructions
+    assert "RE-RUN gatekeeper_review.py" not in current_instructions
+    assert ".merge.lock" not in description
+    assert "rebase onto current origin/main" not in description
+    for required in ("ready-first", "accepted receipt", "bounded",
+                     "READY-bound", "holds", "dependencies",
+                     "shared conflicts"):
+        assert required in description, required
     assert "--service-ready" in cron
     assert "--service-final-write" in cron
     assert "BLOCKED_NO_ACCEPTED_CANDIDATE" in cron
