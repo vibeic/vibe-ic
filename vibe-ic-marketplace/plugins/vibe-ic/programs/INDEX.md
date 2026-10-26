@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1499
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1499)
+- **Total programs (excluding helpers / shims):** 1501
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1501)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1490 |
+| `any` | 1492 |
 
 ## Alphabetical listing
 
@@ -76,7 +76,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_block_coverage_check` | any | — | deterministic gate for analog block design coverage |
 | `analog_block_list_emit_check` | any | — | master block-list schema gate. |
 | `analog_block_type_classify` | any | — | deterministic name→type taxonomy lookup. |
-| `analog_bound_measurements` | any | — | Run explicit source-bound OP/DC/AC measurements on a delivered DUT. |
+| `analog_bound_measurements` | any | — | Run explicit source-bound OP/DC/AC/TRAN measurements on a delivered DUT. |
 | `analog_content_detected_must_emit_l5_check` | any | Wave 47 | Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when |
 | `analog_converter_density_grade` | any | — | R-0915-45: EVALUATE the density pass condition the analog harness already DECLARES, on the run's own bitstream. |
 | `analog_corner_admission` | any | — | Fail-closed aggregate-RAM admission for independently launched PVT corners. |
@@ -99,7 +99,9 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_hw_tb_de10lite_budget_check` | any | — | DE10-Lite board-budget gate. |
 | `analog_incremental_capture` | any | — | Native held-input incremental conversions and coherent SNDR/ENOB. |
 | `analog_incremental_decimator` | any | — | R-0915-70: the matched decimator for an INCREMENTAL converter, DERIVED from the loop's own recurrence. |
+| `analog_incremental_pvt` | any | — | Prepare, run, or independently collect actual incremental ADC PVT series. |
 | `analog_incremental_resolution` | any | — | what resolution an INCREMENTAL loop can actually reach, MEASURED on its own recurrence. |
+| `analog_incremental_statistics` | any | — | Prepare and replay foundry-mismatch incremental ADC chip cohorts. |
 | `analog_interface_classify` | any | — | structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141). |
 | `analog_lef_gds_outline_check` | any | — | Codifies the EXTRACT-NEW spot-check in |
 | `analog_liberty_nonzero_delay_check` | any | — | deterministic Liberty non-degeneracy gate. |
@@ -1571,7 +1573,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1490 programs)
+### `any` (1492 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1623,7 +1625,7 @@ _(no programs in this group)_
 - `analog_block_coverage_check` — deterministic gate for analog block design coverage
 - `analog_block_list_emit_check` — master block-list schema gate.
 - `analog_block_type_classify` — deterministic name→type taxonomy lookup.
-- `analog_bound_measurements` — Run explicit source-bound OP/DC/AC measurements on a delivered DUT.
+- `analog_bound_measurements` — Run explicit source-bound OP/DC/AC/TRAN measurements on a delivered DUT.
 - `analog_content_detected_must_emit_l5_check` — Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when  _[Wave 47]_
 - `analog_converter_density_grade` — R-0915-45: EVALUATE the density pass condition the analog harness already DECLARES, on the run's own bitstream.
 - `analog_corner_admission` — Fail-closed aggregate-RAM admission for independently launched PVT corners.
@@ -1646,7 +1648,9 @@ _(no programs in this group)_
 - `analog_hw_tb_de10lite_budget_check` — DE10-Lite board-budget gate.
 - `analog_incremental_capture` — Native held-input incremental conversions and coherent SNDR/ENOB.
 - `analog_incremental_decimator` — R-0915-70: the matched decimator for an INCREMENTAL converter, DERIVED from the loop's own recurrence.
+- `analog_incremental_pvt` — Prepare, run, or independently collect actual incremental ADC PVT series.
 - `analog_incremental_resolution` — what resolution an INCREMENTAL loop can actually reach, MEASURED on its own recurrence.
+- `analog_incremental_statistics` — Prepare and replay foundry-mismatch incremental ADC chip cohorts.
 - `analog_interface_classify` — structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141).
 - `analog_lef_gds_outline_check` — Codifies the EXTRACT-NEW spot-check in
 - `analog_liberty_nonzero_delay_check` — deterministic Liberty non-degeneracy gate.
