@@ -13,6 +13,7 @@ import execution_policy as E
 import librelane_contract as LC
 import librelane_prelayout as LP
 import phase3_one_shot_runner as P
+import vibe_ic_one_shot_runner as V
 
 
 def put(path, value):
@@ -104,6 +105,57 @@ def test_tool_step8_early_preflight_refuses_missing_or_unjustified_constraints(
     row = D.step_sdc_validation(tmp_path)
     assert row.status == 'FAIL'
     assert row.extras['early_preflight'] is True
+
+
+@pytest.mark.parametrize('case', ['valid', 'missing_sdc', 'unjustified_exception'])
+def test_public_d20_owner_entry_runs_only_early_preflight(
+        tmp_path, monkeypatch, case):
+    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'8': 'dual'}})
+    put(tmp_path / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json', {
+        'clock_domains': [{'name': 'clk', 'source_pin': 'clk', 'period_ns': 10}]})
+    if case != 'missing_sdc':
+        text = ('create_clock -name clk -period 10 [get_ports clk]\n'
+                'set_input_delay 1 -clock clk [get_ports d]\n'
+                'set_output_delay 1 -clock clk [get_ports q]\n')
+        if case == 'unjustified_exception':
+            text += 'set_false_path -from [get_clocks clk] -to [get_clocks foreign]\n'
+        put(tmp_path / 'phase2/stage2/constraints/neutral.asic.sdc', text)
+    put(tmp_path / 'phase2/stage1/rtl/neutral.v',
+        'module neutral(input clk, d, output q); assign q=d; endmodule\n')
+    monkeypatch.setattr(E, '_ordinary_runtime', {
+        'project': tmp_path.resolve(), 'policy': {'mode': 'default'}, 'parameters': {}})
+    monkeypatch.setattr(E, 'dispatch_fixed_step', lambda *_a, **_k:
+                        pytest.fail('D20 early entry dispatched a frontend worker'))
+    finished = []
+    import flow109
+    monkeypatch.setattr(flow109, 'finish_native_window', lambda project, report:
+                        finished.append((project, report)) or None)
+    result = V._complete_step8_early_preflight(tmp_path)
+    expected = 'PASS' if case == 'valid' else 'FAIL'
+    assert result['verdict'] == expected, result
+    assert result['early_preflight'] is True
+    assert result['mapped_path_claimed'] is False
+    assert result['frontend_dispatched'] is False
+    assert ('no mapped-path claim' in result['detail']) == (case == 'valid')
+    assert finished[0][1]['steps'][0]['extras']['step_id'] == '8'
+    assert finished[0][1]['steps'][0]['extras']['completed'] is (case == 'valid')
+
+
+def test_public_step8_branch_selects_early_not_postprelayout_consumer():
+    tree = ast.parse(Path(V.__file__).read_text())
+    main = next(node for node in tree.body
+                if isinstance(node, ast.FunctionDef) and node.name == '_main')
+    branch = next(node for node in ast.walk(main) if isinstance(node, ast.If)
+                  and isinstance(node.test, ast.Name)
+                  and node.test.id == '_sdc_early_entry')
+    calls = {node.func.id for node in ast.walk(branch)
+             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+    assert '_complete_step8_early_preflight' in calls
+    assert '_complete_step8_postcheck' not in calls
+    source = ast.unparse(main)
+    assert "VIBEIC_FLOW109_CONTEXT" in source
+    assert '_sdc_early_entry = ' in source and 'and _flow109_owner_entry' in source
+    assert '_sdc_postcheck_entry = ' in source and 'not _flow109_owner_entry' in source
 
 
 def test_flow109_d20_d26_split_keeps_stable_obligations():

@@ -1027,43 +1027,95 @@ def _d44_fresh_native_identity(project: Path, component: Mapping[str, Any],
             or not isinstance(meta, Mapping) or meta.get("step") != "Yosys.EQY"):
         raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "native config identity")
 
-    preparation_path, preparation = _d44_bound_json(
-        project, component.get("transformation_receipt"), "current preparation")
-    outputs = preparation.get("outputs")
-    if (preparation.get("schema") != physical.SCHEMA
-            or preparation.get("producer") != "flow109_final_lec_physical"
-            or preparation.get("status") != "PREPARED_NOT_EQUIVALENCE_PROVEN"
-            or preparation.get("kind") != physical.KIND
-            or not isinstance(outputs, Mapping) or set(outputs) != {"gold", "gate"}):
-        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
-                            "current physical preparation")
-    output_paths = {}
-    for side in ("gold", "gate"):
-        output_paths[side] = _d44_bound_file(project, outputs[side], f"{side} proof view")
-        _d44_readset_record(project, inputs, str(output_paths[side]), f"{side} proof view")
-    _d44_readset_record(project, inputs, str(preparation_path), "current preparation")
-    raw_netlist = preparation.get("raw_adopted_netlist")
-    if (not isinstance(raw_netlist, Mapping) or not isinstance(raw_netlist.get("path"), str)
-            or not _HEX.fullmatch(str(raw_netlist.get("sha256", "")))):
-        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "raw adopted netlist")
-    raw_read = _d44_readset_record(project, inputs, raw_netlist["path"],
-                                   "raw adopted netlist")
-    if raw_read["sha256"] != raw_netlist["sha256"]:
-        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_STALE", "raw adopted netlist")
-    prep_inputs = preparation.get("inputs")
-    if not isinstance(prep_inputs, Mapping) or any(
-            inputs.get(name) != digest for name, digest in prep_inputs.items()):
-        raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_STALE",
-                            "physical preparation read set")
+    from flow109_final_lec import INPUT as D44_INPUT
+    manifest_record = {"path": D44_INPUT, "sha256": inputs.get(D44_INPUT)}
+    _, manifest = _d44_bound_json(project, manifest_record, "D44 input")
+    transformations = manifest.get("transformations")
+    if transformations == []:
+        if component.get("transformation_receipt") is not None:
+            raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
+                                "undeclared physical preparation")
+        rtl = manifest.get("rtl")
+        if not isinstance(rtl, list) or not rtl:
+            raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "reference proof views")
+        reference_records = []
+        reference_paths = []
+        for index, record in enumerate(rtl):
+            path = _d44_bound_file(project, record, f"reference proof view {index}")
+            current = _d44_readset_record(project, inputs, str(path),
+                                          f"reference proof view {index}")
+            if current["sha256"] != record.get("sha256"):
+                raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_STALE",
+                                    f"reference proof view {index}")
+            reference_records.append(dict(record))
+            reference_paths.append(path)
+        raw_netlist = manifest.get("adopted_netlist")
+        gate_path = _d44_bound_file(project, raw_netlist, "adopted proof view")
+        raw_read = _d44_readset_record(project, inputs, str(gate_path),
+                                       "adopted proof view")
+        if raw_read["sha256"] != raw_netlist.get("sha256"):
+            raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_STALE", "adopted proof view")
+        physical_configuration = {"transformations": "NONE_DECLARED",
+                                  "reference_views": reference_records,
+                                  "gate_view": dict(raw_netlist)}
+        top = manifest.get("top")
+        interfaces = None
+    else:
+        if not isinstance(transformations, list) or not transformations:
+            raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
+                                "D44 transformations")
+        preparation_path, preparation = _d44_bound_json(
+            project, component.get("transformation_receipt"), "current preparation")
+        outputs = preparation.get("outputs")
+        if (preparation.get("schema") != physical.SCHEMA
+                or preparation.get("producer") != "flow109_final_lec_physical"
+                or preparation.get("status") != "PREPARED_NOT_EQUIVALENCE_PROVEN"
+                or preparation.get("kind") != physical.KIND
+                or not isinstance(outputs, Mapping) or set(outputs) != {"gold", "gate"}):
+            raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
+                                "current physical preparation")
+        output_paths = {}
+        for side in ("gold", "gate"):
+            output_paths[side] = _d44_bound_file(project, outputs[side],
+                                                  f"{side} proof view")
+            _d44_readset_record(project, inputs, str(output_paths[side]),
+                                f"{side} proof view")
+        _d44_readset_record(project, inputs, str(preparation_path),
+                            "current preparation")
+        raw_netlist = preparation.get("raw_adopted_netlist")
+        if (not isinstance(raw_netlist, Mapping)
+                or not isinstance(raw_netlist.get("path"), str)
+                or not _HEX.fullmatch(str(raw_netlist.get("sha256", "")))):
+            raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "raw adopted netlist")
+        raw_read = _d44_readset_record(project, inputs, raw_netlist["path"],
+                                       "raw adopted netlist")
+        if raw_read["sha256"] != raw_netlist["sha256"]:
+            raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_STALE", "raw adopted netlist")
+        prep_inputs = preparation.get("inputs")
+        if not isinstance(prep_inputs, Mapping) or any(
+                inputs.get(name) != digest for name, digest in prep_inputs.items()):
+            raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_STALE",
+                                "physical preparation read set")
+        reference_paths = [output_paths["gold"]]
+        gate_path = output_paths["gate"]
+        physical_configuration = {
+            "current_preparation": dict(component["transformation_receipt"]),
+            "raw_adopted_netlist": dict(raw_netlist),
+            "reference_view": dict(outputs["gold"]),
+            "gate_view": dict(outputs["gate"]),
+        }
+        top = preparation.get("top")
+        interfaces = preparation.get("functional_interfaces")
 
     verilog_files = config.get("VERILOG_FILES")
     models = config.get("CELL_VERILOG_MODELS")
-    if (not isinstance(verilog_files, list) or len(verilog_files) != 1
-            or not isinstance(verilog_files[0], str)
-            or Path(verilog_files[0]).resolve() != output_paths["gold"].resolve()
+    if (not isinstance(verilog_files, list)
+            or not all(isinstance(item, str) for item in verilog_files)
+            or [Path(item).resolve() for item in verilog_files]
+               != [path.resolve() for path in reference_paths]
             or state_in.get("nl") != state_out.get("nl")
             or not isinstance(state_in.get("nl"), str)
-            or Path(state_in["nl"]).resolve() != output_paths["gate"].resolve()
+            or Path(state_in["nl"]).resolve() != gate_path.resolve()
             or not isinstance(models, list) or not models
             or not all(isinstance(model, str) and model for model in models)):
         raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID",
@@ -1114,8 +1166,6 @@ def _d44_fresh_native_identity(project: Path, component: Mapping[str, Any],
                             "partition proof differs from native evidence")
 
     census = component.get("model_census")
-    top = preparation.get("top")
-    interfaces = preparation.get("functional_interfaces")
     if not isinstance(census, Mapping) or set(census) != {"gold", "gate"}:
         raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "model census")
     normalized = {}
@@ -1132,7 +1182,7 @@ def _d44_fresh_native_identity(project: Path, component: Mapping[str, Any],
         except (KeyError, TypeError) as exc:
             raise MetricRefusal("METRIC_EXECUTION_EVIDENCE_INVALID", "model census") from exc
     if (normalized["gold"] != normalized["gate"]
-            or interfaces != normalized
+            or (interfaces is not None and interfaces != normalized)
             or _proof_binding(proof).get("status") != "PASS"
             or not isinstance(proof.get("compared_points"), int)
             or proof.get("compared_points") <= 0):
@@ -1155,10 +1205,7 @@ def _d44_fresh_native_identity(project: Path, component: Mapping[str, Any],
                      "sha256": _sha(state_in_path.read_bytes())},
         "state_out": {"path": str(state_out_path.relative_to(project)),
                       "sha256": _sha(state_out_path.read_bytes())},
-        "current_preparation": dict(component["transformation_receipt"]),
-        "raw_adopted_netlist": dict(raw_netlist),
-        "reference_view": dict(outputs["gold"]),
-        "gate_view": dict(outputs["gate"]),
+        **physical_configuration,
         "models": model_records,
         "partition_evidence": evidence_records,
         "current_proof": dict(component["proof_receipt"]),

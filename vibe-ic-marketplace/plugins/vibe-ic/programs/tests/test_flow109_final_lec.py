@@ -501,6 +501,11 @@ def _fresh_source_owned_identity_case(project, monkeypatch):
     preparation = _put(project,
                        'reports/flow109/D44/fresh/physical-views/preparation.json',
                        preparation_value)
+    manifest = _put(project, lec.INPUT, {
+        'schema': lec.SCHEMA, 'top': 'chip_top',
+        'transformations': [{'kind': lec.physical.KIND,
+                             'input': 'input/flow109/physical.json'}],
+        'rtl': [gold], 'adopted_netlist': raw})
     config_value = {'DESIGN_NAME': 'chip_top',
         'VERILOG_FILES': [str((project / gold['path']).resolve())],
         'CELL_VERILOG_MODELS': [str((project / model['path']).resolve())],
@@ -535,7 +540,7 @@ def _fresh_source_owned_identity_case(project, monkeypatch):
     sources = {**current_sources, metrics.D44_METRIC_READER_SOURCE: 'e' * 64}
     monkeypatch.setattr(lec, 'operation_sources', lambda: current_sources)
     inputs = {record['path']: record['sha256']
-              for record in (gold, gate, raw, model, preparation)}
+              for record in (gold, gate, raw, model, preparation, manifest)}
     component = {'component_status': 'PASS', 'native_started': True,
         'native_error': None, 'proof': proof_value, 'proof_receipt': proof,
         'transformation_receipt': preparation, 'inputs': inputs,
@@ -556,6 +561,39 @@ def _fresh_source_owned_identity_case(project, monkeypatch):
     records = {'raw': raw, 'model': model, 'preparation': preparation,
                'config': config, 'state_in': state_in, 'state_out': state_out,
                'listing': listing, 'pdr': pdr, 'sat': sat, 'proof': proof}
+    return context, component, obligation, records
+
+
+def _fresh_empty_transform_identity_case(project, monkeypatch):
+    """Mirror the ordinary transformations=[] native output and read set."""
+    context, component, obligation, records = _fresh_source_owned_identity_case(
+        project, monkeypatch)
+    reference = records['preparation'] = lec._record(
+        project, project / 'reports/flow109/D44/fresh/physical-views/gold.functional.v')
+    adopted = records['raw']
+    manifest = _put(project, lec.INPUT, {
+        'schema': lec.SCHEMA, 'top': 'chip_top', 'transformations': [],
+        'rtl': [reference], 'adopted_netlist': adopted})
+
+    config_path = project / records['config']['path']
+    config = json.loads(config_path.read_text())
+    config['VERILOG_FILES'] = [str((project / reference['path']).resolve())]
+    config_path.write_text(json.dumps(config))
+    records['config'] = lec._record(project, config_path)
+    state = {'nl': str((project / adopted['path']).resolve()), 'metrics': {}}
+    for name in ('state_in', 'state_out'):
+        path = project / records[name]['path']
+        path.write_text(json.dumps(state))
+        records[name] = lec._record(project, path)
+    proof_path = project / records['proof']['path']
+    proof = json.loads(proof_path.read_text())
+    proof['config_sha256'] = records['config']['sha256']
+    proof_path.write_text(json.dumps(proof))
+    records['proof'] = lec._record(project, proof_path)
+    component.update(proof=proof, proof_receipt=records['proof'])
+    component.pop('transformation_receipt')
+    component['inputs'] = {record['path']: record['sha256']
+                           for record in (reference, adopted, records['model'], manifest)}
     return context, component, obligation, records
 
 
@@ -585,6 +623,63 @@ def test_source_owned_D44_identity_reopens_fresh_native_execution(tmp_path, monk
     assert execution['proof_source_closure'][metrics.D44_METRIC_READER_SOURCE] == 'e' * 64
     assert execution['current_metric_reader']['sha256'] == 'd' * 64
     assert identity['configuration']['partition_evidence']
+
+
+def test_source_owned_D44_identity_accepts_fresh_empty_transform_execution(
+        tmp_path, monkeypatch):
+    context, component, obligation, _ = _fresh_empty_transform_identity_case(
+        tmp_path, monkeypatch)
+    identity = metrics._d44_identity(tmp_path, component, context, obligation)
+    configuration = identity['configuration']
+    assert configuration['transformations'] == 'NONE_DECLARED'
+    assert configuration['reference_views'] == [
+        json.loads((tmp_path / lec.INPUT).read_text())['rtl'][0]]
+    assert 'current_preparation' not in configuration
+
+
+def test_outer_D44_metric_reader_accepts_current_empty_transform_execution(
+        tmp_path, monkeypatch):
+    context, component, _, _ = _fresh_empty_transform_identity_case(tmp_path, monkeypatch)
+    current = {'schema': lec.METRICS_SCHEMA, 'status': 'PASS', 'metrics': {
+        'final_lec_unproved': {'status': 'PASS', 'value': 0, 'unit': 'count'},
+        'sta_lvs_release_netlist_mapping': {
+            'status': 'PASS', 'reference': {'adopted_netlist_sha256': '1' * 64}}}}
+    monkeypatch.setattr(lec, 'bind_metrics', lambda *_: current)
+    accepted = metrics.accept_d44(tmp_path, context, component)
+    assert accepted['status'] == 'PASS'
+    assert all(item['status'] == 'PASS' for item in accepted['obligations'])
+
+
+def test_source_owned_D44_nonempty_transform_still_requires_preparation_receipt(
+        tmp_path, monkeypatch):
+    context, component, obligation, _ = _fresh_source_owned_identity_case(
+        tmp_path, monkeypatch)
+    component.pop('transformation_receipt')
+    with pytest.raises(metrics.MetricRefusal, match='current preparation record'):
+        metrics._d44_identity(tmp_path, component, context, obligation)
+
+
+@pytest.mark.parametrize('damage', ['stale', 'mismatched'])
+def test_source_owned_D44_nonempty_transform_refuses_bad_preparation_receipt(
+        tmp_path, monkeypatch, damage):
+    context, component, obligation, records = _fresh_source_owned_identity_case(
+        tmp_path, monkeypatch)
+    if damage == 'stale':
+        path = tmp_path / records['preparation']['path']
+        path.write_text(path.read_text() + '\n')
+    else:
+        component['transformation_receipt'] = records['proof']
+    with pytest.raises(metrics.MetricRefusal):
+        metrics._d44_identity(tmp_path, component, context, obligation)
+
+
+def test_source_owned_D44_preparation_only_is_not_execution(tmp_path, monkeypatch):
+    context, component, obligation, _ = _fresh_source_owned_identity_case(
+        tmp_path, monkeypatch)
+    component['native_started'] = False
+    component.pop('proof_receipt')
+    with pytest.raises(metrics.MetricRefusal, match='completed fresh D44 native execution'):
+        metrics._d44_identity(tmp_path, component, context, obligation)
 
 
 def test_outer_D44_metric_reader_accepts_current_fresh_native_execution(tmp_path, monkeypatch):
@@ -635,14 +730,23 @@ def test_outer_reader_reopens_common_baseline_across_only_its_source_change(
     assert refused['status'] == 'FAIL'
 
 
-@pytest.mark.parametrize('damage', ['netlist', 'missing_partition', 'partition_mismatch',
-                                    'config', 'incomplete', 'blackbox', 'producer_source'])
+@pytest.mark.parametrize('damage', ['netlist', 'missing_proof', 'tampered_proof',
+                                    'proof_mismatch', 'missing_partition',
+                                    'partition_mismatch', 'config', 'incomplete',
+                                    'blackbox', 'producer_source'])
 def test_source_owned_D44_fresh_identity_refuses_stale_incomplete_or_functionless_evidence(
         tmp_path, monkeypatch, damage):
     context, component, obligation, records = _fresh_source_owned_identity_case(
         tmp_path, monkeypatch)
     if damage == 'netlist':
         (tmp_path / records['raw']['path']).write_text('module changed; endmodule\n')
+    elif damage == 'missing_proof':
+        (tmp_path / records['proof']['path']).unlink()
+    elif damage == 'tampered_proof':
+        proof_path = tmp_path / records['proof']['path']
+        proof_path.write_text(proof_path.read_text() + '\n')
+    elif damage == 'proof_mismatch':
+        component['proof'] = {**component['proof'], 'compared_points': 2}
     elif damage == 'missing_partition':
         (tmp_path / records['pdr']['path']).unlink()
     elif damage == 'partition_mismatch':
