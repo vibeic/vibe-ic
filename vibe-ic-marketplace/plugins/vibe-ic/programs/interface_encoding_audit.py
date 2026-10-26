@@ -1502,8 +1502,12 @@ def _bitfield_control_proof(wire, producer, producer_port, consumer,
         return None
     leaf = alias.group(2)
     leaf_spec = producer.native.get('netnames', {}).get(leaf, {})
+    native_alias = leaf_spec.get('bits') == specs[0]['bits'] or any(
+        c['type'] == '$buf' and c['connections'].get('A') == leaf_spec.get('bits')
+        and c['connections'].get('Y') == specs[0]['bits']
+        for c in producer.native.get('cells', {}).values())
     if (producer.native_widths.get(leaf) != width or leaf_spec.get('upto')
-            or leaf_spec.get('offset', 0) != 0 or leaf_spec.get('bits') != specs[0]['bits']):
+            or leaf_spec.get('offset', 0) != 0 or not native_alias):
         return None
     occurrences = lambda text, name: {m.span() for m in re.finditer(
         r'(?<![\w$])' + re.escape(name) + r'(?![\w$])', text)}
