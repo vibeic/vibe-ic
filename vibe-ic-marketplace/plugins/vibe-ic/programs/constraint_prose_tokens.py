@@ -356,10 +356,14 @@ def _code_block_lines(text: str) -> set:
 def inline_bindings(text: str, source: str = "") -> List[Dict[str, object]]:
     """Every ``KEY = value`` binding stated in PROSE, outside a table."""
     code = _code_block_lines(text)
+    table_lines = set()
+    for table in iter_tables(text):
+        table_lines.update((table.header_line, table.header_line + 1))
+        table_lines.update(line_no for line_no, _row in table.rows)
     heads = heading_path_map(text)
     out: List[Dict[str, object]] = []
     for line_no, line in enumerate(text.splitlines(), start=1):
-        if line_no in code:
+        if line_no in code or line_no in table_lines:
             continue
         for m in _INLINE_BIND_RE.finditer(line):
             val = strip_ornament(m.group(2))
