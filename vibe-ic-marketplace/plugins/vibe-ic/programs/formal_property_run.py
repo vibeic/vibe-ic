@@ -2844,9 +2844,25 @@ def run(project: Path, harness: Optional[Path] = None,
             chip_read = _authored_chip_read(project, formal_dir, sby_path,
                                             harness, rtl, top)
         except (OSError, ValueError, TypeError, KeyError) as exc:
-            _write_authoring_incomplete(formal_dir, "authored chip read refused: " + str(exc))
-            return {"verdict": "INCOMPLETE", "rc": RC_INCOMPLETE,
-                    "all_proved": False, "reason": "authored chip read refused: " + str(exc)}
+            import uuid
+            refusal = {
+                "program": "formal_property_run", "verdict": "INCOMPLETE",
+                "rc": RC_INCOMPLETE, "all_proved": False, "proof_attempted": False,
+                "reason": "authored chip read refused: " + str(exc),
+                "attempt_id": uuid.uuid4().hex,
+                "producer_sha256": _sha256_file(Path(__file__)),
+                "sby": str(sby_path), "sby_sha256": _sha256_file(sby_path),
+                "requested_top": top,
+                "requested_rtl": [{"path": str(p), "sha256": _sha256_file(p)}
+                                  for p in (rtl or [])],
+                "harness_sha256": _sha256_file(harness) if harness else None,
+                "supersedes_results_sha256": _sha256_file(formal_dir / "results.json"),
+            }
+            # The public consumer selects results.json before any sibling
+            # authoring request. Publish this refusal atomically FIRST.
+            _aa.write_json(formal_dir / "results.json", refusal)
+            _write_authoring_incomplete(formal_dir, refusal["reason"])
+            return refusal
 
     # 1b) EMIT-ONLY — the artefact is written; the proof is NOT run ---------
     # Returns BEFORE the executor is reached, so the guarantee is structural

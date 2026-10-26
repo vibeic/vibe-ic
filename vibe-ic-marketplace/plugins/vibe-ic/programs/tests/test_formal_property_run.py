@@ -1217,3 +1217,50 @@ def test_authored_chip_read_preserves_elaboration_order(tmp_path, monkeypatch, r
     else:
         assert result["verdict"] == "PASS" and result["chip_read"] == current, result
         assert len(calls) == 1
+
+
+def test_authored_order_refusal_supersedes_stale_public_consumer_pass(tmp_path, monkeypatch):
+    import formal_proof_evidence_check as consumer
+    rtl, harness, formal, task, kwargs, calls = _authored_chip_fixture(tmp_path, monkeypatch)
+    package = rtl.parent / "pkg.sv"
+    package.write_text("package fixture_pkg; parameter WIDTH = 1; endpackage\n")
+    kwargs["rtl"] = [package, rtl]
+    execute = FPR._run_sby
+    def staged_transcript(sby, *args, **kw):
+        transcript = execute(sby, *args, **kw)
+        for name in FPR.parse_sby_config(sby.read_text()):
+            shutil.copy2(formal / package.name,
+                         formal / f"{sby.stem}_{name}" / "src" / package.name)
+        return transcript
+    monkeypatch.setattr(FPR, "_run_sby", staged_transcript)
+    old = FPR.run(tmp_path, **kwargs)
+    assert old["all_proved"] is True and consumer.audit(tmp_path)["verdict"] == "PASS"
+    old_bytes = (formal / "results.json").read_bytes()
+    old_hash = FPR._sha256_file(formal / "results.json")
+    # Preserve the valid old deck/log: the new selected deck is a separate
+    # invocation, while the historical result remains genuinely consumable.
+    reverse_task = formal / "reversed.sby"
+    text = task.read_text()
+    reads = [line for line in text.splitlines() if line.startswith("read_verilog -sv ")]
+    assert len(reads) == 2
+    reverse_task.write_text(text.replace("\n".join(reads), "\n".join(reversed(reads))))
+    kwargs["rtl"] = [rtl, package]
+    assert consumer.audit(tmp_path)["verdict"] == "PASS"
+    calls.clear()
+    result = FPR.run(tmp_path, sby=reverse_task, **kwargs)
+    assert result["verdict"] == "INCOMPLETE" and result["rc"] == 2
+    assert result["all_proved"] is False and not result.get("chip_read") and not calls
+    checked = consumer.audit(tmp_path)
+    print(json.dumps({"fixture_only": True, "refusal": result, "consumer": checked}))
+    assert checked["verdict"] != "PASS", checked
+    current = json.loads((formal / "results.json").read_text())
+    assert current == result and current["proof_attempted"] is False
+    assert (formal / "results.json").read_bytes() != old_bytes
+    assert current["supersedes_results_sha256"] == old_hash
+    assert len(current["attempt_id"]) == 32
+    assert current["producer_sha256"] == FPR._sha256_file(Path(FPR.__file__))
+    assert current["sby_sha256"] == FPR._sha256_file(reverse_task)
+    assert current["requested_top"] == kwargs["top"]
+    assert current["harness_sha256"] == FPR._sha256_file(harness)
+    assert current["requested_rtl"] == [
+        {"path": str(p), "sha256": FPR._sha256_file(p)} for p in (rtl, package)]
