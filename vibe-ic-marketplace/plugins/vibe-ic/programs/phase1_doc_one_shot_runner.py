@@ -62665,6 +62665,126 @@ def _post_emit_enforce_clock_contract(project: Path) -> List[str]:
     return messages
 
 
+_EXPLICIT_SOLE_CLOCK_PERIOD = re.compile(
+    r"`?(?P<name>[A-Za-z_]\w*)`?\s+is\s+the\s+sole\s+clock\s*,?\s*"
+    r"(?:with|at)\s+(?:a\s+)?(?P<period>\d+(?:\.\d+)?)\s*"
+    r"(?P<unit>ps|ns|us|µs|μs)\s+period\.?",
+    re.IGNORECASE,
+)
+_TOP_LEVEL_MARKDOWN_LIST_ITEM = re.compile(
+    r"^(?:[-*+]|\d+[.)]) (?P<content>.*\S|)$")
+_ATX_MARKDOWN_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+\S.*$")
+
+
+def _strip_balanced_markdown_emphasis(line: str) -> str:
+    """Remove one balanced whole-line common emphasis frame, if present."""
+    value = line.strip()
+    for marker in ("**", "__", "*", "_"):
+        if (value.startswith(marker) and value.endswith(marker)
+                and len(value) > 2 * len(marker)):
+            return value[len(marker):-len(marker)].strip()
+    return value
+
+
+def _explicit_clock_authority_clauses(text: str) -> List[str]:
+    """Supported complete clauses from structurally closed prose blocks.
+
+    A block is blank-line delimited.  It is eligible only when it is one
+    unindented plain line, or when every line is a flat top-level Markdown
+    list peer.  A parent line, continuation, or nested/indented item rejects
+    the whole block instead of letting a matching child line detach from its
+    qualifier.  This classifies structure only; it contains no prose-word
+    policy and does not attempt general Markdown parsing.
+    """
+    clauses: List[str] = []
+    blocks = [block for block in re.split(r"\n[ \t]*\n+", text)
+              if block.strip()]
+
+    def introduced_by_prose(block_index: int) -> bool:
+        if not block_index:
+            return False
+        parent_lines = blocks[block_index - 1].splitlines()
+        parent_final = (_strip_balanced_markdown_emphasis(parent_lines[-1])
+                        if parent_lines else "")
+        parent_is_heading = (
+            len(parent_lines) == 1
+            and _ATX_MARKDOWN_HEADING.fullmatch(parent_lines[0]) is not None)
+        return not parent_is_heading and parent_final.endswith(":")
+
+    for block_index, block in enumerate(blocks):
+        lines = block.splitlines()
+        if not lines:
+            continue
+        if len(lines) == 1:
+            line = lines[0].rstrip()
+            item = _TOP_LEVEL_MARKDOWN_LIST_ITEM.fullmatch(line)
+            if item is not None and not introduced_by_prose(block_index):
+                clauses.append(item.group("content"))
+            elif (line == line.lstrip()
+                  and not introduced_by_prose(block_index)):
+                clauses.append(line)
+            continue
+        items = []
+        for raw_line in lines:
+            item = _TOP_LEVEL_MARKDOWN_LIST_ITEM.fullmatch(raw_line.rstrip())
+            if item is None:
+                items = []
+                break
+            items.append(item.group("content"))
+        if items and introduced_by_prose(block_index):
+            items = []
+        clauses.extend(items)
+    return clauses
+
+
+def _single_explicit_document_clock(project: Path) -> Optional[dict]:
+    """One current prose declaration of a sole named clock and period.
+
+    This is deliberately narrower than the general timing prose harvesters:
+    it exists only to corroborate an authored SDC target when L9 has no port
+    population.  Duplicate statements, alternatives, malformed values, or
+    more than one match are non-authority and return ``None``.
+    """
+    matches = []
+    docs = project / "input" / "docs"
+    if not docs.is_dir():
+        return None
+    try:
+        import _reference_flow_boundary as _rfb
+    except Exception:
+        return None
+    for path in sorted(docs.rglob("*")):
+        if (not path.is_file()
+                or path.suffix.lower() not in (".txt", ".md", ".rst", ".adoc")
+                or _rfb.design_input_denial(project, path)):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for clause in _explicit_clock_authority_clauses(text):
+            match = _EXPLICIT_SOLE_CLOCK_PERIOD.fullmatch(clause)
+            if match is None:
+                continue
+            try:
+                value = float(match.group("period"))
+            except (TypeError, ValueError):
+                continue
+            scale = {
+                "ps": 1.0e-3, "ns": 1.0, "us": 1.0e3,
+                "µs": 1.0e3, "μs": 1.0e3,
+            }.get(match.group("unit").lower())
+            if scale is None or value <= 0:
+                continue
+            source = path.relative_to(project).as_posix()
+            matches.append({
+                "name": match.group("name"),
+                "period_ns": value * scale,
+                "evidence": source,
+            })
+    return matches[0] if len(matches) == 1 else None
+
+
 def _post_emit_sdc_constraints(project: Path) -> None:
     """ORGANIC #554 (a) — ingest staged ``input/constraints/*.sdc`` and
     ``input/reference_flow/**/*.sdc`` into L8 (clock_domains[].freq_mhz
@@ -62745,6 +62865,29 @@ def _post_emit_sdc_constraints(project: Path) -> None:
         if isinstance(p, dict) and (p.get("direction") or p.get("mode")) == "input"
         and type(p.get("width")) is int and p["width"] == 1
     }
+    # A TEST or other minimal authored carrier can explicitly state its sole
+    # clock without presenting a full interface table, leaving L9.top_ports
+    # empty.  Do not guess from the SDC label or conventional ``clk`` name:
+    # allow the bootstrap only when one current document declaration (name +
+    # period) agrees with one and only one authored create_clock (target +
+    # period).  Any second SDC clock, second prose statement, name mismatch,
+    # or period mismatch preserves the empty contract and the downstream
+    # LL_CLOCK_AMBIGUOUS refusal.
+    document_clock = _single_explicit_document_clock(project)
+    document_clock_authorized = False
+    if document_clock is not None and len(_declared) == 1:
+        declared_clock = _declared[0]
+        try:
+            period_matches = abs(
+                float(declared_clock["period_ns"])
+                - float(document_clock["period_ns"])
+            ) <= 1.0e-9
+        except (KeyError, TypeError, ValueError):
+            period_matches = False
+        if (declared_clock.get("port_name") == document_clock["name"]
+                and period_matches):
+            scalar_inputs.add(document_clock["name"])
+            document_clock_authorized = True
 
     def _same_clock(entry: dict, port: str) -> bool:
         """Whether `entry` already describes the SDC clock on `port`."""
@@ -62781,6 +62924,9 @@ def _post_emit_sdc_constraints(project: Path) -> None:
                     "freq_hz": rfreq, "freq_mhz": rfreq / 1_000_000.0 if rfreq else None,
                     "period_ns": rperiod, "source": "input/constraints/*.sdc",
                     "evidence": project_relative_source(rec["source"], project)[0],
+                    **({"subject_evidence": document_clock["evidence"]}
+                       if document_clock_authorized
+                       and rport == document_clock["name"] else {}),
                     "reset_strategy": "unspecified",
                 })
             if clock_domains:
