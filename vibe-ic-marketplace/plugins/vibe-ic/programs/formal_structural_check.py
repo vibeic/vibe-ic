@@ -2011,10 +2011,22 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
     _aa.write_json(model_path, model)
     row_cone = _reset_row_cone_eligibility(model)
     result["native_row_cone"] = row_cone
-    script = [f"read_json {model_path.resolve()}", "hierarchy -top transition_pair",
-              "log VIBEIC_TRANSITION_QUERY domain",
-              "sat -timeout 10 -enable_undef -set-def-inputs -show-inputs",
-              "log VIBEIC_TRANSITION_COMPLETE domain"]
+    script = [f"read_json {model_path.resolve()}", "hierarchy -top transition_pair"]
+    # A total single-driver DAG guarantees that every assignment on a selected
+    # row cone extends to the unselected logic.  Measure the domain through one
+    # real row cone instead of importing the entire paired design into SAT just
+    # to establish that a witness exists.  The old whole-model domain query was
+    # the only unscoped query even when every per-row query was cone selected.
+    domain_observed = (sorted(set(rows[0]["query_ports"].values()))
+                       if row_cone["eligible"] and rows else [])
+    if domain_observed:
+        script += ["select -module transition_pair",
+                   "select " + " ".join("w:" + p for p in domain_observed) + " %% %ci*"]
+    script += ["log VIBEIC_TRANSITION_QUERY domain",
+               "sat -timeout 10 -enable_undef -set-def-inputs -show-inputs",
+               "log VIBEIC_TRANSITION_COMPLETE domain"]
+    if domain_observed:
+        script.append("select -clear")
     specs = {}
     for i, row in enumerate(rows):
         if row.get("unsupported") and not row.get("raw_undef_native_candidate"):
