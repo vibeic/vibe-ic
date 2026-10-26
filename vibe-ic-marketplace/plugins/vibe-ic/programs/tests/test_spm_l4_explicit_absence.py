@@ -12,22 +12,58 @@ import json
 from pathlib import Path
 
 from programs.phase1_one_shot_runner import gen_l4_regmap
+from flow_compliance_check import _p0_zero_population_evidence
+from ic_class_profile import _l4_has_otp
+from l4_register_map_claim import reconcile_register_map_claims
+from l_doc_cross_consistency_check import _rel_otp_bytes_subset_layout
 import spi_protocol_synth
 
 
 _GEN_DIR = Path("phase1") / "generated_docs"
 
 _EXPLICIT_ABSENCE = """\
----
-layer: L5
-status: not-applicable
----
-
 # Register Map
 
-This datapath has no SW-visible chip registers.
-There is no control, status, configuration, or interrupt register.
-No register file is required.
+The design has no software-visible registers, address map, interrupts, status
+registers, configuration registers, OTP, or nonvolatile memory.
+"""
+
+_PARAGRAPH_POSITIVE_AFTER_NEGATIVE = """\
+# Register Map
+
+The design has no software-visible registers.
+
+No OTP-based calibration is used
+
+An OTP bank with lock bits stores the device identifier.
+"""
+
+_DOCUMENT_NEGATIVE_PLUS_UNRESOLVED = """\
+No OTP-based calibration is used.
+
+No OTP is present but OTP is present.
+"""
+
+_QUALIFIED_OTP_ABSENCE = """\
+No OTP is present unless secure boot is enabled.
+"""
+
+_QUALIFIED_REGISTER_ABSENCE = """\
+No software-visible registers unless debug mode is enabled.
+"""
+
+_COMMA_QUALIFIED_ABSENCE = """\
+No OTP, unless secure boot is enabled.
+
+No software-visible registers, unless debug mode is enabled.
+"""
+
+_INTERNAL_EXCEPTION_OTP = """\
+No component except the boot controller uses OTP.
+"""
+
+_SCOPED_COMPONENT_REGISTER_DENIAL = """\
+The debug component has no software-visible registers.
 """
 
 _ACTUAL_L6_OTP_NEGATIVE = """\
@@ -73,6 +109,40 @@ def test_actual_explicit_absence_sets_typed_no_register_flag(tmp_path: Path) -> 
     assert l4["no_otp_layout_in_input"] is True
 
 
+def test_malformed_unknown_does_not_guess_absence(tmp_path: Path) -> None:
+    gen_l4_regmap(tmp_path, {"L5_register_map.md": "# Register Map\n\nTBD\n"})
+    l4 = _read_l4(tmp_path)
+    assert l4["registers"] == []
+    assert l4["no_registers_in_input"] is False
+    assert l4.get("register_map_present") is not False
+    assert l4["otp_layout"] is None
+    assert l4["no_otp_layout_in_input"] is False
+
+
+def test_double_negated_otp_absence_is_not_an_absence_declaration(
+        tmp_path: Path) -> None:
+    gen_l4_regmap(
+        tmp_path,
+        {"L5_register_map.md": "This is not a design with no OTP.\n"},
+    )
+    l4 = _read_l4(tmp_path)
+    assert l4["no_otp_layout_in_input"] is False
+    assert l4["otp_layout"] is not None
+
+
+def test_explicit_absence_drives_real_consumers(tmp_path: Path) -> None:
+    gen_l4_regmap(tmp_path, {"L5_register_map.md": _EXPLICIT_ABSENCE})
+    l4 = _read_l4(tmp_path)
+
+    assert _l4_has_otp(l4, None, None) is False
+    assert reconcile_register_map_claims(l4) == []
+    assert _p0_zero_population_evidence(
+        tmp_path, "l4_regmap_phase2_emitter_contract_check") is not None
+    finding = _rel_otp_bytes_subset_layout(
+        {"otp_bytes": [{"address": 0}]}, l4)
+    assert finding.verdict == "N/A"
+
+
 def test_contradictory_register_declaration_stays_unknown(tmp_path: Path) -> None:
     contradictory = _EXPLICIT_ABSENCE + """
 
@@ -86,12 +156,15 @@ def test_contradictory_register_declaration_stays_unknown(tmp_path: Path) -> Non
     assert l4["no_registers_in_input"] is False
     assert l4.get("register_map_present") is not False
 
+    assert _p0_zero_population_evidence(
+        tmp_path, "l4_regmap_phase2_emitter_contract_check") is None
+
 
 def test_otp_positive_control_keeps_declared_geometry(tmp_path: Path) -> None:
     otp = """\
 # Register Map
 
-OTP layout: 128-byte one-time-programmable fuse array with lock bits.
+OTP layout: 128-byte one-time-programmable fuse array with lock bits. ID[0].
 """
     gen_l4_regmap(tmp_path, {"otp_layout.md": otp})
     l4 = _read_l4(tmp_path)
@@ -99,6 +172,10 @@ OTP layout: 128-byte one-time-programmable fuse array with lock bits.
     assert l4["no_otp_layout_in_input"] is False
     assert l4["otp_layout"]["depth_bytes"] == 128
     assert l4["otp_layout"]["width_bits"] == 8
+    assert _l4_has_otp(l4, None, None) is True
+    finding = _rel_otp_bytes_subset_layout(
+        {"otp_bytes": [{"address": 0}]}, l4)
+    assert finding.verdict != "N/A"
 
 
 def test_otp_declaration_after_unrelated_negative_clause_is_positive(
@@ -115,6 +192,176 @@ def test_otp_declaration_after_unrelated_negative_clause_is_positive(
         l4 = _read_l4(project)
         assert l4["no_otp_layout_in_input"] is False
         assert l4["otp_layout"] is not None
+
+
+def test_otp_positive_paragraph_after_negative_calibration_is_preserved(
+        tmp_path: Path) -> None:
+    """Paragraph boundaries keep a later OTP bank authoritative."""
+    gen_l4_regmap(
+        tmp_path,
+        {"L5_register_map.md": _PARAGRAPH_POSITIVE_AFTER_NEGATIVE},
+    )
+    l4 = _read_l4(tmp_path)
+    assert l4["no_otp_layout_in_input"] is False
+    assert l4["otp_layout"] is not None
+    assert _l4_has_otp(l4, None, None) is True
+    finding = _rel_otp_bytes_subset_layout(
+        {"otp_bytes": [{"address": 0}]}, l4)
+    assert finding.verdict == "FAIL"
+
+    unresolved = tmp_path / "unresolved"
+    gen_l4_regmap(
+        unresolved,
+        {"L5_register_map.md": "No OTP is present but OTP is present.\n"},
+    )
+    unresolved_l4 = _read_l4(unresolved)
+    assert unresolved_l4["no_otp_layout_in_input"] is False
+    assert unresolved_l4["otp_layout"] is None
+
+
+def test_document_absence_is_vetoed_by_an_unresolved_otp_clause(
+        tmp_path: Path) -> None:
+    """A clean denial cannot mask another unresolved OTP-bearing clause."""
+    gen_l4_regmap(
+        tmp_path,
+        {"L5_register_map.md": _DOCUMENT_NEGATIVE_PLUS_UNRESOLVED},
+    )
+    l4 = _read_l4(tmp_path)
+    assert l4["no_otp_layout_in_input"] is False
+    assert l4["otp_layout"] is None
+    assert _l4_has_otp(l4, None, None) is False
+    finding = _rel_otp_bytes_subset_layout(
+        {"otp_bytes": [{"address": 0}]}, l4)
+    assert finding.verdict == "FAIL"
+
+
+def test_qualified_otp_absence_remains_unknown_to_actual_consumers(
+        tmp_path: Path) -> None:
+    """A conditional negative cannot authorize whole-document absence."""
+    gen_l4_regmap(
+        tmp_path,
+        {"L5_register_map.md": _QUALIFIED_OTP_ABSENCE},
+    )
+    l4 = _read_l4(tmp_path)
+    assert l4["no_otp_layout_in_input"] is False
+    assert l4["otp_layout"] is None
+    assert _l4_has_otp(l4, None, None) is False
+    finding = _rel_otp_bytes_subset_layout(
+        {"otp_bytes": [{"address": 0}]}, l4)
+    assert finding.verdict == "FAIL"
+
+    clean = tmp_path / "clean"
+    gen_l4_regmap(clean, {"L5_register_map.md": "No OTP is present.\n"})
+    clean_l4 = _read_l4(clean)
+    assert clean_l4["no_otp_layout_in_input"] is True
+    assert clean_l4["otp_layout"] is None
+    clean_finding = _rel_otp_bytes_subset_layout(
+        {"otp_bytes": [{"address": 0}]}, clean_l4)
+    assert clean_finding.verdict == "N/A"
+
+
+def test_qualified_register_absence_does_not_declare_zero_population(
+        tmp_path: Path) -> None:
+    """A qualified no-register claim remains unknown to the L4 gate."""
+    gen_l4_regmap(
+        tmp_path,
+        {"L5_register_map.md": _QUALIFIED_REGISTER_ABSENCE},
+    )
+    l4 = _read_l4(tmp_path)
+    assert l4["registers"] == []
+    assert l4["no_registers_in_input"] is False
+    assert l4.get("register_map_present") is not False
+    assert _p0_zero_population_evidence(
+        tmp_path, "l4_regmap_phase2_emitter_contract_check") is None
+
+    clean = tmp_path / "clean"
+    gen_l4_regmap(
+        clean,
+        {"L5_register_map.md": "No software-visible registers.\n"},
+    )
+    clean_l4 = _read_l4(clean)
+    assert clean_l4["no_registers_in_input"] is True
+    assert clean_l4["register_map_present"] is False
+    assert _p0_zero_population_evidence(
+        clean, "l4_regmap_phase2_emitter_contract_check") is not None
+
+
+def test_comma_qualified_absence_is_not_a_denied_l4_member_list(
+        tmp_path: Path) -> None:
+    """Comma-delimited conditions remain unknown to actual consumers."""
+    gen_l4_regmap(
+        tmp_path,
+        {"L5_register_map.md": _COMMA_QUALIFIED_ABSENCE},
+    )
+    l4 = _read_l4(tmp_path)
+    assert l4["registers"] == []
+    assert l4["no_otp_layout_in_input"] is False
+    assert l4["otp_layout"] is None
+    assert _l4_has_otp(l4, None, None) is False
+    finding = _rel_otp_bytes_subset_layout(
+        {"otp_bytes": [{"address": 0}]}, l4)
+    assert finding.verdict == "FAIL"
+
+    assert l4["no_registers_in_input"] is False
+    assert l4.get("register_map_present") is not False
+    assert _p0_zero_population_evidence(
+        tmp_path, "l4_regmap_phase2_emitter_contract_check") is None
+
+
+def test_full_denial_body_requires_whole_design_authority(
+        tmp_path: Path) -> None:
+    """Internal residual syntax or a scoped subject remains unknown."""
+    otp_project = tmp_path / "otp-exception"
+    gen_l4_regmap(
+        otp_project,
+        {"L5_register_map.md": _INTERNAL_EXCEPTION_OTP},
+    )
+    otp_l4 = _read_l4(otp_project)
+    assert otp_l4["no_otp_layout_in_input"] is False
+    assert otp_l4["otp_layout"] is None
+    assert _l4_has_otp(otp_l4, None, None) is False
+    otp_finding = _rel_otp_bytes_subset_layout(
+        {"otp_bytes": [{"address": 0}]}, otp_l4)
+    assert otp_finding.verdict == "FAIL"
+
+    register_project = tmp_path / "register-subject"
+    gen_l4_regmap(
+        register_project,
+        {"L5_register_map.md": _SCOPED_COMPONENT_REGISTER_DENIAL},
+    )
+    register_l4 = _read_l4(register_project)
+    assert register_l4["registers"] == []
+    assert register_l4["no_registers_in_input"] is False
+    assert register_l4.get("register_map_present") is not False
+    assert _p0_zero_population_evidence(
+        register_project,
+        "l4_regmap_phase2_emitter_contract_check",
+    ) is None
+
+    clean_otp_project = tmp_path / "clean-otp"
+    gen_l4_regmap(
+        clean_otp_project,
+        {"L5_register_map.md": "No OTP is present.\n"},
+    )
+    clean_otp_l4 = _read_l4(clean_otp_project)
+    assert clean_otp_l4["no_otp_layout_in_input"] is True
+    assert clean_otp_l4["otp_layout"] is None
+    clean_otp_finding = _rel_otp_bytes_subset_layout(
+        {"otp_bytes": [{"address": 0}]}, clean_otp_l4)
+    assert clean_otp_finding.verdict == "N/A"
+
+    clean_register_project = tmp_path / "clean-register"
+    gen_l4_regmap(
+        clean_register_project,
+        {"L5_register_map.md": "No software-visible registers.\n"},
+    )
+    clean_register_l4 = _read_l4(clean_register_project)
+    assert clean_register_l4["no_registers_in_input"] is True
+    assert clean_register_l4["register_map_present"] is False
+    assert _p0_zero_population_evidence(
+        clean_register_project,
+        "l4_regmap_phase2_emitter_contract_check",
+    ) is not None
 
 
 def test_actual_l6_negative_otp_interface_does_not_create_layout(

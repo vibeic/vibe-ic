@@ -2161,25 +2161,123 @@ _OTP_EVIDENCE_TOKEN_RE = re.compile(
     r"\bfuse(?:s|map|bit)?\b|\beFuse\b|\bantifuse\b",
     re.IGNORECASE,
 )
-_OTP_EXPLICIT_ABSENCE_CLAUSE_RE = re.compile(
-    r"(?i)(?:\bno\b|\bwithout\b|\bnone\b|\bnot\b|\bn/?a\b|"
-    r"無|沒有|不需|無需|不含|未)"
-    r"[^;\n.!?。；！？→]{0,120}"
+_OTP_DOUBLE_NEGATION_CLAUSE_RE = re.compile(
+    r"(?i)\bnot\b[^;.!?。；！？→]{0,80}"
+    r"(?:\bno\b|\bwithout\b|\bnone\b|\bn/?a\b)"
+    r"[^;.!?。；！？→]{0,80}"
     r"(?:\bOTP\b|\bone[-\s]?time[-\s]?programmable\b|"
     r"\bfuse(?:s|map|bit)?\b|\beFuse\b|\bantifuse\b)"
 )
-_OTP_CLAUSE_SPLIT_RE = re.compile(r"[;\n.!?。；！？→]")
+_L4_DENIED_DESIGN_MEMBER_PATTERN = (
+    r"(?:"
+    r"(?:(?:software|sw)[-\s]*visible\s+)?"
+    r"(?:chip[-\s]*(?:level)?\s+)?registers?|"
+    r"(?:control|status|configuration|config|interrupt)\s+registers?|"
+    r"register\s+(?:file|map)|address\s+map|interrupts?|"
+    r"(?:otp|one[-\s]*time[-\s]*programmable|efuse|antifuse)"
+    r"(?:-based\s+calibration|[-\s]+"
+    r"(?:array|bank|bits?|fuses?|interface|layout|memory))?|"
+    r"fuses?(?:\s+(?:array|bank|bits?|map))?|"
+    r"(?:non[-\s]*volatile|nv)\s+memory|"
+    r"(?:(?:plugin\s+)?(?:產生\s+)?)?calibration\s+controller|"
+    r"analog\s+trim\s+dac"
+    r")"
+)
+_L4_DENIAL_BODY_PATTERN = (
+    rf"(?:"
+    rf"{_L4_DENIED_DESIGN_MEMBER_PATTERN}"
+    rf"(?:\s+(?:is|are)\s+"
+    rf"(?:present|used|required|provided|included|implemented|supported|available))?"
+    rf"|{_L4_DENIED_DESIGN_MEMBER_PATTERN}"
+    rf"(?:(?:\s*,\s*(?:(?:and|or)\s+)?|\s*、\s*)"
+    rf"{_L4_DENIED_DESIGN_MEMBER_PATTERN})+\s*(?:等)?"
+    rf")"
+)
+_L4_ABSENCE_SENTENCE_RE = re.compile(
+    rf"(?ix)^\s*(?:[-*+]\s*)?(?:"
+    rf"(?:(?:the|this)\s+)?(?:design|device|chip|ic|system)\s+"
+    rf"(?:has|have|contains|uses)\s+no\s+|"
+    rf"there\s+(?:is|are)\s+no\s+|"
+    rf"no\s+|"
+    rf"(?:無|沒有|不含|無需|不需)\s*"
+    rf"){_L4_DENIAL_BODY_PATTERN}\s*(?:[.;!?。；！？]|$)\s*$"
+)
+_L4_NEGATION_CUE_RE = re.compile(
+    r"(?i)(?:\bno\b|\bwithout\b|\bnone\b|\bnot\b|\bn/?a\b|"
+    r"無|沒有|不需|無需|不含|未)"
+)
+
+
+def _otp_clauses(text: str) -> List[str]:
+    """Preserve fixed sentence/list terminators while joining wrapping."""
+    marked = str(text).replace("\r\n", "\n").replace("\r", "\n")
+    marked = re.sub(r"(?m)(^[ \t]*#{1,6}[^\n]*)\n", r"\1;", marked)
+    marked = re.sub(r"\n[ \t]*\n+", ";", marked)
+    marked = re.sub(
+        r"\n(?=[ \t]*(?:[-*+]\s|#{1,6}\s|→))", ";", marked
+    )
+    marked = re.sub(r"[ \t]*\n[ \t]*", " ", marked)
+    return [
+        match.group(0).strip()
+        for match in re.finditer(
+            r"[^;.!?。；！？→]+(?:[;.!?。；！？→]|$)", marked
+        )
+        if match.group(0).strip()
+    ]
+
+
+def _l4_absence_claim_is_complete(clause: str) -> bool:
+    """Fullmatch one supported whole-design negative sentence."""
+    return bool(_L4_ABSENCE_SENTENCE_RE.fullmatch(str(clause)))
+
+
+def _is_explicit_otp_absence_clause(clause: str) -> bool:
+    """Recognise only a full supported OTP-denial sentence."""
+    return bool(
+        _OTP_EVIDENCE_TOKEN_RE.search(clause)
+        and not _OTP_DOUBLE_NEGATION_CLAUSE_RE.search(clause)
+        and _l4_absence_claim_is_complete(clause)
+    )
+
+
+def _has_unresolved_mixed_otp_polarity(clause: str) -> bool:
+    """Refuse a denial clause that carries another unresolved OTP claim."""
+    if (not _OTP_EVIDENCE_TOKEN_RE.search(clause)
+            or _OTP_DOUBLE_NEGATION_CLAUSE_RE.search(clause)
+            or _is_explicit_otp_absence_clause(clause)):
+        return False
+    return bool(_L4_NEGATION_CUE_RE.search(clause))
+
+
+def _has_unresolved_otp_evidence(text: str) -> bool:
+    """Return true when any OTP-bearing clause has unresolved polarity."""
+    return any(
+        _has_unresolved_mixed_otp_polarity(clause)
+        for clause in _otp_clauses(text)
+    )
 
 
 def _has_positive_otp_evidence(text: str) -> bool:
     """Return true for OTP evidence not explicitly negated in its clause."""
-    for clause in _OTP_CLAUSE_SPLIT_RE.split(str(text)):
+    for clause in _otp_clauses(text):
         if not _OTP_EVIDENCE_TOKEN_RE.search(clause):
             continue
-        if _OTP_EXPLICIT_ABSENCE_CLAUSE_RE.search(clause):
+        if _is_explicit_otp_absence_clause(clause):
+            continue
+        if (_L4_NEGATION_CUE_RE.search(clause)
+                and not _OTP_DOUBLE_NEGATION_CLAUSE_RE.search(clause)):
             continue
         return True
     return False
+
+
+def _has_explicit_otp_absence(text: str) -> bool:
+    """Return true only when an OTP-bearing clause explicitly denies OTP."""
+    return any(
+        _is_explicit_otp_absence_clause(clause)
+        and not _has_unresolved_mixed_otp_polarity(clause)
+        for clause in _otp_clauses(text)
+    )
 
 # v1.6.248 — for #110. The L1 pin / L9 port extractors read every
 # file in `extracted` indiscriminately, including build / config
@@ -33045,7 +33143,8 @@ _RE_L4_NO_REGMAP = re.compile(
     r'(?i)無\s*SW-?visible\s*(?:chip[\s-]*(?:level)?\s*)?register(?:s)?|'
     r'無\s*chip[\s-]*(?:level\s*)?register(?:s)?|'
     r'沒有\s*(?:chip[\s-]*)?register(?:s)?|'
-    r'\bno\s+(?:SW-?visible\s+)?(?:chip[\s-]*)?register(?:s)?\b|'
+    r'\bno\s+(?:(?:SW|software)[\s-]*visible\s+)?'
+    r'(?:chip[\s-]*)?register(?:s)?\b|'
     r'\bno\s+(?:control|status|configuration|config|interrupt)\s+registers?\b|'
     r'\bno\s+register\s+file\b|'
     r'不需\s*產生.*register\s*file')
@@ -33065,7 +33164,22 @@ def _l4_explicit_no_regmap_sources(
         lowered = name.lower()
         if not any(token in lowered for token in ("register", "l4", "l5")):
             continue
-        if isinstance(text, str) and _RE_L4_NO_REGMAP.search(text):
+        if not isinstance(text, str):
+            continue
+        matches = [
+            (clause, match)
+            for clause in _otp_clauses(text)
+            if (match := _RE_L4_NO_REGMAP.search(clause)) is not None
+        ]
+        has_complete = any(
+            _l4_absence_claim_is_complete(clause)
+            for clause, match in matches
+        )
+        has_unresolved = any(
+            not _l4_absence_claim_is_complete(clause)
+            for clause, match in matches
+        )
+        if has_complete and not has_unresolved:
             sources.append(name)
     return sources
 
@@ -34971,8 +35085,8 @@ def gen_l4_regmap(project: Path,
     elif _l4_no_regmap_sources:
         no_registers_in_input = True
     else:
-        no_registers_in_input = _flag_no_X_in_input(
-            registers, evidence, "registers")
+        # Empty extraction is unknown, not an affirmative absence claim.
+        no_registers_in_input = False
     # v1.6.70 — closes issue #10 Bug A. Previous code emitted a fixed
     # AID-class OTP geometry (`depth_bytes=128, width_bits=8`) plus
     # hardcoded read_map / write_map / lockbits / trim_registers /
@@ -34992,8 +35106,17 @@ def gen_l4_regmap(project: Path,
     # v1.6.78 — closes #11 FLAG-EVIDENCE CONSISTENCY for L4.otp_layout.
     # Filename-level evidence (e.g. OTP_Layout.md / fuse_map.txt) also
     # counts as positive evidence the input has OTP content.
-    no_otp_layout_in_input_l4 = _flag_no_X_in_input(
-        has_otp_evidence, evidence, "otp_layout")
+    has_explicit_otp_absence = any(
+        _has_explicit_otp_absence(t) for t in extracted.values()
+    )
+    has_unresolved_otp_evidence = any(
+        _has_unresolved_otp_evidence(t) for t in extracted.values()
+    )
+    no_otp_layout_in_input_l4 = bool(
+        not has_otp_evidence
+        and has_explicit_otp_absence
+        and not has_unresolved_otp_evidence
+    )
     if has_otp_evidence:
         # v1.6.252 — for #111 ORGANIC. Previous emission populated
         # `lockbits` / `trim_registers` / `mask_sources` /
