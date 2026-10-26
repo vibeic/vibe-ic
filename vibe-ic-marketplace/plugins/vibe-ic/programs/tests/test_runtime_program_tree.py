@@ -198,6 +198,120 @@ def test_backend_parameters_keep_active_retained_runner(
             child.read_bytes()).hexdigest()
 
 
+_STEP23_SIGNOFF_PROGRAMS = (
+    ("sta_signoff", "sta_report_check.py"),
+    ("sta_corner", "post_route_signoff_corner_check.py"),
+    ("sta_record", "sta_corner_record_completeness_check.py"),
+    ("sta_architectural_residual", "sta_architectural_residual_check.py"),
+    ("drv_signoff", "drv_signoff_judge.py"),
+)
+
+
+def _step23_backend_context(tmp_path, monkeypatch):
+    import clock_target_provenance as provenance
+    import execution_backend_producers as producers
+    import execution_modes as modes
+
+    _clear(monkeypatch)
+    source = tmp_path / "source"
+    programs = _plugin(source, "1.0.0", "print('A')\n")
+    for _, name in _STEP23_SIGNOFF_PROGRAMS:
+        (programs / name).write_text("# retained sign-off program\n")
+    project = tmp_path / "project"
+    project.mkdir()
+    tree = rpt.activate(project, programs, programs / "runner.py")
+
+    def context(name, program_root):
+        module = ModuleType(name)
+        module.PROGRAMS_DIR = program_root
+        module._RUNTIME_PROGRAM_TREE = tree
+        module._producer_identity_now = lambda: tree.receipt()
+        module._DECLARED_SIGNOFF_GATES = tuple(
+            (gate, program, f"reports/{gate}.json", ())
+            for gate, program in _STEP23_SIGNOFF_PROGRAMS[:-1])
+        module._PRESTREAM_GATES = (
+            ("drv_signoff", "drv_signoff_judge.py",
+             "reports/drv_signoff.json", ()),)
+
+        def run_gate(_project, gate, program, _output, _extra=(), **_kwargs):
+            try:
+                child = module.PROGRAMS_DIR / program
+                if not child.is_file():
+                    raise rpt.RuntimeTreeError(f"RUNTIME_CHILD_MISSING: programs/{program}")
+                tree.verify_command([sys.executable, str(child), str(_project)])
+            except rpt.RuntimeTreeError as exc:
+                return SimpleNamespace(name=gate, status="NOT_MEASURED",
+                                       detail=str(exc))
+            return SimpleNamespace(name=gate, status="PASS", detail="retained")
+
+        module._run_declared_signoff_gate = run_gate
+        return module
+
+    active = context("__main__", tree.programs_dir)
+    live = context("phase3_one_shot_runner", programs)
+    monkeypatch.setitem(sys.modules, "__main__", active)
+    monkeypatch.setitem(sys.modules, "phase3_one_shot_runner", live)
+    monkeypatch.setattr(producers, "produce_signoff",
+                        lambda *_args, **_kwargs: {"verdict": "PASS", "detail": "native"})
+    monkeypatch.setattr(producers, "_native_current_step_producer", lambda _sid: None)
+    monkeypatch.setattr(producers, "_run_current_step_declared_producers",
+                        lambda *_args, **_kwargs: {"verdict": "PRODUCED"})
+    monkeypatch.setattr(producers, "_current_step_producer_authority",
+                        lambda *_args, **_kwargs: (True, "", "PASS"))
+    monkeypatch.setattr(provenance, "stamp_signoff_records", lambda _project: None)
+    params = {"step_id": "23", "execution_mode": "default",
+              "resolved_input_manifest": {"files": {}}, "top": "neutral"}
+    return producers, modes, project, params, tree, active
+
+
+def test_backend_step23_signoff_uses_active_retained_runner_context(
+        tmp_path, monkeypatch):
+    producers, _, project, params, tree, _ = _step23_backend_context(
+        tmp_path, monkeypatch)
+
+    result = producers.produce(project, params)
+
+    assert result["verdict"] == "PASS", result
+    launches = json.loads(tree.launch_path.read_text())["children"]
+    for _, name in _STEP23_SIGNOFF_PROGRAMS:
+        retained = tree.programs_dir / name
+        row = launches[f"programs/{name}"]
+        assert row["launch_count"] == 1
+        assert row["sha256"] == hashlib.sha256(retained.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize("damage", [
+    "foreign-root", "environment-mismatch", "changed", "missing"])
+def test_backend_step23_refuses_invalid_retained_program_identity(
+        tmp_path, monkeypatch, damage):
+    producers, modes, project, params, tree, active = _step23_backend_context(
+        tmp_path, monkeypatch)
+    child = tree.programs_dir / "sta_report_check.py"
+    if damage == "foreign-root":
+        foreign = tmp_path / "foreign" / "programs"
+        foreign.mkdir(parents=True)
+        for _, name in _STEP23_SIGNOFF_PROGRAMS:
+            (foreign / name).write_text("# foreign program\n")
+        active.PROGRAMS_DIR = foreign
+    elif damage == "environment-mismatch":
+        monkeypatch.setenv(rpt.ENV_MANIFEST, str(tmp_path / "stale-manifest.json"))
+    elif damage == "changed":
+        child.write_text("# changed after retention\n")
+    else:
+        child.unlink()
+
+    if damage in ("foreign-root", "environment-mismatch"):
+        with pytest.raises(modes.Refusal,
+                           match="BACKEND_RUNTIME_PROGRAM_IDENTITY_INVALID"):
+            producers.produce(project, params)
+    else:
+        result = producers.produce(project, params)
+        assert result["verdict"] == "NOT_MEASURED", result
+        expected = ("RUNTIME_CHILD_CHANGED" if damage == "changed"
+                    else "RUNTIME_CHILD_MISSING")
+        assert expected in result["detail"], result
+
+
 def test_long_runner_entrypoints_activate_retention_before_work():
     programs = Path(__file__).resolve().parents[1]
     for name, later in (
