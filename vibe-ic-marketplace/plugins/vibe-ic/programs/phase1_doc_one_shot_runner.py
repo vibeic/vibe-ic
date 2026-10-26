@@ -41016,46 +41016,108 @@ def gen_l7_test_debug(project: Path,
             evidence.setdefault(f"input/docs/{fname}", []).append({
                 "literal": m.group(0)[:80],
                 "label": "debug observability"})
-    # v1.6.241 — for #104. RST grid Interface table parser. Catches
-    # the canonical RV debug docs (`debug.rst`) which ship rows like
-    # `| debug_req_i | input | "Request to enter Debug Mode" |`
-    # that the inline-prose `_debug_re` above never matched.
-    # chip-AGNOSTIC: structural pattern (identifier + direction
-    # vocabulary + description cell); no chip-class literal. Only
-    # runs on docs whose filename passes the L7 keyword filter.
-    # v1.6.268 — for #125 ORGANIC round-2. Leading whitespace
-    # tolerance for `.. table::`-wrapped grids.
-    _l7_iface_row_re = re.compile(
-        r"^[ \t]*\|\s*[`]{0,2}(?P<signal>[a-zA-Z_][\w]{0,40})[`]{0,2}\s*\|"
-        r"\s*(?P<dir>input|output|inout|reg|wire)\s*\|"
-        r"\s*[\"`']?(?P<desc>[^|\"`'\n]{1,160}?)[\"`']?\s*\|",
-        re.MULTILINE,
-    )
+    # v1.6.241 — for #104. RST/Markdown Interface table parser. A row is
+    # L7 debug evidence only when its own table has explicit Debug or
+    # Observability authority. A debug-keyworded filename alone is not that
+    # authority: such files routinely contain ordinary top-level interfaces.
+    # Resolve columns from the header so a Width column can never be consumed
+    # as Description when the table has four or more columns.
+    def _debug_table_rows(source_text: str) -> List[Tuple[str, str, str, str]]:
+        lines = source_text.splitlines()
+
+        def _cells(line: str) -> List[str]:
+            stripped = line.strip()
+            if not (stripped.startswith("|") and stripped.endswith("|")):
+                return []
+            return [cell.strip() for cell in stripped[1:-1].split("|")]
+
+        def _header_key(cell: str) -> str:
+            return re.sub(r"[\s_-]+", " ", cell.strip(" `*_'\"").lower())
+
+        def _explicit_debug_authority(header_at: int,
+                                      headers: List[str]) -> bool:
+            if any(re.search(r"(?i)\b(?:debug|observability)\b", value)
+                   for value in headers):
+                return True
+            start = max(0, header_at - 12)
+            # The nearest structural owner wins. Do not borrow Debug authority
+            # across an intervening ordinary section heading or table caption.
+            for pos in range(header_at - 1, start - 1, -1):
+                line = lines[pos]
+                if re.match(r"^\s*\.\.\s+table::", line, re.IGNORECASE):
+                    return bool(re.search(
+                        r"(?i)\b(?:debug|observability)\b", line))
+                if re.match(r"^\s{0,3}#{1,6}\s+", line):
+                    return bool(re.search(
+                        r"(?i)\b(?:debug|observability)\b", line))
+                if (re.match(r"^\s*[=\-~^\"']{3,}\s*$", line)
+                        and pos > start):
+                    return bool(re.search(
+                        r"(?i)\b(?:debug|observability)\b", lines[pos - 1]))
+            return False
+
+        rows: List[Tuple[str, str, str, str]] = []
+        signal_headers = {"signal", "pin", "port", "name",
+                          "debug signal", "debug pin",
+                          "observability signal"}
+        direction_headers = {"direction", "dir", "type"}
+        description_headers = {"description", "meaning", "purpose"}
+        for header_at, line in enumerate(lines):
+            headers = _cells(line)
+            keys = [_header_key(value) for value in headers]
+            signal_at = next((i for i, key in enumerate(keys)
+                              if key in signal_headers), None)
+            direction_at = next((i for i, key in enumerate(keys)
+                                 if key in direction_headers), None)
+            description_at = next((i for i, key in enumerate(keys)
+                                   if key in description_headers), None)
+            if (signal_at is None or direction_at is None
+                    or description_at is None
+                    or not _explicit_debug_authority(header_at, headers)):
+                continue
+            last_at = max(signal_at, direction_at, description_at)
+            have_data = False
+            for row_at in range(header_at + 1, min(len(lines), header_at + 128)):
+                row_line = lines[row_at]
+                cells = _cells(row_line)
+                if not cells:
+                    if have_data and not re.match(r"^\s*\+[-+=+]+\+\s*$",
+                                                  row_line):
+                        break
+                    continue
+                if len(cells) <= last_at:
+                    continue
+                signal = cells[signal_at].strip(" `*_'\"")
+                direction = cells[direction_at].strip(" `*_'\"").lower()
+                description = cells[description_at].strip(" `*_'\"")
+                if (not re.fullmatch(r"[A-Za-z_][\w\[\]]{0,40}", signal)
+                        or direction not in {"input", "output", "inout",
+                                             "reg", "wire"}
+                        or not description):
+                    continue
+                have_data = True
+                rows.append((signal, direction, description,
+                             row_line.strip()[:120]))
+        return rows
+
     for fname, text in extracted.items():
         if not _L7_FILE_KEYWORDS.search(fname):
             continue
-        for m in _l7_iface_row_re.finditer(text):
-            sig = m.group("signal").strip()
+        for sig, direction, description, source_quote in _debug_table_rows(text):
             if not sig or sig.lower() in seen_debug:
-                continue
-            # Reject column-header rows ("Signal" / "Name" /
-            # "Direction" / "Description" tokens) — they have the
-            # right shape but are header noise.
-            if sig.lower() in {"signal", "name", "direction",
-                                "description", "type", "port"}:
                 continue
             seen_debug.add(sig.lower())
             debug_observability.append({
                 "signal": sig,
-                "direction": m.group("dir").lower(),
-                "description": m.group("desc").strip(),
+                "direction": direction,
+                "description": description,
                 "purpose": "debug observability pin (extracted from "
                            "RST Interface table)",
                 "evidence": f"input/docs/{fname}",
                 "extraction_strategy": "rst_grid_interface_table",
             })
             evidence.setdefault(f"input/docs/{fname}", []).append({
-                "literal": m.group(0).strip()[:120],
+                "literal": source_quote,
                 "label": "debug observability (RST Interface table)",
             })
     no_debug_observability_in_input = _flag_no_X_in_input(
