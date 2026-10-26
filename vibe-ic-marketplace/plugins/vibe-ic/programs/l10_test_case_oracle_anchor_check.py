@@ -109,6 +109,10 @@ _L10_GLOBS = (
 )
 
 _CASE_ARRAY_KEYS = ("test_cases", "cases", "tests", "vectors")
+_NON_WAIVABLE_CATEGORIES = frozenset({
+    "INVALID_CASE_POPULATION_ALIAS",
+    "CONFLICTING_CASE_POPULATION_ALIASES",
+})
 _HANDLE_KEYS = ("name", "id", "case_id", "test_id")
 #: Every field through which a case can carry its expectation. This roster is
 #: the CONSUMER half of a contract the producers already publish: the typed
@@ -633,7 +637,10 @@ def main(argv: Optional[List[str]] = None) -> int:
                 f"this design's own L-docs):")
         body = "\n".join(f"  - [{f['category']}] {f['case']}: {f['message']}"
                          for f in errs[:8])
-        if waived:
+        has_non_waivable = any(
+            finding["category"] in _NON_WAIVABLE_CATEGORIES
+            for finding in errs)
+        if waived and not has_non_waivable:
             report["verdict"] = "PASS_WITH_WAIVERS"
             if args.json_out:
                 outp = Path(args.json_out)

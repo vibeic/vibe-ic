@@ -388,6 +388,48 @@ def test_valid_case_refuses_additional_malformed_alias(tmp_path):
     assert "INVALID_CASE_POPULATION_ALIAS" in _errors(tmp_path)
 
 
+def test_waiver_cannot_suppress_malformed_population_alias(tmp_path):
+    docs = _docs(tmp_path)
+    payload = {
+        "test_cases": [],
+        "cases": {},
+        "no_test_cases_in_input": True,
+    }
+    (docs / "L10_TEST_CASES.json").write_text(json.dumps(payload))
+    (tmp_path / "waivers.json").write_text(json.dumps({
+        chk.WAIVER_KEY: "x" * (chk.WAIVER_MIN + 1)}))
+
+    result = _consume(tmp_path)
+    assert result.exit_code == 1
+    assert result.structured_verdict == "FAIL"
+    assert result.verdict == "FAIL"
+    report = json.loads((tmp_path / "reports/phase1/gates/"
+                         "l10_test_case_oracle_anchor.json").read_text())
+    assert report["verdict"] == "FAIL"
+    assert "INVALID_CASE_POPULATION_ALIAS" in _errors(tmp_path)
+
+
+def test_waiver_cannot_suppress_conflicting_population_aliases(tmp_path):
+    docs = _docs(tmp_path)
+    payload = {
+        "test_cases": [dict(_GOOD_CASE)],
+        "cases": [dict(_GOOD_CASE, name="tc_second_alias")],
+        "no_test_cases_in_input": False,
+    }
+    (docs / "L10_TEST_CASES.json").write_text(json.dumps(payload))
+    (tmp_path / "waivers.json").write_text(json.dumps({
+        chk.WAIVER_KEY: "x" * (chk.WAIVER_MIN + 1)}))
+
+    result = _consume(tmp_path)
+    assert result.exit_code == 1
+    assert result.structured_verdict == "FAIL"
+    assert result.verdict == "FAIL"
+    report = json.loads((tmp_path / "reports/phase1/gates/"
+                         "l10_test_case_oracle_anchor.json").read_text())
+    assert report["verdict"] == "FAIL"
+    assert "CONFLICTING_CASE_POPULATION_ALIASES" in _errors(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # 6. Waiver
 # ---------------------------------------------------------------------------
