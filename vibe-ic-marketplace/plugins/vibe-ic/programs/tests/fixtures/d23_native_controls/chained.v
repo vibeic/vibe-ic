@@ -73,4 +73,3 @@ module neutral_unit(clk, rst, data, result, sin, shift, sout, tck, test);
   );
   assign sout = result;
 endmodule
-
