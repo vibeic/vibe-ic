@@ -1054,45 +1054,349 @@ def _current_step9_checkpoint(project: Path, *,
 
 def _complete_step10_prelayout(project: Path, top: str, pdk_name: str,
                               container: str) -> dict:
-    """Resume the existing prelayout owner from a current synthesis handoff."""
+    """Resume D26 and publish its functional/scan timing modes atomically.
+
+    The retained Step10 call remains the functional synthesis-netlist baseline.
+    When current D09 authority requires scan, two additional STAPrePNR arms
+    time the exact D24 post-scan subject: functional clock/case mode and scan
+    shift mode.  Missing authority is NOT_MEASURED; a measured red arm is FAIL.
+    """
+    import _atomic_artefact as atomic
     import design_one_shot_runner as design
+    import librelane_contract as contract
     import phase3_one_shot_runner as phase3
     import step_output_collector as versions
     import synth_handoff_netlist_check as handoff
 
+    project = Path(project).resolve()
+    selected_d26 = _flow109_selected_row('D26')
+    receipt_path = project / 'reports/flow109/d26_scan_mode.json'
+    receipt = {
+        'schema': 'vibeic.flow109.d26-timing-modes.v1',
+        'step_id': 'D26', 'position': 38, 'top': top,
+        'aggregate_status': 'NOT_MEASURED', 'modes_measured': [],
+        'functional_baseline': {'status': 'NOT_MEASURED'},
+        'post_scan_arms': {},
+        'scan': {'applicability': 'UNKNOWN', 'status': 'NOT_MEASURED'},
+    }
+
+    def publish(status: str, detail: str, *, folder=None) -> dict:
+        if not selected_d26:
+            answer = {'verdict': status, 'detail': detail}
+            if folder is not None:
+                answer['folder'] = folder
+            return answer
+        receipt['aggregate_status'] = status
+        receipt['detail'] = detail
+        atomic.write_json(receipt_path, receipt)
+        ref = {'path': str(receipt_path.relative_to(project)),
+               'sha256': contract.digest(receipt_path)}
+        answer = {'verdict': status, 'detail': detail,
+                  'timing_modes_receipt': ref}
+        if folder is not None:
+            answer['folder'] = folder
+        return answer
+
+    def rooted_file(value, label: str) -> Path:
+        if not isinstance(value, (str, os.PathLike)) or not str(value).strip():
+            raise ValueError(f'D26_SCAN_INPUT_INVALID: {label}')
+        raw = Path(os.fspath(value))
+        candidate = raw if raw.is_absolute() else project / raw
+        resolved = candidate.resolve(strict=False)
+        if (candidate.is_symlink() or not resolved.is_relative_to(project)
+                or not resolved.is_file() or resolved.stat().st_size <= 0):
+            raise ValueError(f'D26_SCAN_INPUT_FOREIGN_OR_ABSENT: {label}')
+        return resolved
+
+    def file_ref(path: Path) -> dict:
+        return {'path': str(path.relative_to(project)),
+                'sha256': contract.digest(path)}
+
     prior, error = _current_step9_checkpoint(project, require_canonical=True)
     if error:
-        return {'verdict': 'NOT_MEASURED', 'detail': 'Step10 ' + error}
+        return publish('NOT_MEASURED', 'Step10 ' + error)
     bound = handoff.bound_handoff(project)
     if not bound or bound['verdict'] != 'PASS':
-        return {'verdict': (bound or {}).get('verdict', 'NOT_MEASURED'),
-                'detail': '; '.join((bound or {}).get('findings', ()))
-                          or 'Step10 requires the current native synthesis handoff'}
+        status = (bound or {}).get('verdict', 'NOT_MEASURED')
+        return publish(status, '; '.join((bound or {}).get('findings', ()))
+                       or 'Step10 requires the current native synthesis handoff')
     if Path(bound['mapped']).name != f'{top}_synth.v':
-        return {'verdict': 'NOT_MEASURED', 'detail':
-                'Step10 top differs from the current native synthesis handoff'}
+        return publish('NOT_MEASURED',
+                       'Step10 top differs from the current native synthesis handoff')
 
     began = time.time()
     try:
+        pdk = design._phase2_pdk_config(project, pdk_name)
         result = phase3.step_prelayout_signoff(
-            project, top, design._phase2_pdk_config(project, pdk_name), container)
+            project, top, pdk, container)
     except (OSError, ValueError, RuntimeError) as exc:
-        return {'verdict': 'NOT_MEASURED', 'detail': str(exc)}
+        return publish('NOT_MEASURED', str(exc))
     current = next((row for row in versions.current_acceptance(project, began)
                     if str(row['id']) == '10'), None)
     if current is None:
-        return {'verdict': 'FAIL' if result.status == 'FAIL' else 'NOT_MEASURED',
-                'detail': result.detail or 'Step10 published no complete consumer'}
+        status = 'FAIL' if result.status == 'FAIL' else 'NOT_MEASURED'
+        receipt['functional_baseline'].update(
+            status=status, producer_status=result.status, canonical_pass=False,
+            current_inputs=False, canonical_consumer_status=None)
+        return publish(status, result.detail or 'Step10 published no complete consumer')
     status = ('PASS' if current.get('canonical_pass') and current['status'] == 'PASS'
               else 'FAIL' if current['status'] == 'FAIL' else 'NOT_MEASURED')
     consumer = (current.get('result') or {}).get('canonical_consumer')
     if not isinstance(consumer, dict):
-        return {'verdict': 'FAIL' if current['status'] == 'FAIL' else 'NOT_MEASURED',
-                'folder': current['folder'],
-                'detail': 'Step10 has no complete canonical consumer'}
-    return {'verdict': status, 'folder': current['folder'],
-            'detail': '; '.join(consumer.get('step', {}).get('reasons', ()))
-                      or result.detail}
+        status = 'FAIL' if current['status'] == 'FAIL' else 'NOT_MEASURED'
+        receipt['functional_baseline'].update(
+            status=status, folder=current.get('folder'),
+            canonical_pass=bool(current.get('canonical_pass')),
+            current_inputs=bool(current.get('current_inputs')),
+            canonical_consumer_status=None)
+        return publish(status, 'Step10 has no complete canonical consumer',
+                       folder=current.get('folder'))
+    baseline_detail = ('; '.join(consumer.get('step', {}).get('reasons', ()))
+                       or result.detail)
+    receipt['functional_baseline'] = {
+        'status': status, 'folder': current['folder'],
+        'canonical_pass': bool(current.get('canonical_pass')),
+        'current_inputs': bool(current.get('current_inputs')),
+        'canonical_consumer_status': consumer.get('status'),
+        'detail': baseline_detail,
+    }
+    if status in ('PASS', 'FAIL'):
+        receipt['modes_measured'].append('functional_baseline')
+
+    # This function also serves the legacy/native Step10 entry.  Preserve that
+    # exact API and behavior unless the validated public Flow109 request owns
+    # D26; only D26 has the two-mode receipt contract.
+    if not selected_d26:
+        return {'verdict': status, 'folder': current['folder'],
+                'detail': baseline_detail}
+    if (status == 'PASS'
+            and (not current.get('current_inputs') or consumer.get('status') != 'PASS')):
+        receipt['functional_baseline']['status'] = 'NOT_MEASURED'
+        receipt['modes_measured'].remove('functional_baseline')
+        return publish('NOT_MEASURED',
+                       'D26 functional baseline is not current/canonical',
+                       folder=current['folder'])
+
+    # D09 is the only authority for whether scan applies.  Missing or invalid
+    # source is unknown, never an inferred scan_test:false.
+    try:
+        import fault_scan_chain_insert as scan
+        planned, problems = scan.load_d09_dft_contract(project)
+        if planned is None:
+            receipt['scan']['reason'] = '; '.join(problems or ['D09 binding absent'])
+            aggregate = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+            return publish(aggregate, 'D26 scan applicability is unresolved',
+                           folder=current['folder'])
+        receipt['scan']['d09_binding'] = planned
+        if planned['intent']['scan_test'] is False:
+            receipt['scan'].update(applicability='NOT_APPLICABLE',
+                                   status='NOT_APPLICABLE',
+                                   reason='D09_SCAN_TEST_DISABLED')
+            return publish(status, baseline_detail, folder=current['folder'])
+        clock, reset, active_low = design.derive_dft_clock_reset(project)
+        planned, problems = scan.load_d09_dft_contract(
+            project, expected_clock=clock or None, expected_reset=reset or None,
+            reset_active_low=active_low if reset else False)
+        if planned is None or problems or not clock or not reset:
+            receipt['scan']['reason'] = '; '.join(
+                problems or ['actual functional clock/reset is unresolved'])
+            aggregate = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+            return publish(aggregate, 'D26 scan authority does not match actual clock/reset',
+                           folder=current['folder'])
+        receipt['scan'].update(applicability='APPLICABLE', d09_binding=planned)
+        if status != 'PASS':
+            receipt['scan']['reason'] = 'functional baseline did not pass'
+            return publish(status, baseline_detail, folder=current['folder'])
+
+        scan_report_path = rooted_file(
+            'reports/phase2/dft/scan_chain.json', 'published scan_chain.json')
+        scan_report = json.loads(scan_report_path.read_text())
+        if (scan_report.get('published') is not True
+                or scan_report.get('d09_contract') != planned):
+            raise ValueError('D26_SCAN_REPORT_NOT_CURRENT: D09/publication mismatch')
+        scan_current, scan_reason = scan.l20_binding_is_current(project, scan_report)
+        if not scan_current:
+            raise ValueError('D26_SCAN_REPORT_NOT_CURRENT: ' + scan_reason)
+        receipt['scan']['scan_chain_report'] = {
+            **file_ref(scan_report_path), 'published': True,
+            'd09_contract': scan_report.get('d09_contract'),
+            'measured_artifacts': scan_report.get('measured_artifacts'),
+            'native_clock_controls': scan_report.get('native_clock_controls'),
+            'current': True,
+        }
+
+        import dft_signoff_check as signoff
+        scan_timing = signoff.evaluate_scan_shift_timing(project)
+        if (scan_timing.get('required') is not True
+                or scan_timing.get('status') != 'PASS'
+                or not isinstance(scan_timing.get('constraint'), dict)):
+            raise ValueError('D26_SCAN_CONSTRAINT_NOT_MEASURED: '
+                             + '; '.join(scan_timing.get('reasons') or ()))
+        constraint = scan_timing['constraint']
+        scan_sdc = rooted_file(constraint.get('path'), 'scan-mode SDC')
+        if constraint.get('sha256') != contract.digest(scan_sdc):
+            raise ValueError('D26_SCAN_CONSTRAINT_CHANGED')
+        receipt['scan']['constraint'] = {**constraint, 'mode': 'scan'}
+
+        import lec_gate_netlist_select as netlists
+        adopted, note, is_scan = netlists.pnr_consumed_netlist(project, top)
+        adopted = rooted_file(adopted, 'D24 adopted post-scan netlist')
+        adopted_ref = file_ref(adopted)
+        d24 = versions.latest_pass(project, '12')
+        d24_outputs = ((d24 or {}).get('outputs') or [])
+        retained = [item for item in d24_outputs
+                    if item.get('rel') == adopted_ref['path']]
+        d24_consumer = (((d24 or {}).get('result') or {}).get('canonical_consumer')
+                        or {})
+        if (is_scan is not True or not d24 or d24.get('status') != 'PASS'
+                or not d24.get('canonical_pass') or not d24.get('current_inputs')
+                or d24_consumer.get('status') != 'PASS' or len(retained) != 1
+                or retained[0].get('sha256') != adopted_ref['sha256']):
+            raise ValueError('D26_D24_ADOPTED_NETLIST_NOT_CURRENT')
+        receipt['scan']['adopted_d24'] = {
+            **adopted_ref, 'current': True, 'is_scan_inserted': True,
+            'native_step': '12', 'flow109_step': 'D24', 'position': 36,
+            'resolver_note': note, 'folder': d24.get('folder'),
+        }
+
+        # Derive functional case controls from the source-bound native roles;
+        # the clock/period remain the already-passing functional Step7 deck.
+        functional_gate_path = rooted_file(
+            'phase3/librelane/prelayout/gates/step8_sdc_opensta.json',
+            'functional prelayout SDC gate')
+        functional_gate = json.loads(functional_gate_path.read_text())
+        functional_sdc = rooted_file(functional_gate.get('sdc'), 'functional SDC')
+        if (functional_gate.get('verdict') != 'PASS'
+                or functional_gate.get('sdc_sha256') != contract.digest(functional_sdc)):
+            raise ValueError('D26_FUNCTIONAL_CONSTRAINT_NOT_CURRENT')
+        intent = planned['intent']
+        expected_roles = {'scan_enable', 'scan_in', 'scan_out', 'test', 'tck'}
+        if set(intent.get('test_port_def') or {}) != expected_roles:
+            raise ValueError('D26_D09_FIVE_ROLE_AUTHORITY_INVALID')
+        native_ports = {role: item.get('native') for role, item in
+                        intent['test_port_def'].items()}
+        selector = intent['test_mode']['clock_select']
+        test_port = selector.get('native')
+        shift_port = native_ports.get('scan_enable')
+        scan_in_port = native_ports.get('scan_in')
+        scan_clock_port = native_ports.get('tck')
+        reset_authority = intent['test_mode'].get('reset') or {}
+        reset_port = reset_authority.get('signal')
+        controls = (test_port, shift_port, scan_in_port, scan_clock_port,
+                    reset_port)
+        if (any(not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', str(port or ''))
+                for port in controls)
+                or len(set(controls)) != len(controls)
+                or selector.get('functional_value') != 0
+                or selector.get('scan_value') != 1
+                or intent['test_mode'].get('scan_clock') != scan_clock_port
+                or reset_authority.get('active_level') not in (0, 1)):
+            raise ValueError('D26_FUNCTIONAL_CASE_AUTHORITY_INVALID')
+        reset_deasserted = 1 - reset_authority['active_level']
+        derived_sdc = project / 'reports/flow109/d26_timing/functional_post_scan.sdc'
+        functional_text = functional_sdc.read_text()
+        if functional_text and not functional_text.endswith('\n'):
+            functional_text += '\n'
+        functional_text += (
+            '# D26 source-bound post-scan functional mode\n'
+            f'# D09 path: {planned["path"]}\n'
+            f'# D09 sha256: {planned["sha256"]}\n'
+            f'set_case_analysis 0 [get_ports {{{test_port}}}]\n'
+            f'set_case_analysis 0 [get_ports {{{shift_port}}}]\n'
+            f'set_case_analysis 0 [get_ports {{{scan_in_port}}}]\n'
+            f'set_case_analysis 0 [get_ports {{{scan_clock_port}}}]\n'
+            f'set_case_analysis {reset_deasserted} '
+            f'[get_ports {{{reset_port}}}]\n')
+        atomic.write_text(derived_sdc, functional_text)
+        functional_constraint = {
+            **file_ref(derived_sdc), 'mode': 'functional',
+            'base_sdc': file_ref(functional_sdc),
+            'clock': intent['test_mode']['clock'],
+            'clock_select': test_port, 'clock_select_value': 0,
+            'scan_enable': shift_port, 'scan_enable_value': 0,
+            'scan_input': scan_in_port, 'scan_input_value': 0,
+            'scan_clock': scan_clock_port, 'scan_clock_value': 0,
+            'reset': reset_port, 'reset_value': reset_deasserted,
+            'd09_path': planned['path'], 'd09_sha256': planned['sha256'],
+        }
+
+        image = contract.resolve_image(project)
+        pdk_root = Path(contract.pdk_root_resolution(
+            project, str(pdk.name), image=image)['path'])
+        if not pdk_root.is_dir():
+            raise ValueError('D26_PDK_ROOT_MISSING')
+        mounts = [(pdk_root, '/pdk')]
+        rtl = sorted(_pl.rtl_dir(project).glob('*.sv')) + \
+            sorted(_pl.rtl_dir(project).glob('*.v'))
+        stem = Path(str(getattr(pdk, 'liberty', ''))).stem
+        scl = stem.split('__', 1)[0] if '__' in stem else None
+        import librelane_prelayout as prelayout
+        gates_root = project / 'reports/flow109/d26_timing'
+
+        def run_arm(name: str, sdc: Path, constraint_record: dict) -> dict:
+            folder = prelayout.run_prelayout(
+                project, image, str(pdk.name), top, adopted, sdc, rtl,
+                arm='d26_post_scan_' + name, std_cell_library=scl,
+                mounts=mounts, pdk_root='/pdk')
+            native_receipt = contract.validate_step_receipt(
+                folder, 'OpenROAD.STAPrePNR')
+            config = json.loads((folder / 'config.json').read_text())
+            state = json.loads((folder / 'state_out.json').read_text())
+            if (Path(str(config.get('PNR_SDC_FILE') or '')).resolve() != sdc
+                    or Path(str(state.get('nl') or '')).resolve() != adopted):
+                raise ValueError(f'D26_{name.upper()}_NATIVE_INPUT_MISMATCH')
+            sdc_path = gates_root / f'{name}_sdc_gate.json'
+            slack_path = gates_root / f'{name}_slack_gate.json'
+            sdc_gate = prelayout.judge_sdc(folder, config, sdc, sdc_path)
+            slack_gate = prelayout.judge_slack(folder, slack_path)
+            if (sdc_gate.get('netlist_sha256') != adopted_ref['sha256']
+                    or sdc_gate.get('sdc_sha256') != contract.digest(sdc)
+                    or sdc_gate.get('state_out_sha256') !=
+                    contract.digest(folder / 'state_out.json')
+                    or slack_gate.get('state_out_sha256') !=
+                    contract.digest(folder / 'state_out.json')):
+                raise ValueError(f'D26_{name.upper()}_GATE_INPUT_MISMATCH')
+            gate_statuses = (sdc_gate.get('verdict'), slack_gate.get('verdict'))
+            arm_status = ('FAIL' if 'FAIL' in gate_statuses else
+                          'PASS' if gate_statuses == ('PASS', 'PASS') else
+                          'NOT_MEASURED')
+            return {
+                'status': arm_status, 'constraint': constraint_record,
+                'adopted_netlist': adopted_ref,
+                'native': {'folder': str(folder.relative_to(project)),
+                           'receipt': file_ref(folder / 'vibeic_receipt.json'),
+                           'input_step': native_receipt['input'].get('step')},
+                'sdc_gate': {**file_ref(sdc_path), 'verdict': sdc_gate.get('verdict'),
+                             'findings': sdc_gate.get('findings'),
+                             'corners': sdc_gate.get('corners')},
+                'slack_gate': {**file_ref(slack_path),
+                               'verdict': slack_gate.get('verdict'),
+                               'findings': slack_gate.get('findings'),
+                               'corners': slack_gate.get('corners')},
+            }
+
+        functional_arm = run_arm('functional', derived_sdc, functional_constraint)
+        scan_arm = run_arm('scan', scan_sdc, {**constraint, 'mode': 'scan'})
+        receipt['post_scan_arms'] = {
+            'functional': functional_arm, 'scan': scan_arm}
+        receipt['scan']['status'] = scan_arm['status']
+        for name, arm in receipt['post_scan_arms'].items():
+            if arm['status'] in ('PASS', 'FAIL'):
+                receipt['modes_measured'].append('post_scan_' + name)
+        arm_statuses = (functional_arm['status'], scan_arm['status'])
+        aggregate = ('FAIL' if 'FAIL' in arm_statuses else
+                     'PASS' if arm_statuses == ('PASS', 'PASS') else
+                     'NOT_MEASURED')
+        detail = ('D26 functional baseline and post-scan functional/scan modes passed'
+                  if aggregate == 'PASS' else
+                  'D26 post-scan timing mode failed' if aggregate == 'FAIL' else
+                  'D26 post-scan timing mode is not measured')
+        return publish(aggregate, detail, folder=current['folder'])
+    except (contract.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
+        receipt['scan']['status'] = 'NOT_MEASURED'
+        receipt['scan']['reason'] = str(exc)
+        aggregate = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+        return publish(aggregate, str(exc), folder=current['folder'])
 
 
 def _finish_selected_native_owner(project: Path, native_step: str,
@@ -1302,11 +1606,249 @@ def _finish_d09_selected_owner(
 
 
 def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
-    """Finalize the selected D26 attempt and validate its immutable result."""
+    """Finalize D26 only while its exact timing-mode evidence is current."""
     import flow109
+    import librelane_contract as contract
+
+    project = Path(project).resolve()
+    status = acceptance.get('verdict')
+    timing_ref = acceptance.get('timing_modes_receipt')
+
+    def current_timing_modes() -> tuple[dict | None, str | None]:
+        try:
+            if (not isinstance(timing_ref, Mapping)
+                    or set(timing_ref) != {'path', 'sha256'}):
+                raise ValueError('timing_modes_receipt reference is absent or malformed')
+            raw_path = Path(str(timing_ref['path']))
+            candidate = raw_path if raw_path.is_absolute() else project / raw_path
+            path = candidate.resolve()
+            if (candidate.is_symlink() or not path.is_relative_to(project)
+                    or not path.is_file()
+                    or contract.digest(path) != timing_ref['sha256']):
+                raise ValueError('timing_modes_receipt bytes are missing, foreign, or changed')
+            doc = json.loads(path.read_text(encoding='utf-8'))
+            baseline = doc.get('functional_baseline') or {}
+            if (doc.get('schema') != 'vibeic.flow109.d26-timing-modes.v1'
+                    or doc.get('step_id') != 'D26' or doc.get('position') != 38
+                    or status not in ('PASS', 'FAIL', 'NOT_MEASURED')
+                    or doc.get('aggregate_status') != status
+                    or baseline.get('status') not in
+                    ('PASS', 'FAIL', 'NOT_MEASURED')
+                    or (baseline.get('status') == 'PASS'
+                        and (baseline.get('canonical_pass') is not True
+                             or baseline.get('current_inputs') is not True
+                             or baseline.get('canonical_consumer_status') != 'PASS'))
+                    or (status == 'PASS' and baseline.get('status') != 'PASS')
+                    or not isinstance(doc.get('top'), str) or not doc['top']):
+                raise ValueError('timing_modes_receipt schema or terminal state is invalid')
+
+            import fault_scan_chain_insert as scan
+            planned, problems = scan.load_d09_dft_contract(project)
+            recorded_d09 = doc.get('scan', {}).get('d09_binding')
+            if recorded_d09 is None:
+                if (status == 'NOT_MEASURED' and not doc.get('post_scan_arms')
+                        and planned is None):
+                    return doc, None
+                raise ValueError('timing_modes_receipt omits current D09 binding')
+            if planned is None or problems or recorded_d09 != planned:
+                raise ValueError('current D09 binding differs from timing_modes_receipt')
+            if planned['intent']['scan_test'] is False:
+                if (doc['scan'].get('applicability') != 'NOT_APPLICABLE'
+                        or doc['scan'].get('status') != 'NOT_APPLICABLE'
+                        or doc.get('post_scan_arms') != {}
+                        or doc.get('aggregate_status') != baseline.get('status')
+                        or doc.get('modes_measured') !=
+                        (['functional_baseline'] if baseline.get('status') in
+                         ('PASS', 'FAIL') else [])):
+                    raise ValueError('no-scan timing_modes_receipt claims extra modes')
+                return doc, None
+            if planned['intent']['scan_test'] is not True:
+                raise ValueError('D09 scan applicability is not explicit')
+            import design_one_shot_runner as design
+            clock, reset, active_low = design.derive_dft_clock_reset(project)
+            planned, problems = scan.load_d09_dft_contract(
+                project, expected_clock=clock or None,
+                expected_reset=reset or None,
+                reset_active_low=active_low if reset else False)
+            if (planned is None or problems or not clock or not reset
+                    or doc.get('scan', {}).get('d09_binding') != planned):
+                raise ValueError('D09 binding differs from current clock/reset roles')
+
+            scan_doc = doc.get('scan') or {}
+            arms = doc.get('post_scan_arms') or {}
+            if scan_doc.get('applicability') != 'APPLICABLE':
+                raise ValueError('scan applicability differs from current D09')
+            if (arms and (set(arms) != {'functional', 'scan'}
+                    or scan_doc.get('status') != arms['scan'].get('status')
+                    or doc.get('modes_measured') != [
+                        'functional_baseline', 'post_scan_functional',
+                        'post_scan_scan'])):
+                raise ValueError('applicable timing mode population is incomplete')
+
+            scan_report_ref = scan_doc.get('scan_chain_report') or {}
+            if scan_report_ref:
+                scan_report_path = (
+                    project / str(scan_report_ref.get('path') or '')).resolve()
+                if (not scan_report_path.is_relative_to(project)
+                        or not scan_report_path.is_file()
+                        or contract.digest(scan_report_path) !=
+                        scan_report_ref.get('sha256')):
+                    raise ValueError('scan-chain report is missing or changed')
+                scan_report = json.loads(scan_report_path.read_text(encoding='utf-8'))
+                current, reason = scan.l20_binding_is_current(project, scan_report)
+                if (not current or scan_report.get('published') is not True
+                        or scan_report.get('d09_contract') != planned):
+                    raise ValueError('scan-chain report is not current: ' + str(reason))
+            elif arms:
+                raise ValueError('complete timing arms omit scan-chain report')
+
+            recorded_constraint = dict(scan_doc.get('constraint') or {})
+            if recorded_constraint:
+                if recorded_constraint.pop('mode', None) != 'scan':
+                    raise ValueError('scan timing constraint mode is invalid')
+                import dft_signoff_check as signoff
+                scan_timing = signoff.evaluate_scan_shift_timing(project)
+                if (scan_timing.get('status') != 'PASS'
+                        or scan_timing.get('constraint') != recorded_constraint):
+                    raise ValueError('current scan timing constraint differs')
+            elif arms:
+                raise ValueError('complete timing arms omit scan timing constraint')
+
+            adopted_doc = scan_doc.get('adopted_d24') or {}
+            if adopted_doc:
+                import lec_gate_netlist_select as netlists
+                adopted, _note, is_scan = netlists.pnr_consumed_netlist(
+                    project, doc['top'])
+                adopted = Path(adopted).resolve()
+                if (not adopted.is_relative_to(project) or not adopted.is_file()
+                        or is_scan is not True
+                        or str(adopted.relative_to(project)) != adopted_doc.get('path')
+                        or contract.digest(adopted) != adopted_doc.get('sha256')
+                        or adopted_doc.get('current') is not True
+                        or adopted_doc.get('is_scan_inserted') is not True):
+                    raise ValueError('current D24 adopted subject differs')
+                import step_output_collector as versions
+                d24 = versions.latest_pass(project, '12')
+                output = next((item for item in (d24 or {}).get('outputs', ())
+                               if item.get('rel') == adopted_doc.get('path')), None)
+                consumer = (((d24 or {}).get('result') or {}).get(
+                    'canonical_consumer') or {})
+                if (not d24 or d24.get('status') != 'PASS'
+                        or not d24.get('canonical_pass')
+                        or not d24.get('current_inputs')
+                        or consumer.get('status') != 'PASS'
+                        or not output
+                        or output.get('sha256') != adopted_doc.get('sha256')):
+                    raise ValueError('current D24 acceptance differs')
+            elif arms:
+                raise ValueError('complete timing arms omit D24 adopted subject')
+
+            if not arms:
+                if (status in ('FAIL', 'NOT_MEASURED')
+                        and scan_doc.get('status') == 'NOT_MEASURED'):
+                    return doc, None
+                raise ValueError('timing mode population is absent')
+
+            for name in ('functional', 'scan'):
+                arm = arms[name]
+                constraint_ref = arm.get('constraint') or {}
+                if (arm.get('status') not in ('PASS', 'FAIL', 'NOT_MEASURED')
+                        or constraint_ref.get('mode') != name
+                        or arm.get('adopted_netlist') != {
+                            'path': adopted_doc['path'], 'sha256': adopted_doc['sha256']}):
+                    raise ValueError(f'{name} timing arm subject or mode differs')
+                if (name == 'functional'
+                        and (constraint_ref.get('clock') != clock
+                             or constraint_ref.get('clock_select') !=
+                             planned['intent']['test_mode']['clock_select']['native']
+                             or constraint_ref.get('clock_select_value') != 0
+                             or constraint_ref.get('scan_enable') !=
+                             planned['intent']['test_port_def']['scan_enable']['native']
+                             or constraint_ref.get('scan_enable_value') != 0
+                             or constraint_ref.get('scan_input') !=
+                             planned['intent']['test_port_def']['scan_in']['native']
+                             or constraint_ref.get('scan_input_value') != 0
+                             or constraint_ref.get('scan_clock') !=
+                             planned['intent']['test_port_def']['tck']['native']
+                             or constraint_ref.get('scan_clock_value') != 0
+                             or constraint_ref.get('reset') !=
+                             planned['intent']['test_mode']['reset']['signal']
+                             or constraint_ref.get('reset_value') != 1 -
+                             planned['intent']['test_mode']['reset']['active_level']
+                             or constraint_ref.get('d09_path') != planned['path']
+                             or constraint_ref.get('d09_sha256') != planned['sha256'])):
+                    raise ValueError('functional timing mode authority differs')
+                constraint_path = (project / str(constraint_ref.get('path') or '')).resolve()
+                if (not constraint_path.is_relative_to(project)
+                        or not constraint_path.is_file()
+                        or contract.digest(constraint_path) != constraint_ref.get('sha256')):
+                    raise ValueError(f'{name} timing constraint is missing or changed')
+                native = arm.get('native') or {}
+                folder = (project / str(native.get('folder') or '')).resolve()
+                native_ref = native.get('receipt') or {}
+                native_path = (project / str(native_ref.get('path') or '')).resolve()
+                if (not folder.is_relative_to(project) or not folder.is_dir()
+                        or native_path != folder / 'vibeic_receipt.json'
+                        or not native_path.is_file()
+                        or contract.digest(native_path) != native_ref.get('sha256')):
+                    raise ValueError(f'{name} native receipt is missing or changed')
+                contract.validate_step_receipt(folder, 'OpenROAD.STAPrePNR')
+                config = json.loads((folder / 'config.json').read_text(encoding='utf-8'))
+                state = json.loads((folder / 'state_out.json').read_text(encoding='utf-8'))
+                if (Path(str(config.get('PNR_SDC_FILE') or '')).resolve() != constraint_path
+                        or Path(str(state.get('nl') or '')).resolve() != adopted):
+                    raise ValueError(f'{name} native input subject differs')
+                gate_verdicts = []
+                for gate_name in ('sdc_gate', 'slack_gate'):
+                    gate_ref = arm.get(gate_name) or {}
+                    gate_path = (project / str(gate_ref.get('path') or '')).resolve()
+                    if (not gate_path.is_relative_to(project) or not gate_path.is_file()
+                            or contract.digest(gate_path) != gate_ref.get('sha256')):
+                        raise ValueError(f'{name} {gate_name} is missing or changed')
+                    gate = json.loads(gate_path.read_text(encoding='utf-8'))
+                    if (gate.get('verdict') not in ('PASS', 'FAIL', 'NOT_MEASURED')
+                            or gate_ref.get('verdict') != gate.get('verdict')):
+                        raise ValueError(f'{name} {gate_name} verdict differs')
+                    gate_verdicts.append(gate['verdict'])
+                    # The immutable gate bytes are authoritative here; calling
+                    # a judge would overwrite them, so bind their source fields.
+                    if (gate.get('state_out_sha256') != contract.digest(folder / 'state_out.json')
+                            or (gate_name == 'sdc_gate'
+                                and (gate.get('netlist_sha256') != adopted_doc['sha256']
+                                     or gate.get('sdc_sha256') != constraint_ref['sha256']))):
+                        raise ValueError(f'{name} {gate_name} inputs differ')
+                arm_status = ('FAIL' if 'FAIL' in gate_verdicts else
+                              'PASS' if gate_verdicts == ['PASS', 'PASS'] else
+                              'NOT_MEASURED')
+                if arm.get('status') != arm_status:
+                    raise ValueError(f'{name} timing arm verdict differs')
+            arm_statuses = (arms['functional']['status'], arms['scan']['status'])
+            aggregate = ('FAIL' if 'FAIL' in arm_statuses else
+                         'PASS' if arm_statuses == ('PASS', 'PASS') else
+                         'NOT_MEASURED')
+            if aggregate != status:
+                raise ValueError('timing arm aggregate differs from terminal status')
+            return doc, None
+        except (contract.Refusal, OSError, ValueError, KeyError, TypeError,
+                json.JSONDecodeError) as exc:
+            return None, str(exc)
+
+    if timing_ref is not None or status == 'PASS':
+        timing_doc, refusal = current_timing_modes()
+        if timing_doc is None:
+            status = 'NOT_MEASURED'
+            acceptance = {**acceptance, 'verdict': status,
+                          'detail': 'D26_TIMING_MODES_RECEIPT_REFUSED: ' + refusal}
+            timing_ref = None
 
     try:
-        finished = _finish_selected_native_owner(project, '10', acceptance)
+        extras = {'step_id': '10', 'default_row_status': status,
+                  'completed': status == 'PASS'}
+        if timing_ref is not None:
+            extras['timing_modes_receipt'] = dict(timing_ref)
+        finished = flow109.finish_native_window(project, {'steps': [{
+            'status': status, 'extras': extras,
+        }]})
     except flow109.Flow109Error as exc:
         finished = None
         detail = f'D26_FINALIZATION_REFUSED: {exc}'
@@ -1332,6 +1874,9 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                  and component.get('step_id') == 'D26'
                  and component.get('default_row_status') == finished.get('default_row_status')
                  and component.get('completed') is (finished.get('default_row_status') == 'PASS')
+                 and ((timing_ref is None
+                       and 'timing_modes_receipt' not in component)
+                      or component.get('timing_modes_receipt') == timing_ref)
                  else None)
     if finalized is None:
         return {**acceptance, 'verdict': 'NOT_MEASURED', 'detail': detail}
@@ -4360,6 +4905,12 @@ def _main() -> int:
             prelayout_status = step10_acceptance['verdict']
             if prelayout_status == 'PASS':
                 step8_acceptance = _complete_step8_postcheck(project, flow_top)
+                if 'timing_modes_receipt' in step10_acceptance:
+                    step8_acceptance = {
+                        **step8_acceptance,
+                        'timing_modes_receipt':
+                            step10_acceptance['timing_modes_receipt'],
+                    }
                 reports['step8_postcheck'] = step8_acceptance
                 prelayout_status = step8_acceptance['verdict']
             if _flow109_owner_entry:

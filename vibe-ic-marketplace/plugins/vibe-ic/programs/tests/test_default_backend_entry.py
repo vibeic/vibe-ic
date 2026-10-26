@@ -780,3 +780,220 @@ def test_default_postcheck8_consumes_saved_prelayout_without_native_replay(
         assert not (observed['step8'] or {}).get('canonical_pass'), observed
     for path, raw in preserved.items():
         assert path.read_bytes() == raw, path
+
+
+@pytest.mark.parametrize('case,expected,calls,terminal_expected', [
+    ('no_scan', 'PASS', 0, 'PASS'),
+    ('scan_pass', 'PASS', 2, 'PASS'),
+    ('terminal_missing', 'PASS', 2, 'NOT_MEASURED'),
+    ('terminal_changed', 'PASS', 2, 'NOT_MEASURED'),
+    ('stale_subject', 'NOT_MEASURED', 0, None),
+    ('missing_scan_sdc', 'NOT_MEASURED', 0, None),
+    ('scan_violation', 'FAIL', 2, 'FAIL'),
+    ('terminal_violation_changed', 'FAIL', 2, 'NOT_MEASURED'),
+])
+def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
+        tmp_path, monkeypatch, case, expected, calls, terminal_expected):
+    """D26 times both modes on D24 bytes; absence/red cannot borrow baseline."""
+    import hashlib
+    import json
+    from types import SimpleNamespace
+    import design_one_shot_runner as design
+    import dft_signoff_check as signoff
+    import fault_scan_chain_insert as scan
+    import flow109
+    import lec_gate_netlist_select as netlists
+    import librelane_contract as contract
+    import librelane_prelayout as prelayout
+    import phase3_one_shot_runner as phase3
+    import step_output_collector as versions
+    import synth_handoff_netlist_check as handoff
+    import vibe_ic_one_shot_runner as front
+    from test_default_frontend_r2 import put
+
+    project = tmp_path.resolve()
+    mapped = put(project / 'phase2/stage2/synth/top_synth.v',
+                 'module top(input clk, test, shift); endmodule\n')
+    adopted = put(project / 'phase2/stage2/synth/post_dft_netlist.v',
+                  'module top(input clk, tck, test, shift); endmodule\n')
+    put(project / 'phase2/stage1/rtl/top.v', 'module top; endmodule\n')
+    functional_sdc = put(project / 'phase2/stage2/constraints/top.sdc',
+                         'create_clock -period 10 [get_ports {clk}]\n')
+    gate = {'verdict': 'PASS', 'sdc': str(functional_sdc),
+            'sdc_sha256': contract.digest(functional_sdc)}
+    put(project / 'phase3/librelane/prelayout/gates/step8_sdc_opensta.json', gate)
+    scan_sdc = put(project / 'phase2/stage2/dft/scan_mode.sdc',
+                   'create_clock -period 100 [get_ports {tck}]\n'
+                   'set_case_analysis 1 [get_ports {shift}]\n'
+                   'set_case_analysis 1 [get_ports {test}]\n')
+    d09 = {'path': 'phase1/generated_docs/dft.json', 'sha256': '1' * 64,
+           'sources': {'input/spec.json': 'sha256:' + '2' * 64},
+           'intent': {'scan_test': case != 'no_scan',
+                      'test_port_def': {
+                          'scan_enable': {'native': 'shift', 'public': 'scan_enable'},
+                          'scan_in': {'native': 'sin', 'public': 'scan_in'},
+                          'scan_out': {'native': 'sout', 'public': 'scan_out'},
+                          'test': {'native': 'test', 'public': 'test_mode'},
+                          'tck': {'native': 'tck', 'public': 'scan_clock'}},
+                      'test_mode': {'clock': 'clk', 'clock_domains': ['clk'],
+                          'edge': 'rising', 'scan_clock': 'tck',
+                          'scan_clock_domains': ['tck'], 'scan_edge': 'rising',
+                          'clock_select': {'native': 'test', 'functional_value': 0,
+                                           'scan_value': 1},
+                          'reset': {'style': 'synchronous', 'signal': 'rst_n',
+                                    'active_level': 0, 'shift_value': 1}}}}
+    put(project / d09['path'], {'dft': d09['intent']})
+    put(project / 'input/spec.json', {})
+    constraint = {'kind': 'scan_shift_clock',
+                  'path': str(scan_sdc.relative_to(project)),
+                  'sha256': contract.digest(scan_sdc),
+                  'l20_path': 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json',
+                  'l20_sha256': '3' * 64, 'clock': 'tck',
+                  'frequency_mhz': '10.0', 'period_ns': '100.0'}
+    scan_report = {'published': True, 'd09_contract': d09,
+                   'scan_mode_constraint': constraint,
+                   'measured_artifacts': {'phase2/stage2/dft/scan_chain_work/chained.v': '4' * 64},
+                   'native_clock_controls': {'functional_clock': 'clk',
+                                             'scan_clock': 'tck',
+                                             'clock_select': 'test'}}
+    put(project / 'reports/phase2/dft/scan_chain.json', scan_report)
+    liberty = put(project / 'pdk/neutral/lib/neutral__tt.lib', 'library(neutral) {}\n')
+
+    monkeypatch.setattr(front, '_current_step9_checkpoint', lambda *_a, **_k:
+                        ({'step9_record': {}, 'native_handoff': {}}, None))
+    monkeypatch.setattr(front, '_flow109_selected_row', lambda row: row == 'D26')
+    monkeypatch.setattr(handoff, 'bound_handoff', lambda *_:
+                        {'verdict': 'PASS', 'mapped': str(mapped)})
+    pdk = SimpleNamespace(name='neutral', liberty=str(liberty))
+    monkeypatch.setattr(design, '_phase2_pdk_config', lambda *_: pdk)
+    monkeypatch.setattr(phase3, 'step_prelayout_signoff', lambda *_:
+                        SimpleNamespace(status='PASS', detail='retained functional PASS'))
+    current = {'id': '10', 'status': 'PASS', 'folder': 'phase3/stage3/10',
+               'canonical_pass': True, 'current_inputs': True,
+               'result': {'canonical_consumer': {'status': 'PASS',
+                                                  'step': {'reasons': []}}}}
+    monkeypatch.setattr(versions, 'current_acceptance', lambda *_: [current])
+    d24_sha = contract.digest(adopted) if case != 'stale_subject' else '0' * 64
+    d24 = {'status': 'PASS', 'canonical_pass': True, 'current_inputs': True,
+           'folder': 'phase2/stage2/12',
+           'outputs': [{'rel': str(adopted.relative_to(project)), 'sha256': d24_sha}],
+           'result': {'canonical_consumer': {'status': 'PASS'}}}
+    monkeypatch.setattr(versions, 'latest_pass', lambda _p, sid:
+                        d24 if str(sid) == '12' else None)
+    monkeypatch.setattr(design, 'derive_dft_clock_reset', lambda *_:
+                        ('clk', 'rst_n', True))
+    monkeypatch.setattr(scan, 'load_d09_dft_contract', lambda *_a, **_k: (d09, []))
+    monkeypatch.setattr(scan, 'l20_binding_is_current', lambda *_: (True, 'current'))
+    monkeypatch.setattr(signoff, 'evaluate_scan_shift_timing', lambda *_: {
+        'status': 'PASS', 'required': True, 'constraint': constraint, 'reasons': []})
+    monkeypatch.setattr(netlists, 'pnr_consumed_netlist', lambda *_:
+                        (adopted, 'post-DFT netlist selected', True))
+    monkeypatch.setattr(contract, 'resolve_image', lambda *_: 'neutral-image@sha256:' + '5' * 64)
+    monkeypatch.setattr(contract, 'pdk_root_resolution', lambda *_a, **_k:
+                        {'path': str(project / 'pdk')})
+
+    launched = []
+    def run_prelayout(current_project, _image, _pdk, _top, netlist, sdc, _rtl,
+                      *, arm, **_kwargs):
+        launched.append({'netlist': Path(netlist), 'sdc': Path(sdc), 'arm': arm})
+        folder = current_project / 'phase3/librelane' / arm / '02-openroad-staprepnr'
+        put(folder / 'config.json', {'PNR_SDC_FILE': str(Path(sdc).resolve())})
+        put(folder / 'state_out.json', {'nl': str(Path(netlist).resolve()), 'metrics': {}})
+        put(folder / 'vibeic_receipt.json', {'input': {'step': 'OpenROAD.STAPrePNR'}})
+        return folder
+    monkeypatch.setattr(prelayout, 'run_prelayout', run_prelayout)
+    monkeypatch.setattr(contract, 'validate_step_receipt', lambda *_:
+                        {'input': {'step': 'OpenROAD.STAPrePNR'}})
+
+    def judge_sdc(folder, _config, declared_sdc, output):
+        doc = {'verdict': 'PASS', 'findings': [], 'corners': {'tt': {}},
+               'netlist_sha256': contract.digest(adopted),
+               'sdc_sha256': contract.digest(Path(declared_sdc)),
+               'state_out_sha256': contract.digest(folder / 'state_out.json')}
+        put(output, doc)
+        return doc
+    def judge_slack(folder, output):
+        red = case in ('scan_violation', 'terminal_violation_changed') \
+            and 'scan_slack_gate' in output.name
+        doc = {'verdict': 'FAIL' if red else 'PASS',
+               'findings': ['LL_STA_SETUP_VIOLATION'] if red else [],
+               'corners': {'tt': {'setup_ws': {'status': 'MEASURED',
+                                                'value': -0.2 if red else 0.2}}},
+               'state_out_sha256': contract.digest(folder / 'state_out.json')}
+        put(output, doc)
+        return doc
+    monkeypatch.setattr(prelayout, 'judge_sdc', judge_sdc)
+    monkeypatch.setattr(prelayout, 'judge_slack', judge_slack)
+    if case == 'missing_scan_sdc':
+        scan_sdc.unlink()
+
+    result = front._complete_step10_prelayout(project, 'top', 'neutral', '')
+    assert result['verdict'] == expected, result
+    assert set(result) == {'verdict', 'detail', 'folder', 'timing_modes_receipt'}
+    receipt_path = project / result['timing_modes_receipt']['path']
+    assert hashlib.sha256(receipt_path.read_bytes()).hexdigest() == \
+        result['timing_modes_receipt']['sha256']
+    receipt = json.loads(receipt_path.read_text())
+    assert receipt['schema'] == 'vibeic.flow109.d26-timing-modes.v1'
+    assert receipt['position'] == 38 and receipt['aggregate_status'] == expected
+    assert receipt['functional_baseline']['canonical_pass'] is True
+    assert len(launched) == calls
+    if calls:
+        assert {row['arm'] for row in launched} == {
+            'd26_post_scan_functional', 'd26_post_scan_scan'}
+        assert all(row['netlist'] == adopted for row in launched)
+        functional = next(row for row in launched if row['arm'].endswith('functional'))
+        scan_row = next(row for row in launched if row['arm'].endswith('scan'))
+        text = functional['sdc'].read_text()
+        assert 'create_clock -period 10' in text
+        assert 'set_case_analysis 0 [get_ports {test}]' in text
+        assert 'set_case_analysis 0 [get_ports {shift}]' in text
+        assert 'set_case_analysis 0 [get_ports {sin}]' in text
+        assert 'set_case_analysis 0 [get_ports {tck}]' in text
+        assert 'set_case_analysis 1 [get_ports {rst_n}]' in text
+        assert scan_row['sdc'] == scan_sdc
+        assert receipt['scan']['adopted_d24']['sha256'] == contract.digest(adopted)
+        assert set(receipt['post_scan_arms']) == {'functional', 'scan'}
+    elif case == 'no_scan':
+        assert receipt['scan']['status'] == 'NOT_APPLICABLE'
+    else:
+        assert receipt['scan']['status'] == 'NOT_MEASURED'
+
+    if terminal_expected is not None:
+        terminal = {**result, 'detail': 'postcheck terminal'}
+        if case == 'terminal_missing':
+            receipt_path.unlink()
+        elif case in ('terminal_changed', 'terminal_violation_changed'):
+            receipt_path.write_text(receipt_path.read_text() + ' ')
+        import _delivery_route
+        from test_flow109_selection import profile
+        assert _delivery_route.admit(project, 'ip') is None
+        manifest = project / 'manifest.json'
+        features = profile('Mapped soft-IP with prestitched scan')
+        features['requires_scan'] = d09['intent']['scan_test']
+        manifest.write_text(json.dumps({'features': features}))
+        monkeypatch.setattr(front, '_activate_runtime_program_tree', lambda _p: None)
+        monkeypatch.setattr(front, '_capture_container_image', lambda *_a, **_k: {
+            'verdict': 'PASS'})
+        monkeypatch.setattr(front, '_complete_step10_prelayout', lambda *_a, **_k: result)
+        monkeypatch.setattr(front, '_complete_step8_postcheck', lambda *_a, **_k: {
+            'verdict': 'PASS', 'detail': 'postcheck PASS'})
+        monkeypatch.setattr(sys, 'argv', [str(Path(front.__file__)), str(project),
+                            '--flow', '109', '--flow109-manifest', str(manifest),
+                            '--entry-step', 'D26', '--exit-step', 'D26',
+                            '--route', 'ip', '--no-dashboard'])
+        expected_rc = {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[terminal_expected]
+        assert front._main() == expected_rc
+        attempt = next((project / 'reports/flow109/attempts').glob('window-*'))
+        finished = json.loads((attempt / 'result.json').read_text())
+        assert finished['default_row_status'] == terminal_expected
+        component = finished['components'][0]
+        summary = json.loads(
+            (project / 'reports/orchestrator/vibe_ic_one_shot.json').read_text())
+        final = summary['d26_finalization']
+        assert final['verdict'] == terminal_expected, final
+        if terminal_expected in ('PASS', 'FAIL'):
+            assert component['timing_modes_receipt'] == result['timing_modes_receipt']
+        else:
+            assert 'timing_modes_receipt' not in component
+            assert 'D26_TIMING_MODES_RECEIPT_REFUSED' in final['detail']

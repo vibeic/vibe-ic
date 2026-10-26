@@ -147,6 +147,7 @@
     ],
     "requires_path_atpg": [
       "requires_dft",
+      "requires_scan",
       "digital_physical"
     ],
     "requires_sdd": [
@@ -6022,7 +6023,7 @@
       "name": "DFT architecture and insertion",
       "phase": 2,
       "stage": 3,
-      "when": "requires_dft",
+      "when": "requires_scan",
       "extension": "core",
       "origin": "OLD70_REORDER_OR_SPLIT",
       "legacy70": [
@@ -6081,7 +6082,7 @@
         {
           "provider": "other",
           "tools": "Fault ATPG + Icarus replay",
-          "when": "requires_dft",
+          "when": "requires_scan",
           "role": "complementary_required_work_not_candidate"
         }
       ],
@@ -6096,7 +6097,7 @@
         {
           "id": "base_14.dft_architecture_coverage",
           "metric": "dft_architecture_coverage",
-          "when": "requires_dft",
+          "when": "requires_scan",
           "expectation": {
             "operator": "covers_all",
             "required_set_ref": "requirements/base_14/dft_architecture_coverage.json#/required_items",
@@ -6115,7 +6116,7 @@
         {
           "id": "base_14.scan_test_protocol_integrity",
           "metric": "scan_test_protocol_integrity",
-          "when": "requires_dft",
+          "when": "requires_scan",
           "expectation": {
             "operator": "eq",
             "value": 0,
@@ -6154,7 +6155,7 @@
       "name": "Post-DFT optimization",
       "phase": 2,
       "stage": 3,
-      "when": "requires_dft",
+      "when": "requires_scan",
       "extension": "core",
       "origin": "OLD70_REORDER_OR_SPLIT",
       "legacy70": [
@@ -6208,7 +6209,7 @@
         {
           "id": "base_15.scan_preservation_errors",
           "metric": "scan_preservation_errors",
-          "when": "requires_dft",
+          "when": "requires_scan",
           "expectation": {
             "operator": "eq",
             "value": 0,
@@ -6228,10 +6229,11 @@
         {
           "id": "base_15.adopted_post_dft_netlist",
           "metric": "adopted_post_dft_netlist",
-          "when": "requires_dft",
+          "when": "requires_scan",
           "expectation": {
             "operator": "matches_adopted_reference",
-            "reference_ref": "adopted/base_15/adopted_post_dft_netlist.json"
+            "reference_ref": "adopted/base_15/adopted_post_dft_netlist.json",
+            "identity": "artifact_id_and_sha256_from_native_scan_report"
           },
           "binding_keys": [
             "netlist.logical",
@@ -6369,7 +6371,8 @@
           "when": "digital_netlist",
           "expectation": {
             "operator": "matches_adopted_reference",
-            "reference_ref": "adopted/base_16/mode_assumptions.json"
+            "reference_ref": "adopted/base_16/mode_assumptions.json",
+            "scope": "functional_equivalence_only"
           },
           "binding_keys": [
             "rtl.logic",
@@ -6498,7 +6501,8 @@
             "operator": "within_declared_bounds",
             "bounds_ref": "requirements/base_13/prelayout_timing_targets.json#/limits",
             "unit_ref": "requirements/base_13/prelayout_timing_targets.json#/units",
-            "missing_bounds": "BLOCKED"
+            "missing_bounds": "BLOCKED",
+            "modes": "functional_and_scan_when_scan_test_is_true"
           },
           "binding_keys": [
             "netlist.logical",
@@ -6715,12 +6719,17 @@
       "data_deps": [
         {
           "step": "D23",
+          "when": "producer_selected",
+          "output": "result"
+        },
+        {
+          "step": "D30",
           "when": "always",
           "output": "result"
         },
         {
           "step": "D24",
-          "when": "always",
+          "when": "producer_selected",
           "output": "result"
         },
         {
@@ -11522,6 +11531,11 @@
         },
         {
           "step": "D23",
+          "when": "producer_selected",
+          "output": "result"
+        },
+        {
+          "step": "D30",
           "when": "always",
           "output": "result"
         },
@@ -11533,8 +11547,10 @@
       ],
       "acceptance_deps": [
         "D23",
+        "D30",
         "D36",
-        "D44"
+        "D44",
+        "D49"
       ],
       "profiles": [
         {
@@ -11542,8 +11558,36 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "Yosys + OpenSTA timing + Python path-delay ATPG",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "PathDelayATPG",
+            "PathDelayCoverageConsumer"
+          ],
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "flow109_frontend",
+            "native_step_id": "flow109.D50",
+            "producer": "path_delay_fault_atpg_run.py:main",
+            "consumer": "path_delay_coverage_check.py:audit",
+            "engine_families": [
+              "python3",
+              "yosys",
+              "opensta"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "yosys": "yosys",
+              "opensta": "sta"
+            },
+            "engine_steps": {
+              "python3": ["PathDelayCoverageConsumer"],
+              "yosys": ["PathDelayATPG"],
+              "opensta": ["PathDelayATPG"]
+            },
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -11581,7 +11625,14 @@
           "when": "requires_path_atpg",
           "expectation": {
             "operator": "matches_adopted_reference",
-            "reference_ref": "adopted/base_31/atpg_netlist_chain_identity.json"
+            "reference_ref": "adopted/base_31/atpg_netlist_chain_identity.json",
+            "required_provenance": "D30 adoption plus D44 transform/equivalence and D49 STAPostPNR state",
+            "timing_views": [
+              "routed_netlist",
+              "sdc",
+              "sdf",
+              "spef"
+            ]
           },
           "binding_keys": [
             "layout.routed",
@@ -11631,9 +11682,27 @@
           "step": "D50",
           "when": "always",
           "output": "result"
+        },
+        {
+          "step": "D30",
+          "when": "always",
+          "output": "result"
+        },
+        {
+          "step": "D44",
+          "when": "always",
+          "output": "result"
+        },
+        {
+          "step": "D49",
+          "when": "always",
+          "output": "result"
         }
       ],
       "acceptance_deps": [
+        "D30",
+        "D44",
+        "D49",
         "D50"
       ],
       "profiles": [
@@ -11642,8 +11711,36 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "Yosys + OpenSTA timing + Python SDD grading",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "native_steps": [
+            "SmallDelayDefectATPG",
+            "SmallDelayDefectCoverageConsumer"
+          ],
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "flow109_frontend",
+            "native_step_id": "flow109.D51",
+            "producer": "sdd_atpg_run.py:main",
+            "consumer": "sdd_coverage_check.py:audit",
+            "engine_families": [
+              "python3",
+              "yosys",
+              "opensta"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "yosys": "yosys",
+              "opensta": "sta"
+            },
+            "engine_steps": {
+              "python3": ["SmallDelayDefectCoverageConsumer"],
+              "yosys": ["SmallDelayDefectATPG"],
+              "opensta": ["SmallDelayDefectATPG"]
+            },
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         }
       ],
       "complementary_tools": [],
@@ -11681,7 +11778,14 @@
           "when": "requires_sdd",
           "expectation": {
             "operator": "matches_adopted_reference",
-            "reference_ref": "adopted/base_32/defect_model_scope.json"
+            "reference_ref": "adopted/base_32/defect_model_scope.json",
+            "required_provenance": "D30 adoption plus D44 transform/equivalence and D49 STAPostPNR state",
+            "timing_views": [
+              "routed_netlist",
+              "sdc",
+              "sdf",
+              "spef"
+            ]
           },
           "binding_keys": [
             "layout.routed",
@@ -11723,7 +11827,7 @@
       "data_deps": [
         {
           "step": "D23",
-          "when": "always",
+          "when": "producer_selected",
           "output": "result"
         },
         {

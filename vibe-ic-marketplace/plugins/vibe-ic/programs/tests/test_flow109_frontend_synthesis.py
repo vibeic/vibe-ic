@@ -31,6 +31,18 @@ def actual_attested_image_route(monkeypatch):
     monkeypatch.setattr(librelane_contract._ce, "no_container_route", lambda: True)
 
 
+def publish_d09(project, intent):
+    import spec_declaration_emit as declaration
+    docs = project / 'input/docs'
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / 'L7_verification_plan.md').write_text(
+        '# Verification\nThe Plugin MUST declare `plugin_output/declaration.json` '
+        'before authoring:\n\n| Field | Required | Example |\n|---|---|---|\n'
+        '| `dft` | Yes | object |\n')
+    assert declaration.main(
+        [str(project), '--set', 'dft=' + json.dumps(intent)]) == 0
+
+
 def case(project):
     import fnmatch
     from librelane.config import Config
@@ -48,6 +60,7 @@ def case(project):
                     'die_area_um':[0,0,100,100],'core_area_um':[10,10,90,90]},
          'answer_provenance':{'deliverable':{'answered_by':'owner','citation':'Developer neutral IC control'}}})
     put(project,'phase1/generated_docs/L8_TIMING_WAVEFORM.json',{'clock_domains':[{'role':'primary','source_pin':'clk','period_ns':20}]})
+    publish_d09(project, {'scan_test': False})
     put(project,'phase1/generated_docs/L9_INTEGRATION_SPEC.json',{'top_module':'unit_alpha','synth_top':'unit_alpha'})
     put(project,'phase1/generated_docs/L19_CONSTRAINTS_PDK.json',{'pdk':'gf180mcuD','constraint_declarations':[],'fields':{'die_area_budget_um':'100x100'}})
     put(project,'phase2/stage1/rtl/unit_alpha.v','module unit_alpha(input clk, input a,b, output reg y); always @(posedge clk) y <= a ^ b; endmodule\n')
@@ -159,6 +172,31 @@ def test_missing_or_changed_qualification_stops_before_existing_owner(tmp_path,m
     result=frontend.execute(tmp_path,context)
     assert result['component_status']=='NOT_MEASURED' and not result['native_started'],result
     assert calls==[]
+
+
+@pytest.mark.parametrize('damage', ['missing', 'empty'])
+def test_missing_d09_dft_intent_stops_before_existing_owner(tmp_path, monkeypatch, damage):
+    context, path = case(tmp_path)
+    monkeypatch.setenv('VIBEIC_FLOW109_CONTEXT', str(path))
+    intent = tmp_path / 'plugin_output/declaration.json'
+    if damage == 'missing':
+        (tmp_path / 'input/docs/L7_verification_plan.md').unlink()
+        intent.unlink()
+        intent.with_name('declaration.provenance.json').unlink()
+        (tmp_path / 'provenance.jsonl').unlink()
+    else:
+        body = json.loads(intent.read_text()); body['dft'].pop('scan_test')
+        intent.write_text(json.dumps(body))
+    calls = []
+    import step_preflight
+    monkeypatch.setattr(step_preflight, 'retained_call', lambda *a, **k: calls.append('owner'))
+
+    result = frontend.execute(tmp_path, context)
+
+    assert result['reason'] in {'D09_DFT_SPEC_MISSING', 'D09_DFT_AUTHORITY_INVALID'}
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert result['native_started'] is False
+    assert calls == []
 
 
 def test_native_contract_launch_rechecks_original_input_census(tmp_path,monkeypatch):
