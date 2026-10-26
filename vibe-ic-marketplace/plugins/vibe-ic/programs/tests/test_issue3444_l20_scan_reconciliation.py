@@ -145,7 +145,6 @@ def test_reconciliation_rejects_measured_length_port_and_clock_mutations(tmp_pat
 
 # D09 planned intent -> the EXISTING run_chain consumer. Native I/O is a
 # neutral payload replay, never a claimed new native D23 acceptance result.
-import copy
 import pytest
 import spec_declaration_emit as DECL
 import librelane_contract as LL
@@ -168,7 +167,7 @@ def _mapped(count=2, scan=False):
                     if scan else '')
     cells = ''.join(f'  sky130_fd_sc_hd__dfxtp_1 u{i} (.CLK(clk), .D(d), .Q(q));\n'
                     for i in range(count))
-    return f'module unit({ports});\ninput clk, rst, d; output q;\n{declarations}{cells}endmodule\n'
+    return f'module unit({ports});\ninput clk; input rst; input d; output q;\n{declarations}{cells}endmodule\n'
 
 
 def _planned(project, intent=None):
@@ -245,6 +244,8 @@ def test_d09_native_measurement_publishes_existing_l20_receipt(tmp_path, monkeyp
     assert l20['fields']['scan_chains'][0]['length'] == 2
     assert l20['extraction_evidence']['d09_contract'] == report['d09_contract']
     assert set(report['dft_ports']) == set(S.DFT_PORTS)  # explicit native binding, no renaming
+    (project / S.SCAN_NETLIST_REL).write_text(_mapped())
+    assert S.l20_binding_is_current(project, report)[0] is False
     # Rehashing a native log/artifact cannot restore an unrelated authority.
     (project / 'input/docs/L7_verification_plan.md').write_text('foreign replacement')
     assert S.l20_binding_is_current(project, report)[0] is False

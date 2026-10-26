@@ -204,7 +204,7 @@ def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=Non
         if clock in ports.values() or reset['signal'] in ports.values():
             raise ValueError('test access aliases clock/reset')
         return binding, []
-    except (OSError, ValueError, KeyError, TypeError) as exc:
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return None, ['D09_DFT_AUTHORITY_INVALID: ' + str(exc)]
 
 
@@ -353,6 +353,10 @@ def l20_binding_is_current(project: Path, report: dict) -> tuple[bool, str]:
                 if (not item.resolve().is_relative_to(project.resolve())
                         or hashlib.sha256(item.read_bytes()).hexdigest() != expected):
                     return False, 'foreign/stale mapped scan artifact or native report'
+            native_output = report['measured_artifacts']['phase2/stage2/dft/scan_chain_work/chained.v']
+            if (report.get('published') and hashlib.sha256(
+                    (project / SCAN_NETLIST_REL).read_bytes()).hexdigest() != native_output):
+                return False, 'published scan netlist differs from the native output'
         except (OSError, KeyError, TypeError):
             return False, 'native scan artifact/report binding is missing'
     recorded = report.get("l20_contract") if isinstance(report, dict) else None
@@ -1178,7 +1182,7 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         # census must agree with the existing stdout/metadata reconciliation.
         native_elements = chain_order_counts(meta).get('dff', 0)
         internal, boundary = verdict['internal_chain_length'], verdict['boundary_chain_length']
-        if (native_elements != internal or not isinstance(boundary, int)
+        if (type(internal) is not int or type(boundary) is not int or native_elements != internal
                 or count_flops(chained_text) != internal + boundary
                 or any((meta or {}).get(k) != k for k in ('sin', 'sout', 'shift'))):
             verdict['ok'] = False
