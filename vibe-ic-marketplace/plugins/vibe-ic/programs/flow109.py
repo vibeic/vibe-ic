@@ -571,6 +571,8 @@ def _new_attempt(project: Path, context: Mapping) -> Path:
     attempt.mkdir()
     request = {"schema": "vibeic.flow109.window-attempt-request.v1",
                "context_sha256": context["context_sha256"],
+               "registry_sha256": context["registry_sha256"],
+               "planner_sha256": context["planner_sha256"],
                "entry": context.get("requested_entry", context.get("requested_step")),
                "exit": context.get("requested_exit", context.get("requested_step")),
                "dispatch_kind": context.get("dispatch_kind", "canonical_owner_window"),
@@ -688,6 +690,18 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
         context = validate_execution_context(json.loads(Path(path).read_text(encoding="utf-8")))
     except (OSError, ValueError, Flow109Error):
         return None
+
+    def bound_attempt() -> Path:
+        if not attempt_name:
+            raise Flow109Error("FLOW109_ATTEMPT_ABSENT", "immutable attempt request absent")
+        attempt = Path(attempt_name)
+        try:
+            request = json.loads((attempt / "request.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise Flow109Error("FLOW109_ATTEMPT_INVALID", str(exc)) from exc
+        if request.get("context_sha256") != context["context_sha256"]:
+            raise Flow109Error("FLOW109_CONTEXT_STALE", "attempt request")
+        return attempt
     owner_rows = context.get("resolved_rows") or [context.get("resolved_row", {})]
     if owner_rows and all((row.get("profile", {}).get("dispatch") or {}).get("kind")
                           == "canonical_owner_window" for row in owner_rows):
@@ -713,15 +727,14 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
             "FAIL" if any(c["default_row_status"] == "FAIL" for c in components)
             else "PASS" if all(c["default_row_status"] == "PASS" for c in components)
             else "NOT_MEASURED")
-        attempt = _new_attempt(project, context)
-        _finish_attempt(attempt, result)
+        _finish_attempt(bound_attempt(), result)
         return result
     if context["schema"] == "vibeic.flow109.execution-context.v1":
         dispatch = context["resolved_row"]["profile"].get("dispatch") or {}
         if dispatch.get("kind") != "canonical_backend_window":
             return None
         rows = [context["resolved_row"]]
-        attempt = None
+        attempt = bound_attempt()
     elif context.get("dispatch_kind") in (
             "canonical_backend_window", "selected_native_sequence") and attempt_name:
         rows = context["resolved_rows"]
@@ -872,10 +885,11 @@ def prepare_front_door(args, project: Path) -> int | None:
         os.environ["VIBEIC_ANALOG_CONTAINER"] = str(args.container)
     if context["schema"] == "vibeic.flow109.execution-window.v1":
         if context["dispatch_kind"] == "canonical_owner_window":
+            attempt = _new_attempt(project, context)
             path = destination / "requests" / (context["context_sha256"] + ".json")
             write_json(path, context)
             os.environ[CONTEXT_ENV] = str(path.resolve())
-            os.environ.pop(ATTEMPT_ENV, None)
+            os.environ[ATTEMPT_ENV] = str(attempt.resolve())
             owner = context["resolved_rows"][0]["profile"]["dispatch"]["owner_runner"]
             write_json(destination / "owner_route.json", {
                 "schema": "vibeic.flow109.owner-route.v1",
@@ -1021,10 +1035,11 @@ def prepare_front_door(args, project: Path) -> int | None:
         return None
     owner_dispatch = _canonical_owner_dispatch(context["resolved_row"])
     if owner_dispatch is not None:
+        attempt = _new_attempt(project, context)
         path = destination / "requests" / (context["context_sha256"] + ".json")
         write_json(path, context)
         os.environ[CONTEXT_ENV] = str(path.resolve())
-        os.environ.pop(ATTEMPT_ENV, None)
+        os.environ[ATTEMPT_ENV] = str(attempt.resolve())
         write_json(destination / "owner_route.json", {
             "schema": "vibeic.flow109.owner-route.v1",
             "context_sha256": context["context_sha256"],
@@ -1041,7 +1056,6 @@ def prepare_front_door(args, project: Path) -> int | None:
         args.entry_step = owner_dispatch["owner_entry_step"]
         args.exit_step = owner_dispatch["owner_exit_step"]
         return None
-    os.environ.pop(ATTEMPT_ENV, None)
     # Source-registered Default component owners retain their existing native
     # input/tool/consumer checks, like canonical_owner_window.  Every route
     # that explicitly claims generic qualification remains on strict admission.
@@ -1055,6 +1069,8 @@ def prepare_front_door(args, project: Path) -> int | None:
     path = destination / "requests" / (context["context_sha256"] + ".json")
     write_json(path, context)
     os.environ[CONTEXT_ENV] = str(path.resolve())
+    attempt = _new_attempt(project, context)
+    os.environ[ATTEMPT_ENV] = str(attempt.resolve())
     adapter = context['resolved_row']['profile']['dispatch'].get('adapter')
     if adapter:
         # Only source-owned dispatch data selects this bounded adapter. It
@@ -1063,6 +1079,8 @@ def prepare_front_door(args, project: Path) -> int | None:
         result = import_module(adapter).execute(project, context)
         result = _selected_step_result(project, context, result, import_module(adapter))
         write_json(destination / 'components' / (context['requested_step'] + '.json'), result)
+        _finish_attempt(attempt, _attempt_result({**context, "resolved_rows": [context["resolved_row"]]},
+                                                 [result]))
         row_status = result['default_row_status']
         print(f"FLOW109 {context['requested_step']}: component {result['component_status']}; "
               f"Default row {row_status}; flow acceptance NOT_MEASURED")

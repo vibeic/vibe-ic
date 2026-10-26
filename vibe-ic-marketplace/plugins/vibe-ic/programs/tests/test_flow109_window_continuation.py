@@ -76,7 +76,8 @@ def _one_row_request(project, monkeypatch, step="D38", *, spares=False):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(context))
     monkeypatch.setenv(flow109.CONTEXT_ENV, str(path))
-    monkeypatch.delenv(flow109.ATTEMPT_ENV, raising=False)
+    attempt = flow109._new_attempt(project, context)
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
     return context
 
 
@@ -210,7 +211,26 @@ def test_one_row_canonical_receipt_is_component_only(tmp_path, monkeypatch):
     assert component["context_sha256"] == context["context_sha256"]
     assert result["flow109_acceptance"] == result["whole_flow_acceptance"] == "NOT_MEASURED"
     assert result["delivery_accepted"] is False
-    assert not (tmp_path / "reports/flow109/attempts").exists()
+    attempts = list((tmp_path / "reports/flow109/attempts").iterdir())
+    assert len(attempts) == 1
+    request = json.loads((attempts[0] / "request.json").read_text())
+    terminal = json.loads((attempts[0] / "result.json").read_text())
+    assert request["context_sha256"] == terminal["context_sha256"] == context["context_sha256"]
+    assert request["registry_sha256"] == context["registry_sha256"]
+    assert request["planner_sha256"] == context["planner_sha256"]
+    with pytest.raises(FileExistsError):
+        flow109.finish_native_window(tmp_path, report)
+
+
+def test_repeated_one_row_requests_use_distinct_immutable_attempts(tmp_path, monkeypatch):
+    first = _one_row_request(tmp_path, monkeypatch)
+    first_attempt = Path(os.environ[flow109.ATTEMPT_ENV])
+    second = _one_row_request(tmp_path, monkeypatch)
+    second_attempt = Path(os.environ[flow109.ATTEMPT_ENV])
+    assert first["context_sha256"] == second["context_sha256"]
+    assert first_attempt != second_attempt
+    assert json.loads((first_attempt / "request.json").read_text()) == json.loads(
+        (second_attempt / "request.json").read_text())
 
 
 def test_one_row_missing_canonical_receipt_cannot_pass(tmp_path, monkeypatch):

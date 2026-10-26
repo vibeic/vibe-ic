@@ -414,6 +414,14 @@ def test_owner_route_uses_native_span_without_generic_qualification_registry(
     assert request["requested_step"] == "D12"
     assert request["resolved_row"]["id"] == "D12"
     assert request["context_sha256"] == route["context_sha256"]
+    attempt_value = __import__("os").environ.get(
+        flow109.ATTEMPT_ENV, "ATTEMPT_ENV_UNSET")
+    assert Path(attempt_value).parent.name == "attempts"
+    attempt = Path(attempt_value)
+    immutable = json.loads((attempt / "request.json").read_text())
+    assert immutable["context_sha256"] == request["context_sha256"]
+    assert immutable["registry_sha256"] == request["registry_sha256"]
+    assert immutable["planner_sha256"] == request["planner_sha256"]
 
 
 @pytest.mark.parametrize("step, adapter, component_scope", [
@@ -680,6 +688,7 @@ def test_owner_finish_uses_only_selected_completed_native_result(
     context=flow109.execution_context(flow109.resolve_plan(profile()),'D11','D11')
     request=tmp_path/'request.json';request.write_text(json.dumps(context))
     monkeypatch.setenv(flow109.CONTEXT_ENV,str(request))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV,str(flow109._new_attempt(tmp_path,context)))
     report={'steps':[{'status':status,'extras':{'step_id':native,
         'context_sha256':context['context_sha256'],
         'default_row_status':status,'completed':completed}}]}
@@ -693,10 +702,12 @@ def test_owner_finish_rejects_stale_context_and_empty_report(tmp_path,monkeypatc
     context=flow109.execution_context(flow109.resolve_plan(profile()),'D11','D11')
     request=tmp_path/'request.json';request.write_text(json.dumps(context))
     monkeypatch.setenv(flow109.CONTEXT_ENV,str(request))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV,str(flow109._new_attempt(tmp_path,context)))
     report={'steps':[{'status':'PASS','extras':{'step_id':'2',
         'context_sha256':'foreign','default_row_status':'PASS','completed':True}}]}
     with pytest.raises(flow109.Flow109Error,match='FLOW109_CONTEXT_STALE'):
         flow109.finish_native_window(tmp_path,report)
+    monkeypatch.setenv(flow109.ATTEMPT_ENV,str(flow109._new_attempt(tmp_path,context)))
     assert flow109.finish_native_window(tmp_path,{'steps':[]})['default_row_status']=='NOT_MEASURED'
     context['context_sha256']='stale';request.write_text(json.dumps(context))
     assert flow109.finish_native_window(tmp_path,report) is None

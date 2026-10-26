@@ -66,14 +66,59 @@ def test_prelayout_io_present_request_has_named_refusal(tmp_path, section):
 @pytest.mark.parametrize('mode', ['dual', 'librelane'])
 def test_tool_step8_defers_before_synth_without_frontend_dispatch(tmp_path, monkeypatch, mode):
     put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'8': mode}})
+    put(tmp_path / 'phase2/stage2/constraints/neutral.asic.sdc',
+        'create_clock -name clk -period 10 [get_ports clk]\n'
+        'set_input_delay 1 -clock clk [get_ports d]\n'
+        'set_output_delay 1 -clock clk [get_ports q]\n')
+    put(tmp_path / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json',
+        {'clock_domains': [{'name': 'clk', 'source_pin': 'clk', 'period_ns': 10}]})
     calls = []
+    monkeypatch.setattr(E, '_ordinary_runtime', {
+        'project': tmp_path.resolve(), 'policy': {'mode': 'default'}, 'parameters': {}})
     monkeypatch.setattr(E, 'dispatch_fixed_step', lambda *a, **k:
                         calls.append(a) or {'status': 'ADOPTED'})
     row = D.step_sdc_validation(tmp_path)
-    assert row.status == 'NOT_MEASURED'
-    assert 'SDC_VALIDATION_DEFERRED' in row.detail
+    assert row.status == 'PASS', row.detail
+    assert 'no mapped-path claim' in row.detail
+    assert row.extras['early_preflight'] is True
     assert row.extras['deferred_until'] == 'post_prelayout'
+    assert not (tmp_path / 'phase2/stage2/synth').exists()
+    assert not (tmp_path / 'phase3/librelane/prelayout').exists()
     assert not calls
+
+
+@pytest.mark.parametrize('mutation', ['missing_sdc', 'unjustified_exception'])
+def test_tool_step8_early_preflight_refuses_missing_or_unjustified_constraints(
+        tmp_path, monkeypatch, mutation):
+    put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'8': 'dual'}})
+    put(tmp_path / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json',
+        {'clock_domains': [{'name': 'clk', 'source_pin': 'clk', 'period_ns': 10}]})
+    if mutation == 'unjustified_exception':
+        put(tmp_path / 'phase2/stage2/constraints/neutral.asic.sdc',
+            'create_clock -name clk -period 10 [get_ports clk]\n'
+            'set_input_delay 1 -clock clk [get_ports d]\n'
+            'set_output_delay 1 -clock clk [get_ports q]\n'
+            'set_false_path -from [get_clocks clk] -to [get_clocks foreign]\n')
+    monkeypatch.setattr(E, '_ordinary_runtime', {
+        'project': tmp_path.resolve(), 'policy': {'mode': 'default'}, 'parameters': {}})
+    row = D.step_sdc_validation(tmp_path)
+    assert row.status == 'FAIL'
+    assert row.extras['early_preflight'] is True
+
+
+def test_flow109_d20_d26_split_keeps_stable_obligations():
+    rows = {row['id']: row for row in json.loads(
+        (Path(D.__file__).parents[1] / 'flow/flow109.json').read_text())['rows']}
+    d20, d26 = rows['D20'], rows['D26']
+    assert d20['profiles'][0]['native_steps'] == []
+    assert 'early preflight' in d20['profiles'][0]['dispatch']['consumer']
+    assert d26['profiles'][0]['native_steps'] == [
+        'OpenROAD.CheckSDCFiles', 'OpenROAD.STAPrePNR']
+    assert 'step_sdc_validation_post_prelayout' in d26['profiles'][0]['dispatch']['consumer']
+    assert [item['id'] for item in d20['obligations']] == [
+        'base_11.invalid_timing_exceptions', 'base_11.cdc_exception_reconciliation']
+    assert 'base_11.unconstrained_required_paths' in {
+        item['id'] for item in d26['obligations']}
 
 
 def test_direct_step8_keeps_existing_worker(tmp_path, monkeypatch):
@@ -109,15 +154,15 @@ def test_default_direct_step8_runs_canonical_checks_without_controller(tmp_path,
     assert 'deferred_until' not in row.extras
 
 
-def test_default_direct_step8_refuses_rc_zero_without_fresh_output(tmp_path, monkeypatch):
+def test_default_direct_step8_replaces_stale_output_with_current_observation(tmp_path, monkeypatch):
     put(tmp_path / 'phase3/librelane_switch.json', {'steps': {'8': 'direct'}})
     put(tmp_path / 'reports/phase2/sdc_check.json', {'stale': 'PASS'})
     monkeypatch.setattr(E, '_ordinary_runtime', {'policy': {'mode': 'default'}})
-    monkeypatch.setattr(D, '_run', lambda *_a, **_k: (0, '', ''))
     row = D.step_sdc_validation(tmp_path)
     assert row.status == 'FAIL'
-    assert 'SDC_CHECK_OUTPUT_ABSENT' in row.detail
-    assert row.output_files == []
+    report = tmp_path / 'reports/phase2/sdc_check.json'
+    assert json.loads(report.read_text()).get('stale') is None
+    assert str(report) in row.output_files
 
 
 def project(tmp_path):
@@ -249,6 +294,63 @@ def test_stale_netlist_bound_gate_is_not_reused(tmp_path):
     assert row.status == 'NOT_MEASURED'
     assert 'GATE_STALE' in row.detail
     assert json.loads(Path(row.output_files[0]).read_text())['records'] == []
+
+
+@pytest.mark.parametrize('late_state', [
+    'missing_netlist', 'missing_sta_gate', 'unmeasured_sta', 'unconstrained_endpoint'])
+def test_postcheck_refuses_incomplete_or_red_mapped_evidence(tmp_path, late_state):
+    gate, _deck, netlist = project(tmp_path)
+    if late_state == 'missing_netlist':
+        netlist.unlink()
+    elif late_state == 'missing_sta_gate':
+        gate.unlink()
+    else:
+        doc = json.loads(gate.read_text())
+        doc['verdict'] = ('NOT_MEASURED' if late_state == 'unmeasured_sta' else 'FAIL')
+        doc['findings'] = (["LL_STA_NO_CORNER: STAPrePNR wrote no corner directory"]
+                           if late_state == 'unmeasured_sta' else
+                           ["tt: check_setup {'unconstrained_endpoints': 1}"])
+        gate.write_text(json.dumps(doc))
+    row = D.step_sdc_validation_post_prelayout(tmp_path, 'top')
+    assert row.status != 'PASS'
+    assert row.status == ('NOT_MEASURED' if late_state in (
+        'missing_netlist', 'missing_sta_gate') else 'FAIL')
+
+
+@pytest.mark.parametrize('late_status', [
+    None, 'NOT_MEASURED', 'PASS_WITH_WAIVERS', 'early_only'])
+def test_d30_refuses_absent_deferred_advisory_or_early_only_d26(
+        tmp_path, monkeypatch, late_status):
+    plan = [D.StepResult('yosys_synth', 'PASS', 0, 'mapped')]
+    if late_status is not None:
+        plan.append(D.StepResult(
+            'sdc_validation', 'PASS' if late_status == 'early_only' else late_status,
+            0, 'bounded late state', extras={
+                'early_preflight': late_status == 'early_only',
+                'deferred_until': 'post_prelayout'},
+            reason_class=('upstream_refused' if late_status == 'NOT_MEASURED' else '')))
+    monkeypatch.setattr(D, '_current_phase2_consumer', lambda *_: pytest.fail(
+        'D30 must refuse before consulting retained consumers'))
+    row = D.step_synthesis_handoff(tmp_path, plan=plan)
+    assert row.status == 'NOT_MEASURED'
+    assert 'D26 mapped SDC acceptance' in row.detail
+
+
+@pytest.mark.parametrize('missing_sid', ['8', '10'])
+def test_d30_requires_current_d26_sdc_and_sta_consumers(tmp_path, monkeypatch, missing_sid):
+    late = D.StepResult('sdc_validation', 'PASS', 0, 'mapped closure',
+                        extras={'post_prelayout': True})
+    calls = []
+
+    def current(_project, sid, _started):
+        calls.append(sid)
+        return None if sid == missing_sid else {'status': 'PASS'}
+
+    monkeypatch.setattr(D, '_current_phase2_consumer', current)
+    row = D.step_synthesis_handoff(tmp_path, plan=[late])
+    assert row.status == 'NOT_MEASURED'
+    assert f'Step{missing_sid} acceptance' in row.detail
+    assert calls[-1] == missing_sid
 
 
 def test_postcheck_is_wired_only_after_passing_prelayout(tmp_path, monkeypatch):
