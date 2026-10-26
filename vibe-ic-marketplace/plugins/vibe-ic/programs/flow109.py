@@ -396,9 +396,13 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
 
 
 def _d44_pre_source_binding(project: Path, baseline: Mapping,
-                            pre_route: Mapping, final_record: Mapping) -> dict:
+                            pre_route: Mapping, final_record: Mapping, *,
+                            physical_top: str | None = None,
+                            logical_top: str | None = None,
+                            physical_input: Mapping | None = None) -> dict:
     """Reopen D44's validated transform source and bind it to D30 bytes."""
-    if final_record.get("sha256") == pre_route.get("sha256"):
+    if (physical_top is None
+            and final_record.get("sha256") == pre_route.get("sha256")):
         return {"mode": "UNCHANGED_D30_BYTES", **dict(pre_route)}
     transforms = baseline.get("transformations")
     receipt_ref = baseline.get("transformation_receipt")
@@ -414,6 +418,28 @@ def _d44_pre_source_binding(project: Path, baseline: Mapping,
         project, Path(path), "FLOW109_D44_PRE_SOURCE_MISSING")
     if dict(receipt_ref) != current_ref:
         raise Flow109Error("FLOW109_D44_PRE_SOURCE_STALE", path)
+    if physical_top is not None:
+        import flow109_final_lec_physical as physical
+        if (receipt.get("schema") != physical.SCHEMA
+                or receipt.get("producer") != "flow109_final_lec_physical"
+                or receipt.get("status") != "PREPARED_NOT_EQUIVALENCE_PROVEN"
+                or receipt.get("kind") != physical.KIND
+                or not isinstance(physical_input, Mapping)):
+            raise Flow109Error("FLOW109_D44_PHYSICAL_TRACE_MISSING", str(path))
+        if receipt.get("logical_top") != logical_top:
+            raise Flow109Error("FLOW109_D44_LOGICAL_TOP_MISMATCH",
+                               f"D30={logical_top}, D44={receipt.get('logical_top')}")
+        if receipt.get("top") != physical_top:
+            raise Flow109Error("FLOW109_D44_PHYSICAL_TOP_MISMATCH",
+                               f"manifest={physical_top}, receipt={receipt.get('top')}")
+        input_path = Path(str(physical_input.get("path") or ""))
+        if not input_path.is_absolute():
+            input_path = Path(project).resolve() / input_path
+        inputs = receipt.get("inputs")
+        if (not isinstance(inputs, Mapping)
+                or inputs.get(str(input_path.resolve())) != physical_input.get("sha256")):
+            raise Flow109Error("FLOW109_D44_PHYSICAL_TRACE_MISSING",
+                               str(physical_input.get("path")))
     raw = receipt.get("raw_adopted_netlist")
     if (not isinstance(raw, Mapping) or not isinstance(raw.get("path"), str)
             or not isinstance(raw.get("sha256"), str)):
@@ -477,9 +503,34 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
         raise Flow109Error("FLOW109_D44_FINAL_EQUIVALENCE_UNACCEPTED", str(exc)) from exc
     final_manifest, _ = _bound_project_json(
         project, Path(final_lec.INPUT), "FLOW109_D44_FINAL_NETLIST_UNBOUND")
-    if final_manifest.get("top") != current_pre["top"]:
-        raise Flow109Error("FLOW109_D44_FINAL_NETLIST_FOREIGN",
-                           f"D30={current_pre['top']}, D44={final_manifest.get('top')}")
+    logical_top = current_pre["top"]
+    physical_top = final_manifest.get("top")
+    physical_input = None
+    if physical_top != logical_top:
+        import flow109_final_lec_physical as physical
+        baseline, _ = _bound_project_json(
+            project, Path(final["baseline"]["path"]), "FLOW109_D44_BASELINE_UNBOUND")
+        transforms = baseline.get("transformations")
+        if (not isinstance(transforms, list) or len(transforms) != 1
+                or final_manifest.get("transformations") != transforms
+                or not isinstance(transforms[0], Mapping)
+                or set(transforms[0]) != {"kind", "input"}
+                or transforms[0].get("kind") != physical.KIND
+                or not isinstance(transforms[0].get("input"), Mapping)):
+            raise Flow109Error("FLOW109_D44_PHYSICAL_TRACE_MISSING",
+                               f"D30={logical_top}, D44={physical_top}")
+        physical_input = transforms[0]["input"]
+        input_path = Path(str(physical_input.get("path") or ""))
+        physical_manifest, current_input = _bound_project_json(
+            project, input_path, "FLOW109_D44_PHYSICAL_TRACE_MISSING")
+        if dict(physical_input) != current_input or physical_manifest.get("schema") != physical.SCHEMA:
+            raise Flow109Error("FLOW109_D44_PHYSICAL_TRACE_MISSING", str(input_path))
+        if physical_manifest.get("logical_top") != logical_top:
+            raise Flow109Error("FLOW109_D44_LOGICAL_TOP_MISMATCH",
+                               f"D30={logical_top}, manifest={physical_manifest.get('logical_top')}")
+        if physical_manifest.get("top") != physical_top:
+            raise Flow109Error("FLOW109_D44_PHYSICAL_TOP_MISMATCH",
+                               f"D44={physical_top}, manifest={physical_manifest.get('top')}")
     final_record = final.get("adopted_netlist")
     if not isinstance(final_record, Mapping):
         raise Flow109Error("FLOW109_D44_FINAL_NETLIST_UNBOUND", str(final_record))
@@ -489,9 +540,14 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
             or final_record.get("sha256") != _file_digest(final_path)):
         raise Flow109Error("FLOW109_D44_FINAL_NETLIST_UNBOUND", str(final_record))
     pre = current_pre["adopted_netlist"]
-    baseline, _ = _bound_project_json(
-        project, Path(final["baseline"]["path"]), "FLOW109_D44_BASELINE_UNBOUND")
-    pre_source = _d44_pre_source_binding(project, baseline, pre, final_record)
+    if physical_input is None:
+        baseline, _ = _bound_project_json(
+            project, Path(final["baseline"]["path"]), "FLOW109_D44_BASELINE_UNBOUND")
+    pre_source = _d44_pre_source_binding(
+        project, baseline, pre, final_record, physical_top=(physical_top
+                                                            if physical_top != logical_top
+                                                            else None),
+        logical_top=logical_top, physical_input=physical_input)
 
     sta, sta_ref = _bound_project_json(
         project, Path("reports/phase3/sta_postpnr_signoff.json"),
@@ -516,6 +572,17 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
     if timing["sha256"]["sta_netlist"] != final_record["sha256"]:
         raise Flow109Error("FLOW109_D49_TIMING_NETLIST_MISMATCH",
                            f"D44={final_record['sha256']}, D49={timing['sha256']['sta_netlist']}")
+    if physical_top != logical_top:
+        try:
+            config_rel = (state_path.resolve().parent / "config.json").relative_to(project)
+        except ValueError as exc:
+            raise Flow109Error("FLOW109_D49_TIMING_TOP_MISMATCH", str(state_path)) from exc
+        sta_config, _ = _bound_project_json(
+            project, config_rel, "FLOW109_D49_TIMING_TOP_MISMATCH")
+        if (sta_config.get("meta", {}).get("step") != "OpenROAD.STAPostPNR"
+                or sta_config.get("DESIGN_NAME") != physical_top):
+            raise Flow109Error("FLOW109_D49_TIMING_TOP_MISMATCH",
+                               f"D44={physical_top}, D49={sta_config.get('DESIGN_NAME')}")
     state = json.loads(state_path.read_text(encoding="utf-8"))
     sdfs = state.get("sdf") or {}
     if isinstance(sdfs, str):
@@ -536,6 +603,7 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
         "D30": d30_ref, "D44": d44_ref, "D49": d49_ref,
         **({"D50": d50_ref} if d50_ref is not None else {}),
         "pre_route_netlist": pre, "final_adopted_netlist": dict(final_record),
+        "logical_top": logical_top, "physical_top": physical_top,
         "D44_pre_source": pre_source,
         "physical_transform": baseline.get("transformation_receipt"),
         "functional_equivalence_trace": {
