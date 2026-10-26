@@ -98,6 +98,168 @@ def _predicate_role(source, widths, port="payload"):
         modules["neutral"], modules, instances)
 
 
+def _bitfield_fixture(change=""):
+    source = r"""
+module source(input [4:0] data, output [3:0] payload);
+  wire [3:0] flags;
+  assign flags[0] = data[1:0] == 2'b00;
+  assign flags[1] = data[2];
+  assign flags[2] = data[3] & !data[0];
+  assign flags[3] = data[4];
+  assign payload = flags;
+endmodule
+module sink(input [3:0] payload, left, right, output [3:0] accepted, extra);
+  assign accepted[0] = payload[0] ? left[0] : right[0];
+  assign accepted[1] = payload[1] ? left[1] : right[1];
+  assign accepted[2] = payload[2] ? left[2] : right[2];
+  assign accepted[3] = payload[3] ? left[3] : right[3];
+  assign extra = 4'b0000;
+endmodule
+module neutral;
+  wire [3:0] link;
+  source a(.data(5'b10101), .payload(link));
+  sink b(.payload(link), .left(4'b1100), .right(4'b0011), .accepted(), .extra());
+endmodule
+"""
+    substitutions = {
+        "partial": ("assign flags[3] = data[4];", ""),
+        "unsupported": ("data[1:0] == 2'b00", "data[0] + data[1]"),
+        "transform": ("payload = flags;", "payload = flags ^ 4'b0001;"),
+        "reference": ("extra = 4'b0000;", "extra = payload;"),
+        "wrong_lane": ("flags[3] = data[4]", "flags[2] = data[4]"),
+        "order": ("wire [3:0] flags;", "wire [0:3] flags;"),
+        "root_transform": ("assign flags[3] = data[4];",
+            "wire [4:0] transformed; assign transformed = data + 5'b00001; "
+            "assign flags[3] = transformed[4];"),
+    }
+    if change:
+        source = source.replace(*substitutions[change])
+    return source
+
+
+def _record_bitfield_consumer(tmp_path):
+    from dataclasses import asdict
+    finding = _consume(tmp_path)
+    (tmp_path / "actual-consumer.json").write_text(
+        json.dumps(asdict(finding), indent=2))
+    return finding
+
+
+@_NATIVE
+def test_native_exact_control_bitfield_reaches_actual_receipt(tmp_path):
+    import hashlib
+    import shutil
+    retained = Path(os.environ["ISSUE3368_RETAINED_RTL"])
+    expected = json.loads(Path(os.environ["ISSUE3368_INPUT_SHA"]).read_text())
+    rtl, out = tmp_path / "rtl", tmp_path / "out"
+    rtl.mkdir()
+    out.mkdir()
+    for name in ("serv_decode.v", "serv_immdec.v"):
+        original = retained / name
+        assert hashlib.sha256(original.read_bytes()).hexdigest() == expected["/subject/rtl/" + name]
+        shutil.copyfile(original, rtl / name)
+    (rtl / "neutral.v").write_text(r"""
+module neutral;
+  wire [3:0] link;
+  serv_decode #(.PRE_REGISTER(1), .MDU(0)) a(
+    .clk(1'b0), .i_wb_rdt(30'b0), .i_wb_en(1'b1), .o_immdec_ctrl(link));
+  serv_immdec #(.W(1), .SHARED_RFADDR_IMM_REGS(1)) b(
+    .i_clk(1'b0), .i_cnt_en(1'b0), .i_cnt_done(1'b0), .i_immdec_en(4'b0000),
+    .i_csr_imm_en(1'b0), .i_ctrl(link), .i_wb_en(1'b1),
+    .i_wb_rdt(25'b0), .o_imm());
+endmodule
+""")
+    result = subprocess.run([sys.executable, str(SCRIPT), "--rtl-dir", str(rtl),
+        "--top-module", "neutral", "--out-dir", str(out)], capture_output=True, text=True)
+    report = json.loads((out / "encoding_audit_report.json").read_text())
+    assert result.returncode == 0, result.stdout + result.stderr
+    row, = report["interfaces"]
+    assert (row["producer_encoding"], row["consumer_encoding"], row["status"]) == (
+        "BITFIELD_CONTROL", "BITFIELD_CONTROL", "MATCH")
+    assert [r["index"] for r in row["semantic_proof"]["lanes"]] == [0, 1, 2, 3]
+    assert _record_bitfield_consumer(tmp_path).state == "PASS"
+
+
+@_NATIVE
+def test_native_bitfield_source_freshness_is_required(tmp_path):
+    result, report = _run(tmp_path, _bitfield_fixture())
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert _record_bitfield_consumer(tmp_path).state == "PASS"
+    source = tmp_path / "rtl/neutral.sv"
+    source.write_text(source.read_text().replace("data[4]", "!data[4]"))
+    assert _record_bitfield_consumer(tmp_path).state == "NOT_MEASURED"
+
+
+@_NATIVE
+@pytest.mark.parametrize("change", ["partial", "unsupported", "transform", "reference",
+                                    "wrong_lane", "order", "root_transform"])
+def test_native_bitfield_partial_unsupported_transform_or_reference_refuses(tmp_path, change):
+    result, report = _run(tmp_path, _bitfield_fixture(change))
+    assert result.returncode in (0, 2), result.stdout + result.stderr
+    assert all(row["producer_encoding"] != "BITFIELD_CONTROL" for row in report["interfaces"])
+    assert _record_bitfield_consumer(tmp_path).state == "NOT_MEASURED"
+
+
+@_NATIVE
+@pytest.mark.parametrize("change", ["lane", "order", "semantic", "missing"])
+def test_native_bitfield_claim_must_match_actual_source_contract(tmp_path, change):
+    result, report = _run(tmp_path, _bitfield_fixture())
+    assert result.returncode == 0, result.stdout + result.stderr
+    row, = report["interfaces"]
+    # Deliberate forged receipt, also executable with exact pre-fix production.
+    # No missing-key/setup failure may stand in for its observed consumer state.
+    row["producer_encoding"] = row["consumer_encoding"] = "BITFIELD_CONTROL"
+    row["status"] = "MATCH"
+    proof = row.setdefault("semantic_proof", {"role": "BITFIELD_CONTROL",
+        "lanes": [{"index": 0, "expression": "data[0]"}],
+        "native_port_bits": [[1, 2, 3, 4]]})
+    if change == "lane":
+        proof["lanes"][0]["index"] = 3
+    elif change == "order":
+        proof["native_port_bits"][-1].reverse()
+    elif change == "semantic":
+        proof["lanes"][0]["expression"] = "1'b1"
+    else:
+        del row["semantic_proof"]
+    report["summary"].update(matches=1, mismatches=0, not_applicable=0, unknowns=0, verdict="PASS")
+    report["semantic_coverage"].update(complete=True, decided=1, not_applicable=0, unknown=0)
+    report["interface_population"] = audit._population.binding(report["interfaces"])
+    (tmp_path / "out/encoding_audit_report.json").write_text(json.dumps(report))
+    assert _record_bitfield_consumer(tmp_path).state == "NOT_MEASURED"
+
+
+@_NATIVE
+def test_bitfield_binary_relabel_cannot_hide_source_required_proof(tmp_path):
+    import hashlib
+    from dataclasses import asdict
+    # Copied sealed exact-positive artifact, mounted at its original paths.
+    # Exercise only the real receipt consumer; no producer/tool is called.
+    seed = Path(os.environ["ISSUE3368_BITFIELD_SEED"])
+    report_path = seed / "out/encoding_audit_report.json"
+    original = report_path.read_bytes()
+    report = json.loads(original)
+    native_dir = Path(report["configuration"]["native_context"]).parent
+    hashes = lambda: {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+                     for p in native_dir.iterdir() if p.is_file()}
+    before = hashes()
+    finding = _consume(seed)
+    (tmp_path / "seed-consumer.json").write_text(json.dumps(asdict(finding), indent=2))
+    (tmp_path / "seed-report.json").write_bytes(original)
+    assert finding.state == "PASS", finding.detail
+    row, = report["interfaces"]
+    assert row["producer_encoding"] == row["consumer_encoding"] == "BITFIELD_CONTROL"
+    row["producer_encoding"] = row["consumer_encoding"] = "BINARY"
+    del row["semantic_proof"]
+    report["interface_population"] = audit._population.binding(report["interfaces"])
+    report_path.write_text(json.dumps(report))
+    (tmp_path / "tampered-report.json").write_bytes(report_path.read_bytes())
+    finding = _consume(seed)
+    (tmp_path / "tampered-consumer.json").write_text(json.dumps(asdict(finding), indent=2))
+    assert hashes() == before, "receipt verification must not regenerate native evidence"
+    assert finding.state == "NOT_MEASURED", finding.detail
+    assert "typed_bitfield_control_mismatch" in finding.detail
+
+
 def test_closed_boolean_and_opaque_grammars_are_not_scalar_defaults():
     boolean = r"""
 module source(input en, rst, output payload); assign payload = en & ~rst; endmodule

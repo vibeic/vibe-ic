@@ -1,0 +1,30 @@
+{
+  "doc_id": "L20",
+  "doc_name": "L20_DFT_SCAN_TOPOLOGY",
+  "applicability": "APPLICABLE",
+  "ic_class": "digital_arithmetic_primitive",
+  "fields": {
+    "scan_chains": [],
+    "test_compression": null,
+    "bist_mbist": [],
+    "jtag_tap": null,
+    "dft_present": false,
+    "notes": "DFT/scan topology is NOT_MEASURED here; integration must establish applicable sequential state and scan requirements from design evidence."
+  },
+  "extraction_hints": [
+    "Look for scan / DFT / BIST / JTAG sections.",
+    "Look for ATPG / test mode / scan-enable sections.",
+    "Capture chain count, length, frequency."
+  ],
+  "extraction_status": "NOT_YET_EXTRACTED",
+  "emitted_by": "phase1_post_process.emit_l_doc_skeleton v1.32.12",
+  "extraction_evidence": {},
+  "source_documents": [],
+  "_generator": {
+    "plugin": "vibe-ic",
+    "plugin_version": "1.32.12",
+    "l_doc_taxonomy_digest": "e3eeeadc5528",
+    "l_doc_taxonomy_docs": 28,
+    "emitter": "spi_protocol_synth._write"
+  }
+}

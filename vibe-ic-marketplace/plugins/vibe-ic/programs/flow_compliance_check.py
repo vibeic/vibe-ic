@@ -14370,6 +14370,11 @@ def _l_doc_declares_absence(project: Path, spec: Any
         return None
     if path is None or not isinstance(doc, dict):
         return None
+    if doc_id == "L20":
+        # DFT authority is explicit; unextracted skeleton defaults are not it.
+        declaration = _condition_na_declaration(
+            project, {"l_doc": doc_id, "applicability": ["NOT_APPLICABLE", "N/A", "NA"]})
+        return (*declaration, None) if declaration is not None else None
     fields = _ldoc.l_doc_fields(doc)
     if not isinstance(fields, dict):
         return None
@@ -14530,9 +14535,16 @@ def _delivery_declares_absence(project: Path, spec: Any
 
 
 def _check_condition(project: Path, condition: Dict[str, Any]) -> bool:
-    """Evaluate a step condition (e.g. files_exist). Returns True if step should run."""
+    """BLOCKING dispatch condition; unknown DFT authority must not launch ATPG."""
     if not condition:
         return True
+    if (condition.get("l_doc_declares") or {}).get("l_doc") == "L20":
+        from dft_atpg_coverage_check import l20_dft_applicability
+        authority = l20_dft_applicability(project)
+        if authority["asserts_dft"] is None:
+            print("L20_DFT_AUTHORITY_NOT_ESTABLISHED: " + authority["reason"],
+                  file=sys.stderr)
+            return False
     # THE DESIGN'S OWN DECLARATION, read from the L-doc the flow names. The
     # step does not run when every field the clause lists declares the
     # capability absent; see `_l_doc_declares_absence` for why every other

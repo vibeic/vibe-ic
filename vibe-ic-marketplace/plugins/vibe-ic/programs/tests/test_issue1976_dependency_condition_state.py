@@ -22,7 +22,9 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
+import pytest
 import yaml
 
 
@@ -116,6 +118,106 @@ def _l20(project: Path, applicability: str) -> Path:
 
 def _touch_grade(project: Path, rel: str) -> None:
     _write_json(project, rel, {"verdict": "PASS", "records": [1]})
+
+
+def _default_dt2(project, monkeypatch):
+    """Real Default condition consumer; only unrelated PDK setup is supplied."""
+    import phase3_one_shot_runner as runner
+    monkeypatch.setattr(runner, "_backend_parameter_values", lambda *_args: {})
+    return runner._default_pnr_rows(
+        project, "neutral_core", SimpleNamespace(name="neutral"), "unused",
+        ["DT2"], report_name="default_backend")
+
+
+def test_default_dt2_explicit_design_na_does_not_dispatch(tmp_path, monkeypatch):
+    import phase3_one_shot_runner as runner
+    _l20(tmp_path, "NOT_APPLICABLE")
+    calls = []
+    monkeypatch.setattr(runner, "_run_at_speed_atpg_producer",
+                        lambda *args, **kwargs: calls.append(args))
+
+    result = _default_dt2(tmp_path, monkeypatch)
+
+    row = result.extras["canonical_steps"][0]
+    assert row["status"] == "NOT_APPLICABLE", row
+    assert "NOT_APPLICABLE" in row["detail"], row
+    assert calls == []
+
+
+@pytest.mark.parametrize("cached_inputs", [False, True])
+def test_default_dt2_retained_unextracted_authority_blocks_dispatch(
+        tmp_path, monkeypatch, capsys, cached_inputs):
+    import phase3_one_shot_runner as runner
+    artifact = _hostpaths.require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "l20_applicable_unextracted_retained.json")
+    declaration = tmp_path / "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json"
+    declaration.parent.mkdir(parents=True)
+    declaration.write_bytes(artifact.read_bytes())
+    # Neutral input has no DFT terms: pre-fix, the real corroboration scanner
+    # wrongly lets skeleton defaults stand down this explicit APPLICABLE L20.
+    text = tmp_path / "input/docs/neutral.md"
+    text.parent.mkdir(parents=True)
+    text.write_text("A synchronous arithmetic core computes output data.\n")
+    if cached_inputs:
+        _write_json(tmp_path, "reports/phase2/dft/transition_coverage.json",
+                    {"fixture": "presence is not DFT authority"})
+        spef = tmp_path / "phase3/stage3/extracted/neutral.spef"
+        spef.parent.mkdir(parents=True)
+        spef.write_text("*SPEF fixture\n")
+    calls = []
+    monkeypatch.setattr(runner, "_run_at_speed_atpg_producer",
+                        lambda *args, **kwargs: calls.append(args))
+
+    result = _default_dt2(tmp_path, monkeypatch)
+
+    row = result.extras["canonical_steps"][0]
+    assert row["status"] == "NOT_MEASURED", row
+    assert result.status == "NOT_MEASURED", result
+    assert row["reason_class"] == "input_absent", row
+    assert calls == []
+    assert "L20_DFT_AUTHORITY_NOT_ESTABLISHED" in capsys.readouterr().err
+    assert declaration.read_bytes() == artifact.read_bytes()
+
+
+def test_default_dt2_source_bound_scope_reaches_launch_admission(
+        tmp_path, monkeypatch):
+    import flow109_admission
+    from l20_dft_scan_topology_extract import extract_dft_scan_topology
+    text = tmp_path / "input/docs/neutral.md"
+    text.parent.mkdir(parents=True)
+    text.write_text(
+        "# DFT scan topology\n"
+        "| name | length | scan_in | scan_out | clock |\n"
+        "| --- | --- | --- | --- | --- |\n"
+        "| chain0 | 8 | test_in | test_out | clk |\n")
+    fields = extract_dft_scan_topology(tmp_path)
+    assert fields and fields["scan_chains"][0]["source"]["document_sha256"]
+    _write_json(tmp_path, "phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json", {
+        "doc_id": "L20", "applicability": "APPLICABLE",
+        "extraction_status": "EXTRACTED", "fields": fields,
+        "source_documents": ["input/docs/neutral.md"],
+        "extraction_evidence": fields["scan_topology_sources"],
+    })
+    _write_json(tmp_path, "reports/phase2/dft/transition_coverage.json",
+                {"fixture": "dispatch eligibility only"})
+    spef = tmp_path / "phase3/stage3/extracted/neutral.spef"
+    spef.parent.mkdir(parents=True)
+    spef.write_text("*SPEF fixture\n")
+    calls = []
+
+    class StopBeforeNative(BaseException):
+        pass
+
+    def observe_admission(project, sid, params):
+        calls.append((project, sid))
+        raise StopBeforeNative
+
+    monkeypatch.setattr(flow109_admission, "require_launch_admission",
+                        observe_admission)
+    with pytest.raises(StopBeforeNative):
+        _default_dt2(tmp_path, monkeypatch)
+    assert calls == [(tmp_path, "DT2")]
 
 
 def test_real_flow_opts_dt2_and_dt3_into_dependency_classification():

@@ -72,6 +72,7 @@ class ModuleInfo:
     body: str               # source code body (comments stripped)
     source_body: str = ''    # retain strings for configured generate selection
     native_widths: Dict[str, int] = field(default_factory=dict)
+    native: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -103,6 +104,7 @@ class InterfaceAuditResult:
     consumer_evidence: str
     status: str             # MATCH | MISMATCH | NOT_APPLICABLE | UNKNOWN
     severity: str           # "ERROR" | "WARN" | "INFO"
+    semantic_proof: Optional[dict] = None
 
 
 # Discovery is a separate evidence dimension from the encoding result.  A
@@ -1386,6 +1388,227 @@ def _whole_nonencoding_value(wire, producer, producer_port, consumer,
 
 
 # ---------------------------------------------------------------------------
+# Closed typed control bitfields
+# ---------------------------------------------------------------------------
+def _bitfield_source_word(module, name):
+    """A lane source is an input word or one unmodified whole input capture."""
+    if module.native.get('ports', {}).get(name, {}).get('direction') == 'input':
+        return True
+    if re.search(r'\b' + re.escape(name) + r'\s*\[[^]]+\]\s*(?:<=|=(?!=))', module.body):
+        return False
+    writes = list(re.finditer(r'(?<![\w$])' + re.escape(name) +
+                               r'\s*(?:<=|=(?!=))\s*([^;]+);', module.body))
+    if len(writes) != 1:
+        return False
+    rhs = re.fullmatch(r'([A-Za-z_]\w*)(?:\s*\[\s*(\d+)\s*:\s*(\d+)\s*\])?',
+                       writes[0].group(1).strip())
+    if rhs is None:
+        return False
+    peer, high, low = rhs.groups()
+    port = module.native.get('ports', {}).get(peer, {})
+    if port.get('direction') != 'input' or port.get('upto'):
+        return False
+    if high is None:
+        return len(port['bits']) == module.native_widths.get(name)
+    high, low = int(high), int(low)
+    return (port.get('offset', 0) <= low <= high < port.get('offset', 0) + len(port['bits'])
+            and high - low + 1 == module.native_widths.get(name))
+
+
+def _bitfield_boolean(expression, module):
+    """Width-check a closed Boolean grammar; no numeric encoding is inferred."""
+    expression = expression.strip()
+    if expression.startswith('('):
+        balanced = extract_balanced(expression, 0)
+        if balanced and balanced[1] == len(expression) - 1:
+            return _bitfield_boolean(balanced[0], module)
+    tokens, pairs = _balanced_expression_tokens(expression)
+    if tokens is None:
+        return False
+    depth = 0
+    for token, start, end in tokens:
+        if token in '([':
+            depth += 1
+        elif token in ')]':
+            depth -= 1
+        elif not depth and token in {'&', '|'}:
+            return (_bitfield_boolean(expression[:start], module)
+                    and _bitfield_boolean(expression[end:], module))
+    if expression.startswith(('!', '~')):
+        return _bitfield_boolean(expression[1:], module)
+    select = re.fullmatch(r'([A-Za-z_]\w*)\[(\d+)\]',
+                          re.sub(r'\s+', '', expression))
+    if select:
+        name, index = select.groups()
+        spec = module.native.get('netnames', {}).get(name, {})
+        return (_bitfield_source_word(module, name) and not spec.get('upto') and
+                spec.get('offset', 0) <= int(index) <
+                spec.get('offset', 0) + len(spec.get('bits', [])))
+    equality = re.fullmatch(
+        r'([A-Za-z_]\w*)\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*'
+        r'==\s*(\d+)\s*\x27[bB]([01_]+)', expression)
+    if equality:
+        name, high, low, width, bits = equality.groups()
+        high, low, width = int(high), int(low), int(width)
+        spec = module.native.get('netnames', {}).get(name, {})
+        return (_bitfield_source_word(module, name) and not spec.get('upto')
+                and high >= low >= spec.get('offset', 0)
+                and high < spec.get('offset', 0) + len(spec.get('bits', []))
+                and high - low + 1 == width == len(bits.replace('_', '')))
+    return expression in {"1'b0", "1'b1"}
+
+
+def _bitfield_control_proof(wire, producer, producer_port, consumer,
+                            consumer_port, parent, modules, instances):
+    """Prove fixed Boolean lanes and ALL fixed-bit selector uses, not invariance."""
+    if (_DISCOVERY_ISSUES or _CONFIGURATION.get('native', {}).get('status') != 'MEASURED'
+            or not re.fullmatch(r'[A-Za-z_]\w*', wire)):
+        return None
+    specs = []
+    boundaries = []
+    for module, name, direction in ((producer, producer_port, 'output'),
+                                    (consumer, consumer_port, 'input'),
+                                    (parent, wire, None)):
+        spec = {**module.native.get('netnames', {}),
+                **module.native.get('ports', {})}.get(name, {})
+        if (len(spec.get('bits', [])) < 2 or spec.get('upto')
+                or spec.get('offset', 0) != 0
+                or (direction and spec.get('direction') != direction)):
+            return None
+        specs.append(spec)
+        if direction:
+            bound = [i for i in instances if i.parent_module == parent.name
+                     and i.module_type == module.name and i.connections.get(name) == wire]
+            if not bound or any(i.connection_expressions.get(name) != wire or
+                    parent.native['cells'][i.inst_name]['connections'].get(name) !=
+                    parent.native['netnames'].get(wire, {}).get('bits')
+                    for i in bound):
+                return None
+            boundaries.extend(i.inst_name for i in bound)
+    width = len(specs[0]['bits'])
+    if any(len(s['bits']) != width for s in specs):
+        return None
+    body = producer.body
+    aliases = list(re.finditer(r'(?<![\w$])(' + re.escape(producer_port) +
+                               r')\s*=(?!=)\s*([A-Za-z_]\w*)\s*;', body))
+    if len(aliases) != 1:
+        return None
+    alias = aliases[0]
+    tokens, pairs = _balanced_expression_tokens(body)
+    operator = next((i for i, t in enumerate(tokens or [])
+                     if t[0] == '=' and alias.start(1) < t[1] < alias.start(2)), -1)
+    if (operator < 0 or not (_nonblocking_assignment_boundary(tokens, pairs, operator)
+            or operator >= 2 and tokens[operator - 2][0] == 'assign')):
+        return None
+    leaf = alias.group(2)
+    leaf_spec = producer.native.get('netnames', {}).get(leaf, {})
+    native_alias = leaf_spec.get('bits') == specs[0]['bits'] or any(
+        c['type'] == '$buf' and c['connections'].get('A') == leaf_spec.get('bits')
+        and c['connections'].get('Y') == specs[0]['bits']
+        for c in producer.native.get('cells', {}).values())
+    if (producer.native_widths.get(leaf) != width or leaf_spec.get('upto')
+            or leaf_spec.get('offset', 0) != 0 or not native_alias):
+        return None
+    occurrences = lambda text, name: {m.span() for m in re.finditer(
+        r'(?<![\w$])' + re.escape(name) + r'(?![\w$])', text)}
+    if occurrences(body, producer_port) != {alias.span(1)}:
+        return None
+    assignments = list(re.finditer(r'\bassign\s+(' + re.escape(leaf) +
+        r')\s*\[\s*(\d+)\s*\]\s*=(?!=)\s*([^;]+);', body))
+    declarations = list(re.finditer(r'\b(?:wire|logic)\s*\[[^]]+\]\s*(' +
+                                    re.escape(leaf) + r')\s*;', body))
+    if (len(assignments) != width or {int(m.group(2)) for m in assignments} != set(range(width))
+            or len(declarations) != 1
+            or occurrences(body, leaf) != {alias.span(2), declarations[0].span(1)} |
+                                         {m.span(1) for m in assignments}
+            or not all(_bitfield_boolean(m.group(3), producer) for m in assignments)):
+        return None
+    tokens, pairs = _balanced_expression_tokens(consumer.body)
+    if tokens is None:
+        return None
+    uses = []
+    for q, token in enumerate(tokens):
+        if token[0] != '?' or q < 4 or tokens[q - 1][0] != ']':
+            continue
+        opening = pairs[q - 1]
+        name = opening - 1
+        if (name < 0 or tokens[name][0] != consumer_port or q - opening != 3
+                or not tokens[opening + 1][0].isdigit()):
+            continue
+        before = name - 1
+        if (before >= 0 and tokens[before][0] not in {'(', ',', ':', '?', '=', '{'}
+                and not (tokens[before][0] == '<=' and
+                         _nonblocking_assignment_boundary(tokens, pairs, before))):
+            continue
+        if any(tokens[start][0] == '[' and start < name < end
+               for start, end in pairs.items() if start < end):
+            continue
+        start, end = tokens[name][1], tokens[q - 1][2]
+        statement_start = consumer.body.rfind(';', 0, start) + 1
+        statement_end = consumer.body.find(';', end)
+        uses.append({'lane': int(tokens[opening + 1][0]), 'span': [start, end],
+                     'statement': consumer.body[statement_start:statement_end + 1].strip()})
+    if ({u['lane'] for u in uses} != set(range(width)) or
+            occurrences(consumer.body, consumer_port) !=
+            {(u['span'][0], u['span'][0] + len(consumer_port)) for u in uses}):
+        return None
+    return {'role': 'BITFIELD_CONTROL', 'width': width, 'wire': wire,
+            'producer': [producer.name, producer_port],
+            'consumer': [consumer.name, consumer_port], 'parent': parent.name,
+            'bindings': sorted(boundaries), 'native_port_bits': [s['bits'] for s in specs],
+            'parameters': [m.native.get('parameter_default_values', {})
+                           for m in (producer, consumer, parent)],
+            'lanes': sorted([{'index': int(m.group(2)), 'expression': m.group(3).strip()}
+                             for m in assignments], key=lambda r: r['index']),
+            'selectors': uses, 'source_sha256': _CONFIGURATION['native']['input_sha256']}
+
+
+def _bitfield_receipt_matches(payload, design):
+    """Recompute typed evidence from current source + checked native bytes, no tool."""
+    cfg = payload['configuration']
+    previous, issues = dict(_CONFIGURATION), list(_DISCOVERY_ISSUES)
+    try:
+        _CONFIGURATION.clear()
+        _CONFIGURATION.update(cfg)
+        _DISCOVERY_ISSUES.clear()
+        modules, headers = {}, {}
+        defines = {d.split('=', 1)[0] for d in cfg['defines']}
+        for filename in cfg['native']['files']:
+            src = _hierarchy.preprocess(strip_comments(Path(filename).read_text()), defines)
+            for name, start, body_start, _ in module_regions(src):
+                headers[name] = src[start:body_start]
+            modules.update({m.name: m for m in parse_modules(src, filename)})
+        modules, instances = _bind_native_view(modules, headers, design, cfg['top'])
+        expected = {}
+        for wire, pm, pp, cm, cp, parent in build_interface_map(modules, instances):
+            producer, consumer = modules[pm], modules[cm]
+            if (classify_producer_encoding(producer.body, pp).encoding != 'UNKNOWN' or
+                    classify_consumer_encoding(consumer.body, cp).encoding != 'UNKNOWN'):
+                continue
+            proof = _bitfield_control_proof(wire, producer, pp, consumer, cp,
+                                            modules[parent], modules, instances)
+            if proof is not None:
+                expected.setdefault((wire, pm, pp, cm, cp), []).append(proof)
+        seen = []
+        for row in payload['interfaces']:
+            candidates = expected.get(tuple(row[k] for k in
+                ('wire_name', 'producer_module', 'producer_port', 'consumer_module', 'consumer_port')), [])
+            if (not candidates and row.get('semantic_proof') is None and 'BITFIELD_CONTROL' not in
+                    (row.get('producer_encoding'), row.get('consumer_encoding'))):
+                continue
+            if (row['producer_encoding'] != 'BITFIELD_CONTROL' or
+                    row['consumer_encoding'] != 'BITFIELD_CONTROL' or row['status'] != 'MATCH'):
+                return False
+            if not row.get('semantic_proof') or row['semantic_proof'] not in candidates:
+                return False
+            seen.append(row['semantic_proof'])
+        return all(proof in seen for proofs in expected.values() for proof in proofs)
+    finally:
+        _CONFIGURATION.clear()
+        _CONFIGURATION.update(previous)
+        _DISCOVERY_ISSUES[:] = issues
+
+
 # Cross-module interface tracing
 # ---------------------------------------------------------------------------
 def build_interface_map(
@@ -1634,6 +1857,13 @@ def _active_native_view(modules, headers, files, top, defines, parameters,
                 context_file = created.pop() / 'context.json'
                 retain_context(context_file)
 
+    return _bind_native_view(modules, headers, design, top)
+
+
+def _bind_native_view(modules, headers, design, top):
+    """Bind an already measured native view; never execute a tool here."""
+    import rtl_hygiene_lint as lint
+
     native_modules = design['modules']
     active_modules = {}
     active_instances = []
@@ -1672,7 +1902,8 @@ def _active_native_view(modules, headers, files, top, defines, parameters,
             [PortInfo(p.name, p.direction, p.width, name) for p in source.ports],
             lexical_mask(body, attributes=True),
             native_widths={key: len(spec['bits']) for key, spec in
-                           {**native.get('netnames', {}), **native_ports}.items()})
+                           {**native.get('netnames', {}), **native_ports}.items()},
+            native=native)
         children = {cell_name: cell['type']
                     for cell_name, cell in native.get('cells', {}).items()
                     if cell['type'] in native_modules}
@@ -1792,6 +2023,7 @@ def run_audit(
             continue
 
         nonencoding = None
+        bitfield = None
         if _fixed_nested_bit_select(wire) is not None:
             evidence = (f'unsupported fixed nested bit-select carrier {wire}; '
                         'retained in interface population')
@@ -1814,9 +2046,18 @@ def run_audit(
             nonencoding = _whole_nonencoding_value(
                 wire, prod_module, prod_port, cons_module, cons_port,
                 all_modules[parent_mod], all_modules, all_instances)
+            if prod_class.encoding == cons_class.encoding == 'UNKNOWN':
+                bitfield = _bitfield_control_proof(
+                    wire, prod_module, prod_port, cons_module, cons_port,
+                    all_modules[parent_mod], all_modules, all_instances)
 
         # Determine match status
-        if (nonencoding is not None
+        if bitfield is not None:
+            evidence = ('source/native-bound BITFIELD_CONTROL lane-role compatibility; '
+                        'numeric encoding and recoding invariance are not inferred')
+            prod_class = cons_class = EncodingClassification('BITFIELD_CONTROL', evidence, 0)
+            status, severity = 'MATCH', 'INFO'
+        elif (nonencoding is not None
                 and prod_class.encoding == cons_class.encoding == 'UNKNOWN'):
             prod_class, cons_class = nonencoding
             status = 'NOT_APPLICABLE'
@@ -1851,7 +2092,7 @@ def run_audit(
             consumer_encoding=cons_class.encoding,
             consumer_evidence=cons_class.evidence,
             status=status,
-            severity=severity))
+            severity=severity, semantic_proof=bitfield))
 
     return results
 
@@ -1926,6 +2167,9 @@ def main():
     out_path.mkdir(parents=True, exist_ok=True)
     report_file = out_path / 'encoding_audit_report.json'
     interface_rows = [asdict(r) for r in results]
+    for row in interface_rows:
+        if row['semantic_proof'] is None:
+            del row['semantic_proof']
     report = {
         'report_schema': 'vibeic.interface_encoding_audit.v3',
         'summary': {
