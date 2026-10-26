@@ -300,25 +300,26 @@ def test_no_requirement_row_carries_a_claim_key(tmp_path):
     walk(doc["fields"])
 
 
-def test_an_input_with_no_signoff_statement_is_still_declared_absent(tmp_path):
-    """R-0915-36 is unchanged underneath: extraction only happens where the
-    subject is there to extract."""
+def test_an_input_with_no_signoff_statement_stays_unknown(tmp_path):
+    """Silence is not a source-bound declaration that sign-off is absent."""
     proj = _project(tmp_path, spec_md="It multiplies two numbers.\n")
+    doc = _emit_l24(proj)
+    assert doc["applicability"] == "APPLICABLE"
+    assert doc["extraction_status"] == "EXTRACTED"
+    assert not any(row["stated"]
+                   for row in doc["fields"]["signoff_requirements"])
+    assert "applicability_evidence" not in doc
+
+
+def test_explicit_source_bound_signoff_refusal_is_declared_absent(tmp_path):
+    proj = _project(
+        tmp_path,
+        spec_md="Tape-out and sign-off are not applicable to this model.\n")
     doc = _emit_l24(proj)
     assert doc["applicability"] == "NOT_APPLICABLE"
     assert doc["extraction_status"] == "DECLARED_ABSENT_FROM_INPUT"
-    assert "signoff_requirements" not in doc["fields"]
-
-
-def test_the_declared_absent_stub_carries_a_rationale(tmp_path):
-    """The gate FAILS an N/A layer with no `rationale` -- "a silent-empty
-    layer is indistinguishable from a failed extraction". R-0915-36's stub
-    had none; the roster answered the gate N/A before it ever ran, so the
-    hole was invisible."""
-    proj = _project(tmp_path, spec_md="It multiplies two numbers.\n")
-    doc = _emit_l24(proj)
-    assert doc["applicability"] == "NOT_APPLICABLE"
     assert doc["rationale"].strip(), "the stub must say WHY"
+    assert doc["applicability_evidence"]["literal"].startswith("Tape-out")
     rc, out = _run_gate(proj)
     assert rc == 2, out          # SKIP, an honest N/A
 
@@ -330,6 +331,55 @@ def test_the_declared_absent_stub_carries_a_rationale(tmp_path):
     rc_bad, out_bad = _run_gate(proj)
     assert rc_bad == 1, out_bad
     assert "no `rationale`" in out_bad
+
+
+def test_qualified_signoff_prefix_cannot_hide_mandatory_tapeout(tmp_path):
+    proj = _project(tmp_path, spec_md=(
+        "Sign-off is not required before RTL generation, but is mandatory "
+        "before tape-out.\n"))
+    doc = _emit_l24(proj)
+    assert doc["applicability"] == "APPLICABLE"
+    assert "applicability_evidence" not in doc
+
+
+def test_activity_scoped_signoff_refusal_stays_applicable(tmp_path):
+    proj = _project(
+        tmp_path,
+        spec_md="Sign-off is not required for this RTL simulation.\n")
+    doc = _emit_l24(proj)
+    assert doc["applicability"] == "APPLICABLE"
+    assert "applicability_evidence" not in doc
+
+
+def test_structured_self_tapeout_die_is_applicable_even_without_doc_keywords(
+        tmp_path):
+    proj = _project(tmp_path, spec_md="An eight-bit counter.\n")
+    decl = proj / "input" / "submission_template" / "tapeout_declaration.json"
+    decl.parent.mkdir(parents=True)
+    decl.write_text(json.dumps({
+        "schema": "vibe-ic/tapeout_declaration/1",
+        "answers": {"deliverable": "DIE"},
+        "answer_provenance": {
+            "deliverable": {"answered_by": "owner", "citation": "fixture"},
+        },
+    }))
+    doc = _emit_l24(proj)
+    assert doc["applicability"] == "APPLICABLE"
+    assert doc["extraction_status"] == "EXTRACTED"
+    assert not any(row["stated"]
+                   for row in doc["fields"]["signoff_requirements"])
+
+
+def test_malformed_tapeout_declaration_does_not_authorize_absence(tmp_path):
+    proj = _project(tmp_path, spec_md="An eight-bit counter.\n")
+    decl = proj / "input" / "submission_template" / "tapeout_declaration.json"
+    decl.parent.mkdir(parents=True)
+    decl.write_text('{"answers":{"deliverable":42}}')
+    doc = _emit_l24(proj)
+    assert doc["applicability"] == "APPLICABLE"
+    assert doc["extraction_status"] == "EXTRACTED"
+    assert not any(row["stated"]
+                   for row in doc["fields"]["signoff_requirements"])
 
 
 # ── the gate judges the run against the requirements ─────────────────────

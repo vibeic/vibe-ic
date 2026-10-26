@@ -1675,7 +1675,163 @@ def decide(*, rebase_status: str, expected_tree: str, verified_tree: str,
 # --------------------------------------------------------------------- the CLI
 
 
+def service_ready(repo: Path, manifest: Path, writer: str,
+                  final_command: Sequence[str], base: str = "origin/main") -> dict:
+    """Consume root-owned admission input; serialize only the final write.
+
+    Receipt pins and check argv come from the maintainer's manifest, NEVER PR
+    metadata. A receipt's self-checksum is integrity, not independent authority.
+    This one-shot service neither polls nor assigns a version by itself.
+    """
+    import fcntl
+    import os
+    import subprocess
+
+    def strict(raw):
+        def pairs(rows):
+            result = {}
+            for key, value in rows:
+                if key in result:
+                    raise ValueError("duplicate JSON key: " + key)
+                result[key] = value
+            return result
+        return json.loads(raw, object_pairs_hook=pairs,
+                          parse_constant=lambda x: (_ for _ in ()).throw(ValueError(x)))
+
+    def git(*args):
+        return subprocess.check_output(["git", "-C", str(repo), *args],
+                                       stderr=subprocess.PIPE).decode().strip()
+
+    raw = manifest.read_bytes()
+    plan = strict(raw)
+    if (not writer or plan.get("writer") != writer or not final_command
+            or not isinstance(plan.get("candidates"), list)):
+        raise ValueError("missing admission input or wrong sole writer")
+    refused = []
+    verifier = repo / "tools/gatekeeper-verify-merge.sh"
+
+    def inspect(entry):
+        if any(entry.get(k) for k in ("holds", "shared_conflicts", "failed_gates")):
+            raise ValueError("explicit hold, shared-source conflict or failed gate")
+        now_base = git("rev-parse", base + "^{commit}")
+        for dep in entry.get("dependencies", []):
+            if subprocess.run(["git", "-C", str(repo), "merge-base", "--is-ancestor",
+                               dep, now_base], capture_output=True).returncode:
+                raise ValueError("unlanded dependency: " + dep)
+        path = Path(entry["receipt"])
+        receipt_bytes = path.read_bytes()
+        if hashlib.sha256(receipt_bytes).hexdigest() != entry["receipt_sha256"]:
+            raise ValueError("receipt differs from independently accepted pin")
+        receipt = strict(receipt_bytes)
+        head = git("rev-parse", entry["head"] + "^{commit}")
+        checked = subprocess.run(
+            ["bash", str(verifier), "--repo", str(repo), "--base", base,
+             "--reassert", str(path), "--reassert-head", head, "--no-fetch"],
+            capture_output=True, text=True, timeout=60)
+        if checked.returncode and "REASSERT: REVALIDATE" not in checked.stderr:
+            raise ValueError("receipt refused: " + checked.stdout + checked.stderr)
+        affected = {line.strip().split("\t")[0] for line in checked.stderr.splitlines()
+                    if line.startswith("    ")} if checked.returncode else set()
+        checks = entry.get("checks", {})
+        if not isinstance(checks, dict):
+            raise ValueError("invalid named check mapping")
+        # Additional consumed dependencies are explicitly named by the accepted
+        # admission input. Git paths, not waiting time or PR identity, invalidate.
+        changed = set(git("diff", "--name-only", receipt["base_sha"], now_base).splitlines())
+        affected |= changed & set(checks)
+        watch = set(checks) | affected
+        bindings = {p: git("ls-tree", now_base, "--", p) for p in watch}
+        return head, affected, bindings
+
+    # Admit the complete queue before running any acceptance work. Stable
+    # partitioning preserves input order only within the same readiness class.
+    admitted = []
+    for entry in plan["candidates"]:
+        if not isinstance(entry, dict):
+            raise ValueError("candidate admission is not an object")
+        try:
+            admitted.append((entry, *inspect(entry)))
+        except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as exc:
+            refused.append({"id": entry.get("id"), "reason": str(exc)})
+    for entry, head, affected, bindings in sorted(admitted, key=lambda row: bool(row[2])):
+        try:
+            performed = []
+            commands = {}
+            for path in sorted(affected):
+                rows = entry.get("checks", {}).get(path)
+                if not rows:
+                    raise ValueError("no impacted check for changed input: " + path)
+                for check in rows:
+                    args = check["argv"]
+                    if not args or not all(isinstance(x, str) for x in args):
+                        raise ValueError("invalid impacted argv")
+                    key = check["id"]
+                    if key in commands and commands[key] != args:
+                        raise ValueError("ambiguous impacted check: " + key)
+                    commands[key] = args
+            for key, args in commands.items():
+                run = subprocess.run(args, cwd=repo, capture_output=True, text=True, timeout=300)
+                if run.returncode:
+                    raise ValueError("impacted check failed: " + key + ": " + run.stderr)
+                performed.append(key)
+        except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as exc:
+            refused.append({"id": entry.get("id"), "reason": str(exc)})
+            continue  # An unrelated earlier refusal is never a FIFO barrier.
+
+        common = Path(git("rev-parse", "--git-common-dir"))
+        if not common.is_absolute():
+            common = repo / common
+        with (common / "gatekeeper-final.lock").open("a") as lock:
+            try:
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return {"status": "BLOCKED_SOLE_WRITER_LOCK", "refused": refused}
+            # No test or acceptance arm runs while holding the short main lock.
+            # Re-read input identities; unrelated main movement is not a lock.
+            try:
+                if manifest.read_bytes() != raw:
+                    raise ValueError("admission manifest changed during checks")
+                current_head, current_affected, current_bindings = inspect(entry)
+                if (current_head != head or current_affected != affected
+                        or current_bindings != bindings):
+                    raise ValueError("named inputs changed during impacted checks")
+            except (ValueError, KeyError, TypeError, OSError, subprocess.SubprocessError) as exc:
+                return {"status": "BLOCKED_CHANGED_INPUT", "reason": str(exc), "refused": refused}
+            env = dict(os.environ, GATEKEEPER_READY_ID=str(entry["id"]),
+                       GATEKEEPER_READY_HEAD=head,
+                       GATEKEEPER_READY_BASE=git("rev-parse", base + "^{commit}"))
+            done = subprocess.run(list(final_command), cwd=repo, env=env,
+                                  capture_output=True, text=True, timeout=300)
+            # Never advance to another candidate after a possibly partial write.
+            return {"status": "DELIVERED" if done.returncode == 0 else "BLOCKED_FINAL_WRITE",
+                    "id": entry["id"], "head": head, "receipt_reused": not affected,
+                    "affected_paths": sorted(affected), "impacted_checks": performed,
+                    "final_rc": done.returncode, "stdout": done.stdout,
+                    "stderr": done.stderr, "refused": refused}
+    return {"status": "BLOCKED_NO_ACCEPTED_CANDIDATE", "refused": refused}
+
+
+def _service_main(argv):
+    ap = argparse.ArgumentParser(description="Consume accepted ready work; root-only final write")
+    ap.add_argument("--service-ready", type=Path, required=True)
+    ap.add_argument("--repo", type=Path, required=True)
+    ap.add_argument("--base", default="origin/main")
+    ap.add_argument("--writer", required=True)
+    ap.add_argument("--final-command", nargs=argparse.REMAINDER, required=True)
+    args = ap.parse_args(argv)
+    try:
+        report = service_ready(args.repo.resolve(), args.service_ready, args.writer,
+                               args.final_command, args.base)
+    except (ValueError, KeyError, TypeError, OSError) as exc:
+        report = {"status": "BLOCKED_ADMISSION_INPUT", "reason": str(exc)}
+    print(json.dumps(report, sort_keys=True))
+    return 0 if report["status"] == "DELIVERED" else RC_REFUSE
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if "--service-ready" in argv:
+        return _service_main(argv)
     ap = argparse.ArgumentParser(
         description="the merge-path landing verdict (chip-AGNOSTIC)")
     ap.add_argument("--base-sha", required=True)

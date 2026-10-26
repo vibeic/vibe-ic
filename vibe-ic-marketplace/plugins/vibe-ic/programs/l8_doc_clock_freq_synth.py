@@ -100,6 +100,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from _prose_polarity import is_denied
+import clock_target_provenance as _clock_provenance
 
 PROGRAM = "l8_doc_clock_freq_synth"
 VERSION = "1.0.0"
@@ -407,17 +408,23 @@ def derive(project: Path) -> Dict[str, Any]:
                 })
                 continue
             hz, matched = freqs[0]
+            target_status = _clock_provenance.physical_target_status(row_text)
             for nm in names:
                 prev = bindings.get(nm)
-                if prev is not None and prev["freq_hz"] != hz:
+                if (prev is not None
+                        and (prev["freq_hz"] != hz
+                             or prev["physical_target_status"] != target_status)):
                     result["ambiguous_rows"].append({
                         "file": str(rel), "line": idx, "row": row_text,
                         "clocks_named": [nm],
-                        "reason": ("two rows state different frequencies for "
-                                   "this clock (%g Hz at %s:%d, %g Hz here); "
+                        "reason": ("two rows state different frequency or "
+                                   "physical-target authority for this clock "
+                                   "(%g Hz/%s at %s:%d, %g Hz/%s here); "
                                    "nothing is bound"
-                                   % (prev["freq_hz"], prev["file"],
-                                      prev["line"], hz)),
+                                   % (prev["freq_hz"],
+                                      prev["physical_target_status"],
+                                      prev["file"], prev["line"], hz,
+                                      target_status)),
                     })
                     bindings.pop(nm, None)
                     continue
@@ -435,6 +442,7 @@ def derive(project: Path) -> Dict[str, Any]:
                     "line": idx,
                     "row": row_text,
                     "matched_text": matched,
+                    "physical_target_status": target_status,
                 }
 
     ambiguous_clocks = {
@@ -462,7 +470,10 @@ def _apply(project: Path, derived: Dict[str, Any]) -> Dict[str, Any]:
     # set ONLY when every bound clock agrees. A multi-rate design keeps the
     # scalar null on purpose and lets its records speak.
     freqs = {b["freq_hz"] for b in derived["bindings"]}
-    scalar_mhz = (next(iter(freqs)) / 1.0e6) if len(freqs) == 1 else None
+    statuses = {b["physical_target_status"] for b in derived["bindings"]}
+    scalar_mhz = ((next(iter(freqs)) / 1.0e6)
+                  if len(freqs) == 1 and statuses == {
+                      _clock_provenance.PHYSICAL_TARGET_DECLARED} else None)
 
     for doc in _L8_DOCS:
         d = _load_l_doc(project, doc)
@@ -493,6 +504,8 @@ def _apply(project: Path, derived: Dict[str, Any]) -> Dict[str, Any]:
                 rec["freq_evidence"] = {
                     "file": b["file"], "line": b["line"],
                     "matched_text": b["matched_text"], "row": b["row"],
+                    _clock_provenance.PHYSICAL_TARGET_STATUS_KEY:
+                        b["physical_target_status"],
                 }
                 rec["derived_by"] = PROGRAM
                 # The later scaffold cleaner consumes the standard layer

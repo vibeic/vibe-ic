@@ -524,7 +524,7 @@ def restamp_l_doc_skeletons(project_dir: Optional[Path]) -> list[str]:
 _INPUT_SUBJECT_TERMS: Dict[str, Tuple[str, ...]] = {
     # 'Look for signoff / tapeout / sign-off checklist sections.'
     # 'Capture DRC / LVS / STA / antenna / IR-drop status per gate.'
-    "L24": ("signoff", "sign-off", "tapeout", "checklist", "DRC", "LVS",
+    "L24": ("signoff", "sign-off", "tapeout", "tape-out", "checklist", "DRC", "LVS",
             "STA", "antenna", "IR-drop", "GDS XOR", "GDS_XOR", "GDS-XOR"),
     # 'Look for reliability / qualification / mission-profile sections.'
     # 'Capture qual standard (JESD47, AEC-Q100/Q200) if stated.'
@@ -678,6 +678,49 @@ def _input_carries_subject(l_doc_code: str,
     different fact from "how the input is searched".
     """
     code = str(l_doc_code or "").upper()
+    # L24/L25 are three-state source contracts.  A zero-hit scan establishes
+    # only UNKNOWN; it cannot manufacture a design-level negative.  L25's
+    # typed negative extractor preserves explicit qualification/unmeasured
+    # statements.  L24 has a narrow whole-clause N/A form here because its
+    # consumer supports an explicitly refused sign-off scope.
+    if code == "L25":
+        return None
+    if code == "L24" and project_dir is not None:
+        pattern = re.compile(
+            r"(?ix)\s*(?:"
+            r"(?:sign[- ]?off|tape[- ]?out)"
+            r"(?:\s+(?:and|or)\s+(?:sign[- ]?off|tape[- ]?out))?"
+            r"\s+(?:is|are)\s+"
+            r"(?:not\s+applicable|out\s+of\s+scope|not\s+required)"
+            r"|(?:no|without)\s+(?:sign[- ]?off|tape[- ]?out)"
+            r"(?:\s+(?:and|or)\s+(?:sign[- ]?off|tape[- ]?out))?"
+            r"(?:\s+(?:is|are)\s+"
+            r"(?:required|planned|intended|performed))?"
+            r")"
+            r"(?:\s+(?:for|to)\s+(?:this|the)\s+"
+            r"(?:design|block|device|part|chip|model|ip))?"
+            r"\s*[.!?]?\s*"
+        )
+        root = Path(project_dir)
+        for doc in input_documents(root):
+            try:
+                lines = doc.read_text(
+                    encoding="utf-8", errors="replace").splitlines()
+            except OSError:
+                return None
+            for line_number, line in enumerate(lines, 1):
+                match = pattern.fullmatch(line)
+                if not match:
+                    continue
+                return {
+                    "kind": "input-explicitly-declares-no-subject",
+                    "layer": code,
+                    "document": doc.relative_to(root).as_posix(),
+                    "line": line_number,
+                    "literal": match.group(0).strip(),
+                    "decided_by": "phase1_post_process._input_carries_subject",
+                }
+        return None
     return scan_input_for_terms(
         project_dir, _INPUT_SUBJECT_TERMS.get(code), code)
 
@@ -793,12 +836,18 @@ def emit_l_doc_skeleton(l_doc_code: str,
         # failed extraction". It is right to, and R-0915-36's stub had none:
         # the roster answered the gate N/A before it ever ran, so the hole was
         # invisible. The rationale is the evidence stated in one sentence.
-        out["rationale"] = (
-            f"No input document carries this layer's subject: "
-            f"{absent['documents_scanned_count']} document(s) scanned for "
-            f"{len(absent['terms_searched'])} term(s) "
-            f"({', '.join(absent['terms_searched'][:6])}...), 0 matched. "
-            f"See applicability_evidence for the full scan.")
+        if absent.get("kind") == "input-explicitly-declares-no-subject":
+            out["rationale"] = (
+                "The input explicitly declares this layer out of scope at "
+                f"{absent['document']}:{absent['line']}: "
+                f"{absent['literal']}")
+        else:
+            out["rationale"] = (
+                f"No input document carries this layer's subject: "
+                f"{absent['documents_scanned_count']} document(s) scanned for "
+                f"{len(absent['terms_searched'])} term(s) "
+                f"({', '.join(absent['terms_searched'][:6])}...), 0 matched. "
+                f"See applicability_evidence for the full scan.")
     if extracted and str(l_doc_code).upper() == "L23":
         # The runner forwards a dictionary through the canonical write
         # chokepoint. Keep the source references, rather than the discarded
@@ -929,7 +978,11 @@ def _skeleton_fields_for(l_doc_code: str) -> Dict[str, Any]:
             "key_handling": {},
             "attack_surface": [],
             "side_channel_mitigation": [],
-            "secure_boot": False,
+            # Source silence is UNKNOWN.  Protocol overlays use setdefault,
+            # so carrying the null state here also prevents a later generic
+            # class default from relabelling silence as an explicit negative.
+            "secure_boot": None,
+            "security_requirements_present": None,
         },
         # ── Completeness extensions (L24-L27). chip-AGNOSTIC placeholders /
         # nulls only — NO fabricated values. ─────────────────────────────

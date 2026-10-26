@@ -127,6 +127,56 @@ _PERIOD_TOKEN_RE = re.compile(
 _CREATE_CLOCK_PERIOD_RE = re.compile(
     r"create_clock[^\n]*?-period\s+(\d+(?:\.\d+)?)", re.IGNORECASE)
 
+# A numeric clock observation is not automatically a physical implementation
+# target. The producer stamps this status into ``freq_evidence`` and every
+# physical consumer reads the same finite vocabulary. Missing status remains
+# DECLARED for backwards compatibility with older design-owned L8 records.
+PHYSICAL_TARGET_STATUS_KEY = "physical_target_status"
+PHYSICAL_TARGET_DECLARED = "DECLARED"
+PHYSICAL_TARGET_CONTEXT_ONLY = "CONTEXT_ONLY"
+PHYSICAL_TARGET_AMBIGUOUS = "AMBIGUOUS"
+
+_SIMULATION_CONTEXT_RE = re.compile(
+    r"\bfor\s+(?=[^.!?\n]*(?:lint|simulation)\b)"
+    r"(?=[^.!?\n]*(?:context|purposes?|only)\b)"
+    r"[^.!?\n]*(?:lint|simulation)\b[^.!?\n]*"
+    r"(?:context|purposes?|only)\b",
+    re.IGNORECASE,
+)
+_PHYSICAL_TARGET_RE = re.compile(
+    r"\b(?:for|as)\s+(?:the\s+)?physical\s+"
+    r"(?:implementation|sign-?off)(?:\s+(?:clock\s+)?(?:target|constraint))?\b|"
+    r"\b(?:physical\s+)?(?:implementation|sign-?off)\s+"
+    r"(?:clock\s+)?(?:target|constraint)\b",
+    re.IGNORECASE,
+)
+
+
+def physical_target_status(text: object) -> str:
+    """Classify the bounded clock-use qualifier on one evidence sentence."""
+    value = text if isinstance(text, str) else ""
+    contextual = bool(_SIMULATION_CONTEXT_RE.search(value))
+    physical = bool(_PHYSICAL_TARGET_RE.search(value))
+    if contextual and physical:
+        return PHYSICAL_TARGET_AMBIGUOUS
+    if contextual:
+        return PHYSICAL_TARGET_CONTEXT_ONLY
+    return PHYSICAL_TARGET_DECLARED
+
+
+def clock_record_physical_target_status(rec: object) -> str:
+    """Return one L8 record's physical-target authority, fail-closed."""
+    if not isinstance(rec, dict):
+        return PHYSICAL_TARGET_AMBIGUOUS
+    evidence = rec.get("freq_evidence")
+    if not isinstance(evidence, dict) or PHYSICAL_TARGET_STATUS_KEY not in evidence:
+        return PHYSICAL_TARGET_DECLARED
+    status = evidence.get(PHYSICAL_TARGET_STATUS_KEY)
+    if status in (PHYSICAL_TARGET_DECLARED, PHYSICAL_TARGET_CONTEXT_ONLY,
+                  PHYSICAL_TARGET_AMBIGUOUS):
+        return status
+    return PHYSICAL_TARGET_AMBIGUOUS
+
 
 def _f(v) -> Optional[float]:
     try:
@@ -193,6 +243,9 @@ def _l8_declared(project: Path) -> Optional[Dict[str, object]]:
             for rec in (data.get(key) or []):
                 if not isinstance(rec, dict):
                     continue
+                if (clock_record_physical_target_status(rec)
+                        != PHYSICAL_TARGET_DECLARED):
+                    continue
                 per = _f(rec.get("period_ns"))
                 if per is None:
                     m = _f(rec.get("freq_mhz"))
@@ -229,6 +282,8 @@ def _doc_prose(project: Path) -> Optional[Dict[str, object]]:
             # literal form of that harm, so the polarity consult is not a
             # formality here.
             if _is_denied(line):
+                continue
+            if physical_target_status(line) != PHYSICAL_TARGET_DECLARED:
                 continue
             return {"period_ns": val,
                     "cite": f"{md}:{text.count(chr(10), 0, m.start()) + 1}",

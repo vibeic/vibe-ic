@@ -55450,9 +55450,26 @@ def gen_l11_otp_content(project: Path,
     otp_layout_from_l4 = (
         l4_otp_layout_raw if isinstance(l4_otp_layout_raw, dict) else {}
     )
-    # v1.6.78 — closes #11 FLAG-EVIDENCE CONSISTENCY for L11.otp_layout.
-    no_otp_layout_in_input = _flag_no_X_in_input(
-        has_otp_evidence_l11, evidence, "otp_layout")
+    # Empty extraction is UNKNOWN, not an affirmative no-OTP declaration.
+    # Reuse L4's clause-scoped polarity rules so the two layers cannot
+    # disagree about the same source text.  An unresolved negative never
+    # authorizes the downstream no-OTP escapes.
+    has_explicit_otp_absence_l11 = any(
+        _has_explicit_otp_absence(text)
+        for text in (extracted or {}).values()
+        if isinstance(text, str)
+    )
+    has_unresolved_otp_evidence_l11 = any(
+        _has_unresolved_otp_evidence(text)
+        for text in (extracted or {}).values()
+        if isinstance(text, str)
+    )
+    otp_absence_authorized_l11 = bool(
+        not has_otp_evidence_l11
+        and has_explicit_otp_absence_l11
+        and not has_unresolved_otp_evidence_l11
+    )
+    no_otp_layout_in_input = otp_absence_authorized_l11
 
     # v1.6.85 (#17 Bug C) — operating-mode vs FSM-state classifier.
     # Field-agent surfaced VCC2P5 / VCC1P2_VCC / OTP_RW being emitted
@@ -55510,6 +55527,13 @@ def gen_l11_otp_content(project: Path,
         "otp_layout": (otp_layout_from_l4
                         if has_otp_evidence_l11 else None),
         "no_otp_layout_in_input": no_otp_layout_in_input,
+        # Three-state declaration consumed by the protocol overlay and the
+        # structured-field gate: True=present, False=explicitly absent,
+        # None=the source did not decide.
+        "otp_present": (True if has_otp_evidence_l11 else
+                        False if otp_absence_authorized_l11 else None),
+        "no_otp_fsm_in_input": bool(
+            otp_absence_authorized_l11 and not fsm_states_acc),
         # v1.6.185 (#72 P0-2 slice 8/8) — split:
         # - otp_program / otp_read keep their original OTP-evidence
         #   gate (so OTP-less projects don't share the generic
@@ -55578,35 +55602,42 @@ def gen_l11_otp_content(project: Path,
         source_documents=_source_documents_from_extracted(project, extracted))
 
 
-# v0.1.82 — input assertion that the part has NO calibration / trimming / OTP
-# trim. Bilingual (zh + en), negation-anchored. Used by gen_l12 to emit the
-# honest L12 no_calibration flag for pure-digital parts. Chip-AGNOSTIC.
+# Complete, locally-owned clauses that say calibration itself is absent or not
+# required.  A noun following "calibration" (for example, "no calibration
+# error") cannot satisfy the full clause and therefore remains UNKNOWN.
 _RE_L12_NO_CALIBRATION = re.compile(
-    r'(?i)無\s*(?:trim|trimming|otp[\s-]*(?:based)?\s*cal|calibration|校準|校准)|'
-    r'不需\s*(?:calibration|trim|校準)|沒有\s*(?:calibration|trim|校準)|'
-    r'\bno\s+(?:calibration|trimming|trim)\b|'
-    r'\bnot\s+calibrat|\bno\s+otp[\s-]*based\s+calibration\b')
+    r"(?ix)\s*(?:"
+    r"(?:this|the)\s+(?:design|block|device|part|chip|ip)\s+(?:"
+    r"(?:requires?|needs?|uses?|includes?|has)\s+no\s+"
+    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration)"
+    r"(?:\s*(?:/|,|\bor\b|\band\b)\s*"
+    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration))*"
+    r"|(?:does\s+not|doesn't)\s+(?:require|need|use|include|have)\s+"
+    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration))"
+    r"|there\s+(?:is|are)\s+no\s+"
+    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration)"
+    r"|no\s+(?:calibration|trimming|trim|"
+    r"otp[\s-]*(?:based\s+)?calibration)(?:\s+(?:is|are)\s+"
+    r"(?:required|needed|present|implemented|included|used))?"
+    r"|without\s+(?:calibration|trimming|trim|"
+    r"otp[\s-]*(?:based\s+)?calibration)"
+    r"|(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration)\s+"
+    r"(?:is|are)\s+(?:not\s+(?:required|needed|present|implemented|"
+    r"included|used)|absent)"
+    r"|(?:本設計|本區塊|本裝置|此設計|此區塊)?\s*"
+    r"(?:不需|無需|沒有|不含|無)\s*(?:calibration|trim|校準|校准)"
+    r")\s*[.!。！？]?\s*")
 
-# ORGANIC #634 facet (e) — POSITIVE calibration-source vocabulary. A
-# calibration / trim / OTP-cal SOURCE in the input means the part DOES
-# carry calibration content (so `no_calibration` must stay False). When
-# NONE of these tokens appears AND no behavioral sequences were harvested,
-# gen_l12 auto-sets `no_calibration: true` — the honest absence-based N/A
-# that mirrors L5.no_analog (blocks == [] → no_analog = True). The negated
-# forms (`no calibration` / `無 trim`) are first stripped to a marker so a
-# sentence that DENIES calibration is not miscounted as a source. The trim
-# token requires an adjacent calibration-context word so a `bit-trimming`
-# datapath idiom never falsely registers a cal source. chip-AGNOSTIC: open
-# calibration vocabulary; no chip/vendor/SKU literal.
-_RE_L12_CALIBRATION_SOURCE = re.compile(
-    r'(?i)\bcalibrat(?:ion|e|ed)\b|'
-    r'\b(?:trim|trimming)\s+(?:code|register|dac|bit|value|step|'
-    r'procedure|routine|table)\b|'
-    r'(?:code|register|dac|bit|value|step|procedure|routine|table)\s+'
-    r'(?:trim|trimming)\b|'
-    r'\botp[\s-]*(?:based\s+)?(?:cal|trim)\w*\b|'
-    r'校[準准]|微調')
 
+def _l12_has_explicit_no_calibration(text: str) -> bool:
+    """Match a complete sentence-level no-calibration declaration."""
+    if not isinstance(text, str):
+        return False
+    for line in text.splitlines():
+        for clause in re.split(r"(?<=[.!?。！？])\s+", line):
+            if _RE_L12_NO_CALIBRATION.fullmatch(clause):
+                return True
+    return False
 
 def gen_l12_behavioral(project: Path,
                        extracted: Dict[str, str],
@@ -55700,40 +55731,13 @@ def gen_l12_behavioral(project: Path,
     no_calibration = False
     if not sequences:
         for _f, _t in (extracted or {}).items():
-            if isinstance(_t, str) and _RE_L12_NO_CALIBRATION.search(_t):
+            if _l12_has_explicit_no_calibration(_t):
                 no_calibration = True
                 evidence.setdefault(f"input/docs/{_f}", []).append({
                     "literal": "no-calibration assertion",
                     "label": "input explicitly states no calibration/trimming",
                 })
                 break
-        # ORGANIC #634 facet (e) — absence-based auto-set, mirroring the
-        # L5.no_analog auto-detection (blocks == [] → no_analog = True).
-        # When the explicit no-cal assertion above did NOT fire, scan the
-        # input for a calibration / trim / OTP-cal SOURCE. If there is no
-        # such source anywhere AND no behavioral sequences were harvested,
-        # the part genuinely has no calibration content — set the honest
-        # `no_calibration: true`. NO-FABRICATION & NO-LEAK: the presence of
-        # ANY calibration source keeps no_calibration False (so a part that
-        # DOES document trim/cal never gets the honest-N/A free pass); the
-        # explicit-negation marker is stripped first so a "no calibration"
-        # sentence is not itself counted as a source.
-        if not no_calibration:
-            _has_cal_source = False
-            for _f, _t in (extracted or {}).items():
-                if not isinstance(_t, str) or not _t:
-                    continue
-                _t_pos = _RE_L12_NO_CALIBRATION.sub(" __NO_CAL__ ", _t)
-                if _RE_L12_CALIBRATION_SOURCE.search(_t_pos):
-                    _has_cal_source = True
-                    break
-            if not _has_cal_source:
-                no_calibration = True
-                evidence.setdefault("derived_no_calibration_source", []).append({
-                    "literal": "no calibration / trim / OTP-cal source in input",
-                    "label": ("L12 no_calibration auto-set (#634 facet e) — "
-                              "absence-based, mirrors L5.no_analog"),
-                })
     content = {
         "schema_version": 2,
         "doc_class": "behavioral_sequences",
@@ -57797,19 +57801,20 @@ def _post_emit_l11_fsm_strict_gate(project: Path) -> None:
         # emitted; nothing to strip.
         return
 
-    # INELIGIBLE — force the canonical thin-input shape.
+    # INELIGIBLE — strip false-positive FSM names, but do not turn class or
+    # source silence into a no-OTP declaration.  Only the producer's
+    # source-bound absence decision may authorize the consumer escape.
     fsm_cat = l11.get("fsm_state_catalogue")
     needs_write = False
     if isinstance(fsm_cat, list) and len(fsm_cat) > 0:
         l11["fsm_state_catalogue"] = []
         needs_write = True
-    elif fsm_cat is None or fsm_cat == []:
-        # Already empty — still ensure the flag is set true for the
-        # canonical thin-input default.
-        if l11.get("no_otp_fsm_in_input") is not True:
-            needs_write = True
-    if l11.get("no_otp_fsm_in_input") is not True:
-        l11["no_otp_fsm_in_input"] = True
+    absence_authorized = (
+        l11.get("no_otp_layout_in_input") is True
+        or l11.get("otp_present") is False
+    )
+    if l11.get("no_otp_fsm_in_input") is not absence_authorized:
+        l11["no_otp_fsm_in_input"] = absence_authorized
         needs_write = True
     if needs_write:
         try:
