@@ -26,9 +26,9 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    `read_prompt_from` file and every `read_context_from` file. Verify their
    recorded SHA-256 values before authoring or reviewing. These are the
    authoritative source bytes; do not substitute generated Ldocs or require a
-   D1 document review for this RTL-only request. A changed or missing source
+   D01 position 1 document review for this RTL-only request. A changed or missing source
    requires returning to the ordinary runner, not silently adopting it. This
-   handoff asserts neither D1 PASS nor measured RTL behavior.
+   handoff asserts neither D01 position 1 PASS nor measured RTL behavior.
 
    For the default structured contract, **read the L docs the runner emitted**:
    - `<project>/phase1/generated_docs/L1_*.json` (product metadata, IC name, target clock)
