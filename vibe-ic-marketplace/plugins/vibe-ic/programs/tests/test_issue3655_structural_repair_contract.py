@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+import benchmark_dispatch as bd
 import benchmark_io_adapter as bio
 from _hostpaths import require_repo
 from rtl_repair_contract import sha256_text
@@ -28,6 +29,10 @@ endmodule
 """
 IMAGE_ID = "sha256:a6713464903bd9f6c3de15cea8653cb0cf1388a24915632190ad64ce3fc2c3d5"
 IMAGE = "ghcr.io/vibeic/vibeic-eda@" + IMAGE_ID
+ROUTING = {
+    "nature": "spec_generation", "route": "SPEC_TO_RTL",
+    "source": "neutral_fixture", "needs_ai_parse": True,
+}
 
 
 def test_checked_in_completion_consumer_forwards_structural_requirement_sources():
@@ -145,6 +150,77 @@ endmodule
     return ran.returncode, ran.stdout + ran.stderr
 
 
+def _review_task(tmp_path: Path, candidate: str, *, functional="PASS") -> tuple[Path, dict]:
+    run = tmp_path / "run"
+    (run / "responses").mkdir(parents=True)
+    project = _project(tmp_path / "run", candidate)
+    bio._stage_public_original("neutral", PROMPT, {"neutral_select.sv": WRONG}, project)
+    got = bio.collect("rtllm", "neutral", project)
+    task = bd._make_ai_review_task(
+        "neutral", project, got, ROUTING, 0, run, "PROGRAM",
+        program_phases={"phase3_verifying": {"ran": {
+            "step4_functional_evidence": functional}}})
+    return run, task
+
+
+def _write_structural_review(task: dict, candidate: str, *, declaration=None) -> dict:
+    challenge_source = r"""module vibeic_ai_challenge_tb;
+reg a, b, s; wire y; integer i;
+neutral_select dut(.a(a), .b(b), .s(s), .y(y));
+initial begin
+  for (i=0; i<8; i=i+1) begin
+    {s,b,a}=i; #1;
+    if (y !== (s ? b : a)) begin
+      $display("VIBEIC_AI_CHALLENGE=FAIL"); $fatal(1);
+    end
+  end
+  $display("VIBEIC_AI_CHALLENGE=PASS"); $finish;
+end
+endmodule
+"""
+    challenge_path = Path(task["challenge_path"])
+    challenge_path.parent.mkdir(parents=True, exist_ok=True)
+    challenge_path.write_text(challenge_source)
+    review = {
+        "schema": bd._AI_REVIEW_SCHEMA,
+        "id": task["id"],
+        "prompt_sha256": task["prompt_sha256"],
+        "rtl_sha256": task["rtl_sha256"],
+        "source_sha256": task["public_original_input"]["source_sha256"],
+        "reviewer": {"kind": "AI", "model": "neutral-structural-reviewer"},
+        "blind": {"oracle_accessed": False},
+        "routing": {"verdict": "AGREE", "ai_nature": "spec_generation"},
+        "semantic_review": {
+            "verdict": "FAIL",
+            "findings": [{"issue": "declared mux-only structure is absent"}],
+            "rationale": (
+                "The public prompt requires a mux-only implementation while the "
+                "frozen candidate uses a Boolean gate decomposition."),
+            "prompt_evidence": [{
+                "excerpt": PROMPT.strip(),
+                "supports": "The public input uniquely declares the required structure."}],
+        },
+        "verification_test": {
+            "schema": bd._CHALLENGE_SCHEMA,
+            "path": str(challenge_path.resolve()),
+            "sha256": bd._sha256_text(challenge_source),
+            "top_module": "vibeic_ai_challenge_tb",
+            "rationale": (
+                "Exhaustively drive every scalar input combination to establish "
+                "that functionality remains correct and is not the repair basis."),
+            "expected_behavior": "Output y selects a when s is zero and b when s is one.",
+            "prompt_evidence": [{
+                "excerpt": PROMPT.strip(),
+                "supports": "The data path is a two-input selection function."}],
+        },
+        "structural_verification": declaration or _contract(candidate),
+    }
+    review_path = Path(task["review_path"])
+    review_path.parent.mkdir(parents=True, exist_ok=True)
+    review_path.write_text(json.dumps(review))
+    return review
+
+
 def test_actual_consumer_rejects_wrong_structure_and_accepts_replayed_repair(tmp_path):
     _native_ready()
     before_functional = _functional_run(tmp_path, WRONG, "wrong")
@@ -182,6 +258,117 @@ def test_actual_consumer_rejects_wrong_structure_and_accepts_replayed_repair(tmp
     assert strict["repair_contract"]["preservation"]["verdict"] == "PASS"
     assert strict["repair_contract"]["elaboration_matrix"]["verdict"] == "PASS"
     assert strict["repair_contract"]["structural"]["verdict"] == "PASS"
+
+
+def test_actual_authorizer_admits_structural_fail_with_functional_pass(tmp_path):
+    _native_ready()
+    _, task = _review_task(tmp_path, WRONG)
+    _write_structural_review(task, WRONG)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REPAIR_REQUIRED"
+    assert verdict["challenge_result"]["status"] == "PASS"
+    assert verdict["structural_result"]["verdict"] == "FAIL"
+    assert verdict["verified_structural_contract"] == _contract(WRONG)
+
+
+def test_authorizer_does_not_fail_conforming_structure(tmp_path):
+    _native_ready()
+    _, task = _review_task(tmp_path, RIGHT)
+    _write_structural_review(task, RIGHT)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED"
+    assert verdict["challenge_result"]["status"] == "PASS"
+    assert verdict["structural_result"]["verdict"] == "PASS"
+    assert any("structural finding is not proven" in item
+               for item in verdict["reasons"])
+
+
+def test_authorizer_refuses_ambiguous_scope_as_not_measured(tmp_path):
+    _, task = _review_task(tmp_path, WRONG)
+    declaration = _contract(WRONG)
+    del declaration["scope"]
+    _write_structural_review(task, WRONG, declaration=declaration)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == bd._NOT_MEASURED
+    assert verdict["reasons"] == []
+    assert verdict["structural_result"]["verdict"] == "NOT_MEASURED"
+
+
+def test_authorizer_requires_prior_functional_pass(tmp_path):
+    _, task = _review_task(tmp_path, WRONG, functional="FAIL")
+    _write_structural_review(task, WRONG)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED"
+    assert any("functional evidence PASS" in item for item in verdict["reasons"])
+
+
+@pytest.mark.parametrize("tamper", ["source", "candidate", "requirement", "tool"])
+def test_authorizer_refuses_structural_identity_drift(tmp_path, tamper):
+    _, task = _review_task(tmp_path, WRONG)
+    declaration = _contract(WRONG)
+    if tamper == "source":
+        declaration["source_sha256"] = "0" * 64
+    elif tamper == "candidate":
+        declaration["candidate_sha256"] = "0" * 64
+    elif tamper == "requirement":
+        declaration["requirement_source"]["sha256"] = "0" * 64
+    else:
+        declaration["backend"]["image_id"] = "0" * 64
+    _write_structural_review(task, WRONG, declaration=declaration)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED"
+    assert verdict["structural_result"]["verdict"] == "REFUSED"
+    assert any("native structural proof was refused" in item
+               for item in verdict["reasons"])
+
+
+def test_repair_record_must_rebind_and_replay_admitted_structure(tmp_path):
+    _native_ready()
+    run, task = _review_task(tmp_path, WRONG)
+    _write_structural_review(task, WRONG)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REPAIR_REQUIRED"
+    project = Path(task["project"])
+    repaired_path = project / "phase2" / "stage1" / "rtl" / "neutral_select.sv"
+    repaired_path.write_text(RIGHT)
+    repaired_hash = bd._sha256_text(bd._candidate_text(bd._rtl_files(project)))
+    author = {"kind": "AI", "model": "neutral-structural-repairer"}
+    contract = _normal_repair_contract(RIGHT)
+    contract.update({
+        "prompt_sha256": task["prompt_sha256"],
+        "source_sha256": task["public_original_input"]["source_sha256"],
+        "parent_rtl_sha256": task["rtl_sha256"],
+        "candidate_sha256": repaired_hash,
+        "challenge_sha256": verdict["verified_challenge"]["sha256"],
+        "author": author,
+        "oracle_accessed": False,
+    })
+    record = {
+        "schema": bd._AI_REPAIR_RECORD_SCHEMA,
+        "id": task["id"],
+        "prompt_sha256": task["prompt_sha256"],
+        "parent_rtl_sha256": task["rtl_sha256"],
+        "repaired_rtl_sha256": repaired_hash,
+        "challenge_sha256": verdict["verified_challenge"]["sha256"],
+        "author": author,
+        "oracle_accessed": False,
+        "rationale": (
+            "Replace the Boolean decomposition with the public mux-only form "
+            "and replay both functional and native structural proofs."),
+        "repair_contract": contract,
+    }
+    record_path = bd._repair_record_path(run, task)
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(json.dumps(record))
+    validated, reasons = bd._validate_repair_record(
+        record_path, task, repaired_hash, verdict["verified_challenge"])
+    assert reasons == []
+    assert validated is not None
+    del record["repair_contract"]["structural"]
+    record_path.write_text(json.dumps(record))
+    _, missing_reasons = bd._validate_repair_record(
+        record_path, task, repaired_hash, verdict["verified_challenge"])
+    assert any("structural proof is missing" in item for item in missing_reasons)
 
 
 def test_unconstrained_equivalent_architecture_does_not_fail(tmp_path):

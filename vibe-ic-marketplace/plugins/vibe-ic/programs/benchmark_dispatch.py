@@ -2007,6 +2007,10 @@ def _program_output_repair_contract(author_contract: dict, identity: dict,
     if isinstance(path, dict):
         path = path.get("path")
     matrix["candidate_sha256"] = output_hash(path)
+    structural = derived.get("structural")
+    if isinstance(structural, dict):
+        structural["candidate_sha256"] = output_hash(
+            structural.get("source_path"))
     return derived
 
 
@@ -2476,6 +2480,36 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                                              "file text>"),
                     },
                 },
+                "structural_verification": {
+                    "_optional_when": (
+                        "semantic_review.verdict is FAIL, Program functional_evidence "
+                        "is PASS, and the public input uniquely declares an implementation "
+                        "structure. verification_test remains required and must PASS; "
+                        "this native proof, not a fabricated simulation failure, must FAIL"),
+                    "schema": "vibeic.native_structural_contract.v1",
+                    "source_path": "<exact public-original RTL relative path>",
+                    "source_sha256": "<sha256 of that exact original source>",
+                    "candidate_sha256": "<sha256 of exact selected candidate file>",
+                    "top": "<one legal top module>",
+                    "abstraction": "RTLIL_AFTER_PROC_OPT",
+                    "scope": "top_module_cells",
+                    "requirement_source": {
+                        "path": "input/phase1_prompt.md",
+                        "sha256": prompt_sha,
+                        "quote": "<unique exact public prompt quote declaring structure>",
+                        "quote_sha256": "<sha256 of the exact quote>",
+                    },
+                    "backend": {
+                        "kind": "docker",
+                        "image": "<immutable image reference ending @sha256:<64 hex>>",
+                        "image_id": "<sha256:<64 hex> local immutable image id>",
+                    },
+                    "expectations": {
+                        "required_cell_types": {"<Yosys $cell type>": "<positive minimum>"},
+                        "forbidden_cell_types": ["<Yosys $cell type>"],
+                        "allow_other_cell_types": "<true or false>",
+                    },
+                },
                 "challenge_supersessions": [{
                     "_optional_when": (
                         "a fresh semantic PASS proves that an inherited "
@@ -2510,12 +2544,13 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                 "limitation; AI semantic judgment is authoritative"),
             "semantic_verdicts": ["PASS", "FAIL"],
             "semantic_fail_action": (
-                "write a self-contained prompt-derived executable test to "
-                "challenge_path and describe it in verification_test; the "
-                "reviewed PROGRAM candidate must fail that test before repair "
-                "is authorized. Corrected RTL must pass the SAME immutable "
-                "test, return through PROGRAM gates, then receive a fresh "
-                "hash-bound AI review"),
+                "normally, write a self-contained prompt-derived executable test "
+                "that the reviewed candidate FAILS. For a declared structural-only "
+                "defect with existing Program functional PASS, that same functional "
+                "test must PASS and structural_verification must natively FAIL. "
+                "Corrected RTL must pass the immutable functional test and replay "
+                "the same structural contract through the normal repair consumer, "
+                "then return through Program gates and fresh hash-bound review"),
             "semantic_pass_action": (
                 "When PROGRAM has no PASS functional evidence, a semantic PASS "
                 "must include a self-contained prompt-derived executable test "
@@ -2742,6 +2777,36 @@ def _validate_repair_record(path: Path, task: dict, repaired_hash: str,
             reasons.append("repair_contract lacks preservation declaration")
         if not isinstance(contract.get("elaboration_matrix"), dict):
             reasons.append("repair_contract lacks elaboration matrix")
+        try:
+            review = _strict_json_loads(
+                Path(str(task.get("review_path") or "")).read_text(errors="replace"))
+        except (OSError, ValueError):
+            review = {}
+        inherited_structural = review.get("structural_verification") \
+            if isinstance(review, dict) else None
+        if inherited_structural is not None:
+            if not isinstance(inherited_structural, dict):
+                reasons.append("review structural_verification is malformed")
+            else:
+                expected_structural = _strict_json_loads(
+                    json.dumps(inherited_structural))
+                source_path = expected_structural.get("source_path")
+                try:
+                    import benchmark_io_adapter as bio  # noqa: PLC0415
+                    relative = bio._public_relative(source_path)
+                    repaired_source = (Path(str(task["project"])) / "phase2" /
+                                       "stage1" / "rtl" / relative)
+                    if not repaired_source.is_file() or repaired_source.is_symlink():
+                        raise ValueError("repaired structural source is absent or a symlink")
+                    expected_structural["candidate_sha256"] = _sha256_text(
+                        repaired_source.read_text(errors="replace"))
+                except (KeyError, OSError, TypeError, ValueError) as exc:
+                    reasons.append(f"repair structural source cannot be bound: {exc}")
+                else:
+                    if contract.get("structural") != expected_structural:
+                        reasons.append(
+                            "repair_contract structural proof is missing, stale, or "
+                            "differs from the admitted native proof")
         if contract.get("author") != record.get("author"):
             reasons.append("repair_contract author differs from repair record")
         if contract.get("oracle_accessed") is not False:
@@ -4189,6 +4254,77 @@ def _run_verification_challenge(candidate: dict, challenge: dict) -> dict:
     })
 
 
+def _run_review_structural_proof(task: dict, candidate: dict,
+                                 declaration: object,
+                                 prompt_text: str) -> dict:
+    """Run the existing source-bound repair consumer's native structure proof.
+
+    This is the pre-repair admission side of ``rtl_repair_contract``.  It reads
+    the immutable review snapshot, never the mutable working RTL, and resolves
+    the exact public-original path rather than guessing by basename.  The
+    contract itself owns the fixed Yosys recipe and tool/input identity checks.
+    """
+    import benchmark_io_adapter as bio                 # noqa: PLC0415
+    import rtl_repair_contract as repair_contract      # noqa: PLC0415
+
+    if not isinstance(declaration, dict):
+        return {"verdict": "REFUSED", "findings": [{
+            "code": "STRUCTURAL_DECLARATION_MISSING",
+            "message": "structural_verification must be an object"}]}
+    source_path = declaration.get("source_path")
+    try:
+        relative = bio._public_relative(source_path)
+    except (TypeError, ValueError):
+        return {"verdict": "REFUSED", "findings": [{
+            "code": "STRUCTURAL_SOURCE_PATH_INVALID",
+            "message": "structural source_path is unsafe"}]}
+    project = Path(str(task.get("project") or "")).resolve()
+    original_path = project / "input" / "public_original" / "files" / relative
+    public_root = (project / "input" / "public_original" / "files").resolve()
+    lexical_original = original_path
+    if lexical_original.is_symlink() or any(
+            parent.is_symlink()
+            for parent in lexical_original.parents
+            if parent == public_root or public_root in parent.parents):
+        return {"verdict": "REFUSED", "findings": [{
+            "code": "STRUCTURAL_SOURCE_PATH_INVALID",
+            "message": "declared public original source traverses a symlink"}]}
+    try:
+        original_path = original_path.resolve(strict=True)
+    except OSError:
+        return {"verdict": "REFUSED", "findings": [{
+            "code": "STRUCTURAL_SOURCE_MISSING",
+            "message": "declared public original source is absent"}]}
+    if public_root not in original_path.parents or original_path.is_symlink():
+        return {"verdict": "REFUSED", "findings": [{
+            "code": "STRUCTURAL_SOURCE_PATH_INVALID",
+            "message": "declared public original source escapes its frozen root"}]}
+
+    frozen_paths = [Path(str(p)).resolve() for p in candidate.get("rtl_paths") or []]
+    source_paths = [Path(str(p)).resolve() for p in candidate.get("source_rtl_paths") or []]
+    rtl_root = (project / "phase2" / "stage1" / "rtl").resolve()
+    selected = []
+    for source, frozen in zip(source_paths, frozen_paths):
+        try:
+            source_relative = source.relative_to(rtl_root)
+        except ValueError:
+            continue
+        if source_relative == relative:
+            selected.append(frozen)
+    if len(selected) != 1 or not selected[0].is_file() or selected[0].is_symlink():
+        return {"verdict": "REFUSED", "findings": [{
+            "code": "STRUCTURAL_CANDIDATE_PATH_AMBIGUOUS",
+            "message": "structural source_path does not select one immutable candidate file"}]}
+    try:
+        original_source = original_path.read_text(errors="replace")
+    except OSError as exc:
+        return {"verdict": "REFUSED", "findings": [{
+            "code": "STRUCTURAL_SOURCE_READ_ERROR", "message": str(exc)}]}
+    return repair_contract.run_structural_contract(
+        selected[0], declaration, original_source=original_source,
+        requirement_sources={"input/phase1_prompt.md": prompt_text})
+
+
 def _validate_ai_review(task: dict, *,
                         allow_repaired_output: bool = False,
                         repaired_output_sha256: str | None = None) -> dict:
@@ -4408,10 +4544,34 @@ def _validate_ai_review(task: dict, *,
     #: mixed: one says "this is wrong", the other says "we did not look".
     unmeasurable: list[str] = []
     execution_backend = _challenge_execution_for_task(task)
+    structural_declaration = review.get("structural_verification")
+    structural_result = None
     raw_supersessions = review.get("challenge_supersessions")
     supersession_requested = (
         isinstance(raw_supersessions, list) and bool(raw_supersessions))
     if semantic_verdict == "FAIL":
+        if structural_declaration is not None:
+            if functional_evidence != "PASS":
+                reasons.append(
+                    "structural-only repair admission requires existing Program "
+                    "functional evidence PASS; structure cannot replace function")
+            structural_result = _run_review_structural_proof(
+                task, candidate, structural_declaration, prompt_text)
+            structural_status = structural_result.get("verdict")
+            if structural_status == "NOT_MEASURED":
+                unmeasurable.append(
+                    "the declared native structural proof was NOT_MEASURED: "
+                    + "; ".join(str(item.get("message") or item.get("code"))
+                                for item in structural_result.get("findings") or []))
+            elif structural_status == "REFUSED":
+                reasons.append(
+                    "native structural proof was refused: "
+                    + "; ".join(str(item.get("message") or item.get("code"))
+                                for item in structural_result.get("findings") or []))
+            elif structural_status != "FAIL":
+                reasons.append(
+                    "AI structural finding is not proven: the frozen candidate "
+                    "must FAIL its source-bound native structural contract")
         challenge, challenge_reasons = _challenge_from_review(
             task, review, prompt_text)
         reasons.extend(challenge_reasons)
@@ -4432,7 +4592,15 @@ def _validate_ai_review(task: dict, *,
                 # FAIL a proof demands; demanding one here would make worse
                 # candidates harder to reject than better ones. The compile
                 # errors travel with challenge_result into the repair task.
-                pass
+                if structural_declaration is not None:
+                    reasons.append(
+                        "structural-only admission still requires the functional "
+                        "test to compile and PASS")
+            elif structural_declaration is not None:
+                if challenge_result.get("status") != "PASS":
+                    reasons.append(
+                        "structural-only admission requires the reviewed candidate "
+                        "to PASS its prompt-derived functional test")
             elif challenge_result.get("status") != "FAIL":
                 reasons.append("AI finding is not proven: the reviewed candidate "
                                "must fail the prompt-derived verification test")
@@ -4607,6 +4775,8 @@ def _validate_ai_review(task: dict, *,
             "verified_semantic_prompt_evidence": verified_semantic_evidence,
             "verified_challenge": challenge,
             "challenge_result": challenge_result,
+            "verified_structural_contract": structural_declaration,
+            "structural_result": structural_result,
             "inherited_challenge_results": inherited_challenge_results,
             "challenge_supersessions": challenge_supersessions,
             "program_review_coverage": program_review_coverage,
@@ -9519,6 +9689,9 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                     "reviewed_rtl_sha256": task.get("rtl_sha256"),
                     "verified_challenge": verdict.get("verified_challenge"),
                     "challenge_result": verdict.get("challenge_result"),
+                    "verified_structural_contract": verdict.get(
+                        "verified_structural_contract"),
+                    "structural_result": verdict.get("structural_result"),
                     "repair_record_path": str(
                         _repair_record_path(run_p, task)),
                     "repair_record_requirements": {
@@ -9547,6 +9720,12 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                             "oracle_accessed": False,
                             "preservation": "complete exact-path declaration required",
                             "elaboration_matrix": "complete exact-path declaration required",
+                            **({"structural": {
+                                **verdict["verified_structural_contract"],
+                                "candidate_sha256": (
+                                    "sha256 of the corrected exact selected RTL file"),
+                            }} if isinstance(verdict.get(
+                                "verified_structural_contract"), dict) else {}),
                         }} if _requires_source_repair_contract(task) else {}),
                     },
                     "verified_prompt_evidence":
