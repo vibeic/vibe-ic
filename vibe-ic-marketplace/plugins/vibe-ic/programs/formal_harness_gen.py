@@ -606,22 +606,22 @@ def _l8_provenance_rule(data: dict, key: str, text: str,
         if not subject:
             return None
         description = subject.group(1)
-        sync = re.match(r"(同步|非同步|異步|synchronous|asynchronous)\s+reset\b",
-                        description, re.I)
-        if not sync:
-            return None
-        observed_sync = _norm_sync(sync.group(1))
-        rest = description[sync.end():]
-        if _P_SYNC.search(rest) or _P_ASYNC.search(rest):
-            return None
-        polarity = re.match(r"\s*(?:\(\s*|,\s*polarity\s+(?:為|is)\s+)"
-                            r"(active[ _-](?:high|low))\b", rest, re.I)
-        observed_pol = _norm_polarity(polarity.group(1)) if polarity else None
-        if _P_HIGH.search(rest) and _P_LOW.search(rest):
-            return None
-        if (observed_sync != _norm_sync(str(rec.get("sync", "")))
-                or observed_pol != _norm_polarity(str(rec.get("polarity", "")))
-                or observed_pol is None):
+        if plain.startswith("|"):
+            if not description.endswith("|"):
+                return None
+            description = description[:-1].strip()
+        # Source authentication does not establish what a sentence means.
+        # Consume the complete clause using the existing conservative parser;
+        # negation, conditions and foreign redirection must stay unresolved.
+        claims = parse_reset_prose(description, claim["signal"],
+                                   _norm_polarity(str(rec.get("polarity", ""))))
+        expected = [{"rule": "reset_sync", "signal": claim["signal"],
+                     "value": _norm_sync(str(rec.get("sync", "")))},
+                    {"rule": "reset_polarity", "signal": claim["signal"],
+                     "value": _norm_polarity(str(rec.get("polarity", "")))}]
+        if (not claims or any(c not in claims for c in expected)
+                or any(c not in expected for c in claims
+                       if c["rule"] in {"reset_sync", "reset_polarity"})):
             return None
     else:
         return None

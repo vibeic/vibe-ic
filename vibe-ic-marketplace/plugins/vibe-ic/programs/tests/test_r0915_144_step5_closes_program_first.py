@@ -383,3 +383,25 @@ def test_equivalent_clock_claim_reaches_structural_consumer(tmp_path):
     result = structural.check([rtl], 'serial_mac', claims + [dict(claim, value='negedge')], tmp_path / 'structural')
     (tmp_path / 'consumer.json').write_text(json.dumps(result, indent=2))
     assert [r['verdict'] for r in result['claims']] == ['PASS', 'PASS', 'PASS', 'REFUTED'], result
+
+
+@pytest.mark.parametrize('suffix', ['', ' is not required',
+    ' only if enable is asserted',
+    '; this statement applies to foreign_rst, not rst',
+    '; reset 後內部狀態須能讓乘法計算正確啟動'])
+@pytest.mark.parametrize('field', ['sync', 'polarity'])
+def test_complete_provenance_clause_cannot_launder_suffix(tmp_path, suffix, field):
+    import hashlib
+    l8, source = _provenance_declarations(tmp_path)
+    quote = '| `rst` | 1-bit | input | synchronous reset (active-high)' + suffix + ' |'
+    source.write_text(quote + '\n')
+    basis = l8['clock_and_reset_waveform']['resets'][0]['semantic_provenance'][field]['basis'][0]
+    basis.update(quote=quote, sha256=hashlib.sha256(source.read_bytes()).hexdigest())
+    key = 'clock_and_reset_waveform.resets.0.semantic_provenance.' + field + '.basis.0.quote'
+    observed = fhg.l8_program_rule(l8, key, quote, tmp_path)
+    if suffix:
+        assert observed is None, observed
+    else:
+        canonical = 'clock_and_reset_waveform.resets.0.' + field
+        assert observed['claims'] == fhg.l8_program_rule(
+            l8, canonical, fhg._value_at(l8, canonical))['claims']
