@@ -14,8 +14,10 @@ if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
 
 import canonical_run_admission as cra  # noqa: E402
+import ai_signed_judgement  # noqa: E402
 import design_input_digest as did  # noqa: E402
 from _delivery_declaration import declare_delivery as _declare  # noqa: E402
+from _ai_judgement_fixture import sign as _sign_judgement  # noqa: E402
 
 
 def test_standalone_isolated_path_load_resolves_required_siblings(tmp_path):
@@ -62,6 +64,108 @@ def _admit(root: Path, **changes):
     return cra.admit(root, "phase2", container_image=changes.pop(
         "image", "sha256:" + "a" * 64), config=cfg,
         program_paths=changes.pop("programs", [PROGRAMS / "design_one_shot_runner.py"]))
+
+
+def _step1_review_project(root: Path) -> Path:
+    project = _project(root)
+    fallback = project / "phase2/stage1/fallback_skill.md"
+    fallback.write_text("spec-to-rtl\n")
+    assert ai_signed_judgement.check(project, "1")[0] is False
+    return project
+
+
+def test_current_verified_step1_judgement_reopens_phase2_once(tmp_path):
+    project = _step1_review_project(tmp_path / "proj")
+    first = _admit(project)
+    assert first.admitted
+    assert "current_consumer_evidence_bindings" not in first.identity
+
+    _sign_judgement(project, "1")
+    accepted, detail = ai_signed_judgement.check(project, "1")
+    assert accepted and detail.startswith(
+        "signed judgement bound to evidence sha256:")
+    current = _admit(project)
+    assert current.admitted and current.identity_sha256 != first.identity_sha256
+    binding = current.identity["current_consumer_evidence_bindings"][
+        "step1_signed_judgement"]
+    receipt = project / binding["receipt_path"]
+    assert binding["receipt_sha256"] == cra._sha256_bytes(receipt.read_bytes())
+    assert binding["evidence_sha256"] == ai_signed_judgement.evidence_sha256(
+        project, "1")
+    assert binding["subject_count"] == len(binding["subjects"])
+    assert {row["path"] for row in binding["subjects"]} == {
+        path.relative_to(project).as_posix()
+        for path in ai_signed_judgement.evidence(project, "1")}
+
+    unchanged = _admit(project)
+    assert not unchanged.admitted
+    assert unchanged.reason == "DUPLICATE_NO_NEW_EVIDENCE"
+    assert unchanged.identity_sha256 == current.identity_sha256
+
+    unrelated = project / "reports/unrelated.json"
+    unrelated.parent.mkdir(exist_ok=True)
+    unrelated.write_text('{"changed": true}\n')
+    report_only = _admit(project)
+    assert not report_only.admitted
+    assert report_only.identity_sha256 == current.identity_sha256
+
+
+def test_invalid_step1_judgements_cannot_reopen_phase2(tmp_path):
+    mutations = {
+        "missing": None,
+        "wrong-evidence": {"evidence_sha256": "0" * 64},
+        "wrong-step": {"step_id": "3"},
+        "unsigned": {"signed_by": ""},
+        "malformed": "not-json",
+        "foreign": {"signed_by": "foreign", "evidence_sha256": "f" * 64},
+        "stale": {"evidence_sha256": "1" * 64},
+    }
+    for name, mutation in mutations.items():
+        project = _step1_review_project(tmp_path / name)
+        first = _admit(project)
+        assert first.admitted
+        receipt = project / "reports/audit/ai_judgements/1.json"
+        if mutation is not None:
+            _sign_judgement(project, "1")
+            if mutation == "not-json":
+                receipt.write_text("not-json\n")
+            else:
+                document = json.loads(receipt.read_text())
+                document.update(mutation)
+                receipt.write_text(json.dumps(document) + "\n")
+        accepted, _detail = ai_signed_judgement.check(project, "1")
+        assert not accepted, name
+        refused = _admit(project)
+        assert not refused.admitted, name
+        assert refused.reason == "DUPLICATE_NO_NEW_EVIDENCE", name
+        assert refused.identity_sha256 == first.identity_sha256, name
+        if name == "stale":
+            _sign_judgement(project, "1")
+            current = _admit(project)
+            assert current.admitted
+            assert current.identity_sha256 != first.identity_sha256
+
+
+def test_step1_binding_tracks_variable_complete_subject_population(tmp_path):
+    ordinary = _step1_review_project(tmp_path / "ordinary")
+    expanded = _step1_review_project(tmp_path / "expanded")
+    extra = expanded / "phase2/stage1/rtl/helper.sv"
+    extra.write_text("module helper(input logic a, output logic y); assign y = a; endmodule\n")
+    _sign_judgement(ordinary, "1")
+    _sign_judgement(expanded, "1")
+
+    ordinary_binding = _admit(ordinary).identity[
+        "current_consumer_evidence_bindings"]["step1_signed_judgement"]
+    expanded_binding = _admit(expanded).identity[
+        "current_consumer_evidence_bindings"]["step1_signed_judgement"]
+    assert ordinary_binding["subject_count"] == len(
+        ai_signed_judgement.evidence(ordinary, "1"))
+    assert expanded_binding["subject_count"] == len(
+        ai_signed_judgement.evidence(expanded, "1"))
+    assert expanded_binding["subject_count"] == ordinary_binding["subject_count"] + 1
+    assert "phase2/stage1/rtl/helper.sv" in {
+        row["path"] for row in expanded_binding["subjects"]}
+    assert expanded_binding["evidence_sha256"] != ordinary_binding["evidence_sha256"]
 
 
 def test_same_identity_is_refused_after_persistent_reload(tmp_path):
