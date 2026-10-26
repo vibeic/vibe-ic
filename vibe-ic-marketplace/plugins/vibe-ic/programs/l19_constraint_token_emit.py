@@ -145,6 +145,7 @@ import argparse
 import json
 import re
 import sys
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -267,6 +268,88 @@ def _identity(rec: Dict[str, Any]) -> tuple:
     """
     return (rec.get("kind"), rec.get("token"),
             rec.get("scope"), rec.get("value"))
+
+
+def _authority_key(rec: Dict[str, Any]) -> Optional[tuple]:
+    """The consumer-visible authority slot for one valued declaration."""
+    token = rec.get("token")
+    if not isinstance(token, str) or not token.strip():
+        return None
+    if rec.get("value") is None:
+        return None
+    scope = rec.get("scope")
+    normalized_scope = (
+        re.sub(r"\s+", " ", str(scope).strip()).casefold()
+        if scope not in (None, "") else None)
+    return (token.strip().upper(), normalized_scope)
+
+
+def _authority_value(value: Any) -> tuple:
+    """Compare structured/prose spellings using the consumer's value shape."""
+    if isinstance(value, bool):
+        return ("bool", value)
+    if isinstance(value, (int, float)):
+        try:
+            return ("number", Decimal(str(value)).normalize())
+        except InvalidOperation:
+            pass
+    text = re.sub(r"\s+", " ", str(value).strip())
+    lowered = text.casefold()
+    if lowered.startswith("true"):
+        return ("bool", True)
+    if lowered.startswith("false"):
+        return ("bool", False)
+    numeric = text[:-1].strip() if text.endswith("%") else text
+    try:
+        return ("number", Decimal(numeric).normalize())
+    except InvalidOperation:
+        return ("text", text.casefold())
+
+
+def _new_declarations_without_authority_conflict(
+        existing: List[Dict[str, Any]],
+        found: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """Refuse differing values before a later consumer can apply priority.
+
+    Same token/scope is one authority slot.  An identical repeated value is
+    corroboration and retains the first record's existing provenance; a
+    different scope or token remains an independent declaration.
+    """
+    authorities: Dict[tuple, tuple] = {}
+    identities = {_identity(r) for r in existing if isinstance(r, dict)}
+
+    for rec in existing + found:
+        if not isinstance(rec, dict):
+            continue
+        key = _authority_key(rec)
+        if key is None:
+            continue
+        value = _authority_value(rec.get("value"))
+        prior = authorities.get(key)
+        if prior is not None and prior != value:
+            token, scope = key
+            scope_text = scope if scope is not None else "<global>"
+            raise ValueError(
+                "L19_CONSTRAINT_AUTHORITY_CONFLICT: "
+                f"{token}@{scope_text}")
+        authorities.setdefault(key, value)
+
+    emitted: List[Dict[str, Any]] = []
+    existing_authorities = {
+        _authority_key(rec): _authority_value(rec.get("value"))
+        for rec in existing if isinstance(rec, dict)
+        and _authority_key(rec) is not None
+    }
+    for rec in found:
+        key = _authority_key(rec)
+        if key is not None and key in existing_authorities:
+            # Equal authority values were proven above.  Keep the first
+            # producer's record and provenance, matching existing dedupe.
+            continue
+        if _identity(rec) not in identities:
+            emitted.append(rec)
+            identities.add(_identity(rec))
+    return emitted
 
 
 def _paragraphs(text: str):
@@ -708,9 +791,7 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
         fields = {}
     existing = fields.get(_DECL_KEY)
     existing = existing if isinstance(existing, list) else []
-    known = {_identity(r) for r in existing if isinstance(r, dict)}
-
-    emitted = [r for r in found if _identity(r) not in known]
+    emitted = _new_declarations_without_authority_conflict(existing, found)
 
     context_emitted: Dict[str, List[Dict[str, Any]]] = {}
     for field, records in context_found.items():

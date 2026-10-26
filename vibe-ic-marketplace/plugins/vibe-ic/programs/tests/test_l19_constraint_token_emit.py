@@ -47,7 +47,9 @@ _RUNNER_SRC = _PROGRAMS / "phase1_doc_one_shot_runner.py"
 
 import constraint_prose_tokens as CPT           # noqa: E402
 import _atomic_artefact as A                     # noqa: E402
+import floorplan_knobs as FPK                    # noqa: E402
 import l19_constraint_token_emit as EMIT        # noqa: E402
+import librelane_contract as LLC                 # noqa: E402
 import phase1_doc_one_shot_runner as R          # noqa: E402
 
 HELPER = "_post_emit_l19_constraint_tokens"
@@ -169,6 +171,107 @@ def _l19(project: Path) -> dict:
 
 def _tokens(doc: dict) -> set:
     return {r["token"] for r in doc["fields"].get("constraint_declarations", [])}
+
+
+def _mk_core_util_chain(project: Path, prose_table: str) -> None:
+    _mk(project, "# L9 — Constraints & Floorplan\n\n" + prose_table)
+    generated = project / "phase1" / "generated_docs"
+    (generated / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({
+        "clock_domains": [{
+            "role": "primary", "pdk_scoped_target": "processA",
+            "period_ns": 8, "source_pin": "clk",
+        }],
+    }))
+    (generated / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": "neutral_top",
+    }))
+    config = project / "input" / "config.json"
+    config.write_text(json.dumps({
+        "DESIGN_NAME": "neutral_top",
+        "FP_SIZING": "absolute",
+        "DIE_AREA": [0, 0, 120, 140],
+        "FP_CORE_UTIL": 25,
+    }, indent=2))
+    declaration = (
+        project / "input" / "submission_template"
+        / "tapeout_declaration.json")
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text(json.dumps({"answers": {
+        "top_cell": "neutral_top",
+        "die_area_um": [0, 0, 120, 140],
+        "core_area_um": [10, 10, 110, 130],
+    }}))
+
+
+def _complete_core_util_chain(project: Path, consumer: str):
+    R._post_emit_floorplan_contract(project)
+    R._post_emit_l19_constraint_tokens(project)
+    if consumer == "librelane":
+        output = project / "phase3" / "librelane" / "config.json"
+        return LLC.emit_config(project, "processA", output)["FP_CORE_UTIL"]
+    assert consumer == "direct"
+    return FPK._l9_declared_die_util(project, "processA")
+
+
+@pytest.mark.parametrize(
+    ("consumer", "wrong_value"),
+    [("librelane", 35), ("direct", 0.35)],
+)
+def test_complete_order_refuses_structured_prose_value_conflict(
+        tmp_path, consumer, wrong_value):
+    project = tmp_path / consumer
+    _mk_core_util_chain(
+        project,
+        "| setting | value | source |\n"
+        "|---|---|---|\n"
+        "| `FP_CORE_UTIL` | **35** | ref |\n",
+    )
+    try:
+        observed = ("accepted", _complete_core_util_chain(project, consumer))
+    except ValueError as exc:
+        observed = ("refused", str(exc).split(":", 1)[0])
+    assert observed == (
+        "refused", "L19_CONSTRAINT_AUTHORITY_CONFLICT"), (
+            f"{consumer} silently accepted {wrong_value}: {observed}")
+
+
+def test_complete_order_deduplicates_identical_core_util_value(tmp_path):
+    project = tmp_path / "same"
+    _mk_core_util_chain(
+        project,
+        "| setting | value | source |\n"
+        "|---|---|---|\n"
+        "| `FP_CORE_UTIL` | **25** | corroborating prose |\n",
+    )
+    assert _complete_core_util_chain(project, "librelane") == 25
+    rows = [
+        row for row in _l19(project)["fields"]["constraint_declarations"]
+        if row.get("token") == "FP_CORE_UTIL"
+    ]
+    assert rows == [{
+        "token": "FP_CORE_UTIL", "value": 25, "scope": None,
+        "source": "input/config.json", "line": 10,
+    }]
+    assert FPK._l9_declared_die_util(project, "processA") == 0.25
+
+
+def test_complete_order_keeps_distinct_scope_and_token_independent(tmp_path):
+    project = tmp_path / "scoped"
+    _mk_core_util_chain(
+        project,
+        "| technology family | `FP_CORE_UTIL` | `PL_TARGET_DENSITY` |\n"
+        "|---|---|---|\n"
+        "| processB | 35 | 0.61 |\n",
+    )
+    assert _complete_core_util_chain(project, "librelane") == 25
+    rows = _l19(project)["fields"]["constraint_declarations"]
+    assert {(row.get("token"), row.get("scope"), str(row.get("value")))
+            for row in rows} >= {
+        ("FP_CORE_UTIL", None, "25"),
+        ("FP_CORE_UTIL", "processB", "35"),
+        ("PL_TARGET_DENSITY", "processB", "0.61"),
+    }
+    assert FPK._l9_declared_die_util(project, "processA") == 0.25
 
 
 # ───────────────────────────────────────────── 1. the gap itself, closed ──
