@@ -78,6 +78,13 @@ def input_census(project):
 
 def _before(project, context, prepared):
     require_launch_admission(project, '9', {'flow109_context': context})
+    import flow109
+    try:
+        current_dft_intent = flow109.dft_source_intent(project, context)
+    except flow109.Flow109Error as exc:
+        raise AdmissionRefusal(exc.code, exc.detail) from exc
+    if current_dft_intent != prepared['dft_intent']:
+        raise AdmissionRefusal('D22_DFT_INTENT_CHANGED', 'D09 DFT intent changed before synthesis launch')
     if operation_sources() != prepared['sources']:
         raise AdmissionRefusal('D22_OPERATION_SOURCE_CHANGED', 'source changed before synthesis launch')
     if input_census(project) != prepared['inputs']:
@@ -121,6 +128,11 @@ def prepare(project, context):
     require_launch_admission(project, '9', {'flow109_context': context})
     if context.get('requested_step') != 'D22':
         raise AdmissionRefusal('D22_CONTEXT_MISMATCH', 'synthesis component only')
+    import flow109
+    try:
+        dft_intent = flow109.dft_source_intent(project, context)
+    except flow109.Flow109Error as exc:
+        raise AdmissionRefusal(exc.code, exc.detail) from exc
     sources = operation_sources()
     for use in (context['runtime_tool_uses'] or []):
         if use.get('semantics', {}).get('operation_sources') != sources:
@@ -157,7 +169,8 @@ def prepare(project, context):
     inputs = input_census(project)
     if not any(p.startswith('phase2/stage1/rtl/') for p in inputs):
         raise AdmissionRefusal('D22_RTL_ABSENT', 'no bound RTL population')
-    return {'manifest': manifest, 'pdk': pdk, 'sources': sources, 'inputs': inputs}
+    return {'manifest': manifest, 'pdk': pdk, 'sources': sources, 'inputs': inputs,
+            'dft_intent': dft_intent}
 
 
 def _canonical_publication(project, started_at):
@@ -198,7 +211,7 @@ def _canonical_publication(project, started_at):
     return row
 
 
-def execute(project, context):
+def _execute_d22(project, context):
     project = Path(project).resolve()
     attempt = project / 'reports/flow109/D22' / uuid.uuid4().hex
     attempt.mkdir(parents=True, exist_ok=False)
@@ -236,6 +249,7 @@ def execute(project, context):
         record['canonical_current_pass'] = versions.latest_pass(project, '9')
         record['source_sha256'] = prepared['sources']
         record['inputs'] = prepared['inputs']
+        record['dft_intent'] = prepared['dft_intent']
         _before(project, context, prepared)
         # Native execution is established by the existing receipt, not by
         # merely entering a function which can refuse before tool launch.
@@ -258,3 +272,86 @@ def execute(project, context):
         record.update(reason='D22_NATIVE_UNAVAILABLE_OR_UNSUPPORTED', detail=str(exc))
     write_json(attempt / 'component.json', record)
     return record
+
+
+def _dft_tail_sources(step):
+    from execution_provider_catalog import source_closure
+    names = ({'D50': ('path_delay_fault_atpg_run.py', 'path_delay_coverage_check.py'),
+              'D51': ('sdd_atpg_run.py', 'sdd_coverage_check.py')})[step]
+    paths = source_closure({HERE / name for name in names})
+    paths.update((Path(__file__), HERE / 'flow109.py'))
+    return {str(path.relative_to(HERE.parent)): _sha(path) for path in sorted(paths)}
+
+
+def _execute_dft_tail(project, context):
+    project = Path(project).resolve()
+    step = context.get('requested_step')
+    attempt = project / 'reports/flow109' / step / uuid.uuid4().hex
+    attempt.mkdir(parents=True, exist_ok=False)
+    record = {'schema': 'vibeic.flow109.dft-tail-component.v1',
+              'step_id': step, 'component_status': 'NOT_MEASURED',
+              'default_row_status': 'NOT_MEASURED', 'completed': False,
+              'flow109_acceptance': 'NOT_MEASURED',
+              'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False,
+              'native_started': False, 'context_sha256': context.get('context_sha256')}
+    try:
+        import flow109
+        admission = flow109.dft_final_timing_admission(project, context)
+        intent = flow109.dft_source_intent(project, context)
+        test_mode = intent['source_binding']['intent'].get('test_mode')
+        clock = test_mode.get('clock') if isinstance(test_mode, dict) else None
+        if not intent['scan_test'] or not isinstance(clock, str) or not clock:
+            raise flow109.Flow109Error('FLOW109_DFT_AT_SPEED_CLOCK_UNRESOLVED', str(clock))
+        sources = _dft_tail_sources(step)
+        timing = admission['timing']
+        argv = [str(project), '--clock', clock,
+                '--librelane-state', timing['state'],
+                '--librelane-corner', timing['corner']]
+        if step == 'D50':
+            import path_delay_fault_atpg_run as producer
+            import path_delay_coverage_check as consumer
+            output = project / 'reports/phase2/dft/path_delay_coverage.json'
+        else:
+            import sdd_atpg_run as producer
+            import sdd_coverage_check as consumer
+            output = project / 'reports/phase2/dft/sdd_coverage.json'
+        argv += ['--json', str(output)]
+        record['native_started'] = True
+        rc = producer.main(argv)
+        judged = consumer.audit(project, str(output))
+        record.update(native_rc=rc, consumer=judged, source_sha256=sources,
+                      dft_final_timing_admission=admission)
+        if rc == 0 and judged.get('verdict') == 'PASS':
+            record.update(component_status='PASS', default_row_status='PASS',
+                          completed=True, reason=step + '_EXISTING_CONSUMER_PASSED')
+        elif judged.get('verdict') == 'FAIL':
+            record.update(component_status='FAIL', default_row_status='FAIL',
+                          reason=step + '_EXISTING_CONSUMER_FAILED')
+        else:
+            record['reason'] = step + '_EXISTING_CONSUMER_NOT_MEASURED'
+        if _dft_tail_sources(step) != sources:
+            raise flow109.Flow109Error('FLOW109_DFT_TAIL_SOURCE_CHANGED', step)
+        if flow109.dft_final_timing_admission(project, context) != admission:
+            raise flow109.Flow109Error('FLOW109_DFT_FINAL_INPUT_CHANGED', step)
+    except flow109.Flow109Error as exc:
+        record.update(component_status='NOT_MEASURED', default_row_status='NOT_MEASURED',
+                      completed=False, reason=exc.code, detail=exc.detail,
+                      native_started=record.get('native_started', False))
+    except (OSError, ValueError, ImportError) as exc:
+        record.update(reason=step + '_NATIVE_UNAVAILABLE_OR_UNSUPPORTED', detail=str(exc))
+    write_json(attempt / 'component.json', record)
+    return record
+
+
+def execute(project, context):
+    step = context.get('requested_step')
+    if step == 'D22':
+        return _execute_d22(project, context)
+    if step in {'D50', 'D51'}:
+        return _execute_dft_tail(project, context)
+    return {'schema': 'vibeic.flow109.window-component.v1',
+            'step_id': step, 'component_status': 'NOT_MEASURED',
+            'reason': 'FLOW109_FRONTEND_CONTEXT_MISMATCH', 'native_started': False,
+            'context_sha256': context.get('context_sha256'),
+            'flow109_acceptance': 'NOT_MEASURED',
+            'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}

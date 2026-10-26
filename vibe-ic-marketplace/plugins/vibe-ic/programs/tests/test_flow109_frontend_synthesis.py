@@ -25,10 +25,28 @@ def put(project, name, value):
 @pytest.fixture(autouse=True)
 def actual_attested_image_route(monkeypatch):
     import librelane_contract
+    import fault_scan_chain_insert as producer
     # Tests execute inside the pinned, host-attested image. Do not attach
     # an unrelated ambient container merely because Docker is reachable.
     librelane_contract.local_image_attestation()
     monkeypatch.setattr(librelane_contract._ce, "no_container_route", lambda: True)
+    def reader(project, expected_clock=None, expected_reset=None,
+               reset_active_low=False):
+        path = Path(project) / 'input/d09-dft-spec-declaration.json'
+        if not path.is_file():
+            return None, ['D09_DFT_SPEC_MISSING']
+        body = json.loads(path.read_text())
+        intent = body.get('dft') if isinstance(body, dict) else None
+        if not isinstance(intent, dict) or type(intent.get('scan_test')) is not bool:
+            return None, ['D09_DFT_AUTHORITY_INVALID: dft.scan_test']
+        return ({'path': str(path.relative_to(project)),
+                 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                 'sources': {'producer': 'SOLE7 exact-reader stub',
+                             'source_sha256': '1' * 64,
+                             'sidecar_sha256': '2' * 64,
+                             'source_input_sha256': '3' * 64},
+                 'intent': intent}, [])
+    monkeypatch.setattr(producer, 'load_d09_dft_contract', reader, raising=False)
 
 
 def case(project):
@@ -48,6 +66,7 @@ def case(project):
                     'die_area_um':[0,0,100,100],'core_area_um':[10,10,90,90]},
          'answer_provenance':{'deliverable':{'answered_by':'owner','citation':'Developer neutral IC control'}}})
     put(project,'phase1/generated_docs/L8_TIMING_WAVEFORM.json',{'clock_domains':[{'role':'primary','source_pin':'clk','period_ns':20}]})
+    put(project,'input/d09-dft-spec-declaration.json',{'dft':{'scan_test':False}})
     put(project,'phase1/generated_docs/L9_INTEGRATION_SPEC.json',{'top_module':'unit_alpha','synth_top':'unit_alpha'})
     put(project,'phase1/generated_docs/L19_CONSTRAINTS_PDK.json',{'pdk':'gf180mcuD','constraint_declarations':[],'fields':{'die_area_budget_um':'100x100'}})
     put(project,'phase2/stage1/rtl/unit_alpha.v','module unit_alpha(input clk, input a,b, output reg y); always @(posedge clk) y <= a ^ b; endmodule\n')
@@ -159,6 +178,28 @@ def test_missing_or_changed_qualification_stops_before_existing_owner(tmp_path,m
     result=frontend.execute(tmp_path,context)
     assert result['component_status']=='NOT_MEASURED' and not result['native_started'],result
     assert calls==[]
+
+
+@pytest.mark.parametrize('damage', ['missing', 'empty'])
+def test_missing_d09_dft_intent_stops_before_existing_owner(tmp_path, monkeypatch, damage):
+    context, path = case(tmp_path)
+    monkeypatch.setenv('VIBEIC_FLOW109_CONTEXT', str(path))
+    intent = tmp_path / 'input/d09-dft-spec-declaration.json'
+    if damage == 'missing':
+        intent.unlink()
+    else:
+        body = json.loads(intent.read_text()); body['dft'].pop('scan_test')
+        intent.write_text(json.dumps(body))
+    calls = []
+    import step_preflight
+    monkeypatch.setattr(step_preflight, 'retained_call', lambda *a, **k: calls.append('owner'))
+
+    result = frontend.execute(tmp_path, context)
+
+    assert result['reason'] in {'D09_DFT_SPEC_MISSING', 'D09_DFT_AUTHORITY_INVALID'}
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert result['native_started'] is False
+    assert calls == []
 
 
 def test_native_contract_launch_rechecks_original_input_census(tmp_path,monkeypatch):
