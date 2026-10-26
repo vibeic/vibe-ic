@@ -55605,39 +55605,79 @@ def gen_l11_otp_content(project: Path,
 # Complete, locally-owned clauses that say calibration itself is absent or not
 # required.  A noun following "calibration" (for example, "no calibration
 # error") cannot satisfy the full clause and therefore remains UNKNOWN.
+_L12_DESIGN_MODIFIER = (
+    r"(?:digital|analog|mixed[\s-]*signal|arithmetic|logic|electronic|"
+    r"integrated|synchronous|asynchronous|combinational|sequential|hardware)"
+)
+_L12_CALIBRATION_NOUN = (
+    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration)"
+)
+_L12_ADDITIONAL_ABSENT_NOUN = (
+    rf"(?:{_L12_CALIBRATION_NOUN}|analog\s+models?|sensors?|conversions?|"
+    r"mixed[\s-]*signal\s+procedures?)"
+)
 _RE_L12_NO_CALIBRATION = re.compile(
-    r"(?ix)\s*(?:"
-    r"(?:this|the)\s+(?:design|block|device|part|chip|ip)\s+(?:"
-    r"(?:requires?|needs?|uses?|includes?|has)\s+no\s+"
-    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration)"
-    r"(?:\s*(?:/|,|\bor\b|\band\b)\s*"
-    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration))*"
-    r"|(?:does\s+not|doesn't)\s+(?:require|need|use|include|have)\s+"
-    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration))"
-    r"|there\s+(?:is|are)\s+no\s+"
-    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration)"
-    r"|no\s+(?:calibration|trimming|trim|"
-    r"otp[\s-]*(?:based\s+)?calibration)(?:\s+(?:is|are)\s+"
-    r"(?:required|needed|present|implemented|included|used))?"
-    r"|without\s+(?:calibration|trimming|trim|"
-    r"otp[\s-]*(?:based\s+)?calibration)"
-    r"|(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration)\s+"
-    r"(?:is|are)\s+(?:not\s+(?:required|needed|present|implemented|"
-    r"included|used)|absent)"
-    r"|(?:本設計|本區塊|本裝置|此設計|此區塊)?\s*"
-    r"(?:不需|無需|沒有|不含|無)\s*(?:calibration|trim|校準|校准)"
-    r")\s*[.!。！？]?\s*")
+    rf"(?ix)\s*(?:"
+    rf"(?:this|the)\s+(?:(?:{_L12_DESIGN_MODIFIER}\s+){{0,3}}design|"
+    rf"block|device|part|chip|ip)\s+(?:"
+    rf"(?:requires?|needs?|uses?|includes?|has)\s+no\s+"
+    rf"{_L12_CALIBRATION_NOUN}(?:\s*(?:/|,(?:\s*(?:or|and))?|\bor\b|\band\b)\s*"
+    rf"{_L12_ADDITIONAL_ABSENT_NOUN})*"
+    rf"|(?:does\s+not|doesn't)\s+(?:require|need|use|include|have)\s+"
+    rf"{_L12_CALIBRATION_NOUN})"
+    rf"|there\s+(?:is|are)\s+no\s+{_L12_CALIBRATION_NOUN}"
+    rf"|no\s+{_L12_CALIBRATION_NOUN}(?:\s+(?:is|are)\s+"
+    rf"(?:required|needed|present|implemented|included|used))?"
+    rf"|without\s+{_L12_CALIBRATION_NOUN}"
+    rf"|{_L12_CALIBRATION_NOUN}\s+(?:is|are)\s+"
+    rf"(?:not\s+(?:required|needed|present|implemented|included|used)|absent)"
+    rf"|(?:本設計|本區塊|本裝置|此設計|此區塊)?\s*"
+    rf"(?:不需|無需|沒有|不含|無)\s*(?:calibration|trim|校準|校准)"
+    rf")\s*[.!。！？]?\s*")
+
+
+def _l12_no_calibration_clauses(text: str):
+    """Yield complete prose clauses without crossing structural boundaries."""
+    if not isinstance(text, str):
+        return
+    paragraph = []
+
+    def _flush():
+        if not paragraph:
+            return []
+        joined = " ".join(paragraph)
+        paragraph.clear()
+        return [part.strip() for part in re.split(
+            r"(?<=[.!?。！？])\s+", joined) if part.strip()]
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        structural = (not line or re.match(
+            r"^(?:#{1,6}\s|```|~~~|\| |[-*_]{3,}\s*$|[-*+]\s+|\d+[.)]\s+)",
+            line))
+        if structural:
+            for clause in _flush():
+                yield clause
+            if line and re.match(r"^(?:[-*+]\s+|\d+[.)]\s+)", line):
+                paragraph.append(re.sub(
+                    r"^(?:[-*+]\s+|\d+[.)]\s+)", "", line, count=1))
+            continue
+        paragraph.append(line)
+    for clause in _flush():
+        yield clause
+
+
+def _l12_explicit_no_calibration_clause(text: str) -> Optional[str]:
+    """Return the complete source-owned no-calibration clause, if present."""
+    for clause in _l12_no_calibration_clauses(text):
+        if _RE_L12_NO_CALIBRATION.fullmatch(clause):
+            return clause
+    return None
 
 
 def _l12_has_explicit_no_calibration(text: str) -> bool:
     """Match a complete sentence-level no-calibration declaration."""
-    if not isinstance(text, str):
-        return False
-    for line in text.splitlines():
-        for clause in re.split(r"(?<=[.!?。！？])\s+", line):
-            if _RE_L12_NO_CALIBRATION.fullmatch(clause):
-                return True
-    return False
+    return _l12_explicit_no_calibration_clause(text) is not None
 
 def gen_l12_behavioral(project: Path,
                        extracted: Dict[str, str],
@@ -55731,10 +55771,11 @@ def gen_l12_behavioral(project: Path,
     no_calibration = False
     if not sequences:
         for _f, _t in (extracted or {}).items():
-            if _l12_has_explicit_no_calibration(_t):
+            _no_calibration_clause = _l12_explicit_no_calibration_clause(_t)
+            if _no_calibration_clause is not None:
                 no_calibration = True
                 evidence.setdefault(f"input/docs/{_f}", []).append({
-                    "literal": "no-calibration assertion",
+                    "literal": _no_calibration_clause,
                     "label": "input explicitly states no calibration/trimming",
                 })
                 break
