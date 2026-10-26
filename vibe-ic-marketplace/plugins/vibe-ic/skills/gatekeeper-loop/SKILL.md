@@ -66,16 +66,16 @@ own direct-push fixes. It is the **single agent that owns `main`** and the
 **sole party allowed to merge** an external PR.
 Centralising the merge authority in one looped identity is what makes the
 contribution model trustworthy: every PR — including one the gatekeeper
-authored itself — passes through the SAME machine gates, the SAME one
-agent gate (Step-2.7), and the SAME serialized re-test-on-rebase merge
-queue before it lands. The gate is the quality guarantee, not a separation
-of author from approver: a single identity MAY both author and merge,
-because nothing lands without surviving the gates on the rebased tree.
+authored itself — must produce the SAME accepted-receipt evidence from the
+machine gates and the one agent gate (Step-2.7). Completed receipts are served
+ready-first; only named invalidated evidence is boundedly revalidated, and only
+the READY-bound sole writer may land the selected id/head/base. The gate is the
+quality guarantee, not a separation of author from approver.
 
 The loop is **infinite** and **stateless across ticks** (all state lives
 in git + GitHub — the PR's open/merged/closed state, its review state,
-its required-check statuses, the `.merge.lock` file). Every cron wake-up
-is a fresh, independent tick:
+its required-check statuses — plus the root-owned receipt manifest and the
+short `gatekeeper-final.lock`). Every cron wake-up is a fresh, independent tick:
 
 1. **poll** open, non-draft PRs against `main` (`poll_prs.py`).
 2. for each PR: run the **machine gates** (`gatekeeper_review.py`).
@@ -142,7 +142,7 @@ the PR with no path forward (a §4.05 leak at the poll layer — the poll
 must not mask a PR that needs the gate to say "fix your branch").
 
 **Ready-first is binding:** an independently accepted candidate proceeds to
-the next available serialized merge lock promptly. An unrelated earlier PR,
+the next available short final lock promptly. An unrelated earlier PR,
 lower/higher PR number, handoff, or queue position is not a dependency and
 must not block it. Genuine declared dependencies, overlapping source ownership,
 an explicit owner hold, or a failed required gate still block. Exactly one
@@ -236,8 +236,8 @@ is supplied only by the designated sole writer; the consumer neither grants a
 source worker landing authority nor treats mergeable status as acceptance.
 Do not repeat acceptance due to waiting, handoff, identity, unrelated base
 movement, or version assignment. Genuine holds/dependencies/shared ownership
-and failed gates remain blocking. This binding path supersedes unconditional
-re-run/enqueue wording in the legacy procedure and cron template below.
+and failed gates remain blocking. This binding path is the current normative
+procedure; the explicitly marked incident record below is non-executable.
 
 The canonical cron stores exact accepted receipt bytes below
 `<git-common-dir>/gatekeeper-ready-receipts/`, verifies their independently
@@ -261,18 +261,21 @@ gatekeeper-assigned version bump**, honoring the **one-version-per-push**
 rule. **The gatekeeper assigns ALL versions** (owner directive 2026-06-17:
 *"all versions are given by gatekeeper"*) — the authoring PR is VERSION-LESS
 (it does NOT touch `plugin.json` / `marketplace.json`), because two PRs in
-flight that each self-bumped would COLLIDE (both pick `x.y.(z+1)`). Only the
-SERIALIZED queue, landing PRs one at a time onto an advancing `origin/main`,
-can assign a strictly-monotonic version: at Step 3.5 above
-`gatekeeper_assign_version.py --write` writes the next version into both
-files on the rebased branch, then the enforced re-run
-(`version_bump_monotonic_check.py` + `marketplace_version_sync_check.py`,
-flag OFF) validates it. The squash collapses the PR's internal commits +
-that version-assignment commit into the single landing commit that carries
-the one bump. Never merge-commit or rebase-merge a multi-commit PR (that
-would land several commits).
+flight that each self-bumped would COLLIDE (both pick `x.y.(z+1)`). When no
+accepted candidate is deliverable, bounded preparation assigns the next
+version from the admitted base and runs the named version/cadence checks once;
+the resulting exact bytes and receipt then enter the atomic manifest. An
+unchanged accepted receipt is reused. The READY-bound squash carries the one
+assigned bump. Never merge-commit or rebase-merge a multi-commit PR.
 
-### Step 3.7 — RUN THE MERGE-PATH GATE. `gh pr merge` runs no gate at all.
+<!-- HISTORICAL_NON_EXECUTABLE_START -->
+### Historical merge-path incident record — non-executable
+
+Everything through the matching end marker records the pre-service-ready
+incident and old command semantics. It is evidence for why the current bound
+path exists, not an operator instruction; do not execute commands in this
+section. The current normative path is the `--service-ready` procedure above
+and the canonical cron below.
 
 ```bash
 tools/gatekeeper-verify-merge.sh <num> --json /tmp/verify-<num>.json   # MUST exit 0
@@ -369,14 +372,15 @@ overlap names the affected paths and requests only their impacted checks.
 > evidence/dependency bytes changed. Bounded revalidation catches that class
 > without discarding independent completed evidence.
 
+<!-- HISTORICAL_NON_EXECUTABLE_END -->
+
 ## Hard rules (non-negotiable)
 
 > **The gatekeeper MAY self-merge.** A single identity may both author and
 > merge its own PRs — there is NO author≠approver requirement. The gates
-> (machine required checks + Step-2.7 + the serialized re-test-on-rebase
-> queue), not identity separation, are what make a merge trustworthy.
-> Nothing lands without surviving every gate on the rebased tree, whoever
-> authored it.
+> (machine required checks + Step-2.7), independently pinned receipt, genuine
+> blocker checks, and READY-bound final writer — not identity separation — are
+> what make a merge trustworthy.
 
 | # | Rule | Reason | Enforced by |
 |---|------|--------|-------------|
@@ -384,17 +388,15 @@ overlap names the affected paths and requests only their impacted checks.
 | 2 | NEVER `git push --force` / `git commit --no-verify` / `git reset --hard` on `main` | Loss of history; bypasses pre-commit gates | `git_prohibition_guard.py` |
 | 3 | NEVER merge a multi-commit PR with merge-commit / rebase-merge — squash only | one PR = one squash commit = one version bump (one-version-per-push) | `--squash` only; version gates |
 | 4 | NEVER use chip/vendor/SKU string literals as detection logic in any gate | gates must be general | `source_chip_agnostic_check.py` |
-| 5 | ALWAYS release `.merge.lock` (even on eject / exception) and NEVER force-steal a live lock | a stuck lock must heal via the dead-PID path, not a steal | `_runner_lock.py` (atexit/signal release + dead-pid cleanup) |
+| 5 | Keep `gatekeeper-final.lock` short and NEVER force-steal it | only the selected READY id/head/base may occupy the sole final writer | `landing_merge_verdict.py` |
 
 ### Self-merge is allowed (no author≠approver requirement)
 
 There is **no** identity-separation rule: the gatekeeper MAY merge a PR it
 authored itself. The PR author login is irrelevant to the merge decision —
-a PR lands iff it survives every gate (machine required checks + Step-2.7 +
-the serialized re-test-on-rebase queue), regardless of who wrote it. This
-keeps a single-maintainer / single-agent project self-sufficient: the same
-identity can author a fix, open a PR, and — once the gates are green — merge
-it through the queue. The quality guarantee is the GATE, not a second
+a PR lands iff its accepted receipt survives the machine and agent gates,
+genuine blocker checks, exact remote binding, and the READY-bound final writer,
+regardless of who wrote it. The quality guarantee is the GATE, not a second
 person.
 
 ### Break-glass override (so a wedged gate can't deadlock the queue)
@@ -419,9 +421,9 @@ queue deadlocks — the broken gate blocks the very PR that would fix it.
    auditable trail — even though self-merge of an ordinary gated PR is
    allowed, a gate-SKIP must be declared, not hidden.
 3. **Reduced gate set, never zero gates.** The wedged gate is the ONLY
-   check skipped; **every other** required check still runs on the rebased
-   tree. The merge still uses `--squash`, never `--admin`/`--force`. (We
-   bypass the BROKEN gate, not branch protection.)
+   check skipped; **every other** required check still runs during bounded
+   preparation. The exact accepted bytes return to the atomic manifest, and
+   only the READY-bound writer may use `--squash`, never `--admin`/`--force`.
 4. **Self-healing follow-up.** Immediately after the gate-fix lands, the
    gatekeeper re-runs the full machine gates (now including the repaired
    gate) on `origin/main` to confirm the wedge is gone, and the normal
@@ -447,8 +449,8 @@ gatekeeping a routine patch-bump PR doesn't pay the full-suite cost:
   green required before merge — the periodic cross-module safety net.
 
 The patch rollover (`x.y.99 → x.(y+1).0`) makes the milestone full-test
-land automatically. The **rebased-tree re-run** in Step 2.9 uses the same
-cadence (targeted for a patch, full for a milestone).
+land automatically. Bounded preparation uses the same cadence (targeted for a
+patch, full for a milestone); an unchanged accepted receipt is not repeated.
 
 ## Comment shape (繁體中文, 5 sections)
 
@@ -463,7 +465,7 @@ Gatekeeper 已 request-changes：PR #<num>（head=<branch>）
 **證據**：
     <失敗 gate 的逐字輸出，或可重現的 HIGH 對抗重現步驟與輸出>
 **要求**：<請作者修正什麼，才能重新進入 gate>
-**機制說明**：本 PR 由單一 gatekeeper 把關 main；通過 machine gates（required checks）+ Step-2.7 對抗審查（唯一 agent 判斷關卡）後，才會進入序列化合併佇列、rebase 到最新 origin/main、在 rebase 樹上重跑 required checks，並以 squash 合併（一 PR＝一 squash commit＝一次版本 bump）。品質由 gate 保證（非作者≠審核者之身分分離）；本機從不 --admin / --force / --no-verify / 繞過 branch protection。
+**機制說明**：本 PR 由單一 gatekeeper 把關 main；machine gates 與 Step-2.7 產生精確 accepted receipt，完整人口由 `--service-ready` ready-first 消費。僅具名失效證據會 bounded revalidation；真實 hold／dependency／shared conflict／failed gate 仍阻擋。短 final lock 內只有 READY-bound id/head/base 可由 sole writer 以 squash 合併（一 PR＝一 squash commit＝一次版本 bump）。品質由 gate 保證（非作者≠審核者之身分分離）；本機從不 --admin / --force / --no-verify / 繞過 branch protection。
 ```
 
 A successful merge is recorded by the squash-merge itself (and the deleted
@@ -503,10 +505,9 @@ The gatekeeper is **stateless across cron ticks**. All state lives in:
 - **git** — `main`'s commit history, each PR branch's state.
 - **GitHub** — PR open/merged/closed, review state (`request-changes` /
   `approved`), the required-check statuses.
-- **the filesystem** — the `.merge.lock` file (held only WHILE a single
-  merge is in flight, released on exit/signal/atexit per `_runner_lock.py`;
-  a crashed holder's lock is cleaned via the dead-PID path on the next
-  acquire).
+- **the filesystem** — root-owned accepted receipt bytes and atomic manifest;
+  `gatekeeper-final.lock` is held only for the selected final write and is
+  released when the `landing_merge_verdict.py` service call exits.
 
 Every tick is independent — no `state.json`. This matches the core-agent's
 stateless design and for the same reason: the gatekeeper reacts to one PR
@@ -551,8 +552,8 @@ Each tick must:
         Never make an accepted later candidate wait behind this preparation,
         and never rerun acceptance due to waiting, handoff, identity or
         unrelated base movement.
-Hard rules: never --admin/--force/--no-verify, squash-only, always release
-the lock. Self-merge of an ordinary gated PR is ALLOWED. A PR that fixes a
+Hard rules: never --admin/--force/--no-verify, squash-only, and keep the sole
+final lock short. Self-merge of an ordinary gated PR is ALLOWED. A PR that fixes a
 wedged gate uses the documented BREAK-GLASS path (scoped diff + recorded
 break-glass approval + reduced-not-zero gates + post-merge re-validation).
 See SKILL.md §Hard rules and §Break-glass override.
@@ -571,8 +572,8 @@ fully programmable; only Step 2.7 is genuine LLM judgment):
   ready-first): `skills/gatekeeper-loop/programs/poll_prs.py`
 - Machine-gate aggregator (required status checks, cadence-aware):
   `gatekeeper_review.py` (the required-check runner this loop invokes)
-- Serialized merge-queue lock (one merge in flight, dead-PID self-heal):
-  `programs/_runner_lock.py`
+- Ready-first receipt consumer and short sole-final-writer lock:
+  `programs/landing_merge_verdict.py --service-ready`
 - Forbidden git/gh ops (rules 1-2): `programs/git_prohibition_guard.py`
 - Chip-AGNOSTIC source scan (rule 4): `programs/source_chip_agnostic_check.py`
 - Version equality (one-version-per-push): `programs/marketplace_version_sync_check.py`
@@ -580,9 +581,8 @@ fully programmable; only Step 2.7 is genuine LLM judgment):
 - Gatekeeper version ASSIGNMENT at merge (the gatekeeper's sole right —
   next monotonic version → plugin.json + marketplace.json):
   `programs/gatekeeper_assign_version.py`
-- PR machine gate — `--version-by-gatekeeper` DEFERS the version gate for
-  the version-less authoring PR; the post-assignment re-run (flag OFF)
-  enforces the bump: `programs/gatekeeper_review.py`
+- PR machine gate used by bounded preparation; exact accepted bytes then enter
+  the service manifest: `programs/gatekeeper_review.py`
 - Full-suite (not subset) test run: `programs/full_suite_run_check.py`. It
   classifies an invocation by the POPULATION IT COVERS (git-derived), not by
   its shape or its name: `./run_tests.sh` is FULL because the tiers it prints

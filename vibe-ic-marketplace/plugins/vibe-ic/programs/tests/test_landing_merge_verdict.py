@@ -4318,19 +4318,28 @@ def test_canonical_gatekeeper_entry_has_no_legacy_unbound_writer_or_rerun():
     description = re.search(r"(?m)^description: (.*)$", frontmatter).group(1)
     cron = skill.split("## Cron-invocation template", 1)[1].split(
         "## Reference", 1)[0]
-    executable = "\n".join(re.findall(
-        r"```(?:bash|sh|python)?\n(.*?)```", skill, re.DOTALL))
-    current_instructions = "\n".join((description, cron, executable))
+    historical = re.findall(
+        r"<!-- HISTORICAL_NON_EXECUTABLE_START -->.*?"
+        r"<!-- HISTORICAL_NON_EXECUTABLE_END -->", skill, re.DOTALL)
+    assert len(historical) <= 1
+    current_instructions = re.sub(
+        r"<!-- HISTORICAL_NON_EXECUTABLE_START -->.*?"
+        r"<!-- HISTORICAL_NON_EXECUTABLE_END -->", "", skill,
+        flags=re.DOTALL)
 
     assert not re.search(r"(?m)^\s*gh pr merge\b", current_instructions)
-    assert "RE-RUN the required checks on the REBASED tree" not in current_instructions
-    assert "RE-RUN gatekeeper_review.py" not in current_instructions
-    assert ".merge.lock" not in description
-    assert "rebase onto current origin/main" not in description
+    for stale in (".merge.lock", "serialized re-test-on-rebase",
+                  "RE-RUN the required checks on the REBASED tree",
+                  "RE-RUN gatekeeper_review.py", "rebased-tree re-run",
+                  "rebase onto current origin/main", "on the rebased tree",
+                  "rebase 到最新 origin/main", "在 rebase 樹上重跑"):
+        assert stale not in current_instructions, stale
+    assert len(historical) == 1
     for required in ("ready-first", "accepted receipt", "bounded",
                      "READY-bound", "holds", "dependencies",
                      "shared conflicts"):
-        assert required in description, required
+        assert required in current_instructions, required
+    assert description in current_instructions
     assert "--service-ready" in cron
     assert "--service-final-write" in cron
     assert "BLOCKED_NO_ACCEPTED_CANDIDATE" in cron
