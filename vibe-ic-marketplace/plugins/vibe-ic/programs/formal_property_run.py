@@ -2537,6 +2537,29 @@ def _prove_engine_mode(project: Path, requested: str) -> str:
     return "dual" if mode == "dual" else "direct"
 
 
+def _publish_chip_read_refusal(formal_dir, sby_path, harness, rtl, top, reason,
+                               *, proof_attempted):
+    """Atomically supersede canonical proof authority with this run's refusal."""
+    import uuid
+    refusal = {
+        "program": "formal_property_run", "verdict": "INCOMPLETE",
+        "rc": RC_INCOMPLETE, "all_proved": False, "proof_attempted": proof_attempted,
+        "reason": reason,
+        "attempt_id": uuid.uuid4().hex,
+        "producer_sha256": _sha256_file(Path(__file__)),
+        "sby": str(sby_path), "sby_sha256": _sha256_file(sby_path),
+        "requested_top": top,
+        "requested_rtl": [{"path": str(p), "sha256": _sha256_file(p)}
+                          for p in (rtl or [])],
+        "harness_sha256": _sha256_file(harness) if harness else None,
+        "supersedes_results_sha256": _sha256_file(formal_dir / "results.json"),
+    }
+    # The public consumer selects results.json before any sibling request.
+    _aa.write_json(formal_dir / "results.json", refusal)
+    _write_authoring_incomplete(formal_dir, reason)
+    return refusal
+
+
 def _authored_chip_read(project, formal_dir, sby, harness, rtl, top):
     """Admit provenance only for the canonical source-reading task body.
 
@@ -2844,25 +2867,9 @@ def run(project: Path, harness: Optional[Path] = None,
             chip_read = _authored_chip_read(project, formal_dir, sby_path,
                                             harness, rtl, top)
         except (OSError, ValueError, TypeError, KeyError) as exc:
-            import uuid
-            refusal = {
-                "program": "formal_property_run", "verdict": "INCOMPLETE",
-                "rc": RC_INCOMPLETE, "all_proved": False, "proof_attempted": False,
-                "reason": "authored chip read refused: " + str(exc),
-                "attempt_id": uuid.uuid4().hex,
-                "producer_sha256": _sha256_file(Path(__file__)),
-                "sby": str(sby_path), "sby_sha256": _sha256_file(sby_path),
-                "requested_top": top,
-                "requested_rtl": [{"path": str(p), "sha256": _sha256_file(p)}
-                                  for p in (rtl or [])],
-                "harness_sha256": _sha256_file(harness) if harness else None,
-                "supersedes_results_sha256": _sha256_file(formal_dir / "results.json"),
-            }
-            # The public consumer selects results.json before any sibling
-            # authoring request. Publish this refusal atomically FIRST.
-            _aa.write_json(formal_dir / "results.json", refusal)
-            _write_authoring_incomplete(formal_dir, refusal["reason"])
-            return refusal
+            return _publish_chip_read_refusal(
+                formal_dir, sby_path, harness, rtl, top,
+                "authored chip read refused: " + str(exc), proof_attempted=False)
 
     # 1b) EMIT-ONLY — the artefact is written; the proof is NOT run ---------
     # Returns BEFORE the executor is reached, so the guarantee is structural
@@ -3052,9 +3059,8 @@ def run(project: Path, harness: Optional[Path] = None,
                     reason = f"task {task_name} src differs from admitted staged sources"
                     break
         if reason:
-            _write_authoring_incomplete(formal_dir, reason)
-            return {"verdict": "INCOMPLETE", "rc": RC_INCOMPLETE,
-                    "all_proved": False, "reason": reason}
+            return _publish_chip_read_refusal(
+                formal_dir, sby_path, harness, rtl, top, reason, proof_attempted=True)
     # Bind the proof's task file and transcript at proof time, just as the
     # individual model inputs above are bound.  A later reader must not pair
     # a retained PASS with a rewritten engine/script/assumption set or with a

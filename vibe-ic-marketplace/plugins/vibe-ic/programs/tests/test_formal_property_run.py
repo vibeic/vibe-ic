@@ -1176,7 +1176,16 @@ def test_chip_read_refuses_post_execution_input_drift(tmp_path, monkeypatch, mut
     assert any(word in result["reason"] for word in ("src", "proof_inputs", "deck"))
     persisted = json.loads((formal / "formal_authoring_request.json").read_text())
     assert persisted["verdict"] == "INCOMPLETE" and persisted["reason"] == result["reason"]
-    assert not (formal / "results.json").exists()
+    assert json.loads((formal / "results.json").read_text()) == result
+    assert result["proof_attempted"] is True
+    assert len(result["attempt_id"]) == 32
+    assert result["producer_sha256"] == FPR._sha256_file(Path(FPR.__file__))
+    assert result["sby"] == str(task) and result["sby_sha256"] == FPR._sha256_file(task)
+    assert result["harness_sha256"] == FPR._sha256_file(harness)
+    assert result["requested_top"] == kwargs["top"]
+    assert result["requested_rtl"] == [{"path": str(rtl), "sha256": FPR._sha256_file(rtl)}]
+    import formal_proof_evidence_check as consumer
+    assert consumer.audit(tmp_path)["verdict"] != "PASS"
 
 
 @pytest.mark.parametrize("reverse", [False, True], ids=["canonical-order", "reversed-order"])
@@ -1264,3 +1273,42 @@ def test_authored_order_refusal_supersedes_stale_public_consumer_pass(tmp_path, 
     assert current["harness_sha256"] == FPR._sha256_file(harness)
     assert current["requested_rtl"] == [
         {"path": str(p), "sha256": FPR._sha256_file(p)} for p in (rtl, package)]
+
+
+def test_postexec_drift_supersedes_stale_public_consumer_pass(tmp_path, monkeypatch):
+    import formal_proof_evidence_check as consumer
+    rtl, harness, formal, task, kwargs, calls = _authored_chip_fixture(tmp_path, monkeypatch)
+    old = FPR.run(tmp_path, sby=task, **kwargs)
+    before = consumer.audit(tmp_path)
+    assert old["all_proved"] is True and before["verdict"] == "PASS"
+    old_hash = FPR._sha256_file(formal / "results.json")
+    execute = FPR._run_sby
+    inputs = FPR.proof_inputs
+    def drift_after_admission(sby, *args, **kw):
+        transcript = execute(sby, *args, **kw)  # fixture transcript, never a solver
+        def drifted_inputs(*a):
+            result = inputs(*a)
+            result["files"][rtl.name] = "0" * 64
+            return result
+        monkeypatch.setattr(FPR, "proof_inputs", drifted_inputs)
+        return transcript
+    monkeypatch.setattr(FPR, "_run_sby", drift_after_admission)
+    calls.clear()
+    result = FPR.run(tmp_path, sby=task, **kwargs)
+    assert len(calls) == 1  # exactly one mocked execution after admission
+    assert result["verdict"] == "INCOMPLETE" and result["rc"] == 2
+    assert result["all_proved"] is False and not result.get("chip_read")
+    assert result["reason"] == "proof_inputs differ from admitted staged sources"
+    after = consumer.audit(tmp_path)
+    print(json.dumps({"fixture_only": True, "before": before,
+                      "refusal": result, "after": after}))
+    assert after["verdict"] != "PASS", after
+    current = json.loads((formal / "results.json").read_text())
+    assert current == result and current["proof_attempted"] is True
+    assert current["supersedes_results_sha256"] == old_hash
+    assert len(current["attempt_id"]) == 32
+    assert current["producer_sha256"] == FPR._sha256_file(Path(FPR.__file__))
+    assert current["sby"] == str(task) and current["sby_sha256"] == FPR._sha256_file(task)
+    assert current["harness_sha256"] == FPR._sha256_file(harness)
+    assert current["requested_top"] == kwargs["top"]
+    assert current["requested_rtl"] == [{"path": str(rtl), "sha256": FPR._sha256_file(rtl)}]
