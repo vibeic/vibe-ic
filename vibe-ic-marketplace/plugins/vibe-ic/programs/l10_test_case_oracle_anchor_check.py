@@ -376,6 +376,21 @@ def audit(l10_path: Path, docs_dir: Path) -> Dict:
         })
         return report
 
+    malformed_aliases = [
+        k for k in _CASE_ARRAY_KEYS
+        if k in data and not isinstance(data[k], list)
+    ]
+    if malformed_aliases:
+        report["findings"].append({
+            "severity": "ERROR",
+            "category": "INVALID_CASE_POPULATION_ALIAS",
+            "case": "",
+            "message": (
+                "registered case population aliases must be lists: "
+                + ", ".join(malformed_aliases)),
+        })
+        return report
+
     cases: List[dict] = []
     populated_aliases = [
         (k, data.get(k)) for k in _CASE_ARRAY_KEYS

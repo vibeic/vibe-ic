@@ -355,6 +355,39 @@ def test_one_populated_alternate_case_alias_is_fully_audited(tmp_path):
     assert report["findings"] == []
 
 
+def test_zero_case_declaration_refuses_malformed_empty_dict_alias(tmp_path):
+    docs = _docs(tmp_path)
+    payload = {
+        "test_cases": [],
+        "cases": {},
+        "no_test_cases_in_input": True,
+    }
+    (docs / "L10_TEST_CASES.json").write_text(json.dumps(payload))
+
+    result = _consume(tmp_path)
+    assert result.exit_code == 1
+    assert result.structured_verdict == "FAIL"
+    assert result.verdict == "FAIL"
+    assert result.reason_class != "DESIGN_DECLARED_NA"
+    assert "INVALID_CASE_POPULATION_ALIAS" in _errors(tmp_path)
+
+
+def test_valid_case_refuses_additional_malformed_alias(tmp_path):
+    docs = _docs(tmp_path)
+    payload = {
+        "test_cases": [dict(_GOOD_CASE)],
+        "cases": "not-a-case-array",
+        "no_test_cases_in_input": False,
+    }
+    (docs / "L10_TEST_CASES.json").write_text(json.dumps(payload))
+
+    result = _consume(tmp_path)
+    assert result.exit_code == 1
+    assert result.structured_verdict == "FAIL"
+    assert result.verdict == "FAIL"
+    assert "INVALID_CASE_POPULATION_ALIAS" in _errors(tmp_path)
+
+
 # ---------------------------------------------------------------------------
 # 6. Waiver
 # ---------------------------------------------------------------------------
