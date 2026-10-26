@@ -605,6 +605,36 @@ def _parse_pipeline_stages(text: str) -> Optional[int]:
 # ----------------------------------------------------------------------------- #
 #  STRUCTURED-SPEC EXTRACTION  (recognize)
 # ----------------------------------------------------------------------------- #
+def _declared_magnitude_signs(text: str) -> Optional[Dict[str, str]]:
+    """Read literal sign assignments on stated magnitude-comparison branches.
+
+    Absence keeps the existing sign-magnitude convention. A conflicting or
+    unsupported explicit assignment declines instead of silently choosing it.
+    This reads public operands and clauses, never a design identifier.
+    """
+    signs: Dict[str, str] = {}
+    for left, right in (("a", "b"), ("b", "a")):
+        clauses = re.findall(
+            rf"\bif\s+`?{left}`?\s+(?:is\s+)?(?:greater|larger)\s+than\s+"
+            rf"`?{right}`?\b[^.\n]*", text, re.I)
+        for clause in clauses:
+            if re.search(r"\b(?:not|never|unless|except)\b", clause, re.I):
+                return None
+            assignment = re.search(
+                r"\b(?:MSB|sign(?:\s+bit)?)\b.*?\bset\s+to\s+([^\s,;.]+)",
+                clause, re.I)
+            if assignment is None:
+                continue
+            value = assignment.group(1).strip("`")
+            if not re.fullmatch(r"[01]|1'[bB][01]", value):
+                return None
+            bit = value[-1]
+            if left in signs and signs[left] != bit:
+                return None
+            signs[left] = bit
+    return signs
+
+
 def recognize(text: str) -> Optional[Dict]:
     """Parse the prose into a structured spec dict, or None to SKIP (§4.05).
 
@@ -622,9 +652,15 @@ def recognize(text: str) -> Optional[Dict]:
         ctl = _find(("aluc", "op", "ctrl", "control"), ins)
         r = _find(("r", "result", "res", "y"), outs)
         if a and b and ctl and r and len(params) >= 4:
+            from rtl_hygiene_lint import VERILOG_KEYWORDS
+            if any(nm in VERILOG_KEYWORDS for nm, _ in params):
+                return None  # preserving an illegal source identifier cannot emit HDL
+            if len({nm.upper() for nm, _ in params}) != len(params):
+                return None  # distinct case-sensitive parameters cannot share a role
             opcodes = {nm.upper(): val for nm, val in params}
             return {"op": "alu", "a": a[0], "b": b[0], "ctl": ctl[0],
                     "r": r[0], "rw": r[1], "ctlw": ctl[1], "opcodes": opcodes,
+                    "opcode_parameter_names": {nm.upper(): nm for nm, _ in params},
                     "ins": ins, "outs": outs}
         return None  # ALU prose without a usable opcode table -> SKIP
 
@@ -695,8 +731,12 @@ def recognize(text: str) -> Optional[Dict]:
                 r"\bfixed[- ]point\s+subtract(?:or|ion)\b", text, re.I)))
             if says_add == says_sub:
                 return None
+            signs = _declared_magnitude_signs(text) if says_add else {}
+            if signs is None:
+                return None
             return {"op": "fixed_sub" if says_sub else "fixed_add",
-                    "a": "a", "b": "b", "c": "c"}
+                    "a": "a", "b": "b", "c": "c",
+                    "magnitude_signs": signs}
         return None  # fixed-point without a clear Q/N a,b->c shape -> SKIP
 
     # --- Float multiplier: rounding mode UNSTATED -> §4.05 SKIP -------------- #
@@ -1147,6 +1187,10 @@ def _emit_alu(s, m):
     a, b, ctl, r = s["a"], s["b"], s["ctl"], s["r"]
     rw = s["rw"]
     oc = s["opcodes"]
+    parameter_names = s.get("opcode_parameter_names", {})
+
+    def public_name(role):
+        return parameter_names.get(role, role)
 
     def have(*names):
         for nm in names:
@@ -1158,10 +1202,12 @@ def _emit_alu(s, m):
     lines.append(f"    wire signed [{rw-1}:0] sa = {a};")
     lines.append(f"    wire signed [{rw-1}:0] sb = {b};")
     lines.append(f"    reg [{rw}:0] res;")
-    # opcode parameters declared as named constants
+    # A source-declared parameter remains overridable, with its exact spelling.
     for nm, val in oc.items():
-        lines.append(f"    localparam {nm} = {val};")
-    lines.append(f"    always @(*) begin")
+        lines.append(f"    parameter {public_name(nm)} = {val};")
+    # always_comb also evaluates at time zero when inputs were initialized in
+    # declarations before an event-sensitive always block began waiting.
+    lines.append("    always_comb begin")
     lines.append(f"        case ({ctl})")
     cases = []
 
@@ -1169,7 +1215,7 @@ def _emit_alu(s, m):
         present = [n for n in names if n in oc]
         if not present:
             return
-        label = ", ".join(present)
+        label = ", ".join(public_name(n) for n in present)
         rhs = expr if extended else f"{{1'b0, {expr}}}"
         cases.append(f"            {label}: res = {rhs};")
 
@@ -1206,10 +1252,10 @@ def _emit_alu(s, m):
         elif n in ("overflow",):
             add = have("ADD")
             sub = have("SUB")
-            add_expr = (f"({ctl} == {add}) ? "
+            add_expr = (f"({ctl} == {public_name(add)}) ? "
                         f"(~({a}[{rw-1}] ^ {b}[{rw-1}]) & "
                         f"({r}[{rw-1}] ^ {a}[{rw-1}])) : ") if add else ""
-            sub_expr = (f"({ctl} == {sub}) ? "
+            sub_expr = (f"({ctl} == {public_name(sub)}) ? "
                         f"(({a}[{rw-1}] ^ {b}[{rw-1}]) & "
                         f"({r}[{rw-1}] ^ {a}[{rw-1}])) : ") if sub else ""
             lines.append(f"    assign {n} = {add_expr}{sub_expr}1'b0;")
@@ -1217,7 +1263,7 @@ def _emit_alu(s, m):
             slt = have("SLT")
             sltu = have("SLTU")
             selected = [x for x in (slt, sltu) if x]
-            cond = " || ".join(f"({ctl} == {x})" for x in selected) or "1'b0"
+            cond = " || ".join(f"({ctl} == {public_name(x)})" for x in selected) or "1'b0"
             lines.append(f"    assign {n} = ({cond}) ? 1'b1 : 1'bz;")
         else:
             lines.append(f"    assign {n} = 1'b0;")
@@ -1229,6 +1275,9 @@ def _emit_fixed_add(s, m):
     # Parameterized sign-magnitude fixed-point adder. Module is parameterized with
     # Q and N (the testbench drives #(.Q,.N)). Reproduces the stated sign-magnitude
     # semantics exactly.
+    signs = s.get("magnitude_signs", {})
+    a_sign = f"1'b{signs['a']}" if "a" in signs else f"{s['a']}[N-1]"
+    b_sign = f"1'b{signs['b']}" if "b" in signs else f"{s['b']}[N-1]"
     return (
         f"module {m} #(parameter Q = 15, parameter N = 32) (\n"
         f"    input  [N-1:0] {s['a']},\n"
@@ -1242,10 +1291,10 @@ def _emit_fixed_add(s, m):
         f"            res[N-1]   = {s['a']}[N-1];\n"
         f"        end else if ({s['a']}[N-2:0] > {s['b']}[N-2:0]) begin\n"
         f"            res[N-2:0] = {s['a']}[N-2:0] - {s['b']}[N-2:0];\n"
-        f"            res[N-1]   = {s['a']}[N-1];\n"
+        f"            res[N-1]   = {a_sign};\n"
         f"        end else if ({s['a']}[N-2:0] < {s['b']}[N-2:0]) begin\n"
         f"            res[N-2:0] = {s['b']}[N-2:0] - {s['a']}[N-2:0];\n"
-        f"            res[N-1]   = {s['b']}[N-1];\n"
+        f"            res[N-1]   = {b_sign};\n"
         f"        end else begin\n"
         f"            res = 0;\n"
         f"        end\n"

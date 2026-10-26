@@ -1030,7 +1030,103 @@ _NOISE = {
 # Each detector returns True only when module-name AND port-signature AND a
 # distinctive prose phrase all match. Otherwise it declines (fail-closed).
 
+def _odd_declared_phase(desc: str) -> Optional[str]:
+    """Only source-declared edge phases; period/duty alone never select one."""
+    for clause in re.split(r"[.\n]", desc):
+        if (re.search(r"\bwrap\w*\b|\bcurrent\s+counter\b|\bfirst\s+half\b", clause, re.I)
+                and re.search(r"\b(?:not|never|without)\b", clause, re.I)):
+            return "unsupported"  # a negated phase is not a positive declaration
+    high_at_wrap = bool(re.search(
+        r"\bwrap\w*[^.\n]*\bto\s+0\b[^.\n]*\bhigh\b", desc, re.I))
+    current_decode = bool(re.search(
+        r"\bcurrent\s+counter\s+value\b|\bpre[- ]increment", desc, re.I))
+    low_at_wrap = bool(re.search(
+        r"\blow\b[^.\n]*\bwrap\b|\bwrap\b[^.\n]*\blow\b", desc, re.I))
+    if high_at_wrap and (current_decode or low_at_wrap):
+        return "conflict"
+    if high_at_wrap:
+        return "post"
+    if current_decode and low_at_wrap:
+        return "pre"
+    return None
+
+
+def _odd_clock_contract(desc: str) -> Optional[Dict]:
+    """Complete two-edge counter architecture, independent of module identity.
+
+    The legacy fixed-template entry remains compatible. This additional entry
+    requires the reset, half-period rule, phase and default divisor in source.
+    """
+    module = module_name_of(desc)
+    phase = _odd_declared_phase(desc)
+    if (not module or not re.fullmatch(r"[A-Za-z_]\w*", module)
+            or phase not in {"pre", "post"}):
+        return None
+    import port_parser
+    from prose_port_block_read import bridge_prompt
+    inputs, outputs = port_parser.parse_ports(bridge_prompt(desc))
+    if (len(inputs) != 2 or len(outputs) != 1
+            or any(width != 1 for _, width in inputs + outputs)):
+        return None  # no unused enable/status ports or silently narrowed vectors
+    records = _source_port_records(desc)
+    clock = [r for r in records if r["direction"] == "in"
+             and re.search(r"\bclock\b", r["text"], re.I)]
+    reset = [r for r in records if r["direction"] == "in"
+             and re.search(r"\breset\b", r["text"], re.I)]
+    if len(clock) != 1 or len(reset) != 1 or clock[0]["name"] == reset[0]["name"]:
+        return None
+    roles = {"clock": clock[0]["name"], "reset": reset[0]["name"],
+             "output": outputs[0][0]}
+    if ({name for name, _ in inputs} != {roles["clock"], roles["reset"]}
+            or len(set(roles.values())) != 3):
+        return None
+    low = _low(desc)
+    if re.search(r"\b(?:not|never|without)\b[^.\n]*\bodd\b", low):
+        return None
+    # This bounded architecture has no conditional/negated reset or combine
+    # policy. Hand such source back instead of treating keywords as assertions.
+    for clause in re.split(r"[.\n]", low):
+        if (re.search(r"\b(?:not|never|without|unless|except)\b", clause)
+                and re.search(r"\b(?:reset|initializ\w*|or|counter\w*|output\w*)\b", clause)):
+            return None
+    if (re.search(r"active[-\s]+high", low)
+            or re.search(r"\bsynchronous\b|\bsynchronously\b", low)):
+        return None
+    required = (
+        re.search(r"\bodd\b", low),
+        re.search(r"\brising\b|\bposedge\b", low),
+        re.search(r"\bfalling\b|\bnegedge\b", low),
+        "first half" in low,
+        "remaining" in low,
+        "integer truncation" in low,
+        re.search(r"\bor\b", low),
+        re.search(r"active[-\s]+low", low),
+        re.search(r"\basynchron", low),
+        re.search(r"\bcounters?\s+to\s+0\b", low),
+        re.search(r"\boutputs?\s+to\s+1\b", low),
+    )
+    defaults = {(m.group(1), int(m.group(2))) for m in re.finditer(
+        r"\bparameter\s+([A-Za-z_]\w*)[^.\n]{0,60}?"
+        r"(?:defaults?\s+to|=)\s*(\d+)\b", desc, re.I)}
+    if not all(required) or len(defaults) != 1:
+        return None
+    parameter, divisor = next(iter(defaults))
+    if (parameter in roles.values() or not re.search(
+            r"\bcounts?\b[^.\n]*\b0\b[^.\n]*\b" + re.escape(parameter)
+            + r"\s*-\s*1\b", desc, re.I)):
+        return None
+    if divisor < 3 or divisor > 2**32 - 1 or divisor % 2 == 0:
+        return None
+    return {"module": module, "phase": phase, "default_divisor": divisor,
+            "ports": roles, "parameter": parameter,
+            "source_sha256": hashlib.sha256(desc.encode("utf-8")).hexdigest()}
+
+
 def _is_odd_divider(desc: str, mod: Optional[str], ports: set) -> bool:
+    if _odd_clock_contract(desc) is not None:
+        return True
+    if _odd_declared_phase(desc) is not None:
+        return False  # contradictory/incomplete explicit phase cannot use a default
     if mod != "freq_divbyodd":
         return False
     if not {"clk", "rst_n", "clk_div"}.issubset(ports):
@@ -3868,12 +3964,47 @@ def _contract_shape(desc_text: str) -> Optional[str]:
 def emit_rtl(shape: str, desc_text: str = "") -> str:
     """RTL for a shape key.
 
-    For the sixteen TEMPLATE shapes this returns the exact verified-correct
-    template, byte for byte, and `desc_text` is not read - their output is
-    unchanged by the contract layer. For a CONTRACT-composed shape the RTL is
+    Legacy TEMPLATE calls retain their template bytes. A complete odd-divider
+    source contract supplies its public identity, divisor and edge phase.
+    For a CONTRACT-composed shape the RTL is
     composed from the handshake/acceptance contract stated by `desc_text`, which
     is therefore required.
     """
+    if shape == "odd_clock_divider" and desc_text:
+        contract = _odd_clock_contract(desc_text)
+        if contract is not None:
+            # Reuse the topology; the public contract supplies identity/default
+            # and which counter value the registered output describes.
+            rtl = _TPL_ODD[re.search(r"(?m)^module\b", _TPL_ODD).start():]
+            rtl = re.sub(r"(parameter\s+NUM_DIV\s*=\s*)\d+",
+                         lambda m: m.group(1) + str(contract["default_divisor"]), rtl, count=1)
+            if contract["phase"] == "post":
+                for counter, output in (("cnt1", "clk_div1"), ("cnt2", "clk_div2")):
+                    rtl = rtl.replace(f"{output} <= 1'b0;", f"{output} <= 1'b1;")
+                    rtl = rtl.replace(f"({counter} < (NUM_DIV / 2))",
+                                      f"(({counter} + 32'd1) < (NUM_DIV / 2))")
+                rtl = rtl.replace("Decode the CURRENT counter value.",
+                                  "Decode the incremented or wrapped counter value.")
+                rtl = rtl.replace("identical current-state rule", "identical source-declared phase")
+            names = {"clk": contract["ports"]["clock"],
+                     "rst_n": contract["ports"]["reset"],
+                     "clk_div": contract["ports"]["output"],
+                     "NUM_DIV": contract["parameter"]}
+            occupied = set(names.values()) | {contract["module"]}
+            for internal in ("cnt1", "cnt2", "clk_div1", "clk_div2"):
+                target = internal
+                while target in occupied:
+                    target = "_" + target
+                names[internal] = target
+                occupied.add(target)
+            # One substitution pass also handles public names that happen to
+            # equal a template's private register or another template port.
+            rtl = re.sub(r"\b(?:" + "|".join(map(re.escape, names)) + r")\b",
+                         lambda m: names[m.group(0)], rtl)
+            rtl = re.sub(r"(?m)^module\s+\w+", "module " + contract["module"], rtl, count=1)
+            return "// Source-declared dual-edge odd divider.\n" + rtl
+        if _odd_declared_phase(desc_text) is not None:
+            raise ValueError("odd divider phase contract is conflicting or incomplete")
     if shape in _TEMPLATES:
         return _TEMPLATES[shape]
     if shape == _UNSIGNED_DIVISION_SHAPE:
@@ -3892,6 +4023,10 @@ def emit_rtl(shape: str, desc_text: str = "") -> str:
 
 
 def module_of_shape(shape: str, desc_text: str = "") -> str:
+    if shape == "odd_clock_divider" and desc_text:
+        contract = _odd_clock_contract(desc_text)
+        if contract is not None:
+            return contract["module"]
     if shape in _SHAPE_MODULE:
         return _SHAPE_MODULE[shape]
     if shape == _UNSIGNED_DIVISION_SHAPE:
@@ -3967,6 +4102,13 @@ def _emit_and_write(shape: str, out_path: Path, desc_text: str = "") -> str:
 
 def _source_contract_metadata(shape: str, desc_text: str) -> Dict:
     """JSON-safe provenance for a composed source-bound shape."""
+    if shape == "odd_clock_divider":
+        contract = _odd_clock_contract(desc_text)
+        if contract is not None:
+            return {"source_sha256": contract["source_sha256"],
+                    "clock_phase_contract": {key: contract[key] for key in (
+                        "phase", "default_divisor", "module", "ports", "parameter")}}
+        return {}
     if shape != _UNSIGNED_DIVISION_SHAPE:
         return {}
     contract, unresolved = _unsigned_division_observation(desc_text)
