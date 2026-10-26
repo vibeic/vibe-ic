@@ -7,9 +7,21 @@ library (d23_control_unit) {
     pin (X) { direction : output; function : "((!S & A0) | (S & A1))"; }
   }
   cell (sky130_fd_sc_hd__dfxtp_1) {
-    ff (IQ, IQN) { clocked_on : "CLK"; next_state : "D"; }
+    ff ("IQ", "IQN") { clocked_on : "CLK"; next_state : "D"; }
     pin (CLK) { direction : input; }
     pin (D) { direction : input; }
+    pin (Q) { direction : output; function : "IQ"; }
+  }
+  cell (sky130_fd_sc_hd__nand2b_1) {
+    pin (A_N) { direction : input; }
+    pin (B) { direction : input; }
+    pin (Y) { direction : output; function : "(A_N) | (!B)"; }
+  }
+  cell (sky130_fd_sc_hd__dfrtp_1) {
+    ff ("IQ", "IQN") { clocked_on : "CLK"; next_state : "D"; clear : "!RESET_B"; }
+    pin (CLK) { direction : input; }
+    pin (D) { direction : input; }
+    pin (RESET_B) { direction : input; }
     pin (Q) { direction : output; function : "IQ"; }
   }
 }

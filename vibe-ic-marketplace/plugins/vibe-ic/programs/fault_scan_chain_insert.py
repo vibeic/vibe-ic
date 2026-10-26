@@ -227,7 +227,7 @@ def _native_clock_controls(text: str, liberty_text: str, intent: dict) -> dict:
     """
     from itertools import product
     from lec_post_layout_check import (
-        _parse_netlist_instances, _parse_liberty_pins, _LIB_CELL_RE, _brace_block, _LibertyFn)
+        _parse_netlist_instances, _parse_liberty_pins, _LIB_CELL_RE, _brace_block, _LibertyFn, _vid)
     mode = intent['test_mode']
     functional, scan, select = mode['clock'], mode['scan_clock'], mode['clock_select']['native']
     for role, definition in intent['test_port_def'].items():
@@ -238,23 +238,131 @@ def _native_clock_controls(text: str, liberty_text: str, intent: dict) -> dict:
     if not re.search(r'\binput\s+(?:wire\s+)?' + re.escape(functional) + r'\s*;', text):
         raise ValueError('native functional clock is not an input')
     instances = _parse_netlist_instances(text)
-    sequential = _fatpg.liberty_sequential_cells(liberty_text)
-    clock_pins = {}
+    library = _parse_liberty_pins(liberty_text)
+    if any(cell not in library for cell, _ in instances.values()):
+        raise ValueError('unknown/unclassified native cell')
+    sequential = _fatpg.liberty_sequential_cells(liberty_text, include_latches=True)
+    semantics = {}
     for match in _LIB_CELL_RE.finditer(liberty_text):
-        if match.group(1) not in sequential:
+        cell = match.group(1)
+        if cell not in sequential:
             continue
         body, _ = _brace_block(liberty_text, match.end())
-        clock = re.search(r'\bclocked_on\s*:\s*"([A-Za-z_][A-Za-z0-9_$]*)"', body)
-        if clock:
-            clock_pins[match.group(1)] = clock.group(1)
+        ff = re.search(r'\bff\s*\(\s*"?([\w$]+)"?\s*,[^)]*\)\s*\{', body)
+        if not ff:
+            continue
+        state, _ = _brace_block(body, ff.end())
+        attrs = dict(re.findall(r'\b(clocked_on|next_state|clear|preset)\s*:\s*"([^"]*)"', state))
+        outputs = [pin for pin, expr in library[cell]['outputs'].items() if expr == ff.group(1)]
+        if (len(outputs) == 1 and all(re.fullmatch(r'[A-Za-z_][\w$]*', attrs.get(k, ''))
+                                     for k in ('clocked_on', 'next_state'))):
+            semantics[cell] = (attrs, outputs[0])
     flops = {name: (cell, pins) for name, (cell, pins) in instances.items() if cell in sequential}
-    if not flops or any(cell not in clock_pins for cell, _ in flops.values()):
+    if not flops or any(cell not in semantics for cell, _ in flops.values()):
         raise ValueError('native sequential clock semantics unsupported/absent')
-    clocks = {pins.get(clock_pins[cell]) for cell, pins in flops.values()}
+    drivers = {}
+    for name, (cell, pins) in instances.items():
+        for pin, expr in library[cell]['outputs'].items():
+            net = pins.get(pin)
+            if net is None or net in drivers:
+                raise ValueError('native output missing or multiply driven')
+            drivers[net] = None if cell in sequential else (expr, pins, library[cell]['inputs'])
+    aliases = {_vid(a): _vid(b) for a, b in re.findall(r'\bassign\s+(\\\S+|[\w$]+)\s*=\s*(\\\S+|[\w$]+)\s*;', text)}
+
+    def signal(net, values, trail=()):
+        if net in values:
+            return values[net]
+        if net in ("1'b0", "1'b1", '0', '1'):
+            return net in ("1'b1", '1')
+        if net is None or net in trail:
+            raise ValueError('missing/cyclic native control connection')
+        if net in aliases:
+            return signal(aliases[net], values, (*trail, net))
+        driver = drivers.get(net)
+        if driver is None:
+            return net
+        expr, pins, inputs = driver
+        if not isinstance(expr, str):
+            raise ValueError('unknown native pin function')
+        fn = _LibertyFn(expr)
+        if ''.join(fn.toks) != re.sub(r'\s+', '', expr):
+            raise ValueError('unsupported native pin function')
+        symbols = {p: values.get(pins.get(p), pins.get(p)) for p in inputs}
+        symbols = {p: (v == "1'b1") if v in ("1'b0", "1'b1") else v for p, v in symbols.items()}
+        leaves = sorted({v for v in symbols.values() if isinstance(v, str)})
+        if None in symbols.values() or len(leaves) > 6:
+            raise ValueError('unsupported native control cone')
+        table = [(bits, fn({p: dict(zip(leaves, bits)).get(v, v) for p, v in symbols.items()}))
+                 for bits in product((False, True), repeat=len(leaves))]
+        if len({out for _, out in table}) == 1:
+            return table[0][1]
+        for i, leaf in enumerate(leaves):
+            if all(out == bits[i] for bits, out in table):
+                return signal(leaf, values, (*trail, net))
+        return net  # opaque functional logic cannot prove a control/scan connection
+
+    meta = parse_chain_metadata(text) or {}
+    order = meta.get('order', [])
+    if (not order or any(e.get('kind') not in ('dff', 'input', 'output') or e.get('width') != 1
+                         for e in order)
+            or sum(e['kind'] == 'dff' for e in order) != meta.get('internalCount')
+            or sum(e['kind'] != 'dff' for e in order) != meta.get('boundaryCount')
+            or len(order) != len(flops)
+            or any(meta.get(k) != k for k in ('sin', 'sout', 'shift'))):
+        raise ValueError('unknown/unclassified Fault order or native sequential census')
+    reset = mode['reset']
+    shift = intent['test_port_def']['scan_enable']['native']
+    scan_values = {select: True, shift: True, reset['signal']: bool(reset['shift_value'])}
+    previous, classified = meta['sin'], {}
+    for entry in order:
+        candidates = []
+        for name, (cell, pins) in flops.items():
+            attrs, output = semantics[cell]
+            if name not in classified and signal(pins.get(attrs['next_state']), scan_values) == previous:
+                candidates.append((name, cell, pins, attrs, output))
+        if len(candidates) != 1:
+            raise ValueError('Fault order does not uniquely classify every native flop')
+        name, cell, pins, attrs, output = candidates[0]
+        kind, q = entry['kind'], pins[output]
+        if kind != 'dff' and pins.get(attrs['clocked_on']) != scan:
+            raise ValueError('boundary flop does not use direct authorized scan clock')
+        controls = {k: v for k, v in attrs.items() if k in ('clear', 'preset')}
+        if kind == 'dff' and controls:
+            raise ValueError('internal asynchronous controls contradict synchronous reset authority')
+        if kind != 'dff':
+            if (set(controls) != {'clear'} or ''.join(_LibertyFn(controls['clear']).toks)
+                    != re.sub(r'\s+', '', controls['clear'])):
+                raise ValueError('boundary reset/control semantics unsupported')
+            for testing, resetting in product((False, True), repeat=2):
+                values = {select: testing, shift: False, reset['signal']: resetting}
+                env = {pin: signal(pins.get(pin), values) for pin in library[cell]['inputs']}
+                used = set(_LibertyFn(controls['clear']).toks) & set(env)
+                if (any(type(env[p]) is not bool for p in used)
+                        or _LibertyFn(controls['clear'])(env) !=
+                        (resetting == bool(reset['active_level']) and not testing)):
+                    raise ValueError('boundary reset is not authorized reset gated by test')
+            if kind == 'input':
+                values = {select: False, shift: False, reset['signal']: bool(reset['shift_value'])}
+                if (signal(pins[attrs['next_state']], values) != entry['name']
+                        or signal(pins[attrs['next_state']], {**values, select: True}) != q):
+                    raise ValueError('boundary input capture/test control differs from Fault order')
+            elif signal(entry['name'], scan_values) != previous:
+                raise ValueError('boundary output differs from Fault order connection')
+        else:
+            values = {select: False, shift: False, reset['signal']: bool(reset['active_level'])}
+            if (type(signal(pins[attrs['next_state']], values)) is not bool
+                    or type(signal(pins[attrs['next_state']],
+                                   {**values, reset['signal']: bool(reset['shift_value'])})) is bool):
+                raise ValueError('internal synchronous reset authority is unproved')
+        classified[name] = {'kind': kind, 'order_name': entry['name'],
+                            'clock': pins.get(attrs['clocked_on'])}
+        previous = q
+    if signal(meta['sout'], scan_values) != previous:
+        raise ValueError('native chain does not terminate at authorized scan output')
+    clocks = {v['clock'] for v in classified.values() if v['kind'] == 'dff'}
     if len(clocks) != 1 or None in clocks:
-        raise ValueError('native flops do not share the authorized clock-source domain')
+        raise ValueError('native internal flops do not share the authorized clock-source domain')
     clock_net = next(iter(clocks))
-    library = _parse_liberty_pins(liberty_text)
     matches = []
     for name, (cell, pins) in instances.items():
         if cell in sequential or cell not in library:
@@ -276,7 +384,8 @@ def _native_clock_controls(text: str, liberty_text: str, intent: dict) -> dict:
         raise ValueError('native clock mux does not implement the declared clk/tck/test selection')
     return {'functional_clock': functional, 'scan_clock': scan, 'clock_select': select,
             'functional_value': 0, 'scan_value': 1, 'clock_net': clock_net,
-            'mux': matches[0], 'flop_clocks': {name: clock_net for name in sorted(flops)}}
+            'mux': matches[0], 'flop_clocks': {name: classified[name]['clock'] for name in sorted(flops)},
+            'flop_roles': classified}
 
 
 def load_l20_scan_contract(project: Path, expected_clock: str | None = None,

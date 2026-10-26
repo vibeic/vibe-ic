@@ -18,6 +18,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _PROG = (Path(__file__).resolve().parent.parent
          / "phase1_doc_one_shot_runner.py")
 _spec = importlib.util.spec_from_file_location("_p1_l7", _PROG)
@@ -80,3 +82,112 @@ def test_bold_list_without_description_not_swept(tmp_path):
     txt = ("# Verification\n\n1. **just_a_name**\n2. **another**\n")
     doc = _gen(tmp_path, {"L7_verification_plan.txt": txt})
     assert _named(doc) == []
+
+
+_NEUTRAL_INTERFACE = """\
+Top-level Interface
+===================
+
+| Pin | Direction | Width | Description |
+| --- | --- | ---: | --- |
+| `clk_i` | input | 1 | Primary clock |
+| `rst_ni` | input | 1 | Active-low synchronous reset |
+| `enable_i` | input | 1 | Increment enable |
+| `count_o` | output | 8 | Current counter value |
+"""
+
+
+def test_functional_interface_table_not_promoted_to_l7_debug(tmp_path):
+    """Actual-producer negative: ordinary top ports carry no debug authority."""
+    doc = _gen(tmp_path, {"debug.rst": _NEUTRAL_INTERFACE})
+    assert doc["debug_observability"] == []
+    assert doc["no_debug_observability_in_input"] is True
+
+
+def test_explicit_debug_observability_table_uses_description_header(tmp_path):
+    """Positive: an explicitly headed debug table retains pins and descriptions."""
+    text = """\
+Debug Observability
+===================
+
+| Signal | Direction | Width | Description |
+| --- | --- | ---: | --- |
+| `debug_req_i` | input | 1 | Request entry to Debug Mode |
+| `debug_state_o` | output | 4 | Current debugger state |
+"""
+    doc = _gen(tmp_path, {"debug.rst": text})
+    rows = doc["debug_observability"]
+    assert [(r["signal"], r["direction"], r["description"])
+            for r in rows] == [
+                ("debug_req_i", "input", "Request entry to Debug Mode"),
+                ("debug_state_o", "output", "Current debugger state"),
+            ]
+    quotes = [e["literal"] for e in
+              doc["extraction_evidence"]["input/docs/debug.rst"]
+              if e["label"] == "debug observability (RST Interface table)"]
+    assert any("debug_req_i" in q and "Request entry to Debug Mode" in q
+               for q in quotes)
+    assert any("debug_state_o" in q and "Current debugger state" in q
+               for q in quotes)
+
+
+@pytest.mark.parametrize("text", [
+    _NEUTRAL_INTERFACE,
+    """\
+Debug Notes
+===========
+
+| Signal | Direction | Width | Notes |
+| --- | --- | ---: | --- |
+| `debug_req_i` | input | 1 | Request entry to Debug Mode |
+""",
+    """\
+The interface may be inspected while debugging.
+
+| Signal | Direction | Width | Description |
+| --- | --- | ---: | --- |
+| `clk_i` | input | 1 | Primary clock |
+""",
+])
+def test_ambiguous_malformed_or_functional_table_has_no_debug_authority(
+        tmp_path, text):
+    doc = _gen(tmp_path, {"debug.rst": text})
+    assert doc["debug_observability"] == []
+    assert doc["no_debug_observability_in_input"] is True
+
+
+def test_empty_or_malformed_debug_table_stops_before_functional_table(tmp_path):
+    """A prior authorized header must not lend authority across table bounds."""
+    cases = {
+        "empty": """\
+Debug Observability
+===================
+| Signal | Direction | Description |
+| --- | --- | --- |
+
+Top-level Interface
+===================
+| Signal | Direction | Description |
+| --- | --- | --- |
+| clk_i | input | Primary clock |
+""",
+        "malformed": """\
+Debug Observability
+===================
+| Signal | Direction | Description |
+| --- | --- | --- |
+| not-a-signal | sideways | Not a valid debug row |
+
+Top-level Interface
+===================
+| Signal | Direction | Description |
+| --- | --- | --- |
+| clk_i | input | Primary clock |
+""",
+    }
+    leaked = {}
+    for case, text in cases.items():
+        doc = _gen(tmp_path / case, {"debug.rst": text})
+        if doc["debug_observability"]:
+            leaked[case] = doc["debug_observability"]
+    assert leaked == {}
