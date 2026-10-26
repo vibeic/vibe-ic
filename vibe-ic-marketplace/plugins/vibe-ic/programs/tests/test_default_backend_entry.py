@@ -789,7 +789,8 @@ def test_default_postcheck8_consumes_saved_prelayout_without_native_replay(
     ('terminal_changed', 'PASS', 2, 'NOT_MEASURED'),
     ('stale_subject', 'NOT_MEASURED', 0, None),
     ('missing_scan_sdc', 'NOT_MEASURED', 0, None),
-    ('scan_violation', 'FAIL', 2, None),
+    ('scan_violation', 'FAIL', 2, 'FAIL'),
+    ('terminal_violation_changed', 'FAIL', 2, 'NOT_MEASURED'),
 ])
 def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
         tmp_path, monkeypatch, case, expected, calls, terminal_expected):
@@ -912,7 +913,8 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
         put(output, doc)
         return doc
     def judge_slack(folder, output):
-        red = case == 'scan_violation' and 'scan_slack_gate' in output.name
+        red = case in ('scan_violation', 'terminal_violation_changed') \
+            and 'scan_slack_gate' in output.name
         doc = {'verdict': 'FAIL' if red else 'PASS',
                'findings': ['LL_STA_SETUP_VIOLATION'] if red else [],
                'corners': {'tt': {'setup_ws': {'status': 'MEASURED',
@@ -958,10 +960,10 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
         assert receipt['scan']['status'] == 'NOT_MEASURED'
 
     if terminal_expected is not None:
-        terminal = {**result, 'verdict': 'PASS', 'detail': 'postcheck PASS'}
+        terminal = {**result, 'detail': 'postcheck terminal'}
         if case == 'terminal_missing':
             receipt_path.unlink()
-        elif case == 'terminal_changed':
+        elif case in ('terminal_changed', 'terminal_violation_changed'):
             receipt_path.write_text(receipt_path.read_text() + ' ')
         import _delivery_route
         from test_flow109_selection import profile
@@ -979,7 +981,8 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
                             '--flow', '109', '--flow109-manifest', str(manifest),
                             '--entry-step', 'D26', '--exit-step', 'D26',
                             '--route', 'ip', '--no-dashboard'])
-        assert front._main() == (0 if terminal_expected == 'PASS' else 2)
+        expected_rc = {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[terminal_expected]
+        assert front._main() == expected_rc
         attempt = next((project / 'reports/flow109/attempts').glob('window-*'))
         finished = json.loads((attempt / 'result.json').read_text())
         assert finished['default_row_status'] == terminal_expected
@@ -988,7 +991,7 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
             (project / 'reports/orchestrator/vibe_ic_one_shot.json').read_text())
         final = summary['d26_finalization']
         assert final['verdict'] == terminal_expected, final
-        if terminal_expected == 'PASS':
+        if terminal_expected in ('PASS', 'FAIL'):
             assert component['timing_modes_receipt'] == result['timing_modes_receipt']
         else:
             assert 'timing_modes_receipt' not in component

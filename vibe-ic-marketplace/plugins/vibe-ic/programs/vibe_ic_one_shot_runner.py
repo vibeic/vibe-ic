@@ -1630,23 +1630,36 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
             baseline = doc.get('functional_baseline') or {}
             if (doc.get('schema') != 'vibeic.flow109.d26-timing-modes.v1'
                     or doc.get('step_id') != 'D26' or doc.get('position') != 38
-                    or doc.get('aggregate_status') != 'PASS'
-                    or baseline.get('status') != 'PASS'
-                    or baseline.get('canonical_pass') is not True
-                    or baseline.get('current_inputs') is not True
-                    or baseline.get('canonical_consumer_status') != 'PASS'
+                    or status not in ('PASS', 'FAIL', 'NOT_MEASURED')
+                    or doc.get('aggregate_status') != status
+                    or baseline.get('status') not in
+                    ('PASS', 'FAIL', 'NOT_MEASURED')
+                    or (baseline.get('status') == 'PASS'
+                        and (baseline.get('canonical_pass') is not True
+                             or baseline.get('current_inputs') is not True
+                             or baseline.get('canonical_consumer_status') != 'PASS'))
+                    or (status == 'PASS' and baseline.get('status') != 'PASS')
                     or not isinstance(doc.get('top'), str) or not doc['top']):
-                raise ValueError('timing_modes_receipt schema or PASS state is invalid')
+                raise ValueError('timing_modes_receipt schema or terminal state is invalid')
 
             import fault_scan_chain_insert as scan
             planned, problems = scan.load_d09_dft_contract(project)
-            if planned is None or problems or doc.get('scan', {}).get('d09_binding') != planned:
+            recorded_d09 = doc.get('scan', {}).get('d09_binding')
+            if recorded_d09 is None:
+                if (status == 'NOT_MEASURED' and not doc.get('post_scan_arms')
+                        and planned is None):
+                    return doc, None
+                raise ValueError('timing_modes_receipt omits current D09 binding')
+            if planned is None or problems or recorded_d09 != planned:
                 raise ValueError('current D09 binding differs from timing_modes_receipt')
             if planned['intent']['scan_test'] is False:
                 if (doc['scan'].get('applicability') != 'NOT_APPLICABLE'
                         or doc['scan'].get('status') != 'NOT_APPLICABLE'
                         or doc.get('post_scan_arms') != {}
-                        or doc.get('modes_measured') != ['functional_baseline']):
+                        or doc.get('aggregate_status') != baseline.get('status')
+                        or doc.get('modes_measured') !=
+                        (['functional_baseline'] if baseline.get('status') in
+                         ('PASS', 'FAIL') else [])):
                     raise ValueError('no-scan timing_modes_receipt claims extra modes')
                 return doc, None
             if planned['intent']['scan_test'] is not True:
@@ -1663,61 +1676,83 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
 
             scan_doc = doc.get('scan') or {}
             arms = doc.get('post_scan_arms') or {}
-            if (scan_doc.get('applicability') != 'APPLICABLE'
-                    or scan_doc.get('status') != 'PASS'
-                    or set(arms) != {'functional', 'scan'}
+            if scan_doc.get('applicability') != 'APPLICABLE':
+                raise ValueError('scan applicability differs from current D09')
+            if (arms and (set(arms) != {'functional', 'scan'}
+                    or scan_doc.get('status') != arms['scan'].get('status')
                     or doc.get('modes_measured') != [
-                        'functional_baseline', 'post_scan_functional', 'post_scan_scan']):
+                        'functional_baseline', 'post_scan_functional',
+                        'post_scan_scan'])):
                 raise ValueError('applicable timing mode population is incomplete')
 
             scan_report_ref = scan_doc.get('scan_chain_report') or {}
-            scan_report_path = (project / str(scan_report_ref.get('path') or '')).resolve()
-            if (not scan_report_path.is_relative_to(project)
-                    or not scan_report_path.is_file()
-                    or contract.digest(scan_report_path) != scan_report_ref.get('sha256')):
-                raise ValueError('scan-chain report is missing or changed')
-            scan_report = json.loads(scan_report_path.read_text(encoding='utf-8'))
-            current, reason = scan.l20_binding_is_current(project, scan_report)
-            if (not current or scan_report.get('published') is not True
-                    or scan_report.get('d09_contract') != planned):
-                raise ValueError('scan-chain report is not current: ' + str(reason))
+            if scan_report_ref:
+                scan_report_path = (
+                    project / str(scan_report_ref.get('path') or '')).resolve()
+                if (not scan_report_path.is_relative_to(project)
+                        or not scan_report_path.is_file()
+                        or contract.digest(scan_report_path) !=
+                        scan_report_ref.get('sha256')):
+                    raise ValueError('scan-chain report is missing or changed')
+                scan_report = json.loads(scan_report_path.read_text(encoding='utf-8'))
+                current, reason = scan.l20_binding_is_current(project, scan_report)
+                if (not current or scan_report.get('published') is not True
+                        or scan_report.get('d09_contract') != planned):
+                    raise ValueError('scan-chain report is not current: ' + str(reason))
+            elif arms:
+                raise ValueError('complete timing arms omit scan-chain report')
 
-            import dft_signoff_check as signoff
-            scan_timing = signoff.evaluate_scan_shift_timing(project)
             recorded_constraint = dict(scan_doc.get('constraint') or {})
-            if recorded_constraint.pop('mode', None) != 'scan':
-                raise ValueError('scan timing constraint mode is invalid')
-            if (scan_timing.get('status') != 'PASS'
-                    or scan_timing.get('constraint') != recorded_constraint):
-                raise ValueError('current scan timing constraint differs')
+            if recorded_constraint:
+                if recorded_constraint.pop('mode', None) != 'scan':
+                    raise ValueError('scan timing constraint mode is invalid')
+                import dft_signoff_check as signoff
+                scan_timing = signoff.evaluate_scan_shift_timing(project)
+                if (scan_timing.get('status') != 'PASS'
+                        or scan_timing.get('constraint') != recorded_constraint):
+                    raise ValueError('current scan timing constraint differs')
+            elif arms:
+                raise ValueError('complete timing arms omit scan timing constraint')
 
-            import lec_gate_netlist_select as netlists
-            adopted, _note, is_scan = netlists.pnr_consumed_netlist(
-                project, doc['top'])
-            adopted = Path(adopted).resolve()
             adopted_doc = scan_doc.get('adopted_d24') or {}
-            if (not adopted.is_relative_to(project) or not adopted.is_file()
-                    or is_scan is not True
-                    or str(adopted.relative_to(project)) != adopted_doc.get('path')
-                    or contract.digest(adopted) != adopted_doc.get('sha256')
-                    or adopted_doc.get('current') is not True
-                    or adopted_doc.get('is_scan_inserted') is not True):
-                raise ValueError('current D24 adopted subject differs')
-            import step_output_collector as versions
-            d24 = versions.latest_pass(project, '12')
-            output = next((item for item in (d24 or {}).get('outputs', ())
-                           if item.get('rel') == adopted_doc.get('path')), None)
-            consumer = (((d24 or {}).get('result') or {}).get('canonical_consumer') or {})
-            if (not d24 or d24.get('status') != 'PASS'
-                    or not d24.get('canonical_pass') or not d24.get('current_inputs')
-                    or consumer.get('status') != 'PASS'
-                    or not output or output.get('sha256') != adopted_doc.get('sha256')):
-                raise ValueError('current D24 acceptance differs')
+            if adopted_doc:
+                import lec_gate_netlist_select as netlists
+                adopted, _note, is_scan = netlists.pnr_consumed_netlist(
+                    project, doc['top'])
+                adopted = Path(adopted).resolve()
+                if (not adopted.is_relative_to(project) or not adopted.is_file()
+                        or is_scan is not True
+                        or str(adopted.relative_to(project)) != adopted_doc.get('path')
+                        or contract.digest(adopted) != adopted_doc.get('sha256')
+                        or adopted_doc.get('current') is not True
+                        or adopted_doc.get('is_scan_inserted') is not True):
+                    raise ValueError('current D24 adopted subject differs')
+                import step_output_collector as versions
+                d24 = versions.latest_pass(project, '12')
+                output = next((item for item in (d24 or {}).get('outputs', ())
+                               if item.get('rel') == adopted_doc.get('path')), None)
+                consumer = (((d24 or {}).get('result') or {}).get(
+                    'canonical_consumer') or {})
+                if (not d24 or d24.get('status') != 'PASS'
+                        or not d24.get('canonical_pass')
+                        or not d24.get('current_inputs')
+                        or consumer.get('status') != 'PASS'
+                        or not output
+                        or output.get('sha256') != adopted_doc.get('sha256')):
+                    raise ValueError('current D24 acceptance differs')
+            elif arms:
+                raise ValueError('complete timing arms omit D24 adopted subject')
+
+            if not arms:
+                if (status in ('FAIL', 'NOT_MEASURED')
+                        and scan_doc.get('status') == 'NOT_MEASURED'):
+                    return doc, None
+                raise ValueError('timing mode population is absent')
 
             for name in ('functional', 'scan'):
                 arm = arms[name]
                 constraint_ref = arm.get('constraint') or {}
-                if (arm.get('status') != 'PASS'
+                if (arm.get('status') not in ('PASS', 'FAIL', 'NOT_MEASURED')
                         or constraint_ref.get('mode') != name
                         or arm.get('adopted_netlist') != {
                             'path': adopted_doc['path'], 'sha256': adopted_doc['sha256']}):
@@ -1763,6 +1798,7 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                 if (Path(str(config.get('PNR_SDC_FILE') or '')).resolve() != constraint_path
                         or Path(str(state.get('nl') or '')).resolve() != adopted):
                     raise ValueError(f'{name} native input subject differs')
+                gate_verdicts = []
                 for gate_name in ('sdc_gate', 'slack_gate'):
                     gate_ref = arm.get(gate_name) or {}
                     gate_path = (project / str(gate_ref.get('path') or '')).resolve()
@@ -1770,8 +1806,10 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                             or contract.digest(gate_path) != gate_ref.get('sha256')):
                         raise ValueError(f'{name} {gate_name} is missing or changed')
                     gate = json.loads(gate_path.read_text(encoding='utf-8'))
-                    if gate.get('verdict') != 'PASS':
-                        raise ValueError(f'{name} {gate_name} is not PASS')
+                    if (gate.get('verdict') not in ('PASS', 'FAIL', 'NOT_MEASURED')
+                            or gate_ref.get('verdict') != gate.get('verdict')):
+                        raise ValueError(f'{name} {gate_name} verdict differs')
+                    gate_verdicts.append(gate['verdict'])
                     # The immutable gate bytes are authoritative here; calling
                     # a judge would overwrite them, so bind their source fields.
                     if (gate.get('state_out_sha256') != contract.digest(folder / 'state_out.json')
@@ -1779,12 +1817,23 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                                 and (gate.get('netlist_sha256') != adopted_doc['sha256']
                                      or gate.get('sdc_sha256') != constraint_ref['sha256']))):
                         raise ValueError(f'{name} {gate_name} inputs differ')
+                arm_status = ('FAIL' if 'FAIL' in gate_verdicts else
+                              'PASS' if gate_verdicts == ['PASS', 'PASS'] else
+                              'NOT_MEASURED')
+                if arm.get('status') != arm_status:
+                    raise ValueError(f'{name} timing arm verdict differs')
+            arm_statuses = (arms['functional']['status'], arms['scan']['status'])
+            aggregate = ('FAIL' if 'FAIL' in arm_statuses else
+                         'PASS' if arm_statuses == ('PASS', 'PASS') else
+                         'NOT_MEASURED')
+            if aggregate != status:
+                raise ValueError('timing arm aggregate differs from terminal status')
             return doc, None
         except (contract.Refusal, OSError, ValueError, KeyError, TypeError,
                 json.JSONDecodeError) as exc:
             return None, str(exc)
 
-    if status == 'PASS':
+    if timing_ref is not None or status == 'PASS':
         timing_doc, refusal = current_timing_modes()
         if timing_doc is None:
             status = 'NOT_MEASURED'
@@ -1825,7 +1874,8 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                  and component.get('step_id') == 'D26'
                  and component.get('default_row_status') == finished.get('default_row_status')
                  and component.get('completed') is (finished.get('default_row_status') == 'PASS')
-                 and (finished.get('default_row_status') != 'PASS'
+                 and ((timing_ref is None
+                       and 'timing_modes_receipt' not in component)
                       or component.get('timing_modes_receipt') == timing_ref)
                  else None)
     if finalized is None:
