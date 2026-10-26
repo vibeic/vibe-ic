@@ -90,8 +90,18 @@ def native_rating_context(transcript: str, rating: dict|None, binding: dict) -> 
     if temperature is not None and declared is not None and temperature!=float(declared):
         raise ValueError('native temperature differs from source-bound conditions')
     matched=bool(rating) and temperature is not None and temperature==rating.get('temperature_c')
+    if not rating:
+        qualification_detail='source current-density rating is absent'
+    elif temperature is None:
+        qualification_detail='native analysis temperature is absent'
+    elif not matched:
+        qualification_detail='native analysis temperature differs from the source current-density rating'
+    else:
+        qualification_detail='native analysis temperature exactly matches the source current-density rating'
     return {'source_rating':rating or {},'native_temperature_c':temperature,
             'temperature_matches_source_rating':matched,
+            'qualification_status':'PASS' if matched else 'NOT_MEASURED',
+            'qualification_detail':qualification_detail,
             'comparison_scope':'source-rated native temperature' if matched else 'numeric current comparison only',
             'lifetime_scope':'foundry table rating only; no temperature/lifetime extrapolation'}
 
@@ -769,7 +779,11 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
         elif row['type'] in known:excluded[row['type']]+=1
         else:raise ValueError('native ideal material is not declared by extraction technology')
     states=[r['status'] for r in results]
-    status='FAIL' if 'FAIL' in states else 'NOT_MEASURED' if not states or 'NOT_MEASURED' in states else 'PASS'
+    numeric_status=('FAIL' if 'FAIL' in states else 'NOT_MEASURED'
+                    if not states or 'NOT_MEASURED' in states else 'PASS')
+    status=('FAIL' if numeric_status=='FAIL' else 'PASS'
+            if numeric_status=='PASS' and rating['qualification_status']=='PASS'
+            else 'NOT_MEASURED')
     roles={}
     if block is not None:
         topology=project/f'phase3/analog/{block}/topology.json'
@@ -815,7 +829,8 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
             stress={'status':'NOT_MEASURED','detail':str(exc)}
     if any(not Path(view['path']).is_file() or _sha(Path(view['path']))!=view['sha256'] for view in views.values()):
         raise ValueError('consumed native interconnect inputs changed during derivation')
-    return {'status':status,'measurement_status':'PASS','receipt':str(receipt_path),'graded_segments':len(results),
+    return {'status':status,'numeric_status':numeric_status,'measurement_status':'PASS',
+            'receipt':str(receipt_path),'graded_segments':len(results),
             'violations':[r for r in results if r['status']=='FAIL'],
             'unmeasured':[r for r in results if r['status']=='NOT_MEASURED'],
             'native_drc_bound_partitions':sum('density_bound_mA_per_um_exact' in r for r in results),

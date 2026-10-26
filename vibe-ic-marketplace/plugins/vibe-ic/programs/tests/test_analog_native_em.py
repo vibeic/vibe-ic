@@ -150,7 +150,7 @@ def measured_case(tmp_path):
          'width_grid':60,'length_grid':200,'width_um':60*scale,'length_um':200*scale}
     geometry=put(work/'geometry.jsonl',json.dumps(header)+'\n'+json.dumps(row)+'\n')
     capture=put(work/'op.raw','Title: native fixture\nPlotname: Operating Point\nFlags: real\nNo. Variables: 2\nNo. Points: 1\nVariables:\n0 v(a) voltage\n1 v(b) voltage\nValues:\n0 0.0001\n0\n')
-    log=put(work/'native.log','Doing analysis at TEMP = 27\nNo. of Data Rows : 1\n')
+    log=put(work/'native.log','Doing analysis at TEMP = 105\nNo. of Data Rows : 1\n')
     mapping=dict(row,spice_resistor='R0',spice_nodes=['a','b'],spice_resistance_ohm=1.0005,
                  voltage_vectors=['a','b'],voltage_v=[.0001,0],current_a=.0001/1.0005)
     currents=put(work/'currents.jsonl',json.dumps(mapping)+'\n')
@@ -166,7 +166,8 @@ def measured_case(tmp_path):
 
 def grade(project,setting):
     aliases,known=em.material_map(TECH)
-    return em.grade_case(project,setting,em.parse_process_limits(TABLE),aliases,known,block='unit')
+    return em.grade_case(project,setting,em.parse_process_limits(TABLE),aliases,known,
+                         block='unit',rating_context=em.process_rating_context(TABLE))
 
 
 def test_real_consumer_recomputes_native_current_and_pg_ranges(measured_case):
@@ -195,6 +196,42 @@ def test_a16_real_consumer_runs_native_em_case_without_promoting_missing_mission
     assert result['metrics']['mission']['status']=='NOT_MEASURED'
     assert result['metrics']['em']['status']=='PASS'
     assert result['metrics']['em']['result']['cases'][0]['status']=='PASS'
+
+
+@pytest.mark.parametrize('temperature,expected',[
+    (105,'PASS'),(125,'NOT_MEASURED'),(None,'NOT_MEASURED')])
+def test_a16_mission_pass_cannot_promote_unrated_native_em(
+        measured_case, monkeypatch, temperature, expected):
+    import analog_native_physical as physical
+    import analog_real_corner_sweep as ars
+    import _designs_root as dr
+    project,case,paths=measured_case
+    paths['log'].write_text((f'Doing analysis at TEMP = {temperature}\n'
+                             if temperature is not None else 'No native temperature marker\n'))
+    rec=em._read(paths['receipt']);rec['outputs'][str(paths['log'])]=em._sha(paths['log'])
+    put(paths['receipt'],rec)
+    pdf=put(project/'current-density.pdf','source-owned limit bytes')
+    source=put(project/'current-density-source.json',
+               {'copy':str(pdf),'sha256':em._sha(pdf)})
+    converted=type('Converted',(),{'stdout':TABLE})()
+    monkeypatch.setattr(em.subprocess,'run',lambda *a,**k:converted)
+    monkeypatch.setattr(em,'read_technology',lambda *a,**k:(TECH,{}))
+    put(project/'mission.sp','.control\nop\n.endc\n.end\n')
+    put(project/'mission-spec.json',{'specs':[{'name':'max_stress','max':1.0}]})
+    monkeypatch.setattr(dr,'resolve_host_root',lambda *a:str(project))
+    monkeypatch.setattr(ars,'_container_path',lambda c,root,path:str(path))
+    monkeypatch.setattr(ars,'_run_ngspice',lambda *a,**k:(
+        True,{'max_stress':.8},'native mission PASS',{}))
+    result=physical._reliability(project,'unit','native','','process',{
+        'deck':'mission.sp','spec':'mission-spec.json',
+        'em':{'limits_source':str(source),'magic_tech':'source.tech','cases':[case]},
+        '_features':{'requires_thermal':False,'requires_ir':False,'requires_aging':False}})
+    assert result['metrics']['mission']['status']=='PASS'
+    assert all(result['metrics'][name]['status']=='NOT_APPLICABLE'
+               for name in ('thermal','ir','aging'))
+    assert result['metrics']['em']['status']==expected
+    assert result['metrics']['em']['result']['cases'][0]['status']==expected
+    assert result['status']==expected
 
 
 def test_frozen_executed_driver_is_preferred_to_mutable_source_path(measured_case):
@@ -285,17 +322,24 @@ def test_native_magic_zero_material_artifact_binds_only_real_positive_edges(dama
         assert sum(row['ideal_short'] for row in rows)==1
 
 
-@pytest.mark.parametrize('temperature,scope',[(105,'source-rated native temperature'),
-                                           (125,'numeric current comparison only')])
-def test_source_rating_is_distinct_from_bound_native_temperature(measured_case,temperature,scope):
+@pytest.mark.parametrize('temperature,scope,expected',[
+    (105,'source-rated native temperature','PASS'),
+    (125,'numeric current comparison only','NOT_MEASURED'),
+    (None,'numeric current comparison only','NOT_MEASURED')])
+def test_source_rating_is_distinct_from_bound_native_temperature(
+        measured_case,temperature,scope,expected):
     project,setting,paths=measured_case
-    paths['log'].write_text(f'Doing analysis at TEMP = {temperature} and TNOM = 27\n')
+    paths['log'].write_text((f'Doing analysis at TEMP = {temperature} and TNOM = 27\n'
+                             if temperature is not None else 'No native temperature marker\n'))
     rec=em._read(paths['receipt']);rec['outputs'][str(paths['log'])]=em._sha(paths['log'])
-    rec['source_binding']={'conditions':{'temperature_c':temperature}};put(paths['receipt'],rec)
+    if temperature is not None:
+        rec['source_binding']={'conditions':{'temperature_c':temperature}}
+    put(paths['receipt'],rec)
     aliases,known=em.material_map(TECH)
     result,_=em.grade_case(project,setting,em.parse_process_limits(TABLE),aliases,known,
                            block='unit',rating_context=em.process_rating_context(TABLE))
-    assert result['status']=='PASS'
+    assert result['status']==expected
+    assert result['graded_segments']==1 and result['violations']==[]
     context=result['rating_context']
     assert context['source_rating']['duration_years']==11 and context['source_rating']['temperature_c']==105
     assert context['native_temperature_c']==temperature and context['comparison_scope']==scope
@@ -313,7 +357,7 @@ def test_rating_uses_native_temperature_and_refuses_source_condition_misbinding(
 def transient_case(measured_case,scale):
     import numpy as np
     project,setting,paths=measured_case;work=paths['receipt'].parent
-    analysis={'kind':'TRAN','step_s':.001,'stop_s':2,'start_s':0,'temperature_c':27,'window_s':[0,2]}
+    analysis={'kind':'TRAN','step_s':.001,'stop_s':2,'start_s':0,'temperature_c':105,'window_s':[0,2]}
     raw=work/'tran.raw'
     matrix=np.array([[0,-scale,0],[.1,-.8*scale,0],[1,scale,0],[2,3*scale,0]],dtype='<f8')
     raw.write_bytes(b'Title: native fixture\nPlotname: Transient Analysis\nFlags: real\nNo. Variables: 3\nNo. Points: 4\nVariables:\n0 time time\n1 v(a) voltage\n2 v(b) voltage\nBinary:\n'+matrix.tobytes())
