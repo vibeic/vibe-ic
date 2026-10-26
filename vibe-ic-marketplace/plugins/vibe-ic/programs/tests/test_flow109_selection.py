@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import copy
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -369,6 +370,103 @@ def test_d23_rejects_step9_handoff_after_netlist_bytes_change(tmp_path, monkeypa
     assert "no longer matches" in error
 
 
+@pytest.mark.parametrize("case", ["noncanonical", "missing", "stale", "foreign"])
+def test_d26_refuses_unbound_step9_before_prelayout_producer(
+        tmp_path, monkeypatch, case):
+    """A native handoff alone is not the current canonical D22 checkpoint."""
+    runner, netlist = _step9_native_state(tmp_path, monkeypatch)
+    mapped = netlist.with_name("top_synth.v")
+    netlist.rename(mapped)
+    import hashlib
+    sha = hashlib.sha256(mapped.read_bytes()).hexdigest()
+    record = next((tmp_path / "steps").rglob("outputs.json"))
+    body = json.loads(record.read_text())
+    body["outputs"][0]["sha256"] = sha
+    record.write_text(json.dumps(body))
+    sys.modules["synth_handoff_netlist_check"].bound_handoff = lambda _p: {
+        "verdict": "PASS", "canonical": str(mapped), "mapped": str(mapped),
+        "netlist_sha256": sha, "findings": [],
+    }
+    versions = sys.modules["step_output_collector"]
+    if case == "missing":
+        versions._read_index = lambda _p: {"steps": []}
+    elif case == "noncanonical":
+        versions.latest_pass = lambda *_a: None
+    else:
+        current = {**body, "folder": "phase2/stage2/9_current",
+                   "current_inputs": case != "stale", "canonical_pass": True,
+                   "status": "PASS", "result": {"canonical_consumer": {
+                       "status": "PASS", "outputs": {"netlist": "foreign"}}}}
+        versions.latest_pass = lambda *_a: current
+        monkeypatch.setitem(sys.modules, "_flow_yaml", SimpleNamespace(
+            load=lambda: {"steps": [{"id": "9"}]}))
+        monkeypatch.setitem(sys.modules, "execution_backend_gates", SimpleNamespace(
+            contracts=lambda *_a: {"netlist": "current"}))
+    launched = []
+    versions.current_acceptance = lambda *_a: [{
+        "id": "10", "folder": "phase3/prelayout/10_current",
+        "status": "PASS", "canonical_pass": True,
+        "result": {"canonical_consumer": {"status": "PASS", "step": {
+            "reasons": []}}}}]
+    monkeypatch.setitem(sys.modules, "design_one_shot_runner", SimpleNamespace(
+        _phase2_pdk_config=lambda *_a: "neutral-pdk"))
+    monkeypatch.setitem(sys.modules, "phase3_one_shot_runner", SimpleNamespace(
+        step_prelayout_signoff=lambda *a, **_k: launched.append(a) or SimpleNamespace(
+            status="PASS", detail=f"{case} producer ran")))
+
+    result = runner._complete_step10_prelayout(tmp_path, "top", "neutral", "")
+
+    assert result["verdict"] == "NOT_MEASURED"
+    expected = ("current Step9 native synthesis record" if case == "missing"
+                else "current canonical Step9 checkpoint")
+    assert expected in result["detail"]
+    assert launched == []
+
+
+def test_d26_current_canonical_step9_launches_prelayout_producer(
+        tmp_path, monkeypatch):
+    runner, netlist = _step9_native_state(tmp_path, monkeypatch)
+    mapped = netlist.with_name("top_synth.v")
+    netlist.rename(mapped)
+    sha = __import__("hashlib").sha256(mapped.read_bytes()).hexdigest()
+    record = next((tmp_path / "steps").rglob("outputs.json"))
+    body = json.loads(record.read_text())
+    outputs = {"netlist": {"path": str(mapped), "sha256": sha}}
+    body.update({"status": "PASS", "canonical_pass": True,
+                 "current_inputs": True,
+                 "outputs": [{"rel": "phase2/stage2/synth/netlist.v",
+                              "sha256": sha}],
+                 "result": {"canonical_consumer": {
+                     "status": "PASS", "outputs": outputs}}})
+    record.write_text(json.dumps(body))
+    current = {**body, "folder": "phase2/stage2/9_current"}
+    versions = sys.modules["step_output_collector"]
+    versions.latest_pass = lambda *_a: current
+    versions.current_acceptance = lambda *_a: [{
+        "id": "10", "folder": "phase3/prelayout/10_current",
+        "status": "PASS", "canonical_pass": True,
+        "result": {"canonical_consumer": {"status": "PASS", "step": {
+            "reasons": []}}}}]
+    sys.modules["synth_handoff_netlist_check"].bound_handoff = lambda _p: {
+        "verdict": "PASS", "canonical": str(mapped), "mapped": str(mapped),
+        "netlist_sha256": sha, "findings": []}
+    monkeypatch.setitem(sys.modules, "_flow_yaml", SimpleNamespace(
+        load=lambda: {"steps": [{"id": "9"}]}))
+    monkeypatch.setitem(sys.modules, "execution_backend_gates", SimpleNamespace(
+        contracts=lambda *_a: outputs))
+    launched = []
+    monkeypatch.setitem(sys.modules, "design_one_shot_runner", SimpleNamespace(
+        _phase2_pdk_config=lambda *_a: "neutral-pdk"))
+    monkeypatch.setitem(sys.modules, "phase3_one_shot_runner", SimpleNamespace(
+        step_prelayout_signoff=lambda *a, **_k: launched.append(a) or SimpleNamespace(
+            status="PASS", detail="canonical Step10 consumer PASS")))
+
+    result = runner._complete_step10_prelayout(tmp_path, "top", "neutral", "")
+
+    assert result["verdict"] == "PASS"
+    assert launched == [(tmp_path, "top", "neutral-pdk", "")]
+
+
 def test_d23_rejects_wrong_l20_before_scan_or_atpg_launch(tmp_path, monkeypatch):
     import vibe_ic_one_shot_runner as runner
 
@@ -436,6 +534,90 @@ def test_bounded_owner_finish_does_not_change_legacy_execution(tmp_path, monkeyp
     assert runner._finish_selected_native_owner(
         tmp_path, "11", {"verdict": "PASS"}) is None
     assert not (tmp_path / "reports/flow109/default_rows").exists()
+
+
+@pytest.mark.parametrize("case,status,rc", [
+    ("pass", "PASS", 0),
+    ("producer_fail", "FAIL", 1),
+    ("postcheck_not_measured", "NOT_MEASURED", 2),
+])
+def test_public_d26_owner_finalizes_selected_attempt(
+        tmp_path, monkeypatch, case, status, rc):
+    import _delivery_route
+    import flow109
+    import vibe_ic_one_shot_runner as runner
+
+    features = profile("Mapped soft-IP with prestitched scan")
+    assert _delivery_route.admit(tmp_path, "ip") is None
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"features": features}))
+    monkeypatch.setattr(runner, "_activate_runtime_program_tree", lambda _p: None)
+    monkeypatch.setattr(runner, "_capture_container_image", lambda *_a, **_k: {
+        "verdict": "PASS"})
+    calls = []
+    producer = "FAIL" if case == "producer_fail" else "PASS"
+    monkeypatch.setattr(runner, "_complete_step10_prelayout",
+                        lambda *_a, **_k: calls.append("producer") or {
+                            "verdict": producer, "detail": case})
+    monkeypatch.setattr(runner, "_complete_step8_postcheck",
+                        lambda *_a, **_k: calls.append("postcheck") or {
+                            "verdict": ("NOT_MEASURED"
+                                        if case == "postcheck_not_measured" else "PASS"),
+                            "detail": case})
+    monkeypatch.setattr(sys, "argv", [str(Path(runner.__file__)), str(tmp_path),
+                        "--flow", "109", "--flow109-manifest", str(manifest),
+                        "--entry-step", "D26", "--exit-step", "D26",
+                        "--route", "ip", "--no-dashboard"])
+
+    assert runner._main() == rc
+
+    attempt = next((tmp_path / "reports/flow109/attempts").glob("window-*"))
+    result = json.loads((attempt / "result.json").read_text())
+    summary = json.loads((tmp_path / "reports/orchestrator/vibe_ic_one_shot.json").read_text())
+    assert result["schema"] == "vibeic.flow109.window-attempt-result.v1"
+    assert result["default_row_status"] == status
+    assert result["components"][0]["step_id"] == "D26"
+    assert result["components"][0]["completed"] is (status == "PASS")
+    assert summary["d26_finalization"]["verdict"] == status
+    assert calls == (["producer"] if case == "producer_fail"
+                     else ["producer", "postcheck"])
+
+
+def test_public_d26_preexisting_attempt_result_is_not_overwritten(
+        tmp_path, monkeypatch):
+    import _delivery_route
+    import flow109
+    import vibe_ic_one_shot_runner as runner
+
+    features = profile("Mapped soft-IP with prestitched scan")
+    assert _delivery_route.admit(tmp_path, "ip") is None
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"features": features}))
+    monkeypatch.setattr(runner, "_activate_runtime_program_tree", lambda _p: None)
+    monkeypatch.setattr(runner, "_capture_container_image", lambda *_a, **_k: {
+        "verdict": "PASS"})
+    monkeypatch.setattr(runner, "_complete_step10_prelayout",
+                        lambda *_a, **_k: {"verdict": "FAIL", "detail": "producer failed"})
+    finish = flow109.finish_native_window
+    retained = '{"immutable":"existing"}\n'
+    def preexisting(project, report):
+        result = Path(os.environ[flow109.ATTEMPT_ENV]) / "result.json"
+        result.write_text(retained)
+        return finish(project, report)
+    monkeypatch.setattr(flow109, "finish_native_window", preexisting)
+    monkeypatch.setattr(sys, "argv", [str(Path(runner.__file__)), str(tmp_path),
+                        "--flow", "109", "--flow109-manifest", str(manifest),
+                        "--entry-step", "D26", "--exit-step", "D26",
+                        "--route", "ip", "--no-dashboard"])
+
+    assert runner._main() == 2
+
+    attempt = next((tmp_path / "reports/flow109/attempts").glob("window-*"))
+    assert (attempt / "result.json").read_text() == retained
+    summary = json.loads((tmp_path / "reports/orchestrator/vibe_ic_one_shot.json").read_text())
+    assert summary["d26_finalization"]["verdict"] == "NOT_MEASURED"
+    assert summary["d26_finalization"]["detail"].startswith(
+        "D26_FINALIZATION_REFUSED: FLOW109_ATTEMPT_RESULT_EXISTS:")
 
 
 def test_owner_route_uses_native_span_without_generic_qualification_registry(

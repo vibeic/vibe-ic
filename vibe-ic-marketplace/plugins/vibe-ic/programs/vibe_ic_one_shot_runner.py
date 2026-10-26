@@ -996,7 +996,9 @@ def _complete_step14_handoff(project: Path) -> dict:
                       or str(record['result'].get('producer_return', {}))}
 
 
-def _current_step9_checkpoint(project: Path) -> tuple[dict | None, str | None]:
+def _current_step9_checkpoint(project: Path, *,
+                              require_canonical: bool = False
+                              ) -> tuple[dict | None, str | None]:
     """Bind the current native synthesis state used by downstream owners.
 
     Step 9 also measures an area budget.  An absent design-owned budget makes
@@ -1014,6 +1016,23 @@ def _current_step9_checkpoint(project: Path) -> tuple[dict | None, str | None]:
     try:
         prior = json.loads((versions._versions_root(project)
                             / pointer['folder'] / 'outputs.json').read_text())
+        if require_canonical:
+            latest = versions.latest_pass(project, '9')
+            consumer = ((latest or {}).get('result') or {}).get(
+                'canonical_consumer') or {}
+            if (not latest or latest.get('folder') != pointer['folder']
+                    or not latest.get('current_inputs')
+                    or not latest.get('canonical_pass')
+                    or latest.get('status') != 'PASS'
+                    or consumer.get('status') != 'PASS'):
+                return None, 'requires the current canonical Step9 checkpoint'
+            import _flow_yaml
+            import execution_backend_gates as gates
+
+            row9 = next(row for row in _flow_yaml.load()['steps']
+                        if str(row['id']) == '9')
+            if consumer.get('outputs') != gates.contracts(project, row9):
+                return None, 'requires the current canonical Step9 checkpoint'
         bound = handoff.bound_handoff(project)
     except (OSError, ValueError, RuntimeError, json.JSONDecodeError) as exc:
         return None, str(exc)
@@ -1040,7 +1059,7 @@ def _complete_step10_prelayout(project: Path, top: str, pdk_name: str,
     import step_output_collector as versions
     import synth_handoff_netlist_check as handoff
 
-    prior, error = _current_step9_checkpoint(project)
+    prior, error = _current_step9_checkpoint(project, require_canonical=True)
     if error:
         return {'verdict': 'NOT_MEASURED', 'detail': 'Step10 ' + error}
     bound = handoff.bound_handoff(project)
@@ -1086,6 +1105,43 @@ def _finish_selected_native_owner(project: Path, native_step: str,
         'extras': {'step_id': native_step, 'default_row_status': status,
                    'completed': status == 'PASS'},
     }]})
+
+
+def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
+    """Finalize the selected D26 attempt and validate its immutable result."""
+    import flow109
+
+    try:
+        finished = _finish_selected_native_owner(project, '10', acceptance)
+    except flow109.Flow109Error as exc:
+        finished = None
+        detail = f'D26_FINALIZATION_REFUSED: {exc}'
+    except FileExistsError as exc:
+        attempt = os.environ.get(flow109.ATTEMPT_ENV)
+        expected = Path(attempt) / 'result.json' if attempt else None
+        if exc.filename is None or expected is None or Path(exc.filename) != expected:
+            raise
+        finished = None
+        detail = ('D26_FINALIZATION_REFUSED: '
+                  'FLOW109_ATTEMPT_RESULT_EXISTS: immutable attempt '
+                  'result already exists')
+    else:
+        detail = 'D26_FINALIZATION_RESULT_INVALID'
+    components = finished.get('components') if isinstance(finished, Mapping) else None
+    component = components[0] if isinstance(components, list) and len(components) == 1 else {}
+    finalized = (finished if isinstance(finished, Mapping)
+                 and finished.get('schema') == 'vibeic.flow109.window-attempt-result.v1'
+                 and finished.get('default_row_status') in ('PASS', 'FAIL', 'NOT_MEASURED')
+                 and finished.get('default_row_status') == acceptance.get('verdict')
+                 and finished.get('whole_flow_acceptance') == 'NOT_MEASURED'
+                 and finished.get('delivery_accepted') is False
+                 and component.get('step_id') == 'D26'
+                 and component.get('default_row_status') == finished.get('default_row_status')
+                 and component.get('completed') is (finished.get('default_row_status') == 'PASS')
+                 else None)
+    if finalized is None:
+        return {**acceptance, 'verdict': 'NOT_MEASURED', 'detail': detail}
+    return {**acceptance, 'verdict': finalized['default_row_status']}
 
 
 def _complete_step8_early_preflight(project: Path) -> dict:
@@ -4095,6 +4151,13 @@ def _main() -> int:
                 step8_acceptance = _complete_step8_postcheck(project, flow_top)
                 reports['step8_postcheck'] = step8_acceptance
                 prelayout_status = step8_acceptance['verdict']
+            if _flow109_owner_entry:
+                terminal = (reports.get('step8_postcheck')
+                            or step10_acceptance)
+                d26_acceptance = _finish_d26_selected_owner(
+                    project, {**terminal, 'verdict': prelayout_status})
+                reports['d26_finalization'] = d26_acceptance
+                prelayout_status = d26_acceptance['verdict']
             if (prelayout_status != 'PASS'
                     or str(args.exit_step) == '10'):
                 status = prelayout_status
@@ -4112,6 +4175,7 @@ def _main() -> int:
                                for n, v, code in plan],
                     'step10_prelayout': step10_acceptance,
                     'step8_postcheck': reports.get('step8_postcheck'),
+                    'd26_finalization': reports.get('d26_finalization'),
                     'whole_flow_verdict': 'NOT_MEASURED'}, project)
                 lock.release()
                 return rc
