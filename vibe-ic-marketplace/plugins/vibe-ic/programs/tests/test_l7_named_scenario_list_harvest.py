@@ -154,3 +154,40 @@ def test_ambiguous_malformed_or_functional_table_has_no_debug_authority(
     doc = _gen(tmp_path, {"debug.rst": text})
     assert doc["debug_observability"] == []
     assert doc["no_debug_observability_in_input"] is True
+
+
+def test_empty_or_malformed_debug_table_stops_before_functional_table(tmp_path):
+    """A prior authorized header must not lend authority across table bounds."""
+    cases = {
+        "empty": """\
+Debug Observability
+===================
+| Signal | Direction | Description |
+| --- | --- | --- |
+
+Top-level Interface
+===================
+| Signal | Direction | Description |
+| --- | --- | --- |
+| clk_i | input | Primary clock |
+""",
+        "malformed": """\
+Debug Observability
+===================
+| Signal | Direction | Description |
+| --- | --- | --- |
+| not-a-signal | sideways | Not a valid debug row |
+
+Top-level Interface
+===================
+| Signal | Direction | Description |
+| --- | --- | --- |
+| clk_i | input | Primary clock |
+""",
+    }
+    leaked = {}
+    for case, text in cases.items():
+        doc = _gen(tmp_path / case, {"debug.rst": text})
+        if doc["debug_observability"]:
+            leaked[case] = doc["debug_observability"]
+    assert leaked == {}

@@ -41076,15 +41076,18 @@ def gen_l7_test_debug(project: Path,
                     or not _explicit_debug_authority(header_at, headers)):
                 continue
             last_at = max(signal_at, direction_at, description_at)
-            have_data = False
             for row_at in range(header_at + 1, min(len(lines), header_at + 128)):
                 row_line = lines[row_at]
                 cells = _cells(row_line)
                 if not cells:
-                    if have_data and not re.match(r"^\s*\+[-+=+]+\+\s*$",
-                                                  row_line):
-                        break
-                    continue
+                    if re.match(r"^\s*\+[-+=+]+\+\s*$", row_line):
+                        continue
+                    break
+                row_keys = [_header_key(value) for value in cells]
+                if (any(key in signal_headers for key in row_keys)
+                        and any(key in direction_headers for key in row_keys)
+                        and any(key in description_headers for key in row_keys)):
+                    break
                 if len(cells) <= last_at:
                     continue
                 signal = cells[signal_at].strip(" `*_'\"")
@@ -41095,7 +41098,6 @@ def gen_l7_test_debug(project: Path,
                                              "reg", "wire"}
                         or not description):
                     continue
-                have_data = True
                 rows.append((signal, direction, description,
                              row_line.strip()[:120]))
         return rows
