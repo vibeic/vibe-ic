@@ -37,7 +37,7 @@ import analog_resolution_stimulus as stimulus
 import analog_adc_enob_corner_check as enob_check
 import analog_real_corner_sweep as sweep
 
-DECODER_REVISION = "observed_reset_release_clock_samples_v2"
+DECODER_REVISION = "observed_transfer_reset_active_updates_v3"
 DECODER_SOURCE_SHA256 = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
 
 
@@ -81,23 +81,109 @@ def declared_dut_consumed(views: dict) -> bool:
         for role, view in views.items() if role.startswith("include:") and isinstance(view, dict)))
 
 
+def _transfer_timing(topology: dict, reset_node: str, node_map: dict | None = None) -> dict:
+    """Locate the actual SC transfer switches, without assuming a clock phase."""
+    from analog_a2_topology_emit import sc_branch_polarities
+
+    devices = topology.get("devices") or []
+    probe = topology.get("loop_probe") or {}
+    names = probe.get("coefficient_devices") or {}
+    order = (topology.get("stage_expansion") or {}).get("stages")
+    if not isinstance(order, int) or isinstance(order, bool) or order < 1:
+        raise ValueError("native transfer attribution requires the typed SC stage count")
+    if not all(isinstance(names.get(role), str) for role in ("sampling", "feedback", "integrating")):
+        raise ValueError("native transfer attribution requires typed coefficient_devices")
+    prefix = reset_node.rsplit(".", 1)[0] if "." in reset_node else ""
+    if not prefix:
+        raise ValueError("native transfer attribution requires the DUT instance path")
+    branches = sc_branch_polarities(devices)
+    if node_map is not None and not isinstance(node_map, dict):
+        raise ValueError("transfer_gate_nodes must map actual typed switch names to native nodes")
+    groups, columns, reset_gates, switches_used = [], [], [], set()
+    for stage in range(1, order + 1):
+        integrating = names["integrating"].format(i=stage)
+        stored = [device for device in devices if device.get("name") == integrating
+                  and len(device.get("nets") or []) == 2]
+        if len(stored) != 1:
+            raise ValueError("typed integrating capacitor is absent or ambiguous: " + integrating)
+        storage_nodes = set(stored[0]["nets"])
+        reset_pair = [device for device in devices if device.get("role") == "pmos"
+                      and len(device.get("nets") or []) == 4
+                      and {device["nets"][0], device["nets"][2]} == storage_nodes]
+        if len(reset_pair) != 1:
+            raise ValueError("typed integrating reset switch is absent or ambiguous: " + integrating)
+        reset_gates.append(reset_pair[0]["nets"][1])
+        for role in ("sampling", "feedback"):
+            name = names[role].format(i=stage)
+            branch = branches.get(name)
+            if not branch:
+                raise ValueError("native transfer branch is absent or ambiguous: " + name)
+            if branch["summing_node"] not in storage_nodes:
+                raise ValueError("native transfer branch does not reach its declared integrator: " + name)
+            endpoints = {branch["top_plate"], branch["summing_node"]}
+            switches = [device for device in devices if len(device.get("nets") or []) == 4
+                        and {device["nets"][0], device["nets"][2]} == endpoints]
+            gates = {}
+            for polarity in ("nmos", "pmos"):
+                found = [device for device in switches if device.get("role") == polarity]
+                if len(found) != 1:
+                    raise ValueError("native transfer requires one actual nMOS/pMOS switch pair: " + name)
+                switch = found[0]
+                switches_used.add(switch["name"])
+                node = node_map.get(switch["name"]) if node_map is not None else prefix + "." + switch["nets"][1]
+                if not isinstance(node, str) or not re.fullmatch(r"[A-Za-z0-9_.:#/$-]+", node):
+                    raise ValueError("actual native transfer gate node is absent: " + switch["name"])
+                gates[polarity] = f"v({node})"
+                gates[polarity + "_switch"] = switch["name"]
+                if gates[polarity] not in columns:
+                    columns.append(gates[polarity])
+            if gates["nmos"] == gates["pmos"]:
+                raise ValueError("native transfer switch gates are not complementary: " + name)
+            groups.append({"capacitor": name, "stage": stage, "branch": role,
+                           "n_switch": gates["nmos_switch"], "p_switch": gates["pmos_switch"],
+                           "n_gate": gates["nmos"], "p_gate": gates["pmos"]})
+    if len(set(reset_gates)) != 1:
+        raise ValueError("typed integrators do not share the observed reset")
+    if node_map is None and reset_node.rsplit(".", 1)[-1] != reset_gates[0]:
+        raise ValueError("remapped reset requires actual transfer_gate_nodes observations")
+    if node_map is not None and set(node_map) != switches_used:
+        raise ValueError("transfer_gate_nodes differs from the actual typed transfer switch inventory")
+    return {"kind": "source_derived_sc_transfer_gates_v1", "columns": columns, "groups": groups}
+
+
 def sampled_capture(path: Path, first_clock_s: float, period_s: float,
-                    high_v: float, sample_fraction: float = 0.9) -> dict:
+                    high_v: float, sample_fraction: float = 0.9,
+                    timing: dict | None = None) -> dict:
     """Stream time/output/reset/input columns; retain only clock samples."""
     if period_s <= 0 or high_v <= 0 or not 0 < sample_fraction < 1:
         raise ValueError("invalid capture clock or sampling phase")
     samples, releases, assertions = [], [], []
+    columns = (timing or {}).get("columns") or []
+    groups = (timing or {}).get("groups") or []
+    pulses = [[] for _ in groups]
+    opened = [None for _ in groups]
+    indices = [(4 + columns.index(group["n_gate"]), 4 + columns.index(group["p_gate"])) for group in groups]
     previous = None
+    phase_header = False
     next_sample = first_clock_s + sample_fraction * period_s
     rows = 0
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt") as stream:
         for line in stream:
             try:
-                row = tuple(float(value) for value in line.split()[:4])
+                row = tuple(float(value) for value in line.split()[:4 + len(columns)])
             except ValueError:
+                fields = line.split()
+                if columns and fields and fields[0].casefold() == "time":
+                    if [field.casefold() for field in fields[4:]] != [name.casefold() for name in columns]:
+                        raise ValueError("native transfer phase header differs from the source-derived probes")
+                    phase_header = True
                 continue
-            if len(row) != 4:
+            if columns and not phase_header:
+                raise ValueError("native transfer phase header is absent")
+            if len(row) != 4 + len(columns):
+                if columns and len(row) >= 4:
+                    raise ValueError("native transfer phase columns are absent")
                 continue
             if not all(math.isfinite(value) for value in row):
                 raise ValueError("non-finite native capture value")
@@ -113,6 +199,24 @@ def sampled_capture(path: Path, first_clock_s: float, period_s: float,
                 if previous[2] > high_v / 2 >= row[2]:
                     fraction = (high_v / 2 - previous[2]) / (row[2] - previous[2])
                     assertions.append(previous[0] + fraction * (row[0] - previous[0]))
+                threshold = high_v / 2
+                for group, (ni, pi) in enumerate(indices):
+                    was_on = previous[ni] > threshold and previous[pi] < threshold
+                    is_on = row[ni] > threshold and row[pi] < threshold
+                    if was_on == is_on:
+                        continue
+                    crossings = []
+                    for index, rising in ((ni, is_on), (pi, not is_on)):
+                        a, b = previous[index], row[index]
+                        crossed = a <= threshold < b if rising else a >= threshold > b
+                        if crossed:
+                            crossings.append(previous[0] + (threshold - a) * (row[0] - previous[0]) / (b - a))
+                    when = (max(crossings) if is_on else min(crossings)) if crossings else row[0]
+                    if is_on:
+                        opened[group] = when
+                    else:
+                        pulses[group].append({"start_s": opened[group], "end_s": when})
+                        opened[group] = None
                 while next_sample <= row[0]:
                     value = row if next_sample == row[0] else previous
                     samples.append({"time_s": next_sample,
@@ -120,17 +224,26 @@ def sampled_capture(path: Path, first_clock_s: float, period_s: float,
                                     "output_v": value[1], "reset_v": value[2], "input_v": value[3]})
                     next_sample += period_s
             previous = row
+    for group, start in enumerate(opened):
+        if start is not None:
+            pulses[group].append({"start_s": start, "end_s": None})
     return {"samples": samples, "reset_releases_s": releases, "reset_assertions_s": assertions, "rows_read": rows,
-            "end_s": previous[0] if previous else None, "sample_fraction": sample_fraction}
+            "end_s": previous[0] if previous else None, "sample_fraction": sample_fraction,
+            "transfer_pulses": pulses}
 
 
 def decode_capture(path: Path, clock: tuple, declaration: dict,
                    settings: dict) -> dict:
     """Decode only complete conversions bounded by observed reset releases."""
     first, period, high = clock
-    capture = sampled_capture(path, first, period, high, settings.get("sample_fraction", 0.9))
+    timing = declaration.get("native_timing")
+    if not isinstance(timing, dict) or timing.get("kind") != "source_derived_sc_transfer_gates_v1" or not timing.get("groups"):
+        return {"conversions": [], "discarded_intervals": [{"reason": "native_transfer_phase_attribution_absent"}],
+                "alignment": DECODER_REVISION}
+    capture = sampled_capture(path, first, period, high, settings.get("sample_fraction", 0.9), timing)
     window = int(declaration["window_clocks"])
     samples = capture.pop("samples")
+    transfer_pulses = capture.pop("transfer_pulses")
     releases = capture["reset_releases_s"]
     decoded, discarded = [], []
     for left, right in zip(releases, releases[1:]):
@@ -145,20 +258,49 @@ def decode_capture(path: Path, clock: tuple, declaration: dict,
             discarded.append({"release_s": left, "next_release_s": right,
                               "clock_slots": period_stop - start, "assertions": len(assertions)})
             continue
-        # A delayed DAC can give the final decision zero weight. Only that
-        # mathematically unused decision may be masked by the next reset.
-        # A reset-corrupted nonzero-weight decision is never credited.
-        stop = period_stop
-        sample_count = stop - start
+        assertion = assertions[0]
+        buckets = []
+        intervals = []
+        invalid = None
+        for pulses in transfer_pulses:
+            selected = []
+            for pulse in pulses:
+                begin, end = pulse["start_s"], pulse["end_s"]
+                if (end is not None and end <= left) or (begin is not None and begin >= assertion):
+                    continue
+                if begin is None or end is None or begin < left or end > assertion:
+                    invalid = "transfer_pulse_overlaps_reset"
+                    break
+                index = math.floor((begin - first) / period + 1e-9)
+                if not start <= index < period_stop:
+                    invalid = "transfer_pulse_outside_clock_bucket"
+                    break
+                selected.append((index, begin, end))
+            indices = [entry[0] for entry in selected]
+            if not indices or indices != list(range(indices[0], indices[-1] + 1)):
+                invalid = invalid or "transfer_updates_not_contiguous"
+            buckets.append(indices)
+            intervals.append(selected)
+        if not invalid and any(indices != buckets[0] for indices in buckets):
+            invalid = "transfer_branches_disagree"
+        active_indices = [index for index in range(start, period_stop) if samples[index]["reset_v"] > high / 2]
+        if not invalid and buckets[0] != active_indices:
+            invalid = "transfer_updates_do_not_cover_active_decisions"
+        if not invalid:
+            for position, index in enumerate(buckets[0]):
+                begin = max(entries[position][1] for entries in intervals)
+                end = min(entries[position][2] for entries in intervals)
+                sample = samples[index]
+                if begin >= end or sample["time_s"] < begin or sample["reset_v"] <= high / 2:
+                    invalid = "transfer_decision_phase_inconsistent"
+                    break
+        if invalid:
+            discarded.append({"release_s": left, "reason": invalid})
+            continue
+        chosen = [samples[index] for index in buckets[0]]
+        sample_count = len(chosen)
         if sample_count < 1:
             discarded.append({"release_s": left, "reason": "no_complete_conversion_clock"})
-            continue
-        chosen = samples[start:stop]
-        weights = decimator.matched_weights(sample_count, int(declaration["order"]),
-            float(declaration["coeff"]), int(declaration["feedback_delay_clocks"]))
-        masked = [index for index, sample in enumerate(chosen) if sample["reset_v"] <= high / 2]
-        if any(weights[index] != 0.0 for index in masked):
-            discarded.append({"release_s": left, "reason": "reset_masks_nonzero_weight_decision"})
             continue
         held = [sample["input_v"] for sample in chosen]
         if max(held) - min(held) > max(1.0, max(abs(value) for value in held)) * 1e-12:
@@ -176,8 +318,13 @@ def decode_capture(path: Path, clock: tuple, declaration: dict,
             continue
         decoded.append({"release_s": left, "next_release_s": right,
                         "clock_slots": sample_count, "reset_period_clocks": window,
+                        "active_update_clocks": sample_count,
+                        "excluded_reset_active_slots": period_stop - start - sample_count,
+                        "transfer_groups": len(timing["groups"]),
+                        "first_transfer_s": max(entries[0][1] for entries in intervals),
+                        "last_transfer_s": max(entries[-1][1] for entries in intervals),
                         "first_sample_s": chosen[0]["time_s"], "last_sample_s": chosen[-1]["time_s"],
-                        "ignored_zero_weight_decisions": len(masked),
+                        "ignored_zero_weight_decisions": 0,
                         "decoded": output[0], "input_v": sum(held) / sample_count,
                         "minimum_decision_margin_v": min(abs(sample["output_v"] - high / 2) for sample in chosen),
                         "decimator": details})
@@ -222,6 +369,8 @@ def validate_point(record: dict) -> tuple:
             return False, "native conversion input is stale"
     if not declared_dut_consumed(views):
         return False, "declared native DUT is absent from the executed include closure"
+    if not (record.get("incremental_decode") or {}).get("native_timing"):
+        return False, "legacy native capture lacks source-derived transfer phase probes"
     try:
         settings = record["settings"]
         if "settings" in views and json.loads(Path(views["settings"]["path"]).read_text()) != settings:
@@ -317,7 +466,7 @@ def native_execution_failure(record: dict) -> bool:
         log = Path(execution.get("log") or "__missing_native_log__")
         if log.is_file() and execution.get("log_sha256") == bound.sha(log) and native_failed(log.read_text(errors="replace")):
             return True
-        if isinstance(code, int) and code > 0 and code not in (130, 137, 143):
+        if isinstance(code, int) and code > 0 and code not in (124, 130, 137, 143):
             return True
     return False
 
@@ -334,7 +483,7 @@ def coherent_sndr(points: list[dict], length: int, tone_bin: int, target_bits: f
             return {"status": "FAIL", "detail": "native conversion execution failed", "phase_index": index}
         for execution in point.get("executions") or []:
             code = execution.get("returncode")
-            interrupted = isinstance(code, int) and (code < 0 or code in (130, 137, 143))
+            interrupted = isinstance(code, int) and (code < 0 or code in (124, 130, 137, 143))
             log = Path(execution.get("log") or "__missing_native_log__")
             if interrupted:
                 return {"status": "NOT_MEASURED", "detail": "native conversion interrupted", "phase_index": index}
@@ -422,8 +571,9 @@ def prepare_deck(template: Path, spec: dict, topology: dict, settings: dict, des
     if clock is None:
         raise ValueError("one delivered native clock is required")
     reset = settings.get("reset_node")
-    if not isinstance(reset, str) or not re.fullmatch(r"[A-Za-z_][\w.]*", reset):
+    if not isinstance(reset, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:#/$-]*", reset):
         raise ValueError("actual active-low reset node must be specified")
+    declaration["native_timing"] = _transfer_timing(topology, reset, settings.get("transfer_gate_nodes"))
     value = settings.get("held_input_v")
     if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
         raise ValueError("explicit finite held input required")
@@ -460,6 +610,7 @@ def prepare_deck(template: Path, spec: dict, topology: dict, settings: dict, des
         raise ValueError("invalid native capture settings")
     dump = destination / "conversion.dat"
     probes = f"v({plan['output_node']}) v({reset}) v({plan['signal_input_port']})"
+    probes += " " + " ".join(declaration["native_timing"]["columns"])
     text = body.rstrip() + "\n" + declaration["stamp"] + f"\n.save {probes}\n.control\nset num_threads={threads}\nset numdgt=15\n"
     text += f"tran {step:.17g} {first + clocks * period:.17g}\nset wr_singlescale\nset wr_vecnames\nwrdata {dump} {probes}\nrusage\n.endc\n.end\n"
     return text, clock, declaration
@@ -481,7 +632,7 @@ def run_point(project: Path, netlist: Path, template: Path, spec_path: Path,
                 "executions": [], "clock": list(clock), "incremental_decode": declaration, "decoded": {}}
     execution = run(deck, destination)
     native_log = Path(execution["log"]).read_text(errors="replace")
-    interrupted = execution.get("returncode") in (130, 137, 143) or execution.get("returncode", 0) < 0
+    interrupted = execution.get("returncode") in (124, 130, 137, 143) or execution.get("returncode", 0) < 0
     failed = execution.get("returncode") != 0 or native_failed(native_log)
     record = {"status": "FAIL" if native_failed(native_log) else "NOT_MEASURED" if interrupted else "FAIL" if failed else "NOT_MEASURED", "project": str(project.resolve()),
               "settings": settings, "native_inputs": views, "executions": [execution],

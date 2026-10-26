@@ -10,30 +10,46 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import analog_incremental_capture as capture
 
 
-def _dump(path, *, moving=False, truncated=False):
+def _timing():
+    return {"kind": "source_derived_sc_transfer_gates_v1",
+            "columns": ["v(xdut.transfer_n)", "v(xdut.transfer_p)"],
+            "groups": [{"capacitor": "sample_unit", "n_gate": "v(xdut.transfer_n)",
+                        "p_gate": "v(xdut.transfer_p)"}]}
+
+
+def _declaration(*, delay=1):
+    return {"window_clocks": 4, "order": 1, "coeff": .25,
+            "feedback_delay_clocks": delay, "native_timing": _timing()}
+
+
+def _dump(path, *, moving=False, truncated=False, assert_at=5.5):
     rows = []
     for tick in range(0, 61 if truncated else 81):
         t = tick / 10
-        reset = 0 if 1.5 <= t < 2.5 or 5.5 <= t < 6.5 else 1.2
-        # The complete reset-aligned interval is clock slots 2..5, with
-        # decisions -,+,-,+. Earlier startup decisions are all high.
+        reset = 0 if 1.5 <= t < 2.5 or assert_at <= t < 6.5 else 1.2
+        # Reset period4 has three actual transfer pulses; the final sampled
+        # decision is reset-active and cannot add a fourth recurrence update.
         slot = math.floor(t - 1 + 1e-9)
         bit = 0 if slot in (2, 4) else 1.2
-        rows.append(f"{t:.17g} {bit} {reset} {0.7 + (t / 100 if moving else 0):.17g}")
-    path.write_text("time output reset input\n" + "\n".join(rows))
+        transfer = (tick % 10) >= 6
+        rows.append(f"{t:.17g} {bit} {reset} {0.7 + (t / 100 if moving else 0):.17g} "
+                    f"{1.2 if transfer else 0} {0 if transfer else 1.2}")
+    path.write_text("time output reset input v(xdut.transfer_n) v(xdut.transfer_p)\n" + "\n".join(rows))
     return path
 
 
 def test_reset_alignment_discards_startup_and_decodes_complete_conversion(tmp_path):
     out = capture.decode_capture(_dump(tmp_path / "wave.dat"), (1, 1, 1.2),
-        {"window_clocks": 4, "order": 1, "coeff": 0.25, "feedback_delay_clocks": 1}, {})
+        _declaration(), {})
     assert len(out["conversions"]) == 1
-    assert out["conversions"][0]["decoded"] == .25  # first low-phase decision is retained; reset-masked tail has zero weight
-    assert out["conversions"][0]["clock_slots"] == 4
+    assert out["conversions"][0]["decoded"] == 0  # +,-,unused; the old4-update kernel wrongly credited +1/4
+    assert out["conversions"][0]["clock_slots"] == 3
+    assert out["conversions"][0]["active_update_clocks"] == 3
     assert out["conversions"][0]["reset_period_clocks"] == 4
-    assert out["conversions"][0]["ignored_zero_weight_decisions"] == 1
+    assert out["conversions"][0]["ignored_zero_weight_decisions"] == 0
+    assert out["conversions"][0]["excluded_reset_active_slots"] == 1
     assert out["conversions"][0]["first_sample_s"] == pytest.approx(2.9)
-    assert out["conversions"][0]["last_sample_s"] == pytest.approx(5.9)
+    assert out["conversions"][0]["last_sample_s"] == pytest.approx(4.9)
     assert out["discarded_intervals"] == []
 
 
@@ -46,33 +62,38 @@ def test_low_phase_first_decision_after_release_is_not_skipped(tmp_path):
               (5.5016e-6, 0, 1.2), (5.5017e-6, 0, 0), (5.5101e-6, 1.2, 0),
               (6.5015e-6, 1.2, 0), (6.5016e-6, 1.2, 1.2), (7e-6, 1.2, 1.2)]
     path = tmp_path / "falling.dat"
-    path.write_text("\n".join(f"{t:.17g} {bit} {reset} .7" for t, bit, reset in events))
+    events += [(x * 1e-6, 0 if x < 3.51 else 1.2 if x < 4.51 else 0,
+                1.2 if x < 5.5016 else 0) for x in (2.6, 2.99, 3.0, 3.6, 3.99, 4.0, 4.6, 4.99, 5.0)]
+    events.sort()
+    path.write_text("time output reset input v(xdut.transfer_n) v(xdut.transfer_p)\n" + "\n".join(
+        f"{t:.17g} {bit} {reset} .7 {1.2 if .6 <= (t * 1e6 % 1) < .9999 else 0} "
+        f"{0 if .6 <= (t * 1e6 % 1) < .9999 else 1.2}" for t, bit, reset in events))
     result = capture.decode_capture(path, (1e-6, 1e-6, 1.2),
-        {"window_clocks": 4, "order": 1, "coeff": .25, "feedback_delay_clocks": 1}, {"held_input_v": .7})
+        _declaration(), {"held_input_v": .7})
     conversion = result["conversions"][0]
     assert conversion["release_s"] == pytest.approx(2.50155e-6)
     assert conversion["first_sample_s"] == pytest.approx(2.9e-6)
-    assert conversion["clock_slots"] == 4 and conversion["ignored_zero_weight_decisions"] == 1
-    assert conversion["decoded"] == -.25  # -,+,-,unused; the old rising-edge rule incorrectly yielded zero
+    assert conversion["clock_slots"] == 3 and conversion["ignored_zero_weight_decisions"] == 0
+    assert conversion["decoded"] == 0  # -,+,unused; no final feedback update during reset
 
 
 @pytest.mark.parametrize("kwargs", [{"moving": True}, {"truncated": True}])
 def test_moving_or_incomplete_conversion_is_not_credited(tmp_path, kwargs):
     out = capture.decode_capture(_dump(tmp_path / "wave.dat", **kwargs), (1, 1, 1.2),
-        {"window_clocks": 4, "order": 1, "coeff": 0.25, "feedback_delay_clocks": 1}, {})
+        _declaration(), {})
     assert out["conversions"] == []
 
 
 def test_reset_cannot_mask_a_decision_with_nonzero_decode_weight(tmp_path):
-    result = capture.decode_capture(_dump(tmp_path / "wave.dat"), (1, 1, 1.2),
-        {"window_clocks": 4, "order": 1, "coeff": 0.25, "feedback_delay_clocks": 0}, {})
+    result = capture.decode_capture(_dump(tmp_path / "wave.dat", assert_at=5.8), (1, 1, 1.2),
+        _declaration(delay=0), {})
     assert not result["conversions"]
-    assert result["discarded_intervals"][0]["reason"] == "reset_masks_nonzero_weight_decision"
+    assert result["discarded_intervals"][0]["reason"] == "transfer_pulse_overlaps_reset"
 
 
 def test_native_input_must_match_the_executed_held_stimulus(tmp_path):
     result = capture.decode_capture(_dump(tmp_path / "wave.dat"), (1, 1, 1.2),
-        {"window_clocks": 4, "order": 1, "coeff": 0.25, "feedback_delay_clocks": 1}, {"held_input_v": .8})
+        _declaration(), {"held_input_v": .8})
     assert not result["conversions"]
     assert result["discarded_intervals"][0]["reason"] == "native_input_differs_from_executed_stimulus"
 
@@ -80,7 +101,7 @@ def test_native_input_must_match_the_executed_held_stimulus(tmp_path):
 def test_lossless_gzip_preserves_every_capture_byte_and_decoded_value(tmp_path):
     path = _dump(tmp_path / "wave.dat")
     original = capture.capture_sha(path)
-    declaration = {"window_clocks": 4, "order": 1, "coeff": .25, "feedback_delay_clocks": 1}
+    declaration = _declaration()
     decoded = capture.decode_capture(path, (1, 1, 1.2), declaration, {})
     receipt = capture.compress_capture(path)
     assert not path.exists()
@@ -106,6 +127,81 @@ def test_capture_missing_first_sample_is_refused(tmp_path):
     path.write_text("2 1.2 1.2 .7\n3 1.2 1.2 .7\n")
     with pytest.raises(ValueError, match="first sampling instant"):
         capture.sampled_capture(path, 1, 1, 1.2)
+
+
+def test_delayed_recurrence_uses_observed_updates_not_reset_period(tmp_path):
+    declaration = _declaration()
+    declaration['order'] = 2
+    result = capture.decode_capture(_dump(tmp_path / 'wave.dat'), (1, 1, 1.2), declaration, {})
+    conversion, = result['conversions']
+    assert conversion['clock_slots'] == 3 and conversion['reset_period_clocks'] == 4
+    bits = [1., -1., 1.]
+    x1 = x2 = previous_bit = 0.
+    for bit in bits:
+        x2 += .25 * (x1 - previous_bit)
+        x1 += .25 * (.1 - previous_bit)
+        previous_bit = bit
+    normalizer = sum(capture.decimator.input_weights(3, 2, .25))
+    assert conversion['decoded'] == pytest.approx(.1 - x2 / normalizer)
+    assert conversion['decoded'] == pytest.approx(1 / 3)
+    # The old period4 kernel gives the final active bit nonzero future credit.
+    old, _ = capture.decimator.decimate([*bits, -1.], 4, 2, .25, 1)
+    assert old[0] == pytest.approx(5 / 6)
+
+
+def test_all_four_updates_are_retained_when_observed_before_reset(tmp_path):
+    result = capture.decode_capture(_dump(tmp_path / 'wave.dat', assert_at=6.05),
+                                    (1, 1, 1.2), _declaration(), {})
+    conversion, = result['conversions']
+    assert conversion['clock_slots'] == conversion['reset_period_clocks'] == 4
+    assert conversion['excluded_reset_active_slots'] == 0
+
+
+def test_propagated_transfer_closure_can_cross_ideal_clock_boundary(tmp_path):
+    path = _dump(tmp_path / 'wave.dat')
+    lines = path.read_text().splitlines()
+    for index in range(1, len(lines)):
+        fields = lines[index].split()
+        phase = int(round(float(fields[0]) * 10)) % 10
+        enabled = phase >= 6 or phase == 0  # falls0.05period after ideal boundary
+        fields[4:] = ['1.2', '0'] if enabled else ['0', '1.2']
+        lines[index] = ' '.join(fields)
+    path.write_text('\n'.join(lines))
+    result = capture.decode_capture(path, (1, 1, 1.2), _declaration(), {})
+    conversion, = result['conversions']
+    assert conversion['active_update_clocks'] == 3
+    assert conversion['decoded'] == 0
+
+
+@pytest.mark.parametrize('fault', ['missing_pulse', 'midwindow_reset', 'missing_reset'])
+def test_inconsistent_transfer_or_reset_intervals_refuse(tmp_path, fault):
+    path = _dump(tmp_path / 'wave.dat')
+    lines = path.read_text().splitlines()
+    for index in range(1, len(lines)):
+        fields = lines[index].split(); when = float(fields[0])
+        if fault == 'missing_pulse' and 3.5 <= when <= 4:
+            fields[4:] = ['0', '1.2']
+        if fault == 'midwindow_reset' and 3.2 <= when < 3.4:
+            fields[2] = '0'
+        if fault == 'missing_reset' and when >= 2.5:
+            fields[2] = '1.2'
+        lines[index] = ' '.join(fields)
+    path.write_text('\n'.join(lines))
+    assert not capture.decode_capture(path, (1, 1, 1.2), _declaration(), {})['conversions']
+
+
+def test_phase_header_must_name_the_actual_derived_vectors(tmp_path):
+    path = _dump(tmp_path / 'wave.dat')
+    path.write_text(path.read_text().replace('v(xdut.transfer_n)', 'v(xdut.other_node)'))
+    with pytest.raises(ValueError, match='phase header differs'):
+        capture.decode_capture(path, (1, 1, 1.2), _declaration(), {})
+
+
+def test_legacy_reset_only_capture_has_no_guessed_update_count(tmp_path):
+    declaration = _declaration(); declaration.pop('native_timing')
+    result = capture.decode_capture(_dump(tmp_path / 'wave.dat'), (1, 1, 1.2), declaration, {})
+    assert not result['conversions']
+    assert result['discarded_intervals'] == [{'reason': 'native_transfer_phase_attribution_absent'}]
 
 
 def test_coherent_fit_counts_harmonics_as_distortion():
@@ -147,6 +243,35 @@ def _template(tmp_path):
     topology["constants"] = {"window_clocks": 8, "feedback_delay_clocks": 1}
     topology["stage_expansion"] = {"count_from": "order", "stages": 2,
                                   "coefficients": [0.25, 0.25], "chain": ["ain", "n1", "n2"]}
+    topology["loop_probe"] = {"coefficient_devices": {"sampling": "sample{i}",
+        "feedback": "feedback{i}", "integrating": "store{i}"}}
+    devices = []
+    def pair(name, a, b, n="transfer_n", p="transfer_p"):
+        devices.extend([{"name": "mn_" + name, "role": "nmos", "nets": [a, n, b, "vss"]},
+                        {"name": "mp_" + name, "role": "pmos", "nets": [a, p, b, "vdd"]}])
+    for stage in (1, 2):
+        summing, out = f"sum{stage}", f"n{stage}"
+        devices.extend([{"name": f"store{stage}", "role": "capacitor", "nets": [summing, out]},
+                        {"name": f"mn_amplifier{stage}", "role": "nmos",
+                         "nets": [f"drain{stage}", summing, "vss", "vss"]}])
+        pair(f"reset{stage}", summing, out, "reset_on", "reset_b")
+        for branch, source_net in (("sample", "ain" if stage == 1 else "n1"), ("feedback", "reference_state")):
+            name = f"{branch}{stage}"
+            bottom, top = name + "_bottom", name + "_top"
+            devices.append({"name": name, "role": "capacitor", "nets": [bottom, top]})
+            pair(name + "_transfer", top, summing)
+            pair(name + "_reference", top, "vcm", "sample_on", "sample_off")
+            pair(name + "_sample", bottom, source_net, "sample_on", "sample_off")
+            pair(name + "_return", bottom, "vcm")
+    topology["devices"] = devices
+    cards = []
+    for device in devices:
+        if len(device['nets']) == 2:
+            cards.append('c_' + device['name'] + ' ' + ' '.join(device['nets']) + ' 1p')
+        else:
+            cards.append('m_' + device['name'] + ' ' + ' '.join(device['nets'])
+                         + (' NTEST' if device['role'] == 'nmos' else ' PTEST') + ' w=1u l=1u')
+    source.write_text(source.read_text().replace('.ends conv', '\n'.join(cards) + '\n.ends conv'))
     return source, spec, topology
 
 
@@ -271,6 +396,26 @@ def test_cached_pass_cannot_hide_native_failure_or_interruption(tmp_path, monkey
     log = tmp_path / "ngspice.log"; log.write_text(line)
     points[0]["executions"] = [{"returncode": code, "log": str(log), "log_sha256": capture.bound.sha(log)}]
     assert capture.coherent_sndr(points, 64, 9, 14)["status"] == status
+
+
+@pytest.mark.parametrize('code,line,status', [(124, '', 'NOT_MEASURED'),
+    (124, ';;RESIDUAL_FAIL actual numerical error', 'FAIL'),
+    (124, 'fatal error: actual native analysis', 'FAIL'), (1, '', 'FAIL')])
+def test_current_raw_value_does_not_turn_a_timeout_into_design_failure(tmp_path, code, line, status):
+    project, _settings, directory, record = _method_record(tmp_path)
+    assert record['decoded']['conversions']  # Real decoder output from this finite software-fixture capture.
+    execution = record['executions'][0]
+    log = Path(execution['log']); log.write_text(line)
+    execution.update(returncode=code, log_sha256=capture.bound.sha(log))
+    assert capture.native_execution_failure(record) is (status == 'FAIL')
+    assert capture.coherent_sndr([record], 64, 9, 14)['status'] == status
+    paths = record['native_inputs']
+    def native(deck, target):
+        transcript = target / 'native.log'; transcript.write_text(line)
+        return {'returncode': code, 'log': str(transcript), 'log_sha256': capture.bound.sha(transcript)}
+    measured = capture.run_point(project, Path(paths['netlist']['path']), Path(paths['testbench']['path']),
+        Path(paths['spec']['path']), Path(paths['topology']['path']), record['settings'], tmp_path / 'interrupted', native)
+    assert measured['status'] == status and measured['decoded'] == {}
 
 
 def test_consumer_replays_native_score_instead_of_trusting_cached_pass(tmp_path, monkeypatch):
@@ -404,7 +549,7 @@ def test_derived_decoder_replay_preserves_original_receipt_and_ignores_old_decod
     original = point.read_bytes()
     replay = capture.write_decoder_replay(record, point)
     assert point.read_bytes() == original
-    assert replay["decoded"]["conversions"][0]["clock_slots"] == 4
+    assert replay["decoded"]["conversions"][0]["clock_slots"] == 3
     assert replay["decoded"]["conversions"][0]["decoded"] != 99
     receipt = json.loads(Path(replay["receipt"]["path"]).read_text())
     assert receipt["original_point"]["sha256"] == capture.bound.sha(point)
@@ -465,3 +610,53 @@ def test_a07_requests_full_series_only_after_valid_control_and_keeps_missing_sco
         lambda *args: calls.append(args) or {"returncode": 2}, "A07")
     assert row["status"] == "NOT_MEASURED" and row["measurements"] == {}
     assert len(calls) == 1 and "--limit-points" not in calls[0][1]
+
+
+def test_typed_switch_endpoints_derive_every_branch_and_native_probes(tmp_path):
+    source, spec, topology = _template(tmp_path)
+    text, _clock, declaration = capture.prepare_deck(source, spec, topology,
+        {'reset_node': 'xdut.reset_b', 'held_input_v': .8}, tmp_path)
+    timing = declaration['native_timing']
+    assert {g['capacitor'] for g in timing['groups']} == {'sample1', 'feedback1', 'sample2', 'feedback2'}
+    assert len(timing['columns']) == 2
+    assert all(column in text.split('wrdata ', 1)[1] for column in timing['columns'])
+    assert {g['n_switch'] for g in timing['groups']} == {
+        'mn_sample1_transfer', 'mn_feedback1_transfer', 'mn_sample2_transfer', 'mn_feedback2_transfer'}
+
+
+def test_actual_mapped_gate_inventory_supports_extracted_hierarchy(tmp_path):
+    _source, _spec, topology = _template(tmp_path)
+    before = capture._transfer_timing(topology, 'xdut.reset_b')
+    mapping = {g[polarity + '_switch']: 'xdut.physical.' + g[polarity + '_switch'] + '_gate#'
+               for g in before['groups'] for polarity in ('n', 'p')}
+    after = capture._transfer_timing(topology, 'xdut.physical.reset_fragment#', mapping)
+    assert len(after['columns']) == 8
+    assert all('xdut.physical.' in column for column in after['columns'])
+    with pytest.raises(ValueError, match='actual native transfer gate node is absent'):
+        capture._transfer_timing(topology, 'xdut.physical.reset_fragment#', dict(list(mapping.items())[1:]))
+    with pytest.raises(ValueError, match='remapped reset requires'):
+        capture._transfer_timing(topology, 'xdut.physical.reset_fragment#')
+
+
+def test_wrong_source_switch_endpoint_cannot_vouch_for_a_phase_probe(tmp_path):
+    _source, _spec, topology = _template(tmp_path)
+    switch = next(d for d in topology['devices'] if d['name'] == 'mp_sample1_transfer')
+    switch['nets'][2] = 'unrelated_summing_node'
+    with pytest.raises(ValueError, match='actual nMOS/pMOS switch pair'):
+        capture._transfer_timing(topology, 'xdut.reset_b')
+
+
+def test_disagreeing_branch_pulses_cannot_supply_one_cascade_update(tmp_path):
+    path = _dump(tmp_path / 'wave.dat')
+    declaration = _declaration()
+    declaration['native_timing']['columns'] += ['v(xdut.extra_n)', 'v(xdut.extra_p)']
+    declaration['native_timing']['groups'].append({'capacitor': 'other_branch',
+        'n_gate': 'v(xdut.extra_n)', 'p_gate': 'v(xdut.extra_p)'})
+    lines = path.read_text().splitlines()
+    lines[0] += ' v(xdut.extra_n) v(xdut.extra_p)'
+    for index in range(1, len(lines)):
+        fields = lines[index].split(); when = float(fields[0])
+        extra = ['0', '1.2'] if 3.5 <= when <= 4 else fields[4:]
+        lines[index] += ' ' + ' '.join(extra)
+    path.write_text('\n'.join(lines))
+    assert not capture.decode_capture(path, (1, 1, 1.2), declaration, {})['conversions']

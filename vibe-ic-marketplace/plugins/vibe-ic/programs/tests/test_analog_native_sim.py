@@ -577,6 +577,120 @@ def test_a08_requires_nominal_pass_before_native_pvt(project):
     assert "nominal A07" in result["detail"]
 
 
+@pytest.mark.parametrize('step', ['A08', 'A09'])
+@pytest.mark.parametrize('state', ['PASS', 'FAIL'])
+def test_execution_input_sidecar_routes_existing_native_consumers(project, step, state):
+    directory = project / 'phase3/analog/stage'
+    (directory/'spec.json').write_text(json.dumps({'specs':[{'name':'vout','min':.9,'max':1.1,'unit':'V'}]}))
+    reference = {'path':'actual-native.json','sha256':'bound-native-source'}
+    key, filename = ('pvt','pvt_inputs.json') if step == 'A08' else ('statistics','statistics_inputs.json')
+    settings = {'result':reference} if step == 'A08' else {'n':3,'references':[reference]}
+    (directory/filename).write_text(json.dumps({key:settings}))
+    seen = []
+    def run(program, argv, **kwargs):
+        seen.append(program)
+        assert program == 'analog_native_physical.py'
+        selected = json.loads(argv[argv.index('--settings')+1])
+        expected = {'result':dict(reference,path=str(project/reference['path']))} if step == 'A08' else {
+            'stage':'PRE','samples':3,'references':[dict(reference,path=str(project/reference['path']))]}
+        assert selected == expected
+        metrics = {'stage':'PRE','verdict':state,'mc_runs':3,
+            'spec_yield':{'vout':{'runs_scored':3,'yield_pct':100}},'total_corners':9,'corners_executed':9,
+            'full_pvt_sweep_executed':True,'design_traceable':True,
+            'source_context_coverage':{'vout':{'required_contexts':9,'measured_contexts':9,'missing_contexts':[]}}}
+        Path(kwargs['outputs'][0]).write_text(json.dumps({'status':state,'metrics':metrics,'outputs':[]}))
+        return {'returncode':0 if state == 'PASS' else 1}
+    result = sim.run_step(step,project,{'name':'stage'},_options(previous_results={'A07':{'stage':{'status':'PASS'}}}),run)
+    assert result['status'] == state and len(seen) == 1
+
+
+@pytest.mark.parametrize('step', ['A08', 'A09'])
+@pytest.mark.parametrize('location', ['block', 'global_step', 'block_step'])
+def test_execution_input_explicit_configuration_overrides_sidecar_defaults(project, step, location):
+    directory = project / 'phase3/analog/stage'
+    key, filename = ('pvt','pvt_inputs.json') if step == 'A08' else ('statistics','statistics_inputs.json')
+    sidecar = {'result':{'path':'unused.json','sha256':'unused'}} if step == 'A08' else {'n':3,'references':[{'path':'unused.json','sha256':'unused'}]}
+    (directory/filename).write_text(json.dumps({key:sidecar}))
+    # An explicit invalid reference must refuse; it cannot fall back to the valid local default.
+    explicit = {key:{'result':{}} if step == 'A08' else {'n':1,'references':[{'path':'explicit','sha256':'h'}]}}
+    config = {'blocks':{'stage':explicit}} if location == 'block' else {'steps':{step:explicit}} if location == 'global_step' else {'blocks':{'stage':{'steps':{step:explicit}}}}
+    result = sim.run_step(step,project,{'name':'stage'},_options(config=config,
+        previous_results={'A07':{'stage':{'status':'PASS'}}}),_never)
+    assert result['status'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('step', ['A08', 'A09'])
+@pytest.mark.parametrize('body', ['{', '[]', 'null'])
+def test_execution_input_malformed_sidecar_refuses_before_native(project, step, body):
+    filename = 'pvt_inputs.json' if step == 'A08' else 'statistics_inputs.json'
+    (project/'phase3/analog/stage'/filename).write_text(body)
+    result = sim.run_step(step,project,{'name':'stage'},_options(previous_results={'A07':{'stage':{'status':'PASS'}}}),_never)
+    assert result['status'] == 'NOT_MEASURED' and filename in result['detail']
+
+
+def _incremental_pvt_manifest(project, fault=None):
+    bdir = project / 'phase3/analog/stage'
+    (bdir / 'spec.json').write_text(json.dumps({'specs': [
+        {'name': 'ENOB', 'min': 14, 'unit': 'bit'},
+        {'name': 'Vref', 'min': 0.8, 'max': 1.2, 'unit': 'V'}]}))
+    views = {role: {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+             for role, path in zip(('netlist', 'testbench', 'spec'), sim._inputs(project, 'stage', {}))}
+    manifest = {'kind': 'incremental_capture_pvt', 'stage': 'PRE', 'block': 'stage',
+                'project': str(project), 'image': 'actual-pin', 'native_inputs': views}
+    if fault in ('project', 'block', 'image'):
+        manifest[fault] = 'another-source'
+    elif fault == 'dut':
+        views['netlist']['sha256'] = 'other-dut'
+    elif fault == 'views_list':
+        manifest['native_inputs'] = ['not-an-object']
+    elif fault == 'role_list':
+        views['spec'] = ['not-a-view']
+    path = project / 'incremental-pvt-manifest.json'
+    path.write_text(json.dumps(manifest))
+    reference = {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    if fault == 'digest':
+        reference['sha256'] = 'changed-manifest'
+    return _options(image='actual-pin', workers=3, cpus=3,
+        previous_results={'A07': {'stage': {'status': 'PASS'}}},
+        config={'blocks': {'stage': {'pvt': {'kind': 'incremental_capture', 'manifest': reference}}}})
+
+
+@pytest.mark.parametrize('fault', ['project', 'block', 'image', 'dut', 'digest', 'views_list', 'role_list'])
+def test_a08_incremental_pvt_refuses_another_source_or_runtime_before_launch(project, fault):
+    result = sim.run_step('A08', project, {'name': 'stage'}, _incremental_pvt_manifest(project, fault), _never)
+    assert result['status'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('state,fault,expected', [
+    ('PASS', None, 'PASS'), ('FAIL', None, 'FAIL'),
+    ('PASS', 'missing_vref', 'NOT_MEASURED'), ('PASS', 'vref_gaps', 'NOT_MEASURED'),
+    ('PASS', 'native_rc', 'NOT_MEASURED'), ('FAIL', 'post', 'NOT_MEASURED')])
+def test_a08_incremental_pvt_uses_real_series_driver_and_requires_both_source_outputs(
+        project, state, fault, expected):
+    options = _incremental_pvt_manifest(project)
+    def run(program, argv, **kwargs):
+        assert program == 'analog_incremental_pvt.py'
+        assert argv[:1] == ['run']
+        assert argv[argv.index('--workers') + 1] == '3'
+        assert argv[argv.index('--cpus') + 1] == '3'
+        assert argv[argv.index('--image') + 1] == 'actual-pin'
+        coverage = {key: {'required_contexts': 9, 'measured_contexts': 9, 'missing_contexts': []}
+                    for key in ('enob', 'vref')}
+        if fault == 'missing_vref':
+            coverage.pop('vref')
+        if fault == 'vref_gaps':
+            coverage['vref']['gaps'] = ['missing actual reference table']
+        Path(kwargs['outputs'][0]).write_text(json.dumps({'status': state, 'metrics': {
+            'stage': 'POST' if fault == 'post' else 'PRE', 'total_corners': 9, 'corners_executed': 9,
+            'full_pvt_sweep_executed': True, 'design_traceable': True, 'source_context_coverage': coverage},
+            'outputs': ['native-series-directory'], 'native_inputs': {'actual-native': {'path': 'source', 'sha256': 'bytes'}}}))
+        return {'returncode': 1 if state == 'FAIL' or fault == 'native_rc' else 0}
+    result = sim.run_step('A08', project, {'name': 'stage'}, options, run)
+    assert result['status'] == expected
+    assert 'native-series-directory' in result['outputs']
+    assert 'actual-native' in result['native_inputs']
+
+
 @pytest.mark.parametrize("native_status,gate_rc,expected", [("PASS", 0, "PASS"), ("FAIL", 1, "FAIL"), ("NOT_MEASURED", 0, "NOT_MEASURED")])
 def test_a08_runs_existing_native_sweep_and_consumer(project, native_status, gate_rc, expected):
     spec = project / "phase3/analog/stage/spec.json"
@@ -671,6 +785,101 @@ def test_a09_does_not_launch_mc_for_unresolved_nominal(project):
     assert result["status"] == "NOT_MEASURED"
     assert "nominal A07" in result["detail"]
 
+
+def _incremental_statistics_manifest(project, fault=None):
+    options = _incremental_pvt_manifest(project, fault)
+    config = options['config']['blocks']['stage']
+    reference = config.pop('pvt')['manifest']
+    path = Path(reference['path'])
+    body = json.loads(path.read_text())
+    body.update(kind='incremental_capture_statistics', requested_samples=2)
+    path.write_text(json.dumps(body))
+    if fault != 'digest':
+        reference['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    config['statistics'] = {'kind': 'incremental_capture', 'n': 2, 'manifest': reference}
+    return options
+
+
+@pytest.mark.parametrize('fault', ['project', 'block', 'image', 'dut', 'digest', 'views_list', 'role_list'])
+def test_a09_incremental_statistics_refuses_another_source_or_runtime_before_launch(project, fault):
+    result = sim.run_step('A09', project, {'name': 'stage'}, _incremental_statistics_manifest(project, fault), _never)
+    assert result['status'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('state,fault,expected', [
+    ('PASS', None, 'PASS'), ('FAIL', None, 'FAIL'),
+    ('PASS', 'activation', 'NOT_MEASURED'), ('PASS', 'sample_count', 'NOT_MEASURED'),
+    ('PASS', 'missing_vref', 'NOT_MEASURED'), ('PASS', 'gaps', 'NOT_MEASURED'),
+    ('PASS', 'native_rc', 'NOT_MEASURED'), ('FAIL', 'post', 'NOT_MEASURED'),
+    ('FAIL', 'sample_count', 'FAIL')])
+def test_a09_incremental_statistics_routes_real_cohorts_and_keeps_native_failure(
+        project, state, fault, expected):
+    options = _incremental_statistics_manifest(project)
+    def run(program, argv, **kwargs):
+        assert program == 'analog_incremental_statistics.py'
+        assert argv[0] == 'run'
+        assert argv[argv.index('--workers') + 1] == '3'
+        assert argv[argv.index('--cpus') + 1] == '3'
+        assert argv[argv.index('--image') + 1] == 'actual-pin'
+        yields = {key: {'runs_scored': 2, 'yield_pct': 100} for key in ('enob', 'vref')}
+        if fault == 'missing_vref':
+            yields.pop('vref')
+        Path(kwargs['outputs'][0]).write_text(json.dumps({'status': state, 'metrics': {
+            'stage': 'POST' if fault == 'post' else 'PRE', 'requested_samples': 2,
+            'samples_executed': 1 if fault == 'sample_count' else 2,
+            'native_activation_proven': fault != 'activation',
+            'gaps': ['missing chip'] if fault == 'gaps' else [],
+            'spec_yield': yields, 'scope': 'actual native selected chip cohort'},
+            'outputs': ['native-chip-directory'], 'native_inputs': {'actual-chip': {'path': 'source', 'sha256': 'bytes'}}}))
+        return {'returncode': 1 if state == 'FAIL' or fault == 'native_rc' else 0}
+    result = sim.run_step('A09', project, {'name': 'stage'}, options, run)
+    assert result['status'] == expected
+    if fault != 'post':
+        assert 'native-chip-directory' in result['outputs']
+        assert 'actual-chip' in result['native_inputs']
+
+
+def test_a09_incremental_statistics_requires_the_explicit_prepared_population_count(project):
+    options = _incremental_statistics_manifest(project)
+    options['config']['blocks']['stage']['statistics']['n'] = 3
+    assert sim.run_step('A09', project, {'name': 'stage'}, options, _never)['status'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('stage,verdict,runs,expected', [
+    ('PRE', 'PASS', 3, 'PASS'), ('PRE', 'FAIL', 3, 'FAIL'),
+    ('PRE', 'PASS', 2, 'NOT_MEASURED'), ('POST', 'PASS', 3, 'NOT_MEASURED')])
+def test_a09_routes_actual_bound_studies_to_pre_population_and_exports_native_artifacts(
+        project, stage, verdict, runs, expected):
+    spec = project / 'phase3/analog/stage/spec.json'
+    spec.write_text(json.dumps({'specs': [{'name': 'vout', 'min': 0.9, 'max': 1.1, 'unit': 'V'}]}))
+    reference = {'path': 'native-source.json', 'sha256': 'abc'}
+    views = {'source': {'path': str(spec), 'sha256': 'native-source-hash'}}
+    def run(program, argv, **kwargs):
+        assert program == 'analog_native_physical.py' and argv[0] == 'population'
+        settings = json.loads(argv[argv.index('--settings') + 1])
+        assert settings == {'stage': 'PRE', 'samples': 3, 'references': [
+            dict(reference, path=str(project / 'native-source.json'))]}
+        Path(kwargs['outputs'][0]).write_text(json.dumps({'status': verdict, 'metrics': {
+            'stage': stage, 'verdict': verdict, 'mc_runs': runs,
+            'spec_yield': {'vout': {'runs_scored': runs, 'yield_pct': 100}}},
+            'outputs': ['actual-native-population'], 'native_inputs': views}))
+        return {'returncode': 1 if verdict == 'FAIL' else 0}
+    result = sim.run_step('A09', project, {'name': 'stage'}, _options(
+        previous_results={'A07': {'stage': {'status': 'PASS'}}},
+        config={'blocks': {'stage': {'statistics': {'n': 3, 'references': [reference]}}}}), run)
+    assert result['status'] == expected
+    if stage == 'PRE':
+        assert 'actual-native-population' in result['outputs']
+        assert result['native_inputs'] == views
+
+
+@pytest.mark.parametrize('statistics', [{'n': 1, 'references': [{'path': 'r', 'sha256': 'h'}]},
+    {'n': 3, 'references': []}, {'n': 3, 'references': [{}]}])
+def test_a09_invalid_bound_sampling_plan_refuses_before_native_launch(project, statistics):
+    result = sim.run_step('A09', project, {'name': 'stage'}, _options(
+        previous_results={'A07': {'stage': {'status': 'PASS'}}},
+        config={'blocks': {'stage': {'statistics': statistics}}}), _never)
+    assert result['status'] == 'NOT_MEASURED'
 
 @pytest.mark.parametrize("complete,expected", [(False, "NOT_MEASURED"), (True, "PASS")])
 def test_a09_requires_source_metric_coverage_and_all_actual_samples(project, complete, expected):
