@@ -3758,7 +3758,7 @@ def _main() -> int:
                         "LEC unbounded; this is not a wall-clock timeout.")
     p.add_argument("--skip-hardware", action="store_true")
     p.add_argument("--rtl-input", choices=("structured", "original"), default="structured",
-                   help="Step 1/2 input authority; original consumes the complete original specification in a bounded RTL-only window.")
+                   help="RTL authoring input authority; original consumes the complete original specification in a bounded RTL-only window.")
     p.add_argument("--entry-step", default=None,
                    help="START an explicit Flow109 window at a current "
                         "canonical row ID: D01..D81, A01..A19 or M01..M09. "
