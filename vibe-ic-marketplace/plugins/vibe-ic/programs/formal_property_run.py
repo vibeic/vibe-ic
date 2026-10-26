@@ -2537,6 +2537,91 @@ def _prove_engine_mode(project: Path, requested: str) -> str:
     return "dual" if mode == "dual" else "direct"
 
 
+def _publish_chip_read_refusal(formal_dir, sby_path, harness, rtl, top, reason,
+                               *, proof_attempted):
+    """Atomically supersede canonical proof authority with this run's refusal."""
+    import uuid
+    refusal = {
+        "program": "formal_property_run", "verdict": "INCOMPLETE",
+        "rc": RC_INCOMPLETE, "all_proved": False, "proof_attempted": proof_attempted,
+        "reason": reason,
+        "attempt_id": uuid.uuid4().hex,
+        "producer_sha256": _sha256_file(Path(__file__)),
+        "sby": str(sby_path), "sby_sha256": _sha256_file(sby_path),
+        "requested_top": top,
+        "requested_rtl": [{"path": str(p), "sha256": _sha256_file(p)}
+                          for p in (rtl or [])],
+        "harness_sha256": _sha256_file(harness) if harness else None,
+        "supersedes_results_sha256": _sha256_file(formal_dir / "results.json"),
+    }
+    # The public consumer selects results.json before any sibling request.
+    _aa.write_json(formal_dir / "results.json", refusal)
+    _write_authoring_incomplete(formal_dir, reason)
+    return refusal
+
+
+def _authored_chip_read(project, formal_dir, sby, harness, rtl, top):
+    """Admit provenance only for the canonical source-reading task body.
+
+    Engines and bounds may be authored; scripts and staged source bytes cannot
+    borrow the chip identity from unrelated --rtl/--harness arguments.
+    """
+    import _chip_synth_read as csr
+    from formal_proof_evidence_check import _dut_instance, strip_comments
+    if not harness or not rtl or not top:
+        raise ValueError("authored task requires --harness, --rtl and --top")
+    contract = json.loads((formal_dir / "property_contract.json").read_text())
+    chip_top = contract.get("chip_read_top")
+    htext = strip_comments(harness.read_text())
+    hm = re.search(r"\bmodule\s+(?:automatic\s+|static\s+)?([A-Za-z_$][\w$]*)", htext)
+    if (not chip_top or not hm or top not in (chip_top, hm[1])
+            or _dut_instance(htext)[0] != chip_top):
+        raise ValueError("authoritative chip_read_top does not bind the harness/DUT top")
+    macros = csr.staged_macro_files(project)
+    record = csr.chip_read_record(rtl, macros, chip_top)
+    current = csr.current_chip_read(project, chip_top)
+    differences = csr.chip_read_differences(record, current)
+    # Yosys elaboration depends on read order, not just the name/hash set.
+    if ([(r["name"], r["sha256"]) for r in record["files"]]
+            != [(r["name"], r["sha256"]) for r in current["files"]]):
+        differences.append("ordered RTL read identity differs")
+    if differences or any(row["sha256"] == "unreadable" for row in record["files"]):
+        raise ValueError("declared RTL differs from current chip read: " + str(differences))
+    # A canonical read uses basename staging, not aliases or a second source.
+    text = sby.read_text()
+    sections = re.findall(r"(?m)^\[([^\]\n]+)\]", text)
+    if (len(sections) != len(set(sections))
+            or set(sections) != {"tasks", "options", "engines", "script", "files"}):
+        raise ValueError("authored task has ambiguous or unsupported sections")
+    def section(body, name):
+        match = re.search(r"(?ms)^\[" + name + r"\]\s*\n(.*?)(?=^\[|\Z)", body)
+        return [line.strip() for line in match[1].splitlines() if line.strip()] if match else []
+    files = section(text, "files")
+    required = [r.name for r in rtl] + [harness.name]
+    headers = [n for n in files if n not in required]
+    if (len(set(files)) != len(files) or set(files) != set(required + headers)
+            or not set(required) <= set(files)
+            or any(Path(n).name != n or not n.endswith((".vh", ".svh")) for n in headers)):
+        raise ValueError("authored task file set does not bind declared RTL/harness")
+    for src in list(rtl) + [harness]:
+        if _sha256_file(formal_dir / src.name) != _sha256_file(src):
+            raise ValueError("staged source hash differs: " + src.name)
+    for name in headers:
+        candidates = [src.parent / name for src in list(rtl) + [harness]]
+        if not any(src.is_file() and _sha256_file(src) == _sha256_file(formal_dir / name)
+                   for src in candidates):
+            raise ValueError("unbound include source: " + name)
+    simdef, _ = csr.chip_sim_define(rtl, macros)
+    siblings = {r.name for r in rtl}
+    reads = [r.name for r in rtl if not _hub.is_include_hub(r, siblings)] or required[:-1]
+    expected = emit_sby(reads, harness.name, top, include_files=headers,
+                        observers=parse_observers(_harness_texts(None, formal_dir, harness)),
+                        dut_simdef=simdef, harness_top=hm[1])
+    if section(text, "script") != section(expected, "script"):
+        raise ValueError("authored task script differs from the canonical chip read/bindings")
+    return record
+
+
 def run(project: Path, harness: Optional[Path] = None,
         rtl: Optional[List[Path]] = None, top: Optional[str] = None,
         sby: Optional[Path] = None, container: Optional[str] = _pin.default_container_name(),
@@ -2777,6 +2862,15 @@ def run(project: Path, harness: Optional[Path] = None,
                     and "/" in ls and Path(ls).is_file()):
                 shutil.copy2(ls, formal_dir / Path(ls).name)
 
+    if sby is not None and inv_h is None and (harness or rtl or top):
+        try:
+            chip_read = _authored_chip_read(project, formal_dir, sby_path,
+                                            harness, rtl, top)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            return _publish_chip_read_refusal(
+                formal_dir, sby_path, harness, rtl, top,
+                "authored chip read refused: " + str(exc), proof_attempted=False)
+
     # 1b) EMIT-ONLY — the artefact is written; the proof is NOT run ---------
     # Returns BEFORE the executor is reached, so the guarantee is structural
     # rather than environmental: there is no code path from here to a solver,
@@ -2827,6 +2921,13 @@ def run(project: Path, harness: Optional[Path] = None,
         return _refuse_hierarchical(formal_dir, project, sby_path, _unbound,
                                     "observer binding(s) that do not match what the harness declares",
                                     results_name=_refusal_results_name)
+
+    # Seal the admitted deck and staged closure BEFORE execution. A matching
+    # CLI hash is not evidence that each task actually read those bytes.
+    bound_deck = _sha256_file(sby_path) if chip_read is not None else None
+    bound_inputs = proof_inputs(sby_path, formal_dir)["files"] if chip_read is not None else {}
+    if chip_read is not None:
+        bound_inputs = {name: _sha256_file(formal_dir / name) for name in bound_inputs}
 
     # 2) run sby -------------------------------------------------------------
     eff_mem_kb = (mem_limit_kb if mem_limit_kb is not None
@@ -2940,6 +3041,26 @@ def run(project: Path, harness: Optional[Path] = None,
     sby_rel = str(sby_path.relative_to(project))
     results = build_results(top_name, cfg, lp, ev_rel, sby_rel)
     results["proof_inputs"] = proof_inputs(sby_path, formal_dir)
+    if chip_read is not None:
+        reason = None
+        if _sha256_file(sby_path) != bound_deck:
+            reason = "selected deck changed during execution"
+        elif (not bound_inputs or None in bound_inputs.values()
+              or results["proof_inputs"]["files"] != bound_inputs):
+            reason = "proof_inputs differ from admitted staged sources"
+        elif any(bound_inputs.get(row["name"]) != row["sha256"]
+                 for row in chip_read["files"]):
+            reason = "chip_read differs from admitted staged sources"
+        else:
+            for task_name in cfg:
+                src = formal_dir / f"{sby_path.stem}_{task_name}" / "src"
+                if any(_sha256_file(src / name) != digest
+                       for name, digest in bound_inputs.items()):
+                    reason = f"task {task_name} src differs from admitted staged sources"
+                    break
+        if reason:
+            return _publish_chip_read_refusal(
+                formal_dir, sby_path, harness, rtl, top, reason, proof_attempted=True)
     # Bind the proof's task file and transcript at proof time, just as the
     # individual model inputs above are bound.  A later reader must not pair
     # a retained PASS with a rewritten engine/script/assumption set or with a
