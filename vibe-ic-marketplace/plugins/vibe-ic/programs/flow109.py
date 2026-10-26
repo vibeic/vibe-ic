@@ -226,7 +226,7 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
             project, Path("reports/flow109/default_rows/D50.json"), "D50")
     import flow109_final_lec as final_lec
     try:
-        final = final_lec.validate_common_baseline(project, d44_ref["path"])
+        final = final_lec.validate_common_baseline(project, d44_ref)
     except Exception as exc:
         raise Flow109Error("FLOW109_D44_FINAL_EQUIVALENCE_UNACCEPTED", str(exc)) from exc
     final_manifest, _ = _bound_project_json(

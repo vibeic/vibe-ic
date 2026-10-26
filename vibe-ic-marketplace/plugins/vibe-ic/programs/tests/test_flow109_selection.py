@@ -308,9 +308,16 @@ def _final_timing_case(project, monkeypatch):
     transform.write_text(json.dumps({"status": "PREPARED_NOT_EQUIVALENCE_PROVEN"}))
     transform_record = {"path": str(transform.relative_to(project)),
                         "sha256": hashlib.sha256(transform.read_bytes()).hexdigest()}
+    proof = project / "reports/flow109/D44/proof.json"
+    proof.write_text(json.dumps({"verdict": "PASS"}))
+    proof_record = {"path": str(proof.relative_to(project)),
+                    "sha256": hashlib.sha256(proof.read_bytes()).hexdigest()}
     baseline = project / final_lec.BASELINE; baseline.parent.mkdir(parents=True)
     baseline.write_text(json.dumps({
         "adopted_netlist": final_record,
+        "consumer_netlists": {role: final_record
+                              for role in ("sta", "lvs_reference", "release")},
+        "proof": proof_record,
         "transformations": [{"kind": "def_bound_physical_preparation",
                              "input": "input/flow109/physical.json"}],
         "transformation_receipt": transform_record}))
@@ -318,16 +325,22 @@ def _final_timing_case(project, monkeypatch):
                        "sha256": hashlib.sha256(baseline.read_bytes()).hexdigest()}
     d44_input = project / final_lec.INPUT; d44_input.parent.mkdir(parents=True, exist_ok=True)
     d44_input.write_text(json.dumps({"top": "neutral_unit"}))
-    for step in ("D44", "D49"):
-        (rows / f"{step}.json").write_text(json.dumps({
-            "step_id": step, "default_row_status": "PASS", "completed": True}))
-    proof = project / "reports/flow109/D44/proof.json"
-    proof.write_text(json.dumps({"verdict": "PASS"}))
-    proof_record = {"path": str(proof.relative_to(project)),
-                    "sha256": hashlib.sha256(proof.read_bytes()).hexdigest()}
-    monkeypatch.setattr(final_lec, "validate_common_baseline", lambda *_: {
-        "baseline": baseline_record, "adopted_netlist": final_record,
-        "proof": proof_record, "component_current": True})
+    source_identity = {"programs/flow109_final_lec.py": "1" * 64}
+    d44_context = {"context_sha256": "2" * 64}
+    (rows / "D44.json").write_text(json.dumps({
+        "schema": final_lec.SCHEMA, "step_id": "D44",
+        "component_status": "PASS", "default_row_status": "PASS",
+        "completed": True, "execution_context": d44_context,
+        "source_sha256": source_identity, "common_baseline": baseline_record}))
+    (rows / "D49.json").write_text(json.dumps({
+        "step_id": "D49", "default_row_status": "PASS", "completed": True}))
+    monkeypatch.setattr(final_lec, "require_launch_admission", lambda *_: None)
+    monkeypatch.setattr(final_lec, "operation_sources", lambda: source_identity)
+    monkeypatch.setattr(final_lec, "bind_metrics", lambda *_: {
+        "status": "PASS", "metrics": {
+            "final_lec_unproved": {"status": "PASS"},
+            "sta_lvs_release_netlist_mapping": {
+                "status": "PASS", "reference": baseline_record}}})
 
     sta = project / "phase3/librelane/23-sta"
     sta.mkdir(parents=True)
@@ -367,7 +380,7 @@ def test_d50_final_timing_accepts_physical_rewrite_with_transform_and_lec_trace(
 
 
 @pytest.mark.parametrize("damage, code", [
-    ("missing_transform", "FLOW109_D44_FINAL_TRANSFORM_MISSING"),
+    ("missing_transform", "FLOW109_D44_FINAL_EQUIVALENCE_UNACCEPTED"),
     ("stale_final", "FLOW109_D44_FINAL_NETLIST_UNBOUND"),
     ("foreign_timing", "FLOW109_D49_TIMING_NETLIST_MISMATCH"),
     ("foreign_spef", "FLOW109_D49_TIMING_PROVENANCE_MISMATCH"),
