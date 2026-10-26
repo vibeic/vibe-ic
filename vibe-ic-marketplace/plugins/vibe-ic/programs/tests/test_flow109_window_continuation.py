@@ -76,7 +76,8 @@ def _one_row_request(project, monkeypatch, step="D38", *, spares=False):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(context))
     monkeypatch.setenv(flow109.CONTEXT_ENV, str(path))
-    monkeypatch.delenv(flow109.ATTEMPT_ENV, raising=False)
+    attempt = flow109._new_attempt(project, context)
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
     return context
 
 
@@ -210,7 +211,132 @@ def test_one_row_canonical_receipt_is_component_only(tmp_path, monkeypatch):
     assert component["context_sha256"] == context["context_sha256"]
     assert result["flow109_acceptance"] == result["whole_flow_acceptance"] == "NOT_MEASURED"
     assert result["delivery_accepted"] is False
-    assert not (tmp_path / "reports/flow109/attempts").exists()
+    attempts = list((tmp_path / "reports/flow109/attempts").iterdir())
+    assert len(attempts) == 1
+    request = json.loads((attempts[0] / "request.json").read_text())
+    terminal = json.loads((attempts[0] / "result.json").read_text())
+    assert request["context_sha256"] == terminal["context_sha256"] == context["context_sha256"]
+    assert request["registry_sha256"] == context["registry_sha256"]
+    assert request["planner_sha256"] == context["planner_sha256"]
+    with pytest.raises(FileExistsError):
+        flow109.finish_native_window(tmp_path, report)
+
+
+def test_repeated_one_row_requests_use_distinct_immutable_attempts(tmp_path, monkeypatch):
+    first = _one_row_request(tmp_path, monkeypatch)
+    first_attempt = Path(os.environ[flow109.ATTEMPT_ENV])
+    second = _one_row_request(tmp_path, monkeypatch)
+    second_attempt = Path(os.environ[flow109.ATTEMPT_ENV])
+    assert first["context_sha256"] == second["context_sha256"]
+    assert first_attempt != second_attempt
+    assert json.loads((first_attempt / "request.json").read_text()) == json.loads(
+        (second_attempt / "request.json").read_text())
+
+
+@pytest.mark.parametrize("entry,exit_", [
+    ("D11", "D11"),
+    ("D38", "D38"),
+    ("D34", "D35"),
+])
+def test_equivalent_foreign_project_attempt_is_refused_for_every_finish_branch(
+        tmp_path, monkeypatch, entry, exit_):
+    project_a, project_b = tmp_path / "a", tmp_path / "b"
+    plan = flow109.resolve_plan(_profile())
+    context = flow109.execution_context(plan, entry, exit_)
+    attempt_a = flow109._new_attempt(project_a, context)
+    request_b = (project_b / "reports/flow109/requests" /
+                 (context["context_sha256"] + ".json"))
+    request_b.parent.mkdir(parents=True)
+    request_b.write_text(json.dumps(context))
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(request_b))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt_a))
+    try:
+        flow109.finish_native_window(project_b, {"steps": []})
+    except flow109.Flow109Error as exc:
+        observed = exc.code
+    else:
+        observed = "FOREIGN_ATTEMPT_ACCEPTED"
+    assert observed == "FLOW109_ATTEMPT_PATH_INVALID"
+    assert not (attempt_a / "result.json").exists()
+    assert not (project_b / "reports/flow109/components").exists()
+    assert not (project_b / "reports/flow109/default_rows").exists()
+
+
+@pytest.mark.parametrize("mutation", ["attempt_symlink", "request_symlink", "path_escape"])
+def test_attempt_symlink_and_path_escape_are_refused(tmp_path, monkeypatch, mutation):
+    project = tmp_path / "current"
+    context = flow109.execution_context(flow109.resolve_plan(_profile()), "D38", "D38")
+    request = project / "reports/flow109/requests/context.json"
+    request.parent.mkdir(parents=True)
+    request.write_text(json.dumps(context))
+    attempt = flow109._new_attempt(project, context)
+    selected = attempt
+    if mutation == "attempt_symlink":
+        target = flow109._new_attempt(tmp_path / "foreign", context)
+        selected = attempt.parent / ("window-" + "a" * 32)
+        selected.symlink_to(target, target_is_directory=True)
+    elif mutation == "request_symlink":
+        body = (attempt / "request.json").read_text()
+        foreign = tmp_path / "foreign-request.json"
+        foreign.write_text(body)
+        (attempt / "request.json").unlink()
+        (attempt / "request.json").symlink_to(foreign)
+    else:
+        foreign = attempt.parent.parent / "foreign" / ("window-" + "b" * 32)
+        foreign.mkdir(parents=True)
+        (foreign / "request.json").write_text((attempt / "request.json").read_text())
+        selected = attempt.parent / ".." / "foreign" / foreign.name
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(request))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(selected))
+    try:
+        flow109.finish_native_window(project, {"steps": []})
+    except flow109.Flow109Error as exc:
+        observed = exc.code
+    else:
+        observed = "UNSAFE_ATTEMPT_ACCEPTED"
+    expected = ("FLOW109_ATTEMPT_REQUEST_INVALID" if mutation == "request_symlink"
+                else "FLOW109_ATTEMPT_PATH_INVALID")
+    assert observed == expected
+    assert not (attempt / "result.json").exists()
+
+
+def test_attempt_request_must_match_producer_identity(tmp_path, monkeypatch):
+    context = flow109.execution_context(flow109.resolve_plan(_profile()), "D38", "D38")
+    request = tmp_path / "reports/flow109/requests/context.json"
+    request.parent.mkdir(parents=True)
+    request.write_text(json.dumps(context))
+    attempt = flow109._new_attempt(tmp_path, context)
+    body = json.loads((attempt / "request.json").read_text())
+    body["project_root_sha256"] = "f" * 64
+    (attempt / "request.json").write_text(json.dumps(body))
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(request))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
+    try:
+        flow109.finish_native_window(tmp_path, {"steps": []})
+    except flow109.Flow109Error as exc:
+        observed = exc.code
+    else:
+        observed = "MISMATCHED_REQUEST_ACCEPTED"
+    assert observed == "FLOW109_ATTEMPT_REQUEST_INVALID"
+    assert not (attempt / "result.json").exists()
+
+
+def test_new_attempt_refuses_symlinked_project_authority(tmp_path):
+    project = tmp_path / "current"
+    foreign = tmp_path / "foreign-attempts"
+    foreign.mkdir()
+    parent = project / "reports/flow109"
+    parent.mkdir(parents=True)
+    (parent / "attempts").symlink_to(foreign, target_is_directory=True)
+    context = flow109.execution_context(flow109.resolve_plan(_profile()), "D38", "D38")
+    try:
+        flow109._new_attempt(project, context)
+    except flow109.Flow109Error as exc:
+        observed = exc.code
+    else:
+        observed = "SYMLINKED_AUTHORITY_ACCEPTED"
+    assert observed == "FLOW109_ATTEMPT_PATH_INVALID"
+    assert list(foreign.iterdir()) == []
 
 
 def test_one_row_missing_canonical_receipt_cannot_pass(tmp_path, monkeypatch):

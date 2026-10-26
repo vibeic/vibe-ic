@@ -20212,44 +20212,44 @@ def step_sdc_validation(project: Path) -> StepResult:
     mode = _llc.selected_mode(project, '8')
     import execution_policy as _execution
     _runtime = _execution._ordinary_runtime
-    # Default's LibreLane Step-8 consumer runs after the canonical pre-layout
-    # producer has emitted the mapped netlist and current gate receipt.  The
-    # early phase-2 row remains an explicit deferred observation; it must not
-    # call the generic frontend Controller merely because the direct tool
-    # switch has no pre-synth consumer yet.
+    # D20 is the netlist-independent preflight.  Mapped OpenROAD.CheckSDCFiles
+    # and STA evidence remain exclusively in step_sdc_validation_post_prelayout
+    # after D26's producer.  Running the pure consumers here prevents an
+    # ordinary tool-selected route from turning the early contract into a
+    # deferred or mapped-path claim.
     if (_runtime is not None and
             _runtime.get('policy', {}).get('mode') == 'default'):
-        if mode == 'direct':
-            # Direct SDC checks need no mapped netlist or tool-arm context.
-            outputs = []
-            checks = (
-                ('sdc_syntax_check', project / 'reports/phase2/sdc_check.json', []),
-                ('sdc_validator_check', project / 'reports/sdc_validator.json',
-                 ['--l8', str(project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json')]),
-            )
-            for name, report, extra in checks:
-                report.parent.mkdir(parents=True, exist_ok=True)
-                report.unlink(missing_ok=True)
-                rc, out, err = _run([sys.executable, str(PROGRAMS_DIR / (name + '.py')),
-                                     str(project), *extra, '--json', str(report)])
-                if rc == 0 and (not report.is_file() or not report.stat().st_size):
-                    return StepResult('sdc_validation', 'FAIL', 0.0,
-                                      f'SDC_CHECK_OUTPUT_ABSENT: {name}', outputs)
-                if report.is_file():
-                    outputs.append(str(report))
-                if rc:
-                    return StepResult('sdc_validation', 'NOT_MEASURED' if rc == 2 else 'FAIL',
-                                      0.0, f'{name} rc={rc}: {(out + err)[-500:]}', outputs,
-                                      reason_class=_V.ReasonClass.INPUT_ABSENT if rc == 2 else '')
-            return StepResult('sdc_validation', 'PASS', 0.0,
-                              'canonical direct SDC checks passed', outputs, extras={'mode': mode})
-        return StepResult('sdc_validation', 'NOT_MEASURED', 0.0,
-                          'SDC_VALIDATION_DEFERRED: Default canonical '
-                          'prelayout producer must emit the mapped netlist '
-                          'before Step 8 consumers run',
-                          extras={'deferred_until': 'post_prelayout',
-                                  'mode': mode},
-                          reason_class=_V.ReasonClass.UPSTREAM_FAILED)
+        import sdc_syntax_check as _syntax
+        import sdc_validator_check as _validator
+        import sdc_exception_correlation_check as _exceptions
+        syntax = _syntax._regex_audit(str(project), include_phase3=False)
+        validator = _validator.evaluate(
+            project, project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json')
+        exceptions = _exceptions.audit(project)
+        reports = (
+            (project / 'reports/phase2/sdc_check.json', asdict(syntax)),
+            (project / 'reports/sdc_validator.json', validator.report),
+            (project / 'reports/phase2/sdc_exception_correlation.json', exceptions),
+        )
+        for report, body in reports:
+            _aa.write_json(report, body)
+        outputs = [str(report) for report, _ in reports]
+        if not syntax.passed or validator.rc == 1 or exceptions.get('verdict') in ('FAIL', 'REVIEW'):
+            return StepResult('sdc_validation', 'FAIL', 0.0,
+                              'SDC_EARLY_PREFLIGHT_REFUSED: syntax, clock/port coverage, '
+                              'or exception/CDC justification failed', outputs,
+                              extras={'mode': mode, 'early_preflight': True})
+        if validator.rc != 0:
+            return StepResult('sdc_validation', 'NOT_MEASURED', 0.0,
+                              'SDC_EARLY_PREFLIGHT_INPUT_ABSENT', outputs,
+                              extras={'mode': mode, 'early_preflight': True},
+                              reason_class=_V.ReasonClass.INPUT_ABSENT)
+        extras = {'mode': mode, 'early_preflight': True}
+        if mode in ('librelane', 'dual'):
+            extras['deferred_until'] = 'post_prelayout'
+        return StepResult('sdc_validation', 'PASS', 0.0,
+                          'SDC_EARLY_PREFLIGHT_PASS: no mapped-path claim', outputs,
+                          extras=extras)
     if mode in ('librelane', 'dual'):
         # The OpenSTA producer consumes Step 9's mapped netlist.  This site
         # precedes synthesis; a frozen frontend worker cannot produce its
@@ -26479,7 +26479,14 @@ def step_synthesis_handoff(project: Path, *, plan=None) -> StepResult:
             return StepResult('synthesis_handoff', 'NOT_MEASURED', 0.0,
                               'Step14 blocked by an earlier measured failure',
                               reason_class=_V.ReasonClass.UPSTREAM_FAILED)
-        for sid in ('9', '13'):
+        late_sdc = next((s for s in reversed(plan)
+                         if s.name == 'sdc_validation'), None)
+        if (late_sdc is None or late_sdc.status != 'PASS'
+                or late_sdc.extras.get('post_prelayout') is not True):
+            return StepResult('synthesis_handoff', 'NOT_MEASURED', 0.0,
+                              'Step14 awaits current complete D26 mapped SDC acceptance',
+                              reason_class=_V.ReasonClass.UPSTREAM_REFUSED)
+        for sid in ('8', '9', '10', '13'):
             if _current_phase2_consumer(project, sid, 0.0) is None:
                 return StepResult('synthesis_handoff', 'NOT_MEASURED', 0.0,
                                   f'Step14 awaits current complete Step{sid} acceptance',

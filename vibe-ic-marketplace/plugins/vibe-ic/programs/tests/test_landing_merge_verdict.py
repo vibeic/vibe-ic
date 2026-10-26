@@ -46,6 +46,7 @@ import json
 import hashlib
 import importlib.util
 import os
+import re
 import signal
 import shutil
 import subprocess
@@ -70,7 +71,15 @@ _PROG = _PROGRAMS / "landing_merge_verdict.py"
 _REPO_ROOT = _PROGRAMS.parents[3]
 _VERIFY = _REPO_ROOT / "tools" / "gatekeeper-verify-merge.sh"
 _LAND = _REPO_ROOT / "tools" / "gatekeeper-land.sh"
+_GATEKEEPER_SKILL = Path(os.environ.get(
+    "GATEKEEPER_SKILL_UNDER_TEST",
+    _REPO_ROOT / "vibe-ic-marketplace" / "plugins" / "vibe-ic" / "skills"
+    / "gatekeeper-loop" / "SKILL.md"))
 _T = 55
+
+
+def _service_program():
+    return Path(os.environ.get("GATEKEEPER_SERVICE_UNDER_TEST", str(_PROG)))
 
 # THE FILES THE MERGE VERIFIER EXECUTES OUT OF THE BASE SNAPSHOT, which the
 # miniature repository below must carry as the real bytes.  This set used to be
@@ -3994,15 +4003,14 @@ def ready_service(tmp_path):
              "receipt_sha256": hashlib.sha256(receipt.read_bytes()).hexdigest()}
     manifest = tmp_path / "admission.json"
     final_marker = tmp_path / "final.json"
-    program = Path(os.environ.get("GATEKEEPER_SERVICE_UNDER_TEST", str(
-        Path(__file__).resolve().parents[1] / "landing_merge_verdict.py")))
+    program = _service_program()
     final = [sys.executable, "-c", "import os,json,pathlib; pathlib.Path(" + repr(str(final_marker))
              + ").write_text(json.dumps({'id':os.environ['GATEKEEPER_READY_ID'],"
                "'head':os.environ['GATEKEEPER_READY_HEAD']}))"]
-    def run(entries=None, writer="root", final_command=None):
+    def run(entries=None, writer="root", final_command=None, base="main"):
         manifest.write_text(json.dumps({"writer": "root", "candidates": entries or [entry]}))
         result = subprocess.run([sys.executable, str(program), "--service-ready", str(manifest),
-            "--repo", str(root), "--base", "main", "--writer", writer,
+            "--repo", str(root), "--base", base, "--writer", writer,
             "--final-command", *(final if final_command is None else final_command)],
             capture_output=True, text=True)
         return result, json.loads(result.stdout)
@@ -4127,3 +4135,254 @@ def test_ready_service_prefers_reusable_receipt_before_unrelated_impacted_checks
     assert result["receipt_reused"] is True and result["impacted_checks"] == []
     assert json.loads(marker.read_text())["head"] == independent_head
     assert not impacted.exists()
+
+
+def _fake_gh(tmp_path, monkeypatch, *, number, head, base="main",
+             base_oid=None, final_state="MERGED"):
+    calls = tmp_path / "gh-calls.jsonl"
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    gh = bindir / "gh"
+    gh.write_text("""#!/usr/bin/env python3
+import json, os, pathlib, sys
+args = sys.argv[1:]
+record = pathlib.Path(os.environ['FAKE_GH_CALLS'])
+prior = record.read_text().splitlines() if record.exists() else []
+with record.open('a') as stream:
+    stream.write(json.dumps(args) + '\\n')
+if args[:2] == ['pr', 'view']:
+    merged = any(json.loads(line)[:2] == ['pr', 'merge'] for line in prior)
+    state = os.environ['FAKE_GH_FINAL_STATE'] if merged else 'OPEN'
+    print(json.dumps({'number': int(os.environ['FAKE_GH_NUMBER']),
+                      'headRefOid': os.environ['FAKE_GH_HEAD'],
+                      'baseRefName': os.environ['FAKE_GH_BASE'],
+                      'baseRefOid': os.environ['FAKE_GH_BASE_OID'],
+                      'isDraft': False, 'state': state,
+                      'mergeCommit': {'oid': os.environ['FAKE_GH_MERGE_OID']}
+                                     if state == 'MERGED' else None}))
+    raise SystemExit(0)
+if args[:2] == ['pr', 'merge']:
+    raise SystemExit(0)
+raise SystemExit(2)
+""")
+    gh.chmod(0o755)
+    monkeypatch.setenv("PATH", str(bindir) + os.pathsep + os.environ["PATH"])
+    monkeypatch.setenv("FAKE_GH_CALLS", str(calls))
+    monkeypatch.setenv("FAKE_GH_NUMBER", str(number))
+    monkeypatch.setenv("FAKE_GH_HEAD", head)
+    monkeypatch.setenv("FAKE_GH_BASE", base)
+    monkeypatch.setenv("FAKE_GH_BASE_OID", base_oid or head)
+    monkeypatch.setenv("FAKE_GH_FINAL_STATE", final_state)
+    monkeypatch.setenv("FAKE_GH_MERGE_OID", "a" * 40)
+    return calls
+
+
+def test_canonical_gatekeeper_loop_calls_service_and_bound_final_writer(
+        ready_service, tmp_path, monkeypatch):
+    skill = _GATEKEEPER_SKILL.read_text()
+    cron = skill.split("## Cron-invocation template", 1)[1].split("## Reference", 1)[0]
+    for required in (
+            "gatekeeper-ready-receipts", "root-admission.json",
+            "--writer repo-gatekeeper", "--receipt-root", "--candidates-json",
+            "receipt_sha256", "os.fsync",
+            "os.replace", "--service-ready", "--service-final-write",
+            "GATEKEEPER_READY_ID", "GATEKEEPER_READY_HEAD",
+            "GATEKEEPER_READY_BASE", "--match-head-commit"):
+        assert required in skill, required
+    assert not re.search(r"(?m)^\s*gh pr merge <num>", cron)
+    assert "RE-RUN required checks" not in cron
+    assert cron.index("--service-ready") < cron.index("bounded preparation")
+
+    root, git, entry, receipt, run, marker = ready_service
+    entry["id"] = "47"
+    main = git("rev-parse", "main")
+    git("update-ref", "refs/remotes/origin/main", main)
+    calls = _fake_gh(tmp_path, monkeypatch, number=47, head=entry["head"],
+                     base_oid=main)
+    receipt_root = root / ".git" / "gatekeeper-ready-receipts"
+    receipt_root.mkdir(mode=0o700)
+    installed_receipt = receipt_root / "verify-47.json"
+    shutil.copyfile(receipt, installed_receipt)
+    entry.update(receipt=str(installed_receipt),
+                 receipt_sha256=hashlib.sha256(
+                     installed_receipt.read_bytes()).hexdigest())
+    manifest = receipt_root / "root-admission.json"
+    slow_marker = tmp_path / "unaccepted-preparation-ran"
+    actionable = [{"id": "46", "accepted": False,
+                   "prepare_argv": [sys.executable, "-c",
+                       "import pathlib; pathlib.Path(" + repr(str(slow_marker))
+                       + ").write_text('slow')"]}, entry]
+    accepted = [row for row in actionable if row.get("accepted", True)]
+    final = [sys.executable, str(_service_program()), "--service-final-write",
+             "--repo", str(root), "--base", "origin/main"]
+    rc = subprocess.run(
+        [sys.executable, str(_service_program()), "--service-ready", str(manifest),
+         "--repo", str(root), "--base", "origin/main",
+         "--writer", "repo-gatekeeper", "--receipt-root", str(receipt_root),
+         "--candidates-json", json.dumps(accepted),
+         "--final-command", *final],
+        cwd=root, capture_output=True, text=True)
+    assert rc.returncode == 0, rc.stdout + rc.stderr
+    result = json.loads(rc.stdout.splitlines()[-1])
+    published = json.loads(manifest.read_text())
+
+    assert result["status"] == "DELIVERED"
+    if result["status"] != "DELIVERED":
+        subprocess.run(actionable[0]["prepare_argv"], check=True)
+    assert not slow_marker.exists()
+    assert result["id"] == "47" and result["receipt_reused"] is True
+    assert published == {"writer": "repo-gatekeeper",
+                         "receipt_root": str(receipt_root),
+                         "candidates": [entry]}
+    assert manifest.stat().st_mode & 0o777 == 0o600
+    bound = json.loads(result["stdout"])
+    assert bound == {"base": main, "final_rc": 0, "head": entry["head"],
+                     "id": "47", "status": "FINAL_WRITE_COMPLETE",
+                     "merge_commit": "a" * 40, "stderr": "", "stdout": ""}
+    observed = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert observed == [
+        ["pr", "view", "47", "--json",
+         "number,headRefOid,baseRefName,baseRefOid,isDraft,state,mergeCommit"],
+        ["pr", "merge", "47", "--squash", "--delete-branch",
+         "--match-head-commit", entry["head"]],
+        ["pr", "view", "47", "--json",
+         "number,headRefOid,baseRefName,baseRefOid,isDraft,state,mergeCommit"]]
+
+
+def test_service_final_writer_refuses_a_different_pr_head_without_merge(
+        ready_service, tmp_path, monkeypatch):
+    root, git, entry, receipt, run, marker = ready_service
+    entry["id"] = "48"
+    main = git("rev-parse", "main")
+    git("update-ref", "refs/remotes/origin/main", main)
+    calls = _fake_gh(tmp_path, monkeypatch, number=48, head=main,
+                     base_oid=main)
+    final = [sys.executable, str(_service_program()), "--service-final-write",
+             "--repo", str(root), "--base", "origin/main"]
+    rc, result = run(final_command=final, base="origin/main")
+
+    assert rc.returncode != 0 and result["status"] == "BLOCKED_FINAL_WRITE"
+    bound = json.loads(result["stdout"])
+    assert bound["status"] == "BLOCKED_FINAL_WRITE_BINDING"
+    assert "id/head/base/state no longer match" in bound["reason"]
+    observed = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert observed == [["pr", "view", "48", "--json",
+                         "number,headRefOid,baseRefName,baseRefOid,isDraft,state,mergeCommit"]]
+
+
+def test_service_final_writer_refuses_rc0_while_remote_is_still_open(
+        ready_service, tmp_path, monkeypatch):
+    root, git, entry, receipt, run, marker = ready_service
+    entry["id"] = "49"
+    main = git("rev-parse", "main")
+    git("update-ref", "refs/remotes/origin/main", main)
+    calls = _fake_gh(tmp_path, monkeypatch, number=49, head=entry["head"],
+                     base_oid=main, final_state="OPEN")
+    final = [sys.executable, str(_service_program()), "--service-final-write",
+             "--repo", str(root), "--base", "origin/main"]
+    rc, result = run(final_command=final, base="origin/main")
+
+    assert rc.returncode != 0 and result["status"] == "BLOCKED_FINAL_WRITE"
+    bound = json.loads(result["stdout"])
+    assert bound["status"] == "BLOCKED_FINAL_WRITE"
+    assert bound["final_rc"] == 0 and bound["merge_commit"] is None
+    observed = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert [row[:2] for row in observed] == [
+        ["pr", "view"], ["pr", "merge"], ["pr", "view"]]
+
+
+def test_service_final_writer_refuses_a_moved_remote_base_without_merge(
+        ready_service, tmp_path, monkeypatch):
+    root, git, entry, receipt, run, marker = ready_service
+    entry["id"] = "51"
+    main = git("rev-parse", "main")
+    git("update-ref", "refs/remotes/origin/main", main)
+    calls = _fake_gh(tmp_path, monkeypatch, number=51, head=entry["head"],
+                     base_oid="b" * 40)
+    final = [sys.executable, str(_service_program()), "--service-final-write",
+             "--repo", str(root), "--base", "origin/main"]
+    rc, result = run(final_command=final, base="origin/main")
+
+    assert rc.returncode != 0 and result["status"] == "BLOCKED_FINAL_WRITE"
+    bound = json.loads(result["stdout"])
+    assert bound["status"] == "BLOCKED_FINAL_WRITE_BINDING"
+    assert "id/head/base/state no longer match" in bound["reason"]
+    observed = [json.loads(line) for line in calls.read_text().splitlines()]
+    assert observed == [["pr", "view", "51", "--json",
+                         "number,headRefOid,baseRefName,baseRefOid,isDraft,state,mergeCommit"]]
+
+
+def test_canonical_gatekeeper_entry_has_no_legacy_unbound_writer_or_rerun():
+    skill = _GATEKEEPER_SKILL.read_text()
+    frontmatter = skill.split("---", 2)[1]
+    description = re.search(r"(?m)^description: (.*)$", frontmatter).group(1)
+    top_loop = skill.split(
+        "Every cron wake-up is a fresh, independent tick:", 1)[1].split(
+            "The loop is **chip-AGNOSTIC**", 1)[0]
+    cron = skill.split("## Cron-invocation template", 1)[1].split(
+        "## Reference", 1)[0]
+    historical = re.findall(
+        r"<!-- HISTORICAL_NON_EXECUTABLE_START -->.*?"
+        r"<!-- HISTORICAL_NON_EXECUTABLE_END -->", skill, re.DOTALL)
+    assert len(historical) <= 1
+    current_instructions = re.sub(
+        r"<!-- HISTORICAL_NON_EXECUTABLE_START -->.*?"
+        r"<!-- HISTORICAL_NON_EXECUTABLE_END -->", "", skill,
+        flags=re.DOTALL)
+
+    assert not re.search(r"(?m)^\s*gh pr merge\b", current_instructions)
+    for stale in (".merge.lock", "serialized re-test-on-rebase",
+                  "RE-RUN the required checks on the REBASED tree",
+                  "RE-RUN gatekeeper_review.py", "rebased-tree re-run",
+                  "rebase onto current origin/main", "on the rebased tree",
+                  "rebase 到最新 origin/main", "在 rebase 樹上重跑"):
+        assert stale not in current_instructions, stale
+    assert len(historical) == 1
+    for required in ("ready-first", "accepted receipt", "bounded",
+                     "READY-bound", "holds", "dependencies",
+                     "shared conflicts"):
+        assert required in current_instructions, required
+    top_order = {
+        "service_ready": top_loop.index("--service-ready"),
+        "machine_gates": top_loop.index("machine gates"),
+    }
+    assert top_order["service_ready"] < top_order["machine_gates"], top_order
+    assert "BLOCKED_NO_ACCEPTED_CANDIDATE" in top_loop
+    assert "no immediately deliverable READY candidate" in " ".join(
+        top_loop.split())
+    assert description in current_instructions
+    assert "--service-ready" in cron
+    assert "--service-final-write" in cron
+    assert "BLOCKED_NO_ACCEPTED_CANDIDATE" in cron
+
+
+@pytest.mark.parametrize("kind", ["missing-outer-pin", "forged-outer-pin"])
+def test_actual_cli_publisher_refuses_invalid_outer_pin_before_final_writer(
+        ready_service, tmp_path, monkeypatch, kind):
+    root, git, entry, receipt, run, marker = ready_service
+    entry["id"] = "50"
+    receipt_root = root / ".git" / "gatekeeper-ready-receipts"
+    receipt_root.mkdir(mode=0o700)
+    installed_receipt = receipt_root / "verify-50.json"
+    shutil.copyfile(receipt, installed_receipt)
+    entry["receipt"] = str(installed_receipt)
+    if kind == "missing-outer-pin":
+        entry.pop("receipt_sha256")
+    else:
+        entry["receipt_sha256"] = "0" * 64
+    manifest = receipt_root / "root-admission.json"
+    calls = _fake_gh(tmp_path, monkeypatch, number=50, head=entry["head"])
+    final = [sys.executable, str(_service_program()), "--service-final-write",
+             "--repo", str(root), "--base", "origin/main"]
+    result = subprocess.run(
+        [sys.executable, str(_service_program()), "--service-ready", str(manifest),
+         "--repo", str(root), "--base", "origin/main",
+         "--writer", "repo-gatekeeper", "--receipt-root", str(receipt_root),
+         "--candidates-json", json.dumps([entry]),
+         "--final-command", *final],
+        cwd=root, capture_output=True, text=True)
+
+    report = json.loads(result.stdout)
+    assert result.returncode != 0
+    assert report["status"] == "BLOCKED_ADMISSION_INPUT"
+    assert not manifest.exists() and not calls.exists()

@@ -5640,17 +5640,15 @@
         {
           "id": "default",
           "select_when": "otherwise",
-          "provider": "librelane",
-          "tools": "OpenROAD.CheckSDCFiles + Python SDC/CDC semantic checks",
-          "native_steps": [
-            "OpenROAD.CheckSDCFiles"
-          ],
+          "provider": "vibeic",
+          "tools": "Python SDC syntax, clock/port coverage, exception justification, and CDC reconciliation",
+          "native_steps": [],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
             "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
             "native_step_id": "8", "owner_entry_step": "8", "owner_exit_step": "8",
-            "producer": "vibe_ic_one_shot_runner.py:_complete_step7_sdc",
-            "consumer": "canonical Step8 SDC postcheck",
+            "producer": "design_one_shot_runner.py:step_asic_sdc",
+            "consumer": "design_one_shot_runner.py:step_sdc_validation early preflight",
             "engine_families": [], "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
@@ -5664,26 +5662,6 @@
         "sdc_exception_correlation_check"
       ],
       "obligations": [
-        {
-          "id": "base_11.unconstrained_required_paths",
-          "metric": "unconstrained_required_paths",
-          "when": "digital_netlist or (soft_ip and has_digital)",
-          "expectation": {
-            "operator": "eq",
-            "value": 0,
-            "unit": "count",
-            "source": "contract invariant: no unresolved required violations"
-          },
-          "binding_keys": [
-            "constraints.timing",
-            "constraints.exceptions",
-            "rtl.interface",
-            "requirements.base_11.unconstrained_required_paths",
-            "checker.base_11.unconstrained_required_paths",
-            "producer.base_11.execution"
-          ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
-        },
         {
           "id": "base_11.invalid_timing_exceptions",
           "metric": "invalid_timing_exceptions",
@@ -6468,8 +6446,9 @@
           "id": "default",
           "select_when": "otherwise",
           "provider": "librelane",
-          "tools": "OpenROAD.STAPrePNR",
+          "tools": "OpenROAD.CheckSDCFiles + OpenROAD.STAPrePNR + Python mapped SDC consumers",
           "native_steps": [
+            "OpenROAD.CheckSDCFiles",
             "OpenROAD.STAPrePNR"
           ],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
@@ -6477,7 +6456,7 @@
             "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
             "native_step_id": "10", "owner_entry_step": "10", "owner_exit_step": "10",
             "producer": "vibe_ic_one_shot_runner.py:_complete_prelayout_timing",
-            "consumer": "canonical Step10 pre-layout timing acceptance",
+            "consumer": "canonical Step10 pre-layout timing acceptance + design_one_shot_runner.py:step_sdc_validation_post_prelayout",
             "engine_families": [], "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
@@ -6491,6 +6470,26 @@
         "librelane_contract"
       ],
       "obligations": [
+        {
+          "id": "base_11.unconstrained_required_paths",
+          "metric": "unconstrained_required_paths",
+          "when": "digital_netlist or (soft_ip and has_digital)",
+          "expectation": {
+            "operator": "eq",
+            "value": 0,
+            "unit": "count",
+            "source": "contract invariant: no unresolved required violations"
+          },
+          "binding_keys": [
+            "constraints.timing",
+            "constraints.exceptions",
+            "rtl.interface",
+            "requirements.base_11.unconstrained_required_paths",
+            "checker.base_11.unconstrained_required_paths",
+            "producer.base_11.execution"
+          ],
+          "status": "UNIMPLEMENTED_METRIC_BINDING"
+        },
         {
           "id": "base_13.prelayout_timing_targets",
           "metric": "prelayout_timing_targets",
