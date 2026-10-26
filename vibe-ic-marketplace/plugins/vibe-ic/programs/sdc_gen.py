@@ -83,6 +83,7 @@ import _path_layout as _pl
 # (`l9_rtl_pin_consistency_check`) read the union and reported PASS.
 from l_doc_consumer_contract import l9_port_direction, l9_top_ports
 import sdc_constraints as _sdc
+import clock_target_provenance as _clock_provenance
 
 
 def _load_json(p: Path) -> Optional[dict]:
@@ -123,6 +124,9 @@ def _clock_mhz_from_l8_domains(l8: dict,
 
     def _mhz(rec) -> Optional[float]:
         if not isinstance(rec, dict):
+            return None
+        if (_clock_provenance.clock_record_physical_target_status(rec)
+                != _clock_provenance.PHYSICAL_TARGET_DECLARED):
             return None
         for key, conv in (("freq_mhz", lambda v: float(v)),
                           ("period_ns", lambda v: 1000.0 / float(v)),
@@ -682,6 +686,9 @@ def _l8_declared_clocks(l8: dict, target_scope: Optional[str] = None
         for rec in recs:
             if not isinstance(rec, dict):
                 continue
+            if (_clock_provenance.clock_record_physical_target_status(rec)
+                    != _clock_provenance.PHYSICAL_TARGET_DECLARED):
+                continue
             name = (rec.get("name") or rec.get("source_pin") or "").strip()
             if not name or name.lower() in seen:
                 continue
@@ -1081,6 +1088,22 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 1
     if resolution.status == _scope.MISMATCH:
         print(f"FAIL: {_scope.MISMATCH}: {resolution.detail}", file=sys.stderr)
+        return 1
+    selected_records = (resolution.records if resolution.selected else records)
+    nonphysical = [
+        ((r.get("name") or r.get("source_pin") or "<unnamed>"),
+         _clock_provenance.clock_record_physical_target_status(r))
+        for r in selected_records
+        if _clock_provenance.clock_record_physical_target_status(r)
+        != _clock_provenance.PHYSICAL_TARGET_DECLARED
+        and any(r.get(k) not in (None, "", 0)
+                for k in ("period_ns", "freq_mhz", "freq_hz"))
+    ]
+    if nonphysical:
+        detail = ", ".join(f"{name}:{status}" for name, status in nonphysical)
+        print("FAIL: L8_CLOCK_TARGET_NOT_PHYSICAL: numeric clock evidence is "
+              "context-only or ambiguous and cannot authorize a physical SDC "
+              f"({detail})", file=sys.stderr)
         return 1
     if resolution.status in (_scope.SELECTED_SCOPED, _scope.SELECTED_UNSCOPED):
         # DISCLOSED, never silent: outcome 2 used a clock the design stated

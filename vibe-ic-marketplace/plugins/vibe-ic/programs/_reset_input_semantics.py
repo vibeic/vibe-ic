@@ -419,7 +419,7 @@ def explicit_reset_port(name, text):
     return False
 
 
-def event_declarations(text):
+def event_declarations(text, clock_name=None):
     """Finite named/role-bound edge events, not an RTL or prose parser.
 
     An unnamed ``the reset signal`` binds only to a unique explicitly
@@ -445,27 +445,36 @@ def event_declarations(text):
         r'(?:the\s+)?(?P<role>clock|reset)(?:\s+signal)?'
         r'(?:\s*\(\s*(?:posedge\s+|negedge\s+)?'
         r'(?P<bound>[A-Za-z_][\w$]*)\s*\))?)', re.I)
+    # A caller asking about one already-declared clock can also accept the
+    # source-bound prose order ``rising <name> edge``. Keeping the exact clock
+    # name in this finite grammar prevents a nearby/foreign edge sentence from
+    # being borrowed as authority for the requested clock.
+    named_clock_edge = None
+    if isinstance(clock_name, str) and re.fullmatch(r'[A-Za-z_][\w$]*', clock_name):
+        named_clock_edge = re.compile(
+            r'\b(?P<prose>positive|rising|negative|falling)\s+`?'
+            + re.escape(clock_name) + r'`?\s+edge\b', re.I)
     for number, raw in enumerate(text.splitlines(), 1):
         for clause in re.split(r'[;；。]|(?<=[a-zA-Z])\.\s+', raw):
             line = current_clause(clause)
             matches = list(edge.finditer(line))
-            if not matches or is_denied(line[:matches[-1].end()], ignore_bracketed=False):
-                continue
             events = []
-            for m in matches:
-                role = (m['role'] or '').lower()
-                name = m['name'] or m['bound']
-                if not name and len(roles.get(role, ())) == 1:
-                    name = next(iter(roles[role]))
-                if not name:
-                    continue
-                if not role:
-                    role = next((r for r, names in roles.items() if name in names), '')
-                if not role:
-                    continue
-                value = (m['rtl'] or m['prose']).lower()
-                events.append((m, name, role,
-                               'posedge' if value in ('posedge', 'positive', 'rising') else 'negedge'))
+            if (matches and not is_denied(
+                    line[:matches[-1].end()], ignore_bracketed=False)):
+                for m in matches:
+                    role = (m['role'] or '').lower()
+                    name = m['name'] or m['bound']
+                    if not name and len(roles.get(role, ())) == 1:
+                        name = next(iter(roles[role]))
+                    if not name:
+                        continue
+                    if not role:
+                        role = next((r for r, names in roles.items() if name in names), '')
+                    if not role:
+                        continue
+                    value = (m['rtl'] or m['prose']).lower()
+                    events.append((m, name, role,
+                                   'posedge' if value in ('posedge', 'positive', 'rising') else 'negedge'))
             for match, name, role, value in events:
                 clocks = [m for m, _, r, _ in events if r == 'clock']
                 asynchronous = role == 'reset' and any(
@@ -474,13 +483,23 @@ def event_declarations(text):
                 yield {'name': name, 'role': role, 'edge': value,
                        'asynchronous': bool(asynchronous), 'line': number,
                        'evidence': raw.strip()}
+            for match in (named_clock_edge.finditer(line)
+                          if named_clock_edge is not None else ()):
+                if is_denied(line[:match.end()], ignore_bracketed=False):
+                    continue
+                value = match['prose'].lower()
+                yield {'name': clock_name, 'role': 'clock',
+                       'edge': ('posedge' if value in
+                                ('positive', 'rising') else 'negedge'),
+                       'asynchronous': False, 'line': number,
+                       'evidence': raw.strip()}
 
 
 def clock_edge_semantics(name, extracted):
     """Read exact input edges and attach source authority per field."""
     rows = []
     for source, text in extracted.items():
-        for row in event_declarations(text):
+        for row in event_declarations(text, clock_name=name):
             if row['name'] == name and row['role'] == 'clock':
                 rows.append((source, text, row))
     values = {row['edge'] for _, _, row in rows}
