@@ -620,8 +620,7 @@ def _l8_provenance_rule(data: dict, key: str, text: str,
                     {"rule": "reset_polarity", "signal": claim["signal"],
                      "value": _norm_polarity(str(rec.get("polarity", "")))}]
         if (not claims or any(c not in claims for c in expected)
-                or any(c not in expected for c in claims
-                       if c["rule"] in {"reset_sync", "reset_polarity"})):
+                or any(c not in expected for c in claims)):
             return None
     else:
         return None

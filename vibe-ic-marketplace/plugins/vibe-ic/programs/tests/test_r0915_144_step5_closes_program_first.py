@@ -296,7 +296,7 @@ def _provenance_declarations(tmp_path):
     clock['semantic_provenance'] = {'edge': {
         'kind': 'convention', 'rule': 'default_positive_clock_edge'}}
     l8['clock_domains'] = [json.loads(json.dumps(clock))]
-    quote = '| `rst` | 1-bit | input | 同步 reset(**active-high**);assertion 後一個 cycle 內所有內部狀態歸零 |'
+    quote = '| `rst` | 1-bit | input | 同步 reset(**active-high**) |'
     source = tmp_path / 'input/docs/interface.md'
     source.parent.mkdir(parents=True)
     source.write_text(quote + '\n')
@@ -388,7 +388,8 @@ def test_equivalent_clock_claim_reaches_structural_consumer(tmp_path):
 @pytest.mark.parametrize('suffix', ['', ' is not required',
     ' only if enable is asserted',
     '; this statement applies to foreign_rst, not rst',
-    '; reset 後內部狀態須能讓乘法計算正確啟動'])
+    '; reset 後內部狀態須能讓乘法計算正確啟動',
+    '; assertion 後一個 cycle 內所有內部狀態歸零'])
 @pytest.mark.parametrize('field', ['sync', 'polarity'])
 def test_complete_provenance_clause_cannot_launder_suffix(tmp_path, suffix, field):
     import hashlib
