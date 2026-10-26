@@ -564,23 +564,76 @@ def _window_inventory(context: Mapping) -> None:
                            "qualification registry required")
 
 
-def _new_attempt(project: Path, context: Mapping) -> Path:
+def _attempt_root(project: Path, *, create: bool) -> Path:
+    project = Path(project).resolve()
     parent = project / "reports" / "flow109" / "attempts"
-    parent.mkdir(parents=True, exist_ok=True)
+    cursor = project
+    for part in ("reports", "flow109", "attempts"):
+        cursor /= part
+        if cursor.is_symlink():
+            raise Flow109Error("FLOW109_ATTEMPT_PATH_INVALID",
+                               "attempt authority contains a symlink")
+    if create:
+        parent.mkdir(parents=True, exist_ok=True)
+    if not parent.is_dir() or parent.resolve() != parent:
+        raise Flow109Error("FLOW109_ATTEMPT_PATH_INVALID",
+                           "attempt authority is not a current-project directory")
+    return parent
+
+
+def _attempt_request(project: Path, context: Mapping) -> dict:
+    return {"schema": "vibeic.flow109.window-attempt-request.v1",
+            "project_root_sha256": hashlib.sha256(
+                str(Path(project).resolve()).encode()).hexdigest(),
+            "context_sha256": context["context_sha256"],
+            "registry_sha256": context["registry_sha256"],
+            "planner_sha256": context["planner_sha256"],
+            "entry": context.get("requested_entry", context.get("requested_step")),
+            "exit": context.get("requested_exit", context.get("requested_step")),
+            "dispatch_kind": context.get("dispatch_kind", "canonical_owner_window"),
+            "component_ids": [row["id"] for row in
+                              (context.get("resolved_rows") or [context["resolved_row"]])],
+            "flow109_acceptance": "NOT_MEASURED"}
+
+
+def _new_attempt(project: Path, context: Mapping) -> Path:
+    parent = _attempt_root(project, create=True)
     attempt = parent / ("window-" + uuid.uuid4().hex)
     attempt.mkdir()
-    request = {"schema": "vibeic.flow109.window-attempt-request.v1",
-               "context_sha256": context["context_sha256"],
-               "registry_sha256": context["registry_sha256"],
-               "planner_sha256": context["planner_sha256"],
-               "entry": context.get("requested_entry", context.get("requested_step")),
-               "exit": context.get("requested_exit", context.get("requested_step")),
-               "dispatch_kind": context.get("dispatch_kind", "canonical_owner_window"),
-               "component_ids": [row["id"] for row in (context.get("resolved_rows") or [context["resolved_row"]])],
-               "flow109_acceptance": "NOT_MEASURED"}
+    request = _attempt_request(project, context)
     with (attempt / "request.json").open("x", encoding="utf-8") as handle:
         json.dump(request, handle, sort_keys=True, indent=2)
         handle.write("\n")
+    return attempt
+
+
+def _bound_attempt(project: Path, context: Mapping, attempt_name: str | None) -> Path:
+    if not attempt_name:
+        raise Flow109Error("FLOW109_ATTEMPT_ABSENT", "immutable attempt request absent")
+    parent = _attempt_root(project, create=False)
+    attempt = Path(attempt_name)
+    if (not attempt.is_absolute() or ".." in attempt.parts or attempt.parent != parent
+            or attempt.is_symlink() or not attempt.is_dir()):
+        raise Flow109Error("FLOW109_ATTEMPT_PATH_INVALID",
+                           "attempt is not a direct current-project attempt directory")
+    try:
+        prefix, token = attempt.name.split("-", 1)
+        if prefix != "window" or uuid.UUID(hex=token).hex != token:
+            raise ValueError("attempt name")
+    except (ValueError, AttributeError) as exc:
+        raise Flow109Error("FLOW109_ATTEMPT_PATH_INVALID",
+                           "attempt directory name is invalid") from exc
+    request_path = attempt / "request.json"
+    if request_path.is_symlink() or not request_path.is_file():
+        raise Flow109Error("FLOW109_ATTEMPT_REQUEST_INVALID",
+                           "immutable attempt request is absent or a symlink")
+    try:
+        request = json.loads(request_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise Flow109Error("FLOW109_ATTEMPT_REQUEST_INVALID", str(exc)) from exc
+    if request != _attempt_request(project, context):
+        raise Flow109Error("FLOW109_ATTEMPT_REQUEST_INVALID",
+                           "immutable attempt request identity differs")
     return attempt
 
 
@@ -691,17 +744,7 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
     except (OSError, ValueError, Flow109Error):
         return None
 
-    def bound_attempt() -> Path:
-        if not attempt_name:
-            raise Flow109Error("FLOW109_ATTEMPT_ABSENT", "immutable attempt request absent")
-        attempt = Path(attempt_name)
-        try:
-            request = json.loads((attempt / "request.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            raise Flow109Error("FLOW109_ATTEMPT_INVALID", str(exc)) from exc
-        if request.get("context_sha256") != context["context_sha256"]:
-            raise Flow109Error("FLOW109_CONTEXT_STALE", "attempt request")
-        return attempt
+    attempt = _bound_attempt(project, context, attempt_name)
     owner_rows = context.get("resolved_rows") or [context.get("resolved_row", {})]
     if owner_rows and all((row.get("profile", {}).get("dispatch") or {}).get("kind")
                           == "canonical_owner_window" for row in owner_rows):
@@ -727,18 +770,16 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
             "FAIL" if any(c["default_row_status"] == "FAIL" for c in components)
             else "PASS" if all(c["default_row_status"] == "PASS" for c in components)
             else "NOT_MEASURED")
-        _finish_attempt(bound_attempt(), result)
+        _finish_attempt(attempt, result)
         return result
     if context["schema"] == "vibeic.flow109.execution-context.v1":
         dispatch = context["resolved_row"]["profile"].get("dispatch") or {}
         if dispatch.get("kind") != "canonical_backend_window":
             return None
         rows = [context["resolved_row"]]
-        attempt = bound_attempt()
     elif context.get("dispatch_kind") in (
-            "canonical_backend_window", "selected_native_sequence") and attempt_name:
+            "canonical_backend_window", "selected_native_sequence"):
         rows = context["resolved_rows"]
-        attempt = Path(attempt_name)
     else:
         return None
     canonical = []
