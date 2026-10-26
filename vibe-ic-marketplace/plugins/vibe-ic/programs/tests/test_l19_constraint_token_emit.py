@@ -47,7 +47,9 @@ _RUNNER_SRC = _PROGRAMS / "phase1_doc_one_shot_runner.py"
 
 import constraint_prose_tokens as CPT           # noqa: E402
 import _atomic_artefact as A                     # noqa: E402
+import floorplan_knobs as FPK                    # noqa: E402
 import l19_constraint_token_emit as EMIT        # noqa: E402
+import librelane_contract as LLC                 # noqa: E402
 import phase1_doc_one_shot_runner as R          # noqa: E402
 
 HELPER = "_post_emit_l19_constraint_tokens"
@@ -169,6 +171,231 @@ def _l19(project: Path) -> dict:
 
 def _tokens(doc: dict) -> set:
     return {r["token"] for r in doc["fields"].get("constraint_declarations", [])}
+
+
+def _mk_core_util_chain(project: Path, prose_table: str) -> None:
+    _mk(project, "# L9 — Constraints & Floorplan\n\n" + prose_table)
+    generated = project / "phase1" / "generated_docs"
+    (generated / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({
+        "clock_domains": [{
+            "role": "primary", "pdk_scoped_target": "processA",
+            "period_ns": 8, "source_pin": "clk",
+        }],
+    }))
+    (generated / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": "neutral_top",
+    }))
+    config = project / "input" / "config.json"
+    config.write_text(json.dumps({
+        "DESIGN_NAME": "neutral_top",
+        "FP_SIZING": "absolute",
+        "DIE_AREA": [0, 0, 120, 140],
+        "FP_CORE_UTIL": 25,
+    }, indent=2))
+    declaration = (
+        project / "input" / "submission_template"
+        / "tapeout_declaration.json")
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text(json.dumps({"answers": {
+        "top_cell": "neutral_top",
+        "die_area_um": [0, 0, 120, 140],
+        "core_area_um": [10, 10, 110, 130],
+    }}))
+
+
+def _complete_core_util_chain(project: Path, consumer: str):
+    R._post_emit_floorplan_contract(project)
+    R._post_emit_l19_constraint_tokens(project)
+    if consumer == "librelane":
+        output = project / "phase3" / "librelane" / "config.json"
+        return LLC.emit_config(project, "processA", output)["FP_CORE_UTIL"]
+    assert consumer == "direct"
+    return FPK._l9_declared_die_util(project, "processA")
+
+
+def test_token_hook_is_fatal_before_conflict_consumers(tmp_path):
+    project = tmp_path / "conflict"
+    _mk_core_util_chain(
+        project,
+        "| setting | value | source |\n"
+        "|---|---|---|\n"
+        "| `FP_CORE_UTIL` | **35** | ref |\n",
+    )
+    R._post_emit_floorplan_contract(project)
+    try:
+        R._post_emit_l19_constraint_tokens(project)
+        observed = ("RETURNED", None)
+    except BaseException as exc:
+        observed = (type(exc).__name__, str(exc).split(":", 1)[0])
+    assert observed == (
+        "SystemExit", "L19_CONSTRAINT_AUTHORITY_CONFLICT")
+
+
+def _mk_runner_core_util_input(project: Path, prose_table: str) -> None:
+    docs = project / "input" / "docs"
+    docs.mkdir(parents=True)
+    (docs / "L9_constraints_floorplan.md").write_text(
+        "# L9 — Constraints & Floorplan\n\n" + prose_table)
+    (project / "input" / "config.json").write_text(json.dumps({
+        "DESIGN_NAME": "neutral_top",
+        "FP_SIZING": "absolute",
+        "DIE_AREA": [0, 0, 120, 140],
+        "FP_CORE_UTIL": 25,
+    }, indent=2))
+    declaration = (
+        project / "input" / "submission_template"
+        / "tapeout_declaration.json")
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text(json.dumps({"answers": {
+        "top_cell": "neutral_top",
+        "die_area_um": [0, 0, 120, 140],
+        "core_area_um": [10, 10, 110, 130],
+    }}))
+
+
+def _run_canonical_phase1(project: Path, monkeypatch) -> int:
+    monkeypatch.setattr(
+        sys, "argv", ["phase1_doc_one_shot_runner.py", str(project)])
+    return R.main()
+
+
+def _seed_consumer_support(project: Path) -> None:
+    generated = project / "phase1" / "generated_docs"
+    (generated / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({
+        "clock_domains": [{
+            "role": "primary", "pdk_scoped_target": "processA",
+            "period_ns": 8, "source_pin": "clk",
+        }],
+    }))
+    (generated / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": "neutral_top",
+    }))
+
+
+def test_canonical_runner_is_fatal_before_consumers_and_aggregate(
+        tmp_path, monkeypatch, capsys):
+    project = tmp_path / "runner-conflict"
+    _mk_runner_core_util_input(
+        project,
+        "| setting | value | source |\n"
+        "|---|---|---|\n"
+        "| `FP_CORE_UTIL` | **35** | authoritative prose |\n",
+    )
+
+    aggregate = project / "reports/phase1/extraction_coverage_report.json"
+    try:
+        rc = _run_canonical_phase1(project, monkeypatch)
+        observed = ("RETURNED", rc, aggregate.exists())
+    except BaseException as exc:
+        observed = (
+            "FATAL", type(exc).__name__,
+            str(exc).split(":", 1)[0], aggregate.exists())
+
+    assert observed == (
+        "FATAL", "SystemExit",
+        "L19_CONSTRAINT_AUTHORITY_CONFLICT", False)
+
+    captured = capsys.readouterr()
+    assert "[15/15] coverage report" not in captured.out
+    assert not aggregate.exists()
+    rows = [
+        row for row in _l19(project)["fields"]["constraint_declarations"]
+        if row.get("token") == "FP_CORE_UTIL"
+    ]
+    assert [(row["value"], row["source"]) for row in rows] == [
+        (25, "input/config.json")]
+
+
+def test_canonical_runner_same_value_reaches_actual_consumers(
+        tmp_path, monkeypatch):
+    project = tmp_path / "runner-same"
+    _mk_runner_core_util_input(
+        project,
+        "| setting | value | source |\n"
+        "|---|---|---|\n"
+        "| `FP_CORE_UTIL` | **25** | corroborating prose |\n",
+    )
+    assert _run_canonical_phase1(project, monkeypatch) == 0
+    _seed_consumer_support(project)
+    output = project / "phase3" / "librelane" / "config.json"
+    assert LLC.emit_config(project, "processA", output)["FP_CORE_UTIL"] == 25
+    assert FPK._l9_declared_die_util(project, "processA") == 0.25
+
+
+def test_canonical_runner_keeps_different_scope_and_token_independent(
+        tmp_path, monkeypatch):
+    project = tmp_path / "runner-scoped"
+    _mk_runner_core_util_input(
+        project,
+        "| technology family | `FP_CORE_UTIL` | `PL_TARGET_DENSITY` |\n"
+        "|---|---|---|\n"
+        "| processB | 35 | 0.61 |\n",
+    )
+    assert _run_canonical_phase1(project, monkeypatch) == 0
+    _seed_consumer_support(project)
+    output = project / "phase3" / "librelane" / "config.json"
+    assert LLC.emit_config(project, "processA", output)["FP_CORE_UTIL"] == 25
+    assert FPK._l9_declared_die_util(project, "processA") == 0.25
+
+
+def test_canonical_runner_preserves_unrelated_exception_fail_open(
+        tmp_path, monkeypatch, capsys):
+    project = tmp_path / "runner-unrelated"
+    _mk_runner_core_util_input(
+        project,
+        "| setting | value | source |\n"
+        "|---|---|---|\n"
+        "| `FP_CORE_UTIL` | **25** | corroborating prose |\n",
+    )
+
+    def unrelated_failure(_project):
+        raise RuntimeError("unrelated emitter failure")
+
+    monkeypatch.setattr(EMIT, "run", unrelated_failure)
+    assert _run_canonical_phase1(project, monkeypatch) == 0
+    captured = capsys.readouterr()
+    assert "FAILED (fail-open): unrelated emitter failure" in captured.err
+    assert (
+        project / "reports/phase1/extraction_coverage_report.json").is_file()
+
+
+def test_complete_order_deduplicates_identical_core_util_value(tmp_path):
+    project = tmp_path / "same"
+    _mk_core_util_chain(
+        project,
+        "| setting | value | source |\n"
+        "|---|---|---|\n"
+        "| `FP_CORE_UTIL` | **25** | corroborating prose |\n",
+    )
+    assert _complete_core_util_chain(project, "librelane") == 25
+    rows = [
+        row for row in _l19(project)["fields"]["constraint_declarations"]
+        if row.get("token") == "FP_CORE_UTIL"
+    ]
+    assert rows == [{
+        "token": "FP_CORE_UTIL", "value": 25, "scope": None,
+        "source": "input/config.json", "line": 10,
+    }]
+    assert FPK._l9_declared_die_util(project, "processA") == 0.25
+
+
+def test_complete_order_keeps_distinct_scope_and_token_independent(tmp_path):
+    project = tmp_path / "scoped"
+    _mk_core_util_chain(
+        project,
+        "| technology family | `FP_CORE_UTIL` | `PL_TARGET_DENSITY` |\n"
+        "|---|---|---|\n"
+        "| processB | 35 | 0.61 |\n",
+    )
+    assert _complete_core_util_chain(project, "librelane") == 25
+    rows = _l19(project)["fields"]["constraint_declarations"]
+    assert {(row.get("token"), row.get("scope"), str(row.get("value")))
+            for row in rows} >= {
+        ("FP_CORE_UTIL", None, "25"),
+        ("FP_CORE_UTIL", "processB", "35"),
+        ("PL_TARGET_DENSITY", "processB", "0.61"),
+    }
+    assert FPK._l9_declared_die_util(project, "processA") == 0.25
 
 
 # ───────────────────────────────────────────── 1. the gap itself, closed ──

@@ -62738,7 +62738,19 @@ def _post_emit_l19_constraint_tokens(project: Path) -> int:
     """
     from l19_constraint_token_emit import run as _l19_emit
 
-    rep = _l19_emit(project)
+    try:
+        rep = _l19_emit(project)
+    except Exception as exc:
+        code, separator, _detail = str(exc).partition(":")
+        if separator and code == "L19_CONSTRAINT_AUTHORITY_CONFLICT":
+            # The canonical main loop intentionally fail-opens ordinary prose
+            # extraction defects.  An unresolved authority conflict is not an
+            # extraction defect: continuing would publish a successful L19
+            # with whichever value arrived first.  SystemExit is the narrow
+            # fatal channel that the surrounding ``except Exception`` cannot
+            # swallow; all other exceptions retain their prior path.
+            raise SystemExit(str(exc)) from exc
+        raise
     if not isinstance(rep, dict):
         raise RuntimeError("l19_constraint_token_emit returned no report")
     status = rep.get("status")
@@ -62987,6 +62999,35 @@ def _post_emit_floorplan_contract(project: Path) -> None:
             existing.append(h)
             changed = True
         fields["floorplan_hints"] = existing
+
+    new_declarations = contract.get("constraint_declarations") or []
+    if new_declarations:
+        existing_declarations = fields.get("constraint_declarations")
+        if existing_declarations is None:
+            existing_declarations = []
+        if not isinstance(existing_declarations, list):
+            raise _fpc.FloorplanContractRefusal(
+                "FP_CORE_UTIL_AUTHORITY_CONFLICT",
+                "L19 constraint_declarations is not a list")
+        for declaration in new_declarations:
+            token = declaration.get("token")
+            matching = [
+                row for row in existing_declarations
+                if isinstance(row, dict) and row.get("token") == token]
+            if matching:
+                exact = [
+                    row for row in matching
+                    if all(row.get(key) == declaration.get(key)
+                           for key in ("token", "value", "scope",
+                                       "source", "line"))]
+                if len(matching) != 1 or not exact:
+                    raise _fpc.FloorplanContractRefusal(
+                        "FP_CORE_UTIL_AUTHORITY_CONFLICT",
+                        f"L19 already has a distinct {token} authority")
+                continue
+            existing_declarations.append(declaration)
+            changed = True
+        fields["constraint_declarations"] = existing_declarations
 
     if (floorplan_present or declaration_limit) and not fields.get(
             "constraints_present"):

@@ -131,10 +131,46 @@ def _l9_declared_floorplan_knob(project: Path, pdk: str,
     return None
 
 
+def _l19_declared_die_util(project: Path,
+                           pdk: str = "") -> Optional[float]:
+    """Resolve L19 FP_CORE_UTIL through LibreLane's existing consumer."""
+    path = _pl.generated_docs_dir(project) / "L19_CONSTRAINTS_PDK.json"
+    if not path.is_file():
+        return None
+    try:
+        l19 = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("FP_CORE_UTIL_L19_INVALID") from exc
+    if not isinstance(l19, dict):
+        raise ValueError("FP_CORE_UTIL_L19_INVALID")
+    import librelane_contract as _ll
+    settings, _sources = _ll._declared_flow_settings(l19, pdk)
+    if "FP_CORE_UTIL" not in settings:
+        return None
+    value = settings["FP_CORE_UTIL"]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("FP_CORE_UTIL_L19_INVALID")
+    percentage = float(value)
+    if not math.isfinite(percentage) or not 0.0 < percentage <= 100.0:
+        raise ValueError("FP_CORE_UTIL_L19_RANGE")
+    return percentage / 100.0
+
+
 def _l9_declared_die_util(project: Path,
                           pdk: str = "") -> Optional[float]:
-    """The L9 `FP_CORE_UTIL` core-area target, expressed as a fraction."""
-    return _l9_declared_floorplan_knob(project, pdk, "FP_CORE_UTIL")
+    """The L19/L9 `FP_CORE_UTIL` core-area target as one fraction.
+
+    L19 is the consuming-layer contract.  A still-present L9 declaration may
+    corroborate it, but disagreement is an authority conflict, never
+    precedence.  Placement density remains on its independent reader.
+    """
+    l19_value = _l19_declared_die_util(project, pdk)
+    l9_value = _l9_declared_floorplan_knob(project, pdk, "FP_CORE_UTIL")
+    if (l19_value is not None and l9_value is not None
+            and not math.isclose(l19_value, l9_value,
+                                 rel_tol=0.0, abs_tol=1e-12)):
+        raise ValueError("FP_CORE_UTIL_AUTHORITY_CONFLICT")
+    return l19_value if l19_value is not None else l9_value
 
 
 def _l9_declared_place_density(project: Path,
