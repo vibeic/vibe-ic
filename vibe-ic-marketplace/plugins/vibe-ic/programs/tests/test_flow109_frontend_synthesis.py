@@ -8,6 +8,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import time
 import pytest
 import flow109
 import flow109_frontend as frontend
@@ -87,7 +88,9 @@ sys.argv=['vibe_ic_one_shot_runner.py',sys.argv[2],'--flow','109','--flow109-man
 raise SystemExit(runner._main())
 '''
     launched=subprocess.run([sys.executable,'-c',driver,str(frontend.HERE),str(tmp_path)],capture_output=True,text=True)
-    assert launched.returncode==0,launched.stdout+launched.stderr
+    component = tmp_path/'reports/flow109/components/D22.json'
+    assert launched.returncode==0,(launched.stdout+launched.stderr+
+        ('\nD22_COMPONENT '+component.read_text() if component.is_file() else ''))
     result=json.loads((tmp_path/'reports/flow109/components/D22.json').read_text())
     if os.environ.get('VIBEIC_FLOW109_EVIDENCE_DIR'):
         target=Path(os.environ['VIBEIC_FLOW109_EVIDENCE_DIR'])/'native-positive'
@@ -105,7 +108,41 @@ raise SystemExit(runner._main())
     assert result['delivery_accepted'] is False
     assert result['producer']['status']=='PASS',result
     assert result['canonical_current_pass'],result
+    assert result['canonical_publication']['status']=='PASS',result
+    assert result['canonical_publication']['canonical_consumer']['status']=='PASS',result
     assert result['component_status']=='PASS',result
+
+
+def test_actual_default_none_path_reaches_complete_existing_consumer(tmp_path, monkeypatch):
+    context, path = case(tmp_path)
+    plan = flow109.resolve_plan(context['features'])
+    context = flow109.execution_context(plan, 'D22', 'D22')
+    path.write_text(json.dumps(context))
+    (tmp_path / 'manifest.json').write_text(json.dumps({'features': context['features']}))
+    monkeypatch.setenv('VIBEIC_FLOW109_CONTEXT', str(path))
+    driver = '''import sys
+from pathlib import Path
+sys.path.insert(0,sys.argv[1])
+import librelane_contract as contract
+contract.local_image_attestation()
+contract._ce.no_container_route=lambda: True
+import vibe_ic_one_shot_runner as runner
+sys.argv=['vibe_ic_one_shot_runner.py',sys.argv[2],'--flow','109','--flow109-manifest',str(Path(sys.argv[2])/'manifest.json'),'--entry-step','D22','--exit-step','D22','--route','ic','--no-dashboard']
+raise SystemExit(runner._main())
+'''
+    launched = subprocess.run([sys.executable, '-c', driver, str(frontend.HERE),
+                               str(tmp_path)], capture_output=True, text=True)
+    component = tmp_path / 'reports/flow109/components/D22.json'
+    assert launched.returncode == 0, (launched.stdout + launched.stderr +
+        ('\nD22_COMPONENT ' + component.read_text() if component.is_file() else ''))
+    result = json.loads((tmp_path / 'reports/flow109/components/D22.json').read_text())
+    assert context['runtime_tool_uses'] is None
+    assert result['native_started'] is True
+    assert result['producer']['status'] == 'PASS'
+    assert result['canonical_publication']['status'] == 'PASS'
+    assert result['canonical_publication']['canonical_consumer']['status'] == 'PASS'
+    assert result['canonical_current_pass']['folder'] == result['canonical_publication']['folder']
+    assert result['component_status'] == 'PASS'
 
 
 @pytest.mark.parametrize('damage',['unsupported','source','deck','declaration'])
@@ -206,11 +243,11 @@ def test_default_synthesis_uses_registered_owner_without_qualification_claim(tmp
     assert flow109.source_owned_native_admission(claimed) is None
 
 
-@pytest.mark.parametrize('status,complete,expected', [('PASS', True, 'PASS'),
+@pytest.mark.parametrize('status,complete,expected', [('PASS', True, 'NOT_MEASURED'),
                                                       ('PASS', False, 'NOT_MEASURED'),
                                                       ('FAIL', False, 'FAIL'),
                                                       ('NOT_MEASURED', False, 'NOT_MEASURED')])
-def test_default_synthesis_native_completion_controls_selected_exit(tmp_path, monkeypatch, status, complete, expected):
+def test_producer_completion_cannot_replace_canonical_publication(tmp_path, monkeypatch, status, complete, expected):
     context = engineering_case(tmp_path, monkeypatch)
     import step_preflight, step_output_collector, design_one_shot_runner as runner
     def result(*args, **kwargs):
@@ -259,3 +296,91 @@ def test_default_synthesis_detects_changed_native_sdc(tmp_path, monkeypatch):
     put(tmp_path, 'phase3/stage3/pnr/constraint.sdc', 'create_clock -period 10 [get_ports clk]')
     with pytest.raises(admission.AdmissionRefusal, match='D22_INPUT_CHANGED'):
         frontend._before(tmp_path, context, prepared)
+
+
+def controlled_canonical_publication(project, monkeypatch, consumer_status):
+    """Use the real retained publication machinery with a controlled consumer."""
+    context = engineering_case(project, monkeypatch)
+    put(project, 'input/submission_template/tapeout_declaration.json',
+        {'answers': {'deliverable': 'DIE'}})
+    import design_one_shot_runner as runner
+    import execution_backend_gates as gates
+    import execution_policy
+    calls = []
+    monkeypatch.setattr(execution_policy, 'request', lambda: {'mode': 'default'})
+    monkeypatch.setattr(execution_policy, '_ordinary_runtime', None)
+
+    def producer(actual_project, *_args, **_kwargs):
+        frontend.require_librelane_launch(actual_project, 'Yosys.Synthesis')
+        put(actual_project, 'phase2/stage2/synth/netlist.v',
+            'module unit_alpha(input a,output y);assign y=a;endmodule\n')
+        put(actual_project, 'phase2/stage2/synth/stats.json', {'cells': 1})
+        return runner.StepResult('yosys_synth', 'PASS', 0.0,
+            'controlled successful native producer',
+            extras={'step_id': '9', 'completed': True,
+                    'default_row_status': 'PASS'})
+
+    def consume(_project, row):
+        calls.append(str(row['id']))
+        return {'status': consumer_status,
+                'step': {'id': row['id'], 'status': consumer_status,
+                         'reasons': ['controlled canonical disposition']},
+                'ledger': [{'gate': 'controlled_existing_consumer',
+                            'rc': 0 if consumer_status == 'PASS' else 1,
+                            'verdict': consumer_status}],
+                'required_commands': []}
+
+    producer.__name__ = 'step_yosys_synth'
+    producer.__module__ = 'design_one_shot_runner'
+    monkeypatch.setattr(runner, 'step_yosys_synth', producer)
+    monkeypatch.setattr(gates, 'evaluate', consume)
+    started = time.time()
+    result = frontend.execute(project, context)
+    return context, result, calls, started
+
+
+@pytest.mark.parametrize('consumer_status', ['PASS', 'NOT_MEASURED', 'FAIL'])
+def test_default_none_path_publishes_and_preserves_canonical_consumer_verdict(
+        tmp_path, monkeypatch, consumer_status):
+    import step_output_collector as versions
+    context, result, calls, started = controlled_canonical_publication(
+        tmp_path, monkeypatch, consumer_status)
+
+    current = [row for row in versions.current_acceptance(tmp_path, started)
+               if str(row['id']) == '9']
+    assert calls == ['9']
+    assert context['runtime_tool_uses'] is None
+    assert len(current) == 1
+    assert current[0]['status'] == consumer_status
+    assert current[0]['result']['canonical_consumer']['status'] == consumer_status
+    assert result['component_status'] == consumer_status
+    assert result['default_row_status'] == consumer_status
+    assert result['canonical_publication']['status'] == consumer_status
+    assert bool(versions.latest_pass(tmp_path, '9')) is (consumer_status == 'PASS')
+
+
+@pytest.mark.parametrize('damage', ['missing', 'foreign', 'stale', 'direct_flag'])
+def test_canonical_publication_missing_foreign_stale_or_flag_only_refuses(
+        tmp_path, monkeypatch, damage):
+    import step_output_collector as versions
+    _context, _result, _calls, started = controlled_canonical_publication(
+        tmp_path, monkeypatch, 'PASS')
+    current = next(row for row in versions.current_acceptance(tmp_path, started)
+                   if str(row['id']) == '9')
+    record = tmp_path / 'steps' / current['folder'] / 'outputs.json'
+    if damage == 'missing':
+        record.unlink()
+    elif damage == 'foreign':
+        body = json.loads(record.read_text()); body['id'] = '8'
+        record.write_text(json.dumps(body))
+    elif damage == 'direct_flag':
+        body = json.loads(record.read_text())
+        body['canonical_pass'] = True
+        body['result'].pop('canonical_consumer')
+        record.write_text(json.dumps(body))
+    else:
+        started = time.time() + 60
+
+    with pytest.raises(admission.AdmissionRefusal,
+                       match='D22_CANONICAL_PUBLICATION_(MISSING_OR_FOREIGN|INVALID|STALE)'):
+        frontend._canonical_publication(tmp_path, started)

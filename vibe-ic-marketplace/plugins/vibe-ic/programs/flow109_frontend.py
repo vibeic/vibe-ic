@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
 import uuid
 from contextvars import ContextVar
 
@@ -159,6 +160,44 @@ def prepare(project, context):
     return {'manifest': manifest, 'pdk': pdk, 'sources': sources, 'inputs': inputs}
 
 
+def _canonical_publication(project, started_at):
+    """Read this D22 invocation's existing complete-consumer publication."""
+    import step_output_collector as versions
+    try:
+        rows = [row for row in versions.current_acceptance(project, started_at)
+                if str(row.get('id')) == '9']
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise AdmissionRefusal('D22_CANONICAL_PUBLICATION_INVALID', str(exc)) from exc
+    if len(rows) != 1:
+        raise AdmissionRefusal('D22_CANONICAL_PUBLICATION_MISSING_OR_FOREIGN',
+                               f'current step 9 publication count={len(rows)}')
+    row = rows[0]
+    result = row.get('result')
+    consumer = result.get('canonical_consumer') if isinstance(result, dict) else None
+    status = consumer.get('status') if isinstance(consumer, dict) else None
+    step = consumer.get('step') if isinstance(consumer, dict) else None
+    if (status not in {'PASS', 'NOT_MEASURED', 'FAIL'}
+            or row.get('status') != status
+            or not isinstance(step, dict) or str(step.get('id')) != '9'
+            or step.get('status') != status
+            or row.get('capture_errors') != []
+            or result.get('runner') != 'design_one_shot_runner'
+            or result.get('site') != 'step_yosys_synth'):
+        raise AdmissionRefusal('D22_CANONICAL_PUBLICATION_INVALID',
+                               'current step 9 consumer identity or verdict differs')
+    if status == 'PASS':
+        latest = versions.latest_pass(project, '9')
+        if (row.get('canonical_pass') is not True or not isinstance(latest, dict)
+                or latest.get('folder') != row.get('folder')
+                or latest.get('current_inputs') is not True):
+            raise AdmissionRefusal('D22_CANONICAL_PUBLICATION_STALE',
+                                   'PASS publication is not the current input-bound latest pass')
+    elif row.get('canonical_pass') is not False:
+        raise AdmissionRefusal('D22_CANONICAL_PUBLICATION_INVALID',
+                               'non-PASS consumer cannot publish canonical_pass')
+    return row
+
+
 def execute(project, context):
     project = Path(project).resolve()
     attempt = project / 'reports/flow109/D22' / uuid.uuid4().hex
@@ -177,16 +216,23 @@ def execute(project, context):
         # No frontend Controller/Ultra arm, copied Yosys recipe, or new checker.
         active = {'project': project, 'context': context, 'prepared': prepared, 'operations': []}
         token = _ACTIVE.set(active)
+        publication_started_at = time.time()
         try:
             result = step_preflight.retained_call(project, '9', runner.step_yosys_synth,
                 project, prepared['manifest']['top'], '', None,
                 pdk_name=prepared['manifest']['pdk'],
-                canonical_acceptance=context['runtime_tool_uses'] is not None)
+                canonical_acceptance=True)
         finally:
             _ACTIVE.reset(token)
             record['native_operations'] = active['operations']
             record['native_started'] = bool(active['operations'])
         record['producer'] = asdict(result)
+        publication = (_canonical_publication(project, publication_started_at)
+                       if result.status == 'PASS' else None)
+        if publication is not None:
+            record['canonical_publication'] = {
+                'folder': publication['folder'], 'status': publication['status'],
+                'canonical_consumer': publication['result']['canonical_consumer']}
         record['canonical_current_pass'] = versions.latest_pass(project, '9')
         record['source_sha256'] = prepared['sources']
         record['inputs'] = prepared['inputs']
@@ -200,16 +246,10 @@ def execute(project, context):
         if result.status == 'FAIL':
             record.update(component_status='FAIL', reason='D22_EXISTING_PRODUCER_FAILED')
         elif result.status == 'PASS':
-            if context['runtime_tool_uses'] is None:
-                # The native owner already validated current mapped bytes,
-                # library, provenance and all required native checkers.
-                record.update(component_status='PASS',
-                              completed=result.extras.get('completed') is True,
-                              default_row_status=result.extras.get('default_row_status', 'NOT_MEASURED'),
-                              reason='D22_EXISTING_NATIVE_OWNER_COMPLETED')
-            elif record['canonical_current_pass']:
-                record.update(component_status='PASS', completed=True, default_row_status='PASS',
-                              reason='D22_EXISTING_CANONICAL_CONSUMER_PASSED')
+            status = publication['status']
+            record.update(component_status=status, default_row_status=status,
+                          completed=status == 'PASS',
+                          reason=('D22_EXISTING_CANONICAL_CONSUMER_' + status))
         else:
             record['reason'] = 'D22_CANONICAL_ACCEPTANCE_NOT_MEASURED'
     except AdmissionRefusal as exc:
