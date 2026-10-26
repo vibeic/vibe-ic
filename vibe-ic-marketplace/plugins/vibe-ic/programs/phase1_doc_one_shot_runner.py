@@ -62738,7 +62738,19 @@ def _post_emit_l19_constraint_tokens(project: Path) -> int:
     """
     from l19_constraint_token_emit import run as _l19_emit
 
-    rep = _l19_emit(project)
+    try:
+        rep = _l19_emit(project)
+    except Exception as exc:
+        code, separator, _detail = str(exc).partition(":")
+        if separator and code == "L19_CONSTRAINT_AUTHORITY_CONFLICT":
+            # The canonical main loop intentionally fail-opens ordinary prose
+            # extraction defects.  An unresolved authority conflict is not an
+            # extraction defect: continuing would publish a successful L19
+            # with whichever value arrived first.  SystemExit is the narrow
+            # fatal channel that the surrounding ``except Exception`` cannot
+            # swallow; all other exceptions retain their prior path.
+            raise SystemExit(str(exc)) from exc
+        raise
     if not isinstance(rep, dict):
         raise RuntimeError("l19_constraint_token_emit returned no report")
     status = rep.get("status")
