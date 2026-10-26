@@ -66,6 +66,29 @@ _SCOPED_COMPONENT_REGISTER_DENIAL = """\
 The debug component has no software-visible registers.
 """
 
+_RETAINED_MARKDOWN_IC_ABSENCE = """\
+---
+layer: L5
+ic: spm
+status: not-applicable
+---
+
+# L5 — Register Map
+
+## 適用性 — N/A
+
+`spm` **無 SW-visible registers**。
+"""
+
+_CROSS_CLAUSE_REGISTER_PRESENCE = """\
+---
+ic: spm
+---
+# Register Map
+`spm` **無 SW-visible registers**。
+The register map is present.
+"""
+
 _ACTUAL_L6_OTP_NEGATIVE = """\
 ---
 layer: L6
@@ -107,6 +130,79 @@ def test_actual_explicit_absence_sets_typed_no_register_flag(tmp_path: Path) -> 
     assert l4["register_map_present"] is False
     assert l4["otp_layout"] is None
     assert l4["no_otp_layout_in_input"] is True
+
+
+def test_exact_markdown_ic_subject_drives_zero_population_consumer(
+        tmp_path: Path) -> None:
+    """The exact current IC can carry a complete wrapped denial."""
+    gen_l4_regmap(
+        tmp_path,
+        {"L5_register_map.md": _RETAINED_MARKDOWN_IC_ABSENCE},
+    )
+    l4 = _read_l4(tmp_path)
+    assert l4["registers"] == []
+    assert l4["no_registers_in_input"] is True
+    assert l4["register_map_present"] is False
+    assert _p0_zero_population_evidence(
+        tmp_path, "l4_regmap_phase2_emitter_contract_check") is not None
+
+
+def test_markdown_subject_requires_exact_ic_and_complete_proposition(
+        tmp_path: Path) -> None:
+    """Foreign, scoped, qualified, contradictory, and negated forms refuse."""
+    clauses = {
+        "foreign": "`other` **無 SW-visible registers**。",
+        "component": "`spm.debug` **無 SW-visible registers**。",
+        "qualified": "`spm` **無 SW-visible registers unless debug is enabled**。",
+        "contradictory": (
+            "`spm` **無 SW-visible registers** but CTRL is software-visible。"
+        ),
+        "mixed": "`spm` **無 SW-visible registers and has a CTRL register**。",
+        "outer_negation": "It is not true that `spm` **無 SW-visible registers**。",
+    }
+    for name, clause in clauses.items():
+        project = tmp_path / name
+        text = f"---\nic: spm\n---\n\n# Register Map\n\n{clause}\n"
+        gen_l4_regmap(project, {"L5_register_map.md": text})
+        l4 = _read_l4(project)
+        assert l4["registers"] == []
+        assert l4["no_registers_in_input"] is False
+        assert l4.get("register_map_present") is not False
+        assert _p0_zero_population_evidence(
+            project, "l4_regmap_phase2_emitter_contract_check") is None
+
+
+def test_exact_markdown_ic_absence_does_not_override_positive_register(
+        tmp_path: Path) -> None:
+    """A positive row keeps non-absence authority over the wrapped denial."""
+    text = _RETAINED_MARKDOWN_IC_ABSENCE + """
+
+| Address | Name | Access | Description |
+|---|---|---|---|
+| 0x00 | CTRL | R/W | control register |
+"""
+    gen_l4_regmap(tmp_path, {"L5_register_map.md": text})
+    l4 = _read_l4(tmp_path)
+    assert l4["registers"]
+    assert l4["no_registers_in_input"] is False
+    assert l4.get("register_map_present") is not False
+    assert _p0_zero_population_evidence(
+        tmp_path, "l4_regmap_phase2_emitter_contract_check") is None
+
+
+def test_separate_positive_register_presence_vetoes_document_absence(
+        tmp_path: Path) -> None:
+    """A later complete positive clause keeps the whole document unknown."""
+    gen_l4_regmap(
+        tmp_path,
+        {"L5_register_map.md": _CROSS_CLAUSE_REGISTER_PRESENCE},
+    )
+    l4 = _read_l4(tmp_path)
+    assert l4["registers"] == []
+    assert l4["no_registers_in_input"] is False
+    assert l4.get("register_map_present") is not False
+    assert _p0_zero_population_evidence(
+        tmp_path, "l4_regmap_phase2_emitter_contract_check") is None
 
 
 def test_malformed_unknown_does_not_guess_absence(tmp_path: Path) -> None:
