@@ -207,8 +207,10 @@ def test_qualified_or_alternative_sole_clock_clause_is_not_authority(
      '  - `clk` is the sole clock, with a 10 ns period.\n'),
     ('If debug mode is disabled:\n\n'
      '- `clk` is the sole clock, with a 10 ns period.\n'),
+    ('**If debug mode is disabled:**\n\n'
+     '- `clk` is the sole clock, with a 10 ns period.\n'),
 ], ids=['reviewer_multiline_conditional', 'nested_list',
-        'reviewer_blankline_parent'])
+        'reviewer_blankline_parent', 'reviewer_emphasized_parent'])
 def test_nonflat_structural_block_cannot_detach_clock_authority(
         tmp_path, prose):
     generated = _empty_l8_sdc_project(

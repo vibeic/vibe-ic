@@ -62676,6 +62676,16 @@ _TOP_LEVEL_MARKDOWN_LIST_ITEM = re.compile(
 _ATX_MARKDOWN_HEADING = re.compile(r"^[ \t]{0,3}#{1,6}[ \t]+\S.*$")
 
 
+def _strip_balanced_markdown_emphasis(line: str) -> str:
+    """Remove one balanced whole-line common emphasis frame, if present."""
+    value = line.strip()
+    for marker in ("**", "__", "*", "_"):
+        if (value.startswith(marker) and value.endswith(marker)
+                and len(value) > 2 * len(marker)):
+            return value[len(marker):-len(marker)].strip()
+    return value
+
+
 def _explicit_clock_authority_clauses(text: str) -> List[str]:
     """Supported complete clauses from structurally closed prose blocks.
 
@@ -62694,7 +62704,8 @@ def _explicit_clock_authority_clauses(text: str) -> List[str]:
         if not block_index:
             return False
         parent_lines = blocks[block_index - 1].splitlines()
-        parent_final = parent_lines[-1].strip() if parent_lines else ""
+        parent_final = (_strip_balanced_markdown_emphasis(parent_lines[-1])
+                        if parent_lines else "")
         parent_is_heading = (
             len(parent_lines) == 1
             and _ATX_MARKDOWN_HEADING.fullmatch(parent_lines[0]) is not None)
