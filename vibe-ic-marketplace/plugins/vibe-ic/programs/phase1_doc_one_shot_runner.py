@@ -55602,14 +55602,42 @@ def gen_l11_otp_content(project: Path,
         source_documents=_source_documents_from_extracted(project, extracted))
 
 
-# v0.1.82 — input assertion that the part has NO calibration / trimming / OTP
-# trim. Bilingual (zh + en), negation-anchored. Used by gen_l12 to emit the
-# honest L12 no_calibration flag for pure-digital parts. Chip-AGNOSTIC.
+# Complete, locally-owned clauses that say calibration itself is absent or not
+# required.  A noun following "calibration" (for example, "no calibration
+# error") cannot satisfy the full clause and therefore remains UNKNOWN.
 _RE_L12_NO_CALIBRATION = re.compile(
-    r'(?i)無\s*(?:trim|trimming|otp[\s-]*(?:based)?\s*cal|calibration|校準|校准)|'
-    r'不需\s*(?:calibration|trim|校準)|沒有\s*(?:calibration|trim|校準)|'
-    r'\bno\s+(?:calibration|trimming|trim)\b|'
-    r'\bnot\s+calibrat|\bno\s+otp[\s-]*based\s+calibration\b')
+    r"(?ix)\s*(?:"
+    r"(?:this|the)\s+(?:design|block|device|part|chip|ip)\s+(?:"
+    r"(?:requires?|needs?|uses?|includes?|has)\s+no\s+"
+    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration)"
+    r"(?:\s*(?:/|,|\bor\b|\band\b)\s*"
+    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration))*"
+    r"|(?:does\s+not|doesn't)\s+(?:require|need|use|include|have)\s+"
+    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration))"
+    r"|there\s+(?:is|are)\s+no\s+"
+    r"(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration)"
+    r"|no\s+(?:calibration|trimming|trim|"
+    r"otp[\s-]*(?:based\s+)?calibration)(?:\s+(?:is|are)\s+"
+    r"(?:required|needed|present|implemented|included|used))?"
+    r"|without\s+(?:calibration|trimming|trim|"
+    r"otp[\s-]*(?:based\s+)?calibration)"
+    r"|(?:calibration|trimming|trim|otp[\s-]*(?:based\s+)?calibration)\s+"
+    r"(?:is|are)\s+(?:not\s+(?:required|needed|present|implemented|"
+    r"included|used)|absent)"
+    r"|(?:本設計|本區塊|本裝置|此設計|此區塊)?\s*"
+    r"(?:不需|無需|沒有|不含|無)\s*(?:calibration|trim|校準|校准)"
+    r")\s*[.!。！？]?\s*")
+
+
+def _l12_has_explicit_no_calibration(text: str) -> bool:
+    """Match a complete sentence-level no-calibration declaration."""
+    if not isinstance(text, str):
+        return False
+    for line in text.splitlines():
+        for clause in re.split(r"(?<=[.!?。！？])\s+", line):
+            if _RE_L12_NO_CALIBRATION.fullmatch(clause):
+                return True
+    return False
 
 def gen_l12_behavioral(project: Path,
                        extracted: Dict[str, str],
@@ -55703,7 +55731,7 @@ def gen_l12_behavioral(project: Path,
     no_calibration = False
     if not sequences:
         for _f, _t in (extracted or {}).items():
-            if isinstance(_t, str) and _RE_L12_NO_CALIBRATION.search(_t):
+            if _l12_has_explicit_no_calibration(_t):
                 no_calibration = True
                 evidence.setdefault(f"input/docs/{_f}", []).append({
                     "literal": "no-calibration assertion",

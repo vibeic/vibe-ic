@@ -687,10 +687,18 @@ def _input_carries_subject(l_doc_code: str,
         return None
     if code == "L24" and project_dir is not None:
         pattern = re.compile(
-            r"(?i)(?:"
-            r"\b(?:sign[- ]?off|tape[- ]?out)\b.{0,100}"
-            r"\b(?:not\s+applicable|out\s+of\s+scope|not\s+required)\b"
-            r"|\b(?:no|without)\s+(?:sign[- ]?off|tape[- ]?out)\b)"
+            r"(?ix)\s*(?:"
+            r"(?:sign[- ]?off|tape[- ]?out)"
+            r"(?:\s+(?:and|or)\s+(?:sign[- ]?off|tape[- ]?out))?"
+            r"\s+(?:is|are)\s+"
+            r"(?:not\s+applicable|out\s+of\s+scope|not\s+required)"
+            r"|(?:no|without)\s+(?:sign[- ]?off|tape[- ]?out)"
+            r"(?:\s+(?:and|or)\s+(?:sign[- ]?off|tape[- ]?out))?"
+            r"(?:\s+(?:is|are)\s+"
+            r"(?:required|planned|intended|performed))?"
+            r")"
+            r"(?:\s+(?:for|to)\s+(?:this|the)\s+[^,;.!?]+)?"
+            r"\s*[.!?]?\s*"
         )
         root = Path(project_dir)
         for doc in input_documents(root):
@@ -700,7 +708,7 @@ def _input_carries_subject(l_doc_code: str,
             except OSError:
                 return None
             for line_number, line in enumerate(lines, 1):
-                match = pattern.search(line)
+                match = pattern.fullmatch(line)
                 if not match:
                     continue
                 return {
@@ -708,7 +716,7 @@ def _input_carries_subject(l_doc_code: str,
                     "layer": code,
                     "document": doc.relative_to(root).as_posix(),
                     "line": line_number,
-                    "literal": match.group(0),
+                    "literal": match.group(0).strip(),
                     "decided_by": "phase1_post_process._input_carries_subject",
                 }
         return None

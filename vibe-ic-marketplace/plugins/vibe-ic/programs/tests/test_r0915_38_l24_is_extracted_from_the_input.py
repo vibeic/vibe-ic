@@ -333,6 +333,15 @@ def test_explicit_source_bound_signoff_refusal_is_declared_absent(tmp_path):
     assert "no `rationale`" in out_bad
 
 
+def test_qualified_signoff_prefix_cannot_hide_mandatory_tapeout(tmp_path):
+    proj = _project(tmp_path, spec_md=(
+        "Sign-off is not required before RTL generation, but is mandatory "
+        "before tape-out.\n"))
+    doc = _emit_l24(proj)
+    assert doc["applicability"] == "APPLICABLE"
+    assert "applicability_evidence" not in doc
+
+
 def test_structured_self_tapeout_die_is_applicable_even_without_doc_keywords(
         tmp_path):
     proj = _project(tmp_path, spec_md="An eight-bit counter.\n")

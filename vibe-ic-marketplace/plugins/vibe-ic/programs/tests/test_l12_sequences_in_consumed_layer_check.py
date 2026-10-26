@@ -95,6 +95,14 @@ def test_explicit_source_bound_no_calibration_authorizes_escape(tmp_path):
     assert field_count._check_l_doc(12, doc, ic_class="unknown")[0] is True
 
 
+def test_calibration_error_sentence_does_not_authorize_global_absence(
+        tmp_path):
+    doc = _produce_l12(
+        tmp_path, "There is no calibration error in the measured output.\n")
+    assert doc["no_calibration"] is False
+    assert field_count._check_l_doc(12, doc, ic_class="unknown")[0] is False
+
+
 def test_positive_calibration_source_does_not_become_absence(tmp_path):
     doc = _produce_l12(
         tmp_path, "A calibration procedure writes a trim register.\n")
