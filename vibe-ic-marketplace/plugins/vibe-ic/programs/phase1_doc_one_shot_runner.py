@@ -54655,6 +54655,24 @@ def _harvest_test_cases_from_input_tables(
                         _scope_i = next((k for k, h in enumerate(_headers)
                             if h in {'範圍', '范围', 'scope', 'coverage',
                                      'coverage scope'} and k < len(cells)), None)
+                        # A threshold-free native coverage row is still a
+                        # measurement obligation, not a functional oracle.
+                        # The ORIGINAL expected cell must be ONE complete,
+                        # affirmative measurement-and-reporting clause.  A
+                        # substring match would incorrectly consume a row
+                        # whose functional result, negation, or condition sits
+                        # outside that substring -- especially in an Input /
+                        # Stimulus table.  Full-match the positive grammar so
+                        # such rows retain their functional oracle unchanged.
+                        _native_measurement = bool(re.fullmatch(
+                            r'\s*native\s+line\s*,\s*branch\s*,?\s+and\s+'
+                            r'toggle\s+coverage\s+'
+                            r'(?:is|are|must|shall|should|will)\s+'
+                            r'(?:be\s+)?measured\s+and\s+reported'
+                            r'(?:\s*(?:;|,)?\s*(?:without\s+inventing\s+'
+                            r'(?:a\s+)?threshold|no\s+(?:percentage\s+)?'
+                            r'threshold\s+(?:is\s+)?declared))?\s*[.!]?\s*',
+                            last, re.I))
                         if (_criteria_header and _scope_i is not None and
                                 not any(h in {'input', 'stimulus', '輸入', '输入'}
                                         for h in _headers) and
@@ -54665,6 +54683,12 @@ def _harvest_test_cases_from_input_tables(
                                 r'[`*]', '', cells[_scope_i]).strip()
                             _case['classification_reason'] = (
                                 'percent-PASS acceptance criterion over a coverage scope')
+                        elif _native_measurement:
+                            _case['kind'] = 'coverage_goal'
+                            _case['coverage_scope'] = last
+                            _case['classification_reason'] = (
+                                'affirmative native line/branch/toggle coverage '
+                                'measurement and reporting obligation')
                         if _assertion_row:
                             _case["oracle_from_assertion_row"] = True
                             _case["assertion_affirmation"] = last
