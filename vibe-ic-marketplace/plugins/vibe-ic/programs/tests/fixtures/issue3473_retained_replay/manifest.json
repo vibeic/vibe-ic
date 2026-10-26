@@ -1,0 +1,40 @@
+{
+  "schema": "issue3473.public-input-regression.v1",
+  "status": "NOT_AN_ACCEPTED_RETAINED_CHECKPOINT",
+  "historical_source": "3ce036897d64cbb5d524a64d418d75515cdd0fbe",
+  "source": "attempt5-final-grammar-proposal",
+  "files": {
+    "input/step_0_5ic_answers.json": "0d8850bf2096bb439b54104fc0401b0b93d1d0a81f0cc04bc7ef8f29108f77e9",
+    "input/docs/L2_architecture.md": "d25d2b25349cfc9fa50a214350f460c4005ddfebd8d5d8afeef2727e802e31e7",
+    "input/docs/L7_verification_plan.md": "d135197dc6cddc3b19e39e8eda8c43291fa58c37cd843865d6fdf49f1f3521bd",
+    "input/docs/L5_register_map.md": "c376fb47edc774175823b5aa279870b8ecc60a4c3da0da7aa6eef85b31de88e5",
+    "input/docs/L4_command_protocol.md": "adac57bc6f2e5d8dc1ce0f8b18082abd64fb811779c5a157edded03624c675fb",
+    "input/docs/L8_submodule_integration.md": "155286d3e36442486ae6a35db1b46d50a57bc5a4f61a599a3643bf8c3cb283b1",
+    "input/docs/L9_constraints_floorplan.md": "9d844ca0946c8baf775ad43c684b5e0fbf3aa554a8adb49b2579196493751652",
+    "input/docs/L1_product_metadata.md": "22911d9406b2c40a3504e721fdd232be1c3e3d0640266cad2918b7973639dc93",
+    "input/docs/L3_external_interface.md": "ed0915bbddfc3e8d1e71496834259d3385583bae6460536002feed6a899bd441",
+    "input/docs/L6_calibration.md": "4f0c86a1340129fe19d6ade49dcb7107bfa421e66574375c7f2735d70c1e61e8",
+    "historical/L8_TIMING_WAVEFORM.json": "906e5f0170710a53f88b39e3b541cbbe2c10c67d2a56777f5a8ffc589d5b5bee",
+    "historical/L8_RTL_CONSTANTS.json": "d9b4b0308e7a2dc9929d7553e188c1143a1fed9144f4886e812275ea5d392d83",
+    "historical/producer_identity.json": "14dfa2b9b86f6b93c923db1e6dd670449dd14e537d29695c01d1df34ed10ca9b"
+  },
+  "local_evidence_sha256": {
+    "historical_failure": "5d695d19f6e81421ee026a345f0428518d2613fd24eea60b34b1f3dfba8e0b28",
+    "independent_scope_review": "81713e6dc5295aa6422ca825615013ce3c9759434c3111e4699aa4edaf41eefd",
+    "private_retained_manifest": "8db9906d3e7c930b3913832da8e54ecc1f2c009d5c4bf414577f0e5dbbe933f6",
+    "private_retained_native_positive": "780e4bc85fdd412118290cb4c0312cb1c661234fed1dc2a413f7d0bc157d70ec",
+    "private_retained_currentness": "142720299b71c156f523bf8574be9cf441d9bcdd5990c803f0105419628a8367"
+  },
+  "private_retained_rtl_sha256": "14753dc13dbfee0c697904272c5eef2e1f2d2708923f024da2cfd03b7c5eb520",
+  "review_boundary": "No review answer or receipt is copied or rebound. No L21/L24 expectation is removed. Public replay remains unmeasured.",
+  "producer_identity": "historical/producer_identity.json",
+  "historical_tree": "92f157b3dde64d0f6ba297fa35dba63f3349a74f",
+  "producer_input_digest": "9870a45fafb9f62320edc2d728bf80b114a54bba4617c0ba10299e808fd57bb8",
+  "producer_code_digest": "36e41f15e88dc1595cd7f9e8bbd990f633845beb3234872d891adacef31f9958",
+  "recorded_input_directories_present": [
+    "input",
+    "input/docs",
+    "input/submission_template",
+    "phase1/input_doc"
+  ]
+}

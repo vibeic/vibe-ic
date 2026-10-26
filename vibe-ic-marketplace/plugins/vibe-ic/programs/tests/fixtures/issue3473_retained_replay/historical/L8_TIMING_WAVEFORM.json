@@ -1,0 +1,67 @@
+{
+  "schema_version": "1",
+  "doc_class": "timing_waveform",
+  "ic_name": "spm",
+  "timing_windows": [],
+  "timing_constants": [],
+  "waveforms": [],
+  "extraction_evidence": {},
+  "source_documents": [
+    "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+  ],
+  "_generator": {
+    "plugin": "vibe-ic",
+    "plugin_version": "1.30.97",
+    "l_doc_taxonomy_digest": "e3eeeadc5528",
+    "l_doc_taxonomy_docs": 28,
+    "emitter": "l8_clock_reset_waveform_emit.run"
+  },
+  "clock_domains": [
+    {
+      "name": "clk",
+      "source_pin": "clk",
+      "domain_kind": "primary",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "evidence": "L9.top_ports",
+      "reset_strategy": "unspecified",
+      "freq_hz": null,
+      "freq_mhz": null,
+      "period_ns": null
+    }
+  ],
+  "clocks": [
+    {
+      "name": "clk",
+      "type": "input",
+      "freq_mhz": null,
+      "extraction_strategy": "seeded_from_l1_clock_port_v1_6_571",
+      "role": "master",
+      "source": "synthesised-from-L9.top_ports",
+      "domain_kind": "primary",
+      "source_pin": "clk"
+    }
+  ],
+  "clock_and_reset_waveform": {
+    "clocks": [
+      {
+        "name": "clk",
+        "edge": "posedge",
+        "edge_derived_from": "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+      }
+    ],
+    "resets": [
+      {
+        "name": "rst",
+        "polarity": "active_high",
+        "sync": "synchronous",
+        "port_description": "Synchronous active-high reset."
+      }
+    ],
+    "derived_from": [
+      "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
+      "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    ],
+    "extraction_strategy": "l8_clock_reset_waveform_emit"
+  }
+}

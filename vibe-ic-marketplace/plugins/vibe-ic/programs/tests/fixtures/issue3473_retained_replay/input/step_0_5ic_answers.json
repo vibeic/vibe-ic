@@ -1,0 +1,12 @@
+{
+  "schema": "vibe-ic/step_0_5ic_answers/1",
+  "answers": {
+    "deliverable": "DIE"
+  },
+  "answer_provenance": {
+    "deliverable": {
+      "answered_by": "owner",
+      "citation": "operator --route ic on 2026-10-26"
+    }
+  }
+}

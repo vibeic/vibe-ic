@@ -1811,6 +1811,18 @@ def select_tests(
 
     for raw in changed_paths:
         rel = _to_plugin_rel(raw, plugin_prefix)
+        # The retained replay crosses producer, receipt and continuation owners;
+        # select its single regression owner in every mode, including ownership.
+        replay = "programs/tests/test_issue3473_retained_checkpoint_replay.py"
+        if replay in population and (
+                rel.startswith("programs/tests/fixtures/issue3473_retained_replay/")
+                or rel in {"programs/" + name for name in (
+                    "vibe_ic_one_shot_runner.py", "design_one_shot_runner.py",
+                    "phase1_doc_one_shot_runner.py", "l8_doc_clock_freq_synth.py",
+                    "_step_identity.py", "step_output_collector.py", "_phase1_producer_identity.py", "execution_step4.py", "ai_signed_judgement.py",
+                    "serial_parallel_mul_synth.py", "_cdc_netlist.py",
+                    "cpu_functional_oracle_waiver_check.py")}):
+            selected.add(replay)
         # (6) a changed repo-root TOOL script -> the tests that NAME it.
         # Checked BEFORE the `.py` guard below, which is one of the two reasons
         # this population was invisible: a `.sh` never survived to reach a rule.

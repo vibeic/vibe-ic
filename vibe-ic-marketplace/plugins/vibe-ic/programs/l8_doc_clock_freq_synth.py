@@ -57,6 +57,10 @@ became a 0.6 V power rail because a heading contained the word "supplies"), so
 this one refuses to derive anything from row shape alone: the design must
 already have declared the clock, in L8, by name.
 
+A prose line may also bind an explicit "clock period is <value> <unit>"
+statement when it names exactly one declared clock. Denied, unnamed, zero,
+multiple-period and conflicting statements remain unresolved.
+
 COMPRESSED ENUMERATIONS
 =======================
 Designs write `CK4/5/6` far more often than `CK4/CK5/CK6`. A token of the form
@@ -94,6 +98,8 @@ import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
+
+from _prose_polarity import is_denied
 
 PROGRAM = "l8_doc_clock_freq_synth"
 VERSION = "1.0.0"
@@ -134,6 +140,12 @@ _RE_COMPRESSED_ENUM = re.compile(
 
 #: Identifier-ish token, for scanning a row for declared clock names.
 _RE_TOKEN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+# A positive period statement must name exactly one already-declared clock
+# on its own line. No anonymous default, range, negation, or cross-line guess.
+_PERIOD_STATEMENT = re.compile(
+    r"\bclock\s+period\s+(?:is|=|:)\s*(\d+(?:\.\d+)?)\s*(ps|ns|us)\b",
+    re.IGNORECASE)
 
 _MD_TABLE_SEP = re.compile(r"^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$")
 
@@ -348,16 +360,26 @@ def derive(project: Path) -> Dict[str, Any]:
             cells = _split_row(line)
             if not cells:
                 in_table = False
-                continue
-            if _MD_TABLE_SEP.match(line):
+                periods = list(_PERIOD_STATEMENT.finditer(line))
+                names = _row_clock_names([line], declared)
+                if len(periods) != 1 or len(names) != 1 or is_denied(line):
+                    continue
+                match = periods[0]
+                ns = float(match[1]) * {"ps": 0.001, "ns": 1.0, "us": 1000.0}[match[2].lower()]
+                if ns <= 0:
+                    continue
+                freqs = [(1e9 / ns, match[0])]
+                cells = [line]
+            elif _MD_TABLE_SEP.match(line):
                 # Header separator — the row above was a header.
                 if not in_table:
                     in_table = True
                     result["tables_seen"] += 1
                 continue
-            if not in_table:
-                continue
-            freqs = _row_frequencies(cells)
+            else:
+                if not in_table:
+                    continue
+                freqs = _row_frequencies(cells)
             if not freqs:
                 continue
             result["rows_with_frequency"] += 1
@@ -407,9 +429,10 @@ def derive(project: Path) -> Dict[str, Any]:
                     "matched_text": matched,
                 }
 
-    result["bindings"] = [bindings[k] for k in sorted(bindings)]
     ambiguous_clocks = {
         n for r in result["ambiguous_rows"] for n in r.get("clocks_named", [])}
+    result["bindings"] = [bindings[k] for k in sorted(bindings)
+                          if k not in ambiguous_clocks]
     result["unplaced_names"] = sorted(
         set(result["declared_clocks"]) - set(bindings) - ambiguous_clocks)
     if result["bindings"]:
@@ -464,6 +487,13 @@ def _apply(project: Path, derived: Dict[str, Any]) -> Dict[str, Any]:
                     "matched_text": b["matched_text"], "row": b["row"],
                 }
                 rec["derived_by"] = PROGRAM
+                # The later scaffold cleaner consumes the standard layer
+                # evidence map, not the per-record frequency citation.
+                evidence = {"label": "document clock period/frequency",
+                            "literal": b["matched_text"], "line": b["line"]}
+                items = d.setdefault("extraction_evidence", {}).setdefault(b["file"], [])
+                if evidence not in items:
+                    items.append(evidence)
                 report["records_filled"] += 1
                 changed = True
         # The scalar SHORT-CIRCUITS the per-record values in the consumer
