@@ -241,7 +241,12 @@ def test_the_lef_write_carries_a_marker_from_its_own_argv(tmp_path: Path,
         "native_log_sha256": "l" * 64,
         "simulator": "ngspice-47",
         "image_digest": "sha256:" + "a" * 64,
+        "native_binary": {"path": "/usr/bin/ngspice", "sha256": "c" * 64,
+                          "selection": "discovered"},
     }, ""))
+    monkeypatch.setattr(E, "_selected_native_binary", lambda *a, **k: (
+        {"path": "/usr/bin/ngspice", "sha256": "c" * 64,
+         "selection": "discovered"}, ""))
     calls = []
 
     def fake_exec(container, cmd, timeout=900, *, marker=None, log_path=None):
@@ -261,6 +266,7 @@ def test_the_lef_write_carries_a_marker_from_its_own_argv(tmp_path: Path,
                            "blk" / "a8_views_provenance.json").read_text())
     assert manifest["producer"] == "analog_a8_hardmacro_emit"
     assert manifest["source_gds_sha256"] == r["source_gds_sha256"]
+    assert manifest["native_measurement"]["native_binary"]["sha256"] == "c" * 64
     assert set(manifest["views"]) == {".lef", ".lib", ".gds", ".v"}
     assert manifest["characterization_scope"]["timing_arcs"] == "NOT_MEASURED"
     assert manifest["characterization_scope"]["full_timing_characterization"] is False
@@ -375,6 +381,8 @@ def _write_native_measurement_fixture(tmp_path: Path, *, value=0.5,
         "provenance": "real_ngspice",
         "simulator": "ngspice-47",
         "image_digest": "sha256:" + "a" * 64,
+        "native_binary": {"path": "/usr/bin/ngspice", "sha256": "c" * 64,
+                          "selection": "discovered"},
         "declared_ports": (declared_ports if declared_ports is not None
                             else topo["ports"]),
         "source_layout": "phase3/analog/blk/layout.mag",
@@ -390,11 +398,28 @@ def _write_native_measurement_fixture(tmp_path: Path, *, value=0.5,
     return project, b, topo
 
 
+def _select_fixture_binary(monkeypatch):
+    monkeypatch.setattr(E, "_selected_native_binary", lambda *a, **k: (
+        {"path": "/usr/bin/ngspice", "sha256": "c" * 64,
+         "selection": "discovered"}, ""))
+
+
 def test_missing_native_measurement_refuses_before_magic(tmp_path: Path):
     project, b, topo = _write_native_measurement_fixture(tmp_path)
     (b / E._A8_MEASUREMENT).unlink()
     got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
     assert got is None and "native ngspice measurement" in why
+
+
+def test_missing_native_binary_identity_is_not_measured(tmp_path: Path):
+    project, b, topo = _write_native_measurement_fixture(tmp_path)
+    path = b / E._A8_MEASUREMENT
+    rec = json.loads(path.read_text())
+    del rec["native_binary"]
+    path.write_text(json.dumps(rec))
+    got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert why == "native binary provenance is absent or malformed"
+    assert got is None
 
 
 def test_stale_native_measurement_refuses(tmp_path: Path):
@@ -530,6 +555,7 @@ def test_nonpositive_native_measurement_refuses(tmp_path: Path):
 def test_native_measurement_emits_non_degenerate_leakage_liberty(tmp_path: Path,
                                                                   monkeypatch):
     project, b, _topo = _write_native_measurement_fixture(tmp_path)
+    _select_fixture_binary(monkeypatch)
     lef = """MACRO blk
   PIN vdd
     PORT
@@ -851,6 +877,7 @@ def test_explicit_different_binary_does_not_reuse_cached_native_measurement(tmp_
     rec, why = E._native_measurement_produce(project, "blk", "", "/pdk", b / "blk.gds", topo)
     assert rec is not None, why
     calls = []
+    monkeypatch.setattr(E, "_docker_exec_raw", lambda *a, **k: (0, "", ""))
     def produce(*args, **kwargs):
         calls.append(kwargs["ngspice_bin"])
         return None, "replacement native execution deliberately stopped"
@@ -860,9 +887,25 @@ def test_explicit_different_binary_does_not_reuse_cached_native_measurement(tmp_
     assert "different selected binary" in result["reason"]
 
 
+def test_discovered_different_binary_does_not_reuse_cached_native_measurement(tmp_path, monkeypatch):
+    project, b, _topo = _write_native_measurement_fixture(tmp_path)
+    monkeypatch.setattr(E, "_native_ngspice_binary", lambda *a: ("/current/ngspice", ""))
+    monkeypatch.setattr(E, "_remote_sha256", lambda *a: ("d" * 64, ""))
+    calls = []
+    def produce(*args, **kwargs):
+        calls.append(args[1])
+        return None, "replacement native execution deliberately stopped"
+    monkeypatch.setattr(E, "_native_measurement_produce", produce)
+    result = E.emit_block(project, "blk", "", "/pdk")
+    assert calls == ["blk"]
+    assert result["emitted"] is False
+    assert "different selected binary" in result["reason"]
+
+
 @pytest.mark.parametrize("native_rc,native_text", [(1, "MACRO failed\n"), (0, "")])
 def test_native_lef_failure_preserves_prior_delivery(tmp_path, monkeypatch, native_rc, native_text):
     project, b, topo = _write_native_measurement_fixture(tmp_path)
+    _select_fixture_binary(monkeypatch)
     h = project / "phase3/analog/hardmacro/blk"
     h.mkdir(parents=True)
     delivered = h / "blk.lef"

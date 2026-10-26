@@ -547,6 +547,28 @@ def _native_ngspice_binary(container: str) -> Tuple[Optional[str], str]:
     return None, "ngspice is not reachable in the selected execution context"
 
 
+def _selected_native_binary(container: str, ngspice_bin: Optional[str] = None
+                            ) -> Tuple[Optional[Dict[str, str]], str]:
+    """Resolve and hash the execution-side ngspice that A8 will consume."""
+    explicit = ngspice_bin is not None
+    if explicit:
+        if not Path(ngspice_bin).is_absolute():
+            return None, "explicit ngspice binary must be an absolute execution-side path"
+        rc, _out, _err = _docker_exec_raw(
+            container, f"test -x {shlex.quote(ngspice_bin)}")
+        if rc != 0:
+            return None, f"explicit ngspice binary is not executable: {ngspice_bin}"
+    else:
+        ngspice_bin, why = _native_ngspice_binary(container)
+        if ngspice_bin is None:
+            return None, why
+    binary_hash, why = _remote_sha256(container, ngspice_bin)
+    if binary_hash is None:
+        return None, "selected ngspice binary cannot be hashed: " + why
+    return {"path": ngspice_bin, "sha256": binary_hash,
+            "selection": "explicit" if explicit else "discovered"}, ""
+
+
 def _native_model_contract(container: str, pdk_root: str, tech: str
                            ) -> Tuple[Optional[Dict[str, str]], str]:
     """Find the PDK's sectioned ngspice model contract from its own files.
@@ -867,22 +889,11 @@ def _native_measurement_produce(project: Path, block: str, container: str,
     rcfile = magicrc_for(pdk_root, container, tech)
     if rcfile is None:
         return None, f"no Magic rcfile for A5 technology {tech!r}"
-    explicit_binary = ngspice_bin is not None
-    if explicit_binary:
-        if not Path(ngspice_bin).is_absolute():
-            return None, "explicit ngspice binary must be an absolute execution-side path"
-        rc, _out, why = _docker_exec_raw(container, f"test -x {shlex.quote(ngspice_bin)}")
-        if rc != 0:
-            return None, f"explicit ngspice binary is not executable: {ngspice_bin}"
-    else:
-        ngspice_bin, why = _native_ngspice_binary(container)
-    if ngspice_bin is None:
+    native_binary, why = _selected_native_binary(container, ngspice_bin)
+    if native_binary is None:
         return None, why
-    binary_hash, why = _remote_sha256(container, ngspice_bin)
-    if binary_hash is None:
-        return None, "selected ngspice binary cannot be hashed: " + why
-    native_binary = {"path": ngspice_bin, "sha256": binary_hash,
-                     "selection": "explicit" if explicit_binary else "discovered"}
+    ngspice_bin = native_binary["path"]
+    binary_hash = native_binary["sha256"]
     image_digest, image_why = _runtime_image_digest(container)
     if image_digest is None:
         return None, image_why
@@ -1411,12 +1422,12 @@ def load_native_measurement(project: Path, block: str, gds: Path,
     # validated above.  Keep the two paths distinct: reusing ``path`` here
     # would publish the wrapper digest under ``measurement_sha256``.
     out["measurement_sha256"] = _sha256(measurement_path)
-    if "native_binary" in rec:
-        binary = rec["native_binary"]
-        if (not isinstance(binary, dict) or not isinstance(binary.get("path"), str)
-                or not Path(binary["path"]).is_absolute()
-                or not re.fullmatch(r"[0-9a-f]{64}", str(binary.get("sha256", "")))):
-            return None, "native binary provenance is absent or malformed"
+    binary = rec.get("native_binary")
+    if (not isinstance(binary, dict) or not isinstance(binary.get("path"), str)
+            or not Path(binary["path"]).is_absolute()
+            or not re.fullmatch(r"[0-9a-f]{64}", str(binary.get("sha256", "")))
+            or binary.get("selection") not in ("explicit", "discovered")):
+        return None, "native binary provenance is absent or malformed"
     return out, ""
 
 
@@ -1439,11 +1450,16 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str, *, ngsp
     topology = json.loads(topo.read_text())
     measurement, measurement_reason = load_native_measurement(
         project, block, gds, topology)
-    if measurement is not None and ngspice_bin is not None:
-        digest = _remote_sha256(container, ngspice_bin)[0]
-        prior_binary = measurement.get("native_binary") or {}
-        if digest is None or prior_binary.get("path") != ngspice_bin or prior_binary.get("sha256") != digest:
-            measurement, measurement_reason = None, "cached native measurement used a different selected binary"
+    if measurement is not None:
+        selected_binary, selected_reason = _selected_native_binary(
+            container, ngspice_bin)
+        prior_binary = measurement["native_binary"]
+        if selected_binary is None:
+            measurement, measurement_reason = None, selected_reason
+        elif any(prior_binary.get(key) != selected_binary[key]
+                 for key in ("path", "sha256")):
+            measurement, measurement_reason = None, \
+                "cached native measurement used a different selected binary"
     if measurement is None:
         produced, produce_reason = _native_measurement_produce(
             project, block, container, pdk_root, gds, topology, **({"ngspice_bin": ngspice_bin} if ngspice_bin is not None else {}))
