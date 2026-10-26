@@ -115,10 +115,10 @@ module sink(input [3:0] payload, left, right, output [3:0] accepted, extra);
   assign accepted[3] = payload[3] ? left[3] : right[3];
   assign extra = 4'b0000;
 endmodule
-module neutral(input [4:0] data, input [3:0] left, right, output [3:0] result);
+module neutral;
   wire [3:0] link;
-  source a(.data(data), .payload(link));
-  sink b(.payload(link), .left(left), .right(right), .accepted(result), .extra());
+  source a(.data(5'b10101), .payload(link));
+  sink b(.payload(link), .left(4'b1100), .right(4'b0011), .accepted(), .extra());
 endmodule
 """
     substitutions = {
@@ -154,14 +154,14 @@ def test_native_exact_control_bitfield_reaches_actual_receipt(tmp_path):
         assert hashlib.sha256(original.read_bytes()).hexdigest() == expected["/subject/rtl/" + name]
         shutil.copyfile(original, rtl / name)
     (rtl / "neutral.v").write_text(r"""
-module neutral(input clk, en, input [31:2] instruction, output result);
+module neutral;
   wire [3:0] link;
   serv_decode #(.PRE_REGISTER(1), .MDU(0)) a(
-    .clk(clk), .i_wb_rdt(instruction), .i_wb_en(en), .o_immdec_ctrl(link));
+    .clk(1'b0), .i_wb_rdt(30'b0), .i_wb_en(1'b1), .o_immdec_ctrl(link));
   serv_immdec #(.W(1), .SHARED_RFADDR_IMM_REGS(1)) b(
-    .i_clk(clk), .i_cnt_en(1'b0), .i_cnt_done(1'b0), .i_immdec_en(4'b0000),
-    .i_csr_imm_en(1'b0), .i_ctrl(link), .i_wb_en(en),
-    .i_wb_rdt(instruction[31:7]), .o_imm(result));
+    .i_clk(1'b0), .i_cnt_en(1'b0), .i_cnt_done(1'b0), .i_immdec_en(4'b0000),
+    .i_csr_imm_en(1'b0), .i_ctrl(link), .i_wb_en(1'b1),
+    .i_wb_rdt(25'b0), .o_imm());
 endmodule
 """)
     result = subprocess.run([sys.executable, str(SCRIPT), "--rtl-dir", str(rtl),
