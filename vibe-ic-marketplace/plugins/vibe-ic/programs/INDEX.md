@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1502
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1502)
+- **Total programs (excluding helpers / shims):** 1504
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1504)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1493 |
+| `any` | 1495 |
 
 ## Alphabetical listing
 
@@ -116,8 +116,10 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_native_erc` | any | — | Native well/tap electrical connectivity checks using the IHP LVS extractor. |
 | `analog_native_flow` | any | — | Run the A01-A19 analog track with existing native producers. |
 | `analog_native_front` | any | — | A01--A05 Default execution using the existing analog producers and consumers. |
+| `analog_native_interconnect_run` | any | — | Native unmerged geometry extraction and source-testbench OP/TRAN capture. |
 | `analog_native_physical` | any | — | Default analog A11--A16: call the existing native producers. |
 | `analog_native_sim` | any | — | Default analog simulation steps A06--A10 using delivered DUT testbenches. |
+| `analog_native_waveform` | any | — | Read native ngspice real raw captures and integrate their actual time grid. |
 | `analog_netlist_connectivity_check` | any | — | deterministic floating-node / dangling-pin graph check for SPICE subcircuits. |
 | `analog_netlist_include_order_check` | any | — | deterministic SPICE model-include ordering gate. |
 | `analog_netlist_path_lint` | any | — | deterministic absolute-path lint for SPICE netlists. |
@@ -1574,7 +1576,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1493 programs)
+### `any` (1495 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1666,8 +1668,10 @@ _(no programs in this group)_
 - `analog_native_erc` — Native well/tap electrical connectivity checks using the IHP LVS extractor.
 - `analog_native_flow` — Run the A01-A19 analog track with existing native producers.
 - `analog_native_front` — A01--A05 Default execution using the existing analog producers and consumers.
+- `analog_native_interconnect_run` — Native unmerged geometry extraction and source-testbench OP/TRAN capture.
 - `analog_native_physical` — Default analog A11--A16: call the existing native producers.
 - `analog_native_sim` — Default analog simulation steps A06--A10 using delivered DUT testbenches.
+- `analog_native_waveform` — Read native ngspice real raw captures and integrate their actual time grid.
 - `analog_netlist_connectivity_check` — deterministic floating-node / dangling-pin graph check for SPICE subcircuits.
 - `analog_netlist_include_order_check` — deterministic SPICE model-include ordering gate.
 - `analog_netlist_path_lint` — deterministic absolute-path lint for SPICE netlists.
