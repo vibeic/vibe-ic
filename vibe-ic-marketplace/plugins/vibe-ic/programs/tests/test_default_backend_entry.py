@@ -86,6 +86,259 @@ def cross_phase_transport(monkeypatch):
         next(transport)
 
 
+_D20_GOOD_SDC = (
+    'create_clock -name clk -period 10 [get_ports clk]\n'
+    'set_input_delay 1 -clock clk [get_ports a]\n'
+    'set_output_delay 1 -clock clk [get_ports q]\n'
+)
+
+
+def _d20_authority_project(tmp_path, monkeypatch, deck=_D20_GOOD_SDC):
+    """One caller-owned SDC plus all three real early D20 consumers."""
+    import execution_policy as policy
+    from test_default_frontend_r2 import _synthesis, put
+
+    project, _rtl, pdk, _calls = _synthesis(
+        tmp_path, monkeypatch, ordinary=True)
+    put(project / 'phase3/librelane_switch.json', {'steps': {'8': 'direct'}})
+    if deck is not None:
+        caller_sdc = project / 'input/constraints/clock.sdc'
+        caller_sdc.parent.mkdir(parents=True, exist_ok=True)
+        caller_sdc.write_text(deck)
+    # The inherited fixture's unrelated Liberty inputs stay deterministic;
+    # D20 must not use them to resolve a technology or publish a Step-7 deck.
+    for corner in ('ss', 'tt', 'ff'):
+        put(project / f'input/pdk/liberty/neutral__{corner}.lib',
+            Path(pdk.liberty).read_text())
+    monkeypatch.setattr(policy, '_ordinary_runtime', {
+        'project': project.resolve(),
+        'policy': {'mode': 'default'},
+        'parameters': {'top': 'top', 'container': '', 'pdk_name': pdk.name},
+    })
+    return project
+
+
+def test_d20_early_consumers_share_original_caller_sdc_authority(
+        tmp_path, monkeypatch):
+    import json
+    import design_one_shot_runner as design
+
+    project = _d20_authority_project(tmp_path, monkeypatch)
+    stale = project / 'phase2/stage2/constraints/stale.sdc'
+    stale.parent.mkdir(parents=True, exist_ok=True)
+    stale.write_text('set_false_path -from * -to *\n')
+    stale_sha = __import__('hashlib').sha256(stale.read_bytes()).hexdigest()
+    result = design.step_sdc_validation(project)
+    assert result.status == 'PASS', result.detail
+    authority = result.extras['sdc_authority']
+    source = authority['source']
+    assert authority['schema'] == 'vibeic.d20.sdc-authority.v2'
+    assert source['path'] == 'input/constraints/clock.sdc'
+    assert source['sha256'] != ''
+    assert 'canonical' not in authority and 'step7_record' not in authority
+    assert __import__('hashlib').sha256(stale.read_bytes()).hexdigest() == stale_sha
+    assert sorted(project.glob('phase2/stage2/constraints/*.sdc')) == [stale]
+    for report in ('reports/phase2/sdc_check.json',
+                   'reports/sdc_validator.json',
+                   'reports/phase2/sdc_exception_correlation.json'):
+        body = json.loads((project / report).read_text())
+        assert body['sdc_authority'] == authority
+        binding = body['summary'] if report.endswith('sdc_check.json') else body
+        assert binding['sdc_sha256_expected'] == source['sha256']
+        assert binding['sdc_sha256_observed'] == source['sha256']
+    syntax = json.loads((project / 'reports/phase2/sdc_check.json').read_text())
+    assert sum(finding['message'] == 'Clock period 10.0ns (100.0 MHz)'
+               for finding in syntax['findings']) == 1
+    for consumer in ('sdc_syntax_check', 'sdc_validator_check',
+                     'sdc_exception_correlation_check'):
+        assert authority['consumers'][consumer] == [source['path']]
+
+
+def test_d20_actual_auto_pdk_carrier_needs_no_phase2_pdk_declaration(
+        tmp_path, monkeypatch):
+    """D20-only public shape: --pdk auto, with no Phase-2 L19/project PDK."""
+    import design_one_shot_runner as design
+    import execution_policy as policy
+
+    project = _d20_authority_project(tmp_path, monkeypatch)
+    (project / 'input/project.json').unlink()
+    (project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json').unlink()
+    monkeypatch.setattr(policy, '_ordinary_runtime', {
+        'project': project.resolve(),
+        'policy': {'mode': 'default'},
+        'parameters': {'top': 'top', 'container': '', 'pdk_name': None},
+    })
+
+    result = design.step_sdc_validation(project)
+    assert result.status == 'PASS', result.detail
+    assert 'pdk' not in result.extras['sdc_authority']
+    for consumer in ('sdc_syntax_check', 'sdc_validator_check',
+                     'sdc_exception_correlation_check'):
+        assert result.extras['sdc_authority']['consumers'][consumer]
+
+
+def test_d20_foreign_clock_false_path_is_a_named_refusal(
+        tmp_path, monkeypatch):
+    import json
+    import design_one_shot_runner as design
+
+    project = _d20_authority_project(
+        tmp_path, monkeypatch,
+        _D20_GOOD_SDC +
+        'set_false_path -from [get_clocks clk] -to [get_clocks foreign]\n')
+    result = design.step_sdc_validation(project)
+    assert result.status == 'FAIL'
+    report = json.loads((project /
+        'reports/phase2/sdc_exception_correlation.json').read_text())
+    categories = {row['category'] for row in report['findings']}
+    assert 'SDC_EXCEPTION_UNJUSTIFIED' in categories
+    assert report['sdc_authority'] == result.extras['sdc_authority']
+
+
+def test_d20_missing_caller_sdc_is_not_replaced_by_generated_output(
+        tmp_path, monkeypatch):
+    import design_one_shot_runner as design
+
+    project = _d20_authority_project(tmp_path, monkeypatch, None)
+    result = design.step_sdc_validation(project)
+    assert result.status == 'NOT_MEASURED'
+    assert result.detail.startswith('D20_SDC_AUTHORITY_ABSENT:')
+    assert not list((project / 'phase2/stage2/constraints').glob('*.sdc'))
+
+
+def test_d20_unrelated_second_caller_sdc_is_refused_before_publication(
+        tmp_path, monkeypatch):
+    import design_one_shot_runner as design
+
+    project = _d20_authority_project(tmp_path, monkeypatch)
+    other = project / 'input/constraints/unrelated.sdc'
+    other.write_text(_D20_GOOD_SDC.replace('clk', 'other'))
+    result = design.step_sdc_validation(project)
+    assert result.status == 'FAIL'
+    assert result.detail.startswith('D20_SDC_AUTHORITY_AMBIGUOUS:')
+    assert not list((project / 'phase2/stage2/constraints').glob('*.sdc'))
+
+
+def test_d20_caller_sdc_changed_after_binding_refuses_current_result(
+        tmp_path, monkeypatch):
+    import design_one_shot_runner as design
+    import sdc_syntax_check as syntax
+
+    project = _d20_authority_project(tmp_path, monkeypatch)
+    source = project / 'input/constraints/clock.sdc'
+    original = syntax._regex_audit
+
+    def mutate_after_syntax(*args, **kwargs):
+        result = original(*args, **kwargs)
+        source.write_text(source.read_text() + '# changed after binding\n')
+        return result
+
+    monkeypatch.setattr(syntax, '_regex_audit', mutate_after_syntax)
+    result = design.step_sdc_validation(project)
+    assert result.status == 'FAIL'
+    assert result.detail.startswith('D20_SDC_AUTHORITY_CHANGED:')
+
+
+def test_d20_explicit_consumers_refuse_external_and_symlink_sdc_authority(
+        tmp_path):
+    """Every actual consumer confines its explicit override before reading."""
+    import hashlib
+    import sdc_exception_correlation_check as exceptions
+    import sdc_syntax_check as syntax
+    import sdc_validator_check as validator
+
+    project = tmp_path / 'project'
+    constraints = project / 'input/constraints'
+    constraints.mkdir(parents=True)
+    external = tmp_path / 'external.sdc'
+    external.write_text(_D20_GOOD_SDC)
+    digest = hashlib.sha256(external.read_bytes()).hexdigest()
+    linked = constraints / 'linked.sdc'
+    linked.symlink_to(external)
+
+    for candidate, detail in (
+            (external,
+             'explicit SDC parent is not literal input/constraints authority'),
+            (linked, 'explicit SDC is a symlink')):
+        syntax_result = syntax._regex_audit(
+            str(project), sdc_path=candidate, sdc_sha256=digest)
+        validator_result = validator.evaluate(
+            project, sdc_path=candidate, sdc_sha256=digest)
+        exception_result = exceptions.audit(
+            project, sdc_path=candidate, sdc_sha256=digest)
+
+        assert syntax_result.passed is False
+        assert [(row.rule, row.message) for row in syntax_result.findings] == [
+            ('SDC_AUTHORITY_REFUSED', detail)]
+        assert validator_result.rc == 1
+        assert validator_result.report['issues'] == [
+            f'SDC_AUTHORITY_REFUSED: {detail}']
+        assert exception_result['verdict'] == 'FAIL'
+        assert exception_result['reason'] == f'SDC_AUTHORITY_REFUSED: {detail}'
+        assert syntax_result.summary['sdc_files_checked'] == []
+        assert validator_result.report['sdc_files_checked'] == []
+        assert exception_result['sdc_files_checked'] == []
+
+
+def test_d20_explicit_consumers_refuse_parent_symlink_alias(tmp_path):
+    """A regular leaf cannot enter through a foreign symlinked parent."""
+    import hashlib
+    import sdc_exception_correlation_check as exceptions
+    import sdc_syntax_check as syntax
+    import sdc_validator_check as validator
+
+    project = tmp_path / 'project'
+    source = project / 'input/constraints/clock.sdc'
+    source.parent.mkdir(parents=True)
+    source.write_text(_D20_GOOD_SDC)
+    alias = tmp_path / 'foreign-alias'
+    alias.symlink_to(source.parent, target_is_directory=True)
+    candidate = alias / source.name
+    assert candidate.is_symlink() is False
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    detail = 'explicit SDC parent is not literal input/constraints authority'
+
+    syntax_result = syntax._regex_audit(
+        str(project), sdc_path=candidate, sdc_sha256=digest)
+    validator_result = validator.evaluate(
+        project, sdc_path=candidate, sdc_sha256=digest)
+    exception_result = exceptions.audit(
+        project, sdc_path=candidate, sdc_sha256=digest)
+
+    assert syntax_result.passed is False
+    assert [(row.rule, row.message) for row in syntax_result.findings] == [
+        ('SDC_AUTHORITY_REFUSED', detail)]
+    assert validator_result.rc == 1
+    assert validator_result.report['issues'] == [
+        f'SDC_AUTHORITY_REFUSED: {detail}']
+    assert exception_result['verdict'] == 'FAIL'
+    assert exception_result['reason'] == f'SDC_AUTHORITY_REFUSED: {detail}'
+    assert syntax_result.summary['sdc_files_checked'] == []
+    assert validator_result.report['sdc_files_checked'] == []
+    assert exception_result['sdc_files_checked'] == []
+
+
+def test_sdc_syntax_default_discovery_keeps_any_valid_deck_contract(tmp_path):
+    """Return2's explicit one-deck strictness must not alter default discovery."""
+    import sdc_syntax_check as syntax
+
+    project = tmp_path / 'project'
+    source = project / 'input/constraints/clock.sdc'
+    source.parent.mkdir(parents=True)
+    source.write_text(_D20_GOOD_SDC)
+    invalid = project / 'phase2/stage2/constraints/invalid.sdc'
+    invalid.parent.mkdir(parents=True)
+    invalid.write_text(
+        'create_clock -name bad -period 10 [get_ports bad]\n')
+
+    result = syntax._regex_audit(str(project))
+    assert result.passed is True
+    assert result.summary['valid_files'] == 1
+    assert result.summary['errors'] == 1
+    assert {row.file for row in result.findings if row.severity == 'ERROR'} == {
+        'phase2/stage2/constraints/invalid.sdc'}
+
+
 @pytest.mark.parametrize("case", ["current", "phase2_failure", "handoff_failure",
                                   "handoff_missing_input", "step31"])
 def test_default_cross_phase_keeps_synthesis_in_phase2(

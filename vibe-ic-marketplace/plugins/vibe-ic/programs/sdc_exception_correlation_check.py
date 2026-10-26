@@ -34,10 +34,12 @@ chip-AGNOSTIC: SDC syntax + structural correlation only.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 _FP_RE = re.compile(r"^\s*set_false_path\b(.*)$", re.MULTILINE)
 _MC_RE = re.compile(r"^\s*set_multicycle_path\s+(\d+)\b(.*)$", re.MULTILINE)
@@ -99,11 +101,65 @@ def _known_async_pairs(project: Path):
     return pairs, evidence
 
 
-def audit(project: Path) -> dict:
-    sdcs = _sdc_files(project)
+def audit(project: Path, *, sdc_path: Optional[Path] = None,
+          sdc_sha256: Optional[str] = None) -> dict:
+    explicit = sdc_path is not None or sdc_sha256 is not None
+    if explicit and (sdc_path is None or not isinstance(sdc_sha256, str)
+                     or not re.fullmatch(r"[0-9a-f]{64}", sdc_sha256)):
+        return {"verdict": "FAIL", "rc": 1,
+                "reason": ("SDC_AUTHORITY_REFUSED: explicit authority "
+                           "requires one path and SHA-256"),
+                "sdc_files_checked": [],
+                "sdc_sha256_expected": sdc_sha256,
+                "sdc_sha256_observed": None}
+    if explicit:
+        candidate = Path(sdc_path)
+        try:
+            project_root = Path(project).resolve(strict=True)
+            declared_root = project_root / "input/constraints"
+            if ((project_root / "input").is_symlink()
+                    or declared_root.is_symlink()):
+                raise ValueError("input/constraints path traverses a symlink")
+            if candidate.parent != declared_root:
+                raise ValueError(
+                    "explicit SDC parent is not literal input/constraints authority")
+            input_root = declared_root.resolve(strict=True)
+            if input_root != declared_root:
+                raise ValueError("input/constraints traverses a symlink")
+            if candidate.is_symlink():
+                raise ValueError("explicit SDC is a symlink")
+            resolved = candidate.resolve(strict=True)
+            if not resolved.is_file() or resolved.parent != input_root:
+                raise ValueError(
+                    "explicit SDC is not a direct input/constraints file")
+        except (OSError, RuntimeError, ValueError) as exc:
+            return {"verdict": "FAIL", "rc": 1,
+                    "reason": f"SDC_AUTHORITY_REFUSED: {exc}",
+                    "sdc_files_checked": [],
+                    "sdc_sha256_expected": sdc_sha256,
+                    "sdc_sha256_observed": None}
+        sdcs = [resolved]
+    else:
+        sdcs = _sdc_files(project)
     if not sdcs:
         return {"verdict": "SKIP", "rc": 2,
-                "reason": "no SDC under phase2/stage2/constraints yet"}
+                "reason": "no SDC under phase2/stage2/constraints yet",
+                "sdc_files_checked": [],
+                "sdc_sha256_expected": sdc_sha256 if explicit else None,
+                "sdc_sha256_observed": None}
+    observed = None
+    if explicit:
+        try:
+            observed = hashlib.sha256(sdcs[0].read_bytes()).hexdigest()
+        except OSError:
+            pass
+        if observed != sdc_sha256:
+            return {"verdict": "FAIL", "rc": 1,
+                    "reason": ("SDC_AUTHORITY_REFUSED: explicit SDC bytes "
+                               "do not match the invocation-bound SHA-256"),
+                    "sdc_files_checked": [str(p) for p in sdcs],
+                    "sdc_sha256_expected": sdc_sha256,
+                    "sdc_sha256_observed": observed}
     findings = []
     async_pairs, evidence = _known_async_pairs(project)
     # No readable evidence source => the correlation question was never
@@ -126,7 +182,10 @@ def audit(project: Path) -> dict:
             txt = sdc.read_text(errors="replace")
         except OSError:
             return {"verdict": "FAIL", "rc": 1,
-                    "reason": f"unreadable SDC: {sdc.name}"}
+                    "reason": f"unreadable SDC: {sdc.name}",
+                    "sdc_files_checked": [str(p) for p in sdcs],
+                    "sdc_sha256_expected": sdc_sha256 if explicit else None,
+                    "sdc_sha256_observed": None}
         rel = sdc.name
         for m in _FP_RE.finditer(txt):
             n_fp += 1
@@ -216,6 +275,17 @@ def audit(project: Path) -> dict:
             "evidence_read": list(evidence_read),
             "evidence_unread": list(evidence_unread),
             "message": detail})
+    if explicit:
+        try:
+            observed = hashlib.sha256(sdcs[0].read_bytes()).hexdigest()
+        except OSError:
+            observed = None
+        if observed != sdc_sha256:
+            return {"verdict": "FAIL", "rc": 1,
+                    "reason": "explicit SDC changed while exceptions were checked",
+                    "sdc_files_checked": [str(p) for p in sdcs],
+                    "sdc_sha256_expected": sdc_sha256,
+                    "sdc_sha256_observed": observed}
     return {
         "verdict": ("REVIEW" if any(f["severity"] == "WARNING"
                                     for f in findings) else "PASS"),
@@ -231,6 +301,9 @@ def audit(project: Path) -> dict:
         "correlation_evidence_read": list(evidence_read),
         "correlation_evidence_unread": list(evidence_unread),
         "findings": findings,
+        "sdc_files_checked": [str(p) for p in sdcs],
+        "sdc_sha256_expected": sdc_sha256 if explicit else None,
+        "sdc_sha256_observed": observed if explicit else None,
     }
 
 

@@ -45,13 +45,14 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 
 import argparse
+import hashlib
 import json
 import os
 import re
 import sys
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 from _atomic_artefact import write_text as atomic_write_text  # vibe-ic#1082 (helper from PR #1094)
 import _gate_authorship as _ga  # R-0915-152 (who invoked this writer)
 import _path_layout as _pl
@@ -234,13 +235,16 @@ def audit(project_dir: str) -> AuditResult:
     return result
 
 
-def _regex_audit(project_dir: str, *, include_phase3: bool = True) -> AuditResult:
+def _regex_audit(project_dir: str, *, include_phase3: bool = True,
+                 sdc_path: Optional[Path] = None,
+                 sdc_sha256: Optional[str] = None) -> AuditResult:
     findings: List[Finding] = []
     base = Path(project_dir)
+    explicit = sdc_path is not None or sdc_sha256 is not None
 
     if not base.exists() or not base.is_dir():
         findings.append(Finding(
-            rule="DIR_MISSING",
+            rule=("SDC_AUTHORITY_REFUSED" if explicit else "DIR_MISSING"),
             severity="ERROR",
             message=f"Project directory does not exist: {project_dir}",
         ))
@@ -251,7 +255,78 @@ def _regex_audit(project_dir: str, *, include_phase3: bool = True) -> AuditResul
             summary={"files_checked": 0, "valid_files": 0},
         )
 
-    sdc_files = discover_sdc_files(base, include_phase3=include_phase3)
+    # D20's early, technology-independent caller supplies its one
+    # invocation-bound original deck explicitly. Every existing CLI/default
+    # caller retains declared-root discovery.
+    if explicit and (sdc_path is None or not isinstance(sdc_sha256, str)
+                     or not re.fullmatch(r"[0-9a-f]{64}", sdc_sha256)):
+        findings.append(Finding(
+            rule="SDC_AUTHORITY_REFUSED", severity="ERROR",
+            message="explicit SDC authority requires one path and SHA-256",
+        ))
+        return AuditResult(
+            program="sdc_syntax_check", passed=False, findings=findings,
+            summary={"files_checked": 0, "valid_files": 0,
+                     "sdc_files_checked": [],
+                     "sdc_sha256_expected": sdc_sha256,
+                     "sdc_sha256_observed": None},
+        )
+    if explicit:
+        candidate = Path(sdc_path)
+        try:
+            project_root = base.resolve(strict=True)
+            declared_root = project_root / "input/constraints"
+            if ((project_root / "input").is_symlink()
+                    or declared_root.is_symlink()):
+                raise ValueError("input/constraints path traverses a symlink")
+            if candidate.parent != declared_root:
+                raise ValueError(
+                    "explicit SDC parent is not literal input/constraints authority")
+            input_root = declared_root.resolve(strict=True)
+            if input_root != declared_root:
+                raise ValueError("input/constraints traverses a symlink")
+            if candidate.is_symlink():
+                raise ValueError("explicit SDC is a symlink")
+            resolved = candidate.resolve(strict=True)
+            if not resolved.is_file() or resolved.parent != input_root:
+                raise ValueError(
+                    "explicit SDC is not a direct input/constraints file")
+        except (OSError, RuntimeError, ValueError) as exc:
+            findings.append(Finding(
+                rule="SDC_AUTHORITY_REFUSED", severity="ERROR",
+                message=str(exc), file=str(candidate),
+            ))
+            return AuditResult(
+                program="sdc_syntax_check", passed=False, findings=findings,
+                summary={"files_checked": 0, "valid_files": 0,
+                         "sdc_files_checked": [],
+                         "sdc_sha256_expected": sdc_sha256,
+                         "sdc_sha256_observed": None},
+            )
+        sdc_files = [resolved]
+    else:
+        sdc_files = discover_sdc_files(
+            base, include_phase3=include_phase3)
+
+    if explicit:
+        try:
+            observed = hashlib.sha256(sdc_files[0].read_bytes()).hexdigest()
+        except OSError:
+            observed = None
+        if observed != sdc_sha256:
+            findings.append(Finding(
+                rule="SDC_AUTHORITY_REFUSED", severity="ERROR",
+                message=("explicit SDC bytes do not match the "
+                         "invocation-bound SHA-256"),
+                file=str(sdc_files[0]),
+            ))
+            return AuditResult(
+                program="sdc_syntax_check", passed=False, findings=findings,
+                summary={"files_checked": 0, "valid_files": 0,
+                         "sdc_files_checked": [str(p) for p in sdc_files],
+                         "sdc_sha256_expected": sdc_sha256,
+                         "sdc_sha256_observed": observed},
+            )
 
     if not sdc_files:
         findings.append(Finding(
@@ -388,7 +463,23 @@ def _regex_audit(project_dir: str, *, include_phase3: bool = True) -> AuditResul
         if file_errors == 0:
             valid_files += 1
 
-    passed = valid_files > 0
+    observed = None
+    if explicit:
+        try:
+            observed = hashlib.sha256(sdc_files[0].read_bytes()).hexdigest()
+        except OSError:
+            observed = None
+        if observed != sdc_sha256:
+            findings.append(Finding(
+                rule="SDC_AUTHORITY_CHANGED", severity="ERROR",
+                message="explicit SDC changed while syntax was checked",
+                file=str(sdc_files[0]),
+            ))
+    # Preserve the historical default-discovery contract: one valid deck is
+    # sufficient even when another discovered deck is invalid. D20's explicit
+    # one-deck override is stricter because every ERROR is about that authority.
+    passed = valid_files > 0 and (not explicit or not any(
+        f.severity == "ERROR" for f in findings))
     return AuditResult(
         program="sdc_syntax_check",
         passed=passed,
@@ -398,6 +489,9 @@ def _regex_audit(project_dir: str, *, include_phase3: bool = True) -> AuditResul
             "valid_files": valid_files,
             "errors": sum(1 for f in findings if f.severity == "ERROR"),
             "clocks_found": sum(1 for f in findings if f.rule == "CLOCK_PERIOD_OK"),
+            "sdc_files_checked": [str(p) for p in sdc_files],
+            "sdc_sha256_expected": sdc_sha256 if explicit else None,
+            "sdc_sha256_observed": observed if explicit else None,
         },
     )
 
