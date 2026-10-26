@@ -81,10 +81,14 @@ confirm it PASSES against the generated RTL.
 > contradictions (FLOOR per #697; 0/8 on the hardest CVDP ambiguity residual). It is a COMPLEMENT to
 > #697 + #699, run BEFORE the scorer on fresh runs.
 
-### Pillar 2 — 56-step Output Comparison vs open-source reference  ▸ gate: **every applicable step PASS**
-For each of the 56 canonical flow steps (`flow/phase1_phase2_phase3.yaml`, which now includes
-the Design-for-ECO spare-cell insertion step), compare OUR step output against the open-source
-reference's corresponding output. Comparison is **step-appropriate, not byte-identical**.
+### Pillar 2 — selected Flow109 row outputs vs open-source reference  ▸ gate: **every applicable selected row PASS**
+Read the exact run's Flow109 plan/request and enumerate its selected applicable
+rows by stable ID. Record each row's current 1-based `position` from the exact
+`flow/flow109.json` used by that run, but never use position as entry, exit, or
+acceptance authority. Compare OUR output for every selected applicable row
+against the reference's corresponding output. There is no fixed required row
+count: unselected and inapplicable rows are disclosed separately and cannot be
+counted as PASS. Comparison is **row-appropriate, not byte-identical**.
 
 *The step→class→comparison-method dispatch table and the legal verdict-token enum
 (MATCH / EQUIVALENT / IN-RANGE / BOTH-CLEAN / DIFFERENT-BUT-OK / N/A / GAP / NO-TOOL / FAIL) and
@@ -100,7 +104,8 @@ independently clean), **layout-endpoint** (GDS — both DRC/LVS/STA-clean + func
 *layout-endpoint* step, deciding that a different micro-architecture (our carry-save vs the ref's
 array) is a *benign* divergence rather than a failure is design judgment, not a fixed compare.
 
-Produce one `cross_check/**/step_<id>.md` per step (what ran, OUR result, REF result, verdict
+Produce one `cross_check/flow109/<stable-id>.md` per selected applicable row
+(stable ID, current position, what ran, OUR result, REF result, and verdict
 token from the enum above).
 **Close runnable GAPs** (e.g. run SPEF/IR/EM/antenna/power if the flow skipped them). Genuine
 NO-TOOL items (e.g. open-source full-chip fast-SPICE) are recorded honestly — and noted if the
@@ -147,8 +152,10 @@ restore any spare a prior optimization dropped) until coverage PASS + preservati
 
 ## Procedure (run for each benchmark IC)
 1. Confirm the IC reached the flow end (RTL generated + phase3 attempted). Read `SOURCE_MANIFEST.md`.
-2. **Pillar 2:** dispatch the per-step cross-check (split phase1/2 and phase3 to keep tool
-   runs bounded), writing `cross_check/<half>/step_*.md`. Run REAL tools in `vibeic-eda`; close gaps.
+2. **Pillar 2:** dispatch comparisons only for the stable IDs selected by the
+   exact Flow109 plan/request, keeping tool runs bounded. Write
+   `cross_check/flow109/<stable-id>.md` with the current registry position as
+   display metadata. Run REAL tools in `vibeic-eda`; close gaps.
 3. **Pillar 1:** build `reports/functional_coverage.json` from the L-doc requirements; close-loop to 100%.
 4. **Pillar 3:** author tests, measure coverage → `reports/code_coverage.json`; close-loop to >= 90%.
 5. **Pillar 4:** test patterns + FPGA/BFM run → `reports/hw_test.json`.
@@ -162,16 +169,22 @@ restore any spare a prior optimization dropped) until coverage PASS + preservati
        --ref <open_source_reference_dir>
    ```
    It emits `<project>/BENCHMARK_VERIFICATION_REPORT.md` with the 6-pillar gate summary +
-   the full 56-step comparison table, and exits non-zero until ALL gates pass.
+   the complete selected-applicable Flow109 row comparison table. The table must
+   identify every row by stable ID and current position and must not treat position
+   as execution authority. The gate remains non-PASS until every selected applicable
+   row is represented and every pillar passes.
 8. **Close the loop** on any failing/pending gate, then re-aggregate. The benchmark IC is
-   **DONE only when the report's OVERALL is PRODUCTION-READY** (functional 100% · 56/56 applicable
-   PASS · code line >= 90% · FPGA PASS · analog converged-or-N/A · Design-for-ECO ready-or-N/A) —
+   **DONE only when the report's OVERALL is PRODUCTION-READY** (functional 100% · every
+   selected applicable Flow109 stable ID PASS · code line >= 90% · FPGA PASS · analog
+   converged-or-N/A · Design-for-ECO ready-or-N/A) —
    with honest, evidence-backed results and source provenance tagged.
 
 ## Acceptance
 A benchmark IC passes `benchmark-verify` iff its `BENCHMARK_VERIFICATION_REPORT.md` shows:
 - Functional Coverage **100%**, and
-- Every applicable step of the 56 = PASS (no GAP/PENDING/FAIL/unexplained NO-TOOL), and
+- Every selected applicable Flow109 row = PASS, identified by its stable ID and
+  current position (no GAP/PENDING/FAIL/unexplained NO-TOOL); unselected or
+  inapplicable rows are disclosed and never counted as PASS, and
 - Code line coverage **>= 90%**, and
 - FPGA digital verification **PASS** (or justified N/A), and
 - Analog **converged** (or N/A), and
@@ -186,10 +199,13 @@ Anything short of that is **NOT complete** — keep working (closed-loop), do no
 > *Enforced by `programs/plugin_change_pytest_gate.py`* — detects changed plugin `*.py` (git or an explicit `--changed-files` list) and FAILs DONE unless `--pytest-log` attests a clean run that collected BOTH test trees; ERRORs (never silent-PASSes) when the change state can't be determined.
 
 ## Worked example
-`benchmark_clean/spm/` — first IC verified under this skill: RTL 100% GENERATED, functional
-equivalence vs golden + upstream (10,013 vectors), 56-step cross-check under
-`benchmark_clean/spm/cross_check/`, signed-off DRC/LVS/STA. Use it as the reference shape for
-a complete report.
+`benchmark_clean/spm/` is a report-shape example only: retain its RTL provenance,
+functional equivalence evidence, and signed-off DRC/LVS/STA evidence where their
+hashes remain current. For Pillar 2, derive the exact selected stable IDs from
+the current Flow109 plan/request, record each current registry position for
+display, and write one comparison per selected applicable row under
+`benchmark_clean/spm/cross_check/flow109/`. Historical fixed-count tables are
+not current acceptance authority.
 
 ## Compliance gate (mandatory)
 
