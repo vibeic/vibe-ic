@@ -845,6 +845,8 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
                        or native not in legacy | {"flow109." + str(row.get("id"))})
         elif adapter == "flow109_frontend":
             identities = {
+                "D05": ("flow109.D05", "l21_to_upf_emit.py:main",
+                        "flow109_frontend.py:_execute_d05"),
                 "D22": ("9", "design_one_shot_runner.py:step_yosys_synth",
                         "design_one_shot_runner.py:step_yosys_synth native synthesis checks and mapped handoff"),
                 "D50": ("flow109.D50", "path_delay_fault_atpg_run.py:main",

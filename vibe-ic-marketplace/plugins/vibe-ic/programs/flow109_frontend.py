@@ -10,6 +10,9 @@ import inspect
 import json
 import os
 from pathlib import Path
+import re
+import shutil
+import subprocess
 import sys
 import time
 import uuid
@@ -23,6 +26,8 @@ from flow109_admission import AdmissionRefusal, require_launch_admission
 
 INPUT = 'input/flow109/D22.json'
 SCHEMA = 'vibeic.flow109.frontend-synthesis.v1'
+D05_INPUT = 'input/flow109/D05.json'
+D05_SCHEMA = 'vibeic.flow109.power-intent.v1'
 _ACTIVE = ContextVar('flow109_synthesis_launch', default=None)
 STEPS = {'Yosys.JsonHeader', 'Yosys.Synthesis', 'Checker.YosysUnmappedCells',
          'Checker.YosysSynthChecks', 'Checker.NetlistAssignStatements'}
@@ -57,6 +62,193 @@ def _read(path):
     if not isinstance(value, dict):
         raise AdmissionRefusal('D22_INPUT_INVALID', str(path))
     return value
+
+
+def _d05_bound(project, value, label):
+    """Reopen one declared D05 input and bind its current project bytes."""
+    if (not isinstance(value, dict) or set(value) != {'path', 'sha256'}
+            or not isinstance(value.get('path'), str)
+            or not re.fullmatch(r'[0-9a-f]{64}', str(value.get('sha256')))):
+        raise AdmissionRefusal('D05_INPUT_UNBOUND', label)
+    relative = Path(value['path'])
+    if relative.is_absolute():
+        raise AdmissionRefusal('D05_INPUT_OUTSIDE_PROJECT', label)
+    project = Path(project).resolve()
+    path = project / relative
+    try:
+        resolved = path.resolve(strict=True)
+        current = resolved.relative_to(project).as_posix()
+    except (OSError, ValueError) as exc:
+        raise AdmissionRefusal('D05_INPUT_OUTSIDE_PROJECT', label) from exc
+    if (path.is_symlink() or not resolved.is_file() or current != relative.as_posix()
+            or _sha(resolved) != value['sha256']):
+        raise AdmissionRefusal('D05_INPUT_STALE', label)
+    return resolved
+
+
+def _d05_area(value):
+    return (isinstance(value, list) and len(value) == 4
+            and all(isinstance(item, (int, float)) and not isinstance(item, bool)
+                    for item in value)
+            and value[0] < value[2] and value[1] < value[3])
+
+
+def _d05_prepare(project, context):
+    """Bind the existing D05 manifest without treating declarations as metrics."""
+    project = Path(project).resolve()
+    if context.get('requested_step') != 'D05':
+        raise AdmissionRefusal('D05_CONTEXT_MISMATCH', 'power-intent component only')
+    try:
+        manifest = json.loads((project / D05_INPUT).read_text())
+    except (OSError, ValueError) as exc:
+        raise AdmissionRefusal('D05_INPUT_INVALID', D05_INPUT) from exc
+    expected = {'schema', 'top', 'upf', 'rtl', 'liberty', 'lefs', 'evaluation'}
+    evaluation = manifest.get('evaluation') if isinstance(manifest, dict) else None
+    if (not isinstance(manifest, dict) or set(manifest) != expected
+            or manifest.get('schema') != D05_SCHEMA
+            or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', str(manifest.get('top', '')))
+            or not isinstance(manifest.get('rtl'), list) or not manifest['rtl']
+            or not isinstance(manifest.get('lefs'), list) or not manifest['lefs']
+            or not isinstance(evaluation, dict)
+            or set(evaluation) != {'site', 'die_area', 'core_area', 'domain_areas'}
+            or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', str(evaluation.get('site', '')))
+            or not _d05_area(evaluation.get('die_area'))
+            or not _d05_area(evaluation.get('core_area'))
+            or not isinstance(evaluation.get('domain_areas'), dict)
+            or any(not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', str(name))
+                   or not _d05_area(area)
+                   for name, area in evaluation['domain_areas'].items())):
+        raise AdmissionRefusal('D05_INPUT_INVALID', 'complete native inputs required')
+    upf = _d05_bound(project, manifest['upf'], 'upf')
+    rtl = [_d05_bound(project, item, f'rtl[{index}]')
+           for index, item in enumerate(manifest['rtl'])]
+    liberty = _d05_bound(project, manifest['liberty'], 'liberty')
+    lefs = [_d05_bound(project, item, f'lefs[{index}]')
+            for index, item in enumerate(manifest['lefs'])]
+    sources = {
+        'programs/flow109_frontend.py': _sha(Path(__file__)),
+        'programs/flow109.py': _sha(HERE / 'flow109.py'),
+        'programs/l21_to_upf_emit.py': _sha(HERE / 'l21_to_upf_emit.py'),
+        'programs/power_domain_crossing_check.py':
+            _sha(HERE / 'power_domain_crossing_check.py'),
+    }
+    paths = [project / D05_INPUT, upf, liberty, *rtl, *lefs]
+    return {'manifest': manifest, 'evaluation': evaluation, 'upf': upf,
+            'rtl': rtl, 'liberty': liberty, 'lefs': lefs, 'sources': sources,
+            'inputs': {str(path.relative_to(project)): _sha(path) for path in paths}}
+
+
+def _d05_tcl_path(path):
+    value = str(path)
+    if any(char in value for char in '{}\n\r'):
+        raise AdmissionRefusal('D05_INPUT_INVALID', 'Tcl-unsafe path')
+    return '{' + value + '}'
+
+
+def _execute_d05(project, context):
+    """Run OpenROAD's existing UPF evaluator; keep unsupported row metrics NM."""
+    project = Path(project).resolve()
+    attempt = project / 'reports/flow109/D05' / uuid.uuid4().hex
+    attempt.mkdir(parents=True, exist_ok=False)
+    record = {
+        'schema': D05_SCHEMA, 'step_id': 'D05',
+        'component_status': 'NOT_MEASURED', 'default_row_status': 'NOT_MEASURED',
+        'metric_acceptance_status': 'NOT_MEASURED_NATIVE_METHOD_UNAVAILABLE',
+        'flow109_acceptance': 'NOT_MEASURED', 'whole_flow_acceptance': 'NOT_MEASURED',
+        'delivery_accepted': False, 'completed': False, 'native_started': False,
+        'context_sha256': context.get('context_sha256'),
+    }
+    try:
+        prepared = _d05_prepare(project, context)
+        record['source_sha256'] = prepared['sources']
+        record['input_sha256'] = prepared['inputs']
+        binary = shutil.which('openroad')
+        if not binary:
+            raise AdmissionRefusal('D05_NATIVE_TOOL_ABSENT', 'openroad')
+        script = [f'read_liberty {_d05_tcl_path(prepared["liberty"])}']
+        script += [f'read_lef {_d05_tcl_path(path)}' for path in prepared['lefs']]
+        script += [f'read_verilog {_d05_tcl_path(path)}' for path in prepared['rtl']]
+        script += [f'link_design {prepared["manifest"]["top"]}',
+                   f'read_upf -file {_d05_tcl_path(prepared["upf"])}',
+                   'set block [[[ord::get_db] getChip] getBlock]']
+        for domain, bounds in sorted(prepared['evaluation']['domain_areas'].items()):
+            script.append(f'set_domain_area {domain} -area {{{" ".join(map(str, bounds))}}}')
+        script += [
+            'initialize_floorplan '
+            f'-die_area {{{" ".join(map(str, prepared["evaluation"]["die_area"]))}}} '
+            f'-core_area {{{" ".join(map(str, prepared["evaluation"]["core_area"]))}}} '
+            f'-site {prepared["evaluation"]["site"]}',
+            'puts "FLOW109_D05_EVALUATE_UPF=PASS"',
+        ]
+        getters = {'domains': 'getPowerDomains', 'power_switches': 'getPowerSwitches',
+                   'isolations': 'getIsolations', 'level_shifters': 'getLevelShifters'}
+        for key, getter in getters.items():
+            script += [f'set names_{key} {{}}',
+                       f'foreach obj [$block {getter}] {{ lappend names_{key} [$obj getName] }}',
+                       f'puts "FLOW109_D05_{key.upper()}=[join [lsort $names_{key}] ,]"']
+        roundtrip = attempt / 'roundtrip.upf'
+        script.append(f'write_upf {_d05_tcl_path(roundtrip)}')
+        tcl = attempt / 'read_upf.tcl'
+        tcl.write_text('\n'.join(script) + '\n', encoding='utf-8')
+        record['native_started'] = True
+        launched = subprocess.run([binary, '-no_init', '-exit', str(tcl)],
+                                  text=True, capture_output=True, timeout=300)
+        log = attempt / 'openroad.log'
+        log.write_text(launched.stdout + launched.stderr, encoding='utf-8')
+        record['native_receipt'] = {
+            'path': str(log.relative_to(project)), 'sha256': _sha(log),
+            'returncode': launched.returncode,
+        }
+        current = _d05_prepare(project, context)
+        if current['sources'] != prepared['sources'] or current['inputs'] != prepared['inputs']:
+            raise AdmissionRefusal('D05_INPUT_CHANGED', 'source or input changed during native run')
+        if launched.returncode:
+            record.update(component_status='FAIL', default_row_status='FAIL',
+                          metric_acceptance_status='FAIL',
+                          reason='D05_OPENROAD_READ_OR_EVALUATE_UPF_FAILED')
+        elif not re.search(r'(?m)^FLOW109_D05_EVALUATE_UPF=PASS$', launched.stdout):
+            raise AdmissionRefusal('D05_NATIVE_RESULT_ABSENT', 'evaluate_upf')
+        else:
+            measured = {}
+            for key in getters:
+                match = re.search(rf'(?m)^FLOW109_D05_{key.upper()}=(.*)$', launched.stdout)
+                if match is None:
+                    raise AdmissionRefusal('D05_NATIVE_RESULT_ABSENT', key)
+                measured[key] = sorted(filter(None, match.group(1).strip().split(',')))
+            semantic_objects = sum(len(measured[key]) for key in
+                                   ('power_switches', 'isolations', 'level_shifters'))
+            if not measured['domains'] or semantic_objects == 0:
+                record.update(component_status='FAIL', default_row_status='FAIL',
+                              metric_acceptance_status='FAIL',
+                              reason='D05_NATIVE_SEMANTIC_POPULATION_MISSING')
+            else:
+                reason = 'D05_NATIVE_STATE_AND_SUPPLY_ANALYSIS_UNAVAILABLE'
+                record['metrics'] = {
+                    'native_structure': {
+                        'status': 'PASS',
+                        'mechanism': 'read_upf -> initialize_floorplan -> upf::eval_upf',
+                        'population': measured,
+                        'roundtrip_upf': {
+                            'path': str(roundtrip.relative_to(project)),
+                            'sha256': _sha(roundtrip),
+                        },
+                    },
+                    'semantic_demand_coverage': {'status': 'NOT_MEASURED', 'reason': reason},
+                    'illegal_power_states': {'status': 'NOT_MEASURED', 'reason': reason},
+                    'supply_cell_assignments': {'status': 'NOT_MEASURED', 'reason': reason},
+                }
+                record.update(component_status='PASS', reason=reason)
+    except AdmissionRefusal as exc:
+        record.update(component_status=exc.status, default_row_status=exc.status,
+                      reason=exc.code, detail=str(exc))
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        record.update(reason='D05_NATIVE_UNAVAILABLE_OR_UNSUPPORTED', detail=str(exc))
+    write_json(attempt / 'component.json', record)
+    record['receipt'] = {
+        'path': str((attempt / 'component.json').relative_to(project)),
+        'sha256': _sha(attempt / 'component.json'),
+    }
+    return record
 
 
 def input_census(project):
@@ -345,6 +537,8 @@ def _execute_dft_tail(project, context):
 
 def execute(project, context):
     step = context.get('requested_step')
+    if step == 'D05':
+        return _execute_d05(project, context)
     if step == 'D22':
         return _execute_d22(project, context)
     if step in {'D50', 'D51'}:

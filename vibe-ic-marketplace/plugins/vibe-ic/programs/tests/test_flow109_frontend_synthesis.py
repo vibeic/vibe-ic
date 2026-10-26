@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import time
+from types import SimpleNamespace
 import pytest
 import flow109
 import flow109_frontend as frontend
@@ -22,8 +23,153 @@ def put(project, name, value):
     return {'path': str(path.relative_to(project)), 'sha256': frontend._sha(path)}
 
 
+def d05_case(project):
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    features = dict(features, has_power_intent=True)
+    context = flow109.execution_context(flow109.resolve_plan(features), 'D05', 'D05')
+    manifest = {
+        'schema': frontend.D05_SCHEMA, 'top': 'neutral_top',
+        'upf': put(project, 'input/power/neutral.upf',
+                   'create_power_domain PD_TOP -elements {.}\n'
+                   'set_isolation ISO -domain PD_TOP -clamp_value 0\n'),
+        'rtl': [put(project, 'input/rtl/neutral.v',
+                    'module neutral_top(input a,output y);assign y=a;endmodule\n')],
+        'liberty': put(project, 'input/pdk/neutral.lib', 'library(neutral) {}\n'),
+        'lefs': [put(project, 'input/pdk/neutral.lef',
+                     'VERSION 5.8 ;\nSITE neutral_site\n  CLASS CORE ;\n'
+                     '  SIZE 1 BY 1 ;\nEND neutral_site\nEND LIBRARY\n')],
+        'evaluation': {'site': 'neutral_site', 'die_area': [0, 0, 100, 100],
+                       'core_area': [10, 10, 90, 90], 'domain_areas': {}},
+    }
+    put(project, frontend.D05_INPUT, manifest)
+    return context, features
+
+
+def d05_launch(monkeypatch, *, returncode=0, marker=True, population=True):
+    from types import SimpleNamespace
+    monkeypatch.setattr(frontend.shutil, 'which', lambda name: '/usr/bin/openroad')
+    lines = []
+    if marker:
+        lines.append('FLOW109_D05_EVALUATE_UPF=PASS')
+    lines += [
+        'FLOW109_D05_DOMAINS=PD_TOP' if population else 'FLOW109_D05_DOMAINS=',
+        'FLOW109_D05_POWER_SWITCHES=',
+        'FLOW109_D05_ISOLATIONS=ISO' if population else 'FLOW109_D05_ISOLATIONS=',
+        'FLOW109_D05_LEVEL_SHIFTERS=',
+    ]
+    def run(args, **kwargs):
+        attempt = Path(args[-1]).parent
+        if returncode == 0:
+            (attempt / 'roundtrip.upf').write_text(
+                'create_power_domain PD_TOP -elements {.}\n')
+        return SimpleNamespace(returncode=returncode, stdout='\n'.join(lines),
+                               stderr='native refusal\n' if returncode else '')
+    monkeypatch.setattr(frontend.subprocess, 'run', run)
+
+
+def test_d05_structural_native_pass_keeps_all_three_row_metrics_not_measured(
+        tmp_path, monkeypatch):
+    context, _ = d05_case(tmp_path)
+    d05_launch(monkeypatch)
+
+    result = frontend.execute(tmp_path, context)
+
+    assert result['native_started'] is True
+    assert result['component_status'] == 'PASS'
+    assert result['default_row_status'] == result['flow109_acceptance'] == 'NOT_MEASURED'
+    assert result['completed'] is False
+    assert result['metrics']['native_structure']['status'] == 'PASS'
+    for metric in ('semantic_demand_coverage', 'illegal_power_states',
+                   'supply_cell_assignments'):
+        assert result['metrics'][metric] == {
+            'status': 'NOT_MEASURED',
+            'reason': 'D05_NATIVE_STATE_AND_SUPPLY_ANALYSIS_UNAVAILABLE'}
+    receipt = tmp_path / result['receipt']['path']
+    assert frontend._sha(receipt) == result['receipt']['sha256']
+
+
+def test_d05_native_semantic_refusal_is_canonical_row_failure(tmp_path, monkeypatch):
+    context, _ = d05_case(tmp_path)
+    d05_launch(monkeypatch, returncode=1)
+
+    result = frontend.execute(tmp_path, context)
+
+    assert result['native_started'] is True
+    assert result['native_receipt']['returncode'] == 1
+    assert result['component_status'] == result['default_row_status'] == 'FAIL'
+    assert result['reason'] == 'D05_OPENROAD_READ_OR_EVALUATE_UPF_FAILED'
+
+
+def test_d05_rc0_empty_semantic_population_cannot_be_measured_zero(tmp_path, monkeypatch):
+    context, _ = d05_case(tmp_path)
+    d05_launch(monkeypatch, population=False)
+
+    result = frontend.execute(tmp_path, context)
+
+    assert result['native_started'] is True
+    assert result['component_status'] == result['default_row_status'] == 'FAIL'
+    assert result['reason'] == 'D05_NATIVE_SEMANTIC_POPULATION_MISSING'
+
+
+@pytest.mark.parametrize('damage,reason', [
+    ('missing', 'D05_INPUT_INVALID'),
+    ('stale', 'D05_INPUT_STALE'),
+    ('foreign', 'D05_INPUT_OUTSIDE_PROJECT'),
+])
+def test_d05_missing_stale_or_foreign_input_refuses_before_native(
+        tmp_path, monkeypatch, damage, reason):
+    context, _ = d05_case(tmp_path)
+    manifest_path = tmp_path / frontend.D05_INPUT
+    manifest = json.loads(manifest_path.read_text())
+    if damage == 'missing':
+        manifest_path.unlink()
+    elif damage == 'stale':
+        manifest['upf']['sha256'] = 'f' * 64
+        manifest_path.write_text(json.dumps(manifest))
+    else:
+        outside = tmp_path.parent / 'foreign-d05.upf'
+        outside.write_text('create_power_domain FOREIGN -elements {.}\n')
+        manifest['upf'] = {'path': str(outside), 'sha256': frontend._sha(outside)}
+        manifest_path.write_text(json.dumps(manifest))
+    calls = []
+    monkeypatch.setattr(frontend.subprocess, 'run', lambda *a, **k: calls.append(a))
+
+    result = frontend.execute(tmp_path, context)
+
+    assert result['component_status'] == result['default_row_status'] == 'NOT_MEASURED'
+    assert result['native_started'] is False
+    assert result['reason'] == reason
+    assert calls == []
+
+
+def test_d05_canonical_front_door_publishes_not_measured_not_component_pass(
+        tmp_path, monkeypatch):
+    import _delivery_route
+    assert _delivery_route.admit(tmp_path, 'ic') is None
+    _, features = d05_case(tmp_path)
+    d05_launch(monkeypatch)
+    selection = tmp_path / 'flow109-selection.json'
+    selection.write_text(json.dumps({'features': features}))
+    args = SimpleNamespace(flow='109', flow109_manifest=selection,
+                           flow109_plan_only=False, execution_mode='default',
+                           entry_step='D05', exit_step='D05', container=None)
+
+    assert flow109.prepare_front_door(args, tmp_path) == 2
+
+    row = json.loads((tmp_path / 'reports/flow109/default_rows/D05.json').read_text())
+    assert row['component_status'] == 'PASS'
+    assert row['default_row_status'] == row['flow109_acceptance'] == 'NOT_MEASURED'
+    assert row['whole_flow_acceptance'] == 'NOT_MEASURED'
+    assert row['completed'] is False
+
+
 @pytest.fixture(autouse=True)
-def actual_attested_image_route(monkeypatch):
+def actual_attested_image_route(monkeypatch, request):
+    # D05 unit controls mock the native boundary; the separate bounded actual
+    # consumer run carries its own CID/image identity.
+    if request.node.name.startswith('test_d05_'):
+        return
     import librelane_contract
     # Tests execute inside the pinned, host-attested image. Do not attach
     # an unrelated ambient container merely because Docker is reachable.
