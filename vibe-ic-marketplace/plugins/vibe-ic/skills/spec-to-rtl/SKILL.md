@@ -232,29 +232,30 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    a genuine floor. The structural extraction + routing is deterministic;
    deciding whether a prose sentence is a distinct *testable* requirement (so
    you can author its stimulus) is your LLM judgment.
-7. **Tell the orchestrator you're done, then stop**. D09/17 is the current
-   RTL-authoring responsibility and maps to retained native helper Step 1, but
-   that responsibility map is not execution authority. Position 17 is display
-   metadata only. **Current disposition: REFUSE public continuation for this
-   handoff as `FLOW109_PRODUCER_UNIMPLEMENTED`.** Do not publish or run a
-   `--entry-step D09 --exit-step D09` command until a separately owned change
-   wires D09 as an executable public row and that wiring is independently
-   accepted.
+7. **Tell the orchestrator you're done, then stop**. D09 at position 17 is the
+   current RTL-authoring responsibility. Its source-owned
+   `canonical_owner_window` now reaches `design_one_shot_runner` authoring
+   through the public Flow109 entry, using the registered native Step 1 owner
+   window `1..1`; position 17 remains display metadata only. This is partial
+   dispatch, not a completed handoff: that window does not consume the Step 2
+   hygiene/lint checks or the Step 4 reference testbench, and the ordinary
+   authoring path does not finalize the Flow109 component result.
 
-   The exact dependency is source-owned D09 row dispatch whose public resolver
-   accepts the selected profile and whose registered owner consumes this AI
-   handoff without bypassing its existing producer/consumer checks. This skill
-   does not own that registry/runtime change.
+   Therefore preserve the authored RTL and handoff as **unconsumed**, keep D09
+   and later rows `NOT_MEASURED`/not executed, and stop until the separately
+   owned completion wiring is independently accepted. Do not report
+   `FLOW109_PRODUCER_UNIMPLEMENTED`: the producer is wired and reaches
+   authoring; the missing authority is a context-bound completion that consumes
+   the hygiene/lint and reference-testbench results and finalizes the component
+   without promoting raw authoring success.
 
-   Once that dependency lands, the only permitted continuation contract is the
-   sole public `vibe_ic_one_shot_runner.py` entry with the original project and
-   route, exact validated `--flow109-manifest`, `--flow 109`, the original
-   selected current stable-ID `--entry-step`/`--exit-step` window, and
-   `--execution-mode default`. The public resolver must accept the window before
-   native work. Until then preserve the authored RTL and handoff as unconsumed,
-   keep later rows NOT_MEASURED/not executed, and report the refusal. Never call
-   `design_one_shot_runner.py` as a public substitute and never pass a D-id to
-   that native helper.
+   After that dependency is accepted, the only permitted continuation contract
+   is the sole public `vibe_ic_one_shot_runner.py` entry with the original
+   project and route, exact validated `--flow109-manifest`, `--flow 109`, the
+   selected current stable-ID D09 window, and `--execution-mode default`. The
+   public resolver must accept that window before native work. Never call
+   `design_one_shot_runner.py` directly as a public substitute, never invoke a
+   native helper directly, and never pass a Flow109 D-id to a native helper.
 
 ## What this skill IS NOT
 
