@@ -111,7 +111,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
     _sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 # ---------------------------------------------------------------------------
 
-import argparse, json, os, re, sys
+import argparse, hashlib, json, os, re, sys
 from pathlib import Path
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 import _path_layout as _pl
@@ -785,20 +785,45 @@ class Verdict(NamedTuple):
     report: Dict[str, Any]
 
 
-def evaluate(project: Path, l8: Optional[Path] = None) -> Verdict:
+def evaluate(project: Path, l8: Optional[Path] = None, *,
+             sdc_path: Optional[Path] = None,
+             sdc_sha256: Optional[str] = None) -> Verdict:
     """Decide the verdict for `project`. READ-ONLY: never writes, never
     creates a directory, so it is safe to run over a tracked corpus."""
     project = Path(project)
-    roots = [str(r) for r in search_roots(project)]
+    explicit = sdc_path is not None or sdc_sha256 is not None
+    bound_sdc: Optional[Path] = None
+    roots = ([] if explicit
+             else [str(r) for r in search_roots(project)])
     superseded: List[Tuple[Path, str]] = []
 
     def _verdict(rc: int, lines: List[str], issues: List[str],
                  sdc_files: List[Path]) -> Verdict:
+        expected = sdc_sha256 if explicit else None
+        observed = None
+        if bound_sdc is not None:
+            try:
+                observed = hashlib.sha256(bound_sdc.read_bytes()).hexdigest()
+            except OSError:
+                pass
+            if (not isinstance(expected, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", expected)
+                    or observed != expected):
+                issue = ("SDC_AUTHORITY_REFUSED: explicit SDC path/SHA "
+                         "authority is invalid or its bytes changed")
+                if issue not in issues:
+                    issues = list(issues) + [issue]
+                rc = RC_FAIL
+                lines = _fail_lines(issues)
         return Verdict(rc, lines, {
             "verdict": _VERDICT_FOR_RC[rc],
             "exit_code": rc,
             "search_roots": roots,
+            "sdc_selection": ("explicit" if explicit
+                              else "declared_roots"),
             "sdc_files_checked": [str(p) for p in sdc_files],
+            "sdc_sha256_expected": expected,
+            "sdc_sha256_observed": observed,
             # The denominator this verdict declined to grade, ALWAYS present
             # so a narrowed scope is visible in the evidence file rather than
             # inferable only from a count that got smaller.
@@ -813,11 +838,50 @@ def evaluate(project: Path, l8: Optional[Path] = None) -> Verdict:
 
     # A positional that is not a directory resolved two search roots that
     # cannot exist and read zero files. At exit 0 that was an ordinary PASS.
-    if not project.is_dir():
+    if not project.is_dir() and not explicit:
         return _verdict(RC_NOT_CHECKED,
                         [unusable_positional_message(project)], [], [])
 
-    sdc_files = find_sdc_files(project)
+    if explicit:
+        if (sdc_path is None or not isinstance(sdc_sha256, str)
+                or not re.fullmatch(r"[0-9a-f]{64}", sdc_sha256)):
+            issue = ("SDC_AUTHORITY_REFUSED: explicit authority requires "
+                     "one path and SHA-256")
+            return _verdict(RC_FAIL, _fail_lines([issue]), [issue], [])
+        candidate = Path(sdc_path)
+        try:
+            project_root = project.resolve(strict=True)
+            declared_root = project_root / "input/constraints"
+            if ((project_root / "input").is_symlink()
+                    or declared_root.is_symlink()):
+                raise ValueError("input/constraints path traverses a symlink")
+            if candidate.parent != declared_root:
+                raise ValueError(
+                    "explicit SDC parent is not literal input/constraints authority")
+            input_root = declared_root.resolve(strict=True)
+            if input_root != declared_root:
+                raise ValueError("input/constraints traverses a symlink")
+            if candidate.is_symlink():
+                raise ValueError("explicit SDC is a symlink")
+            resolved = candidate.resolve(strict=True)
+            if not resolved.is_file() or resolved.parent != input_root:
+                raise ValueError(
+                    "explicit SDC is not a direct input/constraints file")
+        except (OSError, RuntimeError, ValueError) as exc:
+            issue = f"SDC_AUTHORITY_REFUSED: {exc}"
+            return _verdict(RC_FAIL, _fail_lines([issue]), [issue], [])
+        bound_sdc = resolved
+        sdc_files = [bound_sdc]
+        # Bind bytes before partitioning or reading SDC semantics. The final
+        # _verdict reread below also catches mutation during evaluation.
+        try:
+            observed = hashlib.sha256(bound_sdc.read_bytes()).hexdigest()
+        except OSError:
+            observed = None
+        if observed != sdc_sha256:
+            return _verdict(RC_FAIL, [], [], sdc_files)
+    else:
+        sdc_files = find_sdc_files(project)
     # L8 self-consistency is a property of L8 alone, so it is evaluated
     # BEFORE the no-SDC skip: a contradictory constraint document must not
     # be able to hide behind an empty SDC glob.

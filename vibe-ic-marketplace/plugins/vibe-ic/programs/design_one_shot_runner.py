@@ -20222,29 +20222,119 @@ def step_sdc_validation(project: Path) -> StepResult:
         import sdc_syntax_check as _syntax
         import sdc_validator_check as _validator
         import sdc_exception_correlation_check as _exceptions
-        syntax = _syntax._regex_audit(str(project), include_phase3=False)
+        import sdc_constraints as _sdc_inputs
+
+        # D20 is early intent validation: bind the one original caller deck
+        # directly to all three consumers. It owns no technology, PDK,
+        # Liberty, mapped-netlist or Step-7 publication decision.
+        staged = _sdc_inputs.collect_sdc_files(project)
+        if not staged:
+            return StepResult(
+                'sdc_validation', 'NOT_MEASURED', 0.0,
+                'D20_SDC_AUTHORITY_ABSENT: no caller SDC was supplied; '
+                'no generated substitute was published',
+                extras={'mode': mode, 'early_preflight': True},
+                reason_class=_V.ReasonClass.INPUT_ABSENT)
+        if len(staged) != 1:
+            return StepResult(
+                'sdc_validation', 'FAIL', 0.0,
+                'D20_SDC_AUTHORITY_AMBIGUOUS: exactly one caller SDC is '
+                f'required, found {len(staged)}',
+                extras={'mode': mode, 'early_preflight': True})
+        source = staged[0]
+        try:
+            root = project.resolve(strict=True)
+            input_root = (project / 'input/constraints').resolve(strict=True)
+            resolved = source.resolve(strict=True)
+            source_rel = resolved.relative_to(root).as_posix()
+            if (source.is_symlink() or resolved.parent != input_root
+                    or not input_root.is_relative_to(root)):
+                raise ValueError('caller SDC is not a direct project input')
+            source_sha = hashlib.sha256(resolved.read_bytes()).hexdigest()
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+            return StepResult(
+                'sdc_validation', 'FAIL', 0.0,
+                'D20_SDC_AUTHORITY_REFUSED: ' + str(exc),
+                extras={'mode': mode, 'early_preflight': True})
+
+        authority = {
+            'schema': 'vibeic.d20.sdc-authority.v2',
+            'source': {'path': source_rel, 'sha256': source_sha},
+        }
+        syntax = _syntax._regex_audit(
+            str(project), include_phase3=False, sdc_path=resolved,
+            sdc_sha256=source_sha)
         validator = _validator.evaluate(
-            project, project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json')
-        exceptions = _exceptions.audit(project)
+            project, project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json',
+            sdc_path=resolved, sdc_sha256=source_sha)
+        exceptions = _exceptions.audit(
+            project, sdc_path=resolved, sdc_sha256=source_sha)
+        binding_problem = None
+        syntax_files, validator_files, exception_files = [], [], []
+        try:
+            syntax_files = [Path(p).resolve(strict=True) for p in
+                            syntax.summary.get('sdc_files_checked', [])]
+            validator_files = [Path(p).resolve(strict=True) for p in
+                               validator.report.get('sdc_files_checked', [])]
+            exception_files = [Path(p).resolve(strict=True) for p in
+                               exceptions.get('sdc_files_checked', [])]
+            if (syntax_files != [resolved] or validator_files != [resolved]
+                    or exception_files != [resolved]):
+                raise ValueError('the three consumers did not share the one original deck')
+            bindings = (
+                (syntax.summary.get('sdc_sha256_expected'),
+                 syntax.summary.get('sdc_sha256_observed')),
+                (validator.report.get('sdc_sha256_expected'),
+                 validator.report.get('sdc_sha256_observed')),
+                (exceptions.get('sdc_sha256_expected'),
+                 exceptions.get('sdc_sha256_observed')),
+            )
+            if any(pair != (source_sha, source_sha) for pair in bindings):
+                raise ValueError('a consumer did not bind the original deck SHA-256')
+            post = source.resolve(strict=True)
+            if (source.is_symlink() or post != resolved
+                    or hashlib.sha256(post.read_bytes()).hexdigest() != source_sha):
+                raise ValueError('caller SDC changed during D20')
+        except (OSError, RuntimeError, ValueError, KeyError, TypeError) as exc:
+            binding_problem = 'D20_SDC_AUTHORITY_CHANGED: ' + str(exc)
+        authority['consumers'] = {
+            'sdc_syntax_check': [str(p.relative_to(root)) for p in syntax_files]
+                if binding_problem is None else [],
+            'sdc_validator_check': [str(p.relative_to(root)) for p in validator_files]
+                if binding_problem is None else [],
+            'sdc_exception_correlation_check': [str(p.relative_to(root)) for p in exception_files]
+                if binding_problem is None else [],
+        }
         reports = (
-            (project / 'reports/phase2/sdc_check.json', asdict(syntax)),
-            (project / 'reports/sdc_validator.json', validator.report),
-            (project / 'reports/phase2/sdc_exception_correlation.json', exceptions),
+            (project / 'reports/phase2/sdc_check.json',
+             {**asdict(syntax), 'sdc_authority': authority}),
+            (project / 'reports/sdc_validator.json',
+             {**validator.report, 'sdc_authority': authority}),
+            (project / 'reports/phase2/sdc_exception_correlation.json',
+             {**exceptions, 'sdc_authority': authority}),
         )
         for report, body in reports:
             _aa.write_json(report, body)
         outputs = [str(report) for report, _ in reports]
+        if binding_problem is not None:
+            return StepResult('sdc_validation', 'FAIL', 0.0,
+                              binding_problem, outputs,
+                              extras={'mode': mode, 'early_preflight': True,
+                                      'sdc_authority': authority})
         if not syntax.passed or validator.rc == 1 or exceptions.get('verdict') in ('FAIL', 'REVIEW'):
             return StepResult('sdc_validation', 'FAIL', 0.0,
                               'SDC_EARLY_PREFLIGHT_REFUSED: syntax, clock/port coverage, '
                               'or exception/CDC justification failed', outputs,
-                              extras={'mode': mode, 'early_preflight': True})
+                              extras={'mode': mode, 'early_preflight': True,
+                                      'sdc_authority': authority})
         if validator.rc != 0:
             return StepResult('sdc_validation', 'NOT_MEASURED', 0.0,
                               'SDC_EARLY_PREFLIGHT_INPUT_ABSENT', outputs,
-                              extras={'mode': mode, 'early_preflight': True},
+                              extras={'mode': mode, 'early_preflight': True,
+                                      'sdc_authority': authority},
                               reason_class=_V.ReasonClass.INPUT_ABSENT)
-        extras = {'mode': mode, 'early_preflight': True}
+        extras = {'mode': mode, 'early_preflight': True,
+                  'sdc_authority': authority}
         if mode in ('librelane', 'dual'):
             extras['deferred_until'] = 'post_prelayout'
         return StepResult('sdc_validation', 'PASS', 0.0,
