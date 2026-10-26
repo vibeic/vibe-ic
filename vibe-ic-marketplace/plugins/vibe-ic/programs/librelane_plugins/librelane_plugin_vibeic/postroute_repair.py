@@ -40,11 +40,13 @@ the candidate-only ID remains the host closure controller's actuator.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import sys
 from decimal import Decimal
+from fnmatch import fnmatchcase
 from pathlib import Path as FilePath
-from typing import Any, Dict, Optional, Sequence, Tuple, Type
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple, Type
 
 from librelane.common import Path
 from librelane.config import Variable
@@ -58,6 +60,82 @@ from librelane.steps.step import MetricsUpdate, Step, StepError, ViewsUpdate
 __all__ = ["PostRouteRepair", "PostRouteRepairAdoption"]
 
 _DRT_VARS = ("DRT_THREADS", "DRT_OPT_ITERS", "DRT_ANTENNA_REPAIR_MARGIN")
+_DIAGNOSTIC_SCHEMA = "vibeic.postroute_diagnostic_spef_authority.v1"
+
+
+def _sha256(path: FilePath) -> str:
+    value = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            value.update(chunk)
+    return value.hexdigest()
+
+
+def _identity(path: Any) -> Dict[str, str]:
+    resolved = FilePath(str(path)).resolve(strict=True)
+    return {"path": str(resolved), "sha256": _sha256(resolved)}
+
+
+def _tcl_word(value: str) -> str:
+    if any(character in value for character in "{}\x00"):
+        raise StepError("PRR_DIAGNOSTIC_AUTHORITY_TCL_UNSAFE: path/pattern contains a brace")
+    return "{" + value + "}"
+
+
+def _diagnostic_spef_env(config: Mapping[str, Any], odb: Any) -> Dict[str, str]:
+    """Validate fixture-only electrical evidence, never extracted-RCX/signoff authority."""
+    authority_value = config.get("VIBEIC_PRR_DIAGNOSTIC_SPEF_AUTHORITY")
+    if authority_value is None:
+        return {}
+    try:
+        authority_path = FilePath(str(authority_value)).resolve(strict=True)
+        authority = json.loads(authority_path.read_text())
+        if set(authority) != {"schema", "design_name", "input_odb",
+                              "input_netlists", "scenes"}:
+            raise ValueError("authority fields are not exact")
+        if authority["schema"] != _DIAGNOSTIC_SCHEMA:
+            raise ValueError("authority schema mismatch")
+        if authority["design_name"] != str(config.get("DESIGN_NAME")):
+            raise ValueError("design identity mismatch")
+        if authority["input_odb"] != _identity(odb):
+            raise ValueError("input ODB identity mismatch")
+        netlists = config.get("VIBEIC_PRR_DIAGNOSTIC_NETLISTS") or []
+        if not isinstance(netlists, (list, tuple)) or not netlists:
+            raise ValueError("current input netlist identity is absent")
+        if authority["input_netlists"] != [_identity(path) for path in netlists]:
+            raise ValueError("input netlist identity mismatch")
+        corners = config.get("STA_CORNERS") or []
+        if not isinstance(corners, (list, tuple)) or not corners or not all(
+                isinstance(corner, str) and corner for corner in corners):
+            raise ValueError("declared corner population is absent")
+        scenes = authority["scenes"]
+        if not isinstance(scenes, list) or not scenes:
+            raise ValueError("diagnostic scene population is absent")
+        covered = []
+        mapping = []
+        for scene in scenes:
+            if not isinstance(scene, dict) or set(scene) != {"pattern", "corners", "spef"}:
+                raise ValueError("diagnostic scene fields are not exact")
+            pattern, declared, spef = scene["pattern"], scene["corners"], scene["spef"]
+            if not isinstance(pattern, str) or not pattern:
+                raise ValueError("diagnostic scene pattern is absent")
+            matched = [corner for corner in corners if fnmatchcase(corner, pattern)]
+            if declared != matched or not matched:
+                raise ValueError(f"diagnostic scene/corner mismatch for {pattern}")
+            if any(corner in covered for corner in matched):
+                raise ValueError(f"diagnostic scene overlap for {pattern}")
+            if spef != _identity(spef.get("path") if isinstance(spef, dict) else ""):
+                raise ValueError(f"diagnostic SPEF identity mismatch for {pattern}")
+            covered.extend(matched)
+            mapping.extend((_tcl_word(pattern), _tcl_word(spef["path"])))
+        if covered != list(corners):
+            raise ValueError("diagnostic scene population is incomplete or reordered")
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise StepError(f"PRR_DIAGNOSTIC_AUTHORITY_REFUSED: {exc}") from exc
+    return {
+        "VIBEIC_PRR_DIAGNOSTIC_SPEFS": " ".join(mapping),
+        "VIBEIC_PRR_DIAGNOSTIC_AUTHORITY_SHA256": _sha256(authority_path),
+    }
 
 
 @Step.factory.register()
@@ -77,11 +155,18 @@ class PostRouteRepair(ResizerStep):
         + [v for v in RCX.config_vars if v.name == "RCX_RULESETS"]
         + [
             Variable(
-                "VIBEIC_PRR_DIAGNOSTIC_SPEFS",
-                Optional[Dict[str, Path]],
-                "Explicit corner-pattern to SPEF map for a diagnostic routed "
-                "electrical fixture. Every declared STA corner must match "
-                "exactly one SPEF; unset keeps ordinary OpenRCX extraction.",
+                "VIBEIC_PRR_DIAGNOSTIC_SPEF_AUTHORITY",
+                Optional[Path],
+                "Receipt binding diagnostic SPEF hashes and scenes to the "
+                "exact design, input ODB and input netlists. Unset keeps "
+                "ordinary OpenRCX extraction. This fixture-only evidence is "
+                "never native-extracted RCX or tapeout/signoff authority.",
+            ),
+            Variable(
+                "VIBEIC_PRR_DIAGNOSTIC_NETLISTS",
+                Optional[List[Path]],
+                "Exact input netlists used to build the diagnostic input ODB; "
+                "required and receipt-bound only in diagnostic SPEF mode.",
             ),
             Variable(
                 "VIBEIC_PRR_SETUP_MARGIN",
@@ -224,6 +309,9 @@ class PostRouteRepair(ResizerStep):
 
     def run(self, state_in: State, **kwargs) -> Tuple[ViewsUpdate, MetricsUpdate]:
         kwargs, env = self.extract_env(kwargs)
+        env.pop("VIBEIC_PRR_DIAGNOSTIC_SPEFS", None)
+        env.pop("VIBEIC_PRR_DIAGNOSTIC_AUTHORITY_SHA256", None)
+        env.update(_diagnostic_spef_env(self.config, state_in[DesignFormat.ODB]))
         env["DRT_THREADS"] = env.get("DRT_THREADS", str(_get_process_limit()))
         views, metrics = super().run(state_in, env=env, **kwargs)
         if metrics.get("vibeic__prr__changed") == 0:

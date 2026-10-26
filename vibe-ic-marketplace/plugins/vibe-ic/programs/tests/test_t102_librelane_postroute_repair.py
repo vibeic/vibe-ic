@@ -7,6 +7,7 @@ OpenROAD timing measurement are replaced by writers of the step folders and
 scene metrics a real run leaves.
 """
 import importlib
+import hashlib
 from types import SimpleNamespace
 import json
 import os
@@ -1608,17 +1609,78 @@ def test_every_variable_the_script_reads_is_declared_by_the_step():
     assert set(prr.PARAM_VARS.values()) <= declared
 
 
+def _sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _diagnostic_authority(tmp_path):
+    from librelane_plugin_vibeic.postroute_repair import _diagnostic_spef_env
+    odb = write(tmp_path / 'route.odb', 'current route')
+    netlist = write(tmp_path / 'netlist.v', 'module neutral; endmodule')
+    max_spef = write(tmp_path / 'max.spef', '*SPEF "IEEE 1481-1998"\n')
+    low_spef = write(tmp_path / 'low.spef', '*SPEF "IEEE 1481-1998"\n')
+    corners = ['max_ss', 'nom_tt', 'min_ff']
+    identity = lambda path: {'path': str(path.resolve()), 'sha256': _sha(path)}
+    receipt = put(tmp_path / 'authority.json', {
+        'schema': 'vibeic.postroute_diagnostic_spef_authority.v1',
+        'design_name': 'neutral', 'input_odb': identity(odb),
+        'input_netlists': [identity(netlist)],
+        'scenes': [
+            {'pattern': 'max_*', 'corners': ['max_ss'], 'spef': identity(max_spef)},
+            {'pattern': 'nom_*', 'corners': ['nom_tt'], 'spef': identity(low_spef)},
+            {'pattern': 'min_*', 'corners': ['min_ff'], 'spef': identity(low_spef)},
+        ]})
+    config = {'VIBEIC_PRR_DIAGNOSTIC_SPEF_AUTHORITY': receipt,
+              'VIBEIC_PRR_DIAGNOSTIC_NETLISTS': [netlist],
+              'DESIGN_NAME': 'neutral',
+              'STA_CORNERS': corners}
+    return _diagnostic_spef_env, config, odb, receipt, max_spef
+
+
+def test_diagnostic_spef_authority_binds_subject_hashes_and_scenes(tmp_path):
+    validate, config, odb, _, _ = _diagnostic_authority(tmp_path)
+    result = validate(config, odb)
+    assert set(result) == {'VIBEIC_PRR_DIAGNOSTIC_SPEFS',
+                           'VIBEIC_PRR_DIAGNOSTIC_AUTHORITY_SHA256'}
+    assert 'max_*' in result['VIBEIC_PRR_DIAGNOSTIC_SPEFS']
+
+
+@pytest.mark.parametrize('damage', ['spef', 'odb', 'netlist', 'design', 'corners'])
+def test_diagnostic_spef_authority_refuses_changed_foreign_or_incomplete_subject(
+        tmp_path, damage):
+    from librelane.steps.step import StepError
+    validate, config, odb, receipt, spef = _diagnostic_authority(tmp_path)
+    if damage == 'spef':
+        spef.write_text('foreign')
+    elif damage == 'odb':
+        odb.write_text('stale route')
+    elif damage == 'netlist':
+        Path(config['VIBEIC_PRR_DIAGNOSTIC_NETLISTS'][0]).write_text('foreign netlist')
+    elif damage == 'design':
+        config['DESIGN_NAME'] = 'foreign'
+    else:
+        config['STA_CORNERS'].append('max_ff')
+    with pytest.raises(StepError, match='PRR_DIAGNOSTIC_AUTHORITY_REFUSED'):
+        validate(config, odb)
+
+
 def test_diagnostic_spef_is_explicit_complete_and_does_not_replace_openrcx():
     src = (STEP_DIR / 'postroute_repair.py').read_text()
     tcl = (STEP_DIR / 'postroute_repair.tcl').read_text()
-    assert 'VIBEIC_PRR_DIAGNOSTIC_SPEFS' in src
-    assert 'Optional[Dict[str, Path]]' in src
+    assert 'VIBEIC_PRR_DIAGNOSTIC_SPEF_AUTHORITY' in src
+    assert 'Optional[Path]' in src
+    assert 'PRR_DIAGNOSTIC_AUTHORITY_REFUSED' in src
+    assert 'never native-extracted RCX or tapeout/signoff authority' in src
     assert 'PRR_DIAGNOSTIC_SPEF_MISSING' in tcl
     assert 'PRR_DIAGNOSTIC_SPEF_AMBIGUOUS' in tcl
     assert 'PRR_DIAGNOSTIC_SPEF_UNUSED' in tcl
     diagnostic = tcl.index('if {$diagnostic}')
     ordinary = tcl.index('extract_parasitics -ext_model_file', diagnostic)
     assert diagnostic < ordinary < tcl.index('set read 0', ordinary)
+    topology = tcl.index('PRR_DIAGNOSTIC_SPEF_TOPOLOGY_STALE')
+    assert tcl.index('vic_annotate after') > topology
+    assert 'fresh topology-current native parasitics are required' in tcl
+    assert tcl.count('getSigType] ni {POWER GROUND}') >= 2
 
 
 def test_bounded_strength_is_only_the_drv_recovery_and_keeps_existing_judges():

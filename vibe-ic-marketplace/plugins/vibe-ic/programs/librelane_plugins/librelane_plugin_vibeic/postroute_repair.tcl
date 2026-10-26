@@ -83,6 +83,7 @@ set_dont_touch_objects
 
 # ---- 2. the input census --------------------------------------------------
 set ::vic_before [dict create]
+set ::vic_before_nets [dict create]
 set ::vic_at [dict create]
 set ::vic_fillers 0
 foreach inst [$::block getInsts] {
@@ -92,6 +93,11 @@ foreach inst [$::block getInsts] {
     }
     dict set ::vic_before [$inst getName] [[$inst getMaster] getName]
     dict set ::vic_at [$inst getName] [list {*}[$inst getLocation] [$inst getOrient]]
+}
+foreach net [$::block getNets] {
+    if {![$net isSpecial] && [$net getSigType] ni {POWER GROUND}} {
+        dict set ::vic_before_nets [$net getName] 1
+    }
 }
 vic_say "input instances=[dict size $::vic_before] fillers=$::vic_fillers"
 vic_metric vibeic__prr__input_fillers $::vic_fillers
@@ -106,6 +112,11 @@ proc vic_annotate {tag} {
     set diagnostic [expr {[info exists ::env(VIBEIC_PRR_DIAGNOSTIC_SPEFS)]
                           && $::env(VIBEIC_PRR_DIAGNOSTIC_SPEFS) ne ""}]
     if {$diagnostic} {
+        if {![info exists ::env(VIBEIC_PRR_DIAGNOSTIC_AUTHORITY_SHA256)]
+            || ![regexp {^[0-9a-f]{64}$} $::env(VIBEIC_PRR_DIAGNOSTIC_AUTHORITY_SHA256)]} {
+            puts stderr "PRR_DIAGNOSTIC_AUTHORITY_REFUSED: validated receipt hash is absent"
+            exit 1
+        }
         foreach {pattern spef} $::env(VIBEIC_PRR_DIAGNOSTIC_SPEFS) {
             if {![file isfile $spef]} {
                 puts stderr "PRR_DIAGNOSTIC_SPEF_MISSING: $pattern: $spef"
@@ -164,7 +175,8 @@ proc vic_annotate {tag} {
     }
     estimate_parasitics -detailed_routing
     set authority [expr {$diagnostic ? "diagnostic SPEF" : "ruleset"}]
-    vic_say "$tag parasitics: [dict size $spefs] $authority input(s) over $read corner(s)"
+    set receipt [expr {$diagnostic ? " receipt=$::env(VIBEIC_PRR_DIAGNOSTIC_AUTHORITY_SHA256)" : ""}]
+    vic_say "$tag parasitics: [dict size $spefs] $authority input(s) over $read corner(s)$receipt"
 }
 
 proc vic_census {tag} {
@@ -1160,6 +1172,28 @@ if {$::vic_fillers > 0} {
     global_connect
 }
 
+if {[info exists ::env(VIBEIC_PRR_DIAGNOSTIC_SPEFS)]
+    && $::env(VIBEIC_PRR_DIAGNOSTIC_SPEFS) ne ""} {
+    set ::vic_after_nets [dict create]
+    foreach net [$::block getNets] {
+        if {![$net isSpecial] && [$net getSigType] ni {POWER GROUND}} {
+            dict set ::vic_after_nets [$net getName] 1
+        }
+    }
+    set ::vic_new_nets [list]
+    set ::vic_removed_nets [list]
+    dict for {name _} $::vic_after_nets {
+        if {![dict exists $::vic_before_nets $name]} { lappend ::vic_new_nets $name }
+    }
+    dict for {name _} $::vic_before_nets {
+        if {![dict exists $::vic_after_nets $name]} { lappend ::vic_removed_nets $name }
+    }
+    if {[llength $::vic_created] || $::vic_removed
+        || [llength $::vic_new_nets] || [llength $::vic_removed_nets]} {
+        puts stderr "PRR_DIAGNOSTIC_SPEF_TOPOLOGY_STALE: created_cells=[llength $::vic_created] removed_cells=$::vic_removed new_nets=[llength $::vic_new_nets] removed_nets=[llength $::vic_removed_nets]; fixed pre-change diagnostic/non-signoff SPEF cannot measure the candidate; fresh topology-current native parasitics are required"
+        exit 1
+    }
+}
 vic_annotate after
 # The consumer runs RCX + STAPostPNR on both changed and no-op candidates.
 # Its fresh per-corner OpenROAD processes count max-fanout violations and
