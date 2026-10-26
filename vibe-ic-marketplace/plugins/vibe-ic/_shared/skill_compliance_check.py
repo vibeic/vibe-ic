@@ -998,12 +998,11 @@ def _encoding_native_source_error(payload: Dict[str, Any], receipt: Path) -> Opt
                 or native['top'] not in json.loads(design.read_text())['modules']
                 or not (context.parent / 'native.log').is_file()):
             return 'native_output_not_this_invocation'
-        if any(row.get('semantic_proof') is not None or 'BITFIELD_CONTROL' in
-               (row.get('producer_encoding'), row.get('consumer_encoding'))
-               for row in payload.get('interfaces', [])):
-            import interface_encoding_audit as encoding
-            if not encoding._bitfield_receipt_matches(payload, json.loads(design.read_text())):
-                return 'typed_bitfield_control_mismatch'
+        # Expected roles come from the validated current source/native view.
+        # Receipt labels cannot opt out of the typed contract check.
+        import interface_encoding_audit as encoding
+        if not encoding._bitfield_receipt_matches(payload, json.loads(design.read_text())):
+            return 'typed_bitfield_control_mismatch'
     except (OSError, ValueError, KeyError, TypeError, AttributeError, ImportError) as exc:
         return 'native_proof_incomplete:' + str(exc)
     return None

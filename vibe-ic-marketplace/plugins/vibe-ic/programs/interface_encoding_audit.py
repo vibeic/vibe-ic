@@ -1579,22 +1579,30 @@ def _bitfield_receipt_matches(payload, design):
                 headers[name] = src[start:body_start]
             modules.update({m.name: m for m in parse_modules(src, filename)})
         modules, instances = _bind_native_view(modules, headers, design, cfg['top'])
+        expected = {}
+        for wire, pm, pp, cm, cp, parent in build_interface_map(modules, instances):
+            producer, consumer = modules[pm], modules[cm]
+            if (classify_producer_encoding(producer.body, pp).encoding != 'UNKNOWN' or
+                    classify_consumer_encoding(consumer.body, cp).encoding != 'UNKNOWN'):
+                continue
+            proof = _bitfield_control_proof(wire, producer, pp, consumer, cp,
+                                            modules[parent], modules, instances)
+            if proof is not None:
+                expected.setdefault((wire, pm, pp, cm, cp), []).append(proof)
+        seen = []
         for row in payload['interfaces']:
-            if (row.get('semantic_proof') is None and 'BITFIELD_CONTROL' not in
+            candidates = expected.get(tuple(row[k] for k in
+                ('wire_name', 'producer_module', 'producer_port', 'consumer_module', 'consumer_port')), [])
+            if (not candidates and row.get('semantic_proof') is None and 'BITFIELD_CONTROL' not in
                     (row.get('producer_encoding'), row.get('consumer_encoding'))):
                 continue
             if (row['producer_encoding'] != 'BITFIELD_CONTROL' or
                     row['consumer_encoding'] != 'BITFIELD_CONTROL' or row['status'] != 'MATCH'):
                 return False
-            candidates = []
-            for wire, pm, pp, cm, cp, parent in build_interface_map(modules, instances):
-                if (wire, pm, pp, cm, cp) == tuple(row[k] for k in
-                        ('wire_name', 'producer_module', 'producer_port', 'consumer_module', 'consumer_port')):
-                    candidates.append(_bitfield_control_proof(wire, modules[pm], pp,
-                        modules[cm], cp, modules[parent], modules, instances))
             if not row.get('semantic_proof') or row['semantic_proof'] not in candidates:
                 return False
-        return True
+            seen.append(row['semantic_proof'])
+        return all(proof in seen for proofs in expected.values() for proof in proofs)
     finally:
         _CONFIGURATION.clear()
         _CONFIGURATION.update(previous)
