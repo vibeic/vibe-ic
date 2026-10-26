@@ -377,21 +377,37 @@ def audit(l10_path: Path, docs_dir: Path) -> Dict:
         return report
 
     cases: List[dict] = []
+    populated_aliases = [
+        (k, data.get(k)) for k in _CASE_ARRAY_KEYS
+        if isinstance(data.get(k), list) and data.get(k)
+    ]
     declared_population = sum(
         len(data.get(k)) for k in _CASE_ARRAY_KEYS
         if isinstance(data.get(k), list))
-    for k in _CASE_ARRAY_KEYS:
-        v = data.get(k)
-        if isinstance(v, list) and v:
-            cases = [c for c in v if isinstance(c, dict)]
-            if len(cases) != len(v):
-                report["findings"].append({
-                    "severity": "ERROR", "category": "INVALID_CASE_ENTRY",
-                    "case": "", "message": (
-                        f"{k} contains a non-object case entry."),
-                })
-            break
     report["summary"]["cases_total"] = declared_population
+
+    if len(populated_aliases) > 1:
+        report["findings"].append({
+            "severity": "ERROR",
+            "category": "CONFLICTING_CASE_POPULATION_ALIASES",
+            "case": "",
+            "message": (
+                "multiple case population aliases are simultaneously "
+                "non-empty: "
+                + ", ".join(k for k, _ in populated_aliases)
+                + "; source authority is ambiguous."),
+        })
+        return report
+
+    if populated_aliases:
+        k, v = populated_aliases[0]
+        cases = [c for c in v if isinstance(c, dict)]
+        if len(cases) != len(v):
+            report["findings"].append({
+                "severity": "ERROR", "category": "INVALID_CASE_ENTRY",
+                "case": "", "message": (
+                    f"{k} contains a non-object case entry."),
+            })
 
     declared_zero = data.get("no_test_cases_in_input") is True
     test_cases = data.get("test_cases")

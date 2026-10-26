@@ -317,6 +317,44 @@ def test_forged_zero_declaration_with_a_case_refuses(tmp_path):
     assert "CONFLICTING_ZERO_CASE_DECLARATION" in _errors(tmp_path)
 
 
+def test_multiple_populated_case_aliases_refuse_ambiguous_authority(tmp_path):
+    docs = _docs(tmp_path)
+    payload = {
+        "test_cases": [dict(_GOOD_CASE)],
+        "cases": [{
+            "name": "tc_hidden_unanchored",
+            "kind": "functional_vector",
+            "stimulus": "drive request",
+            "expected": "behaves as described",
+        }],
+        "no_test_cases_in_input": False,
+    }
+    (docs / "L10_TEST_CASES.json").write_text(json.dumps(payload))
+
+    result = _consume(tmp_path)
+    assert result.exit_code == 1
+    assert result.structured_verdict == "FAIL"
+    assert result.verdict == "FAIL"
+    assert "CONFLICTING_CASE_POPULATION_ALIASES" in _errors(tmp_path)
+
+
+def test_one_populated_alternate_case_alias_is_fully_audited(tmp_path):
+    docs = _docs(tmp_path)
+    payload = {
+        "test_cases": [],
+        "cases": [dict(_GOOD_CASE)],
+        "no_test_cases_in_input": False,
+    }
+    (docs / "L10_TEST_CASES.json").write_text(json.dumps(payload))
+
+    assert _run(tmp_path) == 0
+    report = chk.audit(docs / "L10_TEST_CASES.json", docs)
+    assert report["summary"]["cases_total"] == 1
+    assert report["summary"]["cases_executable"] == 1
+    assert report["summary"]["cases_anchored"] == 1
+    assert report["findings"] == []
+
+
 # ---------------------------------------------------------------------------
 # 6. Waiver
 # ---------------------------------------------------------------------------
