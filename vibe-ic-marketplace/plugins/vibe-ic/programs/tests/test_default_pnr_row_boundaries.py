@@ -435,6 +435,14 @@ def test_routing_resolves_flow_gates_before_native_execution(tmp_path, monkeypat
         timing = json.loads(timing_config.read_text())
         assert timing['PNR_CORNERS'] == ['source_tt', 'source_ss']
         assert timing['RUN_POST_GRT_RESIZER_TIMING'] is True
+        source_config = timing_config.with_name('OpenROAD.ResizerTimingPostGRT.json')
+        provenance = json.loads(timing_config.with_suffix('.provenance.json').read_text())
+        import hashlib
+        assert provenance['derived_from'] == str(source_config)
+        assert provenance['derived_from_sha256'] == \
+            hashlib.sha256(source_config.read_bytes()).hexdigest()
+        assert provenance['keys']['PNR_CORNERS'] == \
+            'resolved STA_CORNERS from the same native step config'
         raise RuntimeError('native boundary reached with resolved flow gates')
 
     monkeypatch.setattr(ll, 'run_chain', native)
@@ -1932,9 +1940,16 @@ def test_default_route_supplies_required_post_grt_policy_to_native_chain(
         assert 'post_grt_repair: required stage absent' in judged['failures']
 
 
-def test_default_route_refuses_before_native_when_resolved_corners_are_absent(
-        tmp_path, monkeypatch):
-    """Meaningful negative: no DEFAULT-corner fallback reaches the tool."""
+@pytest.mark.parametrize('corners', [
+    pytest.param([], id='empty'),
+    pytest.param([' '], id='whitespace-only'),
+    pytest.param([' source_tt'], id='leading-whitespace'),
+    pytest.param(['source_tt '], id='trailing-whitespace'),
+    pytest.param(['source_tt', 'source_tt'], id='duplicate'),
+])
+def test_default_route_refuses_before_native_when_resolved_corners_are_invalid(
+        tmp_path, monkeypatch, corners):
+    """Malformed populations refuse; no normalization/default reaches native."""
     import librelane_contract as ll
     import librelane_route as route
 
@@ -1960,16 +1975,32 @@ def test_default_route_refuses_before_native_when_resolved_corners_are_absent(
         configs = {sid: root / (sid + '.json') for sid in ids}
         for config in configs.values():
             config.write_text(json.dumps({'DESIGN_NAME': 'unit',
-                                          'STA_CORNERS': []}))
+                                          'STA_CORNERS': corners}))
         return configs
 
     monkeypatch.setattr(ll, 'resolve_step_configs', resolve)
-    monkeypatch.setattr(ll, 'run_chain',
-                        lambda *args, **kwargs: pytest.fail('native must not run'))
+    observed = {}
+
+    class NativeReached(RuntimeError):
+        pass
+
+    def native(project, image, chain, **kwargs):
+        timing_path = next(config for sid, config, _ in chain
+                           if sid == 'OpenROAD.ResizerTimingPostGRT')
+        timing = json.loads(timing_path.read_text())
+        observed['PNR_CORNERS'] = timing['PNR_CORNERS']
+        raise NativeReached('invalid corner population reached native')
+
+    monkeypatch.setattr(ll, 'run_chain', native)
     params = {'step_id': '21', 'top': 'unit', 'pdk_name': 'unit',
               'image_id': 'unit-image', 'pdk_root': str(tmp_path), 'overlay': {}}
-    with pytest.raises(ll.Refusal, match='LL_STRICT_TIMING_CORNERS_UNDECLARED'):
+    try:
         producers.produce_pnr(tmp_path, params)
+    except ll.Refusal as exc:
+        observed['outcome'] = exc.code
+    except NativeReached:
+        observed['outcome'] = 'NATIVE_REACHED'
+    assert observed == {'outcome': 'LL_STRICT_TIMING_CORNERS_UNDECLARED'}
 
 
 @pytest.mark.parametrize('refuse', [False, True])

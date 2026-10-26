@@ -204,6 +204,17 @@ def test_a_ppa_candidate_sets_only_the_declared_route_knobs(tmp_path):
         route.seed_arms(tmp_path)
 
 
+def test_a_conflicting_ppa_timing_knob_refuses_without_weakening(tmp_path,
+                                                                 monkeypatch):
+    put(tmp_path / 'phase3/librelane_switch.json', {
+        'route_knobs': {'RUN_POST_GRT_RESIZER_TIMING': False}})
+    sdc = tmp_path / 'constraint.sdc'
+    sdc.write_text('create_clock -period 10 clk\n')
+    monkeypatch.setattr(cts, 'signoff_scene_sdc', lambda *args: sdc)
+    with pytest.raises(ValueError, match='LL_STRICT_TIMING_OVERRIDE_FORBIDDEN'):
+        route.overlay(runner, tmp_path, sdc, tmp_path / 'scratch')
+
+
 def test_the_route_knobs_never_trip_the_19_20_knob_allow_list(tmp_path):
     put(tmp_path / 'phase3/librelane_switch.json',
         {'steps': {'19': 'librelane', '20': 'librelane', '21': 'librelane'},

@@ -334,7 +334,8 @@ def bind_strict_timing_corners(configs: Dict[str, Path]) -> Dict[str, Path]:
         raise _ll.Refusal("LL_STRICT_TIMING_CONFIG_UNREADABLE", str(source)) from exc
     corners = doc.get("STA_CORNERS") if isinstance(doc, dict) else None
     if (not isinstance(corners, list) or not corners
-            or any(not isinstance(corner, str) or not corner for corner in corners)
+            or any(not isinstance(corner, str) or not corner.strip()
+                   or corner != corner.strip() for corner in corners)
             or len(set(corners)) != len(corners)):
         raise _ll.Refusal("LL_STRICT_TIMING_CORNERS_UNDECLARED", str(source))
     output = Path(source).with_name(Path(source).stem + "@strict-native.json")
