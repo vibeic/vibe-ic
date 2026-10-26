@@ -25,28 +25,22 @@ def put(project, name, value):
 @pytest.fixture(autouse=True)
 def actual_attested_image_route(monkeypatch):
     import librelane_contract
-    import fault_scan_chain_insert as producer
     # Tests execute inside the pinned, host-attested image. Do not attach
     # an unrelated ambient container merely because Docker is reachable.
     librelane_contract.local_image_attestation()
     monkeypatch.setattr(librelane_contract._ce, "no_container_route", lambda: True)
-    def reader(project, expected_clock=None, expected_reset=None,
-               reset_active_low=False):
-        path = Path(project) / 'input/d09-dft-spec-declaration.json'
-        if not path.is_file():
-            return None, ['D09_DFT_SPEC_MISSING']
-        body = json.loads(path.read_text())
-        intent = body.get('dft') if isinstance(body, dict) else None
-        if not isinstance(intent, dict) or type(intent.get('scan_test')) is not bool:
-            return None, ['D09_DFT_AUTHORITY_INVALID: dft.scan_test']
-        return ({'path': str(path.relative_to(project)),
-                 'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
-                 'sources': {'producer': 'SOLE7 exact-reader stub',
-                             'source_sha256': '1' * 64,
-                             'sidecar_sha256': '2' * 64,
-                             'source_input_sha256': '3' * 64},
-                 'intent': intent}, [])
-    monkeypatch.setattr(producer, 'load_d09_dft_contract', reader, raising=False)
+
+
+def publish_d09(project, intent):
+    import spec_declaration_emit as declaration
+    docs = project / 'input/docs'
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / 'L7_verification_plan.md').write_text(
+        '# Verification\nThe Plugin MUST declare `plugin_output/declaration.json` '
+        'before authoring:\n\n| Field | Required | Example |\n|---|---|---|\n'
+        '| `dft` | Yes | object |\n')
+    assert declaration.main(
+        [str(project), '--set', 'dft=' + json.dumps(intent)]) == 0
 
 
 def case(project):
@@ -66,7 +60,7 @@ def case(project):
                     'die_area_um':[0,0,100,100],'core_area_um':[10,10,90,90]},
          'answer_provenance':{'deliverable':{'answered_by':'owner','citation':'Developer neutral IC control'}}})
     put(project,'phase1/generated_docs/L8_TIMING_WAVEFORM.json',{'clock_domains':[{'role':'primary','source_pin':'clk','period_ns':20}]})
-    put(project,'input/d09-dft-spec-declaration.json',{'dft':{'scan_test':False}})
+    publish_d09(project, {'scan_test': False})
     put(project,'phase1/generated_docs/L9_INTEGRATION_SPEC.json',{'top_module':'unit_alpha','synth_top':'unit_alpha'})
     put(project,'phase1/generated_docs/L19_CONSTRAINTS_PDK.json',{'pdk':'gf180mcuD','constraint_declarations':[],'fields':{'die_area_budget_um':'100x100'}})
     put(project,'phase2/stage1/rtl/unit_alpha.v','module unit_alpha(input clk, input a,b, output reg y); always @(posedge clk) y <= a ^ b; endmodule\n')
@@ -184,9 +178,12 @@ def test_missing_or_changed_qualification_stops_before_existing_owner(tmp_path,m
 def test_missing_d09_dft_intent_stops_before_existing_owner(tmp_path, monkeypatch, damage):
     context, path = case(tmp_path)
     monkeypatch.setenv('VIBEIC_FLOW109_CONTEXT', str(path))
-    intent = tmp_path / 'input/d09-dft-spec-declaration.json'
+    intent = tmp_path / 'plugin_output/declaration.json'
     if damage == 'missing':
+        (tmp_path / 'input/docs/L7_verification_plan.md').unlink()
         intent.unlink()
+        intent.with_name('declaration.provenance.json').unlink()
+        (tmp_path / 'provenance.jsonl').unlink()
     else:
         body = json.loads(intent.read_text()); body['dft'].pop('scan_test')
         intent.write_text(json.dumps(body))

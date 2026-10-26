@@ -153,6 +153,10 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
                 or values[0] == 0):
             raise Flow109Error("FLOW109_D30_CHAIN_STATISTICS_UNRESOLVED",
                                str(_SCAN_REPORT))
+        import fault_scan_chain_insert as scan
+        current, reason = scan.l20_binding_is_current(project, report)
+        if not current:
+            raise Flow109Error("FLOW109_D30_SCAN_REPORT_STALE", reason)
         if d24.get("native_scan_report") != report_ref:
             raise Flow109Error("FLOW109_D30_SCAN_REPORT_STALE", str(_SCAN_REPORT))
     lec, lec_ref = _bound_project_json(project, _LEC_REPORT, "FLOW109_D25_PROOF_MISSING")
@@ -188,9 +192,12 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
         "consumer_step": "D30", "consumer_position": 42,
         "top": top, "scan_test": intent["scan_test"], "adopted_netlist": adopted,
         "native_chain": chain, "functional_equivalence": lec_ref,
-        "pre_route_timing": {"D26_result": d26_ref,
-                             "modes": (["functional", "scan"]
-                                       if intent["scan_test"] else ["functional"])},
+        "pre_route_timing": {
+            "owner_step": "D26", "owner_position": 38,
+            "D26_result": d26_ref,
+            "applicable_modes": (["functional", "scan"]
+                                 if intent["scan_test"] else ["functional"]),
+            "scope": "timing applicability; D25 functional LEC grants no timing credit"},
         "D25_result": d25_ref,
         **({"D24_result": d24_ref} if d24_ref is not None else {}),
         "identity_agreement": "D24_D25_D30_MATCH" if is_scan else "D22_D25_D30_MATCH",

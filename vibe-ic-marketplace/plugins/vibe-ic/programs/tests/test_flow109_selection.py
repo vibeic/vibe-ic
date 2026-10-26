@@ -52,30 +52,27 @@ def test_reference_profiles_close_without_turning_unknown_into_false():
 
 
 def _write_dft_intent(project, monkeypatch, *, scan, bist=False):
-    import hashlib
     import fault_scan_chain_insert as producer
-    path = project / "input/d09-dft-spec-declaration.json"
-    path.parent.mkdir(parents=True, exist_ok=True)
     intent = {"scan_test": scan}
     if scan:
-        intent.update({
-            "test_port_def": {
-                "scan_enable": {"public": "scan_enable", "native": "shift"},
-                "scan_in": {"public": "scan_in", "native": "sin"},
-                "scan_out": {"public": "scan_out", "native": "sout"}},
-            "test_mode": {"clock": "clk", "reset": {"signal": "rst_n",
-                "style": "synchronous", "active_level": 0, "shift_value": 1}}})
-    path.write_text(json.dumps({"dft": intent, "bist_selected": bist}))
-    binding = {"path": str(path.relative_to(project)),
-        "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-        "sources": {"producer": "SOLE7 exact-reader stub",
-                    "source_sha256": "1" * 64, "sidecar_sha256": "2" * 64,
-                    "source_input_sha256": "3" * 64},
-        "intent": intent}
-    monkeypatch.setattr(producer, "load_d09_dft_contract",
-        lambda _project, expected_clock=None, expected_reset=None,
-        reset_active_low=False: (binding, []), raising=False)
+        from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+        intent = _intent()
+    _publish_dft_intent(project, intent)
+    binding, problems = producer.load_d09_dft_contract(project)
+    assert problems == [] and binding is not None
     return binding
+
+
+def _publish_dft_intent(project, intent):
+    import spec_declaration_emit as declaration
+    docs = project / "input/docs"
+    docs.mkdir(parents=True, exist_ok=True)
+    (docs / "L7_verification_plan.md").write_text(
+        "# Verification\nThe Plugin MUST declare `plugin_output/declaration.json` "
+        "before authoring:\n\n| Field | Required | Example |\n|---|---|---|\n"
+        "| `dft` | Yes | object |\n")
+    assert declaration.main(
+        [str(project), "--set", "dft=" + json.dumps(intent)]) == 0
 
 
 def test_d09_scan_intent_is_source_bound_without_author_chain_length(tmp_path, monkeypatch):
@@ -156,52 +153,60 @@ def test_scan_compression_and_bist_applicability_are_not_exclusive(tmp_path, mon
     ("forged", "D09_DFT_AUTHORITY_INVALID")])
 def test_d09_dft_intent_refuses_missing_malformed_or_conflicting_source(
         tmp_path, monkeypatch, damage, code):
-    import fault_scan_chain_insert as producer
     features = profile("Mapped soft-IP with prestitched scan")
     context = flow109.execution_context(flow109.resolve_plan(features), "D22", "D22")
-    problem = code if damage != "forged" else {"code": code, "field": "provenance"}
-    monkeypatch.setattr(producer, "load_d09_dft_contract",
-        lambda *_a, **_k: (None, [problem]), raising=False)
+    if damage == "malformed":
+        _publish_dft_intent(tmp_path, {"scan_test": "false"})
+    elif damage == "forged":
+        _write_dft_intent(tmp_path, monkeypatch, scan=True)
+        source = tmp_path / "input/docs/L7_verification_plan.md"
+        source.write_text(source.read_text() + "\nforged\n")
 
     with pytest.raises(flow109.Flow109Error, match=code):
         flow109.dft_source_intent(tmp_path, context)
 
 
-def test_unlanded_d09_reader_dependency_fails_closed(tmp_path, monkeypatch):
-    import fault_scan_chain_insert as producer
-    monkeypatch.delattr(producer, "load_d09_dft_contract", raising=False)
-    features = profile("Small digital IC without DFT")
+def test_old_three_role_d09_intent_fails_closed(tmp_path, monkeypatch):
+    intent = {"scan_test": True,
+              "test_port_def": {
+                  "scan_enable": {"public": "scan_enable", "native": "shift"},
+                  "scan_in": {"public": "scan_in", "native": "sin"},
+                  "scan_out": {"public": "scan_out", "native": "sout"}},
+              "test_mode": {"clock": "clk", "clock_domains": ["clk"],
+                            "edge": "rising", "reset": {"signal": "rst",
+                            "style": "synchronous", "active_level": 1,
+                            "shift_value": 0}}}
+    _publish_dft_intent(tmp_path, intent)
+    features = profile("Mapped soft-IP with prestitched scan")
     context = flow109.execution_context(flow109.resolve_plan(features), "D22", "D22")
 
     with pytest.raises(flow109.Flow109Error, match="D09_DFT_AUTHORITY_INVALID"):
         flow109.dft_source_intent(tmp_path, context)
 
 
-def _d30_scan_case(project, monkeypatch, top="unit"):
+def _d30_scan_case(project, monkeypatch, top="neutral_unit"):
     import hashlib
-    _write_dft_intent(project, monkeypatch, scan=True)
+    import fault_scan_chain_insert as producer
+    from programs.tests.test_issue3444_l20_scan_reconciliation import (
+        _native_payload, _planned)
+    _planned(project)
+    calls = _native_payload(project, monkeypatch)
+    rc, report = producer.run_chain(
+        project, "phase2/stage2/synth/netlist.v", "clk", "sky130",
+        reset="rst", skip_boundary="on", top_module="neutral_unit",
+        require_l20_contract=True)
+    assert rc == 0 and report["published"] is True and len(calls) == 1
+    assert producer.l20_binding_is_current(project, report)[0] is True
+    # Mirror the released D23 caller's post-consumption publication bit.  The
+    # actual currentness consumer above, not this bit alone, authorizes it.
+    report["authorized_by_l20_contract"] = True
+    scan_report = project / producer.SCAN_JSON_REL
+    scan_report.parent.mkdir(parents=True, exist_ok=True)
+    scan_report.write_text(json.dumps(report))
     synth = project / "phase2/stage2/synth"
-    synth.mkdir(parents=True, exist_ok=True)
-    (synth / f"{top}_synth.v").write_text(
-        f"module {top}(input clk, input rst_n); endmodule\n")
     post = synth / "post_dft_netlist.v"
-    post.write_text(f"""module {top}(clk,rst_n,sin,shift,test,tck,sout);
-input clk;
-input rst_n;
-input sin;
-input shift;
-input test;
-input tck;
-output sout;
-endmodule
-""")
-    report = {"published": True, "chain_length_matches_flop_count": True,
-              "internal_chain_length": 1,
-              "boundary_chain_length": 0, "input_flop_count": 1,
-              "dft_ports": ["sin", "shift", "test", "tck", "sout"],
-              "clock": "clk"}
-    dft = project / "reports/phase2/dft"; dft.mkdir(parents=True, exist_ok=True)
-    (dft / "scan_chain.json").write_text(json.dumps(report))
+    post.write_bytes((project / producer.SCAN_NETLIST_REL).read_bytes())
+    dft = project / "reports/phase2/dft"
     reports = project / "reports"; reports.mkdir(exist_ok=True)
     digest = "sha256:" + hashlib.sha256(post.read_bytes()).hexdigest()
     (reports / "lec.json").write_text(json.dumps({
@@ -233,13 +238,16 @@ def test_d30_accepts_native_d24_d25_identity_and_chain_report(tmp_path, monkeypa
 
     assert result["identity_agreement"] == "D24_D25_D30_MATCH"
     assert result["adopted_netlist"]["artifact_id"] == "D24_POST_SCAN_NETLIST"
-    assert result["native_chain"]["internal_chain_length"] == 1
+    assert result["native_chain"]["internal_chain_length"] == 2
 
 
 @pytest.mark.parametrize("damage, code", [
     ("pre_scan", "FLOW109_D25_GATE_IDENTITY_MISMATCH"),
+    ("foreign_netlist", "FLOW109_D30_NETLIST_FOREIGN"),
     ("foreign_report", "FLOW109_D30_SCAN_REPORT_STALE"),
+    ("stale_d09", "FLOW109_D30_SCAN_REPORT_STALE"),
     ("wrong_hash", "FLOW109_D25_GATE_IDENTITY_MISMATCH"),
+    ("d24_hash", "FLOW109_D30_D24_IDENTITY_MISMATCH"),
     ("unresolved_length", "FLOW109_D30_CHAIN_STATISTICS_UNRESOLVED"),
 ])
 def test_d30_refuses_prescan_foreign_stale_or_unresolved_inputs(
@@ -248,14 +256,29 @@ def test_d30_refuses_prescan_foreign_stale_or_unresolved_inputs(
     if damage == "pre_scan":
         (tmp_path / "phase2/stage2/synth/post_dft_netlist.v").write_text(
             "module unit(input clk, input rst_n); endmodule\n")
+    elif damage == "foreign_netlist":
+        path = tmp_path / "phase2/stage2/synth/post_dft_netlist.v"
+        foreign = tmp_path.parent / (tmp_path.name + "-foreign-scan.v")
+        foreign.write_bytes(path.read_bytes())
+        path.unlink(); path.symlink_to(foreign)
     elif damage == "foreign_report":
         path = tmp_path / "reports/phase2/dft/scan_chain.json"
         body = json.loads(path.read_text()); body["clock"] = "foreign_clock"
         path.write_text(json.dumps(body))
+    elif damage == "stale_d09":
+        from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+        intent = _intent()
+        intent["test_port_def"]["scan_enable"]["public"] = "scan_enable_new"
+        _publish_dft_intent(tmp_path, intent)
     elif damage == "wrong_hash":
         path = tmp_path / "reports/lec.json"
         body = json.loads(path.read_text())
         body["proof_identity"]["gate_netlist"]["sha256"] = "sha256:" + "0" * 64
+        path.write_text(json.dumps(body))
+    elif damage == "d24_hash":
+        path = tmp_path / "reports/flow109/default_rows/D24.json"
+        body = json.loads(path.read_text())
+        body["adopted_netlist"]["sha256"] = "0" * 64
         path.write_text(json.dumps(body))
     else:
         path = tmp_path / "reports/phase2/dft/scan_chain.json"
@@ -269,7 +292,7 @@ def test_d30_refuses_prescan_foreign_stale_or_unresolved_inputs(
 def _final_timing_case(project, monkeypatch):
     import hashlib
     import flow109_final_lec as final_lec
-    d30_context = _d30_scan_case(project, monkeypatch, top="chip_top")
+    d30_context = _d30_scan_case(project, monkeypatch, top="neutral_unit")
     d30_admission = flow109.dft_preroute_admission(project, d30_context)
     rows = project / "reports/flow109/default_rows"
     (rows / "D30.json").write_text(json.dumps({
@@ -277,7 +300,7 @@ def _final_timing_case(project, monkeypatch):
         "dft_preroute_admission": d30_admission}))
     final_netlist = project / "phase3/stage3/pnr/chip_top_pnr.v"
     final_netlist.parent.mkdir(parents=True)
-    final_netlist.write_text("module chip_top(input clk, output sout); assign sout=clk; endmodule\n")
+    final_netlist.write_text("module neutral_unit(input clk, output sout); assign sout=clk; endmodule\n")
     final_record = {"path": str(final_netlist.relative_to(project)),
                     "sha256": hashlib.sha256(final_netlist.read_bytes()).hexdigest()}
     transform = project / "reports/flow109/D44/physical-transform.json"
@@ -294,7 +317,7 @@ def _final_timing_case(project, monkeypatch):
     baseline_record = {"path": str(baseline.relative_to(project)),
                        "sha256": hashlib.sha256(baseline.read_bytes()).hexdigest()}
     d44_input = project / final_lec.INPUT; d44_input.parent.mkdir(parents=True, exist_ok=True)
-    d44_input.write_text(json.dumps({"top": "chip_top"}))
+    d44_input.write_text(json.dumps({"top": "neutral_unit"}))
     for step in ("D44", "D49"):
         (rows / f"{step}.json").write_text(json.dumps({
             "step_id": step, "default_row_status": "PASS", "completed": True}))
@@ -338,6 +361,7 @@ def test_d50_final_timing_accepts_physical_rewrite_with_transform_and_lec_trace(
     assert result["pre_route_netlist"]["sha256"] != result["final_adopted_netlist"]["sha256"]
     assert result["physical_transform"] is not None
     assert result["timing"]["sha256"]["sta_netlist"] == result["final_adopted_netlist"]["sha256"]
+    assert result["timing"]["sha256"]["spef"]
     assert result["timing"]["sdf_sha256"]
     assert result["lec_measures_timing"] is False
 
@@ -346,6 +370,8 @@ def test_d50_final_timing_accepts_physical_rewrite_with_transform_and_lec_trace(
     ("missing_transform", "FLOW109_D44_FINAL_TRANSFORM_MISSING"),
     ("stale_final", "FLOW109_D44_FINAL_NETLIST_UNBOUND"),
     ("foreign_timing", "FLOW109_D49_TIMING_NETLIST_MISMATCH"),
+    ("foreign_spef", "FLOW109_D49_TIMING_PROVENANCE_MISMATCH"),
+    ("missing_sdf", "FLOW109_D49_SDF_UNRESOLVED"),
 ])
 def test_d50_final_timing_refuses_missing_stale_or_foreign_provenance(
         tmp_path, monkeypatch, damage, code):
@@ -355,9 +381,23 @@ def test_d50_final_timing_refuses_missing_stale_or_foreign_provenance(
         body.pop("transformation_receipt"); baseline.write_text(json.dumps(body))
     elif damage == "stale_final":
         final_netlist.write_text(final_netlist.read_text() + "// stale\n")
-    else:
+    elif damage == "foreign_timing":
         other = tmp_path / "phase3/stage3/pnr/foreign.v"; other.write_text("module foreign; endmodule\n")
         body = json.loads(state.read_text()); body["nl"] = str(other); state.write_text(json.dumps(body))
+        signoff = tmp_path / "reports/phase3/sta_postpnr_signoff.json"
+        doc = json.loads(signoff.read_text()); doc["sta_state_sha256"] = __import__("hashlib").sha256(state.read_bytes()).hexdigest()
+        signoff.write_text(json.dumps(doc))
+    elif damage == "foreign_spef":
+        foreign = tmp_path.parent / (tmp_path.name + "-foreign.spef")
+        foreign.write_text("*SPEF \"IEEE 1481-1998\"\n")
+        body = json.loads(state.read_text()); body["spef"] = {"tt": str(foreign)}
+        state.write_text(json.dumps(body))
+        signoff = tmp_path / "reports/phase3/sta_postpnr_signoff.json"
+        doc = json.loads(signoff.read_text()); doc["sta_state_sha256"] = __import__("hashlib").sha256(state.read_bytes()).hexdigest()
+        signoff.write_text(json.dumps(doc))
+    else:
+        body = json.loads(state.read_text()); body["sdf"] = {}
+        state.write_text(json.dumps(body))
         signoff = tmp_path / "reports/phase3/sta_postpnr_signoff.json"
         doc = json.loads(signoff.read_text()); doc["sta_state_sha256"] = __import__("hashlib").sha256(state.read_bytes()).hexdigest()
         signoff.write_text(json.dumps(doc))

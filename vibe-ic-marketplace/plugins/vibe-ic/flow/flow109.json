@@ -11630,7 +11630,8 @@
             "timing_views": [
               "routed_netlist",
               "sdc",
-              "sdf_or_spef"
+              "sdf",
+              "spef"
             ]
           },
           "binding_keys": [
@@ -11782,7 +11783,8 @@
             "timing_views": [
               "routed_netlist",
               "sdc",
-              "sdf_or_spef"
+              "sdf",
+              "spef"
             ]
           },
           "binding_keys": [
