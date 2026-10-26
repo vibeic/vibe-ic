@@ -55618,8 +55618,8 @@ _L12_ADDITIONAL_ABSENT_NOUN = (
 )
 _RE_L12_NO_CALIBRATION = re.compile(
     rf"(?ix)\s*(?:"
-    rf"(?:this|the)\s+(?:{_L12_DESIGN_MODIFIER}\s+){{0,3}}"
-    rf"(?:design|block|device|part|chip|ip)\s+(?:"
+    rf"(?:this|the)\s+(?:(?:{_L12_DESIGN_MODIFIER}\s+){{0,3}}design|"
+    rf"block|device|part|chip|ip)\s+(?:"
     rf"(?:requires?|needs?|uses?|includes?|has)\s+no\s+"
     rf"{_L12_CALIBRATION_NOUN}(?:\s*(?:/|,(?:\s*(?:or|and))?|\bor\b|\band\b)\s*"
     rf"{_L12_ADDITIONAL_ABSENT_NOUN})*"

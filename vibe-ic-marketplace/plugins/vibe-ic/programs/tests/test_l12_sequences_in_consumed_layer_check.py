@@ -114,6 +114,18 @@ def test_soft_wrapped_modified_design_absence_is_source_bound(tmp_path):
     assert field_count._check_l_doc(12, doc, ic_class="unknown")[0] is True
 
 
+def test_scoped_modified_block_cannot_authorize_global_absence(tmp_path):
+    doc = _produce_l12(
+        tmp_path,
+        "The analog block requires no calibration or trimming.\n"
+        "The digital design uses a calibration procedure.\n",
+    )
+    assert doc["no_calibration"] is False
+    assert doc["extraction_evidence"] == {}
+    assert field_count._check_l_doc(
+        12, doc, ic_class="unknown")[0] is False
+
+
 def test_calibration_error_sentence_does_not_authorize_global_absence(
         tmp_path):
     doc = _produce_l12(
