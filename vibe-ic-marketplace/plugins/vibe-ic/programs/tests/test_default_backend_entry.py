@@ -969,8 +969,9 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
         from test_flow109_selection import profile
         assert _delivery_route.admit(project, 'ip') is None
         manifest = project / 'manifest.json'
-        manifest.write_text(json.dumps({
-            'features': profile('Mapped soft-IP with prestitched scan')}))
+        features = profile('Mapped soft-IP with prestitched scan')
+        features['requires_scan'] = d09['intent']['scan_test']
+        manifest.write_text(json.dumps({'features': features}))
         monkeypatch.setattr(front, '_activate_runtime_program_tree', lambda _p: None)
         monkeypatch.setattr(front, '_capture_container_image', lambda *_a, **_k: {
             'verdict': 'PASS'})
