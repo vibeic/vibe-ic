@@ -54,8 +54,9 @@ from the new step ID; never use a position as a completed-step count.
 > (the internal improvement-phase shortcut). The PR-merge-queue machinery in this
 > skill is **Layer 1** — the public contribution model: an external contributor
 > files a **backlog** (a report) or a **PR** (a fix), and you are the sole merger
-> of those PRs. Both layers cross the identical gate sequence; only Layer-1 adds
-> the PR ceremony. External contributors never push to `main`.
+> of those PRs. Both layers must carry accepted evidence from the identical gate
+> sequence; an unchanged accepted receipt is not rerun. Only Layer-1 adds the PR
+> ceremony. External contributors never push to `main`.
 
 The gatekeeper is the **review-gate-and-merge** half of the Vibe-IC
 contribution model. Where `core-agent-loop` is an issue-**fix** loop
@@ -77,17 +78,19 @@ in git + GitHub — the PR's open/merged/closed state, its review state,
 its required-check statuses — plus the root-owned receipt manifest and the
 short `gatekeeper-final.lock`). Every cron wake-up is a fresh, independent tick:
 
-1. **poll** open, non-draft PRs against `main` (`poll_prs.py`).
-2. for each PR: run the **machine gates** (`gatekeeper_review.py`).
-   Any machine gate red → `request-changes` with the failing program
-   output, in a 繁中 5-section comment; continue to the next PR.
-3. machine-green → run the **one agent gate** (Step-2.7 adversarial
-   review). Only a **reproducible HIGH** finding blocks → request-changes;
-   continue.
-4. green + no reproducible HIGH → publish the accepted receipt bytes and
-   their independently supplied outer SHA256 pin, then return to the canonical
-   `--service-ready` consumer. Only its READY-bound final writer may acquire
-   the short final lock and perform the squash merge.
+1. **poll and classify** the complete open, non-draft population against `main`
+   (`poll_prs.py`) together with root-owned independently accepted receipts.
+2. **first invoke `--service-ready`** over the complete accepted population.
+   A deliverable READY candidate reaches the bound sole writer immediately;
+   genuine holds, dependencies, shared conflicts, or failed gates block only
+   their own candidate, not an unrelated READY candidate.
+3. Only `BLOCKED_NO_ACCEPTED_CANDIDATE`, meaning there is **no immediately
+   deliverable READY candidate**, permits bounded preparation of one candidate
+   without accepted evidence: run its **machine gates** and then the one agent
+   gate. A red or reproducible HIGH requests changes and ends that preparation.
+4. A green preparation publishes its accepted receipt bytes and independently
+   supplied outer SHA256 pin, then returns to the canonical `--service-ready`
+   consumer; it never performs an inline final write.
 
 The loop is **chip-AGNOSTIC**: every gate and queue rule reads generic PR
 metadata + program verdicts; nothing references `PR-A`, any IC name,
@@ -128,7 +131,7 @@ driver's signal:
 | rc | Meaning | Gatekeeper action |
 |----|---------|-------------------|
 | 0  | No actionable PRs | Output `(no actionable PRs)` and idle this tick (healthy idle — see §STOP CONDITION) |
-| 1  | ≥1 actionable | Process each PR listed, ready-first |
+| 1  | ≥1 actionable | Classify the complete population, service accepted receipts first, and prepare an unaccepted candidate only if none is deliverable |
 | 2  | I/O / auth error | Log + exit; retry next tick (do NOT treat as actionable) |
 
 One rule: **actionable = ANY open, non-draft PR targeting `main`.** A
@@ -141,16 +144,20 @@ it back to the author; silently dropping it from the poll would **wedge**
 the PR with no path forward (a §4.05 leak at the poll layer — the poll
 must not mask a PR that needs the gate to say "fix your branch").
 
-**Ready-first is binding:** an independently accepted candidate proceeds to
-the next available short final lock promptly. An unrelated earlier PR,
-lower/higher PR number, handoff, or queue position is not a dependency and
-must not block it. Genuine declared dependencies, overlapping source ownership,
-an explicit owner hold, or a failed required gate still block. Exactly one
-writer may hold the merge lock.
+**Ready-first is binding:** before any candidate preparation, invoke the actual
+`--service-ready` consumer over the complete independently accepted population.
+An accepted candidate proceeds to the next available short final lock promptly.
+An unrelated earlier PR, lower/higher PR number, handoff, queue position, or
+slow preparation is not a dependency and must not block it. Genuine declared
+dependencies, overlapping source ownership, an explicit owner hold, or a failed
+required gate still block their own candidate. Exactly one writer may hold the
+final lock.
 
-### Step 2 — machine gates (required status checks)
+### Step 2 — bounded preparation only: machine gates
 
-For each actionable PR, run the deterministic gate aggregator against
+Only after the complete-population service call returns
+`BLOCKED_NO_ACCEPTED_CANDIDATE`, select one candidate without accepted evidence
+for bounded preparation. Run the deterministic gate aggregator against
 `base=origin/main`, `head=<the PR branch>`:
 
 ```bash
@@ -179,10 +186,11 @@ gh pr review <num> --request-changes --body-file <comment_file.md>
 > exit-code questions. No LLM reads them. The gatekeeper only *relays*
 > the failing output into the review.
 
-### Step 2.7 — the one agent gate (adversarial review)
+### Step 2.7 — the one agent gate within bounded preparation
 
-When **and only when** the machine gates are green, run the irreducible
-agent-judgment gate on the PR diff. This is the Step-2.7 adversarial
+Within that bounded preparation, when **and only when** the machine gates are
+green, run the irreducible agent-judgment gate on the PR diff. This is the
+Step-2.7 adversarial
 review doctrine carried over from `core-agent-loop` — **try to BREAK the
 change, do not validate it** — with three concrete attack lenses:
 
@@ -205,8 +213,8 @@ against the PR diff with these lenses. **Only a finding the reviewer can
 REPRODUCE blocks.** A speculative "this might…" without a reproduction is
 NOT a block — it is at most a review comment. On a reproducible HIGH,
 `request-changes` with the reproduction in the 繁中 comment, then
-continue. No reproducible HIGH → the PR is **mergeable**, proceed to
-Step 2.9.
+continue. No reproducible HIGH publishes accepted evidence and returns to
+the complete-population `--service-ready` path in Step 2.9.
 
 > **why_not_bucket_a (the judgment residual):** whether a regex is
 > "general" or "tuned to one example", whether a widened guard "masks a
@@ -509,10 +517,11 @@ The gatekeeper is **stateless across cron ticks**. All state lives in:
   `gatekeeper-final.lock` is held only for the selected final write and is
   released when the `landing_merge_verdict.py` service call exits.
 
-Every tick is independent — no `state.json`. This matches the core-agent's
-stateless design and for the same reason: the gatekeeper reacts to one PR
-at a time and the response is fully captured by the PR's review/merge
-transition + the transient lock.
+Every tick is independent — no `state.json`. The gatekeeper classifies the
+complete population first, then selects at most one READY candidate for the
+short final write; only when none is deliverable may it prepare one unaccepted
+candidate. The result is captured by the PR's review/merge transition, accepted
+receipt bytes, and the transient final lock.
 
 ## Cron-invocation template
 
@@ -523,9 +532,9 @@ Each tick must:
 1. python3 plugins/vibe-ic/skills/gatekeeper-loop/programs/poll_prs.py --repo <owner/repo> --base main
 2. If rc=0 → output "(no actionable PRs)" and exit (healthy idle).
 3. If rc=2 → log + exit. Retry next tick.
-4. If rc=1 → for each PR in `actionable[]` (ready-first). The PR author is
-   irrelevant — the gatekeeper MAY merge its OWN authored PR; the gates are
-   the quality guarantee, not identity separation:
+4. If rc=1 → classify the complete `actionable[]` population ready-first. The
+   PR author is irrelevant — the gatekeeper MAY merge its OWN authored PR; the
+   gates are the quality guarantee, not identity separation:
      a. Inspect the complete population and FIRST invoke the actual consumer
         over every already accepted packet:
         `python3 programs/landing_merge_verdict.py --service-ready

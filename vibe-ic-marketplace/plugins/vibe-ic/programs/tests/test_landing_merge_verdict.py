@@ -4316,6 +4316,9 @@ def test_canonical_gatekeeper_entry_has_no_legacy_unbound_writer_or_rerun():
     skill = _GATEKEEPER_SKILL.read_text()
     frontmatter = skill.split("---", 2)[1]
     description = re.search(r"(?m)^description: (.*)$", frontmatter).group(1)
+    top_loop = skill.split(
+        "Every cron wake-up is a fresh, independent tick:", 1)[1].split(
+            "The loop is **chip-AGNOSTIC**", 1)[0]
     cron = skill.split("## Cron-invocation template", 1)[1].split(
         "## Reference", 1)[0]
     historical = re.findall(
@@ -4339,6 +4342,14 @@ def test_canonical_gatekeeper_entry_has_no_legacy_unbound_writer_or_rerun():
                      "READY-bound", "holds", "dependencies",
                      "shared conflicts"):
         assert required in current_instructions, required
+    top_order = {
+        "service_ready": top_loop.index("--service-ready"),
+        "machine_gates": top_loop.index("machine gates"),
+    }
+    assert top_order["service_ready"] < top_order["machine_gates"], top_order
+    assert "BLOCKED_NO_ACCEPTED_CANDIDATE" in top_loop
+    assert "no immediately deliverable READY candidate" in " ".join(
+        top_loop.split())
     assert description in current_instructions
     assert "--service-ready" in cron
     assert "--service-final-write" in cron
