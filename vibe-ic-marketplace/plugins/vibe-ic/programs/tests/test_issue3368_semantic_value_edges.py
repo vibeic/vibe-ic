@@ -228,6 +228,38 @@ def test_native_bitfield_claim_must_match_actual_source_contract(tmp_path, chang
     assert _record_bitfield_consumer(tmp_path).state == "NOT_MEASURED"
 
 
+@_NATIVE
+def test_bitfield_binary_relabel_cannot_hide_source_required_proof(tmp_path):
+    import hashlib
+    from dataclasses import asdict
+    # Copied sealed exact-positive artifact, mounted at its original paths.
+    # Exercise only the real receipt consumer; no producer/tool is called.
+    seed = Path(os.environ["ISSUE3368_BITFIELD_SEED"])
+    report_path = seed / "out/encoding_audit_report.json"
+    original = report_path.read_bytes()
+    report = json.loads(original)
+    native_dir = Path(report["configuration"]["native_context"]).parent
+    hashes = lambda: {str(p): hashlib.sha256(p.read_bytes()).hexdigest()
+                     for p in native_dir.iterdir() if p.is_file()}
+    before = hashes()
+    finding = _consume(seed)
+    (tmp_path / "seed-consumer.json").write_text(json.dumps(asdict(finding), indent=2))
+    (tmp_path / "seed-report.json").write_bytes(original)
+    assert finding.state == "PASS", finding.detail
+    row, = report["interfaces"]
+    assert row["producer_encoding"] == row["consumer_encoding"] == "BITFIELD_CONTROL"
+    row["producer_encoding"] = row["consumer_encoding"] = "BINARY"
+    del row["semantic_proof"]
+    report["interface_population"] = audit._population.binding(report["interfaces"])
+    report_path.write_text(json.dumps(report))
+    (tmp_path / "tampered-report.json").write_bytes(report_path.read_bytes())
+    finding = _consume(seed)
+    (tmp_path / "tampered-consumer.json").write_text(json.dumps(asdict(finding), indent=2))
+    assert hashes() == before, "receipt verification must not regenerate native evidence"
+    assert finding.state == "NOT_MEASURED", finding.detail
+    assert "typed_bitfield_control_mismatch" in finding.detail
+
+
 def test_closed_boolean_and_opaque_grammars_are_not_scalar_defaults():
     boolean = r"""
 module source(input en, rst, output payload); assign payload = en & ~rst; endmodule
