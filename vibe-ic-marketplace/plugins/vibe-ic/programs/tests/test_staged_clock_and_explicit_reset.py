@@ -13,6 +13,7 @@ PROGRAMS = Path(__file__).resolve().parent.parent
 FIXTURES = Path(__file__).parent / 'fixtures/phase1_local'
 sys.path.insert(0, str(PROGRAMS))
 import phase1_doc_one_shot_runner as D
+import librelane_contract as LC
 
 
 def _public_cli(tmp_path, fixture, source_name, *, sdc_override=None, source_override=None):
@@ -110,6 +111,66 @@ def test_empty_clock_bootstrap_requires_a_declared_scalar_input(tmp_path):
         assert len(rows) == 1
         assert (rows[0]['name'], rows[0]['source_pin'], rows[0]['period_ns']) == (
             'actual_i', 'actual_i', 19)
+
+
+def _empty_l8_sdc_project(tmp_path, prose, sdc):
+    docs = tmp_path / 'input/docs'
+    docs.mkdir(parents=True)
+    (docs / 'contract.md').write_text(prose)
+    constraints = tmp_path / 'input/constraints'
+    constraints.mkdir()
+    (constraints / 'constraints.sdc').write_text(sdc)
+    generated = tmp_path / 'phase1/generated_docs'
+    generated.mkdir(parents=True)
+    (generated / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({
+        'top_module': 'neutral_counter', 'top_ports': [], 'ports': []}))
+    (generated / 'L19_CONSTRAINTS_PDK.json').write_text(json.dumps({'fields': {}}))
+    for name in ('L8_RTL_CONSTANTS', 'L8_TIMING_WAVEFORM'):
+        (generated / f'{name}.json').write_text(json.dumps({'clock_domains': []}))
+    return generated
+
+
+def test_explicit_sole_clock_and_unique_sdc_bootstrap_empty_l8(tmp_path):
+    generated = _empty_l8_sdc_project(
+        tmp_path,
+        '# Current contract\n\n`clk` is the sole clock, with a 10 ns period.\n',
+        'create_clock -name clk -period 10 [get_ports clk]\n')
+    D._post_emit_sdc_constraints(tmp_path)
+    for name in ('L8_RTL_CONSTANTS', 'L8_TIMING_WAVEFORM'):
+        rows = json.loads((generated / f'{name}.json').read_text())['clock_domains']
+        assert rows == [{
+            'name': 'clk', 'source_pin': 'clk',
+            'domain_kind': 'primary', 'role': 'master',
+            'freq_hz': 100_000_000, 'freq_mhz': 100.0, 'period_ns': 10.0,
+            'source': 'input/constraints/*.sdc',
+            'evidence': 'input/constraints/constraints.sdc',
+            'subject_evidence': 'input/docs/contract.md',
+            'reset_strategy': 'unspecified'}]
+    emitted = LC.emit_config(
+        tmp_path, 'neutral', tmp_path / 'phase3/librelane/config.json',
+        synthesis_only=True)
+    assert (emitted['CLOCK_PORT'], emitted['CLOCK_PERIOD']) == ('clk', 10.0)
+
+
+@pytest.mark.parametrize(('prose', 'sdc'), [
+    ('`clk` is the sole clock, with a 10 ns period.\n',
+     'create_clock -name clk -period 12 [get_ports clk]\n'),
+    ('`other_clk` is the sole clock, with a 10 ns period.\n',
+     'create_clock -name clk -period 10 [get_ports clk]\n'),
+    ('`clk` is the sole clock, with a 10 ns period.\n',
+     'create_clock -name clk -period 10 [get_ports clk]\n'
+     'create_clock -name aux -period 20 [get_ports aux]\n'),
+], ids=['period_mismatch', 'name_mismatch', 'multiple_sdc_clocks'])
+def test_explicit_sole_clock_does_not_override_ambiguous_or_mismatched_sdc(
+        tmp_path, prose, sdc):
+    generated = _empty_l8_sdc_project(tmp_path, prose, sdc)
+    D._post_emit_sdc_constraints(tmp_path)
+    for name in ('L8_RTL_CONSTANTS', 'L8_TIMING_WAVEFORM'):
+        assert json.loads((generated / f'{name}.json').read_text())['clock_domains'] == []
+    with pytest.raises(LC.Refusal, match='LL_CLOCK_AMBIGUOUS: 0 primary clocks'):
+        LC.emit_config(
+            tmp_path, 'neutral', tmp_path / 'phase3/librelane/config.json',
+            synthesis_only=True)
 
 
 def test_explicit_reset_role_without_timing_does_not_invent_semantics():
