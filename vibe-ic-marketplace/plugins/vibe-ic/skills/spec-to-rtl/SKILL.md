@@ -232,12 +232,24 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    a genuine floor. The structural extraction + routing is deterministic;
    deciding whether a prose sentence is a distinct *testable* requirement (so
    you can author its stimulus) is your LLM judgment.
-7. **Tell the orchestrator you're done**. The caller will re-invoke
-   `vibe_ic_one_shot_runner.py` so the runner detects the RTL at the
-   expected path, skips `step_rtl_gen`, and continues with: chip_top
-   wrapper auto-emit (v0.1.32+), `rtl_hygiene_lint --fix`, `eda_lint`,
-   `eda_synth`, `spec_conformance_check`, `rtl_repair_retry` (up to 3 retries
-   on `reference_tb` FAIL), `full_stack_tb_gen`, `final_audit`.
+7. **Tell the orchestrator you're done**. The caller must return through the
+   sole public Flow109 entry, preserving the original route, validated manifest
+   and selected current stable-ID window. For a bounded RTL-authoring re-entry:
+
+   ```bash
+   python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py <project> \
+     --route <ic|ip> --flow 109 --flow109-manifest <manifest.json> \
+     --entry-step D09 --exit-step D09 --execution-mode default
+   ```
+
+   D09/17 is the current RTL-authoring responsibility; position 17 is
+   display metadata only. The public runner resolves D09 to the registered
+   native owner, which detects the RTL at the expected path and applies only the
+   selected row's existing producer/consumer contract. Never pass D09 to
+   `design_one_shot_runner.py`, and never infer that unselected validation,
+   synthesis, testbench or audit rows ran. If the original request selected
+   later work, re-enter that exact current stable-ID window through the same
+   public entry and preserve each row's actual PASS/FAIL/NOT_MEASURED state.
 
 ## What this skill IS NOT
 
@@ -638,15 +650,23 @@ without a stated range needs no invented limit. The deterministic
 
 ### How this finding REACHES you (#2081, second half)
 
-Until v1.19.x nothing routed a Phase-3 timing verdict here. Step 23's
-`closed_loop.fallback_to` is 32 — post-route timing REPAIR — and step 10's is 7,
-constraint setup; both are physical remedies, and neither is this step.
+Until v1.19.x nothing routed a Phase-3 timing verdict here. The current Flow109
+responsibility map keeps the former native relation explicit: candidate timing
+closure is D49 at position 71 and owns native helper Step 23; post-route timing
+repair is D41 at position 63 and owns native Step 32; pre-layout timing is D26 at
+position 38 and owns native Step 10; and mode/constraint planning is D19 at
+position 31 and owns native Step 7. Positions are display metadata only. A
+user/operator selects the stable ID through the public entry; the registered
+native helper receives only its native step ID, never the D-id. The former
+native map's Step 23 → Step 32 and Step 10 → Step 7 fallbacks are physical
+remedies, and neither is this skill.
 `benchmark/CAPTURE_ROUTING.json`'s `phase3.sta` pointed at the STA runner and
 `sta-review`, also physical. So a run could prove at sign-off that the
 ARCHITECTURE cannot meet the period and have nowhere to put the discovery.
 
-`programs/sta_architectural_residual_check.py`, blocking at step 23, is that
-route. It reads the run's own post-route sign-off report and, per violating
+`programs/sta_architectural_residual_check.py`, blocking inside D49/71's
+registered native Step 23 owner, is that route. It reads the run's own
+post-route sign-off report and, per violating
 setup path, bounds what any physical remedy could still recover — the delay on
 buffer/inverter arcs, plus the adverse clock-tree insertion a perfectly
 balanced tree would remove. Slack beyond that bound is delay on LOGIC arcs, and
