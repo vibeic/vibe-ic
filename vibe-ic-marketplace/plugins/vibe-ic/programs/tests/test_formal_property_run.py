@@ -1031,3 +1031,149 @@ def test_neutral_bmc_wording_preserves_incomplete_obligations_and_report(tmp_pat
     assert 'reset_window' in report and 'depth 6' in report
     assert 'functional property' not in report and 'solver-hard' not in report
     assert 'declared.transfer' in report and 'INCOMPLETE' in report
+
+
+def _authored_chip_fixture(project, monkeypatch):
+    """Existing fake-transcript seam only: no SBY/Yosys/native proof."""
+    rd = project / "phase2/stage1/rtl"
+    rd.mkdir(parents=True)
+    rtl = rd / "sample.v"
+    rtl.write_text("module sample(input clk, input rst, output reg q);\n"
+                   "always @(posedge clk) if (rst) q <= 0; else q <= 1; endmodule\n")
+    formal = FPR._pl.formal_dir(project)
+    formal.mkdir(parents=True)
+    harness = formal / "formal_sample.sv"
+    harness.write_text("module formal_sample(input clk);\n"
+                       "(* anyseq *) wire rst; wire q;\n"
+                       "sample dut(.clk(clk), .rst(rst), .q(q));\n"
+                       "always @(posedge clk) assert(q == q); endmodule\n")
+    contract = {"chip_read_top": "sample", "property_denominator": 1,
+                "covered_obligations": [{"id": "fixture.self", "property": "fixture"}],
+                "unresolved_obligations": []}
+    (formal / "property_contract.json").write_text(json.dumps(contract))
+    calls = []
+    monkeypatch.setattr(FPR, "detect_engines", lambda _c: {"abc": True, "_env_reachable": True})
+    monkeypatch.setattr(FPR, "_program_discharge", lambda *args: None)
+    def fixture_transcript(sby, *_args, **_kwargs):
+        calls.append(str(sby))
+        for name in FPR.parse_sby_config(sby.read_text()):
+            src = formal / f"{sby.stem}_{name}" / "src"
+            src.mkdir(parents=True, exist_ok=True)
+            for staged in (rtl, harness):
+                shutil.copy2(formal / staged.name, src / staged.name)
+        return _REAL_SPM_LOG.replace("formal_spm_formal", sby.stem)
+    monkeypatch.setattr(FPR, "_run_sby", fixture_transcript)
+    kwargs = dict(harness=harness, rtl=[rtl], top="formal_sample", container=None,
+                  prove_engines="direct")
+    emitted = FPR.run(project, emit_only=True, **kwargs)
+    task = project / emitted["sby"]
+    return rtl, harness, formal, task, kwargs, calls
+
+
+@pytest.mark.parametrize("authored", [False, True], ids=["default", "public-sby"])
+def test_chip_read_provenance_reaches_real_consumer(tmp_path, monkeypatch, authored):
+    import _chip_synth_read as csr
+    import formal_proof_evidence_check as consumer
+    rtl, harness, formal, task, kwargs, calls = _authored_chip_fixture(tmp_path, monkeypatch)
+    if authored:
+        task.write_text(task.read_text().replace("safety: abc pdr", "safety: smtbmc yices"))
+    result = FPR.run(tmp_path, **kwargs, **({"sby": task} if authored else {}))
+    expected = csr.chip_read_record([rtl], [], "sample")
+    assert result["chip_read"] == expected
+    assert len(calls) == 1
+    expected_inputs = {p.name: FPR._sha256_file(p) for p in (rtl, harness)}
+    assert result["proof_inputs"]["files"] == expected_inputs
+    for name in FPR.parse_sby_config(task.read_text()):
+        src = formal / f"{task.stem}_{name}" / "src"
+        assert {p.name: FPR._sha256_file(p) for p in src.iterdir()} == expected_inputs
+    assert {r["name"]: r["sha256"] for r in expected["files"]} == {rtl.name: expected_inputs[rtl.name]}
+    assert consumer.proof_source_staleness(tmp_path, formal, result) == []
+    checked = consumer.audit(tmp_path)
+    assert not checked.get("chip_read_stale"), checked
+    assert "no chip read" not in json.dumps(checked)
+    # A forged result cannot borrow this record after the actual DUT changes.
+    rtl.write_text(rtl.read_text().replace("q <= 1", "q <= 0"))
+    assert consumer.proof_source_staleness(tmp_path, formal, result)
+    print(json.dumps({"fixture_only": True, "route": "public-sby" if authored else "default",
+                      "observed_chip_read": result["chip_read"], "consumer": checked,
+                      "forged_result_after_source_change": consumer.proof_source_staleness(tmp_path, formal, result)}))
+
+
+@pytest.mark.parametrize("mutation", ["missing-contract", "missing-rtl", "wrong-top",
+    "wrong-contract-top", "staged-hash", "different-source", "unrelated-task", "forged-script", "missing-harness", "read-omission", "read-substitution",
+    "define-only", "task-define", "duplicate-script" ])
+def test_authored_chip_read_refuses_unbound_inputs(tmp_path, monkeypatch, mutation):
+    rtl, harness, formal, task, kwargs, calls = _authored_chip_fixture(tmp_path, monkeypatch)
+    if mutation == "missing-contract":
+        (formal / "property_contract.json").unlink()
+    elif mutation == "missing-rtl":
+        kwargs.pop("rtl")
+    elif mutation == "missing-harness":
+        kwargs.pop("harness")
+    elif mutation == "wrong-top":
+        kwargs["top"] = "unrelated"
+    elif mutation == "wrong-contract-top":
+        (formal / "property_contract.json").write_text('{"chip_read_top":"unrelated"}')
+    elif mutation == "staged-hash":
+        (formal / rtl.name).write_text("module sample; endmodule\n")
+    elif mutation == "different-source":
+        alternate = tmp_path / rtl.name
+        alternate.write_text("module sample; endmodule\n")
+        kwargs["rtl"] = [alternate]
+    elif mutation == "unrelated-task":
+        task.write_text(task.read_text().replace("sample.v", "unrelated.v"))
+        (formal / "unrelated.v").write_text("module unrelated; endmodule\n")
+    elif mutation in {"read-omission", "read-substitution", "define-only", "task-define", "duplicate-script"}:
+        text = task.read_text()
+        read = next(line for line in text.splitlines() if line.startswith("read_verilog") and line.endswith("sample.v"))
+        replacement = {"read-omission": "", "read-substitution": read.replace("sample.v", "formal_sample.sv"),
+                       "define-only": read.replace("-DSIMULATION ", "-DFORMAL "),
+                       "task-define": "safety: " + read.replace("-DSIMULATION ", "-DFORMAL "),
+                       "duplicate-script": read}[mutation]
+        text = text.replace(read, replacement)
+        if mutation == "duplicate-script":
+            text += "\n[script]\nread_verilog -formal formal_sample.sv\nprep -top formal_sample\n"
+        task.write_text(text)
+        assert FPR.proof_inputs(task, formal)["files"][rtl.name] == FPR._sha256_file(rtl)
+    else:
+        task.write_text(task.read_text().replace("prep -top formal_sample", "chformal -remove\nprep -top formal_sample"))
+    result = FPR.run(tmp_path, sby=task, **kwargs)
+    assert result["verdict"] == "INCOMPLETE" and result["rc"] == 2, result
+    assert not result.get("chip_read") and result.get("all_proved") is False
+    assert not calls, "refused metadata must never reach the solver seam"
+    print(json.dumps({"fixture_only": True, "mutation": mutation, "observed": result}))
+
+
+@pytest.mark.parametrize("mutation", ["task-src", "second-task-src", "missing-task-src", "proof-inputs", "deck-define"])
+def test_chip_read_refuses_post_execution_input_drift(tmp_path, monkeypatch, mutation):
+    rtl, harness, formal, task, kwargs, calls = _authored_chip_fixture(tmp_path, monkeypatch)
+    execute = FPR._run_sby
+    inputs = FPR.proof_inputs
+    def changed_execution(sby, *args, **kw):
+        transcript = execute(sby, *args, **kw)
+        names = list(FPR.parse_sby_config(sby.read_text()))
+        selected = names[1] if mutation == "second-task-src" else names[0]
+        staged = formal / f"{sby.stem}_{selected}" / "src" / rtl.name
+        if mutation in {"task-src", "second-task-src"}:
+            staged.write_text("module sample; endmodule\n")
+        elif mutation == "missing-task-src":
+            staged.unlink()
+        elif mutation == "proof-inputs":
+            def forged_inputs(*a):
+                result = inputs(*a)
+                result["files"][rtl.name] = "0" * 64
+                return result
+            monkeypatch.setattr(FPR, "proof_inputs", forged_inputs)
+        else:
+            sby.write_text(sby.read_text().replace("-DSIMULATION", "-DFORMAL"))
+        return transcript
+    monkeypatch.setattr(FPR, "_run_sby", changed_execution)
+    result = FPR.run(tmp_path, sby=task, **kwargs)
+    print(json.dumps({"fixture_only": True, "mutation": mutation, "observed": result}))
+    assert len(calls) == 1
+    assert result["verdict"] == "INCOMPLETE" and result["rc"] == 2, result
+    assert not result.get("chip_read") and result["all_proved"] is False
+    assert any(word in result["reason"] for word in ("src", "proof_inputs", "deck"))
+    persisted = json.loads((formal / "formal_authoring_request.json").read_text())
+    assert persisted["verdict"] == "INCOMPLETE" and persisted["reason"] == result["reason"]
+    assert not (formal / "results.json").exists()
