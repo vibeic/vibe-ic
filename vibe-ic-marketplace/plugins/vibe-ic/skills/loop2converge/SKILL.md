@@ -75,7 +75,7 @@ RULE 0).
 
 | subject | entry | target |
 |---|---|---|
-| benchmark IC (doc→GDS) | `/vibe-ic-all <project> --pdk <pdk> --ic-name <ic>` | `flow_compliance_check` exit 0 |
+| benchmark IC (doc→GDS) | `/vibe-ic-all <project> --route ic --flow109-manifest <manifest> --entry-step <D-id> --exit-step <D-id> --pdk <pdk> --ic-name <ic>` | selected Flow109 row evidence; whole-flow acceptance remains separate |
 | IP-cell (doc→LEF) | same runner, IP route | LEF + GDS emitted, the 37.5 gate reached |
 | open benchmark | `/vibe-ic-benchmark <bench>` | the highest HONEST pass@1 |
 
@@ -108,8 +108,8 @@ only on a plugin upgrade, a repaired read path, or a suspicion of stale evidence
   selected by retained hashes; `UNRESOLVED` launches nothing. Do not invoke a guessed
   broad `--entry-step/--exit-step` window first and inspect it afterwards.
 - An explicit user-requested fresh/full rerun remains available: put one canonical,
-  contiguous existing-entry window (for example Steps 17–18) in
-  `explicit_rerun_steps` and record the owner's reason in the same request. The exact
+  contiguous stable-ID window (for example `D09` through `D11`, only when every
+  selected row is dispatchable) in `explicit_rerun_steps` and record the owner's reason in the same request. The exact
   first and last IDs are forwarded as the existing entry/exit window; sparse or
   automatically inferred multi-step sets remain `UNRESOLVED`. This is the only
   ordinary-continuation path allowed to bypass evidence-derived reuse.
@@ -305,8 +305,9 @@ Run through the one front door → classify each FAIL as flow / gate / tool → 
 fixing the layer that owns it → prove it in the cache against real artefacts with a
 falsification and a control → PR it to the owning repo → upgrade, restart, re-run.
 
-Next: run `/vibe-ic-all` (or `/vibe-ic-benchmark`) on the subject, then classify every
-FAIL per §2 before changing anything.
+Next: run `/vibe-ic-all` through the explicit Flow109 public entry (or use a
+benchmark dispatcher whose saved argv proves that same entry), then classify
+every FAIL per §2 before changing anything.
 
 ## Compliance gate (mandatory)
 

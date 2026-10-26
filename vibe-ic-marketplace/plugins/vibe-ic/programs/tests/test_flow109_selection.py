@@ -115,31 +115,68 @@ def test_context_rejects_changed_tool_identity_and_changed_selection():
         flow109.validate_execution_context(changed)
     changed = copy.deepcopy(original)
     changed["resolved_row"]["profile"]["dispatch"]["native_step_id"] = "21"
-    changed["context_sha256"] = flow109.digest({k: v for k, v in changed.items() if k != "context_sha256"})
+    changed["context_sha256"] = flow109.digest(
+        {k: v for k, v in changed.items() if k != "context_sha256"})
     with pytest.raises(flow109.Flow109Error, match="CONTEXT_STALE"):
         flow109.validate_execution_context(changed)
 
 
-def test_canonical_cli_plan_does_not_credit_or_rewrite_old_pass(tmp_path):
+def test_completion_audit_writer_stamps_only_validated_flow109_identity(
+        tmp_path, monkeypatch):
+    """The audit producer binds current flow identity to source, not omission."""
+    import flow_compliance_check
+
+    context = flow109.execution_context(flow109.resolve_plan(profile()),
+                                        "D09", "D09")
+    path = tmp_path / "flow109-context.json"
+    path.write_text(json.dumps(context))
+    monkeypatch.setenv("VIBEIC_FLOW109_CONTEXT", str(path))
+    identity = flow_compliance_check._resolved_flow_identity()
+    assert identity == {
+        "schema": "vibeic.resolved-flow-identity.v1",
+        "status": "RESOLVED",
+        "flow_id": "109",
+        "source": "VALIDATED_FLOW109_EXECUTION_CONTEXT",
+        "context_sha256": context["context_sha256"],
+        "registry_sha256": context["registry_sha256"],
+        "planner_sha256": context["planner_sha256"],
+    }
+
+    changed = copy.deepcopy(context)
+    changed["requested_step"] = "D11"
+    path.write_text(json.dumps(changed))
+    invalid = flow_compliance_check._resolved_flow_identity()
+    assert invalid["status"] == "INVALID"
+    assert invalid["flow_id"] is None
+
+
+def test_default_public_cli_runs_flow109_and_emits_current_identity(tmp_path):
     runner = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "vibe_ic_one_shot_runner.py")
     manifest = tmp_path / "manifest.json"
-    features = profile()
+    features = profile("Low-power secure scan SoC")
     features["requires_functional_safety"] = True
     manifest.write_text(json.dumps({"features": features}))
     old = tmp_path / "reports" / "phase3_one_shot.json"
     old.parent.mkdir()
     old.write_text('{"verdict":"PASS","native_identity":"preserve"}\n')
     before = old.read_bytes()
-    command = [sys.executable, str(runner), str(tmp_path), "--flow", "109",
+    # Omit --flow deliberately: 109 is the public runtime, not an opt-in label
+    # over the older route.
+    command = [sys.executable, str(runner), str(tmp_path),
                "--flow109-manifest", str(manifest), "--flow109-plan-only", "--route", "ic", "--no-dashboard"]
     result = subprocess.run(command, text=True, capture_output=True)
     assert result.returncode == 0, result.stderr
     plan = json.loads((tmp_path / "reports" / "flow109" / "plan.json").read_text())
+    assert plan["flow_id"] == "109"
+    identity = {row["id"]: row["position"] for row in plan["rows"]}
+    expected = {"D09": 17, "D11": 19, "D13": 21,
+                "D22": 34, "D23": 35, "D30": 42, "D50": 72}
+    assert {key: identity.get(key) for key in expected} == expected
     assert plan["flow109_acceptance"] == "NOT_MEASURED"
     assert old.read_bytes() == before
     assert not (tmp_path / "reports" / "flow109" / "admission.json").exists()
-    # Select an optional unmapped safety row explicitly: the ordinary digital
-    # profile's D06 now has a native owner, so it is no longer a refusal case.
+    # Select an optional unmapped safety row explicitly: this digital profile's
+    # D06 now has a native owner, so it is no longer a refusal case.
     unmapped = next(row['id'] for row in plan['rows'] if not row['profile'].get('dispatch'))
     result = subprocess.run([x for x in command if x != "--flow109-plan-only"]
                             + ["--entry-step", unmapped, "--exit-step", unmapped],
@@ -156,6 +193,18 @@ def test_canonical_cli_plan_does_not_credit_or_rewrite_old_pass(tmp_path):
     refusal = json.loads((tmp_path / "reports/flow109/admission.json").read_text())
     assert refusal["native_started"] is False
     assert old.read_bytes() == before
+
+
+def test_obsolete_explicit_public_flow_refuses_before_project_access(tmp_path):
+    runner = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic",
+                          "programs", "vibe_ic_one_shot_runner.py")
+    absent = tmp_path / "does-not-exist"
+    result = subprocess.run(
+        [sys.executable, str(runner), str(absent), "--flow", "70"],
+        text=True, capture_output=True)
+    assert result.returncode == 2
+    assert "invalid choice: '70'" in result.stderr
+    assert not absent.exists()
 
 
 def test_real_front_door_selection_translates_only_the_named_component(tmp_path, monkeypatch):

@@ -39,7 +39,10 @@ def _audit(steps, ledger=(), **kw):
     would be testing the refusal, not the rule under test."""
     doc = {"steps": [{"id": i, "name": "step %s" % i, "stage": "stage1",
                       "status": s} for i, s in steps],
-           "gate_execution_ledger": list(ledger)}
+           "gate_execution_ledger": list(ledger),
+           "resolved_flow_identity": {
+               "schema": "vibeic.resolved-flow-identity.v1",
+               "status": "RESOLVED", "flow_id": "109"}}
     doc.update(kw)
     return doc
 
@@ -181,6 +184,53 @@ def test_a_different_project_path_is_still_comparable():
                                     command_argv=["flow_compliance_check.py",
                                                   "/b/spm", "--strict"]))
     assert S.comparability(ref, cur)[0] is True
+
+
+def test_omitted_current_flow_and_explicit_109_are_the_same_scope():
+    ref = S.table_from_audit(_audit(
+        [("D09", "PASS")], verdict="PASS",
+        resolved_flow_identity={
+            "schema": "vibeic.resolved-flow-identity.v1",
+            "status": "RESOLVED", "flow_id": "109"},
+        command_argv=["flow_compliance_check.py", "/a", "--strict"]))
+    cur = S.table_from_audit(_audit(
+        [("D09", "PASS")], verdict="PASS",
+        command_argv=["flow_compliance_check.py", "/b", "--flow", "109",
+                      "--strict"]))
+    assert S.comparability(ref, cur)[0] is True
+
+
+def test_historical_omitted_flow_without_resolved_identity_is_not_current_109():
+    """Old omitted argv meant 70; omission alone must never inherit 109 now."""
+    historical = S.table_from_audit(_audit(
+        [("1", "PASS")], verdict="PASS",
+        resolved_flow_identity=None,
+        command_argv=["flow_compliance_check.py", "/old", "--strict"]))
+    current = S.table_from_audit(_audit(
+        [("D09", "PASS")], verdict="PASS",
+        resolved_flow_identity={
+            "schema": "vibeic.resolved-flow-identity.v1",
+            "status": "RESOLVED", "flow_id": "109"},
+        command_argv=["flow_compliance_check.py", "/new", "--strict"]))
+    ok, why = S.comparability(historical, current)
+    assert ok is False
+    assert "reference: omitted --flow has no authoritative" in why
+
+
+def test_historical_70_and_current_109_are_not_one_runtime_scope():
+    old = S.table_from_audit(_audit(
+        [("1", "PASS")], verdict="PASS",
+        resolved_flow_identity=None,
+        command_argv=["flow_compliance_check.py", "/old", "--flow", "70",
+                      "--strict"]))
+    current = S.table_from_audit(_audit(
+        [("D09", "PASS")], verdict="PASS",
+        command_argv=["flow_compliance_check.py", "/new", "--flow", "109",
+                      "--strict"]))
+    ok, why = S.comparability(old, current)
+    assert ok is False
+    assert "different resolved flow identity" in why
+    assert "reference 70" in why and "current 109" in why
 
 
 def test_a_table_with_no_recorded_argv_is_refused():

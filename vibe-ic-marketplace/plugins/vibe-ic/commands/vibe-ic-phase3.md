@@ -1,46 +1,51 @@
 ---
 name: vibe-ic-phase3
-description: Run Phase 3 (synth → PnR → GDS → DRC → LVS) via phase3_one_shot_runner. AI-monitored + close-loop.
-argument-hint: <project-dir> [--top-name chip_top] [--die-um 1500x1500] [--util 0.4] [--pdk auto|sky130A|<custom>]
+description: Run a bounded backend Flow109 row through the sole public entry in Default mode. AI-monitored + close-loop.
+argument-hint: <project-dir> --route ic|ip --flow109-manifest <manifest.json> --entry-step <D-id> --exit-step <D-id> [--top-name <top>] [--pdk <pdk>]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
-> `/vibe-ic-phase3 <project-dir>` (e.g. `/vibe-ic-phase3 1st_benchmark_example/phase2_v0119.48-vendor`).
+> `/vibe-ic-phase3 <project-dir> --route ic|ip --flow109-manifest <manifest.json> --entry-step <D-id> --exit-step <D-id>`.
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 
-# /phase3 — Phase 3 (silicon backend)
+# /vibe-ic-phase3 — bounded Flow109 backend entry
 
-**Prerequisite**: at least one of `<project>/rtl/*.sv` and `<project>/input/pdk/{liberty,lef}/` is present (PDK can be auto-detected or fall back to sky130A). `/phase2` complete is best.
+**Prerequisite**: every input declared by the selected current Flow109 row must
+exist and bind the current project. The manifest must select that row for the
+owner-declared IC/IP route.
 
 Main execution (**program-driven**):
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/programs/phase3_one_shot_runner.py $ARGUMENTS
+python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $ARGUMENTS \
+  --flow 109 --execution-mode default
 ```
 
-The runner automatically:
-1. PDK detect (input/pdk/liberty + lef → custom; fallback sky130A)
-2. macro detect (input/pdk_local/<vendor>/{lib,LEF,PA_GDS,Verilog})
-3. Calibre / Assura DRC + LVS deck detect
-4. yosys synth (macro libs as blackbox)
-5. OpenROAD floorplan + place + CTS + global_route → DEF + sta.rpt
-6. KLayout DEF→GDS (merge macro PA-GDS)
-7. KLayout DRC (when .lydrc or deck is available)
-8. Netgen LVS (when reference netlist is available)
+Do not call a backend owner directly. The public entry admits only the exact
+current row/window and retains its Flow109 request and attempt. D50 is the
+current path-delay ATPG responsibility at position 72, but it has no registered
+dispatch today; requesting D50 must refuse before native work. Never replace
+that refusal with a former path-ATPG entry. Use another backend ID only after
+confirming both its current position and dispatch in `flow/flow109.json`.
 
 After the run completes, the AI must:
 
-1. Read `<project>/reports/phase3_one_shot.json` and inspect the verdict
-2. For every FAIL step:
+1. Read `<project>/reports/flow109/attempts/` and every selected
+   `<project>/reports/flow109/components/<D-id>.json`.
+2. For a selected registered owner that emits the corresponding artifact, use
+   its exact FAIL evidence:
    - **`synth`** FAIL → check `phase3/synth/synth.log`; common: vendor primitive missing black-box (need to add macro `read_liberty -lib`), `SIMULATION` define not effective (runner already set), `assertions.sv` leaking into synth (runner already filters)
    - **`pnr`** FAIL → check `phase3/pnr/openroad.log`; common: site name detected wrong, metal_prefix detected wrong, CTS buffer not in liberty, die size too small (util > 80% requires enlarging die), missing TRACKS (runner already adds `make_tracks`), SDC ref FPGA-only port → close-loop fix `_detect_pdk` heuristic
    - **`gds`** FAIL → check KLayout stream-out log; usually LEF conflict (multiple LEF variants for the same macro) → fix `lef_by_macro` selection logic
    - **`drc` / `lvs`** WAIVED is legal (commercial deck must be run offline); but if .lydrc should exist yet was not found, hint to fix the path
-3. All PASS / PASS_WITH_WAIVERS → hint: tapeout review
+3. A selected-row PASS permits only the next dependency-valid Flow109 request;
+   it is not tapeout or whole-flow acceptance.
 
 **Helper skills:** `synthesis-driver` / `pnr-orchestrate` / `drc-orchestrate` / `lvs-orchestrate` / `gds-export` / `tapeout-checklist`
 
-**Rule:** Phase 3 PASS requires synth + pnr + gds all PASS (DRC/LVS may be WAIVED → must be run offline for sign-off before tapeout).
+**Rule:** the selected Flow109 attempt and every selected component must be
+current and terminal. Missing signoff remains NOT_MEASURED; a row-local PASS is
+never promoted to backend or whole-flow PASS by this command.
 
 ---
 

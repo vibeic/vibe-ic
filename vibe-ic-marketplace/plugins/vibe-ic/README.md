@@ -1,4 +1,4 @@
-# vibe-ic — AI-Native IC Design plugin (**v1.32.40**)
+# vibe-ic — AI-Native IC Design plugin (**v1.32.41**)
 
 **A deterministic program layer with AI-backup skills, driving spec → RTL → GDS.**
 
@@ -12,10 +12,23 @@ deliberately leave.
 ## ► The one front door
 
 ```bash
-python3 programs/vibe_ic_one_shot_runner.py <project>
+python3 programs/vibe_ic_one_shot_runner.py <project> --route ic \
+  --flow 109 --flow109-manifest <project>/input/flow109_manifest.json \
+  --entry-step D09 --exit-step D09 --execution-mode default
 ```
 
-That single runner drives the whole chain:
+`vibe_ic_one_shot_runner.py` is the only public Flow109 entry. A run supplies
+an explicit feature manifest and an inclusive stable-ID window; omission is a
+refusal, not permission to fall back to another flow. Default execution is
+spelled `--execution-mode default`. Use `flow/flow109.json` as the authority
+for both the ID and its 1-based position. Common digital anchors are D09/17
+(RTL), D11/19 (lint), D13/21 (simulation), D22/34 (synthesis), D23/35 (DFT),
+D30/42 (handoff), and D50/72 (path ATPG). A registered row without a current
+dispatch, including D50 today, refuses before native work; do not substitute a
+former numeric entry.
+
+That single runner drives each admitted bounded window through its registered
+owner and consumer:
 
 | Phase | What runs |
 |-------|-----------|
@@ -96,7 +109,9 @@ Entry points:
 - **Open RTL evaluations**: `benchmark_dispatch.py --solve` → the normal
   `vibe_ic_one_shot_runner.py`; only input/output and official-scorer adapters
   vary by dataset.
-- **Full IC evaluations**: `/vibe-ic-all <project>` + `benchmark-verify`.
+- **Full IC evaluations**: `/vibe-ic-all <project> --route ic
+  --flow109-manifest <manifest> --entry-step <D-id> --exit-step <D-id>` +
+  `benchmark-verify`; a bounded result is not whole-flow acceptance.
 - **Blocked / out-of-scope datasets**: document only; do not publish a number.
 
 See `benchmark/README.md` for the full harness orientation and per-benchmark quickstarts.

@@ -1,40 +1,41 @@
 ---
 name: vibe-ic-phase23
-description: Chain /vibe-ic-phase2 → /vibe-ic-phase3 via phase23_one_shot_runner (true chained orchestrator — delegates to design_one_shot_runner.py + phase3_one_shot_runner.py, not monolithic). AI-monitored + close-loop.
-argument-hint: <project-dir> [--top-name chip_top] [--skip-hardware] [--max-rtl-repair-retries 3] [--skip-phase2|--skip-phase3]
+description: Run one explicit current Flow109 window through the sole public entry in Default mode. AI-monitored + close-loop.
+argument-hint: <project-dir> --route ic|ip --flow109-manifest <manifest.json> --entry-step <D-id> --exit-step <D-id> [--top-name <top>] [--pdk <pdk>]
 ---
 > **Missing arg?** When `$ARGUMENTS` is empty, prompt the user first:
-> `/vibe-ic-phase23 <project-dir>` (e.g. `/vibe-ic-phase23 1st_benchmark_example/phase2_v0119.48-vendor`).
+> `/vibe-ic-phase23 <project-dir> --route ic|ip --flow109-manifest <manifest.json> --entry-step <D-id> --exit-step <D-id>`.
 > The AI must NOT guess the path; a concrete project path is required before continuing.
 
 
-# /vibe-ic-phase23 — Phase 2 + Phase 3 true chain
+# /vibe-ic-phase23 — bounded cross-stage Flow109 entry
 
 Main execution (**program-driven**):
 
 ```bash
-python3 ${CLAUDE_PLUGIN_ROOT}/programs/phase23_one_shot_runner.py $ARGUMENTS
+python3 ${CLAUDE_PLUGIN_ROOT}/programs/vibe_ic_one_shot_runner.py $ARGUMENTS \
+  --flow 109 --execution-mode default
 ```
 
-This runner is a **thin-shell chain**:
-1. Delegates to `design_one_shot_runner.py` to run Phase 2 (rig_topology skeleton → phase1 → rtl_gen → reference_tb → yosys → qsf/sdc → otp_check → fpga compile/burn → <half-duplex-tester> → manifests → final_audit @phase 2)
-2. If Phase 2 verdict==FAIL, **auto-halt** without entering Phase 3 (unless `--skip-phase3` is the user-specified alias usage)
-3. Phase 2 PASS / PASS_WITH_WAIVERS → delegates to `phase3_one_shot_runner.py` to run Phase 3 (synth/PnR/GDS/DRC/LVS)
-4. Aggregates JSON reports from both phases → `<project>/reports/phase23_one_shot.json`
+The command no longer selects a separate phase-chain route. The single public
+front door resolves the explicit stable-ID window from `flow/flow109.json` and
+uses only registered owners. D09/17, D11/19, D13/21, D22/34, D23/35 and D30/42
+are the current frontend anchors. The window must be contiguous in the selected
+plan and fully dispatchable; otherwise the request refuses before approximation.
 
 After the run completes, the AI must (combine `/vibe-ic-phase2` + `/vibe-ic-phase3` monitoring rules):
 
-1. Read `<project>/reports/phase23_one_shot.json` — inspect `phase2.verdict` / `phase3.verdict` / overall `verdict`
-2. Phase 2 FAIL → close-loop per `/vibe-ic-phase2` rules; Phase 3 FAIL → per `/vibe-ic-phase3` rules
-3. **Acceptance gate** (per CLAUDE.md SOLE ACCEPTANCE CRITERION):
-   - `Overall: PASS` — production tapeout-ready
-   - `Overall: PASS_WITH_WAIVERS` — every deferred step in waivers.json must carry evidence + ticket id + `review_required: true`
-   - `Overall: FAIL` — not complete, keep working
-4. Individual gate PASS does NOT mean Phase 2+3 is complete
+1. Read the immutable request and attempt under `<project>/reports/flow109/`
+   plus every selected component result.
+2. Close-loop only the first selected row that is FAIL or NOT_MEASURED; later
+   rows must remain not executed.
+3. Preserve the selected rows' exact PASS/FAIL/NOT_MEASURED states; do not
+   fold missing or not-executed rows into PASS.
+4. A selected-row or bounded-window PASS does not mean the whole flow is
+   complete.
 
-**Flag mapping:**
-- `--skip-phase3` ≡ exactly equivalent to `/vibe-ic-phase2`
-- `--skip-phase2` ≡ exactly equivalent to `/vibe-ic-phase3` (precondition: rtl/ + generated_docs/ already prepared)
+Do not use phase skip aliases to emulate a Flow109 window. Use only the current
+stable IDs and positions recorded by the registry.
 
 **Helper skills:** same as `/vibe-ic-phase2` + `/vibe-ic-phase3`, plus `tapeout-checklist`, `flow-orchestrate`.
 

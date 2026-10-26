@@ -171,10 +171,13 @@ SUBJECT_AUDIT_REPLAY = "audit_replay"
 SUBJECT_REAL_IC_GATE = "real_ic_gate"
 
 #: Flags that do not change WHICH steps a compliance pass measures, so two
-#: invocations differing only in these are still comparable. Everything else —
-#: `--stage`, `--stage-id`, `--phase`, `--exclude-step`, `--skip-*` — narrows the
-#: population and makes the two tables answers to different questions.
-_SCOPE_NEUTRAL_FLAGS = {"--json", "--read-only", "--flow", "--flow-def"}
+#: invocations differing only in these are still comparable. `--flow 109` is
+#: handled on a separate authoritative identity axis: an explicit current value
+#: can equal an omitted value only when the producer stamped a validated current
+#: identity. Everything else — `--stage`, `--stage-id`, `--phase`,
+#: `--exclude-step`, `--skip-*` — narrows the population and makes the two
+#: tables answers to different questions.
+_SCOPE_NEUTRAL_FLAGS = {"--json", "--read-only", "--flow-def"}
 
 
 #: Cached so a consumer that builds many tables pays the owning module's import
@@ -379,6 +382,7 @@ def table_from_audit(audit: Dict[str, Any], source: str = "") -> Dict[str, Any]:
         "version": audit.get("version"),
         "run_at": audit.get("run_at"),
         "command_argv": audit.get("command_argv"),
+        "resolved_flow_identity": audit.get("resolved_flow_identity"),
         "step_count": len(rows),
         "duplicate_step_ids": sorted(set(duplicates)),
         # R-0915-85 — the words in this artefact that the reform deleted. A
@@ -424,6 +428,12 @@ def _scope_flags(argv: Optional[List[Any]]) -> Optional[Tuple[str, frozenset]]:
         tok = str(argv[i])
         if tok.startswith("-"):
             name = tok.split("=", 1)[0]
+            if name == "--flow":
+                if "=" not in tok and i + 1 < len(argv) \
+                        and not str(argv[i + 1]).startswith("-"):
+                    i += 1
+                i += 1
+                continue
             if name not in _SCOPE_NEUTRAL_FLAGS:
                 # A narrowing flag carries its VALUE into the identity:
                 # `--exclude-step 39` and `--exclude-step 7` scope differently.
@@ -438,6 +448,52 @@ def _scope_flags(argv: Optional[List[Any]]) -> Optional[Tuple[str, frozenset]]:
                 i += 1
         i += 1
     return prog, frozenset(flags)
+
+
+def _flow_identity(table: Dict[str, Any]) -> Tuple[Optional[str], str]:
+    """Return an authoritative flow ID and its evidence source.
+
+    An explicit ``--flow`` value is self-describing. An omitted value is not:
+    immutable evidence may predate the current default, so only the producer's
+    validated resolved identity can authorize it.
+    """
+    argv = table.get("command_argv")
+    explicit: Optional[str] = None
+    if isinstance(argv, list):
+        i = 1
+        while i < len(argv):
+            tok = str(argv[i])
+            if tok == "--flow":
+                if i + 1 < len(argv) and not str(argv[i + 1]).startswith("-"):
+                    explicit = str(argv[i + 1])
+                else:
+                    return None, "recorded --flow has no value"
+                break
+            if tok.startswith("--flow="):
+                explicit = tok.split("=", 1)[1]
+                if not explicit:
+                    return None, "recorded --flow has no value"
+                break
+            i += 1
+
+    resolved = table.get("resolved_flow_identity")
+    resolved_id = None
+    if (isinstance(resolved, dict)
+            and resolved.get("schema") == "vibeic.resolved-flow-identity.v1"
+            and resolved.get("status") == "RESOLVED"
+            and isinstance(resolved.get("flow_id"), str)
+            and resolved.get("flow_id")):
+        resolved_id = resolved["flow_id"]
+    if explicit is not None and resolved_id is not None and explicit != resolved_id:
+        return None, ("recorded --flow=%s conflicts with resolved flow identity %s"
+                      % (explicit, resolved_id))
+    if resolved_id is not None:
+        return resolved_id, "resolved_flow_identity"
+    if explicit is not None:
+        return explicit, "explicit --flow"
+    status = resolved.get("status") if isinstance(resolved, dict) else "ABSENT"
+    return None, ("omitted --flow has no authoritative resolved flow identity "
+                  "(identity status %s)" % status)
 
 
 def comparability(ref: Dict[str, Any], cur: Dict[str, Any]) -> Tuple[bool, str]:
@@ -462,6 +518,19 @@ def comparability(ref: Dict[str, Any], cur: Dict[str, Any]) -> Tuple[bool, str]:
     if rs[0] != cs[0]:
         return False, ("different producer: reference was written by %s, current "
                        "by %s" % (rs[0], cs[0]))
+    rflow, rflow_why = _flow_identity(ref)
+    cflow, cflow_why = _flow_identity(cur)
+    if rflow is None or cflow is None:
+        unknown = []
+        if rflow is None:
+            unknown.append("reference: " + rflow_why)
+        if cflow is None:
+            unknown.append("current: " + cflow_why)
+        return False, ("flow identity is not comparable: " + "; ".join(unknown))
+    if rflow != cflow:
+        return False, ("different resolved flow identity: reference %s (%s), "
+                       "current %s (%s)"
+                       % (rflow, rflow_why, cflow, cflow_why))
     if rs[1] != cs[1]:
         only_ref = sorted(rs[1] - cs[1])
         only_cur = sorted(cs[1] - rs[1])
@@ -479,8 +548,9 @@ def comparability(ref: Dict[str, Any], cur: Dict[str, Any]) -> Tuple[bool, str]:
     ok, why = _run_shape_comparability(ref, cur)
     if not ok:
         return False, why
-    return True, ("same producer (%s), same scoping flags %s, and %s"
-                  % (rs[0], sorted(rs[1]) or ["<none>"], why))
+    return True, ("same producer (%s), same resolved flow identity %s, same "
+                  "scoping flags %s, and %s"
+                  % (rs[0], rflow, sorted(rs[1]) or ["<none>"], why))
 
 
 def _run_shape_comparability(ref: Dict[str, Any],

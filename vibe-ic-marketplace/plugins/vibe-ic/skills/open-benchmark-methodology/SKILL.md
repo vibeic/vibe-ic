@@ -20,7 +20,9 @@ benchmark_dispatch.py <bench> --solve
   -> task_nature_route                     (input-only advisory proposal)
   -> needs_ai_routing.jsonl                (AI judges task nature before runner)
   -> benchmark_dispatch.py <bench> --resume (hash-bound AI route validation)
-  -> vibe_ic_one_shot_runner --entry-step  (normal product runner)
+  -> vibe_ic_one_shot_runner --flow 109 --flow109-manifest ...
+       --entry-step <stable-ID> --exit-step <stable-ID>
+       --execution-mode default             (normal product runner)
   -> Program candidate or declared AI backup
   -> independent hash-bound AI review
   -> benchmark_dispatch.py <bench> --resume
@@ -29,9 +31,12 @@ benchmark_dispatch.py <bench> --solve
   -> official host scorer
 ```
 
-For whole-IC `benchmark_clean`, use the ordinary `/vibe-ic-all` entry,
-`vibe_ic_one_shot_runner.py`, and the `benchmark-verify` skill. A benchmark IC
-must not select another solver because of its IC name.
+For whole-IC `benchmark_clean`, use `/vibe-ic-all` only when its saved argv
+enters `vibe_ic_one_shot_runner.py` with `--flow 109`, an explicit feature
+manifest, stable-ID window, and `--execution-mode default`; then use the
+`benchmark-verify` skill. A benchmark IC must not select another solver because
+of its IC name. D09/17, D11/19, D13/21, D22/34, D23/35, D30/42 and D50/72 are
+current ID/position pairs; position is never an entry argument.
 
 Forbidden alternatives include:
 

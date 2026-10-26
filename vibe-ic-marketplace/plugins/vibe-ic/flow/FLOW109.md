@@ -1,11 +1,30 @@
 # 109-flow implementation entry
 
-The existing general front door now accepts an explicit `--flow 109` selection.
+The sole public entry is `programs/vibe_ic_one_shot_runner.py` with explicit
+`--flow 109`, `--flow109-manifest`, stable-ID window, and Default execution.
 `flow109.json` owns the stable responsibility IDs, four phases, seven stages,
-Boolean selection, per-row Default tool profiles, source-bound old-70 mapping,
+Boolean selection, per-row Default tool profiles, source-bound owner mapping,
 and the 277 metric specifications. `G1` through `G9` name the nine gate layers;
-`L1` through `L27` remain specification documents. No old matrix result is
-credited to the new rows or gate layers.
+`L1` through `L27` remain specification documents. No result from another
+entry is credited to the current rows or gate layers.
+
+User/operator instructions name only the stable ID. The 1-based position is
+reported alongside it for review, never passed as `--entry-step` or
+`--exit-step`:
+
+| Responsibility | Stable ID | Position |
+|---|---:|---:|
+| RTL authoring | D09 | 17 |
+| RTL validation and lint | D11 | 19 |
+| Functional simulation and coverage | D13 | 21 |
+| Synthesis | D22 | 34 |
+| DFT architecture and insertion | D23 | 35 |
+| Netlist handoff | D30 | 42 |
+| Path-delay ATPG | D50 | 72 |
+
+D50 currently has no dispatch in `flow109.json`; the public entry therefore
+refuses that request before native work. Documentation must not substitute an
+older path-ATPG command.
 
 ## Resolve a plan
 
@@ -17,7 +36,8 @@ they are not evidence that a project's features have been independently checked.
 
 ```
 python3 programs/vibe_ic_one_shot_runner.py PROJECT --route ic \
-  --flow 109 --flow109-manifest INPUT_MANIFEST.json --flow109-plan-only
+  --flow 109 --flow109-manifest INPUT_MANIFEST.json --flow109-plan-only \
+  --execution-mode default
 ```
 
 The result is `reports/flow109/plan.json` with `NOT_MEASURED` execution and
@@ -34,12 +54,12 @@ existing producer and complete canonical consumer. For example:
 ```
 python3 programs/vibe_ic_one_shot_runner.py PROJECT --route ic \
   --flow 109 --flow109-manifest INPUT_MANIFEST.json \
-  --entry-step D38 --exit-step D38 --no-dashboard
+  --entry-step D09 --exit-step D09 --execution-mode default --no-dashboard
 ```
 
-This dispatches the existing Default CTS window with its original execution ID
-and receipts. Qualification must succeed both at admission and at the actual
-producer boundary. The manifest supplies `runtime_tool_uses` and a
+This dispatches the registered Default RTL-authoring owner for D09/17.
+Qualification must succeed both at admission and at the actual producer
+boundary. The manifest supplies `runtime_tool_uses` and a
 project-relative `qualification_registry`; source-owned use IDs are returned by
 `resolve_step`. The admission module owns the exact identity/evidence schema.
 An unavailable admission implementation refuses before native dispatch.
@@ -48,16 +68,16 @@ The request is preserved under `reports/flow109/requests/`. It binds the
 registry, planner, selected features/profile, responsibility, runtime tool
 identities and qualification path. Child execution receives the explicit
 `VIBEIC_FLOW109_CONTEXT` path. The source resolver revalidates this context;
-ordinary 70-flow invocation clears an inherited 109 context.
+any non-Flow109 invocation clears an inherited Flow109 context and is not a
+substitute for this request.
 
-Only a single explicit mapped component is dispatchable in this tranche.
-The registry currently maps 28 rows: 22 existing backend components and the
-A01, A04, A05, D44, D55 and D62 adapters described below. A dispatch mapping is
-not a native test result or a completed row. The remaining 81 rows return
-`FLOW109_PRODUCER_UNIMPLEMENTED`. Translating an entire
-new span into an old span would silently execute a different dependency order,
-so multi-row execution remains `FLOW109_WINDOW_UNIMPLEMENTED` until its actual
-adapters are implemented. This boundary can be extended as implementation lands.
+The current registry has 109 rows: 90 have at least one registered dispatch and
+19 have none. A dispatch mapping is not a native test result or a completed
+row. A requested window is admitted only when every selected row has a dispatch
+and the resolver can preserve one supported ownership sequence. A missing row
+returns `FLOW109_PRODUCER_UNIMPLEMENTED`; an unsupported ownership crossing
+returns `FLOW109_WINDOW_DISPATCH_UNSUPPORTED`. Neither condition authorizes a
+different entry or dependency order.
 
 Native component PASS remains scoped to the existing consumer. The new metric
 bindings, G1-G9 checks, full route acceptance and tool/profile qualifications
