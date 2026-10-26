@@ -463,8 +463,40 @@ def _step15_sdc(project):
         raise em.Refusal('BACKEND_STEP15_SDC_BINDING_CHANGED', str(record_path)) from exc
 
 
+def _runner_context():
+    """Return the active runner, preserving an invocation's retained source.
+
+    A long phase runner may already have retained and activated its immutable
+    plugin tree when this backend module is imported.  Importing the phase
+    runner by name can then select a second module object whose ``PROGRAMS_DIR``
+    still names the replaceable installed tree.  Bind the existing active
+    context and fail closed if its retained root/manifest/program directory no
+    longer describe the same runtime tree.
+    """
+    from _ppa.power import _runner_context as active_runner_context
+    import runtime_program_tree as runtime_tree
+
+    R = active_runner_context()
+    tree = getattr(R, "_RUNTIME_PROGRAM_TREE", None)
+    retained_root = os.environ.get(runtime_tree.ENV_ROOT, "")
+    retained_manifest = os.environ.get(runtime_tree.ENV_MANIFEST, "")
+    if tree is None and not retained_root and not retained_manifest:
+        return R
+    try:
+        selected = Path(getattr(R, "PROGRAMS_DIR"))
+        if (tree is None or not retained_root or not retained_manifest
+                or selected.is_symlink()
+                or selected.resolve() != Path(tree.programs_dir).resolve()
+                or Path(retained_root) != Path(tree.plugin_root)
+                or Path(retained_manifest) != Path(tree.manifest_path)):
+            raise ValueError("active runner and retained program tree disagree")
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        raise em.Refusal(
+            "BACKEND_RUNTIME_PROGRAM_IDENTITY_INVALID", str(exc)) from exc
+    return R
+
+
 def _parameters(project, params):
-    from _ppa.power import _runner_context
     R = _runner_context()
     import librelane_contract as ll
     missing = [name for name in ("pdk_name", "image_id", "pdk_root", "top")
@@ -2424,7 +2456,7 @@ def produce(project, params):
                             f"; {reason}").strip('; ')
     # These are the existing canonical report producers, scoped to this row.
     # They consume actual native outputs; they do not stand in for native work.
-    import phase3_one_shot_runner as R
+    R = _runner_context()
     names = {'23': {'sta_signoff', 'sta_corner', 'sta_record', 'sta_architectural_residual'},
              '24': {'ir_drop'}, '25': {'em_signoff'}, '26': {'antenna'}}.get(sid, set())
     if sid == '23' and params.get('execution_mode') == 'default':
