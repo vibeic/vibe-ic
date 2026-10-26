@@ -146,7 +146,6 @@ def test_reconciliation_rejects_measured_length_port_and_clock_mutations(tmp_pat
 # D09 planned intent -> the EXISTING run_chain consumer. Native I/O is a
 # neutral payload replay, never a claimed new native D23 acceptance result.
 import pytest
-import os
 import hashlib
 import spec_declaration_emit as DECL
 import librelane_contract as LL
@@ -201,10 +200,12 @@ def _planned(project, intent=None):
 
 def _native_payload(project, monkeypatch, *, actual=2):
     calls = []
-    retained = Path(os.environ['VIBEIC_RETAINED_D23_CONTROL'])
+    retained = Path(__file__).parent / 'fixtures' / 'd23_native_controls'
+    monkeypatch.setattr(S, 'resolve_liberty', lambda pdk, override: (
+        str(retained / 'semantic.lib'), 'function-only unit fixture; native integration sealed separately'))
     if actual == 2:
         (project / 'phase2/stage2/synth/netlist.v').write_bytes(
-            (retained / 'phase2/stage2/synth/netlist.v').read_bytes())
+            (retained / 'input_mapped.v').read_bytes())
     def native(project, argv, **kwargs):
         assert argv[:2] == ['fault', 'chain']  # no new native/tool path
         calls.append(argv)
@@ -216,8 +217,8 @@ def _native_payload(project, monkeypatch, *, actual=2):
                     + '\' END FAULT METADATA */\n' + _mapped(actual, scan=True))
         path = project / 'phase2/stage2/dft/scan_chain_work/chained.v'
         if actual == 2:
-            path.write_bytes((retained / 'phase2/stage2/dft/scan_chain_work/chained.v').read_bytes())
-            log = (retained / 'phase2/stage2/dft/scan_chain_work/native_chain.log').read_text()
+            path.write_bytes((retained / 'chained.v').read_bytes())
+            log = (retained / 'native_chain.log').read_text()
             # Preserve the exact combined native log bytes used by run_chain.
             out, separator, err = log.rpartition('\n')
             assert separator

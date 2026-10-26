@@ -1,0 +1,15 @@
+/* Function-only UNIT fixture. No PDK timing or native qualification claim. */
+library (d23_control_unit) {
+  cell (sky130_fd_sc_hd__mux2_1) {
+    pin (A0) { direction : input; }
+    pin (A1) { direction : input; }
+    pin (S) { direction : input; }
+    pin (X) { direction : output; function : "((!S & A0) | (S & A1))"; }
+  }
+  cell (sky130_fd_sc_hd__dfxtp_1) {
+    ff (IQ, IQN) { clocked_on : "CLK"; next_state : "D"; }
+    pin (CLK) { direction : input; }
+    pin (D) { direction : input; }
+    pin (Q) { direction : output; function : "IQ"; }
+  }
+}
