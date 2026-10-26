@@ -1294,7 +1294,8 @@ def _whole_copy_assignments(module, signal, *, source=False):
                 statement_start = offset + 1
         leader = module.body[statement_start:assignment.start()].strip()
         if (quoted or depth or not re.fullmatch(
-                r'(?:assign|begin|always(?:_\w+)?(?:\s*@\s*\*)?'
+                r'(?:assign|begin|else(?:\s+begin)?|'
+                r'always(?:_\w+)?(?:\s*@\s*\*)?'
                 r'(?:\s+begin)?)?', leader)):
             continue
         target, value = assignment.group(1), assignment.group(2)

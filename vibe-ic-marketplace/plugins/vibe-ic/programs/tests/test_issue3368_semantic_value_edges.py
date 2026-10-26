@@ -303,6 +303,46 @@ def test_whole_copy_after_closed_control_header_remains_opaque_value():
     assert producer.encoding == consumer.encoding == "OPAQUE_VALUE"
 
 
+def _if_else_edge(else_statement):
+    source = r"""
+module source(input [7:0] data, output [7:0] payload);
+  assign payload = data;
+endmodule
+module sink(input [7:0] payload, input choose, output reg [7:0] accepted);
+  always @* if (choose) accepted <= payload;
+            else        ELSE_STATEMENT
+endmodule
+module neutral;
+  wire [7:0] link;
+  source a(.data(8'h5a), .payload(link));
+  sink b(.payload(link), .choose(1'b1), .accepted());
+endmodule
+""".replace("ELSE_STATEMENT", else_statement)
+    widths = {"source": {"data": 8, "payload": 8},
+              "sink": {"payload": 8, "choose": 1, "accepted": 8},
+              "neutral": {"link": 8}}
+    return source, widths
+
+
+@_NATIVE
+def test_native_if_else_whole_copies_remain_opaque_value(tmp_path):
+    source, widths = _if_else_edge("accepted <= payload;")
+    result, report = _run(tmp_path, source)
+    assert result.returncode == 0, result.stdout + result.stderr
+    row, = report["interfaces"]
+    assert (row["producer_encoding"], row["consumer_encoding"],
+            row["status"]) == (
+                "OPAQUE_VALUE", "OPAQUE_VALUE", "NOT_APPLICABLE")
+    assert _consume(tmp_path).state == "PASS"
+    producer, consumer = _semantic_role(source, widths)
+    assert producer.encoding == consumer.encoding == "OPAQUE_VALUE"
+
+
+def test_else_arm_relational_expression_is_not_a_whole_copy():
+    source, widths = _if_else_edge("accepted = accepted <= payload;")
+    assert _semantic_role(source, widths) is None
+
+
 @pytest.mark.parametrize("statement", [
     '`define COPY_TEXT "accepted <= payload;"',
     "always @* begin /* accepted <= payload; */ accepted = 8'h00; end",
