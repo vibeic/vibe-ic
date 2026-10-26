@@ -294,6 +294,40 @@ def test_authorizer_refuses_ambiguous_scope_as_not_measured(tmp_path):
     assert verdict["structural_result"]["verdict"] == "NOT_MEASURED"
 
 
+def test_authorizer_does_not_admit_yosys_elaboration_failure(tmp_path):
+    _native_ready()
+    _, task = _review_task(tmp_path, WRONG)
+    declaration = _contract(WRONG)
+    declaration["top"] = "missing_top"
+    _write_structural_review(task, WRONG, declaration=declaration)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == bd._NOT_MEASURED
+    assert verdict["challenge_result"]["status"] == "PASS"
+    assert verdict["structural_result"]["verdict"] == "NOT_MEASURED"
+    assert {item["code"] for item in verdict["structural_result"]["findings"]} == {
+        "STRUCTURAL_PROOF_EXECUTION_UNMEASURED"}
+    assert any("native structural proof was NOT_MEASURED" in item
+               for item in verdict["unmeasurable"])
+
+
+def test_authorizer_rejects_generic_structural_fail(tmp_path, monkeypatch):
+    _, task = _review_task(tmp_path, WRONG)
+    _write_structural_review(task, WRONG)
+
+    def generic_fail(*_args, **_kwargs):
+        return {"verdict": "FAIL", "findings": [{
+            "code": "STRUCTURAL_PROOF_EXECUTION_FAILED",
+            "message": "synthetic future generic failure"}]}
+
+    monkeypatch.setattr("rtl_repair_contract.run_structural_contract", generic_fail)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED"
+    assert verdict["challenge_result"]["status"] == "PASS"
+    assert verdict["structural_result"]["verdict"] == "FAIL"
+    assert any("generic structural FAIL is not a measured" in item
+               for item in verdict["reasons"])
+
+
 def test_authorizer_requires_prior_functional_pass(tmp_path):
     _, task = _review_task(tmp_path, WRONG, functional="FAIL")
     _write_structural_review(task, WRONG)

@@ -834,8 +834,9 @@ def run_structural_contract(
                        "network": "none"},
         }
         if completed.returncode != 0:
-            return finish("FAIL", "STRUCTURAL_PROOF_EXECUTION_FAILED",
-                          (completed.stderr or completed.stdout or "yosys failed").strip()[-1200:])
+            return finish(
+                "NOT_MEASURED", "STRUCTURAL_PROOF_EXECUTION_UNMEASURED",
+                (completed.stderr or completed.stdout or "yosys failed").strip()[-1200:])
         if sha256_text(frozen.read_text(errors="replace")) != candidate_hash:
             return finish("REFUSED", "STRUCTURAL_CANDIDATE_CHANGED_DURING_EXECUTION",
                           "frozen structural input changed during native proof")

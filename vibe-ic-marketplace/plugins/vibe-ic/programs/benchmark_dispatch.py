@@ -4568,6 +4568,13 @@ def _validate_ai_review(task: dict, *,
                     "native structural proof was refused: "
                     + "; ".join(str(item.get("message") or item.get("code"))
                                 for item in structural_result.get("findings") or []))
+            elif (structural_status == "FAIL"
+                  and not any(item.get("code") == "STRUCTURAL_CONTRACT_VIOLATION"
+                              for item in structural_result.get("findings") or []
+                              if isinstance(item, dict))):
+                reasons.append(
+                    "AI structural finding is not proven: a generic structural "
+                    "FAIL is not a measured STRUCTURAL_CONTRACT_VIOLATION")
             elif structural_status != "FAIL":
                 reasons.append(
                     "AI structural finding is not proven: the frozen candidate "
