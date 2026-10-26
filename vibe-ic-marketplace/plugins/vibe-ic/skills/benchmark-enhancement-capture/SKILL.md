@@ -146,6 +146,11 @@ recovery in the right place.
 - **MANDATORY** after every real-case run in `benchmark_clean/` or via
   `/vibe-ic-all` where a close-loop agent applied a chip-agnostic fix that a
   future runner could have applied automatically.
+- A `/vibe-ic-all` run is current for this purpose only when its saved argv
+  binds `vibe_ic_one_shot_runner.py --flow 109`, an explicit
+  `--flow109-manifest`, stable-ID entry/exit rows, and
+  `--execution-mode default`. Record each row as `<ID>/<position>` from
+  `flow/flow109.json`; never translate a historical step number into authority.
 - **STRONGLY ENCOURAGED** at the end of any session where multiple
   AI-judgment fixes accumulated, even if individual fixes were small.
 

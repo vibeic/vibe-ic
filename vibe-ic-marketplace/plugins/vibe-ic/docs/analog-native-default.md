@@ -1,32 +1,24 @@
 # Default analog A01–A19 execution
 
 The analog rows in `flow/flow109.json` dispatch to the existing native
-producers through `programs/analog_native_flow.py`. Both front doors use the
-same implementation:
+producers through `programs/analog_native_flow.py`. The sole public front door
+uses that implementation:
 
 ```sh
-python3 programs/analog_one_shot_runner.py /path/to/project \
-  --flow 109 --entry-step A01 --exit-step A19 \
-  --pdk ihp-sg13g2 --container my-eda --execution-workers 2
-
-# A bounded post-layout statistical execution; count is per RC style.
-python3 programs/analog_one_shot_runner.py /path/to/project \
-  --flow 109 --entry-step A15 --exit-step A15 --blocks regulator \
-  --post-mc-samples 2 --pdk ihp-sg13g2 --container my-eda
-
 python3 programs/vibe_ic_one_shot_runner.py /path/to/project \
   --flow 109 --flow109-manifest /path/to/project/manifest.json \
-  --entry-step A04 --exit-step A07 --route ic --container my-eda
+  --entry-step A04 --exit-step A07 --route ic --container my-eda \
+  --execution-mode default
 ```
 
-The whole-flow front door requires its existing resolved feature manifest.
-Its windows follow the complete flow's interleaved row order: a window from
-A01 to A19 also selects digital and mixed-signal rows. Use the analog runner
-for an analog-only A01–A19 pass, or select a contiguous analog window through
-the whole-flow front door.
+The public front door requires its existing resolved feature manifest. Its
+windows follow the complete Flow109 interleaved row order: an A-row endpoint
+does not imply that intervening digital or mixed-signal rows are absent. Select
+only a contiguous window whose complete resolved ownership is supported.
 Native analog execution does not require a tool qualification registry.
-Other flow owners retain their own admission behavior. The legacy A1–A9
-runner remains available with `--flow 70` (the default).
+Other flow owners retain their own admission behavior. User/operator
+instructions use only the current A01–A19 IDs; no former analog numbering or
+alternate public flow is an execution substitute.
 
 Use the project's existing `phase3/analog/analog_block_list.json`, L-docs,
 per-block `spec.json`, `topology.json`, netlist and testbench. Optional

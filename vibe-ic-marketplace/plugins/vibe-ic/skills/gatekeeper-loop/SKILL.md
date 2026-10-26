@@ -16,20 +16,20 @@ description: Infinite-loop single gatekeeper agent that owns main and services t
 
 # Gatekeeper Loop — Single-Owner PR-Merge Loop for `main`
 
-## User-facing step numbering (owner directive, 2026-10-23)
+## User-facing Flow109 identity
 
-All progress reports to the user MUST use the new step ID: the 1-based
-position of the row in the current canonical `flow/phase1_phase2_phase3.yaml`
-`steps` list, consistent with `flow-order.json`'s `position` for that source.
-Read the mapping from the source used by the run; never infer order from the
-legacy row `id`. Do not renumber after filtering out inapplicable rows.
+All progress reports to the user MUST use the current stable Flow109 ID and its
+1-based `position` from `flow/flow109.json`. The ID is execution authority; the
+position is display/audit metadata and must never be passed as an entry or exit
+step. Read both from the exact source used by the run; never infer either from
+an output folder or historical report. Do not renumber after filtering out
+inapplicable rows.
 
-Report `Step <new ID> — <step name>: <measured status>`. Legacy IDs belong only
-in internal CLI arguments, receipts, paths and historical cross-references;
-do not use them as progress step numbers in replies, summaries or dashboards.
-Only explain an explicitly labeled old-to-new mapping when the user asks for it.
-This is a reporting rule: preserve executable IDs, historical outputs and
-checkpoint identity. Changing the displayed number does not trigger a rerun.
+Report `<stable ID> (position <position>) — <row name>: <measured status>`.
+Historical IDs belong only in immutable receipts and historical
+cross-references; they are not current progress identity. Preserve executable
+IDs, historical outputs and checkpoint identity. A display change does not
+trigger a rerun.
 If the mapping is unavailable, report the step name and say numbering is not
 yet verified rather than guessing. Applicability/PASS counts are separate
 from the new step ID; never use a position as a completed-step count.

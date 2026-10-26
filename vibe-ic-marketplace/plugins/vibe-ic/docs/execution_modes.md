@@ -1,7 +1,8 @@
 # Execution modes: canonical Default routing and Ultra qualification
 
-The execution policy now has two deliberately separate paths across all 70
-canonical flow rows:
+The execution policy has two deliberately separate paths. User/operator flow
+instructions bind them through the Flow109 public entry and stable IDs in
+`flow/flow109.json`:
 
 * **Default mode** is program-first. The caller owns the one canonical producer
   for the row and its declared gates. The policy seam returns to that caller;
@@ -9,11 +10,25 @@ canonical flow rows:
   One local driver runs all phases in the same project directory. The normal
   Default CLI starts directly, without an execution-authority supervisor,
   capability socket, copied worker project, or candidate source snapshot.
-  Step 9 input preparation and Step 15 pre-layout publication are typed
-  producer preparation and still do not call `Controller.run` or `adopt`.
+  D22/34 synthesis input preparation and D31/51 floorplan publication are
+  typed producer preparation and still do not call `Controller.run` or
+  `adopt`.
 * **Ultra mode** is the qualification path. It may run the registered candidate
   arms through `Controller`, preserve isolated receipts, and let AI adopt an
   eligible result. Ultra evidence never changes the Default producer contract.
+
+The public Default form is:
+
+```bash
+python3 programs/vibe_ic_one_shot_runner.py PROJECT --route ic \
+  --flow 109 --flow109-manifest MANIFEST.json \
+  --entry-step D09 --exit-step D09 --execution-mode default
+```
+
+Both window endpoints are current Flow109 IDs, never positions and never former
+step numbers. The registry records D09/17, D11/19, D13/21, D22/34, D23/35,
+D30/42 and D50/72. Position is display/audit metadata only. A row without a
+registered dispatch refuses rather than entering another producer.
 
 Default uses each canonical producer's declared inputs, native outputs and
 existing quality gates in place. A failed design gate still stops progression;
