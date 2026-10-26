@@ -146,6 +146,39 @@ except ImportError:
     sys.exit(2)
 
 
+def _resolved_flow_identity() -> Dict[str, Any]:
+    """Return the authoritative runtime-flow identity for this audit.
+
+    ``command_argv`` cannot answer this for an omitted selector: its meaning
+    changed when Flow109 became the public default.  The current public runner
+    instead supplies its source-bound execution context.  Validate that context
+    before stamping 109; absence or invalidity remains explicit and fail-closed
+    for consumers rather than inheriting today's parser default.
+    """
+    schema = "vibeic.resolved-flow-identity.v1"
+    raw_path = os.environ.get("VIBEIC_FLOW109_CONTEXT")
+    if not raw_path:
+        return {"schema": schema, "status": "UNRESOLVED", "flow_id": None,
+                "source": "NO_EXECUTION_CONTEXT"}
+    try:
+        raw = json.loads(Path(raw_path).read_text(encoding="utf-8"))
+        import flow109
+        current = flow109.validate_execution_context(raw)
+    except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+        return {"schema": schema, "status": "INVALID", "flow_id": None,
+                "source": "VIBEIC_FLOW109_CONTEXT",
+                "reason": f"{type(exc).__name__}: {exc}"}
+    return {
+        "schema": schema,
+        "status": "RESOLVED",
+        "flow_id": "109",
+        "source": "VALIDATED_FLOW109_EXECUTION_CONTEXT",
+        "context_sha256": current["context_sha256"],
+        "registry_sha256": current["registry_sha256"],
+        "planner_sha256": current["planner_sha256"],
+    }
+
+
 def _find_flow_def() -> Path:
     """Locate flow/phase1_phase2_phase3.yaml across install layouts.
 
@@ -23324,6 +23357,11 @@ def main(argv: Optional[List[str]] = None) -> int:
             "blocker_contract_violations": blocker_contract_violations,
             "gate_execution_ledger": _gate_ledger_payload(),
             "command_argv": list(sys.argv),
+            # The literal argv cannot distinguish an old omitted selector
+            # (whose public default was 70) from today's omitted Flow109
+            # selector. Stamp only the validated execution context; direct or
+            # historical invocations remain explicitly unresolved.
+            "resolved_flow_identity": _resolved_flow_identity(),
             # THE POPULATION, beside the tally. `design_input_digest` is what
             # the verdict was computed over; `measurement` is what computed
             # it. A consumer holding two of these artefacts can state which of

@@ -115,9 +115,39 @@ def test_context_rejects_changed_tool_identity_and_changed_selection():
         flow109.validate_execution_context(changed)
     changed = copy.deepcopy(original)
     changed["resolved_row"]["profile"]["dispatch"]["native_step_id"] = "21"
-    changed["context_sha256"] = flow109.digest({k: v for k, v in changed.items() if k != "context_sha256"})
+    changed["context_sha256"] = flow109.digest(
+        {k: v for k, v in changed.items() if k != "context_sha256"})
     with pytest.raises(flow109.Flow109Error, match="CONTEXT_STALE"):
         flow109.validate_execution_context(changed)
+
+
+def test_completion_audit_writer_stamps_only_validated_flow109_identity(
+        tmp_path, monkeypatch):
+    """The audit producer binds current flow identity to source, not omission."""
+    import flow_compliance_check
+
+    context = flow109.execution_context(flow109.resolve_plan(profile()),
+                                        "D09", "D09")
+    path = tmp_path / "flow109-context.json"
+    path.write_text(json.dumps(context))
+    monkeypatch.setenv("VIBEIC_FLOW109_CONTEXT", str(path))
+    identity = flow_compliance_check._resolved_flow_identity()
+    assert identity == {
+        "schema": "vibeic.resolved-flow-identity.v1",
+        "status": "RESOLVED",
+        "flow_id": "109",
+        "source": "VALIDATED_FLOW109_EXECUTION_CONTEXT",
+        "context_sha256": context["context_sha256"],
+        "registry_sha256": context["registry_sha256"],
+        "planner_sha256": context["planner_sha256"],
+    }
+
+    changed = copy.deepcopy(context)
+    changed["requested_step"] = "D11"
+    path.write_text(json.dumps(changed))
+    invalid = flow_compliance_check._resolved_flow_identity()
+    assert invalid["status"] == "INVALID"
+    assert invalid["flow_id"] is None
 
 
 def test_default_public_cli_runs_flow109_and_emits_current_identity(tmp_path):
