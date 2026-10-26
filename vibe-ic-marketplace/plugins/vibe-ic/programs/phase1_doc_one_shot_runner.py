@@ -2226,9 +2226,31 @@ def _otp_clauses(text: str) -> List[str]:
     ]
 
 
-def _l4_absence_claim_is_complete(clause: str) -> bool:
-    """Fullmatch one supported whole-design negative sentence."""
-    return bool(_L4_ABSENCE_SENTENCE_RE.fullmatch(str(clause)))
+def _l4_absence_claim_is_complete(
+        clause: str, *, ic_name: Optional[str] = None) -> bool:
+    """Fullmatch one supported whole-design negative sentence.
+
+    A Markdown-wrapped subject is authoritative only when it names the exact
+    current IC and its entire bold proposition is already a supported bare
+    absence sentence.  Keeping the wrapper grammar here prevents a foreign or
+    component-scoped name from inheriting whole-design authority.
+    """
+    text = str(clause)
+    if _L4_ABSENCE_SENTENCE_RE.fullmatch(text):
+        return True
+    if not isinstance(ic_name, str) or not ic_name.strip():
+        return False
+    wrapped = re.fullmatch(
+        r"\s*(?:[-*+]\s*)?`(?P<subject>[^`\r\n]+)`\s+"
+        r"\*\*(?P<proposition>[^*\r\n]+)\*\*"
+        r"\s*(?:[.;!?。；！？]|$)\s*",
+        text,
+    )
+    if wrapped is None or wrapped.group("subject") != ic_name.strip():
+        return False
+    return bool(
+        _L4_ABSENCE_SENTENCE_RE.fullmatch(wrapped.group("proposition"))
+    )
 
 
 def _is_explicit_otp_absence_clause(clause: str) -> bool:
@@ -33151,7 +33173,8 @@ _RE_L4_NO_REGMAP = re.compile(
 
 
 def _l4_explicit_no_regmap_sources(
-        extracted: Dict[str, str]) -> List[str]:
+        extracted: Dict[str, str], *, ic_name: Optional[str] = None,
+) -> List[str]:
     """Return input docs that explicitly declare an absent L4 map.
 
     Filename filtering keeps generic prose from becoming a typed absence
@@ -33172,11 +33195,11 @@ def _l4_explicit_no_regmap_sources(
             if (match := _RE_L4_NO_REGMAP.search(clause)) is not None
         ]
         has_complete = any(
-            _l4_absence_claim_is_complete(clause)
+            _l4_absence_claim_is_complete(clause, ic_name=ic_name)
             for clause, match in matches
         )
         has_unresolved = any(
-            not _l4_absence_claim_is_complete(clause)
+            not _l4_absence_claim_is_complete(clause, ic_name=ic_name)
             for clause, match in matches
         )
         if has_complete and not has_unresolved:
@@ -35079,7 +35102,8 @@ def gen_l4_regmap(project: Path,
     # v1.6.78 — closes #11 FLAG-EVIDENCE CONSISTENCY for L4.registers.
     # v0.1.82-r1 — an explicit register-map absence is a typed producer fact;
     # an empty parse or a filename alone is not enough to assert it.
-    _l4_no_regmap_sources = _l4_explicit_no_regmap_sources(extracted)
+    _l4_no_regmap_sources = _l4_explicit_no_regmap_sources(
+        extracted, ic_name=ic_name)
     if registers:
         no_registers_in_input = False
     elif _l4_no_regmap_sources:
