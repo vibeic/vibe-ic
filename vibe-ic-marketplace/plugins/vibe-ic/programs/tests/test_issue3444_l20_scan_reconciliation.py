@@ -141,3 +141,172 @@ def test_reconciliation_rejects_measured_length_port_and_clock_mutations(tmp_pat
     for mutation in mutations:
         report = {**base, **mutation}
         assert S.reconcile_l20_scan_contract(binding, report)["ok"] is False
+
+
+# D09 planned intent -> the EXISTING run_chain consumer. Native I/O is a
+# neutral payload replay, never a claimed new native D23 acceptance result.
+import copy
+import pytest
+import spec_declaration_emit as DECL
+import librelane_contract as LL
+
+
+def _intent():
+    return {'scan_test': True,
+            'test_port_def': {
+                'scan_enable': {'public': 'scan_enable', 'native': 'shift'},
+                'scan_in': {'public': 'scan_in', 'native': 'sin'},
+                'scan_out': {'public': 'scan_out', 'native': 'sout'}},
+            'test_mode': {'clock': 'clk', 'clock_domains': ['clk'], 'edge': 'rising',
+                          'reset': {'signal': 'rst', 'style': 'synchronous',
+                                    'active_level': 1, 'shift_value': 0}}}
+
+
+def _mapped(count=2, scan=False):
+    ports = 'clk, rst, d, q' + (', sin, sout, shift, test, tck' if scan else '')
+    declarations = ('input sin, shift, test, tck; output sout; assign sout=q;\n'
+                    if scan else '')
+    cells = ''.join(f'  sky130_fd_sc_hd__dfxtp_1 u{i} (.CLK(clk), .D(d), .Q(q));\n'
+                    for i in range(count))
+    return f'module unit({ports});\ninput clk, rst, d; output q;\n{declarations}{cells}endmodule\n'
+
+
+def _planned(project, intent=None):
+    docs = project / 'input/docs'
+    docs.mkdir(parents=True)
+    # The existing D09 declaration artifact, not a separate DFT-intent file.
+    (docs / 'L7_verification_plan.md').write_text(
+        '# Verification\nDFT remains planned and unmeasured.\n'
+        'The Plugin MUST declare `plugin_output/declaration.json` before authoring:\n\n'
+        '| Field | Required | Example |\n|---|---|---|\n| `dft` | Yes | object |\n')
+    gd = project / 'phase1/generated_docs'
+    gd.mkdir(parents=True)
+    from programs.tests._hostpaths import require_repo
+    fixture = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+                           'tests', 'fixtures', 'l20_applicable_unextracted_retained.json')
+    (gd / 'L20_DFT_SCAN_TOPOLOGY.json').write_bytes(fixture.read_bytes())
+    import l20_dft_intent_emit
+    assert l20_dft_intent_emit.run(project)['status'] == 'OK'
+    assert DECL.main([str(project), '--set', 'dft=' + json.dumps(intent or _intent())]) == 0
+    net = project / 'phase2/stage2/synth/netlist.v'
+    net.parent.mkdir(parents=True)
+    net.write_text(_mapped())
+    return project
+
+
+def _native_payload(project, monkeypatch, *, actual=2):
+    calls = []
+    def native(project, argv, **kwargs):
+        calls.append(argv)
+        metadata = {'sin': 'sin', 'sout': 'sout', 'shift': 'shift',
+                    'internalCount': 2, 'boundaryCount': 0,
+                    'order': [{'name': 'u0', 'kind': 'dff', 'width': 1},
+                              {'name': 'u1', 'kind': 'dff', 'width': 1}]}
+        artifact = ('/* FAULT METADATA: \'' + json.dumps(metadata)
+                    + '\' END FAULT METADATA */\n' + _mapped(actual, scan=True))
+        path = project / 'phase2/stage2/dft/scan_chain_work/chained.v'
+        path.write_text(artifact)
+        return 0, ('Internal scan chain successfully constructed. Length: 2\n'
+                   'Boundary scan cells successfully chained. Length: 0\n'
+                   'Total scan-chain length: 2\n'), ''
+    monkeypatch.setattr(S._fatpg, '_run_docker', native)
+    return calls
+
+
+def test_d09_planned_authority_reaches_existing_native_boundary(tmp_path, monkeypatch):
+    project = _planned(tmp_path)
+    # This assertion is the substantive reverse: old caller returns False
+    # despite real owner declaration, before it can reach the native producer.
+    assert D.dft_scan_insertion_contract(project)[0] is True
+    calls = []
+    def refused_native(project, argv, **kwargs):
+        calls.append(argv)
+        return 1, '', 'intentional native-boundary refusal in source control'
+    monkeypatch.setattr(S._fatpg, '_run_docker', refused_native)
+    rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
+                             reset='rst', require_l20_contract=True)
+    assert rc == 1 and report['stage'] == 'chain'
+    assert len(calls) == 1 and calls[0][:2] == ['fault', 'chain']
+    assert '--l20-contract' not in calls[0]  # no guessed native length argument
+    assert not (project / S.SCAN_NETLIST_REL).exists()
+
+
+def test_d09_native_measurement_publishes_existing_l20_receipt(tmp_path, monkeypatch):
+    project = _planned(tmp_path)
+    calls = _native_payload(project, monkeypatch)
+    rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
+                             reset='rst', require_l20_contract=True)
+    assert rc == 0 and report['published'] is True and len(calls) == 1
+    assert report['internal_chain_length'] == 2
+    assert report['l20_reconciliation']['ok'] is True
+    assert S.l20_binding_is_current(project, report)[0] is True
+    assert report['test_port_def'] == _intent()['test_port_def']
+    l20 = json.loads((project / report['l20_contract']['path']).read_text())
+    assert l20['fields']['scan_chains'][0]['length'] == 2
+    assert l20['extraction_evidence']['d09_contract'] == report['d09_contract']
+    assert set(report['dft_ports']) == set(S.DFT_PORTS)  # explicit native binding, no renaming
+    # Rehashing a native log/artifact cannot restore an unrelated authority.
+    (project / 'input/docs/L7_verification_plan.md').write_text('foreign replacement')
+    assert S.l20_binding_is_current(project, report)[0] is False
+
+
+@pytest.mark.parametrize('damage', ['declaration', 'sidecar', 'publication', 'source'])
+def test_d09_forged_authority_cannot_dispatch(tmp_path, monkeypatch, damage):
+    project = _planned(tmp_path)
+    paths = {'declaration': 'plugin_output/declaration.json',
+             'sidecar': 'plugin_output/declaration.provenance.json',
+             'publication': 'provenance.jsonl', 'source': 'input/docs/L7_verification_plan.md'}
+    path = project / paths[damage]
+    path.write_text(path.read_text() + ' altered')
+    monkeypatch.setattr(S._fatpg, '_run_docker', lambda *a, **k: pytest.fail('native started'))
+    with pytest.raises(LL.Refusal, match='D09_DFT_AUTHORITY_INVALID'):
+        D.dft_scan_insertion_contract(project)
+    rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
+                             reset='rst', require_l20_contract=True)
+    assert rc == 1 and report['stage'] == 'd09_contract'
+
+
+@pytest.mark.parametrize('wrong', ['length', 'clock', 'reset', 'polarity', 'domains'])
+def test_d09_guessed_or_unsupported_intent_refuses(tmp_path, monkeypatch, wrong):
+    intent = _intent()
+    if wrong == 'length': intent['chain_length'] = 64
+    if wrong == 'clock': intent['test_mode']['clock'] = 'other_clk'
+    if wrong == 'reset': intent['test_mode']['reset']['signal'] = 'other_rst'
+    if wrong == 'polarity': intent['test_mode']['reset'].update(active_level=0, shift_value=1)
+    if wrong == 'domains': intent['test_mode']['clock_domains'].append('other_clk')
+    project = _planned(tmp_path, intent)
+    monkeypatch.setattr(S._fatpg, '_run_docker', lambda *a, **k: pytest.fail('native started'))
+    with pytest.raises(LL.Refusal, match='D09_DFT_AUTHORITY_INVALID'):
+        D.dft_scan_insertion_contract(project)
+
+
+def test_d09_missing_authority_is_named_refusal(tmp_path):
+    project = _project(tmp_path, [])
+    with pytest.raises(LL.Refusal, match='D09_DFT_AUTHORITY_REQUIRED'):
+        D.dft_scan_insertion_contract(project)
+
+
+def test_d09_explicit_no_scan_is_scan_only_and_composable(tmp_path, monkeypatch):
+    intent = {'scan_test': False, 'bist': {'required': True}, 'compression': {'required': True}}
+    project = _planned(tmp_path, intent)
+    enabled, reason = D.dft_scan_insertion_contract(project)
+    assert enabled is False and 'D09_SCAN_TEST_DISABLED' in reason
+    binding, problems = S.load_d09_dft_contract(project)
+    assert problems == [] and binding['intent']['bist']['required'] is True
+    monkeypatch.setattr(S._fatpg, '_run_docker', lambda *a, **k: pytest.fail('native started'))
+    rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
+                             require_l20_contract=True)
+    assert rc == 0 and report['verdict'] == 'NOT_APPLICABLE'
+    assert report['reason_code'] == 'D09_SCAN_TEST_DISABLED' and not report['published']
+
+
+def test_d09_incomplete_native_mapping_does_not_publish(tmp_path, monkeypatch):
+    project = _planned(tmp_path)
+    _native_payload(project, monkeypatch, actual=1)
+    before = (project / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json').read_bytes()
+    rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
+                             reset='rst', require_l20_contract=True)
+    assert rc == 1 and report['published'] is False
+    assert any('D23_INCOMPLETE_MAPPING' in p for p in report['problems'])
+    assert (project / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json').read_bytes() == before
+    assert not (project / S.SCAN_NETLIST_REL).exists()

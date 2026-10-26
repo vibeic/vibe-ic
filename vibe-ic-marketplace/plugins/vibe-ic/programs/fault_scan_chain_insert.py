@@ -116,6 +116,98 @@ SCAN_NETLIST_REL = "phase2/stage2/dft/scan_netlist.v"
 SCAN_JSON_REL = "reports/phase2/dft/scan_chain.json"
 
 
+def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=None,
+                         reset_active_low=False) -> tuple[dict | None, list[str]]:
+    """BLOCKING D09 intent admission; no topology or chain length is inferred.
+
+    Reuse the spec's existing declaration artifact and its normal producer.
+    Missing/forged authority is a refusal, never scan_test:false. Other DFT
+    capabilities remain composable; this consumer decides scan only.
+    """
+    import spec_declaration_emit as declaration
+    try:
+        contract, why, _ = declaration.select_contract(project)
+        if not contract or not any(f['name'] == 'dft' for f in contract['fields']):
+            return None, ['D09_DFT_SPEC_MISSING: existing specification must declare dft']
+        path = project / contract['artifact_path']
+        if not path.resolve().is_relative_to(project.resolve()):
+            raise ValueError('declaration escapes project')
+        checked = declaration.verify_declaration(project, contract, path)
+        if (checked['verdict'] != 'PASS' or checked['provenance_unverified']
+                or checked['recovered_from_prose']):
+            raise ValueError('normal declaration producer provenance is incomplete')
+        sidecar = path.with_name(path.stem + '.provenance.json')
+        claims = [json.loads(line) for line in (project / 'provenance.jsonl').read_text().splitlines()
+                  if line.strip()]
+        claims = [r for r in claims if r.get('tool') == 'spec_declaration_emit'
+                  and str(path.relative_to(project)) in r.get('outputs', {})
+                  and r.get('exit_code') == 0]
+        if not claims:
+            raise ValueError('normal declaration publication is missing')
+        claim = claims[-1]
+        digest = lambda p: 'sha256:' + hashlib.sha256(p.read_bytes()).hexdigest()
+        if claim.get('source_sha256') != digest(Path(declaration.__file__)):
+            raise ValueError('declaration producer source differs')
+        for output in (path, sidecar):
+            if claim['outputs'].get(str(output.relative_to(project))) != digest(output):
+                raise ValueError('declaration publication output differs')
+        sources = {}
+        for rel, expected in claim.get('inputs', {}).items():
+            source = project / rel
+            if source in (path, sidecar) or rel.startswith('phase1/generated_docs/'):
+                continue
+            if not source.resolve().is_relative_to(project.resolve()) or digest(source) != expected:
+                raise ValueError('declaration source is foreign or changed: ' + rel)
+            sources[rel] = expected
+        if contract['source'] not in sources:
+            raise ValueError('the specification is not bound by the publication')
+        intent = json.loads(path.read_text())['dft']
+        if not isinstance(intent, dict) or type(intent.get('scan_test')) is not bool:
+            raise ValueError('scan_test must be an explicit Boolean')
+        if any(k in intent for k in ('length', 'chain_length', 'scan_chains')):
+            raise ValueError('caller-predeclared topology/length is not planned intent')
+        binding = {'path': str(path.relative_to(project)),
+                   'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                   'sources': sources, 'intent': intent}
+        if not intent['scan_test']:
+            return binding, []
+        definitions = intent.get('test_port_def', {})
+        native = {'scan_enable': 'shift', 'scan_in': 'sin', 'scan_out': SCAN_OUT_PORT}
+        ports = {}
+        if set(definitions) != set(native):
+            raise ValueError('three applicable test_port_def bindings are required')
+        for role, name in native.items():
+            entry = definitions[role]
+            if (not isinstance(entry, dict) or entry.get('native') != name
+                    or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', str(entry.get('public', '')))):
+                raise ValueError('unsupported public/native test port binding: ' + role)
+            ports[role] = entry['public']
+        if len(set(ports.values())) != 3:
+            raise ValueError('public scan interface ports must be distinct')
+        mode = intent.get('test_mode', {})
+        clock = mode.get('clock')
+        reset = mode.get('reset', {})
+        if (not isinstance(clock, str) or not clock
+                or mode.get('clock_domains') != [clock] or mode.get('edge') != 'rising'):
+            raise ValueError('unsupported or unknown clock/domain/edge strategy')
+        if expected_clock is not None and clock != expected_clock:
+            raise ValueError('test clock differs from the actual caller clock')
+        if (reset.get('style') != 'synchronous' or type(reset.get('active_level')) is not int
+                or reset['active_level'] not in (0, 1)
+                or type(reset.get('shift_value')) is not int
+                or reset.get('shift_value') != 1 - reset['active_level']
+                or not isinstance(reset.get('signal'), str) or not reset['signal']):
+            raise ValueError('unsupported or unknown reset strategy')
+        if expected_reset is not None and (reset['signal'] != expected_reset
+                or reset['active_level'] != int(not reset_active_low)):
+            raise ValueError('test reset differs from the actual caller reset/polarity')
+        if clock in ports.values() or reset['signal'] in ports.values():
+            raise ValueError('test access aliases clock/reset')
+        return binding, []
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return None, ['D09_DFT_AUTHORITY_INVALID: ' + str(exc)]
+
+
 def load_l20_scan_contract(project: Path, expected_clock: str | None = None,
                            expected_length: int | None = None
                            ) -> tuple[dict | None, list[str]]:
@@ -251,6 +343,18 @@ def reconcile_l20_scan_contract(binding: dict, report: dict) -> dict:
 
 def l20_binding_is_current(project: Path, report: dict) -> tuple[bool, str]:
     """Re-derive the current contract and compare its path, bytes and fields."""
+    if isinstance(report, dict) and 'd09_contract' in report:
+        current_d09, problems = load_d09_dft_contract(project)
+        if problems or current_d09 != report['d09_contract']:
+            return False, 'current D09 authority differs from the scan receipt'
+        try:
+            for path, expected in report['measured_artifacts'].items():
+                item = project / path
+                if (not item.resolve().is_relative_to(project.resolve())
+                        or hashlib.sha256(item.read_bytes()).hexdigest() != expected):
+                    return False, 'foreign/stale mapped scan artifact or native report'
+        except (OSError, KeyError, TypeError):
+            return False, 'native scan artifact/report binding is missing'
     recorded = report.get("l20_contract") if isinstance(report, dict) else None
     if not isinstance(recorded, dict):
         return False, "scan report carries no L20 path/SHA binding"
@@ -729,11 +833,27 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
 
     l20_contract = None
     scan_mode_constraint = None
+    d09_contract = None
     if require_l20_contract:
-        l20_contract, l20_problems = load_l20_scan_contract(
-            project, expected_clock=clock,
-            expected_length=count_flops(netlist_text))
-        if l20_problems or l20_contract is None:
+        d09_contract, d09_problems = load_d09_dft_contract(
+            project, expected_clock=clock, expected_reset=reset,
+            reset_active_low=reset_active_low)
+        if d09_contract is not None and not d09_contract['intent']['scan_test']:
+            return 0, {'verdict': 'NOT_APPLICABLE', 'published': False,
+                       'reason_code': 'D09_SCAN_TEST_DISABLED', 'native_started': False}
+        if d09_contract is not None and not reset:
+            return 1, {'stage': 'd09_contract', 'published': False,
+                       'error': 'D09_DFT_AUTHORITY_INVALID: actual reset missing'}
+        if d09_contract is None and not all(
+                p.startswith('D09_DFT_SPEC_MISSING:') for p in d09_problems):
+            return 1, {'stage': 'd09_contract', 'published': False,
+                       'problems': d09_problems}
+        l20_problems = []
+        if d09_contract is None:
+            l20_contract, l20_problems = load_l20_scan_contract(
+                project, expected_clock=clock,
+                expected_length=count_flops(netlist_text))
+        if l20_problems or (d09_contract is None and l20_contract is None):
             return 1, {
                 "stage": "l20_contract", "netlist": netlist_rel,
                 "clock": clock, "problems": l20_problems,
@@ -741,7 +861,7 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
                 "published": False,
             }
         _constraint_text, scan_mode_constraint, constraint_problems = (
-            _smc.render(l20_contract))
+            _smc.render(l20_contract) if l20_contract else (None, None, []))
         if constraint_problems:
             return 1, {
                 "stage": "scan_mode_constraint", "netlist": netlist_rel,
@@ -1053,6 +1173,16 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         produced.write_text(chained_text, encoding="utf-8")
     meta = parse_chain_metadata(chained_text)
     verdict = assess(parse_chain_log(log), meta, count_flops(netlist_text))
+    if d09_contract is not None:
+        # Both the output's native element census and its actual mapped flop
+        # census must agree with the existing stdout/metadata reconciliation.
+        native_elements = chain_order_counts(meta).get('dff', 0)
+        internal, boundary = verdict['internal_chain_length'], verdict['boundary_chain_length']
+        if (native_elements != internal or not isinstance(boundary, int)
+                or count_flops(chained_text) != internal + boundary
+                or any((meta or {}).get(k) != k for k in ('sin', 'sout', 'shift'))):
+            verdict['ok'] = False
+            verdict['problems'].append('D23_INCOMPLETE_MAPPING: native elements/ports/mapped output disagree')
 
     before, after = cell_histogram(netlist_text), cell_histogram(chained_text)
     n_before, n_after = sum(before.values()), sum(after.values())
@@ -1121,6 +1251,39 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         # design into PnR under a name that says it is testable.
         report["published"] = False
         return 1, report
+
+    if d09_contract is not None:
+        import l_doc_generator_stamp as stamp
+        import _atomic_artefact as atomic
+        current, problems = load_d09_dft_contract(project)
+        if problems or current != d09_contract:
+            return 1, {**report, 'published': False,
+                       'problems': ['D09 authority changed during native insertion']}
+        # The existing L20 producer stamp records a derivation. Its length
+        # is the native measurement above, never an author/pre-synthesis value.
+        l20_path = _pl.generated_docs_dir(project) / 'L20_DFT_SCAN_TOPOLOGY.json'
+        doc = json.loads(l20_path.read_text()) if l20_path.is_file() else {'doc_id': 'L20', 'fields': {}}
+        raw_log = work_rel + '/native_chain.log'
+        atomic.write_text(project / raw_log, log)
+        measured = {out_rel: hashlib.sha256(produced.read_bytes()).hexdigest(),
+                    raw_log: hashlib.sha256((project / raw_log).read_bytes()).hexdigest()}
+        doc.update(applicability='APPLICABLE', extraction_status='EXTRACTED',
+                   source_documents=[d09_contract['path']],
+                   extraction_evidence={'d09_contract': d09_contract, 'native_artifacts': measured})
+        fields = doc.setdefault('fields', {})
+        fields.pop('dft_intent_status', None)
+        fields.update(dft_present=True, scan_chains=[{
+            'name': meta['sin'], 'length': report['internal_chain_length'],
+            'scan_in': meta['sin'], 'scan_out': meta['sout'], 'clock': clock}],
+            notes='Native mapped scan topology; timing and coverage are separate measurements.')
+        stamp.dump(l20_path, doc)
+        l20_contract, problems = load_l20_scan_contract(project, clock, report['internal_chain_length'])
+        if problems:
+            return 1, {**report, 'published': False, 'problems': problems}
+        report.update(d09_contract=d09_contract, l20_contract=l20_contract,
+                      test_port_def=d09_contract['intent']['test_port_def'],
+                      measured_artifacts=measured)
+        report['l20_reconciliation'] = reconcile_l20_scan_contract(l20_contract, report)
 
     if l20_contract is not None:
         # Publish the producer-owned timing actuator only after the native
