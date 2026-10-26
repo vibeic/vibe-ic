@@ -62671,7 +62671,42 @@ _EXPLICIT_SOLE_CLOCK_PERIOD = re.compile(
     r"(?P<unit>ps|ns|us|µs|μs)\s+period\.?",
     re.IGNORECASE,
 )
-_MARKDOWN_LIST_ITEM_PREFIX = re.compile(r"^(?:[-*+] |\d+[.)] )")
+_TOP_LEVEL_MARKDOWN_LIST_ITEM = re.compile(
+    r"^(?:[-*+]|\d+[.)]) (?P<content>.*\S|)$")
+
+
+def _explicit_clock_authority_clauses(text: str) -> List[str]:
+    """Supported complete clauses from structurally closed prose blocks.
+
+    A block is blank-line delimited.  It is eligible only when it is one
+    unindented plain line, or when every line is a flat top-level Markdown
+    list peer.  A parent line, continuation, or nested/indented item rejects
+    the whole block instead of letting a matching child line detach from its
+    qualifier.  This classifies structure only; it contains no prose-word
+    policy and does not attempt general Markdown parsing.
+    """
+    clauses: List[str] = []
+    for block in re.split(r"\n[ \t]*\n+", text):
+        lines = block.splitlines()
+        if not lines:
+            continue
+        if len(lines) == 1:
+            line = lines[0].rstrip()
+            item = _TOP_LEVEL_MARKDOWN_LIST_ITEM.fullmatch(line)
+            if item is not None:
+                clauses.append(item.group("content"))
+            elif line == line.lstrip():
+                clauses.append(line)
+            continue
+        items = []
+        for raw_line in lines:
+            item = _TOP_LEVEL_MARKDOWN_LIST_ITEM.fullmatch(raw_line.rstrip())
+            if item is None:
+                items = []
+                break
+            items.append(item.group("content"))
+        clauses.extend(items)
+    return clauses
 
 
 def _single_explicit_document_clock(project: Path) -> Optional[dict]:
@@ -62699,8 +62734,7 @@ def _single_explicit_document_clock(project: Path) -> Optional[dict]:
             text = path.read_text(encoding="utf-8", errors="ignore")
         except OSError:
             continue
-        for raw_line in text.splitlines():
-            clause = _MARKDOWN_LIST_ITEM_PREFIX.sub("", raw_line.strip(), count=1)
+        for clause in _explicit_clock_authority_clauses(text):
             match = _EXPLICIT_SOLE_CLOCK_PERIOD.fullmatch(clause)
             if match is None:
                 continue
