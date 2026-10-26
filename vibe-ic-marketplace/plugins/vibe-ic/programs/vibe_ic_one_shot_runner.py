@@ -1098,15 +1098,33 @@ def _complete_step8_early_preflight(project: Path) -> dict:
     status = row.status
     if extras.get('early_preflight') is not True:
         status = 'NOT_MEASURED'
-    finished = flow109.finish_native_window(project, {'steps': [{
-        'status': status,
-        'extras': {**extras, 'step_id': '8', 'default_row_status': status,
-                   'completed': status == 'PASS', 'detail': row.detail,
-                   'output_files': list(row.output_files)},
-    }]})
-    if finished is not None:
-        status = finished.get('default_row_status', 'NOT_MEASURED')
-    return {'verdict': status, 'detail': row.detail,
+    try:
+        finished = flow109.finish_native_window(project, {'steps': [{
+            'status': status,
+            'extras': {**extras, 'step_id': '8', 'default_row_status': status,
+                       'completed': status == 'PASS', 'detail': row.detail,
+                       'output_files': list(row.output_files)},
+        }]})
+    except flow109.Flow109Error as exc:
+        finished = None
+        finalization_detail = f'D20_FINALIZATION_REFUSED: {exc}'
+    else:
+        finalization_detail = 'D20_FINALIZATION_RESULT_INVALID'
+    components = finished.get('components') if isinstance(finished, Mapping) else None
+    component = components[0] if isinstance(components, list) and len(components) == 1 else {}
+    finalized = (finished if isinstance(finished, Mapping)
+                 and finished.get('schema') == 'vibeic.flow109.window-attempt-result.v1'
+                 and finished.get('default_row_status') in ('PASS', 'FAIL', 'NOT_MEASURED')
+                 and finished.get('whole_flow_acceptance') == 'NOT_MEASURED'
+                 and finished.get('delivery_accepted') is False
+                 and component.get('step_id') == 'D20'
+                 and component.get('default_row_status') == finished.get('default_row_status')
+                 and component.get('completed') is (finished.get('default_row_status') == 'PASS')
+                 else None)
+    status = (finalized or {}).get('default_row_status', 'NOT_MEASURED')
+    if finalized is not None:
+        finalization_detail = row.detail
+    return {'verdict': status, 'detail': finalization_detail,
             'early_preflight': extras.get('early_preflight') is True,
             'deferred_until': extras.get('deferred_until'),
             'mapped_path_claimed': False, 'frontend_dispatched': False,
