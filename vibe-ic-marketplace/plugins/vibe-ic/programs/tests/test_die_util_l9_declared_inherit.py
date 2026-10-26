@@ -15,8 +15,11 @@ mis-parsing a wrong number would fabricate a wrong die).
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
+
+import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -31,6 +34,14 @@ def _mk_l9(tmp_path, body: str) -> Path:
     docs.mkdir(parents=True, exist_ok=True)
     (docs / "L9_constraints_floorplan.md").write_text(body)
     return proj
+
+
+def _write_l19(proj: Path, value) -> None:
+    path = proj / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"fields": {"constraint_declarations": [{
+        "token": "FP_CORE_UTIL", "value": value, "scope": None,
+        "source": "input/config.json", "line": 4}]}}))
 
 
 def test_core_util_does_not_inherit_placement_density(tmp_path):
@@ -71,6 +82,45 @@ def test_no_l9_returns_none(tmp_path):
     proj = tmp_path / "empty"
     (proj / "input").mkdir(parents=True)
     assert P._l9_declared_die_util(proj) is None
+
+
+def test_l19_core_util_reaches_direct_phase3_resolver(tmp_path):
+    proj = tmp_path / "proj"
+    _write_l19(proj, 25)
+    assert P._l9_declared_die_util(proj) == 0.25
+
+
+def test_l19_core_util_drives_direct_auto_die_target(tmp_path):
+    proj = tmp_path / "proj"
+    _write_l19(proj, 25)
+    netlist = proj / "netlist.v"
+    netlist.write_text("\n".join(
+        f"neutral_inv u{i} (.A(a{i}),.Y(y{i}));" for i in range(5000)))
+
+    class _Pdk:
+        name = "processA"
+        cell_lef = "/nonexistent.lef"
+
+    metrics = {}
+    die, note = P._resolve_auto_die_um(
+        "auto", netlist, 0.77, _Pdk(), proj, metrics=metrics)
+    assert "x" in die and "target_util=0.25" in (note or "")
+    assert metrics["die_target_util"] == 0.25
+
+
+def test_l19_core_util_never_becomes_placement_density(tmp_path):
+    proj = _mk_l9(
+        tmp_path, "| `PL_TARGET_DENSITY` | **0.61** | ref |\n")
+    _write_l19(proj, 25)
+    assert P._l9_declared_die_util(proj) == 0.25
+    assert P._l9_declared_place_density(proj) == 0.61
+
+
+def test_l19_and_l9_core_util_conflict_refuses(tmp_path):
+    proj = _mk_l9(tmp_path, "| `FP_CORE_UTIL` | **35** | ref |\n")
+    _write_l19(proj, 25)
+    with pytest.raises(ValueError, match="FP_CORE_UTIL_AUTHORITY_CONFLICT"):
+        P._l9_declared_die_util(proj)
 
 
 def test_resolve_uses_declared_util_over_default(tmp_path):

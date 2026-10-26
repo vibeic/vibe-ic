@@ -46,11 +46,21 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 import fnmatch
 import json
+import math
 import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import _reference_flow_boundary as _rfb
+
+
+class FloorplanContractRefusal(ValueError):
+    """A structured floorplan authority is present but cannot be admitted."""
+
+    def __init__(self, code: str, detail: str):
+        self.code = code
+        self.detail = detail
+        super().__init__(f"{code}: {detail}")
 
 # Canonical DEF/OpenLane DIE_AREA rect: "llx lly urx ury" (4 numbers, any of
 # the JSON-array / prose / TCL separators). W = urx-llx, H = ury-lly.
@@ -244,6 +254,31 @@ def _ci_get(d: Dict[str, Any], key: str) -> Any:
     return None
 
 
+def _ci_has(d: Dict[str, Any], key: str) -> bool:
+    return any(isinstance(k, str) and k.lower() == key.lower() for k in d)
+
+
+def _json_key_line(text: str, key: str) -> int:
+    pattern = re.compile(r'^[ \t]*["\']' + re.escape(key)
+                         + r'["\'][ \t]*:', re.IGNORECASE | re.MULTILINE)
+    match = pattern.search(text)
+    return text.count("\n", 0, match.start()) + 1 if match else 1
+
+
+def _structured_core_util(value: Any, source: str) -> Any:
+    """Validate one JSON FP_CORE_UTIL percentage without string coercion."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise FloorplanContractRefusal(
+            "FP_CORE_UTIL_INVALID",
+            f"{source}: FP_CORE_UTIL must be a structured numeric percentage")
+    number = float(value)
+    if not math.isfinite(number) or not 0.0 < number <= 100.0:
+        raise FloorplanContractRefusal(
+            "FP_CORE_UTIL_RANGE",
+            f"{source}: FP_CORE_UTIL must satisfy 0 < value <= 100")
+    return int(number) if number.is_integer() else number
+
+
 def _die_area_from_value(v: Any) -> Optional[str]:
     """A config ``DIE_AREA`` value is either a JSON list of 4 numbers or a
     string of 4 whitespace/comma-separated numbers. Returns 'WxH' or None."""
@@ -326,7 +361,8 @@ def _parse_openlane_config(rel: str, text: str) -> Optional[Dict[str, Any]]:
     config file (JSON or classic TCL), or None if it declares nothing.
 
     Keys returned (any subset): design_name, die_wxh, fp_sizing,
-    def_template, pin_order_cfg, source(rel)."""
+    fp_core_util, fp_core_util_line, def_template, pin_order_cfg,
+    source(rel)."""
     facts: Dict[str, Any] = {"source": rel}
     parsed_json = False
     if text.lstrip().startswith("{"):
@@ -346,6 +382,11 @@ def _parse_openlane_config(rel: str, text: str) -> Optional[Dict[str, Any]]:
             fps = _ci_get(cfg, "FP_SIZING")
             if isinstance(fps, str) and fps.strip():
                 facts["fp_sizing"] = fps.strip().lower()
+            if _ci_has(cfg, "FP_CORE_UTIL"):
+                facts["fp_core_util"] = _structured_core_util(
+                    _ci_get(cfg, "FP_CORE_UTIL"), rel)
+                facts["fp_core_util_line"] = _json_key_line(
+                    text, "FP_CORE_UTIL")
             dft = _ci_get(cfg, "FP_DEF_TEMPLATE")
             if isinstance(dft, str) and dft.strip():
                 facts["def_template"] = _strip_dir_macro(dft)
@@ -376,7 +417,8 @@ def _parse_openlane_config(rel: str, text: str) -> Optional[Dict[str, Any]]:
             facts["pin_order_cfg"] = _strip_dir_macro(mpo.group(1))
     # Only meaningful if it carried at least one floorplan fact.
     if any(k in facts for k in
-           ("die_wxh", "fp_sizing", "def_template", "pin_order_cfg")):
+           ("die_wxh", "fp_sizing", "fp_core_util", "def_template",
+            "pin_order_cfg")):
         return facts
     return None
 
@@ -458,6 +500,7 @@ def extract_floorplan_contract(project: Path,
         "die_area_budget_um": None,
         "die_area_source": None,
         "floorplan_hints": [],
+        "constraint_declarations": [],
     }
     if not isinstance(project, Path):
         project = Path(project)
@@ -503,6 +546,25 @@ def extract_floorplan_contract(project: Path,
                 "source": src,
                 **({"design_name": dn} if dn else {}),
             })
+
+    core_util_configs = [
+        facts for facts in configs if "fp_core_util" in facts]
+    if len(core_util_configs) > 1:
+        authorities = ", ".join(
+            f"{facts['source']}={facts['fp_core_util']}"
+            for facts in core_util_configs)
+        raise FloorplanContractRefusal(
+            "FP_CORE_UTIL_AUTHORITY_CONFLICT",
+            f"multiple structured FP_CORE_UTIL authorities: {authorities}")
+    if core_util_configs:
+        facts = core_util_configs[0]
+        result["constraint_declarations"] = [{
+            "token": "FP_CORE_UTIL",
+            "value": facts["fp_core_util"],
+            "scope": None,
+            "source": facts["source"],
+            "line": facts["fp_core_util_line"],
+        }]
 
     # --- discovered fixed-floorplan aux files (pin order + power sources) ---
     have_pin_hint = any(h["kind"] == "pin_order" for h in hints)
@@ -600,7 +662,8 @@ def extract_floorplan_contract(project: Path,
         seen.add(key)
         deduped.append(h)
     result["floorplan_hints"] = deduped
-    result["constraints_present"] = bool(die_wxh or deduped)
+    result["constraints_present"] = bool(
+        die_wxh or deduped or result["constraint_declarations"])
     return result
 
 

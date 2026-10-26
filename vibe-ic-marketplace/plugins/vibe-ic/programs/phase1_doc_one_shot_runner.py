@@ -62988,6 +62988,35 @@ def _post_emit_floorplan_contract(project: Path) -> None:
             changed = True
         fields["floorplan_hints"] = existing
 
+    new_declarations = contract.get("constraint_declarations") or []
+    if new_declarations:
+        existing_declarations = fields.get("constraint_declarations")
+        if existing_declarations is None:
+            existing_declarations = []
+        if not isinstance(existing_declarations, list):
+            raise _fpc.FloorplanContractRefusal(
+                "FP_CORE_UTIL_AUTHORITY_CONFLICT",
+                "L19 constraint_declarations is not a list")
+        for declaration in new_declarations:
+            token = declaration.get("token")
+            matching = [
+                row for row in existing_declarations
+                if isinstance(row, dict) and row.get("token") == token]
+            if matching:
+                exact = [
+                    row for row in matching
+                    if all(row.get(key) == declaration.get(key)
+                           for key in ("token", "value", "scope",
+                                       "source", "line"))]
+                if len(matching) != 1 or not exact:
+                    raise _fpc.FloorplanContractRefusal(
+                        "FP_CORE_UTIL_AUTHORITY_CONFLICT",
+                        f"L19 already has a distinct {token} authority")
+                continue
+            existing_declarations.append(declaration)
+            changed = True
+        fields["constraint_declarations"] = existing_declarations
+
     if (floorplan_present or declaration_limit) and not fields.get(
             "constraints_present"):
         fields["constraints_present"] = True

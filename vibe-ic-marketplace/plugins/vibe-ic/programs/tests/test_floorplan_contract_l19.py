@@ -21,11 +21,14 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
     sys.path.insert(0, str(_PROGRAMS))
 
 import floorplan_contract as FPC          # noqa: E402
+import librelane_contract as LLC          # noqa: E402
 import phase1_doc_one_shot_runner as P1   # noqa: E402
 import phase3_one_shot_runner as P3       # noqa: E402
 
@@ -294,6 +297,114 @@ def test_phase1_hook_does_not_clobber_existing_die(tmp_path):
     P1._post_emit_floorplan_contract(proj)
     f = json.loads(l19.read_text())["fields"]
     assert f["die_area_budget_um"] == "111x222"    # not clobbered
+
+
+def _seed_librelane_contract_inputs(proj: Path) -> Path:
+    l19 = _seed_l19(proj)
+    _write(proj / "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
+           json.dumps({"clock_domains": [{
+               "role": "primary", "pdk_scoped_target": "processA",
+               "period_ns": 8, "source_pin": "clk"}]}))
+    _write(proj / "phase1/generated_docs/L9_INTEGRATION_SPEC.json",
+           json.dumps({"top_module": "neutral_top"}))
+    return l19
+
+
+def _seed_librelane_declaration(proj: Path) -> None:
+    _write(proj / "input/submission_template/tapeout_declaration.json",
+           json.dumps({"answers": {
+               "top_cell": "neutral_top",
+               "die_area_um": [0, 0, 120, 140],
+               "core_area_um": [10, 10, 110, 130]}}))
+
+
+def test_structured_core_util_reaches_l19_and_actual_librelane_consumer(
+        tmp_path):
+    proj = tmp_path / "p"
+    l19 = _seed_librelane_contract_inputs(proj)
+    config = proj / "input/config.json"
+    _write(config, json.dumps({
+        "DESIGN_NAME": "neutral_top",
+        "FP_SIZING": "absolute",
+        "DIE_AREA": [0, 0, 120, 140],
+        "FP_CORE_UTIL": 25,
+    }, indent=2))
+
+    P1._post_emit_floorplan_contract(proj)
+    fields = json.loads(l19.read_text())["fields"]
+    rows = [row for row in fields.get("constraint_declarations", [])
+            if row.get("token") == "FP_CORE_UTIL"]
+    assert rows == [{
+        "token": "FP_CORE_UTIL", "value": 25, "scope": None,
+        "source": "input/config.json", "line": 10}]
+    assert fields["die_area_budget_um"] == "120x140"
+    assert {row["kind"] for row in fields["floorplan_hints"]} >= {
+        "die_area", "fp_sizing"}
+
+    _seed_librelane_declaration(proj)
+    output = proj / "phase3/librelane/config.json"
+    emitted = LLC.emit_config(proj, "processA", output)
+    assert emitted["FP_CORE_UTIL"] == 25
+    provenance = json.loads(
+        output.with_suffix(".provenance.json").read_text())
+    assert "input/config.json" in provenance["FP_CORE_UTIL"]
+
+
+@pytest.mark.parametrize("value", [
+    0, -1, 100.01, "25", "not-a-number", None, True, float("nan")])
+def test_structured_core_util_refuses_invalid_or_out_of_range(tmp_path, value):
+    proj = tmp_path / "p"
+    _write(proj / "input/config.json", json.dumps({
+        "DESIGN_NAME": "neutral_top", "FP_CORE_UTIL": value}))
+    with pytest.raises(
+            FPC.FloorplanContractRefusal,
+            match=r"FP_CORE_UTIL_(?:INVALID|RANGE)"):
+        FPC.extract_floorplan_contract(proj)
+
+
+def test_structured_core_util_refuses_multiple_config_authorities(tmp_path):
+    proj = tmp_path / "p"
+    for name, value in (("a", 25), ("b", 35)):
+        _write(proj / f"input/{name}/config.json", json.dumps({
+            "DESIGN_NAME": name, "FP_CORE_UTIL": value}))
+    with pytest.raises(
+            FPC.FloorplanContractRefusal,
+            match="FP_CORE_UTIL_AUTHORITY_CONFLICT"):
+        FPC.extract_floorplan_contract(proj)
+
+
+def test_structured_core_util_refuses_existing_l19_authority(tmp_path):
+    proj = tmp_path / "p"
+    l19 = _seed_l19(proj)
+    doc = json.loads(l19.read_text())
+    doc["fields"]["constraint_declarations"] = [{
+        "token": "FP_CORE_UTIL", "value": 35, "scope": None,
+        "source": "input/docs/floorplan.md", "line": 4}]
+    _write(l19, json.dumps(doc))
+    _write(proj / "input/config.json", json.dumps({
+        "DESIGN_NAME": "neutral_top", "FP_CORE_UTIL": 25}))
+    with pytest.raises(
+            FPC.FloorplanContractRefusal,
+            match="FP_CORE_UTIL_AUTHORITY_CONFLICT"):
+        P1._post_emit_floorplan_contract(proj)
+
+
+def test_absent_structured_core_util_stays_absent_from_actual_consumer(
+        tmp_path):
+    proj = tmp_path / "p"
+    l19 = _seed_librelane_contract_inputs(proj)
+    _write(proj / "input/config.json", json.dumps({
+        "DESIGN_NAME": "neutral_top",
+        "FP_SIZING": "absolute",
+        "DIE_AREA": [0, 0, 120, 140]}))
+    P1._post_emit_floorplan_contract(proj)
+    fields = json.loads(l19.read_text())["fields"]
+    assert not any(row.get("token") == "FP_CORE_UTIL"
+                   for row in fields.get("constraint_declarations", []))
+    _seed_librelane_declaration(proj)
+    emitted = LLC.emit_config(
+        proj, "processA", proj / "phase3/librelane/config.json")
+    assert "FP_CORE_UTIL" not in emitted
 
 
 # ===========================================================================
