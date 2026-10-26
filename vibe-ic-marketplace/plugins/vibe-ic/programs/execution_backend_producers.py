@@ -464,7 +464,8 @@ def _step15_sdc(project):
 
 
 def _parameters(project, params):
-    import phase3_one_shot_runner as R
+    from _ppa.power import _runner_context
+    R = _runner_context()
     import librelane_contract as ll
     missing = [name for name in ("pdk_name", "image_id", "pdk_root", "top")
                if not params.get(name)]

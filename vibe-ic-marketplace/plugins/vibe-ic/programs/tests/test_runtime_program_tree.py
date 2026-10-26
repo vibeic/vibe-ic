@@ -4,6 +4,7 @@ import os
 import shutil
 import subprocess
 import sys
+from types import ModuleType, SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -141,6 +142,60 @@ def test_live_installed_path_is_refused_after_retention(tmp_path, monkeypatch):
     tree = rpt.activate(project, programs, programs / "runner.py")
     with pytest.raises(rpt.RuntimeTreeError, match="LIVE_PLUGIN_PATH_AFTER_RETENTION"):
         tree.verify_command([sys.executable, str(programs / "next.py")])
+
+
+@pytest.mark.parametrize("child_location", ["retained", "live"])
+def test_backend_parameters_keep_active_retained_runner(
+        tmp_path, monkeypatch, child_location):
+    import execution_backend_producers as producers
+    import librelane_contract as ll
+
+    _clear(monkeypatch)
+    programs = _plugin(tmp_path / "source", "1.0.0", "print('A')\n")
+    (programs / "pad_ring_check.py").write_text("# verifier subject\n")
+    project = tmp_path / "project"
+    project.mkdir()
+    tree = rpt.activate(project, programs, programs / "runner.py")
+    pdk = SimpleNamespace(name="fixture")
+    pdk_root = tmp_path / "pdk"
+    pdk_root.mkdir()
+
+    def runner_context(name, program_root):
+        context = ModuleType(name)
+        context.PROGRAMS_DIR = program_root
+        context._RUNTIME_PROGRAM_TREE = tree if name == "__main__" else None
+        context._producer_identity_now = lambda: tree.receipt()
+        context._detect_pdk = lambda project, name: pdk
+        context._host_staged_liberty = lambda pdk, staging: None
+        context.set_invocation_provenance_sink = lambda project: None
+        return context
+
+    active = runner_context("__main__", tree.programs_dir)
+    separate = runner_context("phase3_one_shot_runner", programs)
+    monkeypatch.setitem(sys.modules, "__main__", active)
+    monkeypatch.setitem(sys.modules, "phase3_one_shot_runner", separate)
+    monkeypatch.setattr(ll, "pdk_root_resolution",
+                        lambda *args, **kwargs: {"path": str(pdk_root)})
+    selected, _, _, _ = producers._parameters(project, {
+        "pdk_name": pdk.name, "image_id": "fixture-image",
+        "pdk_root": str(pdk_root), "top": "fixture"})
+
+    assert selected is active
+    assert selected is not separate
+    assert selected._RUNTIME_PROGRAM_TREE is tree
+    assert selected.PROGRAMS_DIR == tree.programs_dir
+    child = ((selected.PROGRAMS_DIR if child_location == "retained" else programs)
+             / "pad_ring_check.py")
+    command = [sys.executable, str(child), str(project)]
+    if child_location == "live":
+        with pytest.raises(rpt.RuntimeTreeError,
+                           match="LIVE_PLUGIN_PATH_AFTER_RETENTION"):
+            tree.verify_command(command)
+    else:
+        tree.verify_command(command)
+        launch = json.loads(tree.launch_path.read_text())["children"]
+        assert launch["programs/pad_ring_check.py"]["sha256"] == hashlib.sha256(
+            child.read_bytes()).hexdigest()
 
 
 def test_long_runner_entrypoints_activate_retention_before_work():
