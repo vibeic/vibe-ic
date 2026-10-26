@@ -25,6 +25,10 @@ import phase1_doc_one_shot_runner as phase1  # noqa: E402
 
 L12 = "L12_BEHAVIORAL_SEQUENCES.json"
 OTHER = "L11_OTP_CONTENT.json"
+EXACT_SOFT_WRAPPED_ABSENCE = (
+    "The digital arithmetic design requires no calibration, trimming, analog model,\n"
+    "sensor, conversion, or mixed-signal procedure.\n"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +99,21 @@ def test_explicit_source_bound_no_calibration_authorizes_escape(tmp_path):
     assert field_count._check_l_doc(12, doc, ic_class="unknown")[0] is True
 
 
+def test_soft_wrapped_modified_design_absence_is_source_bound(tmp_path):
+    doc = _produce_l12(tmp_path, EXACT_SOFT_WRAPPED_ABSENCE)
+    assert doc["no_calibration"] is True
+    assert doc["behavioral_sequences"] == []
+    evidence = doc["extraction_evidence"]["input/docs/design.md"]
+    assert evidence == [{
+        "literal": (
+            "The digital arithmetic design requires no calibration, trimming, "
+            "analog model, sensor, conversion, or mixed-signal procedure."
+        ),
+        "label": "input explicitly states no calibration/trimming",
+    }]
+    assert field_count._check_l_doc(12, doc, ic_class="unknown")[0] is True
+
+
 def test_calibration_error_sentence_does_not_authorize_global_absence(
         tmp_path):
     doc = _produce_l12(
@@ -113,6 +132,17 @@ def test_positive_calibration_source_does_not_become_absence(tmp_path):
 def test_incidental_trim_word_does_not_authorize_absence(tmp_path):
     doc = _produce_l12(tmp_path, "Trim whitespace before parsing.\n")
     assert doc["no_calibration"] is False
+
+
+def test_foreign_or_conditional_absence_stays_unknown(tmp_path):
+    for index, text in enumerate((
+        "The test fixture requires no calibration or trimming.\n",
+        "If this digital design requires no calibration, skip the procedure.\n",
+        "The digital design may require no calibration or trimming.\n",
+    )):
+        doc = _produce_l12(tmp_path / str(index), text)
+        assert doc["no_calibration"] is False
+        assert not doc.get("extraction_evidence")
 
 
 # ---------------------------------------------------------------------------
