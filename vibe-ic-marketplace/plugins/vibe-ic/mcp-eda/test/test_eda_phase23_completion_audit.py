@@ -1,15 +1,10 @@
 #!/usr/bin/env python3
-"""Wave 75 — tests for eda_phase23_completion_audit (v0.109 tool).
+"""Focused public-consumer tests for ``eda_phase23_completion_audit``.
 
-This is the SOLE acceptance gate for Phase 2+3 completion claims; the
-contract is documented in CLAUDE.md rule #11. Tests verify:
-
-Positive: tool wraps phase23_completion_self_audit_check.py (the
-          gate referenced in CLAUDE.md), with --json output piped back.
-Negative: missing project_dir is not silently defaulted (zod required).
-Edge   : exit code 0 → phase23_complete:true; non-zero → false.
-SKIP   : description forbids skipping — claims without this audit
-         are explicitly called out as a process violation.
+The wrapped program is a retained legacy diagnostic.  It must still execute
+and report its own outcome, but the public MCP result must refuse to promote
+that outcome to current Flow109 acceptance because this tool accepts neither a
+current Flow109 manifest nor an execution window.
 """
 import json
 import os
@@ -67,48 +62,25 @@ def test_uses_json_output_mode():
     assert "--json" in w
 
 
-def test_phase23_complete_field_derived_from_exit_code():
-    """Positive: exit_code===0 → phase23_complete:true. This is the
-    single field downstream gates / human reviewers should branch on.
-    A regression that always returns true would defeat the gate."""
+def test_legacy_phase23_complete_field_derived_from_exit_code():
+    """The retained legacy diagnostic still derives its own result from rc."""
     w = _slice()
-    assert "phase23_complete" in w
+    assert "legacy_phase23_complete" in w
     assert "exitCode === 0" in w or "exitCode == 0" in w
 
 
-def test_description_forbids_skipping():
-    """SKIP_NOT_APPLICABLE: the description must explicitly call out
-    that individual gate PASSes are insufficient (CLAUDE.md rule #11).
-    A regression that softens the language risks agents skipping."""
+def test_description_refuses_current_flow_authority():
+    """The inventory-facing description must not present the legacy gate as current."""
     w = _slice()
-    desc_terms = [
-        "SOLE",
-        "necessary but insufficient",
-        "Phase 2+3",
-    ]
-    desc_lower = w.lower()
-    matched = sum(1 for t in desc_terms if t.lower() in desc_lower)
-    assert matched >= 2, (
-        f"description must reinforce the SOLE-gate contract; "
-        f"matched only {matched}/3 strict terms"
-    )
+    assert "legacy diagnostic" in w.lower()
+    assert "not current flow109 authority" in w.lower()
+    assert "sole phase 2+3 acceptance criterion" not in w.lower()
 
 
-@pytest.mark.skipif(
-    shutil.which("node") is None
-    or not (ROOT / "node_modules" / "@modelcontextprotocol" / "sdk").is_dir(),
-    reason="NOT_MEASURED: node or mcp-eda/node_modules absent (run `npm ci`)",
-)
-def test_canonical_gate_exists_on_disk(tmp_path):
-    """Ask the TOOL where its gate is, then check that path.
-
-    This test used to probe its OWN candidate list, which included the
-    current layout, so it stayed green while the tool resolved a `vibe-ic-d`
-    path that exists nowhere (#2348). Now the server is booted over MCP stdio
-    with $VIBE_IC_PROGRAMS_DIR unset (the default resolver) and the tool's
-    own answer is checked: it must have RUN, and the gate it names must be
-    the canonical program on disk."""
+def _call_actual_tool(tmp_path, *, programs_dir=None):
     env = {k: v for k, v in os.environ.items() if k != "VIBE_IC_PROGRAMS_DIR"}
+    if programs_dir is not None:
+        env["VIBE_IC_PROGRAMS_DIR"] = str(programs_dir)
     env["TMPDIR"] = str(tmp_path)
     proj = tmp_path / "proj"
     proj.mkdir()
@@ -146,12 +118,64 @@ def test_canonical_gate_exists_on_disk(tmp_path):
         p.wait()
     assert reply is not None, "the tool never answered"
     res = reply["result"]
-    out = json.loads("".join(c.get("text", "") for c in res["content"]))
-    gate = out.get("gate")
-    assert gate, f"the tool did not report its resolved gate: {out}"
-    assert out.get("status") == "MEASURED" and out.get("audit_ran") is True, (
-        f"the tool could not run its gate at {gate}: {out}")
+    return json.loads("".join(c.get("text", "") for c in res["content"]))
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None
+    or not (ROOT / "node_modules" / "@modelcontextprotocol" / "sdk").is_dir(),
+    reason="NOT_MEASURED: node or mcp-eda/node_modules absent (run `npm ci`)",
+)
+def test_actual_consumer_runs_legacy_gate_but_refuses_current_flow109(tmp_path):
+    """Ask the actual MCP TOOL for both its positive and refusal values.
+
+    Positive control: the retained diagnostic really runs and names the
+    canonical program.  Refusal control: without a current manifest/window,
+    its measured legacy result cannot become current Flow109 acceptance.
+    """
+    out = _call_actual_tool(tmp_path)
+    assert out.get("flow_id") == "109", out
+    assert out.get("flow109_manifest") is None, out
+    assert out.get("execution_window") is None, out
+    assert out.get("status") == "NOT_MEASURED", out
+    assert out.get("flow109_manifest") is None, out
+    assert out.get("execution_window") is None, out
+    assert out.get("flow109_acceptance") == "NOT_MEASURED", out
+    assert out.get("current_flow_authority") is False, out
+    assert out.get("audit_ran") is False, out
+    assert out.get("phase23_complete") is False, out
+    assert out.get("not_measured_class") == "FLOW109_MANIFEST_WINDOW_UNBOUND", out
+    legacy = out.get("legacy_diagnostic")
+    assert isinstance(legacy, dict), out
+    assert legacy.get("status") == "MEASURED" and legacy.get("audit_ran") is True, out
+    assert isinstance(legacy.get("legacy_phase23_complete"), bool), out
+    gate = legacy.get("gate")
+    assert gate, f"the diagnostic did not report its resolved gate: {out}"
     gate = Path(gate)
     assert gate.name == GATE_NAME and gate.is_file(), gate
     assert gate.resolve() == (ROOT.parent / "programs" / GATE_NAME).resolve(), (
         f"the tool resolved {gate}, not the plugin's own programs/ gate")
+
+
+@pytest.mark.skipif(
+    shutil.which("node") is None
+    or not (ROOT / "node_modules" / "@modelcontextprotocol" / "sdk").is_dir(),
+    reason="NOT_MEASURED: node or mcp-eda/node_modules absent (run `npm ci`)",
+)
+def test_actual_consumer_does_not_promote_legacy_pass(tmp_path):
+    """A measured positive legacy result is still not current authority."""
+    programs = tmp_path / "programs"
+    programs.mkdir()
+    (programs / GATE_NAME).write_text(
+        "import json\n"
+        "print(json.dumps({'summary': {'overall': 'PASS', 'certified': True}}))\n",
+        encoding="utf-8",
+    )
+    out = _call_actual_tool(tmp_path, programs_dir=programs)
+    assert out.get("status") == "NOT_MEASURED", out
+    assert out.get("flow109_acceptance") == "NOT_MEASURED", out
+    assert out.get("current_flow_authority") is False, out
+    assert out.get("phase23_complete") is False, out
+    legacy = out.get("legacy_diagnostic")
+    assert legacy.get("status") == "MEASURED", out
+    assert legacy.get("legacy_phase23_complete") is True, out

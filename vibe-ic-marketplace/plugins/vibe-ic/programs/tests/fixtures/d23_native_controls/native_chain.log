@@ -1,0 +1,15 @@
+Processing file /receipt/project/phase2/stage2/synth/netlist.v…
+Processing module neutral_unit…
+Chaining internal flip-flops…
+Internal scan chain successfully constructed. Length: 2
+Boundary scan register NOT inserted (--skip-boundary): the chain is the 2 internal flip-flop(s) only.
+Total scan-chain length:  2
+Resynthesizing with yosys…
+Done.
+
+/usr/local/lib/python3.12/dist-packages/pyverilog/vparser/lexer.py:107: SyntaxWarning: invalid escape sequence '\s'
+  m = re.match("^`default_nettype\s+(.+)\n", t.value)
+Generating LALR tables
+WARNING: 183 shift/reduce conflicts
+Generating LALR tables
+WARNING: 183 shift/reduce conflicts

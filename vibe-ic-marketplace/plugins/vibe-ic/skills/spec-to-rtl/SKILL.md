@@ -22,13 +22,13 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
 …the AI MUST:
 
 1. **Read the input contract named by the runner handoff**. For the explicit
-   bounded Step 1/2 `input_authority=original` contract, read the **entire**
+   bounded D09 position 17 `input_authority=original` contract, read the **entire**
    `read_prompt_from` file and every `read_context_from` file. Verify their
    recorded SHA-256 values before authoring or reviewing. These are the
    authoritative source bytes; do not substitute generated Ldocs or require a
-   D1 document review for this RTL-only request. A changed or missing source
+   D01 position 1 document review for this RTL-only request. A changed or missing source
    requires returning to the ordinary runner, not silently adopting it. This
-   handoff asserts neither D1 PASS nor measured RTL behavior.
+   handoff asserts neither D01 position 1 PASS nor measured RTL behavior.
 
    For the default structured contract, **read the L docs the runner emitted**:
    - `<project>/phase1/generated_docs/L1_*.json` (product metadata, IC name, target clock)
@@ -232,12 +232,32 @@ When `design_one_shot_runner.step_rtl_gen` WAIVES with the message:
    a genuine floor. The structural extraction + routing is deterministic;
    deciding whether a prose sentence is a distinct *testable* requirement (so
    you can author its stimulus) is your LLM judgment.
-7. **Tell the orchestrator you're done**. The caller will re-invoke
-   `vibe_ic_one_shot_runner.py` so the runner detects the RTL at the
-   expected path, skips `step_rtl_gen`, and continues with: chip_top
-   wrapper auto-emit (v0.1.32+), `rtl_hygiene_lint --fix`, `eda_lint`,
-   `eda_synth`, `spec_conformance_check`, `rtl_repair_retry` (up to 3 retries
-   on `reference_tb` FAIL), `full_stack_tb_gen`, `final_audit`.
+7. **Tell the orchestrator you're done, then stop**. D09 at position 17 is the
+   current RTL-authoring responsibility. Its source-owned
+   `canonical_owner_window` now reaches `design_one_shot_runner` authoring
+   through the public Flow109 entry. This is partial dispatch, not a completed
+   handoff: it does not yet consume or complete its author-self-validation
+   evidence from D11 at position 19 (hygiene/lint) and D13 at position 21
+   (reference testbench), and the ordinary authoring path does not finalize the
+   Flow109 component result. Naming that evidence grants no row credit,
+   metrics, delivery acceptance, or whole-flow acceptance to those or adjacent
+   responsibilities.
+
+   Therefore preserve the authored RTL and handoff as **unconsumed**, keep D09
+   position 17 and later rows `NOT_MEASURED`/not executed, and stop until the separately
+   owned completion wiring is independently accepted. Do not report
+   `FLOW109_PRODUCER_UNIMPLEMENTED`: the producer is wired and reaches
+   authoring; the missing authority is a context-bound completion that consumes
+   the hygiene/lint and reference-testbench results and finalizes the component
+   without promoting raw authoring success.
+
+   After that dependency is accepted, the only permitted continuation contract
+   is the sole public `vibe_ic_one_shot_runner.py` entry with the original
+   project and route, exact validated `--flow109-manifest`, `--flow 109`, the
+   selected current D09 position 17 window, and `--execution-mode default`. The
+   public resolver must accept that window before native work. Never call
+   `design_one_shot_runner.py` directly as a public substitute, never invoke a
+   native helper directly, and never pass a Flow109 D-id to a native helper.
 
 ## What this skill IS NOT
 
@@ -638,15 +658,21 @@ without a stated range needs no invented limit. The deterministic
 
 ### How this finding REACHES you (#2081, second half)
 
-Until v1.19.x nothing routed a Phase-3 timing verdict here. Step 23's
-`closed_loop.fallback_to` is 32 — post-route timing REPAIR — and step 10's is 7,
-constraint setup; both are physical remedies, and neither is this step.
+Until v1.19.x nothing routed a Phase-3 timing verdict here. The current Flow109
+responsibility map is: candidate timing closure at D49 position 71; post-route
+timing repair at D41 position 63; pre-layout timing at D26 position 38; and
+mode/constraint planning at D19 position 31. A user/operator selects the stable
+ID through the public entry; the paired position is display identity. Current
+registry dispatch metadata connects D49 position 71 to D41 position 63, and D26
+position 38 to D19 position 31, as physical remedies. Neither remedy is this
+skill.
 `benchmark/CAPTURE_ROUTING.json`'s `phase3.sta` pointed at the STA runner and
 `sta-review`, also physical. So a run could prove at sign-off that the
 ARCHITECTURE cannot meet the period and have nowhere to put the discovery.
 
-`programs/sta_architectural_residual_check.py`, blocking at step 23, is that
-route. It reads the run's own post-route sign-off report and, per violating
+`programs/sta_architectural_residual_check.py`, blocking inside the D49 position
+71 responsibility, is that route. It reads the run's own
+post-route sign-off report and, per violating
 setup path, bounds what any physical remedy could still recover — the delay on
 buffer/inverter arcs, plus the adverse clock-tree insertion a perfectly
 balanced tree would remove. Slack beyond that bound is delay on LOGIC arcs, and

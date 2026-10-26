@@ -21650,26 +21650,37 @@ def _dft_disclose_skip(path: Path, reason: str, extra: Optional[dict] = None):
 
 
 def dft_scan_insertion_contract(project: Path) -> Tuple[bool, str]:
-    """Whether this design authorizes automatic scan insertion.
+    """BLOCKING D23 authority, with explicit scan-only absence semantics.
 
-    Scan insertion changes the physical interface: it adds test ports and, for
-    a non-fixed top, boundary cells.  A measured chain alone is not authority
-    to make that product decision.  The existing L20 consumer is the single
-    design-owned source for it: only an actionable, declared topology may
-    reach the scan producer.  A missing, malformed, or undeclared contract
-    declines loudly rather than creating an interface which no pad plan owns.
-
-    ``inspect`` is read-only.  Its ``PASS`` verdict is specifically the state
-    where L20 contains an actionable topology; ``SKIP`` means no requirement,
-    and ``FAIL`` means a requirement exists but has not reached the consuming
-    layer.  Neither latter state is permission to invent a chain.
+    The existing D09 declaration producer owns planned intent. A measured
+    positive length is not admission authority. Invalid/missing source data
+    raises the existing typed refusal, so the caller cannot label it N/A.
+    A complete legacy L20 contract retains its existing compatibility path.
     """
+    import fault_scan_chain_insert as _scan_contract
+    import librelane_contract as _dft_contract
+    planned, problems = _scan_contract.load_d09_dft_contract(project)
+    if planned is not None:
+        if not planned['intent']['scan_test']:
+            return False, 'D09_SCAN_TEST_DISABLED: explicit source-bound scan_test:false'
+        clk, reset, active_low = derive_dft_clock_reset(project)
+        planned, problems = _scan_contract.load_d09_dft_contract(
+            project, expected_clock=clk, expected_reset=reset,
+            reset_active_low=active_low)
+        if planned is not None and clk and reset:
+            return True, 'D09_SCAN_PLANNED_UNMEASURED: native D23 must measure topology'
+        raise _dft_contract.Refusal('D09_DFT_AUTHORITY_INVALID',
+                                    '; '.join(problems) or 'actual clock/reset missing')
+    if not all(p.startswith('D09_DFT_SPEC_MISSING:') for p in problems):
+        raise _dft_contract.Refusal('D09_DFT_AUTHORITY_INVALID', '; '.join(problems))
+    # Compatibility for a complete pre-existing L20 contract. This does not
+    # make missing D09 inputs eligible for the new D22 admission boundary.
     try:
         result = _l20_dft.inspect(project)
     except Exception as exc:  # fail closed; never invent test IO on uncertainty
-        return False, (
+        raise _dft_contract.Refusal('D09_DFT_AUTHORITY_INVALID', (
             "L20 DFT contract could not be inspected; scan insertion declined: "
-            f"{type(exc).__name__}")
+            f"{type(exc).__name__}"))
     verdict = str(result.get("verdict") or "").upper()
     evidence = result.get("evidence") or {}
     actionable = int(evidence.get("typed_scan_chain_count") or 0) > 0
@@ -21680,14 +21691,18 @@ def dft_scan_insertion_contract(project: Path) -> Tuple[bool, str]:
         except Exception as exc:  # noqa: BLE001
             problems = [f"L20 fixed-producer compatibility check crashed: {exc}"]
         if problems:
-            return False, (
+            raise _dft_contract.Refusal('D09_DFT_AUTHORITY_INVALID', (
                 "L20 topology is not implementable by Step 11: "
-                + "; ".join(problems))
+                + "; ".join(problems)))
         return True, "L20 declares a Step-11-compatible one-chain DFT topology"
-    return False, (
-        "L20 does not authorize automatic scan insertion "
+    _path, _doc = _scan_contract._ldoc.load_l_doc(project, 'L20')
+    if isinstance(_doc, dict) and str(_doc.get('applicability')).upper() in (
+            'NOT_APPLICABLE', 'N/A', 'NA'):
+        return False, 'L20_SCAN_TEST_DISABLED: explicit legacy design declaration'
+    raise _dft_contract.Refusal('D09_DFT_AUTHORITY_REQUIRED', (
+        "D09 source-owned scan intent is required; L20 does not authorize insertion "
         f"(verdict={verdict or 'UNKNOWN'}; "
-        f"reason={result.get('reason') or 'no actionable scan topology'})")
+        f"reason={result.get('reason') or 'no actionable scan topology'})"))
 
 
 # The post-DFT-optimization skip-sentinel must OWN its canonical output so

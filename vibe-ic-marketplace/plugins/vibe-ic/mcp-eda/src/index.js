@@ -8117,10 +8117,11 @@ server.tool(
 );
 
 // ─── Tool: eda_phase23_completion_audit ─────────────────────────────────
-// v0.109: SOLE acceptance gate for Phase 2+3 completion claims. Wraps
-// programs/phase23_completion_self_audit_check.py which itself wraps
-// flow_compliance_check.py --strict. Embeds the rule into the tool
-// description so any agent picking up the tool inventory cannot miss it.
+// Retained compatibility wrapper for the pre-Flow109 Phase 2+3 diagnostic.
+// The program still has value as a diagnostic, but this MCP entry accepts no
+// Flow109 manifest or execution window.  Its result therefore cannot be
+// published as current Flow109 authority.  Keep the legacy measurement under
+// an explicitly scoped key and fail the current-flow claim closed.
 //
 // The gate used to be resolved under `vibe-ic-d`, the plugin Wave 82 retired.
 // That path exists in NO layout — installed or checkout — so the tool never
@@ -8140,17 +8141,11 @@ server.tool(
 // the same rule this file states for docker exec above.
 server.tool(
   "eda_phase23_completion_audit",
-  "⛔ SOLE PHASE 2+3 ACCEPTANCE CRITERION — call this before claiming "
-  + "'Phase 2+3 complete', 'design flow done', 'tape-out ready', "
-  + "'ready for fab', or any equivalent. Returns Overall PASS/FAIL plus "
-  + "non-waived PASS = N/34. Individual gates passing (tapeout_signoff, "
-  + "host-tester connect_test, BACKLOG-v6/v7 P0) are NECESSARY BUT INSUFFICIENT "
-  + "— this gate audits all 34 canonical artefacts (PnR signoff, SPEF, "
-  + "post-route STA, IR/EM/antenna/SI, post-layout sim, SPICE correlation, "
-  + "ECO, power, metal fill, FPGA final sign-off, analog A1-A8). v0.108 "
-  + "fresh-agent benchmark proved a project can pass every individual gate "
-  + "while only completing 2/34 canonical steps. Run this. Paste the "
-  + "output into FINAL_REPORT.md. Don't claim PASS without it.",
+  "Legacy diagnostic for retained Phase 2+3 evidence. This is not current Flow109 authority: "
+  + "the entry accepts neither a current Flow109 manifest "
+  + "nor an execution window, so it always reports current Flow109 acceptance "
+  + "as NOT_MEASURED. The nested legacy_diagnostic result is diagnostic only "
+  + "and must not be used to claim current-flow completion.",
   {
     project_dir: z.string().describe("Absolute path to the project directory (containing rtl/, fpga/, gds/, etc.)"),
   },
@@ -8160,13 +8155,18 @@ server.tool(
     } catch (e) { return guardError(e); }
     const gate = join(VIBE_IC_PROGRAMS_DIR, "phase23_completion_self_audit_check.py");
     // THREE STATES, NOT TWO: "could not run" is not a verdict. See above.
-    const notMeasured = (cls, why) => ({
+    const notMeasured = (cls, why, legacyDiagnostic = undefined) => ({
       content: [{
         type: "text",
         text: JSON.stringify({
           success: false, status: "NOT_MEASURED", not_measured_class: cls,
           not_measured_reason: why, audit_ran: false,
-          phase23_complete: false, gate,
+          phase23_complete: false, flow_id: "109",
+          flow109_manifest: null, execution_window: null,
+          flow109_acceptance: "NOT_MEASURED", current_flow_authority: false,
+          ...(legacyDiagnostic === undefined
+            ? { gate }
+            : { legacy_diagnostic: legacyDiagnostic }),
         }, null, 2),
       }],
     });
@@ -8216,19 +8216,19 @@ server.tool(
           ? ": " + parsed.summary.certification_note
           : "; INCONCLUSIVE, not a verdict"));
     }
-    return {
-      content: [{
-        type: "text",
-        text: JSON.stringify({
-          ...parsed,
-          status: "MEASURED",
-          audit_ran: true,
-          gate,  // which program produced this verdict — the resolved path
-          exit_code: exitCode,
-          phase23_complete: exitCode === 0,
-        }, null, 2),
-      }],
-    };
+    return notMeasured(
+      "FLOW109_MANIFEST_WINDOW_UNBOUND",
+      "the retained diagnostic ran, but this public entry binds neither a "
+        + "current Flow109 manifest nor an execution window",
+      {
+        ...parsed,
+        status: "MEASURED",
+        audit_ran: true,
+        gate,  // which program produced this diagnostic — the resolved path
+        exit_code: exitCode,
+        legacy_phase23_complete: exitCode === 0,
+      },
+    );
   },
 );
 
