@@ -433,3 +433,60 @@ def test_d09_native_currentness_rederives_controls_after_rehash(tmp_path, monkey
     # A fresh digest/old passing label is insufficient: semantics are re-read.
     report['measured_artifacts'][str(path.relative_to(project))] = hashlib.sha256(path.read_bytes()).hexdigest()
     assert S.l20_binding_is_current(project, report)[0] is False
+
+
+@pytest.mark.parametrize('damage', [None, 'internal_clock', 'boundary_clock',
+                                   'unknown_cell', 'unknown_order', 'boundary_reset',
+                                   'internal_reset', 'boundary_test', 'mux_select'])
+def test_d09_internal_and_boundary_native_control_authority(damage):
+    # Actual neutral 2DFF Fault output: internal2 + boundary2, auto boundary.
+    retained = Path(__file__).parent / 'fixtures' / 'd23_native_controls'
+    text = original = (retained / 'boundary_chained.v').read_text()
+    library = (retained / 'semantic.lib').read_text()
+    if damage == 'internal_clock':
+        text = text.replace('.CLK(\\__uuf__.__clk_source__ )', '.CLK(clk)', 1)
+    if damage == 'boundary_clock':
+        text = text.replace('.CLK(tck)', '.CLK(clk)', 1)
+    if damage == 'unknown_cell':
+        text = text.replace('sky130_fd_sc_hd__dfrtp_1 _12_', 'unknown_storage _12_')
+    if damage == 'unknown_order':
+        text = text.replace('"kind":"input"', '"kind":"unknown"')
+    if damage == 'boundary_reset':
+        text = text.replace('.RESET_B(_01_)', ".RESET_B(1'b1)", 1)
+    if damage == 'internal_reset':
+        text = text.replace('.S(rst)', '.S(data)', 1)
+    if damage == 'boundary_test':
+        text = text.replace('.S(test)', '.S(shift)', 1)
+    if damage == 'mux_select':
+        text = text.replace('.S(test),\n    .X(\\__uuf__.__clk_source__ )',
+                            '.S(shift),\n    .X(\\__uuf__.__clk_source__ )')
+    if damage:
+        assert text != original
+        with pytest.raises(ValueError):
+            S._native_clock_controls(text, library, _intent())
+    else:
+        proof = S._native_clock_controls(text, library, _intent())
+        assert [v['kind'] for v in proof['flop_roles'].values()] == ['input', 'dff', 'dff', 'output']
+        assert {v['clock'] for v in proof['flop_roles'].values() if v['kind'] == 'dff'} == {'__uuf__.__clk_source__'}
+        assert {v['clock'] for v in proof['flop_roles'].values() if v['kind'] != 'dff'} == {'tck'}
+        assert proof['functional_value'] == 0 and proof['scan_value'] == 1
+
+
+def test_d09_boundary_native_measurement_publishes_current_receipt(tmp_path, monkeypatch):
+    project = _planned(tmp_path)
+    _native_payload(project, monkeypatch)
+    replay = S._fatpg._run_docker
+    retained = Path(__file__).parent / 'fixtures' / 'd23_native_controls'
+    def boundary(project, argv, **kwargs):
+        rc, out, err = replay(project, argv, **kwargs)
+        (project / 'phase2/stage2/dft/scan_chain_work/chained.v').write_bytes(
+            (retained / 'boundary_chained.v').read_bytes())
+        return rc, out.replace('chained. Length: 0', 'chained. Length: 2').replace(
+            'Total scan-chain length: 2', 'Total scan-chain length: 4'), err
+    monkeypatch.setattr(S._fatpg, '_run_docker', boundary)
+    rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', pdk='sky130',
+                             clock='clk', reset='rst', reset_active_low=False,
+                             require_l20_contract=True, top_module='neutral_unit')
+    assert rc == 0 and report['published'] is True, report
+    assert report['internal_chain_length'] == 2 and report['boundary_chain_length'] == 2
+    assert S.l20_binding_is_current(project, report)[0] is True
