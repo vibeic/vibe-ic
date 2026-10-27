@@ -578,8 +578,16 @@ def _final_timing_case(project, monkeypatch):
     import flow109_final_lec as final_lec
     import flow109_final_lec_physical as physical
     _d30_scan_case(project, monkeypatch, top="neutral_unit")
+    # D50's physical fixture must use a physical D30 context too. Isolate its
+    # upstream D23/D24 native proof here; the real no-chain D30 control above
+    # exercises that producer and binding without this fixture substitution.
     features = profile("Low-power secure scan SoC")
     d30_context = flow109.execution_context(flow109.resolve_plan(features), "D30", "D30")
+    def physical_fixture(project, _context, _intent):
+        row, ref = flow109._accepted_row(project, flow109._D24_RESULT, "D24")
+        return {"D24_result": ref, "adopted_netlist": row["adopted_netlist"],
+                "scan_cell_reconciliation": {"fixture": "D23_D24_native_binding"}}
+    monkeypatch.setattr(flow109, "physical_d24_binding", physical_fixture)
     d30_admission = flow109.dft_preroute_admission(project, d30_context)
     rows = project / "reports/flow109/default_rows"
     (rows / "D30.json").write_text(json.dumps({
