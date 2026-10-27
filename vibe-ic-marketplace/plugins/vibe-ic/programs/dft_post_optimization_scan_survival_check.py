@@ -73,6 +73,76 @@ def _dff_instance_count(netlist_text: str) -> int:
     return sum(1 for _ in _DFF_INST_RE.finditer(netlist_text or ""))
 
 
+def reconcile_scan_cell_list(mapped: str, replaced: str, adopted: str, cells: list, *, top: str) -> dict:
+    """Compare a D23 list using complete Yosys parses of all three netlists.
+
+    This is a component check: its caller must bind the D23 native execution
+    and all three inputs before using it as Flow109 evidence.
+    """
+    import hashlib
+    import shutil
+    import subprocess
+    import tempfile
+    tool = shutil.which('yosys')
+    if not tool or not isinstance(top, str) or not top:
+        return {'verdict': 'NOT_MEASURED', 'reason': 'NETLIST_PARSER_UNAVAILABLE'}
+    try:
+        tool_hash = hashlib.sha256(Path(tool).read_bytes()).hexdigest()
+        parsed = []
+        with tempfile.TemporaryDirectory(prefix='dft-cell-parse-') as td:
+            for index, text in enumerate((mapped, replaced, adopted)):
+                if not isinstance(text, str) or not text.strip():
+                    raise ValueError('empty netlist')
+                source = Path(td) / f'in{index}.v'
+                result = Path(td) / f'out{index}.json'
+                source.write_text(text)
+                cmd = f'read_verilog {source}; write_json {result}'
+                run = subprocess.run([tool, '-Q', '-T', '-p', cmd], capture_output=True, timeout=60)
+                if run.returncode != 0 or not result.is_file():
+                    raise ValueError('Yosys netlist parse failed')
+                document = json.loads(result.read_text())
+                modules = document.get('modules')
+                if not isinstance(modules, dict) or set(modules) != {top}:
+                    raise ValueError('expected one selected flat top')
+                items = modules[top].get('cells')
+                if not isinstance(items, dict) or not items:
+                    raise ValueError('native instance population unavailable')
+                if any(not isinstance(cell, dict) or not isinstance(cell.get('type'), str)
+                       for cell in items.values()):
+                    raise ValueError('native cell type unavailable')
+                parsed.append({name: cell['type'] for name, cell in items.items()})
+        if hashlib.sha256(Path(tool).read_bytes()).hexdigest() != tool_hash:
+            raise ValueError('Yosys changed during parsing')
+    except (OSError, ValueError, TypeError, KeyError, subprocess.TimeoutExpired):
+        return {'verdict': 'NOT_MEASURED', 'reason': 'NATIVE_INSTANCE_POPULATION_UNRESOLVED'}
+    before, source, final = parsed
+    if set(before) != set(source):
+        return {'verdict': 'NOT_MEASURED', 'reason': 'NATIVE_INSTANCE_POPULATION_UNRESOLVED'}
+    if not isinstance(cells, list) or not cells:
+        return {'verdict': 'NOT_MEASURED', 'reason': 'D23_SCAN_CELL_LIST_MISSING'}
+    if any(not isinstance(c, dict) or set(c) != {'instance', 'cell'}
+           or not all(isinstance(c[k], str) and c[k] for k in ('instance', 'cell'))
+           for c in cells):
+        return {'verdict': 'NOT_MEASURED', 'reason': 'D23_SCAN_CELL_LIST_INVALID'}
+    claimed = [(c['instance'], c['cell']) for c in cells]
+    if len(set(claimed)) != len(claimed) or len({n for n, _ in claimed}) != len(claimed):
+        return {'verdict': 'FAIL', 'reason': 'D23_SCAN_CELL_LIST_DUPLICATE'}
+    changed = {(name, source[name]) for name in before if before[name] != source[name]}
+    if not changed:
+        return {'verdict': 'NOT_MEASURED', 'reason': 'NO_SCAN_REPLACEMENTS_OBSERVED'}
+    if set(claimed) != changed:
+        return {'verdict': 'FAIL', 'reason': 'D23_SCAN_CELL_LIST_MISMATCH',
+                'missing': sorted(changed - set(claimed)), 'extra': sorted(set(claimed) - changed)}
+    masters = {cell for _, cell in changed}
+    adopted_cells = {(name, cell) for name, cell in final.items() if cell in masters}
+    if adopted_cells != changed:
+        return {'verdict': 'FAIL', 'reason': 'D24_SCAN_CELL_LIST_MISMATCH',
+                'missing': sorted(changed - adopted_cells), 'extra': sorted(adopted_cells - changed)}
+    return {'verdict': 'PASS', 'reason': 'D23_D24_SCAN_CELL_CONTENT_MATCH',
+            'cells': [{'instance': n, 'cell': c} for n, c in sorted(changed)],
+            'parser_sha256': tool_hash, 'flow109_acceptance': 'NOT_MEASURED'}
+
+
 def _missing_dft_ports(project: Path, netlist_text: str) -> list:
     """DFT ports the published scan chain declares, absent from the netlist.
 

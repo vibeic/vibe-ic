@@ -320,10 +320,33 @@ def _d26_timing_modes_binding(project: Path, d26: Mapping, intent: Mapping,
             "scan": dict(scan), "modes_measured": list(timing["modes_measured"])}
 
 
+def dft_plan_reference(intent: Mapping) -> dict:
+    """Bind the planned scan limits to the current D01 specification."""
+    if type(intent.get("requires_scan")) is not bool:
+        raise Flow109Error("FLOW109_D30_DFT_PLAN_MISSING", "scan applicability unresolved")
+    if not intent["requires_scan"]:
+        return {"status": "NOT_APPLICABLE", "reason": "scan is not required"}
+    binding = intent.get("source_binding")
+    data = binding.get("intent") if isinstance(binding, Mapping) else None
+    plan = data.get("dft_plan") if isinstance(data, Mapping) else None
+    if not isinstance(plan, Mapping):
+        raise Flow109Error("FLOW109_D30_DFT_PLAN_MISSING", "D01 dft_plan")
+    count, limit = plan.get("planned_chain_count"), plan.get("max_chain_length")
+    if type(count) is not int or count < 1 or type(limit) is not int or limit < 1:
+        raise Flow109Error("FLOW109_D30_DFT_PLAN_MISSING", "D01 chain count and limit must be positive integers")
+    if (intent.get("source_step") != "D01" or not isinstance(binding.get("path"), str)
+            or not isinstance(binding.get("sha256"), str) or len(binding["sha256"]) != 64):
+        raise Flow109Error("FLOW109_D30_DFT_PLAN_UNBOUND", "D01 source identity")
+    return {"status": "PASS", "producer": "D01", "path": binding["path"],
+            "sha256": binding["sha256"], "planned_chain_count": count,
+            "max_chain_length": limit}
+
+
 def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     """Re-open D24/D25/D26's actual consumers before D30 native handoff."""
     project = Path(project).resolve()
     intent = dft_source_intent(project, context)
+    plan_ref = dft_plan_reference(intent)
     _d25, d25_ref = _accepted_row(project, _D25_RESULT, "D25")
     _d26, d26_ref = _accepted_row(project, _D26_RESULT, "D26")
     manifest, _ = _bound_project_json(
@@ -385,7 +408,8 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
         "schema": "vibeic.flow109.dft-preroute-admission.v1",
         "consumer_step": "D30", "consumer_position": 42,
         "top": top, "requires_scan": intent["requires_scan"], "adopted_netlist": adopted,
-        "native_chain": chain, "functional_equivalence": lec_ref,
+        "native_chain": chain, "dft_plan_reference": plan_ref,
+        "functional_equivalence": lec_ref,
         "pre_route_timing": {
             "owner_step": "D26", "owner_position": 38,
             "D26_result": d26_ref,

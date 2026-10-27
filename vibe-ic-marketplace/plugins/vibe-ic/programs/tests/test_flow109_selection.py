@@ -220,8 +220,9 @@ def _d30_scan_case(project, monkeypatch, top="neutral_unit"):
     import hashlib
     import fault_scan_chain_insert as producer
     from programs.tests.test_issue3444_l20_scan_reconciliation import (
-        _native_payload, _planned)
-    _planned(project)
+        _intent, _native_payload, _planned)
+    dft = _intent(); dft['dft_plan'] = {'planned_chain_count': 1, 'max_chain_length': 32}
+    _planned(project, dft)
     calls = _native_payload(project, monkeypatch)
     rc, report = producer.run_chain(
         project, "phase2/stage2/synth/netlist.v", "clk", "sky130",
@@ -473,6 +474,7 @@ def test_d30_refuses_prescan_foreign_stale_or_unresolved_inputs(
     elif damage == "stale_d09":
         from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
         intent = _intent()
+        intent['dft_plan'] = {'planned_chain_count': 1, 'max_chain_length': 32}
         intent["test_port_def"]["scan_enable"]["public"] = "scan_enable_new"
         _publish_dft_intent(tmp_path, intent)
     elif damage == "wrong_hash":
@@ -2772,3 +2774,21 @@ def test_d01_does_not_relabel_old_d09_decision_without_d01_source(tmp_path):
     old = (tmp_path / 'plugin_output/dft_intent.json').read_bytes()
     assert phase1._d01_emit_dft_intent(tmp_path) is None
     assert (tmp_path / 'plugin_output/dft_intent.json').read_bytes() == old
+
+
+def test_d30_dft_plan_requires_source_bound_positive_limits(tmp_path):
+    from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+    data = _intent(); data['dft_plan'] = {'planned_chain_count': 2, 'max_chain_length': 128}
+    _publish_dft_intent(tmp_path, data)
+    intent = flow109.dft_source_intent(tmp_path, {'features': profile('Mapped soft-IP with prestitched scan')})
+    plan = flow109.dft_plan_reference(intent)
+    assert plan['producer'] == 'D01' and plan['planned_chain_count'] == 2
+    assert plan['max_chain_length'] == 128 and 'actual_chain_source' not in plan
+    assert plan['sha256'] == intent['source_binding']['sha256']
+    for bad in ({}, {'planned_chain_count': 0, 'max_chain_length': 128},
+                {'planned_chain_count': 2, 'max_chain_length': True}):
+        import copy
+        invalid = copy.deepcopy(intent); invalid['source_binding']['intent']['dft_plan'] = bad
+        with pytest.raises(flow109.Flow109Error, match='FLOW109_D30_DFT_PLAN_MISSING'):
+            flow109.dft_plan_reference(invalid)
+    assert flow109.dft_plan_reference({'requires_scan': False})['status'] == 'NOT_APPLICABLE'

@@ -204,3 +204,18 @@ def test_cli_exit_codes_match_the_assess_rc(tmp_path):
     _stage(tmp_path, scan=_SCAN_NETLIST, post_dft=_GENUINE_POST_DFT)
     rc = M.main([str(tmp_path)])
     assert rc == 0
+
+
+def test_scan_cell_reconciliation_detects_missing_d23_or_d24_cell():
+    import dft_post_optimization_scan_survival_check as gate
+    mapped = 'module top(input d, output q);\n dff u0 (.D(d), .Q(q));\n dff u1 (.D(d), .Q(q));\n endmodule\n'
+    replaced = 'module top(input d, output q);\n sdff u0 (.D(d), .Q(q));\n sdff u1 (.D(d), .Q(q));\n endmodule\n'
+    one_missing = 'module top(input d, output q);\n sdff u0 (.D(d), .Q(q));\n endmodule\n'
+    cells = [{'instance': 'u0', 'cell': 'sdff'}, {'instance': 'u1', 'cell': 'sdff'}]
+    result = gate.reconcile_scan_cell_list(mapped, replaced, replaced, cells, top='top')
+    assert result['verdict'] == 'PASS' and result['flow109_acceptance'] == 'NOT_MEASURED'
+    assert gate.reconcile_scan_cell_list(mapped, replaced, replaced, cells[:1], top='top')['reason'] == 'D23_SCAN_CELL_LIST_MISMATCH'
+    assert gate.reconcile_scan_cell_list(mapped, replaced, one_missing, cells, top='top')['reason'] == 'D24_SCAN_CELL_LIST_MISMATCH'
+    assert gate.reconcile_scan_cell_list(mapped, mapped, mapped, cells, top='top')['verdict'] == 'NOT_MEASURED'
+    compact = replaced.replace('\n', ' ')
+    assert gate.reconcile_scan_cell_list(mapped, compact, compact, cells, top='top')['verdict'] == 'PASS'
