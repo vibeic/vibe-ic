@@ -391,6 +391,8 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
         "schema": "vibeic.flow109.dft-preroute-admission.v1",
         "consumer_step": "D30", "consumer_position": 42,
         "top": top, "requires_scan": intent["requires_scan"], "adopted_netlist": adopted,
+        "profile_identity": {"features_sha256": digest(context["features"]),
+                             "step_profiles_sha256": digest(context["step_profiles"])},
         "native_chain": chain, "dft_plan_reference": plan_ref,
         "functional_equivalence": lec_ref,
         "pre_route_timing": {
@@ -496,8 +498,13 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
         raise Flow109Error("FLOW109_DFT_FINAL_CONTEXT_MISMATCH", str(row.get("id")))
     d30, d30_ref = _accepted_row(
         project, Path("reports/flow109/default_rows/D30.json"), "D30")
+    prior = d30.get("dft_preroute_admission")
+    expected_profile = {"features_sha256": digest(context["features"]),
+                        "step_profiles_sha256": digest(context["step_profiles"])}
+    if not isinstance(prior, Mapping) or prior.get("profile_identity") != expected_profile:
+        raise Flow109Error("FLOW109_D30_PROFILE_MISMATCH", str(d30_ref["path"]))
     current_pre = dft_preroute_admission(project, context)
-    if d30.get("dft_preroute_admission") != current_pre:
+    if prior != current_pre:
         raise Flow109Error("FLOW109_D30_ADOPTION_STALE", str(d30_ref["path"]))
     _d44, d44_ref = _accepted_row(
         project, Path("reports/flow109/default_rows/D44.json"), "D44")

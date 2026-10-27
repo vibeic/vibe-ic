@@ -544,7 +544,9 @@ def _final_timing_case(project, monkeypatch):
     import hashlib
     import flow109_final_lec as final_lec
     import flow109_final_lec_physical as physical
-    d30_context = _d30_scan_case(project, monkeypatch, top="neutral_unit")
+    _d30_scan_case(project, monkeypatch, top="neutral_unit")
+    features = profile("Low-power secure scan SoC")
+    d30_context = flow109.execution_context(flow109.resolve_plan(features), "D30", "D30")
     d30_admission = flow109.dft_preroute_admission(project, d30_context)
     rows = project / "reports/flow109/default_rows"
     (rows / "D30.json").write_text(json.dumps({
@@ -684,6 +686,16 @@ def _physical_wrapper_timing_case(project, monkeypatch, *, same_name=False,
         "logical_top": logical_top, "physical_top": physical_top,
         "transform": transform, "physical_input": physical_input,
         "sta_config": sta_config}
+
+
+def test_d50_refuses_d30_profile_mismatch_before_reopening(tmp_path, monkeypatch):
+    context, _final, _baseline, _state, _tops = _physical_wrapper_timing_case(tmp_path, monkeypatch)
+    row_path = tmp_path / 'reports/flow109/default_rows/D30.json'
+    row = json.loads(row_path.read_text())
+    row['dft_preroute_admission']['profile_identity']['features_sha256'] = '0' * 64
+    row_path.write_text(json.dumps(row))
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_D30_PROFILE_MISMATCH'):
+        flow109.dft_final_timing_admission(tmp_path, context)
 
 
 def test_d50_final_timing_accepts_physical_rewrite_with_transform_and_lec_trace(
