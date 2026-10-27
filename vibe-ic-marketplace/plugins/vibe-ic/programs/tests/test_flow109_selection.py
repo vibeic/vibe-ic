@@ -2677,11 +2677,55 @@ def test_d10_dft_owner_consumes_current_native_elaboration(tmp_path, monkeypatch
     p0 = {'status': 'PASS', 'top': 'top', 'elaboration_path': frontend.RTL_ELAB_REL,
           'elaboration_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
           'input_fingerprint': native.source_binding(tmp_path, 'top', _specrtl_common.rtl_source_files(tmp_path))['fingerprint']}
+    # This test isolates the DFT-port comparison; the P0 identity is tested
+    # independently through its consumer and actual-source refusal controls.
+    monkeypatch.setattr(runner, '_validate_d10_p0_consumer', lambda *_: {'status': 'PASS'})
     observed = runner._d10_dft_ports(tmp_path, p0)
     assert observed['status'] == 'FAIL' and observed['reason'] == 'DFT_PORT_MISMATCH'
     assert observed['mismatches'][0]['role'] == 'scan_enable'
     rtl.write_text(rtl.read_text() + '// changed after elaboration\n')
     assert runner._d10_dft_ports(tmp_path, p0)['status'] == 'NOT_MEASURED'
+
+
+def test_d10_p0_consumer_binds_actual_argv_and_rejects_stale_inputs(tmp_path, monkeypatch):
+    import hashlib
+    import shutil
+    import _cdc_netlist as native
+    import _specrtl_common
+    import librelane_contract as contract
+    import p0_tool_frontend_check as frontend
+    import vibe_ic_one_shot_runner as runner
+    rtl = tmp_path / 'phase2/stage1/rtl/top.v'; rtl.parent.mkdir(parents=True)
+    rtl.write_text('module top(input a, output b); assign b=a; endmodule\n')
+    spec = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'; spec.parent.mkdir(parents=True)
+    spec.write_text(json.dumps({'top_module': 'top'}))
+    result = frontend.check(tmp_path, output_project=tmp_path)
+    assert result['passed'] is True
+    receipt = tmp_path / 'p0_result.json'; receipt.write_text(json.dumps(result))
+    authority = {'image': 'image-ref', 'image_id': 'image-id', 'cid': 'cid', 'attestation_sha256': 'launch'}
+    monkeypatch.setattr(contract, 'local_image_attestation', lambda: dict(authority))
+    digest = lambda p: hashlib.sha256(Path(p).read_bytes()).hexdigest()
+    p0 = {'status':'PASS', 'top':'top',
+        'elaboration_path':frontend.RTL_ELAB_REL,
+        'elaboration_sha256':digest(tmp_path / frontend.RTL_ELAB_REL),
+        'producer_result': {'path':'p0_result.json', 'sha256':digest(receipt)},
+        'input_fingerprint':native.source_binding(tmp_path, 'top', _specrtl_common.rtl_source_files(tmp_path))['fingerprint'],
+        'producer_source_sha256':digest(frontend.__file__), 'runner_source_sha256':digest(runner.__file__),
+        'tool_sha256':{name:digest(shutil.which(name)) for name in ('yosys','verilator')}, **authority}
+    assert runner._validate_d10_p0_consumer(tmp_path, p0)['argv_validation'] == 'MATCH'
+    bad = json.loads(receipt.read_text())
+    bad['tools']['Yosys.JsonHeader']['argv'][4] = bad['tools']['Yosys.JsonHeader']['argv'][4].replace('read_slang', 'read_verilog', 1)
+    receipt.write_text(json.dumps(bad)); p0['producer_result']['sha256'] = digest(receipt)
+    with pytest.raises(ValueError, match='Yosys command'):
+        runner._validate_d10_p0_consumer(tmp_path, p0)
+    receipt.write_text(json.dumps(result)); p0['producer_result']['sha256'] = digest(receipt)
+    wrong_image = dict(p0, image_id='foreign')
+    with pytest.raises(ValueError, match='launch identity'):
+        runner._validate_d10_p0_consumer(tmp_path, wrong_image)
+    rtl.write_text(rtl.read_text() + '// stale source\n')
+    with pytest.raises(ValueError, match='source, producer or runner'):
+        runner._validate_d10_p0_consumer(tmp_path, p0)
+    assert p0['status'] == 'PASS'  # P0 only; this test does not claim D10.
 
 
 def test_d10_dft_owner_finalizes_mismatch_as_fail(tmp_path, monkeypatch):

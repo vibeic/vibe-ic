@@ -1474,6 +1474,8 @@ def _d10_p0_native(project: Path) -> dict:
             return {name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
                     for name, path in tool_paths.items()}
         tools_before = tool_hashes()
+        producer_sha = hashlib.sha256(Path(frontend.__file__).read_bytes()).hexdigest()
+        runner_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
         authority = None
         if os.environ.get(contract.LOCAL_ATTESTATION_ENV):
             authority = contract.local_image_attestation()
@@ -1487,8 +1489,11 @@ def _d10_p0_native(project: Path) -> dict:
         diagnostic = {'path': str(result_path.relative_to(project)),
                       'sha256': hashlib.sha256(result_bytes).hexdigest()}
         after = native.source_binding(project, top, _specrtl_common.rtl_source_files(project))
-        if before != after or tools_before != tool_hashes():
-            raise ValueError('native inputs or tools changed during execution')
+        if (before != after or tools_before != tool_hashes()
+                or producer_sha != hashlib.sha256(Path(frontend.__file__).read_bytes()).hexdigest()
+                or runner_sha != hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+                or (authority is not None and contract.local_image_attestation() != authority)):
+            raise ValueError('native inputs, sources, tools or launch changed during execution')
         elab = output_root / frontend.RTL_ELAB_REL
         if (result.get('passed') is not True
                 or (result.get('elaboration') or {}).get('written') is not True
@@ -1503,6 +1508,7 @@ def _d10_p0_native(project: Path) -> dict:
                 'elaboration_path': str(elab.relative_to(project)),
                 'elaboration_sha256': hashlib.sha256(raw).hexdigest(),
                 'tool_sha256': tools_before,
+                'producer_source_sha256': producer_sha, 'runner_source_sha256': runner_sha,
                 'producer_result': diagnostic,
                 'image': authority.get('image') if authority else None,
                 'image_id': authority.get('image_id') if authority else None,
@@ -1513,16 +1519,100 @@ def _d10_p0_native(project: Path) -> dict:
         return {'status': 'NOT_MEASURED', 'detail': str(exc), 'producer_result': diagnostic}
 
 
+def _validate_d10_p0_consumer(project: Path, p0: Mapping) -> dict:
+    """Validate actual P0 result, current launch, source inputs and tool commands."""
+    import _cdc_netlist as native
+    import _specrtl_common
+    import librelane_contract as contract
+    import p0_tool_frontend_check as frontend
+    project = Path(project).resolve()
+    reference = p0['producer_result']
+    relative = Path(reference['path'])
+    path = project / relative
+    if (relative.is_absolute() or '..' in relative.parts or path.is_symlink()
+            or not path.is_file() or not path.resolve().is_relative_to(project)
+            or hashlib.sha256(path.read_bytes()).hexdigest() != reference['sha256']):
+        raise ValueError('P0 producer result is missing, foreign or stale')
+    result = json.loads(path.read_text())
+    files = _specrtl_common.rtl_source_files(project)
+    top = frontend._top(project)
+    before = native.source_binding(project, top, files)
+    authority = contract.local_image_attestation()
+    for key, field in (('image', 'image'), ('image_id', 'image_id'), ('cid', 'cid'),
+                       ('attestation_sha256', 'attestation_sha256')):
+        if p0.get(key) != authority.get(field):
+            raise ValueError('P0 live launch identity differs: ' + key)
+    if (p0.get('top') != top or p0.get('input_fingerprint') != before['fingerprint']
+            or p0.get('producer_source_sha256') != hashlib.sha256(Path(frontend.__file__).read_bytes()).hexdigest()
+            or p0.get('runner_source_sha256') != hashlib.sha256(Path(__file__).read_bytes()).hexdigest()):
+        raise ValueError('P0 source, producer or runner identity differs')
+    elab_relative = Path(p0['elaboration_path'])
+    elaboration = project / elab_relative
+    if (elab_relative.is_absolute() or '..' in elab_relative.parts or elaboration.is_symlink()
+            or not elaboration.is_file() or not elaboration.resolve().is_relative_to(project)
+            or hashlib.sha256(elaboration.read_bytes()).hexdigest() != p0['elaboration_sha256']
+            or (result.get('elaboration') or {}).get('written') is not True
+            or (result.get('elaboration') or {}).get('top') != top):
+        raise ValueError('P0 native elaboration is missing or stale')
+    actual_tools = {name: hashlib.sha256(Path(shutil.which(name)).read_bytes()).hexdigest()
+                    for name in ('yosys', 'verilator')}
+    if p0.get('tool_sha256') != actual_tools:
+        raise ValueError('P0 executable identity differs')
+    if (result.get('program') != 'p0_tool_frontend_check' or result.get('passed') is not True
+            or result.get('sources') != [str(p.relative_to(project)) for p in files]):
+        raise ValueError('P0 producer or input population differs')
+    tools = result['tools']
+    names = [str(p.resolve()) for p in files]
+    include_dirs = sorted({str(p.parent.resolve()) for p in files})
+    if any(not re.fullmatch(r'[A-Za-z0-9_./-]+', name) for name in names):
+        raise ValueError('P0 input path cannot be represented')
+    yosys = tools['Yosys.JsonHeader']
+    argv = yosys['argv']
+    if not isinstance(argv, list) or len(argv) != 5 or argv[:4] != ['yosys', '-Q', '-T', '-p']:
+        raise ValueError('P0 Yosys argv differs')
+    output = re.search(r'; proc; write_json ([^;\s]+/vibeic_p0_elab_[^/\s;]+/rtl_elab\.json)$', argv[4])
+    if output is None:
+        raise ValueError('P0 Yosys output argument differs')
+    relaxed = yosys.get('relaxed_flags', [])
+    if relaxed not in ([], [frontend.DECL_RELAX_FLAG]):
+        raise ValueError('P0 relaxed flags are invalid')
+    prefix = ('read_slang --single-unit ' + (frontend.DECL_RELAX_FLAG + ' ' if relaxed else '')
+              + f'--top {top} ' + ' '.join('-I ' + d for d in include_dirs)
+              + ' ' + ' '.join(names) + '; hierarchy -check -top ' + top
+              + '; proc; write_json ' + output.group(1))
+    if argv[4] != prefix or yosys.get('exit_code') != 0 or yosys.get('execution') != 'host':
+        raise ValueError('P0 Yosys command or verdict differs')
+    if relaxed:
+        strict = prefix.replace(frontend.DECL_RELAX_FLAG + ' ', '', 1)
+        if (yosys.get('strict_argv') != ['yosys', '-Q', '-T', '-p', strict]
+                or type(yosys.get('strict_exit_code')) is not int or yosys['strict_exit_code'] <= 0):
+            raise ValueError('P0 strict retry identity differs')
+    expected = ['verilator', '--lint-only', '--Wall', '-Wno-fatal', '--top-module', top,
+                *('-I' + d for d in include_dirs), *names]
+    verilator = tools['Verilator.Lint']
+    if (verilator.get('argv') != expected or verilator.get('exit_code') != 0
+            or verilator.get('execution') != 'host'):
+        raise ValueError('P0 Verilator command or verdict differs')
+    return {'status': 'PASS', 'producer_result': dict(reference), 'input_fingerprint': before['fingerprint'],
+            'producer_source_sha256': p0['producer_source_sha256'],
+            'runner_source_sha256': p0['runner_source_sha256'],
+            'tool_sha256': actual_tools, 'image_id': authority['image_id'],
+            'cid': authority['cid'], 'attestation_sha256': authority['attestation_sha256'],
+            'argv_validation': 'MATCH', 'qualification': 'NOT_MEASURED'}
+
+
 def _d10_dft_ports(project: Path, p0: dict) -> dict:
     """Consume the current P0 elaboration and source-bound DFT intent."""
     import _cdc_netlist as native
     import _specrtl_common
     import fault_scan_chain_insert as scan
     import flow109_metric_acceptance as metric
+    import librelane_contract as contract
     if p0.get('status') != 'PASS':
         return {'status': 'NOT_MEASURED', 'reason': 'P0_NOT_AVAILABLE'}
     try:
         project = Path(project).resolve()
+        identity = _validate_d10_p0_consumer(project, p0)
         elaboration = project / p0['elaboration_path']
         if elaboration.is_symlink() or not elaboration.resolve().is_relative_to(project) or not elaboration.is_file():
             raise ValueError('P0 elaboration is unavailable')
@@ -1541,9 +1631,9 @@ def _d10_dft_ports(project: Path, p0: dict) -> dict:
         after = native.source_binding(project, top, _specrtl_common.rtl_source_files(project))
         if current != binding or problems or after != before or hashlib.sha256(elaboration.read_bytes()).hexdigest() != p0['elaboration_sha256']:
             raise ValueError('DFT port inputs changed')
-        return {**result, 'intent_binding': binding,
+        return {**result, 'intent_binding': binding, 'p0_identity': identity,
                 'elaboration_sha256': p0['elaboration_sha256']}
-    except (native.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+    except (native.Refusal, contract.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return {'status': 'NOT_MEASURED', 'reason': 'DFT_PORT_INPUT_UNAVAILABLE', 'detail': str(exc)}
 
 
@@ -1555,6 +1645,12 @@ def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False) -> d
                 'p0_native': (_d10_p0_native(project) if run_p0 else
                               {'status': 'NOT_MEASURED',
                                'detail': 'current passing Phase 2 report is unavailable'})}
+    try:
+        import librelane_contract as contract
+        import _cdc_netlist as native
+        evidence['p0_consumer_identity'] = _validate_d10_p0_consumer(project, evidence['p0_native'])
+    except (native.Refusal, contract.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        evidence['p0_consumer_identity'] = {'status': 'NOT_MEASURED', 'detail': str(exc)}
     evidence['dft_port_consistency'] = _d10_dft_ports(project, evidence['p0_native'])
     dft_failed = evidence['dft_port_consistency'].get('status') == 'FAIL'
     detail = ('D10_METRIC_BINDINGS_UNIMPLEMENTED: elaboration errors, '
