@@ -2722,6 +2722,11 @@ def test_d10_p0_consumer_binds_actual_argv_and_rejects_stale_inputs(tmp_path, mo
     wrong_image = dict(p0, image_id='foreign')
     with pytest.raises(ValueError, match='launch identity'):
         runner._validate_d10_p0_consumer(tmp_path, wrong_image)
+    elab = tmp_path / frontend.RTL_ELAB_REL
+    original_elab = elab.read_bytes(); elab.write_bytes(original_elab + b' ')
+    with pytest.raises(ValueError, match='elaboration is missing or stale'):
+        runner._validate_d10_p0_consumer(tmp_path, p0)
+    elab.write_bytes(original_elab)
     rtl.write_text(rtl.read_text() + '// stale source\n')
     with pytest.raises(ValueError, match='source, producer or runner'):
         runner._validate_d10_p0_consumer(tmp_path, p0)
