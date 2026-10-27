@@ -185,8 +185,14 @@ def publish_d09(project, intent):
         '# Verification\nThe Plugin MUST declare `plugin_output/declaration.json` '
         'before authoring:\n\n| Field | Required | Example |\n|---|---|---|\n'
         '| `dft` | Yes | object |\n')
+    (project / 'input/feature-decisions.json').write_text(json.dumps({'dft': intent}))
     assert declaration.main(
         [str(project), '--set', 'dft=' + json.dumps(intent)]) == 0
+    import phase1_one_shot_runner as phase1
+    output = phase1._d01_emit_dft_intent(project)
+    if output is not None:
+        report = project / 'reports/phase1_one_shot.json'; report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps({'dft_intent_output': output}))
 
 
 def case(project):
@@ -339,7 +345,7 @@ def test_missing_d09_dft_intent_stops_before_existing_owner(tmp_path, monkeypatc
 
     result = frontend.execute(tmp_path, context)
 
-    assert result['reason'] in {'D09_DFT_SPEC_MISSING', 'D09_DFT_AUTHORITY_INVALID'}
+    assert result['reason'] == ('FLOW109_DFT_INTENT_MISSING' if damage == 'missing' else 'D09_DFT_AUTHORITY_INVALID')
     assert result['component_status'] == 'NOT_MEASURED'
     assert result['native_started'] is False
     assert calls == []

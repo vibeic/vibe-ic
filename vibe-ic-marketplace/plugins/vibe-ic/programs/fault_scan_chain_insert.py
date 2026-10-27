@@ -117,7 +117,7 @@ SCAN_JSON_REL = "reports/phase2/dft/scan_chain.json"
 
 
 def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=None,
-                         reset_active_low=False) -> tuple[dict | None, list[str]]:
+                         reset_active_low=False, *, _validate_owner=True) -> tuple[dict | None, list[str]]:
     """BLOCKING D09 intent admission; no topology or chain length is inferred.
 
     Reuse the spec's existing declaration artifact and its normal producer.
@@ -176,6 +176,17 @@ def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=Non
         binding = {'path': str(path.relative_to(project)),
                    'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
                    'sources': sources, 'intent': intent}
+        if _validate_owner:
+            report_path = project / 'reports/phase1_one_shot.json'
+            if report_path.is_symlink() or not report_path.is_file():
+                raise ValueError('UNPROVEN_ADAPTER_BINDING: D01 output absent')
+            owner = json.loads(report_path.read_text()).get('dft_intent_output')
+            import phase1_one_shot_runner as phase1
+            expected = {'producer': 'D01', 'path': binding['path'],
+                        'sha256': binding['sha256'], 'sources': sources,
+                        'producer_source_sha256': hashlib.sha256(Path(phase1.__file__).read_bytes()).hexdigest()}
+            if owner != expected:
+                raise ValueError('UNPROVEN_ADAPTER_BINDING: D01 producer or output identity mismatch')
         if not intent['requires_scan']:
             return binding, []
         definitions = intent.get('test_port_def', {})

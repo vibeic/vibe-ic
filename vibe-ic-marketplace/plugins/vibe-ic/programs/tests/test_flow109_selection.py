@@ -96,8 +96,15 @@ def _publish_dft_intent(project, intent):
         "# Verification\nThe Plugin MUST declare `plugin_output/declaration.json` "
         "before authoring:\n\n| Field | Required | Example |\n|---|---|---|\n"
         "| `dft` | Yes | object |\n")
+    (project / 'input/feature-decisions.json').write_text(json.dumps({'dft': intent}))
     assert declaration.main(
         [str(project), "--set", "dft=" + json.dumps(intent)]) == 0
+    import phase1_one_shot_runner as phase1
+    output = phase1._d01_emit_dft_intent(project)
+    if output is not None:
+        report = project / 'reports/phase1_one_shot.json'
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps({'dft_intent_output': output}))
 
 
 def test_d09_scan_intent_is_source_bound_without_author_chain_length(tmp_path, monkeypatch):
@@ -2636,3 +2643,132 @@ def test_d10_dft_owner_finalizes_mismatch_as_fail(tmp_path, monkeypatch):
     outcome = runner._finish_d10_unimplemented_owner(tmp_path, run_p0=True)
     assert reports[0]['steps'][0]['status'] == 'FAIL'
     assert outcome['verdict'] == 'FAIL' and outcome['whole_flow_verdict'] == 'NOT_MEASURED'
+
+
+def test_d01_dft_producer_binding_and_wrong_owner_refusal(tmp_path):
+    import phase1_one_shot_runner as phase1
+    import fault_scan_chain_insert as scan
+    from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+    _publish_dft_intent(tmp_path, _intent())
+    produced = phase1._d01_emit_dft_intent(tmp_path)
+    assert produced and produced['producer'] == 'D01'
+    report = tmp_path / 'reports/phase1_one_shot.json'
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({'dft_intent_output': produced}))
+    binding, problems = scan.load_d09_dft_contract(tmp_path)
+    assert binding and not problems
+    features = profile('Mapped soft-IP with prestitched scan')
+    admission = flow109.dft_source_intent(tmp_path, {'features': features})
+    assert admission['source_step'] == 'D01' and set(admission['source_evidence']) == {'D01'}
+    for owner in ('D09', None):
+        forged = dict(produced); forged['producer'] = owner
+        report.write_text(json.dumps({'dft_intent_output': forged}))
+        binding, problems = scan.load_d09_dft_contract(tmp_path)
+        assert binding is None and 'UNPROVEN_ADAPTER_BINDING' in str(problems)
+        with pytest.raises(flow109.Flow109Error):
+            flow109.dft_source_intent(tmp_path, {'features': features})
+
+
+def test_d01_missing_dft_intent_blocks_d22(tmp_path):
+    import _delivery_route
+    features = profile('Small digital IC without DFT')
+    assert _delivery_route.admit(tmp_path, 'ic') is None
+    manifest = tmp_path / 'manifest.json'; manifest.write_text(json.dumps({'features': features}))
+    args = SimpleNamespace(flow='109', flow109_manifest=manifest,
+                           flow109_plan_only=False, execution_mode='default',
+                           entry_step='D22', exit_step='D22', container='')
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_DFT_INTENT_MISSING'):
+        flow109.prepare_front_door(args, tmp_path)
+    assert not (tmp_path / 'reports/flow109/owner_route.json').exists()
+
+
+def test_d01_producer_reaches_d22_and_d09_only_consumes(tmp_path, monkeypatch, capsys):
+    import _delivery_route
+    import phase1_one_shot_runner as phase1
+    import design_one_shot_runner as design
+    from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+    _publish_dft_intent(tmp_path, _intent())
+    assert phase1._as_the_producer(lambda _p: 0)(tmp_path) == 0
+    produced = phase1._RUN['dft_intent_output']
+    assert produced and produced['producer'] == 'D01'
+    report = tmp_path / 'reports/phase1_one_shot.json'; report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({'dft_intent_output': produced}))
+    before = (tmp_path / produced['path']).read_bytes()
+    early = design.declaration_before_step4(tmp_path)
+    assert early['producer'] == 'D01' and early['emitted'] is True
+    assert (tmp_path / produced['path']).read_bytes() == before
+    rtl = tmp_path / 'phase2/stage1/rtl/top.v'; rtl.parent.mkdir(parents=True)
+    rtl.write_text('module top(input scan_enable, scan_in, test_mode, scan_clock, output scan_out); assign scan_out = scan_enable ^ scan_in ^ test_mode ^ scan_clock; endmodule\n')
+    spec = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'; spec.parent.mkdir(parents=True)
+    spec.write_text(json.dumps({'top_module': 'top'}))
+    import flow109_metric_acceptance as metric
+    diagnostic = metric.dry_run_d10(tmp_path, 'dft_port_consistency')
+    assert diagnostic['gate_status'] == 'PASS'
+    assert _delivery_route.admit(tmp_path, 'ic') is None
+    features = profile('Small digital IC without DFT')
+    features['requires_dft'] = features['requires_scan'] = True
+    manifest = tmp_path / 'manifest.json'; manifest.write_text(json.dumps({'features': features}))
+    args = SimpleNamespace(flow='109', flow109_manifest=manifest,
+                           flow109_plan_only=False, execution_mode='default',
+                           entry_step='D22', exit_step='D22', container='')
+    assert flow109.prepare_front_door(args, tmp_path) == 2
+    assert 'FLOW109 D22: component NOT_MEASURED' in capsys.readouterr().out
+    plan = json.loads((tmp_path / 'reports/flow109/plan.json').read_text())
+    assert plan['dft_source_admission']['source_step'] == 'D01'
+
+
+def test_d09_dft_consumer_refuses_wrong_owner_without_reemission(tmp_path, monkeypatch):
+    import design_one_shot_runner as design
+    from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+    _publish_dft_intent(tmp_path, _intent())
+    report = tmp_path / 'reports/phase1_one_shot.json'
+    body = json.loads(report.read_text()); body['dft_intent_output']['producer'] = 'D09'
+    report.write_text(json.dumps(body))
+    artifact = tmp_path / body['dft_intent_output']['path']
+    before = artifact.read_bytes()
+    monkeypatch.setattr(design.subprocess, 'run', lambda *_a, **_kw: pytest.fail('D09 must not re-emit DFT intent'))
+    result = design.declaration_before_step4(tmp_path)
+    assert result['producer'] == 'D01' and result['emitted'] is False
+    assert 'UNPROVEN_ADAPTER_BINDING' in result['reason']
+    assert artifact.read_bytes() == before
+
+
+def test_d01_fresh_author_decisions_produce_bound_intent(tmp_path):
+    import phase1_one_shot_runner as phase1
+    import fault_scan_chain_insert as scan
+    from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+    docs = tmp_path / 'input/docs'; docs.mkdir(parents=True)
+    (docs / 'L7_verification_plan.md').write_text(
+        '# Verification\nThe Plugin MUST declare `plugin_output/dft_intent.json` '
+        'before authoring:\n\n| Field | Required | Example |\n|---|---|---|\n'
+        '| `dft` | Yes | object |\n')
+    decisions = tmp_path / 'input/feature-decisions.json'
+    decisions.write_text(json.dumps({'dft': _intent()}))
+    assert not (tmp_path / 'plugin_output/dft_intent.json').exists()
+    assert phase1._as_the_producer(lambda _p: 0)(tmp_path) == 0
+    output = phase1._RUN['dft_intent_output']
+    assert output and output['producer'] == 'D01'
+    assert output['path'] == 'plugin_output/dft_intent.json'
+    assert 'input/feature-decisions.json' in output['sources']
+    report = tmp_path / 'reports/phase1_one_shot.json'; report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({'dft_intent_output': output}))
+    binding, problems = scan.load_d09_dft_contract(tmp_path)
+    assert binding and not problems
+    decisions.write_text(json.dumps({'dft': {'requires_scan': False, 'reason': 'changed'}}))
+    binding, problems = scan.load_d09_dft_contract(tmp_path)
+    assert binding is None and problems
+
+
+def test_d01_does_not_relabel_old_d09_decision_without_d01_source(tmp_path):
+    import phase1_one_shot_runner as phase1
+    import spec_declaration_emit as declaration
+    from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+    docs = tmp_path / 'input/docs'; docs.mkdir(parents=True)
+    (docs / 'L7_verification_plan.md').write_text(
+        '# Verification\nThe Plugin MUST declare `plugin_output/dft_intent.json` '
+        'before authoring:\n\n| Field | Required | Example |\n|---|---|---|\n'
+        '| `dft` | Yes | object |\n')
+    assert declaration.main([str(tmp_path), '--set', 'dft=' + json.dumps(_intent())]) == 0
+    old = (tmp_path / 'plugin_output/dft_intent.json').read_bytes()
+    assert phase1._d01_emit_dft_intent(tmp_path) is None
+    assert (tmp_path / 'plugin_output/dft_intent.json').read_bytes() == old

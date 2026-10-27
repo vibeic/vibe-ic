@@ -115,11 +115,11 @@ def dft_source_intent(project: Path, context: Mapping) -> dict:
                            "requires_scan:true requires requires_dft:true")
     return {
         "schema": "vibeic.flow109.dft-source-intent.v1",
-        "source_step": "D09", "source_position": 17,
+        "source_step": "D01", "source_position": 1,
         "consumer_step": "D22", "consumer_position": 34,
-        "requires_scan": requires_scan, "authority": "canonical_d09_spec_declaration",
+        "requires_scan": requires_scan, "authority": "canonical_d01_spec_declaration",
         "source_binding": dict(binding),
-        "source_evidence": {"D09": {
+        "source_evidence": {"D01": {
             "path": binding["path"], "sha256": binding["sha256"],
             "sources": binding["sources"]}},
         "realized_chain_length": "NOT_YET_REALIZED",

@@ -191,7 +191,13 @@ def _planned(project, intent=None):
     (gd / 'L20_DFT_SCAN_TOPOLOGY.json').write_bytes(fixture.read_bytes())
     import l20_dft_intent_emit
     assert l20_dft_intent_emit.run(project)['status'] == 'OK'
+    (project / 'input/feature-decisions.json').write_text(json.dumps({'dft': intent or _intent()}))
     assert DECL.main([str(project), '--set', 'dft=' + json.dumps(intent or _intent())]) == 0
+    import phase1_one_shot_runner as phase1
+    output = phase1._d01_emit_dft_intent(project)
+    if output is not None:
+        report = project / 'reports/phase1_one_shot.json'; report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps({'dft_intent_output': output}))
     net = project / 'phase2/stage2/synth/netlist.v'
     net.parent.mkdir(parents=True)
     net.write_text(_mapped())

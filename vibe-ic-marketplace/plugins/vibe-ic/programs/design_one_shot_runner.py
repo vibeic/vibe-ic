@@ -24504,6 +24504,18 @@ def declaration_before_step4(project: Path) -> Dict[str, Any]:
     them. Returns what happened, for Step 4's record and for the later
     agreement check (`declaration_disagreement`)."""
     out_p = Path(project) / DECLARATION_REL
+    try:
+        dft_contract, _, _ = _decl.select_contract(project)
+        if dft_contract and any(f.get('name') == 'dft' for f in dft_contract['fields']):
+            import fault_scan_chain_insert as scan
+            binding, problems = scan.load_d09_dft_contract(project)
+            if binding is None or problems:
+                return {'producer': 'D01', 'emitted': False,
+                        'reason': 'D01 DFT intent unavailable: ' + '; '.join(problems)}
+            fields = json.loads((Path(project) / binding['path']).read_text())
+            return {'producer': 'D01', 'emitted': True, 'fields': fields}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {'producer': 'D01', 'emitted': False, 'reason': str(exc)}
     prog = PROGRAMS_DIR / "spec_declaration_emit.py"
     rec: Dict[str, Any] = {"producer": "spec_declaration_emit",
                            "emitted": False}
@@ -24674,6 +24686,19 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
     #    spec, so it is the only one that can satisfy a spec-declared contract.
     #    rc 3 = NO_CONTRACT; rc 4 = NOTHING_TO_DECLARE (only optional,
     #    undetermined fields). Neither result proves arithmetic applicability.
+    try:
+        dft_contract, _, _ = _decl.select_contract(project)
+        if dft_contract and any(f.get('name') == 'dft' for f in dft_contract['fields']):
+            import fault_scan_chain_insert as scan
+            binding, problems = scan.load_d09_dft_contract(project)
+            if binding is None or problems:
+                return StepResult("arith_declaration_emit", "NOT_MEASURED", time.time() - t0,
+                                  "D01 DFT intent unavailable: " + '; '.join(problems or []))
+            return StepResult("arith_declaration_emit", "PASS", time.time() - t0,
+                              "consumed current D01 declaration", [str(Path(project) / binding['path'])])
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return StepResult("arith_declaration_emit", "NOT_MEASURED", time.time() - t0,
+                          "D01 DFT declaration unresolved: " + str(exc))
     spec_cp = _run("spec_declaration_emit.py", _top_args)
     if spec_cp is not None and spec_cp.returncode not in (3, 4):
         if spec_cp.returncode == 0 and out_p.is_file():

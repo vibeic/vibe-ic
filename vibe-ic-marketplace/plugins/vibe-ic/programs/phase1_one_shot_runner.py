@@ -1716,7 +1716,7 @@ def main_recorded() -> int:
     producer's recording, inputs and every other doc are left alone."""
     import _phase1_producer_identity as _pid
     _RUN.update(project=None, second_track_only=False, extracting=False,
-                knobs=None)
+                knobs=None, dft_intent_output=None)
     # The design-input tree BEFORE phase 1: whatever it creates or rewrites
     # there -- in this process or a launched one (step 0.5ic's declaration) --
     # is the flow's own output, not design input (review wave8 BLOCKER 1).
@@ -1741,6 +1741,37 @@ def main_recorded() -> int:
     return rc
 
 
+def _d01_emit_dft_intent(project: Path) -> dict | None:
+    """Produce a declared DFT intent inside the actual D01 extraction owner."""
+    import hashlib
+    import spec_declaration_emit as declaration
+    import fault_scan_chain_insert as scan
+    try:
+        contract, _, _ = declaration.select_contract(project)
+        if not contract or not any(f.get('name') == 'dft' for f in contract['fields']):
+            return None
+        args = [str(project)]
+        decisions = Path(project) / 'input/feature-decisions.json'
+        if decisions.exists():
+            if decisions.is_symlink() or not decisions.is_file():
+                return None
+            args += ['--from-json', str(decisions)]
+        else:
+            previous = Path(project) / contract['artifact_path']
+            if previous.exists() or previous.is_symlink():
+                return None
+        if declaration.main(args) != 0:
+            return None
+        binding, problems = scan.load_d09_dft_contract(project, _validate_owner=False)
+        if binding is None or problems:
+            return None
+        return {'producer': 'D01', 'path': binding['path'], 'sha256': binding['sha256'],
+                'sources': binding['sources'],
+                'producer_source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        return None
+
+
 def _as_the_producer(fn):
     """`fn` is the D1 extraction: when the preflight lets it RUN, this run is
     the doc producer of record.
@@ -1754,7 +1785,10 @@ def _as_the_producer(fn):
         import _phase1_producer_identity as _pid
         _RUN["extracting"] = True
         _pid.void(project)
-        return fn(project, *a, **k)
+        result = fn(project, *a, **k)
+        succeeded = (type(result) is int and result == 0) or getattr(result, 'status', None) == 'PASS'
+        _RUN['dft_intent_output'] = _d01_emit_dft_intent(project) if succeeded else None
+        return result
     return _run
 
 
@@ -1838,6 +1872,7 @@ def main() -> int:
     # this project's answer. R-0915-160. Below the second-pass short-circuit on purpose: the
     # second pass carries pass 1's sidecar and must not erase it. See
     # `_name_the_sidecar_this_pass_wrote` for why the entitlement is structural and not a clock.
+    _RUN['dft_intent_output'] = None
     _forget_any_earlier_coverage_sidecar(project)
 
     # STEP 0.5ic — the route declaration. Dispatched before the mode branch
@@ -1975,6 +2010,7 @@ def main() -> int:
         # passes through the same producer binding the second-pass tail uses.
         # Standalone runs (no VIBEIC_RUNNER_INVOCATION_CONTEXT) are unchanged.
         from benchmark_dispatch import _bind_runner_report
+        summary['dft_intent_output'] = _RUN.get('dft_intent_output') if not refused else None
         summary = _bind_runner_report(summary, project, __file__, _p1.name)
         _p1.write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
@@ -2082,6 +2118,7 @@ def main() -> int:
     # dispatched run's fresh phase1 report must carry its generation, and a
     # standalone run (no invocation context) is byte-identical to before.
     from benchmark_dispatch import _bind_runner_report
+    summary['dft_intent_output'] = _RUN.get('dft_intent_output') if not _refused else None
     summary = _bind_runner_report(summary, project, __file__, _p1.name)
     _p1.write_text(
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
