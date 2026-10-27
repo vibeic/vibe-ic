@@ -1546,6 +1546,40 @@ def _d10_p0_native(project: Path) -> dict:
         return {'status': 'NOT_MEASURED', 'detail': str(exc), 'producer_result': diagnostic}
 
 
+def _d10_dft_ports(project: Path, p0: dict) -> dict:
+    """Consume the current P0 elaboration and source-bound DFT intent."""
+    import _cdc_netlist as native
+    import _specrtl_common
+    import fault_scan_chain_insert as scan
+    import flow109_metric_acceptance as metric
+    if p0.get('status') != 'PASS':
+        return {'status': 'NOT_MEASURED', 'reason': 'P0_NOT_AVAILABLE'}
+    try:
+        project = Path(project).resolve()
+        elaboration = project / p0['elaboration_path']
+        if elaboration.is_symlink() or not elaboration.resolve().is_relative_to(project) or not elaboration.is_file():
+            raise ValueError('P0 elaboration is unavailable')
+        raw = elaboration.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != p0['elaboration_sha256']:
+            raise ValueError('P0 elaboration changed')
+        top = p0['top']
+        before = native.source_binding(project, top, _specrtl_common.rtl_source_files(project))
+        if before['fingerprint'] != p0['input_fingerprint']:
+            raise ValueError('P0 source changed')
+        binding, problems = scan.load_d09_dft_contract(project)
+        if binding is None or problems:
+            raise ValueError('DFT intent unavailable: ' + '; '.join(problems))
+        result = metric.dft_port_consistency(binding, json.loads(raw), top)
+        current, problems = scan.load_d09_dft_contract(project)
+        after = native.source_binding(project, top, _specrtl_common.rtl_source_files(project))
+        if current != binding or problems or after != before or hashlib.sha256(elaboration.read_bytes()).hexdigest() != p0['elaboration_sha256']:
+            raise ValueError('DFT port inputs changed')
+        return {**result, 'intent_binding': binding,
+                'elaboration_sha256': p0['elaboration_sha256']}
+    except (native.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return {'status': 'NOT_MEASURED', 'reason': 'DFT_PORT_INPUT_UNAVAILABLE', 'detail': str(exc)}
+
+
 def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False) -> dict:
     """Publish an honest D10 terminal until its three metric bindings exist."""
     import flow109
@@ -1554,13 +1588,15 @@ def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False) -> d
                 'p0_native': (_d10_p0_native(project) if run_p0 else
                               {'status': 'NOT_MEASURED',
                                'detail': 'current passing Phase 2 report is unavailable'})}
+    evidence['dft_port_consistency'] = _d10_dft_ports(project, evidence['p0_native'])
+    dft_failed = evidence['dft_port_consistency'].get('status') == 'FAIL'
     detail = ('D10_METRIC_BINDINGS_UNIMPLEMENTED: elaboration errors, '
               'unexpected blackboxes and adopted feature inventory require '
               'a canonical producer and consumer')
     try:
         finished = flow109.finish_native_window(project, {'steps': [{
-            'status': 'NOT_MEASURED', 'extras': {
-                'step_id': 'P0', 'default_row_status': 'NOT_MEASURED',
+            'status': 'FAIL' if dft_failed else 'NOT_MEASURED', 'extras': {
+                'step_id': 'P0', 'default_row_status': 'FAIL' if dft_failed else 'NOT_MEASURED',
                 'completed': False, 'detail': detail, 'evidence': evidence,
             },
         }]})
@@ -1576,7 +1612,9 @@ def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False) -> d
         detail = 'D10_FINALIZATION_REFUSED: immutable attempt result already exists'
     if not isinstance(finished, Mapping):
         detail = 'D10_FINALIZATION_UNAVAILABLE: ' + detail
-    return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',
+    verdict = ('FAIL' if isinstance(finished, Mapping) and dft_failed
+               and finished.get('default_row_status') == 'FAIL' else 'NOT_MEASURED')
+    return {'verdict': verdict, 'whole_flow_verdict': 'NOT_MEASURED',
             'detail': detail, 'evidence': evidence}
 
 

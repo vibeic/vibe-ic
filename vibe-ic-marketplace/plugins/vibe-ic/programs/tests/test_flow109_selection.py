@@ -2570,3 +2570,69 @@ def test_dft_vocabulary_mbist_plan_records_scan_metric_skips(tmp_path):
     assert not any(item['step_id'] in ('D23', 'D24') and 'metric' not in item for item in skips)
     assert any(item.get('metric') == 'scan_test_protocol_integrity' for item in skips)
     assert all(item.get('source_validated') is True for item in skips)
+
+
+def test_d10_dft_ports_dry_run_real_frontend_positive_and_missing_port(tmp_path, monkeypatch, capsys):
+    import hashlib
+    import vibe_ic_one_shot_runner as runner
+    from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+    _publish_dft_intent(tmp_path, _intent())
+    rtl = tmp_path / 'phase2/stage1/rtl/top.v'; rtl.parent.mkdir(parents=True)
+    spec = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'; spec.parent.mkdir(parents=True)
+    spec.write_text(json.dumps({'top_module': 'top'}))
+    rtl.write_text('module top(input scan_enable, scan_in, test_mode, scan_clock, output scan_out); assign scan_out = scan_enable ^ scan_in ^ test_mode ^ scan_clock; endmodule\n')
+    monkeypatch.delenv('VIBEIC_LIBRELANE_LOCAL_ATTESTATION', raising=False)
+    monkeypatch.setattr(sys, 'argv', [str(Path(runner.__file__)), str(tmp_path), '--step', 'D10', '--only', 'dft_port_consistency', '--dry-run'])
+    snapshot = lambda: {str(p.relative_to(tmp_path)): hashlib.sha256(p.read_bytes()).hexdigest() for p in tmp_path.rglob('*') if p.is_file()}
+    before = snapshot()
+    assert runner._main() == 0
+    good = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert good['gate_status'] == 'PASS' and good['row_status'] == 'NOT_MEASURED'
+    assert snapshot() == before
+    rtl.write_text('module top(input scan_in, test_mode, scan_clock, output scan_out); assign scan_out = scan_in ^ test_mode ^ scan_clock; endmodule\n')
+    before = snapshot()
+    assert runner._main() == 1
+    bad = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert bad['gate_status'] == 'FAIL' and bad['reason'] == 'DFT_PORT_MISMATCH'
+    assert bad['port_evidence']['mismatches'][0]['role'] == 'scan_enable'
+    assert bad['row_status'] == 'NOT_MEASURED' and snapshot() == before
+
+
+def test_d10_dft_owner_consumes_current_native_elaboration(tmp_path, monkeypatch):
+    import hashlib
+    import _cdc_netlist as native
+    import _specrtl_common
+    import p0_tool_frontend_check as frontend
+    import vibe_ic_one_shot_runner as runner
+    from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+    _publish_dft_intent(tmp_path, _intent())
+    rtl = tmp_path / 'phase2/stage1/rtl/top.v'; rtl.parent.mkdir(parents=True)
+    rtl.write_text('module top(input scan_in, test_mode, scan_clock, output scan_out); assign scan_out = scan_in ^ test_mode ^ scan_clock; endmodule\n')
+    spec = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'; spec.parent.mkdir(parents=True)
+    spec.write_text(json.dumps({'top_module': 'top'}))
+    result = frontend.check(tmp_path, output_project=tmp_path)
+    assert result['passed'] is True
+    path = tmp_path / frontend.RTL_ELAB_REL
+    p0 = {'status': 'PASS', 'top': 'top', 'elaboration_path': frontend.RTL_ELAB_REL,
+          'elaboration_sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+          'input_fingerprint': native.source_binding(tmp_path, 'top', _specrtl_common.rtl_source_files(tmp_path))['fingerprint']}
+    observed = runner._d10_dft_ports(tmp_path, p0)
+    assert observed['status'] == 'FAIL' and observed['reason'] == 'DFT_PORT_MISMATCH'
+    assert observed['mismatches'][0]['role'] == 'scan_enable'
+    rtl.write_text(rtl.read_text() + '// changed after elaboration\n')
+    assert runner._d10_dft_ports(tmp_path, p0)['status'] == 'NOT_MEASURED'
+
+
+def test_d10_dft_owner_finalizes_mismatch_as_fail(tmp_path, monkeypatch):
+    import vibe_ic_one_shot_runner as runner
+    monkeypatch.setattr(runner, '_d10_p0_native', lambda _p: {'status': 'PASS'})
+    monkeypatch.setattr(runner, '_d10_yosys_observation', lambda _p: {})
+    monkeypatch.setattr(runner, '_d10_dft_ports', lambda _p, _p0: {'status': 'FAIL', 'reason': 'DFT_PORT_MISMATCH'})
+    reports = []
+    def finish(_p, report):
+        reports.append(report)
+        return {'default_row_status': report['steps'][0]['extras']['default_row_status']}
+    monkeypatch.setattr(flow109, 'finish_native_window', finish)
+    outcome = runner._finish_d10_unimplemented_owner(tmp_path, run_p0=True)
+    assert reports[0]['steps'][0]['status'] == 'FAIL'
+    assert outcome['verdict'] == 'FAIL' and outcome['whole_flow_verdict'] == 'NOT_MEASURED'

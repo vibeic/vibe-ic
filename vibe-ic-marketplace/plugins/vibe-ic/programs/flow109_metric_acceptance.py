@@ -27,6 +27,34 @@ _HEX = re.compile(r"[0-9a-f]{64}")
 _SAFE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
 
 
+def dft_port_consistency(binding: Mapping, elaboration: Mapping, top: str) -> dict:
+    """Compare declared scan access with the selected Yosys-elaborated top."""
+    intent = binding.get("intent") if isinstance(binding, Mapping) else None
+    if not isinstance(intent, Mapping) or type(intent.get("requires_scan")) is not bool:
+        return {"status": "NOT_MEASURED", "reason": "DFT_INTENT_MISSING"}
+    if not intent["requires_scan"]:
+        return {"status": "NOT_MEASURED", "reason": "SCAN_NOT_REQUIRED",
+                "skip_reason": intent.get("reason")}
+    declared = intent.get("test_port_def")
+    ports = ((elaboration.get("modules") or {}).get(top) or {}).get("ports")
+    roles = {"scan_enable": "input", "scan_in": "input", "scan_out": "output",
+             "test": "input", "tck": "input"}
+    if not isinstance(declared, Mapping) or not isinstance(ports, Mapping):
+        return {"status": "NOT_MEASURED", "reason": "DFT_PORT_EVIDENCE_MISSING"}
+    mismatches = []
+    for role, direction in roles.items():
+        entry = declared.get(role)
+        name = entry.get("public") if isinstance(entry, Mapping) else None
+        if not isinstance(name, str) or not name:
+            return {"status": "NOT_MEASURED", "reason": "DFT_PORT_DECLARATION_MISSING"}
+        actual = ports.get(name)
+        if not isinstance(actual, Mapping) or actual.get("direction") != direction or len(actual.get("bits", [])) != 1:
+            mismatches.append({"role": role, "port": name, "expected_direction": direction})
+    return {"status": "FAIL" if mismatches else "PASS",
+            "reason": "DFT_PORT_MISMATCH" if mismatches else "DFT_PORTS_MATCH",
+            "mismatches": mismatches}
+
+
 def dry_run_d10(project: Path, gate: str) -> dict:
     """Run one existing D10 frontend gate without publishing project artifacts.
 
@@ -43,7 +71,7 @@ def dry_run_d10(project: Path, gate: str) -> dict:
     answer = {'step_id': 'D10', 'gate': gate, 'dry_run': True,
               'gate_status': 'NOT_MEASURED', 'row_status': 'NOT_MEASURED',
               'tool_qualification': 'NOT_MEASURED', 'delivery_accepted': False}
-    if gate != 'p0_tool_frontend_check':
+    if gate not in ('p0_tool_frontend_check', 'dft_port_consistency'):
         answer['reason'] = 'UNPROVEN_ADAPTER_BINDING'
         if gate == 'feature_inventory' and not (project / 'adopted/base_04/feature_inventory.json').is_file():
             answer['reason'] = 'MISSING_ADOPTED_FEATURE_INVENTORY'
@@ -54,6 +82,12 @@ def dry_run_d10(project: Path, gate: str) -> dict:
         if not files or not top:
             raise ValueError('selected RTL or top is missing')
         before = native.source_binding(project, top, files)
+        binding = None
+        if gate == 'dft_port_consistency':
+            import fault_scan_chain_insert as scan
+            binding, problems = scan.load_d09_dft_contract(project)
+            if binding is None or problems:
+                raise ValueError('DFT intent unavailable: ' + '; '.join(problems))
         paths = {name: shutil.which(name) for name in ('yosys', 'verilator')}
         if any(not path for path in paths.values()):
             raise ValueError('native frontend tools unavailable')
@@ -67,7 +101,12 @@ def dry_run_d10(project: Path, gate: str) -> dict:
             result = frontend.check(project, output_project=Path(td))
             elab = Path(td) / frontend.RTL_ELAB_REL
             elab_sha = hashlib.sha256(elab.read_bytes()).hexdigest() if elab.is_file() else None
+            elaboration = json.loads(elab.read_text()) if elab_sha else None
         after = native.source_binding(project, top, _specrtl_common.rtl_source_files(project))
+        if gate == 'dft_port_consistency':
+            current_binding, problems = scan.load_d09_dft_contract(project)
+            if current_binding != binding or problems:
+                raise ValueError('DFT intent changed during diagnostic')
         if before != after or tools_before != tool_hashes():
             raise ValueError('source or tools changed during diagnostic')
         tools = result.get('tools') or {}
@@ -83,7 +122,12 @@ def dry_run_d10(project: Path, gate: str) -> dict:
         elif any(code < 0 or code >= 128 for code in codes.values()):
             answer['reason'] = 'NATIVE_FRONTEND_ABNORMAL_TERMINATION'
         elif result.get('passed') is True and elab_sha:
-            answer.update(gate_status='PASS', reason='NATIVE_FRONTEND_PASS')
+            if gate == 'dft_port_consistency':
+                port_result = dft_port_consistency(binding, elaboration, top)
+                answer.update(gate_status=port_result['status'], reason=port_result['reason'],
+                              port_evidence=port_result, intent_binding=binding)
+            else:
+                answer.update(gate_status='PASS', reason='NATIVE_FRONTEND_PASS')
         elif result.get('passed') is False:
             answer.update(gate_status='FAIL', reason='NATIVE_FRONTEND_FAIL')
             answer['native_diagnostics'] = {
