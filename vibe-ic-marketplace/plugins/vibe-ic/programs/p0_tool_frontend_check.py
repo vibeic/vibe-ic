@@ -426,8 +426,9 @@ def _check(project: Path, image: str | None, scratch: Path, *,
     import _eda_pin
     try:
         yosys_image = _route_image("yosys", image)
-        yosys = _invoke("yosys", ["-Q", "-T", "-p", _script()], project,
-                        yosys_image)
+        strict_yosys_args = ["-Q", "-T", "-p", _script()]
+        yosys_args = strict_yosys_args
+        yosys = _invoke("yosys", yosys_args, project, yosys_image)
         # Orchestrator ruling (2026-09-28), the D3 review's two conditions:
         # (a) REUSED IP ONLY -- plugin-authored RTL that uses a name before
         #     declaring it stays a FAIL and goes to repair, which can edit it;
@@ -458,9 +459,8 @@ def _check(project: Path, image: str | None, scratch: Path, *,
                                    and only_use_before_declare(strict_log))
                            else _all_in_supplied_ip(project, strict_log))
         if in_ip:
-            relaxed = _invoke("yosys", ["-Q", "-T", "-p",
-                                        _script(DECL_RELAX_FLAG + " ")],
-                              project, yosys_image)
+            relaxed_yosys_args = ["-Q", "-T", "-p", _script(DECL_RELAX_FLAG + " ")]
+            relaxed = _invoke("yosys", relaxed_yosys_args, project, yosys_image)
             if relaxed.returncode == 0:
                 files = sorted({Path(f).name for f in
                                 _use_before_declare_files(strict_log)})
@@ -474,13 +474,14 @@ def _check(project: Path, image: str | None, scratch: Path, *,
                 result["strict_exit_code"] = strict_rc
                 result["relaxed_flags"] = [DECL_RELAX_FLAG]
                 yosys = relaxed
+                yosys_args = relaxed_yosys_args
         verilator_args = ["--lint-only", "--Wall", "-Wno-fatal"]
         if top:
             verilator_args += ["--top-module", top]
         verilator_image = _route_image("verilator", image)
-        verilator = _invoke("verilator", [*verilator_args,
-                                          *("-I" + directory for directory in include_dirs),
-                                          *names], project, verilator_image)
+        verilator_args = [*verilator_args,
+                          *("-I" + directory for directory in include_dirs), *names]
+        verilator = _invoke("verilator", verilator_args, project, verilator_image)
     except _eda_pin.ImageNotResolvable as exc:
         result["findings"].append(f"tool invocation refused: {exc}")
         return result
@@ -496,12 +497,14 @@ def _check(project: Path, image: str | None, scratch: Path, *,
         return result
     result["tools"]["Yosys.JsonHeader"] = {"exit_code": yosys.returncode,
                                                "execution": "host" if shutil.which("yosys") else yosys_image,
+                                               "argv": ["yosys", *yosys_args],
                                                "output": (yosys.stdout + yosys.stderr)[-8000:]}
     if "strict_exit_code" in result:
         # The row says which run it shows: the strict refusal's exit code is
         # kept beside the relaxed run's, never overwritten by it.
         result["tools"]["Yosys.JsonHeader"].update(
             strict_exit_code=result["strict_exit_code"],
+            strict_argv=["yosys", *strict_yosys_args],
             relaxed_flags=list(result["relaxed_flags"]))
     lint_log = verilator.stdout + verilator.stderr
     try:
@@ -511,6 +514,7 @@ def _check(project: Path, image: str | None, scratch: Path, *,
         return result
     result["tools"]["Verilator.Lint"] = {"exit_code": verilator.returncode,
                                             "execution": "host" if shutil.which("verilator") else verilator_image,
+                                            "argv": ["verilator", *verilator_args],
                                             "diagnostics": diagnostics,
                                             "output": lint_log[-8000:]}
     result["elaboration"] = _keep_elaboration(output_root, elab_out,

@@ -110,6 +110,9 @@ def test_reused_ip_declaration_order_refusal_is_disclosed(monkeypatch,
     assert len(ys) == 2 and FLAG not in ys[0][-1] and FLAG in ys[1][-1]
     assert {FLAG in args[-1] for args in ys} == {False, True}
     assert ys[1][-1].index(FLAG) < ys[1][-1].index("top.v")
+    emitted = r["tools"]["Yosys.JsonHeader"]
+    assert emitted["argv"] == ["yosys", *ys[1]]
+    assert emitted["strict_argv"] == ["yosys", *ys[0]]
 
 
 # ---- (a) plugin-authored RTL is not retried ------------------------------

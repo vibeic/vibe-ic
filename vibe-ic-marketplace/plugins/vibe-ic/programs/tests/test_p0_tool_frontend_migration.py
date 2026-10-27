@@ -251,6 +251,11 @@ def test_p0_keeps_the_tool_elaboration(monkeypatch, tmp_path):
     assert json.loads(kept.read_text())["modules"]["top"]["ports"]["a"]["direction"] == "input"
     assert result["elaboration"]["written"] is True
     assert result["elaboration"]["top"] == "top"
+    yosys_argv = result["tools"]["Yosys.JsonHeader"]["argv"]
+    assert yosys_argv[:4] == ["yosys", "-Q", "-T", "-p"]
+    assert "read_slang --single-unit" in yosys_argv[4]
+    assert "read_verilog" not in yosys_argv[4]
+    assert result["tools"]["Verilator.Lint"]["argv"][:2] == ["verilator", "--lint-only"]
 
 
 def test_a_failed_or_empty_elaboration_keeps_nothing_and_clears_the_last(
