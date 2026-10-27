@@ -1480,11 +1480,80 @@ def _d10_yosys_observation(project: Path) -> dict:
         return {'status': 'NOT_MEASURED', 'detail': str(exc)}
 
 
-def _finish_d10_unimplemented_owner(project: Path) -> dict:
+def _d10_p0_native(project: Path) -> dict:
+    """Run the existing P0 producer into this attempt without replacing prior evidence."""
+    import _cdc_netlist as native
+    import _specrtl_common
+    import flow109
+    import librelane_contract as contract
+    import p0_tool_frontend_check as frontend
+
+    diagnostic = None
+    try:
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_text(encoding='utf-8')))
+        attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+        if (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink():
+            raise ValueError('immutable attempt result already exists')
+        files = _specrtl_common.rtl_source_files(project)
+        top = frontend._top(project)
+        if not files or not top:
+            raise ValueError('selected RTL or top is unavailable')
+        before = native.source_binding(project, top, files)
+        tool_paths = {name: shutil.which(name) for name in ('yosys', 'verilator')}
+        if any(not path for path in tool_paths.values()):
+            raise ValueError('local native frontend tools unavailable')
+        def tool_hashes():
+            return {name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+                    for name, path in tool_paths.items()}
+        tools_before = tool_hashes()
+        authority = None
+        if os.environ.get(contract.LOCAL_ATTESTATION_ENV):
+            authority = contract.local_image_attestation()
+        output_root = attempt / 'p0-native'
+        output_root.mkdir(mode=0o700)
+        result = frontend.check(project, output_project=output_root)
+        result_path = output_root / 'p0_result.json'
+        result_bytes = json.dumps(result, sort_keys=True, ensure_ascii=False).encode('utf-8') + b'\n'
+        with result_path.open('xb') as stream:
+            stream.write(result_bytes)
+        diagnostic = {'path': str(result_path.relative_to(project)),
+                      'sha256': hashlib.sha256(result_bytes).hexdigest()}
+        after = native.source_binding(project, top, _specrtl_common.rtl_source_files(project))
+        if before != after or tools_before != tool_hashes():
+            raise ValueError('native inputs or tools changed during execution')
+        elab = output_root / frontend.RTL_ELAB_REL
+        if (result.get('passed') is not True
+                or (result.get('elaboration') or {}).get('written') is not True
+                or elab.is_symlink() or not elab.is_file()):
+            raise ValueError('native P0 did not produce a successful elaboration')
+        raw = elab.read_bytes()
+        parsed = json.loads(raw)
+        if not isinstance(parsed.get('modules'), dict) or top not in parsed['modules']:
+            raise ValueError('native P0 elaboration does not contain the selected top')
+        return {'status': 'PASS', 'qualification': 'NOT_MEASURED', 'top': top,
+                'input_fingerprint': before['fingerprint'],
+                'elaboration_path': str(elab.relative_to(project)),
+                'elaboration_sha256': hashlib.sha256(raw).hexdigest(),
+                'tool_sha256': tools_before,
+                'producer_result': diagnostic,
+                'image': authority.get('image') if authority else None,
+                'image_id': authority.get('image_id') if authority else None,
+                'cid': authority.get('cid') if authority else None,
+                'attestation_sha256': authority.get('attestation_sha256') if authority else None}
+    except (flow109.Flow109Error, native.Refusal, contract.Refusal, OSError,
+            ValueError, TypeError, KeyError, AttributeError) as exc:
+        return {'status': 'NOT_MEASURED', 'detail': str(exc), 'producer_result': diagnostic}
+
+
+def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False) -> dict:
     """Publish an honest D10 terminal until its three metric bindings exist."""
     import flow109
 
-    evidence = {'yosys_observation': _d10_yosys_observation(project)}
+    evidence = {'yosys_observation': _d10_yosys_observation(project),
+                'p0_native': (_d10_p0_native(project) if run_p0 else
+                              {'status': 'NOT_MEASURED',
+                               'detail': 'current passing Phase 2 report is unavailable'})}
     detail = ('D10_METRIC_BINDINGS_UNIMPLEMENTED: elaboration errors, '
               'unexpected blackboxes and adopted feature inventory require '
               'a canonical producer and consumer')
@@ -5165,7 +5234,10 @@ def _main() -> int:
                 verdict = d09_acceptance['verdict']
                 rc = 0 if verdict == 'PASS' else 1 if verdict == 'FAIL' else 2
             elif _flow109_selected_row('D10') and _d10_metrics_unimplemented():
-                d10_acceptance = _finish_d10_unimplemented_owner(project)
+                d10_acceptance = _finish_d10_unimplemented_owner(
+                    project, run_p0=(verdict == 'PASS' and _pl.published_here(
+                        _phase_report_path(project, 'phase2_one_shot.json'),
+                        _phase_started['phase2'])))
                 reports['d10_finalization'] = d10_acceptance
                 if verdict != 'FAIL':
                     verdict, rc = 'NOT_MEASURED', 2

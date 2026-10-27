@@ -292,3 +292,17 @@ def test_the_docker_path_mounts_only_the_elaboration_scratch_writable(
     assert f"{root}:{root}:ro" in vols
     assert f"{scratch}:{scratch}" in vols
     assert len(vols) == 2
+
+
+def test_isolated_elaboration_output_preserves_prior_project_evidence(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    prior = project / frontend.RTL_ELAB_REL
+    prior.parent.mkdir(parents=True, exist_ok=True)
+    prior.write_bytes(b'prior-evidence\n')
+    output = tmp_path / 'isolated-output'
+    monkeypatch.setattr(frontend, '_invoke', _elab_fake())
+    result = frontend.check(project, 'test-image', output_project=output)
+    assert result['passed'] is True
+    assert prior.read_bytes() == b'prior-evidence\n'
+    assert (output / frontend.RTL_ELAB_REL).is_file()
+    assert result['elaboration']['written'] is True

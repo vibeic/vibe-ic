@@ -2312,3 +2312,67 @@ def test_public_d10_keeps_yosys_observation_separate_from_row_verdict(tmp_path, 
     assert observation['unexpected_blackboxes'] == 0
     assert observation['qualification'] == 'NOT_MEASURED'
     assert terminal['delivery_accepted'] is False
+
+
+@pytest.mark.parametrize('mode', ['pass', 'yosys_fail', 'rtl_changed'])
+def test_public_d10_runs_isolated_p0_but_never_promotes_missing_inventory(tmp_path, monkeypatch, mode):
+    import re
+    import p0_tool_frontend_check as frontend
+    runner = _public_d09_entry(tmp_path, monkeypatch)
+    monkeypatch.setattr(runner._pl, 'published_here', lambda *_: True)
+    monkeypatch.setattr(sys, 'argv', ['D10' if x == 'D09' else x for x in sys.argv])
+    rtl = tmp_path / 'phase2/stage1/rtl/top.v'
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text('module top(input a, output y); assign y = a; endmodule\n')
+    top = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+    top.parent.mkdir(parents=True)
+    top.write_text(json.dumps({'top_module': 'top'}))
+    prior = tmp_path / frontend.RTL_ELAB_REL
+    prior.parent.mkdir(parents=True, exist_ok=True)
+    prior.write_bytes(b'prior-native-evidence\n')
+    def fake_tool(tool, args, project, image):
+        if tool == 'yosys':
+            if mode == 'yosys_fail':
+                return SimpleNamespace(returncode=1, stdout='', stderr='native failure')
+            output = Path(re.search(r'write_json\s+([^;\s]+)', args[-1]).group(1))
+            output.write_text(json.dumps({'modules': {'top': {'attributes': {'top': '1'}, 'cells': {}}}}))
+            if mode == 'rtl_changed':
+                rtl.write_text(rtl.read_text() + '// changed while running\n')
+        return SimpleNamespace(returncode=0, stdout='', stderr='')
+    monkeypatch.setattr(frontend, '_invoke', fake_tool)
+    monkeypatch.setattr(runner, '_run_phase', lambda *args, **kwargs: 0)
+    monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: ('PASS', None))
+    monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': 'PASS', 'steps': []})
+    assert runner._main() != 0
+    attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
+    terminal = json.loads((attempt / 'result.json').read_text())
+    assert terminal['default_row_status'] == 'NOT_MEASURED'
+    assert terminal['delivery_accepted'] is False
+    p0 = terminal['components'][0]['evidence']['p0_native']
+    assert p0['status'] == ('PASS' if mode == 'pass' else 'NOT_MEASURED')
+    producer_result = tmp_path / p0['producer_result']['path']
+    assert producer_result.is_file()
+    recorded = json.loads(producer_result.read_text())
+    assert recorded['tools']['Yosys.JsonHeader']['exit_code'] == (1 if mode == 'yosys_fail' else 0)
+    if mode == 'pass':
+        assert p0['qualification'] == 'NOT_MEASURED'
+        assert (tmp_path / p0['elaboration_path']).is_file()
+    assert prior.read_bytes() == b'prior-native-evidence\n'
+
+
+@pytest.mark.parametrize('phase_verdict,fresh', [('PASS', False), ('FAIL', True)])
+def test_public_d10_never_runs_p0_after_stale_or_failed_phase2(tmp_path, monkeypatch, phase_verdict, fresh):
+    runner = _public_d09_entry(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys, 'argv', ['D10' if x == 'D09' else x for x in sys.argv])
+    monkeypatch.setattr(runner._pl, 'published_here', lambda *_: fresh)
+    monkeypatch.setattr(runner, '_run_phase', lambda *args, **kwargs: 0)
+    monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: (phase_verdict, None))
+    monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': phase_verdict, 'steps': []})
+    def forbidden(*_args):
+        raise AssertionError('P0 must not run on a stale or failed producer')
+    monkeypatch.setattr(runner, '_d10_p0_native', forbidden)
+    assert runner._main() != 0
+    attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
+    terminal = json.loads((attempt / 'result.json').read_text())
+    assert terminal['default_row_status'] == 'NOT_MEASURED'
+    assert terminal['components'][0]['evidence']['p0_native']['status'] == 'NOT_MEASURED'

@@ -378,22 +378,25 @@ def _diagnostic_file(name: str, rtl: list[str]) -> str | None:
     return hits[0] if len(hits) == 1 else None
 
 
-def check(project: Path, image: str | None = None) -> dict:
+def check(project: Path, image: str | None = None, *,
+          output_project: Path | None = None) -> dict:
     """`image` is the declared one (`--image`); None resolves it only if a
     tool actually has to run in docker. The elaboration scratch directory
     lives exactly as long as this call, on every return path."""
     import tempfile
     scratch = Path(tempfile.mkdtemp(prefix=_ELAB_SCRATCH_PREFIX))
     try:
-        return _check(project, image, scratch)
+        return _check(project, image, scratch, output_project=output_project)
     finally:
         shutil.rmtree(scratch, ignore_errors=True)
 
 
-def _check(project: Path, image: str | None, scratch: Path) -> dict:
+def _check(project: Path, image: str | None, scratch: Path, *,
+           output_project: Path | None = None) -> dict:
     # A previous run's elaboration is never this run's (removed before any
     # return path, so no RTL / a refusal leaves none behind).
-    (Path(project) / RTL_ELAB_REL).unlink(missing_ok=True)
+    output_root = Path(output_project) if output_project is not None else Path(project)
+    (output_root / RTL_ELAB_REL).unlink(missing_ok=True)
     files = rtl_source_files(project)
     result = {"program": "p0_tool_frontend_check", "passed": False,
               "sources": [str(p.relative_to(project)) for p in files],
@@ -510,7 +513,7 @@ def _check(project: Path, image: str | None, scratch: Path) -> dict:
                                             "execution": "host" if shutil.which("verilator") else verilator_image,
                                             "diagnostics": diagnostics,
                                             "output": lint_log[-8000:]}
-    result["elaboration"] = _keep_elaboration(project, elab_out,
+    result["elaboration"] = _keep_elaboration(output_root, elab_out,
                                               yosys.returncode, top)
     if yosys.returncode:
         result["findings"].append("Yosys elaboration failed")
