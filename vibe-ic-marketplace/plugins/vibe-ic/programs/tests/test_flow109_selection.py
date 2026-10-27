@@ -2206,3 +2206,17 @@ def test_d10_refusal_tracks_selected_registry_binding(tmp_path, monkeypatch):
     assert runner._d10_metrics_unimplemented() is True
     context['resolved_row']['profile']['dispatch']['flow109_metrics_status'] = 'IMPLEMENTED'
     assert runner._d10_metrics_unimplemented() is False
+
+
+def test_public_d10_does_not_mask_failed_phase2(tmp_path, monkeypatch):
+    runner = _public_d09_entry(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys, 'argv', ['D10' if x == 'D09' else x for x in sys.argv])
+    monkeypatch.setattr(runner, '_run_phase', lambda *args, **kwargs: 1)
+    monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: ('FAIL', None))
+    monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': 'FAIL', 'steps': []})
+    assert runner._main() != 0
+    summary = json.loads((tmp_path / 'reports/orchestrator/vibe_ic_one_shot.json').read_text())
+    phase2 = next(row for row in summary['phases'] if row['name'] == 'phase2')
+    assert phase2['verdict'] == 'FAIL'
+    attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
+    assert json.loads((attempt / 'result.json').read_text())['default_row_status'] == 'NOT_MEASURED'

@@ -5115,7 +5115,8 @@ def _main() -> int:
             elif _flow109_selected_row('D10') and _d10_metrics_unimplemented():
                 d10_acceptance = _finish_d10_unimplemented_owner(project)
                 reports['d10_finalization'] = d10_acceptance
-                verdict, rc = 'NOT_MEASURED', 2
+                if verdict != 'FAIL':
+                    verdict, rc = 'NOT_MEASURED', 2
             plan.append(("phase2", verdict, rc))
             reports["phase2"] = rep
             if (verdict == 'NOT_MEASURED' and _execution.request()['mode'] == 'default'
