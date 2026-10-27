@@ -3082,6 +3082,7 @@ def test_d30_delivery_owner_records_current_adopted_netlist_and_refuses_stale(tm
     delivered = tmp_path / receipt['delivered_netlist']['path']
     assert receipt['step_id'] == 'D30'
     assert receipt['context_sha256'] == context['context_sha256']
+    assert receipt['window_context_sha256'] == context['context_sha256']
     assert receipt['handoff_folder'] == folder
     assert receipt['flow109_acceptance'] == 'NOT_MEASURED'
     assert hashlib.sha256(delivered.read_bytes()).hexdigest() == receipt['source_netlist']['sha256']

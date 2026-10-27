@@ -26651,6 +26651,7 @@ def _d30_publish_delivery(project: Path, context: dict, attempt: Path,
                  'sha256': hashlib.sha256(out.read_bytes()).hexdigest()}
     document = {'schema': 'vibeic.flow109.d30-delivery.v1', 'step_id': 'D30',
         'context_sha256': current['context_sha256'],
+        'window_context_sha256': context['context_sha256'],
         'profile_identity': admission['profile_identity'],
         'source_netlist': source, 'delivered_netlist': delivered,
         'producer_source_sha256': source_sha, 'flow109_source_sha256': flow_sha,
