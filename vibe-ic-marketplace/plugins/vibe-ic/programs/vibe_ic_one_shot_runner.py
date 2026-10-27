@@ -2397,10 +2397,6 @@ def _d24_post_dft_component(project: Path) -> dict:
         intent = flow109.dft_source_intent(project, context)
         source = flow109.d23_scan_replacement_binding(project, context, intent)
         authority = contract.local_image_attestation()
-        d23 = json.loads((project / source['scan_cell_list']['path']).read_text())
-        if (d23.get('cid') != authority['cid']
-                or d23.get('attestation_sha256') != authority['attestation_sha256']):
-            raise ValueError('D23 launch identity is not the current attested launch')
         tool = shutil.which('yosys')
         if not tool:
             raise ValueError('Yosys unavailable')

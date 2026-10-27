@@ -339,6 +339,51 @@ def dft_plan_reference(intent: Mapping) -> dict:
             "max_chain_length": limit}
 
 
+def _d23_original_launch(doc: Mapping, current: Mapping) -> None:
+    """Reopen the host-retained D23 launch before reusing its native output."""
+    import re
+    import _eda_pin
+    path = Path(os.environ.get('VIBEIC_FLOW109_D23_ATTESTATION') or
+                str(current.get('attestation_path', '')))
+    try:
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != doc.get('attestation_sha256'):
+            raise ValueError('original host receipt hash mismatch')
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError('duplicate receipt key')
+                result[key] = value
+            return result
+        record = json.loads(raw, object_pairs_hook=unique)
+        inspected = record['container_inspect']
+        cid, reference = record['cid'], record['image']
+        config = inspected['Config']
+        original_image = next(item for item in record['image_inspect']
+                              if item['Id'] == inspected['Image'])
+        digest = _eda_pin.reference_digest(reference)
+        listed = original_image.get('RepoDigests', [])
+        manifest = (inspected.get('ImageManifestDescriptor') or {}).get('digest')
+        image_bound = (bool(re.fullmatch(r'sha256:[0-9a-f]{64}', reference))
+                       and reference == config['Image'] == inspected['Image']) or (
+            bool(digest) and '@sha256:' in reference
+            and _eda_pin.reference_digest(config['Image']) == digest
+            and (manifest == digest or digest in [_eda_pin.reference_digest(x) for x in listed]))
+        if (not re.fullmatch(r'[0-9a-f]{64}', str(cid))
+                or cid != doc.get('cid') or inspected['Id'] != cid
+                or not isinstance(config.get('Hostname'), str)
+                or not config['Hostname'].startswith(cid[:12])
+                or inspected['State']['Running'] is not True
+                or inspected['State'].get('Paused') or inspected['State'].get('Dead')
+                or reference != doc.get('image') or reference != current.get('image')
+                or inspected['Image'] != doc.get('image_id')
+                or inspected['Image'] != current.get('image_id') or not image_bound):
+            raise ValueError('original CID, image or running state mismatch')
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, StopIteration) as exc:
+        raise Flow109Error('FLOW109_D23_ORIGINAL_LAUNCH_UNPROVEN', str(exc)) from exc
+
+
 def d23_scan_replacement_binding(project: Path, context: Mapping, intent: Mapping) -> dict:
     """Reopen the current D23 native scan-replacement component and its list."""
     import re
@@ -374,6 +419,7 @@ def d23_scan_replacement_binding(project: Path, context: Mapping, intent: Mappin
         raise Flow109Error('FLOW109_D23_SCAN_CELLS_UNPROVEN', 'producer or intent identity')
     try:
         current = contract.local_image_attestation()
+        _d23_original_launch(doc, current)
         if (doc.get('image_id') != current.get('image_id') or doc.get('image') != current.get('image')
                 or not re.fullmatch(r'[0-9a-f]{64}', str(doc.get('cid', '')))
                 or not re.fullmatch(r'[0-9a-f]{64}', str(doc.get('attestation_sha256', '')))):

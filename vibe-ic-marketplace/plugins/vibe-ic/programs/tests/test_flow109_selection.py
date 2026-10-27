@@ -2968,11 +2968,10 @@ def test_d23_openroad_scan_replace_component_no_chain_report(tmp_path, monkeypat
     monkeypatch.setenv(flow109.ATTEMPT_ENV, str(d24_attempt))
     authority = native_contract.local_image_attestation()
     with monkeypatch.context() as stale_launch:
-        stale_launch.setattr(native_contract, 'local_image_attestation',
-                             lambda *a, **kw: {**authority, 'attestation_sha256': '0' * 64})
+        stale_launch.setenv('VIBEIC_FLOW109_D23_ATTESTATION', str(tmp_path / 'absent-launch.json'))
         refused = runner._complete_step12_post_dft(tmp_path, 'unused')
         assert refused['verdict'] == 'NOT_MEASURED'
-        assert 'D23 launch identity' in refused['detail']
+        assert 'FLOW109_D23_ORIGINAL_LAUNCH_UNPROVEN' in refused['detail']
         assert not (d24_attempt / 'd24_post_dft.v').exists()
     optimized = runner._complete_step12_post_dft(tmp_path, 'unused')
     assert optimized['component_status'] == 'PASS', optimized
