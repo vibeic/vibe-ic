@@ -339,6 +339,116 @@ def dft_plan_reference(intent: Mapping) -> dict:
             "max_chain_length": limit}
 
 
+def d23_scan_replacement_binding(project: Path, context: Mapping, intent: Mapping) -> dict:
+    """Reopen the current D23 native scan-replacement component and its list."""
+    import re
+    import shutil
+    import librelane_contract as contract
+    import dft_post_optimization_scan_survival_check as cells_gate
+    import vibe_ic_one_shot_runner as runner
+    project = Path(project).resolve()
+    row, row_ref = _bound_project_json(project, Path('reports/flow109/default_rows/D23.json'),
+                                       'FLOW109_D23_SCAN_CELLS_MISSING')
+    ref = row.get('scan_cell_list')
+    if (row.get('step_id') != 'D23' or row.get('native_component_status') != 'PASS'
+            or row.get('default_row_status') not in ('PASS', 'NOT_MEASURED')):
+        raise Flow109Error('FLOW109_D23_SCAN_CELLS_UNPROVEN', 'D23 native component')
+    ref = _current_project_ref(project, ref, 'FLOW109_D23_SCAN_CELLS_STALE')
+    doc, _ = _bound_project_json(project, Path(ref['path']), 'FLOW109_D23_SCAN_CELLS_MISSING')
+    attempt = (project / ref['path']).parent
+    root = project / 'reports/flow109/attempts'
+    if (attempt.is_symlink() or attempt.parent != root or not attempt.name.startswith('window-')):
+        raise Flow109Error('FLOW109_D23_SCAN_CELLS_UNPROVEN', 'foreign attempt')
+    terminal, _ = _bound_project_json(project, attempt.relative_to(project) / 'result.json',
+                                      'FLOW109_D23_SCAN_CELLS_UNPROVEN')
+    matches = [item for item in terminal.get('components', []) if item.get('step_id') == 'D23']
+    if (len(matches) != 1 or matches[0].get('scan_cell_list') != ref
+            or matches[0].get('native_component_status') != 'PASS'
+            or matches[0].get('context_sha256') != row.get('context_sha256')):
+        raise Flow109Error('FLOW109_D23_SCAN_CELLS_UNPROVEN', 'D23 attempt binding')
+    if (doc.get('schema') != 'vibeic.flow109.d23-scan-cells.v1'
+            or doc.get('producer') != 'D23' or doc.get('operation') != 'OpenROAD.scan_replace'
+            or doc.get('d01_intent') != intent['source_binding']
+            or doc.get('dft_plan') != dft_plan_reference(intent)
+            or doc.get('returncode') != 0):
+        raise Flow109Error('FLOW109_D23_SCAN_CELLS_UNPROVEN', 'producer or intent identity')
+    try:
+        current = contract.local_image_attestation()
+        if (doc.get('image_id') != current.get('image_id') or doc.get('image') != current.get('image')
+                or not re.fullmatch(r'[0-9a-f]{64}', str(doc.get('cid', '')))
+                or not re.fullmatch(r'[0-9a-f]{64}', str(doc.get('attestation_sha256', '')))):
+            raise ValueError('image or launch identity differs')
+        for key, module in (('producer_source_sha256', runner), ('comparator_source_sha256', cells_gate)):
+            if doc.get(key) != _file_digest(Path(module.__file__)):
+                raise ValueError(key + ' changed')
+        for key, executable in (('openroad_sha256', 'openroad'), ('yosys_sha256', 'yosys')):
+            path = shutil.which(executable)
+            if not path or doc.get(key) != _file_digest(Path(path)):
+                raise ValueError(key + ' changed')
+        pdk = doc.get('pdk_sha256')
+        if not isinstance(pdk, Mapping) or len(pdk) != 3:
+            raise ValueError('PDK identity missing')
+        for path, digest in pdk.items():
+            if not isinstance(path, str) or _file_digest(Path(path)) != digest:
+                raise ValueError('PDK input changed')
+        mapped = _current_project_ref(project, doc.get('mapped'), 'FLOW109_D23_SCAN_CELLS_STALE')
+        replaced = _current_project_ref(project, doc.get('replaced'), 'FLOW109_D23_SCAN_CELLS_STALE')
+        for name in ('recipe', 'log'):
+            item = _current_project_ref(project, doc.get(name), 'FLOW109_D23_SCAN_CELLS_STALE')
+            if (project / item['path']).parent != attempt:
+                raise ValueError(name + ' foreign attempt')
+        if (project / replaced['path']).parent != attempt:
+            raise ValueError('replacement foreign attempt')
+        argv = doc.get('argv')
+        if (not isinstance(argv, list) or len(argv) != 4 or argv[1:3] != ['-no_init', '-exit']
+                or argv[0] != shutil.which('openroad')):
+            raise ValueError('native argv mismatch')
+        source = (project / mapped['path']).read_text()
+        replaced_text = (project / replaced['path']).read_text()
+        check = cells_gate.reconcile_scan_cell_list(source, replaced_text, replaced_text,
+                                                    doc.get('cells'), top=doc.get('top'))
+        if check.get('verdict') != 'PASS':
+            raise ValueError('scan list does not match native replacement: ' + str(check))
+    except (contract.Refusal, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        raise Flow109Error('FLOW109_D23_SCAN_CELLS_UNPROVEN', str(exc)) from exc
+    return {'D23_result': row_ref, 'scan_cell_list': ref, 'mapped': mapped,
+            'replaced': replaced, 'cells': doc['cells'], 'top': doc['top']}
+
+
+def d24_scan_content(project: Path, context: Mapping, intent: Mapping, adopted: Mapping) -> dict:
+    """Compare the current D24 subject against the bound D23 scan-cell list."""
+    import dft_post_optimization_scan_survival_check as gate
+    source = d23_scan_replacement_binding(project, context, intent)
+    current = _current_project_ref(project, {'path': adopted.get('path'), 'sha256': adopted.get('sha256')},
+                                   'FLOW109_D24_ADOPTED_NETLIST_UNBOUND')
+    if current['path'] != _D24_NETLIST.as_posix():
+        raise Flow109Error('FLOW109_D30_PRE_SCAN_SUBSTITUTION', current['path'])
+    try:
+        result = gate.reconcile_scan_cell_list(
+            (Path(project) / source['mapped']['path']).read_text(),
+            (Path(project) / source['replaced']['path']).read_text(),
+            (Path(project) / current['path']).read_text(), source['cells'], top=source['top'])
+    except (OSError, UnicodeError) as exc:
+        raise Flow109Error('FLOW109_D30_SCAN_CELL_LIST_UNMEASURED', str(exc)) from exc
+    if result.get('verdict') != 'PASS':
+        raise Flow109Error('FLOW109_D30_SCAN_CELL_LIST_MISMATCH', str(result))
+    return {'scan_cell_list': source['scan_cell_list'], 'D23_result': source['D23_result'],
+            'adopted_netlist': current, 'cells': result['cells'],
+            'parser_sha256': result['parser_sha256']}
+
+
+def physical_d24_binding(project: Path, context: Mapping, intent: Mapping) -> dict:
+    """Reopen the D24 accepted record and independently reconcile its cells."""
+    d24, ref = _accepted_row(project, _D24_RESULT, 'D24')
+    adopted = d24.get('adopted_netlist')
+    if (not isinstance(adopted, Mapping) or adopted.get('artifact_id') != 'D24_POST_SCAN_NETLIST'):
+        raise Flow109Error('FLOW109_D24_ADOPTED_NETLIST_UNBOUND', 'D24 identity')
+    check = d24_scan_content(project, context, intent, adopted)
+    if d24.get('scan_cell_list') != check['scan_cell_list']:
+        raise Flow109Error('FLOW109_D23_SCAN_CELLS_STALE', 'D24 list binding')
+    return {'D24_result': ref, 'adopted_netlist': dict(adopted), 'scan_cell_reconciliation': check}
+
+
 def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     """Re-open D24/D25/D26's actual consumers before D30 native handoff."""
     project = Path(project).resolve()
@@ -352,7 +462,12 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     if not isinstance(top, str) or not top:
         raise Flow109Error("FLOW109_D30_SYNTHESIS_IDENTITY_MISSING", "D22 top")
     report = report_ref = d24_ref = None
-    if intent["requires_scan"]:
+    physical_default = intent["requires_scan"] and context.get("features", {}).get("physical") is True
+    physical_binding = physical_d24_binding(project, context, intent) if physical_default else None
+    if physical_binding:
+        d24_ref = physical_binding['D24_result']
+        d24, _ = _accepted_row(project, _D24_RESULT, "D24")
+    elif intent["requires_scan"]:
         d24, d24_ref = _accepted_row(project, _D24_RESULT, "D24")
         report, report_ref = _bound_project_json(
             project, _SCAN_REPORT, "FLOW109_D30_SCAN_REPORT_MISSING")
@@ -394,10 +509,14 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
             raise Flow109Error("FLOW109_D30_PRE_SCAN_SUBSTITUTION", rel)
         if d24.get("adopted_netlist") != adopted:
             raise Flow109Error("FLOW109_D30_D24_IDENTITY_MISMATCH", rel)
-        chain = {"status": "REALIZED_NATIVE", "report": report_ref,
-                 "internal_chain_length": values[0],
-                 "boundary_chain_length": values[1],
-                 "input_flop_count": values[2]}
+        if physical_default:
+            chain = {"status": "NOT_MEASURED", "reason": "physical scan stitching is owned by D36",
+                     "producer_step": "D36"}
+        else:
+            chain = {"status": "REALIZED_NATIVE", "report": report_ref,
+                     "internal_chain_length": values[0],
+                     "boundary_chain_length": values[1],
+                     "input_flop_count": values[2]}
     timing_modes = _d26_timing_modes_binding(
         project, _d26, intent, top, report=report, report_ref=report_ref,
         adopted=adopted)
@@ -408,6 +527,8 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
         "profile_identity": {"features_sha256": digest(context["features"]),
                              "step_profiles_sha256": digest(context["step_profiles"])},
         "native_chain": chain, "dft_plan_reference": plan_ref,
+        **({"scan_cell_list_reconciliation": physical_binding['scan_cell_reconciliation']}
+           if physical_binding else {}),
         "functional_equivalence": lec_ref,
         "pre_route_timing": {
             "owner_step": "D26", "owner_position": 38,
@@ -1336,17 +1457,24 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
               "flow109_acceptance": status,
               "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False}
     if row["id"] == "D24" and status == "PASS":
-        report, report_ref = _bound_project_json(
-            project, _SCAN_REPORT, "FLOW109_D24_SCAN_REPORT_MISSING")
         netlist = project / _D24_NETLIST
-        if (report.get("published") is not True
-                or netlist.is_symlink() or not netlist.is_file()
+        if (netlist.is_symlink() or not netlist.is_file()
                 or not netlist.resolve().is_relative_to(Path(project).resolve())):
             raise Flow109Error("FLOW109_D24_ADOPTED_NETLIST_UNBOUND", str(_D24_NETLIST))
         answer["adopted_netlist"] = {
             "artifact_id": "D24_POST_SCAN_NETLIST",
             "path": _D24_NETLIST.as_posix(), "sha256": _file_digest(netlist)}
-        answer["native_scan_report"] = report_ref
+        if context.get('features', {}).get('physical') is True:
+            intent = dft_source_intent(project, context)
+            check = d24_scan_content(project, context, intent, answer['adopted_netlist'])
+            answer['scan_cell_list'] = check['scan_cell_list']
+            answer['scan_cell_reconciliation'] = check
+        else:
+            report, report_ref = _bound_project_json(
+                project, _SCAN_REPORT, "FLOW109_D24_SCAN_REPORT_MISSING")
+            if report.get("published") is not True:
+                raise Flow109Error("FLOW109_D24_ADOPTED_NETLIST_UNBOUND", str(_D24_NETLIST))
+            answer["native_scan_report"] = report_ref
     if row["id"] == "D30" and status == "PASS":
         answer["dft_preroute_admission"] = dft_preroute_admission(project, context)
     from _atomic_artefact import write_json

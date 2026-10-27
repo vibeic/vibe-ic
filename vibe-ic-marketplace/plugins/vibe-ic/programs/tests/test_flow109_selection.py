@@ -2947,6 +2947,12 @@ def test_d23_openroad_scan_replace_component_no_chain_report(tmp_path, monkeypat
     row = json.loads((tmp_path / 'reports/flow109/default_rows/D23.json').read_text())
     assert row['scan_cell_list'] == result['scan_cell_list']
     assert row['native_component_status'] == 'PASS' and row['default_row_status'] == 'NOT_MEASURED'
+    intent = flow109.dft_source_intent(tmp_path, context)
+    bound = flow109.d23_scan_replacement_binding(tmp_path, context, intent)
+    assert bound['scan_cell_list'] == result['scan_cell_list'] and len(bound['cells']) == 2
+    artifact.write_text(artifact.read_text() + ' ')
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_D23_SCAN_CELLS_STALE'):
+        flow109.d23_scan_replacement_binding(tmp_path, context, intent)
 
 
 def test_d23_component_reference_survives_finalization_without_row_pass(tmp_path, monkeypatch):

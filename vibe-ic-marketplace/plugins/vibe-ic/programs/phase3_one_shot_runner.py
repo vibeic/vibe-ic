@@ -36772,6 +36772,20 @@ def pnr_input_netlist(project: Path, top: str) -> Tuple[Path, str, bool]:
     synth = _pl.synth_dir(project)
     pre_dft = synth / f"{top}_synth.v"
     post_dft = synth / "post_dft_netlist.v"
+    context_path = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+    if context_path:
+        try:
+            import flow109
+            context = flow109.validate_execution_context(json.loads(Path(context_path).read_text()))
+            features = context.get('features') or {}
+            if features.get('physical') is True and features.get('requires_scan') is True:
+                intent = flow109.dft_source_intent(project, context)
+                d24 = flow109.physical_d24_binding(project, context, intent)
+                if d24['scan_cell_reconciliation']['adopted_netlist']['path'] != str(post_dft.relative_to(project)):
+                    raise ValueError('D24 subject differs from physical input')
+                return post_dft, 'D24 post-scan netlist with bound D23 scan-cell reconciliation', True
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            return pre_dft, 'physical D23/D24 scan-cell binding unavailable: ' + str(exc), False
     try:
         meta = json.loads(
             (project / "reports/phase2/dft/scan_chain.json").read_text())
