@@ -2223,3 +2223,92 @@ def test_public_d10_does_not_mask_failed_phase2(tmp_path, monkeypatch):
     assert phase2['verdict'] == 'FAIL'
     attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
     assert json.loads((attempt / 'result.json').read_text())['default_row_status'] == 'NOT_MEASURED'
+
+
+def test_d10_yosys_observation_requires_matching_current_native_binding(tmp_path, monkeypatch):
+    import hashlib
+    import _cdc_netlist as native
+    import vibe_ic_one_shot_runner as runner
+    path = tmp_path / native.NETLIST_REL
+    path.parent.mkdir(parents=True)
+    graph = {'modules': {'top': {'attributes': {}, 'cells': {}}}}
+    path.write_text(json.dumps(graph))
+    bound = {'sha256': {'netlist.json': hashlib.sha256(path.read_bytes()).hexdigest()},
+             'input': {'fingerprint': 'current-input'}}
+    monkeypatch.setattr(native, 'load', lambda _: SimpleNamespace(top='top'))
+    monkeypatch.setattr(native, 'require_binding', lambda *_: bound)
+    observation = runner._d10_yosys_observation(tmp_path)
+    assert observation['status'] == 'OBSERVED'
+    assert observation['elaboration_errors'] == 0
+    assert observation['unexpected_blackboxes'] == 0
+    assert observation['qualification'] == 'NOT_MEASURED'
+    path.write_text(json.dumps({'modules': {'top': {'cells': {'u': {'type': 'foreign'}}}}}))
+    assert runner._d10_yosys_observation(tmp_path)['status'] == 'NOT_MEASURED'
+
+
+def test_d10_yosys_observation_does_not_approve_nonzero_blackboxes(tmp_path, monkeypatch):
+    import hashlib
+    import _cdc_netlist as native
+    import vibe_ic_one_shot_runner as runner
+    path = tmp_path / native.NETLIST_REL
+    path.parent.mkdir(parents=True)
+    graph = {'modules': {'top': {'cells': {'u': {'type': 'macro'}}},
+                         'macro': {'attributes': {'blackbox': '1'}, 'cells': {}}}}
+    path.write_text(json.dumps(graph))
+    bound = {'sha256': {'netlist.json': hashlib.sha256(path.read_bytes()).hexdigest()},
+             'input': {'fingerprint': 'current-input'}}
+    monkeypatch.setattr(native, 'load', lambda _: SimpleNamespace(top='top'))
+    monkeypatch.setattr(native, 'require_binding', lambda *_: bound)
+    observation = runner._d10_yosys_observation(tmp_path)
+    assert observation['observed_blackbox_instances'] == ['u']
+    assert observation['unexpected_blackboxes'] is None
+    assert observation['qualification'] == 'NOT_MEASURED'
+
+
+def test_d10_yosys_observation_follows_hierarchy_and_refuses_unknown_cells(tmp_path, monkeypatch):
+    import hashlib
+    import _cdc_netlist as native
+    import vibe_ic_one_shot_runner as runner
+    path = tmp_path / native.NETLIST_REL
+    path.parent.mkdir(parents=True)
+    graph = {'modules': {'top': {'cells': {'u': {'type': 'child'}}},
+                         'child': {'cells': {'m': {'type': 'macro'}}},
+                         'macro': {'attributes': {'blackbox': '1'}, 'cells': {}}}}
+    path.write_text(json.dumps(graph))
+    bound = {'sha256': {'netlist.json': hashlib.sha256(path.read_bytes()).hexdigest()},
+             'input': {'fingerprint': 'current-input'}}
+    monkeypatch.setattr(native, 'load', lambda _: SimpleNamespace(top='top'))
+    monkeypatch.setattr(native, 'require_binding', lambda *_: bound)
+    observation = runner._d10_yosys_observation(tmp_path)
+    assert observation['observed_blackbox_instances'] == ['u/m']
+    assert observation['unexpected_blackboxes'] is None
+    graph['modules']['child']['cells']['m']['type'] = 'undefined'
+    path.write_text(json.dumps(graph))
+    bound['sha256']['netlist.json'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    assert runner._d10_yosys_observation(tmp_path)['status'] == 'NOT_MEASURED'
+
+
+def test_public_d10_keeps_yosys_observation_separate_from_row_verdict(tmp_path, monkeypatch):
+    import hashlib
+    import _cdc_netlist as native
+    runner = _public_d09_entry(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys, 'argv', ['D10' if x == 'D09' else x for x in sys.argv])
+    path = tmp_path / native.NETLIST_REL
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({'modules': {'top': {'cells': {}}}}))
+    bound = {'sha256': {'netlist.json': hashlib.sha256(path.read_bytes()).hexdigest()},
+             'input': {'fingerprint': 'current-input'}}
+    monkeypatch.setattr(native, 'load', lambda _: SimpleNamespace(top='top'))
+    monkeypatch.setattr(native, 'require_binding', lambda *_: bound)
+    monkeypatch.setattr(runner, '_run_phase', lambda *args, **kwargs: 0)
+    monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: ('PASS', None))
+    monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': 'PASS', 'steps': []})
+    assert runner._main() != 0
+    attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
+    terminal = json.loads((attempt / 'result.json').read_text())
+    assert terminal['default_row_status'] == 'NOT_MEASURED'
+    observation = terminal['components'][0]['evidence']['yosys_observation']
+    assert observation['elaboration_errors'] == 0
+    assert observation['unexpected_blackboxes'] == 0
+    assert observation['qualification'] == 'NOT_MEASURED'
+    assert terminal['delivery_accepted'] is False

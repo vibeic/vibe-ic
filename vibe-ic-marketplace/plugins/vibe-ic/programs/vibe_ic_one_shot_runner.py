@@ -1429,10 +1429,62 @@ def _flow109_selected_row(row_id: str) -> bool:
             and context.get('requested_step') == row_id)
 
 
+def _d10_yosys_observation(project: Path) -> dict:
+    """Observe only facts bound by the existing native JsonHeader producer."""
+    import _cdc_netlist as native
+
+    path = project / native.NETLIST_REL
+    try:
+        if (path.is_symlink() or not path.is_file()
+                or not path.resolve().is_relative_to(project.resolve())):
+            raise ValueError('native netlist absent or symlink')
+        netlist = native.load(path)
+        binding = native.require_binding(project, path, netlist)
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != binding['sha256']['netlist.json']:
+            raise ValueError('native netlist changed after binding')
+        doc = json.loads(raw)
+        modules = doc['modules']
+        if not isinstance(modules, dict) or netlist.top not in modules:
+            raise ValueError('native module inventory missing')
+        blackboxes = {name for name, module in modules.items()
+                      if native._int((module.get('attributes') or {}).get('blackbox', 0))}
+        instances = []
+
+        pending = [(netlist.top, '', frozenset())]
+        while pending:
+            module_name, prefix, ancestors = pending.pop()
+            if module_name in ancestors:
+                raise ValueError('recursive native module hierarchy')
+            cells = modules[module_name].get('cells', {})
+            if not isinstance(cells, dict):
+                raise ValueError('native cell inventory missing')
+            for name, cell in cells.items():
+                if not isinstance(name, str) or not isinstance(cell, dict) or not isinstance(cell.get('type'), str):
+                    raise ValueError('invalid native cell inventory')
+                kind, instance = cell['type'], prefix + name
+                if kind in blackboxes:
+                    instances.append(instance)
+                elif kind in modules:
+                    pending.append((kind, instance + '/', ancestors | {module_name}))
+                elif not kind.startswith('$'):
+                    raise ValueError('unresolved native cell type')
+        instances.sort()
+        return {'status': 'OBSERVED', 'producer': 'Yosys.JsonHeader',
+                'netlist_sha256': binding['sha256']['netlist.json'],
+                'input_fingerprint': binding['input']['fingerprint'],
+                'elaboration_errors': 0, 'observed_blackbox_instances': instances,
+                'unexpected_blackboxes': 0 if not instances else None,
+                'qualification': 'NOT_MEASURED'}
+    except (native.Refusal, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return {'status': 'NOT_MEASURED', 'detail': str(exc)}
+
+
 def _finish_d10_unimplemented_owner(project: Path) -> dict:
     """Publish an honest D10 terminal until its three metric bindings exist."""
     import flow109
 
+    evidence = {'yosys_observation': _d10_yosys_observation(project)}
     detail = ('D10_METRIC_BINDINGS_UNIMPLEMENTED: elaboration errors, '
               'unexpected blackboxes and adopted feature inventory require '
               'a canonical producer and consumer')
@@ -1440,7 +1492,7 @@ def _finish_d10_unimplemented_owner(project: Path) -> dict:
         finished = flow109.finish_native_window(project, {'steps': [{
             'status': 'NOT_MEASURED', 'extras': {
                 'step_id': 'P0', 'default_row_status': 'NOT_MEASURED',
-                'completed': False, 'detail': detail,
+                'completed': False, 'detail': detail, 'evidence': evidence,
             },
         }]})
     except flow109.Flow109Error as exc:
@@ -1456,7 +1508,7 @@ def _finish_d10_unimplemented_owner(project: Path) -> dict:
     if not isinstance(finished, Mapping):
         detail = 'D10_FINALIZATION_UNAVAILABLE: ' + detail
     return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',
-            'detail': detail, 'evidence': {}}
+            'detail': detail, 'evidence': evidence}
 
 
 def _d10_metrics_unimplemented() -> bool:
