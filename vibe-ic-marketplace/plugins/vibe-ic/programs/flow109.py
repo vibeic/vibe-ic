@@ -227,19 +227,21 @@ def _d26_timed_arm(project: Path, arm: Mapping, intent: Mapping,
         raw_input = state_in.get("nl")
         if (not isinstance(raw_input, str) or not raw_input
                 or hashes.get("state_in.json") != _file_digest(state_in_path)
-                or fingerprint.get("state") != _file_digest(state_in_path)
-                or fingerprint.get("state_files", {}).get(raw_input) != adopted["sha256"]
-                or Path(raw_input).resolve() != (Path(project) / adopted["path"]).resolve()
-                or _file_digest(Path(raw_input)) != adopted["sha256"]):
+                or fingerprint.get("state") != _file_digest(state_in_path)):
+            raise Flow109Error("FLOW109_D26_INPUT_NETLIST_UNBOUND", mode)
+        input_path = Path(raw_input).resolve()
+        input_rel = input_path.relative_to(Path(project).resolve()).as_posix()
+        input_sha = fingerprint.get("state_files", {}).get(raw_input)
+        _current_project_ref(project, {'path': input_rel, 'sha256': input_sha},
+                             "FLOW109_D26_INPUT_NETLIST_UNBOUND")
+        if Path(str(state.get('nl') or '')).resolve() != input_path:
             raise Flow109Error("FLOW109_D26_INPUT_NETLIST_UNBOUND", mode)
     except Flow109Error:
         raise
     except Exception as exc:
         raise Flow109Error("FLOW109_D26_SCAN_NATIVE_STALE", mode) from exc
     if (Path(str(config.get("PNR_SDC_FILE") or "")).resolve()
-            != (Path(project) / constraint_ref["path"]).resolve()
-            or Path(str(state.get("nl") or "")).resolve()
-            != (Path(project) / adopted["path"]).resolve()):
+            != (Path(project) / constraint_ref["path"]).resolve()):
         raise Flow109Error("FLOW109_D26_SCAN_NATIVE_MISMATCH", mode)
     for gate_name in ("sdc_gate", "slack_gate"):
         gate_ref = arm.get(gate_name)
@@ -256,7 +258,7 @@ def _d26_timed_arm(project: Path, arm: Mapping, intent: Mapping,
                 or gate_ref.get("corners") != gate.get("corners")):
             raise Flow109Error("FLOW109_D26_SCAN_GATE_FAIL", f"{mode}.{gate_name}")
         if (gate_name == "sdc_gate"
-                and (gate.get("netlist_sha256") != adopted["sha256"]
+                and (gate.get("netlist_sha256") != input_sha
                      or gate.get("sdc_sha256") != constraint["sha256"])):
             raise Flow109Error("FLOW109_D26_SCAN_GATE_MISMATCH", mode)
         if not isinstance(gate.get("corners"), Mapping) or not gate["corners"]:

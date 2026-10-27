@@ -409,6 +409,53 @@ def test_d30_rejects_d26_input_netlist_substitution(tmp_path, monkeypatch):
         flow109.dft_preroute_admission(tmp_path, context)
 
 
+def test_d30_scan_front_door_rejects_different_bound_timing_netlist(tmp_path, monkeypatch):
+    # Fixture authorities are synthetic; this exercises the real front door only.
+    import hashlib
+    import _delivery_route
+    context = _d30_scan_case(tmp_path, monkeypatch)
+    assert flow109.dft_preroute_admission(tmp_path, context)['normalized_preroute_chain']['reason'] == 'D30_DELIVERY_ARTIFACT_UNBOUND'
+    folder = tmp_path / 'phase3/librelane/d26_post_scan_functional'
+    other = tmp_path / 'different_timed.v'
+    other.write_text('module neutral_unit(input clk, output q); assign q=~clk; endmodule\n')
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    for name in ('state_in.json', 'state_out.json'):
+        (folder / name).write_text(json.dumps({'nl': str(other.resolve())}))
+    receipt_path = folder / 'vibeic_receipt.json'
+    receipt = json.loads(receipt_path.read_text())
+    receipt['input']['state'] = sha(folder / 'state_in.json')
+    receipt['input']['state_files'] = {str(other.resolve()): sha(other)}
+    receipt['sha256']['state_in.json'] = sha(folder / 'state_in.json')
+    receipt_path.write_text(json.dumps(receipt))
+    timing_path = tmp_path / 'reports/flow109/d26_scan_mode.json'
+    timing = json.loads(timing_path.read_text())
+    arm = timing['post_scan_arms']['functional']
+    arm['native']['receipt']['sha256'] = sha(receipt_path)
+    for name in ('sdc_gate', 'slack_gate'):
+        gate_path = tmp_path / arm[name]['path']
+        gate = json.loads(gate_path.read_text())
+        gate['state_out_sha256'] = sha(folder / 'state_out.json')
+        if name == 'sdc_gate':
+            gate['netlist_sha256'] = sha(other)
+        gate_path.write_text(json.dumps(gate))
+        arm[name]['sha256'] = sha(gate_path)
+    timing_path.write_text(json.dumps(timing))
+    row_path = tmp_path / 'reports/flow109/default_rows/D26.json'
+    row = json.loads(row_path.read_text())
+    row['timing_modes_receipt']['sha256'] = sha(timing_path)
+    row_path.write_text(json.dumps(row))
+    assert _delivery_route.admit(tmp_path, 'ip') is None
+    manifest = tmp_path / 'scan-manifest.json'
+    manifest.write_text(json.dumps({'features': profile('Mapped soft-IP with prestitched scan')}))
+    args = SimpleNamespace(flow='109', flow109_manifest=manifest, execution_mode=None,
+                           flow109_plan_only=False, entry_step='D30', exit_step='D30')
+    assert flow109.prepare_front_door(args, tmp_path) == 1
+    refusal = json.loads((tmp_path / 'reports/flow109/admission.json').read_text())
+    assert refusal['status'] == 'FAIL' and refusal['native_started'] is False
+    assert refusal['reason'] == 'FLOW109_PREROUTE_NETLIST_MISMATCH'
+    assert not list((tmp_path / 'reports/flow109').rglob('*d30-delivery*'))
+
+
 def test_d30_refuses_row_pass_without_bound_delivery_netlist(tmp_path, monkeypatch):
     context = _d30_scan_case(tmp_path, monkeypatch)
     admission = flow109.dft_preroute_admission(tmp_path, context)
