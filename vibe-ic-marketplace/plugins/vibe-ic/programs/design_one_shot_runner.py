@@ -26596,6 +26596,75 @@ def _current_phase2_consumer(project: Path, step_id: str, started_at: float):
         return None
 
 
+def _d30_publish_delivery(project: Path, context: dict, attempt: Path,
+                          handoff_folder: str) -> dict:
+    """Record the netlist actually handed off by this completed D30 owner.
+
+    This records a component artifact, not D30 metric or whole-flow acceptance.
+    """
+    import flow109
+    import step_output_collector as versions
+    project = Path(project).resolve()
+    context = flow109.validate_execution_context(context)
+    rows = context.get('resolved_rows') or [context.get('resolved_row', {})]
+    if not any(row.get('id') == 'D30' for row in rows):
+        raise ValueError('D30 is not selected')
+    attempt = flow109._bound_attempt(project, context, str(attempt))
+    if (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink():
+        raise ValueError('D30 attempt is already completed')
+    current = flow109.component_context(context, requested_step='D30')
+    admission = flow109.dft_preroute_admission(project, current)
+    adopted = admission.get('adopted_netlist') or {}
+    source = flow109._current_project_ref(project,
+        {key: adopted.get(key) for key in ('path', 'sha256')},
+        'FLOW109_D30_DELIVERY_SOURCE_STALE')
+    if not isinstance(handoff_folder, str) or not handoff_folder:
+        raise ValueError('D30 handoff folder missing')
+    accepted = _current_phase2_consumer(project, '14', 0.0)
+    if not accepted or accepted.get('folder') != handoff_folder:
+        raise ValueError('D30 handoff consumer is not current')
+    handoff = (versions._versions_root(project) / handoff_folder / 'outputs.json').resolve()
+    if (not handoff.is_relative_to(project) or not handoff.is_file()):
+        raise ValueError('D30 handoff receipt is foreign or missing')
+    handoff_bytes = handoff.read_bytes()
+    handoff_doc = json.loads(handoff_bytes)
+    if handoff_doc.get('canonical_pass') is not True or handoff_doc.get('status') != 'PASS':
+        raise ValueError('D30 handoff is not accepted')
+    source_path = project / source['path']
+    raw = source_path.read_bytes()
+    source_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    flow_sha = hashlib.sha256(Path(flow109.__file__).read_bytes()).hexdigest()
+    if hashlib.sha256(raw).hexdigest() != source['sha256']:
+        raise ValueError('D30 input changed')
+    out = attempt / 'd30_delivered_netlist.v'
+    receipt = attempt / 'd30_delivery.json'
+    if out.exists() or out.is_symlink() or receipt.exists() or receipt.is_symlink():
+        raise ValueError('D30 attempt delivery already exists')
+    with out.open('xb') as stream:
+        stream.write(raw)
+    if (source_path.read_bytes() != raw or handoff.read_bytes() != handoff_bytes
+            or hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != source_sha
+            or hashlib.sha256(Path(flow109.__file__).read_bytes()).hexdigest() != flow_sha
+            or flow109.dft_preroute_admission(project, current) != admission):
+        raise ValueError('D30 delivery inputs changed')
+    delivered = {'path': str(out.relative_to(project)),
+                 'sha256': hashlib.sha256(out.read_bytes()).hexdigest()}
+    document = {'schema': 'vibeic.flow109.d30-delivery.v1', 'step_id': 'D30',
+        'context_sha256': current['context_sha256'],
+        'profile_identity': admission['profile_identity'],
+        'source_netlist': source, 'delivered_netlist': delivered,
+        'producer_source_sha256': source_sha, 'flow109_source_sha256': flow_sha,
+        'handoff_folder': handoff_folder,
+        'handoff_record': {'path': str(handoff.relative_to(project)),
+                           'sha256': hashlib.sha256(handoff_bytes).hexdigest()},
+        'flow109_acceptance': 'NOT_MEASURED'}
+    with receipt.open('x', encoding='utf-8') as stream:
+        json.dump(document, stream, sort_keys=True, indent=2)
+        stream.write('\n')
+    return {'path': str(receipt.relative_to(project)),
+            'sha256': hashlib.sha256(receipt.read_bytes()).hexdigest()}
+
+
 def step_synthesis_handoff(project: Path, *, plan=None) -> StepResult:
     """Run the existing Step14 report producers and its complete consumer.
 
@@ -26656,9 +26725,23 @@ def step_synthesis_handoff(project: Path, *, plan=None) -> StepResult:
         print(f'[WARN] Step14 handoff producers did not complete: {exc}',
               file=sys.stderr)
     status = handoff_acceptance['verdict']
+    extras = {'step14_handoff': handoff_acceptance}
+    context_path = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+    if status == 'PASS' and context_path:
+        try:
+            import flow109
+            context = flow109.validate_execution_context(json.loads(Path(context_path).read_text()))
+            rows = context.get('resolved_rows') or [context.get('resolved_row', {})]
+            if any(row.get('id') == 'D30' for row in rows):
+                extras['d30_delivery_receipt'] = _d30_publish_delivery(
+                    project, context, Path(os.environ[flow109.ATTEMPT_ENV]),
+                    handoff_acceptance['folder'])
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            status = 'NOT_MEASURED'
+            extras['d30_delivery_error'] = str(exc)
     return StepResult('synthesis_handoff', status, time.time() - t0,
                       'Step14 complete handoff: ' + status,
-                      extras={'step14_handoff': handoff_acceptance},
+                      extras=extras,
                       reason_class=_V.ReasonClass.INPUT_ABSENT if status == 'NOT_MEASURED' else '')
 
 

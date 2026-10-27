@@ -3062,3 +3062,32 @@ def test_d23_original_launch_reuse_requires_unchanged_host_receipt(tmp_path, mon
     monkeypatch.setenv('VIBEIC_FLOW109_D23_ATTESTATION', str(tmp_path / 'missing'))
     with pytest.raises(flow109.Flow109Error, match='FLOW109_D23_ORIGINAL_LAUNCH_UNPROVEN'):
         flow109._d23_original_launch(doc, current)
+
+
+def test_d30_delivery_owner_records_current_adopted_netlist_and_refuses_stale(tmp_path, monkeypatch):
+    import hashlib
+    import design_one_shot_runner as design
+    import step_output_collector as versions
+    context = _d30_scan_case(tmp_path, monkeypatch)
+    attempt = flow109._new_attempt(tmp_path, context)
+    versions_root = versions._versions_root(tmp_path)
+    folder = 'test-d30-handoff'
+    handoff = versions_root / folder / 'outputs.json'
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    handoff.write_text(json.dumps({'canonical_pass': True, 'status': 'PASS'}))
+    monkeypatch.setattr(design, '_current_phase2_consumer',
+                        lambda _p, _s, _t: {'folder': folder})
+    ref = design._d30_publish_delivery(tmp_path, context, attempt, folder)
+    receipt = json.loads((tmp_path / ref['path']).read_text())
+    delivered = tmp_path / receipt['delivered_netlist']['path']
+    assert receipt['step_id'] == 'D30'
+    assert receipt['context_sha256'] == context['context_sha256']
+    assert receipt['handoff_folder'] == folder
+    assert receipt['flow109_acceptance'] == 'NOT_MEASURED'
+    assert hashlib.sha256(delivered.read_bytes()).hexdigest() == receipt['source_netlist']['sha256']
+    assert delivered != tmp_path / receipt['source_netlist']['path']
+    second = flow109._new_attempt(tmp_path, context)
+    monkeypatch.setattr(design, '_current_phase2_consumer', lambda *_: None)
+    with pytest.raises(ValueError, match='handoff consumer is not current'):
+        design._d30_publish_delivery(tmp_path, context, second, folder)
+    assert not (second / 'd30_delivered_netlist.v').exists()
