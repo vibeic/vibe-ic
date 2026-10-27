@@ -554,6 +554,86 @@ def _preroute_chain_observation(project: Path, top: str, intent: Mapping,
                 'detail': str(exc), 'flow109_acceptance': 'NOT_MEASURED'}
 
 
+def _complete_preroute_chain(project: Path, context: Mapping, admission: Mapping,
+                             delivery_ref: Mapping, *, d30_context_sha256: str) -> dict:
+    """Reopen the actual D30 delivery and compare four independently bound points."""
+    import dft_post_optimization_scan_survival_check as normalizer
+    import design_one_shot_runner as design
+    import step_output_collector as versions
+    project = Path(project).resolve()
+    observed = admission.get('normalized_preroute_chain') or {}
+    if observed.get('status') != 'NOT_MEASURED' or observed.get('reason') != 'D30_DELIVERY_ARTIFACT_UNBOUND':
+        return dict(observed)
+    try:
+        ref = _current_project_ref(project, delivery_ref, 'FLOW109_D30_DELIVERY_RECEIPT_UNBOUND')
+        receipt, receipt_ref = _bound_project_json(project, Path(ref['path']),
+                                                    'FLOW109_D30_DELIVERY_RECEIPT_UNBOUND')
+        if receipt_ref != ref:
+            raise ValueError('D30 delivery receipt changed')
+        attempt = (project / ref['path']).parent
+        root = _attempt_root(project, create=False)
+        if (attempt.parent != root or attempt.is_symlink() or not attempt.name.startswith('window-')):
+            raise ValueError('D30 delivery receipt is outside its immutable attempt')
+        request, _ = _bound_project_json(project, (attempt / 'request.json').relative_to(project),
+                                          'FLOW109_D30_DELIVERY_REQUEST_UNBOUND')
+        profile = {'features_sha256': digest(context['features']),
+                   'step_profiles_sha256': digest(context['step_profiles'])}
+        if (request.get('project_root_sha256') != hashlib.sha256(str(project).encode()).hexdigest()
+                or request.get('context_sha256') != receipt.get('window_context_sha256')
+                or 'D30' not in request.get('component_ids', [])
+                or receipt.get('schema') != 'vibeic.flow109.d30-delivery.v1'
+                or receipt.get('step_id') != 'D30'
+                or receipt.get('context_sha256') != d30_context_sha256
+                or receipt.get('profile_identity') != profile
+                or receipt.get('producer_source_sha256') != _file_digest(Path(design.__file__))
+                or receipt.get('flow109_source_sha256') != _file_digest(Path(__file__))):
+            raise ValueError('D30 context, profile or producer identity differs')
+        handoff = design._current_phase2_consumer(project, '14', 0)
+        folder = receipt.get('handoff_folder')
+        if not isinstance(handoff, Mapping) or not folder or handoff.get('folder') != folder:
+            raise ValueError('current canonical D30 owner handoff is absent')
+        expected_record = (versions._versions_root(project) / folder / 'outputs.json').resolve()
+        if not expected_record.is_relative_to(project):
+            raise ValueError('D30 owner handoff is outside project')
+        handoff_ref = _current_project_ref(project, receipt.get('handoff_record'),
+                                           'FLOW109_D30_HANDOFF_UNBOUND')
+        if (project / handoff_ref['path']).resolve() != expected_record:
+            raise ValueError('D30 owner handoff record differs')
+        points = observed.get('points')
+        if not isinstance(points, Mapping) or set(points) != {'D24', 'D25', 'D26'}:
+            raise ValueError('D24/D25/D26 input evidence is incomplete')
+        refs = {name: _current_project_ref(project, points[name]['input'],
+                                          'FLOW109_PREROUTE_INPUT_STALE')
+                for name in ('D24', 'D25', 'D26')}
+        source = _current_project_ref(project, receipt.get('source_netlist'),
+                                      'FLOW109_D30_DELIVERY_SOURCE_STALE')
+        if source != refs['D24']:
+            raise ValueError('D30 source differs from D24 adoption')
+        delivered = _current_project_ref(project, receipt.get('delivered_netlist'),
+                                         'FLOW109_D30_DELIVERY_NETLIST_STALE')
+        output = project / delivered['path']
+        if output.parent != attempt or delivered['path'] == source['path']:
+            raise ValueError('D30 delivered netlist is not an independent attempt output')
+        refs['D30'] = delivered
+        texts = {name: (project / item['path']).read_text() for name, item in refs.items()}
+        answer = normalizer.compare_normalized_preroute_netlists(
+            texts, top=admission['top'], requires_scan=True)
+        if (any(_current_project_ref(project, item, 'FLOW109_PREROUTE_INPUT_STALE') != item
+                for item in refs.values())
+                or _current_project_ref(project, ref, 'FLOW109_D30_DELIVERY_RECEIPT_UNBOUND') != ref
+                or _current_project_ref(project, handoff_ref, 'FLOW109_D30_HANDOFF_UNBOUND') != handoff_ref
+                or receipt['producer_source_sha256'] != _file_digest(Path(design.__file__))
+                or receipt['flow109_source_sha256'] != _file_digest(Path(__file__))):
+            raise ValueError('D30 chain inputs changed during normalization')
+        answer['references'] = refs
+        answer['d30_delivery_receipt'] = ref
+        answer['handoff_record'] = handoff_ref
+        return answer
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return {'status': 'NOT_MEASURED', 'reason': 'D30_DELIVERY_BINDING_UNPROVEN',
+                'detail': str(exc), 'flow109_acceptance': 'NOT_MEASURED'}
+
+
 def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     """Re-open D24/D25/D26's actual consumers before D30 native handoff."""
     project = Path(project).resolve()
@@ -746,6 +826,11 @@ def dft_final_timing_admission(project: Path, context: Mapping) -> dict:
     if not isinstance(prior, Mapping) or prior.get("profile_identity") != expected_profile:
         raise Flow109Error("FLOW109_D30_PROFILE_MISMATCH", str(d30_ref["path"]))
     current_pre = dft_preroute_admission(project, context)
+    current_pre['normalized_preroute_chain'] = _complete_preroute_chain(
+        project, context, current_pre, d30.get('d30_delivery_receipt'),
+        d30_context_sha256=d30.get('context_sha256'))
+    if current_pre['normalized_preroute_chain'].get('status') != 'PASS':
+        raise Flow109Error("FLOW109_D30_DELIVERY_CHAIN_UNPROVEN", str(d30_ref["path"]))
     if prior != current_pre:
         raise Flow109Error("FLOW109_D30_ADOPTION_STALE", str(d30_ref["path"]))
     _d44, d44_ref = _accepted_row(
@@ -1584,8 +1669,11 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
             answer["native_scan_report"] = report_ref
     if row["id"] == "D30" and status == "PASS":
         admission = dft_preroute_admission(project, context)
+        chain = _complete_preroute_chain(project, context, admission,
+                    completion.get('d30_delivery_receipt'),
+                    d30_context_sha256=context['context_sha256'])
+        admission['normalized_preroute_chain'] = chain
         answer["dft_preroute_admission"] = admission
-        chain = admission["normalized_preroute_chain"]
         if chain.get("status") != "PASS":
             row_status = "FAIL" if chain.get("status") == "FAIL" else "NOT_MEASURED"
             answer.update(default_row_status=row_status, flow109_acceptance=row_status,
