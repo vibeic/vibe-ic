@@ -1506,14 +1506,25 @@ def _d09_bound_phase2_evidence(
                        and row.get('status') == 'FAIL'})
     if failures:
         return 'FAIL', {}, 'D09_REQUIRED_CHECK_FAILED: ' + ', '.join(failures)
+    author_extras = (author or {}).get('extras') or {}
+    preserved = (author is not None and author.get('status') == 'PASS_WITH_WAIVERS'
+                 and author_extras.get('preserved') is True)
+    outputs = (author or {}).get('output_files') or ()
+    generated_rtl = {str(Path(path).resolve()) for path in outputs
+                     if isinstance(path, str) and Path(path).suffix in {'.v', '.sv'}}
+    bound_rtl = {str((project / 'phase2/stage1/rtl' / path).resolve()) for path in rtl}
+    generated = (author is not None and author.get('status') == 'PASS'
+                 and author_extras.get('program_first') is True
+                 and isinstance(author_extras.get('deterministic_generator'), str)
+                 and bool(author_extras['deterministic_generator'].strip())
+                 and bool(generated_rtl) and generated_rtl == bound_rtl)
     if (author is None or lint is None or manifests is None or reference is None
-            or author.get('status') != 'PASS_WITH_WAIVERS'
-            or (author.get('extras') or {}).get('preserved') is not True
+            or not (preserved or generated)
             or lint.get('status') != 'PASS'
             or manifests.get('status') != 'PASS'
             or reference.get('status') != 'PASS'):
         return ('NOT_MEASURED', {},
-                'D09_REQUIRED_EVIDENCE_ABSENT: preserved authored RTL, '
+                'D09_REQUIRED_EVIDENCE_ABSENT: preserved or bound generated RTL, '
                 'validation/lint PASS, manifests PASS, and reference-TB PASS are required')
 
     cdc_paths = tuple(f'reports/phase2/cdc/{name}.json'

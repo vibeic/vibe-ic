@@ -1424,7 +1424,7 @@ def _d09_report_body(tmp_path, *, lint="PASS", reference="PASS", cdc="PASS"):
 
 
 def _d09_owner_report(tmp_path, monkeypatch, *, lint="PASS", reference="PASS",
-                      cdc="PASS"):
+                      cdc="PASS", generated=None):
     """Issue the real child identity and let the existing writer bind it."""
     import benchmark_dispatch as dispatch
     import design_one_shot_runner as design
@@ -1432,6 +1432,8 @@ def _d09_owner_report(tmp_path, monkeypatch, *, lint="PASS", reference="PASS",
 
     report = _d09_report_body(
         tmp_path, lint=lint, reference=reference, cdc=cdc)
+    if generated is not None:
+        report['steps'][0] = generated
     out = tmp_path / "reports/orchestrator/phase2_one_shot.json"
 
     def child(command, *, env=None, **_kwargs):
@@ -1457,6 +1459,28 @@ def _d09_owner_report(tmp_path, monkeypatch, *, lint="PASS", reference="PASS",
     return (runner, report,
             tmp_path / "phase2/stage1/rtl/chip_top.sv",
             tmp_path / "input/spec.md", invocation)
+
+
+@pytest.mark.parametrize('kind,expected', [
+    ('valid', 'PASS'), ('unbound', 'NOT_MEASURED'),
+    ('no_generator', 'NOT_MEASURED'), ('failed', 'FAIL'),
+])
+def test_d09_generated_rtl_requires_current_bound_producer(tmp_path, monkeypatch, kind, expected):
+    rtl = tmp_path / 'phase2/stage1/rtl/chip_top.sv'
+    generated = {'name': 'rtl_gen', 'status': 'PASS',
+                 'output_files': [str(rtl)],
+                 'extras': {'program_first': True, 'deterministic_generator': 'neutral'}}
+    if kind == 'unbound':
+        generated['output_files'] = [str(tmp_path / 'elsewhere.sv')]
+    if kind == 'no_generator':
+        generated['extras'] = {}
+    if kind == 'failed':
+        generated['status'] = 'FAIL'
+    runner, report, _, _, invocation = _d09_owner_report(
+        tmp_path, monkeypatch, generated=generated)
+    answer = runner._finish_d09_selected_owner(
+        tmp_path, report, invocation, published_current=True)
+    assert answer['verdict'] == expected
 
 
 def test_d09_completion_requires_full_bound_owner_report_and_preserves_rtl(
