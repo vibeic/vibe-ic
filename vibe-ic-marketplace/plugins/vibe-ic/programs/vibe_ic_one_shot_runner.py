@@ -1552,7 +1552,9 @@ def _validate_d10_p0_consumer(project: Path, p0: Mapping) -> dict:
             or not elaboration.is_file() or not elaboration.resolve().is_relative_to(project)
             or hashlib.sha256(elaboration.read_bytes()).hexdigest() != p0['elaboration_sha256']
             or (result.get('elaboration') or {}).get('written') is not True
-            or (result.get('elaboration') or {}).get('top') != top):
+            or (result.get('elaboration') or {}).get('top') != top
+            or (path.parent / str((result.get('elaboration') or {}).get('path', ''))).resolve()
+                != elaboration.resolve()):
         raise ValueError('P0 native elaboration is missing or stale')
     actual_tools = {name: hashlib.sha256(Path(shutil.which(name)).read_bytes()).hexdigest()
                     for name in ('yosys', 'verilator')}
