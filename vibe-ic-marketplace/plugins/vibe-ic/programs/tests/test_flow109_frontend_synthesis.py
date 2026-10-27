@@ -206,7 +206,7 @@ def case(project):
                     'die_area_um':[0,0,100,100],'core_area_um':[10,10,90,90]},
          'answer_provenance':{'deliverable':{'answered_by':'owner','citation':'Developer neutral IC control'}}})
     put(project,'phase1/generated_docs/L8_TIMING_WAVEFORM.json',{'clock_domains':[{'role':'primary','source_pin':'clk','period_ns':20}]})
-    publish_d09(project, {'scan_test': False})
+    publish_d09(project, {'requires_scan': False, 'reason': 'test declares scan not required'})
     put(project,'phase1/generated_docs/L9_INTEGRATION_SPEC.json',{'top_module':'unit_alpha','synth_top':'unit_alpha'})
     put(project,'phase1/generated_docs/L19_CONSTRAINTS_PDK.json',{'pdk':'gf180mcuD','constraint_declarations':[],'fields':{'die_area_budget_um':'100x100'}})
     put(project,'phase2/stage1/rtl/unit_alpha.v','module unit_alpha(input clk, input a,b, output reg y); always @(posedge clk) y <= a ^ b; endmodule\n')
@@ -331,7 +331,7 @@ def test_missing_d09_dft_intent_stops_before_existing_owner(tmp_path, monkeypatc
         intent.with_name('declaration.provenance.json').unlink()
         (tmp_path / 'provenance.jsonl').unlink()
     else:
-        body = json.loads(intent.read_text()); body['dft'].pop('scan_test')
+        body = json.loads(intent.read_text()); body['dft'].pop('requires_scan')
         intent.write_text(json.dumps(body))
     calls = []
     import step_preflight

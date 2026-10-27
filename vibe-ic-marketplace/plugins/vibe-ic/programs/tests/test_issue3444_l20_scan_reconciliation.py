@@ -152,7 +152,7 @@ import librelane_contract as LL
 
 
 def _intent():
-    return {'scan_test': True,
+    return {'requires_scan': True,
             'test_port_def': {
                 'scan_enable': {'public': 'scan_enable', 'native': 'shift'},
                 'scan_in': {'public': 'scan_in', 'native': 'sin'},
@@ -314,17 +314,17 @@ def test_d09_missing_authority_is_named_refusal(tmp_path):
 
 
 def test_d09_explicit_no_scan_is_scan_only_and_composable(tmp_path, monkeypatch):
-    intent = {'scan_test': False, 'bist': {'required': True}, 'compression': {'required': True}}
+    intent = {'requires_scan': False, 'reason': 'test declares scan not required', 'bist': {'required': True}, 'compression': {'required': True}}
     project = _planned(tmp_path, intent)
     enabled, reason = D.dft_scan_insertion_contract(project)
-    assert enabled is False and 'D09_SCAN_TEST_DISABLED' in reason
+    assert enabled is False and 'D09_REQUIRES_SCAN_DISABLED' in reason
     binding, problems = S.load_d09_dft_contract(project)
     assert problems == [] and binding['intent']['bist']['required'] is True
     monkeypatch.setattr(S._fatpg, '_run_docker', lambda *a, **k: pytest.fail('native started'))
     rc, report = S.run_chain(project, 'phase2/stage2/synth/netlist.v', 'clk', 'sky130',
                              require_l20_contract=True)
     assert rc == 0 and report['verdict'] == 'NOT_APPLICABLE'
-    assert report['reason_code'] == 'D09_SCAN_TEST_DISABLED' and not report['published']
+    assert report['reason_code'] == 'D09_REQUIRES_SCAN_DISABLED' and not report['published']
 
 
 def test_d09_incomplete_native_mapping_does_not_publish(tmp_path, monkeypatch):

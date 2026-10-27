@@ -88,7 +88,9 @@ def dft_source_intent(project: Path, context: Mapping) -> dict:
         (str(item.get("code")) if isinstance(item, Mapping)
          else str(item).split(":", 1)[0]) for item in (problems or [])}
     if binding is None or problems:
-        code = ("D09_DFT_SPEC_MISSING" if "D09_DFT_SPEC_MISSING" in problem_codes
+        missing = any("DFT_INTENT_MISSING" in str(item) for item in (problems or []))
+        code = ("FLOW109_DFT_INTENT_MISSING"
+                if missing or "D09_DFT_SPEC_MISSING" in problem_codes
                 else "D09_DFT_AUTHORITY_INVALID")
         raise Flow109Error(code, "; ".join(map(str, problems or ["no binding"])))
     if (not isinstance(binding, Mapping)
@@ -98,21 +100,24 @@ def dft_source_intent(project: Path, context: Mapping) -> dict:
             or len(binding["sha256"]) != 64
             or binding.get("sources") in (None, {}, [])
             or not isinstance(binding.get("intent"), Mapping)
-            or type(binding["intent"].get("scan_test")) is not bool):
+            or type(binding["intent"].get("requires_scan")) is not bool):
         raise Flow109Error("D09_DFT_AUTHORITY_INVALID",
                            "canonical reader returned a malformed binding")
-    scan_test = binding["intent"]["scan_test"]
-    if scan_test != features["requires_scan"]:
+    requires_scan = binding["intent"]["requires_scan"]
+    reason = binding["intent"].get("reason")
+    if not requires_scan and (not isinstance(reason, str) or not reason.strip()):
+        raise Flow109Error("FLOW109_DFT_INTENT_MISSING", "non-scan decision requires a reason")
+    if requires_scan != features["requires_scan"]:
         raise Flow109Error("FLOW109_DFT_INTENT_CONFLICT",
-                           f"source scan_test={scan_test}, plan requires_scan={features['requires_scan']}")
-    if scan_test and features["requires_dft"] is not True:
+                           f"source requires_scan={requires_scan}, plan requires_scan={features['requires_scan']}")
+    if requires_scan and features["requires_dft"] is not True:
         raise Flow109Error("FLOW109_DFT_INTENT_CONFLICT",
-                           "scan_test:true requires requires_dft:true")
+                           "requires_scan:true requires requires_dft:true")
     return {
         "schema": "vibeic.flow109.dft-source-intent.v1",
         "source_step": "D09", "source_position": 17,
         "consumer_step": "D22", "consumer_position": 34,
-        "scan_test": scan_test, "authority": "canonical_d09_spec_declaration",
+        "requires_scan": requires_scan, "authority": "canonical_d09_spec_declaration",
         "source_binding": dict(binding),
         "source_evidence": {"D09": {
             "path": binding["path"], "sha256": binding["sha256"],
@@ -272,7 +277,7 @@ def _d26_timing_modes_binding(project: Path, d26: Mapping, intent: Mapping,
     scan = timing.get("scan")
     if not isinstance(scan, Mapping) or scan.get("d09_binding") != intent["source_binding"]:
         raise Flow109Error("FLOW109_D26_SCAN_D09_MISMATCH", "D09 binding")
-    if not intent["scan_test"]:
+    if not intent["requires_scan"]:
         if (scan.get("applicability") != "NOT_APPLICABLE"
                 or scan.get("status") != "NOT_APPLICABLE"
                 or timing.get("post_scan_arms") != {}
@@ -327,7 +332,7 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     if not isinstance(top, str) or not top:
         raise Flow109Error("FLOW109_D30_SYNTHESIS_IDENTITY_MISSING", "D22 top")
     report = report_ref = d24_ref = None
-    if intent["scan_test"]:
+    if intent["requires_scan"]:
         d24, d24_ref = _accepted_row(project, _D24_RESULT, "D24")
         report, report_ref = _bound_project_json(
             project, _SCAN_REPORT, "FLOW109_D30_SCAN_REPORT_MISSING")
@@ -353,9 +358,9 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     if binding.get("state") != netlists.BINDING_MATCH:
         raise Flow109Error("FLOW109_D25_GATE_IDENTITY_MISMATCH", str(binding))
     consumed, note, is_scan = netlists.pnr_consumed_netlist(project, top)
-    if consumed is None or not consumed.is_file() or is_scan is not intent["scan_test"]:
+    if consumed is None or not consumed.is_file() or is_scan is not intent["requires_scan"]:
         raise Flow109Error("FLOW109_D30_NETLIST_NOT_ADOPTED",
-                           f"scan_test={intent['scan_test']}, consumer_scan={is_scan}: {note}")
+                           f"requires_scan={intent['requires_scan']}, consumer_scan={is_scan}: {note}")
     try:
         rel = consumed.resolve().relative_to(project).as_posix()
     except ValueError as exc:
@@ -363,7 +368,7 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     adopted = {"artifact_id": ("D24_POST_SCAN_NETLIST" if is_scan
                                 else "D22_MAPPED_NETLIST"),
                "path": rel, "sha256": _file_digest(consumed)}
-    chain = {"status": "NOT_APPLICABLE", "reason": "scan_test is false"}
+    chain = {"status": "NOT_APPLICABLE", "reason": "requires_scan is false"}
     if is_scan:
         if Path(rel) != _D24_NETLIST:
             raise Flow109Error("FLOW109_D30_PRE_SCAN_SUBSTITUTION", rel)
@@ -379,14 +384,14 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     return {
         "schema": "vibeic.flow109.dft-preroute-admission.v1",
         "consumer_step": "D30", "consumer_position": 42,
-        "top": top, "scan_test": intent["scan_test"], "adopted_netlist": adopted,
+        "top": top, "requires_scan": intent["requires_scan"], "adopted_netlist": adopted,
         "native_chain": chain, "functional_equivalence": lec_ref,
         "pre_route_timing": {
             "owner_step": "D26", "owner_position": 38,
             "D26_result": d26_ref,
             "timing_modes": timing_modes,
             "applicable_modes": (["functional", "scan"]
-                                 if intent["scan_test"] else ["functional"]),
+                                 if intent["requires_scan"] else ["functional"]),
             "scope": "timing applicability; D25 functional LEC grants no timing credit"},
         "D25_result": d25_ref,
         **({"D24_result": d24_ref} if d24_ref is not None else {}),
@@ -1519,14 +1524,26 @@ def prepare_front_door(args, project: Path) -> int | None:
     if plan["features"]["has_digital"] and touches_dft_contract:
         source_intent = dft_source_intent(project, {"features": plan["features"]})
         plan["dft_source_admission"] = source_intent
-        if source_intent["scan_test"] is False:
-            plan["conditional_skips"] = [
-                {"step_id": step, "position": position,
-                 "reason_code": "FLOW109_SCAN_TEST_FALSE",
-                 "reason": "source-authoritative typed D09 dft.scan_test is false",
-                 "source_validated": True,
-                 "source_evidence": source_intent["source_evidence"]}
-                for step, position in (("D23", 35), ("D24", 36))]
+        if source_intent["requires_scan"] is False:
+            reason = source_intent["source_binding"]["intent"]["reason"]
+            common = {"reason_code": "FLOW109_REQUIRES_SCAN_FALSE",
+                      "reason": reason, "source_validated": True,
+                      "source_evidence": source_intent["source_evidence"]}
+            skips = []
+            if not plan["features"]["requires_dft"]:
+                skips.extend({"step_id": step, "position": position, **common}
+                             for step, position in (("D23", 35), ("D24", 36)))
+            else:
+                for row in plan["rows"]:
+                    if row["id"] not in ("D23", "D24"):
+                        continue
+                    for obligation in row.get("obligations", []):
+                        if obligation.get("when") == "requires_scan":
+                            skips.append({"step_id": row["id"], "metric": obligation["metric"],
+                                          "position": row["position"], **common})
+            if plan["features"]["physical"]:
+                skips.append({"step_id": "D36", "position": 57, **common})
+            plan["conditional_skips"] = skips
     from _atomic_artefact import write_json
     destination = project / "reports" / "flow109"
     write_json(destination / "plan.json", plan)

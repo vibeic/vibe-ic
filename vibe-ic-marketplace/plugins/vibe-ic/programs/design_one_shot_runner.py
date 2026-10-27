@@ -21751,8 +21751,8 @@ def dft_scan_insertion_contract(project: Path) -> Tuple[bool, str]:
     import librelane_contract as _dft_contract
     planned, problems = _scan_contract.load_d09_dft_contract(project)
     if planned is not None:
-        if not planned['intent']['scan_test']:
-            return False, 'D09_SCAN_TEST_DISABLED: explicit source-bound scan_test:false'
+        if not planned['intent']['requires_scan']:
+            return False, 'D09_REQUIRES_SCAN_DISABLED: explicit source-bound requires_scan:false'
         clk, reset, active_low = derive_dft_clock_reset(project)
         planned, problems = _scan_contract.load_d09_dft_contract(
             project, expected_clock=clk, expected_reset=reset,
@@ -21788,7 +21788,7 @@ def dft_scan_insertion_contract(project: Path) -> Tuple[bool, str]:
     _path, _doc = _scan_contract._ldoc.load_l_doc(project, 'L20')
     if isinstance(_doc, dict) and str(_doc.get('applicability')).upper() in (
             'NOT_APPLICABLE', 'N/A', 'NA'):
-        return False, 'L20_SCAN_TEST_DISABLED: explicit legacy design declaration'
+        return False, 'L20_REQUIRES_SCAN_DISABLED: explicit legacy design declaration'
     raise _dft_contract.Refusal('D09_DFT_AUTHORITY_REQUIRED', (
         "D09 source-owned scan intent is required; L20 does not authorize insertion "
         f"(verdict={verdict or 'UNKNOWN'}; "

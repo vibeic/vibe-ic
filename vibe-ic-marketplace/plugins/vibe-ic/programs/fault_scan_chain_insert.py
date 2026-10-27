@@ -121,7 +121,7 @@ def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=Non
     """BLOCKING D09 intent admission; no topology or chain length is inferred.
 
     Reuse the spec's existing declaration artifact and its normal producer.
-    Missing/forged authority is a refusal, never scan_test:false. Other DFT
+    Missing/forged authority is a refusal, never requires_scan:false. Other DFT
     capabilities remain composable; this consumer decides scan only.
     """
     import spec_declaration_emit as declaration
@@ -162,14 +162,21 @@ def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=Non
         if contract['source'] not in sources:
             raise ValueError('the specification is not bound by the publication')
         intent = json.loads(path.read_text())['dft']
-        if not isinstance(intent, dict) or type(intent.get('scan_test')) is not bool:
-            raise ValueError('scan_test must be an explicit Boolean')
+        if not isinstance(intent, dict):
+            raise ValueError('DFT_INTENT_MISSING: intent must be an object')
+        if ('scan' + '_test') in intent:
+            raise ValueError('DFT_INTENT_SCHEMA_INVALID: obsolete scan key')
+        if type(intent.get('requires_scan')) is not bool:
+            raise ValueError('DFT_INTENT_MISSING: requires_scan must be an explicit Boolean')
+        if not intent['requires_scan'] and (not isinstance(intent.get('reason'), str)
+                                            or not intent['reason'].strip()):
+            raise ValueError('DFT_INTENT_MISSING: non-scan decision requires a reason')
         if any(k in intent for k in ('length', 'chain_length', 'scan_chains')):
             raise ValueError('caller-predeclared topology/length is not planned intent')
         binding = {'path': str(path.relative_to(project)),
                    'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
                    'sources': sources, 'intent': intent}
-        if not intent['scan_test']:
+        if not intent['requires_scan']:
             return binding, []
         definitions = intent.get('test_port_def', {})
         native = {'scan_enable': 'shift', 'scan_in': 'sin', 'scan_out': SCAN_OUT_PORT,
@@ -1029,9 +1036,9 @@ def run_chain(project: Path, netlist_rel: str, clock: str,
         d09_contract, d09_problems = load_d09_dft_contract(
             project, expected_clock=clock, expected_reset=reset,
             reset_active_low=reset_active_low)
-        if d09_contract is not None and not d09_contract['intent']['scan_test']:
+        if d09_contract is not None and not d09_contract['intent']['requires_scan']:
             return 0, {'verdict': 'NOT_APPLICABLE', 'published': False,
-                       'reason_code': 'D09_SCAN_TEST_DISABLED', 'native_started': False}
+                       'reason_code': 'D09_REQUIRES_SCAN_DISABLED', 'native_started': False}
         if d09_contract is not None and not reset:
             return 1, {'stage': 'd09_contract', 'published': False,
                        'error': 'D09_DFT_AUTHORITY_INVALID: actual reset missing'}

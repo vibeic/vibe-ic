@@ -1081,7 +1081,7 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
                    'set_case_analysis 1 [get_ports {test}]\n')
     d09 = {'path': 'phase1/generated_docs/dft.json', 'sha256': '1' * 64,
            'sources': {'input/spec.json': 'sha256:' + '2' * 64},
-           'intent': {'scan_test': case != 'no_scan',
+           'intent': {'requires_scan': case != 'no_scan', 'reason': 'no scan in this test',
                       'test_port_def': {
                           'scan_enable': {'native': 'shift', 'public': 'scan_enable'},
                           'scan_in': {'native': 'sin', 'public': 'scan_in'},
@@ -1223,7 +1223,7 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
         assert _delivery_route.admit(project, 'ip') is None
         manifest = project / 'manifest.json'
         features = profile('Mapped soft-IP with prestitched scan')
-        features['requires_scan'] = d09['intent']['scan_test']
+        features['requires_scan'] = d09['intent']['requires_scan']
         manifest.write_text(json.dumps({'features': features}))
         monkeypatch.setattr(front, '_activate_runtime_program_tree', lambda _p: None)
         monkeypatch.setattr(front, '_capture_container_image', lambda *_a, **_k: {

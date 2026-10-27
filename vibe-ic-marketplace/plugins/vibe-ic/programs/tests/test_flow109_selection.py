@@ -78,7 +78,7 @@ def test_reference_profiles_close_without_turning_unknown_into_false():
 
 def _write_dft_intent(project, monkeypatch, *, scan, bist=False):
     import fault_scan_chain_insert as producer
-    intent = {"scan_test": scan}
+    intent = {"requires_scan": scan, **({"reason": "test declares scan not required"} if not scan else {})}
     if scan:
         from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
         intent = _intent()
@@ -107,7 +107,7 @@ def test_d09_scan_intent_is_source_bound_without_author_chain_length(tmp_path, m
 
     intent = flow109.dft_source_intent(tmp_path, context)
 
-    assert intent["scan_test"] is True
+    assert intent["requires_scan"] is True
     assert intent["source_binding"]["intent"]["test_port_def"]["scan_in"] == {
         "public": "scan_in", "native": "sin"}
     assert intent["realized_chain_length"] == "NOT_YET_REALIZED"
@@ -123,7 +123,7 @@ def test_explicit_no_scan_skips_only_d23_d24_and_keeps_d25_d26(tmp_path, monkeyp
 
     intent = flow109.dft_source_intent(tmp_path, context)
 
-    assert intent["scan_test"] is False
+    assert intent["requires_scan"] is False
     assert {"D23", "D24"}.isdisjoint(selected)
     assert {"D25", "D26"}.issubset(selected)
     assert plan["conditional_skips"] == []
@@ -159,9 +159,9 @@ def test_scan_compression_and_bist_applicability_are_not_exclusive(tmp_path, mon
         tmp_path, flow109.execution_context(plan, "D22", "D22"))
 
     selected = {row["id"] for row in plan["rows"]}
-    assert intent["source_binding"]["intent"]["scan_test"] is False
+    assert intent["source_binding"]["intent"]["requires_scan"] is False
     assert "D52" in selected
-    assert {"D23", "D24"}.isdisjoint(selected)
+    assert {"D23", "D24"}.issubset(selected)
     import _delivery_route
     assert _delivery_route.admit(tmp_path, "ip") is None
     manifest = tmp_path / "manifest.json"; manifest.write_text(json.dumps({"features": features}))
@@ -173,7 +173,7 @@ def test_scan_compression_and_bist_applicability_are_not_exclusive(tmp_path, mon
 
 
 @pytest.mark.parametrize("damage,code", [
-    ("missing", "D09_DFT_SPEC_MISSING"),
+    ("missing", "FLOW109_DFT_INTENT_MISSING"),
     ("malformed", "D09_DFT_AUTHORITY_INVALID"),
     ("forged", "D09_DFT_AUTHORITY_INVALID")])
 def test_d09_dft_intent_refuses_missing_malformed_or_conflicting_source(
@@ -181,7 +181,7 @@ def test_d09_dft_intent_refuses_missing_malformed_or_conflicting_source(
     features = profile("Mapped soft-IP with prestitched scan")
     context = flow109.execution_context(flow109.resolve_plan(features), "D22", "D22")
     if damage == "malformed":
-        _publish_dft_intent(tmp_path, {"scan_test": "false"})
+        _publish_dft_intent(tmp_path, {"requires_scan": "false"})
     elif damage == "forged":
         _write_dft_intent(tmp_path, monkeypatch, scan=True)
         source = tmp_path / "input/docs/L7_verification_plan.md"
@@ -192,7 +192,7 @@ def test_d09_dft_intent_refuses_missing_malformed_or_conflicting_source(
 
 
 def test_old_three_role_d09_intent_fails_closed(tmp_path, monkeypatch):
-    intent = {"scan_test": True,
+    intent = {"requires_scan": True,
               "test_port_def": {
                   "scan_enable": {"public": "scan_enable", "native": "shift"},
                   "scan_in": {"public": "scan_in", "native": "sin"},
@@ -427,7 +427,7 @@ def test_d30_explicit_no_scan_accepts_current_functional_only_d26(
             "sha256": hashlib.sha256(timing.read_bytes()).hexdigest()}}))
     result = flow109.dft_preroute_admission(tmp_path, context)
 
-    assert result["scan_test"] is False
+    assert result["requires_scan"] is False
     assert result["identity_agreement"] == "D22_D25_D30_MATCH"
     assert result["pre_route_timing"]["timing_modes"]["scan"]["applicability"] == "NOT_APPLICABLE"
 
@@ -2474,3 +2474,99 @@ def test_d10_single_gate_dry_run_never_classifies_tool_crash_as_design_fail(tmp_
     assert answer['gate_status'] == 'NOT_MEASURED'
     assert answer['reason'] == 'NATIVE_FRONTEND_ABNORMAL_TERMINATION'
     assert answer['row_status'] == 'NOT_MEASURED'
+
+
+def test_dft_vocabulary_scan_and_non_scan_dft_selection(tmp_path):
+    from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+    scan = _intent()
+    scan['requires_scan'] = True
+    _publish_dft_intent(tmp_path, scan)
+    features = profile('Small digital IC without DFT')
+    features['requires_dft'] = True
+    features['requires_scan'] = True
+    rows = {row['id'] for row in flow109.resolve_plan(features)['rows']}
+    assert {'D23', 'D24', 'D36'} <= rows
+    binding = flow109.dft_source_intent(tmp_path, {'features': features})
+    assert binding['requires_scan'] is True
+    assert 'scan_test' not in binding
+
+    features['requires_scan'] = False
+    rows = {row['id'] for row in flow109.resolve_plan(features)['rows']}
+    assert 'D23' in rows and 'D24' in rows and 'D36' not in rows
+    registry = {r['id']: r for r in flow109.load_registry()['rows']}
+    assert all(o['when'] == 'requires_scan' for o in registry['D23']['obligations'])
+    assert all(o['when'] == 'requires_scan' for o in registry['D24']['obligations'])
+
+
+def test_dft_vocabulary_rejects_old_key_and_unreasoned_negative(tmp_path):
+    import fault_scan_chain_insert as producer
+    features = profile('Small digital IC without DFT')
+    _publish_dft_intent(tmp_path, {'scan_test': False, 'requires_scan': False,
+                                   'reason': 'no scan required'})
+    binding, problems = producer.load_d09_dft_contract(tmp_path)
+    assert binding is None and 'DFT_INTENT_SCHEMA_INVALID' in str(problems)
+    with pytest.raises(flow109.Flow109Error, match='D09_DFT_AUTHORITY_INVALID'):
+        flow109.dft_source_intent(tmp_path, {'features': features})
+
+    other = tmp_path / 'negative'; other.mkdir()
+    _publish_dft_intent(other, {'requires_scan': False})
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_DFT_INTENT_MISSING'):
+        flow109.dft_source_intent(other, {'features': features})
+
+    good = tmp_path / 'reasoned'; good.mkdir()
+    _publish_dft_intent(good, {'requires_scan': False, 'reason': 'no scan required'})
+    binding = flow109.dft_source_intent(good, {'features': features})
+    assert binding['requires_scan'] is False
+
+
+def test_dft_vocabulary_unreasoned_negative_blocks_d22_front_door(tmp_path):
+    import _delivery_route
+    features = profile('Small digital IC without DFT')
+    _publish_dft_intent(tmp_path, {'requires_scan': False})
+    assert _delivery_route.admit(tmp_path, 'ic') is None
+    manifest = tmp_path / 'manifest.json'
+    manifest.write_text(json.dumps({'features': features}))
+    args = SimpleNamespace(flow='109', flow109_manifest=manifest,
+                           flow109_plan_only=False, execution_mode='default',
+                           entry_step='D22', exit_step='D22', container='')
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_DFT_INTENT_MISSING'):
+        flow109.prepare_front_door(args, tmp_path)
+    assert not (tmp_path / 'reports/flow109/owner_route.json').exists()
+
+
+def test_dft_vocabulary_canonical_named_intent_rejects_legacy_key(tmp_path):
+    import spec_declaration_emit as declaration
+    import fault_scan_chain_insert as producer
+    docs = tmp_path / 'input/docs'
+    docs.mkdir(parents=True)
+    (docs / 'L7_verification_plan.md').write_text(
+        '# Verification\nThe Plugin MUST declare `plugin_output/dft_intent.json` '
+        'before authoring:\n\n| Field | Required | Example |\n|---|---|---|\n'
+        '| `dft` | Yes | object |\n')
+    intent = {'scan_test': False, 'requires_scan': False, 'reason': 'no scan required'}
+    assert declaration.main([str(tmp_path), '--set', 'dft=' + json.dumps(intent)]) == 0
+    assert (tmp_path / 'plugin_output/dft_intent.json').is_file()
+    binding, problems = producer.load_d09_dft_contract(tmp_path)
+    assert binding is None and 'DFT_INTENT_SCHEMA_INVALID' in str(problems)
+
+
+def test_dft_vocabulary_mbist_plan_records_scan_metric_skips(tmp_path):
+    import _delivery_route
+    features = profile('Small digital IC without DFT')
+    features['requires_dft'] = True
+    features['requires_scan'] = False
+    _publish_dft_intent(tmp_path, {'requires_scan': False, 'reason': 'MBIST only'})
+    assert _delivery_route.admit(tmp_path, 'ic') is None
+    manifest = tmp_path / 'manifest.json'
+    manifest.write_text(json.dumps({'features': features}))
+    args = SimpleNamespace(flow='109', flow109_manifest=manifest,
+                           flow109_plan_only=True, execution_mode='default',
+                           entry_step='D22', exit_step='D24', container='')
+    assert flow109.prepare_front_door(args, tmp_path) == 0
+    plan = json.loads((tmp_path / 'reports/flow109/plan.json').read_text())
+    assert {'D23', 'D24'} <= {row['id'] for row in plan['rows']}
+    skips = plan['conditional_skips']
+    assert skips and all(item['reason'] == 'MBIST only' for item in skips)
+    assert not any(item['step_id'] in ('D23', 'D24') and 'metric' not in item for item in skips)
+    assert any(item.get('metric') == 'scan_test_protocol_integrity' for item in skips)
+    assert all(item.get('source_validated') is True for item in skips)

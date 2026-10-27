@@ -1178,7 +1178,7 @@ def _complete_step10_prelayout(project: Path, top: str, pdk_name: str,
                        folder=current['folder'])
 
     # D09 is the only authority for whether scan applies.  Missing or invalid
-    # source is unknown, never an inferred scan_test:false.
+    # source is unknown, never an inferred requires_scan:false.
     try:
         import fault_scan_chain_insert as scan
         planned, problems = scan.load_d09_dft_contract(project)
@@ -1188,10 +1188,10 @@ def _complete_step10_prelayout(project: Path, top: str, pdk_name: str,
             return publish(aggregate, 'D26 scan applicability is unresolved',
                            folder=current['folder'])
         receipt['scan']['d09_binding'] = planned
-        if planned['intent']['scan_test'] is False:
+        if planned['intent']['requires_scan'] is False:
             receipt['scan'].update(applicability='NOT_APPLICABLE',
                                    status='NOT_APPLICABLE',
-                                   reason='D09_SCAN_TEST_DISABLED')
+                                   reason='D09_REQUIRES_SCAN_DISABLED')
             return publish(status, baseline_detail, folder=current['folder'])
         clock, reset, active_low = design.derive_dft_clock_reset(project)
         planned, problems = scan.load_d09_dft_contract(
@@ -1828,7 +1828,7 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                 raise ValueError('timing_modes_receipt omits current D09 binding')
             if planned is None or problems or recorded_d09 != planned:
                 raise ValueError('current D09 binding differs from timing_modes_receipt')
-            if planned['intent']['scan_test'] is False:
+            if planned['intent']['requires_scan'] is False:
                 if (doc['scan'].get('applicability') != 'NOT_APPLICABLE'
                         or doc['scan'].get('status') != 'NOT_APPLICABLE'
                         or doc.get('post_scan_arms') != {}
@@ -1838,7 +1838,7 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                          ('PASS', 'FAIL') else [])):
                     raise ValueError('no-scan timing_modes_receipt claims extra modes')
                 return doc, None
-            if planned['intent']['scan_test'] is not True:
+            if planned['intent']['requires_scan'] is not True:
                 raise ValueError('D09 scan applicability is not explicit')
             import design_one_shot_runner as design
             clock, reset, active_low = design.derive_dft_clock_reset(project)
@@ -4061,7 +4061,10 @@ def _main() -> int:
     try:
         flow_result = flow109.prepare_front_door(args, project)
     except flow109.Flow109Error as exc:
-        print(f"REFUSED: {exc}", file=sys.stderr)
+        if exc.code == "FLOW109_DFT_INTENT_MISSING":
+            print(f"REFUSED: D22 input MISSING: {exc}", file=sys.stderr)
+        else:
+            print(f"REFUSED: {exc}", file=sys.stderr)
         return 2
     except ValueError as exc:
         if args.flow != "109" or not hasattr(exc, "report") or not hasattr(exc, "code"):

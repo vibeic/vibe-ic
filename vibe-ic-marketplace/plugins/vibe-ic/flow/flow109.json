@@ -6048,7 +6048,7 @@
       "name": "DFT architecture and insertion",
       "phase": 2,
       "stage": 3,
-      "when": "requires_scan",
+      "when": "requires_dft",
       "extension": "core",
       "origin": "OLD70_REORDER_OR_SPLIT",
       "legacy70": [
@@ -6180,7 +6180,7 @@
       "name": "Post-DFT optimization",
       "phase": 2,
       "stage": 3,
-      "when": "requires_scan",
+      "when": "requires_dft",
       "extension": "core",
       "origin": "OLD70_REORDER_OR_SPLIT",
       "legacy70": [

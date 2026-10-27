@@ -492,7 +492,7 @@ def _execute_dft_tail(project, context):
         intent = flow109.dft_source_intent(project, context)
         test_mode = intent['source_binding']['intent'].get('test_mode')
         clock = test_mode.get('clock') if isinstance(test_mode, dict) else None
-        if not intent['scan_test'] or not isinstance(clock, str) or not clock:
+        if not intent['requires_scan'] or not isinstance(clock, str) or not clock:
             raise flow109.Flow109Error('FLOW109_DFT_AT_SPEED_CLOCK_UNRESOLVED', str(clock))
         sources = _dft_tail_sources(step)
         timing = admission['timing']
