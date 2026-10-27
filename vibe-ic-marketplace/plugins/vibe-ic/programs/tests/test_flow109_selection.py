@@ -3037,3 +3037,28 @@ def test_d23_component_reference_survives_finalization_without_row_pass(tmp_path
     assert extra['scan_cell_list'] == ref and extra['native_component_status'] == 'PASS'
     assert extra['default_row_status'] == 'NOT_MEASURED' and extra['completed'] is False
     assert result['steps'][0]['status'] == 'NOT_MEASURED'
+
+
+def test_d23_original_launch_reuse_requires_unchanged_host_receipt(tmp_path, monkeypatch):
+    import hashlib
+    old_cid, new_cid = '12' * 32, '34' * 32
+    image = 'sha256:' + 'ab' * 32
+    launch = {'cid': old_cid, 'image': image,
+        'container_inspect': {'Id': old_cid, 'Image': image,
+            'Config': {'Image': image, 'Hostname': old_cid[:12]},
+            'State': {'Running': True, 'Paused': False, 'Dead': False}},
+        'image_inspect': [{'Id': image, 'RepoDigests': []}]}
+    receipt = tmp_path / 'original-launch.json'
+    receipt.write_text(json.dumps(launch))
+    doc = {'cid': old_cid, 'image': image, 'image_id': image,
+           'attestation_sha256': hashlib.sha256(receipt.read_bytes()).hexdigest()}
+    current = {'cid': new_cid, 'image': image, 'image_id': image,
+               'attestation_path': str(tmp_path / 'current-launch.json')}
+    monkeypatch.setenv('VIBEIC_FLOW109_D23_ATTESTATION', str(receipt))
+    flow109._d23_original_launch(doc, current)
+    receipt.write_text(receipt.read_text() + ' ')
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_D23_ORIGINAL_LAUNCH_UNPROVEN'):
+        flow109._d23_original_launch(doc, current)
+    monkeypatch.setenv('VIBEIC_FLOW109_D23_ATTESTATION', str(tmp_path / 'missing'))
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_D23_ORIGINAL_LAUNCH_UNPROVEN'):
+        flow109._d23_original_launch(doc, current)
