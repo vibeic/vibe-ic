@@ -1374,6 +1374,9 @@ def _finish_selected_native_owner(project: Path, native_step: str,
     if native_step == '11' and 'scan_cell_list' in acceptance:
         extras['scan_cell_list'] = acceptance['scan_cell_list']
         extras['native_component_status'] = acceptance.get('component_status', 'NOT_MEASURED')
+    if native_step == '12' and 'post_dft_component' in acceptance:
+        extras['post_dft_component'] = acceptance['post_dft_component']
+        extras['native_component_status'] = acceptance.get('component_status', 'NOT_MEASURED')
     return flow109.finish_native_window(project, {'steps': [{
         'status': status, 'extras': extras,
     }]})
@@ -2370,10 +2373,99 @@ def _complete_step11_dft(project: Path, top: str, container: str) -> dict:
                       or result.detail}
 
 
+def _d24_post_dft_component(project: Path) -> dict:
+    """Optimize the bound D23 replacement in the same attested native launch.
+
+    Output is immutable component evidence, not a D24 row or LEC PASS.
+    """
+    import tempfile
+    import flow109
+    import librelane_contract as contract
+    import dft_post_optimization_scan_survival_check as cell_gate
+    try:
+        project = Path(project).resolve()
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+        rows = context.get('resolved_rows') or [context.get('resolved_row', {})]
+        if (len(rows) != 1 or rows[0].get('id') != 'D24'
+                or context.get('features', {}).get('physical') is not True
+                or context.get('features', {}).get('requires_scan') is not True):
+            raise ValueError('not the physical D24 scan owner')
+        attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+        if (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink():
+            raise ValueError('immutable D24 attempt already completed')
+        intent = flow109.dft_source_intent(project, context)
+        source = flow109.d23_scan_replacement_binding(project, context, intent)
+        authority = contract.local_image_attestation()
+        d23 = json.loads((project / source['scan_cell_list']['path']).read_text())
+        if (d23.get('cid') != authority['cid']
+                or d23.get('attestation_sha256') != authority['attestation_sha256']):
+            raise ValueError('D23 launch identity is not the current attested launch')
+        tool = shutil.which('yosys')
+        if not tool:
+            raise ValueError('Yosys unavailable')
+        tool_sha = hashlib.sha256(Path(tool).read_bytes()).hexdigest()
+        source_path = project / source['replaced']['path']
+        before = source_path.read_bytes()
+        with tempfile.TemporaryDirectory(prefix='flow109-d24-') as td:
+            staged = Path(td) / 'source.v'; staged.write_bytes(before)
+            output = Path(td) / 'optimized.v'
+            recipe = f'read_verilog {staged}; opt_clean -purge; write_verilog -noattr {output}'
+            run = subprocess.run([tool, '-Q', '-T', '-p', recipe], capture_output=True,
+                                 text=True, timeout=120)
+            if run.returncode != 0 or not output.is_file():
+                raise ValueError('Yosys post-DFT optimization failed')
+            after = output.read_bytes()
+        check = cell_gate.reconcile_scan_cell_list(
+            (project / source['mapped']['path']).read_text(), before.decode(),
+            after.decode(), source['cells'], top=source['top'])
+        if check.get('verdict') != 'PASS':
+            raise ValueError('D24 scan cells differ from D23 list')
+        if (source_path.read_bytes() != before
+                or hashlib.sha256(Path(tool).read_bytes()).hexdigest() != tool_sha
+                or contract.local_image_attestation() != authority
+                or flow109.d23_scan_replacement_binding(project, context, intent) != source):
+            raise ValueError('D24 inputs changed during execution')
+        target = attempt / 'd24_post_dft.v'
+        with target.open('xb') as stream:
+            stream.write(after)
+        log = attempt / 'd24_yosys.log'
+        with log.open('x', encoding='utf-8') as stream:
+            stream.write(run.stdout + run.stderr)
+        ref = lambda path: {'path': str(path.relative_to(project)),
+                            'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+        receipt = attempt / 'd24_component.json'
+        with receipt.open('x', encoding='utf-8') as stream:
+            json.dump({'schema': 'vibeic.flow109.d24-component.v1', 'producer': 'D24',
+                'source': source['replaced'], 'scan_cell_list': source['scan_cell_list'],
+                'netlist': ref(target), 'log': ref(log), 'yosys_sha256': tool_sha,
+                'cid': authority['cid'], 'attestation_sha256': authority['attestation_sha256'],
+                'returncode': run.returncode}, stream, sort_keys=True, indent=2)
+            stream.write('\n')
+        return {'verdict': 'NOT_MEASURED', 'component_status': 'PASS',
+                'detail': 'D24 optimized bound D23 output; row metrics remain unqualified',
+                'post_dft_component': ref(receipt), 'whole_flow_verdict': 'NOT_MEASURED'}
+    except (flow109.Flow109Error, contract.Refusal, OSError, ValueError, KeyError,
+            TypeError, AttributeError, subprocess.TimeoutExpired, UnicodeError) as exc:
+        return {'verdict': 'NOT_MEASURED', 'component_status': 'NOT_MEASURED',
+                'detail': str(exc), 'whole_flow_verdict': 'NOT_MEASURED'}
+
+
 def _complete_step12_post_dft(project: Path, container: str) -> dict:
     """Run the existing Step-12 producer and return its complete consumer."""
     import design_one_shot_runner as design
     import step_output_collector as versions
+
+    if _flow109_selected_row('D24'):
+        try:
+            import flow109
+            context = flow109.validate_execution_context(json.loads(
+                Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+            if (context.get('features', {}).get('physical') is True
+                    and context.get('features', {}).get('requires_scan') is True):
+                return _d24_post_dft_component(project)
+        except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError, ImportError):
+            return {'verdict': 'NOT_MEASURED', 'detail': 'D24 context is unavailable'}
 
     began = time.time()
     try:

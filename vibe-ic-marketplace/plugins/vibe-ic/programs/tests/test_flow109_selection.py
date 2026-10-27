@@ -2958,12 +2958,39 @@ def test_d23_openroad_scan_replace_component_no_chain_report(tmp_path, monkeypat
     intent = flow109.dft_source_intent(tmp_path, context)
     bound = flow109.d23_scan_replacement_binding(tmp_path, context, intent)
     assert bound['scan_cell_list'] == result['scan_cell_list'] and len(bound['cells']) == 2
+    # D24 reads the actual D23 output in this same host-attested launch.
+    import librelane_contract as native_contract
+    d24_context = flow109.execution_context(flow109.resolve_plan(features), 'D24', 'D24')
+    d24_context_path = tmp_path / 'd24-context.json'
+    d24_context_path.write_text(json.dumps(d24_context))
+    d24_attempt = flow109._new_attempt(tmp_path, d24_context)
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(d24_context_path))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(d24_attempt))
+    authority = native_contract.local_image_attestation()
+    with monkeypatch.context() as stale_launch:
+        stale_launch.setattr(native_contract, 'local_image_attestation',
+                             lambda *a, **kw: {**authority, 'attestation_sha256': '0' * 64})
+        refused = runner._complete_step12_post_dft(tmp_path, 'unused')
+        assert refused['verdict'] == 'NOT_MEASURED'
+        assert 'D23 launch identity' in refused['detail']
+        assert not (d24_attempt / 'd24_post_dft.v').exists()
+    optimized = runner._complete_step12_post_dft(tmp_path, 'unused')
+    assert optimized['component_status'] == 'PASS', optimized
+    assert optimized['verdict'] == optimized['whole_flow_verdict'] == 'NOT_MEASURED'
+    receipt = json.loads((tmp_path / optimized['post_dft_component']['path']).read_text())
+    assert receipt['source'] == bound['replaced']
+    assert receipt['scan_cell_list'] == result['scan_cell_list']
+    assert (tmp_path / receipt['netlist']['path']).is_file()
+    d24_finished = runner._finish_selected_native_owner(tmp_path, '12', optimized)
+    assert d24_finished['default_row_status'] == 'NOT_MEASURED'
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(context_path))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
     # Exercise the real D30 admission and D24 list consumer with a real D23
     # producer. LEC and STA here are synthetic fixture inputs, not native proof.
     import lec_gate_netlist_select as netlists
     adopted_path = tmp_path / 'phase2/stage2/synth/post_dft_netlist.v'
     adopted_path.parent.mkdir(parents=True, exist_ok=True)
-    adopted_path.write_bytes((tmp_path / bound['replaced']['path']).read_bytes())
+    adopted_path.write_bytes((tmp_path / receipt['netlist']['path']).read_bytes())
     def adopted_ref():
         return {'artifact_id': 'D24_POST_SCAN_NETLIST',
                 'path': 'phase2/stage2/synth/post_dft_netlist.v',
