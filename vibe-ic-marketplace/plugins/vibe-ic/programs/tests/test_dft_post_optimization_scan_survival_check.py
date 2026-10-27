@@ -251,6 +251,7 @@ def test_normalized_preroute_chain_reports_changed_point_without_d23():
     no_scan = {'D22': good, 'D25': fmt, 'D26': good, 'D30': fmt}
     assert M.compare_normalized_preroute_netlists(no_scan, top='unit', requires_scan=False)['status'] == 'PASS'
     # D23 may legally differ: it is not a point in the D24-starting chain.
-    prior = M.normalized_netlist_digest(changed, top='unit')
+    d23_equivalent = 'module unit(input a, output q); wire n; assign n=~a; assign q=~n; endmodule\n'
+    prior = M.normalized_netlist_digest(d23_equivalent, top='unit')
     assert prior['normalized_sha256'] != ok['points']['D24']['normalized_sha256']
     assert ok['status'] == 'PASS'
