@@ -1369,10 +1369,13 @@ def _finish_selected_native_owner(project: Path, native_step: str,
     import flow109
 
     status = acceptance['verdict']
+    extras = {'step_id': native_step, 'default_row_status': status,
+              'completed': status == 'PASS'}
+    if native_step == '11' and 'scan_cell_list' in acceptance:
+        extras['scan_cell_list'] = acceptance['scan_cell_list']
+        extras['native_component_status'] = acceptance.get('component_status', 'NOT_MEASURED')
     return flow109.finish_native_window(project, {'steps': [{
-        'status': status,
-        'extras': {'step_id': native_step, 'default_row_status': status,
-                   'completed': status == 'PASS'},
+        'status': status, 'extras': extras,
     }]})
 
 
@@ -2078,6 +2081,129 @@ def _complete_step8_early_preflight(project: Path) -> dict:
             'outputs': list(row.output_files)}
 
 
+def _d23_scan_replace_component(project: Path, top: str, checkpoint: Mapping) -> dict:
+    """Run physical Default scan replacement without creating a scan chain.
+
+    The result is component evidence only; it does not claim D23 or D30 PASS.
+    """
+    import tempfile
+    try:
+        import flow109
+        import librelane_contract as contract
+        import design_one_shot_runner as design
+        import dft_post_optimization_scan_survival_check as cell_gate
+        from lec_post_layout_check import _parse_netlist_instances
+    except ImportError as exc:
+        return {'verdict': 'NOT_MEASURED', 'component_status': 'NOT_MEASURED',
+                'detail': str(exc), 'whole_flow_verdict': 'NOT_MEASURED'}
+    try:
+        project = Path(project).resolve()
+        if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', top):
+            raise ValueError('top is not a supported identifier')
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+        rows = context.get('resolved_rows') or [context.get('resolved_row', {})]
+        if (len(rows) != 1 or rows[0].get('id') != 'D23'
+                or context.get('features', {}).get('physical') is not True
+                or context.get('features', {}).get('requires_scan') is not True):
+            raise ValueError('not the physical D23 scan owner')
+        attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+        if (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink():
+            raise ValueError('immutable D23 attempt already completed')
+        intent = flow109.dft_source_intent(project, context)
+        plan = flow109.dft_plan_reference(intent)
+        authority = contract.local_image_attestation()
+        mapped = Path(str(checkpoint['native_handoff']['canonical']))
+        if mapped.is_symlink() or not mapped.is_file() or not mapped.resolve().is_relative_to(project):
+            raise ValueError('mapped input is foreign or missing')
+        before = mapped.read_bytes()
+        if hashlib.sha256(before).hexdigest() != checkpoint['native_handoff']['netlist_sha256']:
+            raise ValueError('mapped input differs from synthesis handoff')
+        pdk = design._phase2_pdk_config(project)
+        paths = [Path(str(getattr(pdk, key))).resolve() for key in ('tech_lef', 'cell_lef', 'liberty')]
+        if any(not path.is_file() for path in paths):
+            raise ValueError('PDK technology, cell LEF or Liberty is missing')
+        tool = shutil.which('openroad')
+        if not tool:
+            raise ValueError('OpenROAD unavailable')
+        tool_sha = hashlib.sha256(Path(tool).read_bytes()).hexdigest()
+        producer_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        comparator_sha = hashlib.sha256(Path(cell_gate.__file__).read_bytes()).hexdigest()
+        pdk_sha = {str(path): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
+        def q(path):
+            value = str(path)
+            if any(char in value for char in '{}\n\r'):
+                raise ValueError('unsafe Tcl path')
+            return '{' + value + '}'
+        with tempfile.TemporaryDirectory(prefix='flow109-d23-') as td:
+            staged = Path(td) / 'mapped.v'; staged.write_bytes(before)
+            output = Path(td) / 'scan_replace.v'
+            script = Path(td) / 'replace.tcl'
+            script.write_text('read_lef ' + q(paths[0]) + '\nread_lef ' + q(paths[1])
+                              + '\nread_liberty ' + q(paths[2]) + '\nread_verilog ' + q(staged)
+                              + '\nlink_design ' + top + '\nscan_replace\nwrite_verilog '
+                              + q(output) + '\n')
+            run = subprocess.run([tool, '-no_init', '-exit', str(script)],
+                                 capture_output=True, text=True, timeout=120)
+            if run.returncode != 0 or '[ERROR' in run.stdout + run.stderr or not output.is_file():
+                raise ValueError('OpenROAD scan replacement did not finish')
+            after = output.read_bytes()
+            recipe_bytes = script.read_bytes()
+            log_bytes = (run.stdout + run.stderr).encode('utf-8')
+            argv = [tool, '-no_init', '-exit', str(script)]
+        a = _parse_netlist_instances(before.decode('utf-8'))
+        b = _parse_netlist_instances(after.decode('utf-8'))
+        if set(a) != set(b):
+            raise ValueError('scan replacement changed instance population')
+        cells = [{'instance': name, 'cell': b[name][0]} for name in sorted(a)
+                 if a[name][0] != b[name][0]]
+        checked = cell_gate.reconcile_scan_cell_list(before.decode('utf-8'),
+                    after.decode('utf-8'), after.decode('utf-8'), cells, top=top)
+        if checked.get('verdict') != 'PASS':
+            raise ValueError('scan replacement inventory not verified: ' + str(checked))
+        if (mapped.read_bytes() != before
+                or hashlib.sha256(Path(tool).read_bytes()).hexdigest() != tool_sha
+                or hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != producer_sha
+                or hashlib.sha256(Path(cell_gate.__file__).read_bytes()).hexdigest() != comparator_sha
+                or any(hashlib.sha256(path.read_bytes()).hexdigest() != pdk_sha[str(path)] for path in paths)
+                or contract.local_image_attestation() != authority
+                or flow109.dft_source_intent(project, context) != intent):
+            raise ValueError('scan replacement inputs changed during execution')
+        out = attempt / 'd23_scan_replace.v'
+        with out.open('xb') as stream:
+            stream.write(after)
+        recipe_path = attempt / 'd23_scan_replace.tcl'
+        log_path = attempt / 'd23_scan_replace.log'
+        for target, data in ((recipe_path, recipe_bytes), (log_path, log_bytes)):
+            with target.open('xb') as stream:
+                stream.write(data)
+        artifact = attempt / 'd23_scan_cells.json'
+        payload = {'schema': 'vibeic.flow109.d23-scan-cells.v1', 'producer': 'D23',
+                   'operation': 'OpenROAD.scan_replace', 'top': top, 'cells': cells,
+                   'mapped': {'path': str(mapped.relative_to(project)), 'sha256': hashlib.sha256(before).hexdigest()},
+                   'replaced': {'path': str(out.relative_to(project)), 'sha256': hashlib.sha256(after).hexdigest()},
+                   'openroad_sha256': tool_sha, 'yosys_sha256': checked['parser_sha256'],
+                   'producer_source_sha256': producer_sha, 'comparator_source_sha256': comparator_sha,
+                   'argv': argv, 'returncode': run.returncode,
+                   'recipe': {'path': str(recipe_path.relative_to(project)), 'sha256': hashlib.sha256(recipe_bytes).hexdigest()},
+                   'log': {'path': str(log_path.relative_to(project)), 'sha256': hashlib.sha256(log_bytes).hexdigest()},
+                   'pdk_sha256': pdk_sha, 'cid': authority['cid'], 'image': authority['image'],
+                   'image_id': authority['image_id'], 'attestation_sha256': authority['attestation_sha256'],
+                   'd01_intent': intent['source_binding'], 'dft_plan': plan}
+        with artifact.open('x', encoding='utf-8') as stream:
+            json.dump(payload, stream, sort_keys=True, indent=2)
+            stream.write('\n')
+        return {'verdict': 'NOT_MEASURED', 'component_status': 'PASS',
+                'detail': 'D23 scan replacement measured; row metrics remain unqualified',
+                'scan_cell_list': {'path': str(artifact.relative_to(project)),
+                                   'sha256': hashlib.sha256(artifact.read_bytes()).hexdigest()},
+                'whole_flow_verdict': 'NOT_MEASURED'}
+    except (flow109.Flow109Error, contract.Refusal, OSError, ValueError, KeyError,
+            TypeError, AttributeError, subprocess.TimeoutExpired, UnicodeError) as exc:
+        return {'verdict': 'NOT_MEASURED', 'component_status': 'NOT_MEASURED',
+                'detail': str(exc), 'whole_flow_verdict': 'NOT_MEASURED'}
+
+
 def _complete_step11_dft(project: Path, top: str, container: str) -> dict:
     """Run the existing Step-11 producer on the current Step-9 subject."""
     import design_one_shot_runner as design
@@ -2088,6 +2214,17 @@ def _complete_step11_dft(project: Path, top: str, container: str) -> dict:
     _prior, error = _current_step9_checkpoint(project)
     if error:
         return {'verdict': 'NOT_MEASURED', 'detail': 'Step11 ' + error}
+    if _flow109_selected_row('D23'):
+        try:
+            import flow109
+            context = flow109.validate_execution_context(json.loads(
+                Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+            flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+            if (context.get('features', {}).get('physical') is True
+                    and context.get('features', {}).get('requires_scan') is True):
+                return _d23_scan_replace_component(project, top, _prior)
+        except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError, ImportError):
+            return {'verdict': 'NOT_MEASURED', 'detail': 'D23 context is unavailable'}
     clk, reset, active_low = design.derive_dft_clock_reset(project)
     # The retained entry owns a DFT insertion request, so validate the exact
     # L20 contract against the mapped subject before either scan insertion or

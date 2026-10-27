@@ -1336,6 +1336,9 @@ def test_d26_current_canonical_step9_launches_prelayout_producer(
 
 def test_d23_rejects_wrong_l20_before_scan_or_atpg_launch(tmp_path, monkeypatch):
     import vibe_ic_one_shot_runner as runner
+    # This directly exercises the retained pre-stitched owner, without a
+    # selected physical D23 context leaked from another test.
+    monkeypatch.setattr(runner, '_flow109_selected_row', lambda _row: False)
 
     mapped = tmp_path / "phase2/stage2/synth/top_synth.v"
     mapped.parent.mkdir(parents=True)
@@ -2796,3 +2799,70 @@ def test_d30_dft_plan_requires_source_bound_positive_limits(tmp_path):
         with pytest.raises(flow109.Flow109Error, match='FLOW109_D30_DFT_PLAN_MISSING'):
             flow109.dft_plan_reference(invalid)
     assert flow109.dft_plan_reference({'requires_scan': False})['status'] == 'NOT_APPLICABLE'
+
+
+def test_d23_openroad_scan_replace_component_no_chain_report(tmp_path, monkeypatch):
+    import hashlib
+    import os
+    import subprocess
+    from types import SimpleNamespace
+    import design_one_shot_runner as design
+    import vibe_ic_one_shot_runner as runner
+    from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+    base = Path('/foss/pdks/gf180mcuD/libs.ref/gf180mcu_fd_sc_mcu9t5v0')
+    liberty = base / 'lib/gf180mcu_fd_sc_mcu9t5v0__tt_025C_3v30.lib'
+    tech = base / 'techlef/gf180mcu_fd_sc_mcu9t5v0__nom.tlef'
+    lef = base / 'lef/gf180mcu_fd_sc_mcu9t5v0.lef'
+    assert all(p.is_file() for p in (liberty, tech, lef))
+    source = tmp_path / 'unit.v'
+    source.write_text('module unit(input clk, input d, output q); reg x,y; always @(posedge clk) begin x<=d; y<=x; end assign q=y; endmodule\n')
+    mapped = tmp_path / 'mapped.v'
+    run = subprocess.run(['yosys', '-Q', '-T', '-p', f'read_verilog {source}; synth -top unit; dfflibmap -liberty {liberty}; write_verilog -noattr {mapped}'], capture_output=True, text=True)
+    assert run.returncode == 0, run.stdout + run.stderr
+    dft = _intent(); dft['dft_plan'] = {'planned_chain_count': 1, 'max_chain_length': 32}
+    _publish_dft_intent(tmp_path, dft)
+    features = profile('Small digital IC without DFT')
+    features['requires_dft'] = features['requires_scan'] = True
+    context = flow109.execution_context(flow109.resolve_plan(features), 'D23', 'D23')
+    context_path = tmp_path / 'context.json'; context_path.write_text(json.dumps(context))
+    attempt = flow109._new_attempt(tmp_path, context)
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(context_path))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
+    monkeypatch.setattr(design, '_phase2_pdk_config', lambda *_: SimpleNamespace(name='gf180mcuD', tech_lef=tech, cell_lef=lef, liberty=liberty))
+    checkpoint = {'native_handoff': {'canonical': str(mapped), 'netlist_sha256': hashlib.sha256(mapped.read_bytes()).hexdigest()}}
+    result = runner._d23_scan_replace_component(tmp_path, 'unit', checkpoint)
+    assert result['component_status'] == 'PASS', result
+    assert result['verdict'] == result['whole_flow_verdict'] == 'NOT_MEASURED'
+    artifact = tmp_path / result['scan_cell_list']['path']
+    doc = json.loads(artifact.read_text())
+    assert doc['producer'] == 'D23' and doc['operation'] == 'OpenROAD.scan_replace'
+    assert all(len(doc[k]) == 64 for k in ('producer_source_sha256', 'comparator_source_sha256',
+                                          'openroad_sha256', 'yosys_sha256', 'attestation_sha256'))
+    assert doc['cid'] == os.environ.get('HOSTNAME') or doc['cid'].startswith(os.environ.get('HOSTNAME', 'invalid'))
+    assert doc['returncode'] == 0 and doc['argv'][1:3] == ['-no_init', '-exit']
+    for name in ('recipe', 'log'):
+        rec = doc[name]; assert hashlib.sha256((tmp_path / rec['path']).read_bytes()).hexdigest() == rec['sha256']
+    assert len(doc['cells']) == 2
+    assert not (tmp_path / 'reports/phase2/dft/scan_chain.json').exists()
+    checkpoint['native_handoff']['netlist_sha256'] = '0' * 64
+    stale = runner._d23_scan_replace_component(tmp_path, 'unit', checkpoint)
+    assert stale['component_status'] == stale['verdict'] == 'NOT_MEASURED'
+    assert 'differs from synthesis handoff' in stale['detail']
+    finished = runner._finish_selected_native_owner(tmp_path, '11', result)
+    assert finished['default_row_status'] == 'NOT_MEASURED'
+    row = json.loads((tmp_path / 'reports/flow109/default_rows/D23.json').read_text())
+    assert row['scan_cell_list'] == result['scan_cell_list']
+    assert row['native_component_status'] == 'PASS' and row['default_row_status'] == 'NOT_MEASURED'
+
+
+def test_d23_component_reference_survives_finalization_without_row_pass(tmp_path, monkeypatch):
+    import vibe_ic_one_shot_runner as runner
+    seen = []
+    monkeypatch.setattr(flow109, 'finish_native_window', lambda _p, report: seen.append(report) or report)
+    ref = {'path': 'attempt/d23_scan_cells.json', 'sha256': 'a' * 64}
+    result = runner._finish_selected_native_owner(tmp_path, '11', {
+        'verdict': 'NOT_MEASURED', 'component_status': 'PASS', 'scan_cell_list': ref})
+    extra = seen[0]['steps'][0]['extras']
+    assert extra['scan_cell_list'] == ref and extra['native_component_status'] == 'PASS'
+    assert extra['default_row_status'] == 'NOT_MEASURED' and extra['completed'] is False
+    assert result['steps'][0]['status'] == 'NOT_MEASURED'
