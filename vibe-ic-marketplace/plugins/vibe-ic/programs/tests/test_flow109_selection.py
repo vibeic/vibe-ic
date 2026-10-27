@@ -2376,3 +2376,101 @@ def test_public_d10_never_runs_p0_after_stale_or_failed_phase2(tmp_path, monkeyp
     terminal = json.loads((attempt / 'result.json').read_text())
     assert terminal['default_row_status'] == 'NOT_MEASURED'
     assert terminal['components'][0]['evidence']['p0_native']['status'] == 'NOT_MEASURED'
+
+
+def test_d10_single_gate_dry_run_real_frontend_positive_negative_and_no_project_writes(tmp_path, monkeypatch, capsys):
+    import hashlib
+    import vibe_ic_one_shot_runner as runner
+    rtl = tmp_path / 'phase2/stage1/rtl/top.v'
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text('module top(input a, output y); assign y = a; endmodule\n')
+    spec = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+    spec.parent.mkdir(parents=True)
+    spec.write_text(json.dumps({'top_module': 'top'}))
+    monkeypatch.delenv('VIBEIC_LIBRELANE_LOCAL_ATTESTATION', raising=False)
+    argv = [str(Path(runner.__file__)), str(tmp_path), '--step', 'D10', '--only',
+            'p0_tool_frontend_check', '--dry-run']
+    monkeypatch.setattr(sys, 'argv', argv)
+    def snapshot():
+        return {str(p.relative_to(tmp_path)): hashlib.sha256(p.read_bytes()).hexdigest()
+                for p in tmp_path.rglob('*') if p.is_file()}
+    before = snapshot()
+    assert runner._main() == 0
+    result = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert result['gate_status'] == 'PASS'
+    assert result['row_status'] == 'NOT_MEASURED'
+    assert result['tool_qualification'] == 'NOT_MEASURED'
+    assert result['delivery_accepted'] is False
+    assert snapshot() == before
+    rtl.write_text('module top(input a, output y); missing_cell x(.a(a),.y(y)); endmodule\n')
+    before = snapshot()
+    assert runner._main() == 1
+    result = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert result['gate_status'] == 'FAIL'
+    assert result['row_status'] == 'NOT_MEASURED'
+    assert snapshot() == before
+
+
+def test_d10_single_gate_dry_run_missing_binding_never_starts_flow(tmp_path, monkeypatch, capsys):
+    import vibe_ic_one_shot_runner as runner
+    monkeypatch.setattr(sys, 'argv', [str(Path(runner.__file__)), str(tmp_path), '--step', 'D10',
+                                     '--only', 'feature_inventory', '--dry-run'])
+    monkeypatch.setattr(flow109, 'prepare_front_door', lambda *_: pytest.fail('must not dispatch flow'))
+    assert runner._main() == 2
+    result = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert result['gate_status'] == result['row_status'] == 'NOT_MEASURED'
+    assert result['reason'] == 'MISSING_ADOPTED_FEATURE_INVENTORY'
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_d10_single_gate_dry_run_refuses_changed_inputs_and_untrusted_runtime(tmp_path, monkeypatch, capsys):
+    import p0_tool_frontend_check as frontend
+    import vibe_ic_one_shot_runner as runner
+    rtl = tmp_path / 'phase2/stage1/rtl/top.v'
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text('module top(input a, output y); assign y = a; endmodule\n')
+    spec = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+    spec.parent.mkdir(parents=True)
+    spec.write_text(json.dumps({'top_module': 'top'}))
+    monkeypatch.delenv('VIBEIC_LIBRELANE_LOCAL_ATTESTATION', raising=False)
+    monkeypatch.setattr(sys, 'argv', [str(Path(runner.__file__)), str(tmp_path), '--step', 'D10',
+                                     '--only', 'p0_tool_frontend_check', '--dry-run'])
+    def changed(_project, *, output_project):
+        output = output_project / frontend.RTL_ELAB_REL
+        output.parent.mkdir(parents=True)
+        output.write_text('{"modules":{"top":{}}}')
+        rtl.write_text(rtl.read_text() + '// changed\n')
+        return {'passed': True, 'findings': [], 'tools': {
+            'Yosys.JsonHeader': {'exit_code': 0}, 'Verilator.Lint': {'exit_code': 0}}}
+    monkeypatch.setattr(frontend, 'check', changed)
+    assert runner._main() == 2
+    answer = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert answer['gate_status'] == answer['row_status'] == 'NOT_MEASURED'
+    assert 'changed' in answer['detail']
+    monkeypatch.setenv('VIBEIC_LIBRELANE_LOCAL_ATTESTATION', str(tmp_path / 'missing.json'))
+    monkeypatch.setattr(frontend, 'check', lambda *_a, **_k: pytest.fail('untrusted runtime must not run'))
+    assert runner._main() == 2
+    answer = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert answer['gate_status'] == 'NOT_MEASURED'
+
+
+def test_d10_single_gate_dry_run_never_classifies_tool_crash_as_design_fail(tmp_path, monkeypatch, capsys):
+    import p0_tool_frontend_check as frontend
+    import vibe_ic_one_shot_runner as runner
+    rtl = tmp_path / 'phase2/stage1/rtl/top.v'
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text('module top(input a, output y); assign y = a; endmodule\n')
+    spec = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+    spec.parent.mkdir(parents=True)
+    spec.write_text(json.dumps({'top_module': 'top'}))
+    monkeypatch.delenv('VIBEIC_LIBRELANE_LOCAL_ATTESTATION', raising=False)
+    monkeypatch.setattr(sys, 'argv', [str(Path(runner.__file__)), str(tmp_path), '--step', 'D10',
+                                     '--only', 'p0_tool_frontend_check', '--dry-run'])
+    monkeypatch.setattr(frontend, 'check', lambda *_a, **_k: {'passed': False,
+        'findings': ['tool crashed'], 'tools': {'Yosys.JsonHeader': {'exit_code': -9},
+                                               'Verilator.Lint': {'exit_code': 0}}})
+    assert runner._main() == 2
+    answer = json.loads(capsys.readouterr().out.splitlines()[-1])
+    assert answer['gate_status'] == 'NOT_MEASURED'
+    assert answer['reason'] == 'NATIVE_FRONTEND_ABNORMAL_TERMINATION'
+    assert answer['row_status'] == 'NOT_MEASURED'

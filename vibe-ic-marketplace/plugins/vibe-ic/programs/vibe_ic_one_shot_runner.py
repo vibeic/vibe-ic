@@ -3903,6 +3903,10 @@ def _main() -> int:
     _line_buffer_own_stream()
     p = argparse.ArgumentParser()
     p.add_argument("project", type=Path)
+    p.add_argument('--step', help='Flow109 row for a single diagnostic gate')
+    p.add_argument('--only', help='Exact source-owned diagnostic gate name')
+    p.add_argument('--dry-run', action='store_true',
+                   help='Run one diagnostic gate without publishing project artifacts')
     p.add_argument("--flow", choices=("109",), default="109",
                    help="Flow109 canonical public runtime (default: 109), "
                         "using current D01..D81, A01..A19 and M01..M09 row "
@@ -4039,6 +4043,16 @@ def _main() -> int:
     if not project.is_dir():
         print(f'ERROR: not a directory: {project}', file=sys.stderr)
         return 2
+    if args.dry_run or args.step or args.only:
+        if (not args.dry_run or args.step != 'D10' or not args.only
+                or args.entry_step or args.exit_step or args.resume_request
+                or args.flow109_plan_only):
+            print('REFUSED: single-gate diagnostic requires --step D10 --only <gate> --dry-run without a flow window', file=sys.stderr)
+            return 2
+        import flow109_metric_acceptance
+        diagnostic = flow109_metric_acceptance.dry_run_d10(project, args.only)
+        print(json.dumps(diagnostic, sort_keys=True))
+        return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[diagnostic['gate_status']]
     route_refusal = _delivery_route.admit(project, args.route)
     if route_refusal:
         print(_delivery_route.refusal_message(route_refusal), file=sys.stderr)

@@ -26,6 +26,76 @@ AUTHORITY_SCHEMA = "vibeic.flow109.requirement-authority.v1"
 _HEX = re.compile(r"[0-9a-f]{64}")
 _SAFE = re.compile(r"[A-Za-z_][A-Za-z0-9_.-]*")
 
+
+def dry_run_d10(project: Path, gate: str) -> dict:
+    """Run one existing D10 frontend gate without publishing project artifacts.
+
+    This is diagnostic, not a metric binding or a Flow109 acceptance decision.
+    """
+    import os
+    import shutil
+    import tempfile
+    import _cdc_netlist as native
+    import _specrtl_common
+    import librelane_contract as contract
+    import p0_tool_frontend_check as frontend
+
+    answer = {'step_id': 'D10', 'gate': gate, 'dry_run': True,
+              'gate_status': 'NOT_MEASURED', 'row_status': 'NOT_MEASURED',
+              'tool_qualification': 'NOT_MEASURED', 'delivery_accepted': False}
+    if gate != 'p0_tool_frontend_check':
+        answer['reason'] = 'UNPROVEN_ADAPTER_BINDING'
+        if gate == 'feature_inventory' and not (project / 'adopted/base_04/feature_inventory.json').is_file():
+            answer['reason'] = 'MISSING_ADOPTED_FEATURE_INVENTORY'
+        return answer
+    try:
+        files = _specrtl_common.rtl_source_files(project)
+        top = frontend._top(project)
+        if not files or not top:
+            raise ValueError('selected RTL or top is missing')
+        before = native.source_binding(project, top, files)
+        paths = {name: shutil.which(name) for name in ('yosys', 'verilator')}
+        if any(not path for path in paths.values()):
+            raise ValueError('native frontend tools unavailable')
+        def tool_hashes():
+            return {name: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+                    for name, path in paths.items()}
+        tools_before = tool_hashes()
+        authority = (contract.local_image_attestation()
+                     if os.environ.get(contract.LOCAL_ATTESTATION_ENV) else None)
+        with tempfile.TemporaryDirectory(prefix='flow109-d10-gate-') as td:
+            result = frontend.check(project, output_project=Path(td))
+            elab = Path(td) / frontend.RTL_ELAB_REL
+            elab_sha = hashlib.sha256(elab.read_bytes()).hexdigest() if elab.is_file() else None
+        after = native.source_binding(project, top, _specrtl_common.rtl_source_files(project))
+        if before != after or tools_before != tool_hashes():
+            raise ValueError('source or tools changed during diagnostic')
+        tools = result.get('tools') or {}
+        codes = {name: (tools.get(name) or {}).get('exit_code')
+                 for name in ('Yosys.JsonHeader', 'Verilator.Lint')}
+        answer.update(input_fingerprint=before['fingerprint'], tool_sha256=tools_before,
+                      image_id=authority.get('image_id') if authority else None,
+                      cid=authority.get('cid') if authority else None,
+                      native_exit_codes=codes, findings=result.get('findings', []),
+                      elaboration_sha256=elab_sha)
+        if result.get('not_measured') or any(type(code) is not int for code in codes.values()):
+            answer['reason'] = 'NATIVE_FRONTEND_NOT_MEASURED'
+        elif any(code < 0 or code >= 128 for code in codes.values()):
+            answer['reason'] = 'NATIVE_FRONTEND_ABNORMAL_TERMINATION'
+        elif result.get('passed') is True and elab_sha:
+            answer.update(gate_status='PASS', reason='NATIVE_FRONTEND_PASS')
+        elif result.get('passed') is False:
+            answer.update(gate_status='FAIL', reason='NATIVE_FRONTEND_FAIL')
+            answer['native_diagnostics'] = {
+                name: str((tools.get(name) or {}).get('output', ''))[-2000:]
+                for name in codes}
+        else:
+            answer['reason'] = 'NATIVE_FRONTEND_OUTPUT_MISSING'
+    except (native.Refusal, contract.Refusal, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        answer['reason'] = 'NATIVE_FRONTEND_UNAVAILABLE'
+        answer['detail'] = str(exc)
+    return answer
+
 # This is the executable whitelist.  A project may provide values and an
 # approved authority document, but it cannot select an extractor, expression,
 # Python attribute or callable.
