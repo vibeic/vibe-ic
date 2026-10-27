@@ -422,7 +422,7 @@ def test_d30_refuses_row_pass_without_bound_delivery_netlist(tmp_path, monkeypat
     answer = flow109._selected_step_result(tmp_path, context, result)
     assert answer['default_row_status'] == 'NOT_MEASURED'
     assert answer['completed'] is False
-    assert answer['normalized_chain_reason'] == 'D30_DELIVERY_ARTIFACT_UNBOUND'
+    assert answer['normalized_chain_reason'] == 'D30_DELIVERY_BINDING_UNPROVEN'
 
 
 def test_d30_accepts_native_d24_d25_identity_and_chain_report(tmp_path, monkeypatch):
@@ -605,9 +605,27 @@ def _final_timing_case(project, monkeypatch):
                 "scan_cell_reconciliation": {"fixture": "D23_D24_native_binding"}}
     monkeypatch.setattr(flow109, "physical_d24_binding", physical_fixture)
     d30_admission = flow109.dft_preroute_admission(project, d30_context)
+    # This D50 fixture supplies a synthetic accepted handoff, while invoking
+    # the actual D30 producer/consumer; no native row acceptance is claimed.
+    import design_one_shot_runner as design
+    import step_output_collector as versions
+    handoff_folder = 'test-d50-d30-handoff'
+    handoff = versions._versions_root(project) / handoff_folder / 'outputs.json'
+    handoff.parent.mkdir(parents=True, exist_ok=True)
+    handoff.write_text(json.dumps({'canonical_pass': True, 'status': 'PASS'}))
+    monkeypatch.setattr(design, '_current_phase2_consumer',
+                        lambda _p, _s, _t: {'folder': handoff_folder})
+    attempt = flow109._new_attempt(project, d30_context)
+    delivery_ref = design._d30_publish_delivery(project, d30_context, attempt, handoff_folder)
+    d30_admission['normalized_preroute_chain'] = flow109._complete_preroute_chain(
+        project, d30_context, d30_admission, delivery_ref,
+        d30_context_sha256=d30_context['context_sha256'])
+    assert d30_admission['normalized_preroute_chain']['status'] == 'PASS'
     rows = project / "reports/flow109/default_rows"
     (rows / "D30.json").write_text(json.dumps({
         "step_id": "D30", "default_row_status": "PASS", "completed": True,
+        "context_sha256": d30_context['context_sha256'],
+        "d30_delivery_receipt": delivery_ref,
         "dft_preroute_admission": d30_admission}))
     final_netlist = project / "phase3/stage3/pnr/chip_top_pnr.v"
     final_netlist.parent.mkdir(parents=True)
@@ -3105,6 +3123,33 @@ def test_d30_delivery_owner_records_current_adopted_netlist_and_refuses_stale(tm
     assert receipt['handoff_folder'] == folder
     assert receipt['flow109_acceptance'] == 'NOT_MEASURED'
     assert hashlib.sha256(delivered.read_bytes()).hexdigest() == receipt['source_netlist']['sha256']
+    admission = flow109.dft_preroute_admission(tmp_path, context)
+    chain = flow109._complete_preroute_chain(
+        tmp_path, context, admission, ref, d30_context_sha256=context['context_sha256'])
+    assert chain['status'] == 'PASS', chain
+    assert set(chain['references']) == {'D24', 'D25', 'D26', 'D30'}
+    assert chain['references']['D30']['path'] != chain['references']['D24']['path']
+    assert chain['flow109_acceptance'] == 'NOT_MEASURED'
+    selected = flow109._selected_step_result(tmp_path, context, {
+        'step_id': 'D30', 'context_sha256': context['context_sha256'],
+        'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True,
+        'd30_delivery_receipt': ref})
+    assert selected['dft_preroute_admission']['normalized_preroute_chain']['status'] == 'PASS'
+    assert selected['default_row_status'] == 'NOT_MEASURED'
+    assert selected['normalized_chain_reason'] == 'D30_METRIC_BINDINGS_UNIMPLEMENTED'
+    with monkeypatch.context() as stale:
+        stale.setattr(design, '_current_phase2_consumer', lambda *_: None)
+        rejected = flow109._complete_preroute_chain(
+            tmp_path, context, admission, ref, d30_context_sha256=context['context_sha256'])
+        assert rejected['status'] == 'NOT_MEASURED'
+        assert rejected['reason'] == 'D30_DELIVERY_BINDING_UNPROVEN'
+    original_delivery = delivered.read_bytes()
+    delivered.write_bytes(original_delivery + b'\n')
+    stale_delivery = flow109._complete_preroute_chain(
+        tmp_path, context, admission, ref, d30_context_sha256=context['context_sha256'])
+    assert stale_delivery['status'] == 'NOT_MEASURED'
+    assert stale_delivery['reason'] == 'D30_DELIVERY_BINDING_UNPROVEN'
+    delivered.write_bytes(original_delivery)
     assert delivered != tmp_path / receipt['source_netlist']['path']
     # Exercise the actual handoff owner with retained producer acceptance as a
     # fixture. The D30 row verdict and native LEC/STA are not asserted here.
