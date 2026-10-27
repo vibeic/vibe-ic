@@ -5357,6 +5357,7 @@ def _main() -> int:
             "advisories": advisories,
             "phase1_checkpoint_review": _phase1_checkpoint_review,
             "d09_finalization": reports.get("d09_finalization"),
+            "d10_finalization": reports.get("d10_finalization"),
             "audit_scope": "bounded; whole-flow audit not refreshed",
             "completion_audit_axis": {"state": "NOT_MEASURED",
                                       "reason": "bounded; whole-flow audit not refreshed"},

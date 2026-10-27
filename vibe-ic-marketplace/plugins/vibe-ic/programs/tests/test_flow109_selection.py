@@ -2179,6 +2179,9 @@ def test_public_d10_missing_metric_binding_is_not_silent_success(tmp_path, monke
     assert terminal['default_row_status'] == 'NOT_MEASURED'
     assert terminal['components'][0]['step_id'] == 'D10'
     assert terminal['delivery_accepted'] is False
+    summary = json.loads((tmp_path / 'reports/orchestrator/vibe_ic_one_shot.json').read_text())
+    assert summary['d10_finalization']['verdict'] == 'NOT_MEASURED'
+    assert 'D10_METRIC_BINDINGS_UNIMPLEMENTED' in summary['d10_finalization']['detail']
 
 
 def test_public_d10_does_not_overwrite_existing_attempt_result(tmp_path, monkeypatch):
