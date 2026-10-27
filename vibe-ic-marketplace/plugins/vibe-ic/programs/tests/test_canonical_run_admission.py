@@ -655,3 +655,33 @@ def test_full_stack_oracle_is_not_a_phase3_input(tmp_path):
     second = cra.admit(project, "phase3", **kwargs)
     assert first.admitted and not second.admitted
     assert first.identity_sha256 == second.identity_sha256
+
+
+def test_phase2_local_runtime_condition_reopens_once(tmp_path, monkeypatch):
+    import librelane_contract
+    project = _project(tmp_path / 'proj')
+    monkeypatch.setenv(librelane_contract.LOCAL_ATTESTATION_ENV, '/host/receipt')
+    condition = {'auto_remove': False, 'network_mode': 'none', 'memory': 1024, 'memory_swap': 1024}
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: condition.copy())
+    args = (project, 'phase2', PROGRAMS, '')
+    config = {'top_name': 'chip_top'}
+    first = cra.admit_span(*args, config)
+    assert first.admitted
+    assert not cra.admit_span(*args, config).admitted
+    condition['auto_remove'] = True
+    changed = cra.admit_span(*args, config)
+    assert changed.admitted
+    assert not cra.admit_span(*args, config).admitted
+
+
+def test_phase2_unattested_local_runtime_is_refused(tmp_path, monkeypatch):
+    import librelane_contract
+    project = _project(tmp_path / 'proj')
+    monkeypatch.setenv(librelane_contract.LOCAL_ATTESTATION_ENV, '/host/bad-receipt')
+    def reject():
+        raise librelane_contract.Refusal('LL_LOCAL_IMAGE_UNATTESTED', 'mismatched CID')
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', reject)
+    result = cra.admit_span(project, 'phase2', PROGRAMS, '', {'top_name': 'chip_top'})
+    assert not result.admitted
+    assert result.reason == 'LOCAL_RUNTIME_UNATTESTED'
+    assert not cra.ledger_path(project).exists()

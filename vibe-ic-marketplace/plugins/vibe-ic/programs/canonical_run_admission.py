@@ -387,6 +387,21 @@ def admit_span(project: Path, span: str, programs_dir: Path,
     """Convenience entry point so all runners build the same identity."""
     paths = canonical_program_paths(programs_dir)
     program_digest, unavailable = _strict_program_digest(paths)
+    if span == "phase2" and os.environ.get("VIBEIC_LIBRELANE_LOCAL_ATTESTATION"):
+        import librelane_contract
+        try:
+            attested = librelane_contract.local_image_attestation()
+            fields = ("auto_remove", "network_mode", "memory", "memory_swap")
+            if type(attested.get("auto_remove")) is not bool:
+                raise ValueError("missing attested AutoRemove")
+            runtime = {field: attested[field] for field in fields}
+        except (librelane_contract.Refusal, KeyError, ValueError) as exc:
+            identity = build_identity(project, span, container_image=image_identity(container),
+                                      config=config, program_paths=paths,
+                                      program_source_sha256=program_digest)
+            return Admission(False, "LOCAL_RUNTIME_UNATTESTED", identity_sha256(identity),
+                             identity, str(exc))
+        config = {**config, "local_runtime_conditions": runtime}
     if unavailable:
         identity = build_identity(
             project, span, container_image=image_identity(container),
