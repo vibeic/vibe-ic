@@ -219,3 +219,34 @@ def test_scan_cell_reconciliation_detects_missing_d23_or_d24_cell():
     assert gate.reconcile_scan_cell_list(mapped, mapped, mapped, cells, top='top')['verdict'] == 'NOT_MEASURED'
     compact = replaced.replace('\n', ' ')
     assert gate.reconcile_scan_cell_list(mapped, compact, compact, cells, top='top')['verdict'] == 'PASS'
+
+
+def test_yosys_normalization_ignores_format_and_rejects_invalid():
+    first = 'module unit(input a, output q); assign q = a; endmodule\n'
+    formatted = 'module unit ( input a , output q );\n  assign q=a ;\nendmodule\n'
+    changed = 'module unit(input a, output q); assign q = ~a; endmodule\n'
+    a = M.normalized_netlist_digest(first, top='unit')
+    b = M.normalized_netlist_digest(formatted, top='unit')
+    c = M.normalized_netlist_digest(changed, top='unit')
+    bad = M.normalized_netlist_digest('not verilog', top='unit')
+    assert a['status'] == b['status'] == c['status'] == 'MEASURED'
+    assert a['input_sha256'] != b['input_sha256']
+    assert a['normalized_sha256'] == b['normalized_sha256']
+    assert a['normalized_sha256'] != c['normalized_sha256']
+    assert a['flow109_acceptance'] == 'NOT_MEASURED'
+    assert bad == {'status': 'NOT_MEASURED', 'reason': 'NETLIST_FORMAT_INVALID'}
+
+
+def test_normalized_preroute_chain_reports_changed_point_without_d23():
+    good = 'module unit(input a, output q); assign q = a; endmodule\n'
+    fmt = 'module unit (input a, output q);\nassign q=a; endmodule\n'
+    changed = 'module unit(input a, output q); assign q = ~a; endmodule\n'
+    points = {'D24': good, 'D25': fmt, 'D26': good, 'D30': fmt}
+    ok = M.compare_normalized_preroute_netlists(points, top='unit', requires_scan=True)
+    assert ok['status'] == 'PASS' and ok['flow109_acceptance'] == 'NOT_MEASURED'
+    bad = M.compare_normalized_preroute_netlists({**points, 'D26': changed}, top='unit', requires_scan=True)
+    assert bad['status'] == 'FAIL' and bad['mismatch'] == ['D26']
+    invalid = M.compare_normalized_preroute_netlists({**points, 'D26': 'not verilog'}, top='unit', requires_scan=True)
+    assert invalid['status'] == 'NOT_MEASURED' and invalid['point'] == 'D26'
+    no_scan = {'D22': good, 'D25': fmt, 'D26': good, 'D30': fmt}
+    assert M.compare_normalized_preroute_netlists(no_scan, top='unit', requires_scan=False)['status'] == 'PASS'

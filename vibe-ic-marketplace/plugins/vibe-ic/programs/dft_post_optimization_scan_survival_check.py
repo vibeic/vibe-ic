@@ -73,6 +73,68 @@ def _dff_instance_count(netlist_text: str) -> int:
     return sum(1 for _ in _DFF_INST_RE.finditer(netlist_text or ""))
 
 
+def normalized_netlist_digest(netlist_text: str, *, top: str) -> dict:
+    """Normalize one Verilog netlist with Yosys; this is not an admission verdict."""
+    import hashlib
+    import re
+    import shutil
+    import subprocess
+    import tempfile
+    if not isinstance(netlist_text, str) or not netlist_text.strip():
+        return {'status': 'NOT_MEASURED', 'reason': 'NETLIST_FORMAT_INVALID'}
+    if not isinstance(top, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', top):
+        return {'status': 'NOT_MEASURED', 'reason': 'NETLIST_TOP_INVALID'}
+    tool = shutil.which('yosys')
+    if not tool:
+        return {'status': 'NOT_MEASURED', 'reason': 'NORMALIZER_UNAVAILABLE'}
+    try:
+        tool_sha = hashlib.sha256(Path(tool).read_bytes()).hexdigest()
+        source_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+        input_sha = hashlib.sha256(netlist_text.encode('utf-8')).hexdigest()
+        with tempfile.TemporaryDirectory(prefix='dft-normalize-') as td:
+            source = Path(td) / 'source.v'
+            target = Path(td) / 'normalized.v'
+            source.write_text(netlist_text, encoding='utf-8')
+            recipe = f'read_verilog {source}; hierarchy -top {top}; write_verilog -noattr {target}'
+            run = subprocess.run([tool, '-Q', '-T', '-p', recipe],
+                                 capture_output=True, timeout=60)
+            if run.returncode != 0 or not target.is_file() or not target.stat().st_size:
+                raise ValueError('Yosys normalization failed')
+            normalized = target.read_bytes()
+        if (hashlib.sha256(Path(tool).read_bytes()).hexdigest() != tool_sha
+                or hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != source_sha):
+            raise ValueError('normalizer changed during execution')
+        return {'status': 'MEASURED', 'input_sha256': input_sha,
+                'normalized_sha256': hashlib.sha256(normalized).hexdigest(),
+                'yosys_sha256': tool_sha, 'source_sha256': source_sha, 'top': top,
+                'recipe': ['read_verilog', 'hierarchy -top', 'write_verilog -noattr'],
+                'flow109_acceptance': 'NOT_MEASURED'}
+    except (OSError, ValueError, UnicodeError, subprocess.TimeoutExpired):
+        return {'status': 'NOT_MEASURED', 'reason': 'NETLIST_FORMAT_INVALID'}
+
+
+def compare_normalized_preroute_netlists(points: dict, *, top: str, requires_scan: bool) -> dict:
+    """Compare four supplied netlists; callers must separately bind each producer."""
+    if type(requires_scan) is not bool:
+        return {'status': 'NOT_MEASURED', 'reason': 'SCAN_APPLICABILITY_UNRESOLVED'}
+    start = 'D24' if requires_scan else 'D22'
+    order = (start, 'D25', 'D26', 'D30')
+    if not isinstance(points, dict) or set(points) != set(order):
+        return {'status': 'NOT_MEASURED', 'reason': 'CHAIN_POINT_MISSING'}
+    evidence = {}
+    for point in order:
+        record = normalized_netlist_digest(points[point], top=top)
+        if record['status'] != 'MEASURED':
+            return {'status': 'NOT_MEASURED', 'reason': record['reason'], 'point': point}
+        evidence[point] = record
+    if len({(v['yosys_sha256'], v['source_sha256']) for v in evidence.values()}) != 1:
+        return {'status': 'NOT_MEASURED', 'reason': 'NORMALIZER_IDENTITY_CHANGED'}
+    expected = evidence[start]['normalized_sha256']
+    mismatch = [point for point in order[1:] if evidence[point]['normalized_sha256'] != expected]
+    return {'status': 'FAIL' if mismatch else 'PASS', 'start': start,
+            'mismatch': mismatch, 'points': evidence, 'flow109_acceptance': 'NOT_MEASURED'}
+
+
 def reconcile_scan_cell_list(mapped: str, replaced: str, adopted: str, cells: list, *, top: str) -> dict:
     """Compare a D23 list using complete Yosys parses of all three netlists.
 
