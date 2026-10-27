@@ -216,10 +216,24 @@ def _d26_timed_arm(project: Path, arm: Mapping, intent: Mapping,
         raise Flow109Error("FLOW109_D26_SCAN_NATIVE_STALE", mode)
     import librelane_contract
     try:
-        librelane_contract.validate_step_receipt(folder, "OpenROAD.STAPrePNR")
+        producer = librelane_contract.validate_step_receipt(folder, "OpenROAD.STAPrePNR")
         config = json.loads((folder / "config.json").read_text())
         state_path = folder / "state_out.json"
         state = json.loads(state_path.read_text())
+        state_in_path = folder / "state_in.json"
+        state_in = json.loads(state_in_path.read_text())
+        fingerprint = producer["input"]
+        hashes = producer["sha256"]
+        raw_input = state_in.get("nl")
+        if (not isinstance(raw_input, str) or not raw_input
+                or hashes.get("state_in.json") != _file_digest(state_in_path)
+                or fingerprint.get("state") != _file_digest(state_in_path)
+                or fingerprint.get("state_files", {}).get(raw_input) != adopted["sha256"]
+                or Path(raw_input).resolve() != (Path(project) / adopted["path"]).resolve()
+                or _file_digest(Path(raw_input)) != adopted["sha256"]):
+            raise Flow109Error("FLOW109_D26_INPUT_NETLIST_UNBOUND", mode)
+    except Flow109Error:
+        raise
     except Exception as exc:
         raise Flow109Error("FLOW109_D26_SCAN_NATIVE_STALE", mode) from exc
     if (Path(str(config.get("PNR_SDC_FILE") or "")).resolve()

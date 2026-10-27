@@ -294,14 +294,19 @@ def _d30_scan_case(project, monkeypatch, top="neutral_unit"):
                         "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
     for mode, native in (("functional", functional_native), ("scan", scan_native)):
         native.parent.mkdir(parents=True)
-        native.write_text(json.dumps({"input": {"step": "OpenROAD.STAPrePNR"}}))
+        state_in = native.parent / "state_in.json"
+        state_in.write_text(json.dumps({"nl": str(post.resolve())}))
+        native.write_text(json.dumps({"input": {"step": "OpenROAD.STAPrePNR",
+            "state": hashlib.sha256(state_in.read_bytes()).hexdigest(),
+            "state_files": {str(post.resolve()): hashlib.sha256(post.read_bytes()).hexdigest()}},
+            "sha256": {"state_in.json": hashlib.sha256(state_in.read_bytes()).hexdigest()}}))
         (native.parent / "config.json").write_text(json.dumps({
             "PNR_SDC_FILE": str((functional_sdc if mode == "functional" else
                                   project / report["scan_mode_constraint"]["path"]).resolve())}))
         (native.parent / "state_out.json").write_text(json.dumps({"nl": str(post.resolve())}))
     import librelane_contract
     monkeypatch.setattr(librelane_contract, "validate_step_receipt",
-                        lambda *_: {"input": {"step": "OpenROAD.STAPrePNR"}})
+                        lambda folder, *_: json.loads((folder / "vibeic_receipt.json").read_text()))
     gates = project / "reports/flow109/d26_timing"; gates.mkdir(parents=True, exist_ok=True)
     intent = flow109.dft_source_intent(
         project, flow109.execution_context(
@@ -374,6 +379,34 @@ def _d30_scan_case(project, monkeypatch, top="neutral_unit"):
     (rows / "D26.json").write_text(json.dumps(d26))
     features = profile("Mapped soft-IP with prestitched scan")
     return flow109.execution_context(flow109.resolve_plan(features), "D30", "D30")
+
+
+def test_d30_rejects_d26_input_netlist_substitution(tmp_path, monkeypatch):
+    import hashlib
+    context = _d30_scan_case(tmp_path, monkeypatch)
+    assert flow109.dft_preroute_admission(tmp_path, context)['flow109_acceptance'] == 'NOT_MEASURED'
+    folder = tmp_path / 'phase3/librelane/d26_post_scan_functional'
+    other = tmp_path / 'other_netlist.v'
+    other.write_text('module neutral_unit; endmodule\n')
+    state_in = folder / 'state_in.json'
+    state_in.write_text(json.dumps({'nl': str(other.resolve())}))
+    receipt_path = folder / 'vibeic_receipt.json'
+    receipt = json.loads(receipt_path.read_text())
+    state_sha = hashlib.sha256(state_in.read_bytes()).hexdigest()
+    receipt['input']['state'] = state_sha
+    receipt['input']['state_files'] = {str(other.resolve()): hashlib.sha256(other.read_bytes()).hexdigest()}
+    receipt['sha256']['state_in.json'] = state_sha
+    receipt_path.write_text(json.dumps(receipt))
+    timing_path = tmp_path / 'reports/flow109/d26_scan_mode.json'
+    timing = json.loads(timing_path.read_text())
+    timing['post_scan_arms']['functional']['native']['receipt']['sha256'] = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+    timing_path.write_text(json.dumps(timing))
+    row_path = tmp_path / 'reports/flow109/default_rows/D26.json'
+    row = json.loads(row_path.read_text())
+    row['timing_modes_receipt']['sha256'] = hashlib.sha256(timing_path.read_bytes()).hexdigest()
+    row_path.write_text(json.dumps(row))
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_D26_INPUT_NETLIST_UNBOUND'):
+        flow109.dft_preroute_admission(tmp_path, context)
 
 
 def test_d30_accepts_native_d24_d25_identity_and_chain_report(tmp_path, monkeypatch):
