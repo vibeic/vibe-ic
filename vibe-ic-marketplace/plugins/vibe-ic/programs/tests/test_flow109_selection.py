@@ -3069,6 +3069,9 @@ def test_d30_delivery_owner_records_current_adopted_netlist_and_refuses_stale(tm
     import design_one_shot_runner as design
     import step_output_collector as versions
     context = _d30_scan_case(tmp_path, monkeypatch)
+    context_path = tmp_path / 'd30-context.json'
+    context_path.write_text(json.dumps(context))
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(context_path))
     attempt = flow109._new_attempt(tmp_path, context)
     versions_root = versions._versions_root(tmp_path)
     folder = 'test-d30-handoff'
