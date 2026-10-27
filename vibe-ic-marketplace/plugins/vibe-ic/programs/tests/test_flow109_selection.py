@@ -385,14 +385,12 @@ def test_d30_accepts_native_d24_d25_identity_and_chain_report(tmp_path, monkeypa
     assert result["adopted_netlist"]["artifact_id"] == "D24_POST_SCAN_NETLIST"
     assert result["native_chain"]["internal_chain_length"] == 2
     modes = result["pre_route_timing"]["timing_modes"]
-    assert modes["modes_measured"] == [
-        "functional_baseline", "post_scan_functional", "post_scan_scan"]
+    assert modes["modes_measured"] == ["functional_baseline", "post_scan_functional"]
     arms = modes["post_scan_arms"]
-    assert (arms["functional"]["adopted_netlist"]["sha256"]
-            == arms["scan"]["adopted_netlist"]["sha256"]
-            == result["adopted_netlist"]["sha256"])
+    assert set(arms) == {"functional"}
+    assert arms["functional"]["adopted_netlist"]["sha256"] == result["adopted_netlist"]["sha256"]
     assert arms["functional"]["constraint"]["clock_select_value"] == 0
-    assert arms["scan"]["constraint"]["mode"] == "scan"
+    assert result["pre_route_timing"]["applicable_modes"] == ["functional"]
 
 
 def test_d30_explicit_no_scan_accepts_current_functional_only_d26(
@@ -532,8 +530,14 @@ def test_d30_refuses_prescan_foreign_stale_or_unresolved_inputs(
                 timing.read_bytes()).hexdigest()
             row.write_text(json.dumps(d26))
 
-    with pytest.raises(flow109.Flow109Error, match=code):
-        flow109.dft_preroute_admission(tmp_path, context)
+    if damage in {"wrong_scan_mode", "stale_scan_arm", "violating_scan_sta"}:
+        # D26 validates functional timing only; D49/D70 own scan-mode timing.
+        result = flow109.dft_preroute_admission(tmp_path, context)
+        assert result["pre_route_timing"]["applicable_modes"] == ["functional"]
+        assert set(result["pre_route_timing"]["timing_modes"]["post_scan_arms"]) == {"functional"}
+    else:
+        with pytest.raises(flow109.Flow109Error, match=code):
+            flow109.dft_preroute_admission(tmp_path, context)
 
 
 def _final_timing_case(project, monkeypatch):

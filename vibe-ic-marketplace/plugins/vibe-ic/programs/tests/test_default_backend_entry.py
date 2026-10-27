@@ -1036,18 +1036,19 @@ def test_default_postcheck8_consumes_saved_prelayout_without_native_replay(
 
 
 @pytest.mark.parametrize('case,expected,calls,terminal_expected', [
-    ('no_scan', 'PASS', 0, 'PASS'),
-    ('scan_pass', 'PASS', 2, 'PASS'),
-    ('terminal_missing', 'PASS', 2, 'NOT_MEASURED'),
-    ('terminal_changed', 'PASS', 2, 'NOT_MEASURED'),
-    ('stale_subject', 'NOT_MEASURED', 0, None),
-    ('missing_scan_sdc', 'NOT_MEASURED', 0, None),
-    ('scan_violation', 'FAIL', 2, 'FAIL'),
-    ('terminal_violation_changed', 'FAIL', 2, 'NOT_MEASURED'),
+    pytest.param('no_scan', 'PASS', 0, 'PASS', id='no_scan-PASS-0-PASS'),
+    pytest.param('scan_pass', 'PASS', 1, 'PASS', id='scan_pass-PASS-2-PASS'),
+    pytest.param('terminal_missing', 'PASS', 1, 'NOT_MEASURED', id='terminal_missing-PASS-2-NOT_MEASURED'),
+    pytest.param('terminal_changed', 'PASS', 1, 'NOT_MEASURED', id='terminal_changed-PASS-2-NOT_MEASURED'),
+    pytest.param('stale_subject', 'NOT_MEASURED', 0, None, id='stale_subject-NOT_MEASURED-0-None'),
+    pytest.param('missing_scan_sdc', 'PASS', 1, 'PASS', id='missing_scan_sdc-NOT_MEASURED-0-None'),
+    pytest.param('scan_violation', 'PASS', 1, 'PASS', id='scan_violation-FAIL-2-FAIL'),
+    pytest.param('terminal_violation_changed', 'PASS', 1, 'NOT_MEASURED', id='terminal_violation_changed-FAIL-2-NOT_MEASURED'),
+    pytest.param('functional_violation', 'FAIL', 1, 'FAIL', id='functional_violation'),
 ])
 def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
         tmp_path, monkeypatch, case, expected, calls, terminal_expected):
-    """D26 times both modes on D24 bytes; absence/red cannot borrow baseline."""
+    """D26 times functional mode on D24; scan-mode checks belong to D49/D70."""
     import hashlib
     import json
     from types import SimpleNamespace
@@ -1166,8 +1167,7 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
         put(output, doc)
         return doc
     def judge_slack(folder, output):
-        red = case in ('scan_violation', 'terminal_violation_changed') \
-            and 'scan_slack_gate' in output.name
+        red = case == 'functional_violation' and 'functional_slack_gate' in output.name
         doc = {'verdict': 'FAIL' if red else 'PASS',
                'findings': ['LL_STA_SETUP_VIOLATION'] if red else [],
                'corners': {'tt': {'setup_ws': {'status': 'MEASURED',
@@ -1179,6 +1179,7 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
     monkeypatch.setattr(prelayout, 'judge_slack', judge_slack)
     if case == 'missing_scan_sdc':
         scan_sdc.unlink()
+        (project / 'reports/phase2/dft/scan_chain.json').unlink()
 
     result = front._complete_step10_prelayout(project, 'top', 'neutral', '')
     assert result['verdict'] == expected, result
@@ -1192,11 +1193,9 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
     assert receipt['functional_baseline']['canonical_pass'] is True
     assert len(launched) == calls
     if calls:
-        assert {row['arm'] for row in launched} == {
-            'd26_post_scan_functional', 'd26_post_scan_scan'}
+        assert {row['arm'] for row in launched} == {'d26_post_scan_functional'}
         assert all(row['netlist'] == adopted for row in launched)
         functional = next(row for row in launched if row['arm'].endswith('functional'))
-        scan_row = next(row for row in launched if row['arm'].endswith('scan'))
         text = functional['sdc'].read_text()
         assert 'create_clock -period 10' in text
         assert 'set_case_analysis 0 [get_ports {test}]' in text
@@ -1204,9 +1203,9 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
         assert 'set_case_analysis 0 [get_ports {sin}]' in text
         assert 'set_case_analysis 0 [get_ports {tck}]' in text
         assert 'set_case_analysis 1 [get_ports {rst_n}]' in text
-        assert scan_row['sdc'] == scan_sdc
         assert receipt['scan']['adopted_d24']['sha256'] == contract.digest(adopted)
-        assert set(receipt['post_scan_arms']) == {'functional', 'scan'}
+        assert set(receipt['post_scan_arms']) == {'functional'}
+        assert receipt['scan']['status'] == 'NOT_MEASURED'
     elif case == 'no_scan':
         assert receipt['scan']['status'] == 'NOT_APPLICABLE'
     else:

@@ -286,24 +286,10 @@ def _d26_timing_modes_binding(project: Path, d26: Mapping, intent: Mapping,
         return {"receipt": current_ref, "functional_baseline": dict(baseline),
                 "scan": dict(scan), "modes_measured": list(timing["modes_measured"])}
     arms = timing.get("post_scan_arms")
-    if (scan.get("applicability") != "APPLICABLE" or scan.get("status") != "PASS"
-            or not isinstance(arms, Mapping) or set(arms) != {"functional", "scan"}
-            or timing.get("modes_measured") != [
-                "functional_baseline", "post_scan_functional", "post_scan_scan"]
-            or report is None or report_ref is None or adopted is None):
-        raise Flow109Error("FLOW109_D26_SCAN_TIMING_NOT_MEASURED", "mode population")
-    chain = scan.get("scan_chain_report")
-    if (not isinstance(chain, Mapping)
-            or {key: chain.get(key) for key in ("path", "sha256")} != dict(report_ref)
-            or chain.get("published") is not True or chain.get("current") is not True
-            or chain.get("d09_contract") != report.get("d09_contract")
-            or chain.get("measured_artifacts") != report.get("measured_artifacts")
-            or chain.get("native_clock_controls") != report.get("native_clock_controls")):
-        raise Flow109Error("FLOW109_D26_SCAN_REPORT_MISMATCH", "D23 report")
-    scan_constraint = dict(scan.get("constraint") or {})
-    if scan_constraint.pop("mode", None) != "scan" \
-            or scan_constraint != report.get("scan_mode_constraint"):
-        raise Flow109Error("FLOW109_D26_SCAN_CONSTRAINT_MISMATCH", "D23 scan SDC")
+    if (not isinstance(arms, Mapping) or "functional" not in arms
+            or "post_scan_functional" not in timing.get("modes_measured", [])
+            or adopted is None):
+        raise Flow109Error("FLOW109_D26_SCAN_TIMING_NOT_MEASURED", "functional mode")
     d24 = scan.get("adopted_d24")
     if (not isinstance(d24, Mapping) or d24.get("path") != adopted["path"]
             or d24.get("sha256") != adopted["sha256"]
@@ -312,12 +298,9 @@ def _d26_timing_modes_binding(project: Path, d26: Mapping, intent: Mapping,
             or d24.get("position") != 36):
         raise Flow109Error("FLOW109_D26_SCAN_NETLIST_MISMATCH", "D24 adoption")
     functional = _d26_timed_arm(project, arms["functional"], intent, adopted, "functional")
-    measured_scan = _d26_timed_arm(project, arms["scan"], intent, adopted, "scan")
-    if functional["native"]["receipt"] == measured_scan["native"]["receipt"]:
-        raise Flow109Error("FLOW109_D26_SCAN_NATIVE_MISMATCH", "arms share receipt")
     return {"receipt": current_ref, "functional_baseline": dict(baseline),
-            "post_scan_arms": {"functional": functional, "scan": measured_scan},
-            "scan": dict(scan), "modes_measured": list(timing["modes_measured"])}
+            "post_scan_arms": {"functional": functional},
+            "modes_measured": ["functional_baseline", "post_scan_functional"]}
 
 
 def dft_plan_reference(intent: Mapping) -> dict:
@@ -414,8 +397,7 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
             "owner_step": "D26", "owner_position": 38,
             "D26_result": d26_ref,
             "timing_modes": timing_modes,
-            "applicable_modes": (["functional", "scan"]
-                                 if intent["requires_scan"] else ["functional"]),
+            "applicable_modes": ["functional"],
             "scope": "timing applicability; D25 functional LEC grants no timing credit"},
         "D25_result": d25_ref,
         **({"D24_result": d24_ref} if d24_ref is not None else {}),

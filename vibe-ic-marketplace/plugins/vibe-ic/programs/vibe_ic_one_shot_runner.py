@@ -1054,12 +1054,11 @@ def _current_step9_checkpoint(project: Path, *,
 
 def _complete_step10_prelayout(project: Path, top: str, pdk_name: str,
                               container: str) -> dict:
-    """Resume D26 and publish its functional/scan timing modes atomically.
+    """Resume D26 using functional timing on the current adopted netlist.
 
-    The retained Step10 call remains the functional synthesis-netlist baseline.
-    When current D09 authority requires scan, two additional STAPrePNR arms
-    time the exact D24 post-scan subject: functional clock/case mode and scan
-    shift mode.  Missing authority is NOT_MEASURED; a measured red arm is FAIL.
+    The retained Step10 call remains the functional baseline. When scan is
+    required, an additional functional-mode STAPrePNR arm measures the D24
+    subject. Shift/capture timing belongs to D49/D70, not this pre-route step.
     """
     import _atomic_artefact as atomic
     import design_one_shot_runner as design
@@ -1208,36 +1207,6 @@ def _complete_step10_prelayout(project: Path, top: str, pdk_name: str,
             receipt['scan']['reason'] = 'functional baseline did not pass'
             return publish(status, baseline_detail, folder=current['folder'])
 
-        scan_report_path = rooted_file(
-            'reports/phase2/dft/scan_chain.json', 'published scan_chain.json')
-        scan_report = json.loads(scan_report_path.read_text())
-        if (scan_report.get('published') is not True
-                or scan_report.get('d09_contract') != planned):
-            raise ValueError('D26_SCAN_REPORT_NOT_CURRENT: D09/publication mismatch')
-        scan_current, scan_reason = scan.l20_binding_is_current(project, scan_report)
-        if not scan_current:
-            raise ValueError('D26_SCAN_REPORT_NOT_CURRENT: ' + scan_reason)
-        receipt['scan']['scan_chain_report'] = {
-            **file_ref(scan_report_path), 'published': True,
-            'd09_contract': scan_report.get('d09_contract'),
-            'measured_artifacts': scan_report.get('measured_artifacts'),
-            'native_clock_controls': scan_report.get('native_clock_controls'),
-            'current': True,
-        }
-
-        import dft_signoff_check as signoff
-        scan_timing = signoff.evaluate_scan_shift_timing(project)
-        if (scan_timing.get('required') is not True
-                or scan_timing.get('status') != 'PASS'
-                or not isinstance(scan_timing.get('constraint'), dict)):
-            raise ValueError('D26_SCAN_CONSTRAINT_NOT_MEASURED: '
-                             + '; '.join(scan_timing.get('reasons') or ()))
-        constraint = scan_timing['constraint']
-        scan_sdc = rooted_file(constraint.get('path'), 'scan-mode SDC')
-        if constraint.get('sha256') != contract.digest(scan_sdc):
-            raise ValueError('D26_SCAN_CONSTRAINT_CHANGED')
-        receipt['scan']['constraint'] = {**constraint, 'mode': 'scan'}
-
         import lec_gate_netlist_select as netlists
         adopted, note, is_scan = netlists.pnr_consumed_netlist(project, top)
         adopted = rooted_file(adopted, 'D24 adopted post-scan netlist')
@@ -1376,21 +1345,16 @@ def _complete_step10_prelayout(project: Path, top: str, pdk_name: str,
             }
 
         functional_arm = run_arm('functional', derived_sdc, functional_constraint)
-        scan_arm = run_arm('scan', scan_sdc, {**constraint, 'mode': 'scan'})
-        receipt['post_scan_arms'] = {
-            'functional': functional_arm, 'scan': scan_arm}
-        receipt['scan']['status'] = scan_arm['status']
-        for name, arm in receipt['post_scan_arms'].items():
-            if arm['status'] in ('PASS', 'FAIL'):
-                receipt['modes_measured'].append('post_scan_' + name)
-        arm_statuses = (functional_arm['status'], scan_arm['status'])
-        aggregate = ('FAIL' if 'FAIL' in arm_statuses else
-                     'PASS' if arm_statuses == ('PASS', 'PASS') else
-                     'NOT_MEASURED')
-        detail = ('D26 functional baseline and post-scan functional/scan modes passed'
+        receipt['post_scan_arms'] = {'functional': functional_arm}
+        receipt['scan']['status'] = 'NOT_MEASURED'
+        receipt['scan']['reason'] = 'shift and capture timing belong to D49/D70'
+        if functional_arm['status'] in ('PASS', 'FAIL'):
+            receipt['modes_measured'].append('post_scan_functional')
+        aggregate = functional_arm['status']
+        detail = ('D26 functional baseline and adopted-netlist functional mode passed'
                   if aggregate == 'PASS' else
-                  'D26 post-scan timing mode failed' if aggregate == 'FAIL' else
-                  'D26 post-scan timing mode is not measured')
+                  'D26 functional timing mode failed' if aggregate == 'FAIL' else
+                  'D26 functional timing mode is not measured')
         return publish(aggregate, detail, folder=current['folder'])
     except (contract.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
         receipt['scan']['status'] = 'NOT_MEASURED'
@@ -1892,41 +1856,9 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
             arms = doc.get('post_scan_arms') or {}
             if scan_doc.get('applicability') != 'APPLICABLE':
                 raise ValueError('scan applicability differs from current D09')
-            if (arms and (set(arms) != {'functional', 'scan'}
-                    or scan_doc.get('status') != arms['scan'].get('status')
-                    or doc.get('modes_measured') != [
-                        'functional_baseline', 'post_scan_functional',
-                        'post_scan_scan'])):
-                raise ValueError('applicable timing mode population is incomplete')
-
-            scan_report_ref = scan_doc.get('scan_chain_report') or {}
-            if scan_report_ref:
-                scan_report_path = (
-                    project / str(scan_report_ref.get('path') or '')).resolve()
-                if (not scan_report_path.is_relative_to(project)
-                        or not scan_report_path.is_file()
-                        or contract.digest(scan_report_path) !=
-                        scan_report_ref.get('sha256')):
-                    raise ValueError('scan-chain report is missing or changed')
-                scan_report = json.loads(scan_report_path.read_text(encoding='utf-8'))
-                current, reason = scan.l20_binding_is_current(project, scan_report)
-                if (not current or scan_report.get('published') is not True
-                        or scan_report.get('d09_contract') != planned):
-                    raise ValueError('scan-chain report is not current: ' + str(reason))
-            elif arms:
-                raise ValueError('complete timing arms omit scan-chain report')
-
-            recorded_constraint = dict(scan_doc.get('constraint') or {})
-            if recorded_constraint:
-                if recorded_constraint.pop('mode', None) != 'scan':
-                    raise ValueError('scan timing constraint mode is invalid')
-                import dft_signoff_check as signoff
-                scan_timing = signoff.evaluate_scan_shift_timing(project)
-                if (scan_timing.get('status') != 'PASS'
-                        or scan_timing.get('constraint') != recorded_constraint):
-                    raise ValueError('current scan timing constraint differs')
-            elif arms:
-                raise ValueError('complete timing arms omit scan timing constraint')
+            if (arms and ('functional' not in arms
+                    or 'post_scan_functional' not in doc.get('modes_measured', []))):
+                raise ValueError('functional timing mode population is incomplete')
 
             adopted_doc = scan_doc.get('adopted_d24') or {}
             if adopted_doc:
@@ -1963,7 +1895,7 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                     return doc, None
                 raise ValueError('timing mode population is absent')
 
-            for name in ('functional', 'scan'):
+            for name in ('functional',):
                 arm = arms[name]
                 constraint_ref = arm.get('constraint') or {}
                 if (arm.get('status') not in ('PASS', 'FAIL', 'NOT_MEASURED')
@@ -2036,10 +1968,7 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                               'NOT_MEASURED')
                 if arm.get('status') != arm_status:
                     raise ValueError(f'{name} timing arm verdict differs')
-            arm_statuses = (arms['functional']['status'], arms['scan']['status'])
-            aggregate = ('FAIL' if 'FAIL' in arm_statuses else
-                         'PASS' if arm_statuses == ('PASS', 'PASS') else
-                         'NOT_MEASURED')
+            aggregate = arms['functional']['status']
             if aggregate != status:
                 raise ValueError('timing arm aggregate differs from terminal status')
             return doc, None
