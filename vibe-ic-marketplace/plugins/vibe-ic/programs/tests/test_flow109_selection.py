@@ -2950,6 +2950,43 @@ def test_d23_openroad_scan_replace_component_no_chain_report(tmp_path, monkeypat
     intent = flow109.dft_source_intent(tmp_path, context)
     bound = flow109.d23_scan_replacement_binding(tmp_path, context, intent)
     assert bound['scan_cell_list'] == result['scan_cell_list'] and len(bound['cells']) == 2
+    # Exercise the real D30 admission and D24 list consumer with a real D23
+    # producer. LEC and STA here are synthetic fixture inputs, not native proof.
+    import lec_gate_netlist_select as netlists
+    adopted_path = tmp_path / 'phase2/stage2/synth/post_dft_netlist.v'
+    adopted_path.parent.mkdir(parents=True, exist_ok=True)
+    adopted_path.write_bytes((tmp_path / bound['replaced']['path']).read_bytes())
+    def adopted_ref():
+        return {'artifact_id': 'D24_POST_SCAN_NETLIST',
+                'path': 'phase2/stage2/synth/post_dft_netlist.v',
+                'sha256': hashlib.sha256(adopted_path.read_bytes()).hexdigest()}
+    rows = tmp_path / 'reports/flow109/default_rows'
+    def publish_d24():
+        (rows / 'D24.json').write_text(json.dumps({'step_id': 'D24',
+            'default_row_status': 'PASS', 'completed': True,
+            'adopted_netlist': adopted_ref(), 'scan_cell_list': result['scan_cell_list']}))
+    publish_d24()
+    for step in ('D25', 'D26'):
+        (rows / f'{step}.json').write_text(json.dumps(
+            {'step_id': step, 'default_row_status': 'PASS', 'completed': True}))
+    manifest = tmp_path / 'input/flow109/D22.json'
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(json.dumps({'top': 'unit'}))
+    (tmp_path / 'reports/lec.json').write_text(json.dumps({'verdict': 'PASS', 'equivalent': True}))
+    monkeypatch.setattr(netlists, 'proof_subject_binding', lambda *_: {'state': netlists.BINDING_MATCH})
+    monkeypatch.setattr(flow109, '_d26_timing_modes_binding', lambda *a, **k: {'status': 'FIXTURE'})
+    accepted = flow109.dft_preroute_admission(tmp_path, context)
+    assert accepted['native_chain']['producer_step'] == 'D36'
+    assert accepted['flow109_acceptance'] == 'NOT_MEASURED'
+    assert accepted['scan_cell_list_reconciliation']['scan_cell_list'] == result['scan_cell_list']
+    assert not (tmp_path / 'reports/phase2/dft/scan_chain.json').exists()
+    original = adopted_path.read_text()
+    adopted_path.write_text(original.replace(doc['cells'][0]['cell'], 'missing_scan_cell', 1))
+    publish_d24()
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_D30_SCAN_CELL_LIST_MISMATCH'):
+        flow109.dft_preroute_admission(tmp_path, context)
+    adopted_path.write_text(original)
+    publish_d24()
     artifact.write_text(artifact.read_text() + ' ')
     with pytest.raises(flow109.Flow109Error, match='FLOW109_D23_SCAN_CELLS_STALE'):
         flow109.d23_scan_replacement_binding(tmp_path, context, intent)
