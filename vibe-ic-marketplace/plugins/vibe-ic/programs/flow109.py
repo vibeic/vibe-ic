@@ -501,25 +501,57 @@ def _preroute_chain_observation(project: Path, top: str, intent: Mapping,
     bound D30 delivered netlist. Do not substitute the upstream adopted path.
     """
     import dft_post_optimization_scan_survival_check as normalizer
-    if intent.get('requires_scan') is not True:
-        return {'status': 'NOT_MEASURED', 'reason': 'D22_D26_INPUT_BINDINGS_UNPROVEN',
-                'missing': ['D22', 'D26', 'D30'], 'flow109_acceptance': 'NOT_MEASURED'}
+    if type(intent.get('requires_scan')) is not bool:
+        return {'status': 'NOT_MEASURED', 'reason': 'SCAN_APPLICABILITY_UNRESOLVED',
+                'flow109_acceptance': 'NOT_MEASURED'}
+    start_name = 'D24' if intent['requires_scan'] else 'D22'
     try:
         start = _current_project_ref(project, {k: adopted.get(k) for k in ('path', 'sha256')},
-                                     'FLOW109_D24_ADOPTED_NETLIST_UNBOUND')
+                                     'FLOW109_' + start_name + '_ADOPTED_NETLIST_UNBOUND')
+        if start_name == 'D22':
+            _accepted_row(project, Path('reports/flow109/default_rows/D22.json'), 'D22')
+            import synth_handoff_netlist_check as handoff
+            source = handoff.bound_handoff(project)
+            if (not isinstance(source, Mapping) or source.get('verdict') != 'PASS'
+                    or source.get('netlist_sha256') != start['sha256']
+                    or Path(str(source.get('mapped') or '')).resolve() !=
+                       (Path(project) / start['path']).resolve()):
+                raise ValueError('D22 native synthesis adoption not bound')
         gate = lec['proof_identity']['gate_netlist']
         gate_sha = gate['sha256']
         if not isinstance(gate_sha, str) or not gate_sha.startswith('sha256:'):
             raise ValueError('D25 proof netlist digest missing')
         d25 = _current_project_ref(project, {'path': gate['path'], 'sha256': gate_sha[7:]},
                                    'FLOW109_D25_PROOF_INPUT_STALE')
-        native = timing['post_scan_arms']['functional']['native']
-        folder = (Path(project) / native['folder']).resolve()
+        if start_name == 'D24':
+            native = timing['post_scan_arms']['functional']['native']
+            folder = (Path(project) / native['folder']).resolve()
+        else:
+            import design_one_shot_runner as design
+            baseline = timing['functional_baseline']
+            current = design._current_phase2_consumer(project, '10', 0)
+            if (not isinstance(current, Mapping)
+                    or current.get('folder') != baseline.get('folder')):
+                raise ValueError('D26 functional baseline consumer is not current')
+            gate, _ = _bound_project_json(project,
+                Path('phase3/librelane/prelayout/gates/step10_slack.json'),
+                'FLOW109_D26_FUNCTIONAL_GATE_UNBOUND')
+            state_out = Path(str(gate.get('source') or '')).resolve()
+            if (gate.get('verdict') != 'PASS' or not gate.get('corners')
+                    or not state_out.is_relative_to(Path(project).resolve())
+                    or state_out.name != 'state_out.json'
+                    or not state_out.is_file()
+                    or _file_digest(state_out) != gate.get('state_out_sha256')):
+                raise ValueError('D26 functional gate is not bound to current native state')
+            folder = state_out.parent
         if not folder.is_relative_to(Path(project).resolve()):
             raise ValueError('D26 folder is outside project')
         state = json.loads((folder / 'state_in.json').read_text())
         path = Path(state['nl']).resolve()
         relative = path.relative_to(Path(project).resolve()).as_posix()
+        output_state = json.loads((folder / 'state_out.json').read_text())
+        if Path(str(output_state.get('nl') or '')).resolve() != path:
+            raise ValueError('D26 output state differs from the actual input netlist')
         import librelane_contract
         receipt = librelane_contract.validate_step_receipt(folder, 'OpenROAD.STAPrePNR')
         fingerprint = receipt['input']
@@ -530,7 +562,7 @@ def _preroute_chain_observation(project: Path, top: str, intent: Mapping,
         d26 = _current_project_ref(project, {'path': relative, 'sha256': sha},
                                    'FLOW109_D26_INPUT_NETLIST_UNBOUND')
         evidence = {}
-        for point, reference in (('D24', start), ('D25', d25), ('D26', d26)):
+        for point, reference in ((start_name, start), ('D25', d25), ('D26', d26)):
             result = normalizer.normalized_netlist_digest(
                 (Path(project) / reference['path']).read_text(), top=top)
             if result.get('status') != 'MEASURED':
@@ -540,7 +572,7 @@ def _preroute_chain_observation(project: Path, top: str, intent: Mapping,
         if len({(v['yosys_sha256'], v['source_sha256']) for v in evidence.values()}) != 1:
             return {'status': 'NOT_MEASURED', 'reason': 'NORMALIZER_IDENTITY_CHANGED',
                     'flow109_acceptance': 'NOT_MEASURED'}
-        baseline = evidence['D24']['normalized_sha256']
+        baseline = evidence[start_name]['normalized_sha256']
         mismatch = [name for name in ('D25', 'D26')
                     if evidence[name]['normalized_sha256'] != baseline]
         if mismatch:
@@ -548,7 +580,7 @@ def _preroute_chain_observation(project: Path, top: str, intent: Mapping,
                     'mismatch': mismatch, 'points': evidence,
                     'flow109_acceptance': 'NOT_MEASURED'}
         return {'status': 'NOT_MEASURED', 'reason': 'D30_DELIVERY_ARTIFACT_UNBOUND',
-                'missing': ['D30'], 'points': evidence, 'flow109_acceptance': 'NOT_MEASURED'}
+                'missing': ['D30'], 'start': start_name, 'points': evidence, 'flow109_acceptance': 'NOT_MEASURED'}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return {'status': 'NOT_MEASURED', 'reason': 'PREROUTE_INPUT_BINDING_UNPROVEN',
                 'detail': str(exc), 'flow109_acceptance': 'NOT_MEASURED'}
@@ -600,15 +632,17 @@ def _complete_preroute_chain(project: Path, context: Mapping, admission: Mapping
         if (project / handoff_ref['path']).resolve() != expected_record:
             raise ValueError('D30 owner handoff record differs')
         points = observed.get('points')
-        if not isinstance(points, Mapping) or set(points) != {'D24', 'D25', 'D26'}:
-            raise ValueError('D24/D25/D26 input evidence is incomplete')
+        start_name = 'D24' if admission.get('requires_scan') is True else 'D22'
+        if (type(admission.get('requires_scan')) is not bool or not isinstance(points, Mapping)
+                or set(points) != {start_name, 'D25', 'D26'}):
+            raise ValueError('pre-route input evidence is incomplete')
         refs = {name: _current_project_ref(project, points[name]['input'],
                                           'FLOW109_PREROUTE_INPUT_STALE')
-                for name in ('D24', 'D25', 'D26')}
+                for name in (start_name, 'D25', 'D26')}
         source = _current_project_ref(project, receipt.get('source_netlist'),
                                       'FLOW109_D30_DELIVERY_SOURCE_STALE')
-        if source != refs['D24']:
-            raise ValueError('D30 source differs from D24 adoption')
+        if source != refs[start_name]:
+            raise ValueError('D30 source differs from upstream adoption')
         delivered = _current_project_ref(project, receipt.get('delivered_netlist'),
                                          'FLOW109_D30_DELIVERY_NETLIST_STALE')
         output = project / delivered['path']
@@ -617,7 +651,7 @@ def _complete_preroute_chain(project: Path, context: Mapping, admission: Mapping
         refs['D30'] = delivered
         texts = {name: (project / item['path']).read_text() for name, item in refs.items()}
         answer = normalizer.compare_normalized_preroute_netlists(
-            texts, top=admission['top'], requires_scan=True)
+            texts, top=admission['top'], requires_scan=admission['requires_scan'])
         if (any(_current_project_ref(project, item, 'FLOW109_PREROUTE_INPUT_STALE') != item
                 for item in refs.values())
                 or _current_project_ref(project, ref, 'FLOW109_D30_DELIVERY_RECEIPT_UNBOUND') != ref
@@ -706,6 +740,11 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
         project, _d26, intent, top, report=report, report_ref=report_ref,
         adopted=adopted)
     observed_chain = _preroute_chain_observation(project, top, intent, adopted, lec, timing_modes)
+    if observed_chain.get('status') == 'FAIL':
+        raise Flow109Error('FLOW109_PREROUTE_NETLIST_MISMATCH', str(observed_chain.get('mismatch')))
+    if (observed_chain.get('status') != 'NOT_MEASURED'
+            or observed_chain.get('reason') != 'D30_DELIVERY_ARTIFACT_UNBOUND'):
+        raise Flow109Error('FLOW109_PREROUTE_INPUTS_UNPROVEN', str(observed_chain.get('reason')))
     return {
         "schema": "vibeic.flow109.dft-preroute-admission.v1",
         "normalized_preroute_chain": observed_chain,
@@ -1915,9 +1954,21 @@ def prepare_front_door(args, project: Path) -> int | None:
                                 runtime_tool_uses=manifest.get("runtime_tool_uses", manifest.get("tool_uses")),
                                 qualification_registry=manifest.get("qualification_registry"))
     selected_rows = context.get("resolved_rows") or [context.get("resolved_row", {})]
-    dft_preroute = (dft_preroute_admission(project, component_context(
-        context, requested_step="D30"))
-        if any(row.get("id") == "D30" for row in selected_rows) else None)
+    try:
+        dft_preroute = (dft_preroute_admission(project, component_context(
+            context, requested_step="D30"))
+            if any(row.get("id") == "D30" for row in selected_rows) else None)
+    except Flow109Error as exc:
+        if exc.code != 'FLOW109_PREROUTE_NETLIST_MISMATCH':
+            raise
+        # This is an observed netlist mismatch, not missing evidence.  Refuse
+        # before the D30 producer and preserve the measured FAIL status.
+        write_json(destination / 'admission.json', {
+            'step_id': 'D30', 'status': 'FAIL', 'reason': exc.code,
+            'detail': exc.detail, 'native_started': False,
+            'flow109_acceptance': 'NOT_MEASURED'})
+        print(f'FLOW109 D30: FAIL {exc.code}; native delivery not started')
+        return 1
     # The registered package/test consumer needs the same original catalogue
     # and pad producer inputs after checkpoint relocation. Restore exact bytes
     # only through the existing current-native-owner transport, before it runs.

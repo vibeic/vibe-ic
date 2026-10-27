@@ -480,11 +480,93 @@ def test_d30_explicit_no_scan_accepts_current_functional_only_d26(
         "step_id": "D26", "default_row_status": "PASS", "completed": True,
         "timing_modes_receipt": {"path": str(timing.relative_to(tmp_path)),
             "sha256": hashlib.sha256(timing.read_bytes()).hexdigest()}}))
+    # The released no-scan baseline records only a Step10 version folder;
+    # without the real synthesis and STA producer bindings it is unproven.
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_PREROUTE_INPUTS_UNPROVEN'):
+        flow109.dft_preroute_admission(tmp_path, context)
+    # Isolated positive fixture for the already-existing native receipt shape.
+    # These authorities are explicitly mocked; they do not constitute row PASS.
+    import design_one_shot_runner as design
+    import synth_handoff_netlist_check as handoff
+    import librelane_contract as native_contract
+    (rows / 'D22.json').write_text(json.dumps({
+        'step_id': 'D22', 'default_row_status': 'PASS', 'completed': True}))
+    monkeypatch.setattr(handoff, 'bound_handoff', lambda *_: {
+        'verdict': 'PASS', 'mapped': str(mapped.resolve()),
+        'netlist_sha256': hashlib.sha256(mapped.read_bytes()).hexdigest()})
+    monkeypatch.setattr(design, '_current_phase2_consumer', lambda _p, step, _t:
+                        {'folder': 'historical-functional'} if step == '10' else None)
+    native = tmp_path / 'phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr'
+    native.mkdir(parents=True)
+    state_in = native / 'state_in.json'; state_out = native / 'state_out.json'
+    state_in.write_text(json.dumps({'nl': str(mapped.resolve())}))
+    state_out.write_text(json.dumps({'nl': str(mapped.resolve())}))
+    native_record = {'input': {'step': 'OpenROAD.STAPrePNR',
+        'state': hashlib.sha256(state_in.read_bytes()).hexdigest(),
+        'state_files': {str(mapped.resolve()): hashlib.sha256(mapped.read_bytes()).hexdigest()}},
+        'sha256': {'state_in.json': hashlib.sha256(state_in.read_bytes()).hexdigest()}}
+    (native / 'vibeic_receipt.json').write_text(json.dumps(native_record))
+    monkeypatch.setattr(native_contract, 'validate_step_receipt',
+                        lambda folder, *_: json.loads((folder / 'vibeic_receipt.json').read_text()))
+    gate = tmp_path / 'phase3/librelane/prelayout/gates/step10_slack.json'
+    gate.parent.mkdir(parents=True)
+    gate.write_text(json.dumps({'verdict': 'PASS', 'corners': {'tt': {}},
+        'source': str(state_out.resolve()), 'state_out_sha256': hashlib.sha256(state_out.read_bytes()).hexdigest()}))
     result = flow109.dft_preroute_admission(tmp_path, context)
+    assert result['normalized_preroute_chain']['reason'] == 'D30_DELIVERY_ARTIFACT_UNBOUND'
+    assert set(result['normalized_preroute_chain']['points']) == {'D22', 'D25', 'D26'}
 
     assert result["requires_scan"] is False
     assert result["identity_agreement"] == "D22_D25_D30_MATCH"
     assert result["pre_route_timing"]["timing_modes"]["scan"]["applicability"] == "NOT_APPLICABLE"
+
+    # Actual owner writes an independent D30 output, but fixtures here stand
+    # in for D22/D25/D26 and Step10/14 authority: component evidence only.
+    import step_output_collector as versions
+    handoff_folder = 'test-nonscan-d30-handoff'
+    handoff_file = versions._versions_root(tmp_path) / handoff_folder / 'outputs.json'
+    handoff_file.parent.mkdir(parents=True, exist_ok=True)
+    handoff_file.write_text(json.dumps({'canonical_pass': True, 'status': 'PASS'}))
+    monkeypatch.setattr(design, '_current_phase2_consumer', lambda _p, step, _t:
+        {'folder': 'historical-functional' if step == '10' else handoff_folder})
+    attempt = flow109._new_attempt(tmp_path, context)
+    delivery_ref = design._d30_publish_delivery(tmp_path, context, attempt, handoff_folder)
+    chain = flow109._complete_preroute_chain(tmp_path, context, result, delivery_ref,
+                                              d30_context_sha256=context['context_sha256'])
+    assert chain['status'] == 'PASS', chain
+    assert set(chain['references']) == {'D22', 'D25', 'D26', 'D30'}
+    answer = flow109._selected_step_result(tmp_path, context, {
+        'step_id': 'D30', 'context_sha256': context['context_sha256'],
+        'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True,
+        'd30_delivery_receipt': delivery_ref})
+    assert answer['default_row_status'] == 'NOT_MEASURED'
+    assert answer['normalized_chain_reason'] == 'D30_METRIC_BINDINGS_UNIMPLEMENTED'
+
+    # Simulate a real producer reporting a different bound D26 input.  The
+    # public selection must return measured FAIL before the delivery owner.
+    foreign = tmp_path / 'foreign_timed.v'
+    foreign.write_text('module neutral_unit(input clk, output q); assign q=~clk; endmodule\n')
+    state_in.write_text(json.dumps({'nl': str(foreign.resolve())}))
+    state_out.write_text(json.dumps({'nl': str(foreign.resolve())}))
+    native_record['input']['state'] = hashlib.sha256(state_in.read_bytes()).hexdigest()
+    native_record['input']['state_files'] = {str(foreign.resolve()): hashlib.sha256(foreign.read_bytes()).hexdigest()}
+    native_record['sha256']['state_in.json'] = hashlib.sha256(state_in.read_bytes()).hexdigest()
+    (native / 'vibeic_receipt.json').write_text(json.dumps(native_record))
+    gate_body = json.loads(gate.read_text())
+    gate_body['state_out_sha256'] = hashlib.sha256(state_out.read_bytes()).hexdigest()
+    gate.write_text(json.dumps(gate_body))
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_PREROUTE_NETLIST_MISMATCH'):
+        flow109.dft_preroute_admission(tmp_path, context)
+    import _delivery_route
+    assert _delivery_route.admit(tmp_path, 'ip') is None
+    manifest = tmp_path / 'nonscan-manifest.json'
+    manifest.write_text(json.dumps({'features': features}))
+    args = SimpleNamespace(flow='109', flow109_manifest=manifest, execution_mode=None,
+                           flow109_plan_only=False, entry_step='D30', exit_step='D30')
+    assert flow109.prepare_front_door(args, tmp_path) == 1
+    refusal = json.loads((tmp_path / 'reports/flow109/admission.json').read_text())
+    assert refusal['status'] == 'FAIL' and refusal['native_started'] is False
+    assert refusal['reason'] == 'FLOW109_PREROUTE_NETLIST_MISMATCH'
 
 
 @pytest.mark.parametrize("damage, code", [
@@ -3040,9 +3122,24 @@ def test_d23_openroad_scan_replace_component_no_chain_report(tmp_path, monkeypat
     manifest = tmp_path / 'input/flow109/D22.json'
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps({'top': 'unit'}))
-    (tmp_path / 'reports/lec.json').write_text(json.dumps({'verdict': 'PASS', 'equivalent': True}))
+    (tmp_path / 'reports/lec.json').write_text(json.dumps({'verdict': 'PASS', 'equivalent': True,
+        'proof_identity': {'gate_netlist': {'path': str(adopted_path.relative_to(tmp_path)),
+            'sha256': 'sha256:' + hashlib.sha256(adopted_path.read_bytes()).hexdigest()}}}))
     monkeypatch.setattr(netlists, 'proof_subject_binding', lambda *_: {'state': netlists.BINDING_MATCH})
-    monkeypatch.setattr(flow109, '_d26_timing_modes_binding', lambda *a, **k: {'status': 'FIXTURE'})
+    # D25 and D26 are synthetic in this D23/D24 native component test.
+    synthetic_folder = tmp_path / 'phase3/librelane/synthetic-sta'
+    synthetic_folder.mkdir(parents=True, exist_ok=True)
+    state = synthetic_folder / 'state_in.json'
+    state.write_text(json.dumps({'nl': str(adopted_path.resolve())}))
+    synthetic_receipt = {'input': {'state': hashlib.sha256(state.read_bytes()).hexdigest(),
+        'state_files': {str(adopted_path.resolve()): hashlib.sha256(adopted_path.read_bytes()).hexdigest()}},
+        'sha256': {'state_in.json': hashlib.sha256(state.read_bytes()).hexdigest()}}
+    (synthetic_folder / 'vibeic_receipt.json').write_text(json.dumps(synthetic_receipt))
+    (synthetic_folder / 'state_out.json').write_text(json.dumps({'nl': str(adopted_path.resolve())}))
+    monkeypatch.setattr(native_contract, 'validate_step_receipt', lambda folder, *_:
+                        json.loads((folder / 'vibeic_receipt.json').read_text()))
+    monkeypatch.setattr(flow109, '_d26_timing_modes_binding', lambda *a, **k:
+        {'post_scan_arms': {'functional': {'native': {'folder': str(synthetic_folder.relative_to(tmp_path))}}}})
     accepted = flow109.dft_preroute_admission(tmp_path, context)
     assert accepted['native_chain']['producer_step'] == 'D36'
     assert accepted['flow109_acceptance'] == 'NOT_MEASURED'
