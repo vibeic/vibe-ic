@@ -3090,6 +3090,17 @@ def test_d30_delivery_owner_records_current_adopted_netlist_and_refuses_stale(tm
     assert receipt['flow109_acceptance'] == 'NOT_MEASURED'
     assert hashlib.sha256(delivered.read_bytes()).hexdigest() == receipt['source_netlist']['sha256']
     assert delivered != tmp_path / receipt['source_netlist']['path']
+    # Exercise the actual handoff owner with retained producer acceptance as a
+    # fixture. The D30 row verdict and native LEC/STA are not asserted here.
+    owner_attempt = flow109._new_attempt(tmp_path, context)
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(owner_attempt))
+    monkeypatch.setattr(versions, '_read_index', lambda _p: {'steps': [{'id': '14', 'folder': folder}]})
+    monkeypatch.setattr(design._spf, 'retained_call', lambda *a, **kw: {
+        'current_step_producers': {'verdict': 'PASS', 'executed': 1}})
+    owner = design.step_synthesis_handoff(tmp_path)
+    assert owner.status == 'PASS'
+    assert owner.extras['d30_delivery_receipt']['path'].startswith(
+        str(owner_attempt.relative_to(tmp_path)))
     second = flow109._new_attempt(tmp_path, context)
     monkeypatch.setattr(design, '_current_phase2_consumer', lambda *_: None)
     with pytest.raises(ValueError, match='handoff consumer is not current'):
