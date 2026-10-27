@@ -685,3 +685,24 @@ def test_phase2_unattested_local_runtime_is_refused(tmp_path, monkeypatch):
     assert not result.admitted
     assert result.reason == 'LOCAL_RUNTIME_UNATTESTED'
     assert not cra.ledger_path(project).exists()
+
+
+def test_current_reset_judgement_reopens_only_once_and_stale_is_ignored(tmp_path, monkeypatch):
+    import ai_signed_judgement as judgement
+    project = _project(tmp_path / 'proj')
+    receipt = project / 'reports/audit/ai_judgements/3.json'
+    receipt.parent.mkdir(parents=True)
+    binding = {'evidence_sha256': 'a' * 64, 'netlist_sha256': 'b' * 64}
+    monkeypatch.setattr(judgement, 'reset_role_request', lambda _: binding.copy())
+    monkeypatch.setattr(judgement, 'check', lambda *_: (True, 'current'))
+    first = _admit(project)
+    receipt.write_text(json.dumps(binding))
+    second = _admit(project)
+    assert first.admitted and second.admitted
+    assert 'reset_role_signed_judgement' in second.identity['current_consumer_evidence_bindings']
+    assert not _admit(project).admitted
+    receipt.write_text(json.dumps({**binding, 'netlist_sha256': 'c' * 64}))
+    assert not _admit(project).admitted
+    monkeypatch.setattr(judgement, 'check', lambda *_: (False, 'unresolved'))
+    receipt.write_text(json.dumps(binding))
+    assert not _admit(project).admitted

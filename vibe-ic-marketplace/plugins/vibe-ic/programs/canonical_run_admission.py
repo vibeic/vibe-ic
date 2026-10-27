@@ -251,6 +251,33 @@ def _phase2_step1_judgement_binding(project: Path) -> Optional[Dict[str, Any]]:
     }
 
 
+def _phase2_reset_judgement_binding(project: Path) -> Optional[Dict[str, Any]]:
+    """Bind a current reset-role decision only after its native consumer accepts it."""
+    import ai_signed_judgement as judgement
+    path = project / "reports/audit/ai_judgements/3.json"
+    try:
+        if path.is_symlink():
+            return None
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                return None
+            before = handle.read()
+        receipt = json.loads(before)
+        accepted, _ = judgement.check(project, "3")
+        request = judgement.reset_role_request(project)
+        if (not accepted or path.is_symlink() or path.read_bytes() != before
+                or not isinstance(receipt, dict)
+                or any(not request.get(k) or request[k] != receipt.get(k)
+                       for k in ("evidence_sha256", "netlist_sha256"))):
+            return None
+        return {"receipt_sha256": _sha256_bytes(before),
+                "evidence_sha256": request["evidence_sha256"],
+                "netlist_sha256": request["netlist_sha256"]}
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
 def build_identity(project: Path, span: str, *, container_image: str,
                    config: Dict[str, Any], program_paths: Iterable[Path],
                    program_source_sha256: Optional[str] = None) -> Dict[str, Any]:
@@ -292,6 +319,10 @@ def build_identity(project: Path, span: str, *, container_image: str,
             identity["current_consumer_evidence_bindings"] = {
                 "step1_signed_judgement": judgement_binding,
             }
+        reset_binding = _phase2_reset_judgement_binding(project)
+        if reset_binding is not None:
+            identity.setdefault("current_consumer_evidence_bindings", {})[
+                "reset_role_signed_judgement"] = reset_binding
         # professional_tb_gen reads this persistent authored source beside
         # its regenerated bundle. Hash that exact input name, never the
         # sim_professional subtree (JUnit, waves and generated TBs are outputs).
