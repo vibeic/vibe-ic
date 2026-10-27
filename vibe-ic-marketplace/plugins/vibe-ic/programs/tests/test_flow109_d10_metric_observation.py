@@ -67,3 +67,29 @@ def test_wrong_producer_identity_refuses_before_any_observation(tmp_path, monkey
     result = metric.observe_d10_frontend_metrics(tmp_path, context(), p0)
     assert result['status'] == 'NOT_MEASURED' and result['obligations'] == []
     assert 'wrong argv' in result['detail']
+
+
+@pytest.mark.parametrize('blackbox,expected', [(False, 0), (True, None)])
+def test_d10_owner_publishes_observations_without_promoting_row(tmp_path, monkeypatch, blackbox, expected):
+    graph = {'modules': {'top': {'cells': {}}}}
+    if blackbox:
+        graph['modules']['top']['cells']['u'] = {'type': 'opaque'}
+        graph['modules']['opaque'] = {'attributes': {'blackbox': '1'}, 'cells': {}}
+    p0, _ = p0_fixture(tmp_path, monkeypatch, graph)
+    c = context()
+    context_path = tmp_path / 'context.json'
+    context_path.write_text(json.dumps(c))
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(context_path))
+    monkeypatch.setattr(runner, '_d10_p0_native', lambda *_: p0)
+    monkeypatch.setattr(runner, '_d10_yosys_observation', lambda *_: {'status': 'NOT_MEASURED'})
+    monkeypatch.setattr(runner, '_d10_dft_ports', lambda *_: {'status': 'NOT_MEASURED'})
+    seen = []
+    monkeypatch.setattr(flow109, 'finish_native_window', lambda _p, report: seen.append(report) or {'default_row_status': 'NOT_MEASURED'})
+    result = runner._finish_d10_unimplemented_owner(tmp_path, run_p0=True)
+    assert result['verdict'] == result['whole_flow_verdict'] == 'NOT_MEASURED'
+    published = seen[0]['steps'][0]['extras']
+    observed = published['evidence']['native_metric_observation']
+    assert observed['status'] == observed['qualification'] == 'NOT_MEASURED'
+    assert observed['obligations'][0]['observed_value'] == 0
+    assert observed['obligations'][1]['observed_value'] == expected
+    assert published['default_row_status'] == 'NOT_MEASURED' and published['completed'] is False

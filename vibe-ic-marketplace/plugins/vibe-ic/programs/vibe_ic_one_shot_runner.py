@@ -1657,6 +1657,18 @@ def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False) -> d
     except (native.Refusal, contract.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         evidence['p0_consumer_identity'] = {'status': 'NOT_MEASURED', 'detail': str(exc)}
     evidence['dft_port_consistency'] = _d10_dft_ports(project, evidence['p0_native'])
+    try:
+        from flow109_metric_acceptance import observe_d10_frontend_metrics
+        path = os.environ.get(flow109.CONTEXT_ENV)
+        if not path:
+            raise ValueError('D10 execution context is unavailable')
+        context = flow109.validate_execution_context(json.loads(Path(path).read_text()))
+        evidence['native_metric_observation'] = observe_d10_frontend_metrics(
+            project, context, evidence['p0_native'])
+    except (flow109.Flow109Error, OSError, ValueError, TypeError, KeyError, ImportError) as exc:
+        evidence['native_metric_observation'] = {
+            'status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+            'reason': 'D10_OBSERVATION_UNAVAILABLE', 'detail': str(exc)}
     dft_failed = evidence['dft_port_consistency'].get('status') == 'FAIL'
     detail = ('D10_METRIC_BINDINGS_UNIMPLEMENTED: elaboration errors, '
               'unexpected blackboxes and adopted feature inventory require '
