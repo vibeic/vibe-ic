@@ -106,12 +106,7 @@ def test_d70_refuses_an_empty_declared_corner_population_before_native(tmp_path,
     assert result['native_started'] is False
 
 
-@pytest.mark.parametrize('spef_keys,expected', [
-    (('nom',), 'PASS'), (('nom_*',), 'PASS'),
-    (('nom', 'nom_*'), 'NOT_MEASURED'), (('max_*',), 'NOT_MEASURED'),
-])
-def test_d70_producer_accepts_equal_corner_population_in_different_order(
-        tmp_path, monkeypatch, spef_keys, expected):
+def _d70_producer_case(tmp_path, monkeypatch, spef_keys, expected, requires_scan, functional):
     def ref(path):
         return {'path': str(path.relative_to(tmp_path)), 'sha256': '0' * 64}
 
@@ -140,17 +135,38 @@ def test_d70_producer_accepts_equal_corner_population_in_different_order(
     monkeypatch.setattr(d70.files, '_bound', lambda project, value: project / value['path'])
     monkeypatch.setattr(d70.signoff, 'run', lambda *_args, **_kwargs: {'sta': sta})
     monkeypatch.setattr(d70.signoff, 'corner_timing', lambda *_: {'tt': {}, 'ss': {}})
-    monkeypatch.setattr(d70.signoff, 'judge_timing', lambda *_: {'verdict': 'PASS'})
+    monkeypatch.setattr(d70.signoff, 'judge_timing', lambda *_: {'verdict': functional})
     monkeypatch.setattr(d70.postroute, 'stapostpnr_state', lambda *_: (sta, state))
     monkeypatch.setattr(d70.postroute, 'corner_sdfs',
                         lambda *_: {'ss': inputs['ss.sdf'], 'tt': inputs['tt.sdf']})
-    result = d70.execute(tmp_path, {'context_sha256': 'source-control'})
-    assert result['component_status'] == expected
+    result = d70.execute(tmp_path, {'context_sha256': 'source-control',
+                                    'features': {'requires_scan': requires_scan}})
+    actual = expected if expected != 'PASS' else (
+        'FAIL' if functional == 'FAIL' else 'NOT_MEASURED' if requires_scan else 'PASS')
+    assert result['component_status'] == actual
     if expected == 'PASS':
         assert result['required_corners'] == ['tt', 'ss']
         assert list(state['sdf']) == ['ss', 'tt']
+        assert result['timing_judgment']['verdict'] == functional
+        if requires_scan:
+            assert result['scan_timing_coverage']['status'] == 'NOT_MEASURED'
+            assert result['scan_timing_coverage']['required_modes'] == ['shift', 'capture']
     else:
         assert result['reason'] == 'D70_FINAL_SPEF_STATE_MISMATCH'
+
+
+@pytest.mark.parametrize('spef_keys,expected', [
+    (('nom',), 'PASS'), (('nom_*',), 'PASS'),
+    (('nom', 'nom_*'), 'NOT_MEASURED'), (('max_*',), 'NOT_MEASURED'),
+])
+def test_d70_producer_accepts_equal_corner_population_in_different_order(
+        tmp_path, monkeypatch, spef_keys, expected):
+    _d70_producer_case(tmp_path, monkeypatch, spef_keys, expected, False, 'PASS')
+
+
+@pytest.mark.parametrize('functional,expected', [('PASS', 'NOT_MEASURED'), ('FAIL', 'FAIL')])
+def test_d70_scan_modes_missing_cannot_override_functional_timing(tmp_path, monkeypatch, functional, expected):
+    _d70_producer_case(tmp_path, monkeypatch, ('nom',), 'PASS', True, functional)
 
 
 def test_d70_validator_accepts_equal_corner_population_in_different_order(tmp_path, monkeypatch):
@@ -287,3 +303,11 @@ def test_final_filled_odb_runs_rcx_then_all_declared_stapostpnr_corners():
                'timing_judgment': signoff.judge_timing(corners),
                'odb_sha256': binding['route_sha256']['odb']}
     (project / 'd69-d70-native-summary.json').write_text(json.dumps(summary, indent=2) + '\n')
+
+
+def test_d70_rejects_historical_functional_only_pass_for_scan(tmp_path, monkeypatch):
+    ref = _validator_fixture(tmp_path, monkeypatch)
+    record = d70._read(None)
+    record['execution_context'] = {'features': {'requires_scan': True}}
+    with pytest.raises(d70.AdmissionRefusal, match='D70_SCAN_MODES_NOT_ACQUIRED'):
+        d70.validate_final_electrical(tmp_path, ref)

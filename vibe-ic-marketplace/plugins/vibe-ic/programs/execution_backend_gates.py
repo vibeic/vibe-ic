@@ -1,6 +1,7 @@
 """Execute the unchanged canonical clauses; retain advisory/conditional facts."""
 from __future__ import annotations
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -106,6 +107,24 @@ def evaluate(project: Path, row: dict) -> dict:
                                   'PASS' if area_rc == 0 else 'FAIL' if area_rc == 1 else 'NOT_MEASURED')
         if area_rc:
             verdict.status = 'FAIL' if area_rc == 1 else 'NOT_MEASURED'
+    # The selected D49 Flow109 consumer must not reuse a functional-only
+    # candidate STA PASS as if shift/capture had been measured.  No other
+    # backend selection is affected; a real functional FAIL keeps precedence.
+    context_path = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+    if str(row['id']) == '23' and context_path:
+        try:
+            import flow109
+            context = flow109.validate_execution_context(json.loads(Path(context_path).read_text()))
+            selected = context.get('resolved_rows') or [context.get('resolved_row', {})]
+            scan_required = (any(r.get('id') == 'D49' for r in selected)
+                             and (context.get('features') or {}).get('requires_scan') is True)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError):
+            scan_required = True  # Context cannot prove that the scan obligation is absent.
+        if scan_required and verdict.status != 'FAIL':
+            from verdict import ReasonClass
+            verdict.status = 'NOT_MEASURED'
+            verdict.reason_class = ReasonClass.INPUT_ABSENT
+            verdict.reasons.append('D49_SCAN_MODES_NOT_ACQUIRED: shift and capture timing unmeasured')
     ledger = fcc._GATE_LEDGER[start:]
     from dataclasses import asdict
     return {'step': asdict(verdict), 'ledger': ledger, 'status': verdict.status,
