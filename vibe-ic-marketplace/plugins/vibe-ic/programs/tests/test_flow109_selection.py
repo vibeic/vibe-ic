@@ -2164,3 +2164,45 @@ def test_owner_finish_rejects_stale_context_and_empty_report(tmp_path,monkeypatc
 def test_selected_lint_window_stops_at_its_own_step():
     window=flow109.resolve_execution_window(flow109.resolve_plan(profile()),'D11','D11')
     assert window['resolved_row']['profile']['dispatch']['owner_exit_step']=='2'
+
+
+def test_public_d10_missing_metric_binding_is_not_silent_success(tmp_path, monkeypatch):
+    runner = _public_d09_entry(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys, 'argv', ['D10' if x == 'D09' else x for x in sys.argv])
+    monkeypatch.setattr(runner, '_run_phase', lambda *args, **kwargs: 0)
+    monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: ('PASS', None))
+    monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': 'PASS', 'steps': []})
+    rc = runner._main()
+    attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
+    terminal = json.loads((attempt / 'result.json').read_text())
+    assert rc != 0
+    assert terminal['default_row_status'] == 'NOT_MEASURED'
+    assert terminal['components'][0]['step_id'] == 'D10'
+    assert terminal['delivery_accepted'] is False
+
+
+def test_public_d10_does_not_overwrite_existing_attempt_result(tmp_path, monkeypatch):
+    runner = _public_d09_entry(tmp_path, monkeypatch)
+    monkeypatch.setattr(sys, 'argv', ['D10' if x == 'D09' else x for x in sys.argv])
+    retained = b'{"retained":true}\n'
+    def child(*args, **kwargs):
+        (Path(os.environ[flow109.ATTEMPT_ENV]) / 'result.json').write_bytes(retained)
+        return 0
+    monkeypatch.setattr(runner, '_run_phase', child)
+    monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: ('PASS', None))
+    monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': 'PASS', 'steps': []})
+    assert runner._main() != 0
+    attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
+    assert (attempt / 'result.json').read_bytes() == retained
+
+
+def test_d10_refusal_tracks_selected_registry_binding(tmp_path, monkeypatch):
+    import vibe_ic_one_shot_runner as runner
+    request = tmp_path / 'context.json'
+    request.write_text('{}')
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(request))
+    context = {'resolved_row': {'profile': {'dispatch': {'flow109_metrics_status': 'UNIMPLEMENTED'}}}}
+    monkeypatch.setattr(flow109, 'validate_execution_context', lambda _: context)
+    assert runner._d10_metrics_unimplemented() is True
+    context['resolved_row']['profile']['dispatch']['flow109_metrics_status'] = 'IMPLEMENTED'
+    assert runner._d10_metrics_unimplemented() is False

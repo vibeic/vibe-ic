@@ -1429,6 +1429,50 @@ def _flow109_selected_row(row_id: str) -> bool:
             and context.get('requested_step') == row_id)
 
 
+def _finish_d10_unimplemented_owner(project: Path) -> dict:
+    """Publish an honest D10 terminal until its three metric bindings exist."""
+    import flow109
+
+    detail = ('D10_METRIC_BINDINGS_UNIMPLEMENTED: elaboration errors, '
+              'unexpected blackboxes and adopted feature inventory require '
+              'a canonical producer and consumer')
+    try:
+        finished = flow109.finish_native_window(project, {'steps': [{
+            'status': 'NOT_MEASURED', 'extras': {
+                'step_id': 'P0', 'default_row_status': 'NOT_MEASURED',
+                'completed': False, 'detail': detail,
+            },
+        }]})
+    except flow109.Flow109Error as exc:
+        finished = None
+        detail = f'D10_FINALIZATION_REFUSED: {exc}'
+    except FileExistsError as exc:
+        attempt = os.environ.get(flow109.ATTEMPT_ENV)
+        expected = Path(attempt) / 'result.json' if attempt else None
+        if exc.filename is None or expected is None or Path(exc.filename) != expected:
+            raise
+        finished = None
+        detail = 'D10_FINALIZATION_REFUSED: immutable attempt result already exists'
+    if not isinstance(finished, Mapping):
+        detail = 'D10_FINALIZATION_UNAVAILABLE: ' + detail
+    return {'verdict': 'NOT_MEASURED', 'whole_flow_verdict': 'NOT_MEASURED',
+            'detail': detail, 'evidence': {}}
+
+
+def _d10_metrics_unimplemented() -> bool:
+    """Do not retain this refusal after the selected row is actually wired."""
+    import flow109
+
+    try:
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_text(encoding='utf-8')))
+        row = context.get('resolved_row') or context['resolved_rows'][0]
+        dispatch = row['profile']['dispatch']
+        return dispatch.get('flow109_metrics_status') == 'UNIMPLEMENTED'
+    except (OSError, ValueError, KeyError, IndexError, TypeError, flow109.Flow109Error):
+        return True
+
+
 def _d09_bound_phase2_evidence(
         project: Path, report: Mapping, invocation: Mapping,
         *, published_current: bool) -> tuple[str, dict, str]:
@@ -5068,6 +5112,10 @@ def _main() -> int:
                 reports['d09_finalization'] = d09_acceptance
                 verdict = d09_acceptance['verdict']
                 rc = 0 if verdict == 'PASS' else 1 if verdict == 'FAIL' else 2
+            elif _flow109_selected_row('D10') and _d10_metrics_unimplemented():
+                d10_acceptance = _finish_d10_unimplemented_owner(project)
+                reports['d10_finalization'] = d10_acceptance
+                verdict, rc = 'NOT_MEASURED', 2
             plan.append(("phase2", verdict, rc))
             reports["phase2"] = rep
             if (verdict == 'NOT_MEASURED' and _execution.request()['mode'] == 'default'
