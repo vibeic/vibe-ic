@@ -493,6 +493,65 @@ def physical_d24_binding(project: Path, context: Mapping, intent: Mapping) -> di
     if d24.get('scan_cell_list') != check['scan_cell_list']:
         raise Flow109Error('FLOW109_D23_SCAN_CELLS_STALE', 'D24 list binding')
     return {'D24_result': ref, 'adopted_netlist': dict(adopted), 'scan_cell_reconciliation': check}
+def _preroute_chain_observation(project: Path, top: str, intent: Mapping,
+                                  adopted: Mapping, lec: Mapping, timing: Mapping) -> dict:
+    """Observe separately bound inputs; D30 delivery is not yet produced here.
+
+    The current canonical handoff owner emits audit reports but no independently
+    bound D30 delivered netlist. Do not substitute the upstream adopted path.
+    """
+    import dft_post_optimization_scan_survival_check as normalizer
+    if intent.get('requires_scan') is not True:
+        return {'status': 'NOT_MEASURED', 'reason': 'D22_D26_INPUT_BINDINGS_UNPROVEN',
+                'missing': ['D22', 'D26', 'D30'], 'flow109_acceptance': 'NOT_MEASURED'}
+    try:
+        start = _current_project_ref(project, {k: adopted.get(k) for k in ('path', 'sha256')},
+                                     'FLOW109_D24_ADOPTED_NETLIST_UNBOUND')
+        gate = lec['proof_identity']['gate_netlist']
+        gate_sha = gate['sha256']
+        if not isinstance(gate_sha, str) or not gate_sha.startswith('sha256:'):
+            raise ValueError('D25 proof netlist digest missing')
+        d25 = _current_project_ref(project, {'path': gate['path'], 'sha256': gate_sha[7:]},
+                                   'FLOW109_D25_PROOF_INPUT_STALE')
+        native = timing['post_scan_arms']['functional']['native']
+        folder = (Path(project) / native['folder']).resolve()
+        if not folder.is_relative_to(Path(project).resolve()):
+            raise ValueError('D26 folder is outside project')
+        state = json.loads((folder / 'state_in.json').read_text())
+        path = Path(state['nl']).resolve()
+        relative = path.relative_to(Path(project).resolve()).as_posix()
+        import librelane_contract
+        receipt = librelane_contract.validate_step_receipt(folder, 'OpenROAD.STAPrePNR')
+        fingerprint = receipt['input']
+        sha = fingerprint['state_files'][state['nl']]
+        if (receipt['sha256']['state_in.json'] != _file_digest(folder / 'state_in.json')
+                or fingerprint['state'] != _file_digest(folder / 'state_in.json')):
+            raise ValueError('D26 state input not bound')
+        d26 = _current_project_ref(project, {'path': relative, 'sha256': sha},
+                                   'FLOW109_D26_INPUT_NETLIST_UNBOUND')
+        evidence = {}
+        for point, reference in (('D24', start), ('D25', d25), ('D26', d26)):
+            result = normalizer.normalized_netlist_digest(
+                (Path(project) / reference['path']).read_text(), top=top)
+            if result.get('status') != 'MEASURED':
+                return {'status': 'NOT_MEASURED', 'reason': result.get('reason'),
+                        'point': point, 'flow109_acceptance': 'NOT_MEASURED'}
+            evidence[point] = {'input': reference, **result}
+        if len({(v['yosys_sha256'], v['source_sha256']) for v in evidence.values()}) != 1:
+            return {'status': 'NOT_MEASURED', 'reason': 'NORMALIZER_IDENTITY_CHANGED',
+                    'flow109_acceptance': 'NOT_MEASURED'}
+        baseline = evidence['D24']['normalized_sha256']
+        mismatch = [name for name in ('D25', 'D26')
+                    if evidence[name]['normalized_sha256'] != baseline]
+        if mismatch:
+            return {'status': 'FAIL', 'reason': 'PREROUTE_NETLIST_MISMATCH',
+                    'mismatch': mismatch, 'points': evidence,
+                    'flow109_acceptance': 'NOT_MEASURED'}
+        return {'status': 'NOT_MEASURED', 'reason': 'D30_DELIVERY_ARTIFACT_UNBOUND',
+                'missing': ['D30'], 'points': evidence, 'flow109_acceptance': 'NOT_MEASURED'}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return {'status': 'NOT_MEASURED', 'reason': 'PREROUTE_INPUT_BINDING_UNPROVEN',
+                'detail': str(exc), 'flow109_acceptance': 'NOT_MEASURED'}
 
 
 def dft_preroute_admission(project: Path, context: Mapping) -> dict:
@@ -566,8 +625,10 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     timing_modes = _d26_timing_modes_binding(
         project, _d26, intent, top, report=report, report_ref=report_ref,
         adopted=adopted)
+    observed_chain = _preroute_chain_observation(project, top, intent, adopted, lec, timing_modes)
     return {
         "schema": "vibeic.flow109.dft-preroute-admission.v1",
+        "normalized_preroute_chain": observed_chain,
         "consumer_step": "D30", "consumer_position": 42,
         "top": top, "requires_scan": intent["requires_scan"], "adopted_netlist": adopted,
         "profile_identity": {"features_sha256": digest(context["features"]),
@@ -1522,7 +1583,13 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
                 raise Flow109Error("FLOW109_D24_ADOPTED_NETLIST_UNBOUND", str(_D24_NETLIST))
             answer["native_scan_report"] = report_ref
     if row["id"] == "D30" and status == "PASS":
-        answer["dft_preroute_admission"] = dft_preroute_admission(project, context)
+        admission = dft_preroute_admission(project, context)
+        answer["dft_preroute_admission"] = admission
+        chain = admission["normalized_preroute_chain"]
+        if chain.get("status") != "PASS":
+            row_status = "FAIL" if chain.get("status") == "FAIL" else "NOT_MEASURED"
+            answer.update(default_row_status=row_status, flow109_acceptance=row_status,
+                          completed=False, normalized_chain_reason=chain.get("reason"))
     from _atomic_artefact import write_json
     write_json(project / "reports/flow109/default_rows" / (row["id"] + ".json"), answer)
     return answer

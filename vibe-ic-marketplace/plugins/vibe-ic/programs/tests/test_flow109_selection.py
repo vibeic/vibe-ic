@@ -409,6 +409,22 @@ def test_d30_rejects_d26_input_netlist_substitution(tmp_path, monkeypatch):
         flow109.dft_preroute_admission(tmp_path, context)
 
 
+def test_d30_refuses_row_pass_without_bound_delivery_netlist(tmp_path, monkeypatch):
+    context = _d30_scan_case(tmp_path, monkeypatch)
+    admission = flow109.dft_preroute_admission(tmp_path, context)
+    chain = admission['normalized_preroute_chain']
+    assert chain['status'] == 'NOT_MEASURED'
+    assert chain['reason'] == 'D30_DELIVERY_ARTIFACT_UNBOUND'
+    assert set(chain['points']) == {'D24', 'D25', 'D26'}
+    assert 'D30' not in chain['points']
+    result = {'step_id': 'D30', 'context_sha256': context['context_sha256'],
+              'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True}
+    answer = flow109._selected_step_result(tmp_path, context, result)
+    assert answer['default_row_status'] == 'NOT_MEASURED'
+    assert answer['completed'] is False
+    assert answer['normalized_chain_reason'] == 'D30_DELIVERY_ARTIFACT_UNBOUND'
+
+
 def test_d30_accepts_native_d24_d25_identity_and_chain_report(tmp_path, monkeypatch):
     context = _d30_scan_case(tmp_path, monkeypatch)
 
