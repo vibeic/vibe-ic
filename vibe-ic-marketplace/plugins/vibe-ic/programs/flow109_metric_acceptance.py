@@ -828,6 +828,94 @@ def _a01_measurements(project: Path, component: Mapping[str, Any],
             {"status": "MEASURED", "value": measurements, "identity": identity})
 
 
+def _d10_blackbox_instances(document: Mapping[str, Any], top: str) -> list[str]:
+    """Enumerate reachable native blackboxes; unknown cells never count as zero."""
+    import _cdc_netlist as native
+    modules = document.get('modules')
+    if not isinstance(modules, Mapping) or top not in modules:
+        raise MetricRefusal('D10_ELABORATION_INVALID', 'selected top absent')
+    blackboxes = {name for name, module in modules.items()
+                  if isinstance(module, Mapping)
+                  and native._int((module.get('attributes') or {}).get('blackbox', 0))}
+    if top in blackboxes:
+        raise MetricRefusal('D10_ELABORATION_UNRESOLVED', 'top is a blackbox')
+    pending = [(top, '', frozenset())]
+    found = []
+    while pending:
+        name, prefix, ancestors = pending.pop()
+        if name in ancestors or not isinstance(modules.get(name), Mapping):
+            raise MetricRefusal('D10_ELABORATION_INVALID', 'recursive or malformed hierarchy')
+        cells = modules[name].get('cells', {})
+        if not isinstance(cells, Mapping):
+            raise MetricRefusal('D10_ELABORATION_INVALID', 'cell inventory missing')
+        for instance, cell in cells.items():
+            if not isinstance(instance, str) or not isinstance(cell, Mapping) or not isinstance(cell.get('type'), str):
+                raise MetricRefusal('D10_ELABORATION_INVALID', 'cell identity invalid')
+            kind, path = cell['type'], prefix + instance
+            if kind in blackboxes:
+                found.append(path)
+            elif kind in modules:
+                pending.append((kind, path + '/', ancestors | {name}))
+            elif not kind.startswith('$'):
+                raise MetricRefusal('D10_ELABORATION_UNRESOLVED', path)
+    return sorted(found)
+
+
+def observe_d10_frontend_metrics(project: Path, context: Mapping[str, Any], p0: Mapping[str, Any]) -> dict:
+    """Bind D10 native counts without claiming qualification or row acceptance.
+
+    This reads the existing P0 consumer identity and accepted registry. The
+    feature inventory and qualification remain explicit, independent debts.
+    """
+    import flow109
+    import librelane_contract as contract
+    import vibe_ic_one_shot_runner as runner
+    project = Path(project).resolve()
+    answer = {'schema': SCHEMA, 'row_id': 'D10', 'status': 'NOT_MEASURED',
+              'delivery_blocked': True, 'qualification': 'NOT_MEASURED', 'obligations': []}
+    try:
+        current = flow109.validate_execution_context(context)
+        if (current.get('resolved_row') or {}).get('id') != 'D10':
+            raise MetricRefusal('D10_CONTEXT_INVALID', 'not D10')
+        obligations = current['resolved_row']['obligations']
+        expected = {'base_04.elaboration_errors', 'base_04.unexpected_blackboxes'}
+        selected = {row.get('id'): row for row in obligations if row.get('id') in expected}
+        if set(selected) != expected or any(row.get('expectation') != {
+                'operator': 'eq', 'value': 0, 'unit': 'count',
+                'source': 'contract invariant: no unresolved required violations'}
+                for row in selected.values()):
+            raise MetricRefusal('D10_OBLIGATIONS_UNREGISTERED', 'two native obligations differ')
+        identity = runner._validate_d10_p0_consumer(project, p0)
+        elab = _safe_project_file(project, p0['elaboration_path'])
+        raw = elab.read_bytes()
+        if _sha(raw) != p0['elaboration_sha256']:
+            raise MetricRefusal('D10_ELABORATION_STALE', str(elab))
+        graph = json.loads(raw)
+        instances = _d10_blackbox_instances(graph, p0['top'])
+        if (_sha(elab.read_bytes()) != p0['elaboration_sha256']
+                or runner._validate_d10_p0_consumer(project, p0) != identity):
+            raise MetricRefusal('D10_NATIVE_BINDING_STALE', 'native identity changed during observation')
+        # A successful native elaboration proves zero frontend errors. It does
+        # not itself establish expected blackbox exceptions or tool qualification.
+        values = {'base_04.elaboration_errors': 0,
+                  'base_04.unexpected_blackboxes': 0 if not instances else None}
+        for oid in ('base_04.elaboration_errors', 'base_04.unexpected_blackboxes'):
+            value = values[oid]
+            answer['obligations'].append({'id': oid, 'status': 'NOT_MEASURED',
+                'observation_status': 'OBSERVED' if value is not None else 'NOT_MEASURED',
+                'observed_value': value, 'unit': 'count',
+                'reason': ('TOOL_QUALIFICATION_UNPROVEN' if value is not None
+                           else 'EXPECTED_BLACKBOX_AUTHORITY_MISSING'),
+                'binding': identity})
+        answer['observed_blackbox_instances'] = instances
+        answer['reason'] = 'TOOL_QUALIFICATION_AND_FEATURE_INVENTORY_UNPROVEN'
+    except (MetricRefusal, flow109.Flow109Error, contract.Refusal,
+            OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        answer['reason'] = getattr(exc, 'code', 'D10_NATIVE_BINDING_UNPROVEN')
+        answer['detail'] = str(exc)
+    return answer
+
+
 def accept_a01(project: Path, context: Mapping[str, Any],
                component: Mapping[str, Any]) -> dict:
     """Evaluate the complete, and only, currently whitelisted A01 binding."""
