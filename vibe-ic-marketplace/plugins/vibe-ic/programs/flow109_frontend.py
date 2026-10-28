@@ -316,6 +316,131 @@ def synthesis_fingerprint(project):
                                    for use in (active['context']['runtime_tool_uses'] or [])}}
 
 
+def d10_native_qualification(project, context, p0, binding):
+    """Consume reviewed per-use admission for the exact existing native purpose.
+
+    Source snapshots bind the unchanged native functions, rather than granting
+    qualification to new decision code elsewhere in the same Python files.
+    """
+    import ast
+    import re
+    import shlex
+    import flow109_admission as admission
+    import flow109_metric_acceptance as metrics
+    import vibe_ic_one_shot_runner as runner
+    project = Path(project)
+    admitted = admission.require_admission(project, context)
+
+    def refuse(code, detail):
+        raise AdmissionRefusal(code, detail)
+
+    def artifact(record):
+        admission._artifact(project, record, use_id='D10')
+        return project / record['path']
+
+    registry = _read(project / context['qualification_registry'])
+    records = {row['use_id']: row for row in registry['uses']}
+    uses = context['resolved_row']['tool_uses']
+    expected_metrics = {'yosys': ['base_04.elaboration_errors', 'base_04.unexpected_blackboxes'],
+                        'verilator': ['base_04.elaboration_errors']}
+    if {u['tool_id'] for u in uses} != set(expected_metrics) or len(uses) != 2:
+        refuse('D10_QUALIFICATION_SCOPE_MISMATCH', 'both native uses required')
+    result = _read(project / p0['producer_result']['path'])
+
+    def command_family(argv, tool):
+        # Model paths, top names and temporary output names vary per subject.
+        # Flags/passes do not. The current consumer separately binds all inputs.
+        if tool == 'verilator':
+            if argv[:5] != ['verilator', '--lint-only', '--Wall', '-Wno-fatal', '--top-module']:
+                refuse('D10_QUALIFICATION_CONFIG_MISMATCH', 'Verilator flags')
+            tail = argv[6:]
+            while tail and tail[0].startswith('-I'):
+                tail = tail[1:]
+            if not tail or any(x.startswith('-') for x in tail):
+                refuse('D10_QUALIFICATION_CONFIG_MISMATCH', 'Verilator model inputs')
+            return argv[:5]
+        if argv[:4] != ['yosys', '-Q', '-T', '-p'] or len(argv) != 5:
+            refuse('D10_QUALIFICATION_CONFIG_MISMATCH', 'Yosys argv')
+        match = re.fullmatch(r'read_slang --single-unit --top ([A-Za-z_][\w$]*) (.+); '
+                            r'hierarchy -check -top \1; proc; write_json '
+                            r'/tmp/vibeic_p0_elab_[^/\s;]+/rtl_elab\.json', argv[4])
+        if not match:
+            refuse('D10_QUALIFICATION_CONFIG_MISMATCH', 'Yosys command semantics')
+        inputs = shlex.split(match[2])
+        while inputs[:1] == ['-I'] and len(inputs) >= 2:
+            inputs = inputs[2:]
+        if not inputs or any(x.startswith('-') or ';' in x for x in inputs):
+            refuse('D10_QUALIFICATION_CONFIG_MISMATCH', 'Yosys model inputs')
+        return ['read_slang --single-unit', 'hierarchy -check', 'proc', 'write_json']
+
+    # The existing reviewed evidence index binds its execution-time source
+    # capture. Validate every link before comparing relevant function bytes.
+    def sources_unchanged(record, config):
+        candidates = []
+        for reference in record['reference_evidence']:
+            path = artifact(reference)
+            if path.suffix == '.json':
+                doc = _read(path)
+                if 'source_before' in doc and 'models' in doc:
+                    candidates.append(doc)
+        if len(candidates) != 1:
+            refuse('D10_QUALIFICATION_SOURCE_UNBOUND', 'one reviewed source capture required')
+        capture = _read(artifact(candidates[0]['source_before']))
+        root = Path(capture['runtime_source'])
+        hashes = capture['source_sha256']
+        relative = 'vibe-ic-marketplace/plugins/vibe-ic/programs/'
+        if hashes[relative + 'vibe_ic_one_shot_runner.py'] != config['runner_source_sha256']:
+            refuse('D10_QUALIFICATION_SOURCE_CHANGED', 'reviewed runner configuration differs')
+        functions = [(runner, ['_d10_p0_native', '_validate_d10_p0_consumer']),
+                     (metrics, ['_d10_blackbox_instances']),
+                     (sys.modules[__name__], ['d10_native_failure'])]
+        def segment(text, name):
+            nodes = [n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef) and n.name == name]
+            if len(nodes) != 1:
+                refuse('D10_QUALIFICATION_SOURCE_UNBOUND', name)
+            return ast.get_source_segment(text, nodes[0])
+        for module, names in functions:
+            rel = relative + Path(module.__file__).name
+            original = root / rel
+            if _sha(original) != hashes[rel]:
+                refuse('D10_QUALIFICATION_SOURCE_CHANGED', str(original))
+            old, current = original.read_text(), Path(module.__file__).read_text()
+            for name in names:
+                if segment(old, name) != segment(current, name):
+                    refuse('D10_QUALIFICATION_SOURCE_CHANGED', name)
+        return capture['snapshot_tree']
+
+    source_trees = []
+    for use in uses:
+        record = records[use['use_id']]
+        identity = record['identity']
+        semantics = identity['semantics']
+        config = _read(artifact(identity['config']))
+        model = semantics.get('model_identity', {})
+        if (semantics.get('checked_metrics') != expected_metrics[use['tool_id']]
+                or config.get('purpose') != use['purpose']
+                or config.get('native_steps') != use['native_steps']):
+            refuse('D10_QUALIFICATION_SCOPE_MISMATCH', use['use_id'])
+        if (model.get('image_id') != binding['image_id']
+                or config.get('image_id') != binding['image_id']):
+            refuse('D10_QUALIFICATION_IMAGE_MISMATCH', use['use_id'])
+        if (identity['build_sha256'] != binding['tool_sha256'][use['tool_id']]
+                or config.get('producer_source_sha256') != binding['producer_source_sha256']):
+            refuse('D10_QUALIFICATION_SOURCE_CHANGED', use['use_id'])
+        if model.get('source_model') != config.get('test_model'):
+            refuse('D10_QUALIFICATION_MODEL_MISMATCH', use['use_id'])
+        artifact(model['source_model'])
+        key = use['native_steps'][0]
+        if command_family(config['actual_command'], use['tool_id']) != command_family(
+                result['tools'][key]['argv'], use['tool_id']):
+            refuse('D10_QUALIFICATION_CONFIG_MISMATCH', use['use_id'])
+        source_trees.append(sources_unchanged(record, config))
+    # Re-read admission inputs after the scoped configuration/source checks.
+    if admission.require_admission(project, context) != admitted:
+        refuse('QUALIFICATION_STALE', 'admission changed during native observation')
+    return {**admitted, 'reviewed_native_source_trees': source_trees}
+
+
 def d10_native_failure(result):
     """Recognize the existing reader's concrete missing-module error witness.
 

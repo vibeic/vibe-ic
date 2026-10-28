@@ -1324,10 +1324,9 @@ def _d10_blackbox_instances(document: Mapping[str, Any], top: str) -> list[str]:
 
 
 def observe_d10_frontend_metrics(project: Path, context: Mapping[str, Any], p0: Mapping[str, Any]) -> dict:
-    """Bind D10 native counts without claiming qualification or row acceptance.
+    """Bind native counts and reviewed per-use admission to typed obligations.
 
-    This reads the existing P0 consumer identity and accepted registry. The
-    feature inventory and qualification remain explicit, independent debts.
+    Feature inventory and product authority remain independent row debts.
     """
     import _cdc_netlist as native
     import flow109
@@ -1349,19 +1348,49 @@ def observe_d10_frontend_metrics(project: Path, context: Mapping[str, Any], p0: 
                 for row in selected.values()):
             raise MetricRefusal('D10_OBLIGATIONS_UNREGISTERED', 'two native obligations differ')
         identity = runner._validate_d10_p0_consumer(project, p0)
+        from flow109_frontend import d10_native_qualification
+        from flow109_admission import AdmissionRefusal
+        try:
+            admitted = d10_native_qualification(project, current, p0, identity)
+            answer['qualification'] = 'PASS'
+            answer['qualification_admission'] = admitted
+        except AdmissionRefusal as exc:
+            answer['qualification_refusal'] = exc.report
+
+        def measured_obligation(oid, value):
+            row = {'id': oid, 'status': 'NOT_MEASURED',
+                   'observation_status': 'OBSERVED' if value is not None else 'NOT_MEASURED',
+                   'observed_value': value, 'unit': 'count',
+                   'reason': ('TOOL_QUALIFICATION_UNPROVEN' if value is not None
+                              else 'EXPECTED_BLACKBOX_AUTHORITY_MISSING'), 'binding': identity}
+            if answer['qualification'] == 'PASS' and value is not None:
+                typed_identity = {
+                    'producer': identity['producer_result'],
+                    'checker': {'source_sha256': _sha(Path(__file__).read_bytes())},
+                    'tool_execution': {key: identity[key] for key in
+                        ('tool_sha256', 'image_id', 'cid', 'attestation_sha256')},
+                    'consumed_inputs': {'fingerprint': identity['input_fingerprint']},
+                    'requirements': selected[oid]['expectation'],
+                    'configuration': admitted}
+                status, detail = evaluate_operator('eq',
+                    {'status': 'MEASURED', 'value': value, 'unit': 'count', 'identity': typed_identity},
+                    {'status': 'APPROVED', 'value': selected[oid]['expectation']['value'], 'unit': 'count'})
+                row.update(status=status, reason=detail, identity=typed_identity)
+            return row
+
         failure = identity.get('native_failure')
         if failure:
             if runner._validate_d10_p0_consumer(project, p0) != identity:
                 raise MetricRefusal('D10_NATIVE_BINDING_STALE', 'native failure identity changed')
             answer['native_failure'] = failure
             answer['obligations'] = [
-                {'id': 'base_04.elaboration_errors', 'status': 'NOT_MEASURED',
-                 'observation_status': 'OBSERVED', 'observed_value': failure['elaboration_errors'],
-                 'unit': 'count', 'reason': 'TOOL_QUALIFICATION_UNPROVEN', 'binding': identity},
+                measured_obligation('base_04.elaboration_errors', failure['elaboration_errors']),
                 {'id': 'base_04.unexpected_blackboxes', 'status': 'NOT_MEASURED',
                  'observation_status': 'NOT_MEASURED', 'observed_value': None, 'unit': 'count',
                  'reason': 'D10_FAILED_ELABORATION_NO_BLACKBOX_CENSUS', 'binding': identity}]
             answer['reason'] = 'TOOL_QUALIFICATION_UNPROVEN'
+            if answer['obligations'][0]['status'] == 'FAIL':
+                answer.update(status='FAIL', reason='D10_QUALIFIED_NATIVE_METRIC_FAILED')
             return answer
         elab = _safe_project_file(project, p0['elaboration_path'])
         raw = elab.read_bytes()
@@ -1377,17 +1406,15 @@ def observe_d10_frontend_metrics(project: Path, context: Mapping[str, Any], p0: 
         values = {'base_04.elaboration_errors': 0,
                   'base_04.unexpected_blackboxes': 0 if not instances else None}
         for oid in ('base_04.elaboration_errors', 'base_04.unexpected_blackboxes'):
-            value = values[oid]
-            answer['obligations'].append({'id': oid, 'status': 'NOT_MEASURED',
-                'observation_status': 'OBSERVED' if value is not None else 'NOT_MEASURED',
-                'observed_value': value, 'unit': 'count',
-                'reason': ('TOOL_QUALIFICATION_UNPROVEN' if value is not None
-                           else 'EXPECTED_BLACKBOX_AUTHORITY_MISSING'),
-                'binding': identity})
+            answer['obligations'].append(measured_obligation(oid, values[oid]))
         answer['observed_blackbox_instances'] = instances
-        answer['reason'] = 'TOOL_QUALIFICATION_AND_FEATURE_INVENTORY_UNPROVEN'
+        answer['reason'] = ('D10_FEATURE_INVENTORY_UNPROVEN' if answer['qualification'] == 'PASS'
+                            else 'TOOL_QUALIFICATION_AND_FEATURE_INVENTORY_UNPROVEN')
     except (MetricRefusal, native.Refusal, flow109.Flow109Error, contract.Refusal,
             OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        answer.update(qualification='NOT_MEASURED', obligations=[])
+        answer.pop('qualification_admission', None)
+        answer.pop('native_failure', None)
         answer['reason'] = getattr(exc, 'code', 'D10_NATIVE_BINDING_UNPROVEN')
         answer['detail'] = str(exc)
     return answer

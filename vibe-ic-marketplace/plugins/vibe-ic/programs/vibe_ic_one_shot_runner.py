@@ -1689,16 +1689,21 @@ def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False) -> d
             'status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
             'reason': 'D10_OBSERVATION_UNAVAILABLE', 'detail': str(exc)}
     dft_failed = evidence['dft_port_consistency'].get('status') == 'FAIL'
+    native_failed = (evidence['native_metric_observation'].get('qualification') == 'PASS'
+                     and evidence['native_metric_observation'].get('status') == 'FAIL')
+    row_failed = dft_failed or native_failed
     detail = ('D10_METRIC_BINDINGS_UNIMPLEMENTED: elaboration errors, '
               'unexpected blackboxes and adopted feature inventory require '
               'a canonical producer and consumer')
     if (evidence['native_metric_observation'].get('native_failure') or {}).get('status') == 'FAIL':
-        detail = ('D10_NATIVE_FAILURE_OBSERVED: TOOL_QUALIFICATION_UNPROVEN; '
+        detail = ('D10_QUALIFIED_NATIVE_METRIC_FAILED: missing independent obligations '
+                  'do not erase the measured native defect' if native_failed else
+                  'D10_NATIVE_FAILURE_OBSERVED: TOOL_QUALIFICATION_UNPROVEN; '
                   'unqualified native evidence cannot close the D10 row contract')
     try:
         finished = flow109.finish_native_window(project, {'steps': [{
-            'status': 'FAIL' if dft_failed else 'NOT_MEASURED', 'extras': {
-                'step_id': 'P0', 'default_row_status': 'FAIL' if dft_failed else 'NOT_MEASURED',
+            'status': 'FAIL' if row_failed else 'NOT_MEASURED', 'extras': {
+                'step_id': 'P0', 'default_row_status': 'FAIL' if row_failed else 'NOT_MEASURED',
                 'completed': False, 'detail': detail, 'evidence': evidence,
             },
         }]})
@@ -1714,7 +1719,7 @@ def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False) -> d
         detail = 'D10_FINALIZATION_REFUSED: immutable attempt result already exists'
     if not isinstance(finished, Mapping):
         detail = 'D10_FINALIZATION_UNAVAILABLE: ' + detail
-    verdict = ('FAIL' if isinstance(finished, Mapping) and dft_failed
+    verdict = ('FAIL' if isinstance(finished, Mapping) and row_failed
                and finished.get('default_row_status') == 'FAIL' else 'NOT_MEASURED')
     return {'verdict': verdict, 'whole_flow_verdict': 'NOT_MEASURED',
             'detail': detail, 'evidence': evidence}
