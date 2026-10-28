@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -39,7 +40,7 @@ def subject(tmp_path, monkeypatch, request):
     return project, context, attempt
 
 
-def tail(project, child_verdict='PASS'):
+def tail(project, child_verdict='PASS', *, fresh=True):
     """Execute the actual bounded tail AST; no child/native return is mocked.
 
     The wrapper envelope is test scaffolding. All LEC substance is consumed
@@ -57,7 +58,8 @@ def tail(project, child_verdict='PASS'):
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(json.dumps(window))
     namespace = {**vars(runner), 'project': project, '_p3_skip_by_exit': True,
-        'reports': {'phase2': window}, '_phase_started': {'phase2': 0},
+        'reports': {'phase2': window},
+        '_phase_started': {'phase2': 0 if fresh else time.time() + 60},
         'plan': [('phase2', child_verdict, 1 if child_verdict == 'FAIL' else 0)],
         'halted_at': 'phase2' if child_verdict == 'FAIL' else '', 'advisories': [],
         '_phase1_checkpoint_review': None, '_fd_disclosures': [],

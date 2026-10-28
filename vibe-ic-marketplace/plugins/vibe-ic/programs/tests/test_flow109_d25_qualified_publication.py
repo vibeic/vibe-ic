@@ -75,9 +75,37 @@ def test_qualified_row_pass_preserves_failed_parent_window(qualified_subject):
     summary = json.loads(runner._pl.report_path(project, 'vibe_ic_one_shot.json').read_text())
     assert summary['verdict'] == summary['dispatched_verdict'] == 'FAIL'
     assert summary['phases'][0]['verdict'] == 'FAIL'
-    assert summary['d25_finalization']['verdict'] == 'PASS'
+    assert summary['d25_finalization']['verdict'] == 'NOT_MEASURED'
+    assert summary['d25_finalization']['metric_acceptance']['status'] == 'PASS'
+    assert 'D25_OWNER_WINDOW_NOT_CURRENT_PASS' in summary['d25_finalization']['detail']
     row = json.loads((project / 'reports/flow109/default_rows/D25.json').read_text())
-    assert row['default_row_status'] == 'PASS' and row['completed'] is True
+    assert row['default_row_status'] == 'NOT_MEASURED' and row['completed'] is False
+    assert row['owner_window'] == {'verdict': 'FAIL', 'published_current': True}
+    assert row['whole_flow_acceptance'] == 'NOT_MEASURED'
+    assert row['delivery_accepted'] is False
+
+
+def test_qualified_native_pass_needs_current_passing_owner(qualified_subject):
+    project, context, attempt = qualified_subject
+    assert metrics.accept_d25(project, context)['status'] == 'PASS'
+    result = runner._finish_d25_selected_owner(project)
+    assert result['verdict'] == 'NOT_MEASURED'
+    assert result['metric_acceptance']['status'] == 'PASS'
+    row = json.loads((project / 'reports/flow109/default_rows/D25.json').read_text())
+    assert row['default_row_status'] == 'NOT_MEASURED' and row['completed'] is False
+    assert row['whole_flow_acceptance'] == 'NOT_MEASURED'
+    assert row['delivery_accepted'] is False
+
+
+@pytest.mark.parametrize('child_verdict,fresh', [('NOT_MEASURED', True), ('PASS', False)])
+def test_actual_bounded_tail_refuses_unknown_or_stale_owner(
+        qualified_subject, child_verdict, fresh):
+    project, context, attempt = qualified_subject
+    assert metrics.accept_d25(project, context)['status'] == 'PASS'
+    assert tail(project, child_verdict, fresh=fresh) == 2
+    row = json.loads((project / 'reports/flow109/default_rows/D25.json').read_text())
+    assert row['default_row_status'] == 'NOT_MEASURED' and row['completed'] is False
+    assert row['metric_acceptance']['status'] == 'PASS'
     assert row['whole_flow_acceptance'] == 'NOT_MEASURED'
     assert row['delivery_accepted'] is False
 
