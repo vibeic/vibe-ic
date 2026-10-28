@@ -238,6 +238,83 @@ def test_native_pmux_full_and_cone_matrix_is_identical(
         "0": {"status": "COMPLETED", "result": expected}}
 
 
+@pytest.mark.parametrize("case,selector,data,expected_undef", [
+    ("default", "000", "111001", "NO_UNDEF"),
+    ("one_hot_0", "001", "111001", "NO_UNDEF"),
+    ("one_hot_1", "010", "111001", "NO_UNDEF"),
+    ("one_hot_2", "100", "111001", "NO_UNDEF"),
+    ("equal_overlap", "011", "110101", "HAS_UNDEF"),
+    ("unequal_overlap", "011", "111001", "HAS_UNDEF"),
+    ("undefined_selector", "0x0", "111100", "HAS_UNDEF"),
+    ("undefined_data", "001", "00000x", "HAS_UNDEF"),
+])
+def test_native_pmux_reset_consumer_preserves_every_full_model_answer(
+        tmp_path, monkeypatch, case, selector, data, expected_undef):
+    """Exercise the shipped query builder, not the direct SAT helper above."""
+    if not shutil.which("yosys"):
+        pytest.fail("native Yosys required for this focused consumer control")
+    # Native JSON retains literal X and overlapping PMUX arms before any
+    # cleanup. The off-cone branch shares A, which stays a defined free input.
+    mod = pmux_matrix_model()["modules"]["transition_pair"]
+    mod["cells"]["row"] = pmux([2, 3], list(reversed(data)),
+                                 list(reversed(selector)), [15, 16])
+    mod["ports"].update({
+        "rst": {"direction": "input", "bits": [19]},
+        "clk": {"direction": "input", "bits": [20]},
+        "q": {"direction": "output", "bits": [21, 22]},
+        "noise": {"direction": "output", "bits": [17, 18]},
+    })
+    mod["cells"]["reset"] = cell("$mux", [15, 16], [23, 24],
+                                  ["0", "0"], [19])
+    mod["cells"]["state"] = {
+        "type": "$dff", "parameters": {"WIDTH": 2, "CLK_POLARITY": 1},
+        "connections": {"CLK": [20], "D": [23, 24], "Q": [21, 22]},
+        "port_directions": {"CLK": "input", "D": "input", "Q": "output"},
+    }
+    mod["netnames"] = {name: {"bits": port["bits"], "attributes": {}}
+                       for name, port in mod["ports"].items()}
+    subject = {"modules": {"m": mod}}
+    cone = fsc.reset_control_mapping(subject, subject, "m", "rst", tmp_path / "cone")
+    with monkeypatch.context() as control:
+        control.setattr(fsc, "_reset_row_cone_eligibility", lambda _model: {
+            "eligible": False, "reason": "whole-model native control"})
+        full = fsc.reset_control_mapping(subject, subject, "m", "rst", tmp_path / "full")
+    assert cone["native_row_cone"]["eligible"] is True, cone
+    assert full["native_row_cone"]["eligible"] is False, full
+    assert cone["raw_identities"] == full["raw_identities"]
+    assert len(cone["raw_identities"]) == len(cone["rows"]) == 2
+    # Compare the exact identity/result map, including the original domain
+    # witness and every role/cofactor query. No aggregate PASS substitutes.
+    for mapping in (cone, full):
+        progress = mapping["query_progress"]
+        assert progress["planned"] == progress["started"] == progress["completed"] == 59, mapping
+        assert not progress["unknown"], progress
+        assert mapping["native_exit_code"] == 0, mapping
+    assert cone["query_progress"]["by_identity"] == full["query_progress"]["by_identity"], case
+    for index, (left, right) in enumerate(zip(cone["rows"], full["rows"])):
+        assert left["native_queries"] == right["native_queries"], case
+        assert left["classification"] == right["classification"], case
+        expected = "NO_UNDEF" if case == "undefined_data" and index == 1 else expected_undef
+        assert left["native_queries"]["undef0"] == expected, (case, left)
+        if case.startswith("one_hot_"):
+            value = (1, 2, 3)[int(case[-1])]
+            proof = "one0" if value & (1 << index) else "zero0"
+            assert left["native_queries"][proof] == "PROVED", (case, left)
+        assert left["native_queries"]["undef1"] == "NO_UNDEF", (case, left)
+    for arm in ("cone", "full"):
+        script = (tmp_path / arm / "transition_pair.ys").read_text().splitlines()
+        queries = [line for line in script if line.startswith("sat ")]
+        assert len(queries) == 59
+        assert all("-enable_undef -set-def-inputs" in line for line in queries)
+        paired = json.loads((tmp_path / arm / "transition_pair.json").read_text())
+        assert sum(c["type"] == "$pmux" for c in
+                   paired["modules"]["transition_pair"]["cells"].values()) == 2
+    print("PMUX_CONSUMER_ANSWER_SET " + json.dumps({
+        "case": case, "answers": cone["query_progress"]["by_identity"],
+        "identities": 59, "rows": 2,
+    }, sort_keys=True))
+
+
 def test_native_feedback_can_restrict_shared_domain_and_is_not_pruned(tmp_path):
     data = model({"row": cell("$and", [2], [4], ["1"]),
                   "feedback": cell("$eqx", [5], [5], [2])})
