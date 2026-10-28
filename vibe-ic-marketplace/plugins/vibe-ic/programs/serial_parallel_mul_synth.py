@@ -293,6 +293,32 @@ def extract_serial_parallel_mul_spec(
         "size_default": size_def,
         "size_min": size_min,
     }
+    declaration = _load_json(project_dir / "plugin_output" / "declaration.json")
+    decisions = _load_json(project_dir / "input" / "feature-decisions.json")
+    if not isinstance(declaration, dict) or not isinstance(decisions, dict):
+        return None, "DFT interface decision/declaration must be an object"
+    if declaration.get("dft") is not None or decisions.get("dft") is not None:
+        from fault_scan_chain_insert import load_d09_dft_contract
+        binding, problems = load_d09_dft_contract(
+            project_dir, expected_clock=clk, expected_reset=rst,
+            reset_active_low=active_low)
+        if binding is None or problems:
+            return None, "DFT interface authority is unavailable: " + "; ".join(problems)
+        if binding["intent"]["requires_scan"]:
+            functional = {clk, rst, par[0], ser_in, ser_out}
+            reserved = {
+                definition["public"]: "output" if role == "scan_out" else "input"
+                for role, definition in binding["intent"]["test_port_def"].items()
+            }
+            if functional.intersection(reserved):
+                return None, "reserved test interface aliases a functional port"
+            spec["reserved_test_ports"] = reserved
+            spec["dft_intent_binding"] = binding
+            spec["preinsert_test_observation"] = {
+                "port": binding["intent"]["test_port_def"]["scan_out"]["public"],
+                "register": "pr",
+                "purpose": "pre_insertion_observation",
+            }
     return spec, "serial-parallel multiplier shape matched"
 
 
@@ -302,6 +328,30 @@ def emit_rtl(spec: Dict[str, Any]) -> str:
     szd = spec["size_default"]
     clk, rst = spec["clk"], spec["rst"]
     x, y, p = spec["parallel"], spec["serial_in"], spec["serial_out"]
+    reserved = spec.get("reserved_test_ports", {})
+    observation = spec.get("preinsert_test_observation")
+    observation_assignment = ""
+    if reserved:
+        intent = spec.get("dft_intent_binding", {}).get("intent", {})
+        roles = intent.get("test_port_def", {})
+        endpoint = roles.get("scan_out", {}).get("public")
+        intended = {
+            definition["public"]: "output" if role == "scan_out" else "input"
+            for role, definition in roles.items()
+        }
+        if (intent.get("requires_scan") is not True or reserved != intended
+                or not endpoint or reserved.get(endpoint) != "output"
+                or observation != {"port": endpoint, "register": "pr",
+                                   "purpose": "pre_insertion_observation"}):
+            raise ValueError("unapproved pre-insertion product observation")
+        observation_assignment = f"    assign {endpoint} = pr;\n"
+    elif observation is not None:
+        raise ValueError("test observation requires the declared test interface")
+    test_ports = "".join(
+        f",\n    {direction} wire            {name}"
+        for name, direction in reserved.items())
+    reservation = ("    // D01-declared test interface; scan_out observes the existing product register.\n"
+                   "    // Scan replacement/stitching and shift behavior remain pending.\n") if reserved else ""
     rst_expr = f"!{rst}" if spec["rst_active_low"] else rst
     rst_word = "active-low" if spec["rst_active_low"] else "active-high"
     reset_mode = spec["reset_mode"]
@@ -336,9 +386,9 @@ module {top} #(
     input  wire            {rst},
     input  wire [{sz}-1:0] {x},
     input  wire            {y},
-    output wire            {p}
+    output wire            {p}{test_ports}
 );
-    reg  [{sz}-1:0] s;    // carry-save sum column
+{reservation}    reg  [{sz}-1:0] s;    // carry-save sum column
     reg  [{sz}-1:0] c;    // carry-save carry column
     reg             yr;   // registered serial multiplier bit
     reg             pr;   // registered serial product bit
@@ -364,7 +414,7 @@ module {top} #(
     end
 
     assign {p} = pr;
-endmodule
+{observation_assignment}endmodule
 `default_nettype wire
 """
 
