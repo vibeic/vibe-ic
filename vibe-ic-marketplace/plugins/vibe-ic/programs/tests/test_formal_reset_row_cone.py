@@ -309,7 +309,13 @@ def test_native_pmux_reset_consumer_preserves_every_full_model_answer(
     for arm in ("cone", "full"):
         script = (tmp_path / arm / "transition_pair.ys").read_text().splitlines()
         queries = [line for line in script if line.startswith("sat ")]
-        assert len(queries) == 59
+        identities = [line.removeprefix("log VIBEIC_TRANSITION_QUERY ") for line in script
+                      if line.startswith("log VIBEIC_TRANSITION_QUERY ")]
+        terminals = [line.removeprefix("log VIBEIC_TRANSITION_COMPLETE ") for line in script
+                     if line.startswith("log VIBEIC_TRANSITION_COMPLETE ")]
+        assert len(identities) == len(set(identities)) == len(queries) == 59
+        assert terminals == identities
+        assert set(identities) == set(cone["query_progress"]["by_identity"])
         assert all("-enable_undef -set-def-inputs" in line for line in queries)
         paired = json.loads((tmp_path / arm / "transition_pair.json").read_text())
         assert sum(c["type"] == "$pmux" for c in
