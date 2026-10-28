@@ -1236,55 +1236,88 @@ def _native_text(value) -> str:
 
 
 def _native_query_run(argv: List[str], timeout: int = 120, *,
-                      container: Optional[str] = None, command: Optional[str] = None
+                      container: Optional[str] = None, command: Optional[str] = None,
+                      transcript_paths=None
                       ) -> Tuple[int, str, str, dict]:
-    """Supervise native progress and reap the exact owned container job.
+    """Keep existing supervision; opt-in local transcripts stay raw on disk.
 
-    ``timeout`` is a recorded budget, never a clock kill. Individual SAT
-    queries retain their solver limit and every terminal marker remains in
-    the evidence. A stalled batch is incomplete, including its partial output.
+    ``timeout`` remains a recorded budget, never a clock kill. Remote container
+    transport and default callers retain their existing capture behavior.
     """
     supervision = "host_process_and_progress"
+
+    def finish(rc, stdout, stderr, meta):
+        if transcript_paths is None:
+            return rc, _native_text(stdout), _native_text(stderr), meta
+        paths = dict(zip(("stdout", "stderr"), map(str, transcript_paths)))
+        # Primitive exceptions may carry partial output. Preserve it when no
+        # supervisor file exists; do not duplicate already-persisted bytes.
+        for name, value in (("stdout", stdout), ("stderr", stderr)):
+            path = Path(paths[name])
+            if not path.exists() or path.stat().st_size == 0:
+                data = value if isinstance(value, bytes) else _native_text(value).encode("utf-8")
+                _aa.write_bytes(path, data)
+        return rc, "", "", dict(meta, transcript_paths=paths)
+
     try:
         import _container_exec as ce
         if container and not ce.local_exec_mode("formal_structural_check"):
+            if transcript_paths is not None:
+                raise ValueError("file-backed transcripts require local/in-image execution")
             if not command:
                 raise ValueError("container native query requires its exact command")
             supervision = "container_identity_and_progress"
             process = ce.run_in_container_supervised(container, command, ceiling_s=timeout)
         else:
-            process = _pr.run(argv, capture_output=True, text=True, hard_ceiling_s=timeout)
-        return process.returncode, _native_text(process.stdout), _native_text(process.stderr), {
+            options = ({"transcript_paths": transcript_paths}
+                       if transcript_paths is not None else {})
+            process = _pr.run(argv, capture_output=True, text=True,
+                              hard_ceiling_s=timeout, **options)
+        return finish(process.returncode, process.stdout, process.stderr, {
             "termination": "STALLED" if process.returncode == _pr.RC_STALLED else "COMPLETED",
             "native_exit_code": process.returncode, "supervision": supervision,
-            "recorded_budget_seconds": timeout}
+            "recorded_budget_seconds": timeout})
     except _pr.Stalled as exc:
-        return _pr.RC_STALLED, _native_text(exc.stdout), _native_text(exc.stderr), {
+        return finish(_pr.RC_STALLED, exc.stdout, exc.stderr, {
             "termination": "STALLED", "native_exit_code": _pr.RC_STALLED,
-            "supervision": supervision, "error": str(exc), "signals": exc.signals}
+            "supervision": supervision, "error": str(exc), "signals": exc.signals})
     except subprocess.TimeoutExpired as exc:
         stdout = getattr(exc, "stdout", None)
         if stdout is None:
             stdout = exc.output
-        return 124, _native_text(stdout), _native_text(exc.stderr), {
+        return finish(124, stdout, exc.stderr, {
             "termination": "TIMEOUT", "native_exit_code": 124,
-            "timeout_seconds": timeout, "error": str(exc)}
+            "timeout_seconds": timeout, "error": str(exc)})
     except OSError as exc:
-        return 127, "", "", {"termination": "TOOL_UNAVAILABLE", "native_exit_code": 127,
-                               "error": str(exc)}
+        return finish(127, "", "", {
+            "termination": "TOOL_UNAVAILABLE", "native_exit_code": 127,
+            "error": str(exc)})
 
 
 def _native_artifacts(work_dir: Path, stem: str, stdout: str, stderr: str, run: dict) -> dict:
-    """Persist distinct native streams and return compact readback metadata."""
+    """Retain exact streams and the legacy concatenated log with bounded RAM."""
     stdout_path = work_dir / f"{stem}.stdout"
     stderr_path = work_dir / f"{stem}.stderr"
     log_path = work_dir / f"{stem}.log"
-    _aa.write_text(stdout_path, stdout)
-    _aa.write_text(stderr_path, stderr)
-    _aa.write_text(log_path, stdout + stderr)
+    paths = run.get("transcript_paths")
+    if paths is None:
+        _aa.write_text(stdout_path, stdout)
+        _aa.write_text(stderr_path, stderr)
+        _aa.write_text(log_path, stdout + stderr)
+    else:
+        import shutil
+        for name, target in (("stdout", stdout_path), ("stderr", stderr_path)):
+            source = Path(paths[name])
+            if source.resolve() != target.resolve():
+                with source.open("rb") as src, _aa.writing(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst, 1024 * 1024)
+        with _aa.writing(log_path, "wb") as combined:
+            for path in (stdout_path, stderr_path):
+                with path.open("rb") as src:
+                    shutil.copyfileobj(src, combined, 1024 * 1024)
     return dict(run, stdout_sha256=file_sha256(stdout_path), stderr_sha256=file_sha256(stderr_path),
-                log_sha256=file_sha256(log_path), stdout_bytes=len(stdout.encode("utf-8")),
-                stderr_bytes=len(stderr.encode("utf-8")))
+                log_sha256=file_sha256(log_path), stdout_bytes=stdout_path.stat().st_size,
+                stderr_bytes=stderr_path.stat().st_size)
 
 
 def _query_result(body: str) -> str:
@@ -1299,36 +1332,108 @@ def _query_result(body: str) -> str:
     return "UNKNOWN"
 
 
-def _transition_query_progress(log: str, planned: List[str]) -> dict:
-    """Read only terminal-marked queries; started/truncated work remains UNKNOWN."""
-    bodies = {}
-    terminals = set()
-    current = None
-    for line in log.splitlines(keepends=True):
-        record, separator, identifier = line.rstrip().partition(" ")
-        if (separator and identifier and len(identifier.split()) == 1 and
-                record in {"VIBEIC_TRANSITION_QUERY", "VIBEIC_TRANSITION_COMPLETE"}):
-            if record == "VIBEIC_TRANSITION_QUERY":
-                current = identifier
-                bodies[current] = ""
+def _transition_query_progress(log, planned: List[str]) -> dict:
+    """Classify bounded chunks, not query bodies; malformed markers fail closed.
+
+    A Path is decoded incrementally with the same replacement policy as the
+    legacy capture. Memory is bounded by the planned identity map and a chunk,
+    including for a native line without a newline. Exact raw bytes stay on disk.
+    A terminal-less final prefix preserves earlier completed observations.
+    """
+    import io
+    prefixes = ("VIBEIC_TRANSITION_QUERY", "VIBEIC_TRANSITION_COMPLETE")
+    tokens = ("SAT proof finished - no model found: SUCCESS!",
+              "SAT proof finished - model found: FAIL!",
+              "SAT solving finished - no model found.",
+              "SAT solving finished - model found:")
+    limit = max([len(p) for p in planned] + [0]) + max(map(len, prefixes)) + 8
+    wanted, started, answers = set(planned), set(), {}
+    current, hits, next_index = None, set(), 0
+    errors, error_count, invalid = [], 0, False
+
+    def error(kind, ident, hard=True):
+        nonlocal error_count, invalid
+        error_count += 1
+        invalid |= hard
+        if len(errors) < 10:
+            errors.append({"kind": kind, "identity": ident})
+
+    if len(wanted) != len(planned):
+        error("duplicate_planned_identity", "")
+
+    def line(text, overflow, found):
+        nonlocal current, hits, next_index
+        marker = next((p for p in prefixes if text.startswith(p)), None)
+        if marker is None:
+            if current is not None:
+                hits.update(found)
+            return
+        head, sep, ident = text.rstrip().partition(" ")
+        if overflow or head != marker or not sep or not ident or len(ident.split()) != 1:
+            error("malformed_marker", text[:limit])
+            return
+        if ident not in wanted:
+            error("foreign_marker", ident)
+            return
+        if marker == prefixes[0]:
+            if current is not None:
+                error("missing_terminal", current)
+            if ident in started:
+                error("duplicate_query", ident)
+            if next_index >= len(planned) or ident != planned[next_index]:
+                error("reordered_query", ident)
             else:
-                terminals.add(identifier)
-        elif current is not None:
-            bodies[current] += line
+                next_index += 1
+            started.add(ident)
+            current, hits = ident, set()
+        else:
+            if ident != current or ident in answers:
+                error("duplicate_or_unmatched_terminal", ident)
+                return
+            if len(hits) > 1:
+                error("conflicting_result_classes", ident)
+            answers[ident] = _query_result("\n".join(hits))
+            current, hits = None, set()
+
+    stream = (Path(log).open("r", encoding="utf-8", errors="replace")
+              if isinstance(log, Path) else io.StringIO(log))
+    preview, overflow, tail, found = "", False, "", set()
+    with stream:
+        while True:
+            chunk = stream.read(65536)
+            if not chunk:
+                break
+            pieces = chunk.split("\n")
+            for index, piece in enumerate(pieces):
+                sample = tail + piece
+                found.update(t for t in tokens if t in sample)
+                tail = sample[-max(map(len, tokens)):]
+                if len(preview) + len(piece) > limit:
+                    overflow = True
+                preview = (preview + piece)[:limit]
+                if index < len(pieces) - 1:
+                    line(preview, overflow, found)
+                    preview, overflow, tail, found = "", False, "", set()
+        if preview or overflow or found:
+            line(preview, overflow, found)
+    if current is not None:
+        error("missing_terminal_at_eof", current, hard=False)
     by_identity = {}
     for ident in planned:
-        if ident in terminals and ident in bodies:
-            by_identity[ident] = {"status": "COMPLETED", "result": _query_result(bodies[ident])}
-        elif ident in bodies:
+        if ident in answers and not invalid:
+            by_identity[ident] = {"status": "COMPLETED", "result": answers[ident]}
+        elif ident in started:
             by_identity[ident] = {"status": "UNKNOWN", "result": "UNKNOWN",
-                                  "reason": "query started without native terminal marker"}
+                "reason": ("transcript marker protocol invalid" if invalid else
+                           "query started without native terminal marker")}
         else:
             by_identity[ident] = {"status": "NOT_STARTED", "result": "UNKNOWN"}
-    return {"planned": len(planned), "started": sum(k in bodies for k in planned),
+    return {"planned": len(planned), "started": sum(k in started for k in planned),
             "completed": sum(v["status"] == "COMPLETED" for v in by_identity.values()),
             "unknown": sorted(k for k, v in by_identity.items() if v["status"] == "UNKNOWN"),
             "not_started": sorted(k for k, v in by_identity.items() if v["status"] == "NOT_STARTED"),
-            "by_identity": by_identity}
+            "by_identity": by_identity, "marker_errors": errors,
+            "marker_error_count": error_count, "marker_protocol_valid": error_count == 0}
 
 
 def _cofactor_payload_support(model: dict, rows: List[dict], work_dir: Path,
@@ -2080,10 +2185,15 @@ def reset_control_mapping(netlist: dict, raw: Optional[dict], top: str,
         argv = ce.exec_argv(container, inner, tag="formal_structural_check")
     else:
         argv = ["yosys", "-Q", "-T", "-s", str(ys.resolve())]
+    import _container_exec as ce
+    local = not container or ce.local_exec_mode("formal_structural_check")
+    capture = ({"transcript_paths": (work_dir / "transition_pair.stdout",
+                                     work_dir / "transition_pair.stderr")}
+               if local else {})
     rc, stdout, stderr, run = _native_query_run(
-        argv, container=container, command=f"yosys -Q -T -s {ys.resolve()}")
-    log = stdout + stderr
+        argv, container=container, command=f"yosys -Q -T -s {ys.resolve()}", **capture)
     native = _native_artifacts(work_dir, "transition_pair", stdout, stderr, run)
+    log = work_dir / "transition_pair.log" if run.get("transcript_paths") else stdout + stderr
     progress = _transition_query_progress(log, ["domain", *specs])
     domain = progress["by_identity"]["domain"]
     domain_reachable = (domain["status"] == "COMPLETED" and
@@ -2626,7 +2736,11 @@ def temporal_applicability(netlist: dict, top: str) -> List[str]:
 def file_sha256(path: Path) -> Optional[str]:
     import hashlib
     try:
-        return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        digest = hashlib.sha256()
+        with Path(path).open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
     except OSError:
         return None
 

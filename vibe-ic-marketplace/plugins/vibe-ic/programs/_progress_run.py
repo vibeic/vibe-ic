@@ -426,6 +426,7 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
                                           Callable[[object], Optional[float]]]]
         = None,
         start_new_session: bool = False,
+        transcript_paths=None,
         _supervisor=None) -> subprocess.CompletedProcess:
     """Run `cmd` to completion, however long it legitimately takes.
 
@@ -475,6 +476,11 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
         `os.killpg`. Counting a SPELLING instead of the property is how that
         goes wrong; the property is `start_new_session=True` on the launch, and
         all four sites carried it before they were converted.
+
+    ``transcript_paths=(stdout_path, stderr_path)`` is an explicit opt-in:
+    captured bytes stay in those files under the existing growth/progress
+    supervision. Return/exception `.transcript_paths` names the payload; no
+    whole-stream read or decode occurs. Defaults remain unchanged.
 
     A ``stdout=<file>`` redirect is NOT supported: it would take the output
     away from the progress meter without saying so, leaving the supervision
@@ -553,6 +559,8 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
     supervisor = _supervisor or _wd.run_supervised
     t0 = time.monotonic()
     try:
+        file_capture = ({"transcript_paths": transcript_paths}
+                        if transcript_paths is not None else {})
         res = supervisor(
             cmd,
             output_progress=True,
@@ -574,6 +582,7 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
             popen_factory=popen_factory,
             env=env,
             as_text=text,
+            **file_capture,
         )
     finally:
         if to_close is not None:
@@ -594,13 +603,20 @@ def run(cmd, *, cwd=None, env=None, input=None,  # noqa: A002
     # back, this module must raise rather than hand the caller a
     # CompletedProcess carrying rc 124 as though the tool had said it.
     if outcome in ("stalled", "ceiling"):
-        raise Stalled(cmd, stall_looks, poll_s,
+        failure = Stalled(cmd, stall_looks, poll_s,
                       getattr(res, "elapsed_s", elapsed) or elapsed,
                       signals, _wd._as_text(res.out), _wd._as_text(res.err))
+        if transcript_paths is not None:
+            failure.transcript_paths = res.transcript_paths
+        raise failure
     cp = subprocess.CompletedProcess(cmd, res.rc, res.out, res.err)
+    if transcript_paths is not None:
+        cp.transcript_paths = res.transcript_paths
     if check and cp.returncode != 0:
-        raise subprocess.CalledProcessError(cp.returncode, cmd,
-                                            cp.stdout, cp.stderr)
+        failure = subprocess.CalledProcessError(cp.returncode, cmd, cp.stdout, cp.stderr)
+        if transcript_paths is not None:
+            failure.transcript_paths = cp.transcript_paths
+        raise failure
     return cp
 
 

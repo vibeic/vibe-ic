@@ -658,3 +658,15 @@ def test_tree_counter_decreases_without_growth_still_stall(tmp_path):
     assert killer.calls == ['stalled'] and proc.killed
     assert samples == [100.0, 100.0, 100.0, 100.0]
     assert clk.t == observations['since_last_progress_s'] == 30
+
+
+def test_file_backed_mode_keeps_progress_and_ceiling_semantics(tmp_path):
+    paths = (tmp_path / 'progress.stdout', tmp_path / 'progress.stderr')
+    result = W.run_supervised(
+        [sys.executable, '-c', "import time; print('start',flush=True); time.sleep(.3); print('end')"],
+        transcript_paths=paths, poll_s=.02, stall_grace_s=1, hard_ceiling_s=.01)
+    assert result.rc == 0 and result.outcome == 'natural'
+    assert result.supervision['hard_ceiling_exceeded'] is True
+    assert len(result.out) == len(result.err) == 0
+    assert paths[0].read_bytes() == b'start\nend\n'
+    assert result.supervision['watched'] == 'output'
