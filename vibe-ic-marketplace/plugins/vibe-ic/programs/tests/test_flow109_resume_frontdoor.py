@@ -48,10 +48,16 @@ def _request(**kwargs):
             "consumer_step": "D09", **kwargs}
 
 
+def _decision(result, plans):
+    return (plans[-1]["status"] if plans else
+            result.stderr.split("REFUSED: ", 1)[-1].split(":", 1)[0])
+
+
 @pytest.mark.parametrize("steps,native_exit", [(["D09"], "4"), (["D09", "D10"], "1")])
 def test_public_explicit_resume_reaches_only_current_owner_window(tmp_path, steps, native_exit):
     project, result, plans = _invoke(tmp_path, _request(
         explicit_rerun_steps=steps, reason="owner requested bounded RTL control"))
+    assert result.returncode == 1, result.stdout + result.stderr
     assert len(plans) == 1, result.stdout + result.stderr
     assert plans[0]["status"] == "READY"
     assert plans[0]["execution_steps"] == steps
@@ -123,6 +129,7 @@ def test_current_plan_reuses_native_bytes_without_rewriting_original_receipt(tmp
 
 def test_public_automatic_resume_refuses_unknown_retained_inputs_before_dispatch(tmp_path):
     project, result, plans = _invoke(tmp_path, _request(revalidate_consumer=True))
+    assert _decision(result, plans) == "UNRESOLVED"
     assert len(plans) == 1, result.stdout + result.stderr
     assert plans[0]["status"] == "UNRESOLVED"
     assert plans[0]["execution_steps"] == []
@@ -135,6 +142,7 @@ def test_public_automatic_resume_refuses_unknown_retained_inputs_before_dispatch
 @pytest.mark.parametrize("steps", [["D09", "D13"], ["D13", "D09"]])
 def test_public_resume_cannot_expand_sparse_or_reversed_window(tmp_path, steps):
     project, result, plans = _invoke(tmp_path, _request(explicit_rerun_steps=steps))
+    assert _decision(result, plans) == "UNRESOLVED"
     assert len(plans) == 1, result.stdout + result.stderr
     assert plans[0]["status"] == "UNRESOLVED"
     assert plans[0]["execution_steps"] == []
