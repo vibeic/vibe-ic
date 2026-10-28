@@ -644,7 +644,8 @@ def run_supervised(cmd, *, log_path=None, progress_paths=None,
                    clock: Callable[[], float] = time.monotonic,
                    abort_probe: Optional[Callable[[], Optional[str]]] = None,
                    ceiling_notice: Optional[Callable[[float], None]] = None,
-                   as_text: bool = True
+                   as_text: bool = True,
+                   transcript_paths=None
                    ) -> SupervisedResult:
     """Launch `cmd` and supervise it by FORWARD PROGRESS (see module docstring).
 
@@ -670,6 +671,10 @@ def run_supervised(cmd, *, log_path=None, progress_paths=None,
     a git blob or a NUL-separated path list would get plausible-looking bytes
     that are not the ones the child wrote. The WATCHDOG_* annotations are
     encoded to match, so a stall is still readable on either side.
+    ``transcript_paths=(stdout_path, stderr_path)`` opts into raw file-backed
+    capture. The SAME output-growth meter and supervision are used; payloads
+    stay on disk rather than being read/decoded on return. `.transcript_paths`
+    names them. Default callers retain their original text/bytes behavior.
     Returns a SupervisedResult."""
     # `start_new_session=True` MAKES THE CHILD ITS OWN PROCESS-GROUP LEADER,
     # which is the precondition `_default_kill` checks before it signals a
@@ -703,13 +708,45 @@ def run_supervised(cmd, *, log_path=None, progress_paths=None,
             # says the scope was not imposed.
             scope_meta = {"enforced": False, "error": repr(_exc)}
 
-    out_f = tempfile.TemporaryFile()
+    if transcript_paths is not None:
+        if not isinstance(transcript_paths, (tuple, list)) or len(transcript_paths) != 2:
+            raise ValueError("transcript_paths requires distinct stdout/stderr paths")
+        transcript_paths = tuple(os.path.abspath(os.fspath(p)) for p in transcript_paths)
+        if os.path.realpath(transcript_paths[0]) == os.path.realpath(transcript_paths[1]):
+            raise ValueError("stdout/stderr transcript paths must be distinct")
+        if (os.path.exists(transcript_paths[0]) and os.path.exists(transcript_paths[1])
+                and os.path.samefile(*transcript_paths)):
+            raise ValueError("stdout/stderr transcript paths alias the same file")
+    out_f = (open(transcript_paths[0], "w+b") if transcript_paths is not None
+             else tempfile.TemporaryFile())
     # `merge_stderr` sends stderr down the SAME descriptor as stdout, which is
     # what `2>&1 | tee` and a human at a terminal see. Separately captured
     # streams re-order under Python's own buffering -- stderr can arrive first
     # while the final stdout verdict flushes at exit -- so for a caller whose
     # comparison is over the combined text, the split is not cosmetic.
-    err_f = None if merge_stderr else tempfile.TemporaryFile()
+    try:
+        err_f = (None if merge_stderr else
+                 open(transcript_paths[1], "w+b") if transcript_paths is not None
+                 else tempfile.TemporaryFile())
+        if merge_stderr and transcript_paths is not None:
+            with open(transcript_paths[1], "wb"):
+                pass
+    except BaseException:
+        out_f.close()
+        raise
+
+    def _result(*args, **kwargs):
+        result = SupervisedResult(*args, **kwargs)
+        if transcript_paths is not None:
+            # Only bounded supervisor annotations are strings in this mode;
+            # child bytes are already retained, without any decode/re-encode.
+            if result.err:
+                note = (result.err.encode("utf-8") if isinstance(result.err, str)
+                        else result.err)
+                with open(transcript_paths[1], "ab") as stream:
+                    stream.write(note)
+            result.transcript_paths = transcript_paths
+        return result
 
     def _size():
         try:
@@ -752,7 +789,7 @@ def run_supervised(cmd, *, log_path=None, progress_paths=None,
         if err_f is not None:
             err_f.close()
         _msg = f"COMMAND_NOT_FOUND: {e}"
-        return SupervisedResult(127, "" if as_text else b"",
+        return _result(127, "" if as_text else b"",
                                 _msg if as_text else _msg.encode("utf-8"),
                                 "launch_error", 0.0, scope=scope_meta)
 
@@ -832,6 +869,8 @@ def run_supervised(cmd, *, log_path=None, progress_paths=None,
         pass
 
     def _read(f):
+        if transcript_paths is not None:
+            return "" if as_text else b""
         try:
             f.seek(0)
             raw = f.read()
@@ -872,7 +911,7 @@ def run_supervised(cmd, *, log_path=None, progress_paths=None,
             scope_meta["liveness"] = f"could not confirm: {_exc!r}"
 
     if outcome == "stalled":
-        return SupervisedResult(
+        return _result(
             RC_STALLED, out,
             err + _note(f"\nWATCHDOG_STALLED: configured forward-progress "
                         f"signals did not advance for > {stall_grace_s:g}s — "
@@ -890,7 +929,7 @@ def run_supervised(cmd, *, log_path=None, progress_paths=None,
         # the clock kill fall through to the 'natural' return below and be
         # reported as an ordinary exit. If this ever fires, the mechanism is
         # back and the message says so rather than the run looking normal.
-        return SupervisedResult(
+        return _result(
             RC_CEILING, out,
             err + _note(f"\nWATCHDOG_CEILING: a clock stopped this job at "
                         f"{hard_ceiling_s:g}s. Since vibe-ic#2051 the ceiling "
@@ -902,12 +941,12 @@ def run_supervised(cmd, *, log_path=None, progress_paths=None,
                         f"{_obs.get('since_last_progress_s')}"),
             "ceiling", elapsed, scope=scope_meta, supervision=_obs)
     if outcome == "aborted":
-        return SupervisedResult(
+        return _result(
             RC_ABORTED, out,
             err + _note(f"\nWATCHDOG_ABORTED: {_abort_reason}"),
             "aborted", elapsed, _abort_reason, scope=scope_meta,
             supervision=_obs)
-    return SupervisedResult(rc if rc is not None else 0, out, err,
+    return _result(rc if rc is not None else 0, out, err,
                             "natural", elapsed, scope=scope_meta,
                             supervision=_obs)
 

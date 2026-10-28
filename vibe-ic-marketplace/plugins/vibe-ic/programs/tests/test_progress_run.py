@@ -497,3 +497,62 @@ def test_a_tree_that_reaped_its_work_and_then_sleeps_is_still_caught():
     with pytest.raises(R.Stalled):
         R.run(_py(parent), **FAST)
     assert time.monotonic() - t0 < 120
+
+
+def test_file_backed_capture_retains_raw_bytes_and_empty_payloads(tmp_path):
+    """Actual existing supervisor, not an independently launched transport."""
+    out, err = tmp_path / 'raw.stdout', tmp_path / 'raw.stderr'
+    cp = R.run(_py("import os; os.write(1,b'raw\\x00\\xff\\n'); os.write(2,b'err\\xfe\\n')"),
+               transcript_paths=(out, err), **FAST)
+    assert cp.returncode == 0
+    assert len(cp.stdout) == len(cp.stderr) == 0
+    assert out.read_bytes() == b'raw\x00\xff\n'
+    assert err.read_bytes() == b'err\xfe\n'
+    assert cp.transcript_paths == (str(out), str(err))
+
+
+def test_file_backed_stall_keeps_partial_raw_output_and_exception(tmp_path):
+    out, err = tmp_path / 'partial.stdout', tmp_path / 'partial.stderr'
+    with pytest.raises(R.Stalled) as caught:
+        R.run(_py("import os,time; os.write(1,b'prefix\\xff\\n'); time.sleep(600)"),
+              transcript_paths=(out, err), **FAST)
+    assert out.read_bytes() == b'prefix\xff\n'
+    assert b'WATCHDOG_STALLED' in err.read_bytes()
+    assert caught.value.transcript_paths == (str(out), str(err))
+    assert caught.value.signals['output'] is True
+
+
+def test_file_backed_nonzero_exit_and_check_keep_primitive_behavior(tmp_path):
+    paths = (tmp_path / 'failed.stdout', tmp_path / 'failed.stderr')
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        R.run(_py("import os; os.write(2,b'failure\\n'); raise SystemExit(7)"),
+              transcript_paths=paths, check=True, **FAST)
+    assert caught.value.returncode == 7
+    assert caught.value.transcript_paths == tuple(map(str, paths))
+    assert paths[1].read_bytes() == b'failure\n'
+
+
+def test_file_backed_missing_tool_preserves_launch_exception(tmp_path):
+    paths = (tmp_path / 'missing.stdout', tmp_path / 'missing.stderr')
+    with pytest.raises(FileNotFoundError, match='COMMAND_NOT_FOUND'):
+        R.run([str(tmp_path / 'not-a-program')], transcript_paths=paths, **FAST)
+    assert paths[0].read_bytes() == b''
+    assert b'COMMAND_NOT_FOUND' in paths[1].read_bytes()
+
+
+def test_file_backed_hardlink_alias_refuses_before_truncation_or_child(tmp_path):
+    import os
+    out, err = tmp_path / 'original.stdout', tmp_path / 'alias.stderr'
+    original = b'previous raw evidence\x00\xff\n'
+    out.write_bytes(original)
+    os.link(out, err)
+    marker = tmp_path / 'child-started'
+    refusal = None
+    try:
+        R.run(_py(f"from pathlib import Path; Path({str(marker)!r}).write_text('started')"),
+              transcript_paths=(out, err), **FAST)
+    except ValueError as exc:
+        refusal = str(exc)
+    assert out.read_bytes() == err.read_bytes() == original
+    assert refusal is not None and 'alias the same file' in refusal
+    assert not marker.exists()

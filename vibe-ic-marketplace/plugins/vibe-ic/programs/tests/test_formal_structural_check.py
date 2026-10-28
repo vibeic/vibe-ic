@@ -1278,3 +1278,189 @@ endmodule
                     klass={'clock': 'clk', 'resets': ['rst_n']})
     (tmp_path / 'normal.json').write_text(json.dumps(rec, indent=2))
     assert [c['verdict'] for c in rec['claims']] == ['NOT_DISCHARGED'] * 2, rec
+
+
+def _streamed_query(ident, message):
+    return (f'VIBEIC_TRANSITION_QUERY {ident}\n{message}\n'
+            f'VIBEIC_TRANSITION_COMPLETE {ident}\n')
+
+
+@pytest.mark.parametrize('message,expected', [
+    ('SAT proof finished - no model found: SUCCESS!', 'PROVED'),
+    ('SAT proof finished - model found: FAIL!', 'REFUTED'),
+    ('SAT solving finished - model found:', 'HAS_UNDEF'),
+    ('SAT solving finished - no model found.', 'NO_UNDEF'),
+])
+def test_streamed_transcript_preserves_each_result_class(tmp_path, message, expected):
+    path = tmp_path / 'native.log'
+    path.write_text(_streamed_query('domain', message))
+    progress = fsc._transition_query_progress(path, ['domain'])
+    assert progress['by_identity'] == {'domain': {'status': 'COMPLETED', 'result': expected}}
+    assert progress['marker_protocol_valid'] is True
+
+
+@pytest.mark.parametrize('damage', ['duplicate_query', 'duplicate_terminal', 'foreign',
+                                   'reordered', 'missing_terminal', 'conflicting_results'])
+def test_streamed_marker_damage_never_certifies_a_complete_map(tmp_path, damage):
+    good = 'SAT proof finished - no model found: SUCCESS!'
+    first = _streamed_query('a', good)
+    second = _streamed_query('b', good)
+    text = {
+        'duplicate_query': first + first + second,
+        'duplicate_terminal': first + 'VIBEIC_TRANSITION_COMPLETE a\n' + second,
+        'foreign': first + _streamed_query('foreign', good) + second,
+        'reordered': second + first,
+        'missing_terminal': 'VIBEIC_TRANSITION_QUERY a\n' + good + '\n' + second,
+        'conflicting_results': _streamed_query('a', good + '\nSAT proof finished - model found: FAIL!') + second,
+    }[damage]
+    path = tmp_path / 'damaged.log'
+    path.write_text(text)
+    result = fsc._transition_query_progress(path, ['a', 'b'])
+    assert result['planned'] == 2
+    assert result['marker_protocol_valid'] is False
+    assert result['completed'] == 0
+    assert all(row['result'] != 'PROVED' for row in result['by_identity'].values())
+
+
+def test_streamed_final_truncation_retains_only_completed_prefix(tmp_path):
+    path = tmp_path / 'partial.log'
+    path.write_text(_streamed_query('a', 'SAT proof finished - no model found: SUCCESS!')
+                    + 'VIBEIC_TRANSITION_QUERY b\nSAT proof finished - model found: FAIL!\n')
+    result = fsc._transition_query_progress(path, ['a', 'b', 'c'])
+    assert result['by_identity']['a'] == {'status': 'COMPLETED', 'result': 'PROVED'}
+    assert result['by_identity']['b']['status'] == 'UNKNOWN'
+    assert result['by_identity']['c']['status'] == 'NOT_STARTED'
+    assert result['completed'] == 1 and result['planned'] == 3
+    assert result['marker_protocol_valid'] is False
+
+
+def test_streamed_long_lines_chunk_boundaries_and_hashes_do_not_use_whole_reads(tmp_path, monkeypatch):
+    import hashlib
+    path = tmp_path / 'raw.log'
+    raw = (b'VIBEIC_TRANSITION_QUERY domain\n' + b'x' * (3 * 65536 + 17)
+           + b'\xff\nSAT proof finished - no model found: SUCCESS!\n'
+           + b'VIBEIC_TRANSITION_COMPLETE domain\n')
+    path.write_bytes(raw)
+    original_read_bytes, original_read_text = Path.read_bytes, Path.read_text
+    def no_bytes(self, *args, **kwargs):
+        assert self != path, 'whole-file byte materialization'
+        return original_read_bytes(self, *args, **kwargs)
+    def no_text(self, *args, **kwargs):
+        assert self != path, 'whole-file text materialization'
+        return original_read_text(self, *args, **kwargs)
+    monkeypatch.setattr(Path, 'read_bytes', no_bytes)
+    monkeypatch.setattr(Path, 'read_text', no_text)
+    assert fsc.file_sha256(path) == hashlib.sha256(raw).hexdigest()
+    assert fsc._transition_query_progress(path, ['domain'])['by_identity']['domain']['result'] == 'PROVED'
+
+
+def test_streamed_native_nonzero_and_partial_stall_keep_primitive_status(tmp_path, monkeypatch):
+    paths = (tmp_path / 'failed.stdout', tmp_path / 'failed.stderr')
+    code = "import os; os.write(1,b'VIBEIC_TRANSITION_QUERY a\\n'); os.write(2,b'raw\\xff\\n'); raise SystemExit(7)"
+    rc, out, err, meta = fsc._native_query_run([sys.executable, '-c', code], transcript_paths=paths)
+    assert rc == 7 and meta['termination'] == 'COMPLETED'
+    assert out == err == ''
+    record = fsc._native_artifacts(tmp_path, 'failed', out, err, meta)
+    assert record['stderr_bytes'] == 5
+    assert paths[1].read_bytes() == b'raw\xff\n'
+    progress = fsc._transition_query_progress(tmp_path / 'failed.log', ['a'])
+    assert progress['by_identity']['a']['result'] == 'UNKNOWN'
+    monkeypatch.setattr(fsc._pr, '_poll_interval', lambda: .02)
+    paths = (tmp_path / 'stall.stdout', tmp_path / 'stall.stderr')
+    code = "import os,time; os.write(1,b'VIBEIC_TRANSITION_QUERY a\\n'); time.sleep(600)"
+    rc, out, err, meta = fsc._native_query_run([sys.executable, '-c', code], transcript_paths=paths)
+    assert rc == fsc._pr.RC_STALLED and meta['termination'] == 'STALLED'
+    assert b'WATCHDOG_STALLED' in paths[1].read_bytes()
+    assert paths[0].read_bytes() == b'VIBEIC_TRANSITION_QUERY a\n'
+
+
+def test_streamed_child_consumer_materialization_is_bounded(tmp_path):
+    """256MiB CHILD output through the actual transport/artifact/parser chain.
+
+    This is software regression evidence, not native SAT or corpus proof.
+    A long body without newlines prevents a line-sized materialization escape.
+    """
+    wrapper = r'''
+import hashlib,json,resource,sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import formal_structural_check as fsc
+root=Path(sys.argv[2]);root.mkdir()
+child=r"""import os
+os.write(1,b'VIBEIC_TRANSITION_QUERY a\n')
+block=b'x'*65536
+for _ in range(4096): os.write(1,block)
+os.write(1,b'\nSAT solving finished - model found:\nVIBEIC_TRANSITION_COMPLETE a\n')
+for ident,msg in [(b'b',b'SAT proof finished - model found: FAIL!'),(b'c',b'SAT proof finished - no model found: SUCCESS!'),(b'd',b'SAT solving finished - no model found.')]:
+ os.write(1,b'VIBEIC_TRANSITION_QUERY '+ident+b'\n'+msg+b'\nVIBEIC_TRANSITION_COMPLETE '+ident+b'\n')
+"""
+rc,out,err,meta=fsc._native_query_run([sys.executable,'-c',child],transcript_paths=(root/'bulk.stdout',root/'bulk.stderr'))
+record=fsc._native_artifacts(root,'bulk',out,err,meta)
+progress=fsc._transition_query_progress(root/'bulk.log',['a','b','c','d'])
+print(json.dumps({'rc':rc,'peak_rss_kib':resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,'stdout_bytes':record['stdout_bytes'],'stdout_sha256':record['stdout_sha256'],'log_sha256':record['log_sha256'],'answers':progress['by_identity'],'protocol_valid':progress['marker_protocol_valid']}))
+'''
+    process = fsc._pr.run([sys.executable, '-c', wrapper,
+                           str(Path(fsc.__file__).parent), str(tmp_path / 'child')])
+    assert process.returncode == 0, process.stderr
+    measurement = json.loads(process.stdout)
+    (tmp_path / 'measurement.json').write_text(json.dumps(measurement, indent=2))
+    assert measurement['rc'] == 0
+    assert measurement['stdout_bytes'] > 256 * 1024 * 1024
+    assert measurement['stdout_sha256'] == measurement['log_sha256']
+    assert measurement['protocol_valid'] is True
+    assert measurement['answers'] == {key: {'status': 'COMPLETED', 'result': result}
+                                    for key, result in [('a', 'HAS_UNDEF'), ('b', 'REFUTED'),
+                                                        ('c', 'PROVED'), ('d', 'NO_UNDEF')]}
+    assert measurement['peak_rss_kib'] < 128 * 1024, measurement
+    print('STREAMED_CHILD_MEASUREMENT ' + json.dumps(measurement, sort_keys=True))
+
+
+def test_streamed_reset_mapping_uses_existing_file_transport_and_nonzero_refusal(tmp_path, monkeypatch):
+    """Software wiring control: real factory/consumer, Python transcript child.
+
+    No Yosys/SAT is run and these synthetic answers provide no proof credit.
+    """
+    from test_formal_reset_row_cone import cell
+    ports = {'clk': {'direction': 'input', 'bits': [2]},
+             'rst': {'direction': 'input', 'bits': [3]},
+             'd': {'direction': 'input', 'bits': [4]},
+             'q': {'direction': 'output', 'bits': [5]}}
+    mod = {'attributes': {}, 'ports': ports,
+           'netnames': {name: {'bits': row['bits'], 'attributes': {}}
+                        for name, row in ports.items()},
+           'cells': {'reset': cell('$mux', [4], [6], ['0'], [3]),
+                     'state': {'type': '$dff', 'parameters': {'WIDTH': 1, 'CLK_POLARITY': 1},
+                               'connections': {'CLK': [2], 'D': [6], 'Q': [5]},
+                               'port_directions': {'CLK': 'input', 'D': 'input', 'Q': 'output'}}}}
+    subject = {'modules': {'neutral': mod}}
+    def support(_model, rows, *_args):
+        return ({'rows': [{'q': row['q'], 'status': 'SOFTWARE_CONTROL'} for row in rows]},
+                {row['q']: set() for row in rows})
+    monkeypatch.setattr(fsc, '_cofactor_payload_support', support)
+    original_run, original_parser = fsc._native_query_run, fsc._transition_query_progress
+    observed = {}
+    def transcript_child(argv, **kwargs):
+        assert kwargs['transcript_paths'] == (tmp_path / 'transition_pair.stdout',
+                                              tmp_path / 'transition_pair.stderr')
+        lines = Path(argv[-1]).read_text().splitlines()
+        identities = [line.split()[-1] for line in lines
+                      if line.startswith('log VIBEIC_TRANSITION_QUERY ')]
+        assert len(identities) == len(set(identities)) == 30
+        observed['identities'] = identities
+        text = ''.join(_streamed_query(ident, 'SAT proof finished - no model found: SUCCESS!')
+                       for ident in identities)
+        code = 'import os; os.write(1,' + repr(text.encode()) + '); raise SystemExit(7)'
+        return original_run([sys.executable, '-c', code], **kwargs)
+    def parser(log, planned):
+        assert log == tmp_path / 'transition_pair.log'
+        observed['file_parser'] = True
+        return original_parser(log, planned)
+    monkeypatch.setattr(fsc, '_native_query_run', transcript_child)
+    monkeypatch.setattr(fsc, '_transition_query_progress', parser)
+    mapping = fsc.reset_control_mapping(subject, subject, 'neutral', 'rst', tmp_path)
+    assert observed['file_parser'] is True
+    assert mapping['query_progress']['planned'] == mapping['query_progress']['completed'] == 30
+    assert mapping['native_exit_code'] == 7
+    assert mapping['native_run']['transcript_paths']['stdout'].endswith('transition_pair.stdout')
+    assert mapping['complete'] is False
+    assert mapping['rows'][0]['classification'] == 'UNSUPPORTED'
