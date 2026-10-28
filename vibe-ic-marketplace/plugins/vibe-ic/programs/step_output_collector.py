@@ -451,6 +451,25 @@ def finish_step(project: Path, attempt: dict, *, verdict: str,
     return record
 
 
+def _inputs_current(project: Path, inputs) -> bool:
+    """Compare a nonempty recorded read set with current project-local bytes."""
+    if not isinstance(inputs, dict) or not inputs:
+        return False
+    try:
+        for rel, value in inputs.items():
+            if not isinstance(rel, str) or not rel or Path(rel).is_absolute():
+                return False
+            path = project / rel
+            if (not path.resolve(strict=True).is_relative_to(project)
+                    or not path.is_file()
+                    or _sha(path) !=
+                    (value.get('sha256') if isinstance(value, dict) else value)):
+                return False
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
+
+
 def latest_pass(project: Path, step_id: str) -> dict | None:
     """Return historical PASS with an explicit current-input flag, not guessed freshness."""
     project = Path(project).resolve()
@@ -463,10 +482,7 @@ def latest_pass(project: Path, step_id: str) -> dict | None:
         return None
     # No resolved input identity means freshness was not measured. A
     # historical canonical PASS must not become current by all({}) alone.
-    record['current_inputs'] = bool(pointer.get('inputs')) and all(
-        (project / rel).is_file() and _sha(project / rel) ==
-        (value.get('sha256') if isinstance(value, dict) else value)
-        for rel, value in pointer.get('inputs', {}).items())
+    record['current_inputs'] = _inputs_current(project, pointer.get('inputs'))
     return record
 
 
@@ -615,8 +631,9 @@ def current_acceptance(project: Path, started_at: float) -> list:
     The local sequential invocation window is the owner; dashboard phase
     labels do not determine which child process executed a fractional row.
     """
+    project = Path(project).resolve()
     latest = {}
-    for path in _versions_root(Path(project).resolve()).glob('*/*/*/outputs.json'):
+    for path in _versions_root(project).glob('*/*/*/outputs.json'):
         record = json.loads(path.read_text())
         result = record.get('result') or {}
         if not isinstance(result, dict):
@@ -632,6 +649,7 @@ def current_acceptance(project: Path, started_at: float) -> list:
         ended = datetime.datetime.fromisoformat(record['finished_at']).timestamp()
         sid = str(record['id'])
         if sid not in latest or ended > latest[sid][0]:
+            record['current_inputs'] = _inputs_current(project, record.get('inputs'))
             latest[sid] = (ended, record)
     return [item[1] for sid, item in sorted(latest.items())]
 

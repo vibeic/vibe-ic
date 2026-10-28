@@ -1035,6 +1035,60 @@ def test_default_postcheck8_consumes_saved_prelayout_without_native_replay(
         assert path.read_bytes() == raw, path
 
 
+@pytest.mark.parametrize('input_state', ['current', 'changed_after_run', 'missing_after_run'])
+def test_d26_uses_actual_collector_currentness_after_retained_consumer(
+        tmp_path, monkeypatch, input_state):
+    """Actual D26/collector readers; retained STA consumer is a source-test double."""
+    import json
+    from types import SimpleNamespace
+    import phase3_one_shot_runner as phase3
+    import step_output_collector as versions
+    import vibe_ic_one_shot_runner as front
+
+    reader = versions.current_acceptance
+    project, _adopted, launched, _prepared, binding = _d26_prelayout_fixture(
+        tmp_path, monkeypatch, 'no_scan')
+    monkeypatch.setattr(versions, 'current_acceptance', reader)
+    sdc = project / 'phase2/stage2/constraints/top.sdc'
+    saved = []
+
+    def retained_consumer(*_args):
+        attempt = versions.begin_step(project, '10', {
+            str(sdc.relative_to(project)): versions._sha(sdc)})
+        # Explicit process/consumer doubles, never native STA qualifications.
+        report = project / 'phase3/stage3/sta/pre_pnr_timing.rpt'
+        report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text('SOURCE_CONTROL retained STA consumer double\n')
+        summary = project / 'reports/phase3/sta/pre_pnr_summary.json'
+        summary.parent.mkdir(parents=True, exist_ok=True)
+        summary.write_text('{"scope":"SOURCE_CONTROL consumer double"}\n')
+        record = versions.finish_step(
+            project, attempt, verdict='PASS', canonical_pass=True,
+            result={'canonical_consumer': {'status': 'PASS', 'step': {'reasons': []}}})
+        output = project / 'steps' / record['folder'] / 'outputs.json'
+        saved.append((output, output.read_bytes()))
+        if input_state == 'changed_after_run':
+            sdc.write_text(sdc.read_text() + '# input changed after the consumer\n')
+        elif input_state == 'missing_after_run':
+            sdc.unlink()
+        return SimpleNamespace(status='PASS', detail='SOURCE_CONTROL consumer double')
+
+    monkeypatch.setattr(phase3, 'step_prelayout_signoff', retained_consumer)
+    result = front._complete_step10_prelayout(project, 'top', 'neutral', '')
+    expected = 'PASS' if input_state == 'current' else 'NOT_MEASURED'
+    assert result['verdict'] == expected, result
+    receipt = json.loads((project / result['timing_modes_receipt']['path']).read_text())
+    assert receipt['aggregate_status'] == expected
+    assert receipt['functional_baseline']['current_inputs'] is (input_state == 'current')
+    if input_state == 'current':
+        assert receipt['scan']['d09_binding'] == binding
+        assert receipt['scan']['applicability'] == 'NOT_APPLICABLE'
+    else:
+        assert receipt['functional_baseline']['status'] == 'NOT_MEASURED'
+    assert launched == []
+    assert all(path.read_bytes() == original for path, original in saved)
+
+
 def _d26_prelayout_fixture(tmp_path, monkeypatch, case, *, d01_binding=None):
     """SOURCE_CONTROL retained/STA doubles, not native qualification.
 

@@ -265,6 +265,74 @@ def test_changed_input_marks_pass_as_historical(tmp_path):
     assert historical['status'] == 'PASS' and historical['current_inputs'] is False
 
 
+@pytest.mark.parametrize('case', [
+    'current', 'current_dict', 'stale', 'missing', 'empty',
+    'foreign_symlink', 'foreign_absolute', 'foreign_relative',
+])
+def test_current_acceptance_measures_its_own_inputs_without_rewriting_history(
+        tmp_path, case):
+    _mk_project(tmp_path)
+    spec = tmp_path / 'input/spec.json'
+    spec.parent.mkdir()
+    spec.write_text('{"width": 8}')
+    digest = SOC._sha(spec)
+    identity = {'sha256': digest} if case == 'current_dict' else digest
+    inputs = {} if case == 'empty' else {'input/spec.json': identity}
+    attempt = SOC.begin_step(tmp_path, '1', inputs)
+    if case in ('foreign_absolute', 'foreign_relative'):
+        foreign = tmp_path.parent / (tmp_path.name + '-foreign.json')
+        foreign.write_bytes(spec.read_bytes())
+        # Synthetic malformed producer identity, before any receipt is emitted.
+        rel = str(foreign) if case == 'foreign_absolute' else '../' + foreign.name
+        attempt['inputs'] = {rel: digest}
+    record = SOC.finish_step(tmp_path, attempt, verdict='PASS', canonical_pass=True,
+                             result={'canonical_consumer': {'status': 'PASS'}})
+    if case == 'stale':
+        spec.write_text('{"width": 16}')
+    elif case == 'missing':
+        spec.unlink()
+    elif case == 'foreign_symlink':
+        foreign = tmp_path.parent / (tmp_path.name + '-foreign.json')
+        foreign.write_bytes(spec.read_bytes())
+        spec.unlink()
+        spec.symlink_to(foreign)
+    history = {p: p.read_bytes() for p in (tmp_path / 'steps').rglob('*') if p.is_file()}
+    selected, = SOC.current_acceptance(tmp_path, 0)
+    assert selected['folder'] == record['folder']
+    expected = case in ('current', 'current_dict')
+    assert selected.get('current_inputs', False) is expected, selected
+    assert SOC.latest_pass(tmp_path, '1')['current_inputs'] is expected
+    assert selected['canonical_pass'] is True and selected['status'] == 'PASS'
+    assert {p: p.read_bytes() for p in history} == history
+    assert 'current_inputs' not in json.loads(next(
+        p for p in history if p.name == 'outputs.json' and p.parent.name ==
+        Path(record['folder']).name).read_text())
+
+
+def test_current_acceptance_keeps_later_failed_consumer_and_its_own_read_set(tmp_path):
+    _mk_project(tmp_path)
+    spec = tmp_path / 'input/spec.json'
+    spec.parent.mkdir()
+    spec.write_text('{"width": 8}')
+    accepted_input = spec.read_bytes()
+    first = SOC.begin_step(tmp_path, '1', {'input/spec.json': SOC._sha(spec)})
+    SOC.finish_step(tmp_path, first, verdict='PASS', canonical_pass=True,
+                    result={'canonical_consumer': {'status': 'PASS'}})
+    spec.write_text('{"width": 16}')
+    failed = SOC.begin_step(tmp_path, '1', {'input/spec.json': SOC._sha(spec)})
+    SOC.finish_step(tmp_path, failed, verdict='FAIL',
+                    result={'canonical_consumer': {'status': 'FAIL'}})
+    spec.write_bytes(accepted_input)
+    history = {p: p.read_bytes() for p in (tmp_path / 'steps').rglob('*') if p.is_file()}
+    assert SOC.latest_pass(tmp_path, '1')['current_inputs'] is True
+    selected, = SOC.current_acceptance(tmp_path, 0)
+    assert selected['folder'] == failed['folder']
+    assert selected['status'] == selected['result']['canonical_consumer']['status'] == 'FAIL'
+    assert selected['canonical_pass'] is False
+    assert selected.get('current_inputs') is False, selected
+    assert {p: p.read_bytes() for p in history} == history
+
+
 def test_interrupted_attempt_is_saved_before_a_retry_overwrites_it(tmp_path):
     _mk_project(tmp_path)
     source = next((tmp_path / 'phase2/stage1/rtl').glob('*.v'))
