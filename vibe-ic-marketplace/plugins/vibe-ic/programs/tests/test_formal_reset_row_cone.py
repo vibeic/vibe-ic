@@ -290,6 +290,11 @@ def test_native_pmux_reset_consumer_preserves_every_full_model_answer(
         assert progress["planned"] == progress["started"] == progress["completed"] == 59, mapping
         assert not progress["unknown"], progress
         assert mapping["native_exit_code"] == 0, mapping
+        # The active reset arm is defined zero even when PMUX data is X.
+        # Pin this semantic result before the complete-map comparison so a
+        # broken root union has a concrete native-value counterexample.
+        for row in mapping["rows"]:
+            assert row["native_queries"]["zero1"] == "PROVED", (case, row)
     assert cone["query_progress"]["by_identity"] == full["query_progress"]["by_identity"], case
     for index, (left, right) in enumerate(zip(cone["rows"], full["rows"])):
         assert left["native_queries"] == right["native_queries"], case
