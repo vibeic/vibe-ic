@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import _path_layout as layout
 import os
 from pathlib import Path
 import subprocess
@@ -76,19 +77,21 @@ def test_reference_profiles_close_without_turning_unknown_into_false():
         flow109.resolve_plan(features)
 
 
-def _write_dft_intent(project, monkeypatch, *, scan, bist=False):
+def _write_dft_intent(project, monkeypatch, *, scan, bist=False, route='ic'):
     import fault_scan_chain_insert as producer
     intent = {"requires_scan": scan, **({"reason": "test declares scan not required"} if not scan else {})}
     if scan:
         from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
         intent = _intent()
-    _publish_dft_intent(project, intent)
+    _publish_dft_intent(project, intent, route=route)
     binding, problems = producer.load_d09_dft_contract(project)
     assert problems == [] and binding is not None
     return binding
 
 
-def _publish_dft_intent(project, intent):
+def _publish_dft_intent(project, intent, *, route='ic'):
+    import _delivery_route
+    assert _delivery_route.admit(project, route) is None
     import spec_declaration_emit as declaration
     docs = project / "input/docs"
     docs.mkdir(parents=True, exist_ok=True)
@@ -102,15 +105,15 @@ def _publish_dft_intent(project, intent):
     import phase1_one_shot_runner as phase1
     output = phase1._d01_emit_dft_intent(project)
     if output is not None:
-        report = project / 'reports/phase1_one_shot.json'
+        report = layout.report_path(project, 'phase1_one_shot.json')
         report.parent.mkdir(parents=True, exist_ok=True)
-        report.write_text(json.dumps({'dft_intent_output': output}))
+        report.write_text(json.dumps({'project': str(project.resolve()), **__import__('_delivery_route').report_label(project), 'dft_intent_output': output}))
 
 
 def test_d09_scan_intent_is_source_bound_without_author_chain_length(tmp_path, monkeypatch):
     features = profile("Mapped soft-IP with prestitched scan")
     context = flow109.execution_context(flow109.resolve_plan(features), "D22", "D22")
-    _write_dft_intent(tmp_path, monkeypatch, scan=True)
+    _write_dft_intent(tmp_path, monkeypatch, scan=True, route='ip')
 
     intent = flow109.dft_source_intent(tmp_path, context)
 
@@ -160,7 +163,7 @@ def test_scan_compression_and_bist_applicability_are_not_exclusive(tmp_path, mon
     features = profile("Mapped soft-IP with prestitched scan")
     features["requires_scan"] = False
     plan = flow109.resolve_plan(features)
-    _write_dft_intent(tmp_path, monkeypatch, scan=False, bist=True)
+    _write_dft_intent(tmp_path, monkeypatch, scan=False, bist=True, route='ip')
 
     intent = flow109.dft_source_intent(
         tmp_path, flow109.execution_context(plan, "D22", "D22"))
@@ -188,9 +191,9 @@ def test_d09_dft_intent_refuses_missing_malformed_or_conflicting_source(
     features = profile("Mapped soft-IP with prestitched scan")
     context = flow109.execution_context(flow109.resolve_plan(features), "D22", "D22")
     if damage == "malformed":
-        _publish_dft_intent(tmp_path, {"requires_scan": "false"})
+        _publish_dft_intent(tmp_path, {"requires_scan": "false"}, route='ip')
     elif damage == "forged":
-        _write_dft_intent(tmp_path, monkeypatch, scan=True)
+        _write_dft_intent(tmp_path, monkeypatch, scan=True, route='ip')
         source = tmp_path / "input/docs/L7_verification_plan.md"
         source.write_text(source.read_text() + "\nforged\n")
 
@@ -208,7 +211,7 @@ def test_old_three_role_d09_intent_fails_closed(tmp_path, monkeypatch):
                             "edge": "rising", "reset": {"signal": "rst",
                             "style": "synchronous", "active_level": 1,
                             "shift_value": 0}}}
-    _publish_dft_intent(tmp_path, intent)
+    _publish_dft_intent(tmp_path, intent, route='ip')
     features = profile("Mapped soft-IP with prestitched scan")
     context = flow109.execution_context(flow109.resolve_plan(features), "D22", "D22")
 
@@ -222,7 +225,7 @@ def _d30_scan_case(project, monkeypatch, top="neutral_unit"):
     from programs.tests.test_issue3444_l20_scan_reconciliation import (
         _intent, _native_payload, _planned)
     dft = _intent(); dft['dft_plan'] = {'planned_chain_count': 1, 'max_chain_length': 32}
-    _planned(project, dft)
+    _planned(project, dft, route='ip')
     calls = _native_payload(project, monkeypatch)
     rc, report = producer.run_chain(
         project, "phase2/stage2/synth/netlist.v", "clk", "sky130",
@@ -492,7 +495,7 @@ def test_d30_accepts_native_d24_d25_identity_and_chain_report(tmp_path, monkeypa
 def test_d30_explicit_no_scan_accepts_current_functional_only_d26(
         tmp_path, monkeypatch):
     import hashlib
-    _write_dft_intent(tmp_path, monkeypatch, scan=False)
+    _write_dft_intent(tmp_path, monkeypatch, scan=False, route='ip')
     top = "neutral_unit"
     mapped = tmp_path / f"phase2/stage2/synth/{top}_synth.v"
     mapped.parent.mkdir(parents=True)
@@ -652,7 +655,7 @@ def test_d30_refuses_prescan_foreign_stale_or_unresolved_inputs(
         intent = _intent()
         intent['dft_plan'] = {'planned_chain_count': 1, 'max_chain_length': 32}
         intent["test_port_def"]["scan_enable"]["public"] = "scan_enable_new"
-        _publish_dft_intent(tmp_path, intent)
+        _publish_dft_intent(tmp_path, intent, route='ip')
     elif damage == "wrong_hash":
         path = tmp_path / "reports/lec.json"
         body = json.loads(path.read_text())
@@ -1357,7 +1360,7 @@ def test_d24_routes_to_existing_default_dft_producer_and_consumer(tmp_path, monk
         "NATIVE_OWNER_WIRED_NOT_CASE_QUALIFIED")
     import _delivery_route
     assert _delivery_route.admit(tmp_path, "ip") is None
-    _write_dft_intent(tmp_path, monkeypatch, scan=True)
+    _write_dft_intent(tmp_path, monkeypatch, scan=True, route='ip')
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"features": features}))
     monkeypatch.setenv(flow109.CONTEXT_ENV, "")
@@ -1388,7 +1391,7 @@ def test_d23_routes_to_existing_default_dft_producer_and_consumer(tmp_path, monk
         "NATIVE_OWNER_WIRED_NOT_CASE_QUALIFIED")
     import _delivery_route
     assert _delivery_route.admit(tmp_path, "ip") is None
-    _write_dft_intent(tmp_path, monkeypatch, scan=True)
+    _write_dft_intent(tmp_path, monkeypatch, scan=True, route='ip')
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"features": features}))
     monkeypatch.setenv(flow109.CONTEXT_ENV, "")
@@ -1592,7 +1595,7 @@ def test_bounded_dft_owner_publishes_its_actual_selected_step_verdict(
 
     features = profile("Mapped soft-IP with prestitched scan")
     assert _delivery_route.admit(tmp_path, "ip") is None
-    _write_dft_intent(tmp_path, monkeypatch, scan=True)
+    _write_dft_intent(tmp_path, monkeypatch, scan=True, route='ip')
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"features": features}))
     monkeypatch.setenv(flow109.CONTEXT_ENV, "")
@@ -2923,12 +2926,12 @@ def test_d01_dft_producer_binding_and_wrong_owner_refusal(tmp_path):
     import phase1_one_shot_runner as phase1
     import fault_scan_chain_insert as scan
     from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
-    _publish_dft_intent(tmp_path, _intent())
+    _publish_dft_intent(tmp_path, _intent(), route='ip')
     produced = phase1._d01_emit_dft_intent(tmp_path)
     assert produced and produced['producer'] == 'D01'
-    report = tmp_path / 'reports/phase1_one_shot.json'
+    report = layout.report_path(tmp_path, 'phase1_one_shot.json')
     report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps({'dft_intent_output': produced}))
+    report.write_text(json.dumps({'project': str(tmp_path.resolve()), **__import__('_delivery_route').report_label(tmp_path), 'dft_intent_output': produced}))
     binding, problems = scan.load_d09_dft_contract(tmp_path)
     assert binding and not problems
     features = profile('Mapped soft-IP with prestitched scan')
@@ -2936,7 +2939,7 @@ def test_d01_dft_producer_binding_and_wrong_owner_refusal(tmp_path):
     assert admission['source_step'] == 'D01' and set(admission['source_evidence']) == {'D01'}
     for owner in ('D09', None):
         forged = dict(produced); forged['producer'] = owner
-        report.write_text(json.dumps({'dft_intent_output': forged}))
+        report.write_text(json.dumps({'project': str(tmp_path.resolve()), **__import__('_delivery_route').report_label(tmp_path), 'dft_intent_output': forged}))
         binding, problems = scan.load_d09_dft_contract(tmp_path)
         assert binding is None and 'UNPROVEN_ADAPTER_BINDING' in str(problems)
         with pytest.raises(flow109.Flow109Error):
@@ -2965,8 +2968,8 @@ def test_d01_producer_reaches_d22_and_d09_only_consumes(tmp_path, monkeypatch, c
     assert phase1._as_the_producer(lambda _p: 0)(tmp_path) == 0
     produced = phase1._RUN['dft_intent_output']
     assert produced and produced['producer'] == 'D01'
-    report = tmp_path / 'reports/phase1_one_shot.json'; report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps({'dft_intent_output': produced}))
+    report = layout.report_path(tmp_path, 'phase1_one_shot.json'); report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({'project': str(tmp_path.resolve()), **__import__('_delivery_route').report_label(tmp_path), 'dft_intent_output': produced}))
     before = (tmp_path / produced['path']).read_bytes()
     early = design.declaration_before_step4(tmp_path)
     assert early['producer'] == 'D01' and early['emitted'] is True
@@ -2995,7 +2998,7 @@ def test_d09_dft_consumer_refuses_wrong_owner_without_reemission(tmp_path, monke
     import design_one_shot_runner as design
     from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
     _publish_dft_intent(tmp_path, _intent())
-    report = tmp_path / 'reports/phase1_one_shot.json'
+    report = layout.report_path(tmp_path, 'phase1_one_shot.json')
     body = json.loads(report.read_text()); body['dft_intent_output']['producer'] = 'D09'
     report.write_text(json.dumps(body))
     artifact = tmp_path / body['dft_intent_output']['path']
@@ -3008,6 +3011,7 @@ def test_d09_dft_consumer_refuses_wrong_owner_without_reemission(tmp_path, monke
 
 
 def test_d01_fresh_author_decisions_produce_bound_intent(tmp_path):
+    assert __import__('_delivery_route').admit(tmp_path, 'ic') is None
     import phase1_one_shot_runner as phase1
     import fault_scan_chain_insert as scan
     from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
@@ -3024,8 +3028,8 @@ def test_d01_fresh_author_decisions_produce_bound_intent(tmp_path):
     assert output and output['producer'] == 'D01'
     assert output['path'] == 'plugin_output/dft_intent.json'
     assert 'input/feature-decisions.json' in output['sources']
-    report = tmp_path / 'reports/phase1_one_shot.json'; report.parent.mkdir(parents=True, exist_ok=True)
-    report.write_text(json.dumps({'dft_intent_output': output}))
+    report = layout.report_path(tmp_path, 'phase1_one_shot.json'); report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({'project': str(tmp_path.resolve()), **__import__('_delivery_route').report_label(tmp_path), 'dft_intent_output': output}))
     binding, problems = scan.load_d09_dft_contract(tmp_path)
     assert binding and not problems
     decisions.write_text(json.dumps({'dft': {'requires_scan': False, 'reason': 'changed'}}))
@@ -3051,7 +3055,7 @@ def test_d01_does_not_relabel_old_d09_decision_without_d01_source(tmp_path):
 def test_d30_dft_plan_requires_source_bound_positive_limits(tmp_path):
     from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
     data = _intent(); data['dft_plan'] = {'planned_chain_count': 2, 'max_chain_length': 128}
-    _publish_dft_intent(tmp_path, data)
+    _publish_dft_intent(tmp_path, data, route='ip')
     intent = flow109.dft_source_intent(tmp_path, {'features': profile('Mapped soft-IP with prestitched scan')})
     plan = flow109.dft_plan_reference(intent)
     assert plan['producer'] == 'D01' and plan['planned_chain_count'] == 2

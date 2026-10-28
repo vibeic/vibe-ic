@@ -64,7 +64,7 @@ def _bound_project_json(project: Path, relative: Path, code: str) -> tuple[dict,
 
 
 def dft_source_intent(project: Path, context: Mapping) -> dict:
-    """Consume D09 only through the source owner's canonical declaration reader."""
+    """Consume the current D01 report and its canonical declaration reader."""
     project = Path(project).resolve()
     features = context.get("features")
     if (not isinstance(features, Mapping)
@@ -113,6 +113,12 @@ def dft_source_intent(project: Path, context: Mapping) -> dict:
     if requires_scan and features["requires_dft"] is not True:
         raise Flow109Error("FLOW109_DFT_INTENT_CONFLICT",
                            "requires_scan:true requires requires_dft:true")
+    import _path_layout as layout
+    d01_path = layout.report_path(project, 'phase1_one_shot.json').relative_to(project)
+    owner, owner_ref = _bound_project_json(project, d01_path, 'FLOW109_D01_RESULT_MISSING')
+    endpoint_route = 'IC' if features.get('ic') else 'IP' if features.get('ip') else None
+    if endpoint_route is not None and owner.get('delivery_route') != endpoint_route:
+        raise Flow109Error('FLOW109_D01_ROUTE_MISMATCH', 'current endpoint differs from D01')
     return {
         "schema": "vibeic.flow109.dft-source-intent.v1",
         "source_step": "D01", "source_position": 1,
@@ -121,7 +127,7 @@ def dft_source_intent(project: Path, context: Mapping) -> dict:
         "source_binding": dict(binding),
         "source_evidence": {"D01": {
             "path": binding["path"], "sha256": binding["sha256"],
-            "sources": binding["sources"]}},
+            "sources": binding["sources"], "producer_result": owner_ref}},
         "realized_chain_length": "NOT_YET_REALIZED",
     }
 

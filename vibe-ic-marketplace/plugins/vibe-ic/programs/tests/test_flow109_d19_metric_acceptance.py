@@ -28,7 +28,7 @@ def _ref(project, rel, text):
 
 
 def _case(project, monkeypatch, *, scan=True):
-    _write_dft_intent(project, monkeypatch, scan=scan)
+    _write_dft_intent(project, monkeypatch, scan=scan, route='ip' if scan else 'ic')
     features = profile('Mapped soft-IP with prestitched scan' if scan else 'Small digital IC without DFT')
     context = flow109.execution_context(flow109.resolve_plan(features), 'D19', 'D19')
     assert context['features']['technology_specific'] is True
@@ -59,7 +59,7 @@ def _case(project, monkeypatch, *, scan=True):
 
 
 def _portable_case(project, monkeypatch, *, l20=False):
-    _write_dft_intent(project, monkeypatch, scan=False)
+    _write_dft_intent(project, monkeypatch, scan=False, route='ip')
     context = flow109.execution_context(flow109.resolve_plan(profile('Digital soft-IP')), 'D19', 'D19')
     assert context['features']['technology_specific'] is False
     deck = _ref(project, 'input/constraints/functional.sdc',

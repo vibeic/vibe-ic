@@ -173,14 +173,24 @@ def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=Non
             raise ValueError('DFT_INTENT_MISSING: non-scan decision requires a reason')
         if any(k in intent for k in ('length', 'chain_length', 'scan_chains')):
             raise ValueError('caller-predeclared topology/length is not planned intent')
+        if 'input/feature-decisions.json' in sources:
+            approved = json.loads((project / 'input/feature-decisions.json').read_text())
+            if not isinstance(approved, dict) or approved.get('dft') != intent:
+                raise ValueError('current D01 author decision differs from the declaration')
         binding = {'path': str(path.relative_to(project)),
                    'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
                    'sources': sources, 'intent': intent}
         if _validate_owner:
-            report_path = project / 'reports/phase1_one_shot.json'
+            import _path_layout as layout
+            import _delivery_route as route
+            report_path = layout.report_path(project, 'phase1_one_shot.json')
             if report_path.is_symlink() or not report_path.is_file():
                 raise ValueError('UNPROVEN_ADAPTER_BINDING: D01 output absent')
-            owner = json.loads(report_path.read_text()).get('dft_intent_output')
+            report = json.loads(report_path.read_text())
+            if (report.get('project') != str(project.resolve())
+                    or any(report.get(key) != value for key, value in route.report_label(project).items())):
+                raise ValueError('UNPROVEN_ADAPTER_BINDING: D01 project or route differs')
+            owner = report.get('dft_intent_output')
             import phase1_one_shot_runner as phase1
             expected = {'producer': 'D01', 'path': binding['path'],
                         'sha256': binding['sha256'], 'sources': sources,
