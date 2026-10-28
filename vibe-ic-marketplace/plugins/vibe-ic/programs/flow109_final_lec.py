@@ -201,6 +201,19 @@ def _before(project, context, prepared):
             raise AdmissionRefusal('D44_INPUT_STALE_OR_MISSING', name)
 
 
+def _bind_native_model_inputs(project, prepared, models):
+    """Bind the native reader's model hashes without replacing prior authority."""
+    inputs = prepared['inputs']
+    for name, digest in models.items():
+        path = (project / name).resolve()
+        if any((project / prior).resolve() == path and value != digest
+               for prior, value in inputs.items()):
+            raise AdmissionRefusal('D44_MODEL_INPUT_CONFLICT', name, status='FAIL')
+        if not path.is_file() or _sha(path) != digest:
+            raise AdmissionRefusal('D44_MODEL_INPUT_CHANGED', name, status='FAIL')
+    inputs.update(models)
+
+
 def _yosys_word(path):
     return '"' + str(path).replace('\\', '\\\\').replace('"', '\\"') + '"'
 
@@ -682,6 +695,7 @@ def execute(project, context):
         else:
             native_error, models = _native_eqy(project, prepared, attempt, before)
             proof = consume_eqy(attempt / 'native', attempt / 'eqy-result.json')
+        _bind_native_model_inputs(project, prepared, models)
         record.update(native_error=native_error, preprocessing_models=models)
         record['proof'] = proof
         record['proof_receipt'] = _record(project, attempt / 'eqy-result.json')
