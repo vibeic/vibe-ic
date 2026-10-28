@@ -3569,6 +3569,7 @@ class _Phase1ProjectBinding:
     parent_fd: int
     name: str
     project_fd: int
+    isolated_rtl_stage: bool = False
 
     @classmethod
     def open(cls, project: Path) -> "_Phase1ProjectBinding":
@@ -4701,11 +4702,67 @@ def _phase1_remap_stage_tree(stage_project: Path, project: Path,
     return rewritten
 
 
+def _phase1_stamp_isolated_tree(
+        stage_binding: _Phase1ProjectBinding,
+        generator: Optional[str],
+        baseline: Dict[str, _Phase1TreeEntry],
+        project_label: Path) -> Dict[str, _Phase1TreeEntry]:
+    """Stamp a held private tree; its caller owns publication and rollback."""
+    stage_project = stage_binding.project
+    baseline_link = next(
+        (rel for rel, entry in baseline.items()
+         if entry.kind == "symlink"
+         and _symlink_escapes_tree(rel, entry.target)), None)
+    if baseline_link is not None:
+        raise _Phase1RtlOutputRefused(
+            "RTL_PROVENANCE_SYMLINK_REFUSED",
+            project_label / baseline_link,
+            "deferred provenance will not read through a symlink in "
+            "the isolated project snapshot")
+    if generator is None:
+        # Deferred finalization extends the owned tree; it is not a
+        # new producer. Read the existing origin from the same held
+        # snapshot that will be stamped and committed, so a mutable
+        # project pathname cannot supply a different ledger's name.
+        ledger = _rtl_prov.load_ledger(stage_project)
+        if ledger is None:
+            raise _Phase1RtlOutputRefused(
+                "RTL_LEDGER_ORIGIN_UNAVAILABLE",
+                _rtl_prov.ledger_path(project_label),
+                "deferred provenance has no valid producer ledger")
+        origin = ledger.get("generator")
+        generator = (origin if isinstance(origin, str)
+                     and origin.strip() else None)
+    _rtl_prov.stamp(stage_project, generator=generator)
+    stage_binding.require_current()
+    final = _phase1_tree_manifest_fd(
+        stage_binding.project_fd, project_label)
+    final_link = next(
+        (rel for rel, entry in final.items()
+         if entry.kind == "symlink"
+         and _symlink_escapes_tree(rel, entry.target)), None)
+    if final_link is not None:
+        raise _Phase1RtlOutputRefused(
+            "RTL_PROVENANCE_SYMLINK_REFUSED",
+            project_label / final_link,
+            "deferred provenance left a symlink in its isolated "
+            "transaction")
+    return final
+
+
 def _phase1_stamp_held_session(
         binding: _Phase1ProjectBinding,
         generator: Optional[str] = None) -> None:
     """Finish deferred provenance through isolation + held-dirfd commit."""
     global _PHASE1_ACTIVE_PROJECT_BINDING
+    if (binding.isolated_rtl_stage
+            and binding is _PHASE1_ACTIVE_PROJECT_BINDING):
+        # step_rtl_gen already owns this exact private inode and commits its
+        # complete delta through the unchanged outer transaction/CAS checks.
+        binding.require_current()
+        baseline = _phase1_tree_manifest_fd(binding.project_fd, binding.project)
+        _phase1_stamp_isolated_tree(binding, generator, baseline, binding.project)
+        return
     prior = _PHASE1_ACTIVE_PROJECT_BINDING
     stage_binding: Optional[_Phase1ProjectBinding] = None
     transaction: Optional[_Phase1StagedTreeTransaction] = None
@@ -4715,46 +4772,10 @@ def _phase1_stamp_held_session(
         with contextlib.nullcontext(stage_temp.name) as td:
             stage_project = Path(td) / binding.project.name
             baseline = _phase1_snapshot_to_stage(binding, stage_project)
-            baseline_link = next(
-                (rel for rel, entry in baseline.items()
-                 if entry.kind == "symlink"
-                 and _symlink_escapes_tree(rel, entry.target)), None)
-            if baseline_link is not None:
-                raise _Phase1RtlOutputRefused(
-                    "RTL_PROVENANCE_SYMLINK_REFUSED",
-                    binding.project / baseline_link,
-                    "deferred provenance will not read through a symlink in "
-                    "the isolated project snapshot")
             stage_binding = _Phase1ProjectBinding.open(stage_project)
             _PHASE1_ACTIVE_PROJECT_BINDING = stage_binding
-            if generator is None:
-                # Deferred finalization extends the owned tree; it is not a
-                # new producer. Read the existing origin from the same held
-                # snapshot that will be stamped and committed, so a mutable
-                # project pathname cannot supply a different ledger's name.
-                ledger = _rtl_prov.load_ledger(stage_project)
-                if ledger is None:
-                    raise _Phase1RtlOutputRefused(
-                        "RTL_LEDGER_ORIGIN_UNAVAILABLE",
-                        _rtl_prov.ledger_path(binding.project),
-                        "deferred provenance has no valid producer ledger")
-                origin = ledger.get("generator")
-                generator = (origin if isinstance(origin, str)
-                             and origin.strip() else None)
-            _rtl_prov.stamp(stage_project, generator=generator)
-            stage_binding.require_current()
-            final = _phase1_tree_manifest_fd(
-                stage_binding.project_fd, binding.project)
-            final_link = next(
-                (rel for rel, entry in final.items()
-                 if entry.kind == "symlink"
-                 and _symlink_escapes_tree(rel, entry.target)), None)
-            if final_link is not None:
-                raise _Phase1RtlOutputRefused(
-                    "RTL_PROVENANCE_SYMLINK_REFUSED",
-                    binding.project / final_link,
-                    "deferred provenance left a symlink in its isolated "
-                    "transaction")
+            final = _phase1_stamp_isolated_tree(
+                stage_binding, generator, baseline, binding.project)
             _PHASE1_ACTIVE_PROJECT_BINDING = binding
             transaction = _phase1_commit_staged_tree(
                 binding, stage_binding, baseline, final)
@@ -8188,6 +8209,7 @@ def step_rtl_gen(project: Path, ic_class: str,
             stage_project = Path(td) / project.name
             baseline = _phase1_snapshot_to_stage(binding, stage_project)
             stage_binding = _Phase1ProjectBinding.open(stage_project)
+            stage_binding.isolated_rtl_stage = True
             _PHASE1_ACTIVE_PROJECT_BINDING = stage_binding
             # A staged claim may hold its own duplicate, but it must never
             # replace/close the prior live-project handle until commit wins.
