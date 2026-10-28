@@ -300,6 +300,13 @@ function repairDeps() {
 }
 
 try {
+  if (process.env.VIBEIC_EDA_AUTO_BOOTSTRAP === "1") {
+    const { ensureContainerRuntime } = await import("./container_runtime.mjs");
+    const runtime = ensureContainerRuntime();
+    process.stderr.write(
+      `[bootstrap] EDA runtime ${runtime.container} pinned to ${runtime.image}\n`
+    );
+  }
   PKG_ROOT = materializeRuntime();
   PKG_JSON = join(PKG_ROOT, "package.json");
   NODE_MODULES = join(PKG_ROOT, "node_modules");
