@@ -296,6 +296,8 @@ def test_actual_native_density_defect_is_measured_fail(tmp_path, monkeypatch):
     assert result["metric_acceptance_status"] == "FAIL"
     by_id = {item["id"]: item for item in result["metric_acceptance"]["obligations"]}
     assert by_id["base_43.fill_density_rules"]["status"] == "FAIL"
+    assert result['default_row_status'] == 'FAIL'
+    assert result['completed'] is False
     assert by_id["base_43.fill_density_rules"]["measurement"]["value"]["violations"] > 0
     assert by_id["base_43.fill_keepout_violations"]["status"] == "PASS"
     assert "UNDER" in (tmp_path / result["outputs"]["density.csv"]["path"]).read_text()
@@ -315,6 +317,8 @@ def test_actual_native_keepout_defect_is_measured_fail(tmp_path, monkeypatch):
     assert result["metric_acceptance_status"] == "FAIL"
     by_id = {item["id"]: item for item in result["metric_acceptance"]["obligations"]}
     assert by_id["base_43.fill_keepout_violations"]["status"] == "FAIL"
+    assert result['default_row_status'] == 'FAIL'
+    assert result['completed'] is False
     measured = by_id["base_43.fill_keepout_violations"]["measurement"]
     assert measured["checked_fill_obstructions"] == 1
     assert measured["value"] == 1

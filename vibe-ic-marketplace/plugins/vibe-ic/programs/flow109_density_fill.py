@@ -268,6 +268,7 @@ def execute(project, context):
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + uuid.uuid4().hex[:8]
     attempt = project / 'phase3/flow109/D62' / stamp
     result = {'schema': SCHEMA, 'step': 'D62', 'component_status': 'NOT_MEASURED',
+              'step_id': 'D62', 'context_sha256': context.get('context_sha256'),
               'flow109_acceptance': 'NOT_MEASURED', 'native_started': False}
     try:
         prepared = prepare(project, context)
@@ -319,4 +320,8 @@ def execute(project, context):
             _write(project / 'reports/flow109/D62/accepted.json', result['receipt'])
     result['metric_acceptance'] = accept_d62(project, context, result)
     result['metric_acceptance_status'] = result['metric_acceptance']['status']
+    result['default_row_status'] = result['metric_acceptance_status']
+    result['completed'] = (
+        result['component_status'] == 'PASS'
+        and result['default_row_status'] == 'PASS')
     return result
