@@ -54058,7 +54058,7 @@ def gen_l9_integration_spec(project: Path,
     # post-emit hook v1.6.311 wrote into `l9["resets"]` (different
     # field). Chip-AGNOSTIC: regex + window scan over open-standard
     # naming convention; no chip-class string literal participates.
-    _v1_6_369_emit_reset_domains(content, extracted)
+    _v1_6_369_emit_reset_domains(content, extracted, project=project)
     # v1.6.391 — for #282 P3 ORGANIC. Post-extract classifier: move
     # SV packages + DV interfaces + UVM scaffolding out of
     # L9.submodules into L9.sim_only_modules. Pre-v1.6.391 the L9
@@ -63628,7 +63628,8 @@ def _v1_6_369_classify_reset_sync(name: str, evidence_text: str) -> str:
     return reset_semantics(name, evidence_text).get("sync", "unknown")
 
 
-def _v1_6_369_emit_reset_domains(l9: dict, extracted: dict) -> None:
+def _v1_6_369_emit_reset_domains(l9: dict, extracted: dict,
+                                project: Optional[Path] = None) -> None:
     """v1.6.369 — for #264 P2. Walk L9.ports / L9.top_ports, find
     canonical reset-shape port names, and emit `reset_domains[]`
     entries with polarity + sync classification + scan-prefix flag
@@ -63687,9 +63688,18 @@ def _v1_6_369_emit_reset_domains(l9: dict, extracted: dict) -> None:
         polarity = explicit.get("polarity", polarity)
         sync = explicit.get("sync", "unknown")
         from _reset_input_semantics import reset_semantic_provenance
-        sources = {
-            (str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}"): text
-            for fname, text in (extracted or {}).items()}
+        if project is not None:
+            # Extracted basenames lose their original root and extension.
+            # Production citations must name actual scoped current inputs;
+            # a phase1/input_doc mirror is not an input/docs file.
+            from _qualified_by import _design_input_files
+            sources = {rel: path.read_text(encoding="utf-8", errors="replace")
+                       for rel, path in _design_input_files(project).items()}
+        else:
+            sources = {
+                (str(fname) if str(fname).startswith(("input/", "phase1/input_doc/"))
+                 else f"input/docs/{fname}"): text
+                for fname, text in (extracted or {}).items()}
         provenance = reset_semantic_provenance(name, sources)
         if "polarity" not in explicit and m_reset:
             provenance["polarity"] = {
@@ -63872,7 +63882,8 @@ def _post_emit_mirror_clock_resets_to_l9_v1_6_311(
     # Reuse the canonical explicit-reset reader on the final input interface;
     # arbitrary declared reset names must not depend on a naming convention.
     if not l9.get("reset_domains"):
-        _v1_6_369_emit_reset_domains(l9, _load_extracted_docs_for_post_pass(project))
+        _v1_6_369_emit_reset_domains(
+            l9, _load_extracted_docs_for_post_pass(project), project=project)
         changed = bool(l9.get("reset_domains"))
     if isinstance(l9.get("clock_domains"), list) and l9["clock_domains"]:
         before_domains = json.dumps(l9["clock_domains"], sort_keys=True)
