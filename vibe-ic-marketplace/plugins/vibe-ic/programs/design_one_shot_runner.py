@@ -20647,6 +20647,9 @@ def step_asic_sdc(project: Path, top_name: str = "chip_top",
             rows = window.get('resolved_rows') or [window.get('resolved_row', {})]
             if any(row.get('id') == 'D19' for row in rows):
                 context = flow109.component_context(window, requested_step='D19')
+                if not context['features']['technology_specific'] and (pdk_config is not None or pdk_name):
+                    raise metrics.MetricRefusal('D19_TECHNOLOGY_FEATURE_CONFLICT',
+                                                'portable endpoint received a target PDK')
                 admission = metrics.d19_admission(project, context, publish=True)
         except (flow109.Flow109Error, metrics.MetricRefusal, OSError, ValueError, TypeError) as exc:
             return StepResult('asic_sdc', 'NOT_MEASURED', 0.0, str(exc),
@@ -20654,10 +20657,39 @@ def step_asic_sdc(project: Path, top_name: str = "chip_top",
                 extras={'d19_refusal': getattr(exc, 'code', 'D19_ADMISSION_REFUSED'),
                         'native_started': False, 'completed': False,
                         'default_row_status': 'NOT_MEASURED'})
-    result = _step_asic_sdc_producer(project, top_name, container, ic_class,
-        pdk_config=pdk_config, pdk_name=pdk_name, _use_controller=_use_controller)
+    if context is not None and not context['features']['technology_specific']:
+        # The silicon emitter rescales units and DRV against Liberty. A
+        # portable endpoint preserves its approved SDC bytes, with no PDK/PVT
+        # surrogate and no electrical qualification. D20 owns syntax checks.
+        try:
+            outputs = []
+            for entry in admission['mapping']:
+                source = metrics._d19_ref(Path(project).resolve(), entry['sdc'], 'portable SDC')
+                target = _pl.constraints_dir(project) / f"{entry['mode']}.{entry['check']}.sdc"
+                relative = target.relative_to(project).as_posix()
+                metrics._safe_project_file(Path(project).resolve(), relative)
+                if target.resolve() == (project / source['path']).resolve():
+                    raise metrics.MetricRefusal('D19_PORTABLE_INPUT_OVERWRITE', relative)
+                _aa.write_bytes(target, (project / source['path']).read_bytes())
+                outputs.append({'source_sdc': source, 'sdc': {
+                    'path': relative, 'sha256': hashlib.sha256(target.read_bytes()).hexdigest()}})
+            result = StepResult('asic_sdc', 'NOT_MEASURED', 0.0,
+                'D19_PORTABLE_SDC_EMITTED: approved SDC preserved; target technology and electrical qualification NOT_MEASURED',
+                [str(project / item['sdc']['path']) for item in outputs],
+                extras={'producer_status': 'PASS', 'portable_sdc_outputs': outputs},
+                reason_class=_V.ReasonClass.INPUT_ABSENT)
+        except (metrics.MetricRefusal, OSError, ValueError, TypeError) as exc:
+            return StepResult('asic_sdc', 'NOT_MEASURED', 0.0, str(exc),
+                extras={'d19_refusal': getattr(exc, 'code', 'D19_PORTABLE_PRODUCER_REFUSED'),
+                        'native_started': False, 'completed': False, 'default_row_status': 'NOT_MEASURED'},
+                reason_class=_V.ReasonClass.INPUT_ABSENT)
+    else:
+        result = _step_asic_sdc_producer(project, top_name, container, ic_class,
+            pdk_config=pdk_config, pdk_name=pdk_name, _use_controller=_use_controller)
     if context is not None:
         component = {'d19_plan_admission': admission}
+        if 'portable_sdc_outputs' in result.extras:
+            component['portable_sdc_outputs'] = result.extras['portable_sdc_outputs']
         accepted = metrics.accept_d19(project, context, component)
         result.extras.update(component, metric_acceptance=accepted,
                              metric_acceptance_status=accepted['status'],

@@ -433,7 +433,7 @@ def d19_admission(project: Path, context: Mapping[str, Any], *, publish: bool = 
     Consume the two registry contracts, or project their explicit declarations
     from L19 into those same paths. Approval must bind their semantic payload in
     an input JSON document, not merely an unrelated document's hash. D01 owns
-    scan applicability; L20 is retained context, never an override of D01.
+    scan applicability; L20 is required for scan, never an override of D01.
     This checks a plan and current files, not native shift/capture execution.
     """
     import flow109
@@ -441,19 +441,27 @@ def d19_admission(project: Path, context: Mapping[str, Any], *, publish: bool = 
     from _atomic_artefact import write_json
 
     project = Path(project).resolve()
+    features = context.get("features", {})
+    technology = features.get("technology_specific")
+    if (type(technology) is not bool
+            or not technology and (features.get("soft_ip") is not True
+                                  or features.get("physical") or features.get("digital_netlist"))):
+        raise MetricRefusal("D19_TECHNOLOGY_APPLICABILITY_UNRESOLVED", "resolved endpoint required")
+    try:
+        intent = flow109.dft_source_intent(project, context)
+    except flow109.Flow109Error as exc:
+        raise MetricRefusal("D19_D01_AUTHORITY_UNAVAILABLE", str(exc)) from exc
     layer_docs, layer_refs = {}, {}
     for name in ("L19", "L20"):
         path, body = layers.load_l_doc(project, name)
         if path is None or not isinstance(body, Mapping):
+            if name == "L20" and not intent["requires_scan"]:
+                continue
             raise MetricRefusal("D19_" + name + "_MISSING", name)
         path = Path(path)
         layer_docs[name] = body
         layer_refs[name] = _d19_ref(project, {
             "path": path.relative_to(project).as_posix(), "sha256": _sha(path.read_bytes())}, name)
-    try:
-        intent = flow109.dft_source_intent(project, context)
-    except flow109.Flow109Error as exc:
-        raise MetricRefusal("D19_D01_AUTHORITY_UNAVAILABLE", str(exc)) from exc
     sources = {"D01": intent["source_binding"], **layer_refs}
     documents, authorities = {}, {}
     fields = layer_docs["L19"].get("fields")
@@ -487,29 +495,33 @@ def d19_admission(project: Path, context: Mapping[str, Any], *, publish: bool = 
         documents[relative] = dict(body)
         authorities[name] = {"status": "APPROVED", "source": ref, **payload}
     requirement = authorities["scenario_constraints"]
-    modes, corners, checks = (requirement.get(key) for key in
-                              ("required_modes", "required_corners", "required_checks"))
+    modes, checks = (requirement.get(key) for key in ("required_modes", "required_checks"))
+    corners = requirement.get("required_corners", [])
     for label, values in (("MODES", modes), ("CORNERS", corners), ("CHECKS", checks)):
-        if (not isinstance(values, list) or not values
+        if (not isinstance(values, list) or not values and (label != "CORNERS" or technology)
                 or any(not isinstance(value, str) or not _SAFE.fullmatch(value) for value in values)
                 or len(set(values)) != len(values)):
             raise MetricRefusal("D19_APPROVED_" + label + "_MISSING", label)
+    if not technology and corners:
+        raise MetricRefusal("D19_TECHNOLOGY_FEATURE_CONFLICT", "portable plan declares target corners")
     mandatory_modes = {"functional", "shift", "capture"} if intent["requires_scan"] else {"functional"}
     if not mandatory_modes.issubset(modes):
         raise MetricRefusal("D19_REQUIRED_MODE_MISSING", ",".join(sorted(mandatory_modes - set(modes))))
     if not {"setup", "hold"}.issubset(checks):
         raise MetricRefusal("D19_REQUIRED_CHECK_MISSING", "setup/hold")
     required = requirement.get("required_items")
+    item_fields = ("mode", "corner", "check") if technology else ("mode", "check")
     if (not isinstance(required, list) or not required
-            or any(not isinstance(item, Mapping) or set(item) != {"mode", "corner", "check"}
-                   or item["mode"] not in modes or item["corner"] not in corners
+            or any(not isinstance(item, Mapping) or set(item) != set(item_fields)
+                   or item["mode"] not in modes or technology and item["corner"] not in corners
                    or item["check"] not in checks for item in required)
             or len(set(map(_json_key, required))) != len(required)):
         raise MetricRefusal("D19_SCENARIO_INVALID", "approved required_items")
     # The owner declares combinations. A Cartesian product would invent extra
     # corner/check requirements (e.g. setup and hold need not use one corner).
     if any({item[key] for item in required} != set(values)
-           for key, values in (("mode", modes), ("corner", corners), ("check", checks))):
+           for key, values in (("mode", modes), ("corner", corners), ("check", checks))
+           if key in item_fields):
         raise MetricRefusal("D19_REQUIRED_SCENARIO_MISSING", "approved mode/corner/check census")
     expected = required
     mapping = authorities["mode_library_rc_mapping"].get("reference")
@@ -517,19 +529,23 @@ def d19_admission(project: Path, context: Mapping[str, Any], *, publish: bool = 
         raise MetricRefusal("D19_LIBRARY_RC_MAPPING_MISSING", "reference")
     actual, consumed = [], {}
     for entry in mapping:
-        if not isinstance(entry, Mapping) or any(key not in entry for key in ("mode", "corner", "check")):
+        if not isinstance(entry, Mapping) or any(key not in entry for key in item_fields):
             raise MetricRefusal("D19_SCENARIO_INVALID", "mapping entry")
-        item = {key: entry[key] for key in ("mode", "corner", "check")}
+        item = {key: entry[key] for key in item_fields}
         if item not in expected:
             raise MetricRefusal("D19_SCENARIO_UNAPPROVED", _json_key(item))
         libraries, rc = entry.get("libraries"), entry.get("rc")
-        if not isinstance(libraries, list) or not libraries:
-            raise MetricRefusal("D19_LIBRARY_MAPPING_MISSING", _json_key(item))
-        if (not isinstance(rc, Mapping) or not isinstance(rc.get("corner"), str)
-                or not rc["corner"] or "model" not in rc):
-            raise MetricRefusal("D19_RC_MAPPING_MISSING", _json_key(item))
-        for ref, label in [(entry.get("sdc"), "sdc"), (rc["model"], "rc")] + [
-                (lib, "library") for lib in libraries]:
+        refs = [(entry.get("sdc"), "sdc")]
+        if technology:
+            if not isinstance(libraries, list) or not libraries:
+                raise MetricRefusal("D19_LIBRARY_MAPPING_MISSING", _json_key(item))
+            if (not isinstance(rc, Mapping) or not isinstance(rc.get("corner"), str)
+                    or not rc["corner"] or "model" not in rc):
+                raise MetricRefusal("D19_RC_MAPPING_MISSING", _json_key(item))
+            refs += [(rc["model"], "rc"), *((lib, "library") for lib in libraries)]
+        elif libraries or rc or "corner" in entry:
+            raise MetricRefusal("D19_TECHNOLOGY_FEATURE_CONFLICT", "portable mapping declares technology")
+        for ref, label in refs:
             current = _d19_ref(project, ref, _json_key(item) + ":" + label)
             consumed[current["path"]] = current["sha256"]
         actual.append(item)
@@ -571,12 +587,29 @@ def accept_d19(project: Path, context: Mapping[str, Any], component: Mapping[str
         current = d19_admission(project, context)
         if component.get("d19_plan_admission") != current:
             raise MetricRefusal("D19_PRODUCER_RECEIPT_STALE", "current plan differs")
+        consumed = dict(current["binding"]["consumed_inputs"])
+        if not context["features"]["technology_specific"]:
+            import _path_layout as layout
+            outputs = component.get("portable_sdc_outputs")
+            if not isinstance(outputs, list) or len(outputs) != len(current["mapping"]):
+                raise MetricRefusal("D19_PORTABLE_SDC_OUTPUTS_MISSING", "current producer outputs")
+            for output, entry in zip(outputs, current["mapping"]):
+                expected = (layout.constraints_dir(project) /
+                            f"{entry['mode']}.{entry['check']}.sdc").relative_to(project).as_posix()
+                if (not isinstance(output, Mapping) or output.get("source_sdc") != entry["sdc"]
+                        or not isinstance(output.get("sdc"), Mapping)
+                        or output["sdc"].get("path") != expected):
+                    raise MetricRefusal("D19_PORTABLE_SDC_OUTPUT_MISMATCH", expected)
+                actual_output = _d19_ref(project, output["sdc"], expected)
+                if actual_output["sha256"] != entry["sdc"]["sha256"]:
+                    raise MetricRefusal("D19_PORTABLE_SDC_OUTPUT_MISMATCH", expected)
+                consumed[actual_output["path"]] = actual_output["sha256"]
         binding = current["binding"]
         identity = {"producer": {"sha256": binding["producer_sha256"]},
                     "checker": {"sha256": binding["checker_sha256"]},
                     "tool_execution": {"kind": "python_constraint_plan_admission",
                                        "native_qualification": "NOT_MEASURED"},
-                    "consumed_inputs": binding["consumed_inputs"],
+                    "consumed_inputs": consumed,
                     "requirements": current["artifacts"],
                     "configuration": {"context_sha256": context["context_sha256"],
                                       "sources": binding["sources"]}}
@@ -588,6 +621,10 @@ def accept_d19(project: Path, context: Mapping[str, Any], component: Mapping[str
                 result["obligations"].append({"id": oid, "status": "UNIMPLEMENTED_METRIC_BINDING"})
                 continue
             name = oid.split(".")[-1]
+            if name == "mode_library_rc_mapping" and not context["features"]["technology_specific"]:
+                result["obligations"].append({"id": oid, "status": "NOT_MEASURED",
+                    "reason": "D19_TARGET_TECHNOLOGY_NOT_SPECIFIED"})
+                continue
             authority = dict(current["authorities"][name])
             if name == "mode_library_rc_mapping":
                 authority["reference_identity"] = identity

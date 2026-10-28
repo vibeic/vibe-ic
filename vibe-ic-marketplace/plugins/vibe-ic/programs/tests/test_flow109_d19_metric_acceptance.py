@@ -31,6 +31,7 @@ def _case(project, monkeypatch, *, scan=True):
     _write_dft_intent(project, monkeypatch, scan=scan)
     features = profile('Mapped soft-IP with prestitched scan' if scan else 'Small digital IC without DFT')
     context = flow109.execution_context(flow109.resolve_plan(features), 'D19', 'D19')
+    assert context['features']['technology_specific'] is True
     modes = ['functional', 'shift', 'capture'] if scan else ['functional']
     corners, checks = ['approved_slow', 'approved_fast'], ['setup', 'hold']
     libraries = [_ref(project, 'input/pdk/logic.lib', 'library(neutral) {}\n')]
@@ -52,6 +53,35 @@ def _case(project, monkeypatch, *, scan=True):
     _write(project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': fields})
     _write(project / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json',
            {'fields': {'dft_present': scan}})
+    _write(project / 'context.json', context)
+    monkeypatch.setenv('VIBEIC_FLOW109_CONTEXT', str(project / 'context.json'))
+    return context, fields
+
+
+def _portable_case(project, monkeypatch, *, l20=False):
+    _write_dft_intent(project, monkeypatch, scan=False)
+    context = flow109.execution_context(flow109.resolve_plan(profile('Digital soft-IP')), 'D19', 'D19')
+    assert context['features']['technology_specific'] is False
+    deck = _ref(project, 'input/constraints/functional.sdc',
+                'create_clock -name core -period 20 [get_ports clk]\n'
+                'set_input_delay -max 2 -clock core [get_ports d]\n'
+                'set_input_delay -min 0 -clock core [get_ports d]\n'
+                'set_output_delay -max 2 -clock core [get_ports q]\n'
+                'set_output_delay -min 0 -clock core [get_ports q]\n')
+    items = [{'mode': 'functional', 'check': check} for check in ('setup', 'hold')]
+    source = {'scenario_constraints': {'required_modes': ['functional'],
+               'required_checks': ['setup', 'hold'], 'required_items': items},
+              'mode_library_rc_mapping': {'reference': [{**item, 'sdc': deck} for item in items]}}
+    source_ref = _ref(project, 'input/approved-constraints.json', json.dumps(source))
+    fields = {name: {'schema': metrics.AUTHORITY_SCHEMA if name == 'scenario_constraints'
+                     else 'vibeic.flow109.adopted-reference.v1',
+                    'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+                                 'source_reference': source_ref}, **payload}
+              for name, payload in source.items()}
+    _write(project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': fields})
+    if l20:
+        _write(project / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json',
+               {'fields': {'dft_present': False}})
     _write(project / 'context.json', context)
     monkeypatch.setenv('VIBEIC_FLOW109_CONTEXT', str(project / 'context.json'))
     return context, fields
@@ -223,3 +253,77 @@ def test_approved_sparse_combinations_do_not_gain_invented_corner_checks(tmp_pat
     result = metrics.accept_d19(tmp_path, context, {'d19_plan_admission': produced})
     assert [item['status'] for item in result['obligations'][:2]] == ['PASS', 'PASS']
     assert len(produced['scenarios']) == 6
+
+
+@pytest.mark.parametrize('l20', [False, True], ids=['no_L20', 'with_L20'])
+def test_portable_soft_ip_reaches_real_producer_without_technology(tmp_path, monkeypatch, l20):
+    context, _ = _portable_case(tmp_path, monkeypatch, l20=l20)
+    monkeypatch.setattr(runner, '_phase2_pdk_config', lambda *_a, **_k:
+                        pytest.fail('technology-neutral SDC must not resolve a PDK'))
+    result = runner.step_asic_sdc(tmp_path, 'neutral', _use_controller=False)
+    assert result.detail.startswith('D19_PORTABLE_SDC_EMITTED'), result.detail
+    assert result.status == result.extras['default_row_status'] == 'NOT_MEASURED'
+    assert result.extras['producer_status'] == 'PASS'
+    assert result.extras['completed'] is False
+    accepted = metrics.accept_d19(tmp_path, context, result.extras)
+    assert [item['status'] for item in accepted['obligations']] == [
+        'PASS', 'NOT_MEASURED', 'UNIMPLEMENTED_METRIC_BINDING']
+    assert accepted['obligations'][1]['reason'] == 'D19_TARGET_TECHNOLOGY_NOT_SPECIFIED'
+    assert accepted['status'] == 'NOT_MEASURED' and accepted['delivery_blocked'] is True
+    for output in result.extras['portable_sdc_outputs']:
+        assert (tmp_path / output['sdc']['path']).read_bytes() == (
+            tmp_path / output['source_sdc']['path']).read_bytes()
+    assert not list((tmp_path / 'input').rglob('*.lib'))
+    assert not list(tmp_path.rglob('pvt_matrix.json'))
+
+
+def test_non_scan_target_tech_does_not_require_l20(tmp_path, monkeypatch):
+    context, _ = _case(tmp_path, monkeypatch, scan=False)
+    (tmp_path / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json').unlink()
+    try:
+        metrics.d19_admission(tmp_path, context, publish=True)
+        observed = 'PLAN_ADMITTED'
+    except metrics.MetricRefusal as exc:
+        observed = exc.code
+    assert observed == 'PLAN_ADMITTED'
+
+
+@pytest.mark.parametrize('missing', ['input/pdk/logic.lib', 'input/pdk/rc.tcl'])
+def test_target_technology_missing_real_file_stops_before_producer(tmp_path, monkeypatch, missing):
+    _case(tmp_path, monkeypatch)
+    (tmp_path / missing).unlink()
+    result = runner.step_asic_sdc(tmp_path, pdk_config=object(), _use_controller=False)
+    assert result.extras['d19_refusal'] == 'D19_INPUT_STALE'
+    assert result.status == 'NOT_MEASURED' and result.extras['native_started'] is False
+
+
+@pytest.mark.parametrize('damage', ['source_sdc', 'output_sdc', 'approval_source', 'approved_fields'])
+def test_portable_actual_consumer_reopens_source_approval_and_output(tmp_path, monkeypatch, damage):
+    context, _ = _portable_case(tmp_path, monkeypatch)
+    produced = runner.step_asic_sdc(tmp_path, _use_controller=False)
+    assert produced.extras['metric_acceptance']['obligations'][0]['status'] == 'PASS'
+    if damage == 'source_sdc':
+        path = tmp_path / 'input/constraints/functional.sdc'
+    elif damage == 'output_sdc':
+        path = tmp_path / produced.extras['portable_sdc_outputs'][0]['sdc']['path']
+    elif damage == 'approval_source':
+        path = tmp_path / 'input/approved-constraints.json'
+    else:
+        path = tmp_path / 'requirements/base_10/scenario_constraints.json'
+        body = json.loads(path.read_text())
+        body['required_items'].pop()
+        _write(path, body)
+    if damage != 'approved_fields':
+        path.write_text(path.read_text() + '\n')
+    result = metrics.accept_d19(tmp_path, context, produced.extras)
+    assert result['status'] == 'NOT_MEASURED' and result['delivery_blocked'] is True
+    assert result['reason'] in ('D19_INPUT_STALE', 'D19_APPROVED_FIELDS_DIFFER')
+    assert not result['obligations']
+
+
+def test_portable_feature_cannot_hide_explicit_target_pdk(tmp_path, monkeypatch):
+    _portable_case(tmp_path, monkeypatch)
+    result = runner.step_asic_sdc(tmp_path, pdk_name='declared_target', _use_controller=False)
+    assert result.extras['d19_refusal'] == 'D19_TECHNOLOGY_FEATURE_CONFLICT'
+    assert result.extras['native_started'] is False
+    assert not (tmp_path / 'requirements/base_10/scenario_constraints.json').exists()
