@@ -144,7 +144,8 @@ def registry_names(path: Optional[Path] = None) -> List[str]:
             if isinstance(e, dict) and e.get("name")]
 
 
-def canonical_entry(selector: Optional[str], path: Optional[Path] = None
+def canonical_entry(selector: Optional[str], path: Optional[Path] = None, *,
+                    exact_distribution: bool = False
                     ) -> Tuple[Optional[str], Dict[str, Any]]:
     """`(canonical name, registry entry)` for `selector`, else `(None, {})`.
 
@@ -153,6 +154,10 @@ def canonical_entry(selector: Optional[str], path: Optional[Path] = None
     would publish one process's constants under a name the caller never asked
     for — the exact failure `pdk_analog_characterize.context_describes_target`
     was written for.  Two hits of equal strength resolve to nothing.
+
+    ``exact_distribution`` permits only normalised spelling aliases of a
+    registered name, never a family prefix or revision inference. A literal
+    registered name wins; otherwise colliding registered spellings refuse.
     """
     best: Optional[Tuple[int, str, Dict[str, Any]]] = None
     ambiguous = False
@@ -163,11 +168,17 @@ def canonical_entry(selector: Optional[str], path: Optional[Path] = None
         if not name:
             continue
         s = match_strength(selector, name)
+        if exact_distribution:
+            if s != MATCH_EXACT:
+                continue
+            if selector == name:
+                s += 1
         if s == MATCH_NONE:
             continue
         if best is None or s > best[0]:
             best, ambiguous = (s, name, ent), False
-        elif s == best[0] and normalise(name) != normalise(best[1]):
+        elif s == best[0] and (name != best[1] if exact_distribution else
+                              normalise(name) != normalise(best[1])):
             ambiguous = True
     if best is None or ambiguous:
         return None, {}
