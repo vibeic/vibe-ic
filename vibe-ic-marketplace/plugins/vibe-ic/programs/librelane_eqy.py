@@ -119,19 +119,27 @@ def judge_eqy(folder: Path, output: Path) -> dict:
     scratch = folder / "scratch"
     parts = partition_status(scratch)
     xbits = xbit_partitions(scratch) or []
+    listing = scratch / "partition.list"
+    lines = listing.read_text(errors="replace").splitlines() if listing.is_file() else []
+    heads = [line.partition(":")[0].split() for line in lines if line.strip()]
+    declared = [head[1] for head in heads if len(head) >= 2]
+    complete = (bool(declared) and len(declared) == len(heads)
+                and len(declared) == len(set(declared)) and set(declared) == set(parts or {}))
     proven, failed, unknown = [], [], []
     for name, strategies in (parts or {}).items():
         words = set(strategies.values())
-        if "PASS" in words:
-            proven.append(name)
-        elif "FAIL" in words:
+        if "FAIL" in words:
             failed.append(name)
+        elif "PASS" in words:
+            proven.append(name)
         else:
             unknown.append(name)
     if not parts:
         verdict, why = "NOT_MEASURED", "EQY wrote no partition status (read/partition stage failed)"
     elif failed:
         verdict, why = "FAIL", f"{len(failed)} partition(s) not equivalent: {', '.join(failed[:5])}"
+    elif not complete:
+        verdict, why = "NOT_MEASURED", "EQY partition declaration/status population is missing or incomplete"
     elif unknown:
         verdict, why = "INCONCLUSIVE", f"{len(unknown)} partition(s) undecided: {', '.join(unknown[:5])}"
     elif xbits:

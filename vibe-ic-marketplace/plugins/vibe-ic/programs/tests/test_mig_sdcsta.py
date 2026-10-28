@@ -345,6 +345,56 @@ def test_eqy_pass_over_xbits_is_inconclusive(tmp_path):
     assert report["xbits_partitions"] == ["cal_chain.y", "cal_chain.q0"]
 
 
+@pytest.mark.parametrize("damage", ["missing", "empty", "renamed", "duplicate", "partial"])
+def test_eqy_requires_the_complete_native_partition_population(tmp_path, damage):
+    folder = eqy_folder(tmp_path, "eqy_defined_init_negative")
+    listing = folder / "scratch/partition.list"
+    if damage == "missing":
+        listing.unlink()
+    elif damage == "empty":
+        listing.write_text("")
+    elif damage == "renamed":
+        listing.write_text("cal_chain unrelated : y\n")
+    elif damage == "duplicate":
+        listing.write_text(listing.read_text() * 2)
+    else:
+        shutil.rmtree(next((folder / "scratch/strategies").iterdir()))
+    report = eqy.judge_eqy(folder, tmp_path / "incomplete.json")
+    assert report["verdict"] == "NOT_MEASURED"
+    assert "population" in report["explanation"]
+
+
+def test_eqy_native_counterexample_is_preserved_when_partition_list_is_missing(tmp_path):
+    folder = eqy_folder(tmp_path, "eqy_not_equivalent_positive")
+    (folder / "scratch/partition.list").unlink()
+    report = eqy.judge_eqy(folder, tmp_path / "counterexample.json")
+    assert report["verdict"] == "FAIL"
+    assert report["non_equivalent_points"] == ["cal_chain.y"]
+
+
+@pytest.mark.parametrize("missing_listing", [False, True])
+@pytest.mark.parametrize("words,expected", [
+    (("PASS", "FAIL"), "FAIL"),
+    (("FAIL", "PASS"), "FAIL"),
+    (("PASS", "UNKNOWN"), "PASS"),
+    (("UNKNOWN", "TIMEOUT"), "INCONCLUSIVE"),
+])
+def test_eqy_strategy_failure_precedes_other_strategies(tmp_path, missing_listing, words, expected):
+    folder = eqy_folder(tmp_path, "eqy_defined_init_negative")
+    partition = next((folder / "scratch/strategies").iterdir())
+    for strategy, word in zip(("sat", "pdr"), words):
+        put(partition / strategy / "status", word + "\n")
+    if missing_listing:
+        (folder / "scratch/partition.list").unlink()
+        if expected != "FAIL":
+            expected = "NOT_MEASURED"
+    report = eqy.judge_eqy(folder, tmp_path / "strategies.json")
+    assert report["verdict"] == expected
+    if expected == "FAIL":
+        assert partition.name in report["non_equivalent_points"]
+        assert report["proven_points"] == 1
+
+
 def test_eqy_script_drops_bitwuzla_and_defines_initial_values():
     text = eqy.eqy_script("top", [Path("/r.v")], Path("/n.v"), "/lib/tt.lib")
     assert "bitwuzla" not in text and "setundef -init -zero" in text
