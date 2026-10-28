@@ -1942,7 +1942,7 @@ def test_public_d26_owner_finalizes_selected_attempt(
     assert _delivery_route.admit(tmp_path, "ip") is None
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"features": features}))
-    binding = _write_dft_intent(tmp_path, monkeypatch, scan=features["requires_scan"])
+    binding = _write_dft_intent(tmp_path, monkeypatch, scan=features["requires_scan"], route='ip')
     timing = {}
     if case == "pass":
         from test_default_backend_entry import _d26_prelayout_fixture
@@ -2015,7 +2015,7 @@ def test_public_d26_preexisting_attempt_result_is_not_overwritten(
     assert _delivery_route.admit(tmp_path, "ip") is None
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"features": features}))
-    _write_dft_intent(tmp_path, monkeypatch, scan=features["requires_scan"])
+    _write_dft_intent(tmp_path, monkeypatch, scan=features["requires_scan"], route='ip')
     monkeypatch.setattr(runner, "_activate_runtime_program_tree", lambda _p: None)
     monkeypatch.setattr(runner, "_capture_container_image", lambda *_a, **_k: {
         "verdict": "PASS"})
