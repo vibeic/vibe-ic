@@ -1731,29 +1731,21 @@ def d10_adopted_rtl(project: Path) -> dict:
 
 
 def _d10_feature_inventory(graph: Mapping, top: str) -> dict:
-    """Read complete reachable interfaces and parameters from native elaboration."""
-    modules, instances, pending = {}, {}, [(top, '', frozenset())]
-    while pending:
-        name, prefix, parents = pending.pop()
-        if name in parents:
-            raise MetricRefusal('D10_INVENTORY_INVALID', 'recursive hierarchy')
-        module = graph['modules'][name]
-        ports = {}
-        for port, value in module.get('ports', {}).items():
-            direction, bits = value.get('direction'), value.get('bits')
-            if direction not in ('input', 'output', 'inout') or not isinstance(bits, list) or not bits:
-                raise MetricRefusal('D10_INVENTORY_INVALID', 'native port shape')
-            ports[port] = {'direction': direction, 'width': len(bits),
-                           'signed': int(bool(value.get('signed', 0)))}
-        modules[name] = {'ports': ports, 'parameter_defaults': module.get('parameter_default_values', {})}
-        for cell, value in module.get('cells', {}).items():
-            kind, path = value['type'], prefix + cell
-            if kind in graph['modules']:
-                instances[path] = {'module': kind, 'parameters': value.get('parameters', {})}
-                pending.append((kind, path + '/', parents | {name}))
-            elif not kind.startswith('$'):
-                raise MetricRefusal('D10_INVENTORY_INVALID', 'unresolved native instance')
-    return {'top': top, 'modules': modules, 'instances': instances,
+    """Read resolved native interfaces; defaults remain bound by full RTL inputs.
+
+    The qualified command permits no parameter override. Slang lowers source
+    defaults and hierarchy and does not promise parameter-default metadata;
+    absence of that metadata must never be presented as an empty parameter set.
+    """
+    ports = {}
+    for port, value in graph['modules'][top]['ports'].items():
+        direction, bits = value.get('direction'), value.get('bits')
+        if direction not in ('input', 'output', 'inout') or not isinstance(bits, list) or not bits:
+            raise MetricRefusal('D10_INVENTORY_INVALID', 'native port shape')
+        ports[port] = {'direction': direction, 'width': len(bits),
+                       'signed': int(bool(value.get('signed', 0)))}
+    return {'top': top, 'ports': ports,
+            'parameterization': 'SOURCE_DEFAULTS_NO_OVERRIDES',
             'blackbox_instances': _d10_blackbox_instances(graph, top)}
 
 
@@ -1773,9 +1765,16 @@ def _d10_inventory_authority(project: Path, subject: Mapping) -> tuple[dict, dic
         raise MetricRefusal('D10_INVENTORY_AUTHORITY_STALE', 'adopted semantics or subject differs')
     reference = payload['reference']
     if (not isinstance(reference, dict)
-            or set(reference) != {'top', 'modules', 'instances', 'blackbox_instances'}
-            or not isinstance(reference['modules'], dict)
-            or not isinstance(reference['instances'], dict)
+            or set(reference) != {'top', 'ports', 'parameterization', 'blackbox_instances'}
+            or not isinstance(reference['top'], str) or not reference['top']
+            or not isinstance(reference['ports'], dict)
+            or any(not isinstance(name, str) or not name or not isinstance(port, dict)
+                   or set(port) != {'direction', 'width', 'signed'}
+                   or port['direction'] not in ('input', 'output', 'inout')
+                   or type(port['width']) is not int or port['width'] <= 0
+                   or type(port['signed']) is not int or port['signed'] not in (0, 1)
+                   for name, port in reference['ports'].items())
+            or reference['parameterization'] != 'SOURCE_DEFAULTS_NO_OVERRIDES'
             or not isinstance(reference['blackbox_instances'], list)
             or any(not isinstance(x, str) or not x for x in reference['blackbox_instances'])
             or reference['blackbox_instances'] != sorted(set(reference['blackbox_instances']))):

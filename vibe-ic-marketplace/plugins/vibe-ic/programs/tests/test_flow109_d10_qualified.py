@@ -201,11 +201,10 @@ def bound_row(tmp_path_factory):
         'consumed_inputs': subject,
         'requirements': {'basis': 'neutral source fixture, not product authority'},
         'configuration': {'purpose': 'D10.default.structural_inventory'}}
-    reference = {'top': 'leaf_top', 'modules': {'leaf_top': {
+    reference = {'top': 'leaf_top',
         'ports': {n: {'direction': direction, 'width': 2, 'signed': 0}
                   for n, direction in [('a', 'input'), ('y', 'output')]},
-        'parameter_defaults': {'WIDTH': '0' * 30 + '10'}}},
-        'instances': {}, 'blackbox_instances': []}
+        'parameterization': 'SOURCE_DEFAULTS_NO_OVERRIDES', 'blackbox_instances': []}
     source = project / 'input/flow109/D10_source_authority.json'
     source_ref = put(source, {'fixture_scope': 'SOFTWARE_OWNER_PRECONDITION_NOT_PRODUCT_ADOPTION',
                              'feature_inventory': {'reference': reference, 'reference_identity': reference_identity}})
@@ -269,7 +268,7 @@ def test_d10_public_dispatch_calls_only_selected_owner(bound_row, monkeypatch):
 
 
 @pytest.mark.parametrize('damage', ['absent', 'forged_payload', 'stale_source', 'wrong_owner',
-                                  'changed_rtl', 'changed_tool', 'old_launch'])
+                                  'changed_rtl', 'changed_parameter', 'changed_tool', 'old_launch'])
 def test_d10_row_refuses_independent_binding_damage(bound_row, damage):
     c = bound_row
     assert 'p0' in c, 'run the explicit canonical positive prerequisite first'
@@ -283,7 +282,7 @@ def test_d10_row_refuses_independent_binding_damage(bound_row, damage):
         elif damage in ('forged_payload', 'wrong_owner'):
             doc = json.loads(adopted)
             if damage == 'forged_payload':
-                doc['reference']['modules']['leaf_top']['ports']['a']['width'] = 1
+                doc['reference']['ports']['a']['width'] = 1
             else:
                 doc['approval']['authority'] = 'caller'
             put(c['adopted'], doc)
@@ -291,6 +290,8 @@ def test_d10_row_refuses_independent_binding_damage(bound_row, damage):
             c['source'].write_bytes(source + b'\n')
         elif damage == 'changed_rtl':
             rtl.write_bytes(original_rtl + b'\n// changed actual subject\n')
+        elif damage == 'changed_parameter':
+            rtl.write_bytes(original_rtl.replace(b'WIDTH=2', b'WIDTH=3'))
         elif damage == 'changed_tool':
             p0['tool_sha256']['yosys'] = '0' * 64
         elif damage == 'old_launch':
@@ -311,7 +312,7 @@ def test_d10_independent_feature_mismatch_is_fail(bound_row):
         source = json.loads(original[0])
         # A distinct independently supplied expectation is intentionally wrong;
         # the checker must compare it rather than overwrite it with measurement.
-        source['feature_inventory']['reference']['modules']['leaf_top']['ports']['a']['width'] = 1
+        source['feature_inventory']['reference']['ports']['a']['width'] = 1
         put(c['source'], source)
         adopted = json.loads(original[1])
         adopted['reference'] = source['feature_inventory']['reference']
@@ -350,11 +351,8 @@ def test_d10_native_unexpected_blackbox_fails_independent_empty_set(cases, bound
     # Independently authored from the reviewed tiny RTL fixture, not its graph.
     ports = {n: {'direction': d, 'width': 1, 'signed': 0}
              for n, d in [('a', 'input'), ('y', 'output')]}
-    reference = {'top': 'reference_top', 'modules': {
-        n: {'ports': ports, 'parameter_defaults': {}}
-        for n in ('reference_top', 'reference_opaque')},
-        'instances': {'u_opaque': {'module': 'reference_opaque', 'parameters': {}}},
-        'blackbox_instances': []}
+    reference = {'top': 'reference_top', 'ports': ports,
+        'parameterization': 'SOURCE_DEFAULTS_NO_OVERRIDES', 'blackbox_instances': []}
     subject = metrics.d10_adopted_rtl(project)
     subject['rtl_inputs'] = native.source_binding(project, 'reference_top')['files']
     identity = copy.deepcopy(json.loads(bound_row['source'].read_text())['feature_inventory']['reference_identity'])

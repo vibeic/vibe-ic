@@ -3708,7 +3708,7 @@
             "engine_families": ["yosys", "verilator"],
             "engine_steps": {"yosys": ["Yosys.JsonHeader"], "verilator": ["Verilator.Lint"]},
             "engine_executables": {"yosys": "yosys", "verilator": "verilator"},
-            "acceptance_scope": "existing_native_component_only",
+            "acceptance_scope": "source_owned_D10_metrics_and_dft_ports",
             "flow109_metrics_status": "IMPLEMENTED"
           }
         }
@@ -3717,7 +3717,9 @@
       "capability_status": "SELECTED_NOT_ROUTE_QUALIFIED",
       "availability_status": "NOT_INVENTORIED_THIS_UPDATE",
       "source_components": [
-        "design_one_shot_runner"
+        "vibe_ic_one_shot_runner",
+        "p0_tool_frontend_check",
+        "flow109_metric_acceptance"
       ],
       "obligations": [
         {
