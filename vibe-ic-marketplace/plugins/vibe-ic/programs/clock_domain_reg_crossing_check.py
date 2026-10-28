@@ -655,6 +655,8 @@ def audit(project_dir: Optional[str] = None, rtl_dir: Optional[str] = None,
         'no_input': len(files) == 0 and not errors,
     }
     result.summary.update(extra)
+    result.summary.setdefault('reg_crossing_population', {
+        'status': 'NOT_MEASURED', 'reason': 'CDC_NATIVE_POPULATION_UNAVAILABLE'})
     return result
 
 

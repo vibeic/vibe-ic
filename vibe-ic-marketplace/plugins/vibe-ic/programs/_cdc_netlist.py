@@ -990,25 +990,35 @@ def clock_domains(nl: Netlist, lookup: Optional[_LookupSnapshot] = None
 
 
 def reg_crossing_findings(nl: Netlist,
-                          lookup: Optional[_LookupSnapshot] = None) -> List[dict]:
+                          lookup: Optional[_LookupSnapshot] = None, *,
+                          metadata: Optional[dict] = None) -> List[dict]:
     """A flop of domain A read by a flop of domain B (clock_domain_reg_crossing)."""
     import instrument_calibration
     instrument_calibration.assert_calibrated("_cdc_netlist::reg_crossing_findings")
     lookup = lookup or _LookupSnapshot(nl)
     domains = clock_domains(nl, lookup)
-    if len(domains) < 2:
+    if len(domains) < 2 and metadata is None:
         return []
+    population = [] if metadata is not None else None
+    source_bits_examined = 0
     findings: List[dict] = []
     per_pair: Dict[Tuple[str, str], List[Tuple[Flop, bool]]] = {}
     for src in nl.flops:
         send = lookup.domain(src)
         synced_all: Dict[str, bool] = {}
         for idx, bit in enumerate(src.q):
+            source_bits_examined += 1
             for f, i, direct in _consumers(nl, bit, lookup, exclude_domain=send):
                 recv = lookup.domain(f)
                 if recv == send:
                     continue
                 ok = direct and _sync_stage2(nl, f, i, recv, lookup)
+                if population is not None:
+                    population.append({
+                        "source_cell": src.name, "source_q_index": idx, "source_q_bit": bit,
+                        "destination_cell": f.name, "destination_d_index": i,
+                        "destination_d_bit": f.d[i], "from_domain": send, "to_domain": recv,
+                        "direct": direct, "synchronised": ok})
                 synced_all[recv] = synced_all.get(recv, True) and ok
         for recv, ok in synced_all.items():
             per_pair.setdefault((send, recv), []).append((src, ok))
@@ -1038,6 +1048,13 @@ def reg_crossing_findings(nl: Netlist,
                 (f"'{label}' (clock '{send}') is read by clock '{recv}' "
                  f"with no 2-flop synchroniser"),
                 **ev))
+    if metadata is not None:
+        metadata.update({"scope": "decoded_register_Q_to_D_cones",
+                         "traversal_complete": True, "clock_domains": domains,
+                         "decoded_flops": len(nl.flops),
+                         "source_q_bits_examined": source_bits_examined,
+                         "destination_d_bits": sum(len(f.d) for f in nl.flops),
+                         "crossings": population})
     return findings
 
 
@@ -1232,7 +1249,7 @@ def judge(nl: Netlist, rule: str, is_candidate=None, *,
     """
     lookup = _LookupSnapshot(nl)
     if rule == "reg_crossing":
-        return reg_crossing_findings(nl, lookup)
+        return reg_crossing_findings(nl, lookup, metadata=metadata)
     if rule == "async_input":
         return async_input_findings(
             nl, is_candidate or (lambda _n: False), lookup)
@@ -1307,6 +1324,13 @@ def apply_front_end(project: Path, mode: str, netlist_arg: Optional[str],
                  "netlist": str(netlist_arg or NETLIST_REL), "netlist_read": False})
     import instrument_calibration
     try:
+        import hashlib
+        graph_sha256 = None
+        if rule == "reg_crossing":
+            try:
+                graph_sha256 = hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError:
+                pass  # load() retains the existing unreadable-graph refusal.
         nl = load(path)
         binding = require_binding(project, path, nl)
         analysis: dict = {}
@@ -1330,6 +1354,22 @@ def apply_front_end(project: Path, mode: str, netlist_arg: Optional[str],
         "netlist_input_fingerprint": binding["input"]["fingerprint"]}
     if rule == "reset_dependency":
         extra["reset_dependency_analysis"] = analysis
+    if rule == "reg_crossing":
+        # Bind the observed population to the same native producer and current
+        # readset. A changed/absent graph cannot become a measured empty set.
+        population = {"status": "NOT_MEASURED", "reason": "CDC_POPULATION_SOURCE_UNPROVEN"}
+        try:
+            if (hashlib.sha256(path.read_bytes()).hexdigest() == graph_sha256
+                    and require_binding(project, path, nl) == binding and nl.flops
+                    and analysis.get("traversal_complete") is True):
+                population = {"status": "MEASURED", **analysis,
+                    "netlist": {"path": str(path), "sha256": graph_sha256},
+                    "input_fingerprint": binding["input"]["fingerprint"],
+                    "producer": binding["producer"],
+                    "checker_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+        except (OSError, Refusal):
+            pass
+        extra["reg_crossing_population"] = population
     if mode == "librelane":
         extra["front_end"] = "netlist"
         return rows, extra

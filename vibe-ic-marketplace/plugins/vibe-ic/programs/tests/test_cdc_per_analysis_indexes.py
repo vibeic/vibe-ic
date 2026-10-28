@@ -68,6 +68,97 @@ def ordinary(root):
     return done.returncode, json.loads(report.read_text())
 
 
+def population_native(root, top='cdc_population_mixed'):
+    """Run the existing native build/normalization; no process substitution."""
+    fixture = PROG / 'tests/fixtures/cdc_netlist/cdc_population.v'
+    rtl = root / 'phase2/stage1/rtl/cdc_population.v'
+    rtl.parent.mkdir(parents=True)
+    shutil.copyfile(fixture, rtl)
+    graph = cdc.build(root, [rtl], top)
+    model = cdc.load(graph)
+    binding = cdc.require_binding(root, graph, model)
+    return model, binding
+
+
+def test_native_population_includes_every_sync_and_unsync_endpoint(tmp_path):
+    import hashlib
+    model, binding = population_native(tmp_path)
+    rc, report = ordinary(tmp_path)
+    # Existing finding semantics stay calibrated and unchanged: the safe
+    # crossing is omitted from findings, while the unsafe crossing fails.
+    assert rc == 1 and report['summary']['errors'] == 1, report
+    assert report['findings'] == cdc.judge(model, 'reg_crossing')
+    assert report['findings'][0]['rule'] == 'CDC_REG_NO_SYNC'
+    population = report['summary'].get('reg_crossing_population', {})
+    assert population.get('status') == 'MEASURED', population
+    doc = json.loads((tmp_path / cdc.NETLIST_REL).read_text())['modules'][model.top]
+
+    def endpoint(net):
+        q = doc['netnames'][net]['bits']
+        return next((name, cell) for name, cell in doc['cells'].items()
+                    if cell['connections'].get('Q') == q)
+
+    expected = []
+    for source, destination, synchronised in (
+            ('launch_safe', 'sync1', True), ('launch_unsafe', 'capture_unsafe', False)):
+        sender, scell = endpoint(source)
+        receiver, dcell = endpoint(destination)
+        expected.append({'source_cell': sender, 'source_q_index': 0,
+            'source_q_bit': scell['connections']['Q'][0],
+            'destination_cell': receiver, 'destination_d_index': 0,
+            'destination_d_bit': dcell['connections']['D'][0],
+            'from_domain': 'clk_a', 'to_domain': 'clk_b',
+            'direct': True, 'synchronised': synchronised})
+    actual = population['crossings']
+    assert sorted(actual, key=json.dumps) == sorted(expected, key=json.dumps), {
+        'actual': actual, 'expected': expected}
+    assert population['traversal_complete'] is True
+    assert population['source_q_bits_examined'] == population['destination_d_bits'] == 5
+    assert population['input_fingerprint'] == binding['input']['fingerprint']
+    assert population['producer'] == binding['producer']
+    assert population['netlist']['sha256'] == hashlib.sha256(
+        (tmp_path / cdc.NETLIST_REL).read_bytes()).hexdigest()
+    assert population['checker_sha256'] == hashlib.sha256(Path(cdc.__file__).read_bytes()).hexdigest()
+
+
+def test_native_single_domain_population_is_empty_after_complete_traversal(tmp_path):
+    model, _binding = population_native(tmp_path, 'cdc_population_single')
+    rc, report = ordinary(tmp_path)
+    assert rc == 0 and report['findings'] == [], report
+    population = report['summary'].get('reg_crossing_population', {})
+    assert population.get('status') == 'MEASURED', population
+    assert population['clock_domains'] == ['clk']
+    assert population['crossings'] == [] and population['traversal_complete'] is True
+    assert population['source_q_bits_examined'] == population['destination_d_bits'] == len(model.flops) == 2
+
+
+@pytest.mark.parametrize('damage', ['missing', 'stale', 'unreadable', 'no_decoded_flops'])
+def test_unproven_native_population_cannot_be_measured_empty(tmp_path, damage):
+    population_native(tmp_path, 'cdc_population_comb' if damage == 'no_decoded_flops'
+                      else 'cdc_population_mixed')
+    path = tmp_path / cdc.NETLIST_REL
+    if damage == 'missing':
+        path.unlink()
+    elif damage == 'stale':
+        rtl = tmp_path / 'phase2/stage1/rtl/cdc_population.v'
+        rtl.write_text(rtl.read_text() + '// changed native input\n')
+    elif damage == 'unreadable':
+        path.write_text('not a native JSON graph\n')
+    rc, report = ordinary(tmp_path)
+    population = report['summary'].get('reg_crossing_population', {})
+    assert population.get('status') == 'NOT_MEASURED', report
+    assert 'crossings' not in population, population
+    if damage != 'no_decoded_flops':
+        assert rc != 0 and report['summary']['netlist_read'] is False, report
+
+
+def test_regex_findings_do_not_authorize_native_population(tmp_path):
+    population_native(tmp_path)
+    from clock_domain_reg_crossing_check import audit
+    report = audit(project_dir=str(tmp_path), front_end='regex')
+    assert report.summary['reg_crossing_population']['status'] == 'NOT_MEASURED'
+
+
 @pytest.mark.parametrize("safe", [True, False])
 @pytest.mark.parametrize("controlled", [False, True])
 def test_native_semantics_without_rebuilding_port_maps_per_pair(tmp_path, safe, controlled):
