@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import _path_layout as layout
 import os
 from pathlib import Path
 import shutil
@@ -189,10 +190,11 @@ def publish_d09(project, intent):
     assert declaration.main(
         [str(project), '--set', 'dft=' + json.dumps(intent)]) == 0
     import phase1_one_shot_runner as phase1
+    assert __import__('_delivery_route').admit(project, 'ic') is None
     output = phase1._d01_emit_dft_intent(project)
     if output is not None:
-        report = project / 'reports/phase1_one_shot.json'; report.parent.mkdir(parents=True, exist_ok=True)
-        report.write_text(json.dumps({'dft_intent_output': output}))
+        report = layout.report_path(project, 'phase1_one_shot.json'); report.parent.mkdir(parents=True, exist_ok=True)
+        report.write_text(json.dumps({'project': str(project.resolve()), **__import__('_delivery_route').report_label(project), 'dft_intent_output': output}))
 
 
 def case(project):

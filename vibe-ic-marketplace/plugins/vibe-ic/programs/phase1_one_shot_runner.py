@@ -1755,6 +1755,12 @@ def _d01_emit_dft_intent(project: Path) -> dict | None:
         if decisions.exists():
             if decisions.is_symlink() or not decisions.is_file():
                 return None
+            # A file containing unrelated decisions is not fresh DFT
+            # authority. Without this field the declaration emitter carries
+            # its old value, which D01 must not re-sign as a current decision.
+            approved = json.loads(decisions.read_text())
+            if not isinstance(approved, dict) or not isinstance(approved.get('dft'), dict):
+                return None
             args += ['--from-json', str(decisions)]
         else:
             previous = Path(project) / contract['artifact_path']
