@@ -1902,7 +1902,9 @@ def _finish_d09_selected_owner(
             'detail': detail, 'evidence': evidence}
 
 
-def _finish_d25_selected_owner(project: Path) -> dict:
+def _finish_d25_selected_owner(
+        project: Path, *, owner_verdict: str | None = None,
+        owner_published_current: bool = False) -> dict:
     """Publish the selected LEC owner's actual consumer through the sole writer."""
     import flow109
     import flow109_metric_acceptance as metrics
@@ -1918,10 +1920,17 @@ def _finish_d25_selected_owner(project: Path) -> dict:
         status = accepted['status']
         if metrics.accept_d25(project, context) != accepted:
             raise flow109.Flow109Error('D25_NATIVE_INPUT_STALE', 'consumer changed during finalization')
+        detail = accepted['reason']
+        if status == 'PASS' and (owner_verdict != 'PASS'
+                                 or owner_published_current is not True):
+            status = 'NOT_MEASURED'
+            detail = 'D25_OWNER_WINDOW_NOT_CURRENT_PASS: ' + detail
         finished = flow109.finish_native_window(project, {'steps': [{
             'status': accepted['component_status'], 'extras': {
                 'step_id': '13', 'default_row_status': status, 'completed': status == 'PASS',
-                'metric_acceptance': accepted, 'detail': accepted['reason'],
+                'metric_acceptance': accepted, 'detail': detail,
+                'owner_window': {'verdict': owner_verdict,
+                                 'published_current': owner_published_current},
             }}]})
         if (not isinstance(finished, Mapping) or finished.get('default_row_status') != status
                 or finished.get('whole_flow_acceptance') != 'NOT_MEASURED'
@@ -1929,7 +1938,7 @@ def _finish_d25_selected_owner(project: Path) -> dict:
             raise flow109.Flow109Error('D25_FINALIZATION_UNAVAILABLE', 'canonical writer did not confirm verdict')
         return {'verdict': status, 'component_status': accepted['component_status'],
                 'whole_flow_verdict': 'NOT_MEASURED', 'metric_acceptance': accepted,
-                'detail': accepted['reason']}
+                'detail': detail}
     except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError) as exc:
         return {'verdict': 'NOT_MEASURED', 'component_status': 'NOT_MEASURED',
                 'whole_flow_verdict': 'NOT_MEASURED', 'detail': 'D25_FINALIZATION_REFUSED: ' + str(exc)}
@@ -6025,7 +6034,9 @@ def _main() -> int:
         out = _pl.report_path(project, "vibe_ic_one_shot.json")
         out.parent.mkdir(parents=True, exist_ok=True)
         if _flow109_selected_row('D25'):
-            d25 = _finish_d25_selected_owner(project)
+            d25 = _finish_d25_selected_owner(
+                project, owner_verdict=window_verdict,
+                owner_published_current=fresh_window)
             summary['d25_finalization'] = d25
             if window_verdict != 'FAIL':
                 window_verdict = d25['verdict']
