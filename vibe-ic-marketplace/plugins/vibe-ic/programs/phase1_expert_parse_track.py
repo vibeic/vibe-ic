@@ -690,6 +690,113 @@ SKIP_ORACLE_PATH = "ORACLE_PATH"          #: deliberate §4.05 exclusion
 SKIP_UNREADABLE = "UNREADABLE"            #: the file exists and would not open
 
 
+def _input_projection(text: str) -> tuple[str, dict, str]:
+    """Separate only established consumer fields; unknown content stays semantic.
+
+    The legacy D25 source has no schema tag. Its source-reference, required-item,
+    mode and native-entry shape is the contract read by _d25_inputs, not a
+    filename or a caller's nonnormative label. This classifies responsibility;
+    it does not approve that source or qualify its native stack.
+    """
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("ambiguous duplicate JSON key")
+            result[key] = value
+        return result
+    try:
+        doc = json.loads(text, object_pairs_hook=unique)
+    except (ValueError, TypeError):
+        return text, {}, "unresolved-possible-requirements"
+    if not isinstance(doc, dict):
+        return text, {}, "unresolved-possible-requirements"
+    semantic, context = dict(doc), {}
+    if doc.get("schema") == "vibeic.ai-judgement.v1":
+        fields = {"schema", "step_id", "verdict", "evidence_sha256", "signed_by", "judgement"}
+        if all(isinstance(doc.get(k), str) for k in fields):
+            for key in fields:
+                context[key] = semantic.pop(key)
+    elif "schema" not in doc:
+        source = doc.get("source_reference")
+        mode = doc.get("mode_assumptions")
+        native = doc.get("native_qualification")
+        if (isinstance(source, dict) and isinstance(source.get("path"), str)
+                and re.fullmatch(r"[0-9a-f]{64}", str(source.get("sha256", "")))
+                and isinstance(doc.get("required_items"), list)
+                and isinstance(mode, dict)
+                and mode.get("purpose") == "functional_after_observed_reset"
+                and isinstance(native, dict)
+                and native.get("native_entry") == "librelane.steps.yosys.EQY.start"):
+            # Nested extensions are not hidden inside a known provenance slot.
+            record_keys = {"path", "sha256", "bytes"}
+            def reference(value):
+                return (isinstance(value, dict) and set(value) <= record_keys
+                        and isinstance(value.get("path"), str)
+                        and re.fullmatch(r"[0-9a-f]{64}", str(value.get("sha256", "")))
+                        and ("bytes" not in value or type(value["bytes"]) is int))
+            def references(value):
+                return isinstance(value, list) and all(reference(v) for v in value)
+            scalar = {"original_rtl_sha256": str, "native_entry": str,
+                      "native_scope": str, "qualified_image_id": str,
+                      "qualified_image_reference": str, "passing_gate_sha256": str,
+                      "rejection_control_gate_sha256": str,
+                      "allow_native_nondefault_preprocessor_for_named_scope": bool,
+                      "default_or_global_force_enabled": bool}
+            known = {k: v for k, v in native.items()
+                     if k in scalar and isinstance(v, scalar[k])}
+            for key in ("allowed_gate_sha256", "qualified_cell_types"):
+                if isinstance(native.get(key), list) and all(isinstance(v, str) for v in native[key]):
+                    known[key] = native[key]
+            for key in ("models", "references"):
+                if references(native.get(key)):
+                    known[key] = native[key]
+            lib = native.get("liberty")
+            if reference(lib):
+                known["liberty"] = lib
+            tools = native.get("actual_tool_readset")
+            if isinstance(tools, dict) and all(isinstance(k, str) and
+                    re.fullmatch(r"[0-9a-f]{64}", str(v)) for k, v in tools.items()):
+                known["actual_tool_readset"] = tools
+            roles = native.get("gate_roles")
+            if isinstance(roles, dict) and all(re.fullmatch(r"[0-9a-f]{64}", str(k)) and
+                    v in ("positive_equivalence_subject", "counterexample_rejection_control_only")
+                    for k, v in roles.items()):
+                known["gate_roles"] = roles
+            if known:
+                context["native_qualification"] = known
+                remaining = {k: v for k, v in native.items() if k not in known}
+                if remaining:
+                    semantic["native_qualification"] = remaining
+                else:
+                    semantic.pop("native_qualification")
+            review = doc.get("root_review")
+            review_keys = {"reviewed_by", "at", "review_receipt_sha256", "scope"}
+            if isinstance(review, dict):
+                known_review = {k: v for k, v in review.items()
+                                if k in review_keys and isinstance(v, str)}
+                if known_review:
+                    context["root_review"] = known_review
+                    remaining = {k: v for k, v in review.items() if k not in known_review}
+                    if remaining:
+                        semantic["root_review"] = remaining
+                    else:
+                        semantic.pop("root_review")
+    if not context:
+        return text, {}, "unresolved-possible-requirements"
+    return (json.dumps(semantic, indent=2, ensure_ascii=False) if semantic else "",
+            context, "supported-consumer-context-with-remaining-possible-requirements")
+
+
+def _source_frame(members, text, status, skipped, truncated):
+    import inspect
+    return {"members": members, "semantic_text": text,
+            "reader_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            "responsibility_mapping_sha256": hashlib.sha256(
+                inspect.getsource(_input_projection).encode()).hexdigest(),
+            "status": status, "files_skipped": skipped, "truncated": truncated}
+
+
 def input_text_report(project: Path) -> Dict[str, Any]:
     """The design-input prose AND an account of what was left out.
 
@@ -711,6 +818,7 @@ def input_text_report(project: Path) -> Dict[str, Any]:
     INPUT only (§4.05) — the oracle exclusion is itself recorded, as a
     deliberate skip rather than as a failure."""
     parts: List[str] = []
+    members: List[Dict[str, Any]] = []
     read: List[str] = []
     skipped: List[Dict[str, Any]] = []
     total = 0
@@ -718,6 +826,8 @@ def input_text_report(project: Path) -> Dict[str, Any]:
     root = project / "input"
     if not root.is_dir():
         return {"text": "", "chars": 0, "status": INPUT_NO_TREE,
+                "source_frame": _source_frame([], "", INPUT_NO_TREE, [], False),
+                "semantic_chars": 0,
                 "files_read": [], "files_skipped": [],
                 "unsupported_suffixes": {}, "truncated": False,
                 "input_root": str(root)}
@@ -753,24 +863,41 @@ def input_text_report(project: Path) -> Dict[str, Any]:
                             "bytes": size, "reason": SKIP_ORACLE_PATH})
             continue
         try:
-            t = q.read_text(errors="replace")
+            raw = q.read_bytes()
+            t = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
         except OSError:
             skipped.append({"path": str(rel), "suffix": q.suffix.lower(),
                             "bytes": size, "reason": SKIP_UNREADABLE})
             continue
         read.append(str(rel))
         parts.append(t)
+        members.append({"path": str(rel), "sha256": hashlib.sha256(raw).hexdigest(),
+                        "bytes": len(raw), "text": t})
         total += len(t)
         if total >= _INPUT_TEXT_CAP:
             truncated = True
             break
-    text = "\n".join(parts)[:_INPUT_TEXT_CAP]
+    retained = "\n".join(parts)[:_INPUT_TEXT_CAP]
+    offset = 0
+    semantic_parts = []
+    for member in members:
+        original = member["text"]
+        included = retained[offset:offset + len(original)]
+        member["text"] = included
+        member["complete"] = len(included) == len(original)
+        projection, context, role = (_input_projection(included) if member["complete"]
+                                    else (included, {}, "truncated-possible-requirements"))
+        member.update(qualification_context=context, responsibility=role,
+                      semantic_text=projection)
+        semantic_parts.append(projection)
+        offset += len(original) + 1
+    text = "\n".join(p for p in semantic_parts if p)
     unsupported: Dict[str, int] = {}
     for sk in skipped:
         if sk["reason"] == SKIP_UNSUPPORTED_FORMAT:
             unsupported[sk["suffix"] or "<none>"] = \
                 unsupported.get(sk["suffix"] or "<none>", 0) + 1
-    if text:
+    if retained:
         status = INPUT_READ
     elif n_files == 0:
         status = INPUT_NO_FILES
@@ -781,7 +908,9 @@ def input_text_report(project: Path) -> Dict[str, Any]:
         status = INPUT_READ_AND_EMPTY
     else:
         status = INPUT_UNREADABLE_FORMAT
-    return {"text": text, "chars": len(text), "status": status,
+    frame = _source_frame(members, text, status, skipped, truncated)
+    return {"text": text, "chars": len(retained), "status": status,
+            "source_frame": frame, "semantic_chars": len(text),
             "files_read": read, "files_skipped": skipped,
             "unsupported_suffixes": unsupported, "truncated": truncated,
             "input_root": str(root)}
@@ -2946,7 +3075,7 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
 # ── the AI sub-track ────────────────────────────────────────────────────────
 
 def ai_subtrack(project: Path, prompt: str, out_dir: Path,
-                ic_class=None, class_availability=None) -> Dict[str, Any]:
+                ic_class=None, class_availability=None, *, source_frame=None) -> Dict[str, Any]:
     """Hand the open-ended reading to the IC Expert Agent.
 
     Uses `ic_expert_backup_pack` — the assembler this doctrine already built
@@ -3008,8 +3137,10 @@ def ai_subtrack(project: Path, prompt: str, out_dir: Path,
             expert_skills=[], verify_gates=[PROGRAM],
             out_dir=out_dir, k=5,
             output_target="l_doc_expectations.json",
-            ic_class=ic_class, authoring_schema=schema)
+            ic_class=ic_class, authoring_schema=schema, source_frame=source_frame)
         status["handoff"] = handoff
+        if source_frame is not None:
+            status["input_frame_sha256"] = handoff["input_frame_sha256"]
         # The disposition is recorded for EVERY design, profiled or not: the
         # pack file only gains a `class_first` block when there was a profile
         # to confine it with, so without this the unprofiled case would leave
@@ -3059,6 +3190,9 @@ def ai_subtrack(project: Path, prompt: str, out_dir: Path,
                 answer_top_level_keys=keys)
             return status
         exps = data["expectations"]
+        if source_frame is not None and data.get("input_frame_sha256") != handoff["input_frame_sha256"]:
+            status.update(status=AI_ERROR, reason="INPUT_FRAME_CHANGED: fresh input-only answer required")
+            return status
         status.update(
             status=AI_CONSUMED if exps else AI_CONSUMED_EMPTY,
             reason=(f"read {len(exps)} expectation(s) from a prior agent "
@@ -3094,7 +3228,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
     ic_class = availability.get("ic_class")
     rules = [fn(project) for fn in DETERMINISTIC_RULES]
     ai = ai_subtrack(project, prompt, out_dir, ic_class=ic_class,
-                     class_availability=availability)
+                     class_availability=availability, source_frame=input_report.get("source_frame"))
 
     # #2150 item 6 — A DECISION TABLE IS DATED BEFORE IT IS USED.
     # A table says, per expectation, where a fact belongs: re-point it to this
@@ -3962,6 +4096,13 @@ def check_report(project: Path) -> int:
         execution = rep.get("execution")
         if not isinstance(ai, dict) or not isinstance(execution, dict):
             raise ValueError("expert execution record is malformed")
+        if ai.get("input_frame_sha256") is not None:
+            report = input_text_report(project)
+            _text, binding = _pack.phase1_frame(report["text"], report["source_frame"],
+                authoring_schema=authoring_schema(project),
+                out_dir=target.parent / "expert_parse_track_pack")
+            if binding != ai["input_frame_sha256"]:
+                raise ValueError("INPUT_FRAME_CHANGED: source/instructions changed since reading")
         if rc == 0:
             # R-0915-126-D1: a completed track has DECIDED its expectations,
             # and TWO derivations can do that. They are checked SEPARATELY and

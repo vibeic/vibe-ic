@@ -63,6 +63,7 @@ sweep — the gap is DECLARED in the DB, class by class, not left implicit.
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import sys
 from pathlib import Path
@@ -328,11 +329,57 @@ def class_first_disposition(ic_class, availability=None) -> Dict[str, Any]:
     return out
 
 
+_PHASE1_FRAME_RULES = [
+    "Author IC/TEST expectations from the semantic/typed-obligation projection. "
+    "Unknown roles and unsupported fields remain possible requirements, never silently nonnormative.",
+    "The retained raw reading includes qualification/audit context. Its tool/source/good/CEX pins "
+    "remain enforced by their native consumers, not lexical IC L-layer requirements. "
+    "Do not infer a role from a filename or a caller's nonnormative label.",
+    "Keep real obligations in JSON and mixed records; typed planning and unresolved answers "
+    "retain their existing consumers. Do not invent Ldoc fields or tune expectations to outputs.",
+    "Return input_frame_sha256 exactly as supplied with the newly authored expectations. "
+    "Never retrofit a historical answer. Native-only audit changes do not change this semantic binding.",
+]
+
+
+def phase1_frame(prompt: str, source_frame: dict, *, authoring_schema=None,
+                 out_dir: Path | None = None) -> tuple[str, str]:
+    """One rendering/binding definition for pack production and read-only reopening."""
+    if source_frame.get("semantic_text") != prompt:
+        raise ValueError("semantic prompt differs from collector frame")
+    semantic = [{"path": m["path"], "text": m["semantic_text"],
+                 "responsibility": m["responsibility"]}
+                for m in source_frame["members"] if m["semantic_text"]]
+    import inspect
+    context = {name: hashlib.sha256((out_dir / name).read_bytes()).hexdigest()
+               for name in ("lessons.md", "ic_expert_db.md", "contract.md", "contract.v")
+               if out_dir is not None and (out_dir / name).is_file()}
+    binding = {"semantic_members": semantic, "semantic_text": prompt,
+               "responsibility_mapping_sha256": source_frame["responsibility_mapping_sha256"],
+               "instructions": _PHASE1_FRAME_RULES,
+               "authoring_schema": {k: v for k, v in (authoring_schema or {}).items()
+                                    if k != "phase1_root"},
+               "expert_context": context,
+               "pack_policy_sha256": hashlib.sha256((inspect.getsource(assemble)
+                   + inspect.getsource(phase1_frame)).encode()).hexdigest(),
+               "status": source_frame["status"], "truncated": source_frame["truncated"],
+               "skips": source_frame["files_skipped"]}
+    digest = hashlib.sha256(json.dumps(binding, sort_keys=True).encode()).hexdigest()
+    sections = ["# Semantic / typed obligations\n" + prompt,
+                "# Retained original reading — audit and qualification context\n"
+                "These original bytes are retained for review; their responsibilities are stated per member."]
+    for member in source_frame["members"]:
+        sections.append(f"## {member['path']} sha256:{member['sha256']} bytes:{member['bytes']} "
+                        f"complete:{member['complete']} responsibility:{member['responsibility']}\n"
+                        + member["text"])
+    return "\n\n".join(sections), digest
+
+
 def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optional[str],
              expert_skills: List[str], verify_gates: List[str],
              out_dir: Path, k: int = 5, context_keys=None,
              output_target: str = "rtl.sv", ic_class=None,
-             authoring_schema=None) -> Dict[str, Any]:
+             authoring_schema=None, *, source_frame=None) -> Dict[str, Any]:
     """Assemble the IC-Expert-Agent AI-backup pack into `out_dir`. Returns the
     hand-off descriptor (also written to `out_dir/ic_expert_agent_handoff.json`).
     `context_keys` (optional) = the record's `input.context` file paths, used for
@@ -510,7 +557,13 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
         # contain the design input, so an orchestrator could dispatch it only
         # by inventing another, undocumented read surface (#1973).
         input_name = "design_input.txt"
-        (out_dir / input_name).write_text(prompt)
+        reading = prompt
+        if source_frame is not None:
+            reading, _binding = phase1_frame(prompt, source_frame)
+            handoff["source_frame"] = source_frame
+            handoff["raw_input_frame_sha256"] = hashlib.sha256(
+                json.dumps(source_frame, sort_keys=True).encode()).hexdigest()
+        (out_dir / input_name).write_text(reading)
         handoff["read_design_input_from"] = input_name
         # THE LAYER CONTRACT (#2150 F5). Two entries were hard-coded here —
         # `{"L9": ..., "L19": ...}` — for projects whose Phase-1 root carries
@@ -614,6 +667,11 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
                 "layer and listing every token",
             ] if derived else []),
         }
+    if output_target == "l_doc_expectations.json" and source_frame is not None:
+        _reading, handoff["input_frame_sha256"] = phase1_frame(
+            prompt, source_frame, authoring_schema=authoring_schema, out_dir=out_dir)
+        handoff["answer_contract"]["rules"] += _PHASE1_FRAME_RULES
+        handoff["answer_contract"]["input_frame_sha256"] = handoff["input_frame_sha256"]
     (out_dir / "ic_expert_agent_handoff.json").write_text(
         json.dumps(handoff, indent=2, ensure_ascii=False))
     return handoff

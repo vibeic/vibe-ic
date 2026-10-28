@@ -181,3 +181,48 @@ def test_public_3088_advisory_reaches_normal_producer(tmp_path, label, surface):
         assert "start/valid" not in text and "ready/done" not in text, advice
     if case["consecutive"]:
         assert "arithmetic result" in text, advice
+
+
+def test_d01_semantic_projection_drives_actual_pack_detectors(tmp_path):
+    import phase1_expert_parse_track as track
+    project = tmp_path / 'project'
+    (project / 'input').mkdir(parents=True)
+    (project / 'input' / 'ports.md').write_text(
+        'The controller drives `real_valid` and `real_ready`. '
+        'Internally, `real_cursor` holds position and `real_remaining` counts data.')
+    source = {'source_reference': {'path': 'input/ports.md', 'sha256': 'a' * 64},
+              'required_items': [{'requirement': 'JSON_REQUIRED_BEHAVIOR'}],
+              'mode_assumptions': {'purpose': 'functional_after_observed_reset'},
+              'native_qualification': {'native_entry': 'librelane.steps.yosys.EQY.start',
+                  'native_scope': 'The controller drives `native_valid` and `native_ready`. '
+                      'Internally, `native_cursor` holds position and `native_remaining` counts data.'}}
+    (project / 'input' / 'arbitrary.json').write_text(json.dumps(source))
+    report = track.input_text_report(project)
+    status = track.ai_subtrack(project, report['text'], tmp_path / 'pack',
+                              source_frame=report['source_frame'])
+    h = status['handoff']
+    assert status['status'] == 'HANDOFF_EMITTED'
+    assert 'JSON_REQUIRED_BEHAVIOR' in report['text']
+    assert 'functional_after_observed_reset' in report['text']
+    assert 'native_valid' not in report['text']
+    named = next(x for x in h['spec_requirements'] if x['kind'] == 'preserve_named_signals')
+    assert set(named['named_signals']) == {'real_valid', 'real_ready', 'real_cursor', 'real_remaining'}
+    reading = (tmp_path / 'pack' / h['read_design_input_from']).read_text()
+    assert 'native_valid' in reading and 'JSON_REQUIRED_BEHAVIOR' in reading
+    assert h['source_frame']['members'][0]['text'] == json.dumps(source)
+
+
+def test_d01_runtime_only_receipt_does_not_feed_pack_detectors(tmp_path):
+    import phase1_expert_parse_track as track
+    (tmp_path / 'input').mkdir()
+    raw = json.dumps({'schema': 'vibeic.ai-judgement.v1', 'step_id': 'D1',
+        'verdict': 'PASS', 'evidence_sha256': 'a' * 64, 'signed_by': 'old reviewer',
+        'judgement': 'The controller drives `native_valid` and `native_ready`; '
+                     '`native_cursor` and `native_remaining` are old audit text.'})
+    (tmp_path / 'input' / 'anything.json').write_text(raw)
+    report = track.input_text_report(tmp_path)
+    status = track.ai_subtrack(tmp_path, report['text'], tmp_path / 'pack',
+                              source_frame=report['source_frame'])
+    assert report['text'] == '' and report['status'] == 'READ'
+    assert not any(x['kind'] == 'preserve_named_signals' for x in status['handoff']['spec_requirements'])
+    assert raw in (tmp_path / 'pack' / 'design_input.txt').read_text()

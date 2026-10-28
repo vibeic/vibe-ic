@@ -736,3 +736,211 @@ def test_a_crashed_track_does_not_read_as_a_pass(tmp_path):
     with mock.patch.object(R, "PROGRAMS_DIR", broken):
         assert R._run_expert_track(p) == 1, \
             "a missing second track must not pass as 'nothing to run'"
+
+
+def _framed_project(tmp_path):
+    p = tmp_path / 'framed'
+    (p / 'input').mkdir(parents=True)
+    (p / 'phase1/generated_docs').mkdir(parents=True)
+    (p / 'phase1/generated_docs/L2_FRS.json').write_text(json.dumps(
+        {'doc_class': 'L2', 'frs_sections': ['Source requirement']}))
+    value = {'source_reference': {'path': 'input/spec.md', 'sha256': 'a' * 64},
+        'required_items': [{'requirement': 'PRESERVE_JSON_REQUIREMENT'}],
+        'mode_assumptions': {'purpose': 'functional_after_observed_reset'},
+        'native_qualification': {'native_entry': 'librelane.steps.yosys.EQY.start',
+                                 'native_scope': 'NATIVE_CONTEXT_ONE'}}
+    source = p / 'input' / 'mixed.json'
+    source.write_text(json.dumps(value))
+    return p, source, value
+
+
+def _framed_read(p):
+    report = T.input_text_report(p)
+    return T.ai_subtrack(p, report['text'], p / 'pack', source_frame=report['source_frame'])
+
+
+def _new_frame_answer(p):
+    status = _framed_read(p)
+    answer = {'input_frame_sha256': status['input_frame_sha256'],
+              'expectations': [{'id': 'authored-control', 'layer': 'L2_FRS',
+                                'expected_tokens': ['Source requirement']}]}
+    path = p / 'pack/l_doc_expectations.json'
+    path.write_text(json.dumps(answer))
+    assert _framed_read(p)['status'] == 'CONSUMED'
+    return path, path.read_bytes(), status
+
+
+def test_d01_native_context_change_reuses_semantic_answer(tmp_path):
+    p, source, value = _framed_project(tmp_path)
+    answer, raw, before = _new_frame_answer(p)
+    value['native_qualification']['native_scope'] = 'NATIVE_CONTEXT_TWO'
+    source.write_text(json.dumps(value))
+    after = _framed_read(p)
+    assert after['status'] == 'CONSUMED'
+    assert after['input_frame_sha256'] == before['input_frame_sha256']
+    assert after['handoff']['raw_input_frame_sha256'] != before['handoff']['raw_input_frame_sha256']
+    assert answer.read_bytes() == raw
+
+
+@pytest.mark.parametrize('change', ['design', 'unknown_field', 'mapping', 'instructions'])
+def test_d01_changed_semantics_or_rules_refuses_old_answer(tmp_path, monkeypatch, change):
+    p, source, value = _framed_project(tmp_path)
+    answer, raw, _before = _new_frame_answer(p)
+    report = T.input_text_report(p)
+    if change == 'design':
+        value['required_items'][0]['requirement'] = 'CHANGED_DESIGN'
+        source.write_text(json.dumps(value))
+    elif change == 'unknown_field':
+        value['native_qualification']['unrecognized_requirement'] = 'MUST_REMAIN_SEMANTIC'
+        source.write_text(json.dumps(value))
+    elif change == 'mapping':
+        report['source_frame']['responsibility_mapping_sha256'] = 'b' * 64
+    else:
+        monkeypatch.setattr(T._pack, '_PHASE1_FRAME_RULES', T._pack._PHASE1_FRAME_RULES + ['Changed instruction'])
+    if change == 'mapping':
+        result = T.ai_subtrack(p, report['text'], p / 'pack', source_frame=report['source_frame'])
+    else:
+        result = _framed_read(p)
+    assert result['status'] == 'ERROR'
+    assert 'INPUT_FRAME_CHANGED' in result['reason']
+    assert answer.read_bytes() == raw
+
+
+def test_d01_unframed_historical_answer_is_not_blessed(tmp_path):
+    p, _source, _value = _framed_project(tmp_path)
+    (p / 'pack').mkdir()
+    answer = p / 'pack/l_doc_expectations.json'
+    answer.write_text(json.dumps({'expectations': [{'id': 'old', 'layer': 'L2_FRS'}]}))
+    raw = answer.read_bytes()
+    assert _framed_read(p)['status'] == 'ERROR'
+    assert answer.read_bytes() == raw
+
+
+@pytest.mark.parametrize('raw', [
+    '{"schema":"unknown","nonnormative":true,"requirement":"KEEP_UNKNOWN"}',
+    '{"source_reference":{"path":"input/spec.md","sha256":"' + 'a' * 64 +
+    '"},"required_items":[],"mode_assumptions":{"purpose":"functional_after_observed_reset"},'
+    '"native_qualification":{"native_entry":"librelane.steps.yosys.EQY.start",'
+    '"native_scope":"FIRST","native_scope":"KEEP_DUPLICATE"}}',
+    '{"schema":"vibeic.ai-judgement.v1","step_id":"D1","verdict":"PASS","evidence_sha256":"x","signed_by":"r","judgement":"audit","unknown":{"requirement":"KEEP_NESTED"}}',
+])
+def test_d01_unknown_or_duplicate_json_remains_possible_requirement(tmp_path, raw):
+    (tmp_path / 'input').mkdir()
+    (tmp_path / 'input' / 'runtime_metadata.json').write_text(raw)
+    report = T.input_text_report(tmp_path)
+    assert ('KEEP_UNKNOWN' in report['text'] or 'KEEP_DUPLICATE' in report['text']
+            or 'KEEP_NESTED' in report['text'])
+    status = T.ai_subtrack(tmp_path, report['text'], tmp_path / 'pack',
+                          source_frame=report['source_frame'])
+    assert raw in (tmp_path / 'pack/design_input.txt').read_text()
+    assert status['status'] == 'HANDOFF_EMITTED'
+
+
+def test_d01_oracle_and_truncation_disclosures_survive_frame(tmp_path, monkeypatch):
+    missing = T.input_text_report(tmp_path / 'missing')
+    assert missing['status'] == 'NO_INPUT_TREE'
+    (tmp_path / 'input/oracle').mkdir(parents=True)
+    (tmp_path / 'input/oracle/answer.txt').write_text('ORACLE_SECRET')
+    (tmp_path / 'input/real.json').write_text(json.dumps({'requirement': 'A' * 100}))
+    monkeypatch.setattr(T, '_INPUT_TEXT_CAP', 60)
+    report = T.input_text_report(tmp_path)
+    assert report['truncated'] is True
+    assert 'ORACLE_SECRET' not in report['text']
+    assert any(x['reason'] == 'ORACLE_PATH' for x in report['files_skipped'])
+    h = T.ai_subtrack(tmp_path, report['text'], tmp_path / 'pack',
+                     source_frame=report['source_frame'])['handoff']
+    assert h['source_frame']['truncated'] is True
+    assert not h['source_frame']['members'][0]['complete']
+
+
+def test_d01_native_only_reuse_does_not_requalify_actual_d25(tmp_path):
+    import os
+    import shutil
+    import flow109_metric_acceptance as metrics
+    reference = Path(os.environ['B829_D25_REFERENCE'])
+    project = tmp_path / 'actual-authority'
+    shutil.copytree(reference, project)
+    # Real image/tool/model/LOCAL admission, no native EQY execution.
+    metrics._d25_inputs(project)
+    answer, raw, _before = _new_frame_answer(project)
+    source = project / 'input/flow109/D25_source_authority.json'
+    value = json.loads(source.read_text())
+    value['native_qualification']['native_scope'] += ' changed retained context'
+    source.write_text(json.dumps(value, indent=2) + '\n')
+    assert _framed_read(project)['status'] == 'CONSUMED'
+    assert answer.read_bytes() == raw
+    with pytest.raises(metrics.MetricRefusal, match='METRIC_AUTHORITY_STALE'):
+        metrics._d25_inputs(project)
+
+
+def test_d01_normal_report_reopens_semantics_not_generated_values(tmp_path):
+    p, source, value = _framed_project(tmp_path)
+    value['required_items'][0]['requirement'] = 'Source requirement'
+    source.write_text(json.dumps(value))
+    # Author a fresh control answer only after the normal producer's own handoff.
+    assert T.main([str(p)]) == T.AWAITING_EXIT_CODE
+    pack = _pl.report_path(p, 'phase1/expert_parse_track.json').parent / 'expert_parse_track_pack'
+    initial = json.loads((pack / 'ic_expert_agent_handoff.json').read_text())
+    answer = pack / 'l_doc_expectations.json'
+    answer.write_text(json.dumps({'input_frame_sha256': initial['input_frame_sha256'],
+        'expectations': [{'id': 'authored-control', 'layer': 'L2_FRS',
+            'field_path': 'frs_sections', 'requirement': 'Source requirement',
+            'evidence': ['input/mixed.json: required_items requirement'],
+            'expected_tokens': ['Source requirement']}]}))
+    raw = answer.read_bytes()
+    # Exercise the normal producer/report/readonly checker, not just the pack formatter.
+    assert T.main([str(p)]) == 0
+    assert T.check_report(p) == 0
+    layer = p / 'phase1/generated_docs/L2_FRS.json'
+    layer.write_text(json.dumps({'doc_class': 'L2', 'frs_sections': ['Wrong generated content']}))
+    assert T.check_report(p) == 1  # old comparison report must still bind exact outputs
+    assert T.main([str(p)]) == 0
+    assert T.check_report(p) == 0
+    report_path = _pl.report_path(p, 'phase1/expert_parse_track.json')
+    comparison = json.loads(report_path.read_text())
+    assert comparison['ai_subtrack']['status'] == 'CONSUMED'
+    assert comparison['ai_subtrack']['input_frame_sha256'] == initial['input_frame_sha256']
+    assert comparison['findings']  # unchanged authored expectation genuinely finds the wrong output
+    layer.write_text(json.dumps({'doc_class': 'L2', 'frs_sections': ['Source requirement']}))
+    assert T.main([str(p)]) == 0
+    assert T.check_report(p) == 0
+    fixed = json.loads(report_path.read_text())
+    assert fixed['ai_subtrack']['input_frame_sha256'] == initial['input_frame_sha256']
+    assert len(fixed['findings']) < len(comparison['findings'])
+    assert answer.read_bytes() == raw
+    layer.write_text(json.dumps({'doc_class': 'L2', 'frs_sections': ['Source requirement'],
+                                 'new_vocabulary': []}))
+    report = T.input_text_report(p)
+    assert T.ai_subtrack(p, report['text'], pack,
+                        source_frame=report['source_frame'])['status'] == 'ERROR'
+
+
+def test_d01_one_raw_read_and_unreadable_disclosure(tmp_path, monkeypatch):
+    import hashlib
+    (tmp_path / 'input').mkdir()
+    target = tmp_path / 'input/spec.json'
+    target.write_text('{"requirement":"old file bytes"}')
+    captured = b'{"requirement":"actual captured bytes"}\r\n'
+    original = Path.read_bytes
+    reads = []
+    def once(path):
+        if path == target:
+            reads.append(path)
+            assert len(reads) == 1
+            return captured
+        return original(path)
+    monkeypatch.setattr(Path, 'read_bytes', once)
+    report = T.input_text_report(tmp_path)
+    member = report['source_frame']['members'][0]
+    assert member['sha256'] == hashlib.sha256(captured).hexdigest()
+    assert member['bytes'] == len(captured)
+    assert 'actual captured bytes' in report['text']
+    assert member['text'].endswith('\n') and '\r' not in member['text']
+    def unreadable(path):
+        if path == target:
+            raise OSError('read refused')
+        return original(path)
+    monkeypatch.setattr(Path, 'read_bytes', unreadable)
+    report = T.input_text_report(tmp_path)
+    assert report['files_read'] == []
+    assert report['files_skipped'][0]['reason'] == 'UNREADABLE'
