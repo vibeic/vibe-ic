@@ -4052,7 +4052,7 @@ def _record_continuation_evidence(project: Path, entry: str, exit_: Optional[str
         print(f'[continuation] evidence unavailable: {exc}; requested scope unchanged', flush=True)
 
 
-def _resume_dependency_graph() -> Tuple[List[str], Dict[str, set]]:
+def _resume_dependency_graph(flow_plan=None) -> Tuple[List[str], Dict[str, set]]:
     """Return canonical order and the flow's existing direct dependencies.
 
     This deliberately reads the declared flow instead of introducing another
@@ -4060,6 +4060,18 @@ def _resume_dependency_graph() -> Tuple[List[str], Dict[str, set]]:
     dependency; ``blocks_on`` is the verdict dependency already consumed by
     flow compliance.
     """
+    if flow_plan is not None:
+        import flow109
+        rows = flow_plan["rows"]
+        order = [row["id"] for row in rows]
+        selected = set(order)
+        graph = {}
+        for row in rows:
+            deps = {dep["step"] for dep in row["data_deps"]
+                    if (dep["step"] in selected if dep["when"] == "producer_selected"
+                        else flow109.predicate(dep["when"], flow_plan["features"]))}
+            graph[row["id"]] = deps | (set(row["acceptance_deps"]) & selected)
+        return order, graph
     import _flow_yaml
     rows = _flow_yaml.load().get("steps") or []
     order = [str(row["id"]) for row in rows if isinstance(row, dict) and "id" in row]
@@ -4181,7 +4193,8 @@ def _validated_disproven_output(project: Path, item: Mapping[str, Any],
             f"sha256={receipt_sha} rejects {output_rel} sha256={output_sha}"), None
 
 
-def _minimal_resume_plan(project: Path, request: Mapping[str, Any]) -> Dict[str, Any]:
+def _minimal_resume_plan(project: Path, request: Mapping[str, Any],
+                         *, flow_plan=None) -> Dict[str, Any]:
     """Select the next *one* demonstrated recovery action from retained bytes.
 
     Recovery is intentionally iterative.  A changed/missing producer is run,
@@ -4194,7 +4207,8 @@ def _minimal_resume_plan(project: Path, request: Mapping[str, Any]) -> Dict[str,
     if request.get("schema") != "vibeic/minimal-resume-request/1":
         raise ValueError("resume request needs schema vibeic/minimal-resume-request/1")
     consumer = str(request.get("consumer_step") or "").strip()
-    order, graph = _resume_dependency_graph()
+    order, graph = (_resume_dependency_graph(flow_plan) if flow_plan is not None
+                    else _resume_dependency_graph())
     if consumer not in graph:
         raise ValueError(f"unknown consumer_step {consumer!r}")
 
@@ -4207,10 +4221,19 @@ def _minimal_resume_plan(project: Path, request: Mapping[str, Any]) -> Dict[str,
         ancestors.add(sid)
         pending.extend(graph.get(sid, ()))
 
-    evidence = versions.continuation_evidence(project, order)
+    native_ids = {row["id"]: str((row["profile"].get("dispatch") or {}).get(
+        "native_step_id", row["id"])) for row in flow_plan["rows"]} if flow_plan else {}
+    evidence = versions.continuation_evidence(
+        project, [native_ids.get(sid, sid) for sid in order])
     rows = {str(row.get("step_id")): dict(row)
             for row in evidence.get("checkpoints") or []
             if isinstance(row, dict) and row.get("step_id") is not None}
+    if flow_plan is not None:
+        # Existing collector receipts keep their native identity. Only the
+        # recovery decision uses the current selected public row IDs.
+        rows = {sid: {**rows[native_ids[sid]], "step_id": sid,
+                      "native_step_id": native_ids[sid]}
+                for sid in order if native_ids[sid] in rows}
 
     # A path resolver repair can move bytes without changing them.  The
     # request names both paths; the planner independently hashes the new path
@@ -4268,7 +4291,8 @@ def _minimal_resume_plan(project: Path, request: Mapping[str, Any]) -> Dict[str,
             continue
         sid = str(item.get("step_id"))
         proof, refusal = _validated_disproven_output(
-            project, item, consumer, versions)
+            project, {**item, "step_id": native_ids.get(sid, sid)},
+            native_ids.get(consumer, consumer), versions)
         if refusal:
             unresolved.append(refusal)
         elif proof:
@@ -4291,7 +4315,7 @@ def _minimal_resume_plan(project: Path, request: Mapping[str, Any]) -> Dict[str,
                           or ((d.get("kind"), d.get("state")) ==
                               ("output", "changed")
                               and versions.registered_output_mismatch(
-                                  project, sid, d.get("path"),
+                                  project, native_ids.get(sid, sid), d.get("path"),
                                   d.get("retained_sha256"),
                                   d.get("current_sha256"))))]
         ambiguous = [d for d in diffs if d not in actionable]
@@ -4350,7 +4374,7 @@ def _write_minimal_resume_plan(project: Path, plan: Mapping[str, Any]) -> Path:
     return path
 
 
-def _minimal_resume_entry(plan: Mapping[str, Any]) -> Optional[Tuple[str, str]]:
+def _minimal_resume_entry(plan: Mapping[str, Any], *, order=None) -> Optional[Tuple[str, str]]:
     """Translate one action or explicit contiguous window to an existing entry."""
     steps = list(plan.get("execution_steps") or [])
     if plan.get("status") != "READY" or not steps:
@@ -4360,7 +4384,8 @@ def _minimal_resume_entry(plan: Mapping[str, Any]) -> Optional[Tuple[str, str]]:
         return steps[0], steps[0]
     if plan.get("selection") != "explicit_owner_window":
         return None
-    order, _ = _resume_dependency_graph()
+    if order is None:
+        order, _ = _resume_dependency_graph()
     try:
         start = order.index(steps[0])
         end = order.index(steps[-1])
@@ -4540,6 +4565,50 @@ def _main() -> int:
         print(_delivery_route.refusal_message(route_refusal), file=sys.stderr)
         return 2
     import flow109
+    _resume_plan = None
+    if args.resume_request:
+        try:
+            _resume_request = json.loads(args.resume_request.read_text())
+            if not isinstance(_resume_request, dict):
+                raise ValueError("request root is not an object")
+            if not args.flow109_manifest:
+                raise ValueError("FLOW109_MANIFEST_REQUIRED: supply explicit resolved features")
+            _manifest = json.loads(args.flow109_manifest.read_text())
+            if not isinstance(_manifest, dict):
+                raise ValueError("FLOW109_MANIFEST_INVALID: expected object")
+            _flow_plan = flow109.resolve_plan(
+                _manifest.get("features"), _manifest.get("step_profiles"))
+            _resume_plan = _minimal_resume_plan(
+                project, _resume_request, flow_plan=_flow_plan)
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
+            print(f"REFUSED: minimal resume request: {exc}", file=sys.stderr)
+            return 2
+        _selected = list(_resume_plan.get("execution_steps") or [])
+        _resume_entry = _minimal_resume_entry(
+            _resume_plan, order=[row["id"] for row in _flow_plan["rows"]])
+        if _selected and _resume_entry is None:
+            # Never infer a window from an automatic/disjoint set.  Only the
+            # owner's explicit canonical contiguous list reaches the already
+            # supported entry/exit interface.
+            _resume_plan["status"] = "UNRESOLVED"
+            _resume_plan["unknown_impact"] = [
+                "multiple steps are not one explicit canonical contiguous window"]
+            _resume_plan["execution_steps"] = []
+            _selected = []
+        if _resume_entry:
+            args.entry_step, args.exit_step = _resume_entry
+
+    if _resume_plan is not None:
+        resume_lock = _runner_lock.acquire_or_reenter(project, "vibe_ic_one_shot_runner")
+        if resume_lock is None:
+            return 3
+        _resume_path = _write_minimal_resume_plan(project, _resume_plan)
+        print(f"[resume] status={_resume_plan['status']}; "
+              f"execute={','.join(_resume_plan.get('execution_steps') or []) or '-'}; "
+              f"reason={_resume_plan.get('reason')}; plan={_resume_path}", flush=True)
+        resume_lock.release()
+        if _resume_plan["status"] != "READY":
+            return 0 if _resume_plan["status"] == "NO_ACTION" else 2
     try:
         flow_result = flow109.prepare_front_door(args, project)
     except flow109.Flow109Error as exc:
@@ -4595,30 +4664,6 @@ def _main() -> int:
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
 
-    _resume_plan = None
-    if args.resume_request:
-        try:
-            _resume_request = json.loads(args.resume_request.read_text())
-            if not isinstance(_resume_request, dict):
-                raise ValueError("request root is not an object")
-            _resume_plan = _minimal_resume_plan(project, _resume_request)
-        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-            print(f"REFUSED: minimal resume request: {exc}", file=sys.stderr)
-            return 2
-        _selected = list(_resume_plan.get("execution_steps") or [])
-        _resume_entry = _minimal_resume_entry(_resume_plan)
-        if _selected and _resume_entry is None:
-            # Never infer a window from an automatic/disjoint set.  Only the
-            # owner's explicit canonical contiguous list reaches the already
-            # supported entry/exit interface.
-            _resume_plan["status"] = "UNRESOLVED"
-            _resume_plan["unknown_impact"] = [
-                "multiple steps are not one explicit canonical contiguous window"]
-            _resume_plan["execution_steps"] = []
-            _selected = []
-        if _resume_entry:
-            args.entry_step, args.exit_step = _resume_entry
-
     try:
         _pl.select_rtl_input(project, args.rtl_input, args.entry_step, args.exit_step)
         _activate_runtime_program_tree(project)
@@ -4634,14 +4679,6 @@ def _main() -> int:
     lock = _runner_lock.acquire_or_reenter(project, "vibe_ic_one_shot_runner")
     if lock is None:
         return 3
-    if _resume_plan is not None:
-        _resume_path = _write_minimal_resume_plan(project, _resume_plan)
-        print(f"[resume] status={_resume_plan['status']}; "
-              f"execute={','.join(_resume_plan.get('execution_steps') or []) or '-'}; "
-              f"reason={_resume_plan.get('reason')}; plan={_resume_path}", flush=True)
-        if _resume_plan["status"] != "READY":
-            lock.release()
-            return 0 if _resume_plan["status"] == "NO_ACTION" else 2
     # The route is an owner decision. Refuse before image capture, dashboard,
     # Phase 1, or any other producer can create a misleading partial run.
     route_refusal = _delivery_route.admit(project, args.route)
