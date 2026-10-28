@@ -1035,20 +1035,13 @@ def test_default_postcheck8_consumes_saved_prelayout_without_native_replay(
         assert path.read_bytes() == raw, path
 
 
-@pytest.mark.parametrize('case,expected,calls,terminal_expected', [
-    pytest.param('no_scan', 'PASS', 0, 'PASS', id='no_scan-PASS-0-PASS'),
-    pytest.param('scan_pass', 'PASS', 1, 'PASS', id='scan_pass-PASS-2-PASS'),
-    pytest.param('terminal_missing', 'PASS', 1, 'NOT_MEASURED', id='terminal_missing-PASS-2-NOT_MEASURED'),
-    pytest.param('terminal_changed', 'PASS', 1, 'NOT_MEASURED', id='terminal_changed-PASS-2-NOT_MEASURED'),
-    pytest.param('stale_subject', 'NOT_MEASURED', 0, None, id='stale_subject-NOT_MEASURED-0-None'),
-    pytest.param('missing_scan_sdc', 'PASS', 1, 'PASS', id='missing_scan_sdc-NOT_MEASURED-0-None'),
-    pytest.param('scan_violation', 'PASS', 1, 'PASS', id='scan_violation-FAIL-2-FAIL'),
-    pytest.param('terminal_violation_changed', 'PASS', 1, 'NOT_MEASURED', id='terminal_violation_changed-FAIL-2-NOT_MEASURED'),
-    pytest.param('functional_violation', 'FAIL', 1, 'FAIL', id='functional_violation'),
-])
-def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
-        tmp_path, monkeypatch, case, expected, calls, terminal_expected):
-    """D26 times functional mode on D24; scan-mode checks belong to D49/D70."""
+def _d26_prelayout_fixture(tmp_path, monkeypatch, case, *, d01_binding=None):
+    """SOURCE_CONTROL retained/STA doubles, not native qualification.
+
+    Every control uses the real D01 publisher, routed owner report and
+    authority reader. Only retained-state/STA boundaries are doubled.
+    The real D26 producer writes the timing-mode receipt.
+    """
     import hashlib
     import json
     from types import SimpleNamespace
@@ -1080,9 +1073,7 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
                    'create_clock -period 100 [get_ports {tck}]\n'
                    'set_case_analysis 1 [get_ports {shift}]\n'
                    'set_case_analysis 1 [get_ports {test}]\n')
-    d09 = {'path': 'phase1/generated_docs/dft.json', 'sha256': '1' * 64,
-           'sources': {'input/spec.json': 'sha256:' + '2' * 64},
-           'intent': {'requires_scan': case != 'no_scan', 'reason': 'no scan in this test',
+    intent = {'requires_scan': case != 'no_scan', 'reason': 'no scan in this test',
                       'test_port_def': {
                           'scan_enable': {'native': 'shift', 'public': 'scan_enable'},
                           'scan_in': {'native': 'sin', 'public': 'scan_in'},
@@ -1095,9 +1086,16 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
                           'clock_select': {'native': 'test', 'functional_value': 0,
                                            'scan_value': 1},
                           'reset': {'style': 'synchronous', 'signal': 'rst_n',
-                                    'active_level': 0, 'shift_value': 1}}}}
-    put(project / d09['path'], {'dft': d09['intent']})
-    put(project / 'input/spec.json', {})
+                                    'active_level': 0, 'shift_value': 1}}}
+    if d01_binding is None:
+        from test_flow109_selection import _publish_dft_intent
+        _publish_dft_intent(project, intent, route='ip')
+        d09, problems = scan.load_d09_dft_contract(project)
+        assert not problems and d09 is not None
+    else:
+        d09 = d01_binding
+        current_binding, problems = scan.load_d09_dft_contract(project)
+        assert not problems and current_binding == d09
     constraint = {'kind': 'scan_shift_clock',
                   'path': str(scan_sdc.relative_to(project)),
                   'sha256': contract.digest(scan_sdc),
@@ -1134,9 +1132,10 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
            'result': {'canonical_consumer': {'status': 'PASS'}}}
     monkeypatch.setattr(versions, 'latest_pass', lambda _p, sid:
                         d24 if str(sid) == '12' else None)
+    mode = d09['intent']['test_mode']
     monkeypatch.setattr(design, 'derive_dft_clock_reset', lambda *_:
-                        ('clk', 'rst_n', True))
-    monkeypatch.setattr(scan, 'load_d09_dft_contract', lambda *_a, **_k: (d09, []))
+                        (mode['clock'], mode['reset']['signal'],
+                         mode['reset']['active_level'] == 0))
     monkeypatch.setattr(scan, 'l20_binding_is_current', lambda *_: (True, 'current'))
     monkeypatch.setattr(signoff, 'evaluate_scan_shift_timing', lambda *_: {
         'status': 'PASS', 'required': True, 'constraint': constraint, 'reasons': []})
@@ -1182,6 +1181,31 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
         (project / 'reports/phase2/dft/scan_chain.json').unlink()
 
     result = front._complete_step10_prelayout(project, 'top', 'neutral', '')
+    return project, adopted, launched, result, d09
+
+
+@pytest.mark.parametrize('case,expected,calls,terminal_expected', [
+    pytest.param('no_scan', 'PASS', 0, 'PASS', id='no_scan-PASS-0-PASS'),
+    pytest.param('scan_pass', 'PASS', 1, 'PASS', id='scan_pass-PASS-2-PASS'),
+    pytest.param('terminal_missing', 'PASS', 1, 'NOT_MEASURED', id='terminal_missing-PASS-2-NOT_MEASURED'),
+    pytest.param('terminal_changed', 'PASS', 1, 'NOT_MEASURED', id='terminal_changed-PASS-2-NOT_MEASURED'),
+    pytest.param('stale_subject', 'NOT_MEASURED', 0, None, id='stale_subject-NOT_MEASURED-0-None'),
+    pytest.param('missing_scan_sdc', 'PASS', 1, 'PASS', id='missing_scan_sdc-NOT_MEASURED-0-None'),
+    pytest.param('scan_violation', 'PASS', 1, 'PASS', id='scan_violation-FAIL-2-FAIL'),
+    pytest.param('terminal_violation_changed', 'PASS', 1, 'NOT_MEASURED', id='terminal_violation_changed-FAIL-2-NOT_MEASURED'),
+    pytest.param('functional_violation', 'FAIL', 1, 'FAIL', id='functional_violation'),
+])
+def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
+        tmp_path, monkeypatch, case, expected, calls, terminal_expected):
+    """D26 times functional mode on D24; scan-mode checks belong to D49/D70."""
+    import hashlib
+    import json
+    import librelane_contract as contract
+    import vibe_ic_one_shot_runner as front
+    from test_default_frontend_r2 import put
+
+    project, adopted, launched, result, d09 = _d26_prelayout_fixture(
+        tmp_path, monkeypatch, case)
     assert result['verdict'] == expected, result
     assert set(result) == {'verdict', 'detail', 'folder', 'timing_modes_receipt'}
     receipt_path = project / result['timing_modes_receipt']['path']

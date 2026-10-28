@@ -1942,6 +1942,12 @@ def test_public_d26_owner_finalizes_selected_attempt(
     assert _delivery_route.admit(tmp_path, "ip") is None
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"features": features}))
+    binding = _write_dft_intent(tmp_path, monkeypatch, scan=features["requires_scan"], route='ip')
+    timing = {}
+    if case == "pass":
+        from test_default_backend_entry import _d26_prelayout_fixture
+        _project, _adopted, _launched, timing, _binding = _d26_prelayout_fixture(
+            tmp_path, monkeypatch, "scan_pass", d01_binding=binding)
     monkeypatch.setattr(runner, "_activate_runtime_program_tree", lambda _p: None)
     monkeypatch.setattr(runner, "_capture_container_image", lambda *_a, **_k: {
         "verdict": "PASS"})
@@ -1949,7 +1955,7 @@ def test_public_d26_owner_finalizes_selected_attempt(
     producer = "FAIL" if case == "producer_fail" else "PASS"
     monkeypatch.setattr(runner, "_complete_step10_prelayout",
                         lambda *_a, **_k: calls.append("producer") or {
-                            "verdict": producer, "detail": case})
+                            **timing, "verdict": producer, "detail": case})
     monkeypatch.setattr(runner, "_complete_step8_postcheck",
                         lambda *_a, **_k: calls.append("postcheck") or {
                             "verdict": ("NOT_MEASURED"
@@ -1974,6 +1980,41 @@ def test_public_d26_owner_finalizes_selected_attempt(
                      else ["producer", "postcheck"])
 
 
+def test_public_d26_missing_d01_authority_stops_before_prelayout(
+        tmp_path, monkeypatch, capsys):
+    """The fixture repair must not bypass the real D01 authority reader."""
+    import _delivery_route
+    import vibe_ic_one_shot_runner as runner
+
+    features = profile("Mapped soft-IP with prestitched scan")
+    assert _delivery_route.admit(tmp_path, "ip") is None
+    manifest = tmp_path / "manifest.json"
+    manifest.write_text(json.dumps({"features": features}))
+    monkeypatch.setattr(runner, "_activate_runtime_program_tree", lambda _p: None)
+    monkeypatch.setattr(runner, "_capture_container_image", lambda *_a, **_k: {
+        "verdict": "PASS"})
+    monkeypatch.setattr(runner, "_complete_step10_prelayout", lambda *_a, **_k:
+                        pytest.fail("missing D01 authority reached the producer"))
+    monkeypatch.setattr(sys, "argv", [str(Path(runner.__file__)), str(tmp_path),
+                        "--flow", "109", "--flow109-manifest", str(manifest),
+                        "--entry-step", "D26", "--exit-step", "D26",
+                        "--route", "ip", "--no-dashboard"])
+
+    assert runner._main() == 2
+    assert "FLOW109_DFT_INTENT_MISSING" in capsys.readouterr().err
+    assert not list((tmp_path / "reports/flow109/attempts").glob("window-*"))
+
+
+def test_d26_fixture_without_d01_owner_report_is_refused(tmp_path, monkeypatch):
+    """A produced declaration cannot replace the routed D01 owner report."""
+    features = profile("Mapped soft-IP with prestitched scan")
+    _write_dft_intent(tmp_path, monkeypatch, scan=features["requires_scan"], route='ip')
+    layout.report_path(tmp_path, 'phase1_one_shot.json').unlink()
+
+    with pytest.raises(flow109.Flow109Error, match="D01 output absent"):
+        flow109.dft_source_intent(tmp_path, {'features': features})
+
+
 def test_public_d26_preexisting_attempt_result_is_not_overwritten(
         tmp_path, monkeypatch):
     import _delivery_route
@@ -1984,6 +2025,7 @@ def test_public_d26_preexisting_attempt_result_is_not_overwritten(
     assert _delivery_route.admit(tmp_path, "ip") is None
     manifest = tmp_path / "manifest.json"
     manifest.write_text(json.dumps({"features": features}))
+    _write_dft_intent(tmp_path, monkeypatch, scan=features["requires_scan"], route='ip')
     monkeypatch.setattr(runner, "_activate_runtime_program_tree", lambda _p: None)
     monkeypatch.setattr(runner, "_capture_container_image", lambda *_a, **_k: {
         "verdict": "PASS"})
