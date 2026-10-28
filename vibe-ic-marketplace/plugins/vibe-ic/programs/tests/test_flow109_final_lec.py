@@ -156,6 +156,42 @@ def test_actual_general_entry_proves_final_mapped_netlist_and_publishes_common_s
     assert legacy.read_bytes() == old
 
 
+def test_native_producer_binds_actual_preprocessing_model_read_set(tmp_path):
+    context = _case(tmp_path)
+    record = lec.execute(tmp_path, context)
+    models = record['preprocessing_models']
+    assert models
+    observed = {name: record['inputs'].get(name) for name in models}
+    assert observed == models
+    assert all(lec._sha(name) == digest for name, digest in models.items())
+
+
+@pytest.mark.parametrize('case', ['new', 'same', 'alias_conflict', 'missing', 'tampered'])
+def test_native_model_read_set_preserves_currentness_and_prior_authority(tmp_path, case):
+    model = _put(tmp_path, 'inputs/cells.v',
+                 'module neutral_cell(input a, output y); assign y=a; endmodule\n')
+    name = str((tmp_path / model['path']).resolve())
+    models = {name: model['sha256']}
+    inputs = {} if case != 'same' else {name: model['sha256']}
+    if case == 'alias_conflict':
+        inputs[model['path']] = 'f' * 64
+    elif case == 'missing':
+        Path(name).unlink()
+    elif case == 'tampered':
+        Path(name).write_text('module changed; endmodule\n')
+    original = dict(inputs)
+    prepared = {'inputs': inputs}
+    if case in ('new', 'same'):
+        lec._bind_native_model_inputs(tmp_path, prepared, models)
+        assert prepared['inputs'] == models
+    else:
+        with pytest.raises(admission.AdmissionRefusal) as refused:
+            lec._bind_native_model_inputs(tmp_path, prepared, models)
+        expected = 'D44_MODEL_INPUT_CONFLICT' if case == 'alias_conflict' else 'D44_MODEL_INPUT_CHANGED'
+        assert refused.value.code == expected
+        assert inputs == original
+
+
 @pytest.mark.parametrize('damage, expected', [('logic', 'FAIL'), ('blackbox', 'NOT_MEASURED')])
 def test_native_logic_change_or_functionless_cell_never_passes(tmp_path, damage, expected):
     _case(tmp_path, bad_logic=damage == 'logic', blackbox=damage == 'blackbox')
@@ -733,7 +769,8 @@ def test_outer_reader_reopens_common_baseline_across_only_its_source_change(
 @pytest.mark.parametrize('damage', ['netlist', 'missing_proof', 'tampered_proof',
                                     'proof_mismatch', 'missing_partition',
                                     'partition_mismatch', 'config', 'incomplete',
-                                    'blackbox', 'producer_source'])
+                                    'blackbox', 'producer_source', 'missing_model_readset',
+                                    'missing_model', 'tampered_model'])
 def test_source_owned_D44_fresh_identity_refuses_stale_incomplete_or_functionless_evidence(
         tmp_path, monkeypatch, damage):
     context, component, obligation, records = _fresh_source_owned_identity_case(
@@ -767,6 +804,13 @@ def test_source_owned_D44_fresh_identity_refuses_stale_incomplete_or_functionles
         component['proof_receipt'] = lec._record(tmp_path, proof_path)
     elif damage == 'blackbox':
         component['model_census']['gate']['modules'] = []
+    elif damage == 'missing_model_readset':
+        component['inputs'].pop(records['model']['path'])
+    elif damage == 'missing_model':
+        (tmp_path / records['model']['path']).unlink()
+    elif damage == 'tampered_model':
+        path = tmp_path / records['model']['path']
+        path.write_text(path.read_text() + '// changed\n')
     else:
         component['source_sha256']['programs/librelane_eqy.py'] = 'f' * 64
     with pytest.raises(metrics.MetricRefusal):
@@ -841,3 +885,37 @@ def test_retained_native_proof_refuses_missing_or_stale_evidence(tmp_path, monke
             'native/librelane/steps/yosys.py': 'c'})
     with pytest.raises(admission.AdmissionRefusal, match=reason):
         lec._consume_retained_native(tmp_path, prepared)
+
+
+@pytest.mark.parametrize('word', ['PASS', 'FAIL', 'UNKNOWN'])
+def test_cached_native_status_keeps_raw_evidence_and_existing_semantics(tmp_path, word):
+    folder = tmp_path / 'native'
+    _put(folder, 'scratch/partition.list', '0 neutral.y\n')
+    raw = word + ' (cached)'
+    _put(folder, 'scratch/strategies/neutral.y/sat/status', raw + '\n')
+    proof = lec.consume_eqy(folder, tmp_path / 'proof.json')
+    assert proof['partitions'] == {'neutral.y': {'sat': raw}}
+    measured = lec._proof_binding(proof)
+    assert (measured['status'] == 'PASS') is (word == 'PASS')
+
+
+def test_current_metric_consumer_accepts_raw_cached_native_proof(tmp_path, monkeypatch):
+    context, component, obligation, records = _fresh_empty_transform_identity_case(tmp_path, monkeypatch)
+    status = tmp_path / records['pdr']['path']
+    status.write_text('PASS (cached)\n')
+    native = status.parents[4]
+    proof_path = tmp_path / records['proof']['path']
+    component['proof'] = lec.consume_eqy(native, proof_path)
+    component['proof_receipt'] = lec._record(tmp_path, proof_path)
+    identity = metrics._d44_identity(tmp_path, component, context, obligation)
+    assert identity['tool_execution']['source_owned']['mode'] == 'fresh_native_executed'
+
+
+def test_current_metric_consumer_refuses_contradictory_native_proof(tmp_path, monkeypatch):
+    context, component, obligation, records = _fresh_empty_transform_identity_case(tmp_path, monkeypatch)
+    component['proof']['partitions']['chip_top.p']['pdr'] = 'FAIL'
+    proof_path = tmp_path / records['proof']['path']
+    proof_path.write_text(json.dumps(component['proof']))
+    component['proof_receipt'] = lec._record(tmp_path, proof_path)
+    with pytest.raises(metrics.MetricRefusal, match='partition proof differs from native evidence'):
+        metrics._d44_identity(tmp_path, component, context, obligation)

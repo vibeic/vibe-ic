@@ -201,6 +201,19 @@ def _before(project, context, prepared):
             raise AdmissionRefusal('D44_INPUT_STALE_OR_MISSING', name)
 
 
+def _bind_native_model_inputs(project, prepared, models):
+    """Bind the native reader's model hashes without replacing prior authority."""
+    inputs = prepared['inputs']
+    for name, digest in models.items():
+        path = (project / name).resolve()
+        if any((project / prior).resolve() == path and value != digest
+               for prior, value in inputs.items()):
+            raise AdmissionRefusal('D44_MODEL_INPUT_CONFLICT', name, status='FAIL')
+        if not path.is_file() or _sha(path) != digest:
+            raise AdmissionRefusal('D44_MODEL_INPUT_CHANGED', name, status='FAIL')
+    inputs.update(models)
+
+
 def _yosys_word(path):
     return '"' + str(path).replace('\\', '\\\\').replace('"', '\\"') + '"'
 
@@ -308,7 +321,12 @@ def consume_eqy(folder, output):
     if not names or len(names) != len(set(names)) or set(names) != set(parts):
         return incomplete('D44_PARTITION_COVERAGE_INCOMPLETE', declared_partitions=names)
     evidence = [listing, *sorted((folder / 'scratch/strategies').glob('*/*/status'))]
-    value = {**result, 'declared_partitions': names,
+    # Preserve the exact native strings for the downstream evidence comparison.
+    # EQY may annotate a status, for example PASS (cached).
+    raw_parts = {}
+    for path in evidence[1:]:
+        raw_parts.setdefault(path.parent.parent.name, {})[path.parent.name] = path.read_text().strip()
+    value = {**result, 'partitions': raw_parts, 'declared_partitions': names,
              'evidence_sha256': {str(p.relative_to(folder)): _sha(p) for p in evidence}}
     write_json(output, value)
     return value
@@ -343,7 +361,10 @@ def _proof_binding(proof):
             or len(declared) != len(set(declared)) or not isinstance(parts, dict)
             or set(declared) != set(parts)):
         return {'status': 'NOT_MEASURED', 'reason': 'D44_PARTITION_COVERAGE_INCOMPLETE'}
-    statuses = {name: set(strategies.values()) if isinstance(strategies, dict) else set()
+    # Match librelane_eqy.partition_status's existing leading-word semantics;
+    # keep the complete raw strings in the proof for immutable native binding.
+    statuses = {name: {str(value).split()[0] if str(value).strip() else 'UNREADABLE'
+                       for value in strategies.values()} if isinstance(strategies, dict) else set()
                 for name, strategies in parts.items()}
     native_proven = {name for name, words in statuses.items() if 'PASS' in words}
     failed = {name for name, words in statuses.items() if 'PASS' not in words and 'FAIL' in words}
@@ -682,6 +703,7 @@ def execute(project, context):
         else:
             native_error, models = _native_eqy(project, prepared, attempt, before)
             proof = consume_eqy(attempt / 'native', attempt / 'eqy-result.json')
+        _bind_native_model_inputs(project, prepared, models)
         record.update(native_error=native_error, preprocessing_models=models)
         record['proof'] = proof
         record['proof_receipt'] = _record(project, attempt / 'eqy-result.json')
