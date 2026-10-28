@@ -791,6 +791,150 @@ def d30_consumed_timing(project: Path, admission: Mapping[str, Any]) -> dict:
                 "detail": str(exc)}
 
 
+def _d25_inputs(project: Path) -> dict:
+    """BLOCKING: admit only an independently approved, exact reset-boundary subject."""
+    import _specrtl_common as sources
+    project = Path(project).resolve()
+    consumed = {}
+
+    def bound(record, *, model=False):
+        if (not isinstance(record, Mapping) or not isinstance(record.get('path'), str)
+                or not _HEX.fullmatch(str(record.get('sha256', '')))):
+            raise MetricRefusal('D25_NATIVE_INPUT_UNBOUND', str(record))
+        path = Path(record['path']) if model else _safe_project_file(project, record['path'])
+        if path.is_symlink() or not path.is_file() or _sha(path.read_bytes()) != record['sha256']:
+            raise MetricRefusal('D25_NATIVE_INPUT_STALE', str(path))
+        consumed[str(path.resolve())] = record['sha256']
+        return path.resolve()
+
+    manifest_path = project / 'input/flow109/D25.json'
+    manifest = json.loads(manifest_path.read_text())
+    consumed[str(manifest_path)] = _sha(manifest_path.read_bytes())
+    required, required_doc = _approved_document(project,
+        'requirements/base_16/required_lec_partitions.json', authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+    adopted, adopted_doc = _approved_document(project,
+        'adopted/base_16/mode_assumptions.json', authority='requirements_owner',
+        schema='vibeic.flow109.adopted-reference.v1')
+    if required['source'] != adopted['source']:
+        raise MetricRefusal('D25_AUTHORITY_MISMATCH', 'requirements and adopted mode source differ')
+    source_path = bound(required['source'])
+    source = json.loads(source_path.read_text())
+    for authority in (required, adopted):
+        bound({'path': authority['path'], 'sha256': authority['sha256']})
+    bound(source['source_reference'])
+    items, mode, qualification = (source.get(k) for k in
+                                 ('required_items', 'mode_assumptions', 'native_qualification'))
+    if (required_doc.get('required_items') != items or adopted_doc.get('mode_assumptions') != mode
+            or not isinstance(items, list) or not items or not isinstance(mode, Mapping)
+            or mode.get('purpose') != 'functional_after_observed_reset'
+            or manifest.get('purpose') != mode['purpose']
+            or manifest.get('top') != mode.get('top')
+            or not _SAFE.fullmatch(str(mode.get('top', '')))
+            or mode.get('clock', {}).get('edge') != 'rising'
+            or mode.get('before_reset') != 'NOT_MEASURED'
+            or mode.get('DUT_initial_state') != 'unconstrained'
+            or mode.get('power_up_reset_schedule') != 'not_assumed'
+            or mode.get('physical_clock_frequency') != 'not_assumed'
+            or any(mode.get(k) is not False for k in ('power_pins', 'four_state_qualification',
+                    'timing_notifier_qualification', 'scan_qualification', 'SPM_qualification'))
+            or not isinstance(qualification, Mapping)
+            or qualification.get('native_entry') != 'librelane.steps.yosys.EQY.start'
+            or qualification.get('allow_native_nondefault_preprocessor_for_named_scope') is not True
+            or qualification.get('default_or_global_force_enabled') is not False):
+        raise MetricRefusal('D25_PURPOSE_UNSUPPORTED', 'exact approved conditional purpose required')
+    for role in ('clock', 'reset'):
+        if not _SAFE.fullmatch(str(mode.get(role, {}).get('port', ''))):
+            raise MetricRefusal('D25_MODE_INVALID', role)
+    if mode['reset'].get('active_level') not in (0, 1):
+        raise MetricRefusal('D25_MODE_INVALID', 'reset polarity')
+    gold = [bound(r) for r in manifest['rtl']]
+    declared = set(sources.rtl_source_files(project))
+    declared.update(sources.rtl_source_files(project, exts=('*.vh', '*.svh')))
+    if set(gold) != {p.resolve() for p in declared} or len(gold) != 1:
+        raise MetricRefusal('D25_NATIVE_READSET_INCOMPLETE', 'qualified original RTL population differs')
+    gate = bound(manifest['gate_netlist'])
+    if (manifest['rtl'][0]['sha256'] != qualification.get('original_rtl_sha256')
+            or manifest['gate_netlist']['sha256'] not in qualification.get('allowed_gate_sha256', [])):
+        raise MetricRefusal('D25_SUBJECT_NOT_QUALIFIED', 'foreign actual original subject')
+    if (manifest['liberty'] != {k: qualification['liberty'][k] for k in ('path', 'sha256')}
+            or manifest['models'] != qualification.get('models')):
+        raise MetricRefusal('D25_MODEL_NOT_QUALIFIED', 'actual Liberty/model identity differs')
+    liberty = bound(manifest['liberty'], model=True)
+    models = [bound(r, model=True) for r in manifest['models']]
+    import librelane_contract as contract
+    try:
+        current_launch = contract.local_image_attestation()
+    except contract.Refusal as exc:
+        raise MetricRefusal('D25_NATIVE_LAUNCH_UNBOUND', str(exc)) from exc
+    if (qualification.get('qualified_image_id') != current_launch['image_id']
+            or qualification.get('qualified_image_reference') != current_launch['image']
+            or not isinstance(qualification.get('actual_tool_readset'), Mapping)
+            or not qualification['actual_tool_readset']
+            or qualification.get('passing_gate_sha256') not in qualification['allowed_gate_sha256']
+            or qualification.get('rejection_control_gate_sha256') not in qualification['allowed_gate_sha256']
+            or qualification.get('passing_gate_sha256') == qualification.get('rejection_control_gate_sha256')):
+        raise MetricRefusal('D25_TOOLCHAIN_UNQUALIFIED', 'exact measured native image/tool/control-role authority absent')
+    for name, sha in qualification['actual_tool_readset'].items():
+        bound({'path': name, 'sha256': sha}, model=True)
+
+    return {'manifest': manifest, 'manifest_path': manifest_path, 'mode': dict(mode),
+            'qualification': dict(qualification), 'required_items': items,
+            'required': required, 'adopted': adopted, 'gold': gold, 'gate': gate,
+            'liberty': liberty, 'models': models, 'consumed': consumed, 'bound': bound}
+
+
+def _d25_accept_eqy(project: Path, context: Mapping, result: dict, specs: Mapping) -> dict:
+    """Reopen a genuine source-owned native execution, then grade all three operators."""
+    import librelane_eqy as native
+    prepared = _d25_inputs(project)
+    execution = native.d25_reopen(project, prepared, context)
+    proof = execution['proof']
+    component = ('PASS' if proof['verdict'] == 'PASS' else 'FAIL'
+                 if proof['verdict'] == 'FAIL' else 'NOT_MEASURED')
+    if (component == 'PASS' and prepared['manifest']['gate_netlist']['sha256']
+            != prepared['qualification']['passing_gate_sha256']):
+        raise MetricRefusal('D25_REJECTION_CONTROL_CANNOT_PASS', 'CEX control is never a PASS subject')
+    identity = {'producer': {'name': 'librelane_eqy.run_eqy', 'sources': execution['sources']},
+                'checker': {'name': 'accept_d25', 'sources': execution['reader_sources']},
+                'tool_execution': {'record': execution['execution_record'], 'launch': execution['launch']},
+                'consumed_inputs': execution['consumed_inputs'],
+                'requirements': {'required': prepared['required']['sha256'], 'adopted': prepared['adopted']['sha256']},
+                'configuration': {'mode': prepared['mode'], 'subject': execution['subject']}}
+    actual = [{'block': prepared['mode']['top'], 'name': name,
+               'mode': prepared['mode']['purpose']} for name in proof['partitions'] or {}]
+    values = {'covers_all': actual, 'eq': len(proof['unproven_points']),
+              'matches_adopted_reference': execution['mode']}
+    obligations = []
+    for obligation in context['resolved_row']['obligations']:
+        oid = obligation['id']
+        spec = specs[oid]
+        operator = spec['operator']
+        authority = ({**prepared['required'], 'required_items': prepared['required_items']}
+            if operator == 'covers_all' else {'status': 'APPROVED', 'value': 0, 'unit': 'count'}
+            if operator == 'eq' else {**prepared['adopted'], 'reference': prepared['mode'],
+                                     'reference_identity': identity})
+        measured = {'status': 'FAIL' if component == 'FAIL' else 'MEASURED'
+                    if component == 'PASS' else 'NOT_MEASURED',
+                    'value': values[operator], 'identity': identity,
+                    'reason': 'D25_NATIVE_CEX' if component == 'FAIL' else proof['explanation']}
+        if operator == 'eq':
+            measured['unit'] = 'count'
+        status, reason = evaluate_operator(operator, measured, authority)
+        obligations.append({'id': oid, 'operator': operator, 'status': status, 'reason': reason,
+                            'observed_value': values[operator]})
+    statuses = [o['status'] for o in obligations]
+    status = ('FAIL' if component == 'FAIL' or 'FAIL' in statuses else 'PASS'
+              if len(statuses) == 3 and all(s == 'PASS' for s in statuses) else 'NOT_MEASURED')
+    result.update(status=status, component_status=component,
+                  qualification='PASS', qualification_scope=prepared['mode']['purpose'],
+                  delivery_blocked=status != 'PASS', obligations=obligations,
+                  native_tool='Yosys.EQY', native_execution=execution,
+                  native_assumptions=prepared['mode'],
+                  reason='D25_NATIVE_CEX' if status == 'FAIL' else
+                  'D25_NAMED_NATIVE_METRICS_PASS' if status == 'PASS' else 'D25_NATIVE_INCOMPLETE')
+    return result
+
+
 def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
     """Consume existing LEC evidence without relabeling equiv_* as EQY.
 
@@ -821,6 +965,10 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
                 or any(any(o['expectation'].get(k) != v for k, v in specs[o['id']].items())
                        for o in obligations)):
             raise MetricRefusal('D25_OBLIGATIONS_UNREGISTERED', 'registered operators differ')
+        if (project / 'input/flow109/D25.json').is_file():
+            if not (project / 'reports/lec_eqy_execution.json').is_file():
+                raise MetricRefusal('D25_NATIVE_EXECUTION_ABSENT', 'current canonical native binding missing')
+            return _d25_accept_eqy(project, current, result, specs)
         consumed = {}
 
         def bound_file(record):

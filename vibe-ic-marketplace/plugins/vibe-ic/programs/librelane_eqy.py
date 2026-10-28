@@ -167,6 +167,8 @@ def run_eqy(project: Path, image: str, pdk: str, top: str, rtl: list[Path],
     A failing EQY job exits nonzero, which the contract reports as a step
     failure; the folder is still judged, because a counterexample IS the answer.
     """
+    if (project / 'input/flow109/D25.json').is_file():
+        return d25_run(project, top, rtl, netlist)
     if not netlist.is_file() or not rtl or any(not p.is_file() for p in rtl):
         raise Refusal("LL_EQY_INPUT_MISSING", f"{netlist} / {rtl}")
     root = project / "phase3/librelane/lec-eqy-config"
@@ -231,6 +233,308 @@ def combine(lec: dict, eqy: dict) -> dict:
         return {"verdict": "PASS", "selected": "eqy", "arms": {"lec_run": a, "eqy": b}}
     return {"verdict": "INCONCLUSIVE", "reason": "NO_CONCLUSIVE_ARM",
             "arms": {"lec_run": a, "eqy": b}}
+
+
+def d25_sources() -> dict:
+    import hashlib
+    import inspect
+    import flow109_metric_acceptance as metrics
+    from librelane.steps.yosys import EQY
+    return {'native/librelane/steps/yosys.py': digest(Path(inspect.getfile(EQY))),
+            'programs/librelane_eqy.py': digest(Path(__file__)),
+            **{name: hashlib.sha256(inspect.getsource(getattr(metrics, name)).encode()).hexdigest()
+               for name in ('_d25_inputs', '_d25_accept_eqy', 'accept_d25')}}
+
+
+def d25_run(project: Path, top: str, rtl: list[Path], netlist: Path) -> Path:
+    """BLOCKING named native purpose; ordinary projects retain their existing path."""
+    import os
+    import re
+    import shutil
+    import subprocess
+    import flow109
+    import flow109_metric_acceptance as metrics
+    from librelane_contract import local_image_attestation
+    from librelane.config import Config
+    from librelane.state import State, DesignFormat
+    from librelane.common import Path as LLPath
+    from librelane.steps.yosys import EQY
+    from librelane.steps import StepError
+
+    project = project.resolve()
+    context = flow109.validate_execution_context(json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+    owner_context = context
+    if context.get('schema') == 'vibeic.flow109.execution-window.v1':
+        context = flow109.component_context(context, requested_step='D25')
+    if context['resolved_row']['id'] != 'D25':
+        raise metrics.MetricRefusal('D25_CONTEXT_INVALID', 'not selected D25')
+    attempt = flow109._bound_attempt(project, owner_context, os.environ.get(flow109.ATTEMPT_ENV))
+    prepared = metrics._d25_inputs(project)
+    manifest, mode = prepared['manifest'], prepared['mode']
+    if (top != mode['top'] or [p.resolve() for p in rtl] != prepared['gold']
+            or netlist.resolve() != prepared['gate']):
+        raise metrics.MetricRefusal('D25_NATIVE_SUBJECT_UNBOUND', 'owner and approved inputs differ')
+    if context.get('runtime_tool_uses') is not None or context.get('qualification_registry') is not None:
+        from flow109_admission import require_admission
+        require_admission(project, context)
+    if (project / 'reports/lec_eqy_execution.json').is_file():
+        retained = d25_reopen(project, prepared, context)
+        return Path(retained['proof']['source'])
+    try:
+        launch = local_image_attestation()
+    except Refusal as exc:
+        raise metrics.MetricRefusal('D25_NATIVE_LAUNCH_UNBOUND', str(exc)) from exc
+    directory = project / 'phase3/librelane/lec_eqy' / attempt.name
+    directory.mkdir(parents=True, exist_ok=False)
+    source_ids = d25_sources()
+    readset = dict(prepared['consumed'])
+    readset.update({str(Path(shutil.which(tool)).resolve()): digest(Path(shutil.which(tool)).resolve())
+                    for tool in ('eqy', 'yosys', 'iverilog')})
+    readset[launch['attestation_path']] = launch['attestation_sha256']
+    readset[str(attempt / 'request.json')] = digest(attempt / 'request.json')
+
+    def guard():
+        if source_ids != d25_sources() or any(digest(Path(p)) != sha for p, sha in readset.items()):
+            raise metrics.MetricRefusal('D25_NATIVE_INPUT_STALE', 'source/input changed during execution')
+
+    def record(path):
+        return {'path': str(path.relative_to(project)), 'sha256': digest(path)}
+
+    cells, outputs, derivation = set(), None, {}
+    for side, files in [('gold', prepared['gold']), ('gate', [prepared['gate']])]:
+        folder = directory / side
+        folder.mkdir()
+        prefix = (f'read_liberty {prepared["liberty"]}\n' if side == 'gate' else '')
+        prefix += 'read_verilog -formal -sv ' + ' '.join(map(str, files)) + '\n'
+        census_script = folder / 'census.ys'
+        census_script.write_text(prefix + f'hierarchy -check -top {top}\nproc\nwrite_json {folder}/census.json\n')
+        guard()
+        cp = subprocess.run(['yosys', '-Q', '-T', '-s', str(census_script)], capture_output=True, text=True)
+        (folder / 'census.log').write_text(cp.stdout + cp.stderr)
+        if cp.returncode:
+            raise metrics.MetricRefusal('D25_MODEL_UNRESOLVED', side)
+        modules = json.loads((folder / 'census.json').read_text())['modules']
+        todo, seen = [top], set()
+        while todo:
+            name = todo.pop()
+            if name in seen or name.startswith('$'):
+                continue
+            seen.add(name)
+            module = modules.get(name)
+            if module is None or any(str(module.get('attributes', {}).get(a, '0')).strip('0')
+                                     for a in ('blackbox', 'whitebox')):
+                raise metrics.MetricRefusal('D25_MODEL_UNRESOLVED', name)
+            todo.extend(c['type'] for c in module.get('cells', {}).values())
+        if side == 'gate':
+            cells = seen - {top}
+            if not cells or not cells <= set(prepared['qualification']['qualified_cell_types']):
+                raise metrics.MetricRefusal('D25_MODEL_NOT_QUALIFIED', 'live library population differs')
+        ports = modules[top]['ports']
+        current_outputs = {name: list(range(len(port['bits']))) for name, port in ports.items()
+                           if port['direction'] == 'output'}
+        if current_outputs != mode['outputs'] or (outputs is not None and current_outputs != outputs):
+            raise metrics.MetricRefusal('D25_PARTITION_CENSUS_UNBOUND', 'all original outputs required')
+        outputs = current_outputs
+        if (mode['clock']['port'] not in ports or mode['reset']['port'] not in ports
+                or any(ports[mode[r]['port']]['direction'] != 'input'
+                       or len(ports[mode[r]['port']]['bits']) != 1 for r in ('clock', 'reset'))):
+            raise metrics.MetricRefusal('D25_MODE_INVALID', 'clock/reset input mapping')
+        reset = mode['reset']
+        if set(reset['next_outputs']) != set(outputs) or any(
+                len(value) != len(outputs[name]) or set(value) - {'0', '1'}
+                for name, value in reset['next_outputs'].items()):
+            raise metrics.MetricRefusal('D25_MODE_INVALID', 'source reset output values')
+        prefix += f'prep -top {top} -flatten\nmemory_map\nopt\n'
+        proofs = ' '.join(f'-prove {name} {len(value)}\'b{value}'
+                          for name, value in reset['next_outputs'].items())
+        sat_script = folder / 'reset.ys'
+        sat_script.write_text(prefix + f'sat -seq 2 -set-at 1 {reset["port"]} {reset["active_level"]} '
+                              + proofs + f' -prove-skip 1 -verify -dump_vcd {folder}/reset-cex.vcd\n')
+        guard()
+        cp = subprocess.run(['yosys', '-Q', '-T', '-s', str(sat_script)], capture_output=True, text=True)
+        (folder / 'reset.log').write_text(cp.stdout + cp.stderr)
+        reset_rc = cp.returncode
+        if reset_rc and not (folder / 'reset-cex.vcd').is_file():
+            raise metrics.MetricRefusal('D25_RESET_MODEL_UNPROVEN', side)
+        replay = folder / 'replay.ys'
+        reset_option = '-reset' if reset['active_level'] else '-resetn'
+        replay.write_text(prefix + f'write_rtlil {folder}/before.il\nsim -clock {mode["clock"]["port"]} '
+                          + f'{reset_option} {reset["port"]} -rstlen 1 -n 1 -w -a -vcd {folder}/reset.vcd\n'
+                          + f'write_rtlil {folder}/after.il\nwrite_json {folder}/after.json\n')
+        guard()
+        cp = subprocess.run(['yosys', '-Q', '-T', '-s', str(replay)], capture_output=True, text=True)
+        (folder / 'replay.log').write_text(cp.stdout + cp.stderr)
+        if cp.returncode:
+            raise metrics.MetricRefusal('D25_RESET_MODEL_UNPROVEN', side)
+        derivation[side] = {'reset_returncode': reset_rc, 'files': [record(p) for p in sorted(folder.iterdir())]}
+    script = directory / 'source-boundary.eqy'
+    script.write_text(f'[gold]\nread_rtlil {directory}/gold/after.il\n[gate]\n'
+        + f'read_rtlil {directory}/gate/after.il\n[script]\nprep -top {top} -flatten\n'
+        + 'memory -nomap\nasync2sync\nsplitnets\n[collect *]\ngroup *\n'
+        + '[partition *]\namend *\n[strategy sat]\nuse sat\ndepth 5\n'
+        + '[strategy pdr]\nuse sby\nengine abc pdr -rfi\n')
+    cfg, _ = Config.load({'DESIGN_NAME': top, 'PDK': manifest['pdk']['name'],
+        'STD_CELL_LIBRARY': manifest['pdk']['library'], 'VERILOG_FILES': list(map(str, prepared['gold'])),
+        'CELL_VERILOG_MODELS': list(map(str, prepared['models'])), 'EQY_SCRIPT': str(script),
+        'EQY_FORCE_ACCEPT_PDK': True}, EQY.get_all_config_variables(), design_dir=str(project),
+        pdk_root=manifest['pdk']['root'])
+    import fnmatch
+    libraries = cfg.get('CELL_LIBS') or cfg.get('LIB') or {}
+    corner = cfg.get('DEFAULT_CORNER') or ''
+    chosen = [str(lib) for pattern, values in libraries.items() if fnmatch.fnmatch(corner, pattern)
+              for lib in (values if isinstance(values, list) else [values])]
+    if chosen != [str(prepared['liberty'])]:
+        raise metrics.MetricRefusal('D25_MODEL_NOT_QUALIFIED', 'native resolved Liberty differs')
+    write_json(directory / 'resolved-config.json', json.loads(cfg.dumps()))
+    guard()
+    error = None
+    try:
+        EQY(config=cfg, state_in=State({DesignFormat.NETLIST: LLPath(str(prepared['gate']))})).start(
+            step_dir=str(directory / 'native'))
+    except StepError as exc:
+        error = str(exc)
+    guard()
+    native = directory / 'native'
+    files = [p for p in directory.rglob('*') if p.is_file()]
+    execution = {'program': 'librelane_eqy', 'producer': 'run_eqy.D25', 'purpose': mode['purpose'],
+        'context_sha256': owner_context['context_sha256'], 'attempt': str(attempt.relative_to(project)),
+        'attempt_request': record(attempt / 'request.json'),
+        'row_contract': {k: context['resolved_row'][k] for k in ('id', 'obligations')},
+        'sources': source_ids, 'inputs': readset, 'mode': mode,
+        'subject': {'rtl': manifest['rtl'], 'gate_netlist': manifest['gate_netlist'],
+                    'liberty': manifest['liberty'], 'models': manifest['models']},
+        'live_cells': sorted(cells), 'outputs': outputs, 'derivation': derivation,
+        'native_directory': str(native.relative_to(project)), 'native_error': error,
+        'launch': launch, 'files': [record(p) for p in sorted(files)]}
+    write_json(project / 'reports/lec_eqy_execution.json', execution)
+    return native
+
+
+def d25_reopen(project: Path, prepared: dict, context: dict) -> dict:
+    """Read only: bind current original/derived views, native artifacts and original host launch."""
+    import hashlib
+    import tempfile
+    import librelane_contract as contract
+    import flow109_metric_acceptance as metrics
+    project = project.resolve()
+    reader_sources = d25_sources()
+    path = project / 'reports/lec_eqy_execution.json'
+    raw = path.read_bytes()
+    doc = json.loads(raw)
+    bound = prepared['bound']
+    proof_inputs = dict(prepared['consumed'])
+    authority, adopted = metrics._approved_document(project,
+        'adopted/base_16/native_execution.json', authority='requirements_owner',
+        schema='vibeic.flow109.adopted-reference.v1')
+    source = json.loads(bound(authority['source']).read_text())
+    bound({'path': authority['path'], 'sha256': authority['sha256']})
+    if (source.get('authority_source') != prepared['required']['source']
+            or source.get('purpose') != prepared['mode']['purpose']
+            or any(adopted.get(key) != source.get(key) for key in
+                   ('purpose', 'authority_source', 'native_executions'))):
+        raise metrics.MetricRefusal('D25_NATIVE_AUTHORITY_UNBOUND', 'execution adoption differs from its source')
+    executions = source.get('native_executions')
+    reference = (executions.get(prepared['manifest']['gate_netlist']['sha256'])
+                 if isinstance(executions, dict) else None)
+    if (not isinstance(reference, dict) or set(reference) != {'path', 'sha256'}
+            or reference['path'] != str(path.relative_to(project))
+            or reference['sha256'] != hashlib.sha256(raw).hexdigest()):
+        raise metrics.MetricRefusal('D25_NATIVE_EXECUTION_UNQUALIFIED',
+                                   'original producer receipt lacks an independent current adoption')
+    # The independently adopted complete receipt pins its original producer
+    # sources and every derived/native input. A newer reader can reuse those
+    # unchanged bytes; caller-resealed file hashes cannot qualify new bytes.
+    if (doc.get('producer') != 'run_eqy.D25' or doc.get('program') != 'librelane_eqy'
+            or doc.get('purpose') != prepared['mode']['purpose']
+            or doc.get('mode') != prepared['mode']
+            or doc.get('subject') != {key: prepared['manifest'][key]
+                                     for key in ('rtl', 'gate_netlist', 'liberty', 'models')}):
+        raise metrics.MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', 'producer/purpose/source/subject')
+    if doc.get('row_contract') != {k: context['resolved_row'][k] for k in ('id', 'obligations')}:
+        raise metrics.MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', 'D25 contract changed')
+    request_path = bound(doc['attempt_request'])
+    request = json.loads(request_path.read_text())
+    if (request_path != project / doc['attempt'] / 'request.json'
+            or request.get('project_root_sha256') != hashlib.sha256(str(project).encode()).hexdigest()
+            or request.get('context_sha256') != doc['context_sha256']
+            or 'D25' not in request.get('component_ids', [])
+            or request.get('dispatch_kind') != 'canonical_owner_window'):
+        raise metrics.MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', 'original canonical attempt differs')
+    expected = proof_inputs
+    expected[str(request_path)] = doc['attempt_request']['sha256']
+    import shutil
+    expected.update({str(Path(shutil.which(tool)).resolve()): digest(Path(shutil.which(tool)).resolve())
+                     for tool in ('eqy', 'yosys', 'iverilog')})
+    expected[doc['launch']['attestation_path']] = doc['launch']['attestation_sha256']
+    if doc['inputs'] != expected:
+        raise metrics.MetricRefusal('D25_NATIVE_READSET_INCOMPLETE', 'actual input/tool/launch readset differs')
+    native_path = project / doc['native_directory']
+    actual_files = {str(p.relative_to(project)) for p in native_path.parent.rglob('*') if p.is_file()}
+    if actual_files != {r['path'] for r in doc['files']}:
+        raise metrics.MetricRefusal('D25_NATIVE_READSET_INCOMPLETE', 'native/derived artifact population differs')
+    for record in doc['files']:
+        bound(record)
+    for name, sha in doc['inputs'].items():
+        if digest(Path(name)) != sha:
+            raise metrics.MetricRefusal('D25_NATIVE_INPUT_STALE', name)
+    native = project / doc['native_directory']
+    if not native.resolve().is_relative_to(project) or native.is_symlink():
+        raise metrics.MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', 'foreign native folder')
+    cfg = json.loads((native / 'config.json').read_text())
+    state = json.loads((native / 'state_in.json').read_text())
+    if (cfg.get('meta', {}).get('step') != 'Yosys.EQY'
+            or cfg.get('VERILOG_FILES') != list(map(str, prepared['gold']))
+            or state.get('nl') != str(prepared['gate'])
+            or cfg.get('CELL_VERILOG_MODELS') != list(map(str, prepared['models']))
+            or Path(cfg.get('EQY_SCRIPT', '')).resolve() != native.parent / 'source-boundary.eqy'
+            or (native / (prepared['mode']['top'] + '.eqy')).read_bytes()
+               != (native.parent / 'source-boundary.eqy').read_bytes()
+            or not (native / 'formal_pdk.v').is_file()):
+        raise metrics.MetricRefusal('D25_NATIVE_CONFIGURATION_UNBOUND', 'actual state/script/models differ')
+    launch = doc['launch']
+    host_raw = Path(launch['attestation_path']).read_bytes()
+    host = json.loads(host_raw)
+    try:
+        current = contract.local_image_attestation()
+    except contract.Refusal as exc:
+        raise metrics.MetricRefusal('D25_NATIVE_LAUNCH_UNBOUND', str(exc)) from exc
+    inspected = host['container_inspect']
+    if (hashlib.sha256(host_raw).hexdigest() != launch['attestation_sha256']
+            or host['cid'] != launch['cid'] or inspected['Id'] != launch['cid']
+            or inspected['Image'] != launch['image_id'] or current['image_id'] != launch['image_id']
+            or host['image'] != launch['image'] or inspected['Config']['Image'] != launch['image']
+            or not inspected['Config']['Hostname'].startswith(launch['cid'][:12])
+            or inspected['State']['Running'] is not True):
+        raise metrics.MetricRefusal('D25_NATIVE_LAUNCH_UNBOUND', 'actual original CID/image/host receipt')
+    with tempfile.TemporaryDirectory(prefix='d25-reader-') as tmp:
+        proof = judge_eqy(native, Path(tmp) / 'proof.json')
+    parts = proof['partitions'] or {}
+    output_bits = {}
+    for name in parts:
+        partition = json.loads((native / 'scratch/partitions' / (name + '.json')).read_text())['partition']
+        for port, bits in partition['outbits'].items():
+            output_bits.setdefault(port, []).extend(bits)
+    if ({name: sorted(bits) for name, bits in output_bits.items()} != prepared['mode']['outputs']
+            or set(doc['live_cells']) - set(prepared['qualification']['qualified_cell_types'])
+            or not doc['live_cells'] or doc['outputs'] != prepared['mode']['outputs']):
+        raise metrics.MetricRefusal('D25_PARTITION_CENSUS_UNBOUND', 'output/cell population differs')
+    if proof['verdict'] == 'PASS' and (doc.get('native_error') is not None
+            or not (native / 'state_out.json').is_file()
+            or json.loads((native / 'state_out.json').read_text()).get('nl') != str(prepared['gate'])):
+        raise metrics.MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', 'native completion absent')
+    if proof['verdict'] == 'FAIL' and not list((native / 'scratch/strategies').rglob('*.vcd')):
+        raise metrics.MetricRefusal('D25_NATIVE_CEX_UNBOUND', 'actual counterexample absent')
+    if proof['verdict'] == 'PASS' and any(d['reset_returncode'] != 0 for d in doc['derivation'].values()):
+        raise metrics.MetricRefusal('D25_RESET_MODEL_UNPROVEN', 'reset relation is not proven')
+    if (path.read_bytes() != raw or reader_sources != d25_sources()
+            or any(digest(Path(p)) != sha for p, sha in prepared['consumed'].items())):
+        raise metrics.MetricRefusal('D25_NATIVE_INPUT_STALE', 'changed during consumer read')
+    return {'proof': proof, 'mode': doc['mode'], 'subject': doc['subject'], 'sources': doc['sources'],
+            'reader_sources': reader_sources,
+            'launch': launch, 'execution_record': {'path': str(path.relative_to(project)),
+                                                 'sha256': hashlib.sha256(raw).hexdigest()},
+            'execution_authority': authority,
+            'consumed_inputs': prepared['consumed']}
 
 
 def main(argv: Optional[list[str]] = None) -> int:
