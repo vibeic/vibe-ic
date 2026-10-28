@@ -6391,6 +6391,22 @@ function _containerImageIdentity(inspect = _spawnSync) {
   }
   const running = `${CONTAINER} runs ${imageRef || "?"} (${_SHORT(imageId)})`;
 
+  // A selected release is compared by bytes, not image creation time. Nix
+  // deliberately uses an epoch timestamp, which cannot rank release freshness.
+  const selected = (process.env.VIBEIC_EDA_IMAGE || process.env.IIC_EDA_IMAGE || "").trim();
+  if (selected) {
+    const resolved = inspect("docker",
+      ["image", "inspect", selected, "--format", "{{.Id}}"],
+      { encoding: "utf-8", timeout: 5000 });
+    const selectedId = String(resolved?.stdout || "").trim();
+    if (!resolved || resolved.status !== 0 || !/^sha256:[0-9a-f]{64}$/.test(selectedId)) {
+      return { ok: false, detail: `${running}; explicit image selection could not be resolved` };
+    }
+    return { ok: selectedId === imageId, detail: selectedId === imageId
+      ? `${running}; explicit image selection matches (${_SHORT(selectedId)})`
+      : `${running}; explicit image selection differs (${_SHORT(selectedId)})` };
+  }
+
   const meta = inspect("docker",
     ["image", "inspect", imageId, "--format",
      '{{.Created}}\t{{index .Config.Labels "org.opencontainers.image.version"}}'],

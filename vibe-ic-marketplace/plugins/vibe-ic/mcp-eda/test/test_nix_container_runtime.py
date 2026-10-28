@@ -74,3 +74,35 @@ try {
     )
     assert result.returncode == 0
     assert "refusing to replace an unmanaged container" in result.stdout
+
+
+def test_existing_nonroot_runtime_initializes_paths_without_recreation():
+    script = r'''
+const { ensureContainerRuntime } = await import(process.argv[1]);
+const digest = 'sha256:' + '8'.repeat(64), calls = [];
+function run(_cmd, args) {
+  calls.push(args);
+  const ok = stdout => ({status: 0, stdout: stdout || ''});
+  if (args[0] === 'pull') return ok();
+  if (args[0] === 'image') return ok(JSON.stringify([{
+    Id: digest, RepoDigests: ['neutral.invalid/eda@' + digest]
+  }]));
+  if (args[0] === 'inspect') return ok(JSON.stringify([{
+    Image: digest, Config: {User: '1000', Labels: {}}, State: {Running: true}
+  }]));
+  if (args[0] === 'exec') {
+    if (args.slice(1, 3).join(' ') === '--user 0') return ok();
+    return {status: 1, stderr: 'mkdir: cannot create directory /foss/tools: Permission denied'};
+  }
+  throw Error('unexpected container mutation ' + JSON.stringify(args));
+}
+const env = {VIBEIC_EDA_AUTO_BOOTSTRAP: '1', VIBEIC_EDA_IMAGE: 'neutral.invalid/eda:latest'};
+ensureContainerRuntime({env, run});
+console.log(JSON.stringify(calls));
+'''
+    result = subprocess.run(
+        ['node', '--input-type=module', '-e', script, MODULE.as_uri()],
+        text=True, capture_output=True, check=True,
+    )
+    calls = json.loads(result.stdout)
+    assert [call[0] for call in calls] == ['pull', 'image', 'inspect', 'exec']

@@ -98,6 +98,8 @@ if "--format" in argv:
 if verb == "image" and argv[1:2] == ["inspect"]:
     if "{{.Id}}" in fmt:
         out(os.environ.get("MOCK_TARGET_ID", ""))
+    elif '{{json (index .Config "Entrypoint")}}' in fmt:
+        out(os.environ.get('MOCK_TARGET_ENTRYPOINT', '["/dockerstartup/scripts/ui_startup.sh"]'))
     sys.exit(0)
 
 if verb == "container" and argv[1:2] == ["inspect"]:
@@ -198,6 +200,18 @@ def _state(binds=None, mounts=None, exists=True):
                    "WorkingDir": "/foss/designs",
                    "Cmd": ["--skip", "sleep", "infinity"]},
     }
+
+
+@pytest.mark.parametrize('exists', [True, False], ids=['upgrade', 'fresh'])
+def test_native_image_runs_command_without_legacy_skip(tmp_path, exists):
+    designs = tmp_path / 'designs'
+    designs.mkdir()
+    h = Harness(tmp_path, _state(exists=exists))
+    result = h.run(MOCK_TARGET_ENTRYPOINT='null', DESIGNS_DIR=designs)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    args = h.run_argv()
+    assert args[args.index(IMAGE)+1:] == ['sleep', 'infinity']
+    assert '-u' in args and '--memory-swap' in args
 
 
 # --- the defect itself ------------------------------------------------------

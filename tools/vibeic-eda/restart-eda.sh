@@ -313,6 +313,14 @@ else
   CMD=( --skip sleep infinity )
 fi
 
+# `--skip` belongs to the legacy ui_startup.sh entrypoint, not the tool
+# command. Native Nix images have no entrypoint and execute CMD directly.
+TARGET_ENTRYPOINT="$(docker image inspect "$IMAGE" --format '{{json (index .Config "Entrypoint")}}')" || die \
+  "could not inspect target entrypoint — nothing was stopped or removed"
+if [[ "$TARGET_ENTRYPOINT" == "null" || "$TARGET_ENTRYPOINT" == "[]" ]]; then
+  if [[ "${CMD[0]:-}" == "--skip" ]]; then CMD=( "${CMD[@]:1}" ); fi
+fi
+
 echo "   binds        : ${BINDS[*]:-<none>}"
 echo "   mounts       : ${#MOUNT_DST[@]} declared"
 for ((_i = 0; _i < ${#MOUNT_DST[@]}; _i++)); do

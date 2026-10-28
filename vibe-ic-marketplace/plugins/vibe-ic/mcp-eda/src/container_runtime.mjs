@@ -85,7 +85,9 @@ export function ensureContainerRuntime({ env = process.env, run = spawnSync } = 
     runDocker(["start", container], run);
   }
 
-  runDocker(["exec", container, "bash", "-lc", COMPAT_SCRIPT], run);
+  // Existing runtimes may run as an unprivileged user. Only filesystem
+  // initialization needs root; ordinary MCP tool exec keeps the configured user.
+  runDocker(["exec", "--user", "0", container, "bash", "-lc", COMPAT_SCRIPT], run);
   env.EDA_CONTAINER = container;
   env.VIBEIC_EDA_CONTAINER = container;
   env.VIBEIC_EDA_IMAGE = immutable;

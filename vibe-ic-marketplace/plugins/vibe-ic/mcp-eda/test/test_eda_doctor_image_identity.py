@@ -62,7 +62,7 @@ def _helper_source() -> str:
     return body
 
 
-def _run(responses: dict) -> dict:
+def _run(responses: dict, image_override="") -> dict:
     """`responses` maps a marker present in the argv to {status, stdout}.
 
     Dispatching on argv rather than call order is deliberate: an order-indexed
@@ -74,6 +74,8 @@ def _run(responses: dict) -> dict:
         pytest.skip("node not available; the helper under test is JavaScript")
     script = textwrap.dedent(f"""
         const CONTAINER = "vibeic-eda";
+        process.env.VIBEIC_EDA_IMAGE = {json.dumps(image_override)};
+        delete process.env.IIC_EDA_IMAGE;
         const RESPONSES = {json.dumps(responses)};
         const _spawnSync = (cmd, args) => {{
           const key = Object.keys(RESPONSES).find(k => args.join(" ").includes(k));
@@ -184,6 +186,23 @@ def test_an_unlistable_image_set_says_so_rather_than_claiming_current():
     r = _responses(running_created="2026-08-29T11:42:34.0Z", newest_created=None)
     r["image ls"] = {"status": 1, "stdout": ""}
     assert "could not list" in _run(r)["detail"]
+
+
+@pytest.mark.parametrize('selected_id,expected_ok', [(RUNNING_ID, True),
+                          ('sha256:' + 'b' * 64, False), ('', False)])
+def test_explicit_image_identity_overrides_creation_date_only_when_verified(
+        selected_id, expected_ok):
+    r = _responses(running_created='1970-01-01T00:00:01Z',
+                   newest_created='2026-10-25 12:00:00 +0800 CST', label='')
+    # Specific argv must precede the general image-inspect fixture.
+    r = {'image inspect neutral.invalid/eda@': {
+        'status': 0 if selected_id else 1, 'stdout': selected_id}, **r}
+    out = _run(r, image_override='neutral.invalid/eda@' + RUNNING_ID)
+    assert out['ok'] is expected_ok, out
+    if expected_ok:
+        assert 'explicit image selection matches' in out['detail']
+    else:
+        assert 'newest local image' not in out['detail']
 
 
 # ── registration shape ─────────────────────────────────────────────────────
