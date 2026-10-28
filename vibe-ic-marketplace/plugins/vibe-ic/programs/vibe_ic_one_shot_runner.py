@@ -1967,6 +1967,112 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
     project = Path(project).resolve()
     status = acceptance.get('verdict')
     timing_ref = acceptance.get('timing_modes_receipt')
+    semantic_ref = None
+
+    def current_semantic_failure(timing_doc: dict) -> dict:
+        """Bind a late failure to its registered immutable Step8 invocation."""
+        import datetime
+        import design_one_shot_runner as design
+        import step_output_collector as versions
+
+        def local_file(value) -> Path:
+            raw = Path(value)
+            path = raw if raw.is_absolute() else project / raw
+            relative = path.relative_to(project)
+            cursor = project
+            for part in relative.parts:
+                cursor /= part
+                if part == '..' or cursor.is_symlink():
+                    raise ValueError('semantic evidence path escapes or is linked')
+            if not path.is_file() or not path.resolve().is_relative_to(project):
+                raise ValueError('semantic evidence is missing or foreign')
+            return path
+
+        selected = {str(row['id']): row for row in versions._read_index(project)['steps']}
+        root = versions._versions_root(project)
+        folder = selected['8']['folder']
+        metadata = local_file(root / folder / 'outputs.json')
+        record = json.loads(metadata.read_text())
+        journal = json.loads(local_file(metadata.with_name('attempt.json')).read_text())
+        result = record.get('result') or {}
+        baseline = versions.latest_pass(project, '10') or {}
+        if (record.get('id') != '8' or record.get('folder') != folder
+                or record.get('phase') != 'phase2' or record.get('stage') != 'stage2'
+                or record.get('status') != 'FAIL' or selected['8'].get('status') != 'FAIL'
+                or record.get('capture_errors') != []
+                or any(record.get(key) != journal.get(key) for key in
+                       ('id', 'folder', 'storage_root', 'started_at', 'inputs'))
+                or not versions._inputs_current(project, record.get('inputs'))
+                or result.get('runner') != 'design_one_shot_runner'
+                or result.get('site') != 'step_sdc_validation_post_prelayout'
+                or result.get('attribution') != 'EXISTING_PRODUCER_RESULT'
+                or baseline.get('folder') != timing_doc['functional_baseline'].get('folder')
+                or selected['10'].get('folder') != baseline.get('folder')
+                or baseline.get('status') != 'PASS' or not baseline.get('canonical_pass')
+                or not baseline.get('current_inputs')
+                or ((baseline.get('result') or {}).get('canonical_consumer') or {}).get('status') != 'PASS'
+                or datetime.datetime.fromisoformat(record['started_at']) <
+                   datetime.datetime.fromisoformat(baseline['finished_at'])):
+            raise ValueError('current canonical semantic/timing invocation differs')
+        for item in baseline['outputs']:
+            if contract.digest(local_file(item['rel'])) != item['sha256']:
+                raise ValueError('current timing consumer output changed')
+
+        def retained_file(value, expected=None) -> Path:
+            path = local_file(value)
+            rel = str(path.relative_to(project))
+            saved = next(item for item in record['written_files'] if item['rel'] == rel)
+            snapshot = local_file(metadata.parent / saved['snapshot'])
+            if (not snapshot.is_relative_to(metadata.parent)
+                    or contract.digest(path) != saved['sha256']
+                    or contract.digest(snapshot) != saved['sha256']
+                    or (expected is not None and saved['sha256'] != expected)):
+                raise ValueError('semantic receipt/output differs from its retained bytes')
+            return path
+
+        rows = result.get('rows') or []
+        if len(rows) != 1 or rows[0].get('name') != 'sdc_validation':
+            raise ValueError('complete semantic producer row is absent')
+        receipt = retained_file(rows[0]['outputs'][0])
+        doc = json.loads(receipt.read_text())
+        binding = doc.get('binding') or {}
+        sources, inputs = binding.get('sources'), binding.get('inputs')
+        required_sources = {'design_one_shot_runner.py', 'phase3_one_shot_runner.py',
+                            'sdc_syntax_check.py', 'sdc_validator_check.py',
+                            'sdc_exception_correlation_check.py', 'librelane_prelayout.py'}
+        if (doc.get('schema') != design._SDC_POSTCHECK_SCHEMA
+                or doc.get('invocation_id') != receipt.parent.name
+                or doc.get('status') != rows[0].get('status')
+                or binding.get('project') != str(project)
+                or not isinstance(sources, dict) or set(sources) != required_sources
+                or any(contract.digest(PROGRAMS_DIR / name) != digest
+                       for name, digest in sources.items())
+                or not isinstance(inputs, dict)
+                or not {'opensta_gate', 'mapped_netlist', 'l8', 'pvt_matrix', 'state_out'} <= inputs.keys()
+                or not ({'canonical_sdc', 'pnr_sdc'} & inputs.keys())
+                or any(contract.digest(local_file(item['path'])) != item['sha256']
+                       for item in inputs.values())
+                or ('cdc_crossings' in inputs) !=
+                   ((project / 'reports/phase2/cdc/crossing.json').exists()
+                    or (project / 'reports/phase2/cdc/crossing.json').is_symlink())):
+            raise ValueError('semantic source/input binding is missing or changed')
+        records = doc.get('records') or []
+        if (len(records) != 2 or {item.get('program') for item in records} !=
+                {'sdc_syntax_check', 'sdc_validator_check'}):
+            raise ValueError('full semantic consumer records are absent')
+        for item in records:
+            retained_file(item['output'], item['output_sha256'])
+        correlation = json.loads(retained_file(receipt.with_name('exceptions.json')).read_text())
+        if correlation != doc.get('exception_correlation'):
+            raise ValueError('semantic exception result differs from retained output')
+        producer_failed = (doc.get('status') == 'FAIL' and
+                           (any(item.get('rc') == 1 for item in records)
+                            or correlation.get('verdict') in ('FAIL', 'REVIEW')))
+        if not producer_failed:
+            raise ValueError('registered full semantic consumer did not fail')
+        return {'folder': folder, 'record_sha256': contract.digest(metadata),
+                'path': str(receipt.relative_to(project)),
+                'sha256': contract.digest(receipt), 'status': 'FAIL'}
 
     def current_timing_modes() -> tuple[dict | None, str | None]:
         try:
@@ -1982,17 +2088,20 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                 raise ValueError('timing_modes_receipt bytes are missing, foreign, or changed')
             doc = json.loads(path.read_text(encoding='utf-8'))
             baseline = doc.get('functional_baseline') or {}
+            timing_status = doc.get('aggregate_status')
             if (doc.get('schema') != 'vibeic.flow109.d26-timing-modes.v1'
                     or doc.get('step_id') != 'D26' or doc.get('position') != 38
                     or status not in ('PASS', 'FAIL', 'NOT_MEASURED')
-                    or doc.get('aggregate_status') != status
+                    or timing_status not in ('PASS', 'FAIL', 'NOT_MEASURED')
+                    or (timing_status != status and not
+                        (timing_status == 'PASS' and status == 'FAIL'))
                     or baseline.get('status') not in
                     ('PASS', 'FAIL', 'NOT_MEASURED')
                     or (baseline.get('status') == 'PASS'
                         and (baseline.get('canonical_pass') is not True
                              or baseline.get('current_inputs') is not True
                              or baseline.get('canonical_consumer_status') != 'PASS'))
-                    or (status == 'PASS' and baseline.get('status') != 'PASS')
+                    or (timing_status == 'PASS' and baseline.get('status') != 'PASS')
                     or not isinstance(doc.get('top'), str) or not doc['top']):
                 raise ValueError('timing_modes_receipt schema or terminal state is invalid')
 
@@ -2000,7 +2109,7 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
             planned, problems = scan.load_d09_dft_contract(project)
             recorded_d09 = doc.get('scan', {}).get('d09_binding')
             if recorded_d09 is None:
-                if (status == 'NOT_MEASURED' and not doc.get('post_scan_arms')
+                if (timing_status == 'NOT_MEASURED' and not doc.get('post_scan_arms')
                         and planned is None):
                     return doc, None
                 raise ValueError('timing_modes_receipt omits current D09 binding')
@@ -2066,7 +2175,7 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                 raise ValueError('complete timing arms omit D24 adopted subject')
 
             if not arms:
-                if (status in ('FAIL', 'NOT_MEASURED')
+                if (timing_status in ('FAIL', 'NOT_MEASURED')
                         and scan_doc.get('status') == 'NOT_MEASURED'):
                     return doc, None
                 raise ValueError('timing mode population is absent')
@@ -2145,15 +2254,23 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                 if arm.get('status') != arm_status:
                     raise ValueError(f'{name} timing arm verdict differs')
             aggregate = arms['functional']['status']
-            if aggregate != status:
+            if aggregate != timing_status:
                 raise ValueError('timing arm aggregate differs from terminal status')
             return doc, None
-        except (contract.Refusal, OSError, ValueError, KeyError, TypeError,
+        except (contract.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError,
                 json.JSONDecodeError) as exc:
             return None, str(exc)
 
     if timing_ref is not None or status == 'PASS':
         timing_doc, refusal = current_timing_modes()
+        if timing_doc is not None and timing_doc.get('aggregate_status') == 'PASS' and status == 'FAIL':
+            try:
+                semantic_ref = current_semantic_failure(timing_doc)
+            except (OSError, ValueError, KeyError, TypeError, AttributeError,
+                    IndexError, RuntimeError, StopIteration) as exc:
+                timing_doc, refusal = None, 'current semantic receipt refused: ' + str(exc)
+            else:
+                acceptance = {**acceptance, 'sdc_semantic_receipt': semantic_ref}
         if timing_doc is None:
             status = 'NOT_MEASURED'
             acceptance = {**acceptance, 'verdict': status,
@@ -2165,6 +2282,8 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                   'completed': status == 'PASS'}
         if timing_ref is not None:
             extras['timing_modes_receipt'] = dict(timing_ref)
+        if semantic_ref is not None:
+            extras['sdc_semantic_receipt'] = dict(semantic_ref)
         finished = flow109.finish_native_window(project, {'steps': [{
             'status': status, 'extras': extras,
         }]})
@@ -2196,6 +2315,7 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
                  and ((timing_ref is None
                        and 'timing_modes_receipt' not in component)
                       or component.get('timing_modes_receipt') == timing_ref)
+                 and (semantic_ref is None or component.get('sdc_semantic_receipt') == semantic_ref)
                  else None)
     if finalized is None:
         return {**acceptance, 'verdict': 'NOT_MEASURED', 'detail': detail}
