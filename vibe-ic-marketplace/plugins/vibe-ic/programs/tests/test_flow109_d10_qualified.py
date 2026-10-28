@@ -217,16 +217,18 @@ def bound_row(tmp_path_factory):
             'source': source, 'reference': reference, 'layout': layout}
 
 
-def test_d10_canonical_selected_preflight_publishes_complete_row(bound_row, monkeypatch):
+def test_d10_canonical_selected_owner_publishes_complete_row(bound_row, monkeypatch):
     c = bound_row
     project = c['project']
-    monkeypatch.setattr(sys, 'argv', [str(Path(runner.__file__)), str(project), '--flow', '109',
-        '--flow109-manifest', str(c['manifest']), '--entry-step', 'D10', '--exit-step', 'D10',
-        '--route', 'ic', '--skip-phase1', '--skip-phase3', '--skip-analog', '--no-dashboard'])
-    def no_generator(*args, **kwargs):
-        raise AssertionError('D10 must not invoke the Phase2 RTL generator or snapshot owner')
-    monkeypatch.setattr(runner, '_run_phase', no_generator)
-    assert runner._main() == 0
+    # Select the actual canonical owner context and immutable attempt. No D01
+    # qualification is manufactured to make a whole front-door fixture pass.
+    path = project / 'context.json'
+    put(path, c['context'])
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(path))
+    attempt = flow109._new_attempt(project, c['context'])
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
+    result = runner._finish_d10_unimplemented_owner(project, run_p0=True)
+    assert result['verdict'] == 'PASS', result
     row = json.loads((project / 'reports/flow109/default_rows/D10.json').read_text())
     assert row['default_row_status'] == 'PASS' and row['completed'] is True
     acceptance = row['metric_acceptance']
@@ -237,7 +239,25 @@ def test_d10_canonical_selected_preflight_publishes_complete_row(bound_row, monk
     assert p0['status'] == 'PASS'
     assert acceptance['obligations'][2]['observed_value'] == c['reference']
     c['p0'] = p0
-    c['context'] = json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text())
+
+
+def test_d10_public_dispatch_calls_only_selected_owner(bound_row, monkeypatch):
+    """Routing-only control: no native/admission/row qualification is claimed."""
+    c = bound_row
+    monkeypatch.setattr(sys, 'argv', [str(Path(runner.__file__)), str(c['project']), '--flow', '109',
+        '--flow109-manifest', str(c['manifest']), '--entry-step', 'D10', '--exit-step', 'D10',
+        '--route', 'ic', '--skip-phase1', '--skip-phase3', '--skip-analog', '--no-dashboard'])
+    # Upstream D01 provenance is a separate software precondition for this
+    # branch-only test. Never present its terminal NOT_MEASURED as native PASS.
+    monkeypatch.setattr(runner, '_standalone_rtl_provenance', lambda *_: {'ran': True})
+    seen = []
+    monkeypatch.setattr(runner, '_finish_d10_unimplemented_owner',
+        lambda *_a, **kw: seen.append(kw) or {'verdict': 'NOT_MEASURED'})
+    def no_generator(*args, **kwargs):
+        raise AssertionError('D10 must not invoke the Phase2 RTL generator or snapshot owner')
+    monkeypatch.setattr(runner, '_run_phase', no_generator)
+    assert runner._main() == 2
+    assert seen == [{'run_p0': True, 'input_refusal': None}]
 
 
 @pytest.mark.parametrize('damage', ['absent', 'forged_payload', 'stale_source', 'wrong_owner',
