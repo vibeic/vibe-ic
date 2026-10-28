@@ -388,6 +388,44 @@ def project(tmp_path):
     return gate, deck, nl
 
 
+def test_postcheck_rejects_advisory_unjustified_exception(tmp_path):
+    """Actual consumers over calibration-backed source fixtures, not native STA."""
+    project(tmp_path)
+    deck = tmp_path / 'phase2/stage2/constraints/top.asic.sdc'
+    deck.write_text(deck.read_text() +
+                    'set_false_path -from [get_clocks clk] -to [get_clocks clk]\n')
+    import sdc_exception_correlation_check as exceptions
+    finding = exceptions.audit(tmp_path)
+    assert finding['verdict'] == 'REVIEW'
+    assert any(f['category'] == 'SDC_EXCEPTION_UNJUSTIFIED' for f in finding['findings'])
+    row = D.step_sdc_validation_post_prelayout(tmp_path, 'top')
+    assert row.status == 'FAIL', row
+    receipt = json.loads(Path(row.output_files[0]).read_text())
+    assert [r['rc'] for r in receipt['records']] == [0, 0]
+    assert receipt['exception_correlation']['verdict'] == 'REVIEW'
+
+
+@pytest.mark.parametrize('initially_present', [False, True])
+def test_postcheck_rejects_cdc_evidence_change_during_exception_audit(
+        tmp_path, monkeypatch, initially_present):
+    project(tmp_path)
+    cdc = tmp_path / 'reports/phase2/cdc/crossing.json'
+    if initially_present:
+        put(cdc, {'crossings': []})
+    import sdc_exception_correlation_check as exceptions
+    original = exceptions.audit
+
+    def changed_evidence(current):
+        result = original(current)
+        put(cdc, {'crossings': [], 'changed_during_consumer': True})
+        return result
+
+    monkeypatch.setattr(exceptions, 'audit', changed_evidence)
+    row = D.step_sdc_validation_post_prelayout(tmp_path, 'top')
+    assert row.status == 'NOT_MEASURED', row
+    assert 'SDC_POSTCHECK_INPUT_CHANGED' in row.detail
+
+
 def test_postcheck_pass_preserves_deferred_history_and_binds_current_inputs(tmp_path, monkeypatch):
     gate, deck, nl = project(tmp_path)
     early = D.step_sdc_validation(tmp_path)

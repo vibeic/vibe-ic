@@ -20374,6 +20374,7 @@ def step_sdc_validation_post_prelayout(project: Path, top: str,
     before and after, including Step 7's PVT matrix.
     """
     import librelane_contract as ll
+    import sdc_exception_correlation_check as exceptions
     import shutil
     import uuid
     project = Path(project).resolve()
@@ -20387,6 +20388,7 @@ def step_sdc_validation_post_prelayout(project: Path, top: str,
     l8 = project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json'
     started = time.time_ns()
     records, binding = [], {}
+    exception_correlation = None
     status, reason, detail = 'NOT_MEASURED', _V.ReasonClass.INPUT_ABSENT, ''
 
     def rooted_path(value: object, label: str) -> Path:
@@ -20484,6 +20486,9 @@ def step_sdc_validation_post_prelayout(project: Path, top: str,
                  'pvt_matrix': project / 'phase2/stage2/constraints/pvt_matrix.json'}
         if deck_key == 'canonical_sdc':
             paths['step7_sdc_record'] = producer_record
+        cdc = project / 'reports/phase2/cdc/crossing.json'
+        if cdc.exists() or cdc.is_symlink():
+            paths['cdc_crossings'] = rooted_file(cdc, 'CDC exception evidence')
         paths.update({str(p.relative_to(project)): p for p in
                       (project / 'phase2/stage2/constraints').glob('*.sdc')})
         paths = {name: rooted_file(path, name) for name, path in paths.items()}
@@ -20514,7 +20519,7 @@ def step_sdc_validation_post_prelayout(project: Path, top: str,
                 'sources': {name: ll.digest(PROGRAMS_DIR / name) for name in
                             ('design_one_shot_runner.py', 'phase3_one_shot_runner.py',
                              'sdc_syntax_check.py', 'sdc_validator_check.py',
-                             'librelane_prelayout.py')}}
+                             'sdc_exception_correlation_check.py', 'librelane_prelayout.py')}}
 
     try:
         binding = current_inputs()
@@ -20544,9 +20549,17 @@ def step_sdc_validation_post_prelayout(project: Path, top: str,
                 raise ValueError(f'SDC_POSTCHECK_OUTPUT_ABSENT: {name}')
         syntax = json.loads((folder / 'syntax.json').read_text())
         validator = json.loads((folder / 'validator.json').read_text())
+        # The existing correlation checker is advisory at its CLI boundary.
+        # Its zero exit code cannot qualify an unjustified mapped exception.
+        exception_correlation = exceptions.audit(project)
+        _aa.write_json(folder / 'exceptions.json', exception_correlation)
+        if current_inputs() != binding:
+            raise ValueError('SDC_POSTCHECK_INPUT_CHANGED')
         passed = (all(r['rc'] == 0 for r in records) and syntax.get('passed') is True
-                  and validator.get('verdict') == 'PASS' and validator.get('exit_code') == 0)
+                  and validator.get('verdict') == 'PASS' and validator.get('exit_code') == 0
+                  and exception_correlation.get('verdict') == 'PASS')
         status = 'PASS' if passed else ('FAIL' if any(r['rc'] == 1 for r in records)
+                                        or exception_correlation.get('verdict') in ('FAIL', 'REVIEW')
                                         else 'NOT_MEASURED')
         reason = '' if status != 'NOT_MEASURED' else _V.ReasonClass.INCONCLUSIVE
         detail = f'SDC_POSTCHECK_{status}: current prelayout consumers; invocation {invocation}'
@@ -20560,6 +20573,7 @@ def step_sdc_validation_post_prelayout(project: Path, top: str,
         status, reason, detail = 'NOT_MEASURED', _V.ReasonClass.INCONCLUSIVE, str(exc)
     _aa.write_json(receipt, {'schema': _SDC_POSTCHECK_SCHEMA, 'invocation_id': invocation,
                             'binding': binding, 'records': records, 'status': status,
+                            'exception_correlation': exception_correlation,
                             'detail': detail, 'started_ns': started, 'ended_ns': time.time_ns()})
     result = StepResult('sdc_validation', status, (time.time_ns() - started) / 1e9,
                         detail, [str(receipt)],
