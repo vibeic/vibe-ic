@@ -159,6 +159,43 @@ def test_regex_findings_do_not_authorize_native_population(tmp_path):
     assert report.summary['reg_crossing_population']['status'] == 'NOT_MEASURED'
 
 
+@pytest.mark.parametrize('ambiguous', [True, False], ids=['multiple-drivers', 'unique-driver'])
+def test_native_driver_ambiguity_only_unqualifies_population(tmp_path, ambiguous):
+    from collections import Counter
+    fixture = PROG / 'tests/fixtures/cdc_netlist/cdc_population_drivers.v'
+    rtl = tmp_path / 'phase2/stage1/rtl/cdc_population_drivers.v'
+    rtl.parent.mkdir(parents=True)
+    shutil.copyfile(fixture, rtl)
+    top = 'cdc_population_ambiguous' if ambiguous else 'cdc_population_unambiguous'
+    path = cdc.build(tmp_path, [rtl], top)
+    model = cdc.load(path)
+    cdc.require_binding(tmp_path, path, model)
+    # Inspect the actual native output independently: the producer accepted
+    # and bound this fixture, including its multiple native output drivers.
+    cells = json.loads(path.read_text())['modules'][top]['cells']
+    counts = Counter(bit for cell in cells.values()
+                     for pin, bits in cell['connections'].items()
+                     if cell['port_directions'][pin] == 'output'
+                     for bit in bits if isinstance(bit, int))
+    multiple = sorted(bit for bit, count in counts.items() if count > 1)
+    assert bool(multiple) is ambiguous, {'native_driver_counts': counts}
+    rc, report = ordinary(tmp_path)
+    assert rc == 1 and report['findings'] == cdc.judge(model, 'reg_crossing'), report
+    population = report['summary']['reg_crossing_population']
+    actual = (population['status'], population['traversal_complete'])
+    expected = ('NOT_MEASURED', False) if ambiguous else ('MEASURED', True)
+    assert actual == expected, {'actual': actual, 'expected': expected, 'native_multiple_bits': multiple}
+    if ambiguous:
+        assert population['reason'] == 'CDC_POPULATION_AMBIGUOUS_DRIVERS'
+        assert population['ambiguous_driver_bits'] == multiple
+        assert 'crossings' not in population
+    else:
+        assert len(population['crossings']) == 1
+    print(json.dumps({'ambiguous': ambiguous, 'native_multiple_bits': multiple,
+                      'population_status': population['status'], 'rc': rc,
+                      'findings': report['findings']}, sort_keys=True))
+
+
 @pytest.mark.parametrize("safe", [True, False])
 @pytest.mark.parametrize("controlled", [False, True])
 def test_native_semantics_without_rebuilding_port_maps_per_pair(tmp_path, safe, controlled):

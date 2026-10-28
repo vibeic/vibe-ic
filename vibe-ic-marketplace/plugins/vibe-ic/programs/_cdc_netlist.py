@@ -409,6 +409,7 @@ class Netlist:
     drivers: Dict[object, Tuple[str, str]] = field(default_factory=dict)
     flops: List[Flop] = field(default_factory=list)
     memories: int = 0
+    ambiguous_drivers: Set[int] = field(default_factory=set)
 
     @property
     def port_bits(self) -> Dict[object, str]:
@@ -638,6 +639,7 @@ def load(path: Path, top: Optional[str] = None) -> Netlist:
                         nl.drivers[b] = (cname, pin)
         if cell["type"] in _MEMORY:
             nl.memories += 1
+    nl.ambiguous_drivers = ambiguous_drivers
     for cname, cell in nl.cells.items():
         if not _is_flop_type(cell["type"]):
             continue
@@ -1050,7 +1052,9 @@ def reg_crossing_findings(nl: Netlist,
                 **ev))
     if metadata is not None:
         metadata.update({"scope": "decoded_register_Q_to_D_cones",
-                         "traversal_complete": True, "clock_domains": domains,
+                         "traversal_complete": not nl.ambiguous_drivers,
+                         "ambiguous_driver_bits": sorted(nl.ambiguous_drivers),
+                         "clock_domains": domains,
                          "decoded_flops": len(nl.flops),
                          "source_q_bits_examined": source_bits_examined,
                          "destination_d_bits": sum(len(f.d) for f in nl.flops),
@@ -1358,6 +1362,10 @@ def apply_front_end(project: Path, mode: str, netlist_arg: Optional[str],
         # Bind the observed population to the same native producer and current
         # readset. A changed/absent graph cannot become a measured empty set.
         population = {"status": "NOT_MEASURED", "reason": "CDC_POPULATION_SOURCE_UNPROVEN"}
+        if nl.ambiguous_drivers:
+            population.update(reason="CDC_POPULATION_AMBIGUOUS_DRIVERS",
+                              traversal_complete=False,
+                              ambiguous_driver_bits=sorted(nl.ambiguous_drivers))
         try:
             if (hashlib.sha256(path.read_bytes()).hexdigest() == graph_sha256
                     and require_binding(project, path, nl) == binding and nl.flops
