@@ -194,6 +194,13 @@ def bound_row(tmp_path_factory):
             'sha256': hashlib.sha256(rtl.read_bytes()).hexdigest()}]}})
     subject = metrics.d10_adopted_rtl(project)
     subject['rtl_inputs'] = native.source_binding(project, 'leaf_top')['files']
+    reference_identity = {
+        'producer': {'authority': 'requirements_owner'},
+        'checker': {'authority': 'independent_source_reviewer'},
+        'tool_execution': {'kind': 'SOURCE_REVIEW_ONLY', 'native_execution': False},
+        'consumed_inputs': subject,
+        'requirements': {'basis': 'neutral source fixture, not product authority'},
+        'configuration': {'purpose': 'D10.default.structural_inventory'}}
     reference = {'top': 'leaf_top', 'modules': {'leaf_top': {
         'ports': {n: {'direction': direction, 'width': 2, 'signed': 0}
                   for n, direction in [('a', 'input'), ('y', 'output')]},
@@ -201,13 +208,13 @@ def bound_row(tmp_path_factory):
         'instances': {}, 'blackbox_instances': []}
     source = project / 'input/flow109/D10_source_authority.json'
     source_ref = put(source, {'fixture_scope': 'SOFTWARE_OWNER_PRECONDITION_NOT_PRODUCT_ADOPTION',
-                             'feature_inventory': {'reference': reference, 'reference_identity': subject}})
+                             'feature_inventory': {'reference': reference, 'reference_identity': reference_identity}})
     source_ref['path'] = str(source.relative_to(project))
     adopted = project / 'adopted/base_04/feature_inventory.json'
     put(adopted, {'schema': 'vibeic.flow109.adopted-reference.v1',
         'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
                      'source_reference': source_ref},
-        'reference': reference, 'reference_identity': subject})
+        'reference': reference, 'reference_identity': reference_identity})
     registry_path = os.environ['FLOW109_D10_APPROVED_REGISTRY']
     registry = json.loads(Path(registry_path).read_text())
     c = context(registry, registry_path)
@@ -228,6 +235,7 @@ def test_d10_canonical_selected_owner_publishes_complete_row(bound_row, monkeypa
     attempt = flow109._new_attempt(project, c['context'])
     monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
     result = runner._finish_d10_unimplemented_owner(project, run_p0=True)
+    c['p0'] = result['evidence']['p0_native']
     assert result['verdict'] == 'PASS', result
     row = json.loads((project / 'reports/flow109/default_rows/D10.json').read_text())
     assert row['default_row_status'] == 'PASS' and row['completed'] is True
@@ -322,3 +330,56 @@ def test_d10_qualified_defect_stays_fail_without_adopted_inventory(cases):
     assert result['native_metric_observation']['qualification'] == 'PASS'
     assert result['obligations'][0]['status'] == result['status'] == 'FAIL'
     assert result['obligations'][-1]['status'] == 'NOT_MEASURED'
+
+
+def test_d10_native_unexpected_blackbox_fails_independent_empty_set(cases, bound_row):
+    import _cdc_netlist as native
+    import _specrtl_common as sources
+    from programs.tests.test_flow109_selection import _publish_dft_intent
+    c = cases('known_blackbox')
+    project = c['project']
+    _publish_dft_intent(project, {'requires_scan': False,
+                               'reason': 'neutral blackbox comparison control'})
+    put(project / 'reports/flow109/default_rows/D09.json', {
+        'step_id': 'D09', 'completed': True, 'component_status': 'PASS',
+        'default_row_status': 'PASS', 'fixture_scope': 'SOFTWARE_UPSTREAM_PRECONDITION_ONLY',
+        'evidence': {'rtl_inventory': [
+            {'path': str(p.relative_to(project / 'phase2/stage1/rtl')),
+             'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+            for p in sources.rtl_source_files(project)]}})
+    # Independently authored from the reviewed tiny RTL fixture, not its graph.
+    ports = {n: {'direction': d, 'width': 1, 'signed': 0}
+             for n, d in [('a', 'input'), ('y', 'output')]}
+    reference = {'top': 'reference_top', 'modules': {
+        n: {'ports': ports, 'parameter_defaults': {}}
+        for n in ('reference_top', 'reference_opaque')},
+        'instances': {'u_opaque': {'module': 'reference_opaque', 'parameters': {}}},
+        'blackbox_instances': []}
+    subject = metrics.d10_adopted_rtl(project)
+    subject['rtl_inputs'] = native.source_binding(project, 'reference_top')['files']
+    identity = copy.deepcopy(json.loads(bound_row['source'].read_text())['feature_inventory']['reference_identity'])
+    identity['consumed_inputs'] = subject
+    src = project / 'input/flow109/D10_source_authority.json'
+    record = put(src, {'fixture_scope': 'SOFTWARE_OWNER_PRECONDITION_NOT_PRODUCT_ADOPTION',
+                      'feature_inventory': {'reference': reference, 'reference_identity': identity}})
+    record['path'] = str(src.relative_to(project))
+    put(project / 'adopted/base_04/feature_inventory.json', {
+        'schema': 'vibeic.flow109.adopted-reference.v1',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': record},
+        'reference': reference, 'reference_identity': identity})
+    result = metrics.accept_d10(project, c['context'], c['p0'])
+    assert result['native_metric_observation']['qualification'] == 'PASS', result
+    assert result['status'] == result['obligations'][1]['status'] == 'FAIL', result
+    assert result['obligations'][1]['observed_value'] == 1
+    assert result['obligations'][1]['unexpected_instances'] == ['u_opaque']
+
+
+def test_d10_required_test_ports_remain_blocking(bound_row):
+    from programs.tests.test_flow109_selection import _publish_dft_intent
+    from programs.tests.test_issue3444_l20_scan_reconciliation import _intent
+    c = bound_row
+    _publish_dft_intent(c['project'], _intent())
+    result = metrics.accept_d10(c['project'], c['context'], c['p0'])
+    assert result['status'] == 'FAIL', result
+    assert result['dft_port_consistency']['reason'] == 'DFT_PORT_MISMATCH'
+    assert len(result['dft_port_consistency']['mismatches']) == 5

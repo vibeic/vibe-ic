@@ -1766,7 +1766,10 @@ def _d10_inventory_authority(project: Path, subject: Mapping) -> tuple[dict, dic
         raise MetricRefusal('D10_INVENTORY_AUTHORITY_UNPROVEN', 'independent input source required')
     original = json.loads(_safe_project_file(project, source['path']).read_bytes())
     payload = {key: body[key] for key in ('reference', 'reference_identity')}
-    if original.get('feature_inventory') != payload or payload['reference_identity'] != subject:
+    reference_identity = payload['reference_identity']
+    _identity_complete(reference_identity)
+    if (original.get('feature_inventory') != payload
+            or reference_identity['consumed_inputs'] != subject):
         raise MetricRefusal('D10_INVENTORY_AUTHORITY_STALE', 'adopted semantics or subject differs')
     reference = payload['reference']
     if (not isinstance(reference, dict)
@@ -1816,7 +1819,10 @@ def accept_d10(project: Path, context: Mapping[str, Any], p0: Mapping) -> dict:
         if _sha(raw) != p0['elaboration_sha256']:
             raise MetricRefusal('D10_ELABORATION_STALE', str(graph_path))
         measured = _d10_feature_inventory(json.loads(raw), p0['top'])
-        identity = {'producer': binding, 'checker': {'source_sha256': _sha(Path(__file__).read_bytes())},
+        identity = {'producer': binding['producer_result'],
+                    'tool_execution': {key: binding[key] for key in
+                        ('tool_sha256', 'image_id', 'cid', 'attestation_sha256')},
+                    'checker': {'source_sha256': _sha(Path(__file__).read_bytes())},
                     'requirements': {key: authority[key] for key in ('path', 'sha256', 'source')},
                     'configuration': observed['qualification_admission'],
                     'consumed_inputs': subject}
