@@ -268,7 +268,8 @@ def test_d10_public_dispatch_calls_only_selected_owner(bound_row, monkeypatch):
 
 
 @pytest.mark.parametrize('damage', ['absent', 'forged_payload', 'stale_source', 'wrong_owner',
-                                  'changed_rtl', 'changed_parameter', 'changed_tool', 'old_launch'])
+                                  'changed_rtl', 'changed_parameter', 'changed_header',
+                                  'changed_source', 'changed_tool', 'old_launch'])
 def test_d10_row_refuses_independent_binding_damage(bound_row, damage):
     c = bound_row
     assert 'p0' in c, 'run the explicit canonical positive prerequisite first'
@@ -292,6 +293,10 @@ def test_d10_row_refuses_independent_binding_damage(bound_row, damage):
             rtl.write_bytes(original_rtl + b'\n// changed actual subject\n')
         elif damage == 'changed_parameter':
             rtl.write_bytes(original_rtl.replace(b'WIDTH=2', b'WIDTH=3'))
+        elif damage == 'changed_header':
+            (rtl.parent / 'added.svh').write_text('`define CONTROL_WIDTH 3\n')
+        elif damage == 'changed_source':
+            p0['runner_source_sha256'] = '0' * 64
         elif damage == 'changed_tool':
             p0['tool_sha256']['yosys'] = '0' * 64
         elif damage == 'old_launch':
@@ -303,6 +308,7 @@ def test_d10_row_refuses_independent_binding_damage(bound_row, damage):
         c['adopted'].write_bytes(adopted)
         c['source'].write_bytes(source)
         rtl.write_bytes(original_rtl)
+        (rtl.parent / 'added.svh').unlink(missing_ok=True)
 
 
 def test_d10_independent_feature_mismatch_is_fail(bound_row):
@@ -370,6 +376,18 @@ def test_d10_native_unexpected_blackbox_fails_independent_empty_set(cases, bound
     assert result['status'] == result['obligations'][1]['status'] == 'FAIL', result
     assert result['obligations'][1]['observed_value'] == 1
     assert result['obligations'][1]['unexpected_instances'] == ['u_opaque']
+
+
+def test_d10_complete_components_still_require_actual_runtime_qualification(bound_row):
+    c = bound_row
+    path = os.environ['FLOW109_D10_APPROVED_REGISTRY']
+    registry = json.loads(Path(path).read_text())
+    missing = context(registry, path, missing_runtime=True)
+    result = metrics.accept_d10(c['project'], missing, c['p0'])
+    assert result['status'] == 'NOT_MEASURED', result
+    observed = result['native_metric_observation']
+    assert observed['qualification_refusal']['reason'] == 'QUALIFICATION_RUNTIME_ABSENT'
+    assert all(row['status'] == 'NOT_MEASURED' for row in result['obligations'])
 
 
 def test_d10_required_test_ports_remain_blocking(bound_row):
