@@ -2005,6 +2005,16 @@ def test_public_d26_missing_d01_authority_stops_before_prelayout(
     assert not list((tmp_path / "reports/flow109/attempts").glob("window-*"))
 
 
+def test_d26_fixture_without_d01_owner_report_is_refused(tmp_path, monkeypatch):
+    """A produced declaration cannot replace the routed D01 owner report."""
+    features = profile("Mapped soft-IP with prestitched scan")
+    _write_dft_intent(tmp_path, monkeypatch, scan=features["requires_scan"], route='ip')
+    layout.report_path(tmp_path, 'phase1_one_shot.json').unlink()
+
+    with pytest.raises(flow109.Flow109Error, match="D01 output absent"):
+        flow109.dft_source_intent(tmp_path, {'features': features})
+
+
 def test_public_d26_preexisting_attempt_result_is_not_overwritten(
         tmp_path, monkeypatch):
     import _delivery_route

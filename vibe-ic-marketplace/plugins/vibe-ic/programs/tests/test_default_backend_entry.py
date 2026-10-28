@@ -1038,9 +1038,9 @@ def test_default_postcheck8_consumes_saved_prelayout_without_native_replay(
 def _d26_prelayout_fixture(tmp_path, monkeypatch, case, *, d01_binding=None):
     """SOURCE_CONTROL retained/STA doubles, not native qualification.
 
-    A supplied D01 binding is consumed by the real reader; only the older
-    isolated producer controls retain their explicitly mocked DFT reader.
-    The real D26 producer writes the timing-mode receipt in both cases.
+    Every control uses the real D01 publisher, routed owner report and
+    authority reader. Only retained-state/STA boundaries are doubled.
+    The real D26 producer writes the timing-mode receipt.
     """
     import hashlib
     import json
@@ -1073,9 +1073,7 @@ def _d26_prelayout_fixture(tmp_path, monkeypatch, case, *, d01_binding=None):
                    'create_clock -period 100 [get_ports {tck}]\n'
                    'set_case_analysis 1 [get_ports {shift}]\n'
                    'set_case_analysis 1 [get_ports {test}]\n')
-    d09 = {'path': 'phase1/generated_docs/dft.json', 'sha256': '1' * 64,
-           'sources': {'input/spec.json': 'sha256:' + '2' * 64},
-           'intent': {'requires_scan': case != 'no_scan', 'reason': 'no scan in this test',
+    intent = {'requires_scan': case != 'no_scan', 'reason': 'no scan in this test',
                       'test_port_def': {
                           'scan_enable': {'native': 'shift', 'public': 'scan_enable'},
                           'scan_in': {'native': 'sin', 'public': 'scan_in'},
@@ -1088,10 +1086,12 @@ def _d26_prelayout_fixture(tmp_path, monkeypatch, case, *, d01_binding=None):
                           'clock_select': {'native': 'test', 'functional_value': 0,
                                            'scan_value': 1},
                           'reset': {'style': 'synchronous', 'signal': 'rst_n',
-                                    'active_level': 0, 'shift_value': 1}}}}
+                                    'active_level': 0, 'shift_value': 1}}}
     if d01_binding is None:
-        put(project / d09['path'], {'dft': d09['intent']})
-        put(project / 'input/spec.json', {})
+        from test_flow109_selection import _publish_dft_intent
+        _publish_dft_intent(project, intent, route='ip')
+        d09, problems = scan.load_d09_dft_contract(project)
+        assert not problems and d09 is not None
     else:
         d09 = d01_binding
         current_binding, problems = scan.load_d09_dft_contract(project)
@@ -1136,8 +1136,6 @@ def _d26_prelayout_fixture(tmp_path, monkeypatch, case, *, d01_binding=None):
     monkeypatch.setattr(design, 'derive_dft_clock_reset', lambda *_:
                         (mode['clock'], mode['reset']['signal'],
                          mode['reset']['active_level'] == 0))
-    if d01_binding is None:
-        monkeypatch.setattr(scan, 'load_d09_dft_contract', lambda *_a, **_k: (d09, []))
     monkeypatch.setattr(scan, 'l20_binding_is_current', lambda *_: (True, 'current'))
     monkeypatch.setattr(signoff, 'evaluate_scan_shift_timing', lambda *_: {
         'status': 'PASS', 'required': True, 'constraint': constraint, 'reasons': []})
