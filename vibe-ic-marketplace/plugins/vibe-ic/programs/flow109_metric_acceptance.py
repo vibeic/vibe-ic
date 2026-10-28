@@ -201,6 +201,13 @@ D19_BINDINGS = {
     },
 }
 
+D30_BINDINGS = {
+    "base_19.adopted_netlist_sdc_library": {
+        "operator": "matches_adopted_reference",
+        "reference_ref": "adopted/base_19/adopted_netlist_sdc_library.json",
+    },
+}
+
 
 class MetricRefusal(ValueError):
     def __init__(self, code: str, detail: str):
@@ -641,6 +648,218 @@ def accept_d19(project: Path, context: Mapping[str, Any], component: Mapping[str
         result["reason"] = "D19_PLAN_METRICS_ONLY_NATIVE_CONTROLS_NOT_QUALIFIED"
     except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
         result.update(reason=getattr(exc, "code", "D19_METRIC_REFUSED"), detail=str(exc))
+    return result
+
+
+def _d30_file(project: Path, record: Any, label: str) -> Path:
+    if (not isinstance(record, Mapping) or set(record) != {"path", "sha256"}
+            or not isinstance(record.get("path"), str)
+            or not _HEX.fullmatch(str(record.get("sha256", "")))):
+        raise MetricRefusal("D30_SOURCE_UNBOUND", label)
+    path = (project / record["path"]).resolve()
+    if (not path.is_relative_to(project) or not path.is_file()
+            or not path.stat().st_size or _sha(path.read_bytes()) != record["sha256"]):
+        raise MetricRefusal("D30_SOURCE_STALE_OR_FOREIGN", label)
+    return path
+
+
+def d30_consumed_timing(project: Path, admission: Mapping[str, Any]) -> dict:
+    """Read D26's sealed native readset, never infer reads from a template.
+
+    Historical STAPrePNR receipts did not seal per-corner sta.log. Those
+    receipts remain unmeasured: sealing a log here cannot establish what the
+    native producer read. This is identity evidence, not new timing signoff.
+    """
+    import fnmatch
+    import librelane_contract as native
+    project = Path(project).resolve()
+    try:
+        inputs = {}
+
+        def ref(path):
+            path = Path(path).resolve()
+            if not path.is_relative_to(project) or not path.is_file() or not path.stat().st_size:
+                raise MetricRefusal("D30_SOURCE_STALE_OR_FOREIGN", str(path))
+            name = path.relative_to(project).as_posix()
+            inputs[name] = _sha(path.read_bytes())
+            return {"path": name, "sha256": inputs[name]}
+
+        timing = admission["pre_route_timing"]["timing_modes"]
+        for record in (admission["pre_route_timing"]["D26_result"], timing["receipt"]):
+            ref(_d30_file(project, record, "D26 current consumer"))
+        if admission["requires_scan"]:
+            arm = timing["post_scan_arms"]["functional"]
+            folder = (project / arm["native"]["folder"]).resolve()
+            corners = arm["slack_gate"]["corners"]
+        else:
+            gate_path = project / "phase3/librelane/prelayout/gates/step10_slack.json"
+            ref(gate_path)
+            gate = json.loads(gate_path.read_text())
+            state_path = _d30_file(project, {"path": gate["source"],
+                "sha256": gate["state_out_sha256"]}, "D26 functional state")
+            folder, corners = state_path.parent, gate["corners"]
+            if gate.get("verdict") != "PASS":
+                raise MetricRefusal("D30_TIMING_SOURCE_UNQUALIFIED", "D26 functional gate")
+        receipt_ref = ref(folder / "vibeic_receipt.json")
+        receipt = native.validate_step_receipt(folder, "OpenROAD.STAPrePNR")
+        fingerprint, hashes = receipt["input"], receipt["sha256"]
+        records = {name: ref(folder / name) for name in
+                   ("config.json", "state_in.json", "state_out.json", "pdk_root.json")}
+        if any(hashes.get(name) != record["sha256"] for name, record in records.items()):
+            raise MetricRefusal("D30_NATIVE_SOURCE_UNBOUND", "config/state/PDK producer hashes")
+        config = json.loads((folder / "config.json").read_text())
+        state = json.loads((folder / "state_in.json").read_text())
+        after = json.loads((folder / "state_out.json").read_text())
+        # LibreLane writes a resolved config copy in the output folder; its
+        # bytes can differ from the launch config fingerprint. Both identities
+        # are producer sealed, rather than assumed to be interchangeable.
+        if (not _HEX.fullmatch(str(fingerprint.get("config", "")))
+                or fingerprint.get("state") != records["state_in.json"]["sha256"]
+                or config.get("meta", {}).get("step") != "OpenROAD.STAPrePNR"):
+            raise MetricRefusal("D30_NATIVE_SOURCE_UNBOUND", "native input fingerprint")
+        netlist = ref(Path(state["nl"]))
+        point = admission["normalized_preroute_chain"]["points"]["D26"]["input"]
+        if (netlist != point or state["nl"] != after.get("nl")
+                or fingerprint["state_files"].get(state["nl"]) != netlist["sha256"]):
+            raise MetricRefusal("D30_NATIVE_SOURCE_UNBOUND", "D26 actual netlist")
+        if not isinstance(corners, Mapping) or not corners or config.get("MACROS"):
+            raise MetricRefusal("D30_TIMING_SOURCE_UNQUALIFIED", "corners/macro timing closure")
+        # Resolve only the native producer's sealed mounts, not arbitrary
+        # host fallbacks for an unreadable guest library path.
+        pdk = json.loads((folder / "pdk_root.json").read_text())
+        mounts = [(Path(host).resolve(), Path(guest))
+                  for host, guest in pdk.get("mounts_under_it", [])]
+        mounts.sort(key=lambda pair: len(str(pair[1])), reverse=True)
+
+        def consumed(name):
+            path = Path(name)
+            if not path.is_absolute():
+                raise MetricRefusal("D30_NATIVE_INPUT_UNBOUND", str(name))
+            source = path
+            if not path.resolve().is_relative_to(project):
+                match = next(((host, guest) for host, guest in mounts
+                              if path.is_relative_to(guest)), None)
+                if match is None:
+                    raise MetricRefusal("D30_NATIVE_INPUT_UNBOUND", str(name))
+                source = match[0] / path.relative_to(match[1])
+            recorded = fingerprint.get("config_files", {}).get(name)
+            if (not _HEX.fullmatch(str(recorded or "")) or not source.is_file()
+                    or _sha(source.read_bytes()) != recorded):
+                raise MetricRefusal("D30_NATIVE_INPUT_STALE_OR_MISSING", str(name))
+            inputs[str(source.resolve())] = recorded
+            return {"path": name, "sha256": recorded}
+
+        logs = {path.relative_to(folder).as_posix() for path in folder.glob("*/sta.log")}
+        expected_logs = {f"{corner}/sta.log" for corner in corners}
+        if logs != expected_logs or any(name not in hashes for name in expected_logs):
+            raise MetricRefusal("D30_NATIVE_READ_LOG_UNBOUND", "D26 per-corner producer logs")
+        values = []
+        for corner in sorted(corners):
+            log_ref = ref(folder / corner / "sta.log")
+            if hashes.get(f"{corner}/sta.log") != log_ref["sha256"]:
+                raise MetricRefusal("D30_NATIVE_READ_LOG_UNBOUND", corner)
+            text = (folder / corner / "sta.log").read_text()
+            sdc_reads = re.findall(r"^Reading design constraints file at '([^']+)'", text, re.M)
+            netlist_reads = re.findall(r"^Reading top-level netlist at '([^']+)'", text, re.M)
+            if (sdc_reads != [config.get("PNR_SDC_FILE")]
+                    or netlist_reads != [state["nl"]]):
+                raise MetricRefusal("D30_NATIVE_READSET_UNPROVEN", corner + ": SDC/netlist")
+            libraries = [path for name, path in native._STA_CELL_LIBRARY_RE.findall(text)
+                         if name == corner]
+            declared = set()
+            for field in ("CELL_LIBS", "PAD_LIBS", "EXTRA_LIBS"):
+                groups = config.get(field) or {}
+                groups = groups.items() if isinstance(groups, Mapping) else [("*", groups)]
+                for pattern, paths in groups:
+                    if fnmatch.fnmatch(corner, pattern):
+                        if not isinstance(paths, list) or any(not isinstance(p, str) for p in paths):
+                            raise MetricRefusal("D30_NATIVE_READSET_UNPROVEN", field)
+                        declared.update(paths)
+            if not declared or set(libraries) != declared or len(libraries) != len(set(libraries)):
+                raise MetricRefusal("D30_NATIVE_READSET_UNPROVEN", corner + ": libraries")
+            values.append({"mode": "functional", "corner": corner,
+                           "sdc": consumed(sdc_reads[0]),
+                           "libraries": [consumed(path) for path in sorted(libraries)]})
+        if any(not Path(project / name).is_file() or
+               _sha(Path(project / name).read_bytes()) != sha for name, sha in inputs.items()):
+            raise MetricRefusal("D30_SOURCE_CHANGED_DURING_READ", "native readset")
+        return {"status": "MEASURED", "value": values, "consumed_inputs": inputs,
+                "native_receipt": receipt_ref, "native_records": records,
+                "scope": "functional handoff identity; no shift/capture timing credit"}
+    except (native.Refusal, ValueError, OSError, KeyError, TypeError, AttributeError) as exc:
+        return {"status": "NOT_MEASURED", "reason": getattr(exc, "code", "D30_NATIVE_SOURCE_UNBOUND"),
+                "detail": str(exc)}
+
+
+def accept_d30(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    """Bind the delivered bundle; the missing delta producer still blocks D30."""
+    import flow109
+    project = Path(project).resolve()
+    result = {"schema": SCHEMA, "row_id": "D30", "status": "NOT_MEASURED",
+              "delivery_blocked": True, "obligations": []}
+    for obligation in context["resolved_row"]["obligations"]:
+        oid, spec = obligation["id"], D30_BINDINGS.get(obligation["id"])
+        item = {"id": oid, "status": "NOT_MEASURED"}
+        if spec is None or any(obligation["expectation"].get(k) != v for k, v in spec.items()):
+            item.update(status="UNIMPLEMENTED_METRIC_BINDING",
+                        reason="D30_POST_SYNTH_CROSSING_POWER_CENSUS_UNBOUND")
+        else:
+            try:
+                admission = flow109.dft_preroute_admission(project, context)
+                chain = flow109._complete_preroute_chain(project, context, admission,
+                    component.get("d30_delivery_receipt"), d30_context_sha256=context["context_sha256"])
+                if chain.get("status") != "PASS":
+                    item.update(status="FAIL" if chain.get("status") == "FAIL" else "NOT_MEASURED",
+                                reason=chain.get("reason", "D30_DELIVERY_BINDING_UNPROVEN"))
+                else:
+                    path = _d30_file(project, chain["d30_delivery_receipt"], "D30 delivery")
+                    delivery = json.loads(path.read_text())
+                    current = d30_consumed_timing(project, admission)
+                    if current["status"] != "MEASURED":
+                        raise MetricRefusal(current["reason"], current.get("detail", "D26 actual inputs"))
+                    if (delivery.get("consumed_timing") != current
+                            or delivery.get("metric_reader_source_sha256") != _sha(Path(__file__).read_bytes())):
+                        raise MetricRefusal("D30_DELIVERY_READSET_STALE", "D30 producer did not bind current readset")
+                    authority, body = _approved_document(project, spec["reference_ref"],
+                        authority="requirements_owner", schema="vibeic.flow109.adopted-reference.v1")
+                    approved = json.loads((project / authority["source"]["path"]).read_text())
+                    payload = {key: body[key] for key in ("reference", "reference_identity")}
+                    if approved.get("adopted_netlist_sdc_library") != payload:
+                        raise MetricRefusal("D30_ADOPTED_REFERENCE_SOURCE_MISMATCH", "independent approval semantics")
+                    _identity_complete(body["reference_identity"])
+                    authority.update(payload)
+                    consumed = {**current["consumed_inputs"],
+                                chain["d30_delivery_receipt"]["path"]: chain["d30_delivery_receipt"]["sha256"]}
+                    for reference in chain["references"].values():
+                        consumed[reference["path"]] = reference["sha256"]
+                    identity = {"producer": {"sha256": delivery["producer_source_sha256"]},
+                        "checker": {"sha256": delivery["metric_reader_source_sha256"]},
+                        "tool_execution": {"receipt": current["native_receipt"],
+                                           "records": current["native_records"]},
+                        "consumed_inputs": consumed, "requirements": authority,
+                        "configuration": {"context_sha256": context["context_sha256"],
+                                          "profile": delivery["profile_identity"]}}
+                    measured = {"status": "MEASURED", "identity": identity,
+                        "value": {"netlist_sha256": chain["references"]["D30"]["sha256"],
+                                  "timing": current["value"]}}
+                    status, detail = evaluate_operator(spec["operator"], measured, authority)
+                    for record in ({"path": name, "sha256": sha} for name, sha in {
+                            **consumed, authority["path"]: authority["sha256"],
+                            authority["source"]["path"]: authority["source"]["sha256"]}.items()):
+                        path = project / record["path"]
+                        if not path.is_file() or _sha(path.read_bytes()) != record["sha256"]:
+                            raise MetricRefusal("D30_SOURCE_CHANGED_DURING_READ", record["path"])
+                    item.update(status=status, measurement=measured, authority=authority, detail=detail)
+            except (ValueError, OSError, KeyError, TypeError, AttributeError) as exc:
+                item.update(reason=getattr(exc, "code", "D30_METRIC_REFUSED"), detail=str(exc))
+        result["obligations"].append(item)
+    statuses = [item["status"] for item in result["obligations"]]
+    if statuses and all(status == "PASS" for status in statuses):
+        result.update(status="PASS", delivery_blocked=False)
+    elif "FAIL" in statuses:
+        result["status"] = "FAIL"
+    result["reason"] = ("D30_ADOPTED_BUNDLE_MISMATCH" if result["status"] == "FAIL"
+                        else "D30_POST_SYNTH_CROSSING_POWER_CENSUS_UNBOUND")
     return result
 
 

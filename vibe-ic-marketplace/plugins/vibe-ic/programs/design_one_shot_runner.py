@@ -26707,6 +26707,9 @@ def _d30_publish_delivery(project: Path, context: dict, attempt: Path,
     raw = source_path.read_bytes()
     source_sha = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     flow_sha = hashlib.sha256(Path(flow109.__file__).read_bytes()).hexdigest()
+    import flow109_metric_acceptance as metrics
+    metric_sha = hashlib.sha256(Path(metrics.__file__).read_bytes()).hexdigest()
+    consumed_timing = metrics.d30_consumed_timing(project, admission)
     if hashlib.sha256(raw).hexdigest() != source['sha256']:
         raise ValueError('D30 input changed')
     out = attempt / 'd30_delivered_netlist.v'
@@ -26718,6 +26721,8 @@ def _d30_publish_delivery(project: Path, context: dict, attempt: Path,
     if (source_path.read_bytes() != raw or handoff.read_bytes() != handoff_bytes
             or hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != source_sha
             or hashlib.sha256(Path(flow109.__file__).read_bytes()).hexdigest() != flow_sha
+            or hashlib.sha256(Path(metrics.__file__).read_bytes()).hexdigest() != metric_sha
+            or metrics.d30_consumed_timing(project, admission) != consumed_timing
             or flow109.dft_preroute_admission(project, current) != admission):
         raise ValueError('D30 delivery inputs changed')
     delivered = {'path': str(out.relative_to(project)),
@@ -26728,6 +26733,7 @@ def _d30_publish_delivery(project: Path, context: dict, attempt: Path,
         'profile_identity': admission['profile_identity'],
         'source_netlist': source, 'delivered_netlist': delivered,
         'producer_source_sha256': source_sha, 'flow109_source_sha256': flow_sha,
+        'metric_reader_source_sha256': metric_sha, 'consumed_timing': consumed_timing,
         'handoff_folder': handoff_folder,
         'handoff_record': {'path': str(handoff.relative_to(project)),
                            'sha256': hashlib.sha256(handoff_bytes).hexdigest()},

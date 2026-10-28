@@ -1726,10 +1726,14 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
             answer.update(default_row_status=row_status, flow109_acceptance=row_status,
                           completed=False, normalized_chain_reason=chain.get("reason"))
         else:
-            # The four-point chain is one component.  D30's adopted handoff
-            # and crossing/power obligations have no metric consumer yet.
-            answer.update(default_row_status="NOT_MEASURED", flow109_acceptance="NOT_MEASURED",
-                          completed=False, normalized_chain_reason="D30_METRIC_BINDINGS_UNIMPLEMENTED")
+            import flow109_metric_acceptance as metrics
+            acceptance = metrics.accept_d30(project, context, completion)
+            row_status = acceptance['status']
+            answer.update(metric_acceptance=acceptance, metric_acceptance_status=row_status,
+                          default_row_status=row_status, flow109_acceptance=row_status,
+                          completed=row_status == 'PASS',
+                          normalized_chain_reason='D30_METRIC_BINDINGS_UNIMPLEMENTED'
+                          if row_status == 'NOT_MEASURED' else acceptance['reason'])
     from _atomic_artefact import write_json
     write_json(project / "reports/flow109/default_rows" / (row["id"] + ".json"), answer)
     return answer
