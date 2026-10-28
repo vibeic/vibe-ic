@@ -3694,9 +3694,10 @@
           "id": "default",
           "select_when": "otherwise",
           "provider": "librelane",
-          "tools": "Yosys.JsonHeader + Python structural checks",
+          "tools": "Yosys.JsonHeader + Verilator.Lint + Python structural checks",
           "native_steps": [
-            "Yosys.JsonHeader"
+            "Yosys.JsonHeader",
+            "Verilator.Lint"
           ],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
@@ -3704,7 +3705,10 @@
             "native_step_id": "P0", "owner_entry_step": "1", "owner_exit_step": "1",
             "producer": "design_one_shot_runner.py:step_rtl_gen",
             "consumer": "design_one_shot_runner structural preflight gates",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "engine_families": ["yosys", "verilator"],
+            "engine_steps": {"yosys": ["Yosys.JsonHeader"], "verilator": ["Verilator.Lint"]},
+            "engine_executables": {"yosys": "yosys", "verilator": "verilator"},
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
         }
