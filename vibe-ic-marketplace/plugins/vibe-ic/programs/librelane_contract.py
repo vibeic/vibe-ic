@@ -4340,7 +4340,8 @@ def run_chain(project: Path, image: str, steps: list[tuple[str, Path, Path]],
         for path in folder.rglob('*'):
             if path.is_file() and path.name.endswith(('.json', '.rpt')) and path.name not in ('vibeic_receipt.json',):
                 hashes[str(path.relative_to(folder))] = digest(path)
-            if step_id == 'OpenROAD.STAPostPNR' and path.is_file() and path.name == 'sta.log':
+            if step_id in ('OpenROAD.STAPrePNR', 'OpenROAD.STAPostPNR') \
+                    and path.is_file() and path.name == 'sta.log':
                 hashes[str(path.relative_to(folder))] = digest(path)
         if step_id == 'OpenROAD.DetailedRouting':
             report = _detailed_route_drc_output(folder, out_state)
