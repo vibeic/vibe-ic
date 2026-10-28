@@ -885,3 +885,37 @@ def test_retained_native_proof_refuses_missing_or_stale_evidence(tmp_path, monke
             'native/librelane/steps/yosys.py': 'c'})
     with pytest.raises(admission.AdmissionRefusal, match=reason):
         lec._consume_retained_native(tmp_path, prepared)
+
+
+@pytest.mark.parametrize('word', ['PASS', 'FAIL', 'UNKNOWN'])
+def test_cached_native_status_keeps_raw_evidence_and_existing_semantics(tmp_path, word):
+    folder = tmp_path / 'native'
+    _put(folder, 'scratch/partition.list', '0 neutral.y\n')
+    raw = word + ' (cached)'
+    _put(folder, 'scratch/strategies/neutral.y/sat/status', raw + '\n')
+    proof = lec.consume_eqy(folder, tmp_path / 'proof.json')
+    assert proof['partitions'] == {'neutral.y': {'sat': raw}}
+    measured = lec._proof_binding(proof)
+    assert (measured['status'] == 'PASS') is (word == 'PASS')
+
+
+def test_current_metric_consumer_accepts_raw_cached_native_proof(tmp_path, monkeypatch):
+    context, component, obligation, records = _fresh_empty_transform_identity_case(tmp_path, monkeypatch)
+    status = tmp_path / records['pdr']['path']
+    status.write_text('PASS (cached)\n')
+    native = status.parents[4]
+    proof_path = tmp_path / records['proof']['path']
+    component['proof'] = lec.consume_eqy(native, proof_path)
+    component['proof_receipt'] = lec._record(tmp_path, proof_path)
+    identity = metrics._d44_identity(tmp_path, component, context, obligation)
+    assert identity['tool_execution']['source_owned']['mode'] == 'fresh_native_executed'
+
+
+def test_current_metric_consumer_refuses_contradictory_native_proof(tmp_path, monkeypatch):
+    context, component, obligation, records = _fresh_empty_transform_identity_case(tmp_path, monkeypatch)
+    component['proof']['partitions']['chip_top.p']['pdr'] = 'FAIL'
+    proof_path = tmp_path / records['proof']['path']
+    proof_path.write_text(json.dumps(component['proof']))
+    component['proof_receipt'] = lec._record(tmp_path, proof_path)
+    with pytest.raises(metrics.MetricRefusal, match='partition proof differs from native evidence'):
+        metrics._d44_identity(tmp_path, component, context, obligation)
