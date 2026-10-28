@@ -69,6 +69,18 @@ def test_wrong_producer_identity_refuses_before_any_observation(tmp_path, monkey
     assert 'wrong argv' in result['detail']
 
 
+def test_missing_current_native_readset_is_named_not_measured(tmp_path, monkeypatch):
+    import _cdc_netlist as native
+    p0, _ = p0_fixture(tmp_path, monkeypatch, {'modules': {'top': {'cells': {}}}})
+    # Isolate identity transport, then execute its actual native readset gate.
+    # No RTL means source_binding must refuse before tools or observations.
+    monkeypatch.setattr(runner, '_validate_d10_p0_consumer',
+                        lambda *_: native.source_binding(tmp_path, 'top', []))
+    result = metric.observe_d10_frontend_metrics(tmp_path, context(), p0)
+    assert result['status'] == 'NOT_MEASURED' and result['obligations'] == []
+    assert result['reason'] == 'CDC_NETLIST_NO_RTL'
+
+
 @pytest.mark.parametrize('blackbox,expected', [(False, 0), (True, None)])
 def test_d10_owner_publishes_observations_without_promoting_row(tmp_path, monkeypatch, blackbox, expected):
     graph = {'modules': {'top': {'cells': {}}}}

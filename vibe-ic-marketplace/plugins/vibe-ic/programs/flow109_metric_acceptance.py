@@ -1329,6 +1329,7 @@ def observe_d10_frontend_metrics(project: Path, context: Mapping[str, Any], p0: 
     This reads the existing P0 consumer identity and accepted registry. The
     feature inventory and qualification remain explicit, independent debts.
     """
+    import _cdc_netlist as native
     import flow109
     import librelane_contract as contract
     import vibe_ic_one_shot_runner as runner
@@ -1371,7 +1372,7 @@ def observe_d10_frontend_metrics(project: Path, context: Mapping[str, Any], p0: 
                 'binding': identity})
         answer['observed_blackbox_instances'] = instances
         answer['reason'] = 'TOOL_QUALIFICATION_AND_FEATURE_INVENTORY_UNPROVEN'
-    except (MetricRefusal, flow109.Flow109Error, contract.Refusal,
+    except (MetricRefusal, native.Refusal, flow109.Flow109Error, contract.Refusal,
             OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
         answer['reason'] = getattr(exc, 'code', 'D10_NATIVE_BINDING_UNPROVEN')
         answer['detail'] = str(exc)
