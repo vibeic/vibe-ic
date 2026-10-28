@@ -1944,7 +1944,7 @@ def _finish_d25_selected_owner(project: Path) -> dict:
             raise flow109.Flow109Error('D25_NATIVE_INPUT_STALE', 'consumer changed during finalization')
         finished = flow109.finish_native_window(project, {'steps': [{
             'status': accepted['component_status'], 'extras': {
-                'step_id': '13', 'default_row_status': status, 'completed': False,
+                'step_id': '13', 'default_row_status': status, 'completed': status == 'PASS',
                 'metric_acceptance': accepted, 'detail': accepted['reason'],
             }}]})
         if (not isinstance(finished, Mapping) or finished.get('default_row_status') != status
