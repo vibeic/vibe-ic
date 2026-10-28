@@ -3703,13 +3703,13 @@
           "dispatch": {
             "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
             "native_step_id": "P0", "owner_entry_step": "1", "owner_exit_step": "1",
-            "producer": "design_one_shot_runner.py:step_rtl_gen",
-            "consumer": "design_one_shot_runner structural preflight gates",
+            "producer": "vibe_ic_one_shot_runner.py:_d10_p0_native",
+            "consumer": "flow109_metric_acceptance.py:accept_d10",
             "engine_families": ["yosys", "verilator"],
             "engine_steps": {"yosys": ["Yosys.JsonHeader"], "verilator": ["Verilator.Lint"]},
             "engine_executables": {"yosys": "yosys", "verilator": "verilator"},
             "acceptance_scope": "existing_native_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "flow109_metrics_status": "IMPLEMENTED"
           }
         }
       ],
@@ -3737,7 +3737,7 @@
             "checker.base_04.elaboration_errors",
             "producer.base_04.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_04.unexpected_blackboxes",
@@ -3756,7 +3756,7 @@
             "checker.base_04.unexpected_blackboxes",
             "producer.base_04.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_04.feature_inventory",
@@ -3773,10 +3773,10 @@
             "checker.base_04.feature_inventory",
             "producer.base_04.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_METRIC_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED",
       "gate_layer_ids": [
         "G1",
         "G2",

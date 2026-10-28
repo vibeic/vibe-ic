@@ -1697,6 +1697,165 @@ def observe_d10_frontend_metrics(project: Path, context: Mapping[str, Any], p0: 
     return answer
 
 
+def d10_adopted_rtl(project: Path) -> dict:
+    """BLOCKING: D10 consumes the completed D09 subject without regenerating it."""
+    import _specrtl_common as sources
+    import _path_layout as layout
+    project = Path(project).resolve()
+    path = _safe_project_file(project, 'reports/flow109/default_rows/D09.json')
+    raw = path.read_bytes()
+    row = json.loads(raw)
+    if (row.get('step_id') != 'D09' or row.get('completed') is not True
+            or row.get('component_status') != 'PASS'
+            or row.get('default_row_status') != 'PASS'):
+        raise MetricRefusal('D10_D09_NOT_ACCEPTED', 'completed canonical D09 required')
+    inventory = row['evidence']['rtl_inventory']
+    expected = {}
+    for item in inventory:
+        relative = 'phase2/stage1/rtl/' + item['path']
+        source = _safe_project_file(project, relative)
+        if relative in expected or _sha(source.read_bytes()) != item['sha256']:
+            raise MetricRefusal('D10_D09_RTL_STALE', relative)
+        expected[relative] = item['sha256']
+    actual = {str(p.resolve().relative_to(project)): _sha(p.read_bytes())
+              for p in sources.rtl_source_files(project)}
+    rtl_expected = {name: sha for name, sha in expected.items()
+                    if Path(name).suffix in ('.v', '.sv')}
+    if not rtl_expected or rtl_expected != actual:
+        raise MetricRefusal('D10_D09_RTL_STALE', 'full adopted RTL population differs')
+    d01 = layout.report_path(project, 'phase1_one_shot.json')
+    if d01.is_symlink() or not d01.is_file() or not d01.resolve().is_relative_to(project):
+        raise MetricRefusal('D10_D01_SOURCE_MISSING', 'normal D01 report required')
+    return {'D09': {'path': str(path.relative_to(project)), 'sha256': _sha(raw)},
+            'D01': {'path': str(d01.relative_to(project)), 'sha256': _sha(d01.read_bytes())}}
+
+
+def _d10_feature_inventory(graph: Mapping, top: str) -> dict:
+    """Read complete reachable interfaces and parameters from native elaboration."""
+    modules, instances, pending = {}, {}, [(top, '', frozenset())]
+    while pending:
+        name, prefix, parents = pending.pop()
+        if name in parents:
+            raise MetricRefusal('D10_INVENTORY_INVALID', 'recursive hierarchy')
+        module = graph['modules'][name]
+        ports = {}
+        for port, value in module.get('ports', {}).items():
+            direction, bits = value.get('direction'), value.get('bits')
+            if direction not in ('input', 'output', 'inout') or not isinstance(bits, list) or not bits:
+                raise MetricRefusal('D10_INVENTORY_INVALID', 'native port shape')
+            ports[port] = {'direction': direction, 'width': len(bits),
+                           'signed': int(bool(value.get('signed', 0)))}
+        modules[name] = {'ports': ports, 'parameter_defaults': module.get('parameter_default_values', {})}
+        for cell, value in module.get('cells', {}).items():
+            kind, path = value['type'], prefix + cell
+            if kind in graph['modules']:
+                instances[path] = {'module': kind, 'parameters': value.get('parameters', {})}
+                pending.append((kind, path + '/', parents | {name}))
+            elif not kind.startswith('$'):
+                raise MetricRefusal('D10_INVENTORY_INVALID', 'unresolved native instance')
+    return {'top': top, 'modules': modules, 'instances': instances,
+            'blackbox_instances': _d10_blackbox_instances(graph, top)}
+
+
+def _d10_inventory_authority(project: Path, subject: Mapping) -> tuple[dict, dict]:
+    """Reopen independent adopted input; never adopt the measured inventory."""
+    authority, body = _approved_document(project, 'adopted/base_04/feature_inventory.json',
+        authority='requirements_owner', schema='vibeic.flow109.adopted-reference.v1')
+    source = authority['source']
+    if not source['path'].startswith('input/'):
+        raise MetricRefusal('D10_INVENTORY_AUTHORITY_UNPROVEN', 'independent input source required')
+    original = json.loads(_safe_project_file(project, source['path']).read_bytes())
+    payload = {key: body[key] for key in ('reference', 'reference_identity')}
+    if original.get('feature_inventory') != payload or payload['reference_identity'] != subject:
+        raise MetricRefusal('D10_INVENTORY_AUTHORITY_STALE', 'adopted semantics or subject differs')
+    reference = payload['reference']
+    if (not isinstance(reference, dict)
+            or set(reference) != {'top', 'modules', 'instances', 'blackbox_instances'}
+            or not isinstance(reference['modules'], dict)
+            or not isinstance(reference['instances'], dict)
+            or not isinstance(reference['blackbox_instances'], list)
+            or any(not isinstance(x, str) or not x for x in reference['blackbox_instances'])
+            or reference['blackbox_instances'] != sorted(set(reference['blackbox_instances']))):
+        raise MetricRefusal('D10_INVENTORY_AUTHORITY_INVALID', 'complete typed inventory required')
+    return {**authority, **payload}, body
+
+
+def accept_d10(project: Path, context: Mapping[str, Any], p0: Mapping) -> dict:
+    """BLOCKING D10 grading; independent missing obligations never erase FAIL."""
+    import _cdc_netlist as native
+    import _specrtl_common as sources
+    import flow109
+    import vibe_ic_one_shot_runner as runner
+    project = Path(project).resolve()
+    observed = observe_d10_frontend_metrics(project, context, p0)
+    dft = runner._d10_dft_ports(project, p0)
+    result = {'schema': SCHEMA, 'row_id': 'D10', 'status': 'NOT_MEASURED',
+              'delivery_blocked': True, 'native_metric_observation': observed,
+              'obligations': [dict(r) for r in observed.get('obligations', [])]}
+    inventory = {'id': 'base_04.feature_inventory', 'status': 'NOT_MEASURED'}
+    result['obligations'].append(inventory)
+    try:
+        current = flow109.validate_execution_context(context)
+        declared = current['resolved_row']['obligations']
+        if ({r['id'] for r in declared} != {r['id'] for r in result['obligations']}
+                or next(r['expectation'] for r in declared if r['id'] == inventory['id'])
+                != {'operator': 'matches_adopted_reference',
+                    'reference_ref': 'adopted/base_04/feature_inventory.json'}):
+            raise MetricRefusal('D10_OBLIGATIONS_UNREGISTERED', 'all three obligations required')
+        binding = runner._validate_d10_p0_consumer(project, p0)
+        if observed.get('qualification') != 'PASS':
+            raise MetricRefusal('TOOL_QUALIFICATION_UNPROVEN', 'current native per-use qualification required')
+        subject = d10_adopted_rtl(project)
+        inputs = native.source_binding(project, p0['top'], sources.rtl_source_files(project))
+        subject['rtl_inputs'] = inputs['files']
+        authority, _ = _d10_inventory_authority(project, subject)
+        if p0.get('status') != 'PASS':
+            raise MetricRefusal('D10_FAILED_ELABORATION_NO_INVENTORY', 'no graph may be borrowed')
+        graph_path = _safe_project_file(project, p0['elaboration_path'])
+        raw = graph_path.read_bytes()
+        if _sha(raw) != p0['elaboration_sha256']:
+            raise MetricRefusal('D10_ELABORATION_STALE', str(graph_path))
+        measured = _d10_feature_inventory(json.loads(raw), p0['top'])
+        identity = {'producer': binding, 'checker': {'source_sha256': _sha(Path(__file__).read_bytes())},
+                    'requirements': {key: authority[key] for key in ('path', 'sha256', 'source')},
+                    'configuration': observed['qualification_admission'],
+                    'consumed_inputs': subject}
+        status, detail = evaluate_operator('matches_adopted_reference',
+            {'status': 'MEASURED', 'value': measured, 'identity': identity}, authority)
+        inventory.update(status=status, reason=detail, observed_value=measured, identity=identity)
+        unexpected = sorted(set(measured['blackbox_instances']) - set(authority['reference']['blackbox_instances']))
+        blackbox = next(r for r in result['obligations'] if r['id'] == 'base_04.unexpected_blackboxes')
+        bb_status, bb_reason = evaluate_operator('eq',
+            {'status': 'MEASURED', 'value': len(unexpected), 'unit': 'count', 'identity': identity},
+            {'status': 'APPROVED', 'value': 0, 'unit': 'count'})
+        blackbox.update(status=bb_status, reason=bb_reason, observed_value=len(unexpected),
+                        unexpected_instances=unexpected, identity=identity)
+        after = d10_adopted_rtl(project)
+        after['rtl_inputs'] = native.source_binding(project, p0['top'], sources.rtl_source_files(project))['files']
+        if (after != subject or _d10_inventory_authority(project, after)[0] != authority
+                or runner._validate_d10_p0_consumer(project, p0) != binding):
+            raise MetricRefusal('D10_INVENTORY_BINDING_STALE', 'consumer inputs changed')
+        result['subject'] = subject
+    except (MetricRefusal, native.Refusal, flow109.Flow109Error, OSError, ValueError,
+            TypeError, KeyError, AttributeError, StopIteration) as exc:
+        inventory.update(status='NOT_MEASURED', reason=getattr(exc, 'code', 'D10_INVENTORY_UNPROVEN'), detail=str(exc))
+        result['obligations'] = [dict(r) for r in observed.get('obligations', [])] + [inventory]
+    states = [r['status'] for r in result['obligations']]
+    # A non-scan applicability record is not a DFT-port PASS. The existing
+    # source-bound declaration must explicitly justify that non-applicability.
+    dft_ok = dft.get('status') == 'PASS' or (dft.get('reason') == 'SCAN_NOT_REQUIRED'
+        and (dft.get('intent_binding') or {}).get('intent', {}).get('requires_scan') is False
+        and bool(dft.get('skip_reason')))
+    result['status'] = ('FAIL' if 'FAIL' in states or dft.get('status') == 'FAIL'
+                        else 'PASS' if len(states) == 3 and all(s == 'PASS' for s in states) and dft_ok
+                        else 'NOT_MEASURED')
+    result['reason'] = ('D10_METRICS_AND_PORTS_PASS' if result['status'] == 'PASS'
+                        else 'D10_REQUIRED_CHECK_FAILED' if result['status'] == 'FAIL'
+                        else inventory.get('reason', 'D10_DFT_PORT_AUTHORITY_UNPROVEN'))
+    result['dft_port_consistency'] = dict(dft)
+    return result
+
+
 def accept_a01(project: Path, context: Mapping[str, Any],
                component: Mapping[str, Any]) -> dict:
     """Evaluate the complete, and only, currently whitelisted A01 binding."""
