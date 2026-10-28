@@ -2952,7 +2952,7 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
     written = out.get("written") or out.get("validated_rtl")
     if not written:
         return None
-    declared = out.get("declaration_written")
+    declared = out.get("declaration_written") or out.get("declaration_retained")
     # The same contract producer runs again at Step 4. Complete its choices
     # now, before the professional TB binds their bytes to measured evidence.
     declaration = declaration_before_step4(project)
@@ -24802,12 +24802,14 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
             binding, problems = scan.load_d09_dft_contract(project)
             if binding is None or problems:
                 return StepResult("arith_declaration_emit", "NOT_MEASURED", time.time() - t0,
-                                  "D01 DFT intent unavailable: " + '; '.join(problems or []))
+                                  "D01 DFT intent unavailable: " + '; '.join(problems or []),
+                                  reason_class=_V.ReasonClass.UPSTREAM_REFUSED)
             return StepResult("arith_declaration_emit", "PASS", time.time() - t0,
                               "consumed current D01 declaration", [str(Path(project) / binding['path'])])
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return StepResult("arith_declaration_emit", "NOT_MEASURED", time.time() - t0,
-                          "D01 DFT declaration unresolved: " + str(exc))
+                          "D01 DFT declaration unresolved: " + str(exc),
+                          reason_class=_V.ReasonClass.EXECUTION_ERROR)
     spec_cp = _run("spec_declaration_emit.py", _top_args)
     if spec_cp is not None and spec_cp.returncode not in (3, 4):
         if spec_cp.returncode == 0 and out_p.is_file():

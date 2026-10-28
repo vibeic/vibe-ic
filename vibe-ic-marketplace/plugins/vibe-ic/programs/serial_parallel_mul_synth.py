@@ -556,6 +556,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 return 2
         decl_path = proj / "plugin_output" / "declaration.json"
         declaration = plugin_declaration(spec)
+        prior_declaration = None
         populations = _declared_scenario_populations(proj, spec)
         if decl_path.exists():
             try:
@@ -568,6 +569,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(json.dumps({"verdict": "DEFER", "reason":
                                   "existing declaration is not an object"}))
                 return 2
+            prior_declaration = prior
             expected = dict(declaration, size_param=spec["size_default"])
             conflicts = [name for name, value in expected.items()
                          if name not in ("latency_cycles", "latency_cycles_origin")
@@ -614,9 +616,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         # a state the spec never describes (RTL present, declaration absent).
         decl_dir = proj / "plugin_output"
         decl_dir.mkdir(parents=True, exist_ok=True)
-        decl_path.write_text(
-            json.dumps(declaration, indent=2, sort_keys=True) + "\n")
-        out["declaration_written"] = str(decl_path)
+        if prior_declaration == declaration:
+            # A byte-bound upstream declaration needs no new publication
+            # when this producer has no semantic field change to contribute.
+            out["declaration_retained"] = str(decl_path)
+        else:
+            decl_path.write_text(
+                json.dumps(declaration, indent=2, sort_keys=True) + "\n")
+            out["declaration_written"] = str(decl_path)
     print(json.dumps(out))
     return 0
 
