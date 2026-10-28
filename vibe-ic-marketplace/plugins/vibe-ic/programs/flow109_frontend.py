@@ -316,6 +316,32 @@ def synthesis_fingerprint(project):
                                    for use in (active['context']['runtime_tool_uses'] or [])}}
 
 
+def d10_native_failure(result):
+    """Recognize the existing reader's concrete missing-module error witness.
+
+    This is an observed native defect, not tool-purpose qualification. Other
+    execution failures remain unmeasured rather than inferred from wrapper rc.
+    """
+    import p0_tool_frontend_check as frontend
+    tools = result.get('tools') or {}
+    yosys = tools.get('Yosys.JsonHeader') or {}
+    lint = tools.get('Verilator.Lint') or {}
+    if (result.get('not_measured') or result.get('passed') is not False
+            or any(type(tool.get('exit_code')) is not int
+                   or not 0 < tool['exit_code'] < 128 for tool in (yosys, lint))
+            or 'Yosys elaboration failed' not in result.get('findings', [])):
+        return None
+    diagnostics = frontend._diagnostic_codes(lint.get('output', ''))
+    if diagnostics != lint.get('diagnostics'):
+        raise ValueError('P0 native diagnostic reader differs')
+    errors = [row for row in diagnostics if row.get('severity') == 'Error']
+    if not errors or any(row.get('code') != 'MODMISSING' for row in errors):
+        return None
+    return {'status': 'FAIL', 'reason': 'D10_NATIVE_UNDEFINED_MODULE',
+            'scope': 'coded native MODMISSING diagnostics',
+            'elaboration_errors': len(errors), 'diagnostics': errors}
+
+
 def prepare(project, context):
     require_launch_admission(project, '9', {'flow109_context': context})
     if context.get('requested_step') != 'D22':

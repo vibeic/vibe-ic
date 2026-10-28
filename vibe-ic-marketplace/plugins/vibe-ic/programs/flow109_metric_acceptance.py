@@ -1349,6 +1349,20 @@ def observe_d10_frontend_metrics(project: Path, context: Mapping[str, Any], p0: 
                 for row in selected.values()):
             raise MetricRefusal('D10_OBLIGATIONS_UNREGISTERED', 'two native obligations differ')
         identity = runner._validate_d10_p0_consumer(project, p0)
+        failure = identity.get('native_failure')
+        if failure:
+            if runner._validate_d10_p0_consumer(project, p0) != identity:
+                raise MetricRefusal('D10_NATIVE_BINDING_STALE', 'native failure identity changed')
+            answer['native_failure'] = failure
+            answer['obligations'] = [
+                {'id': 'base_04.elaboration_errors', 'status': 'NOT_MEASURED',
+                 'observation_status': 'OBSERVED', 'observed_value': failure['elaboration_errors'],
+                 'unit': 'count', 'reason': 'TOOL_QUALIFICATION_UNPROVEN', 'binding': identity},
+                {'id': 'base_04.unexpected_blackboxes', 'status': 'NOT_MEASURED',
+                 'observation_status': 'NOT_MEASURED', 'observed_value': None, 'unit': 'count',
+                 'reason': 'D10_FAILED_ELABORATION_NO_BLACKBOX_CENSUS', 'binding': identity}]
+            answer['reason'] = 'TOOL_QUALIFICATION_UNPROVEN'
+            return answer
         elab = _safe_project_file(project, p0['elaboration_path'])
         raw = elab.read_bytes()
         if _sha(raw) != p0['elaboration_sha256']:

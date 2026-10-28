@@ -1459,6 +1459,7 @@ def _d10_p0_native(project: Path) -> dict:
     import p0_tool_frontend_check as frontend
 
     diagnostic = None
+    bound_identity = None
     try:
         context = flow109.validate_execution_context(json.loads(
             Path(os.environ[flow109.CONTEXT_ENV]).read_text(encoding='utf-8')))
@@ -1497,6 +1498,20 @@ def _d10_p0_native(project: Path) -> dict:
                 or runner_sha != hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
                 or (authority is not None and contract.local_image_attestation() != authority)):
             raise ValueError('native inputs, sources, tools or launch changed during execution')
+        bound_identity = {'qualification': 'NOT_MEASURED', 'top': top,
+                'input_fingerprint': before['fingerprint'], 'tool_sha256': tools_before,
+                'producer_source_sha256': producer_sha, 'runner_source_sha256': runner_sha,
+                'producer_result': diagnostic,
+                'image': authority.get('image') if authority else None,
+                'image_id': authority.get('image_id') if authority else None,
+                'cid': authority.get('cid') if authority else None,
+                'attestation_sha256': authority.get('attestation_sha256') if authority else None}
+        if result.get('passed') is not True:
+            from flow109_frontend import d10_native_failure
+            failure = d10_native_failure(result)
+            if failure:
+                return {**bound_identity, 'status': 'FAIL', 'native_failure': failure}
+            raise ValueError('native failure lacks a supported elaboration diagnostic')
         elab = output_root / frontend.RTL_ELAB_REL
         if (result.get('passed') is not True
                 or (result.get('elaboration') or {}).get('written') is not True
@@ -1506,20 +1521,13 @@ def _d10_p0_native(project: Path) -> dict:
         parsed = json.loads(raw)
         if not isinstance(parsed.get('modules'), dict) or top not in parsed['modules']:
             raise ValueError('native P0 elaboration does not contain the selected top')
-        return {'status': 'PASS', 'qualification': 'NOT_MEASURED', 'top': top,
-                'input_fingerprint': before['fingerprint'],
+        return {**bound_identity, 'status': 'PASS',
                 'elaboration_path': str(elab.relative_to(project)),
-                'elaboration_sha256': hashlib.sha256(raw).hexdigest(),
-                'tool_sha256': tools_before,
-                'producer_source_sha256': producer_sha, 'runner_source_sha256': runner_sha,
-                'producer_result': diagnostic,
-                'image': authority.get('image') if authority else None,
-                'image_id': authority.get('image_id') if authority else None,
-                'cid': authority.get('cid') if authority else None,
-                'attestation_sha256': authority.get('attestation_sha256') if authority else None}
+                'elaboration_sha256': hashlib.sha256(raw).hexdigest()}
     except (flow109.Flow109Error, native.Refusal, contract.Refusal, OSError,
             ValueError, TypeError, KeyError, AttributeError) as exc:
-        return {'status': 'NOT_MEASURED', 'detail': str(exc), 'producer_result': diagnostic}
+        return {**(bound_identity or {}), 'status': 'NOT_MEASURED',
+                'detail': str(exc), 'producer_result': diagnostic}
 
 
 def _validate_d10_p0_consumer(project: Path, p0: Mapping) -> dict:
@@ -1537,6 +1545,12 @@ def _validate_d10_p0_consumer(project: Path, p0: Mapping) -> dict:
             or hashlib.sha256(path.read_bytes()).hexdigest() != reference['sha256']):
         raise ValueError('P0 producer result is missing, foreign or stale')
     result = json.loads(path.read_text())
+    from flow109_frontend import d10_native_failure
+    failure = d10_native_failure(result) if p0.get('status') == 'FAIL' else None
+    if (p0.get('status') not in ('PASS', 'FAIL')
+            or p0.get('status') == 'FAIL' and
+               (not failure or p0.get('native_failure') != failure)):
+        raise ValueError('P0 native outcome is not bound to a supported diagnostic')
     files = _specrtl_common.rtl_source_files(project)
     top = frontend._top(project)
     before = native.source_binding(project, top, files)
@@ -1549,21 +1563,24 @@ def _validate_d10_p0_consumer(project: Path, p0: Mapping) -> dict:
             or p0.get('producer_source_sha256') != hashlib.sha256(Path(frontend.__file__).read_bytes()).hexdigest()
             or p0.get('runner_source_sha256') != hashlib.sha256(Path(__file__).read_bytes()).hexdigest()):
         raise ValueError('P0 source, producer or runner identity differs')
-    elab_relative = Path(p0['elaboration_path'])
-    elaboration = project / elab_relative
-    if (elab_relative.is_absolute() or '..' in elab_relative.parts or elaboration.is_symlink()
-            or not elaboration.is_file() or not elaboration.resolve().is_relative_to(project)
-            or hashlib.sha256(elaboration.read_bytes()).hexdigest() != p0['elaboration_sha256']
-            or (result.get('elaboration') or {}).get('written') is not True
-            or (result.get('elaboration') or {}).get('top') != top
-            or (path.parent / str((result.get('elaboration') or {}).get('path', ''))).resolve()
-                != elaboration.resolve()):
-        raise ValueError('P0 native elaboration is missing or stale')
+    if not failure:
+        elab_relative = Path(p0['elaboration_path'])
+        elaboration = project / elab_relative
+        if (elab_relative.is_absolute() or '..' in elab_relative.parts or elaboration.is_symlink()
+                or not elaboration.is_file() or not elaboration.resolve().is_relative_to(project)
+                or hashlib.sha256(elaboration.read_bytes()).hexdigest() != p0['elaboration_sha256']
+                or (result.get('elaboration') or {}).get('written') is not True
+                or (result.get('elaboration') or {}).get('top') != top
+                or (path.parent / str((result.get('elaboration') or {}).get('path', ''))).resolve()
+                    != elaboration.resolve()):
+            raise ValueError('P0 native elaboration is missing or stale')
+    elif (result.get('elaboration') or {}).get('written') is not False:
+        raise ValueError('P0 failed elaboration cannot borrow an output graph')
     actual_tools = {name: hashlib.sha256(Path(shutil.which(name)).read_bytes()).hexdigest()
                     for name in ('yosys', 'verilator')}
     if p0.get('tool_sha256') != actual_tools:
         raise ValueError('P0 executable identity differs')
-    if (result.get('program') != 'p0_tool_frontend_check' or result.get('passed') is not True
+    if (result.get('program') != 'p0_tool_frontend_check' or result.get('passed') is not (not bool(failure))
             or result.get('sources') != [str(p.relative_to(project)) for p in files]):
         raise ValueError('P0 producer or input population differs')
     tools = result['tools']
@@ -1585,7 +1602,8 @@ def _validate_d10_p0_consumer(project: Path, p0: Mapping) -> dict:
               + f'--top {top} ' + ' '.join('-I ' + d for d in include_dirs)
               + ' ' + ' '.join(names) + '; hierarchy -check -top ' + top
               + '; proc; write_json ' + output.group(1))
-    if argv[4] != prefix or yosys.get('exit_code') != 0 or yosys.get('execution') != 'host':
+    if (argv[4] != prefix or yosys.get('execution') != 'host'
+            or not failure and yosys.get('exit_code') != 0):
         raise ValueError('P0 Yosys command or verdict differs')
     if relaxed:
         strict = prefix.replace(frontend.DECL_RELAX_FLAG + ' ', '', 1)
@@ -1595,10 +1613,11 @@ def _validate_d10_p0_consumer(project: Path, p0: Mapping) -> dict:
     expected = ['verilator', '--lint-only', '--Wall', '-Wno-fatal', '--top-module', top,
                 *('-I' + d for d in include_dirs), *names]
     verilator = tools['Verilator.Lint']
-    if (verilator.get('argv') != expected or verilator.get('exit_code') != 0
+    if (verilator.get('argv') != expected or not failure and verilator.get('exit_code') != 0
             or verilator.get('execution') != 'host'):
         raise ValueError('P0 Verilator command or verdict differs')
-    return {'status': 'PASS', 'producer_result': dict(reference), 'input_fingerprint': before['fingerprint'],
+    return {**({'native_failure': failure} if failure else {}),
+            'status': 'PASS', 'producer_result': dict(reference), 'input_fingerprint': before['fingerprint'],
             'producer_source_sha256': p0['producer_source_sha256'],
             'runner_source_sha256': p0['runner_source_sha256'],
             'tool_sha256': actual_tools, 'image_id': authority['image_id'],
@@ -1673,6 +1692,9 @@ def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False) -> d
     detail = ('D10_METRIC_BINDINGS_UNIMPLEMENTED: elaboration errors, '
               'unexpected blackboxes and adopted feature inventory require '
               'a canonical producer and consumer')
+    if (evidence['native_metric_observation'].get('native_failure') or {}).get('status') == 'FAIL':
+        detail = ('D10_NATIVE_FAILURE_OBSERVED: TOOL_QUALIFICATION_UNPROVEN; '
+                  'unqualified native evidence cannot close the D10 row contract')
     try:
         finished = flow109.finish_native_window(project, {'steps': [{
             'status': 'FAIL' if dft_failed else 'NOT_MEASURED', 'extras': {
