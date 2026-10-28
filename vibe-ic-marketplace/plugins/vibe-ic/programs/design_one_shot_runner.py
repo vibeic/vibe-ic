@@ -20631,6 +20631,47 @@ def step_asic_sdc(project: Path, top_name: str = "chip_top",
                   ic_class: Optional[str] = None,
                   *, pdk_config: Any = None, pdk_name: Optional[str] = None,
                   _use_controller: bool = True) -> StepResult:
+    """D19 admission is BLOCKING before Controller or native SDC dispatch.
+
+    The ordinary producer remains shared with non-Flow109 invocations. The
+    selected D19 owner also publishes/consumes its two existing plan contracts;
+    a plan metric PASS is not native shift/capture or complete row acceptance.
+    """
+    context, admission = None, None
+    raw_context = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+    if raw_context:
+        import flow109
+        import flow109_metric_acceptance as metrics
+        try:
+            window = flow109.validate_execution_context(json.loads(Path(raw_context).read_text()))
+            rows = window.get('resolved_rows') or [window.get('resolved_row', {})]
+            if any(row.get('id') == 'D19' for row in rows):
+                context = flow109.component_context(window, requested_step='D19')
+                admission = metrics.d19_admission(project, context, publish=True)
+        except (flow109.Flow109Error, metrics.MetricRefusal, OSError, ValueError, TypeError) as exc:
+            return StepResult('asic_sdc', 'NOT_MEASURED', 0.0, str(exc),
+                reason_class=_V.ReasonClass.INPUT_ABSENT,
+                extras={'d19_refusal': getattr(exc, 'code', 'D19_ADMISSION_REFUSED'),
+                        'native_started': False, 'completed': False,
+                        'default_row_status': 'NOT_MEASURED'})
+    result = _step_asic_sdc_producer(project, top_name, container, ic_class,
+        pdk_config=pdk_config, pdk_name=pdk_name, _use_controller=_use_controller)
+    if context is not None:
+        component = {'d19_plan_admission': admission}
+        accepted = metrics.accept_d19(project, context, component)
+        result.extras.update(component, metric_acceptance=accepted,
+                             metric_acceptance_status=accepted['status'],
+                             completed=False, default_row_status='NOT_MEASURED')
+        if accepted['status'] != 'PASS' and result.status == 'PASS':
+            result.status = 'NOT_MEASURED'
+            result.detail += '; ' + accepted['reason']
+    return result
+
+
+def _step_asic_sdc_producer(project: Path, top_name: str,
+                           container: str, ic_class: Optional[str],
+                           *, pdk_config: Any, pdk_name: Optional[str],
+                           _use_controller: bool) -> StepResult:
     """Canonical Phase-2 Step-7 producer (SDC + PVT matrix).
 
     The Controller may provide an issued fixed-row producer.  Without one,
