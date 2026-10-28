@@ -39,7 +39,7 @@ def subject(tmp_path, monkeypatch, request):
     return project, context, attempt
 
 
-def tail(project):
+def tail(project, child_verdict='PASS'):
     """Execute the actual bounded tail AST; no child/native return is mocked.
 
     The wrapper envelope is test scaffolding. All LEC substance is consumed
@@ -58,7 +58,8 @@ def tail(project):
     report.write_text(json.dumps(window))
     namespace = {**vars(runner), 'project': project, '_p3_skip_by_exit': True,
         'reports': {'phase2': window}, '_phase_started': {'phase2': 0},
-        'plan': [('phase2', 'PASS', 0)], 'halted_at': '', 'advisories': [],
+        'plan': [('phase2', child_verdict, 1 if child_verdict == 'FAIL' else 0)],
+        'halted_at': 'phase2' if child_verdict == 'FAIL' else '', 'advisories': [],
         '_phase1_checkpoint_review': None, '_fd_disclosures': [],
         'lock': SimpleNamespace(release=lambda: None)}
     exec(compile(module, str(runner.__file__), 'exec'), namespace)
@@ -88,6 +89,21 @@ def test_bounded_tail_publishes_current_d25_without_promoting_component_pass(sub
     before = (attempt / 'result.json').read_bytes()
     assert runner._finish_d25_selected_owner(project)['verdict'] == 'NOT_MEASURED'
     assert (attempt / 'result.json').read_bytes() == before
+
+
+def test_failed_window_survives_valid_unqualified_d25_finalization(subject):
+    project, context, attempt = subject
+    rc = tail(project, 'FAIL')
+    assert rc == 1, {'actual': rc, 'expected': 1}
+    summary = json.loads(runner._pl.report_path(project, 'vibe_ic_one_shot.json').read_text())
+    assert summary['verdict'] == summary['dispatched_verdict'] == 'FAIL'
+    assert summary['phases'][0]['verdict'] == 'FAIL'
+    assert summary['d25_finalization']['verdict'] == 'NOT_MEASURED'
+    published = json.loads((project / 'reports/flow109/default_rows/D25.json').read_text())
+    assert published['component_status'] == 'PASS'
+    assert published['default_row_status'] == 'NOT_MEASURED'
+    assert published['metric_acceptance']['qualification'] == 'NOT_MEASURED'
+    assert published['whole_flow_acceptance'] == 'NOT_MEASURED'
 
 
 @pytest.mark.parametrize('damage,reason', [

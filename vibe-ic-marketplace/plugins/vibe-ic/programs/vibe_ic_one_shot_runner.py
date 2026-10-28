@@ -5877,8 +5877,9 @@ def _main() -> int:
         if _flow109_selected_row('D25'):
             d25 = _finish_d25_selected_owner(project)
             summary['d25_finalization'] = d25
-            summary['verdict'] = summary['dispatched_verdict'] = d25['verdict']
-            window_verdict = d25['verdict']
+            if window_verdict != 'FAIL':
+                window_verdict = d25['verdict']
+            summary['verdict'] = summary['dispatched_verdict'] = window_verdict
         _write_runner_summary(out, summary, project)
         lock.release()
         return (0 if window_verdict in ("PASS", "PASS_WITH_WAIVERS") else
