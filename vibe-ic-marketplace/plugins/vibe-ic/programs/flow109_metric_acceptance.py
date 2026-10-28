@@ -791,6 +791,135 @@ def d30_consumed_timing(project: Path, admission: Mapping[str, Any]) -> dict:
                 "detail": str(exc)}
 
 
+def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
+    """Consume existing LEC evidence without relabeling equiv_* as EQY.
+
+    The retained native checker may reject an implementation. Its successful
+    point count supplies neither an approved partition census nor adopted modes.
+    """
+    import flow109
+    import lec_run
+    import lec_equivalence_check as checker
+    import _specrtl_common as sources
+    from dataclasses import asdict
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': 'D25', 'status': 'NOT_MEASURED',
+              'component_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    specs = {
+        'base_16.required_lec_partitions': {'operator': 'covers_all',
+            'required_set_ref': 'requirements/base_16/required_lec_partitions.json#/required_items'},
+        'base_16.unproved_equivalence': {'operator': 'eq', 'value': 0, 'unit': 'count'},
+        'base_16.mode_assumptions': {'operator': 'matches_adopted_reference',
+            'reference_ref': 'adopted/base_16/mode_assumptions.json'}}
+    try:
+        current = flow109.validate_execution_context(context)
+        if current['resolved_row']['id'] != 'D25':
+            raise MetricRefusal('D25_CONTEXT_INVALID', 'not D25')
+        obligations = current['resolved_row']['obligations']
+        if ({o['id'] for o in obligations} != set(specs)
+                or any(any(o['expectation'].get(k) != v for k, v in specs[o['id']].items())
+                       for o in obligations)):
+            raise MetricRefusal('D25_OBLIGATIONS_UNREGISTERED', 'registered operators differ')
+        consumed = {}
+
+        def bound_file(record):
+            name, digest = record['path'], str(record['sha256']).removeprefix('sha256:')
+            path = Path(name)
+            path = path if path.is_absolute() else _safe_project_file(project, name)
+            if path.is_symlink() or not path.is_file() or _sha(path.read_bytes()) != digest:
+                raise MetricRefusal('D25_NATIVE_INPUT_STALE', name)
+            consumed[str(path)] = digest
+            return path
+
+        path = _safe_project_file(project, 'reports/lec.json')
+        if not path.is_file():
+            raise MetricRefusal('D25_NATIVE_EVIDENCE_ABSENT', str(path))
+        raw = path.read_bytes()
+        report = json.loads(raw)
+        if (report.get('program') != 'lec_run'
+                or report.get('tool') != 'yosys equiv_make+equiv_simple+equiv_induct'):
+            raise MetricRefusal('D25_NATIVE_PRODUCER_PURPOSE_MISMATCH', 'unsupported actual producer/tool')
+        identity, execution = report['proof_identity'], report['proof_execution']
+        gold = identity['gold_rtl']
+        declared = {p.resolve() for p in sources.rtl_source_files(project)}
+        declared.update(p.resolve() for p in sources.rtl_source_files(project, exts=('*.vh', '*.svh')))
+        if {bound_file(record).resolve() for record in gold} != declared:
+            raise MetricRefusal('D25_NATIVE_READSET_INCOMPLETE', 'current RTL/header population differs')
+        bound_file(identity['gate_netlist'])
+        if identity.get('liberty', {}).get('state') != 'unused':
+            bound_file(identity['liberty'])
+        for record in identity['scan'].values():
+            if record != {'state': 'absent'}:
+                bound_file(record)
+        recipe = identity['equivalence_script']['sha256']
+        if (report.get('lec_resume', {}).get('checkpoint_key') != lec_run.lec_checkpoint_key(identity)
+                or execution.get('canonical_recipe_sha256') != recipe
+                or report.get('lec_resume', {}).get('base_script_sha256') != recipe
+                or identity.get('gold_frontend') != report.get('gold_frontend')
+                or identity.get('gold_defines') != report.get('gold_defines')):
+            raise MetricRefusal('D25_NATIVE_ASSUMPTIONS_STALE', 'existing proof recipe/identity differs')
+        legs = execution.get('evidence_legs')
+        if not isinstance(legs, list) or not legs:
+            raise MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', 'native evidence legs absent')
+        for leg in legs:
+            bound_file({'path': 'reports/' + leg['path'], 'sha256': leg['sha256']})
+        judged = checker.audit(project)
+        binding = judged.summary.get('subject_binding', {})
+        if binding.get('state') != 'MATCH':
+            raise MetricRefusal('D25_NATIVE_SUBJECT_UNBOUND', str(binding))
+        for count in (judged.compared_points, judged.unproven_points, judged.non_equivalent_points):
+            _finite_number(count, count=True)
+        if judged.compared_points <= 0:
+            raise MetricRefusal('D25_NATIVE_COMPARISON_EMPTY', 'no native compared points')
+        if (_sha(path.read_bytes()) != _sha(raw)
+                or any(_sha(Path(p).read_bytes()) != sha for p, sha in consumed.items())):
+            raise MetricRefusal('D25_NATIVE_INPUT_STALE', 'changed during consumer read')
+        component = ('PASS' if judged.passed else 'NOT_MEASURED'
+                     if judged.not_measured or judged.inconclusive else 'FAIL')
+        result.update(component_status=component,
+            status='FAIL' if component == 'FAIL' else 'NOT_MEASURED', native_consumer=asdict(judged),
+            native_tool=report['tool'], consumed_inputs=consumed,
+            native_report={'path': 'reports/lec.json', 'sha256': _sha(raw)},
+            native_assumptions={'scan': identity['scan'], 'gold_frontend': identity.get('gold_frontend'),
+                                'gold_defines': identity.get('gold_defines')},
+            qualification_reason='D25_NATIVE_TOOL_PURPOSE_UNQUALIFIED',
+            qualification_detail={'required_native_steps': current['resolved_row']['profile']['native_steps'],
+                'actual_native_tool': report['tool'],
+                'source_owned_tool_uses': current['resolved_row']['tool_uses'],
+                'proof_identity_complete': lec_run.proof_identity_complete(identity)})
+        for obligation in obligations:
+            oid, spec = obligation['id'], specs[obligation['id']]
+            measured = {'status': 'NOT_MEASURED', 'reason': 'D25_NATIVE_TOOL_PURPOSE_UNQUALIFIED'}
+            item = {'id': oid, 'operator': spec['operator'], 'status': 'NOT_MEASURED'}
+            authority = {'status': 'NOT_MEASURED'}
+            if spec['operator'] == 'eq':
+                measured.update(value=judged.unproven_points, unit='count')
+                authority = {'status': 'APPROVED', 'value': spec['value'], 'unit': spec['unit']}
+                item['observed_value'] = judged.unproven_points
+            else:
+                ref = spec.get('required_set_ref', spec.get('reference_ref')).partition('#/')[0]
+                try:
+                    authority, body = _approved_document(project, ref, authority='requirements_owner',
+                        schema=AUTHORITY_SCHEMA if spec['operator'] == 'covers_all'
+                        else 'vibeic.flow109.adopted-reference.v1')
+                    measured['reason'] = ('D25_PARTITION_CENSUS_UNBOUND' if spec['operator'] == 'covers_all'
+                                          else 'D25_CONSUMED_MODE_ASSUMPTIONS_UNBOUND')
+                except MetricRefusal as exc:
+                    measured['reason'] = exc.code
+                    item['detail'] = str(exc)
+            item['status'], item['reason'] = evaluate_operator(spec['operator'], measured, authority)
+            result['obligations'].append(item)
+        # A real canonical consumer rejection remains blocking even while
+        # unrelated authority/qualification obligations are not measured.
+        result.update(status='FAIL' if component == 'FAIL' else 'NOT_MEASURED',
+                      reason='D25_NATIVE_CONSUMER_FAILED' if component == 'FAIL'
+                      else 'D25_METRIC_QUALIFICATION_AND_AUTHORITY_UNPROVEN')
+    except (MetricRefusal, flow109.Flow109Error, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D25_NATIVE_BINDING_UNPROVEN'), detail=str(exc))
+    return result
+
+
 def accept_d30(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
     """Bind the delivered bundle; the missing delta producer still blocks D30."""
     import flow109

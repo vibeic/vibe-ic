@@ -1926,6 +1926,39 @@ def _finish_d09_selected_owner(
             'detail': detail, 'evidence': evidence}
 
 
+def _finish_d25_selected_owner(project: Path) -> dict:
+    """Publish the selected LEC owner's actual consumer through the sole writer."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    try:
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+        if context['resolved_row']['id'] != 'D25':
+            raise flow109.Flow109Error('D25_CONTEXT_INVALID', 'not the selected owner')
+        attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+        if (attempt / 'result.json').exists():
+            raise flow109.Flow109Error('FLOW109_ATTEMPT_RESULT_EXISTS', 'immutable D25 attempt')
+        accepted = metrics.accept_d25(project, context)
+        status = accepted['status']
+        if metrics.accept_d25(project, context) != accepted:
+            raise flow109.Flow109Error('D25_NATIVE_INPUT_STALE', 'consumer changed during finalization')
+        finished = flow109.finish_native_window(project, {'steps': [{
+            'status': accepted['component_status'], 'extras': {
+                'step_id': '13', 'default_row_status': status, 'completed': False,
+                'metric_acceptance': accepted, 'detail': accepted['reason'],
+            }}]})
+        if (not isinstance(finished, Mapping) or finished.get('default_row_status') != status
+                or finished.get('whole_flow_acceptance') != 'NOT_MEASURED'
+                or finished.get('delivery_accepted') is not False):
+            raise flow109.Flow109Error('D25_FINALIZATION_UNAVAILABLE', 'canonical writer did not confirm verdict')
+        return {'verdict': status, 'component_status': accepted['component_status'],
+                'whole_flow_verdict': 'NOT_MEASURED', 'metric_acceptance': accepted,
+                'detail': accepted['reason']}
+    except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError) as exc:
+        return {'verdict': 'NOT_MEASURED', 'component_status': 'NOT_MEASURED',
+                'whole_flow_verdict': 'NOT_MEASURED', 'detail': 'D25_FINALIZATION_REFUSED: ' + str(exc)}
+
+
 def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
     """Finalize D26 only while its exact timing-mode evidence is current."""
     import flow109
@@ -5841,9 +5874,15 @@ def _main() -> int:
         }
         out = _pl.report_path(project, "vibe_ic_one_shot.json")
         out.parent.mkdir(parents=True, exist_ok=True)
+        if _flow109_selected_row('D25'):
+            d25 = _finish_d25_selected_owner(project)
+            summary['d25_finalization'] = d25
+            summary['verdict'] = summary['dispatched_verdict'] = d25['verdict']
+            window_verdict = d25['verdict']
         _write_runner_summary(out, summary, project)
         lock.release()
-        return 0 if window_verdict in ("PASS", "PASS_WITH_WAIVERS") else 1
+        return (0 if window_verdict in ("PASS", "PASS_WITH_WAIVERS") else
+                2 if window_verdict == 'NOT_MEASURED' and 'd25_finalization' in summary else 1)
 
     if _p3_window_ran:
         # A physical window ends here.  Mixed-signal merge, PDK finalisation
