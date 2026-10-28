@@ -4618,7 +4618,10 @@ def _main() -> int:
                             and execution_policy_value['mode'] == 'default'
                             and not _flow109_owner_entry)
     _dft_entry = (str(getattr(args, 'entry_step', None)) == '11'
-                  and execution_policy_value['mode'] == 'default')
+                  and execution_policy_value['mode'] == 'default'
+                  and not (_flow109_owner_entry
+                           and _flow109_selected_row('D25')
+                           and str(getattr(args, 'exit_step', None)) == '13'))
     _post_dft_entry = (str(getattr(args, 'entry_step', None)) == '12'
                        and execution_policy_value['mode'] == 'default')
     if getattr(args, "entry_step", None):
