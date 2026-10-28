@@ -97,17 +97,28 @@ The plugin ships this registration in `.mcp.json`:
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-eda/src/bootstrap.mjs"],
       "env": {
-        "EDA_CONTAINER": "vibeic-eda"
+        "EDA_CONTAINER": "vibeic-eda",
+        "VIBEIC_EDA_AUTO_BOOTSTRAP": "1",
+        "VIBEIC_EDA_IMAGE": "ghcr.io/vibeic/vibeic-eda:latest"
       }
     }
   }
 }
 ```
 
-`bootstrap.mjs` is the supported entry point. It checks the server's Node
-dependencies and performs the self-healing install before importing
-`src/index.js`. Bypassing it with a direct `index.js` registration removes that
-recovery path and can also create a duplicate `eda-tools` server.
+`bootstrap.mjs` is the supported entry point. On each new session it pulls the
+published `latest` tag, resolves that tag to an immutable registry digest, and
+creates or updates the MCP-managed `vibeic-eda` container. The server process
+then carries the immutable digest in `VIBEIC_EDA_IMAGE`; a moving tag is never
+used as run provenance. The bootstrap also supplies the compatibility paths
+needed by the native Nix image, checks the server's Node dependencies, and
+performs the self-healing install before importing `src/index.js`.
+
+No Docker socket path or host storage location is shipped. Docker's normal
+context is used unless the operator deliberately exports `DOCKER_HOST`.
+Set `VIBEIC_EDA_AUTO_BOOTSTRAP=0` only when an administrator owns container
+lifecycle separately. Bypassing bootstrap with a direct `index.js`
+registration removes both recovery paths and can create a duplicate server.
 
 Do not separately clone `mcp-eda`, run a manual dependency install, or add a
 second MCP registration. After installing or updating the plugin, start a new

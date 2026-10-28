@@ -22,20 +22,18 @@ GDS file (tapeout-ready)
 claude plugin marketplace add https://github.com/vibeic/vibe-ic
 claude plugin install vibe-ic
 
-# 2. From the installed plugin root, pull the image the plugin is pinned to
-#    (by digest, never :latest) and create the named container on it.
-export VIBEIC_DESIGNS="/absolute/path/to/your/projects"
-DESIGNS_DIR="$VIBEIC_DESIGNS" PULL=1 \
-  bash tools/vibeic-eda/restart-eda.sh
-
-# 3. Start a new Claude Code session and run eda_doctor(skip_versions=false).
+# 2. Start a new Claude Code session. The shipped bootstrap pulls the newest
+#    Nix image, resolves it to an immutable digest, and starts the container.
 claude
+
+# 3. Run eda_doctor(skip_versions=false).
 ```
 
-The shipped `.mcp.json` starts `mcp-eda/src/bootstrap.mjs`, which self-heals Node
-dependencies before loading the server. Do not create a second manual MCP
-registration. See [INSTALL_GUIDE.md](INSTALL_GUIDE.md) for container policy,
-verification, updates, and troubleshooting.
+The shipped `.mcp.json` starts `mcp-eda/src/bootstrap.mjs`, which manages the
+published Nix runtime and self-heals Node dependencies before loading the
+server. It uses the operator's normal Docker context and contains no host-specific
+socket or storage path. Do not create a second manual MCP registration. See
+[INSTALL_GUIDE.md](INSTALL_GUIDE.md) for policy, verification, and troubleshooting.
 
 ## 55 MCP Tools (47 EDA + 7 Device + 1 health)
 
