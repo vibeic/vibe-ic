@@ -190,6 +190,17 @@ D71_BINDINGS = {
 }
 D71_CONSUMER_SOURCE = "programs/flow109_metric_acceptance.py"
 
+D19_BINDINGS = {
+    "base_10.scenario_constraints": {
+        "operator": "covers_all",
+        "required_set_ref": "requirements/base_10/scenario_constraints.json#/required_items",
+    },
+    "base_10.mode_library_rc_mapping": {
+        "operator": "matches_adopted_reference",
+        "reference_ref": "adopted/base_10/mode_library_rc_mapping.json",
+    },
+}
+
 
 class MetricRefusal(ValueError):
     def __init__(self, code: str, detail: str):
@@ -399,6 +410,238 @@ def _approved_document(project: Path, relative: str, *, authority: str,
     return ({"status": "APPROVED", "path": relative, "sha256": _sha(raw),
              "source": {"path": source["path"], "sha256": source["sha256"]},
              "approval": approval}, body)
+
+
+def _d19_ref(project: Path, record: Any, label: str) -> dict:
+    """Reopen a declared input; neither a corner name nor a path is evidence."""
+    if (not isinstance(record, Mapping) or set(record) != {"path", "sha256"}
+            or not isinstance(record.get("path"), str)
+            or Path(record["path"]).is_absolute()
+            or ".." in Path(record["path"]).parts
+            or Path(record["path"]).as_posix() != record["path"]
+            or not _HEX.fullmatch(str(record.get("sha256", "")))):
+        raise MetricRefusal("D19_INPUT_IDENTITY_MISSING", label)
+    path = _safe_project_file(project, record["path"])
+    if not path.is_file() or not path.stat().st_size or _sha(path.read_bytes()) != record["sha256"]:
+        raise MetricRefusal("D19_INPUT_STALE", label + ": " + record["path"])
+    return dict(record)
+
+
+def d19_admission(project: Path, context: Mapping[str, Any], *, publish: bool = False) -> dict:
+    """BLOCKING plan admission before the existing SDC producer dispatches.
+
+    Consume the two registry contracts, or project their explicit declarations
+    from L19 into those same paths. Approval must bind their semantic payload in
+    an input JSON document, not merely an unrelated document's hash. D01 owns
+    scan applicability; L20 is required for scan, never an override of D01.
+    This checks a plan and current files, not native shift/capture execution.
+    """
+    import flow109
+    import l_doc_consumer_contract as layers
+    from _atomic_artefact import write_json
+
+    project = Path(project).resolve()
+    features = context.get("features", {})
+    technology = features.get("technology_specific")
+    if (type(technology) is not bool
+            or not technology and (features.get("soft_ip") is not True
+                                  or features.get("physical") or features.get("digital_netlist"))):
+        raise MetricRefusal("D19_TECHNOLOGY_APPLICABILITY_UNRESOLVED", "resolved endpoint required")
+    try:
+        intent = flow109.dft_source_intent(project, context)
+    except flow109.Flow109Error as exc:
+        raise MetricRefusal("D19_D01_AUTHORITY_UNAVAILABLE", str(exc)) from exc
+    layer_docs, layer_refs = {}, {}
+    for name in ("L19", "L20"):
+        path, body = layers.load_l_doc(project, name)
+        if path is None or not isinstance(body, Mapping):
+            if name == "L20" and not intent["requires_scan"]:
+                continue
+            raise MetricRefusal("D19_" + name + "_MISSING", name)
+        path = Path(path)
+        layer_docs[name] = body
+        layer_refs[name] = _d19_ref(project, {
+            "path": path.relative_to(project).as_posix(), "sha256": _sha(path.read_bytes())}, name)
+    sources = {"D01": intent["source_binding"], **layer_refs}
+    documents, authorities = {}, {}
+    fields = layer_docs["L19"].get("fields")
+    fields = fields if isinstance(fields, Mapping) else {}
+    for name, relative, schema in (
+            ("scenario_constraints", "requirements/base_10/scenario_constraints.json", AUTHORITY_SCHEMA),
+            ("mode_library_rc_mapping", "adopted/base_10/mode_library_rc_mapping.json",
+             "vibeic.flow109.adopted-reference.v1")):
+        path = _safe_project_file(project, relative)
+        body = (json.loads(path.read_text()) if path.is_file()
+                else fields.get(name))
+        if not isinstance(body, Mapping):
+            raise MetricRefusal("D19_APPROVED_" + name.upper() + "_MISSING", relative)
+        approval = body.get("approval")
+        if (body.get("schema") != schema or not isinstance(approval, Mapping)
+                or approval.get("status") != "APPROVED"
+                or approval.get("authority") != "requirements_owner"):
+            raise MetricRefusal("D19_PLAN_UNAPPROVED", relative)
+        ref = _d19_ref(project, approval.get("source_reference"), name + " approval")
+        if (not ref["path"].startswith("input/")
+                or not (project / ref["path"]).resolve().is_relative_to((project / "input").resolve())):
+            raise MetricRefusal("D19_APPROVED_INPUT_MISSING", name)
+        try:
+            approved = json.loads((project / ref["path"]).read_text())[name]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise MetricRefusal("D19_APPROVED_STRUCTURED_SOURCE_MISSING", name) from exc
+        payload = {key: value for key, value in body.items()
+                   if key not in ("schema", "approval", "producer_binding")}
+        if payload != approved:
+            raise MetricRefusal("D19_APPROVED_FIELDS_DIFFER", name)
+        documents[relative] = dict(body)
+        authorities[name] = {"status": "APPROVED", "source": ref, **payload}
+    requirement = authorities["scenario_constraints"]
+    modes, checks = (requirement.get(key) for key in ("required_modes", "required_checks"))
+    corners = requirement.get("required_corners", [])
+    for label, values in (("MODES", modes), ("CORNERS", corners), ("CHECKS", checks)):
+        if (not isinstance(values, list) or not values and (label != "CORNERS" or technology)
+                or any(not isinstance(value, str) or not _SAFE.fullmatch(value) for value in values)
+                or len(set(values)) != len(values)):
+            raise MetricRefusal("D19_APPROVED_" + label + "_MISSING", label)
+    if not technology and corners:
+        raise MetricRefusal("D19_TECHNOLOGY_FEATURE_CONFLICT", "portable plan declares target corners")
+    mandatory_modes = {"functional", "shift", "capture"} if intent["requires_scan"] else {"functional"}
+    if not mandatory_modes.issubset(modes):
+        raise MetricRefusal("D19_REQUIRED_MODE_MISSING", ",".join(sorted(mandatory_modes - set(modes))))
+    if not {"setup", "hold"}.issubset(checks):
+        raise MetricRefusal("D19_REQUIRED_CHECK_MISSING", "setup/hold")
+    required = requirement.get("required_items")
+    item_fields = ("mode", "corner", "check") if technology else ("mode", "check")
+    if (not isinstance(required, list) or not required
+            or any(not isinstance(item, Mapping) or set(item) != set(item_fields)
+                   or item["mode"] not in modes or technology and item["corner"] not in corners
+                   or item["check"] not in checks for item in required)
+            or len(set(map(_json_key, required))) != len(required)):
+        raise MetricRefusal("D19_SCENARIO_INVALID", "approved required_items")
+    # The owner declares combinations. A Cartesian product would invent extra
+    # corner/check requirements (e.g. setup and hold need not use one corner).
+    if any({item[key] for item in required} != set(values)
+           for key, values in (("mode", modes), ("corner", corners), ("check", checks))
+           if key in item_fields):
+        raise MetricRefusal("D19_REQUIRED_SCENARIO_MISSING", "approved mode/corner/check census")
+    expected = required
+    mapping = authorities["mode_library_rc_mapping"].get("reference")
+    if not isinstance(mapping, list) or not mapping:
+        raise MetricRefusal("D19_LIBRARY_RC_MAPPING_MISSING", "reference")
+    actual, consumed = [], {}
+    for entry in mapping:
+        if not isinstance(entry, Mapping) or any(key not in entry for key in item_fields):
+            raise MetricRefusal("D19_SCENARIO_INVALID", "mapping entry")
+        item = {key: entry[key] for key in item_fields}
+        if item not in expected:
+            raise MetricRefusal("D19_SCENARIO_UNAPPROVED", _json_key(item))
+        libraries, rc = entry.get("libraries"), entry.get("rc")
+        refs = [(entry.get("sdc"), "sdc")]
+        if technology:
+            if not isinstance(libraries, list) or not libraries:
+                raise MetricRefusal("D19_LIBRARY_MAPPING_MISSING", _json_key(item))
+            if (not isinstance(rc, Mapping) or not isinstance(rc.get("corner"), str)
+                    or not rc["corner"] or "model" not in rc):
+                raise MetricRefusal("D19_RC_MAPPING_MISSING", _json_key(item))
+            refs += [(rc["model"], "rc"), *((lib, "library") for lib in libraries)]
+        elif libraries or rc or "corner" in entry:
+            raise MetricRefusal("D19_TECHNOLOGY_FEATURE_CONFLICT", "portable mapping declares technology")
+        for ref, label in refs:
+            current = _d19_ref(project, ref, _json_key(item) + ":" + label)
+            consumed[current["path"]] = current["sha256"]
+        actual.append(item)
+    if (len(actual) != len(set(map(_json_key, actual)))
+            or set(map(_json_key, actual)) != set(map(_json_key, expected))):
+        missing = set(map(_json_key, expected)) - set(map(_json_key, actual))
+        raise MetricRefusal("D19_REQUIRED_SCENARIO_MISSING", ",".join(sorted(missing)))
+    producer = HERE / "design_one_shot_runner.py"
+    binding = {"sources": sources, "consumed_inputs": dict(sorted(consumed.items())),
+               "producer_sha256": _sha(producer.read_bytes()),
+               "checker_sha256": _sha(Path(__file__).read_bytes()),
+               "context_sha256": context["context_sha256"]}
+    artifacts = {}
+    for relative, body in documents.items():
+        path = _safe_project_file(project, relative)
+        if publish:
+            write_json(path, {**body, "producer_binding": binding})
+        if not path.is_file() or json.loads(path.read_text()).get("producer_binding") != binding:
+            raise MetricRefusal("D19_PRODUCER_BINDING_MISSING", relative)
+        artifacts[relative] = {"path": relative, "sha256": _sha(path.read_bytes())}
+    result = {"schema": "vibeic.flow109.d19-plan-admission.v1", "step_id": "D19",
+            "binding": binding, "artifacts": artifacts, "authorities": authorities,
+            "scenarios": actual, "mapping": mapping, "native_dispatched": False,
+            "native_controls_qualification": "NOT_MEASURED"}
+    if publish and d19_admission(project, context) != result:
+        raise MetricRefusal("D19_INPUTS_CHANGED_DURING_PUBLICATION", "plan inputs")
+    return result
+
+
+def accept_d19(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    """Reopen the actual producer's existing contracts and all consumed files.
+
+    The exception obligation stays unimplemented until independently measured;
+    passing these two plan metrics cannot qualify the row or scan timing.
+    """
+    result = {"schema": SCHEMA, "row_id": "D19", "status": "NOT_MEASURED",
+              "delivery_blocked": True, "obligations": []}
+    try:
+        current = d19_admission(project, context)
+        if component.get("d19_plan_admission") != current:
+            raise MetricRefusal("D19_PRODUCER_RECEIPT_STALE", "current plan differs")
+        consumed = dict(current["binding"]["consumed_inputs"])
+        if not context["features"]["technology_specific"]:
+            import _path_layout as layout
+            outputs = component.get("portable_sdc_outputs")
+            if not isinstance(outputs, list) or len(outputs) != len(current["mapping"]):
+                raise MetricRefusal("D19_PORTABLE_SDC_OUTPUTS_MISSING", "current producer outputs")
+            for output, entry in zip(outputs, current["mapping"]):
+                expected = (layout.constraints_dir(project) /
+                            f"{entry['mode']}.{entry['check']}.sdc").relative_to(project).as_posix()
+                if (not isinstance(output, Mapping) or output.get("source_sdc") != entry["sdc"]
+                        or not isinstance(output.get("sdc"), Mapping)
+                        or output["sdc"].get("path") != expected):
+                    raise MetricRefusal("D19_PORTABLE_SDC_OUTPUT_MISMATCH", expected)
+                actual_output = _d19_ref(project, output["sdc"], expected)
+                if actual_output["sha256"] != entry["sdc"]["sha256"]:
+                    raise MetricRefusal("D19_PORTABLE_SDC_OUTPUT_MISMATCH", expected)
+                consumed[actual_output["path"]] = actual_output["sha256"]
+        binding = current["binding"]
+        identity = {"producer": {"sha256": binding["producer_sha256"]},
+                    "checker": {"sha256": binding["checker_sha256"]},
+                    "tool_execution": {"kind": "python_constraint_plan_admission",
+                                       "native_qualification": "NOT_MEASURED"},
+                    "consumed_inputs": consumed,
+                    "requirements": current["artifacts"],
+                    "configuration": {"context_sha256": context["context_sha256"],
+                                      "sources": binding["sources"]}}
+        for obligation in context["resolved_row"]["obligations"]:
+            oid = obligation["id"]
+            spec = D19_BINDINGS.get(oid)
+            if spec is None or any(obligation["expectation"].get(key) != value
+                                   for key, value in spec.items()):
+                result["obligations"].append({"id": oid, "status": "UNIMPLEMENTED_METRIC_BINDING"})
+                continue
+            name = oid.split(".")[-1]
+            if name == "mode_library_rc_mapping" and not context["features"]["technology_specific"]:
+                result["obligations"].append({"id": oid, "status": "NOT_MEASURED",
+                    "reason": "D19_TARGET_TECHNOLOGY_NOT_SPECIFIED"})
+                continue
+            authority = dict(current["authorities"][name])
+            if name == "mode_library_rc_mapping":
+                authority["reference_identity"] = identity
+            measured = {"status": "MEASURED", "identity": identity,
+                        "value": current["scenarios"] if name == "scenario_constraints" else current["mapping"]}
+            status, detail = evaluate_operator(spec["operator"], measured, authority)
+            result["obligations"].append({"id": oid, "status": status,
+                "measurement": measured, "authority": authority, "detail": detail})
+        statuses = [item["status"] for item in result["obligations"]]
+        if statuses and all(status == "PASS" for status in statuses):
+            result.update(status="PASS", delivery_blocked=False)
+        elif "FAIL" in statuses:
+            result["status"] = "FAIL"
+        result["reason"] = "D19_PLAN_METRICS_ONLY_NATIVE_CONTROLS_NOT_QUALIFIED"
+    except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+        result.update(reason=getattr(exc, "code", "D19_METRIC_REFUSED"), detail=str(exc))
+    return result
 
 
 def _d62_bounds_authority(project: Path, relative: str,
