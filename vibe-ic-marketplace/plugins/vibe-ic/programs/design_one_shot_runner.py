@@ -23913,6 +23913,24 @@ def step_lec_equivalence(project: Path, top_name: str, container: str,
     this step's row.
     """
     results = list(results or [])
+    d25_context = None
+    if any((project / relative).exists() or (project / relative).is_symlink()
+           for relative in (
+            'input/flow109/D25.json', 'input/flow109/D25_source_authority.json',
+            'reports/lec_eqy_execution.json')):
+        import flow109
+        try:
+            owner = flow109.validate_execution_context(json.loads(
+                Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+            rows = owner.get('resolved_rows') or [owner['resolved_row']]
+            if any(row['id'] == 'D25' for row in rows):
+                d25_context = (flow109.component_context(owner, requested_step='D25')
+                               if owner.get('resolved_rows') else owner)
+        except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError) as exc:
+            return results + [StepResult(
+                'lec_equivalence', 'NOT_MEASURED', 0.0,
+                'D25_REUSE_REFUSED: ' + str(exc),
+                reason_class=_V.ReasonClass.INPUT_ABSENT)]
     import synth_handoff_netlist_check as _handoff
     bound = _handoff.bound_handoff(project)
     if bound is not None and bound['verdict'] != 'PASS':
@@ -23953,6 +23971,32 @@ def step_lec_equivalence(project: Path, top_name: str, container: str,
                        time.time() - t0, _why,
                        reason_class=_V.ReasonClass.INPUT_ABSENT))
         return results
+    if d25_context is not None:
+        import flow109_metric_acceptance as metrics
+        import librelane_eqy as native
+        try:
+            execution = project / 'reports/lec_eqy_execution.json'
+            if execution.is_symlink() or not execution.is_file():
+                raise metrics.MetricRefusal('D25_NATIVE_EXECUTION_ABSENT',
+                                            'qualified original execution is required for reuse')
+            rtl = sorted(_pl.rtl_dir(project).glob('*.sv')) + sorted(
+                _pl.rtl_dir(project).glob('*.v'))
+            folder = native.d25_run(project, top_name, rtl, project / gate_netlist)
+            accepted = metrics.accept_d25(project, d25_context)
+            status = accepted['status']
+            return results + [StepResult(
+                'lec_equivalence', status, time.time() - t0,
+                'retained named Yosys.EQY: ' + accepted['reason'],
+                extras={'native_reuse': {'folder': str(folder),
+                        'producer_reused': status in ('PASS', 'FAIL'),
+                        'metric_acceptance': accepted}},
+                reason_class=_V.ReasonClass.INPUT_ABSENT if status == 'NOT_MEASURED' else '')]
+        except (flow109.Flow109Error, native.Refusal, metrics.MetricRefusal,
+                OSError, ValueError, KeyError, TypeError, ImportError) as exc:
+            return results + [StepResult(
+                'lec_equivalence', 'NOT_MEASURED', time.time() - t0,
+                'D25_REUSE_REFUSED: ' + str(exc),
+                reason_class=_V.ReasonClass.INPUT_ABSENT)]
     lec_run = PROGRAMS_DIR / "lec_run.py"
     if lec_run.is_file():
         cmd = _lec_run_argv(
