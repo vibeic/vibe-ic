@@ -1688,6 +1688,20 @@ def phase2_pdk(project: Path, *, selected: str | None = None) -> tuple[str, str]
     omission retains the existing primary-target result.
     """
     import declared_pdk_is_the_pdk_used_check as declared
+    import pdk_family_identity as identity
+
+    def distribution_name(value):
+        if not isinstance(value, str):
+            return value
+        name, _ = identity.canonical_entry(value, exact_distribution=True)
+        if name is not None:
+            return name
+        if any(identity.normalise(value) == identity.normalise(candidate)
+               for candidate in identity.registry_names()):
+            raise Refusal('LL_PHASE2_PDK_INVALID', 'ambiguous registered PDK spelling')
+        # Preserve opaque declarations for the existing native resolvability
+        # gate; an unregistered token gains no spelling aliases here.
+        return value
 
     paths = [project / 'phase1/pdk_staging_read.json',
              project / 'phase1/merged_docs/L19_CONSTRAINTS_PDK.json',
@@ -1726,17 +1740,19 @@ def phase2_pdk(project: Path, *, selected: str | None = None) -> tuple[str, str]
                             and key == 'staged_identifier'
                             and scope.get('adopted_pdk_target')):
                         continue
-                    values.add(value.strip())
+                    values.add(distribution_name(value.strip()))
         except (OSError, ValueError) as exc:
             raise Refusal('LL_PHASE2_PDK_INVALID', f'{path.relative_to(project)}: {exc}') from exc
     pdk, source = declared.declared_target(project)
     if not pdk or not source or not values:
         raise Refusal('LL_PHASE2_PDK_UNDECLARED', 'declare PDK in Phase-2 L19 or input/project.json')
+    pdk = distribution_name(pdk)
     if values != {pdk}:
         raise Refusal('LL_PHASE2_PDK_CONFLICT', 'Phase-2 PDK declarations disagree')
     if selected is not None and selected != 'auto':
         if not isinstance(selected, str) or not _PDK_NAME.fullmatch(selected):
             raise Refusal('LL_PHASE2_PDK_INVALID', 'selected PDK must name an exact distribution')
+        selected = distribution_name(selected)
         # The scalar primary is not the complete declaration of a multi-PDK
         # design. Reuse the backend's existing, one-directional family/revision
         # rule; a caller may select only a process the design already names.
@@ -1752,7 +1768,7 @@ def phase2_pdk(project: Path, *, selected: str | None = None) -> tuple[str, str]
         pdk, source = selected, f'run selection {selected}; declared by {source}'
     switch = project / 'phase3/librelane_switch.json'
     if switch.is_file():
-        selected = _load(switch).get('pdk')
+        selected = distribution_name(_load(switch).get('pdk'))
         if selected is not None and selected != pdk:
             raise Refusal('LL_PHASE2_PDK_CONFLICT', 'switch.pdk disagrees with Phase-2 declaration')
     return pdk, source
