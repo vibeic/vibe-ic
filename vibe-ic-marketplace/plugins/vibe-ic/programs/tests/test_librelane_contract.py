@@ -637,6 +637,128 @@ def test_stapostpnr_receipt_binds_mounted_liberty_bytes(tmp_path, monkeypatch):
                            pdk_root='/pdk/process')
 
 
+def _sta_journal_process_double(tmp_path, monkeypatch, *, step='OpenROAD.STAPrePNR',
+                                corners=('nom_typ',), returncode=0):
+    """Real receipt owner; substitute only native execution, never signoff."""
+    from _stated_eda_image import mock_docker_route
+    mock_docker_route(monkeypatch)
+    project = tmp_path / 'design'
+    netlist = project / 'neutral.v'
+    netlist.parent.mkdir(parents=True)
+    netlist.write_text('module neutral; endmodule\n')
+    sdc = project / 'neutral.sdc'
+    sdc.write_text('# TEST DOUBLE: no approved electrical constraints\n')
+    liberty = project / 'neutral.lib'
+    liberty.write_text('/* TEST DOUBLE: not a qualified timing model */\n')
+    views = {key: str(put(project / (key + '.json'), {})) for key in ('odb', 'def')}
+    views.update(nl=str(netlist), sdc=str(sdc))
+    initial = put(project / 'initial.json', views)
+    config = put(project / 'config.json', {'meta': {'step': step},
+        'STA_CORNERS': list(corners), 'PNR_SDC_FILE': str(sdc),
+        'CELL_LIBS': {'*': [str(liberty)]}})
+    calls = []
+
+    def native_process_double(argv, **_kwargs):
+        calls.append(argv)
+        folder = Path(argv[argv.index('-o') + 1])
+        for flag, name in (('-c', 'config.json'), ('-i', 'state_in.json')):
+            (folder / name).write_bytes(Path(argv[argv.index(flag) + 1]).read_bytes())
+        put(folder / 'state_out.json', views)
+        for corner in corners:
+            log = folder / corner / 'sta.log'
+            log.parent.mkdir(parents=True)
+            log.write_text('TEST DOUBLE: no native STA qualification\n'
+                f"Reading cell library for the '{corner}' corner at '{liberty}'\n"
+                f"Reading top-level netlist at '{netlist}'\n"
+                f"Reading design constraints file at '{sdc}'\n")
+        return SimpleNamespace(returncode=returncode, stdout='TEST DOUBLE process output', stderr='')
+
+    monkeypatch.setattr(contract, 'image_capability', lambda *_a, **_k: None)
+    monkeypatch.setattr(contract, 'run_container', native_process_double)
+
+    def invoke():
+        return contract.run_chain(project, 'candidate', [(step, config, initial)], pdk_root='/pdk')[0]
+
+    return project, invoke, calls
+
+
+@pytest.mark.parametrize('corners', [('nom_typ',), ('nom_typ', 'nom_other')],
+                         ids=['one-journal', 'two-journals'])
+def test_staprepnr_success_receipt_seals_emitted_journals(tmp_path, monkeypatch, corners):
+    _project, invoke, calls = _sta_journal_process_double(tmp_path, monkeypatch, corners=corners)
+    folder = invoke()
+    receipt = contract.validate_step_receipt(folder, 'OpenROAD.STAPrePNR')
+    assert len(calls) == 1
+    recorded = {f'{corner}/sta.log': receipt['sha256'].get(f'{corner}/sta.log', 'UNBOUND')
+                for corner in corners}
+    expected = {f'{corner}/sta.log': contract.digest(folder / corner / 'sta.log') for corner in corners}
+    assert recorded == expected, {'actual': recorded, 'expected': expected}
+
+
+@pytest.mark.parametrize('step', ['OpenROAD.STAPrePNR', 'OpenROAD.STAPostPNR'])
+@pytest.mark.parametrize('damage', ['tampered', 'missing'])
+def test_sta_claimed_journal_changes_refused(tmp_path, monkeypatch, step, damage):
+    _project, invoke, calls = _sta_journal_process_double(tmp_path, monkeypatch, step=step)
+    folder = invoke()
+    contract.validate_step_receipt(folder, step)
+    before = (folder / 'vibeic_receipt.json').read_bytes()
+    log = folder / 'nom_typ/sta.log'
+    log.write_text('changed read journal\n') if damage == 'tampered' else log.unlink()
+    try:
+        contract.validate_step_receipt(folder, step)
+        actual = 'ACCEPTED'
+    except contract.Refusal as exc:
+        actual = exc.code
+    assert actual == 'LL_STEP_OUTPUT_UNBOUND', {'actual': actual, 'step': step, 'damage': damage}
+    assert (folder / 'vibeic_receipt.json').read_bytes() == before
+    assert len(calls) == 1
+
+
+def test_staprepnr_historical_unsealed_receipt_stays_ineligible_for_d30(tmp_path, monkeypatch):
+    """Synthetic historical receipt; actual cache and D30 readset consumers."""
+    import flow109_metric_acceptance as metrics
+    project, invoke, calls = _sta_journal_process_double(tmp_path, monkeypatch)
+    folder = invoke()
+
+    def ref(path):
+        return {'path': str(path.relative_to(project)), 'sha256': contract.digest(path)}
+
+    # Isolate the native readset reader. These metadata doubles confer no D26
+    # row approval, LEC, timing or full D30 acceptance.
+    metadata = put(project / 'readset-metadata.json', {'test_double': 'D26 readset metadata only'})
+    admission = {'requires_scan': True, 'pre_route_timing': {'D26_result': ref(metadata),
+        'timing_modes': {'receipt': ref(metadata), 'post_scan_arms': {'functional': {
+            'native': {'folder': str(folder.relative_to(project))},
+            'slack_gate': {'corners': {'nom_typ': {'test_double': True}}}}}}},
+        'normalized_preroute_chain': {'points': {'D26': {'input': ref(project / 'neutral.v')}}}}
+    current = metrics.d30_consumed_timing(project, admission)
+    assert current['status'] == 'MEASURED', current
+    # Build the historical fixture by omitting the producer binding that old
+    # executions never wrote. Capture its bytes before exercising reuse.
+    receipt_path = folder / 'vibeic_receipt.json'
+    historical = json.loads(receipt_path.read_text())
+    del historical['sha256']['nom_typ/sta.log']
+    put(receipt_path, historical)
+    before = receipt_path.read_bytes()
+    contract.validate_step_receipt(folder, 'OpenROAD.STAPrePNR')
+    assert invoke() == folder
+    assert len(calls) == 1, 'historical reuse must not manufacture a fresh native execution'
+    assert receipt_path.read_bytes() == before, 'cache must not re-sign or upgrade old receipts'
+    observed = metrics.d30_consumed_timing(project, admission)
+    assert observed['status'] == 'NOT_MEASURED', observed
+    assert observed['reason'] == 'D30_NATIVE_READ_LOG_UNBOUND', observed
+    assert receipt_path.read_bytes() == before
+
+
+def test_staprepnr_failed_native_process_does_not_publish_receipt(tmp_path, monkeypatch):
+    project, invoke, calls = _sta_journal_process_double(tmp_path, monkeypatch, returncode=1)
+    with pytest.raises(contract.Refusal, match='LL_STEP_FAILED'):
+        invoke()
+    assert len(calls) == 1
+    assert list(project.glob('phase3/librelane/*/nom_typ/sta.log'))
+    assert not list(project.glob('phase3/librelane/*/vibeic_receipt.json'))
+
+
 def test_stream_lane_and_synthesis_namespace_keep_separate_receipts(tmp_path, monkeypatch):
     from _stated_eda_image import mock_docker_route
     mock_docker_route(monkeypatch)
