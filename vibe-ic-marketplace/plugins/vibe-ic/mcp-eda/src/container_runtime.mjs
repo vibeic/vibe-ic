@@ -60,7 +60,8 @@ export function ensureContainerRuntime({ env = process.env, run = spawnSync } = 
   let current = null;
   try { current = inspectJson("container", container, run); }
   catch (error) {
-    if (!error.message.includes("No such") && !error.message.includes("not found")) throw error;
+    const message = error.message.toLowerCase();
+    if (!message.includes("no such") && !message.includes("not found")) throw error;
   }
 
   if (current && current.Image !== target.Id) {

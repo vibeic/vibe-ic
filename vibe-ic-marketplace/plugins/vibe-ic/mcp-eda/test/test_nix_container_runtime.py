@@ -19,7 +19,7 @@ function run(_cmd, args) {
   if (args[0] === "image" && args[1] === "inspect") return result(0, JSON.stringify([{
     Id: digest, RepoDigests: [repoDigest]
   }]));
-  if (args[0] === "inspect") return result(1, "", "No such object");
+  if (args[0] === "inspect") return result(1, "", "error: no such object: vibeic-eda");
   if (args[0] === "run") return result(0, "container-id");
   if (args[0] === "exec") return result(0);
   throw new Error("unexpected docker call " + JSON.stringify(args));
