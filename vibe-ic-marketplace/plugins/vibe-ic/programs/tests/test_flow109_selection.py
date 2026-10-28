@@ -2446,60 +2446,70 @@ def test_selected_lint_window_stops_at_its_own_step():
 def test_public_d10_missing_metric_binding_is_not_silent_success(tmp_path, monkeypatch):
     runner = _public_d09_entry(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, 'argv', ['D10' if x == 'D09' else x for x in sys.argv])
-    monkeypatch.setattr(runner, '_run_phase', lambda *args, **kwargs: 0)
-    monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: ('PASS', None))
-    monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': 'PASS', 'steps': []})
-    rc = runner._main()
+    monkeypatch.setattr(runner, '_run_phase', lambda *_a, **_k: pytest.fail('D10 must not generate RTL'))
+    assert runner._main() != 0
     attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
     terminal = json.loads((attempt / 'result.json').read_text())
-    assert rc != 0
     assert terminal['default_row_status'] == 'NOT_MEASURED'
     assert terminal['components'][0]['step_id'] == 'D10'
     assert terminal['delivery_accepted'] is False
     summary = json.loads((tmp_path / 'reports/orchestrator/vibe_ic_one_shot.json').read_text())
     assert summary['d10_finalization']['verdict'] == 'NOT_MEASURED'
-    assert 'D10_METRIC_BINDINGS_UNIMPLEMENTED' in summary['d10_finalization']['detail']
+    assert summary['d10_finalization']['evidence']['input_refusal']['reason'] == 'D10_D09_INPUT_UNAVAILABLE'
+
 
 
 def test_public_d10_does_not_overwrite_existing_attempt_result(tmp_path, monkeypatch):
     runner = _public_d09_entry(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, 'argv', ['D10' if x == 'D09' else x for x in sys.argv])
     retained = b'{"retained":true}\n'
-    def child(*args, **kwargs):
-        (Path(os.environ[flow109.ATTEMPT_ENV]) / 'result.json').write_bytes(retained)
-        return 0
-    monkeypatch.setattr(runner, '_run_phase', child)
-    monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: ('PASS', None))
-    monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': 'PASS', 'steps': []})
+    original = flow109._new_attempt
+    def existing_result(*args, **kwargs):
+        attempt = original(*args, **kwargs)
+        (attempt / 'result.json').write_bytes(retained)
+        return attempt
+    monkeypatch.setattr(flow109, '_new_attempt', existing_result)
+    monkeypatch.setattr(runner, '_run_phase', lambda *_a, **_k: pytest.fail('D10 must not generate RTL'))
     assert runner._main() != 0
     attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
     assert (attempt / 'result.json').read_bytes() == retained
 
 
+
 def test_d10_refusal_tracks_selected_registry_binding(tmp_path, monkeypatch):
     import vibe_ic_one_shot_runner as runner
+    context = flow109.execution_context(flow109.resolve_plan(profile()), 'D10', 'D10')
     request = tmp_path / 'context.json'
-    request.write_text('{}')
+    request.write_text(json.dumps(context))
     monkeypatch.setenv(flow109.CONTEXT_ENV, str(request))
-    context = {'resolved_row': {'profile': {'dispatch': {'flow109_metrics_status': 'UNIMPLEMENTED'}}}}
-    monkeypatch.setattr(flow109, 'validate_execution_context', lambda _: context)
-    assert runner._d10_metrics_unimplemented() is True
-    context['resolved_row']['profile']['dispatch']['flow109_metrics_status'] = 'IMPLEMENTED'
-    assert runner._d10_metrics_unimplemented() is False
+    assert runner._flow109_selected_row('D10') is True
+    row = context['resolved_row']
+    assert row['profile']['dispatch']['flow109_metrics_status'] == 'IMPLEMENTED'
+    assert len(row['obligations']) == 3
+    assert all(r['status'] == 'IMPLEMENTED_METRIC_BINDING' for r in row['obligations'])
+    context['resolved_row']['id'] = 'D09'
+    request.write_text(json.dumps(context))
+    assert runner._flow109_selected_row('D10') is False
+
 
 
 def test_public_d10_does_not_mask_failed_phase2(tmp_path, monkeypatch):
+    # D09 now owns the Phase2 producer. A failed predecessor blocks P0;
+    # D10 no longer repeats that generator to rediscover the same failure.
     runner = _public_d09_entry(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, 'argv', ['D10' if x == 'D09' else x for x in sys.argv])
-    monkeypatch.setattr(runner, '_run_phase', lambda *args, **kwargs: 1)
-    monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: ('FAIL', None))
-    monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': 'FAIL', 'steps': []})
+    path = tmp_path / 'reports/flow109/default_rows/D09.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({'step_id': 'D09', 'default_row_status': 'FAIL',
+                               'component_status': 'FAIL', 'completed': False}))
+    monkeypatch.setattr(runner, '_run_phase', lambda *_a, **_k: pytest.fail('D10 must not regenerate failed D09'))
+    monkeypatch.setattr(runner, '_d10_p0_native', lambda *_: pytest.fail('failed D09 cannot launch P0'))
     assert runner._main() != 0
     summary = json.loads((tmp_path / 'reports/orchestrator/vibe_ic_one_shot.json').read_text())
-    phase2 = next(row for row in summary['phases'] if row['name'] == 'phase2')
-    assert phase2['verdict'] == 'FAIL'
+    assert summary['d10_finalization']['evidence']['input_refusal']['reason'] == 'D10_D09_NOT_ACCEPTED'
     attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
     assert json.loads((attempt / 'result.json').read_text())['default_row_status'] == 'NOT_MEASURED'
+
 
 
 def test_d10_yosys_observation_requires_matching_current_native_binding(tmp_path, monkeypatch):
@@ -2566,29 +2576,23 @@ def test_d10_yosys_observation_follows_hierarchy_and_refuses_unknown_cells(tmp_p
 
 
 def test_public_d10_keeps_yosys_observation_separate_from_row_verdict(tmp_path, monkeypatch):
-    import hashlib
     import _cdc_netlist as native
     runner = _public_d09_entry(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, 'argv', ['D10' if x == 'D09' else x for x in sys.argv])
     path = tmp_path / native.NETLIST_REL
     path.parent.mkdir(parents=True)
-    path.write_text(json.dumps({'modules': {'top': {'cells': {}}}}))
-    bound = {'sha256': {'netlist.json': hashlib.sha256(path.read_bytes()).hexdigest()},
-             'input': {'fingerprint': 'current-input'}}
-    monkeypatch.setattr(native, 'load', lambda _: SimpleNamespace(top='top'))
-    monkeypatch.setattr(native, 'require_binding', lambda *_: bound)
-    monkeypatch.setattr(runner, '_run_phase', lambda *args, **kwargs: 0)
-    monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: ('PASS', None))
-    monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': 'PASS', 'steps': []})
+    raw = json.dumps({'modules': {'top': {'cells': {}}}}).encode()
+    path.write_bytes(raw)
+    monkeypatch.setattr(runner, '_run_phase', lambda *_a, **_k: pytest.fail('D10 must not generate RTL'))
     assert runner._main() != 0
     attempt = next((tmp_path / 'reports/flow109/attempts').glob('window-*'))
     terminal = json.loads((attempt / 'result.json').read_text())
     assert terminal['default_row_status'] == 'NOT_MEASURED'
-    observation = terminal['components'][0]['evidence']['yosys_observation']
-    assert observation['elaboration_errors'] == 0
-    assert observation['unexpected_blackboxes'] == 0
-    assert observation['qualification'] == 'NOT_MEASURED'
     assert terminal['delivery_accepted'] is False
+    assert 'yosys_observation' not in terminal['components'][0]['evidence']
+    assert terminal['components'][0]['evidence']['p0_native']['status'] == 'NOT_MEASURED'
+    assert path.read_bytes() == raw
+
 
 
 @pytest.mark.parametrize('mode', ['pass', 'yosys_fail', 'rtl_changed'])
@@ -2604,6 +2608,17 @@ def test_public_d10_runs_isolated_p0_but_never_promotes_missing_inventory(tmp_pa
     top = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
     top.parent.mkdir(parents=True)
     top.write_text(json.dumps({'top_module': 'top'}))
+    import hashlib
+    d09 = tmp_path / 'reports/flow109/default_rows/D09.json'
+    d09.parent.mkdir(parents=True, exist_ok=True)
+    d09.write_text(json.dumps({'step_id': 'D09', 'completed': True,
+        'component_status': 'PASS', 'default_row_status': 'PASS',
+        'fixture_scope': 'SOFTWARE_UPSTREAM_PRECONDITION_ONLY',
+        'evidence': {'rtl_inventory': [{'path': 'top.v',
+            'sha256': hashlib.sha256(rtl.read_bytes()).hexdigest()}]}}))
+    d01 = layout.report_path(tmp_path, 'phase1_one_shot.json')
+    d01.parent.mkdir(parents=True, exist_ok=True)
+    d01.write_text('{}')
     prior = tmp_path / frontend.RTL_ELAB_REL
     prior.parent.mkdir(parents=True, exist_ok=True)
     prior.write_bytes(b'prior-native-evidence\n')
@@ -2641,10 +2656,17 @@ def test_public_d10_runs_isolated_p0_but_never_promotes_missing_inventory(tmp_pa
 def test_public_d10_never_runs_p0_after_stale_or_failed_phase2(tmp_path, monkeypatch, phase_verdict, fresh):
     runner = _public_d09_entry(tmp_path, monkeypatch)
     monkeypatch.setattr(sys, 'argv', ['D10' if x == 'D09' else x for x in sys.argv])
-    monkeypatch.setattr(runner._pl, 'published_here', lambda *_: fresh)
-    monkeypatch.setattr(runner, '_run_phase', lambda *args, **kwargs: 0)
-    monkeypatch.setattr(runner, '_row_verdict', lambda *args, **kwargs: (phase_verdict, None))
-    monkeypatch.setattr(runner, '_read_report', lambda *args, **kwargs: {'verdict': phase_verdict, 'steps': []})
+    import hashlib
+    rtl = tmp_path / 'phase2/stage1/rtl/top.v'
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text('module top; endmodule\n')
+    d09 = tmp_path / 'reports/flow109/default_rows/D09.json'
+    d09.parent.mkdir(parents=True, exist_ok=True)
+    d09.write_text(json.dumps({'step_id': 'D09', 'completed': phase_verdict == 'PASS',
+        'component_status': phase_verdict, 'default_row_status': phase_verdict,
+        'evidence': {'rtl_inventory': [{'path': 'top.v',
+            'sha256': hashlib.sha256(rtl.read_bytes()).hexdigest() if fresh else '0' * 64}]}}))
+    monkeypatch.setattr(runner, '_run_phase', lambda *_a, **_k: pytest.fail('D10 must not repeat D09'))
     def forbidden(*_args):
         raise AssertionError('P0 must not run on a stale or failed producer')
     monkeypatch.setattr(runner, '_d10_p0_native', forbidden)
@@ -2951,6 +2973,10 @@ def test_d10_p0_consumer_binds_actual_argv_and_rejects_stale_inputs(tmp_path, mo
 
 def test_d10_dft_owner_finalizes_mismatch_as_fail(tmp_path, monkeypatch):
     import vibe_ic_one_shot_runner as runner
+    context = flow109.execution_context(flow109.resolve_plan(profile()), 'D10', 'D10')
+    request = tmp_path / 'context.json'
+    request.write_text(json.dumps(context))
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(request))
     monkeypatch.setattr(runner, '_d10_p0_native', lambda _p: {'status': 'PASS'})
     monkeypatch.setattr(runner, '_d10_yosys_observation', lambda _p: {})
     monkeypatch.setattr(runner, '_d10_dft_ports', lambda _p, _p0: {'status': 'FAIL', 'reason': 'DFT_PORT_MISMATCH'})

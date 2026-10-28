@@ -1661,50 +1661,40 @@ def _d10_dft_ports(project: Path, p0: dict) -> dict:
         return {'status': 'NOT_MEASURED', 'reason': 'DFT_PORT_INPUT_UNAVAILABLE', 'detail': str(exc)}
 
 
-def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False) -> dict:
-    """Publish an honest D10 terminal until its three metric bindings exist."""
+def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False,
+                                    input_refusal: dict | None = None) -> dict:
+    """BLOCKING: grade the existing native P0 and complete D10 row obligations."""
     import flow109
+    import flow109_metric_acceptance as metrics
 
-    evidence = {'yosys_observation': _d10_yosys_observation(project),
-                'p0_native': (_d10_p0_native(project) if run_p0 else
-                              {'status': 'NOT_MEASURED',
-                               'detail': 'current passing Phase 2 report is unavailable'})}
+    evidence = {'p0_native': (_d10_p0_native(project) if run_p0 else
+                             {'status': 'NOT_MEASURED',
+                              'detail': 'D10 current adopted input is unavailable'})}
     try:
-        import librelane_contract as contract
-        import _cdc_netlist as native
-        evidence['p0_consumer_identity'] = _validate_d10_p0_consumer(project, evidence['p0_native'])
-    except (native.Refusal, contract.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        evidence['p0_consumer_identity'] = {'status': 'NOT_MEASURED', 'detail': str(exc)}
-    evidence['dft_port_consistency'] = _d10_dft_ports(project, evidence['p0_native'])
-    try:
-        from flow109_metric_acceptance import observe_d10_frontend_metrics
-        path = os.environ.get(flow109.CONTEXT_ENV)
-        if not path:
-            raise ValueError('D10 execution context is unavailable')
-        context = flow109.validate_execution_context(json.loads(Path(path).read_text()))
-        evidence['native_metric_observation'] = observe_d10_frontend_metrics(
-            project, context, evidence['p0_native'])
-    except (flow109.Flow109Error, OSError, ValueError, TypeError, KeyError, ImportError) as exc:
-        evidence['native_metric_observation'] = {
-            'status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
-            'reason': 'D10_OBSERVATION_UNAVAILABLE', 'detail': str(exc)}
-    dft_failed = evidence['dft_port_consistency'].get('status') == 'FAIL'
-    native_failed = (evidence['native_metric_observation'].get('qualification') == 'PASS'
-                     and evidence['native_metric_observation'].get('status') == 'FAIL')
-    row_failed = dft_failed or native_failed
-    detail = ('D10_METRIC_BINDINGS_UNIMPLEMENTED: elaboration errors, '
-              'unexpected blackboxes and adopted feature inventory require '
-              'a canonical producer and consumer')
-    if (evidence['native_metric_observation'].get('native_failure') or {}).get('status') == 'FAIL':
-        detail = ('D10_QUALIFIED_NATIVE_METRIC_FAILED: missing independent obligations '
-                  'do not erase the measured native defect' if native_failed else
-                  'D10_NATIVE_FAILURE_OBSERVED: TOOL_QUALIFICATION_UNPROVEN; '
-                  'unqualified native evidence cannot close the D10 row contract')
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
+        acceptance = metrics.accept_d10(project, context, evidence['p0_native'])
+    except (flow109.Flow109Error, OSError, ValueError, TypeError, KeyError) as exc:
+        acceptance = {'status': 'NOT_MEASURED', 'reason': 'D10_CONTEXT_UNAVAILABLE',
+                      'detail': str(exc)}
+    evidence['native_metric_observation'] = acceptance.get('native_metric_observation', {})
+    evidence['dft_port_consistency'] = acceptance.get('dft_port_consistency', {})
+    evidence['metric_acceptance'] = acceptance
+    if input_refusal:
+        evidence['input_refusal'] = input_refusal
+    status, detail = acceptance['status'], acceptance['reason']
+    if input_refusal and status != 'FAIL':
+        status, detail = 'NOT_MEASURED', input_refusal['reason']
+    failure = evidence['native_metric_observation'].get('native_failure')
+    if failure:
+        detail = ('D10_QUALIFIED_NATIVE_METRIC_FAILED' if status == 'FAIL' else
+                  'D10_NATIVE_FAILURE_OBSERVED: TOOL_QUALIFICATION_UNPROVEN')
     try:
         finished = flow109.finish_native_window(project, {'steps': [{
-            'status': 'FAIL' if row_failed else 'NOT_MEASURED', 'extras': {
-                'step_id': 'P0', 'default_row_status': 'FAIL' if row_failed else 'NOT_MEASURED',
-                'completed': False, 'detail': detail, 'evidence': evidence,
+            'status': status, 'extras': {
+                'step_id': 'P0', 'default_row_status': status,
+                'completed': status == 'PASS', 'detail': detail, 'evidence': evidence,
+                'metric_acceptance': acceptance, 'metric_acceptance_status': status,
             },
         }]})
     except flow109.Flow109Error as exc:
@@ -1719,24 +1709,10 @@ def _finish_d10_unimplemented_owner(project: Path, *, run_p0: bool = False) -> d
         detail = 'D10_FINALIZATION_REFUSED: immutable attempt result already exists'
     if not isinstance(finished, Mapping):
         detail = 'D10_FINALIZATION_UNAVAILABLE: ' + detail
-    verdict = ('FAIL' if isinstance(finished, Mapping) and row_failed
-               and finished.get('default_row_status') == 'FAIL' else 'NOT_MEASURED')
+    verdict = (status if isinstance(finished, Mapping)
+               and finished.get('default_row_status') == status else 'NOT_MEASURED')
     return {'verdict': verdict, 'whole_flow_verdict': 'NOT_MEASURED',
             'detail': detail, 'evidence': evidence}
-
-
-def _d10_metrics_unimplemented() -> bool:
-    """Do not retain this refusal after the selected row is actually wired."""
-    import flow109
-
-    try:
-        context = flow109.validate_execution_context(json.loads(
-            Path(os.environ[flow109.CONTEXT_ENV]).read_text(encoding='utf-8')))
-        row = context.get('resolved_row') or context['resolved_rows'][0]
-        dispatch = row['profile']['dispatch']
-        return dispatch.get('flow109_metrics_status') == 'UNIMPLEMENTED'
-    except (OSError, ValueError, KeyError, IndexError, TypeError, flow109.Flow109Error):
-        return True
 
 
 def _d09_bound_phase2_evidence(
@@ -5577,6 +5553,31 @@ def _main() -> int:
     # ---------------- Phase 2 ----------------
     _phase2_pad_top_deferred = None
     if not halted_at:
+        if _flow109_selected_row('D10'):
+            import flow109_metric_acceptance as metrics
+            refusal = None
+            try:
+                metrics.d10_adopted_rtl(project)
+            except (metrics.MetricRefusal, OSError, ValueError, TypeError, KeyError) as exc:
+                refusal = {'reason': getattr(exc, 'code', 'D10_D09_INPUT_UNAVAILABLE'),
+                           'detail': str(exc)}
+            acceptance = _finish_d10_unimplemented_owner(
+                project, run_p0=refusal is None, input_refusal=refusal)
+            status = acceptance['verdict']
+            rc = {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[status]
+            plan.append(('phase2', status, rc))
+            out = _pl.report_path(project, 'vibe_ic_one_shot.json')
+            out.parent.mkdir(parents=True, exist_ok=True)
+            _write_runner_summary(out, {
+                'program': 'vibe_ic_one_shot_runner', 'bounded': True,
+                **_delivery_route.report_label(project), 'verdict': status,
+                'halted_at': None if status == 'PASS' else 'phase2',
+                'declared_window': {'entry_step': 'D10', 'exit_step': 'D10'},
+                'phases': [{'name': n, 'verdict': v, 'rc': code} for n, v, code in plan],
+                'd10_finalization': acceptance,
+                'whole_flow_verdict': 'NOT_MEASURED'}, project)
+            lock.release()
+            return rc
         if _sdc_early_entry:
             step8_acceptance = _complete_step8_early_preflight(project)
             status = step8_acceptance['verdict']
@@ -5772,14 +5773,6 @@ def _main() -> int:
                 reports['d09_finalization'] = d09_acceptance
                 verdict = d09_acceptance['verdict']
                 rc = 0 if verdict == 'PASS' else 1 if verdict == 'FAIL' else 2
-            elif _flow109_selected_row('D10') and _d10_metrics_unimplemented():
-                d10_acceptance = _finish_d10_unimplemented_owner(
-                    project, run_p0=(verdict == 'PASS' and _pl.published_here(
-                        _phase_report_path(project, 'phase2_one_shot.json'),
-                        _phase_started['phase2'])))
-                reports['d10_finalization'] = d10_acceptance
-                if verdict != 'FAIL':
-                    verdict, rc = 'NOT_MEASURED', 2
             plan.append(("phase2", verdict, rc))
             reports["phase2"] = rep
             if (verdict == 'NOT_MEASURED' and _execution.request()['mode'] == 'default'
