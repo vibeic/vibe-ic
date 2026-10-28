@@ -19,6 +19,7 @@ interaction, so the argument-handling tests need no docker daemon. The default
 path DOES need one — it asks this host what it has — and it says so rather than
 passing when it could not look.
 """
+import json
 import os
 import re
 import shutil
@@ -50,6 +51,8 @@ def _find(rel):
 SCRIPT = _find(Path("tools") / "vibeic-eda" / "restart-eda.sh")
 RESOLVER = _find(Path("vibe-ic-marketplace") / "plugins" / "vibe-ic" /
                  "programs" / "_eda_image.py")
+MCP_JSON = _find(Path("vibe-ic-marketplace") / "plugins" / "vibe-ic" /
+                 ".mcp.json")
 _skip = pytest.mark.skipif(SCRIPT is None,
                            reason="tools/vibeic-eda/restart-eda.sh not present")
 
@@ -343,20 +346,15 @@ def test_issue2349_a_failed_pull_touches_no_container(tmp_path):
                                      ["rename"]) for l in docker), docker
 
 
-def test_issue2349_install_docs_name_no_image_and_take_the_pull_route():
-    """The shipped install docs take the same route as the published manual: the
-    helper with PULL=1 and no image argument. A tag typed into a doc is a second
-    statement of the image identity, and `:latest` is the one that produced
-    CONTAINER_IMAGE_MISMATCH for every container built by following it.
+def test_install_registration_pulls_latest_but_runs_the_resolved_digest():
+    """The moving tag is discovery only; bootstrap replaces it with RepoDigest
+    before the MCP server and runtime-pair gate start."""
+    config = json.loads(MCP_JSON.read_text(encoding="utf-8"))
+    env = config["mcpServers"]["eda-tools"]["env"]
+    assert env["VIBEIC_EDA_AUTO_BOOTSTRAP"] == "1"
+    assert env["VIBEIC_EDA_IMAGE"] == "ghcr.io/vibeic/vibeic-eda:latest"
 
-    INSTALL_GUIDE.md only: mcp-eda/README.md carries the same route, but the
-    landing delta excludes every `*README.md` (they are regenerated at landing),
-    so a pin on it here would be measured against a README the landing does
-    not take."""
-    for doc in (INSTALL_GUIDE,):
-        text = doc.read_text(encoding="utf-8")
-        assert "PULL=1" in text and "tools/vibeic-eda/restart-eda.sh" in text, doc
-        assert not re.search(r"vibeic/vibeic-eda[:@]", text), (
-            f"{doc.name} names an image reference; the plugin's pin is the only one")
-        assert not re.search(r"docker (pull|run)\b", text), (
-            f"{doc.name} builds the container by hand instead of through the helper")
+    text = INSTALL_GUIDE.read_text(encoding="utf-8")
+    assert "resolves that tag to an immutable registry digest" in text
+    assert "moving tag is never\nused as run provenance" in text
+    assert "No Docker socket path or host storage location is shipped" in text

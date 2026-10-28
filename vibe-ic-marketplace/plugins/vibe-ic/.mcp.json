@@ -5,7 +5,9 @@
       "command": "node",
       "args": ["${CLAUDE_PLUGIN_ROOT}/mcp-eda/src/bootstrap.mjs"],
       "env": {
-        "EDA_CONTAINER": "vibeic-eda"
+        "EDA_CONTAINER": "vibeic-eda",
+        "VIBEIC_EDA_AUTO_BOOTSTRAP": "1",
+        "VIBEIC_EDA_IMAGE": "ghcr.io/vibeic/vibeic-eda:latest"
       }
     }
   }
