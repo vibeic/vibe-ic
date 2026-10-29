@@ -6088,7 +6088,7 @@ def _main() -> int:
         fresh_window = bool(
             p2_window.get("declared_window")
             and _pl.published_here(
-                _phase_report_path(project, "phase2_one_shot.json"),
+                phase2_report,
                 _phase_started["phase2"]))
         window_rows = [(n, v, rc) for n, v, rc in plan if v != "SKIPPED"]
         window_verdict, window_reasons = _roll_up(
