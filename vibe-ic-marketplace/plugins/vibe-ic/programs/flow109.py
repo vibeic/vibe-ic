@@ -1194,7 +1194,9 @@ def _canonical_owner_dispatch(row: Mapping) -> dict | None:
     actual = step_preflight.runner_for_step(entry)
     # Default Steps 8, 10, 11 and 12 are retained front-door consumers whose special
     # entry branches deliberately sit outside the generic span-head table.
-    if actual is None and owner == "design_one_shot_runner" and entry in ("8", "10", "11", "12"):
+    if (actual is None and owner == "design_one_shot_runner"
+            and (entry in ("8", "10", "11", "12")
+                 or row.get('id') == 'D12' and entry == exit_ == '3')):
         actual = owner
     if actual != owner:
         raise Flow109Error("FLOW109_OWNER_MISMATCH",

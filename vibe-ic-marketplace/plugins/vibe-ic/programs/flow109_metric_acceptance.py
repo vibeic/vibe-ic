@@ -2393,6 +2393,307 @@ def accept_d11(project: Path, context: Mapping[str, Any], *, current_execution: 
     return result
 
 
+D12_PURPOSE = 'D12.default.complete_current_early_rtl'
+D12_STEPS = ('CDC.RegCrossing', 'CDC.AsyncInput', 'RDC.ResetDependency')
+D12_IDS = ('base_06.clock_reset_crossing_census', 'base_06.unresolved_crossings',
+           'base_06.cdc_protocol_results')
+D12_FIELDS = ('kind', 'name', 'clock', 'detail')
+
+
+def d12_model_sources() -> dict:
+    """The existing decoded model/rule and role consumers, not a new engine."""
+    return {name: _sha((HERE / name).read_bytes()) for name in (
+        '_cdc_netlist.py', 'ai_signed_judgement.py', 'instrument_calibration.py',
+        '_hdl_code_text.py', 'rtl_final_bundle_integrity.py')}
+
+
+def d12_subject(project: Path) -> dict:
+    import _cdc_netlist as native
+    project = Path(project).resolve()
+    path = _safe_project_file(project, native.NETLIST_REL)
+    nl = native.load(path)
+    binding = native.require_binding(project, path, nl)
+    role_path = _safe_project_file(project, 'reports/audit/ai_judgements/3.json')
+    roles = ({'path': role_path.relative_to(project).as_posix(), 'sha256': _sha(role_path.read_bytes())}
+             if native.reset_role_candidates(nl) else {'status': 'NO_INTRINSIC_ROLE_CANDIDATES'})
+    return {'input': binding['input'], 'graph': {'path': native.NETLIST_REL,
+            'sha256': _sha(path.read_bytes())}, 'roles': roles}
+
+
+def _d12_source(project: Path, name: str, fields: tuple) -> tuple[dict, dict, dict]:
+    authority, body = _approved_authority(project,
+        'requirements/base_06/' + name + '.json#/required_items', fields)
+    source = json.loads(_safe_project_file(project, authority['source']['path']).read_bytes())
+    payload = {k: v for k, v in body.items() if k not in ('schema', 'approval')}
+    if isinstance(payload.get('validated_absence'), dict):
+        absence = dict(payload['validated_absence'])
+        if absence.pop('source_reference', None) != authority['source']:
+            raise MetricRefusal('D12_ABSENCE_AUTHORITY_MISMATCH', name)
+        payload['validated_absence'] = absence
+    if (not authority['source']['path'].startswith('input/')
+            or source.get('purpose') != D12_PURPOSE or source.get(name) != payload):
+        raise MetricRefusal('D12_AUTHORITY_PAYLOAD_MISMATCH', name)
+    if len({_json_key(x) for x in body['required_items']}) != len(body['required_items']):
+        raise MetricRefusal('D12_REQUIREMENT_DUPLICATE', name)
+    return authority, body, source
+
+
+def _d12_qualification(project: Path, context: Mapping) -> dict:
+    import flow109_admission as admission
+    admitted = admission.require_admission(project, context)
+    uses = context['runtime_tool_uses']
+    if (len(uses) != 1 or uses[0]['tool_id'] != 'python3'
+            or uses[0]['semantics'] != {'purpose': 'D12.default', 'native_steps': list(D12_STEPS)}):
+        raise MetricRefusal('D12_QUALIFICATION_SCOPE_INVALID', 'existing three structural rules only')
+    config = json.loads((project / uses[0]['config']['path']).read_bytes())
+    if config != {'purpose': D12_PURPOSE, 'native_steps': list(D12_STEPS),
+                  'model_sources': d12_model_sources()}:
+        raise MetricRefusal('D12_MODEL_QUALIFICATION_STALE', 'model/role/rule source changed')
+    return admitted
+
+
+def _d12_observe(project: Path, source: Mapping) -> dict:
+    """Reopen the original native graph; run existing structural readers only."""
+    import _cdc_netlist as native
+    import ai_signed_judgement as expert
+    subject = d12_subject(project)
+    if source.get('subject') != subject:
+        raise MetricRefusal('D12_SUBJECT_STALE', 'original source/graph/roles differ from authority')
+    for reference in source.get('source_refs', []):
+        if (set(reference) != {'path', 'sha256'}
+                or _sha(_safe_project_file(project, reference['path']).read_bytes()) != reference['sha256']):
+            raise MetricRefusal('D12_SOURCE_REFERENCE_STALE', str(reference))
+    if not source.get('source_refs'):
+        raise MetricRefusal('D12_SOURCE_REFERENCES_ABSENT', 'independent original design authority required')
+    path = project / native.NETLIST_REL
+    document = json.loads(path.read_bytes())
+    nl = native.load(path)
+    # Only explicitly supported combinational primitives may stand between
+    # decoded state. A dollar-prefixed unknown is not evidence of no storage.
+    combinational = {'$and', '$or', '$xor', '$xnor', '$not', '$logic_not', '$logic_and',
+        '$logic_or', '$mux', '$pmux', '$buf', '$pos', '$add', '$sub', '$mul', '$neg',
+        '$eq', '$ne', '$eqx', '$nex', '$lt', '$le', '$gt', '$ge', '$shl', '$shr',
+        '$sshl', '$sshr', '$shift', '$shiftx', '$slice', '$concat', '$reduce_and',
+        '$reduce_or', '$reduce_xor', '$reduce_xnor', '$reduce_bool', '$_BUF_', '$_NOT_',
+        '$_AND_', '$_OR_', '$_XOR_', '$_XNOR_', '$_MUX_'}
+    decoded = {f.name for f in nl.flops}
+    if (not decoded or nl.memories or nl.ambiguous_drivers
+            or any(n not in decoded and c['type'] not in combinational for n, c in nl.cells.items())
+            or any(len(f.d) != len(f.q) or not f.q or len(set(f.q)) != len(f.q) for f in nl.flops)):
+        raise MetricRefusal('D12_GRAPH_INCOMPLETE', 'unknown/ambiguous/zero/unsupported sequential population')
+    q_of = nl.flop_of_q()
+    if len(q_of) != sum(len(f.q) for f in nl.flops):
+        raise MetricRefusal('D12_GRAPH_INCOMPLETE', 'duplicate state driver')
+    input_bits = {b for _n, (d, bits) in nl.ports.items() if d in ('input', 'inout') for b in bits}
+    if (input_bits.intersection(nl.drivers) or any(not cell.get('port_directions')
+            or any(isinstance(b, int) and b not in input_bits and b not in nl.drivers
+                   for pin, bits in cell['connections'].items()
+                   if cell['port_directions'].get(pin) == 'input' for b in bits)
+            for cell in nl.cells.values())):
+        raise MetricRefusal('D12_GRAPH_INCOMPLETE', 'undriven or ambiguous input cone')
+    roles, why = expert.reset_roles(project, nl, path) if native.reset_role_candidates(nl) else ({}, 'native pins')
+    domains = source.get('input_domains')
+    inputs = {n for n, (direction, _bits) in nl.ports.items() if direction in ('input', 'inout')}
+    if (not isinstance(domains, dict) or set(domains) != inputs
+            or any(not isinstance(v, dict) or set(v) != {'role', 'clock'}
+                   or v['role'] not in ('clock', 'synchronous_data', 'synchronous_reset',
+                                        'asynchronous_data', 'inactive')
+                   or not isinstance(v['clock'], str) for v in domains.values())):
+        raise MetricRefusal('D12_INPUT_DOMAINS_INCOMPLETE', 'every actual input needs independent role/clock')
+    population, reset_analysis = {}, {}
+    findings = native.judge(nl, 'reg_crossing', metadata=population)
+    findings += native.judge(nl, 'async_input', lambda n: domains[n]['role'] == 'asynchronous_data')
+    findings += native.judge(nl, 'reset_dependency', metadata=reset_analysis, reset_roles=roles)
+    if (population.get('traversal_complete') is not True
+            or population.get('source_q_bits_examined') != len(q_of)
+            or population.get('destination_d_bits') != sum(len(f.d) for f in nl.flops)
+            ):
+        raise MetricRefusal('D12_TRAVERSAL_INCOMPLETE', 'complete crossing/reset population required')
+    lookup = native._LookupSnapshot(nl)
+    for name, declaration in domains.items():
+        _direction, bits = nl.ports[name]
+        consumers = [f for bit in bits for f, _i, _direct in native._consumers(nl, bit, lookup)]
+        loads = [(cell, pin) for cell in nl.cells.values() for pin, conn in cell['connections'].items()
+                 if cell.get('port_directions', {}).get(pin) == 'input' and set(bits).intersection(conn)]
+        role, clock = declaration['role'], declaration['clock']
+        if role == 'inactive' and (loads or clock != 'none'):
+            raise MetricRefusal('D12_INACTIVE_INPUT_LOADED', name)
+        if role in ('synchronous_data', 'synchronous_reset') and (
+                clock not in native.clock_domains(nl) or any(nl.domain(f) != clock for f in consumers)):
+            findings.append({'rule': 'D12_INPUT_DOMAIN_MISMATCH', 'severity': 'ERROR', 'port': name})
+        if role == 'clock' and (clock != name or name not in native.clock_domains(nl)):
+            raise MetricRefusal('D12_CLOCK_ROLE_MISMATCH', name)
+    return {'subject': subject, 'producer': native.require_binding(project, path, nl)['producer'],
+            'population': population, 'reset_analysis': reset_analysis, 'findings': findings,
+            'roles': roles, 'role_detail': why, 'input_domains': domains}
+
+
+def _d12_census(project: Path, source: Mapping, observed: Mapping) -> list:
+    import _cdc_netlist as native
+    from _hdl_code_text import strip_hdl_comments_and_strings
+    from rtl_final_bundle_integrity import module_blocks
+    nl = native.load(project / native.NETLIST_REL)
+    if observed['reset_analysis'].get('cycle_detection_complete') is not True:
+        raise MetricRefusal('D12_ROLES_UNPROVEN', observed['role_detail'])
+    mod = json.loads((project / native.NETLIST_REL).read_bytes())['modules'][nl.top]
+    aliases = dict(mod['netnames'])
+    bodies = [body for name, body in module_blocks('\n'.join(
+        strip_hdl_comments_and_strings((project / name).read_text())
+        for name in observed['subject']['input']['rtl_files'])) if name == nl.top]
+    for state, net in source.get('state_aliases', {}).items():
+        if (state in aliases or not _SAFE.fullmatch(state) or not _SAFE.fullmatch(net)
+                or len(bodies) != 1 or net not in aliases
+                or not re.search(r'\bassign\s+' + re.escape(net) + r'\s*=\s*'
+                                 + re.escape(state) + r'\s*;', bodies[0])):
+            raise MetricRefusal('D12_STATE_ALIAS_UNPROVEN', state)
+        aliases[state] = aliases[net]
+    q_of = nl.flop_of_q()
+    required = source['clock_reset_crossing_census']['required_items']
+    actual, covered, ports, clocks, resets = [], set(), set(), set(), set()
+    for item in required:
+        kind, name, clock, detail = (item[k] for k in D12_FIELDS)
+        valid = False
+        if kind == 'state':
+            bits = aliases.get(name, {}).get('bits', [])
+            valid = bool(bits) and not covered.intersection(bits) and detail == str(len(bits)) and all(
+                b in q_of and nl.domain(q_of[b]) == clock for b in bits)
+            if valid:
+                covered.update(bits)
+        elif kind == 'clock':
+            fs = [f for f in nl.flops if nl.domain(f) == name]
+            valid = bool(fs) and clock == name and all(
+                detail == ('rising' if nl.sample_edge(f) else 'falling') for f in fs)
+            valid = valid and observed['input_domains'].get(name) == {'role': 'clock', 'clock': clock}
+            if valid:
+                clocks.add(name); ports.add(name)
+        elif kind == 'reset':
+            fs = [f for f in nl.flops if nl.domain(f) == clock]
+            def matches(f):
+                r = f.arst if f.arst is not None else f.srst
+                if r is None or nl.bit_label(nl.root(r)) != name:
+                    return False
+                if f.arst is not None:
+                    return detail == ('asynchronous_active_high' if f.arst_pol else 'asynchronous_active_low')
+                if f.srst_origin == 'd_mux_candidate':
+                    # Only the current signed semantic reset role admits this mux.
+                    cell = nl.cells[nl.drivers[f.d[0]][0]]
+                    polarity = all(b == '0' for b in cell['connections']['B'])
+                    other_zero = all(b == '0' for b in cell['connections']['A'])
+                    return (observed['roles'].get(f.name) == 'synchronous_reset'
+                            and (polarity or other_zero) and detail == (
+                                'synchronous_active_high' if polarity else 'synchronous_active_low'))
+                polarity = native._int(nl.cells[f.name].get('parameters', {}).get('SRST_POLARITY', 1))
+                return detail == ('synchronous_active_high' if polarity else 'synchronous_active_low')
+            valid = (bool(fs) and all(matches(f) for f in fs)
+                     and observed['input_domains'].get(name) == {'role': 'synchronous_reset', 'clock': clock})
+            if valid:
+                resets.add(name); ports.add(name)
+        elif kind == 'input':
+            valid = observed['input_domains'].get(name) == {'role': detail, 'clock': clock}
+            if valid:
+                ports.add(name)
+        elif kind == 'output' and name in nl.ports and nl.ports[name][0] == 'output':
+            bits = nl.ports[name][1]
+            valid = detail == 'registered' and all(b in q_of and nl.domain(q_of[b]) == clock for b in bits)
+            if valid:
+                ports.add(name)
+        if not valid:
+            raise MetricRefusal('D12_CENSUS_MAPPING_UNPROVEN', _json_key(item))
+        actual.append(dict(item))
+    actual_resets = {nl.bit_label(nl.root(r)) for f in nl.flops for r in (f.arst, f.srst)
+                     if r is not None and (f.arst is not None or f.srst_origin == 'native_pin'
+                         or observed['roles'].get(f.name) == 'synchronous_reset')}
+    if (covered != set(q_of) or ports != set(nl.ports)
+            or clocks != set(native.clock_domains(nl)) or resets != actual_resets):
+        raise MetricRefusal('D12_CENSUS_INCOMPLETE', 'all native state/ports/clocks/resets must be accounted for')
+    return actual
+
+
+def accept_d12(project: Path, context: Mapping[str, Any]) -> dict:
+    """Three normal D12 obligations; qualified native failure survives missing protocols."""
+    import _cdc_netlist as native
+    import flow109
+    import flow109_admission as admission
+    import instrument_calibration
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': 'D12', 'status': 'NOT_MEASURED',
+              'qualification': 'NOT_MEASURED', 'component_status': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': [{'id': k, 'status': 'NOT_MEASURED'} for k in D12_IDS]}
+    try:
+        current = flow109.validate_execution_context(context)
+        rows = current['resolved_row']['obligations']
+        if (current['resolved_row']['id'] != 'D12' or [r['id'] for r in rows] != list(D12_IDS)
+                or rows[1]['expectation']['operator'] != 'eq' or rows[1]['expectation']['value'] != 0
+                or rows[1]['expectation']['unit'] != 'count'
+                or any(rows[i]['expectation'].get('required_set_ref') != 'requirements/base_06/'
+                    + D12_IDS[i].split('.')[1] + '.json#/required_items' for i in (0, 2))):
+            raise MetricRefusal('D12_OBLIGATIONS_UNREGISTERED', 'existing three contracts only')
+        try:
+            _authority, _body, source = _d12_source(project, 'clock_reset_crossing_census', D12_FIELDS)
+        except (MetricRefusal, OSError, ValueError, KeyError, TypeError):
+            # Either independently approved normal document may bind the
+            # shared original source. Missing census coverage cannot erase a
+            # qualified blocking reset/crossing observation.
+            _authority, _body, source = _d12_source(project, 'cdc_protocol_results',
+                                                  ('name', 'from_clock', 'to_clock'))
+        qualified = _d12_qualification(project, current)
+        observed = _d12_observe(project, source)
+        result.update(qualification='PASS', observed=observed)
+        failures = [f for f in observed['findings'] if f.get('severity') in ('ERROR', 'FATAL')
+                    and f.get('rule') != 'RESET_ROLE_UNRESOLVED']
+        result['obligations'][1].update(status='FAIL' if failures else 'PASS'
+            if observed['reset_analysis'].get('cycle_detection_complete') is True else 'NOT_MEASURED', observed_value=len(failures),
+                                         unit='count', findings=failures)
+        result['component_status'] = 'FAIL' if failures else 'PASS'
+        try:
+            authority, _body, census_source = _d12_source(project, 'clock_reset_crossing_census', D12_FIELDS)
+            if census_source != source:
+                raise MetricRefusal('D12_AUTHORITY_SUBJECT_MISMATCH', 'census source differs')
+            census = _d12_census(project, source, observed)
+            status, reason = evaluate_operator('covers_all', {'status': 'MEASURED', 'value': census,
+                'identity': {'producer': {'path': native.NETLIST_MANIFEST_REL,
+                    'sha256': _sha((project / native.NETLIST_MANIFEST_REL).read_bytes())}, 'checker': d12_model_sources(),
+                    'tool_execution': qualified, 'consumed_inputs': observed['subject'],
+                    'requirements': authority, 'configuration': source['input_domains']}}, authority)
+            result['obligations'][0].update(status=status, reason=reason, observed_value=census)
+        except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            result['obligations'][0].update(reason=getattr(exc, 'code', 'D12_CENSUS_UNPROVEN'), detail=str(exc))
+        try:
+            proto_auth, proto, proto_source = _d12_source(project, 'cdc_protocol_results',
+                                                        ('name', 'from_clock', 'to_clock'))
+            if (proto_source != source or proto['required_items'] or len(observed['population']['clock_domains']) != 1
+                    or observed['population']['crossings'] or any(
+                        v['role'] == 'asynchronous_data' for v in observed['input_domains'].values())):
+                raise MetricRefusal('D12_PROTOCOL_PROOF_REQUIRED', 'nonempty/active CDC protocol needs native purpose proof')
+            result['obligations'][2].update(status='PASS', observed_value=[], authority=proto_auth)
+        except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            result['obligations'][2].update(reason=getattr(exc, 'code', 'D12_PROTOCOL_UNPROVEN'), detail=str(exc))
+        for row in result['obligations']:
+            if row['status'] == 'PASS' and row['id'] != D12_IDS[1]:
+                name = row['id'].split('.')[1]
+                fields = D12_FIELDS if name == 'clock_reset_crossing_census' else ('name', 'from_clock', 'to_clock')
+                fresh_auth, _fresh_body, fresh_source = _d12_source(project, name, fields)
+                expected_auth = authority if name == 'clock_reset_crossing_census' else proto_auth
+                if fresh_source != source or fresh_auth != expected_auth:
+                    raise MetricRefusal('D12_INPUT_CHANGED', 'requirement changed during consumption')
+        if (_d12_observe(project, source) != observed or _d12_qualification(project, current) != qualified):
+            raise MetricRefusal('D12_INPUT_CHANGED', 'source/model/native/authority changed during consumption')
+        result['subject'] = observed['subject']
+    except (MetricRefusal, native.Refusal, admission.AdmissionRefusal, flow109.Flow109Error,
+            instrument_calibration.Uncalibrated,
+            OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D12_EVIDENCE_UNPROVEN'), detail=str(exc))
+        # Changed currentness invalidates every previously observed conclusion.
+        for row in result['obligations']:
+            row['status'] = 'NOT_MEASURED'
+        result['component_status'] = 'NOT_MEASURED'
+    states = [r['status'] for r in result['obligations']]
+    result['status'] = 'FAIL' if 'FAIL' in states else ('PASS' if states == ['PASS'] * 3 else 'NOT_MEASURED')
+    result['delivery_blocked'] = result['status'] != 'PASS'
+    result.setdefault('reason', 'D12_' + result['status'])
+    return result
+
+
 def accept_a01(project: Path, context: Mapping[str, Any],
                component: Mapping[str, Any]) -> dict:
     """Evaluate the complete, and only, currently whitelisted A01 binding."""

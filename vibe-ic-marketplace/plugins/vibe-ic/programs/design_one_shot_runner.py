@@ -25060,6 +25060,48 @@ def _refuse_a_disagreeing_declaration(row: "StepResult", early: Any,
                 "finding": "DECLARATION_DISAGREES_WITH_STEP4"})
 
 
+def step_d12_cdc_rdc(project: Path, context: Mapping[str, Any]) -> StepResult:
+    """D12 only: consume the current original graph, never rebuild an old proof."""
+    import flow109_metric_acceptance as metrics
+    import librelane_contract as contract
+    try:
+        launch = contract.local_image_attestation()
+        accepted = metrics.accept_d12(project, context)
+    except contract.Refusal as exc:
+        launch = {'status': 'NOT_MEASURED', 'reason': exc.code}
+        accepted = {'status': 'NOT_MEASURED', 'reason': str(exc)}
+    status = accepted['status']
+    return StepResult('cdc_rdc', status, detail=accepted['reason'],
+        reason_class='input_absent' if status == 'NOT_MEASURED' else '',
+        extras={'step_id': '3', 'context_sha256': context['context_sha256'],
+            'metric_acceptance': accepted, 'reader_launch': launch,
+            'default_row_status': status, 'completed': status == 'PASS',
+            'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False})
+
+
+def _publish_d12_owner(project: Path, context: Mapping[str, Any], *, invocation_context=None) -> int:
+    """Publish only this fresh D12 read, then reopen before the canonical writer."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    row = step_d12_cdc_rdc(project, context)
+    summary = {'project': str(project), 'steps': [asdict(row)], 'verdict': row.status,
+        'declared_window': {'entry_step': '3', 'exit_step': '3', 'dispatched_step_ids': ['3']},
+        'bounded_disclosures': ['complete current early RTL CDC/RDC read; no native graph replay; whole flow unmeasured']}
+    out = _pl.report_path(project, 'phase2_one_shot.json')
+    _write_phase2_report(out, summary, project, invocation_context=invocation_context)
+    reread = metrics.accept_d12(project, context)
+    if reread != row.extras['metric_acceptance']:
+        row.status = 'NOT_MEASURED'
+        row.reason_class = 'input_absent'
+        row.detail = 'D12_INPUT_CHANGED_DURING_OWNER_PUBLICATION'
+        row.extras.update(default_row_status='NOT_MEASURED', completed=False)
+        summary.update(steps=[asdict(row)], verdict=row.status)
+        _write_phase2_report(out, summary, project, invocation_context=invocation_context)
+    finished = flow109.finish_native_window(project, summary, out)
+    status = finished.get('default_row_status', 'NOT_MEASURED') if finished else 'NOT_MEASURED'
+    return {'PASS': 0, 'FAIL': 1}.get(status, 2)
+
+
 def step_arith_declaration_emit(project: Path) -> StepResult:
     """Run the deterministic `plugin_output/declaration.json` emitter.
 
@@ -27504,6 +27546,13 @@ def main() -> int:
     # early refusal report therefore cannot become an unbound witness merely
     # because it was emitted before the normal finalize tail.
     _dispatch_invocation_context = _runner_invocation_context()
+    _d12_context = None
+    _d12_raw = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+    if str(args.entry_step) == str(args.exit_step) == '3' and _d12_raw:
+        import flow109
+        _d12_current = flow109.validate_execution_context(json.loads(Path(_d12_raw).read_bytes()))
+        if _d12_current['resolved_row']['id'] == 'D12':
+            _d12_context = _d12_current
 
     # ── A DECLARED WINDOW IS A DECLARED PROOF BURDEN (R-0924-1) ─────────────
     # The owner's ask: when a gate is wrong, re-run THAT step -- only it.
@@ -27649,7 +27698,8 @@ def main() -> int:
     if getattr(args, "exit_step", None):
         _exit_plan = _spf.RUNNER_PLANS.get("design_one_shot_runner")
         _exit_sites = _exit_plan.sites if _exit_plan else ()
-        _exit_pruned = _exit_pruned_sites(_exit_sites, str(args.exit_step))
+        _exit_pruned = (set(name for name, _span in _exit_sites) if _d12_context else
+                        _exit_pruned_sites(_exit_sites, str(args.exit_step)))
         if _exit_pruned is None:
             print(f"REFUSED: cannot exit at step {args.exit_step!r} — it "
                   f"names neither a dispatch site nor a canonical numeric "
@@ -27700,9 +27750,17 @@ def main() -> int:
         # Idempotent by the consumer's own guard: it SKIPs when
         # phase2/stage1/rtl/ already holds RTL, so the later dispatch of the
         # same step is a no-op rather than a second copy.
-        _entry_staged = step_reused_ip_consume(project, args.top_name)
-        _adm = _spf.entry_admission(project, "design_one_shot_runner",
-                                    str(args.entry_step))
+        if _d12_context:
+            import flow109_metric_acceptance as metrics
+            try:
+                metrics.d12_subject(project)
+                _adm = {'admitted': True, 'site': 'cdc_rdc'}
+            except (OSError, ValueError, RuntimeError, KeyError, TypeError) as exc:
+                _adm = {'admitted': False, 'reason': str(exc)}
+        else:
+            _entry_staged = step_reused_ip_consume(project, args.top_name)
+            _adm = _spf.entry_admission(project, "design_one_shot_runner",
+                                        str(args.entry_step))
         if not _adm["admitted"]:
             print(f"REFUSED: cannot enter at step {args.entry_step!r} — "
                   f"{_adm['reason']}", file=sys.stderr)
@@ -27733,7 +27791,7 @@ def main() -> int:
     # run's real dispatch signals and neither exists until the two blocks above
     # have run. Everything in the finalize tail reads `_bounded`, and every one
     # of those reads happens after the lock, below.
-    _bounded = run_is_bounded(_entry_site, _exit_pruned, _site_order())
+    _bounded = bool(_d12_context) or run_is_bounded(_entry_site, _exit_pruned, _site_order())
     if _window_flags and not _bounded:
         print(f"[bounded] window {' '.join(_window_flags)} prunes NOTHING this "
               f"runner would dispatch (its sites are "
@@ -27842,6 +27900,15 @@ def main() -> int:
                                 invocation_context=_dispatch_invocation_context)
         print(f"native Step 2: {row.status} — {row.detail}")
         return {"PASS": 0, "FAIL": 1}.get(status, 2)
+
+    # D12 has no lint/D11 dependency. Its bounded owner reads the complete
+    # retained current graph and publishes a fresh normal report of that read.
+    if _d12_context:
+        import flow109
+        import flow109_metric_acceptance as metrics
+        context = _d12_context
+        if context['resolved_row']['id'] == 'D12':
+            return _publish_d12_owner(project, context, invocation_context=_dispatch_invocation_context)
 
     plan: List[StepResult] = []
 
