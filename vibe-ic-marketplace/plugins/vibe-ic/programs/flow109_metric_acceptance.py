@@ -4654,7 +4654,8 @@ def d14_model_sources() -> dict:
         (producer, ('run', 'run_reachability', 'reachability_plan', '_reachability_inputs',
                     '_reachability_deck', '_cover_target_identity', 'check_reachability', '_authored_chip_read',
                     'parse_sby_config', 'parse_sby_log', 'build_results', 'fold_prove_arms')),
-        (generator, ('generate', 'declaration_obligations', '_timing_semantics', '_provenance_evidence')),
+        (generator, ('generate', 'declaration_obligations', '_timing_semantics', '_provenance_evidence',
+                     '_unresolved_declaration_rows')),
         (checker, ('audit', 'binding_dispositions', 'proof_source_staleness')),
     ]
     result = {}

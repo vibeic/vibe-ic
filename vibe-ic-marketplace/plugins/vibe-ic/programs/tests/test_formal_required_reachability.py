@@ -572,3 +572,46 @@ def test_smt_context_replays_source_owned_inventory_without_changing_default_pla
     assert ctx['resolved_row']['tool_uses'] != qualified['resolved_row']['tool_uses']
     with pytest.raises(flow109.Flow109Error, match='UNSUPPORTED'):
         flow109._tool_uses(ctx['resolved_row'], ctx['resolved_row']['profile'], mode='unknown')
+
+
+def test_changed_classifier_model_hash_refused_after_valid_per_use_admission(reach_case, monkeypatch):
+    """SOFTWARE binding control: stale classifier alone cannot complete a row."""
+    import sys
+    import flow109_admission as admission
+    monkeypatch.setattr(shutil, 'which', lambda name: sys.executable)
+    project, ctx = reach_case
+    software_covers(project)
+    current = software_qualified_binding(project, ctx)
+    key = 'formal_harness_gen.py:_unresolved_declaration_rows'
+    assert key in metrics.d14_model_sources()
+    assert metrics.accept_d14(project, current)['status'] == 'PASS'
+    original_proof = (project / 'phase2/stage1/formal/results.json').read_bytes()
+    original_cover = (project / 'phase2/stage1/formal/reachability/results.json').read_bytes()
+    registry_path = project / current['qualification_registry']
+    registry = json.loads(registry_path.read_text())
+    runtime = current['runtime_tool_uses']
+    use = runtime[0]
+    config_path = project / use['config']['path']
+    config = json.loads(config_path.read_text())
+    config['model_sources'][key] = 'a' * 64
+    put(config_path, config)
+    use['config']['sha256'] = sha(config_path)
+    entry = next(r for r in registry['uses'] if r['use_id'] == use['use_id'])
+    entry['identity']['config'] = dict(use['config'])
+    use['qualification_sha256'] = admission.canonical_sha(entry)
+    put(registry_path, registry)
+    stale = flow109.execution_context(flow109.resolve_plan(ctx['features']), 'D14', 'D14',
+        runtime_tool_uses=runtime, qualification_registry=current['qualification_registry'])
+    # All ordinary artifact/runtime/registry bindings remain valid. Refusal
+    # must come from the actually consumed classifier's source model identity.
+    assert admission.require_admission(project, stale)['status'] == 'PASS'
+    answer = metrics.accept_d14(project, stale)
+    assert answer['metric_status'] == 'PASS', answer
+    assert answer['status'] == answer['qualification'] == 'NOT_MEASURED', answer
+    assert answer['reason'] == 'D14_MODEL_QUALIFICATION_STALE', answer
+    published = flow109._selected_step_result(project, stale,
+        {'step_id': 'D14', 'context_sha256': stale['context_sha256'],
+         'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True})
+    assert published['completed'] is False
+    assert (project / 'phase2/stage1/formal/results.json').read_bytes() == original_proof
+    assert (project / 'phase2/stage1/formal/reachability/results.json').read_bytes() == original_cover
