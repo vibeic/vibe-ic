@@ -261,3 +261,25 @@ def test_d12_incomplete_graph_is_not_empty_pass(case, change):
     result = metrics.accept_d12(p, c)
     assert result['status'] == 'NOT_MEASURED', result
     assert result['reason'] == 'D12_GRAPH_INCOMPLETE', result
+
+
+def test_d12_uncalibrated_model_is_normal_not_measured(case, monkeypatch):
+    import instrument_calibration
+    p, c = case
+    def unavailable(name):
+        raise instrument_calibration.Uncalibrated(name, 'SOFTWARE calibration-unavailable boundary')
+    monkeypatch.setattr(instrument_calibration, 'assert_calibrated', unavailable)
+    result = metrics.accept_d12(p, c)
+    assert result['status'] == 'NOT_MEASURED', result
+    assert result['qualification'] == 'NOT_MEASURED'
+    assert 'SOFTWARE calibration-unavailable boundary' in result['detail']
+
+
+def test_d12_missing_host_launch_is_normal_owner_refusal(case, monkeypatch):
+    import librelane_contract
+    p, c = case
+    monkeypatch.delenv(librelane_contract.LOCAL_ATTESTATION_ENV)
+    row = owner.step_d12_cdc_rdc(p, c)
+    assert row.status == 'NOT_MEASURED'
+    assert row.extras['completed'] is False
+    assert row.extras['reader_launch']['status'] == 'NOT_MEASURED'

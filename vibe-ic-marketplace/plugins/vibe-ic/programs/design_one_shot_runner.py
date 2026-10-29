@@ -25064,8 +25064,12 @@ def step_d12_cdc_rdc(project: Path, context: Mapping[str, Any]) -> StepResult:
     """D12 only: consume the current original graph, never rebuild an old proof."""
     import flow109_metric_acceptance as metrics
     import librelane_contract as contract
-    launch = contract.local_image_attestation()
-    accepted = metrics.accept_d12(project, context)
+    try:
+        launch = contract.local_image_attestation()
+        accepted = metrics.accept_d12(project, context)
+    except contract.Refusal as exc:
+        launch = {'status': 'NOT_MEASURED', 'reason': exc.code}
+        accepted = {'status': 'NOT_MEASURED', 'reason': str(exc)}
     status = accepted['status']
     return StepResult('cdc_rdc', status, detail=accepted['reason'],
         reason_class='input_absent' if status == 'NOT_MEASURED' else '',

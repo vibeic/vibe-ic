@@ -2614,6 +2614,7 @@ def accept_d12(project: Path, context: Mapping[str, Any]) -> dict:
     import _cdc_netlist as native
     import flow109
     import flow109_admission as admission
+    import instrument_calibration
     project = Path(project).resolve()
     result = {'schema': SCHEMA, 'row_id': 'D12', 'status': 'NOT_MEASURED',
               'qualification': 'NOT_MEASURED', 'component_status': 'NOT_MEASURED',
@@ -2679,6 +2680,7 @@ def accept_d12(project: Path, context: Mapping[str, Any]) -> dict:
             raise MetricRefusal('D12_INPUT_CHANGED', 'source/model/native/authority changed during consumption')
         result['subject'] = observed['subject']
     except (MetricRefusal, native.Refusal, admission.AdmissionRefusal, flow109.Flow109Error,
+            instrument_calibration.Uncalibrated,
             OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         result.update(reason=getattr(exc, 'code', 'D12_EVIDENCE_UNPROVEN'), detail=str(exc))
         # Changed currentness invalidates every previously observed conclusion.
