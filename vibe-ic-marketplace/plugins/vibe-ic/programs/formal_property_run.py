@@ -3386,7 +3386,9 @@ def reachability_plan(project: Path, results: dict) -> dict:
     contract = json.loads((formal / 'property_contract.json').read_text())
     rows = contract.get('covered_obligations', []) + contract.get('unresolved_obligations', [])
     ids = [r['id'] for r in rows]
-    if (len(ids) != len(set(ids)) or len(ids) != results.get('property_denominator')
+    # Declaration IDs and the producer's native assertion floor are distinct
+    # populations. Preserve the raw result; its aggregate is replayed below.
+    if (len(ids) != len(set(ids))
             or len(ids) != contract.get('property_denominator') or not ids):
         raise ValueError('reachability: declaration denominator/IDs are incomplete')
     hfiles = checker._harness_files(project, formal, results)
@@ -3460,7 +3462,19 @@ def _reachability_inputs(project: Path) -> tuple:
     replay = build_results(results['top'], cfg,
         parse_sby_log(log.read_text(), sby_stem=sby.stem, seed=cfg), results['evidence'], results['sby'])
     if (replay['properties'] != results.get('properties') or replay['verdict'] != 'PASS'
-            or not replay['unbounded_proved'] or checker.audit(project).get('verdict') != 'PASS'):
+            or not replay['unbounded_proved']):
+        raise ValueError('reachability: current full proof chain is not complete')
+    # Reproduce the producer's original aggregate/count semantics rather than
+    # forcing native assertion and declaration populations to be identical.
+    refreshed = dict(replay, proof_inputs=results['proof_inputs'])
+    _attach_property_contract(refreshed, formal, harness)
+    counts = ('property_denominator', 'authored_property_count', 'covered_property_count',
+              'unresolved_obligations')
+    if 'assert_statement_count' in results:
+        counts += ('assert_statement_count',)
+    if any(refreshed.get(key) != results.get(key) for key in counts):
+        raise ValueError('reachability: original producer count/model replay differs')
+    if checker.audit(project).get('verdict') != 'PASS':
         raise ValueError('reachability: current full proof chain is not complete')
     files = results['proof_inputs']['files']
     for task in cfg:

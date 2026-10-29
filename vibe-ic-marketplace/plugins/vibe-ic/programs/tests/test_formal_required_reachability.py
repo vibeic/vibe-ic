@@ -615,3 +615,52 @@ def test_changed_classifier_model_hash_refused_after_valid_per_use_admission(rea
     assert published['completed'] is False
     assert (project / 'phase2/stage1/formal/results.json').read_bytes() == original_proof
     assert (project / 'phase2/stage1/formal/reachability/results.json').read_bytes() == original_cover
+
+
+def software_auxiliary_assertions(project):
+    """Re-emit SOFTWARE proof fields using unchanged producer count semantics."""
+    formal = project / 'phase2/stage1/formal'
+    harness = formal / 'formal_neutral.sv'
+    put(harness, harness.read_text().replace('endmodule',
+        "always @* assert (1'b1); // auxiliary strengthening, not another declaration ID\nendmodule"))
+    result = reseal(project)
+    producer._attach_property_contract(result, formal, harness)
+    put(formal / 'results.json', result)
+    return result
+
+
+def test_declaration_ids_and_native_assertion_floor_are_distinct_without_restamping(reach_case):
+    project, ctx = reach_case
+    original = software_auxiliary_assertions(project)
+    formal = project / 'phase2/stage1/formal'
+    contract = json.loads((formal / 'property_contract.json').read_text())
+    assert original['property_denominator'] == original['assert_statement_count']
+    assert original['assert_statement_count'] > contract['property_denominator']
+    before = (formal / 'results.json').read_bytes()
+    software_covers(project)
+    plan = producer.reachability_plan(project, original)
+    assert set(plan) == {'obligations', 'properties'}  # retained cover mappings keep their format
+    assert len(plan['obligations']) == contract['property_denominator']
+    retained = producer._reachability_inputs(project)[1]
+    assert retained['property_denominator'] == original['property_denominator']
+    assert retained['assert_statement_count'] == original['assert_statement_count']
+    checked = producer.check_reachability(project)
+    assert checked['status'] == 'PASS', checked
+    answer = metrics.accept_d14(project, ctx)
+    assert answer['metric_status'] == 'PASS', answer
+    assert answer['status'] == answer['qualification'] == 'NOT_MEASURED'
+    assert (formal / 'results.json').read_bytes() == before
+
+
+@pytest.mark.parametrize('field', ['property_denominator', 'assert_statement_count', 'authored_property_count', 'covered_property_count'])
+def test_tampered_producer_count_axis_refused_by_planner_reader_and_metric_consumer(reach_case, field):
+    project, ctx = reach_case
+    result = software_auxiliary_assertions(project)
+    formal = project / 'phase2/stage1/formal'
+    result[field] += 1
+    put(formal / 'results.json', result)
+    with pytest.raises(ValueError, match='count/model replay differs'):
+        producer.run_reachability(project, emit_only=True)
+    answer = metrics.accept_d14(project, ctx)
+    assert answer['status'] == 'NOT_MEASURED', answer
+    assert answer['reason'] == 'D14_PROPERTY_MODEL_STALE', answer

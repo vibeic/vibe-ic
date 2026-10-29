@@ -4818,8 +4818,11 @@ def _d14_observe(project: Path) -> dict:
             retain(formal / name)
     refreshed = dict(replay, proof_inputs=result['proof_inputs'])
     producer._attach_property_contract(refreshed, formal, harness)
-    for key in ('property_denominator', 'authored_property_count', 'covered_property_count',
-                'unresolved_obligations'):
+    count_keys = ('property_denominator', 'authored_property_count', 'covered_property_count',
+                  'unresolved_obligations')
+    if 'assert_statement_count' in result:
+        count_keys += ('assert_statement_count',)
+    for key in count_keys:
         if refreshed.get(key) != result.get(key):
             raise MetricRefusal('D14_PROPERTY_MODEL_STALE', key)
     if refreshed.get('structural_refutations', []) != result.get('structural_refutations', []):
