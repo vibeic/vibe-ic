@@ -9253,7 +9253,7 @@
           "id": "default",
           "select_when": "otherwise",
           "provider": "openroad",
-          "tools": "OpenROAD execute_dft_plan + Fault scan-map checks",
+          "tools": "OpenROAD report_dft_plan/execute_dft_plan + native connectivity checks + Icarus scan flush",
           "native_steps": [
             "OpenROAD.execute_dft_plan",
             "Icarus.scan_flush"
