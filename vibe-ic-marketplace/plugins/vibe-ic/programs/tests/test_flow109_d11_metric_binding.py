@@ -547,3 +547,17 @@ def test_d11_entry_preserves_other_normal_context_shapes(tmp_path, monkeypatch, 
     try: observed=design.step_rtl_lint_tool(tmp_path)
     except KeyError as exc: observed={'exception':'KeyError','field':str(exc)}
     assert observed is None,observed
+
+
+def test_d11_complete_required_source_set_order_is_semantic(case):
+    p=case['project'];req=p/'requirements/base_05/source_file_coverage.json'
+    document=json.loads(req.read_bytes());document['required_items'].reverse()
+    source=json.loads(case['source'].read_bytes())
+    source['source_file_coverage']['required_items']=document['required_items']
+    put(case['source'],source)
+    document['approval']['source_reference']=ref(p,case['source']);put(req,document)
+    adopted=p/'adopted/base_05/lint_execution.json';document=json.loads(adopted.read_bytes())
+    document['approval']['source_reference']=ref(p,case['source']);put(adopted,document)
+    result=accept(case)
+    assert result['status']=='PASS',result
+    assert [x['status'] for x in result['obligations']]==['PASS','PASS']

@@ -2179,6 +2179,13 @@ def _d11_qualification(project: Path, context: Mapping, native: Mapping) -> dict
     return admitted
 
 
+def _d11_required_population(items, subject) -> bool:
+    """Coverage is a complete unique set, not an incidental JSON list order."""
+    expected = subject['source_files']
+    return (isinstance(items, list) and len(items) == len(expected)
+            and {_json_key(item) for item in items} == {_json_key(item) for item in expected})
+
+
 def d11_fresh_request(project: Path, context: Mapping) -> bool:
     """Only explicit normal root source authority may request a new D11 run."""
     project = Path(project).resolve()
@@ -2191,8 +2198,8 @@ def d11_fresh_request(project: Path, context: Mapping) -> bool:
         if request is None:
             return False
         registry = _d11_file(project, project / context['qualification_registry'])
-        return (source.get('source_file_coverage') == {'required_items': subject['source_files'], 'subject': subject}
-            and body['required_items'] == subject['source_files']
+        return (source.get('source_file_coverage') == {'required_items': body['required_items'], 'subject': subject}
+            and _d11_required_population(body['required_items'], subject)
             and request == {'purpose': 'D11.default', 'subject': subject, 'qualification_registry': registry})
     except (MetricRefusal, OSError, ValueError, TypeError, KeyError):
         return False
@@ -2320,7 +2327,9 @@ def accept_d11(project: Path, context: Mapping[str, Any], *, current_execution: 
             if (admission_record.get('status') != 'PASS' or admission_record.get('subject') != subject
                     or not source_ref['path'].startswith('input/')
                     or source.get('native_run') != expected_request
-                    or source.get('source_file_coverage') != {'subject': subject, 'required_items': subject['source_files']}
+                    or set(source.get('source_file_coverage', {})) != {'subject', 'required_items'}
+                    or source['source_file_coverage']['subject'] != subject
+                    or not _d11_required_population(source['source_file_coverage']['required_items'], subject)
                     or current_execution.get('subject') != subject):
                 raise MetricRefusal('D11_FRESH_EXECUTION_UNBOUND', 'normal source request/current owner required')
             body = {'reference': dict(current_execution)}
@@ -2349,7 +2358,7 @@ def accept_d11(project: Path, context: Mapping[str, Any], *, current_execution: 
             original = json.loads((project / authority['source']['path']).read_bytes())
             if (not authority['source']['path'].startswith('input/')
                     or original.get('source_file_coverage') != {'required_items': req['required_items'], 'subject': subject}
-                    or req['required_items'] != subject['source_files']):
+                    or not _d11_required_population(req['required_items'], subject)):
                 raise MetricRefusal('D11_SOURCE_REQUIREMENTS_STALE', 'independent complete source population required')
             for item in req['required_items']:
                 _d11_reopen(project, item)
