@@ -126,14 +126,15 @@ def write_record(project: Path, l10_path: Path,
                  rows: Iterable[Dict[str, Any]], *, producer: str,
                  tb_dir: Optional[Path] = None,
                  source_junit: Optional[Path] = None,
-                 isa_receipt: Optional[Path] = None) -> Path:
+                 isa_receipt: Optional[Path] = None,
+                 output: Optional[Path] = None) -> Path:
     """Atomically publish a completed execution record.
 
     `isa_receipt`: the ISA-suite receipt THIS execution's producer wrote. Its
     sha256 and run id are bound here (`ISA_RECEIPT_BINDING_KEY`), and
     `isa_conformance_credit` credits only the receipt this record binds -- so a
     receipt left by an earlier run can never stand in for this one."""
-    target = record_path(project)
+    target = Path(output) if output is not None else record_path(project)
     target.parent.mkdir(parents=True, exist_ok=True)
     doc: Dict[str, Any] = {
         "schema": SCHEMA,
@@ -194,13 +195,14 @@ def _normalise_verdict(raw: Any) -> Optional[str]:
     return aliases.get(token)
 
 
-def load_record(project: Path, l10_path: Optional[Path] = None) -> Dict[str, Any]:
+def load_record(project: Path, l10_path: Optional[Path] = None, *,
+                path: Optional[Path] = None) -> Dict[str, Any]:
     """Load a record, failing closed on every unreviewable shape.
 
     When ``l10_path`` is supplied, a record must bind to that exact file hash;
     an old record beside a changed declaration credits no case.
     """
-    path = resolve_record(project)
+    path = Path(path) if path is not None else resolve_record(project)
     if path is None:
         return _unavailable("no_execution_record")
     try:

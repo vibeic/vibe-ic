@@ -1934,7 +1934,8 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
                   report: "dict | None" = None,
                   out_dir: "Path | None" = None,
                   scaffold: bool = True,
-                  case_stated: bool = False) -> int:
+                  case_stated: bool = False,
+                  case_ids: "list[str] | None" = None) -> int:
     """ORGANIC #797 — importable producer entry point. Emit one unit TB per L10
     test case under `<project>/sim/tb/`, optionally KIND-SCOPED.
 
@@ -1983,6 +1984,14 @@ def emit_unit_tbs(project: Path, top: str = "chip_top",
         report["reason"] = "no L10_TEST_CASES.json"
         return -1
     report["scope"] = producer_scope(cases, kind)
+    if case_ids is not None:
+        names = [str(c.get('name') or c.get('id') or '') for c in cases]
+        if (not case_ids or len(set(case_ids)) != len(case_ids)
+                or any(names.count(name) != 1 for name in case_ids)):
+            report['reason'] = 'NOT_EXECUTED: exact unique declared case selection required'
+            return -2
+        cases = [c for c in cases if str(c.get('name') or c.get('id') or '') in case_ids]
+        report['selected_cases'] = list(case_ids)
     if not cases:
         report["reason"] = "L10 carries no test case"
         return 0
@@ -2334,7 +2343,9 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
                  build_timeout: int = 1800,
                  run_timeout: int = 600,
                  dispatch=None,
-                 isa_producer=None) -> int:
+                 isa_producer=None,
+                 case_ids: "list[str] | None" = None,
+                 output_dir: "Path | None" = None) -> int:
     """Build and RUN every emitted unit TB; write the Step-4 JUnit.
 
     Returns the number of testbenches that EXECUTED (built and ran), or a
@@ -2353,22 +2364,52 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
     defaults to `default_dispatch`, i.e. the runner's single dispatch site.
     chip-AGNOSTIC: file grammar, the standard verilator argv, the standard
     JUnit path — no chip/vendor literal.
+
+    With case_ids/output_dir, only those declared cases run and their record,
+    logs and JUnit stay in that fresh scope; global records/ISA evidence stay
+    unchanged. Omission retains the all-case producer and clearing behavior.
     """
     if report is None:
         report = {}
+    scoped = case_ids is not None or output_dir is not None
+    if scoped:
+        if (not case_ids or len(set(case_ids)) != len(case_ids) or output_dir is None):
+            report['reason'] = 'NOT_EXECUTED: case selection and isolated output are both required'
+            return -2
+        output_dir = Path(output_dir).absolute()
+        protected = (_pl.sim_dir(project) / 'tb',
+                     sim_professional_dir(project) / UNIT_TB_RESULT_DIR,
+                     _l10x.record_path(project).parent)
+        if (output_dir.resolve() != output_dir or not output_dir.is_relative_to(Path(project).resolve())
+                or any(output_dir.is_relative_to(p.resolve()) or p.resolve().is_relative_to(output_dir)
+                       for p in protected)
+                or (output_dir / 'l10_execution.json').exists()):
+            report['reason'] = 'NOT_EXECUTED: isolated fresh project-local output required'
+            return -2
     # Clear every prior execution record BEFORE any refusal path.  Otherwise
     # a rerun with no simulator (or no TB) can leave yesterday's PASS in place.
-    _l10x.clear_record(project)
+    if not scoped:
+        _l10x.clear_record(project)
     # ... and the SECOND per-case execution record, the ISA-suite receipt with
     # its transcripts: a rerun whose producer crashes, binds nothing or is
     # never reached must not leave yesterday's credit behind (review wave 58).
-    _clear_isa_suite_evidence(project)
+    if not scoped:
+        _clear_isa_suite_evidence(project)
     disp = dispatch or default_dispatch
-    tb_dir = _pl.sim_dir(project) / "tb"
+    tb_dir = output_dir / 'tb' if scoped else _pl.sim_dir(project) / "tb"
     tbs = [p for p in sorted(tb_dir.glob("*.v")) + sorted(tb_dir.glob("*.sv"))
            if is_unit_tb(p)] if tb_dir.is_dir() else []
     report["tb_total"] = len(tbs)
     report["sim_executed"] = False
+    if scoped:
+        declared = [str(c.get('name') or c.get('id') or '') for c in (load_l10_cases(project) or [])]
+        if (any(declared.count(name) != 1 for name in case_ids)
+                or any(sum(tb.stem == name for tb in tbs) != 1 for name in case_ids)):
+            report['reason'] = 'NOT_EXECUTED: selected declared testbench absent or ambiguous'
+            return -2
+        tbs = [tb for tb in tbs if tb.stem in case_ids]
+        report['tb_total'] = len(tbs)
+        report['selected_cases'] = list(case_ids)
     duplicates = _duplicate_unit_tb_cases(tb_dir)
     if duplicates:
         report['reason'] = 'NOT_EXECUTED: duplicate unit TB case: ' + ', '.join(duplicates)
@@ -2376,7 +2417,7 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
     if not tbs:
         report["reason"] = f"no unit TB under {tb_dir} — nothing to execute"
         return -1
-    out_root = sim_professional_dir(project) / UNIT_TB_RESULT_DIR
+    out_root = output_dir if scoped else sim_professional_dir(project) / UNIT_TB_RESULT_DIR
     out_root.mkdir(parents=True, exist_ok=True)
     rc, _out = disp([SIMULATOR, "--version"], out_root, container,
                     SIMULATOR, 60)
@@ -2489,7 +2530,7 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
                       "has_case_oracle": has_case_oracle,
                       **({"reset_retention": retention} if tb.stem in retention_cases else {}),
                       **({"arithmetic_scenario": arithmetic_scenario} if arithmetic_scenario else {})})
-    isa_rows = _isa_suite_rows(project, report, isa_producer)
+    isa_rows = [] if scoped else _isa_suite_rows(project, report, isa_producer)
     for row in isa_rows:
         # A case the ISA suite producer EXECUTED is judged by the suite, not by
         # the substance-floor scaffold that stood in for it.
@@ -2567,7 +2608,8 @@ def run_unit_tbs(project: Path, container: "str | None" = None,
         producer="testbench_gen.run_unit_tbs",
         tb_dir=tb_dir, source_junit=results,
         # Binds the receipt THIS run's producer wrote (it was cleared above).
-        isa_receipt=Path(project) / _l10x.ISA_RECEIPT_REL)
+        isa_receipt=None if scoped else Path(project) / _l10x.ISA_RECEIPT_REL,
+        output=output_dir / 'l10_execution.json' if scoped else None)
     report["execution_record"] = str(execution_record)
     return executed
 
@@ -2620,11 +2662,63 @@ def main() -> int:
     p.add_argument("--container", default=None,
                    help="pinned EDA container to run the simulator in; "
                         "omit to use the simulator on PATH")
+    p.add_argument('--case', action='append', dest='case_ids',
+                   help='emit/run only this declared case; repeat for an explicit selection')
+    p.add_argument('--output-dir', type=Path,
+                   help='fresh isolated project-local output for --case --run')
     args = p.parse_args()
+    if not args.run and (args.case_ids is not None or args.output_dir is not None):
+        p.error('isolated --case/--output-dir selection requires --run')
     report: dict = {}
     if args.run:
         rep: dict = {}
-        executed = run_unit_tbs(args.project, args.container, rep)
+        if args.case_ids is not None or args.output_dir is not None:
+            if not args.case_ids or args.output_dir is None:
+                p.error('--case --run requires --output-dir and vice versa')
+            # Emit through the ordinary qualified ladder into this case's own
+            # directory. Never refresh the original testbenches or record.
+            args.project = args.project.resolve()
+            args.output_dir = args.output_dir.absolute()
+            protected = (_pl.sim_dir(args.project) / 'tb',
+                sim_professional_dir(args.project) / UNIT_TB_RESULT_DIR,
+                _l10x.record_path(args.project).parent)
+            if (not args.output_dir.is_relative_to(args.project)
+                    or args.output_dir.resolve() != args.output_dir or args.output_dir.exists()
+                    or any(args.output_dir.is_relative_to(p.resolve()) or p.resolve().is_relative_to(args.output_dir)
+                           for p in protected)):
+                p.error('--output-dir must be a fresh non-symlink project-local directory')
+            import flow109_metric_acceptance as metrics
+            import librelane_contract as contract
+            import benchmark_dispatch as binding
+            import uuid
+            _, _, authority = metrics._d13_authority(args.project, 'required_function_scenarios')
+            metrics._d13_execution(args.project, authority)
+            subject = metrics.d13_subject(args.project)
+            launch = contract.local_image_attestation()
+            emitted = emit_unit_tbs(args.project, args.top, args.kind, report,
+                out_dir=args.output_dir / 'tb', scaffold=False, case_ids=args.case_ids)
+            if emitted != len(args.case_ids):
+                print('[NOT_EXECUTED] selected case emission incomplete', file=sys.stderr)
+                return 2
+            invocation = {'invocation_id': uuid.uuid4().hex, 'project': str(args.project),
+                'argv': [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]]}
+            invocation['source'] = binding._runner_source_snapshot(invocation['argv'])
+        executed = run_unit_tbs(args.project, args.container, rep,
+            case_ids=args.case_ids, output_dir=args.output_dir)
+        if args.case_ids is not None:
+            verdict = ('NOT_MEASURED' if executed < 0 or executed != len(args.case_ids)
+                       else 'FAIL' if rep['failed'] or rep['errored'] else 'PASS')
+            if metrics.d13_subject(args.project) != subject:
+                verdict = 'NOT_MEASURED'
+            summary = binding._bind_runner_report({'project': str(args.project),
+                'verdict': verdict, 'subject': subject, 'selected_cases': args.case_ids,
+                'execution': rep, 'emission': report, 'model_sources': metrics.d13_model_sources()},
+                args.project, __file__, 'phase2_one_shot.json', context=invocation)
+            _atomic_write_text(args.output_dir / 'phase2_one_shot.json', json.dumps(summary, indent=2) + '\n')
+            _atomic_write_text(args.output_dir / 'launch.json', json.dumps(launch, indent=2) + '\n')
+            (args.output_dir / 'host-launch.json').write_bytes(Path(launch['attestation_path']).read_bytes())
+            print(json.dumps(summary))
+            return {'PASS': 0, 'FAIL': 1}.get(verdict, 2)
         if executed < 0:
             print(f"[NOT_EXECUTED] testbench_gen --run: "
                   f"{rep.get('reason')}")
