@@ -1918,12 +1918,12 @@ def _finish_d11_selected_owner(project: Path, report: Mapping, invocation: Mappi
         attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
         if (attempt / 'result.json').exists():
             raise ValueError('immutable attempt result already exists')
+        path = attempt / 'phase2_one_shot.json'
         fresh_execution = metrics.d11_current_execution(project, context, report, invocation,
-            published_current=published_current)
+            published_current=published_current, report_path=path)
         accepted = metrics.accept_d11(project, context, **(
             {'current_execution': fresh_execution} if fresh_execution is not None else {}))
         status, detail = accepted['status'], accepted['reason']
-        path = _pl.report_path(project, 'phase2_one_shot.json')
         owner_current = False
         try:
             binding = report['runner_binding']
@@ -1952,7 +1952,7 @@ def _finish_d11_selected_owner(project: Path, report: Mapping, invocation: Mappi
         if status == 'PASS' and not owner_current:
             status, detail = 'NOT_MEASURED', 'D11_OWNER_WINDOW_NOT_CURRENT_PASS'
         reopened_execution = metrics.d11_current_execution(project, context, report, invocation,
-            published_current=published_current)
+            published_current=published_current, report_path=path)
         reread = metrics.accept_d11(project, context, **(
             {'current_execution': reopened_execution} if reopened_execution is not None else {}))
         if reread != accepted:
@@ -5844,7 +5844,7 @@ def _main() -> int:
                 "PHASE 2 (= 2a + 2b)", runner, p2_args, env=p2_env,
                 invocation=d09_invocation if d09_selected or d11_selected or d12_selected else None)
             phase2_report = _phase_report_path(project, 'phase2_one_shot.json')
-            if d12_selected:
+            if d11_selected or d12_selected:
                 context = flow109.validate_execution_context(json.loads(
                     Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
                 phase2_report = flow109._bound_attempt(project, context,
@@ -5852,7 +5852,7 @@ def _main() -> int:
             verdict, _fresh_why = _row_verdict(
                 project, "phase2_one_shot.json", rc,
                 _phase_started.get("phase2", t0), "phase2",
-                **({'report_path': phase2_report} if d12_selected else {}))
+                **({'report_path': phase2_report} if d11_selected or d12_selected else {}))
             if _fresh_why:
                 advisories.append(_fresh_why)
             rep = _read_report(phase2_report)
@@ -5867,7 +5867,7 @@ def _main() -> int:
                 rc = 0 if verdict == 'PASS' else 1 if verdict == 'FAIL' else 2
             if d11_selected:
                 finalized = _finish_d11_selected_owner(project, rep, d09_invocation,
-                    published_current=_pl.published_here(_phase_report_path(project, 'phase2_one_shot.json'),
+                    published_current=_pl.published_here(phase2_report,
                                                          _phase_started['phase2']))
                 reports['d11_finalization'] = finalized
                 verdict = finalized['verdict']

@@ -2232,13 +2232,18 @@ def d11_fresh_admission(project: Path, context: Mapping, config: Mapping, checke
 
 
 def d11_current_execution(project: Path, context: Mapping, report: Mapping,
-                          invocation: Mapping, *, published_current: bool) -> dict | None:
+                          invocation: Mapping, *, published_current: bool,
+                          report_path: Path | None = None) -> dict | None:
     """Bind this real normal owner invocation; never backfill a historical report."""
     import benchmark_dispatch as dispatch
-    import _path_layout as layout
+    import flow109
+    import os
     project = Path(project).resolve()
-    path = layout.report_path(project, 'phase2_one_shot.json')
     try:
+        path = flow109._bound_attempt(project, context,
+            os.environ.get(flow109.ATTEMPT_ENV)) / 'phase2_one_shot.json'
+        if report_path is not None and Path(report_path) != path:
+            return None
         binding = report['runner_binding']
         rows = [r for r in report['steps'] if r.get('name') == 'rtl_lint_tool']
         if (published_current is not True or path.is_symlink() or json.loads(path.read_bytes()) != report
@@ -2259,7 +2264,7 @@ def d11_current_execution(project: Path, context: Mapping, report: Mapping,
             return None
         execution['owner_report'] = _d11_file(project, path)
         return execution
-    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+    except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError, AttributeError):
         return None
 
 
