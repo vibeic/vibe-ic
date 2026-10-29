@@ -14425,7 +14425,12 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
     from _rtl_include_hub import silicon_rtl_selection
     import verilator_lint_gate as _vlg
     t0 = time.time()
-    out_dir = project / "reports/phase2/lint"
+    namespace = None
+    if d11_context is not None:
+        attempt = flow109._bound_attempt(project, d11_context, os.environ.get(flow109.ATTEMPT_ENV))
+        namespace = 'D11/' + attempt.name
+    config_dir = project / 'phase3/librelane' / (namespace or 'step2')
+    out_dir = config_dir if d11_context is not None else project / "reports/phase2/lint"
     gate_json = out_dir / "verilator_lint_gate.json"
     try:
         try:
@@ -14442,7 +14447,6 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
         l9 = _rcvar_l9_top_ports(project)
         top = l9[0] if l9 else None
         rtl = silicon_rtl_selection(_pl.rtl_dir(project))
-        config_dir = project / "phase3/librelane/step2"
         config_dir.mkdir(parents=True, exist_ok=True)
         _ll.emit_lint_config(project, str(pdk), config_dir / "lint_config.json",
                              str(top or ""), rtl,
@@ -14475,9 +14479,6 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
             d11_admission = metrics.d11_fresh_admission(project, d11_context,
                 json.loads(resolved.read_bytes()),
                 {sid: json.loads(cfg.read_bytes()) for sid, cfg, _ in checks})
-            namespace = 'D11/' + Path(os.environ[flow109.ATTEMPT_ENV]).name
-        else:
-            namespace = None
         folders = _ll.run_chain(
             project, image, [("Verilator.Lint", resolved, state_in), *checks,
                 *([] if d11_context is not None else [("Yosys.JsonHeader", header_resolved, state_in)])],
@@ -14518,7 +14519,8 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
                                   "default_row_status": "NOT_MEASURED" if stopped else "FAIL"})
     # The step-2 port conformance, against the tool's elaborated interface.
     # Advisory like its flow clause: recorded, never the lint verdict.
-    conformance = project / "reports/phase2/gates/spec_conformance_tool_ports.json"
+    conformance = (out_dir / 'spec_conformance_tool_ports.json' if d11_context is not None
+                   else project / "reports/phase2/gates/spec_conformance_tool_ports.json")
     json_h = (json.loads((header_dir / "state_out.json").read_text()).get("json_h")
               if d11_context is None else None)
     l9_path = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
