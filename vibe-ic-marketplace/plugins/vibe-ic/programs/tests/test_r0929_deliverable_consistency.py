@@ -625,7 +625,7 @@ L9_FIXED = """# L9 Constraints
 ### 9.2.3 Floorplan
 | Item | Value |
 |---|---|
-| Core die (no seal ring) | 300 × 200 µm |
+| Outer die hard limit | 300 × 200 µm |
 """
 
 

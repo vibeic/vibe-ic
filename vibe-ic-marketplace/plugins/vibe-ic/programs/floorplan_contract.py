@@ -189,6 +189,39 @@ def _die_statement_negated(text: str, start: int, end: int) -> bool:
     return bool(_DIE_NEGATION_RE.search(_BRACKETED_RE.sub(_blank, span)))
 
 
+def die_dimensions_are_outer(text: str, start: int, end: int) -> bool:
+    """Whether a dimension's local source record denotes an outer die bound.
+
+    Core/pad/seal figures and approximate targets remain source facts, not
+    interchangeable hard die geometry. Structured DIE_AREA configs retain
+    their existing authority; prose consumers share this role check.
+    """
+    lo = text.rfind("\n", 0, start) + 1
+    hi = text.find("\n", end)
+    hi = len(text) if hi < 0 else hi
+    if "|" not in text[lo:hi]:
+        lo = max([lo] + [position + len(sep) for sep in (". ", ";", ", ")
+                         if (position := text.rfind(sep, lo, start)) >= 0])
+        stops = [p for sep in (". ", ";")
+                 if (p := text.find(sep, end, hi)) >= 0]
+        hi = min(stops, default=hi)
+    prefix, suffix = text[lo:start], text[end:hi]
+    # An owning die label can describe its components in parentheses. Core
+    # words in that description do not replace the outside geometry owner.
+    role_prefix = _BRACKETED_RE.sub(" ", prefix)
+    if not re.search(r"\b(?:die|chip)\b", role_prefix, re.I):
+        role_prefix = prefix
+    if re.search(r"\b(?:core|active|pad(?:ring)?|seal\s+ring)\b", role_prefix, re.I):
+        return False
+    if re.search(r"[~≈]|\b(?:approx(?:imate(?:ly)?)?|about|roughly|estimated?|target|baseline)\b",
+                 text[lo:hi], re.I):
+        return False
+    if re.search(r"\b(?:no|without|excluding|not\s+including)\s+(?:the\s+)?seal\s+ring\b",
+                 prefix + " " + suffix, re.I):
+        return False
+    return True
+
+
 _FP_SIZING_PROSE_RE = re.compile(
     r"FP_SIZING\b[\s:=|`'\")(]{0,6}(absolute|relative)", re.IGNORECASE)
 
@@ -447,16 +480,20 @@ def _prose_die_area(project: Path,
         # VALUE, not the whole match — see `_die_statement_negated`.
         for m in _DIE_AREA_RECT_RE.finditer(text):
             wxh = _rect_to_wxh(*(float(m.group(i)) for i in (1, 2, 3, 4)))
-            if wxh and not _die_statement_negated(text, m.start(1), m.end(4)):
+            if (wxh and die_dimensions_are_outer(text, m.start(1), m.end(4))
+                    and not _die_statement_negated(text, m.start(1), m.end(4))):
                 return wxh
         mw, mh = _DIE_WIDTH_RE.search(text), _DIE_HEIGHT_RE.search(text)
         if (mw and mh
+                and die_dimensions_are_outer(text, mw.start(1), mw.end(1))
+                and die_dimensions_are_outer(text, mh.start(1), mh.end(1))
                 and not _die_statement_negated(text, mw.start(1), mw.end(1))
                 and not _die_statement_negated(text, mh.start(1), mh.end(1))):
             return _rect_to_wxh(0.0, 0.0, float(mw.group(1)),
                                 float(mh.group(1)))
         for m in _DIE_LABELLED_WXH_RE.finditer(text):
-            if _die_statement_negated(text, m.start(2), m.end(3)):
+            if (not die_dimensions_are_outer(text, m.start(2), m.end(3))
+                    or _die_statement_negated(text, m.start(2), m.end(3))):
                 continue
             return _rect_to_wxh(0.0, 0.0, float(m.group(2)),
                                 float(m.group(3)))

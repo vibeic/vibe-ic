@@ -20265,7 +20265,8 @@ def _v1_6_295_extract_tapeout_metadata(text: str
     if not isinstance(text, str) or not text:
         return None
     out: Dict[str, Any] = {}
-    m = _V1_6_295_RE_DIE_DIMENSIONS.search(text)
+    m = next((candidate for candidate in _V1_6_295_RE_DIE_DIMENSIONS.finditer(text)
+              if _fpc.die_dimensions_are_outer(text, candidate.start(1), candidate.end(2))), None)
     if m:
         try:
             w = float(m.group(1))
@@ -20288,7 +20289,8 @@ def _v1_6_295_extract_tapeout_metadata(text: str
     # consumers can distinguish unit-explicit matches from inferred
     # ones. Chip-AGNOSTIC: open-vocabulary prose anchor.
     if "die_size_um" not in out:
-        m2 = _V1_6_333_RE_DIE_DIMENSIONS_NO_UNIT.search(text)
+        m2 = next((candidate for candidate in _V1_6_333_RE_DIE_DIMENSIONS_NO_UNIT.finditer(text)
+                   if _fpc.die_dimensions_are_outer(text, candidate.start(1), candidate.end(2))), None)
         if m2:
             try:
                 w = float(m2.group(1))

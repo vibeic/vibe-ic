@@ -61,7 +61,7 @@ def test_a_labelled_die_row_is_extracted(tmp_path):
 def test_the_source_is_recorded(tmp_path):
     """A value with no provenance cannot be audited — and a WRONG extraction
     has to be traceable to the line it came from."""
-    d = _doc(tmp_path, "| Core die (no seal ring) | 1300 x 1300 um |\n")
+    d = _doc(tmp_path, "| Outer die limit | 1300 x 1300 um |\n")
     r = F.extract_floorplan_contract(d)
     assert r["die_area_budget_um"] == "1300x1300"
     assert r["die_area_source"], r

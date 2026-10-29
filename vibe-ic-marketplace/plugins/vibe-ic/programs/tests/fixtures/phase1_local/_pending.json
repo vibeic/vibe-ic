@@ -537,5 +537,16 @@
     "version_observed": "v1.33.28, commit 364400fd6a855012eed016a672e0e67c89ca386e\n\n## Acceptance boundary\n\nProve failure before repair on the verbatim input; preserve complete wrapped bullets and their polarity, boundary, and disclosure-vs-test role after repair. Exercise actual existing L7 and L22 consumers. Compare affected test IDs to the exact main base, with no new red IDs; reuse unchanged valid evidence. Root remains sole main/version writer. No complete-flow or simulator qualification may be inferred from this extraction repair.",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/phase1_wrapped_verification_intent/L5_ANALOG_SPEC.md"
+  },
+  {
+    "issue": 3754,
+    "project": "core_die_role_preservation",
+    "layer": "L19",
+    "field": "L1_DATASHEET.tapeout_metadata.die_size_um role; L19_CONSTRAINTS_PDK.fields.die_area_budget_um; normal area_budget_basis.status/max_die_dimensions_um/fixed_input_basis",
+    "expected": "Retain core/no-seal1300x1300 and approximate with-seal1480x1480 with their source roles. Do not assert an owner-fixed outer-DIE hard LIMIT solely from the qualified core row or derive a max from the approximate seal envelope. Use the existing unqualified/unknown representation when no genuine hard die limit is declared. Explicit independently declared die hard bounds must remain accepted unchanged.",
+    "actual": "L1 die_size_um=[1300,1300]; L19 die_area_budget_um=1300x1300; area_budget_basis.status=LIMIT and max_die_dimensions_um=[1300,1300], with rationale claiming the owner-fixed die limit and core=die minus pad/power rings despite the source qualifier.",
+    "version_observed": "v1.33.29 document refresh on main1980ed5687f7354b3c65140dba9db92e851e5357; same preserved original/derived source-frame members as independently read back on v1.33.28. No recent DFT causation inferred.",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/core_die_role_preservation/L9_CONSTRAINTS.md"
   }
 ]

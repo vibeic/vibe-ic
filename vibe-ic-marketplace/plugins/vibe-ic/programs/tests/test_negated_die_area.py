@@ -96,8 +96,8 @@ def test_plain_labelled_row_still_read():
 
 
 def test_parenthetical_negation_is_a_qualifier_not_a_denial():
-    """`test_issue376...` depends on this exact row; it must keep working."""
-    assert _die("## Floorplan\n| Core die (no seal ring) | 1300 x 1300 um |\n"
+    """Polarity and outer-die role are separate; retain the numeric positive."""
+    assert _die("## Floorplan\n| Outer die limit (not including scribe) | 1300 x 1300 um |\n"
                 ) == "1300x1300"
 
 

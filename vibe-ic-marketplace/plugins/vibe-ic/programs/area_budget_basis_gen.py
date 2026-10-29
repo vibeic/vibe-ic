@@ -665,6 +665,27 @@ def main(argv: Optional[List[str]] = None) -> int:
                               "reason": got.get("reason"),
                               "basis": got.get("basis")}
     rc = got["rc"]
+    if got["status"] == "NOT_DETERMINED":
+        # Retract only this generator's own obsolete derivation. Route
+        # approval does not supply a numeric limit; owner fields stay intact.
+        provenance = doc.get(TD.PROVENANCE_KEY) or {}
+        record = provenance.get(KEY) if isinstance(provenance, dict) else None
+        if (isinstance(record, dict) and record.get("producer") == PROGRAM
+                and TD.attestation_of(doc, KEY)["answered_by"] == TD.ANSWERED_BY_PROGRAM_VALUE):
+            new = copy.deepcopy(doc)
+            previous = TD.answer(doc, KEY)
+            new["answers"][KEY] = TD.NOT_DETERMINED
+            if KEY in new:
+                new[KEY] = TD.NOT_DETERMINED
+            new[TD.PROVENANCE_KEY].pop(KEY, None)
+            revision = {"field": f"answers.{KEY}", "producer": PROGRAM,
+                        "date": date.today().isoformat(),
+                        "reason": got["reason"], "previous": previous,
+                        "previous_provenance": record}
+            new.setdefault(TD.REVISIONS_KEY, []).append(revision)
+            out = args.out or src
+            _aa.write_json(out, new)
+            report.update({"out": str(out), "revision": revision})
     if got["status"] == "WRITE":
         new, revision = apply(doc, got, args.reason)
         own = [r for r in TD.derived_answer_refusals(new, project)
