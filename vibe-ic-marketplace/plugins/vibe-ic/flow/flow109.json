@@ -6623,7 +6623,7 @@
             "bounds_ref": "requirements/base_13/prelayout_timing_targets.json#/limits",
             "unit_ref": "requirements/base_13/prelayout_timing_targets.json#/units",
             "missing_bounds": "BLOCKED",
-            "modes": "functional_and_scan_when_scan_test_is_true"
+            "modes": "functional_only"
           },
           "binding_keys": [
             "netlist.logical",

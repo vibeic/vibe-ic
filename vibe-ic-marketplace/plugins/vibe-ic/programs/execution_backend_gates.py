@@ -107,11 +107,11 @@ def evaluate(project: Path, row: dict) -> dict:
                                   'PASS' if area_rc == 0 else 'FAIL' if area_rc == 1 else 'NOT_MEASURED')
         if area_rc:
             verdict.status = 'FAIL' if area_rc == 1 else 'NOT_MEASURED'
-    # The selected D49 Flow109 consumer must not reuse a functional-only
-    # candidate STA PASS as if shift/capture had been measured.  No other
-    # backend selection is affected; a real functional FAIL keeps precedence.
+    # D49 reopens declared mode receipts; functional PASS never supplies them.
     context_path = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+    scan_coverage = None
     if str(row['id']) == '23' and context_path:
+        context = None
         try:
             import flow109
             context = flow109.validate_execution_context(json.loads(Path(context_path).read_text()))
@@ -119,15 +119,30 @@ def evaluate(project: Path, row: dict) -> dict:
             scan_required = (any(r.get('id') == 'D49' for r in selected)
                              and (context.get('features') or {}).get('requires_scan') is True)
         except (OSError, ValueError, KeyError, TypeError, AttributeError):
-            scan_required = True  # Context cannot prove that the scan obligation is absent.
-        if scan_required and verdict.status != 'FAIL':
-            from verdict import ReasonClass
-            verdict.status = 'NOT_MEASURED'
-            verdict.reason_class = ReasonClass.INPUT_ABSENT
-            verdict.reasons.append('D49_SCAN_MODES_NOT_ACQUIRED: shift and capture timing unmeasured')
+            scan_required = True
+        if scan_required:
+            try:
+                import librelane_signoff as signoff
+                current = flow109.component_context(context, requested_step='D49')
+                record = json.loads((project / signoff.SIGNOFF_RECORD).read_bytes())
+                state = json.loads(Path(record['sta_state']).read_bytes())
+                scan_coverage = signoff.validate_scan_timing(project, current,
+                    record.get('scan_timing_coverage') or {}, state)
+            except Exception as exc:
+                scan_coverage = {'status': 'NOT_MEASURED', 'reason': str(exc)}
+            if scan_coverage['status'] == 'FAIL':
+                verdict.status = 'FAIL'
+                verdict.reason_class = None
+                verdict.reasons.append('D49_SCAN_TIMING_FAIL: independently bound shift/capture timing violation')
+            elif scan_coverage['status'] != 'PASS' and verdict.status != 'FAIL':
+                from verdict import ReasonClass
+                verdict.status = 'NOT_MEASURED'
+                verdict.reason_class = ReasonClass.INPUT_ABSENT
+                verdict.reasons.append('D49_SCAN_MODES_NOT_ACQUIRED: required declared coverage is unmeasured')
     ledger = fcc._GATE_LEDGER[start:]
     from dataclasses import asdict
     return {'step': asdict(verdict), 'ledger': ledger, 'status': verdict.status,
+            **({'scan_timing_coverage': scan_coverage} if scan_coverage is not None else {}),
             'required_commands': required_commands(row)}
 
 

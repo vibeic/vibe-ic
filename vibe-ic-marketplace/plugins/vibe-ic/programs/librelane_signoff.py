@@ -111,7 +111,8 @@ def run(project: Path, image: str, pdk_root: Path, pdk: str, *,
         lane: str = '22-23',
         extract: bool = True, time: bool = True,
         direct_spefs: Optional[dict[str, Path]] = None,
-        report_body: str = '') -> dict:
+        report_body: str = '', config_overlay: Optional[dict] = None,
+        config_folder: Optional[str] = None) -> dict:
     """direct routed views -> bridge -> RCX and/or STAPostPNR in the image.
 
     ``extract``: step 22 on the tool (RCX).  ``time``: step 23 on the tool
@@ -122,16 +123,53 @@ def run(project: Path, image: str, pdk_root: Path, pdk: str, *,
     """
     if not (extract or time):
         raise Refusal('LL_SIGNOFF_NOTHING_SELECTED', 'neither step 22 nor 23')
-    extra = write_extra_corner_tcl(project, report_body) if time else None
-    overlay = ({'STA_EXTRA_CORNER_TCL_FILE': ('dir::' + EXTRA_TCL, DERATE_SOURCE +
+    # Optional declared-mode calls own a fresh namespace; old calls retain
+    # their exact paths and behavior. Never overwrite another arm's Config.
+    folder = '22-config'
+    if config_folder is not None:
+        if not isinstance(config_folder, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', config_folder):
+            raise Refusal('LL_STA_NAMESPACE_INVALID', str(config_folder))
+        root = Path(project).resolve() / 'phase3/librelane'
+        if root.resolve() != root:
+            raise Refusal('LL_STA_NAMESPACE_INVALID', str(root))
+        root.mkdir(parents=True, exist_ok=True)
+        target = root / config_folder
+        if target.exists() or target.is_symlink():
+            raise Refusal('LL_STA_NAMESPACE_INVALID', str(target))
+        if (not isinstance(lane, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', lane)
+                or lane == config_folder):
+            raise Refusal('LL_STA_NAMESPACE_INVALID', str(lane))
+        output = root / lane
+        if output.exists() or output.is_symlink():
+            raise Refusal('LL_STA_NAMESPACE_INVALID', str(output))
+        target.mkdir(exist_ok=False)
+        output.mkdir(exist_ok=False)
+        folder = config_folder
+    if config_overlay is not None:
+        allowed = {'SIGNOFF_SDC_FILE', 'STA_CORNERS', 'CELL_LIBS', 'DEFAULT_CORNER'}
+        if (config_folder is None or not isinstance(config_overlay, dict)
+                or not set(config_overlay) <= allowed):
+            raise Refusal('LL_STA_CONFIGURATION_UNSUPPORTED', 'declared SDC/corner/library overlay only')
+        for value in config_overlay.values():
+            if not isinstance(value, tuple) or len(value) != 2 or not isinstance(value[1], str) or not value[1]:
+                raise Refusal('LL_STA_CONFIGURATION_UNSUPPORTED', 'normal value/source pairs required')
+        selected = config_overlay.get('SIGNOFF_SDC_FILE')
+        if selected and Path(selected[0]).resolve() != Path(sdc).resolve():
+            raise Refusal('LL_STA_SDC_MISMATCH', 'Config and State must select the same SDC')
+    if config_folder is not None and time:
+        extra = Path(project).resolve() / 'phase3/librelane' / folder / Path(EXTRA_TCL).name
+        extra.write_text(_DERATE_TCL.lstrip('\n') + (report_body.rstrip('\n') + '\n' if report_body else ''))
+    else:
+        extra = write_extra_corner_tcl(project, report_body) if time else None
+    overlay = ({'STA_EXTRA_CORNER_TCL_FILE': ('dir::' + (str(extra.relative_to(Path(project).resolve())) if config_folder is not None else EXTRA_TCL), DERATE_SOURCE +
                                               '; report body: vibe-ic step-23 emitters')}
                if extra else None)
     # The RCX authority must read the technology of the route it extracts,
     # including its recorded via legalization (also used by step 32).
     import librelane_pv_signoff as pv
-    overlay = {**(overlay or {}), **(pv.tech_lef_overlay(project) or {})}
+    overlay = {**(overlay or {}), **(pv.tech_lef_overlay(project) or {}), **(config_overlay or {})}
     configs = resolve_step_configs(project, image, pdk, list(STEPS), pdk_root=pdk_root,
-                                   folder='22-config', overlay=overlay)
+                                   folder=folder, overlay=overlay)
     rulesets = _load(configs['OpenROAD.RCX']).get('RCX_RULESETS') or {}
     if not isinstance(rulesets, dict) or not rulesets:
         # A PDK that declares no OpenRCX rules is the LEF-RC/analytical
@@ -158,7 +196,7 @@ def run(project: Path, image: str, pdk_root: Path, pdk: str, *,
             spef[pattern] = Path(source)
         views['spef'] = spef
     state = state_from_direct(project, image, configs[steps[0]], views,
-                              project / 'phase3/librelane/22-config/bridge',
+                              project / 'phase3/librelane' / folder / 'bridge',
                               chain=[configs[s] for s in steps[1:]], mounts=mounts)
     folders = run_chain(project, image, [(s, configs[s], state) for s in steps],
                         mounts=mounts, lane=lane, pdk_root=PDK_GUEST_ROOT)
@@ -171,6 +209,316 @@ def run(project: Path, image: str, pdk_root: Path, pdk: str, *,
             'sta': folders[-1] if time else None,
             'spef': {pattern: Path(path) for pattern, path in spefs.items()},
             'configs': configs, 'extra_tcl': extra, 'mounts': mounts}
+
+
+def scan_timing_plan(project: Path, context: dict) -> dict:
+    """Read existing owner-approved D19 facts; never re-emit its row or inputs."""
+    import flow109_metric_acceptance as metrics
+    project = Path(project).resolve()
+    if (context.get('features') or {}).get('requires_scan') is not True:
+        raise Refusal('SCAN_TIMING_APPLICABILITY_UNRESOLVED', 'scan-required context expected')
+    values, sources = {}, {}
+    for name, relative, schema in (
+            ('scenario_constraints', 'requirements/base_10/scenario_constraints.json', metrics.AUTHORITY_SCHEMA),
+            ('mode_library_rc_mapping', 'adopted/base_10/mode_library_rc_mapping.json', 'vibeic.flow109.adopted-reference.v1')):
+        authority, body = metrics._approved_document(project, relative,
+            authority='requirements_owner', schema=schema)
+        payload = {k: v for k, v in body.items() if k not in ('schema', 'approval', 'producer_binding')}
+        owner = _load(project / authority['source']['path'])
+        if not authority['source']['path'].startswith('input/') or owner.get(name) != payload:
+            raise Refusal('SCAN_TIMING_PLAN_AUTHORITY_DIFFERS', name)
+        values[name] = payload
+        sources[name] = {'path': relative, 'sha256': digest(project / relative), 'source': authority['source']}
+    required = values['scenario_constraints']
+    if not {'shift', 'capture'} <= set(required.get('required_modes') or []):
+        raise Refusal('SCAN_TIMING_REQUIRED_MODES_UNSTATED', 'declared shift and capture required')
+    items = required.get('required_items')
+    mapping = values['mode_library_rc_mapping'].get('reference')
+    if not isinstance(items, list) or not isinstance(mapping, list):
+        raise Refusal('SCAN_TIMING_SCENARIOS_UNSTATED', 'existing scenario/mapping lists required')
+    selected = [row for row in items if isinstance(row, dict) and row.get('mode') in ('shift', 'capture')]
+    keys, groups = set(), {}
+    for item in selected:
+        if (set(item) != {'mode', 'corner', 'check'}
+                or any(not isinstance(item[k], str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]*', item[k]) for k in item)
+                or item['corner'] not in required.get('required_corners', [])
+                or item['check'] not in required.get('required_checks', [])
+                or item['check'] not in ('setup', 'hold')):
+            raise Refusal('SCAN_TIMING_SCENARIO_UNSUPPORTED', str(item))
+        key = (item['mode'], item['corner'], item['check'])
+        if key in keys:
+            raise Refusal('SCAN_TIMING_SCENARIO_DUPLICATE', str(key))
+        keys.add(key)
+        matches = [row for row in mapping if isinstance(row, dict) and all(row.get(k) == v for k, v in item.items())]
+        if len(matches) != 1:
+            raise Refusal('SCAN_TIMING_SCENARIO_MAPPING_MISSING', str(key))
+        row = matches[0]
+        sdc = metrics._d19_ref(project, row.get('sdc'), 'declared scan SDC')
+        if not isinstance(row.get('libraries'), list) or not row['libraries']:
+            raise Refusal('SCAN_TIMING_LIBRARY_UNSTATED', str(key))
+        libraries = [metrics._d19_ref(project, ref, 'declared scan library') for ref in row['libraries']]
+        rc = row.get('rc')
+        if not isinstance(rc, dict) or not isinstance(rc.get('corner'), str) or not rc['corner']:
+            raise Refusal('SCAN_TIMING_RC_SCENE_DIFFERS', str(key))
+        rc = {'corner': rc['corner'], 'model': metrics._d19_ref(project, rc.get('model'), 'declared RC planning source')}
+        core = {'mode': item['mode'], 'sdc': sdc, 'libraries': libraries, 'rc': rc}
+        group_key = json.dumps(core, sort_keys=True)
+        group = groups.setdefault(group_key, {**core, 'scenarios': []})
+        group['scenarios'].append(dict(item))
+    if {g['mode'] for g in groups.values()} != {'shift', 'capture'}:
+        raise Refusal('SCAN_TIMING_REQUIRED_MODES_UNSTATED', 'both declared mode populations required')
+    return {'required_modes': ['shift', 'capture'], 'groups': list(groups.values()), 'source_refs': sources}
+
+
+def scan_timing_sources() -> dict:
+    """Existing per-use model binding, no release/main identity lock."""
+    import ast
+    text = Path(__file__).read_text()
+    nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
+    import hashlib
+    return {'librelane_signoff.py:' + name: hashlib.sha256(ast.get_source_segment(text, nodes[name]).encode()).hexdigest()
+            for name in ('run', 'corner_timing', 'judge_timing', 'scan_timing_plan', 'scan_timing_sources', '_scan_timing_qualification',
+                         '_scan_timing_status', '_scan_timing_subject', '_scan_timing_origin', '_scan_timing_arm',
+                         'run_scan_timing', 'validate_scan_timing')}
+
+
+def _scan_timing_qualification(project: Path, context: dict, *, models: Optional[dict] = None) -> None:
+    import flow109_admission as admission
+    admission.require_admission(project, context)
+    expected = scan_timing_sources() if models is None else models
+    for use in context['runtime_tool_uses']:
+        config = _load(Path(project) / use['config']['path'])
+        if not all(config.get('model_sources', {}).get(k) == v for k, v in expected.items()):
+            raise Refusal('SCAN_TIMING_MODEL_UNQUALIFIED', use['use_id'])
+
+
+def _scan_timing_status(corners: dict) -> dict:
+    observed = judge_timing(corners)
+    # A complete, bound failing corner remains a failure when another corner
+    # is missing. Do not change the legacy/non-scan judge's behavior.
+    failed = {name: judge_timing({name: row}) for name, row in corners.items()}
+    failed = {name: value for name, value in failed.items() if value['verdict'] == 'FAIL'}
+    return {**observed, 'verdict': 'FAIL', 'bound_failing_corners': failed} if failed else observed
+
+
+def _scan_timing_subject(project: Path, state: dict) -> dict:
+    import librelane_fill_stream as files
+    subject = {k: files._record(project, Path(state[k])) for k in ('nl', 'def', 'odb')}
+    spefs = state.get('spef')
+    if not isinstance(spefs, dict) or not spefs:
+        raise Refusal('SCAN_TIMING_SPEF_UNBOUND', 'current native physical subject required')
+    subject['spef'] = {rc_corner(k): files._record(project, Path(v)) for k, v in spefs.items()}
+    if len(subject['spef']) != len(spefs):
+        raise Refusal('SCAN_TIMING_SPEF_UNBOUND', 'duplicate physical RC scene')
+    return subject
+
+
+def _scan_timing_origin(project: Path, record: dict, receipt: dict) -> dict:
+    """Authenticate a normal arm against its original source/runtime admission.
+
+    Only the existing live LOCAL launch interface is available for these arms.
+    A historical/different-CID execution without an existing original-execution
+    adoption interface remains unmeasured; file self-consistency is insufficient.
+    No current-main, release, or historical-image-string equality is required.
+    """
+    import ast
+    import hashlib
+    import flow109
+    import execution_source_identity as source_identity
+    import librelane_contract as contract
+    fingerprint = receipt['input']
+    original = fingerprint.get('local_image')
+    if not isinstance(original, dict) or not fingerprint.get('image'):
+        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'original LOCAL execution receipt required')
+    if fingerprint['image'] not in (original.get('image'), original.get('image_id')):
+        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'fingerprint image differs from its own original launch')
+    launch = contract.local_image_attestation(fingerprint['image'])
+    if original != launch:
+        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND',
+            'original launch is not the attested live execution; historical adoption unsupported')
+    # Reopen the actual retained source via the existing Git/installed-source
+    # authority. Reader-only updates need not equal the original producer bytes.
+    package = Path(record['source_root']).resolve()
+    source = package / 'programs/librelane_signoff.py'
+    identity = source_identity.current(package)
+    identity.verify(source)
+    text = source.read_text()
+    nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
+    models = record.get('operation_sources')
+    if not isinstance(models, dict) or set(models) != set(scan_timing_sources()):
+        raise Refusal('SCAN_TIMING_SOURCE_UNBOUND', 'original consumed model population differs')
+    for key, value in models.items():
+        name = key.partition(':')[2]
+        if name not in nodes or hashlib.sha256(ast.get_source_segment(text, nodes[name]).encode()).hexdigest() != value:
+            raise Refusal('SCAN_TIMING_SOURCE_UNBOUND', key)
+    context = flow109.validate_execution_context(record['execution_context'])
+    if context['resolved_row']['id'] not in ('D49', 'D70'):
+        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'foreign original purpose')
+    _scan_timing_qualification(project, context, models=models)
+    identity.verify_current()
+    if contract.local_image_attestation(fingerprint['image']) != launch:
+        raise Refusal('SCAN_TIMING_EXECUTION_UNBOUND', 'launch changed during readback')
+    return {'source_root': str(package), 'source_revision': identity.revision,
+            'source_tree': identity.tree, 'launch': launch,
+            'context_sha256': context['context_sha256']}
+
+
+def _scan_timing_arm(project: Path, group: dict, record: dict, subject: dict) -> dict:
+    """Reopen the normal native receipt, not a mode label or reported PASS."""
+    from librelane_contract import validate_step_receipt
+    import librelane_fill_stream as files
+    state_path = files._bound(project, record.get('sta_state'))
+    folder = state_path.parent
+    if (state_path.name != 'state_out.json' or not folder.is_relative_to(project / 'phase3/librelane')
+            or folder.is_symlink()):
+        raise Refusal('SCAN_TIMING_STATE_FOREIGN', str(state_path))
+    receipt = validate_step_receipt(folder, 'OpenROAD.STAPostPNR')
+    origin = _scan_timing_origin(project, record, receipt)
+    if files._record(project, folder / 'vibeic_receipt.json') != record.get('native_receipt'):
+        raise Refusal('SCAN_TIMING_RECEIPT_CHANGED', str(folder))
+    for name in ('config.json', 'state_in.json'):
+        if receipt['sha256'].get(name) != digest(folder / name):
+            raise Refusal('SCAN_TIMING_INPUT_UNBOUND', name)
+    state, config = _load(state_path), _load(folder / 'config.json')
+    declared_corners = sorted({row['corner'] for row in group['scenarios']})
+    if sorted(config.get('STA_CORNERS') or []) != declared_corners:
+        raise Refusal('SCAN_TIMING_CORNERS_DIFFER', str(folder))
+    rules = config.get('RCX_RULESETS') or {}
+    for corner in declared_corners:
+        scenes = [rc_corner(pattern) for pattern in rules if fnmatch.fnmatchcase(corner, pattern)]
+        if scenes != [group['rc']['corner']] or group['rc']['corner'] not in subject['spef']:
+            raise Refusal('SCAN_TIMING_RC_SCENE_DIFFERS', corner)
+    sdc = files._bound(project, group['sdc'])
+    if (Path(str(state.get('sdc', ''))).resolve() != sdc
+            or Path(str(config.get('SIGNOFF_SDC_FILE', ''))).resolve() != sdc):
+        raise Refusal('SCAN_TIMING_SDC_DIFFER', str(folder))
+    if _scan_timing_subject(project, state) != subject:
+        raise Refusal('SCAN_TIMING_PHYSICAL_SUBJECT_DIFFER', str(folder))
+    timed = receipt['input'].get('state_files') or {}
+    for value in [state[k] for k in ('nl', 'def', 'odb', 'sdc')] + list(state['spef'].values()):
+        if timed.get(str(value)) != digest(Path(value)):
+            raise Refusal('SCAN_TIMING_INPUT_CHANGED', str(value))
+    libraries = config.get('CELL_LIBS') or config.get('LIB') or {}
+    library_inputs = receipt['input'].get('liberty_files') or {}
+    expected = {row['sha256'] for row in group['libraries']}
+    for corner in declared_corners:
+        matches = [v for k, v in libraries.items() if fnmatch.fnmatchcase(corner, k)]
+        if len(matches) != 1 or {digest(Path(v)) for v in matches[0]} != expected:
+            raise Refusal('SCAN_TIMING_LIBRARY_DIFFER', corner)
+        if any(library_inputs.get(str(v)) != digest(Path(v)) for v in matches[0]):
+            raise Refusal('SCAN_TIMING_LIBRARY_UNBOUND', corner)
+    if (folder / 'metrics.json').exists() and receipt['sha256'].get('metrics.json') != digest(folder / 'metrics.json'):
+        raise Refusal('SCAN_TIMING_REPORT_UNBOUND', 'metrics.json')
+    for corner in declared_corners:
+        for name in ('sta.log', CORNER_REPORT, 'unpropagated.rpt'):
+            relative = corner + '/' + name
+            if receipt['sha256'].get(relative) != digest(folder / relative):
+                raise Refusal('SCAN_TIMING_REPORT_UNBOUND', relative)
+    corners = corner_timing(folder)
+    if set(corners) != set(declared_corners):
+        raise Refusal('SCAN_TIMING_COVERAGE_INCOMPLETE', str(folder))
+    return {'status': _scan_timing_status(corners)['verdict'], 'timing': _scan_timing_status(corners),
+            'corners': corners, 'sta_state': record['sta_state'], 'native_receipt': record['native_receipt'],
+            'execution_origin': origin}
+
+
+def run_scan_timing(project: Path, context: dict, owner: str, native: dict,
+                    state: dict, *, report_body: str = '') -> dict:
+    """Existing STAPostPNR per declared group, no extraction or other engine."""
+    import uuid
+    import librelane_fill_stream as files
+    project = Path(project).resolve()
+    coverage = {'status': 'NOT_MEASURED', 'required_modes': ['shift', 'capture'], 'modes': {}, 'not_measured': []}
+    statuses = []
+    try:
+        if owner not in ('D49', 'D70'):
+            raise Refusal('SCAN_TIMING_OWNER_UNSUPPORTED', str(owner))
+        plan = scan_timing_plan(project, context)
+        _scan_timing_qualification(project, context)
+        subject = _scan_timing_subject(project, state)
+        direct_spefs = {k: files._bound(project, ref) for k, ref in subject['spef'].items()}
+        for group in plan['groups']:
+            mode = group['mode']
+            scope = 'scan-' + owner + '-' + mode + '-' + uuid.uuid4().hex
+            corners = sorted({row['corner'] for row in group['scenarios']})
+            sdc = files._bound(project, group['sdc'])
+            libraries = [str(files._bound(project, ref)) for ref in group['libraries']]
+            overlay = {'SIGNOFF_SDC_FILE': (str(sdc), 'existing approved D19 mode SDC'),
+                'STA_CORNERS': (corners, 'existing approved D19 declared corners'),
+                'CELL_LIBS': ({c: libraries for c in corners}, 'existing approved D19 libraries'),
+                'DEFAULT_CORNER': (corners[0], 'first explicitly declared corner in this acquisition')}
+            result = run(project, native['image'], Path(native['pdk_root']), native['pdk'],
+                routed_def=files._bound(project, subject['def']), routed_odb=files._bound(project, subject['odb']),
+                netlist=files._bound(project, subject['nl']), sdc=sdc, extract=False, time=True,
+                direct_spefs=direct_spefs, lane=scope, report_body=report_body,
+                config_folder=scope + '-config', config_overlay=overlay)
+            folder = Path(result['sta'])
+            record = {'group': group, 'execution_context': context,
+                      'source_root': str(Path(__file__).resolve().parents[1]),
+                      'operation_sources': scan_timing_sources(),
+                      'sta_state': files._record(project, folder / 'state_out.json'),
+                      'native_receipt': files._record(project, folder / 'vibeic_receipt.json')}
+            observation = _scan_timing_arm(project, group, record, subject)
+            record['observation'] = observation
+            coverage['modes'].setdefault(mode, []).append(record)
+            statuses.append(observation['status'])
+        coverage['source_refs'] = plan['source_refs']
+        if scan_timing_plan(project, context)['groups'] != plan['groups']:
+            raise Refusal('SCAN_TIMING_INPUT_CHANGED', 'declared input group changed during native acquisition')
+    except Exception as exc:
+        if getattr(exc, 'code', '') == 'LL_STEP_FAILED':
+            statuses.append('FAIL')
+        coverage['not_measured'].append({'reason': getattr(exc, 'code', 'SCAN_TIMING_NOT_MEASURED'), 'detail': str(exc)})
+    complete = (set(coverage['modes']) == {'shift', 'capture'} and not coverage['not_measured']
+                and statuses and all(x == 'PASS' for x in statuses))
+    coverage['status'] = 'FAIL' if 'FAIL' in statuses else 'PASS' if complete else 'NOT_MEASURED'
+    return coverage
+
+
+def validate_scan_timing(project: Path, context: dict, coverage: dict, state: dict) -> dict:
+    """Reopen every declared mode; valid earlier FAIL survives later absence."""
+    project = Path(project).resolve()
+    statuses, observed, missing, seen = [], {}, [], set()
+    try:
+        plan = scan_timing_plan(project, context)
+        _scan_timing_qualification(project, context)
+        subject = _scan_timing_subject(project, state)
+        expected = {json.dumps(g, sort_keys=True): g for g in plan['groups']}
+        records = {}
+        for mode, values in (coverage.get('modes') or {}).items():
+            if mode not in ('shift', 'capture') or not isinstance(values, list):
+                missing.append({'reason': 'SCAN_TIMING_RECORD_INVALID', 'detail': str(mode)})
+                continue
+            for record in values:
+                if not isinstance(record, dict):
+                    missing.append({'reason': 'SCAN_TIMING_RECORD_INVALID', 'detail': str(mode)})
+                    continue
+                key = json.dumps(record.get('group'), sort_keys=True)
+                if key not in expected or expected[key]['mode'] != mode or key in records:
+                    missing.append({'reason': 'SCAN_TIMING_RECORD_INVALID', 'detail': str(mode)})
+                    continue
+                records[key] = record
+        # A later missing/refused record does not erase an earlier bound FAIL.
+        for key, record in records.items():
+            try:
+                path = record.get('sta_state', {}).get('path')
+                if path in seen:
+                    raise Refusal('SCAN_TIMING_STATE_ALIAS', str(path))
+                seen.add(path)
+                observed[key] = _scan_timing_arm(project, expected[key], record, subject)
+                statuses.append(observed[key]['status'])
+            except Exception as exc:
+                missing.append({'reason': getattr(exc, 'code', 'SCAN_TIMING_NOT_MEASURED'), 'detail': str(exc)})
+        if set(records) != set(expected):
+            raise Refusal('SCAN_TIMING_COVERAGE_INCOMPLETE', 'declared shift/capture groups missing')
+        if scan_timing_plan(project, context)['groups'] != plan['groups']:
+            raise Refusal('SCAN_TIMING_INPUT_CHANGED', 'declared scan inputs changed during readback')
+        _scan_timing_qualification(project, context)
+    except Exception as exc:
+        missing.append({'reason': getattr(exc, 'code', 'SCAN_TIMING_NOT_MEASURED'), 'detail': str(exc)})
+    return {'status': 'FAIL' if 'FAIL' in statuses else 'PASS' if statuses and all(s == 'PASS' for s in statuses) and not missing else 'NOT_MEASURED',
+            'required_modes': ['shift', 'capture'], 'observations': observed, 'not_measured': missing}
+
 
 
 def rc_corner(pattern: str) -> str:

@@ -111,18 +111,20 @@ def execute(project, context):
                       'declared_corners': required_corners,
                       'spef_by_rc_scene': parasitics['final_spefs']}
         status = timing['verdict']
-        # D70 currently acquires only the functional STA arm.  A scan-required
-        # design needs separately bound shift and capture acquisitions before
-        # that functional result may be offered as a complete component.
-        # Preserve a real functional failure, but never promote an unmeasured
-        # scan mode to PASS.  The native measurements remain available below.
         scan_required = (context.get('features') or {}).get('requires_scan') is True
-        if scan_required and status == 'PASS':
-            status = 'NOT_MEASURED'
-        result['scan_timing_coverage'] = ({
-            'status': 'NOT_MEASURED', 'required_modes': ['shift', 'capture'],
-            'reason': 'D70_SCAN_MODES_NOT_ACQUIRED'} if scan_required else {
-            'status': 'NOT_APPLICABLE', 'reason': 'requires_scan is false'})
+        if scan_required:
+            coverage = signoff.run_scan_timing(project, context, 'D70', native, state)
+            scan_current = signoff.validate_scan_timing(project, context, coverage, state)
+            # Preserve a valid measured failure, including when later coverage
+            # becomes unmeasured. The raw acquisitions remain retained.
+            scan_status = ('FAIL' if coverage['status'] == 'FAIL' or scan_current['status'] == 'FAIL'
+                           else scan_current['status'])
+            status = ('FAIL' if status == 'FAIL' or scan_status == 'FAIL' else
+                      'PASS' if status == scan_status == 'PASS' else 'NOT_MEASURED')
+            result['scan_timing_coverage'] = coverage
+            result['scan_timing_readback'] = scan_current
+        else:
+            result['scan_timing_coverage'] = {'status': 'NOT_APPLICABLE', 'reason': 'requires_scan is false'}
         result.update(component_status=status, reason='D70_NATIVE_ELECTRICAL_' + status,
                       producer='flow109_final_electrical', sdf_role='final',
                       final_parasitics_receipt=manifest['final_parasitics_receipt'],
@@ -150,11 +152,6 @@ def validate_final_electrical(project, receipt_ref):
     if record.get('schema') != SCHEMA or record.get('component_status') != 'PASS':
         raise AdmissionRefusal('D70_COMPONENT_NOT_ACCEPTED', 'current native STA component PASS required')
     require_launch_admission(project, 'flow109.D70', {'flow109_context': record.get('execution_context')})
-    if ((record.get('execution_context') or {}).get('features') or {}).get('requires_scan') is True:
-        # No implementation currently reopens bound shift/capture native
-        # receipts here; refuse even a historical functional-only PASS.
-        raise AdmissionRefusal('D70_SCAN_MODES_NOT_ACQUIRED',
-                               'scan-required D70 needs shift and capture evidence')
     if record.get('operation_sources') != operation_sources():
         raise AdmissionRefusal('D70_OPERATION_SOURCE_CHANGED', 'adapter or retained consumer changed')
     parasitics = extract.validate_final_parasitics(project, record['final_parasitics_receipt'])
@@ -163,6 +160,12 @@ def validate_final_electrical(project, receipt_ref):
         raise AdmissionRefusal('D70_STA_STATE_CHANGED', str(folder))
     if signoff.judge_timing(signoff.corner_timing(folder)) != record['timing_judgment']:
         raise AdmissionRefusal('D70_TIMING_CHANGED', str(folder))
+    if ((record.get('execution_context') or {}).get('features') or {}).get('requires_scan') is True:
+        current = signoff.validate_scan_timing(project, record['execution_context'],
+            record.get('scan_timing_coverage') or {}, state)
+        if current['status'] != 'PASS':
+            raise AdmissionRefusal('D70_SCAN_TIMING_FAIL' if current['status'] == 'FAIL' else 'D70_SCAN_MODES_NOT_ACQUIRED',
+                'declared shift/capture timing is ' + current['status'], status=current['status'])
     state_sdfs = postroute.corner_sdfs(state)
     required_population = _required_corner_population(record.get('required_corners'))
     expected_sdfs = {corner: files._record(project, path)

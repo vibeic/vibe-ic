@@ -1683,6 +1683,20 @@ def produce_signoff(project, params):
         if ordinary:
             import librelane_signoff as signoff
             record = json.loads(_require(rpt / 'sta_postpnr_signoff.json').read_text())
+            import os
+            context_path = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+            if context_path:
+                import flow109
+                context = flow109.validate_execution_context(json.loads(Path(context_path).read_bytes()))
+                selected = context.get('resolved_rows') or [context.get('resolved_row', {})]
+                if (any(row.get('id') == 'D49' for row in selected)
+                        and context['features'].get('requires_scan') is True):
+                    current = flow109.component_context(context, requested_step='D49')
+                    state = json.loads(Path(record['sta_state']).read_bytes())
+                    record['scan_timing_coverage'] = signoff.run_scan_timing(project, current, 'D49',
+                        {'image': image, 'pdk_root': str(root), 'pdk': pdk.name}, state,
+                        report_body=R._librelane_signoff_report_body())
+                    R._aa.write_json(rpt / 'sta_postpnr_signoff.json', record)
             drv_final_state = {'capture_step': '23', 'final': {
                 'sta_state': record['sta_state'],
                 'sta_state_sha256': record['sta_state_sha256']}}
