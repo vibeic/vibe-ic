@@ -1716,6 +1716,13 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
             if report.get("published") is not True:
                 raise Flow109Error("FLOW109_D24_ADOPTED_NETLIST_UNBOUND", str(_D24_NETLIST))
             answer["native_scan_report"] = report_ref
+    if row["id"] == "D14":
+        import flow109_metric_acceptance as metrics
+        acceptance = metrics.accept_d14(project, context)
+        row_status = 'FAIL' if status == 'FAIL' else acceptance['status']
+        answer.update(metric_acceptance=acceptance, metric_acceptance_status=acceptance['status'],
+                      default_row_status=row_status, flow109_acceptance=row_status,
+                      completed=False, normalized_chain_reason=acceptance.get('reason'))
     if row["id"] == "D30" and status == "PASS":
         admission = dft_preroute_admission(project, context)
         chain = _complete_preroute_chain(project, context, admission,

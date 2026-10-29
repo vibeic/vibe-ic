@@ -4612,3 +4612,168 @@ def accept_d36(project: Path, context: Mapping[str, Any]) -> dict:
     if result['component_status'] == 'FAIL':
         result.update(status='FAIL', delivery_blocked=True)
     return result
+
+# D14 deliberately consumes the existing formal artifacts; it never runs a
+# solver or upgrades a missing antecedent reachability check to non-vacuity.
+D14_BINDINGS = {
+    'base_08.unproved_required_properties': {'operator': 'eq', 'value': 0, 'unit': 'count'},
+    'base_08.vacuous_required_proofs': {'operator': 'eq', 'value': 0, 'unit': 'count'},
+    'base_08.proof_partition_coverage': {'operator': 'covers_all',
+        'required_set_ref': 'requirements/base_08/proof_partition_coverage.json#/required_items'},
+}
+
+
+def _d14_observe(project: Path) -> dict:
+    import _path_layout as layout
+    import _chip_synth_read as chip
+    import formal_property_run as producer
+    import formal_proof_evidence_check as checker
+
+    formal = layout.formal_dir(project)
+    path = _safe_project_file(project, (formal / 'results.json').relative_to(project).as_posix())
+    result = json.loads(path.read_bytes())
+    if result.get('program') != 'formal_property_run':
+        raise MetricRefusal('D14_PRODUCER_UNBOUND', str(path))
+    inputs = {str(path.relative_to(project)): _sha(path.read_bytes())}
+    def retain(path):
+        relative = path.relative_to(project).as_posix()
+        path = _safe_project_file(project, relative)
+        inputs[relative] = _sha(path.read_bytes())
+        return path
+    sby = retain(_safe_project_file(project, result['sby']))
+    log = retain(_safe_project_file(project, result['evidence']))
+    if (inputs[result['sby']] != result.get('sby_sha256')
+            or inputs[result['evidence']] != result.get('evidence_sha256')
+            or result.get('program_owner_sha256') != producer.program_owner_identity()):
+        raise MetricRefusal('D14_PROOF_IDENTITY_STALE', 'deck/transcript/program owners')
+    stale = checker.proof_source_staleness(project, formal, result)
+    if stale:
+        raise MetricRefusal('D14_PROOF_SOURCE_STALE', '; '.join(stale))
+    harnesses = checker._harness_files(project, formal, result)
+    harness = next((p for p in harnesses if p.suffix == '.sv'), None)
+    rtl = chip.chip_rtl_files(layout.rtl_dir(project))
+    # Reuse the producer's admitted canonical read, including defines and
+    # observer bindings, rather than interpreting another task script model.
+    read = producer._authored_chip_read(project, formal, sby, harness, rtl, result['top'])
+    if read != result.get('chip_read'):
+        raise MetricRefusal('D14_CHIP_READ_STALE', 'current selected read differs')
+    cfg = producer.parse_sby_config(sby.read_text())
+    proof_files = (result.get('proof_inputs') or {}).get('files')
+    if not isinstance(proof_files, dict) or not proof_files:
+        raise MetricRefusal('D14_PROOF_INPUTS_ABSENT', 'no actual source set')
+    for name, digest in proof_files.items():
+        if Path(name).name != name or not _HEX.fullmatch(str(digest)):
+            raise MetricRefusal('D14_PROOF_INPUTS_INVALID', str(name))
+        for source in [formal / name] + [formal / f'{sby.stem}_{task}' / 'src' / name for task in cfg]:
+            if _sha(retain(source).read_bytes()) != digest:
+                raise MetricRefusal('D14_TASK_SOURCE_STALE', str(source))
+    if producer.proof_inputs(sby, formal).get('files') != proof_files:
+        raise MetricRefusal('D14_PROOF_INPUTS_STALE', 'actual selected source set')
+    replay = producer.build_results(result['top'], cfg,
+        producer.parse_sby_log(log.read_text(), sby_stem=sby.stem, seed=cfg),
+        result['evidence'], result['sby'])
+    for key in ('properties', 'prove_arms', 'all_proved', 'proof_strength'):
+        if replay.get(key) != result.get(key):
+            raise MetricRefusal('D14_TRANSCRIPT_RESULT_MISMATCH', key)
+    contract = retain(_safe_project_file(project, result['property_contract']))
+    if _sha(contract.read_bytes()) != result.get('property_contract_sha256'):
+        raise MetricRefusal('D14_CONTRACT_STALE', str(contract))
+    # These existing consumers reopen expert/structural receipts. Retain their
+    # inputs too so publication cannot pair a read with a later authoring epoch.
+    for name in ('formal_authoring_request.json', 'formal_expert_review.json',
+                 'formal_program_discharge.json', 'formal_structural_evidence.json'):
+        if (formal / name).exists():
+            retain(formal / name)
+    refreshed = dict(replay, proof_inputs=result['proof_inputs'])
+    producer._attach_property_contract(refreshed, formal, harness)
+    for key in ('property_denominator', 'authored_property_count', 'covered_property_count',
+                'unresolved_obligations'):
+        if refreshed.get(key) != result.get(key):
+            raise MetricRefusal('D14_PROPERTY_MODEL_STALE', key)
+    if refreshed.get('structural_refutations', []) != result.get('structural_refutations', []):
+        raise MetricRefusal('D14_STRUCTURAL_REFUTATION_UNBOUND', 'current program evidence differs')
+    audit = checker.audit(project)
+    failed = (replay['verdict'] == 'FAIL' or bool(refreshed.get('structural_refutations')))
+    return {'result': result, 'replay': replay, 'audit': audit, 'inputs': inputs,
+            'chip_read': read, 'failed': failed, 'owners': producer.program_owner_identity()}
+
+
+def accept_d14(project: Path, context: Mapping[str, Any]) -> dict:
+    """Read-only D14 metric seam; absent native vacuity mapping stays unmeasured.
+
+    Partition requirements name existing prove tasks, not assertion counts.
+    Even complete safety task evidence cannot establish non-vacuity or full row
+    acceptance. No project-provided zero/PASS is accepted for that obligation.
+    """
+    import flow109
+    project = Path(project).resolve()
+    answer = {'schema': SCHEMA, 'row_id': 'D14', 'status': 'NOT_MEASURED',
+        'delivery_blocked': True, 'obligations': [], 'qualification': 'NOT_MEASURED',
+        'whole_flow_acceptance': 'NOT_MEASURED'}
+    try:
+        current = flow109.validate_execution_context(context)
+        declared = current['resolved_row']['obligations']
+        if (current['resolved_row']['id'] != 'D14'
+                or len(declared) != len(D14_BINDINGS)
+                or {o['id'] for o in declared} != set(D14_BINDINGS)
+                or any(any(o['expectation'].get(k) != v for k, v in D14_BINDINGS[o['id']].items())
+                       for o in declared)):
+            raise MetricRefusal('D14_OBLIGATIONS_UNREGISTERED', 'existing three contracts only')
+        observed = _d14_observe(project)
+        answer['evidence'] = observed
+        for oid, binding in D14_BINDINGS.items():
+            row = {'id': oid, 'status': 'NOT_MEASURED'}
+            answer['obligations'].append(row)
+            if observed['failed']:
+                row.update(status='FAIL' if oid.endswith('unproved_required_properties') else 'NOT_MEASURED',
+                           reason='D14_NATIVE_COUNTEREXAMPLE_OR_REFUTATION')
+                continue
+            if oid.endswith('vacuous_required_proofs'):
+                row['reason'] = 'D14_PROPERTY_ANTECEDENT_REACHABILITY_MAPPING_ABSENT'
+                continue
+            try:
+                authority, body = _approved_authority(project,
+                    D14_BINDINGS['base_08.proof_partition_coverage']['required_set_ref'], ('task',))
+                source = json.loads(_safe_project_file(project, authority['source']['path']).read_bytes())
+                if (not authority['source']['path'].startswith('input/')
+                        or source.get('required_items') != body.get('required_items')):
+                    raise MetricRefusal('D14_PARTITION_AUTHORITY_PAYLOAD_MISMATCH', 'required_items')
+                required = authority['required_items']
+                tasks = observed['replay']['properties']
+                proved = [{'task': t['task']} for t in tasks
+                          if t['mode'] == 'prove' and t['status'] == 'PASS' and t['bound'] == 'unbounded']
+                if (observed['audit'].get('verdict') != 'PASS'
+                        or observed['result'].get('resource_stop')
+                        or not required or not proved
+                        or {t['task'] for t in required} != {t['task'] for t in tasks if t['mode'] == 'prove'}):
+                    raise MetricRefusal('D14_REQUIRED_PROOF_INCOMPLETE', 'full declaration and partition mapping required')
+                identity = {'producer': observed['owners'],
+                    'checker': {'path': 'formal_proof_evidence_check.py',
+                                'sha256': _sha((HERE / 'formal_proof_evidence_check.py').read_bytes())},
+                    'tool_execution': {'tasks': [{k: t[k] for k in ('task', 'mode', 'engine', 'status', 'bound')}
+                                               for t in tasks],
+                                       'transcript': observed['result']['evidence_sha256']},
+                    'consumed_inputs': observed['inputs'], 'requirements': authority,
+                    'configuration': {'chip_read_sha256': flow109.digest(observed['chip_read']),
+                                      'context_sha256': current['context_sha256']}}
+                measured = {'status': 'MEASURED', 'identity': identity}
+                if binding['operator'] == 'eq':
+                    measured.update(value=len({t['task'] for t in required} - {t['task'] for t in proved}), unit='count')
+                    authority = {'status': 'APPROVED', 'value': 0, 'unit': 'count'}
+                else:
+                    measured['value'] = proved
+                status, reason = evaluate_operator(binding['operator'], measured, authority)
+                row.update(status=status, reason=reason, measurement=measured, authority=authority)
+            except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+                row.update(reason=getattr(exc, 'code', 'D14_EVIDENCE_UNPROVEN'), detail=str(exc))
+        if _d14_observe(project) != observed:
+            raise MetricRefusal('D14_INPUT_CHANGED_DURING_READ', 'proof source/receipts changed')
+        if any(o['status'] == 'FAIL' for o in answer['obligations']):
+            answer.update(status='FAIL', reason='D14_MEASURED_PROOF_FAILURE')
+        else:
+            answer['reason'] = 'D14_REQUIRED_METRICS_NOT_MEASURED'
+    except (MetricRefusal, flow109.Flow109Error, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        answer.update(reason=getattr(exc, 'code', 'D14_EVIDENCE_UNPROVEN'), detail=str(exc))
+        answer['obligations'] = [{'id': oid, 'status': 'NOT_MEASURED', 'reason': answer['reason']}
+                                 for oid in D14_BINDINGS]
+    return answer
