@@ -3186,3 +3186,72 @@ def accept_d71(project: Path, context: Mapping[str, Any],
     else:
         result["reason"] = "METRIC_BINDING_INCOMPLETE_OR_NOT_CURRENT"
     return result
+
+
+def accept_d36(project: Path, context: Mapping[str, Any]) -> dict:
+    """BLOCKING D36 map/flush consumer; original execution must be independently adopted."""
+    import flow109
+    import flow109_scan_physical as native
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': 'D36', 'status': 'NOT_MEASURED',
+              'component_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    specs = {
+        'scan_physical.chain_map_identity': {'operator': 'matches_adopted_reference',
+            'reference_ref': 'adopted/scan_physical/chain_map_identity.json'},
+        'scan_physical.scan_flush_errors': {'operator': 'eq', 'value': 0, 'unit': 'count'},
+    }
+    try:
+        current = flow109.validate_execution_context(context)
+        if current['resolved_row']['id'] != 'D36':
+            raise MetricRefusal('D36_CONTEXT_INVALID', 'not D36')
+        declared = current['resolved_row']['obligations']
+        if ({o['id'] for o in declared} != set(specs)
+                or any(any(o['expectation'].get(k) != v for k, v in specs[o['id']].items()) for o in declared)):
+            raise MetricRefusal('D36_OBLIGATIONS_UNREGISTERED', 'existing two contracts only')
+        prepared = native.prepare(project, current)
+        observed = native.reopen(prepared)
+        result.update(component_status=observed['native_status'], qualification='PASS',
+                      qualification_scope=native.PURPOSE, execution=observed['execution'],
+                      map_reference=observed['map_reference'])
+        for oid, spec in specs.items():
+            is_map = spec['operator'] == 'matches_adopted_reference'
+            relative = (spec['reference_ref'] if is_map else
+                        'requirements/scan_physical/scan_flush_errors.json')
+            authority, body, source = native.approved(project, relative,
+                'vibeic.flow109.adopted-reference.v1' if is_map else AUTHORITY_SCHEMA)
+            if (source.get('project') != str(project) or source.get('manifest') != prepared['manifest_ref']
+                    or source.get('purpose') != native.PURPOSE):
+                raise MetricRefusal('D36_AUTHORITY_SUBJECT_MISMATCH', relative)
+            if is_map:
+                authority.update(reference=body['reference'], reference_identity=body['reference_identity'])
+                value = observed['chain_map']
+            else:
+                if body.get('value') != 0 or type(body.get('value')) is not int or body.get('unit') != 'count':
+                    raise MetricRefusal('D36_FLUSH_EXPECTATION_CHANGED', 'zero errors invariant')
+                authority.update(value=0, unit='count')
+                value = observed['scan_flush_errors']
+            identity = {'producer': native.operation_sources(), 'checker': native.consumer_sources(),
+                'tool_execution': observed['execution'],
+                'consumed_inputs': {'manifest': prepared['manifest_ref'], 'map': observed['map_reference'],
+                                    'upstream': prepared['upstream']},
+                'requirements': authority, 'configuration': {'purpose': native.PURPOSE,
+                    'tools': prepared['tools'], 'context_sha256': current['context_sha256']}}
+            measured = {'status': 'MEASURED', 'value': value, 'identity': identity}
+            if not is_map:
+                measured['unit'] = 'count'
+            status, reason = evaluate_operator(spec['operator'], measured, authority)
+            result['obligations'].append({'id': oid, 'status': status, 'reason': reason,
+                'measurement': measured, 'authority': authority})
+        if native.prepare(project, current) != prepared or native.reopen(prepared) != observed:
+            raise MetricRefusal('D36_INPUT_CHANGED_DURING_READ', 'current inputs/execution')
+        statuses = [o['status'] for o in result['obligations']]
+        status = 'FAIL' if observed['native_status'] == 'FAIL' or 'FAIL' in statuses else (
+            'PASS' if len(statuses) == 2 and all(s == 'PASS' for s in statuses) else 'NOT_MEASURED')
+        result.update(status=status, delivery_blocked=status != 'PASS',
+                      reason='D36_NATIVE_OR_MAP_MISMATCH' if status == 'FAIL' else 'D36_MAP_AND_FLUSH_CURRENT')
+    except (MetricRefusal, flow109.Flow109Error, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D36_NATIVE_BINDING_UNPROVEN'), detail=str(exc))
+    if result['component_status'] == 'FAIL':
+        result.update(status='FAIL', delivery_blocked=True)
+    return result
