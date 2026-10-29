@@ -1108,18 +1108,27 @@ def _selected_profile(row: dict, features: dict, override: str | None) -> dict:
     return copy.deepcopy(choice)
 
 
-def _tool_uses(row: dict, profile: dict) -> list[dict]:
+def _tool_uses(row: dict, profile: dict, *, mode: str | None = None) -> list[dict]:
     """Use identities are source-owned purposes, not caller-selected tool names."""
     dispatch = profile.get("dispatch")
     if dispatch is None:
         return []
-    return [{"use_id": f"flow109.{row['id']}.{profile['id']}.{tool}",
-             "tool_id": tool, "purpose": f"{row['id']}.{profile['id']}",
+    purpose = f"{row['id']}.{profile['id']}"
+    inventory = dispatch
+    if mode is not None:
+        # D14's installed SMT proof mode has no ABC/BMC invocation. Its
+        # inventory is source-owned; declared runtime purpose only selects it.
+        if row['id'] != 'D14' or mode not in dispatch.get('qualification_modes', {}):
+            raise Flow109Error("FLOW109_QUALIFICATION_MODE_UNSUPPORTED", str(mode))
+        inventory = dispatch['qualification_modes'][mode]
+        purpose = inventory['purpose']
+    return [{"use_id": f"flow109.{purpose}.{tool}",
+             "tool_id": tool, "purpose": purpose,
              "native_step_id": dispatch["native_step_id"],
-             "native_steps": dispatch.get("engine_steps", {}).get(tool, profile.get("native_steps", [])),
+             "native_steps": inventory.get("engine_steps", {}).get(tool, profile.get("native_steps", [])),
              "executable_name": dispatch.get("engine_executables", {}).get(tool, tool),
              "qualification_required": True}
-            for tool in dispatch["engine_families"]]
+            for tool in inventory["engine_families"]]
 
 
 def resolve_plan(features: Mapping[str, bool], step_profiles: Mapping[str, str] | None = None) -> dict:
@@ -1424,6 +1433,18 @@ _WINDOW_CONTEXT_KEYS = {
 def execution_context(plan: dict, entry: str, exit_: str, *,
                       runtime_tool_uses=None, qualification_registry=None) -> dict:
     window = resolve_execution_window(plan, entry, exit_)
+    window = copy.deepcopy(window)
+    for row in window.get('resolved_rows', [window.get('resolved_row')]):
+        if not row or row['id'] != 'D14' or not isinstance(runtime_tool_uses, list):
+            continue
+        declared = [u for u in runtime_tool_uses if isinstance(u, dict)
+                    and str(u.get('use_id', '')).startswith('flow109.D14.')]
+        purposes = {str(u['semantics'].get('purpose')) for u in declared
+                    if isinstance(u.get('semantics'), Mapping)}
+        modes = row['profile']['dispatch'].get('qualification_modes', {})
+        for mode, spec in modes.items():
+            if purposes == {spec['purpose']}:
+                row['tool_uses'] = _tool_uses(row, row['profile'], mode=mode)
     schema = ("vibeic.flow109.execution-context.v1" if "requested_step" in window
               else "vibeic.flow109.execution-window.v1")
     context = {"schema": schema,

@@ -4634,6 +4634,14 @@ D14_TOOL_STEPS = {
                 'formal_property_run.run_reachability', 'D14.RetainedReaders'],
 }
 D14_ENGINES = {'safety': 'abc pdr', 'bmc': 'abc bmc3', 'cover': 'smtbmc yices'}
+D14_SMT_TOOL_STEPS = {
+    'sby': ['SymbiYosys.Prove', 'SymbiYosys.Cover'],
+    'yosys': ['Yosys.FormalRead', 'Yosys.Prep'],
+    'yosys-smtbmc': ['SMTBMC.Prove', 'SMTBMC.Cover'],
+    'yices-smt2': ['Yices.SMT2Prove', 'Yices.SMT2Cover'],
+    'python3': D14_TOOL_STEPS['python3'],
+}
+D14_SMT_ENGINES = {'safety': 'smtbmc yices', 'cover': 'smtbmc yices'}
 
 
 def d14_model_sources() -> dict:
@@ -4666,24 +4674,30 @@ def _d14_qualification(project: Path, context: Mapping, observed: Mapping) -> di
     import flow109_admission as admission
     qualified = admission.require_admission(project, context)
     uses = context['runtime_tool_uses']
-    if {u['tool_id'] for u in uses} != set(D14_TOOL_STEPS) or len(uses) != len(D14_TOOL_STEPS):
-        raise MetricRefusal('D14_QUALIFICATION_SCOPE_INVALID', 'exact current formal/cover tool uses required')
+    tasks = {p['task']: p for p in observed['replay']['properties']}
+    if (set(tasks) == {'safety', 'bmc'} and tasks['safety']['mode'] == 'prove'
+            and tasks['bmc']['mode'] == 'bmc'
+            and all(tasks[name]['engine'] == D14_ENGINES[name] for name in tasks)):
+        steps, engines, purpose = D14_TOOL_STEPS, D14_ENGINES, 'D14.default'
+    elif (set(tasks) == {'safety'} and tasks['safety']['mode'] == 'prove'
+            and tasks['safety']['engine'] == 'smtbmc yices'):
+        steps, engines, purpose = D14_SMT_TOOL_STEPS, D14_SMT_ENGINES, 'D14.default.smt_yices'
+    else:
+        raise MetricRefusal('D14_ENGINE_MODE_NOT_QUALIFIED', 'unsupported actual proof task/engine population')
+    if observed['replay'].get('prove_arms'):
+        raise MetricRefusal('D14_ENGINE_MODE_NOT_QUALIFIED', 'unqualified additional proof arms')
+    if {u['tool_id'] for u in uses} != set(steps) or len(uses) != len(steps):
+        raise MetricRefusal('D14_QUALIFICATION_SCOPE_INVALID', 'exact actual formal/cover tool uses required')
     models = d14_model_sources()
     for use in uses:
         tool = use['tool_id']
-        expected = {'purpose': 'D14.default.formal_and_reachability', 'tool_id': tool,
-                    'native_steps': D14_TOOL_STEPS[tool], 'engines': D14_ENGINES,
+        expected = {'purpose': purpose + '.formal_and_reachability', 'tool_id': tool,
+                    'native_steps': steps[tool], 'engines': engines,
                     'model_sources': models}
         config = json.loads(_safe_project_file(project, use['config']['path']).read_bytes())
-        if (use['semantics'] != {'purpose': 'D14.default', 'native_steps': D14_TOOL_STEPS[tool]}
+        if (use['semantics'] != {'purpose': purpose, 'native_steps': steps[tool]}
                 or config != expected):
             raise MetricRefusal('D14_MODEL_QUALIFICATION_STALE', tool)
-    tasks = {p['task']: p for p in observed['replay']['properties']}
-    if (set(tasks) != {'safety', 'bmc'} or tasks['safety']['mode'] != 'prove'
-            or tasks['bmc']['mode'] != 'bmc'
-            or any(tasks[name]['engine'] != D14_ENGINES[name] for name in tasks)
-            or observed['replay'].get('prove_arms')):
-        raise MetricRefusal('D14_ENGINE_MODE_NOT_QUALIFIED', 'current ABC PDR/BMC3 plus Yices cover subset only')
     return qualified
 
 def _d14_owner_provenance(project: Path, result: Mapping) -> dict:

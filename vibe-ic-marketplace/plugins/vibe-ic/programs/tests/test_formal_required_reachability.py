@@ -253,10 +253,20 @@ def test_native_small_antecedent_control_for_E_only(reach_case, reachable):
     harness = formal / 'formal_neutral.sv'
     if not reachable:
         put(harness, harness.read_text().replace('ready |->', "(ready && 1'b0) |->"))
-    result = producer.run(project, harness=harness,
+    authored = {}
+    mode = os.environ.get('VIBEIC_D14_SMALL_CONTROL_MODE', 'default')
+    assert mode in ('default', 'smt_yices'), 'unsupported native purpose control mode'
+    if mode == 'smt_yices':
+        path = formal / 'formal_neutral.sby'
+        put(path, smt_safety_deck(path.read_text()))
+        authored['sby'] = path
+    result = producer.run(project, harness=harness, **authored,
         rtl=[project / 'phase2/stage1/rtl/neutral.v'], top='formal_neutral',
         container=None, timeout=30, mem_limit_kb=1048576)
     assert result['all_proved'] is True and result['unbounded_proved'] is True, result
+    if mode == 'smt_yices':
+        assert [(p['task'], p['mode'], p['engine']) for p in result['properties']] == [
+            ('safety', 'prove', 'smtbmc yices')], result
     covered = producer.run_reachability(project, container=None, timeout=30, mem_limit_kb=1048576)
     assert covered['reachability_check']['status'] == ('PASS' if reachable else 'NOT_MEASURED'), covered
     accepted = metrics.accept_d14(project, ctx)
@@ -348,7 +358,7 @@ def test_conditional_property_requires_native_assertion_mapping(reach_case):
 
 
 
-def software_qualified_binding(project, ctx):
+def software_qualified_binding(project, ctx, *, mode=None):
     """SOFTWARE admission control only; never a genuine platform qualification.
 
     Default metric/native-purpose fixtures never call this helper. Root alone
@@ -359,11 +369,15 @@ def software_qualified_binding(project, ctx):
     put(proof, {'scope': 'SOFTWARE_ADMISSION_CONTROL_NOT_NATIVE_QUALIFICATION'})
     entries, runtime = [], []
     models = metrics.d14_model_sources()
-    for use in ctx['resolved_row']['tool_uses']:
+    row = ctx['resolved_row']
+    uses = flow109._tool_uses(row, row['profile'], mode=mode)
+    steps = metrics.D14_SMT_TOOL_STEPS if mode == 'smt_yices' else metrics.D14_TOOL_STEPS
+    engines = metrics.D14_SMT_ENGINES if mode == 'smt_yices' else metrics.D14_ENGINES
+    for use in uses:
         tool = use['tool_id']
         config = project / ('input/qualification/D14/' + tool + '.json')
-        put(config, {'purpose': 'D14.default.formal_and_reachability', 'tool_id': tool,
-            'native_steps': metrics.D14_TOOL_STEPS[tool], 'engines': metrics.D14_ENGINES,
+        put(config, {'purpose': use['purpose'] + '.formal_and_reachability', 'tool_id': tool,
+            'native_steps': steps[tool], 'engines': engines,
             'model_sources': models})
         binary = Path(shutil.which(use['executable_name'])).resolve()
         identity = {'use_id': use['use_id'], 'tool_id': tool,
@@ -452,3 +466,109 @@ def test_native_cover_error_is_not_reported_as_unreachable_or_stage_tampering(re
     answer = metrics.accept_d14(project, ctx)
     assert answer['status'] == 'NOT_MEASURED'
     assert rows(answer)['vacuous_required_proofs']['reason'] == 'D14_NATIVE_COVER_EXECUTION_ERROR'
+
+
+def smt_safety_deck(text, *, engine="smtbmc yices"):
+    # Retain the canonical script, assumptions, source reads and aliases. Only
+    # the supplemental task/options/engine declarations are removed.
+    text = '\n'.join(line for line in text.splitlines()
+        if not (line.split() and line.split()[0] in ('bmc', 'bmc:'))) + '\n'
+    return text.replace('safety: abc pdr', 'safety: ' + engine)
+
+
+def software_smt_safety(project, *, engine="smtbmc yices"):
+    """Authored existing --sby input and SOFTWARE transcript, never native proof."""
+    formal = project / 'phase2/stage1/formal'
+    path = formal / 'formal_neutral.sby'
+    text = smt_safety_deck(path.read_text(), engine=engine)
+    put(path, text)
+    cfg = producer.parse_sby_config(text)
+    assert set(cfg) == {'safety'} and cfg['safety'].engine == engine
+    log = formal / 'formal_neutral.sby.log'
+    put(log, 'SOFTWARE_ONLY_NOT_NATIVE_PROOF\nSBY 12:00:00 [formal_neutral_safety] DONE (PASS, rc=0)\n')
+    original = json.loads((formal / 'results.json').read_text())
+    measured = producer.build_results(original['top'], cfg,
+        producer.parse_sby_log(log.read_text(), sby_stem=path.stem, seed=cfg),
+        str(log.relative_to(project)), str(path.relative_to(project)))
+    original.update(measured, sby_sha256=sha(path), evidence_sha256=sha(log),
+                    proof_inputs=producer.proof_inputs(path, formal))
+    put(formal / 'results.json', original)
+    return path
+
+
+@pytest.mark.parametrize('control', ['positive', 'missing', 'stale', 'wrong_mode', 'wrong_engine', 'unknown_purpose', 'unused_abc'])
+def test_smt_safety_only_actual_consumer_qualification_controls(reach_case, monkeypatch, control):
+    """Explicit SOFTWARE admission controls, not platform qualification adoption."""
+    import sys
+    # Exercise real executable hashing and normal admission against a labelled
+    # software runtime. No solver process is launched by this control.
+    monkeypatch.setattr(shutil, 'which', lambda name: sys.executable)
+    project, ctx = reach_case
+    software_smt_safety(project, engine='smtbmc z3' if control == 'wrong_engine' else 'smtbmc yices')
+    software_covers(project)
+    qualified = software_qualified_binding(project, ctx, mode='smt_yices')
+    expected_uses = qualified['resolved_row']['tool_uses']
+    assert {u['tool_id'] for u in expected_uses} == set(metrics.D14_SMT_TOOL_STEPS)
+    assert 'yosys-abc' not in {u['tool_id'] for u in expected_uses}
+    assert all('Bmc' not in step for u in expected_uses for step in u['native_steps'])
+    if control == 'missing':
+        qualified = ctx
+    elif control == 'stale':
+        config = project / qualified['runtime_tool_uses'][0]['config']['path']
+        put(config, {'purpose': 'stale software control'})
+    elif control == 'wrong_mode':
+        qualified = software_qualified_binding(project, ctx)
+    elif control == 'unknown_purpose':
+        for use in qualified['runtime_tool_uses']:
+            use['semantics']['purpose'] = 'D14.default.unknown'
+        qualified = flow109.execution_context(flow109.resolve_plan(ctx['features']), 'D14', 'D14',
+            runtime_tool_uses=qualified['runtime_tool_uses'], qualification_registry=qualified['qualification_registry'])
+    elif control == 'unused_abc':
+        other = software_qualified_binding(project, ctx)
+        qualified = flow109.execution_context(flow109.resolve_plan(ctx['features']), 'D14', 'D14',
+            runtime_tool_uses=qualified['runtime_tool_uses'] + [next(u for u in other['runtime_tool_uses'] if u['tool_id'] == 'yosys-abc')],
+            qualification_registry=qualified['qualification_registry'])
+    answer = metrics.accept_d14(project, qualified)
+    assert answer['status'] == ('PASS' if control == 'positive' else 'NOT_MEASURED'), answer
+    assert answer['qualification'] == ('PASS' if control == 'positive' else 'NOT_MEASURED'), answer
+    if control in ('wrong_engine', 'wrong_mode', 'missing', 'stale'):
+        assert answer['metric_status'] == 'PASS', answer
+    if control == 'wrong_engine':
+        assert answer['reason'] == 'D14_ENGINE_MODE_NOT_QUALIFIED', answer
+    if control == 'wrong_mode':
+        assert answer['reason'] == 'D14_QUALIFICATION_SCOPE_INVALID', answer
+    published = flow109._selected_step_result(project, qualified,
+        {'step_id': 'D14', 'context_sha256': qualified['context_sha256'],
+         'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True})
+    assert published['completed'] is (control == 'positive')
+    assert published['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+def test_existing_authored_smt_safety_only_entry_admits_same_model_without_execution(reach_case, monkeypatch):
+    project, _ = reach_case
+    path = software_smt_safety(project)
+    formal = path.parent
+    before = path.read_bytes()
+    monkeypatch.setattr(producer, '_run_sby', lambda *a, **k: pytest.fail('emit-only must not execute'))
+    monkeypatch.setattr(producer, 'detect_engines', lambda *a, **k: pytest.fail('emit-only must not probe'))
+    result = producer.run(project, sby=path, harness=formal / 'formal_neutral.sv',
+        rtl=[project / 'phase2/stage1/rtl/neutral.v'], top='formal_neutral', container=None, emit_only=True)
+    assert result['verdict'] == 'EMIT_ONLY', result
+    assert path.read_bytes() == before
+    assert result['all_proved'] is False
+
+
+def test_smt_context_replays_source_owned_inventory_without_changing_default_plan(reach_case, monkeypatch):
+    import sys
+    monkeypatch.setattr(shutil, 'which', lambda name: sys.executable)
+    project, ctx = reach_case
+    plan = flow109.resolve_plan(ctx['features'])
+    before = json.dumps(plan, sort_keys=True)
+    qualified = software_qualified_binding(project, ctx, mode='smt_yices')
+    assert flow109.validate_execution_context(qualified) == qualified
+    assert json.dumps(flow109.resolve_plan(ctx['features']), sort_keys=True) == before
+    for row in plan['rows']:
+        assert row['tool_uses'] == flow109._tool_uses(row, row['profile'])
+    assert ctx['resolved_row']['tool_uses'] != qualified['resolved_row']['tool_uses']
+    with pytest.raises(flow109.Flow109Error, match='UNSUPPORTED'):
+        flow109._tool_uses(ctx['resolved_row'], ctx['resolved_row']['profile'], mode='unknown')
