@@ -2699,6 +2699,455 @@ def accept_d12(project: Path, context: Mapping[str, Any]) -> dict:
     return result
 
 
+D13_PURPOSE = 'D13.default.retained_early_rtl'
+D13_TOOL_STEPS = {
+    'verilator': ['Verilator.BinaryScenario', 'Verilator.CoverageSimulation'],
+    'iverilog': ['Icarus.CocotbCompile'],
+    'vvp': ['Icarus.CocotbRuntime'],
+    'python3': ['Cocotb.ArithmeticRandom', 'D13.RetainedReaders'],
+    'verilator_coverage': ['VerilatorCoverage.LcovUnion'],
+}
+D13_IDS = ('base_07.required_function_scenarios', 'base_07.assertion_failures',
+           'base_07.coverage_targets')
+
+
+def d13_model_sources() -> dict:
+    import importlib
+    return {name: _sha(Path(importlib.import_module(name[:-3]).__file__).read_bytes()) for name in (
+        '_l10_execution.py', '_sim_results_bridge.py', 'arith_oracle_tb_gen.py',
+        'professional_tb_gen.py', 'verilator_coverage_measure.py',
+        'l10_tb_conformance_check.py', 'testbench_gen.py', 'coverage_closure.py')}
+
+
+def _d13_qualification(project: Path, context: Mapping) -> dict:
+    import flow109_admission as admission
+    admitted = admission.require_admission(project, context)
+    uses = context['runtime_tool_uses']
+    if len(uses) != len(D13_TOOL_STEPS) or {u['tool_id'] for u in uses} != set(D13_TOOL_STEPS):
+        raise MetricRefusal('D13_QUALIFICATION_SCOPE_INVALID', 'actual required simulation/reader/projection uses')
+    for use in uses:
+        tool = use['tool_id']
+        if use['semantics'] != {'purpose': 'D13.default', 'native_steps': D13_TOOL_STEPS[tool]}:
+            raise MetricRefusal('D13_QUALIFICATION_SCOPE_INVALID', tool)
+        config = json.loads((project / use['config']['path']).read_bytes())
+        if config != {'purpose': D13_PURPOSE, 'tool_id': tool,
+                      'native_steps': D13_TOOL_STEPS[tool], 'model_sources': d13_model_sources()}:
+            raise MetricRefusal('D13_MODEL_QUALIFICATION_STALE', tool)
+    return admitted
+
+
+def d13_subject(project: Path) -> dict:
+    """Reuse complete accepted D09/D10 source identity; do not require D11 execution here."""
+    project = Path(project).resolve()
+    return {'rtl': d11_subject(project),
+            'declaration': _d11_file(project, project / 'plugin_output/declaration.json'),
+            'documents': [_d11_file(project, project / ('phase1/generated_docs/' + name))
+                          for name in ('L10_TEST_CASES.json', 'L22_VERIFICATION_PLAN.json')]}
+
+
+def _d13_authority(project: Path, name: str) -> tuple[dict, dict, dict]:
+    relative = 'requirements/base_07/' + name + '.json'
+    if name == 'required_function_scenarios':
+        authority, body = _approved_authority(project, relative + '#/required_items', ('name',))
+    else:
+        authority, body = _approved_document(project, relative,
+            authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+    source = json.loads(_safe_project_file(project, authority['source']['path']).read_bytes())
+    if (not authority['source']['path'].startswith('input/') or source.get('purpose') != D13_PURPOSE
+            or {k: v for k, v in body.items() if k not in ('schema', 'approval')} != source.get(name)):
+        raise MetricRefusal('D13_AUTHORITY_PAYLOAD_MISMATCH', name)
+    return authority, body, source
+
+
+def _d13_file(project: Path, record: Mapping, *, external: bool = False) -> Path:
+    if not isinstance(record, Mapping) or set(record) != {'path', 'sha256'}:
+        raise MetricRefusal('D13_REFERENCE_INVALID', str(record))
+    value = record['path']
+    if not isinstance(value, str) or not _HEX.fullmatch(str(record['sha256'])):
+        raise MetricRefusal('D13_REFERENCE_INVALID', str(record))
+    path = Path(value)
+    if not path.is_absolute():
+        path = _safe_project_file(project, value)
+    elif not external:
+        try:
+            path = _safe_project_file(project, path.relative_to(project).as_posix())
+        except ValueError as exc:
+            raise MetricRefusal('D13_FOREIGN_ACTUAL_INPUT', value) from exc
+    if not path.is_file() or _sha(path.read_bytes()) != record['sha256']:
+        raise MetricRefusal('D13_INPUT_STALE', value)
+    return path
+
+
+def _d13_retained(project: Path, execution: Mapping, path: Path) -> Path:
+    """Only actual same-project design inputs may feed a measurement."""
+    try:
+        relative = path.relative_to(project).as_posix()
+    except ValueError as exc:
+        raise MetricRefusal('D13_FOREIGN_ACTUAL_INPUT', str(path)) from exc
+    matches = [r for r in execution['artifacts'] if r['path'] == relative]
+    if len(matches) != 1:
+        raise MetricRefusal('D13_EXECUTION_INPUT_UNBOUND', relative)
+    return _d13_file(project, matches[0])
+
+
+def _d13_execution(project: Path, source: Mapping) -> dict:
+    """Reopen independently adopted original owner/launch; never restamp old execution."""
+    authority, adopted = _approved_document(project, 'adopted/base_07/simulation_execution.json',
+        authority='requirements_owner', schema='vibeic.flow109.adopted-reference.v1')
+    approved_source = json.loads(_safe_project_file(project, authority['source']['path']).read_bytes())
+    reference = adopted.get('reference')
+    if (approved_source != source or reference != source.get('execution')
+            or reference.get('project') != str(project) or source.get('project') != str(project)
+            or source.get('subject') != d13_subject(project)):
+        raise MetricRefusal('D13_EXECUTION_SUBJECT_MISMATCH', 'exact current same-project subject required')
+    files = reference.get('artifacts')
+    if (not isinstance(files, list) or not files or len({r['path'] for r in files}) != len(files)
+            or any(Path(r['path']).is_absolute() for r in files)):
+        raise MetricRefusal('D13_EXECUTION_POPULATION_INVALID', 'unique project-relative native readset required')
+    owner = json.loads(_d13_file(project, reference['original_owner'], external=True).read_bytes())
+    binding = owner.get('runner_binding') or {}
+    producer = binding.get('producer')
+    if (binding.get('schema') != 'vibeic.runner_report_binding.v1' or binding.get('project') != str(project)
+            or binding.get('invocation_id') != reference.get('original_invocation')
+            or producer != reference.get('original_producer')):
+        raise MetricRefusal('D13_ORIGINAL_OWNER_UNBOUND', 'original invocation/producer must reopen')
+    _d13_file(project, producer)
+    for component in ('runner', 'consumer', 'executable'):
+        _d13_file(project, binding['source'][component], external=component == 'executable')
+    launch = json.loads(_d13_file(project, reference['original_launch'], external=True).read_bytes())
+    terminal = json.loads(_d13_file(project, reference['original_terminal'], external=True).read_bytes())
+    if (not re.fullmatch(r'[0-9a-f]{64}', str(launch.get('cid', '')))
+            or not re.fullmatch(r'sha256:[0-9a-f]{64}', str(launch.get('image_id', '')))
+            or terminal.get('host_exit_verified') is not True or terminal.get('docker_cli_exit_code') != 0
+            or terminal.get('host_die_event_exit_code') != 0 or terminal.get('source_unchanged') is not True):
+        raise MetricRefusal('D13_ORIGINAL_LAUNCH_UNPROVEN', 'actual original host CID/image/terminal required')
+    for record in source.get('source_refs', []):
+        _d13_file(project, record)
+    if not source.get('source_refs'):
+        raise MetricRefusal('D13_SOURCE_AUTHORITY_ABSENT', 'independent original requirements required')
+    return dict(reference)
+
+
+def _d13_scenario(project: Path, name: str, required: Mapping,
+                  record: Mapping, execution: Mapping, declared: Mapping) -> dict:
+    """One current complete original case; absent proof is not a design counterexample."""
+    import _l10_execution as cases
+    import arith_oracle_tb_gen as arithmetic
+    result = {'name': name, 'status': 'NOT_MEASURED', 'errors': 0}
+    row = record.get('rows', {}).get(name)
+    if not isinstance(row, dict) or row.get('sim_executed') is not True:
+        return {**result, 'reason': 'D13_CASE_NOT_EXECUTED'}
+    measured = row.get('arithmetic_scenario')
+    if not isinstance(measured, dict):
+        return {**result, 'reason': 'D13_CASE_COMPARATORS_UNMEASURED'}
+    tb = _d13_retained(project, execution, Path(row['tb_file']))
+    transcript = _d13_retained(project, execution, Path(measured['transcript']))
+    plan = measured['plan']
+    for value, expected in {**plan.get('binding', {}), **measured.get('sources', {})}.items():
+        path = _d13_retained(project, execution, Path(value))
+        if _sha(path.read_bytes()) != expected:
+            raise MetricRefusal('D13_CASE_INPUT_CHANGED', value)
+    valid, detail = cases.scenario_tb_identity(name, record)
+    observed, _ = arithmetic.capture_arithmetic_scenario_execution(project, tb, transcript, measured['sources'])
+    if not valid or observed != measured:
+        return {**result, 'reason': 'D13_CASE_EXECUTION_UNBOUND', 'detail': detail}
+    for key in ('transactions', 'comparisons', 'errors'):
+        if type(measured.get(key)) is not int or measured[key] < 0:
+            raise MetricRefusal('D13_CASE_POPULATION_INVALID', name + ':' + key)
+    result.update(errors=measured['errors'], measured=measured)
+    # A complete native comparator failure wins before missing semantic scope.
+    if measured['errors']:
+        return {**result, 'status': 'FAIL', 'reason': 'D13_NATIVE_COMPARATOR_FAILED'}
+    state, detail = cases.scenario_case_state(name, record)
+    if state != 'PASS' or measured.get('complete') is not True:
+        return {**result, 'reason': 'D13_CASE_INCOMPLETE', 'detail': detail}
+    spec, framing = plan['spec'], plan['framing']
+    projection = {'top': spec['top'], 'width': spec['width'], 'operator': spec['operator'],
+        'integer_encoding': 'signed_2c' if spec.get('signed') else 'unsigned',
+        **{key: framing[key] for key in ('bit_order', 'latency', 'latency_origin',
+            'transaction_rearm', 'rearm_reset_cycles', 'parallel_hold')}}
+    if (projection != declared or plan.get('scenario') != required.get('scenario')
+            or measured['transactions'] < required.get('minimum_transactions', 1)
+            or measured['comparisons'] < measured['transactions'] * spec['width']):
+        return {**result, 'reason': 'D13_DECLARED_SEMANTICS_UNPROVEN'}
+    pairs = plan.get('pairs') or []
+    unique = {tuple(pair) for pair in pairs if isinstance(pair, list) and len(pair) == 2}
+    if len(unique) < required.get('minimum_distinct_pairs', 1):
+        return {**result, 'reason': 'D13_REQUIRED_PAIR_POPULATION_UNMEASURED'}
+    if 'operand_values' in required:
+        mask = (1 << spec['width']) - 1
+        values = {v & mask for v in required['operand_values']}
+        if any(not values <= {pair[i] & mask for pair in unique} for i in (0, 1)):
+            return {**result, 'reason': 'D13_REQUIRED_OPERAND_CORNERS_UNMEASURED'}
+    expected_reset = required.get('reset_observation')
+    if expected_reset is not None:
+        samples = measured.get('reset_observations')
+        if (plan.get('reset_observation') != expected_reset or not isinstance(samples, list)
+                or len(samples) != len(expected_reset['required_observations'])):
+            return {**result, 'reason': 'D13_RESET_VALUES_NOT_MEASURED'}
+        if ([{k: sample.get(k) for k in ('state', 'width', 'expected_value')} for sample in samples
+                if isinstance(sample, dict)] != expected_reset['required_observations']):
+            return {**result, 'reason': 'D13_RESET_POPULATION_INCOMPLETE'}
+        observed_states = {}
+        for sample in samples:
+            if (not isinstance(sample, dict) or sample.get('state') in observed_states
+                    or type(sample.get('samples')) is not int or sample['samples'] <= 0
+                    or sample['samples'] != measured.get('held_edges')
+                    or any(type(sample.get(k)) is not int for k in ('width', 'expected_value', 'mismatches'))
+                    or not 0 <= sample['mismatches'] <= sample['samples']):
+                return {**result, 'reason': 'D13_RESET_POPULATION_INCOMPLETE'}
+            observed_states[sample['state']] = sample
+        if sum(sample['mismatches'] for sample in samples) > measured['errors']:
+            return {**result, 'reason': 'D13_RESET_POPULATION_INCOMPLETE'}
+        for expected in expected_reset['required_observations']:
+            sample = observed_states.get(expected['state'], {})
+            if any(sample.get(k) != v for k, v in expected.items()):
+                return {**result, 'reason': 'D13_RESET_POPULATION_INCOMPLETE'}
+            if sample['mismatches']:
+                return {**result, 'status': 'FAIL', 'errors': sample['mismatches'],
+                        'reason': 'D13_NATIVE_RESET_VALUE_FAILED'}
+    return {**result, 'status': 'PASS', 'reason': 'D13_REQUIRED_SCENARIO_CURRENT'}
+
+
+def _d13_functions(project: Path, source: Mapping, execution: Mapping) -> list[dict]:
+    """Read actual declared cases, including the mandatory cocotb random backend."""
+    import _l10_execution as cases
+    import professional_tb_gen as professional
+    authority, required, approved = _d13_authority(project, 'required_function_scenarios')
+    names = [item['name'] for item in required['required_items']]
+    if (approved != source or not names or len(names) != len(set(names))
+            or set(names) != set(source.get('scenario_requirements') or {})):
+        raise MetricRefusal('D13_SCENARIO_POPULATION_UNPROVEN', 'independent complete unique census required')
+    l10 = project / 'phase1/generated_docs/L10_TEST_CASES.json'
+    document = json.loads(_d13_retained(project, execution, l10).read_bytes())
+    declared = document.get('test_cases')
+    if (not isinstance(declared, list) or any(not isinstance(c, dict) for c in declared)
+            or len({c.get('name') for c in declared}) != len(declared)):
+        raise MetricRefusal('D13_SCENARIO_POPULATION_UNPROVEN', 'current L10 case identities are ambiguous')
+    declared = {c['name']: c for c in declared}
+    path = _d13_file(project, execution['scenario_record'])
+    _d13_retained(project, execution, path)
+    record = cases.load_record(project, l10)
+    if (not record.get('available') or not record.get('l10_binding_ok')
+            or record.get('malformed') or record.get('path') != str(path)):
+        raise MetricRefusal('D13_CASE_RECORD_UNPROVEN', 'exact current L10-bound record required')
+    observed = []
+    for name in names:
+        try:
+            if name not in declared:
+                raise MetricRefusal('D13_SCENARIO_POPULATION_UNPROVEN', name)
+            row = _d13_scenario(project, name, source['scenario_requirements'][name],
+                                record, execution, source['declared'])
+            if row['status'] == 'FAIL':
+                observed.append(row)
+                continue
+            # The goal-bound cocotb execution is an independent required
+            # comparison population, not the supplemental arithmetic oracle.
+            if professional._requested_random_pairs(declared[name]) is not None:
+                import _path_layout as layout
+                plans = sorted((layout.rtl_dir(project).parent / 'sim_professional').glob('*/verification_plan.json'))
+                adopted_plans = sorted(project / r['path'] for r in execution['artifacts']
+                                       if Path(r['path']).name == 'verification_plan.json')
+                if not plans or plans != adopted_plans:
+                    raise MetricRefusal('D13_RANDOM_EXECUTION_UNBOUND', 'exact adopted goal-plan population required')
+                for plan in plans:
+                    _d13_retained(project, execution, plan)
+                    for item in execution['artifacts']:
+                        if (project / item['path']).is_relative_to(plan.parent):
+                            _d13_file(project, item)
+                goal = professional.random_pair_goal_measurement(project, declared[name]) or {}
+                if goal.get('achieved_source'):
+                    measured = _d13_retained(project, execution, project / goal['achieved_source'])
+                    for item in execution['artifacts']:
+                        if Path(item['path']).parent == measured.parent.relative_to(project):
+                            _d13_file(project, item)
+                state = goal.get('verdict', 'NOT_MEASURED')
+                row['random_pair_goal'] = goal
+                row['status'] = ('FAIL' if 'FAIL' in (row['status'], state) else 'PASS'
+                    if row['status'] == state == 'PASS' else 'NOT_MEASURED')
+            observed.append(row)
+        except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            observed.append({'name': name, 'status': 'NOT_MEASURED',
+                'reason': getattr(exc, 'code', 'D13_SCENARIO_UNPROVEN'), 'detail': str(exc)})
+    return observed
+
+
+def _d13_assertions(project: Path, execution: Mapping, scenarios: list[dict]) -> dict:
+    """Count executed native golden/checker failures; uncompiled SVA grants no credit."""
+    import _sim_results_bridge as bridge
+    measured = []
+    for key in ('unit_junit', 'streaming_junit'):
+        try:
+            path = _d13_file(project, execution[key])
+            _d13_retained(project, execution, path)
+            summary = bridge.parse_junit(path)
+            if (not summary or summary['tests'] <= 0 or summary['skipped']
+                    or summary['passed'] + summary['failures'] + summary['errors'] != summary['tests']):
+                raise MetricRefusal('D13_ASSERTION_POPULATION_UNMEASURED', key)
+            measured.append({'name': key, **summary, 'status': 'FAIL'
+                if summary['failures'] or summary['errors'] else 'PASS'})
+        except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            measured.append({'name': key, 'status': 'NOT_MEASURED',
+                'reason': getattr(exc, 'code', 'D13_ASSERTIONS_UNPROVEN'), 'detail': str(exc)})
+    states = [r['status'] for r in [*scenarios, *measured]]
+    count = sum(r.get('errors', 0) + r.get('failures', 0) for r in [*scenarios, *measured])
+    return {'id': D13_IDS[1], 'status': 'FAIL' if 'FAIL' in states else 'PASS'
+        if states and all(s == 'PASS' for s in states) else 'NOT_MEASURED',
+        'observed_value': count, 'unit': 'count', 'native_suites': measured,
+        'scope': 'executed required golden/comparator assertions; uncompiled SVA is not execution'}
+
+
+def _d13_coverage(project: Path, source: Mapping, execution: Mapping, identity: Mapping) -> dict:
+    """Actual DUT coverage targets; informational classification never excuses missing data."""
+    import verilator_coverage_measure as coverage
+    authority, required, approved = _d13_authority(project, 'coverage_targets')
+    if (approved != source or type(required.get('acceptance_applicable')) is not bool
+            or not isinstance(required.get('reason'), str) or not required['reason'].strip()):
+        raise MetricRefusal('D13_COVERAGE_CLASSIFICATION_UNPROVEN', 'independent exact applicability required')
+    limits, units = required.get('limits'), required.get('units')
+    if (not isinstance(limits, dict) or not limits or set(limits) != set(units or {})
+            or not set(limits) <= {'line', 'toggle', 'branch'}
+            or any(v != 'percent' for v in units.values())):
+        raise MetricRefusal('D13_COVERAGE_BOUNDS_UNPROVEN', 'nonempty declared categories/bounds/units only')
+    report = _d13_file(project, execution['coverage_report'])
+    _d13_retained(project, execution, report)
+    kind, detail, payload = coverage.classify_coverage_artefact(report)
+    if kind != 'measured' or payload.get('measurement_scope') != 'union-of-suite':
+        raise MetricRefusal('D13_COVERAGE_NOT_MEASURED', detail)
+    scope = payload.get('scope_files')
+    expected = sorted(str(project / r['path']) for r in source['subject']['rtl']['source_files']
+                      if Path(r['path']).suffix.lower() in ('.v', '.sv'))
+    if not expected or sorted(scope or []) != expected:
+        raise MetricRefusal('D13_COVERAGE_SCOPE_INCOMPLETE', 'complete original DUT RTL scope required')
+    for value in scope:
+        _d13_retained(project, execution, Path(value))
+    benches = payload.get('per_testbench')
+    if (not isinstance(benches, dict) or not benches or set(benches) != set(payload.get('testbenches') or [])
+            or any(v.get('measured') is not True for v in benches.values())):
+        raise MetricRefusal('D13_COVERAGE_POPULATION_INCOMPLETE', 'all declared instrumented runs required')
+    dats = []
+    for tb, run in benches.items():
+        _d13_retained(project, execution, Path(tb))
+        dats.append(str(_d13_retained(project, execution, Path(run['coverage_dat']))))
+    if len(set(dats)) != len(dats):
+        raise MetricRefusal('D13_COVERAGE_POPULATION_INCOMPLETE', 'duplicate run data')
+    union = coverage.union_coverage_dats(dats)
+    if union.get('unionisable') is not True or union.get('runs_unioned') != len(dats):
+        raise MetricRefusal('D13_COVERAGE_POPULATION_INCOMPLETE', 'no partial/unknown raw union')
+    scoped = coverage.scope_totals(union, scope)
+    info = _d13_retained(project, execution, Path(payload['line_union_cross_check']['lcov_info']))
+    crosscheck = coverage.cross_check_line_union(union.get('line_union'),
+        coverage.parse_lcov_info(info.read_text()), scope)
+    if (crosscheck.get('status') != 'MEASURED' or crosscheck.get('agree') is not True
+            or scoped.get('totals') != payload.get('totals')):
+        raise MetricRefusal('D13_COVERAGE_RAW_DISAGREEMENT', 'DUT-scoped raw/lcov/report disagree')
+    targets = []
+    for category, bounds in limits.items():
+        total = scoped['totals'][category]
+        covered, population = total.get('covered'), total.get('total')
+        if (type(covered) is not int or type(population) is not int or population <= 0
+                or not 0 <= covered <= population):
+            raise MetricRefusal('D13_COVERAGE_POPULATION_INCOMPLETE', category)
+        # Judge exact counts, not the report's rounded display percentage.
+        value = 100.0 * covered / population
+        measured = {'status': 'MEASURED', 'value': value, 'unit': units[category],
+                    'identity': {**identity, 'requirements': authority}}
+        status, reason = evaluate_operator('within_declared_bounds', measured,
+            {'status': 'APPROVED', 'limits': bounds, 'unit': units[category]})
+        if status not in ('PASS', 'FAIL'):
+            raise MetricRefusal('D13_COVERAGE_BOUNDS_UNPROVEN', category + ': ' + reason)
+        targets.append({'category': category, 'status': status, 'reason': reason,
+                        'value': value, 'unit': units[category], 'covered': covered, 'total': population})
+    return {'id': D13_IDS[2], 'status': 'FAIL' if any(t['status'] == 'FAIL' for t in targets) else 'PASS',
+            'measurement_complete': True, 'acceptance_applicable': required['acceptance_applicable'],
+            'classification_reason': required.get('reason'), 'authority': authority,
+            'targets': targets, 'DUT_totals': scoped['totals'], 'line_union_cross_check': crosscheck}
+
+
+def accept_d13(project: Path, context: Mapping[str, Any]) -> dict:
+    """BLOCKING current functional/assertion evidence and complete source-scoped coverage."""
+    import flow109
+    import flow109_admission as admission
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': 'D13', 'status': 'NOT_MEASURED',
+        'component_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+        'delivery_blocked': True, 'obligations': [{'id': k, 'status': 'NOT_MEASURED'} for k in D13_IDS]}
+    try:
+        current = flow109.validate_execution_context(context)
+        rows = current['resolved_row']['obligations']
+        if (current['resolved_row']['id'] != 'D13' or [r['id'] for r in rows] != list(D13_IDS)
+                or rows[0]['expectation'].get('required_set_ref') !=
+                    'requirements/base_07/required_function_scenarios.json#/required_items'
+                or rows[1]['expectation'] != {'operator': 'eq', 'value': 0, 'unit': 'count',
+                    'source': 'contract invariant: no unresolved required violations'}
+                or rows[2]['expectation'].get('bounds_ref') != 'requirements/base_07/coverage_targets.json#/limits'
+                or rows[2]['expectation'].get('unit_ref') != 'requirements/base_07/coverage_targets.json#/units'
+                or rows[2]['expectation'].get('applicability_ref') !=
+                    'requirements/base_07/coverage_targets.json#/acceptance_applicable'):
+            raise MetricRefusal('D13_OBLIGATIONS_UNREGISTERED', 'existing three obligations and source classification only')
+        authority, _required, source = _d13_authority(project, 'required_function_scenarios')
+        qualified = _d13_qualification(project, current)
+        execution = _d13_execution(project, source)
+        identity = {'producer': execution['original_producer'], 'checker': d13_model_sources(),
+            'tool_execution': qualified, 'consumed_inputs': source['subject'],
+            'requirements': authority, 'configuration': source['declared']}
+        observed = _d13_functions(project, source, execution)
+        states = [r['status'] for r in observed]
+        result.update(qualification='PASS', subject=source['subject'], scenarios=observed)
+        status, reason = evaluate_operator('covers_all', {'status': 'MEASURED',
+            'value': [{'name': r['name']} for r in observed if r['status'] == 'PASS'],
+            'identity': identity}, authority)
+        result['obligations'][0].update(status='FAIL' if 'FAIL' in states else status
+            if observed and all(s == 'PASS' for s in states) else 'NOT_MEASURED',
+            reason=reason, observed_value=observed)
+        result['obligations'][1] = _d13_assertions(project, execution, observed)
+        try:
+            result['obligations'][2] = _d13_coverage(project, source, execution, identity)
+        except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            result['obligations'][2].update(reason=getattr(exc, 'code', 'D13_COVERAGE_UNPROVEN'), detail=str(exc))
+        # Preserve a qualified native failure beside an incomplete coverage
+        # measurement. Changed shared authority/model/subject invalidates all.
+        if (_d13_execution(project, source) != execution
+                or _d13_qualification(project, current) != qualified
+                or _d13_authority(project, 'required_function_scenarios')[0] != authority
+                or _d13_functions(project, source, execution) != observed
+                or _d13_assertions(project, execution, observed) != result['obligations'][1]):
+            raise MetricRefusal('D13_INPUT_CHANGED_DURING_READ', 'current original execution/authority/model')
+        if result['obligations'][2].get('measurement_complete') is True:
+            if _d13_coverage(project, source, execution, identity) != result['obligations'][2]:
+                raise MetricRefusal('D13_INPUT_CHANGED_DURING_READ', 'coverage/authority changed')
+        # D11 is a row dependency, not permission to replay accepted D09 or its
+        # simulation. Bind the accepted lint subject to this complete RTL set.
+        try:
+            lint, lint_ref = flow109._accepted_row(project, Path('reports/flow109/default_rows/D11.json'), 'D11')
+            if lint['metric_acceptance']['subject'] != source['subject']['rtl']:
+                raise MetricRefusal('D13_D11_SUBJECT_STALE', 'accepted lint subject differs')
+            result['D11'] = lint_ref
+        except (flow109.Flow109Error, MetricRefusal, KeyError, TypeError) as exc:
+            result.update(dependency='NOT_MEASURED', dependency_reason=getattr(exc, 'code', 'D13_D11_NOT_CURRENT'))
+    except (MetricRefusal, admission.AdmissionRefusal, flow109.Flow109Error,
+            OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D13_EVIDENCE_UNPROVEN'), detail=str(exc))
+        for row in result['obligations']:
+            row['status'] = 'NOT_MEASURED'
+    functional, assertions, coverage = result['obligations']
+    # Target verdicts remain actual PASS/FAIL even for informational targets.
+    # Only independently approved applicability may exclude a complete target
+    # result from row gating; absence/partial coverage always blocks.
+    required = [functional['status'], assertions['status']]
+    if coverage.get('measurement_complete') is not True:
+        required.append('NOT_MEASURED')
+    elif coverage.get('acceptance_applicable') is True:
+        required.append(coverage['status'])
+    elif coverage.get('acceptance_applicable') is not False:
+        required.append('NOT_MEASURED')
+    status = ('FAIL' if 'FAIL' in required else 'PASS' if required
+        and all(s == 'PASS' for s in required) and result.get('D11') else 'NOT_MEASURED')
+    result.update(status=status, component_status=status, delivery_blocked=status != 'PASS')
+    result.setdefault('reason', 'D13_' + status)
+    return result
+
+
 def accept_a01(project: Path, context: Mapping[str, Any],
                component: Mapping[str, Any]) -> dict:
     """Evaluate the complete, and only, currently whitelisted A01 binding."""

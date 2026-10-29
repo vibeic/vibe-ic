@@ -1972,6 +1972,66 @@ def _finish_d11_selected_owner(project: Path, report: Mapping, invocation: Mappi
                 'whole_flow_verdict': 'NOT_MEASURED', 'detail': 'D11_FINALIZATION_REFUSED: ' + str(exc)}
 
 
+def _finish_d13_selected_owner(project: Path, report: Mapping, invocation: Mapping,
+                               *, published_current: bool) -> dict:
+    """Confirm the normal D13 owner before publishing the current canonical row."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    import benchmark_dispatch as dispatch
+    accepted = {'status': 'NOT_MEASURED', 'component_status': 'NOT_MEASURED'}
+    try:
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
+        if context['resolved_row']['id'] != 'D13':
+            raise ValueError('D13 selected context required')
+        attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+        if (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink():
+            raise ValueError('immutable attempt result already exists')
+        path = attempt / 'phase2_one_shot.json'
+        accepted = metrics.accept_d13(project, context)
+        status, detail = accepted['status'], accepted['reason']
+        owner_current, owner_ref = False, None
+        try:
+            raw = path.read_bytes();binding = report['runner_binding']
+            rows = [r for r in report['steps'] if r.get('name') == 'sim']
+            owner_current = (published_current is True and not path.is_symlink()
+                and json.loads(raw) == report and set(invocation) == {'invocation_id', 'argv', 'project', 'source'}
+                and invocation['project'] == str(project) and bool(invocation['invocation_id'])
+                and all(binding[k] == invocation[k] for k in invocation)
+                and binding['schema'] == 'vibeic.runner_report_binding.v1'
+                and binding['report_name'] == 'phase2_one_shot.json'
+                and binding['source'] == dispatch._runner_source_snapshot(binding['argv'],
+                    consumer=binding['source']['consumer']['path'])
+                and binding['material'] == dispatch._runner_material_snapshot(project)
+                and Path(binding['producer']['path']).name == 'design_one_shot_runner.py'
+                and hashlib.sha256(Path(binding['producer']['path']).read_bytes()).hexdigest() == binding['producer']['sha256']
+                and len(rows) == 1 and rows[0]['status'] == report['verdict'] == accepted['status']
+                and rows[0]['extras']['context_sha256'] == context['context_sha256']
+                and rows[0]['extras']['metric_acceptance'] == accepted
+                and str(report['declared_window']['entry_step']) == str(report['declared_window']['exit_step']) == '4')
+            if owner_current:
+                owner_ref = {'path': str(path.relative_to(project)), 'sha256': hashlib.sha256(raw).hexdigest()}
+        except (OSError, ValueError, KeyError, TypeError):
+            owner_current = False
+        if status == 'PASS' and not owner_current:
+            status, detail = 'NOT_MEASURED', 'D13_OWNER_WINDOW_NOT_CURRENT_PASS'
+        reread = metrics.accept_d13(project, context)
+        if (reread != accepted or owner_current and path.read_bytes() != raw):
+            status, detail, accepted = 'NOT_MEASURED', 'D13_INPUT_CHANGED_DURING_FINALIZATION', reread
+        finished = flow109.finish_native_window(project, {'steps': [{
+            'status': accepted['component_status'], 'extras': {'step_id': '4',
+                'context_sha256': context['context_sha256'], 'default_row_status': status,
+                'completed': status == 'PASS', 'metric_acceptance': accepted, 'owner_report': owner_ref,
+                'owner_window': {'published_current': owner_current}, 'detail': detail}}]})
+        if not isinstance(finished, Mapping) or finished.get('default_row_status') != status:
+            raise ValueError('canonical writer did not confirm verdict')
+        return {'verdict': status, 'metric_acceptance': accepted,
+                'whole_flow_verdict': 'NOT_MEASURED', 'detail': detail}
+    except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError) as exc:
+        return {'verdict': 'NOT_MEASURED', 'metric_acceptance': accepted,
+                'whole_flow_verdict': 'NOT_MEASURED', 'detail': 'D13_FINALIZATION_REFUSED: ' + str(exc)}
+
+
 def _finish_d25_selected_owner(
         project: Path, *, owner_verdict: str | None = None,
         owner_published_current: bool = False) -> dict:
@@ -5838,13 +5898,14 @@ def _main() -> int:
             d09_selected = _flow109_selected_row('D09')
             d11_selected = _flow109_selected_row('D11')
             d12_selected = _flow109_selected_row('D12')
+            d13_selected = _flow109_selected_row('D13')
             d09_invocation: Dict[str, Any] = {}
             _phase_started["phase2"] = time.time()
             rc = _run_phase(
                 "PHASE 2 (= 2a + 2b)", runner, p2_args, env=p2_env,
-                invocation=d09_invocation if d09_selected or d11_selected or d12_selected else None)
+                invocation=d09_invocation if d09_selected or d11_selected or d12_selected or d13_selected else None)
             phase2_report = _phase_report_path(project, 'phase2_one_shot.json')
-            if d11_selected or d12_selected:
+            if d11_selected or d12_selected or d13_selected:
                 context = flow109.validate_execution_context(json.loads(
                     Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
                 phase2_report = flow109._bound_attempt(project, context,
@@ -5852,7 +5913,7 @@ def _main() -> int:
             verdict, _fresh_why = _row_verdict(
                 project, "phase2_one_shot.json", rc,
                 _phase_started.get("phase2", t0), "phase2",
-                **({'report_path': phase2_report} if d11_selected or d12_selected else {}))
+                **({'report_path': phase2_report} if d11_selected or d12_selected or d13_selected else {}))
             if _fresh_why:
                 advisories.append(_fresh_why)
             rep = _read_report(phase2_report)
@@ -5870,6 +5931,12 @@ def _main() -> int:
                     published_current=_pl.published_here(phase2_report,
                                                          _phase_started['phase2']))
                 reports['d11_finalization'] = finalized
+                verdict = finalized['verdict']
+                rc = 0 if verdict == 'PASS' else 1 if verdict == 'FAIL' else 2
+            if d13_selected:
+                finalized = _finish_d13_selected_owner(project, rep, d09_invocation,
+                    published_current=_pl.published_here(phase2_report, _phase_started['phase2']))
+                reports['d13_finalization'] = finalized
                 verdict = finalized['verdict']
                 rc = 0 if verdict == 'PASS' else 1 if verdict == 'FAIL' else 2
             plan.append(("phase2", verdict, rc))
