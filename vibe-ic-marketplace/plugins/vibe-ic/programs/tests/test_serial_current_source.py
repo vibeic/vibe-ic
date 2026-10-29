@@ -176,11 +176,22 @@ def test_root_inode_race_refuses_without_write(current,monkeypatch):
         return result
     monkeypatch.setattr(serial,'inspect_current_outputs',raced)
     result=runner.step_rtl_gen(current,CLASS)
-    assert result.status == 'FAIL'
+    assert result.status == 'NOT_MEASURED'
     assert 'PROJECT_BOUNDARY_REPLACED' in str(result.extras)
     assert not list(current.iterdir())
 
 
 def test_real_missing_D01_cannot_publish_or_reuse(tmp_path):
     with pytest.raises(ValueError,match='D01'):
+        runner._serial_d01_state(tmp_path)
+
+
+def test_real_D01_owner_mismatch_is_not_current(tmp_path):
+    report=runner._pl.report_path(tmp_path,'phase1_one_shot.json')
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({'project':'foreign namespace'}))
+    receipt=tmp_path/'reports/audit/ai_judgements/D1.json'
+    receipt.parent.mkdir(parents=True)
+    receipt.write_text('{}')
+    with pytest.raises(ValueError,match='owner'):
         runner._serial_d01_state(tmp_path)

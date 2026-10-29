@@ -8215,6 +8215,9 @@ def _serial_d01_state(project: Path) -> dict:
     report = _pl.report_path(project, "phase1_one_shot.json")
     if not report.is_file() or not (project / "reports/audit/ai_judgements/D1.json").is_file():
         raise ValueError("current D01 publication/review absent")
+    owner = _serial_current_json(report.read_bytes())
+    if owner.get("project") != str(project.resolve()) or not judgement._requested(project, "D1"):
+        raise ValueError("current D01 owner or reviewed population unavailable")
     current, why = judgement.check(project, "D1")
     evidence = judgement.evidence_sha256(project, "D1")
     if not current or not evidence:
@@ -8400,6 +8403,7 @@ def _try_serial_current_source(binding: _Phase1ProjectBinding, ic_class: str,
         result.detail = ("deterministic serial-parallel multiplier RTL (program-first; no LLM) "
                          "validated at " + plan["rtl"] + "; L7 declaration -> " + plan["declaration"])
         result.extras = dict(extras, current_source_read_only=True,
+                             current_source_reuse="READ_ONLY_CURRENT_SOURCE",
                              contract_refreshed_from_retained_rtl=True)
         binding.require_current()
         return result
@@ -8463,11 +8467,16 @@ def step_rtl_gen(project: Path, ic_class: str,
                         stage_project, ic_class, force_regen, t0, stage_binding,
                         snapshot_manifest=baseline)
                     proof = _serial_publication_proof(result, stage_binding, binding, ic_class)
-            if proof is not None:
-                recording, _why = executed.recorded()
-                code, _why = identity.code_from_recording(recording)
-                if code is not None:
-                    result.extras["current_source_proof"] = dict(proof, recording=recording, code=code)
+            if result.extras.get("deterministic_generator") == "serial_parallel_mul_synth":
+                result.extras["current_source_reuse"] = "UNAVAILABLE_FULL_TRANSACTION_USED"
+                if proof is not None:
+                    recording, why_not = executed.recorded()
+                    code, why = identity.code_from_recording(recording)
+                    if code is not None:
+                        result.extras["current_source_proof"] = dict(proof, recording=recording, code=code)
+                        result.extras["current_source_reuse"] = "NORMAL_PROOF_PUBLISHED"
+                    else:
+                        result.extras["current_source_reuse_detail"] = why_not or "; ".join(why)
             stage_binding.require_current()
             # #2183 — THE FILES, not only the StepResult. Every generator above
             # ran against `stage_project` and any of them may have recorded
