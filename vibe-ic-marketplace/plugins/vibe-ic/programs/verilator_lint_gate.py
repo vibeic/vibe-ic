@@ -208,6 +208,13 @@ def judge(step_dir: Path, expected: list[Path], *, checker_dirs=None, native_fai
         required = {"Checker.LintErrors": "design__lint_error__count",
                     "Checker.LintTimingConstructs": "design__lint_timing_construct__count",
                     "Checker.LintWarnings": "design__lint_warning__count"}
+        # Validate the recorded failed checker before unexecuted successors.
+        # The existing failure reader still owns rc/path/artifact/input checks.
+        detail = native_failure.get("detail") if isinstance(native_failure, dict) else None
+        parts = detail.split(": ", 2) if isinstance(detail, str) else []
+        if len(parts) == 3 and parts[0] == "LL_STEP_FAILED" and parts[1] in required:
+            failed_sid = parts[1]
+            required = {failed_sid: required[failed_sid], **required}
         for sid, metric in required.items():
             folder = Path(checker_dirs[sid]) if sid in checker_dirs else None
             try:
