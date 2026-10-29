@@ -156,14 +156,93 @@ _VOLT_RE = re.compile(
 # rail. Covers prose ("supply"/"rail"/"operating voltage"/"core voltage") and the
 # canonical rail identifiers (VDD / VDDIO / VCC). chip-AGNOSTIC.
 _SUPPLY_CTX_RE = re.compile(
-    r"\b(supply|VDDIO|VDDA|VDD|VCCIO|VCC|operating\s+voltage|core\s+voltage|"
-    r"io\s+voltage|power\s+rail|rail)\b", re.IGNORECASE)
-# A REFERENCE voltage context (Vref / bandgap / a `REF` pin / "reference") within
-# the short window before a volt value — that value is a reference, not a supply
-# rail (precision guard). Searched (not anchored) so an intervening pin name
-# ("bandgap `REF` = 2.048 V") still triggers the skip. chip-AGNOSTIC.
-_REF_CTX_RE = re.compile(r"(V[_ ]?REF\w*|band[\s-]?gap|\bREF\b|reference)",
-                         re.IGNORECASE)
+    r"\b(?:supply(?:[_\s]+voltage)?|[AD]?VDD\w*|IOVDD\w*|VCC\w*|VEE\w*|VSS\w*|"
+    r"operating\s+voltage|core(?:\s+voltage)?|io\s+voltage|power\s+rail|rail)\b"
+    r"|供電|供电|電源|电源", re.IGNORECASE)
+# A quantity's role is local, not inherited from the rest of a document.
+_NON_SUPPLY_RE = re.compile(
+    r"\b(?:headroom|dropout|differential|diff|full[\s-]?scale|fs|input(?:\s+(?:target|range|voltage))?|"
+    r"reference(?:[_\s]+voltage)?|V[_ ]?REF\w*|band[\s-]?gap|amplitude|swing|threshold)\b"
+    r"|壓差|压差|裕量|振幅|差動|差分|參考|参考|輸入|输入", re.I)
+
+
+def _local_supply_role(text: str, start: int, end: int):
+    """Nearest explicit quantity owner; False means an explicit non-rail."""
+    # A conjunction introducing a new named quantity cannot transfer its owner
+    # backwards (nor let the previous quantity own the next value). A bare
+    # numeric list still shares its explicit rail owner.
+    lo, hi = 0, len(text)
+    boundaries = list(re.finditer(r",|\b(?:and|but|whereas)\b|而|但", text, re.I))
+    for index, boundary in enumerate(boundaries):
+        stop = boundaries[index + 1].start() if index + 1 < len(boundaries) else len(text)
+        label = text[boundary.end():stop]
+        if not _VOLT_RE.search(label):
+            continue
+        if not (_SUPPLY_CTX_RE.search(label) or _NON_SUPPLY_RE.search(label)):
+            continue
+        if boundary.end() <= start:
+            lo = boundary.end()
+        elif boundary.start() >= end:
+            hi = boundary.start()
+            break
+    owners = []
+    for supply, pattern in ((True, _SUPPLY_CTX_RE), (False, _NON_SUPPLY_RE)):
+        for owner in pattern.finditer(text, lo, hi):
+            if owner.end() <= start:
+                distance = start - owner.end()
+            elif owner.start() >= end:
+                following = _VOLT_RE.search(text, end)
+                if following and owner.start() >= following.start():
+                    continue
+                distance = owner.start() - end
+            else:
+                continue
+            owners.append((distance, supply, owner.group()))
+    if not owners:
+        return None
+    _, supply, role = min(owners)  # an equally close non-rail wins
+    return role if supply else False
+
+
+def _table_supply_role(cells: list, field: int):
+    label = cells[0].strip()
+    if _NON_SUPPLY_RE.search(label):
+        return None
+    owner = _SUPPLY_CTX_RE.search(label)
+    if owner:
+        return label
+    # A regulator Vin/Vout field can name its supply role in the Note column.
+    # A generic input/amplitude/reference field cannot borrow that note.
+    if re.fullmatch(r"V(?:in|out|reg)", label, re.I):
+        note = " ".join(cells[field + 1:])
+        owner = _SUPPLY_CTX_RE.search(note)
+        if owner:
+            return label + " (" + owner.group() + ")"
+    return None
+
+
+def _supply_context(text: str, match):
+    start, end = match.span()
+    lo = max((pos + len(sep) if (pos := text.rfind(sep, 0, start)) >= 0 else 0)
+             for sep in ('\n', ';', '. ', '。', '；'))
+    hi = min((pos for sep in ('\n', ';', '. ', '。', '；')
+              if (pos := text.find(sep, end)) >= 0), default=len(text))
+    scope = text[lo:hi]
+    if '|' in scope:
+        fields = list(re.finditer(r'[^|]+', scope))
+        cells = [f.group().strip() for f in fields]
+        field = next((i for i, f in enumerate(fields)
+                      if f.start() <= start - lo < f.end()), None)
+        if field is None or not cells or _NON_SUPPLY_RE.search(cells[0]):
+            return None
+        f = fields[field]
+        role = _local_supply_role(f.group(), start - lo - f.start(), end - lo - f.start())
+        if role is False:
+            return None
+        role = role or _table_supply_role(cells, field)
+    else:
+        role = _local_supply_role(scope, start - lo, end - lo)
+    return (role, scope.strip()) if role else None
 
 
 # ---------------------------------------------------------------------------
@@ -225,15 +304,6 @@ _CELL_NUM_RE = re.compile(r"^[≤≥~<>]?\s*([+-]?\d+(?:\.\d+)?)$")
 _CELL_FREQ_U = re.compile(r"^(GHz|MHz|kHz|KHz|Hz)$")
 _CELL_VOLT_U = re.compile(r"^(mV|V)$")
 _CELL_CURR_U = re.compile(r"^(mA|[uµμ]A|nA|A)$")
-# a supply-rail PARAMETER name (vs a Vref / threshold, which the analog extractor
-# owns) — the voltage-row facet only fires for a supply-ish name. chip-AGNOSTIC.
-_SUPPLY_NAME_RE = re.compile(
-    r"\b(vdd|vcc|vddio|vccio|vin|vout|vldo|core|supply|rail|iovdd|avdd|dvdd)\b",
-    re.IGNORECASE)
-# a FULL-SCALE / input-range qualifier on a voltage row -> a signal range, NOT a
-# supply rail (e.g. an ADC `Vin (FS, diff)` full-scale input). chip-AGNOSTIC.
-_FS_NAME_RE = re.compile(r"\b(fs|full[\s-]?scale|input\s+range)\b", re.IGNORECASE)
-
 
 def _table_cells(line: str):
     """Cells of a markdown table row (outer pipes stripped), or None if the line
@@ -271,13 +341,16 @@ def _table_items(text: str) -> List[dict]:
                             "name": name})
                 break
             if _CELL_VOLT_U.match(c):
-                # "Vin" names a rail (LDO input) OR an ADC FULL-SCALE INPUT range —
-                # the latter is a signal range, not a supply. Exclude a full-scale /
-                # input-range row (precision). chip-AGNOSTIC.
-                if _SUPPLY_NAME_RE.search(name) and not _FS_NAME_RE.search(name):
+                target = next(i for i, cell in enumerate(cells)
+                              if _CELL_NUM_RE.match(cell))
+                role = _table_supply_role(cells, target)
+                if role:
+                    extra = ({"range": cells[target + 1]}
+                             if target + 1 < cells.index(c) else {})
                     out.append({"kind": "supply_voltage", "value": _to_float(num),
                                 "unit": c, "disp": num + " " + c,
-                                "evidence": line.strip()[:120], "name": name})
+                                "evidence": line.strip(), "name": name,
+                                "supply_role": role, **extra})
                 break
             if _CELL_CURR_U.match(c):
                 out.append({"kind": "current_spec", "value": _to_float(num),
@@ -352,39 +425,32 @@ def extract(prompt_text: str) -> List[dict]:
                 "provenance": "STRUCTURAL",
             })
 
-    # --- (2) Supply voltage: a volt number, gated on supply context -----------
-    if _SUPPLY_CTX_RE.search(text):
-        seen_v = set()
-        for m in _VOLT_RE.finditer(text):
-            val = _to_float(m.group(1))
-            if val is None:
-                continue
-            # PRECISION: a voltage that is a REFERENCE (Vref / bandgap) is owned by
-            # the analog reference_voltage facet, NOT a supply rail. Skip a volt
-            # whose preceding context — WITHIN THE CURRENT CLAUSE (after the last
-            # ;/|/newline, ≤40 chars) — names a reference. The clause bound stops a
-            # `REF` in a PRIOR clause from suppressing a real later supply rail.
-            _lo = max(text.rfind(";", max(0, m.start() - 40), m.start()),
-                      text.rfind("|", max(0, m.start() - 40), m.start()),
-                      text.rfind("\n", max(0, m.start() - 40), m.start()),
-                      m.start() - 40, 0)
-            if _REF_CTX_RE.search(text[_lo:m.start()]):
-                continue
-            unit = m.group(2)
-            disp = m.group(1).strip() + " " + unit
-            if disp in seen_v:
-                continue
-            seen_v.add(disp)
-            items.append({
-                "kind": "supply_voltage",
-                "requirement": ("supply voltage: " + disp
-                                + "; the design must operate at this rail."),
-                "evidence": m.group(0).strip(),
-                "value": val,
-                "unit": unit,
-                "coverage_tokens": [m.group(1).strip(), unit],
-                "provenance": "STRUCTURAL",
-            })
+    # --- (2) Supply voltage: explicit local clause/table-field owner ---------
+    voltages = []
+    for m in _VOLT_RE.finditer(text):
+        owner = _supply_context(text, m)
+        value = _to_float(m.group(1))
+        if owner and value is not None:
+            role, evidence = owner
+            voltages.append((value, m.group(2), m.group(1), role, evidence))
+    seen_v = set()
+    for val, unit, token, role, evidence in voltages:
+        disp = token.strip() + " " + unit
+        key = (disp, role)
+        if key in seen_v:
+            continue
+        seen_v.add(key)
+        items.append({
+            "kind": "supply_voltage",
+            "requirement": ("supply voltage: " + disp
+                            + "; the design must operate at this rail."),
+            "evidence": evidence,
+            "supply_role": role,
+            "value": val,
+            "unit": unit,
+            "coverage_tokens": [token.strip(), unit],
+            "provenance": "STRUCTURAL",
+        })
 
     # --- (3) Current: a current number, gated on current context --------------
     if _CURRENT_CTX_RE.search(text):
@@ -462,8 +528,9 @@ def extract(prompt_text: str) -> List[dict]:
 
     # --- (6) markdown spec-TABLE rows (param | value | … | unit) --------------
     # value and unit live in separate cells, so the prose passes above miss them.
-    # The same doc-wide context gate decides whether a table number is in-facet.
-    _present = {(it["kind"], it.get("value"), it.get("unit")) for it in items}
+    # Supply values use the row's quantity owner; other facets keep their gates.
+    _present = {(it["kind"], it.get("value"), it.get("unit"),
+                 it.get("supply_role")) for it in items}
     for ti in _table_items(text):
         if ti["kind"] == "clock_frequency" and not _CLOCK_CTX_RE.search(text):
             continue
@@ -471,9 +538,10 @@ def extract(prompt_text: str) -> List[dict]:
             continue
         if ti["kind"] == "current_spec" and not _CURRENT_CTX_RE.search(text):
             continue
-        if (ti["kind"], ti["value"], ti["unit"]) in _present:
+        key = (ti["kind"], ti["value"], ti["unit"], ti.get("supply_role"))
+        if key in _present:
             continue
-        _present.add((ti["kind"], ti["value"], ti["unit"]))
+        _present.add(key)
         label = {"clock_frequency": "clock frequency", "supply_voltage": "supply voltage",
                  "current_spec": "current spec"}[ti["kind"]]
         items.append({
@@ -482,6 +550,7 @@ def extract(prompt_text: str) -> List[dict]:
                             + "; from the spec table — constraints/TB must honor it."),
             "evidence": ti["evidence"], "value": ti["value"], "unit": ti["unit"],
             "coverage_tokens": [ti["name"], ti["disp"]], "provenance": "STRUCTURAL",
+            **{k: ti[k] for k in ("supply_role", "range") if k in ti},
         })
 
     # --- (7) slash/comma corner-temperature LIST ("−40/27/125 °C") ------------

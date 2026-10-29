@@ -515,5 +515,16 @@
     "version_observed": "1.31.58, source d1a134de8353b95860e173798b50b6c0c9a59af0. The local PR #3576 overlay changes report binding and interrupted-run recovery only; the layer producer used for this reproduction is unchanged from release.",
     "version_lkg": "Not established for this exact neutral fixture. Historical benchmark scores do not establish this producer contract.",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/neutral_declared_module/design.md"
+  },
+  {
+    "issue": 3752,
+    "project": "issue3752_supply_ownership",
+    "layer": "L5",
+    "field": "L5_ADI_SPEC.json rows with param=VDD and parameter=supply_voltage; generating extractor kind=supply_voltage",
+    "expected": "Preserve source-declared core supply 1.2 V and IOVDD 1.8 V. The 1.0 V differential input/reference target and 0.6 V available headroom must not produce VDD/supply_voltage rows. Preserve source roles and local evidence.",
+    "actual": "Normal Phase1 generated VDD/supply_voltage entries value=0.6 V and value=1.0 V, quoted in the original report. The supplied generic diagnostic returns supply_voltage values [1.2,0.6,1.0] instead of only [1.2]. Independent semantic verdict FAIL; no ADC simulation.",
+    "version_observed": "v1.33.26, commit 8d6e9bbfb16ba4f2ffd10bef2c01397e79ccb8bc",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/issue3752_supply_ownership/L5_ANALOG_SPEC.md"
   }
 ]

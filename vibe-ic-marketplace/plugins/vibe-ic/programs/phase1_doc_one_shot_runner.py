@@ -37032,6 +37032,8 @@ def gen_l5_adi_spec(project: Path,
                 _ee_unit = _ee_it.get("unit") or ""
                 _ee_val = str(_ee_it.get("value"))
                 _ee_key = (_ee_label[_ee_kind], _ee_val + _ee_unit)
+                if _ee_kind == "supply_voltage":
+                    _ee_key += (_ee_it.get("supply_role"),)
                 if _ee_key in elec_seen:
                     continue
                 elec_seen.add(_ee_key)
@@ -37042,6 +37044,8 @@ def gen_l5_adi_spec(project: Path,
                     "unit": _ee_unit,
                     "source": fname,
                     "extraction_strategy": "spec_electrical_extract",
+                    **({k: _ee_it[k] for k in ("supply_role", "evidence", "range")
+                        if k in _ee_it} if _ee_kind == "supply_voltage" else {}),
                 })
         except Exception:
             pass
