@@ -1353,9 +1353,9 @@ def test_d24_routes_to_existing_default_dft_producer_and_consumer(tmp_path, monk
             dispatch["owner_entry_step"], dispatch["owner_exit_step"]) == (
                 "12", "design_one_shot_runner", "12", "12")
     assert dispatch["producer"] == (
-        "design_one_shot_runner.py:_step_post_dft_optimization")
+        "design_one_shot_runner.py:_d24_resynthesis")
     assert dispatch["consumer"] == (
-        "design_one_shot_runner retained Step 12 canonical acceptance")
+        "flow109_metric_acceptance.py:accept_d24 via selected public owner")
     assert row["profile"]["execution_status"] == (
         "NATIVE_OWNER_WIRED_NOT_CASE_QUALIFIED")
     import _delivery_route

@@ -827,6 +827,242 @@ def accept_d19(project: Path, context: Mapping[str, Any], component: Mapping[str
     return result
 
 
+D24_BINDINGS = {
+    'base_15.scan_preservation_errors': {'operator': 'eq', 'value': 0, 'unit': 'count'},
+    'base_15.adopted_post_dft_netlist': {'operator': 'matches_adopted_reference',
+        'reference_ref': 'adopted/base_15/adopted_post_dft_netlist.json',
+        'identity': 'artifact_id_and_sha256_from_native_scan_report'},
+}
+
+
+def d24_native_module() -> dict:
+    import inspect
+    import importlib.metadata
+    from librelane.steps import Step
+    step = Step.factory.get('Yosys.Resynthesis')
+    if step is None:
+        raise MetricRefusal('D24_NATIVE_STEP_UNAVAILABLE', 'Yosys.Resynthesis')
+    path = Path(inspect.getfile(step)).resolve()
+    return {'path': str(path), 'sha256': _sha(path.read_bytes()),
+            'version': importlib.metadata.version('librelane'), 'step': step.id}
+
+
+def d24_model_sources() -> dict:
+    import ast
+    import design_one_shot_runner as owner
+    import vibe_ic_one_shot_runner as public
+    import dft_post_optimization_scan_survival_check as cells
+    import flow109
+    sources = {}
+    for module, names in ((Path(__file__), ('accept_d24', '_d24_native_observe', '_d24_adoption',
+            '_d24_qualification', 'd24_model_sources', 'd24_native_module')),
+            (Path(owner.__file__), ('_d24_resynthesis',)),
+            (Path(public.__file__), ('_d24_post_dft_component', '_complete_step12_post_dft', '_finish_selected_native_owner')),
+            (Path(flow109.__file__), ('_selected_step_result', 'd23_scan_replacement_binding', '_d23_original_launch')),
+            (Path(cells.__file__), ('reconcile_scan_cell_list',))):
+        text = module.read_text()
+        nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
+        for name in names:
+            sources[module.name + ':' + name] = _sha(ast.get_source_segment(text, nodes[name]).encode())
+    return sources
+
+
+def _d24_adoption(project: Path) -> tuple:
+    authority, body = _approved_document(project, D24_BINDINGS['base_15.adopted_post_dft_netlist']['reference_ref'],
+        authority='requirements_owner', schema='vibeic.flow109.adopted-reference.v1')
+    reference = body.get('reference')
+    if (not isinstance(reference, dict) or set(reference) != {'artifact_id', 'path', 'sha256'}
+            or reference['artifact_id'] != 'D24_POST_SCAN_NETLIST'
+            or reference['path'] != 'phase2/stage2/synth/post_dft_netlist.v'):
+        raise MetricRefusal('D24_INDEPENDENT_ADOPTION_UNBOUND', 'post-DFT artifact identity')
+    source = authority['source']
+    if not source['path'].startswith('input/'):
+        raise MetricRefusal('D24_INDEPENDENT_ADOPTION_UNBOUND', 'independent host input required')
+    document = json.loads((project / source['path']).read_bytes())
+    if (document.get('reference') != reference
+            or document.get('native_component') != body.get('native_component')):
+        raise MetricRefusal('D24_INDEPENDENT_ADOPTION_DIFFERS', source['path'])
+    if (project / reference['path']).exists():
+        _d19_ref(project, {k: reference[k] for k in ('path', 'sha256')}, 'adopted D24 output')
+    return {**authority, 'reference': reference}, reference
+
+
+def _d24_native_observe(project: Path, context: Mapping, component: Mapping) -> dict:
+    import flow109
+    import librelane_contract as contract
+    import dft_post_optimization_scan_survival_check as cells
+    import design_one_shot_runner as owner
+    import shutil
+    intent = flow109.dft_source_intent(project, context)
+    upstream = flow109.d23_scan_replacement_binding(project, context, intent)
+    bound = flow109._current_project_ref(project, component.get('post_dft_component'), 'D24_NATIVE_COMPONENT_UNBOUND')
+    path = project / bound['path']
+    attempt = path.parent
+    if (attempt.parent != project / 'reports/flow109/attempts'
+            or not attempt.name.startswith('window-') or attempt.is_symlink()):
+        raise MetricRefusal('D24_NATIVE_COMPONENT_FOREIGN', str(path))
+    doc = json.loads(path.read_bytes())
+    if (doc.get('schema') != 'vibeic.flow109.d24-component.v1' or doc.get('producer') != 'D24'
+            or doc.get('operation') != 'Yosys.Resynthesis' or doc.get('returncode') != 0
+            or doc.get('source') != upstream['replaced'] or doc.get('scan_cell_list') != upstream['scan_cell_list']
+            or doc.get('producer_source_sha256') != _sha(Path(owner.__file__).read_bytes())):
+        raise MetricRefusal('D24_NATIVE_COMPONENT_STALE', str(path))
+    current = contract.local_image_attestation()
+    original = doc.get('launch')
+    if not isinstance(original, dict) or any(original.get(k) != current.get(k) for k in ('image', 'image_id')):
+        raise MetricRefusal('D24_ORIGINAL_LAUNCH_UNPROVEN', 'same immutable image required')
+    if original.get('cid') == current.get('cid'):
+        if any(original.get(k) != current.get(k) for k in ('attestation_path', 'attestation_sha256')):
+            raise MetricRefusal('D24_ORIGINAL_LAUNCH_UNPROVEN', 'current host receipt differs')
+    else:
+        adoption, _ = _d24_adoption(project)
+        owner_input = json.loads((project / adoption['source']['path']).read_bytes())
+        if owner_input.get('native_component') != bound or owner_input.get('launch') != original:
+            raise MetricRefusal('D24_ORIGINAL_LAUNCH_UNPROVEN', 'retained launch lacks independent source adoption')
+    # Validate the actual original host receipt, including reuse in another CID.
+    launch_path = Path(str(original.get('attestation_path', '')))
+    raw = launch_path.read_bytes()
+    if _sha(raw) != original.get('attestation_sha256'):
+        raise MetricRefusal('D24_ORIGINAL_LAUNCH_UNPROVEN', str(launch_path))
+    host = json.loads(raw)
+    inspected = host['container_inspect']
+    if (host['cid'] != original['cid'] or inspected['Id'] != original['cid']
+            or inspected['Image'] != original['image_id'] or host['image'] != original['image']
+            or not inspected['Config']['Hostname'].startswith(original['cid'][:12])
+            or inspected['State']['Running'] is not True
+            or inspected['State'].get('Paused') or inspected['State'].get('Dead')):
+        raise MetricRefusal('D24_ORIGINAL_LAUNCH_UNPROVEN', 'original CID/image/launch differs')
+    files = {bound['path']: bound['sha256']}
+    for name in ('config', 'state_in', 'state', 'netlist', 'log', 'config_input'):
+        ref = flow109._current_project_ref(project, doc.get(name), 'D24_NATIVE_OUTPUT_STALE')
+        if name != 'config_input' and (project / ref['path']).parent != attempt / 'resynthesis':
+            raise MetricRefusal('D24_NATIVE_OUTPUT_FOREIGN', name)
+        files[ref['path']] = ref['sha256']
+    cfg = json.loads((project / doc['config']['path']).read_bytes())
+    state_in = json.loads((project / doc['state_in']['path']).read_bytes())
+    state = json.loads((project / doc['state']['path']).read_bytes())
+    actual = (project / doc['netlist']['path']).resolve()
+    if cfg.get('SYNTH_ELABORATE_ONLY') is not False:
+        raise MetricRefusal('D24_NATIVE_ENGINE_UNSUPPORTED', 'resynthesis mapping required')
+    if (cfg.get('meta', {}).get('step') != 'Yosys.Resynthesis' or cfg.get('DESIGN_NAME') != upstream['top']
+            or state_in.get('nl') != str((project / upstream['replaced']['path']).resolve())
+            or state.get('nl') != str(actual)):
+        raise MetricRefusal('D24_STATE_INPUT_OUTPUT_MISMATCH', 'actual normal SDK State')
+    d23_doc = json.loads((project / upstream['scan_cell_list']['path']).read_bytes())
+    if (not doc.get('consumed_config_files')
+            or contract.config_file_hashes(cfg, []) != doc['consumed_config_files']):
+        raise MetricRefusal('D24_NATIVE_CONFIG_INPUTS_STALE', 'resolved native input files changed')
+    libraries = cfg.get('CELL_LIBS')
+    libs = [p for values in libraries.values() for p in values] if isinstance(libraries, dict) else []
+    if not libs or any(d23_doc['pdk_sha256'].get(str(Path(p).resolve())) != _sha(Path(p).read_bytes()) for p in libs):
+        raise MetricRefusal('D24_ADOPTED_LIBRARY_MISMATCH', 'same D23 Liberty required')
+    module = doc.get('native_module', {})
+    if module != d24_native_module():
+        raise MetricRefusal('D24_NATIVE_MODULE_STALE', 'actual installed SDK')
+    tool = shutil.which('yosys')
+    if not tool or _sha(Path(tool).read_bytes()) != doc.get('yosys_sha256'):
+        raise MetricRefusal('D24_NATIVE_TOOL_STALE', 'actual parser')
+    check = cells.reconcile_scan_cell_list((project / upstream['mapped']['path']).read_text(),
+        (project / upstream['replaced']['path']).read_text(), actual.read_text(), upstream['cells'], top=upstream['top'])
+    if check.get('verdict') not in ('PASS', 'FAIL'):
+        raise MetricRefusal('D24_SCAN_CENSUS_UNMEASURED', str(check))
+    return {'upstream': upstream, 'component': bound, 'document': doc, 'files': files,
+            'scan': check, 'launch': original, 'native_module': module}
+
+
+def _d24_qualification(project: Path, context: Mapping, native: Mapping) -> dict:
+    import flow109_admission as admission
+    accepted = admission.require_admission(project, context)
+    for use in context['runtime_tool_uses']:
+        expected = {'purpose': 'D24.default.post_dft_resynthesis',
+            'model_sources': d24_model_sources(), 'native_module': native['native_module']}
+        if (use['semantics']['purpose'] != 'D24.default'
+                or json.loads((project / use['config']['path']).read_bytes()) != expected):
+            raise MetricRefusal('D24_MODEL_QUALIFICATION_STALE', use['use_id'])
+    return accepted
+
+
+def accept_d24(project: Path, context: Mapping, component: Mapping) -> dict:
+    """Logical preservation/adoption only; not chain length, connectivity or LEC."""
+    import flow109
+    import flow109_admission as admission
+    import librelane_contract as contract
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': 'D24', 'status': 'NOT_MEASURED',
+        'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+        'delivery_blocked': True, 'obligations': []}
+    try:
+        current = flow109.validate_execution_context(context)
+        declared = current['resolved_row']['obligations']
+        if (current['resolved_row']['id'] != 'D24'
+                or {o['id'] for o in declared} != set(D24_BINDINGS)
+                or len(declared) != len(D24_BINDINGS)):
+            raise MetricRefusal('D24_OBLIGATIONS_UNREGISTERED', 'existing two scan contracts only')
+        native = _d24_native_observe(project, context, component)
+        scan = native['scan']
+        errors = len(scan.get('missing', [])) + len(scan.get('extra', [])) if scan['verdict'] == 'FAIL' else 0
+        if scan['verdict'] == 'FAIL' and not errors:
+            result['obligations'].append({'id': 'base_15.scan_preservation_errors', 'status': 'FAIL',
+                'measurement': {'native_scan_observation': scan}, 'reason': 'D24_SCAN_CONTRADICTION'})
+            raise MetricRefusal('D24_SCAN_CONTRADICTION', str(scan))
+        result['native_observation'] = native
+        identity = {'producer': {'source_sha256': native['document']['producer_source_sha256']},
+            'checker': {'sources': d24_model_sources()},
+            'tool_execution': {'component': native['component'], 'launch': native['launch'],
+                               'operation': 'Yosys.Resynthesis'},
+            'consumed_inputs': native['files'],
+            'requirements': {'registry_sha256': current['registry_sha256'],
+                             'obligations': [o['id'] for o in declared]},
+            'configuration': {'context_sha256': current['context_sha256'],
+                              'native_config': native['document']['config']}}
+        for obligation in context['resolved_row']['obligations']:
+            oid = obligation['id']; spec = D24_BINDINGS.get(oid)
+            if spec is None or any(obligation['expectation'].get(k) != v for k,v in spec.items()):
+                raise MetricRefusal('D24_METRIC_CONTRACT_UNSUPPORTED', oid)
+            if oid.endswith('scan_preservation_errors'):
+                authority = {'status': 'APPROVED', 'value': spec['value'], 'unit': spec['unit'],
+                             'source': obligation['expectation']['source']}
+                measured = {'status': 'MEASURED', 'identity': identity, 'value': errors,
+                            'unit': 'count', 'native_scan_observation': scan}
+                status, detail = evaluate_operator(spec['operator'], measured, authority)
+                result['obligations'].append({'id': oid, 'status': status,
+                    'measurement': measured, 'authority': authority, 'detail': detail})
+            else:
+                authority, reference = _d24_adoption(project)
+                owner_document = json.loads((project / authority['source']['path']).read_bytes())
+                if owner_document.get('native_component') not in (None, native['component']):
+                    raise MetricRefusal('D24_INDEPENDENT_COMPONENT_DIFFERS', 'owner-adopted native component differs')
+                actual = {'artifact_id': 'D24_POST_SCAN_NETLIST', 'path': reference['path'],
+                          'sha256': native['document']['netlist']['sha256']}
+                authority['reference_identity'] = {**identity, 'requirements': authority.copy()}
+                measured = {'status': 'MEASURED', 'identity': identity, 'value': actual}
+                status, detail = evaluate_operator(spec['operator'], measured, authority)
+                result['obligations'].append({'id': oid, 'status': status,
+                    'authority': authority, 'measurement': measured, 'detail': detail})
+                result['adopted_netlist'] = actual
+        failed = any(item['status'] == 'FAIL' for item in result['obligations'])
+        result['status'] = result['metric_status'] = 'FAIL' if failed else 'PASS'
+        if not failed:
+            result['metric_status'] = 'PASS';result['status'] = 'NOT_MEASURED'
+            result['admission'] = _d24_qualification(project, context, native)
+            result['qualification'] = result['admission']['status']
+            if result['qualification'] == 'PASS':result.update(status='PASS', delivery_blocked=False)
+        if _d24_native_observe(project, context, component) != native:
+            raise MetricRefusal('D24_INPUT_CHANGED_DURING_READ', 'native observation changed')
+        if result.get('adopted_netlist'):
+            _, current = _d24_adoption(project)
+            if current != result['adopted_netlist']:
+                raise MetricRefusal('D24_INPUT_CHANGED_DURING_READ', 'adoption changed')
+        result['reason'] = 'D24_CURRENT_LOGICAL_SCAN_AND_ADOPTION_' + result['status']
+    except (flow109.Flow109Error, admission.AdmissionRefusal, contract.Refusal, MetricRefusal,
+            OSError, ValueError, KeyError, TypeError, AttributeError, ImportError) as exc:
+        # Fail closed while retaining independently observed failures.
+        failed = any(x['status'] == 'FAIL' for x in result['obligations'])
+        result.update(status='FAIL' if failed else 'NOT_MEASURED', metric_status='FAIL' if failed else 'NOT_MEASURED',
+            qualification='NOT_MEASURED', delivery_blocked=True,
+            reason=getattr(exc, 'code', 'D24_EVIDENCE_NOT_MEASURED'), detail=str(exc))
+    return result
+
 def _d30_file(project: Path, record: Any, label: str) -> Path:
     if (not isinstance(record, Mapping) or set(record) != {"path", "sha256"}
             or not isinstance(record.get("path"), str)

@@ -6307,16 +6307,16 @@
           "id": "default",
           "select_when": "otherwise",
           "provider": "other",
-          "tools": "Yosys opt_clean -purge on the mapped scan netlist",
-          "native_steps": [],
+          "tools": "LibreLane Yosys.Resynthesis + bound logical scan-cell census",
+          "native_steps": ["Yosys.Resynthesis", "D24.ScanCellPreservation"],
           "execution_status": "NATIVE_OWNER_WIRED_NOT_CASE_QUALIFIED",
           "dispatch": {
             "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
             "native_step_id": "12", "owner_entry_step": "12", "owner_exit_step": "12",
-            "producer": "design_one_shot_runner.py:_step_post_dft_optimization",
-            "consumer": "design_one_shot_runner retained Step 12 canonical acceptance",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "producer": "design_one_shot_runner.py:_d24_resynthesis",
+            "consumer": "flow109_metric_acceptance.py:accept_d24 via selected public owner",
+            "engine_families": ["python3", "yosys", "yosys-abc"], "engine_executables": {"python3": "python3", "yosys": "yosys", "yosys-abc": "yosys-abc"}, "engine_steps": {"python3": ["Yosys.Resynthesis"], "yosys": ["Yosys.Resynthesis", "D24.ScanCellPreservation"], "yosys-abc": ["Yosys.Resynthesis.ABCMapping"]}, "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "SOURCE_BOUND_NOT_PLATFORM_QUALIFIED"
           }
         }
       ],
@@ -6345,7 +6345,7 @@
             "checker.base_15.scan_preservation_errors",
             "producer.base_15.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "SOURCE_BOUND_NOT_PLATFORM_QUALIFIED"
         },
         {
           "id": "base_15.adopted_post_dft_netlist",
@@ -6364,10 +6364,10 @@
             "checker.base_15.adopted_post_dft_netlist",
             "producer.base_15.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "SOURCE_BOUND_NOT_PLATFORM_QUALIFIED"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "SOURCE_BOUND_NOT_PLATFORM_QUALIFIED",
       "gate_layer_ids": [
         "G1",
         "G2",

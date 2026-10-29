@@ -1718,25 +1718,24 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
               "completed": status == "PASS" and completion.get("completed") is True,
               "flow109_acceptance": status,
               "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False}
-    if row["id"] == "D24" and status == "PASS":
-        netlist = project / _D24_NETLIST
-        if (netlist.is_symlink() or not netlist.is_file()
-                or not netlist.resolve().is_relative_to(Path(project).resolve())):
-            raise Flow109Error("FLOW109_D24_ADOPTED_NETLIST_UNBOUND", str(_D24_NETLIST))
-        answer["adopted_netlist"] = {
-            "artifact_id": "D24_POST_SCAN_NETLIST",
-            "path": _D24_NETLIST.as_posix(), "sha256": _file_digest(netlist)}
-        if context.get('features', {}).get('physical') is True:
-            intent = dft_source_intent(project, context)
-            check = d24_scan_content(project, context, intent, answer['adopted_netlist'])
-            answer['scan_cell_list'] = check['scan_cell_list']
-            answer['scan_cell_reconciliation'] = check
-        else:
-            report, report_ref = _bound_project_json(
-                project, _SCAN_REPORT, "FLOW109_D24_SCAN_REPORT_MISSING")
-            if report.get("published") is not True:
-                raise Flow109Error("FLOW109_D24_ADOPTED_NETLIST_UNBOUND", str(_D24_NETLIST))
-            answer["native_scan_report"] = report_ref
+    if row["id"] == "D24":
+        import flow109_metric_acceptance as metrics
+        acceptance = metrics.accept_d24(project, context, completion)
+        row_status = ('FAIL' if status == 'FAIL' or acceptance['status'] == 'FAIL' else
+                      'PASS' if status == 'PASS' and completion.get('completed') is True
+                      and acceptance['status'] == acceptance['qualification'] == 'PASS' else 'NOT_MEASURED')
+        answer.update(metric_acceptance=acceptance, metric_acceptance_status=acceptance['status'],
+            qualification=acceptance['qualification'], default_row_status=row_status,
+            flow109_acceptance=row_status, completed=row_status == 'PASS',
+            normalized_chain_reason=acceptance.get('reason'))
+        if row_status == 'PASS':
+            adopted = acceptance['adopted_netlist']
+            current = _current_project_ref(project, {k: adopted[k] for k in ('path', 'sha256')},
+                                           'FLOW109_D24_ADOPTED_NETLIST_UNBOUND')
+            answer['adopted_netlist'] = dict(adopted)
+            source = acceptance['native_observation']['upstream']
+            answer['scan_cell_list'] = source['scan_cell_list']
+            answer['scan_cell_reconciliation'] = acceptance['native_observation']['scan']
     if row["id"] == "D14":
         import flow109_metric_acceptance as metrics
         acceptance = metrics.accept_d14(project, context)

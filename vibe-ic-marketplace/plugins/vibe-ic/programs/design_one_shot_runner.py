@@ -24078,6 +24078,84 @@ def _step_dft_insertion(project: Path, top_name: str, container: str,
     return _dft_owned_result(results, pdk)
 
 
+def _d24_resynthesis(project: Path, context: Mapping[str, Any]) -> dict:
+    """Run the installed normal SDK step, preserving component-only evidence."""
+    import flow109
+    import librelane_contract as contract
+    from librelane.config import Config
+    from librelane.state import State, DesignFormat
+    from librelane.common import Path as LLPath
+    from librelane.steps import Step
+    import inspect
+    import importlib.metadata
+    project = Path(project).resolve()
+    intent = flow109.dft_source_intent(project, context)
+    upstream = flow109.d23_scan_replacement_binding(project, context, intent)
+    authority = contract.local_image_attestation()
+    config_input = project / 'input/flow109/D24/resynthesis.json'
+    if not config_input.is_file():
+        raise ValueError('D24_RESYNTHESIS_CONFIG_MISSING: input/flow109/D24/resynthesis.json')
+    raw = config_input.read_bytes()
+    data = json.loads(raw)
+    if data.get('DESIGN_NAME') != upstream['top'] or not data.get('PDK'):
+        raise ValueError('D24_RESYNTHESIS_CONFIG_UNBOUND: DESIGN_NAME/PDK')
+    attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+    folder = attempt / 'resynthesis'
+    receipt = attempt / 'd24_component.json'
+    if folder.exists() or receipt.exists() or (attempt / 'result.json').exists():
+        raise ValueError('D24_NATIVE_OUTPUT_ALREADY_EXISTS')
+    step_type = Step.factory.get('Yosys.Resynthesis')
+    if step_type is None:
+        raise ValueError('D24_NATIVE_STEP_UNAVAILABLE: Yosys.Resynthesis')
+    cfg, _ = Config.load(data, step_type.get_all_config_variables(), design_dir=str(project),
+                         pdk=data['PDK'], pdk_root=os.environ.get('PDK_ROOT'))
+    if cfg.get('SYNTH_ELABORATE_ONLY') is not False:
+        raise ValueError('D24_NATIVE_ENGINE_UNSUPPORTED: resynthesis mapping required')
+    original_doc = json.loads((project / upstream['scan_cell_list']['path']).read_bytes())
+    libraries = cfg.get('CELL_LIBS')
+    libs = [p for values in libraries.values() for p in values] if isinstance(libraries, Mapping) else []
+    if not libs or any(original_doc['pdk_sha256'].get(str(Path(p).resolve())) != hashlib.sha256(Path(p).read_bytes()).hexdigest() for p in libs):
+        raise ValueError('D24_ADOPTED_LIBRARY_MISMATCH: same original D23 Liberty required')
+    consumed_config_files = contract.config_file_hashes(dict(cfg), [])
+    state_in = State({DesignFormat.NETLIST: LLPath(str((project / upstream['replaced']['path']).resolve()))})
+    module = Path(inspect.getfile(step_type)).resolve()
+    module_identity = {'path': str(module), 'sha256': hashlib.sha256(module.read_bytes()).hexdigest(),
+                       'version': importlib.metadata.version('librelane'), 'step': step_type.id}
+    tool = shutil.which('yosys')
+    selected_tool = shutil.which(step_type.get_yosys_path())
+    if not tool or not selected_tool or Path(tool).resolve() != Path(selected_tool).resolve():
+        raise ValueError('D24_NATIVE_ENGINE_UNSUPPORTED: current source-owned Yosys only')
+    tool_sha = hashlib.sha256(Path(tool).read_bytes()).hexdigest()
+    step = step_type(config=cfg, state_in=state_in)
+    state = step.start(step_dir=str(folder))
+    if (config_input.read_bytes() != raw
+            or contract.config_file_hashes(dict(cfg), []) != consumed_config_files
+            or contract.local_image_attestation() != authority
+            or flow109.d23_scan_replacement_binding(project, context, intent) != upstream
+            or hashlib.sha256(module.read_bytes()).hexdigest() != module_identity['sha256']
+            or hashlib.sha256(Path(tool).read_bytes()).hexdigest() != tool_sha):
+        raise ValueError('D24_INPUT_CHANGED_DURING_RESYNTHESIS')
+    tool = shutil.which('yosys')
+    if not tool:
+        raise ValueError('D24_PARSER_UNAVAILABLE: yosys')
+    def ref(path):
+        path = Path(path).resolve()
+        return {'path': str(path.relative_to(project)), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    document = {'schema': 'vibeic.flow109.d24-component.v1', 'producer': 'D24',
+        'operation': 'Yosys.Resynthesis', 'source': upstream['replaced'],
+        'consumed_config_files': consumed_config_files,
+        'scan_cell_list': upstream['scan_cell_list'], 'config_input': ref(config_input),
+        'config': ref(folder / 'config.json'), 'state_in': ref(folder / 'state_in.json'),
+        'state': ref(folder / 'state_out.json'), 'netlist': ref(state[DesignFormat.NETLIST]),
+        'log': ref(step.get_log_path()), 'returncode': 0, 'launch': authority,
+        'native_module': module_identity, 'yosys_sha256': tool_sha,
+        'producer_source_sha256': hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}
+    with receipt.open('x', encoding='utf-8') as stream:
+        json.dump(document, stream, indent=2, sort_keys=True)
+        stream.write('\n')
+    return ref(receipt)
+
+
 @_spf.retained_step('12', canonical_acceptance=True)
 def _step_post_dft_optimization(project: Path, container: str):
     results = []
