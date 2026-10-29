@@ -581,15 +581,20 @@ def main(argv: Optional[List[str]] = None) -> int:
         "--refresh-contract", action="store_true",
         help=("refresh plugin_output/declaration.json only when the retained "
               "RTL is byte-identical to this producer's current output"))
+    ap.add_argument("--output-project", type=Path,
+                    help="private output workspace; authority stays with the source project")
     a = ap.parse_args(argv)
-    proj = Path(a.project).resolve()
-    spec, reason = extract_serial_parallel_mul_spec(proj, a.ic_class)
+    source_project = Path(a.project).resolve()
+    proj = a.output_project.resolve() if a.output_project else source_project
+    spec, reason = extract_serial_parallel_mul_spec(source_project, a.ic_class)
     if spec is None:
         print(json.dumps({"verdict": "DEFER", "reason": reason}))
         return 2
     rtl = emit_rtl(spec)
     out = {"verdict": "EMIT", "reason": reason, "top": spec["top"],
            "spec": spec}
+    if proj != source_project:
+        out.update(source_project=str(source_project), output_project=str(proj))
     if a.emit or a.refresh_contract:
         rtl_dir = proj / "phase2" / "stage1" / "rtl"
         rtl_path = rtl_dir / f"{spec['top']}.v"
@@ -604,13 +609,64 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(json.dumps({"verdict": "DEFER", "reason":
                                   "retained RTL differs from current deterministic output"}))
                 return 2
+            if proj != source_project:
+                source_rtl = source_project / "phase2/stage1/rtl" / rtl_path.name
+                if not source_rtl.is_file() or source_rtl.read_bytes() != retained:
+                    print(json.dumps({"verdict": "DEFER", "reason":
+                                      "retained source RTL differs from the output workspace"}))
+                    return 2
         decl_path = proj / "plugin_output" / "declaration.json"
+        source_decl = source_project / "plugin_output" / "declaration.json"
+        if proj != source_project:
+            from _path_layout import report_path
+            source_report = report_path(source_project, "phase1_one_shot.json")
+            output_report = report_path(proj, "phase1_one_shot.json")
+            if output_report.exists() and (not source_report.is_file()
+                    or output_report.read_bytes() != source_report.read_bytes()):
+                print(json.dumps({"verdict": "DEFER", "reason":
+                                  "output workspace has a different D01 owner"}))
+                return 2
+            if output_report.exists():
+                for rel in ("plugin_output/declaration.provenance.json",
+                            "reports/audit/ai_judgements/D1.json"):
+                    original, copied = source_project / rel, proj / rel
+                    if original.is_file() and (not copied.is_file()
+                            or original.read_bytes() != copied.read_bytes()):
+                        print(json.dumps({"verdict": "DEFER", "reason":
+                                          "output authority evidence differs from the source"}))
+                        return 2
+            if (proj / "phase1/generated_docs").is_dir():
+                import ai_signed_judgement as judgement
+                source_inputs = {p.relative_to(source_project): p.read_bytes()
+                                 for p in judgement.evidence(source_project, "D1")}
+                output_inputs = {p.relative_to(proj): p.read_bytes()
+                                 for p in judgement.evidence(proj, "D1")}
+                for rel in spec.get("dft_intent_binding", {}).get("sources", {}):
+                    source_inputs[Path(rel)] = (source_project / rel).read_bytes()
+                    target = proj / rel
+                    if target.is_file():
+                        output_inputs[Path(rel)] = target.read_bytes()
+                if source_inputs != output_inputs:
+                    print(json.dumps({"verdict": "DEFER", "reason":
+                                      "output workspace inputs differ from the source"}))
+                    return 2
+            if output_report.exists():
+                import _delivery_route as route
+                if route.report_label(source_project) != route.report_label(proj):
+                    print(json.dumps({"verdict": "DEFER", "reason":
+                                      "output workspace route differs from the source"}))
+                    return 2
+            if decl_path.exists() and (not source_decl.is_file()
+                    or decl_path.read_bytes() != source_decl.read_bytes()):
+                print(json.dumps({"verdict": "DEFER", "reason":
+                                  "output declaration differs from the source author"}))
+                return 2
         declaration = plugin_declaration(spec)
         prior_declaration = None
-        populations = _declared_scenario_populations(proj, spec)
-        if decl_path.exists():
+        populations = _declared_scenario_populations(source_project, spec)
+        if source_decl.exists():
             try:
-                prior = json.loads(decl_path.read_text())
+                prior = json.loads(source_decl.read_text())
             except (OSError, ValueError) as exc:
                 print(json.dumps({"verdict": "DEFER", "reason":
                                   f"existing declaration is unreadable: {exc}"}))
@@ -666,10 +722,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         # a state the spec never describes (RTL present, declaration absent).
         decl_dir = proj / "plugin_output"
         decl_dir.mkdir(parents=True, exist_ok=True)
-        if prior_declaration == declaration:
+        if prior_declaration == declaration and decl_path.exists():
             # A byte-bound upstream declaration needs no new publication
             # when this producer has no semantic field change to contribute.
             out["declaration_retained"] = str(decl_path)
+        elif prior_declaration == declaration:
+            decl_path.write_bytes(source_decl.read_bytes())
+            out["declaration_written"] = str(decl_path)
         else:
             decl_path.write_text(
                 json.dumps(declaration, indent=2, sort_keys=True) + "\n")

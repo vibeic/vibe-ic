@@ -2936,9 +2936,25 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
         return None  # D6 — consume stages the design's own RTL instead
     try:
         _phase1_project_checkpoint(project)
+        stage_binding = _PHASE1_ACTIVE_PROJECT_BINDING
+        source_binding = (getattr(stage_binding, "rtl_source_binding", None)
+                          if stage_binding is not None else None)
+        source_project = project
+        if source_binding is not None:
+            if (stage_binding.project != project or not stage_binding.isolated_rtl_stage
+                    or not source_binding.project.is_absolute()):
+                raise _Phase1RtlOutputRefused(
+                    "RTL_SOURCE_OUTPUT_UNBOUND", project,
+                    "distinct source requires the held private RTL workspace")
+            source_binding.require_current()
+            source_project = source_binding.project
         action = "--refresh-contract" if retained_rtl else "--emit"
-        r = _pr.run([sys.executable, str(solver), str(project), action],
-                           capture_output=True, text=True)
+        command = [sys.executable, str(solver), str(source_project), action]
+        if source_project != project:
+            command += ["--output-project", str(project)]
+        r = _pr.run(command, capture_output=True, text=True)
+        if source_binding is not None:
+            source_binding.require_current()
         _phase1_project_checkpoint(project)
     except Exception as e:
         return StepResult("rtl_gen", "FAIL", time.time() - t0,
@@ -2967,6 +2983,7 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
         extras={"deterministic_generator": "serial_parallel_mul_synth",
                 "program_first": True, "topology": "serial_parallel",
                 "contract_refreshed_from_retained_rtl": retained_rtl,
+                "source_project": str(source_project),
                 "spec": out.get("spec"),
                 "declaration_before_simulation": declaration,
                 "rtl_provenance": _rtl_prov.GENERATED})
@@ -3570,6 +3587,7 @@ class _Phase1ProjectBinding:
     name: str
     project_fd: int
     isolated_rtl_stage: bool = False
+    rtl_source_binding: Optional["_Phase1ProjectBinding"] = None
 
     @classmethod
     def open(cls, project: Path) -> "_Phase1ProjectBinding":
@@ -8210,6 +8228,7 @@ def step_rtl_gen(project: Path, ic_class: str,
             baseline = _phase1_snapshot_to_stage(binding, stage_project)
             stage_binding = _Phase1ProjectBinding.open(stage_project)
             stage_binding.isolated_rtl_stage = True
+            stage_binding.rtl_source_binding = binding
             _PHASE1_ACTIVE_PROJECT_BINDING = stage_binding
             # A staged claim may hold its own duplicate, but it must never
             # replace/close the prior live-project handle until commit wins.
