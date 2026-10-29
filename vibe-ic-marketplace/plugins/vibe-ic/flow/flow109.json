@@ -4131,16 +4131,60 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "Icarus Verilog/vvp + cocotb functional scenarios; Verilator --coverage + verilator_coverage code coverage",
-          "native_steps": [],
+          "native_steps": [
+            "Verilator.BinaryScenario",
+            "Verilator.CoverageSimulation",
+            "Icarus.CocotbCompile",
+            "Icarus.CocotbRuntime",
+            "Cocotb.ArithmeticRandom",
+            "D13.RetainedReaders",
+            "VerilatorCoverage.LcovUnion"
+          ],
           "capability_status": "SUPPORTED_SUBSET_NOT_QUALIFIED",
-          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "execution_status": "NATIVE_OWNER_WIRED_NOT_CASE_QUALIFIED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "4", "owner_entry_step": "4", "owner_exit_step": "4",
-            "producer": "design_one_shot_runner.py:sim",
-            "consumer": "design_one_shot_runner simulation and coverage acceptance",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "4",
+            "owner_entry_step": "4",
+            "owner_exit_step": "4",
+            "producer": "design_one_shot_runner.py:step_d13_simulation",
+            "consumer": "flow109_metric_acceptance.accept_d13",
+            "engine_families": [
+              "verilator",
+              "iverilog",
+              "vvp",
+              "python3",
+              "verilator_coverage"
+            ],
+            "acceptance_scope": "D13_current_required_scenarios_assertions_and_source_scoped_coverage",
+            "flow109_metrics_status": "IMPLEMENTED",
+            "engine_steps": {
+              "verilator": [
+                "Verilator.BinaryScenario",
+                "Verilator.CoverageSimulation"
+              ],
+              "iverilog": [
+                "Icarus.CocotbCompile"
+              ],
+              "vvp": [
+                "Icarus.CocotbRuntime"
+              ],
+              "python3": [
+                "Cocotb.ArithmeticRandom",
+                "D13.RetainedReaders"
+              ],
+              "verilator_coverage": [
+                "VerilatorCoverage.LcovUnion"
+              ]
+            },
+            "engine_executables": {
+              "verilator": "verilator",
+              "iverilog": "iverilog",
+              "vvp": "vvp",
+              "python3": "python3",
+              "verilator_coverage": "verilator_coverage"
+            }
           }
         }
       ],
@@ -4176,7 +4220,7 @@
             "checker.base_07.required_function_scenarios",
             "producer.base_07.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_07.assertion_failures",
@@ -4196,7 +4240,7 @@
             "checker.base_07.assertion_failures",
             "producer.base_07.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_07.coverage_targets",
@@ -4206,7 +4250,9 @@
             "operator": "within_declared_bounds",
             "bounds_ref": "requirements/base_07/coverage_targets.json#/limits",
             "unit_ref": "requirements/base_07/coverage_targets.json#/units",
-            "missing_bounds": "BLOCKED"
+            "missing_bounds": "BLOCKED",
+            "applicability_ref": "requirements/base_07/coverage_targets.json#/acceptance_applicable",
+            "measurement_required": true
           },
           "binding_keys": [
             "rtl.logic",
@@ -4216,10 +4262,10 @@
             "checker.base_07.coverage_targets",
             "producer.base_07.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_METRIC_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED",
       "gate_layer_ids": [
         "G1",
         "G2",
