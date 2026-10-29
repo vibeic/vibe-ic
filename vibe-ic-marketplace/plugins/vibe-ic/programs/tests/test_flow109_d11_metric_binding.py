@@ -67,6 +67,7 @@ def case(tmp_path):
     d09path = p / 'reports/flow109/default_rows/D09.json'
     put(d09path, d09)
     cfg = {'meta': {'step': 'Verilator.Lint'}, 'DESIGN_NAME': 'neutral',
+        'MACROS': None, 'VERILOG_INCLUDE_DIRS': [], 'VERILOG_DEFINES': None,
         'VERILOG_FILES': [str(rtl / 'leaf.v'), str(rtl / 'neutral.v')], 'LINTER_ERROR_ON_LATCH': True,
         'LINTER_DISABLE_WARNINGS': ['DECLFILENAME', 'EOFNEWLINE'],
         'LINTER_DISABLE_WARNINGS_BLACKBOX': ['UNDRIVEN', 'UNUSEDSIGNAL'],

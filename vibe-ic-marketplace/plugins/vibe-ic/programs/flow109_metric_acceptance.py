@@ -2352,7 +2352,10 @@ def accept_d11(project: Path, context: Mapping[str, Any], *, current_execution: 
                     'consumer_sha256': _sha(Path(__file__).read_bytes())},
                     'tool_execution': {'original_launch': body['reference']['launch'], 'qualification': qualified},
                     'consumed_inputs': subject, 'requirements': obligations[0]['expectation'],
-                    'configuration': {'native_policy': native['policy'], 'settings': native['config']}}
+                    'configuration': {'resolved_config': _d11_file(project,
+                        project / body['reference']['lint_dir'] / 'config.json'),
+                        'consumed_settings_sha256': _sha(_json_key(d11_consumed_settings(native['config'])).encode()),
+                        'native_policy_sha256': _sha(_json_key(native['policy']).encode())}}
         first = result['obligations'][0]
         status, detail = evaluate_operator('eq', {'status': 'MEASURED', 'value': native['violations'],
             'unit': 'count', 'identity': identity}, {'status': 'APPROVED', 'value': 0, 'unit': 'count'})
