@@ -9253,16 +9253,47 @@
           "id": "default",
           "select_when": "otherwise",
           "provider": "openroad",
-          "tools": "OpenROAD execute_dft_plan + Fault scan-map checks",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "tools": "OpenROAD report_dft_plan/execute_dft_plan + native connectivity checks + Icarus scan flush",
+          "native_steps": [
+            "OpenROAD.execute_dft_plan",
+            "Icarus.scan_flush"
+          ],
+          "execution_status": "IMPLEMENTED_REQUIRES_CURRENT_QUALIFIED_INPUTS",
+          "dispatch": {
+            "kind": "python_adapter",
+            "adapter": "flow109_scan_physical",
+            "native_step_id": "flow109.D36",
+            "producer": "phase3_one_shot_runner.py:step_scan_physical",
+            "consumer": "flow109_metric_acceptance.py:accept_d36",
+            "admission_policy": "source_owned_existing_native",
+            "operation_scope": "physical_scan_stitch",
+            "acceptance_scope": "existing_native_component_only",
+            "engine_families": [
+              "openroad",
+              "iverilog"
+            ],
+            "engine_steps": {
+              "openroad": [
+                "OpenROAD.report_dft_plan",
+                "OpenROAD.execute_dft_plan"
+              ],
+              "iverilog": [
+                "Icarus.scan_flush"
+              ]
+            },
+            "engine_executables": {
+              "openroad": "openroad",
+              "iverilog": "iverilog"
+            }
+          }
         }
       ],
       "complementary_tools": [],
       "capability_status": "SELECTED_NOT_ROUTE_QUALIFIED",
       "availability_status": "NOT_INVENTORIED_THIS_UPDATE",
       "source_components": [
-        "fault_scan_chain_insert"
+        "phase3_one_shot_runner",
+        "flow109_scan_physical"
       ],
       "obligations": [
         {
@@ -9282,7 +9313,7 @@
             "checker.scan_physical.chain_map_identity",
             "producer.scan_physical.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_REQUIRES_CURRENT_QUALIFIED_INPUTS"
         },
         {
           "id": "scan_physical.scan_flush_errors",
@@ -9303,10 +9334,10 @@
             "checker.scan_physical.scan_flush_errors",
             "producer.scan_physical.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_REQUIRES_CURRENT_QUALIFIED_INPUTS"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_REQUIRES_CURRENT_QUALIFIED_INPUTS",
       "gate_layer_ids": [
         "G1",
         "G2",

@@ -80484,6 +80484,12 @@ def _reuse_current_default_step17(project, pdk, manifest, row_def, attempt,
     receipt["retained_source_census_sha256"] = request["source_census_sha256"]
     return receipt
 
+def step_scan_physical(project: Path, context: dict) -> dict:
+    """D36's existing physical-owner seam; no enclosing PnR or scan replacement."""
+    import flow109_scan_physical
+    return flow109_scan_physical.owner(Path(project).resolve(), context)
+
+
 def _default_pnr_rows(project: Path, top: str, pdk: PdkConfig, container: str,
                       step_ids: List[str], *, die_um: Optional[str] = None,
                       util: Optional[float] = None,
