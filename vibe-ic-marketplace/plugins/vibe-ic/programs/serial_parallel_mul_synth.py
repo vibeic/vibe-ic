@@ -621,6 +621,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             from _path_layout import report_path
             source_report = report_path(source_project, "phase1_one_shot.json")
             output_report = report_path(proj, "phase1_one_shot.json")
+            if source_report.is_file():
+                import ai_signed_judgement as judgement
+                current, why = judgement.check(source_project, "D1")
+                if not current:
+                    print(json.dumps({"verdict": "DEFER", "reason":
+                                      "source D01 signed judgement is not current: " + why}))
+                    return 2
+                out["source_D01_admission"] = {
+                    "current": True, "detail": why,
+                    "evidence_sha256": judgement.evidence_sha256(source_project, "D1")}
             if output_report.exists() and (not source_report.is_file()
                     or output_report.read_bytes() != source_report.read_bytes()):
                 print(json.dumps({"verdict": "DEFER", "reason":

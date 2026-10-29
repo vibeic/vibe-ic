@@ -83,6 +83,7 @@ def test_actual_source_and_private_stage_dispatch_succeeds_without_authority_tra
             stage, "digital_arithmetic_primitive", time.time())
     assert result is not None and result.status == "PASS", result
     assert result.extras["source_project"] == str(source)
+    assert result.extras["source_D01_admission"]["current"] is True
     for rel in ("phase2/stage1/rtl/spm.v", "plugin_output/declaration.json"):
         assert (stage / rel).read_bytes() == (source / rel).read_bytes()
     assert _files(source) == before
@@ -111,6 +112,7 @@ def test_compiler_output_carries_no_new_canonical_d01(source, tmp_path):
     assert result.returncode == 0, result.stdout + result.stderr
     record = json.loads(result.stdout.strip().splitlines()[-1])
     assert record["source_project"] == str(source)
+    assert record["source_D01_admission"]["current"] is True
     assert (output / "phase2/stage1/rtl/spm.v").read_bytes() == (
         source / "phase2/stage1/rtl/spm.v").read_bytes()
     assert (output / "plugin_output/declaration.json").read_bytes() == (
@@ -118,6 +120,41 @@ def test_compiler_output_carries_no_new_canonical_d01(source, tmp_path):
     assert not (output / "reports/orchestrator/phase1_one_shot.json").exists()
     refused, why = scan.load_d09_dft_contract(output)
     assert refused is None and why
+    assert _files(source) == before
+
+
+@pytest.mark.parametrize("mutation", ("missing", "tampered_receipt", "stale_actual_subject", "nonpass"))
+def test_distinct_output_requires_current_source_d01_before_publication(source, tmp_path, mutation):
+    import ai_signed_judgement as judgement
+    import fault_scan_chain_insert as scan
+
+    receipt = source / "reports/audit/ai_judgements/D1.json"
+    assert judgement.check(source, "D1")[0]
+    if mutation == "missing":
+        receipt.unlink()
+    elif mutation == "stale_actual_subject":
+        path = source / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+        path.write_bytes(path.read_bytes() + b"\n")
+    else:
+        data = json.loads(receipt.read_text())
+        data["evidence_sha256" if mutation == "tampered_receipt" else "verdict"] = (
+            "0" * 64 if mutation == "tampered_receipt" else "FAIL")
+        receipt.write_text(json.dumps(data))
+    # Retained declaration publication/owner is still admissible: the new
+    # signed-current source check must supply this refusal, not an earlier gate.
+    binding, problems = scan.load_d09_dft_contract(source)
+    assert binding is not None and not problems, problems
+    assert judgement.check(source, "D1")[0] is False
+    before = _files(source)
+    output = tmp_path / "unpublished"
+    result = subprocess.run([sys.executable, str(PROGRAMS / "serial_parallel_mul_synth.py"),
+                             str(source), "--output-project", str(output), "--emit"],
+                            capture_output=True, text=True)
+    (tmp_path / "refusal.stdout").write_text(result.stdout)
+    (tmp_path / "refusal.stderr").write_text(result.stderr)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "source D01 signed judgement is not current" in result.stdout
+    assert not output.exists()
     assert _files(source) == before
 
 

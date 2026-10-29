@@ -2984,6 +2984,7 @@ def _try_serial_parallel_mul_rtl(project: Path, ic_class: str,
                 "program_first": True, "topology": "serial_parallel",
                 "contract_refreshed_from_retained_rtl": retained_rtl,
                 "source_project": str(source_project),
+                "source_D01_admission": out.get("source_D01_admission"),
                 "spec": out.get("spec"),
                 "declaration_before_simulation": declaration,
                 "rtl_provenance": _rtl_prov.GENERATED})
