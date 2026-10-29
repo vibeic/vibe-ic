@@ -4335,6 +4335,7 @@
             "engine_families": ["sby", "yosys", "yosys-abc", "yosys-smtbmc", "yices-smt2", "python3"],
             "engine_executables": {"sby": "sby", "yosys": "yosys", "yosys-abc": "yosys-abc", "yosys-smtbmc": "yosys-smtbmc", "yices-smt2": "yices-smt2", "python3": "python3"},
             "engine_steps": {"sby": ["SymbiYosys.Prove", "SymbiYosys.Bmc", "SymbiYosys.Cover"], "yosys": ["Yosys.FormalRead", "Yosys.Prep"], "yosys-abc": ["ABC.PDR", "ABC.BMC3"], "yosys-smtbmc": ["SMTBMC.Cover"], "yices-smt2": ["Yices.SMT2Cover"], "python3": ["formal_harness_gen.generate", "formal_property_run.run", "formal_property_run.run_reachability", "D14.RetainedReaders"]}, "acceptance_scope": "existing_native_component_only",
+            "qualification_modes": {"smt_yices": {"purpose": "D14.default.smt_yices", "engine_families": ["sby", "yosys", "yosys-smtbmc", "yices-smt2", "python3"], "engine_steps": {"sby": ["SymbiYosys.Prove", "SymbiYosys.Cover"], "yosys": ["Yosys.FormalRead", "Yosys.Prep"], "yosys-smtbmc": ["SMTBMC.Prove", "SMTBMC.Cover"], "yices-smt2": ["Yices.SMT2Prove", "Yices.SMT2Cover"], "python3": ["formal_harness_gen.generate", "formal_property_run.run", "formal_property_run.run_reachability", "D14.RetainedReaders"]}}},
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
         }
