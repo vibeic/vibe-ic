@@ -27873,10 +27873,21 @@ def main() -> int:
         and _lint_scope.is_rtl_only_evidence(exit_step=args.exit_step))
     if (str(args.entry_step) == "2" and str(args.exit_step) == "2"
             and _lint_contract.selected_mode(project, "2") == "librelane"):
+        import flow109
+        raw_context = os.environ.get("VIBEIC_FLOW109_CONTEXT")
+        d11_selected = bool(raw_context and json.loads(Path(raw_context).read_bytes())
+                            .get('resolved_row', {}).get('id') == 'D11')
+        out = _pl.report_path(project, "phase2_one_shot.json")
+        if d11_selected:
+            context = flow109.validate_execution_context(json.loads(Path(raw_context).read_bytes()))
+            attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+            if (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink():
+                print('REFUSED: D11_ATTEMPT_ALREADY_COMPLETED', file=sys.stderr)
+                return 2
+            out = attempt / 'phase2_one_shot.json'
         row = step_rtl_lint_tool(
             project, pdk_name=args.pdk, bounded_rtl=_bounded_rtl_lint,
             top_name=args.top_name, container=args.container)
-        raw_context = os.environ.get("VIBEIC_FLOW109_CONTEXT")
         if raw_context:
             row.extras["context_sha256"] = json.loads(Path(raw_context).read_text())["context_sha256"]
         summary = {"project": str(project),
@@ -27884,14 +27895,10 @@ def main() -> int:
                    "declared_window": {"entry_step": "2", "exit_step": "2",
                                        "dispatched_step_ids": ["2"]},
                    "bounded_disclosures": ["native lint only; whole flow not measured"]}
-        out = _pl.report_path(project, "phase2_one_shot.json")
         _write_phase2_report(out, summary, project,
                             invocation_context=_dispatch_invocation_context)
-        import flow109
         # D11's front door reopens the actual fresh normal owner report before
         # the sole canonical writer publishes; this child owns no row credit.
-        d11_selected = bool(raw_context and json.loads(Path(raw_context).read_bytes())
-                            .get('resolved_row', {}).get('id') == 'D11')
         finished = None if d11_selected else flow109.finish_native_window(project, summary, out)
         status = (row.status if d11_selected else
                   finished.get("default_row_status", "NOT_MEASURED")

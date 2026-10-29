@@ -322,7 +322,7 @@ def normal_owner(c, monkeypatch):
     report = {'project': str(p), 'steps': [asdict(row)], 'verdict': row.status,
               'declared_window': {'entry_step': '2', 'exit_step': '2', 'dispatched_step_ids': ['2']}}
     report = dispatch._bind_runner_report(report, p, design.__file__, 'phase2_one_shot.json', context=invocation)
-    put(p / 'reports/orchestrator/phase2_one_shot.json', report)
+    put(attempt / 'phase2_one_shot.json', report)
     return report, invocation, attempt
 
 
@@ -343,7 +343,7 @@ def test_d11_canonical_publication_requires_actual_fresh_owner(case, monkeypatch
     elif kind == 'stale_invocation': invocation['invocation_id'] = 'different'
     else:
         report['verdict'] = 'FAIL'
-        put(case['project'] / 'reports/orchestrator/phase2_one_shot.json', report)
+        put(Path(os.environ[flow109.ATTEMPT_ENV]) / 'phase2_one_shot.json', report)
     result = runner._finish_d11_selected_owner(case['project'], report, invocation, published_current=True)
     assert result['verdict'] == 'NOT_MEASURED', result
     assert result['metric_acceptance']['status'] == 'PASS'
@@ -500,9 +500,9 @@ def software_fresh_owner(c, monkeypatch):
     report={'project':str(p),'steps':[asdict(row)],'verdict':row.status,
             'declared_window':{'entry_step':'2','exit_step':'2','dispatched_step_ids':['2']}}
     report=dispatch._bind_runner_report(report,p,str(producer),'phase2_one_shot.json',context=invocation)
-    put(p/'reports/orchestrator/phase2_one_shot.json',report)
     ctxpath=p/'context.json';put(ctxpath,ctx);monkeypatch.setenv(flow109.CONTEXT_ENV,str(ctxpath))
     attempt=flow109._new_attempt(p,ctx);monkeypatch.setenv(flow109.ATTEMPT_ENV,str(attempt))
+    put(attempt/'phase2_one_shot.json',report)
     return report,invocation
 
 
