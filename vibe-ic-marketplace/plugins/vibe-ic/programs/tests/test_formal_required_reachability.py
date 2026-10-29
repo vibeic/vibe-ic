@@ -68,12 +68,21 @@ def software_covers(project, *, statuses=None):
             vcd = work / f'formal_reachability_{task}/engine_0/trace0.vcd'
             put(vcd, '$comment SOFTWARE_ONLY_NOT_NATIVE $end\n$enddefinitions $end\n#0\n#1\n')
             witnesses[task][str(vcd.relative_to(project))] = sha(vcd)
+    targets = {}
+    for task in emitted['tasks']:
+        source = task['cover_source']
+        model = work / f"formal_reachability_{task['task']}/model/cover_identity.json"
+        put(model, {'creator': 'SOFTWARE_CONTROL_NOT_NATIVE', 'modules': {'formal_neutral': {'cells': {
+            '$generated$cover$17': {'type': '$check', 'parameters': {'FLAVOR': 'cover'},
+                'attributes': {'src': f"{source['file']}:{source['line']}.2-{source['line']}.40"}}
+        }}}})
+        targets[task['task']] = producer._cover_target_identity(project, work, task)
     measured = producer.build_results(original['top'], cfg,
         producer.parse_sby_log(transcript, sby_stem=sby.stem, seed=cfg),
         str(log.relative_to(project)), str(sby.relative_to(project)))
     measured.update(mode='reachability', project=str(project.resolve()), mapping=plan, tasks=emitted['tasks'], original_inputs=inputs,
         sby_sha256=sha(sby), evidence_sha256=sha(log),
-        proof_inputs=producer.proof_inputs(sby, work), witnesses=witnesses)
+        proof_inputs=producer.proof_inputs(sby, work), witnesses=witnesses, target_identities=targets)
     put(work / 'results.json', measured)
     return work, measured
 
@@ -397,3 +406,49 @@ def test_explicit_software_qualified_binding_positive_and_stale_negative(reach_c
     assert published['delivery_accepted'] is False
     # Synthetic reference wording is explicit and never installed on a real carrier.
     assert json.loads((project / qualified['qualification_registry']).read_text())['scope'] == 'SOFTWARE_ADMISSION_CONTROL_NOT_NATIVE_QUALIFICATION'
+
+
+
+@pytest.mark.parametrize('task', ['reach_0', 'reach_1'])
+def test_sby_actual_config_parser_preserves_each_task_script_and_global_files(reach_case, task):
+    """SBY --dumpcfg is parser-only: it never creates a solver task directory."""
+    import subprocess
+    project, ctx = reach_case
+    emitted = producer.run_reachability(project, emit_only=True)
+    path = Path(emitted['sby'])
+    result = subprocess.run(['sby', '--dumpcfg', str(path), task],
+        cwd=path.parent, capture_output=True, text=True)
+    assert result.returncode == 0, result.stdout + result.stderr
+    files = result.stdout.split('[files]', 1)[1].splitlines()
+    assert {'neutral.v', 'formal_neutral.sv'} <= {line.strip() for line in files}
+    assert 'read_verilog -sv -DSIMULATION neutral.v' in result.stdout
+    assert not list(path.parent.glob('formal_reachability_reach_*'))
+
+
+@pytest.mark.parametrize('change', ['assert_cell', 'wrong_source', 'duplicate_cover'])
+def test_cover_target_is_native_type_count_and_source_not_hand_authored_cell_name(reach_case, change):
+    project, ctx = reach_case
+    work, measured = software_covers(project)
+    path = work / 'formal_reachability_reach_0/model/cover_identity.json'
+    body = json.loads(path.read_text())
+    cells = body['modules']['formal_neutral']['cells']
+    cell = next(iter(cells.values()))
+    if change == 'assert_cell':cell['parameters']['FLAVOR'] = 'assert'
+    if change == 'wrong_source':cell['attributes']['src'] = 'formal_neutral.sv:1.2-1.40'
+    if change == 'duplicate_cover':cells['$second$cover'] = cell.copy()
+    put(path, body)
+    with pytest.raises(ValueError, match='native cover target'):
+        producer.check_reachability(project)
+
+
+def test_native_cover_error_is_not_reported_as_unreachable_or_stage_tampering(reach_case):
+    project, ctx = reach_case
+    work, measured = software_covers(project, statuses={'reach_0': 'ERROR'})
+    shutil.rmtree(work / 'formal_reachability_reach_0/src')
+    checked = producer.check_reachability(project)
+    assert checked['status'] == 'NOT_MEASURED'
+    assert checked['reason'] == 'D14_NATIVE_COVER_EXECUTION_ERROR'
+    assert checked['native_errors'] == ['reach_0']
+    answer = metrics.accept_d14(project, ctx)
+    assert answer['status'] == 'NOT_MEASURED'
+    assert rows(answer)['vacuous_required_proofs']['reason'] == 'D14_NATIVE_COVER_EXECUTION_ERROR'

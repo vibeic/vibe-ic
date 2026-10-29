@@ -3487,13 +3487,16 @@ def _reachability_deck(sby: Path, harness: Path, plan: dict) -> tuple:
     script = re.search(r'(?ms)^\[script\]\s*\n(.*?)(?=^\[|\Z)', text)[1]
     selected = []
     for line in script.splitlines():
+        if not line.strip():
+            continue  # bare task: starts an SBY conditional block, not a blank line
         scoped = _SCOPED_RE.match(line.strip())
         if scoped:
             if (scoped.group('neg') and scoped.group('task') == 'safety'
                     or not scoped.group('neg') and scoped.group('task') != 'safety'):
                 continue
             line = scoped.group('val')
-        selected.append(line)
+        if line.strip():
+            selected.append(line)
     body = harness.read_text()
     if len(re.findall(r'\bendmodule\b', body)) != 1:
         raise ValueError('reachability: single harness module required')
@@ -3502,8 +3505,12 @@ def _reachability_deck(sby: Path, harness: Path, plan: dict) -> tuple:
         task = f'reach_{index}'
         tasks.append({'task': task, 'property': name, **prop})
         injections.append(f'`ifdef VIBEIC_REACH_{index}\n'
-            f"always @(posedge {prop['clock']}) c_{task}: cover ({prop['antecedent']});\n`endif\n")
+            f"// VIBEIC_REACH_PROPERTY {name}\n"
+            f"always @(posedge {prop['clock']}) cover ({prop['antecedent']});\n`endif\n")
     body = body.replace('endmodule', '\n'.join(injections) + '\nendmodule')
+    for task in tasks:
+        marker = '// VIBEIC_REACH_PROPERTY ' + task['property'] + '\n'
+        task['cover_source'] = {'file': harness.name, 'line': body[:body.index(marker)].count('\n') + 2}
     scripts = []
     for index, task in enumerate(tasks):
         for line in selected:
@@ -3513,13 +3520,37 @@ def _reachability_deck(sby: Path, harness: Path, plan: dict) -> tuple:
         top = re.search(r'(?m)^\s*prep\s+-top\s+(\w+)\s*$', '\n'.join(selected))
         if top is None:
             raise ValueError('reachability: canonical prep top missing')
-        scripts.append(task['task'] + f": select -assert-count 1 {top[1]}/c:c_{task['task']}")
+        source = task['cover_source']
+        scripts.append(task['task'] + f": select -assert-count 1 t:$check t:$cover %u a:src={source['file']}:{source['line']}.* %i")
+        scripts.append(task['task'] + ': select *')
+        scripts.append(task['task'] + ': write_json ../model/cover_identity.json')
     files = re.search(r'(?ms)^\[files\]\s*\n(.*?)(?=^\[|\Z)', text)[1].strip()
     if any(Path(n.strip()).name != n.strip() for n in files.splitlines()):
         raise ValueError('reachability: basename staging required')
     deck = '[tasks]\n' + '\n'.join(t['task'] for t in tasks) + '\n\n[options]\nmode cover\ndepth 12\nmulticlock on\n\n[engines]\nsmtbmc yices\n\n[script]\n' + '\n'.join(scripts) + '\n\n[files]\n' + files + '\n'
     return deck, body, tasks
 
+
+
+def _cover_target_identity(project: Path, work: Path, task: dict) -> dict:
+    """Read the actual Yosys cover cell, including flavor and exact source line."""
+    model = work / f"formal_reachability_{task['task']}/model/cover_identity.json"
+    body = json.loads(model.read_text())
+    covers = []
+    for module in body['modules'].values():
+        for name, cell in module.get('cells', {}).items():
+            if cell['type'] == '$cover' or (cell['type'] == '$check'
+                    and cell.get('parameters', {}).get('FLAVOR') == 'cover'):
+                covers.append((name, cell))
+    if len(covers) != 1:
+        raise ValueError('reachability: native cover target population differs')
+    name, cell = covers[0]
+    source = cell.get('attributes', {}).get('src', '')
+    expected = task['cover_source']
+    if not re.fullmatch(re.escape(expected['file']) + ':' + str(expected['line']) + r'\.\d+-\d+\.\d+', source):
+        raise ValueError('reachability: native cover target source differs')
+    return {'path': str(model.relative_to(project)), 'sha256': _sha256_file(model),
+            'cell': name, 'type': cell['type'], 'source': source}
 
 def run_reachability(project: Path, *, container=None, timeout=60, mem_limit_kb=1048576,
                      emit_only=False) -> dict:
@@ -3547,8 +3578,12 @@ def run_reachability(project: Path, *, container=None, timeout=60, mem_limit_kb=
         str(log.relative_to(project)), str(selected.relative_to(project)))
     measured.update(mode='reachability', project=str(project.resolve()), mapping=plan, tasks=tasks, original_inputs=inputs,
                     sby_sha256=_sha256_file(selected), evidence_sha256=_sha256_file(log),
-                    proof_inputs=proof_inputs(selected, work), witnesses={})
+                    proof_inputs=proof_inputs(selected, work), witnesses={}, target_identities={})
     for task in tasks:
+        try:
+            measured['target_identities'][task['task']] = _cover_target_identity(project, work, task)
+        except (OSError, ValueError, KeyError, TypeError):
+            pass  # native ERROR has no compiled target; the checker reports it explicitly
         paths = sorted((work / f"{selected.stem}_{task['task']}" / 'engine_0').glob('trace*.vcd'))
         measured['witnesses'][task['task']] = {str(p.relative_to(project)): _sha256_file(p) for p in paths if p.stat().st_size}
     (work / 'results.json').write_text(json.dumps(measured, indent=2) + '\n')
@@ -3570,6 +3605,19 @@ def check_reachability(project: Path) -> dict:
             or record.get('sby_sha256') != _sha256_file(selected)
             or record.get('evidence_sha256') != _sha256_file(log)):
         raise ValueError('reachability: source/deck/assumption/mapping identity changed')
+    cfg = parse_sby_config(deck)
+    replay = build_results(results['top'], cfg,
+        parse_sby_log(log.read_text(), sby_stem=selected.stem, seed=cfg), str(log.relative_to(project)), str(selected.relative_to(project)))
+    if replay['properties'] != record.get('properties'):
+        raise ValueError('reachability: transcript task result differs')
+    if classify_resource_stop(log.read_text()):
+        raise ValueError('reachability: resource-limited cover execution')
+    native_errors = [p['task'] for p in replay['properties'] if p['status'] in ('ERROR', 'UNKNOWN')]
+    if native_errors:
+        return {'status': 'NOT_MEASURED', 'reason': 'D14_NATIVE_COVER_EXECUTION_ERROR',
+                'native_errors': native_errors, 'reached': [],
+                'pending': [t['property'] for t in tasks], 'mapping': plan,
+                'original_inputs': inputs, 'cover_result_sha256': _sha256_file(work / 'results.json')}
     expected = {n: _sha256_file(work / n) for n in results['proof_inputs']['files']}
     expected[harness.name] = hashlib.sha256(body.encode()).hexdigest()
     for name, digest in expected.items():
@@ -3580,19 +3628,15 @@ def check_reachability(project: Path) -> dict:
                 raise ValueError('reachability: actual task src changed ' + name)
     if record.get('proof_inputs', {}).get('files') != expected:
         raise ValueError('reachability: actual cover read differs')
-    cfg = parse_sby_config(deck)
-    replay = build_results(results['top'], cfg,
-        parse_sby_log(log.read_text(), sby_stem=selected.stem, seed=cfg), str(log.relative_to(project)), str(selected.relative_to(project)))
-    if replay['properties'] != record.get('properties'):
-        raise ValueError('reachability: transcript task result differs')
-    if classify_resource_stop(log.read_text()):
-        raise ValueError('reachability: resource-limited cover execution')
     by_task = {p['task']: p for p in replay['properties']}
     reached, pending = [], []
     witnesses = record.get('witnesses')
     if not isinstance(witnesses, dict) or set(witnesses) != {t['task'] for t in tasks}:
         raise ValueError('reachability: witness population differs')
     for task in tasks:
+        identity = _cover_target_identity(project, work, task)
+        if record.get('target_identities', {}).get(task['task']) != identity:
+            raise ValueError('reachability: native target identity changed')
         named = witnesses[task['task']]
         actual_dir = work / f"{selected.stem}_{task['task']}" / 'engine_0'
         if not isinstance(named, dict):

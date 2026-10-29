@@ -4644,7 +4644,7 @@ def d14_model_sources() -> dict:
     import formal_proof_evidence_check as checker
     modules = [
         (producer, ('run', 'run_reachability', 'reachability_plan', '_reachability_inputs',
-                    '_reachability_deck', 'check_reachability', '_authored_chip_read',
+                    '_reachability_deck', '_cover_target_identity', 'check_reachability', '_authored_chip_read',
                     'parse_sby_config', 'parse_sby_log', 'build_results', 'fold_prove_arms')),
         (generator, ('generate', 'declaration_obligations', '_timing_semantics', '_provenance_evidence')),
         (checker, ('audit', 'binding_dispositions', 'proof_source_staleness')),
@@ -4885,7 +4885,7 @@ def accept_d14(project: Path, context: Mapping[str, Any]) -> dict:
                     except FileNotFoundError as exc:
                         raise MetricRefusal('D14_PROPERTY_ANTECEDENT_REACHABILITY_MAPPING_ABSENT', str(exc)) from exc
                     if reach['status'] != 'PASS':
-                        raise MetricRefusal('D14_ANTECEDENT_NOT_PROVEN_REACHABLE', ', '.join(reach['pending']))
+                        raise MetricRefusal(reach.get('reason', 'D14_ANTECEDENT_NOT_PROVEN_REACHABLE'), ', '.join(reach['pending']))
                     if producer.check_reachability(project) != reach:
                         raise MetricRefusal('D14_REACHABILITY_CHANGED_DURING_READ', 'cover evidence changed')
                     measured.update(value=0, unit='count')
