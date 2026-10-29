@@ -71,6 +71,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 
 import argparse
+import hashlib
 import json
 import re
 import shutil
@@ -3370,6 +3371,246 @@ RECORD_ADJUDICATION = _ra.declare(
 )
 
 
+
+def reachability_plan(project: Path, results: dict) -> dict:
+    """Map the existing declaration denominator to source predicates or closures.
+
+    Only named, same-edge implication properties are supported here. Unsupported
+    SVA/immediate control flow is unresolved, never assigned a guessed guard.
+    Structural and NAME rows retain their existing program/binding discharger.
+    """
+    import _path_layout as layout
+    import formal_harness_gen as generator
+    import formal_proof_evidence_check as checker
+    formal = layout.formal_dir(project)
+    contract = json.loads((formal / 'property_contract.json').read_text())
+    rows = contract.get('covered_obligations', []) + contract.get('unresolved_obligations', [])
+    ids = [r['id'] for r in rows]
+    if (len(ids) != len(set(ids)) or len(ids) != results.get('property_denominator')
+            or len(ids) != contract.get('property_denominator') or not ids):
+        raise ValueError('reachability: declaration denominator/IDs are incomplete')
+    hfiles = checker._harness_files(project, formal, results)
+    text = checker.strip_comments('\n'.join(p.read_text() for p in hfiles))
+    if re.search(r'(?m)^\s*`(?:ifdef|ifndef|elsif|else)\b', text):
+        raise ValueError('reachability: conditionally compiled property needs native assertion mapping')
+    if re.search(r'\bcover\s*(?:property\s*)?\(', text):
+        raise ValueError('reachability: preexisting covers need explicit target mapping')
+    closed, refuted, _ = _verified_program_closures(formal)
+    bindings = {r['id']: r for r in checker.binding_dispositions(project, formal, results)}
+    expert = {r['id']: r for r in generator._expert_closed_obligations(formal, rows, text)}
+    properties = {}
+    for name, body in checker._PROPERTY_RE.findall(text):
+        match = re.fullmatch(r'\s*@\(posedge\s+([A-Za-z_]\w*)\)\s*(.*?)\s*\|->\s*(.*?)\s*;\s*', body, re.S)
+        if (name in properties or not match or not match[2].strip() or not match[3].strip()
+                or re.search(r'##|\|=>|\b(?:disable|throughout|until|within)\b', body)
+                or not re.search(r'\bassert\s+property\s*\(\s*' + re.escape(name) + r'\s*\)', text)):
+            raise ValueError('reachability: unsupported/ambiguous property ' + name)
+        properties[name] = {'clock': match[1], 'antecedent': match[2].strip()}
+    mapped = []
+    for row in rows:
+        oid = row['id']
+        if oid in refuted:
+            mapped.append({'id': oid, 'kind': 'structural', 'status': 'FAIL'})
+            continue
+        if generator.binding_obligation(row, project):
+            disposition = bindings.get(oid)
+            if not disposition or disposition['status'] != checker.DISCHARGED_BY_BINDING:
+                raise ValueError('reachability: binding outstanding ' + oid)
+            mapped.append({'id': oid, 'kind': 'binding', 'disposition': disposition})
+            continue
+        if oid in closed and not closed[oid].get('properties'):
+            mapped.append({'id': oid, 'kind': 'structural', 'disposition': closed[oid]})
+            continue
+        names = closed[oid].get('properties') if oid in closed else None
+        if not names:
+            chosen = expert.get(oid) if row.get('author') == 'formal-verify' else row
+            names = [chosen['property']] if chosen and chosen.get('property') else []
+        if not names or any(n not in properties for n in names):
+            raise ValueError('reachability: temporal property mapping missing ' + oid)
+        mapped.append({'id': oid, 'kind': 'temporal', 'properties': sorted(set(names))})
+    needed = sorted({n for r in mapped for n in r.get('properties', [])})
+    if not needed:
+        raise ValueError('reachability: no supported temporal property')
+    return {'obligations': mapped, 'properties': {n: properties[n] for n in needed}}
+
+
+def _reachability_inputs(project: Path) -> tuple:
+    """Reopen proof inputs; file-wide producer hashes are provenance, not RTL."""
+    import _path_layout as layout
+    import _chip_synth_read as chip
+    import formal_proof_evidence_check as checker
+    formal = layout.formal_dir(project)
+    results = json.loads((formal / 'results.json').read_text())
+    stale = checker.proof_source_staleness(project, formal, results)
+    if stale:
+        raise ValueError('reachability: proof input changed: ' + '; '.join(stale))
+    sby = project / results['sby']
+    log = project / results['evidence']
+    if (_sha256_file(sby) != results.get('sby_sha256')
+            or _sha256_file(log) != results.get('evidence_sha256')):
+        raise ValueError('reachability: proof deck/transcript changed')
+    if _sha256_file(formal / 'property_contract.json') != results.get('property_contract_sha256'):
+        raise ValueError('reachability: property contract changed')
+    harnesses = checker._harness_files(project, formal, results)
+    harness = next(p for p in harnesses if p.suffix == '.sv')
+    rtl = chip.chip_rtl_files(layout.rtl_dir(project))
+    if _authored_chip_read(project, formal, sby, harness, rtl, results['top']) != results.get('chip_read'):
+        raise ValueError('reachability: actual proof read differs')
+    cfg = parse_sby_config(sby.read_text())
+    replay = build_results(results['top'], cfg,
+        parse_sby_log(log.read_text(), sby_stem=sby.stem, seed=cfg), results['evidence'], results['sby'])
+    if (replay['properties'] != results.get('properties') or replay['verdict'] != 'PASS'
+            or not replay['unbounded_proved'] or checker.audit(project).get('verdict') != 'PASS'):
+        raise ValueError('reachability: current full proof chain is not complete')
+    files = results['proof_inputs']['files']
+    for task in cfg:
+        for name, digest in files.items():
+            if (Path(name).name != name or _sha256_file(formal / name) != digest
+                    or _sha256_file(formal / f'{sby.stem}_{task}/src' / name) != digest):
+                raise ValueError('reachability: proof task source differs ' + task + '/' + name)
+    snapshots = {str((formal / n).relative_to(project)): _sha256_file(formal / n) for n in files}
+    for name in ('results.json', 'property_contract.json', 'formal_authoring_request.json',
+                 'formal_expert_review.json', PROGRAM_RECEIPT, STRUCTURAL_EVIDENCE):
+        if (formal / name).is_file():
+            snapshots[str((formal / name).relative_to(project))] = _sha256_file(formal / name)
+    snapshots[results['sby']] = _sha256_file(sby)
+    snapshots[results['evidence']] = _sha256_file(log)
+    return formal, results, sby, harness, reachability_plan(project, results), snapshots
+
+
+def _reachability_deck(sby: Path, harness: Path, plan: dict) -> tuple:
+    """Keep the admitted safety read/assumptions; add one cover per task."""
+    cfg = parse_sby_config(sby.read_text())
+    if 'safety' not in cfg or cfg['safety'].mode != 'prove':
+        raise ValueError('reachability: canonical safety task required')
+    text = sby.read_text()
+    script = re.search(r'(?ms)^\[script\]\s*\n(.*?)(?=^\[|\Z)', text)[1]
+    selected = []
+    for line in script.splitlines():
+        scoped = _SCOPED_RE.match(line.strip())
+        if scoped:
+            if (scoped.group('neg') and scoped.group('task') == 'safety'
+                    or not scoped.group('neg') and scoped.group('task') != 'safety'):
+                continue
+            line = scoped.group('val')
+        selected.append(line)
+    body = harness.read_text()
+    if len(re.findall(r'\bendmodule\b', body)) != 1:
+        raise ValueError('reachability: single harness module required')
+    tasks, injections = [], []
+    for index, (name, prop) in enumerate(plan['properties'].items()):
+        task = f'reach_{index}'
+        tasks.append({'task': task, 'property': name, **prop})
+        injections.append(f'`ifdef VIBEIC_REACH_{index}\n'
+            f"always @(posedge {prop['clock']}) c_{task}: cover ({prop['antecedent']});\n`endif\n")
+    body = body.replace('endmodule', '\n'.join(injections) + '\nendmodule')
+    scripts = []
+    for index, task in enumerate(tasks):
+        for line in selected:
+            if re.match(r'\s*read_verilog\s+-formal\b', line):
+                line = line.replace('read_verilog ', f'read_verilog -DVIBEIC_REACH_{index} ', 1)
+            scripts.append(task['task'] + ': ' + line)
+        top = re.search(r'(?m)^\s*prep\s+-top\s+(\w+)\s*$', '\n'.join(selected))
+        if top is None:
+            raise ValueError('reachability: canonical prep top missing')
+        scripts.append(task['task'] + f": select -assert-count 1 {top[1]}/c:c_{task['task']}")
+    files = re.search(r'(?ms)^\[files\]\s*\n(.*?)(?=^\[|\Z)', text)[1].strip()
+    if any(Path(n.strip()).name != n.strip() for n in files.splitlines()):
+        raise ValueError('reachability: basename staging required')
+    deck = '[tasks]\n' + '\n'.join(t['task'] for t in tasks) + '\n\n[options]\nmode cover\ndepth 12\nmulticlock on\n\n[engines]\nsmtbmc yices\n\n[script]\n' + '\n'.join(scripts) + '\n\n[files]\n' + files + '\n'
+    return deck, body, tasks
+
+
+def run_reachability(project: Path, *, container=None, timeout=60, mem_limit_kb=1048576,
+                     emit_only=False) -> dict:
+    """Run only the missing normal cover tasks; retain original proof arms."""
+    formal, results, sby, harness, plan, inputs = _reachability_inputs(project)
+    deck, body, tasks = _reachability_deck(sby, harness, plan)
+    work = formal / 'reachability'
+    # Existing task directories are immutable evidence, never sby -f targets.
+    if work.exists():
+        raise ValueError('reachability: retained output exists; use a new isolated carrier')
+    work.mkdir()
+    for name in results['proof_inputs']['files']:
+        shutil.copy2(formal / name, work / name)
+    (work / harness.name).write_text(body)
+    selected = work / 'formal_reachability.sby'
+    selected.write_text(deck)
+    if emit_only:
+        return {'program': 'formal_property_run', 'mode': 'reachability', 'verdict': 'EMIT_ONLY',
+                'mapping': plan, 'tasks': tasks, 'sby': str(selected), 'rc': RC_EMIT_ONLY}
+    transcript = _run_sby(selected, work, container, timeout, mem_limit_kb=mem_limit_kb)
+    log = work / 'formal_reachability.sby.log';log.write_text(transcript)
+    cfg = parse_sby_config(deck)
+    measured = build_results(results['top'], cfg,
+        parse_sby_log(transcript, sby_stem=selected.stem, seed=cfg),
+        str(log.relative_to(project)), str(selected.relative_to(project)))
+    measured.update(mode='reachability', project=str(project.resolve()), mapping=plan, tasks=tasks, original_inputs=inputs,
+                    sby_sha256=_sha256_file(selected), evidence_sha256=_sha256_file(log),
+                    proof_inputs=proof_inputs(selected, work), witnesses={})
+    for task in tasks:
+        paths = sorted((work / f"{selected.stem}_{task['task']}" / 'engine_0').glob('trace*.vcd'))
+        measured['witnesses'][task['task']] = {str(p.relative_to(project)): _sha256_file(p) for p in paths if p.stat().st_size}
+    (work / 'results.json').write_text(json.dumps(measured, indent=2) + '\n')
+    checked = check_reachability(project)
+    return {**measured, 'reachability_check': checked, 'rc': 0 if checked['status'] == 'PASS' else 2}
+
+
+def check_reachability(project: Path) -> dict:
+    """Reconstruct the one-property cover tasks and reopen their native witnesses."""
+    formal, results, sby, harness, plan, inputs = _reachability_inputs(project)
+    deck, body, tasks = _reachability_deck(sby, harness, plan)
+    work = formal / 'reachability';selected = work / 'formal_reachability.sby'
+    record = json.loads((work / 'results.json').read_text())
+    log = work / 'formal_reachability.sby.log'
+    if (record.get('mode') != 'reachability' or record.get('project') != str(project.resolve())
+            or record.get('original_inputs') != inputs
+            or record.get('mapping') != plan or record.get('tasks') != tasks
+            or selected.read_text() != deck or (work / harness.name).read_text() != body
+            or record.get('sby_sha256') != _sha256_file(selected)
+            or record.get('evidence_sha256') != _sha256_file(log)):
+        raise ValueError('reachability: source/deck/assumption/mapping identity changed')
+    expected = {n: _sha256_file(work / n) for n in results['proof_inputs']['files']}
+    expected[harness.name] = hashlib.sha256(body.encode()).hexdigest()
+    for name, digest in expected.items():
+        if name != harness.name and digest != results['proof_inputs']['files'][name]:
+            raise ValueError('reachability: staged proof source changed ' + name)
+        for task in tasks:
+            if _sha256_file(work / f"{selected.stem}_{task['task']}/src" / name) != digest:
+                raise ValueError('reachability: actual task src changed ' + name)
+    if record.get('proof_inputs', {}).get('files') != expected:
+        raise ValueError('reachability: actual cover read differs')
+    cfg = parse_sby_config(deck)
+    replay = build_results(results['top'], cfg,
+        parse_sby_log(log.read_text(), sby_stem=selected.stem, seed=cfg), str(log.relative_to(project)), str(selected.relative_to(project)))
+    if replay['properties'] != record.get('properties'):
+        raise ValueError('reachability: transcript task result differs')
+    if classify_resource_stop(log.read_text()):
+        raise ValueError('reachability: resource-limited cover execution')
+    by_task = {p['task']: p for p in replay['properties']}
+    reached, pending = [], []
+    witnesses = record.get('witnesses')
+    if not isinstance(witnesses, dict) or set(witnesses) != {t['task'] for t in tasks}:
+        raise ValueError('reachability: witness population differs')
+    for task in tasks:
+        named = witnesses[task['task']]
+        actual_dir = work / f"{selected.stem}_{task['task']}" / 'engine_0'
+        if not isinstance(named, dict):
+            raise ValueError('reachability: invalid witnesses')
+        for path, digest in named.items():
+            p = project / path
+            if (p.parent != actual_dir or p.is_symlink() or not p.resolve().is_relative_to(work.resolve())
+                    or p.suffix != '.vcd'
+                    or not p.stat().st_size or _sha256_file(p) != digest):
+                raise ValueError('reachability: wrong property witness or changed bytes')
+        if by_task[task['task']]['status'] == 'PASS' and named:
+            reached.append(task['property'])
+        else:
+            pending.append(task['property'])
+    return {'status': 'PASS' if not pending else 'NOT_MEASURED', 'reached': reached,
+            'pending': pending, 'mapping': plan, 'original_inputs': inputs,
+            'cover_result_sha256': _sha256_file(work / 'results.json')}
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("project_dir", type=Path)
@@ -3407,12 +3648,22 @@ def main(argv=None) -> int:
                     help="direct = abc pdr; dual = abc pdr + smtbmc yices "
                          "k-induction, better verdict kept; auto = the "
                          "project's step-5 switch (default direct)")
+    ap.add_argument("--reachability-only", action="store_true",
+                    help="run missing antecedent cover tasks without rewriting proof arms")
     ap.add_argument("--json", default=None)
     args = ap.parse_args(argv)
     if not args.project_dir.is_dir():
         print(f"ERROR: not a directory: {args.project_dir}", file=sys.stderr)
         return 1
-    res = run(args.project_dir.resolve(), harness=args.harness, rtl=args.rtl,
+    if args.reachability_only:
+        try:
+            res = run_reachability(args.project_dir.resolve(), container=(args.container or None),
+                timeout=args.timeout, mem_limit_kb=args.mem_limit_kb, emit_only=args.emit_only)
+        except (OSError, ValueError, KeyError, TypeError, StopIteration) as exc:
+            res = {'program': 'formal_property_run', 'mode': 'reachability',
+                   'verdict': 'NOT_MEASURED', 'reason': str(exc), 'rc': 2}
+    else:
+        res = run(args.project_dir.resolve(), harness=args.harness, rtl=args.rtl,
               top=args.top, sby=args.sby,
               container=(args.container or None),
               bmc_depth=args.bmc_depth, safety_depth=args.safety_depth,

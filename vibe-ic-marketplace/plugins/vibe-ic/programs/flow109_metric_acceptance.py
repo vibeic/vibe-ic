@@ -4643,9 +4643,15 @@ def _d14_observe(project: Path) -> dict:
     sby = retain(_safe_project_file(project, result['sby']))
     log = retain(_safe_project_file(project, result['evidence']))
     if (inputs[result['sby']] != result.get('sby_sha256')
-            or inputs[result['evidence']] != result.get('evidence_sha256')
-            or result.get('program_owner_sha256') != producer.program_owner_identity()):
+            or inputs[result['evidence']] != result.get('evidence_sha256')):
         raise MetricRefusal('D14_PROOF_IDENTITY_STALE', 'deck/transcript/program owners')
+    retained_owners = result.get('program_owner_sha256')
+    if (not isinstance(retained_owners, dict)
+            or set(retained_owners) != set(producer.program_owner_identity())
+            or any(not _HEX.fullmatch(str(v)) for v in retained_owners.values())):
+        raise MetricRefusal('D14_PRODUCER_PROVENANCE_ABSENT', 'original producer source identity required')
+    # Full-file producer edits are not proof inputs. Reopen/replay exact native
+    # artifacts with current consumers; never restamp the retained receipt.
     stale = checker.proof_source_staleness(project, formal, result)
     if stale:
         raise MetricRefusal('D14_PROOF_SOURCE_STALE', '; '.join(stale))
@@ -4695,7 +4701,9 @@ def _d14_observe(project: Path) -> dict:
     audit = checker.audit(project)
     failed = (replay['verdict'] == 'FAIL' or bool(refreshed.get('structural_refutations')))
     return {'result': result, 'replay': replay, 'audit': audit, 'inputs': inputs,
-            'chip_read': read, 'failed': failed, 'owners': producer.program_owner_identity()}
+            'chip_read': read, 'failed': failed, 'owners': producer.program_owner_identity(),
+            'retained_owners': retained_owners,
+            'reuse_basis': 'current canonical read/task source/transcript/contract replay; original receipt unchanged'}
 
 
 def accept_d14(project: Path, context: Mapping[str, Any]) -> dict:
@@ -4728,9 +4736,6 @@ def accept_d14(project: Path, context: Mapping[str, Any]) -> dict:
                 row.update(status='FAIL' if oid.endswith('unproved_required_properties') else 'NOT_MEASURED',
                            reason='D14_NATIVE_COUNTEREXAMPLE_OR_REFUTATION')
                 continue
-            if oid.endswith('vacuous_required_proofs'):
-                row['reason'] = 'D14_PROPERTY_ANTECEDENT_REACHABILITY_MAPPING_ABSENT'
-                continue
             try:
                 authority, body = _approved_authority(project,
                     D14_BINDINGS['base_08.proof_partition_coverage']['required_set_ref'], ('task',))
@@ -4757,7 +4762,24 @@ def accept_d14(project: Path, context: Mapping[str, Any]) -> dict:
                     'configuration': {'chip_read_sha256': flow109.digest(observed['chip_read']),
                                       'context_sha256': current['context_sha256']}}
                 measured = {'status': 'MEASURED', 'identity': identity}
-                if binding['operator'] == 'eq':
+                if oid.endswith('vacuous_required_proofs'):
+                    import formal_property_run as producer
+                    try:
+                        import _path_layout as layout
+                        if not (layout.formal_dir(project) / 'reachability/results.json').is_file():
+                            raise FileNotFoundError('no normal cover result')
+                        reach = producer.check_reachability(project)
+                    except FileNotFoundError as exc:
+                        raise MetricRefusal('D14_PROPERTY_ANTECEDENT_REACHABILITY_MAPPING_ABSENT', str(exc)) from exc
+                    if reach['status'] != 'PASS':
+                        raise MetricRefusal('D14_ANTECEDENT_NOT_PROVEN_REACHABLE', ', '.join(reach['pending']))
+                    if producer.check_reachability(project) != reach:
+                        raise MetricRefusal('D14_REACHABILITY_CHANGED_DURING_READ', 'cover evidence changed')
+                    measured.update(value=0, unit='count')
+                    identity['tool_execution']['reachability'] = reach['cover_result_sha256']
+                    identity['configuration']['obligation_mapping_sha256'] = flow109.digest(reach['mapping'])
+                    authority = {'status': 'APPROVED', 'value': 0, 'unit': 'count'}
+                elif binding['operator'] == 'eq':
                     measured.update(value=len({t['task'] for t in required} - {t['task'] for t in proved}), unit='count')
                     authority = {'status': 'APPROVED', 'value': 0, 'unit': 'count'}
                 else:
@@ -4770,6 +4792,8 @@ def accept_d14(project: Path, context: Mapping[str, Any]) -> dict:
             raise MetricRefusal('D14_INPUT_CHANGED_DURING_READ', 'proof source/receipts changed')
         if any(o['status'] == 'FAIL' for o in answer['obligations']):
             answer.update(status='FAIL', reason='D14_MEASURED_PROOF_FAILURE')
+        elif all(o['status'] == 'PASS' for o in answer['obligations']):
+            answer.update(status='PASS', delivery_blocked=False, reason='D14_ALL_REQUIRED_PROOF_METRICS_CURRENT')
         else:
             answer['reason'] = 'D14_REQUIRED_METRICS_NOT_MEASURED'
     except (MetricRefusal, flow109.Flow109Error, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
