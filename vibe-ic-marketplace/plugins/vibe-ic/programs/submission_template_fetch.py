@@ -75,7 +75,7 @@ import math
 import re
 import subprocess
 import sys
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 _HERE = Path(__file__).resolve().parent
@@ -528,8 +528,8 @@ def _registry_entry(pdk: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def _technology_probe(image: str, command: List[str], *, parser: bool = False
-                      ) -> Tuple[int, str, str]:
+def _technology_probe(image: str, command: List[str], *, parser: bool = False,
+                      registry_root: Optional[str] = None) -> Tuple[int, str, str]:
     """Read technology bytes through this judged image's supported entrypoint.
 
     The operator-template interpreter contract in `_in_image` is independent.
@@ -547,6 +547,36 @@ def _technology_probe(image: str, command: List[str], *, parser: bool = False
             prefix = ["--skip"]
         else:
             raise ValueError(f"unsupported EDA image entrypoint {entrypoint!r}")
+        if registry_root is not None:
+            # Fresh probes have no MCP-created /foss alias. Relocate only the
+            # explicit artifact argument, using this immutable image's Env.
+            env = records[0]["Config"].get("Env")
+            if env is None:
+                env = []
+            if not isinstance(env, list) or any(not isinstance(e, str) or "=" not in e for e in env):
+                raise ValueError("image Env unavailable")
+            declared = [e.split("=", 1)[1] for e in env if e.startswith("PDK_ROOT=")]
+            if len(declared) > 1:
+                raise ValueError("duplicate image PDK_ROOT")
+            def absolute(value):
+                canonical = value.rstrip("/") or "/"
+                path = PurePosixPath(canonical)
+                if (not value or not path.is_absolute() or value.startswith("//")
+                        or path.as_posix() != canonical or ".." in path.parts
+                        or any(c in value for c in "\\*?[]")
+                        or any(ord(c) < 32 for c in value)):
+                    raise ValueError("invalid absolute technology root")
+                return path
+            registered = absolute(registry_root)
+            root = absolute(declared[0]) if declared else registered.parent
+            if not command or not command[-1].startswith(registry_root + "/"):
+                raise ValueError("technology artifact argument is not registry-bound")
+            relative = command[-1][len(registry_root) + 1:]
+            if (not relative or ".." in PurePosixPath(relative).parts
+                    or PurePosixPath(relative).is_absolute()
+                    or any(ord(c) < 32 for c in relative)):
+                raise ValueError("invalid registry artifact pattern")
+            command = [*command[:-1], str(root / registered.name) + "/" + relative]
     except (ValueError, TypeError, KeyError, IndexError) as exc:
         return 126, "", f"technology image inspection unavailable: {exc}; {err.strip()}"
     mounts = (["-v", f"{_HERE}:/vibeic_programs:ro",
@@ -612,10 +642,11 @@ def technology_facts(pdk: str, image: str,
     # glob is expanded by the shell INSIDE the image — the tech LEF is in the
     # image, not on this host, and a host-side guess at the filename is how a
     # transcription ends up naming a file nobody read.
-    script = (f'set -e; f=$(ls -1 {root}/{glob} 2>/dev/null | head -1); '
-              f'[ -n "$f" ] || {{ echo "NO_TECH_LEF"; exit 3; }}; '
-              f'echo "FILE=$f"; grep -n "DATABASE[[:space:]]\\+MICRONS" "$f" '
-              f'| head -1')
+    script = ('set -e; f=$(compgen -G "$1" | LC_ALL=C sort | head -1); '
+              '[ -n "$f" ] && [ -f "$f" ] || { echo "NO_TECH_LEF"; exit 3; }; '
+              'echo "FILE=$f"; grep -n "DATABASE[[:space:]]\\+MICRONS" -- "$f" '
+              '| head -1')
+    lef_command = ["bash", "-lc", script, "technology-lef", f"{root}/{glob}"]
     # THE CEILING GOES HERE TOO, and it is not a formality because the command
     # is one `grep` (vibe-ic#2111). `test_no_docker_run_escapes_the_ceiling`
     # states the rule with no allowlist on purpose: "this one is small" is a
@@ -626,9 +657,9 @@ def technology_facts(pdk: str, image: str,
     # other `docker run` in this file does.
     local = _cex.local_exec_mode(ATTRIBUTION)
     if local:
-        rc, out, err = _run(["bash", "-lc", script], timeout=600)
+        rc, out, err = _run(lef_command, timeout=600)
     else:
-        rc, out, err = _technology_probe(digest, ["bash", "-lc", script])
+        rc, out, err = _technology_probe(digest, lef_command, registry_root=root)
     path, line_no, statement = None, None, None
     for raw in (out or "").splitlines():
         s = raw.strip()
@@ -695,7 +726,8 @@ def technology_facts(pdk: str, image: str,
             timeout=600)
     else:
         rc, out, err = _technology_probe(
-            digest, ["python3", "-c", probe, f"{root}/{gds_glob}"], parser=True)
+            digest, ["python3", "-c", probe, f"{root}/{gds_glob}"],
+            parser=True, registry_root=root)
     try:
         # The image entrypoint prints banners and the command itself. Only a
         # complete, uniquely marked result line belongs to this probe.
