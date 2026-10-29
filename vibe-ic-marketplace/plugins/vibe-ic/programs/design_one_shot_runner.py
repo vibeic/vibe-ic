@@ -25150,6 +25150,49 @@ def _publish_d13_owner(project: Path, context: Mapping[str, Any], *, invocation_
     return {'PASS': 0, 'FAIL': 1}.get(row.status, 2)
 
 
+def step_d14_formal_read(project: Path, context: Mapping[str, Any]) -> StepResult:
+    """Reopen qualified current formal proof/cover populations without replaying native work."""
+    import flow109_metric_acceptance as metrics
+    import librelane_contract as contract
+    try:
+        launch = contract.local_image_attestation()
+        accepted = metrics.accept_d14(project, context)
+    except contract.Refusal as exc:
+        launch = {'status': 'NOT_MEASURED', 'reason': exc.code}
+        accepted = {'status': 'NOT_MEASURED', 'reason': str(exc)}
+    status = accepted['status']
+    return StepResult('formal_verification', status, detail=accepted['reason'],
+        reason_class='input_absent' if status == 'NOT_MEASURED' else '',
+        extras={'step_id': '5', 'context_sha256': context['context_sha256'],
+            'metric_acceptance': accepted, 'reader_launch': launch,
+            'default_row_status': 'NOT_MEASURED', 'completed': False,
+            'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False})
+
+
+def _publish_d14_owner(project: Path, context: Mapping[str, Any], *, invocation_context=None) -> int:
+    """Publish only the fresh D14 read in this attempt, preserving original formal proof/cover outputs."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+    if (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink():
+        print('REFUSED: D14_ATTEMPT_ALREADY_COMPLETED', file=sys.stderr)
+        return 2
+    row = step_d14_formal_read(project, context)
+    summary = {'project': str(project), 'steps': [asdict(row)], 'verdict': row.status,
+        'declared_window': {'entry_step': '4', 'exit_step': '5', 'dispatched_step_ids': ['5']},
+        'bounded_disclosures': ['current qualified formal proof/cover read; no native replay; whole flow unmeasured']}
+    out = attempt / 'phase2_one_shot.json'
+    _write_phase2_report(out, summary, project, invocation_context=invocation_context)
+    reread = metrics.accept_d14(project, context)
+    if reread != row.extras['metric_acceptance']:
+        row.status, row.reason_class, row.detail = 'NOT_MEASURED', 'input_absent', 'D14_INPUT_CHANGED_DURING_OWNER_PUBLICATION'
+        row.extras.update(default_row_status='NOT_MEASURED', completed=False, metric_acceptance=reread)
+        summary.update(steps=[asdict(row)], verdict=row.status)
+        _write_phase2_report(out, summary, project, invocation_context=invocation_context)
+    # The parent confirms current publication before the canonical writer.
+    return {'PASS': 0, 'FAIL': 1}.get(row.status, 2)
+
+
 def step_arith_declaration_emit(project: Path) -> StepResult:
     """Run the deterministic `plugin_output/declaration.json` emitter.
 
@@ -27596,6 +27639,7 @@ def main() -> int:
     _dispatch_invocation_context = _runner_invocation_context()
     _d12_context = None
     _d13_context = None
+    _d14_context = None
     _d12_raw = os.environ.get('VIBEIC_FLOW109_CONTEXT')
     if str(args.entry_step) == str(args.exit_step) == '3' and _d12_raw:
         import flow109
@@ -27607,6 +27651,11 @@ def main() -> int:
         _d13_current = flow109.validate_execution_context(json.loads(Path(_d12_raw).read_bytes()))
         if _d13_current['resolved_row']['id'] == 'D13':
             _d13_context = _d13_current
+    if str(args.entry_step) == '4' and str(args.exit_step) == '5' and _d12_raw:
+        import flow109
+        _d14_current = flow109.validate_execution_context(json.loads(Path(_d12_raw).read_bytes()))
+        if _d14_current.get('resolved_row', {}).get('id') == 'D14':
+            _d14_context = _d14_current
 
     # ── A DECLARED WINDOW IS A DECLARED PROOF BURDEN (R-0924-1) ─────────────
     # The owner's ask: when a gate is wrong, re-run THAT step -- only it.
@@ -27972,6 +28021,8 @@ def main() -> int:
             return _publish_d12_owner(project, context, invocation_context=_dispatch_invocation_context)
     if _d13_context:
         return _publish_d13_owner(project, _d13_context, invocation_context=_dispatch_invocation_context)
+    if _d14_context:
+        return _publish_d14_owner(project, _d14_context, invocation_context=_dispatch_invocation_context)
 
     plan: List[StepResult] = []
 
