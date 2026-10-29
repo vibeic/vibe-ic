@@ -110,7 +110,57 @@ def _judge_calibration(text: str) -> Optional[str]:
     return "BLOCKING" if blocking(parsed["diagnostics"], files) else None
 
 
-def judge(step_dir: Path, expected: list[Path], *, checker_dirs=None) -> dict:
+def _native_checker_failure(step_dir, folder, sid, metric, metrics, failure):
+    """Read an actual failed invocation without manufacturing a success receipt."""
+    import librelane_contract as contract
+    try:
+        if not isinstance(failure, dict) or failure.get('code') != 'LL_STEP_FAILED' or folder is None:
+            return None
+        match = re.fullmatch(r'LL_STEP_FAILED: ([A-Za-z.]+): rc=(\d+); (.+)', failure.get('detail', ''))
+        if (match is None or match[1] != sid or int(match[2]) != 255
+                or Path(match[3]).resolve() != (folder / 'invocation.log').resolve()
+                or (folder / 'state_out.json').exists()):
+            return None
+        artifacts = failure.get('artifact_readset')
+        required = [folder / name for name in ('config.json', 'state_in.json',
+                    'input_fingerprint.json', 'invocation.log', 'pdk_root.json')]
+        required += [step_dir / name for name in ('vibeic_receipt.json', 'state_out.json',
+                    'config.json', 'input_fingerprint.json', 'verilator-lint.log', 'invocation.log')]
+        if (not isinstance(artifacts, dict) or any(str(path) not in artifacts for path in required)
+                or any(not Path(name).is_file() or hashlib.sha256(Path(name).read_bytes()).hexdigest() != digest
+                       for name, digest in artifacts.items())):
+            return None
+        contract.validate_step_receipt(step_dir, 'Verilator.Lint')
+        config = json.loads((folder / 'config.json').read_bytes())
+        state = json.loads((folder / 'state_in.json').read_bytes())
+        fingerprint = json.loads((folder / 'input_fingerprint.json').read_bytes())
+        flag = {'Checker.LintErrors': 'ERROR_ON_LINTER_ERRORS',
+                'Checker.LintTimingConstructs': 'ERROR_ON_LINTER_TIMING_CONSTRUCTS',
+                'Checker.LintWarnings': 'ERROR_ON_LINTER_WARNINGS'}[sid]
+        value = metrics.get(metric)
+        if (fingerprint.get('step') != sid or config.get('meta', {}).get('step') != sid
+                or config.get(flag, sid != 'Checker.LintWarnings') is not True
+                or type(value) is not int or value <= 0 or state.get('metrics') != metrics
+                or fingerprint.get('state') != hashlib.sha256((folder / 'state_in.json').read_bytes()).hexdigest()
+                or fingerprint.get('local_image') != json.loads((step_dir / 'input_fingerprint.json').read_bytes()).get('local_image')):
+            return None
+        text = (folder / 'invocation.log').read_text()
+        labels = {'Checker.LintErrors': 'Lint errors', 'Checker.LintWarnings': 'Lint warnings',
+                  'Checker.LintTimingConstructs': 'Timing constructs'}
+        diagnostic = (f'{value} {labels[sid]} found.' if sid != 'Checker.LintTimingConstructs'
+                      else 'Timing constructs found in the RTL.')
+        if (f"Running '{sid}'" not in text or diagnostic not in text
+                or 'An error occurred while executing your step:' not in text):
+            return None
+        return {'value': value, 'blocking': True, 'failed_step': sid, 'exit_code': int(match[2]),
+                'state_in': str(folder / 'state_in.json'),
+                'sha256': _sha(folder / 'state_in.json'), 'invocation_log_sha256': _sha(folder / 'invocation.log'),
+                'execution_status': 'NATIVE_FAILED_NO_SUCCESS_STATE'}
+    except (contract.Refusal, OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def judge(step_dir: Path, expected: list[Path], *, checker_dirs=None, native_failure=None) -> dict:
     report: dict = {"gate": GATE, "tool": "LibreLane Verilator.Lint",
                     "step_dir": str(step_dir), "blocking_warning_codes":
                     sorted(BLOCKING_WARNINGS)}
@@ -158,6 +208,13 @@ def judge(step_dir: Path, expected: list[Path], *, checker_dirs=None) -> dict:
         required = {"Checker.LintErrors": "design__lint_error__count",
                     "Checker.LintTimingConstructs": "design__lint_timing_construct__count",
                     "Checker.LintWarnings": "design__lint_warning__count"}
+        # Validate the recorded failed checker before unexecuted successors.
+        # The existing failure reader still owns rc/path/artifact/input checks.
+        detail = native_failure.get("detail") if isinstance(native_failure, dict) else None
+        parts = detail.split(": ", 2) if isinstance(detail, str) else []
+        if len(parts) == 3 and parts[0] == "LL_STEP_FAILED" and parts[1] in required:
+            failed_sid = parts[1]
+            required = {failed_sid: required[failed_sid], **required}
         for sid, metric in required.items():
             folder = Path(checker_dirs[sid]) if sid in checker_dirs else None
             try:
@@ -175,8 +232,20 @@ def judge(step_dir: Path, expected: list[Path], *, checker_dirs=None) -> dict:
                 if sid != "Checker.LintWarnings" and enabled is not True:
                     raise ValueError("required native checker disabled")
             except (OSError, ValueError, KeyError, TypeError) as exc:
-                report.update(verdict="NOT_MEASURED", reason_class="NATIVE_CHECK_ABSENT_OR_MISMATCH",
-                              reason=f"{sid}: {exc}")
+                # A failed native checker has no success-only state_out. Its
+                # actual run_chain refusal, completed lint receipt, identical
+                # checker input counters and native failure diagnostic remain
+                # distinct from an absent/unexecuted checker. Qualification and
+                # original launch/adoption are separately required by D11.
+                failure = _native_checker_failure(step_dir, folder, sid, metric,
+                    metrics, native_failure) if native_failure is not None else None
+                if failure is not None:
+                    report["native_checks"][sid] = failure
+                    report.update(verdict="FAIL", reason_class="LINT_BLOCKING",
+                        reason="recorded native required checker failure", native_failure=failure)
+                else:
+                    report.update(verdict="NOT_MEASURED", reason_class="NATIVE_CHECK_ABSENT_OR_MISMATCH",
+                                  reason=f"{sid}: {exc}")
                 return report
             report["native_checks"][sid] = {
                 "state_out": str(folder / "state_out.json"), "value": value,

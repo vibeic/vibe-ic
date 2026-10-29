@@ -1861,6 +1861,538 @@ def accept_d10(project: Path, context: Mapping[str, Any], p0: Mapping) -> dict:
     return result
 
 
+# D11 consumes retained native lint through the normal requirement/adoption envelope.
+D11_STEPS = ('Verilator.Lint', 'Checker.LintTimingConstructs',
+             'Checker.LintErrors', 'Checker.LintWarnings')
+D11_IDS = ('base_05.required_lint_violations', 'base_05.source_file_coverage')
+
+
+def d11_subject(project: Path) -> dict:
+    """Current approved original population; never infer coverage from lint output."""
+    import _cdc_netlist as native
+    import _path_layout as layout
+    import _specrtl_common as sources
+    import p0_tool_frontend_check as frontend
+    project = Path(project).resolve()
+    subject = d10_adopted_rtl(project)
+    path = _safe_project_file(project, 'reports/flow109/default_rows/D10.json')
+    row = json.loads(path.read_bytes())
+    if (row.get('step_id') != 'D10' or row.get('completed') is not True
+            or row.get('component_status') != 'PASS' or row.get('default_row_status') != 'PASS'):
+        raise MetricRefusal('D11_D10_NOT_ACCEPTED', 'current canonical D10 required')
+    original = row['evidence']['metric_acceptance']['subject']
+    binding = native.source_binding(project, frontend._top(project), sources.rtl_source_files(project))
+    subject['rtl_inputs'] = binding['files']
+    if original != subject:
+        raise MetricRefusal('D11_D10_SUBJECT_STALE', 'D10 and current original inputs differ')
+    _d10_inventory_authority(project, subject)
+    subject['D10'] = {'path': str(path.relative_to(project)), 'sha256': _sha(path.read_bytes())}
+    # Include all support files, even unreferenced headers. A newly added header
+    # cannot disappear from the source population because a parser ignored it.
+    support = [p for p in layout.rtl_dir(project).rglob('*')
+               if p.is_file() and p.suffix.lower() in ('.v', '.sv', '.vh', '.svh', '.h')]
+    subject['source_files'] = sorted((_d11_file(project, p) for p in support), key=lambda x: x['path'])
+    if not subject['source_files']:
+        raise MetricRefusal('D11_SOURCE_POPULATION_EMPTY', 'original sources required')
+    return subject
+
+
+def _d11_file(project: Path, path: Path) -> dict:
+    relative = str(path.relative_to(project))
+    checked = _safe_project_file(project, relative)
+    if not checked.is_file():
+        raise MetricRefusal('D11_INPUT_MISSING', relative)
+    return {'path': relative, 'sha256': _sha(checked.read_bytes())}
+
+
+def _d11_reopen(project: Path, reference: Mapping) -> Path:
+    return project / _d19_ref(project, reference, 'D11 retained input')['path']
+
+
+def d11_native_sources() -> dict:
+    """Bind native execution and verdict semantics, independent of other owner edits."""
+    import ast
+    import librelane_contract as contract
+    import verilator_lint_gate as lint
+    modules = [(contract, ('emit_lint_config', 'run_chain', 'validate_step_receipt')),
+               (lint, ('judge', '_native_checker_failure'))]
+    result = {}
+    for module, names in modules:
+        text = Path(module.__file__).read_text()
+        nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
+        for name in names:
+            result[Path(module.__file__).name + ':' + name] = _sha(
+                ast.get_source_segment(text, nodes[name]).encode())
+    return result
+
+
+def d11_tool_readset() -> dict:
+    import inspect
+    import shutil
+    import librelane.steps.verilator as verilator
+    import librelane.steps.checker as checker
+    import librelane.common.toolbox as toolbox
+    paths = [Path(inspect.getsourcefile(m)) for m in (verilator, checker, toolbox)]
+    for name in ('verilator', 'verilator_bin'):
+        path = shutil.which(name)
+        if not path:
+            raise MetricRefusal('D11_TOOL_ABSENT', name)
+        paths.append(Path(path))
+    return {str(p): _sha(p.read_bytes()) for p in paths}
+
+
+def d11_consumed_settings(config: Mapping) -> dict:
+    """Use the installed lint reader's actual keys; retain raw config separately.
+
+    Electrical CLOCK_PERIOD/die/placement/STA keys are not read by Lint.run or
+    the three metric checkers. Tool-purpose qualification must not bind them.
+    MACROS is read by the existing Toolbox macro-view selector. New dynamic
+    config reads are unsupported until their native semantics are reviewed.
+    """
+    import ast
+    import inspect
+    import textwrap
+    from librelane.steps.verilator import Lint
+    tree = ast.parse(textwrap.dedent(inspect.getsource(Lint.run)))
+    keys = set()
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Subscript) and isinstance(node.value, ast.Attribute)
+                and isinstance(node.value.value, ast.Name) and node.value.value.id == 'self'
+                and node.value.attr == 'config'):
+            if not isinstance(node.slice, ast.Constant) or not isinstance(node.slice.value, str):
+                raise MetricRefusal('D11_SETTINGS_UNMAPPED', 'dynamic native config read')
+            keys.add(node.slice.value)
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Attribute)
+                and isinstance(node.func.value.value, ast.Name) and node.func.value.value.id == 'self'
+                and node.func.value.attr == 'config'):
+            if (node.func.attr != 'get' or not node.args or not isinstance(node.args[0], ast.Constant)
+                    or not isinstance(node.args[0].value, str)):
+                raise MetricRefusal('D11_SETTINGS_UNMAPPED', 'unknown native config accessor')
+            keys.add(node.args[0].value)
+    # Explicit subject dimensions are separately checked against every native
+    # command and independently required source, never dropped from row identity.
+    keys.difference_update(('DESIGN_NAME', 'VERILOG_FILES'))
+    keys.add('MACROS')
+    return {key: config.get(key) for key in sorted(keys)}
+
+
+def _d11_native(project: Path, reference: Mapping) -> dict:
+    """Reopen exact independently adopted original execution, never reseal found logs."""
+    import shlex
+    import librelane_contract as contract
+    import verilator_lint_gate as lint
+    if reference.get('project') != str(project):
+        raise MetricRefusal('D11_FOREIGN_EXECUTION', 'original canonical project must match')
+    files = reference['artifacts']
+    if not isinstance(files, list) or not files or len({r['path'] for r in files}) != len(files):
+        raise MetricRefusal('D11_EXECUTION_POPULATION_INVALID', 'complete unique artifact readset required')
+    for record in files:
+        _d11_reopen(project, record)
+    bound = {r['path']: r['sha256'] for r in files}
+    def retained(path):
+        record = _d11_file(project, path)
+        if bound.get(record['path']) != record['sha256']:
+            raise MetricRefusal('D11_EXECUTION_UNBOUND', record['path'])
+        return path
+    original = _d11_reopen(project, reference['owner_report'])
+    owner = json.loads(original.read_bytes())
+    d09 = json.loads((project / reference['subject']['D09']['path']).read_bytes())
+    origin = reference.get('origin', 'D09')
+    if origin == 'D09':
+        owner_bound = (reference['owner_report']['sha256'] == d09['evidence']['phase2_report']['sha256']
+                       and owner.get('runner_binding', {}).get('producer') == d09['evidence']['producer'])
+    elif origin == 'D11':
+        binding = owner.get('runner_binding', {})
+        window = owner.get('declared_window', {})
+        owner_bound = (binding.get('schema') == 'vibeic.runner_report_binding.v1'
+            and binding.get('project') == str(project) and bool(binding.get('invocation_id'))
+            and binding.get('report_name') == 'phase2_one_shot.json'
+            and str(window.get('entry_step')) == '2' and str(window.get('exit_step')) == '2')
+    else:
+        owner_bound = False
+    if not owner_bound:
+        raise MetricRefusal('D11_ORIGINAL_OWNER_UNBOUND', 'actual normal original D09 or D11 owner required')
+    producer = owner['runner_binding']['producer']
+    producer_path = Path(producer['path'])
+    if (not producer_path.is_relative_to(project) or producer_path.is_symlink()
+            or _sha(producer_path.read_bytes()) != producer['sha256']):
+        raise MetricRefusal('D11_ORIGINAL_PRODUCER_STALE', 'original producer source must reopen unchanged')
+    import ast
+    text = producer_path.read_text()
+    nodes = [n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)
+             and n.name == 'step_rtl_lint_tool']
+    if len(nodes) != 1:
+        raise MetricRefusal('D11_ORIGINAL_PRODUCER_UNBOUND', 'one actual original lint producer required')
+    producer_function = _sha(ast.get_source_segment(text, nodes[0]).encode())
+    rows = [r for r in owner['steps'] if r.get('name') == 'rtl_lint_tool']
+    if len(rows) != 1 or rows[0].get('extras', {}).get('mode') != 'librelane':
+        raise MetricRefusal('D11_OWNER_SHAPE_INVALID', 'normal typed lint result required')
+    row = rows[0]
+    if origin == 'D11' and row.get('extras', {}).get('native_fresh') is not True:
+        raise MetricRefusal('D11_ORIGINAL_OWNER_UNBOUND', 'a reuse wrapper is not original native execution')
+    folder = _safe_project_file(project, reference['lint_dir'])
+    checks = {sid: _safe_project_file(project, reference['checker_dirs'][sid]) for sid in D11_STEPS[1:]}
+    launch = json.loads(_d11_reopen(project, reference['launch']).read_bytes())
+    inspected = launch['container_inspect']
+    image = next(i for i in launch['image_inspect'] if i['Id'] == inspected['Image'])
+    if (launch['cid'] != inspected['Id'] or inspected['State']['Running'] is not True
+            or inspected['Config']['Image'] != launch['image']
+            or not _HEX.fullmatch(launch['cid']) or image['Id'] != reference['image_id']):
+        raise MetricRefusal('D11_ORIGINAL_LAUNCH_UNBOUND', 'root-adopted host launch required')
+    failure = None
+    if reference.get('native_failure') is not None:
+        recorded = json.loads(_d11_reopen(project, reference['native_failure']).read_bytes())
+        failure = recorded.get('native_execution_refusal', recorded.get('normal_chain_refusal'))
+    steps = {'Verilator.Lint': folder, **checks}
+    for sid, directory in steps.items():
+        for path in directory.rglob('*'):
+            if path.is_file():
+                retained(path)
+        if sid != 'Verilator.Lint' and failure is not None and not (directory / 'state_out.json').exists():
+            # The native failure reader below validates the actual failed
+            # step. Unrun successors owe no successful receipt on a FAIL path.
+            continue
+        receipt = contract.validate_step_receipt(directory, sid)
+        fp = receipt['input']
+        loc = fp.get('local_image') or {}
+        if (fp.get('image') != launch['image'] or loc.get('cid') != launch['cid']
+                or loc.get('image_id') != reference['image_id']):
+            raise MetricRefusal('D11_NATIVE_LAUNCH_MISMATCH', sid)
+    config = json.loads(retained(folder / 'config.json').read_bytes())
+    commands = shlex.split(retained(folder / 'COMMANDS').read_text())
+    paths = [Path(name) for name in config['VERILOG_FILES']]
+    # The raw full fingerprint stays immutable audit lineage. Reopen only
+    # files actually used by lint, not unrelated timing/layout/RC/GDS views.
+    consumed = {**d11_consumed_settings(config), 'VERILOG_FILES': config['VERILOG_FILES']}
+    fp = contract.validate_step_receipt(folder, 'Verilator.Lint')['input']
+    include_dirs = {Path(p) for p in config.get('VERILOG_INCLUDE_DIRS') or []}
+    for path in contract._walk_paths(consumed):
+        if path in include_dirs:
+            if not path.is_dir():
+                raise MetricRefusal('D11_NATIVE_INPUT_STALE', str(path))
+        elif not path.is_file() or fp.get('config_files', {}).get(str(path)) != _sha(path.read_bytes()):
+            raise MetricRefusal('D11_NATIVE_INPUT_STALE', str(path))
+    source_hashes = {str(p): _sha(p.read_bytes()) for p in paths}
+    if source_hashes != row['extras']['input_sha256']:
+        raise MetricRefusal('D11_OWNER_SOURCE_STALE', 'typed lint source hashes differ')
+    expected = reference['subject']['source_files']
+    rtl = [project / r['path'] for r in expected if Path(r['path']).suffix in ('.v', '.sv')]
+    if set(paths) != set(rtl) or not rtl or any(commands.count(str(p)) != 1 for p in paths):
+        raise MetricRefusal('D11_SOURCE_FILE_DROPPED', 'all independently required original RTL must be read')
+    execution_inputs = contract.validate_step_receipt(folder, 'Verilator.Lint')['input']['config_files']
+    for item in expected:
+        path = project / item['path']
+        if path.suffix in ('.vh', '.svh', '.h') and execution_inputs.get(str(path)) != item['sha256']:
+            raise MetricRefusal('D11_HEADER_EXECUTION_UNBOUND', item['path'])
+    for name in commands:
+        if name.startswith('/') and Path(name).is_file() and Path(name).is_relative_to(project):
+            if Path(name) not in paths:
+                retained(Path(name))
+    report = lint.judge(folder, rtl, checker_dirs=checks, native_failure=failure)
+    if row['status'] != report['verdict'] or row['extras']['native_checks'] != report.get('native_checks'):
+        raise MetricRefusal('D11_NATIVE_OWNER_MISMATCH', 'normal producer/native checkers disagree')
+    values = report.get('tool_metrics', {})
+    names = ('design__lint_error__count', 'design__lint_timing_construct__count',
+             'design__inferred_latch__count', 'design__lint_warning__count')
+    counts = [values.get(n) for n in names]
+    if any(type(n) is not int or n < 0 for n in counts) or report['verdict'] not in ('PASS', 'FAIL'):
+        raise MetricRefusal('D11_NATIVE_INCOMPLETE', 'full native counters/checkers required')
+    policy = {'LINTER_ERROR_ON_LATCH': config.get('LINTER_ERROR_ON_LATCH'),
+              'warning_blocking': report.get('native_checks', {}).get('Checker.LintWarnings', {}).get('blocking'),
+              'LINTER_DISABLE_WARNINGS': config.get('LINTER_DISABLE_WARNINGS'),
+              'LINTER_DISABLE_WARNINGS_BLACKBOX': config.get('LINTER_DISABLE_WARNINGS_BLACKBOX')}
+    if (policy['LINTER_ERROR_ON_LATCH'] is not True or
+            policy['warning_blocking'] is not None and type(policy['warning_blocking']) is not bool):
+        raise MetricRefusal('D11_REQUIRED_CHECK_DISABLED', 'latch check required')
+    return {'report': report, 'violations': sum(counts[:3]) + (counts[3] if policy['warning_blocking'] else 0),
+            'policy': policy, 'config': config, 'commands': commands, 'launch': launch,
+            'source_files': expected, 'producer_function_sha256': producer_function, 'reference': dict(reference)}
+
+
+def _d11_qualification(project: Path, context: Mapping, native: Mapping) -> dict:
+    import flow109_admission as admission
+    import librelane_contract as contract
+    admitted = admission.require_admission(project, context)
+    uses = context['resolved_row']['tool_uses']
+    if len(uses) != 1 or uses[0]['tool_id'] != 'verilator' or uses[0]['native_steps'] != list(D11_STEPS):
+        raise MetricRefusal('D11_QUALIFICATION_SCOPE_INVALID', 'exact native lint/checker use required')
+    registry = json.loads((project / context['qualification_registry']).read_bytes())
+    record = next(r for r in registry['uses'] if r['use_id'] == uses[0]['use_id'])
+    identity = record['identity']
+    cfg = json.loads((project / identity['config']['path']).read_bytes())
+    ref = native['reference']
+    current = contract.local_image_attestation()
+    readset = ref['tool_readset']
+    if readset != d11_tool_readset():
+        raise MetricRefusal('D11_QUALIFICATION_TOOL_CHANGED', 'complete actual native/tool readset required')
+    policy = dict(native['policy'])
+    if native.get('report', {}).get('verdict') == 'FAIL' and policy.get('warning_blocking') is None:
+        policy['warning_blocking'] = cfg.get('policy', {}).get('warning_blocking')
+    if (cfg.get('schema') != 'vibeic.flow109.d11-lint-qualification.v1'
+            or cfg.get('purpose') != uses[0]['purpose']
+            or cfg.get('native_steps') != list(D11_STEPS)
+            or cfg.get('checked_metrics') != list(D11_IDS)
+            or cfg.get('native_sources') != d11_native_sources()
+            or cfg.get('producer_function_sha256') != native['producer_function_sha256']
+            or cfg.get('policy') != policy
+            or cfg.get('image_id') != ref['image_id'] or current['image_id'] != ref['image_id']
+            or cfg.get('tool_readset') != readset or not readset
+            or _sha(Path(identity['executable']['path']).read_bytes()) != identity['build_sha256']):
+        raise MetricRefusal('D11_QUALIFICATION_SEMANTICS_MISMATCH', 'actual native use differs from reviewed controls')
+    settings = d11_consumed_settings(native['config'])
+    if cfg.get('settings') != settings:
+        raise MetricRefusal('D11_QUALIFICATION_SETTINGS_MISMATCH', 'full native settings changed')
+    for name, sha in readset.items():
+        if _sha(Path(name).read_bytes()) != sha:
+            raise MetricRefusal('D11_QUALIFICATION_TOOL_CHANGED', name)
+    controls = cfg.get('controls')
+    if not isinstance(controls, dict) or set(controls) != {'positive', 'required_violation', 'latch', 'timing_construct'}:
+        raise MetricRefusal('D11_QUALIFICATION_CONTROLS_MISSING', 'positive/error/latch/timing native controls required')
+    references = {r['path']: r['sha256'] for r in record['reference_evidence']}
+    for name, reference in controls.items():
+        if references.get(reference['path']) != reference['sha256']:
+            raise MetricRefusal('D11_QUALIFICATION_CONTROL_UNBOUND', name)
+        control = json.loads(_d11_reopen(project, reference).read_bytes())
+        if (control.get('purpose') != uses[0]['purpose'] or control.get('image_id') != ref['image_id']
+                or control.get('native_sources') != cfg['native_sources']
+                or control.get('policy') != cfg['policy']
+                or control.get('tool_readset') != readset
+                or control.get('status') != ('PASS' if name == 'positive' else 'FAIL')
+                or type(control.get('required_lint_violations')) is not int
+                or (control['required_lint_violations'] != 0 if name == 'positive'
+                    else control['required_lint_violations'] <= 0)):
+            raise MetricRefusal('D11_QUALIFICATION_CONTROL_INVALID', name)
+        if name in ('latch', 'timing_construct'):
+            key = ('design__inferred_latch__count' if name == 'latch'
+                   else 'design__lint_timing_construct__count')
+            counter = control.get('native_metrics', {}).get(key)
+            if type(counter) is not int or counter <= 0:
+                raise MetricRefusal('D11_QUALIFICATION_CONTROL_INVALID', name + ': no native finding')
+        artifacts = control.get('artifacts')
+        if not isinstance(artifacts, list) or not artifacts:
+            raise MetricRefusal('D11_QUALIFICATION_CONTROL_UNBOUND', name)
+        for item in artifacts:
+            _d11_reopen(project, item)
+    if admission.require_admission(project, context) != admitted:
+        raise MetricRefusal('D11_QUALIFICATION_CHANGED', 'per-use evidence changed during consumption')
+    return admitted
+
+
+def _d11_required_population(items, subject) -> bool:
+    """Coverage is a complete unique set, not an incidental JSON list order."""
+    expected = subject['source_files']
+    return (isinstance(items, list) and len(items) == len(expected)
+            and {_json_key(item) for item in items} == {_json_key(item) for item in expected})
+
+
+def d11_fresh_request(project: Path, context: Mapping) -> bool:
+    """Only explicit normal root source authority may request a new D11 run."""
+    project = Path(project).resolve()
+    try:
+        authority, body = _approved_authority(project,
+            'requirements/base_05/source_file_coverage.json#/required_items', ('path', 'sha256'))
+        source = json.loads((project / authority['source']['path']).read_bytes())
+        subject = d11_subject(project)
+        request = source.get('native_run')
+        if request is None:
+            return False
+        registry = _d11_file(project, project / context['qualification_registry'])
+        return (source.get('source_file_coverage') == {'required_items': body['required_items'], 'subject': subject}
+            and _d11_required_population(body['required_items'], subject)
+            and request == {'purpose': 'D11.default', 'subject': subject, 'qualification_registry': registry})
+    except (MetricRefusal, OSError, ValueError, TypeError, KeyError):
+        return False
+
+
+def d11_fresh_admission(project: Path, context: Mapping, config: Mapping, checker_configs: Mapping) -> dict:
+    """Qualification/config admission only; this is not an execution or metric."""
+    import inspect
+    import design_one_shot_runner as design
+    import librelane_contract as contract
+    if not d11_fresh_request(project, context):
+        raise MetricRefusal('D11_FRESH_RUN_NOT_AUTHORIZED', 'normal source request required')
+    policy = {'LINTER_ERROR_ON_LATCH': config.get('LINTER_ERROR_ON_LATCH'),
+        'warning_blocking': checker_configs['Checker.LintWarnings'].get('ERROR_ON_LINTER_WARNINGS', False),
+        'LINTER_DISABLE_WARNINGS': config.get('LINTER_DISABLE_WARNINGS'),
+        'LINTER_DISABLE_WARNINGS_BLACKBOX': config.get('LINTER_DISABLE_WARNINGS_BLACKBOX')}
+    if (policy['LINTER_ERROR_ON_LATCH'] is not True
+            or checker_configs['Checker.LintErrors'].get('ERROR_ON_LINTER_ERRORS', True) is not True
+            or checker_configs['Checker.LintTimingConstructs'].get('ERROR_ON_LINTER_TIMING_CONSTRUCTS', True) is not True):
+        raise MetricRefusal('D11_REQUIRED_CHECK_DISABLED', 'native checkers must remain enabled')
+    prepared = {'reference': {'image_id': contract.local_image_attestation()['image_id'],
+                             'tool_readset': d11_tool_readset()},
+                'producer_function_sha256': _sha(inspect.getsource(design.step_rtl_lint_tool).rstrip().encode()),
+                'config': dict(config), 'policy': policy}
+    authority, _ = _approved_authority(project,
+        'requirements/base_05/source_file_coverage.json#/required_items', ('path', 'sha256'))
+    return {'status': 'PASS', 'scope': 'QUALIFICATION_AND_LAUNCH_ADMISSION_ONLY',
+            'source_authority': authority, 'subject': d11_subject(project),
+            'qualification': _d11_qualification(project, context, prepared)}
+
+
+def d11_current_execution(project: Path, context: Mapping, report: Mapping,
+                          invocation: Mapping, *, published_current: bool) -> dict | None:
+    """Bind this real normal owner invocation; never backfill a historical report."""
+    import benchmark_dispatch as dispatch
+    import _path_layout as layout
+    project = Path(project).resolve()
+    path = layout.report_path(project, 'phase2_one_shot.json')
+    try:
+        binding = report['runner_binding']
+        rows = [r for r in report['steps'] if r.get('name') == 'rtl_lint_tool']
+        if (published_current is not True or path.is_symlink() or json.loads(path.read_bytes()) != report
+                or set(invocation) != {'invocation_id', 'argv', 'project', 'source'}
+                or invocation['project'] != str(project) or not invocation['invocation_id']
+                or any(binding[k] != invocation[k] for k in invocation)
+                or binding['schema'] != 'vibeic.runner_report_binding.v1'
+                or binding['report_name'] != 'phase2_one_shot.json'
+                or binding['source'] != dispatch._runner_source_snapshot(
+                    binding['argv'], consumer=binding['source']['consumer']['path'])
+                or binding['material'] != dispatch._runner_material_snapshot(project)
+                or len(rows) != 1 or rows[0]['status'] not in ('PASS', 'FAIL')
+                or rows[0]['extras'].get('native_fresh') is not True
+                or rows[0]['extras']['context_sha256'] != context['context_sha256']):
+            return None
+        execution = dict(rows[0]['extras']['native_lint_execution'])
+        if execution['subject'] != d11_subject(project) or execution['origin'] != 'D11':
+            return None
+        execution['owner_report'] = _d11_file(project, path)
+        return execution
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return None
+
+
+def d11_capture_execution(project: Path, context: Mapping, native_base: Path,
+                          admission: Mapping, failure_path: Path | None = None) -> dict:
+    """Capture this actual producer run; no approval or synthetic success artifact."""
+    import librelane_contract as contract
+    project = Path(project).resolve()
+    if admission['subject'] != d11_subject(project):
+        raise MetricRefusal('D11_INPUT_CHANGED', 'original source changed during native execution')
+    launch = contract.local_image_attestation()
+    original = native_base / 'original-native-launch.json'
+    # Preserve the actual host attestation bytes, including its original CID.
+    original.write_bytes(Path(launch['attestation_path']).read_bytes())
+    directories = {sid: native_base / (f'{i:02d}-' + sid.lower().replace('.', '-'))
+                   for i, sid in enumerate(D11_STEPS, 1)}
+    result = {'origin': 'D11', 'project': str(project), 'subject': admission['subject'],
+        'lint_dir': str(directories['Verilator.Lint'].relative_to(project)),
+        'checker_dirs': {sid: str(directory.relative_to(project)) for sid, directory in directories.items()
+                         if sid != 'Verilator.Lint'},
+        'artifacts': [_d11_file(project, path) for path in sorted(native_base.rglob('*')) if path.is_file()],
+        'launch': _d11_file(project, original), 'image_id': launch['image_id'],
+        'tool_readset': d11_tool_readset(), 'admission': dict(admission)}
+    if failure_path is not None:
+        result['native_failure'] = _d11_file(project, failure_path)
+    return result
+
+
+def accept_d11(project: Path, context: Mapping[str, Any], *, current_execution: Mapping | None = None) -> dict:
+    """BLOCKING D11: qualified native failure wins; every PASS obligation must be current."""
+    import flow109
+    import flow109_admission as admission
+    import librelane_contract as contract
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': 'D11', 'status': 'NOT_MEASURED',
+              'component_status': 'NOT_MEASURED', 'delivery_blocked': True,
+              'obligations': [{'id': oid, 'status': 'NOT_MEASURED'} for oid in D11_IDS]}
+    try:
+        current = flow109.validate_execution_context(context)
+        obligations = current['resolved_row']['obligations']
+        if (current['resolved_row']['id'] != 'D11' or [r['id'] for r in obligations] != list(D11_IDS)
+                or obligations[0]['expectation']['operator'] != 'eq'
+                or obligations[0]['expectation']['value'] != 0
+                or obligations[1]['expectation'].get('required_set_ref')
+                    != 'requirements/base_05/source_file_coverage.json#/required_items'):
+            raise MetricRefusal('D11_OBLIGATIONS_UNREGISTERED', 'exact two normal obligations required')
+        subject = d11_subject(project)
+        if current_execution is None:
+            adopted, body = _approved_document(project, 'adopted/base_05/lint_execution.json',
+                authority='requirements_owner', schema='vibeic.flow109.adopted-reference.v1')
+            source = json.loads((project / adopted['source']['path']).read_bytes())
+            if (not adopted['source']['path'].startswith('input/')
+                    or source.get('lint_execution') != {k: body[k] for k in ('reference', 'reference_identity')}
+                    or body['reference']['subject'] != subject):
+                raise MetricRefusal('D11_EXECUTION_AUTHORITY_STALE', 'independent original execution/subject required')
+            _identity_complete(body['reference_identity'])
+            if body['reference_identity']['consumed_inputs'] != subject:
+                raise MetricRefusal('D11_EXECUTION_AUTHORITY_STALE', 'adopted identity differs')
+        else:
+            admission_record = current_execution['admission']
+            source_ref = admission_record['source_authority']['source']
+            source = json.loads(_d11_reopen(project, source_ref).read_bytes())
+            expected_request = {'purpose': 'D11.default', 'subject': subject,
+                'qualification_registry': _d11_file(project, project / current['qualification_registry'])}
+            if (admission_record.get('status') != 'PASS' or admission_record.get('subject') != subject
+                    or not source_ref['path'].startswith('input/')
+                    or source.get('native_run') != expected_request
+                    or set(source.get('source_file_coverage', {})) != {'subject', 'required_items'}
+                    or source['source_file_coverage']['subject'] != subject
+                    or not _d11_required_population(source['source_file_coverage']['required_items'], subject)
+                    or current_execution.get('subject') != subject):
+                raise MetricRefusal('D11_FRESH_EXECUTION_UNBOUND', 'normal source request/current owner required')
+            body = {'reference': dict(current_execution)}
+            adopted = {'kind': 'CURRENT_NORMAL_OWNER_EXECUTION', 'owner_report': current_execution['owner_report']}
+        native = _d11_native(project, body['reference'])
+        result['native_observation'] = native['report']
+        result['component_status'] = native['report']['verdict']
+        try:
+            qualified = _d11_qualification(project, current, native)
+        except (admission.AdmissionRefusal, MetricRefusal, OSError, ValueError, TypeError, KeyError) as exc:
+            # An unqualified observation is retained, never a row FAIL/PASS.
+            result['component_status'] = 'NOT_MEASURED'
+            raise MetricRefusal('D11_TOOL_QUALIFICATION_UNPROVEN', str(exc)) from exc
+        identity = {'producer': adopted, 'checker': {'native_sources': d11_native_sources(),
+                    'consumer_sha256': _sha(Path(__file__).read_bytes())},
+                    'tool_execution': {'original_launch': body['reference']['launch'], 'qualification': qualified},
+                    'consumed_inputs': subject, 'requirements': obligations[0]['expectation'],
+                    'configuration': {'native_policy': native['policy'], 'settings': native['config']}}
+        first = result['obligations'][0]
+        status, detail = evaluate_operator('eq', {'status': 'MEASURED', 'value': native['violations'],
+            'unit': 'count', 'identity': identity}, {'status': 'APPROVED', 'value': 0, 'unit': 'count'})
+        first.update(status=status, reason=detail, observed_value=native['violations'], identity=identity)
+        try:
+            authority, req = _approved_authority(project,
+                'requirements/base_05/source_file_coverage.json#/required_items', ('path', 'sha256'))
+            original = json.loads((project / authority['source']['path']).read_bytes())
+            if (not authority['source']['path'].startswith('input/')
+                    or original.get('source_file_coverage') != {'required_items': req['required_items'], 'subject': subject}
+                    or not _d11_required_population(req['required_items'], subject)):
+                raise MetricRefusal('D11_SOURCE_REQUIREMENTS_STALE', 'independent complete source population required')
+            for item in req['required_items']:
+                _d11_reopen(project, item)
+            status, detail = evaluate_operator('covers_all', {'status': 'MEASURED',
+                'value': native['source_files'], 'identity': {**identity, 'requirements': authority}}, authority)
+            result['obligations'][1].update(status=status, reason=detail, observed_value=native['source_files'])
+        except (MetricRefusal, OSError, ValueError, TypeError, KeyError) as exc:
+            result['obligations'][1].update(reason=getattr(exc, 'code', 'D11_COVERAGE_UNPROVEN'), detail=str(exc))
+        if (d11_subject(project) != subject
+                or (current_execution is None and _approved_document(project, 'adopted/base_05/lint_execution.json',
+                    authority='requirements_owner', schema='vibeic.flow109.adopted-reference.v1')[0] != adopted)
+                or _d11_native(project, body['reference']) != native
+                or _d11_qualification(project, current, native) != qualified):
+            raise MetricRefusal('D11_INPUT_CHANGED', 'consumer inputs changed during acceptance')
+        result['subject'] = subject
+    except (MetricRefusal, admission.AdmissionRefusal, flow109.Flow109Error, contract.Refusal,
+            OSError, ValueError, TypeError, KeyError, AttributeError, StopIteration) as exc:
+        if 'subject' not in result and any(r['status'] == 'PASS' for r in result['obligations']):
+            # Coverage refusal is handled independently above. A later changed
+            # native/authority/launch read invalidates this whole observation.
+            if getattr(exc, 'code', '') == 'D11_INPUT_CHANGED':
+                for item in result['obligations']:
+                    item['status'] = 'NOT_MEASURED'
+                result['component_status'] = 'NOT_MEASURED'
+        result['reason'] = getattr(exc, 'code', 'D11_EVIDENCE_UNPROVEN')
+        result['detail'] = str(exc)
+    states = [r['status'] for r in result['obligations']]
+    result['status'] = ('FAIL' if 'FAIL' in states else 'PASS' if states == ['PASS', 'PASS']
+                        and 'subject' in result else 'NOT_MEASURED')
+    result.setdefault('reason', 'D11_METRICS_PASS' if result['status'] == 'PASS'
+                       else 'D11_REQUIRED_LINT_FAILED' if result['status'] == 'FAIL' else 'D11_COVERAGE_UNPROVEN')
+    return result
+
+
 def accept_a01(project: Path, context: Mapping[str, Any],
                component: Mapping[str, Any]) -> dict:
     """Evaluate the complete, and only, currently whitelisted A01 binding."""
