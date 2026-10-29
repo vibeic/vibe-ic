@@ -8303,11 +8303,13 @@ def _serial_current_context(binding: _Phase1ProjectBinding,
             for index, part in enumerate(parts):
                 prefix = "/".join(parts[:index + 1])
                 last = index == len(parts) - 1
-                visit(parent, part, prefix, last, rel != report_rel)
+                visit(parent, part, prefix, last, last and rel != report_rel)
                 if not last:
                     try:
                         child = os.open(part, flags | os.O_DIRECTORY, dir_fd=parent)
                     except FileNotFoundError:
+                        if rel != report_rel:
+                            entries[rel] = ["absent"]
                         break
                     if list((os.fstat(child).st_dev, os.fstat(child).st_ino)) != identities[prefix][:2]:
                         os.close(child)
