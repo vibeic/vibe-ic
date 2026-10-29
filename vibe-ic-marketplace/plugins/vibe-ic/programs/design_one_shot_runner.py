@@ -14341,7 +14341,7 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
         import flow109
         import flow109_metric_acceptance as metrics
         selected = flow109.validate_execution_context(json.loads(Path(raw_context).read_bytes()))
-        if selected['resolved_row']['id'] == 'D11':
+        if selected.get('resolved_row', {}).get('id') == 'D11':
             t0 = time.time()
             accepted = metrics.accept_d11(project, selected)
             if accepted['status'] in ('PASS', 'FAIL') or not metrics.d11_fresh_request(project, selected):

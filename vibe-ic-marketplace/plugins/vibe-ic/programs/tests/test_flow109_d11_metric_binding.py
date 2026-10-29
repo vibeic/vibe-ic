@@ -531,3 +531,18 @@ def test_d11_current_native_owner_missing_fresh_binding_cannot_publish(case,monk
     invocation['invocation_id']='foreign-current-owner'
     result=runner._finish_d11_selected_owner(case['project'],report,invocation,published_current=True)
     assert result['verdict']=='NOT_MEASURED',result
+
+
+@pytest.mark.parametrize('window', [False, True])
+def test_d11_entry_preserves_other_normal_context_shapes(tmp_path, monkeypatch, window):
+    import design_one_shot_runner as design
+    c=context()
+    plan=flow109.resolve_plan(c['features'])
+    selected=flow109.execution_context(plan,'D11','D12') if window else flow109.execution_context(plan,'D09','D09')
+    path=tmp_path/'other-context.json';put(path,selected)
+    monkeypatch.setenv(flow109.CONTEXT_ENV,str(path))
+    monkeypatch.setattr(contract,'selected_mode',lambda *args:'direct')
+    # Existing structured direct lint returns None without a native call.
+    try: observed=design.step_rtl_lint_tool(tmp_path)
+    except KeyError as exc: observed={'exception':'KeyError','field':str(exc)}
+    assert observed is None,observed
