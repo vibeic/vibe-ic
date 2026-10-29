@@ -183,6 +183,8 @@ def test_native_small_antecedent_control_for_E_only(reach_case, reachable):
     covered = producer.run_reachability(project, container=None, timeout=30, mem_limit_kb=1048576)
     assert covered['reachability_check']['status'] == ('PASS' if reachable else 'NOT_MEASURED'), covered
     accepted = metrics.accept_d14(project, ctx)
+    put(project / 'native_formal_acceptance.json', accepted)
+    put(project / 'native_cover_command_result.json', covered)
     assert accepted['status'] == ('PASS' if reachable else 'NOT_MEASURED'), accepted
 
 
