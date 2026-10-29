@@ -96,13 +96,30 @@ def census(after):
     return '\n'.join(lines)+'\n'
 
 
+def actual_d24_binding_with_software_lower_inputs(project, monkeypatch):
+    """Execute the real normal return path; only lower reconciliation is isolated."""
+    cells=[{'instance':x,'cell':'scan_unit'} for x in ['a','b']]
+    netlist=write(project,'phase2/stage2/synth/post_dft_netlist.v',NETLIST)
+    inventory=write(project,'reports/fixture_scan_cells.json',{'software_upstream_fixture':True,'cells':cells})
+    adopted={'artifact_id':'D24_POST_SCAN_NETLIST',**netlist}
+    write(project,flow109._D24_RESULT.as_posix(),{'step_id':'D24','default_row_status':'PASS',
+        'completed':True,'adopted_netlist':adopted,'scan_cell_list':inventory,
+        'software_upstream_fixture':True})
+    reconciliation={'cells':cells,'scan_cell_list':inventory,'adopted_netlist':netlist,
+                    'D23_result':inventory,'parser_sha256':'SOFTWARE_LOWER_PRECONDITION_NO_NATIVE_RUN'}
+    monkeypatch.setattr(flow109,'d24_scan_content',lambda *args:copy.deepcopy(reconciliation))
+    result=flow109.physical_d24_binding(project,context(),{'software_D01_precondition':True})
+    assert set(result)=={'D24_result','adopted_netlist','scan_cell_reconciliation'}
+    return result
+
+
 @pytest.fixture
 def software_case(tmp_path, monkeypatch):
     native = leaf()
     p = tmp_path.resolve()
     c = context()
     # Only upstream/current D35/intent is isolated. Consumer/reopen/prepare are real.
-    prior = {'intent': intent(), 'plan': {'planned_chain_count':1,'max_chain_length':2}, 'scan': {'cells': [{'instance': x,'cell':'scan_unit'} for x in ['a','b']]},
+    prior = {'intent': intent(), 'plan': {'planned_chain_count':1,'max_chain_length':2}, 'scan': actual_d24_binding_with_software_lower_inputs(p,monkeypatch),
              'accepted': {'D19': 'software fixture', 'D25': 'software fixture', 'D35': 'software fixture'},
              'placed': {'odb': write(p, 'placed.odb', 'SOFTWARE OWNER SOURCE CONTROL ONLY'),
                         'def': write(p, 'placed.def', 'SOFTWARE OWNER SOURCE CONTROL ONLY')}}
@@ -142,7 +159,7 @@ def software_case(tmp_path, monkeypatch):
         ('script','stitch.tcl','// SOFTWARE ONLY'),('testbench','tb.v','// SOFTWARE ONLY'),
         ('compile_log','compile.log','SOFTWARE ONLY'),('simulation_log','simulation.log','D36_FLUSH_DONE checked=16 errors=0\n'),
         ('simulation_result','simulation.result.json',{'returncode':0})]}
-    chain=native.derive_map(p/outputs['before']['path'],p/outputs['after']['path'],{**manifest,'qualified_cell_types':scope['qualified_cell_types']},intent(),prior['scan']['cells'])
+    chain=native.derive_map(p/outputs['before']['path'],p/outputs['after']['path'],{**manifest,'qualified_cell_types':scope['qualified_cell_types']},intent(),prior['scan']['scan_cell_reconciliation']['cells'])
     outputs['map']=write(p,str((directory/'map.json').relative_to(p)),chain)
     outputs['flush']=write(p,str((directory/'flush.json').relative_to(p)),{'map':outputs['map'],'models':models,
         'defines':manifest['defines'],'clock':native.check_clock(NETLIST,LIB,intent(),chain),
@@ -340,3 +357,33 @@ def test_d36_canonical_writer_reopens_after_genuine_owner_pass(software_case):
     assert canonical['completed'] is False
     row=json.loads((p/'reports/flow109/default_rows/D36.json').read_text())
     assert row['default_row_status']=='NOT_MEASURED' and row['completed'] is False
+
+
+def test_d36_consumes_actual_normal_d24_binding_shape(tmp_path,monkeypatch):
+    native=leaf();project=tmp_path.resolve()
+    actual=actual_d24_binding_with_software_lower_inputs(project,monkeypatch)
+    m={'top':'unit','liberty':{},'models':[],'defines':[],'scan_cells':SCAN,
+       'scan_period_ns':17,'scan_protocol':'software shape control','clock_constraints':[],
+       'test_output_change':{'port':'sout'}}
+    prepared={'manifest':m,'upstream':{'scan':actual,'placed':{'odb':{}},
+        'intent':intent(),'plan':{'planned_chain_count':1,'max_chain_length':2}},
+        'tools':{'precondition':'SOFTWARE_ONLY'},
+        'source':{'qualified_image':'SOFTWARE_ONLY','qualified_image_id':'SOFTWARE_ONLY'}}
+    observed=native.native_subject(prepared)
+    assert observed['population']==actual['scan_cell_reconciliation']['cells']
+    assert actual['D24_result']['path']==flow109._D24_RESULT.as_posix()
+    assert actual['adopted_netlist']['artifact_id']=='D24_POST_SCAN_NETLIST'
+
+
+@pytest.mark.parametrize('damage',['missing','partial','wrong'])
+def test_d36_bad_reconciled_population_refuses_before_native(software_case,damage):
+    p,c,m,scope,prior,*_=software_case
+    reconciliation=prior['scan']['scan_cell_reconciliation']
+    if damage=='missing':reconciliation.pop('cells')
+    elif damage=='partial':reconciliation['cells']=reconciliation['cells'][:1]
+    else:reconciliation['cells']=[{'instance':'foreign','cell':'unknown'}]
+    before={str(f):f.read_bytes() for f in (p/'reports/flow109/attempts').rglob('*') if f.is_file()}
+    with forbid_native_call():
+        result=leaf().owner(p,c)
+    assert result['default_row_status']=='NOT_MEASURED' and result['native_started'] is False
+    assert before=={str(f):f.read_bytes() for f in (p/'reports/flow109/attempts').rglob('*') if f.is_file()}

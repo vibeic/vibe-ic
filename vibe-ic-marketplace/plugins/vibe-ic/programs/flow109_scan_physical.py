@@ -169,7 +169,7 @@ def prepare(project, context):
     if plan.get('planned_chain_count') != 1:
         fail('CHAIN_COUNT_UNQUALIFIED', 'only the reviewed single-chain endpoint scope is supported')
     limit = plan.get('max_chain_length')
-    if type(limit) is not int or limit < 1 or len(prior['scan']['cells']) > limit:
+    if type(limit) is not int or limit < 1 or len(prior['scan']['scan_cell_reconciliation']['cells']) > limit:
         fail('PLAN_LIMIT_EXCEEDED', 'complete current population must fit the D01 limit')
     mode = prior['intent']['test_mode']
     ports = prior['intent']['test_port_def']
@@ -351,7 +351,7 @@ def native_subject(prepared):
     keys = ('top', 'liberty', 'models', 'defines', 'scan_cells', 'scan_period_ns',
             'scan_protocol', 'clock_constraints', 'test_output_change')
     return {**{key: m[key] for key in keys}, 'placed_odb': prior['placed']['odb'],
-            'population': sorted(prior['scan']['cells'], key=lambda item: item['instance']),
+            'population': sorted(prior['scan']['scan_cell_reconciliation']['cells'], key=lambda item: item['instance']),
             'ports': prior['intent']['test_port_def'], 'mode': prior['intent']['test_mode'],
             'plan': {k: prior['plan'][k] for k in ('planned_chain_count', 'max_chain_length')},
             'tools': prepared['tools'],
@@ -392,7 +392,7 @@ def reopen(prepared):
         bound(project, outputs[key])
     manifest = {**prepared['manifest'], 'qualified_cell_types': prepared['source']['qualified_cell_types']}
     chain = derive_map(bound(project, outputs['before']), bound(project, outputs['after']), manifest,
-                       prepared['upstream']['intent'], prepared['upstream']['scan']['cells'])
+                       prepared['upstream']['intent'], prepared['upstream']['scan']['scan_cell_reconciliation']['cells'])
     if json.loads(bound(project, outputs['map']).read_text()) != chain:
         fail('MAP_CHANGED', 'map differs from original native connectivity')
     original_manifest = bound(project, outputs['manifest_snapshot'])
@@ -592,7 +592,7 @@ def run_native(prepared, directory):
     loaded = run('preflight', [prepared['tools']['openroad']['path'], '-no_init', '-exit', str(pre)])
     if loaded.returncode != 0:
         fail('PLACED_NATIVE_READ_REFUSED', 'preflight.log')
-    population = prepared['upstream']['scan']['cells']
+    population = prepared['upstream']['scan']['scan_cell_reconciliation']['cells']
     cells, _, ports = snapshot(path('preflight.tsv'))
     if set(c['cell'] for c in cells.values()) - set(prepared['source']['qualified_cell_types']):
         fail('UNKNOWN_NATIVE_CELL', 'placed live models must be qualified before stitching')
