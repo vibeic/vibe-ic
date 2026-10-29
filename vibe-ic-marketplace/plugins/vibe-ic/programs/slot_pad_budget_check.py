@@ -1625,7 +1625,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             if _derived["measurable"]:
                 _ring = _derived
                 _ring_source = "l_doc:pad_placement"
-        if _budget["unresolved_width_ports"]:
+        elif (Path(a.project) / "config/dft_test_access.json").is_file():
+            _derived = derived_own_ring(str(a.project), ports)
+        if (_derived or {}).get("planned_test_access_refusal"):
+            refusal = _derived["planned_test_access_refusal"]
+            rep = {"check": "slot_pad_budget", "verdict": "UNDECIDED", "rc": 2,
+                   "reason": refusal["rule"] + ": " + refusal["message"],
+                   "findings": [{"severity": "ERROR", **refusal}],
+                   "derived_ring": _derived}
+            rc = 2
+        elif _budget["unresolved_width_ports"]:
             rep = {"check": "slot_pad_budget", "verdict": "UNDECIDED", "rc": 2,
                    "reason_class": _reason_taxonomy.ZERO_DENOMINATOR,
                    "reason": ("the width of "
@@ -1786,7 +1795,8 @@ def main(argv: Optional[List[str]] = None) -> int:
                      "renamed_interfaces_rejected",
                      "exposed_output_splits", "exposed_output_splits_rejected",
                      "nets_on_two_sides", "documents_scanned",
-                     "documents_unreadable", "parameter_defaults")
+                     "documents_unreadable", "parameter_defaults",
+                     "planned_test_access")
                     if k in _derived}
             if not _fits:
                 _why = []

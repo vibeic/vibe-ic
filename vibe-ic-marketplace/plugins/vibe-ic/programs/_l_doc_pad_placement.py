@@ -81,6 +81,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 
 import json
+import hashlib
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -1078,6 +1079,142 @@ def pathless_os_error(exc: OSError) -> str:
 # --------------------------------------------------------------------------- #
 # the ring the design declares for itself, derived once (R-0915-101)
 # --------------------------------------------------------------------------- #
+def planned_test_access(project: Path, placement: Optional[PadPlacement],
+                        params: Dict[str, int], implemented: Any = None):
+    """Reopen the approved Default pad plan, without claiming scan realization.
+
+    The old prestitched view remains the physical producer's responsibility.
+    This view binds independent source intent, not a generated pad report.
+    """
+    project = Path(project).resolve()
+    path = project / "config/dft_test_access.json"
+    if not path.exists() and not path.is_symlink():
+        return [], {}, None
+    try:
+        def unique(pairs):
+            out = {}
+            for key, value in pairs:
+                if key in out:
+                    raise ValueError("duplicate planned-input key: " + key)
+                out[key] = value
+            return out
+        raw = path.read_bytes()
+        body = json.loads(raw, object_pairs_hook=unique)
+        if not isinstance(body, dict):
+            raise ValueError("test access must be an object")
+        if body.get("profile") != "default_planned":
+            return [], {}, None
+        import flow109_metric_acceptance as metrics
+        import fault_scan_chain_insert as scan
+        import _cdc_netlist as native
+        import _specrtl_common as sources
+        import _path_layout as layout
+        import _tapeout_declaration as declaration
+        authority, approved = metrics._approved_document(
+            project, "config/dft_test_access.json", authority="requirements_owner",
+            schema="vibeic.dft-test-access.v1")
+        if approved != body or authority["sha256"] != hashlib.sha256(raw).hexdigest():
+            raise ValueError("planned authority changed during interpretation")
+        if (set(body) != {"schema", "profile", "mapping", "approval",
+                          "reference", "reference_identity"}
+                or body["mapping"] != "dedicated_pads"
+                or not authority["source"]["path"].startswith("input/")
+                or not (project / authority["source"]["path"]).resolve().is_relative_to(project / "input")):
+            raise ValueError("planned view needs independent input and dedicated pads")
+        payload = {key: body[key] for key in
+                   ("profile", "mapping", "reference", "reference_identity")}
+        original = json.loads(metrics._safe_project_file(
+            project, authority["source"]["path"]).read_bytes(), object_pairs_hook=unique)
+        if original.get("dft_test_access") != payload:
+            raise ValueError("approved planned semantics differ from independent input")
+        binding, problems = scan.load_d09_dft_contract(project)
+        if binding is None or problems or binding["intent"]["requires_scan"] is not True:
+            raise ValueError("current D01 full-scan authority unavailable: " + "; ".join(problems))
+        if placement is None:
+            raise ValueError("the original functional pad placement is required")
+        spec = metrics._safe_project_file(project, "phase1/generated_docs/L9_INTEGRATION_SPEC.json")
+        core = json.loads(spec.read_bytes())["top_module"]
+        d01 = layout.report_path(project, "phase1_one_shot.json")
+        def record(p):
+            rel = Path(p).relative_to(project).as_posix()
+            checked = metrics._safe_project_file(project, rel)
+            return {"path": rel, "sha256": hashlib.sha256(checked.read_bytes()).hexdigest()}
+        tapeout = metrics._safe_project_file(project, declaration.DECLARATION_REL)
+        declared_ring = json.loads(tapeout.read_bytes())
+        if any(isinstance(declaration.answer(declared_ring, key), dict)
+               and declaration.answer(declared_ring, key)
+               for key in ("pad_signal_map", "pad_order_by_side")):
+            raise ValueError("planned overlay cannot override a typed declared ring")
+        subject = {"D01": record(d01),
+                   "declaration": {"path": binding["path"], "sha256": binding["sha256"]},
+                   "declaration_sources": binding["sources"],
+                   "functional_pad_source": record(project / placement.source),
+                   "functional_interface": record(spec),
+                   "tapeout_declaration": record(tapeout),
+                   "rtl_inputs": native.source_binding(project, core,
+                       sources.rtl_source_files(project))["files"]}
+        identity = body["reference_identity"]
+        metrics._identity_complete(identity)
+        if (identity["consumed_inputs"] != subject
+                or identity["producer"] != {"authority": "requirements_owner"}
+                or identity["checker"] != {"authority": "independent_source_reviewer"}
+                or identity["tool_execution"] != {"kind": "SOURCE_REVIEW_ONLY",
+                                                  "native_execution": False}
+                or identity["configuration"] != {"purpose": "D09.default.planned_test_pads"}):
+            raise ValueError("planned source-review identity is stale or unqualified")
+        reference = body["reference"]
+        if not isinstance(reference, dict) or set(reference) != {"ports"}:
+            raise ValueError("planned reference must contain explicit ports")
+        rows = reference["ports"]
+        roles = binding["intent"]["test_port_def"]
+        expected = {entry["public"]: "output" if role == "scan_out" else "input"
+                    for role, entry in roles.items()}
+        if (not isinstance(rows, list) or len(rows) != len(expected)
+                or any(not isinstance(row, dict) or set(row) != {"name", "direction", "side"}
+                       for row in rows)
+                or len({row["name"] for row in rows}) != len(rows)
+                or {row["name"] for row in rows} != set(expected)):
+            raise ValueError("planned pads must cover every D01 role exactly once")
+        base, unresolved = expand_side_ports(placement, params)
+        base_names = {net.split("[")[0] for nets in base.values() for net in nets}
+        if unresolved or base_names & set(expected):
+            raise ValueError("test pads cannot alias or replace the functional partition")
+        directions = {str(p.get("name")): p for p in (implemented or [])}
+        sides = {side: [] for side in ("S", "E", "N", "W")}
+        additions = []
+        for row in rows:
+            name = row["name"]
+            if row["side"] not in sides or row["direction"] != expected[name]:
+                raise ValueError("invalid planned side/direction: " + name)
+            if implemented is not None:
+                actual = directions.get(name, {})
+                if _port_direction(actual) != expected[name] or _port_width(actual) != 1:
+                    raise ValueError("implemented D01 role is absent or not scalar: " + name)
+            sides[row["side"]].append(name)
+            additions.append({"name": name, "direction": expected[name], "width": 1})
+        # A second approval/source read catches changes during interpretation.
+        if metrics._approved_document(project, "config/dft_test_access.json",
+                authority="requirements_owner", schema="vibeic.dft-test-access.v1") != (authority, body):
+            raise ValueError("planned authority changed during interpretation")
+        for item in [subject[key] for key in
+                     ("D01", "declaration", "functional_pad_source", "functional_interface",
+                      "tapeout_declaration")
+                     ] + subject["rtl_inputs"] + [
+                         {"path": rel, "sha256": sha.removeprefix("sha256:")}
+                         for rel, sha in subject["declaration_sources"].items()]:
+            if record(project / item["path"]) != item:
+                raise ValueError("planned source changed during interpretation")
+        return additions, sides, {"profile": "default_planned",
+            "declaration": "config/dft_test_access.json",
+            "declaration_sha256": authority["sha256"], "authority": authority,
+            "source_identity": identity, "ports": rows,
+            "permanent_control_tieoffs": False, "native_execution": False}
+    except PadPlacementError:
+        raise
+    except (OSError, ValueError, KeyError, TypeError, AttributeError, RuntimeError) as exc:
+        raise PadPlacementError("DFT_TEST_PAD_PLAN_INVALID", str(exc)) from exc
+
+
 def derive_own_ring(project: Path, ports: Any) -> Dict[str, Any]:
     """The pad ring THIS DESIGN DECLARES FOR ITSELF, read from its own docs.
 
@@ -1117,6 +1254,12 @@ def derive_own_ring(project: Path, ports: Any) -> Dict[str, Any]:
     out["documents_scanned"] = list(scanned)
     out["documents_unreadable"] = list(unreadable)
     out["parameter_defaults"] = dict(params)
+    try:
+        _test_ports, test_sides, test_plan = planned_test_access(
+            project, placement, params, ports)
+    except PadPlacementError as exc:
+        out["planned_test_access_refusal"] = {"rule": exc.rule, "message": exc.message}
+        return out
     if placement is None:
         return out
     out["source"] = placement.source
@@ -1152,6 +1295,10 @@ def derive_own_ring(project: Path, ports: Any) -> Dict[str, Any]:
             if net not in nets:
                 nets.append(net)
         by_side[side] = nets
+    if test_plan is not None:
+        for side, nets in test_sides.items():
+            by_side.setdefault(side, []).extend(nets)
+        out["planned_test_access"] = test_plan
     out["by_side"] = by_side
     # A NET ON TWO EDGES is the contradiction step 15.5ic refuses as
     # PORT_ON_TWO_SIDES (e.g. a declared rename whose L9 names sit in two
