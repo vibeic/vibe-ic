@@ -20979,6 +20979,68 @@ def _emit_step7_pvt_matrix(project: Path, pdk: object,
     return path, len(corners)
 
 
+def _publish_d19_owner(project: Path, context: Mapping[str, Any], top: str,
+                       container: str, ic_class, pdk_name, *, invocation_context=None) -> int:
+    """Execute only the selected constraint-plan owner, not the whole P0 tail."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+    if (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink():
+        print('REFUSED: D19_ATTEMPT_ALREADY_COMPLETED', file=sys.stderr)
+        return 2
+    row = step_asic_sdc(project, top, container, ic_class, pdk_name=pdk_name, _use_controller=False)
+    row.extras.update(completed=False, default_row_status='NOT_MEASURED')
+    summary = {'project': str(project), 'steps': [asdict(row)], 'verdict': row.status,
+        'declared_window': {'entry_step': '7', 'exit_step': '7', 'dispatched_step_ids': ['7']},
+        'bounded_disclosures': ['constraint-plan/native SDC load only; full-phase P0/STA/audit not dispatched; whole IC unmeasured']}
+    out = attempt / 'phase2_one_shot.json'
+    _write_phase2_report(out, summary, project, invocation_context=invocation_context)
+    reread = metrics.accept_d19(project, context, row.extras)
+    if reread != row.extras.get('metric_acceptance'):
+        row.status, row.reason_class, row.detail = 'NOT_MEASURED', 'input_absent', 'D19_INPUT_CHANGED_DURING_OWNER_PUBLICATION'
+        row.extras.update(metric_acceptance=reread, completed=False, default_row_status='NOT_MEASURED')
+        summary.update(steps=[asdict(row)], verdict=row.status)
+        _write_phase2_report(out, summary, project, invocation_context=invocation_context)
+    return {'PASS': 0, 'FAIL': 1}.get(row.status, 2)
+
+
+def _d19_load_base_sdc(project: Path, context: Mapping[str, Any], admission: Mapping[str, Any],
+                       top: str, pdk_name: str) -> list:
+    """Use the installed normal LibreLane copy step; no Tcl evaluation or STA."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    from librelane.config import Config
+    from librelane.state import State, DesignFormat
+    from librelane.steps.misc import LoadBaseSDC
+    project = Path(project).resolve()
+    if not context['features']['technology_specific'] or not pdk_name:
+        raise metrics.MetricRefusal('D19_NATIVE_PDK_CONTEXT_MISSING', 'no portable technology surrogate')
+    attempt_name = os.environ.get(flow109.ATTEMPT_ENV)
+    attempt = (flow109._bound_attempt(project, context, attempt_name) if attempt_name
+               else flow109._new_attempt(project, context))
+    outputs = []
+    module = metrics.d19_native_module()
+    for index, entry in enumerate(admission['mapping']):
+        source = metrics._d19_ref(project, entry['sdc'], 'native input SDC')
+        work = attempt / 'load_base_sdc' / str(index)
+        if work.exists():
+            raise metrics.MetricRefusal('D19_NATIVE_OUTPUT_ALREADY_EXISTS', str(work))
+        config, _ = Config.load({'DESIGN_NAME': top,
+            'FALLBACK_SDC': str((project / source['path']).resolve())},
+            LoadBaseSDC.get_all_config_variables(), design_dir=str(project), pdk=pdk_name,
+            pdk_root=os.environ.get('PDK_ROOT'))
+        step = LoadBaseSDC(config=config, state_in=State())
+        state = step.start(step_dir=str(work))
+        output = Path(state[DesignFormat.SDC])
+        def ref(path):
+            return {'path': str(path.relative_to(project)),
+                    'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+        outputs.append({'scenario': {k: entry[k] for k in ('mode', 'corner', 'check') if k in entry},
+            'source_sdc': source, 'sdc': ref(output), 'config': ref(work / 'config.json'),
+            'state': ref(work / 'state_out.json'), 'native_module': module})
+    return outputs
+
+
 def step_asic_sdc(project: Path, top_name: str = "chip_top",
                   container: str = _pin.default_container_name(),
                   ic_class: Optional[str] = None,
@@ -21040,15 +21102,41 @@ def step_asic_sdc(project: Path, top_name: str = "chip_top",
         result = _step_asic_sdc_producer(project, top_name, container, ic_class,
             pdk_config=pdk_config, pdk_name=pdk_name, _use_controller=_use_controller)
     if context is not None:
+        # Complete D19 inputs may exercise the actual legacy SDC copy purpose.
+        # This does not run the later constraint syntax/STA checks.
+        if (context['features']['technology_specific'] and result.status != 'FAIL'
+                and (project / 'requirements/base_10/exception_justification.json').is_file()):
+            try:
+                selected_pdk = pdk_name or getattr(pdk_config, 'name', None)
+                result.extras['native_sdc_outputs'] = _d19_load_base_sdc(
+                    project, context, admission, top_name, selected_pdk)
+            except Exception as exc:
+                result.extras['native_sdc_refusal'] = str(exc)
         component = {'d19_plan_admission': admission}
+        if 'native_sdc_outputs' in result.extras:
+            component['native_sdc_outputs'] = result.extras['native_sdc_outputs']
         if 'portable_sdc_outputs' in result.extras:
             component['portable_sdc_outputs'] = result.extras['portable_sdc_outputs']
         accepted = metrics.accept_d19(project, context, component)
+        # The old electrical-validation deferral belongs downstream. Only
+        # an actually emitted plan and qualified native copy close this row.
+        produced = (result.status == 'PASS' or result.extras.get('producer_status') == 'PASS'
+                    and result.extras.get('deferred_until') == 'post_prelayout')
+        completed = accepted['status'] == 'PASS' and produced
         result.extras.update(component, metric_acceptance=accepted,
-                             metric_acceptance_status=accepted['status'],
-                             completed=False, default_row_status='NOT_MEASURED')
+                             metric_acceptance_status=accepted['status'], step_id='7',
+                             context_sha256=context['context_sha256'],
+                             completed=completed, default_row_status='PASS' if completed else 'NOT_MEASURED')
+        if completed:
+            result.status = 'PASS'
+            result.reason_class = ''
+            for key in tuple(result.extras):
+                if key.startswith('deferred_'):
+                    result.extras.pop(key)
+            result.detail += '; constraint plan/native copy qualified; SDC validation and STA remain downstream'
         if accepted['status'] != 'PASS' and result.status == 'PASS':
             result.status = 'NOT_MEASURED'
+            result.reason_class = _V.ReasonClass.INPUT_ABSENT
             result.detail += '; ' + accepted['reason']
     return result
 
@@ -27640,6 +27728,7 @@ def main() -> int:
     _d12_context = None
     _d13_context = None
     _d14_context = None
+    _d19_context = None
     _d12_raw = os.environ.get('VIBEIC_FLOW109_CONTEXT')
     if str(args.entry_step) == str(args.exit_step) == '3' and _d12_raw:
         import flow109
@@ -27656,6 +27745,11 @@ def main() -> int:
         _d14_current = flow109.validate_execution_context(json.loads(Path(_d12_raw).read_bytes()))
         if _d14_current.get('resolved_row', {}).get('id') == 'D14':
             _d14_context = _d14_current
+    if str(args.entry_step) == str(args.exit_step) == '7' and _d12_raw:
+        import flow109
+        current = flow109.validate_execution_context(json.loads(Path(_d12_raw).read_bytes()))
+        if current.get('resolved_row', {}).get('id') == 'D19':
+            _d19_context = current
 
     # ── A DECLARED WINDOW IS A DECLARED PROOF BURDEN (R-0924-1) ─────────────
     # The owner's ask: when a gate is wrong, re-run THAT step -- only it.
@@ -28023,6 +28117,9 @@ def main() -> int:
         return _publish_d13_owner(project, _d13_context, invocation_context=_dispatch_invocation_context)
     if _d14_context:
         return _publish_d14_owner(project, _d14_context, invocation_context=_dispatch_invocation_context)
+    if _d19_context:
+        return _publish_d19_owner(project, _d19_context, args.top_name, args.container,
+            getattr(args, 'ic_class', None), args.pdk, invocation_context=_dispatch_invocation_context)
 
     plan: List[StepResult] = []
 

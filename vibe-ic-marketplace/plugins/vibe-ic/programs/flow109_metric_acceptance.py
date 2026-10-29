@@ -191,6 +191,10 @@ D71_BINDINGS = {
 D71_CONSUMER_SOURCE = "programs/flow109_metric_acceptance.py"
 
 D19_BINDINGS = {
+    "base_10.exception_justification": {
+        "operator": "covers_all",
+        "required_set_ref": "requirements/base_10/exception_justification.json#/required_items",
+    },
     "base_10.scenario_constraints": {
         "operator": "covers_all",
         "required_set_ref": "requirements/base_10/scenario_constraints.json#/required_items",
@@ -582,13 +586,152 @@ def d19_admission(project: Path, context: Mapping[str, Any], *, publish: bool = 
     return result
 
 
+D19_PURPOSE = 'D19.default.constraint_plan_load'
+D19_STEPS = ['Python.SDCPlan', 'Misc.LoadBaseSDC']
+
+
+def d19_native_module() -> dict:
+    """The actual installed legacy copy step, not a timing/STA capability."""
+    import inspect
+    import importlib.metadata
+    from librelane.steps.misc import LoadBaseSDC
+    path = Path(inspect.getfile(LoadBaseSDC)).resolve()
+    return {'path': str(path), 'sha256': _sha(path.read_bytes()),
+            'version': importlib.metadata.version('librelane'), 'step': LoadBaseSDC.id}
+
+
+def d19_model_sources() -> dict:
+    import ast
+    import design_one_shot_runner as producer
+    import vibe_ic_one_shot_runner as public
+    sources = {}
+    for module, names in ((Path(__file__), ('d19_admission', 'accept_d19', '_d19_native_outputs',
+            '_d19_exception_observe', '_d19_exception_commands', '_d19_qualification', 'd19_native_module', 'd19_model_sources')),
+            (Path(producer.__file__), ('step_asic_sdc', '_d19_load_base_sdc', '_publish_d19_owner')),
+            (Path(public.__file__), ('_finish_d19_selected_owner',))):
+        text = module.read_text()
+        nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
+        for name in names:
+            sources[module.name + ':' + name] = _sha(ast.get_source_segment(text, nodes[name]).encode())
+    return sources
+
+
+def _d19_exception_commands(path: Path) -> list[str]:
+    """Census a bounded static plan input; do not claim Tcl/SDC validation.
+
+    Runtime Tcl and unclassified commands stay unresolved. No evaluation or
+    synthesized netlist/STA is needed merely to identify approved exceptions.
+    """
+    exceptions = {'set_false_path', 'set_multicycle_path', 'set_clock_groups',
+                  'set_max_delay', 'set_min_delay', 'set_disable_timing', 'set_data_check'}
+    ordinary = {'create_clock', 'create_generated_clock', 'set_units', 'set_input_delay',
+                'set_output_delay', 'set_clock_uncertainty', 'set_clock_latency',
+                'set_clock_transition', 'set_clock_groups', 'set_propagated_clock',
+                'set_ideal_network', 'set_input_transition', 'set_driving_cell', 'set_load',
+                'set_max_transition', 'set_max_fanout', 'set_max_capacitance', 'set_case_analysis',
+                'set_clock_sense', 'set_timing_derate', 'set_operating_conditions', 'set_wire_load_model'}
+    collections = {'get_ports', 'get_pins', 'get_clocks', 'get_cells', 'get_nets',
+                   'all_inputs', 'all_outputs', 'all_clocks', 'all_registers'}
+    text = re.sub(r'\\\r?\n', ' ', path.read_text())
+    found = []
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        command = line.split()[0]
+        if (command not in ordinary | exceptions or any(c in line for c in (';', '$'))
+                or any(x not in collections for x in re.findall(r'\[\s*([^\s\[\]]+)', line))):
+            raise MetricRefusal('D19_EXCEPTION_CENSUS_UNSUPPORTED', str(path))
+        if command in exceptions:
+            found.append(' '.join(line.split()))
+    if len(found) != len(set(found)):
+        raise MetricRefusal('D19_EXCEPTION_CENSUS_AMBIGUOUS', str(path))
+    return found
+
+
+def _d19_native_outputs(project: Path, current: Mapping, component: Mapping) -> tuple[list, dict]:
+    """Reopen genuine normal native step config/state and unchanged SDC bytes."""
+    loads = component.get('native_sdc_outputs')
+    if not isinstance(loads, list) or len(loads) != len(current['mapping']):
+        raise MetricRefusal('D19_NATIVE_SDC_OUTPUTS_MISSING', 'Misc.LoadBaseSDC')
+    files = {}
+    module = d19_native_module()
+    fields = ('mode', 'corner', 'check')
+    for entry, output in zip(current['mapping'], loads):
+        scenario = {k: entry[k] for k in fields if k in entry}
+        if (output.get('scenario') != scenario or output.get('source_sdc') != entry['sdc']
+                or output.get('native_module') != module):
+            raise MetricRefusal('D19_NATIVE_INPUT_IDENTITY_MISMATCH', str(scenario))
+        for name in ('sdc', 'config', 'state'):
+            ref = _d19_ref(project, output.get(name), 'native ' + name)
+            files[ref['path']] = ref['sha256']
+        cfg = json.loads((project / output['config']['path']).read_text())
+        state = json.loads((project / output['state']['path']).read_text())
+        target = _safe_project_file(project, output['sdc']['path'])
+        if (cfg.get('meta', {}).get('step') != 'Misc.LoadBaseSDC'
+                or cfg.get('FALLBACK_SDC') != str((project / entry['sdc']['path']).resolve())
+                or target.name != str(cfg.get('DESIGN_NAME')) + '.sdc'
+                or state.get('sdc') != str(target)
+                or output['sdc']['sha256'] != entry['sdc']['sha256']):
+            raise MetricRefusal('D19_NATIVE_SDC_OUTPUT_MISMATCH', str(scenario))
+    return loads, files
+
+
+def _d19_exception_observe(project: Path, context: Mapping, current: Mapping, component: Mapping) -> tuple:
+    fields = ('mode', 'corner', 'check') if context['features']['technology_specific'] else ('mode', 'check')
+    fields += ('command', 'justification')
+    authority, body = _approved_authority(project, D19_BINDINGS['base_10.exception_justification']['required_set_ref'], fields)
+    source = json.loads((project / authority['source']['path']).read_text())
+    payload = {k: v for k, v in body.items() if k not in ('schema', 'approval', 'producer_binding')}
+    if (not authority['source']['path'].startswith('input/')
+            or source.get('exception_justification') != payload):
+        raise MetricRefusal('D19_APPROVED_EXCEPTION_FIELDS_DIFFER', 'exception_justification')
+    loads, files = _d19_native_outputs(project, current, component)
+    actual, required = [], authority['required_items']
+    for entry, output in zip(current['mapping'], loads):
+        scenario = {k: entry[k] for k in fields if k in entry}
+        commands = _d19_exception_commands(project / output['sdc']['path'])
+        for command in commands:
+            matches = [r for r in required if all(r.get(k) == v for k, v in scenario.items())
+                       and r['command'] == command and r['justification'].strip()]
+            if len(matches) != 1:
+                raise MetricRefusal('D19_EXCEPTION_UNJUSTIFIED', command)
+            actual.append(matches[0])
+    if set(map(_json_key, actual)) != set(map(_json_key, required)):
+        raise MetricRefusal('D19_REQUIRED_EXCEPTION_MISSING', 'approved vs actual emitted SDC census')
+    files[authority['path']] = authority['sha256']
+    files[authority['source']['path']] = authority['source']['sha256']
+    if not required:
+        absence = body['validated_absence']['source_reference']
+        files[absence['path']] = absence['sha256']
+    for path, digest in files.items():
+        _d19_ref(project, {'path': path, 'sha256': digest}, 'exception readback')
+    return actual, authority, files
+
+
+def _d19_qualification(project: Path, context: Mapping) -> dict:
+    import flow109_admission as admission
+    qualified = admission.require_admission(project, context)
+    uses = context['runtime_tool_uses']
+    if (len(uses) != 1 or uses[0]['tool_id'] != 'python3'
+            or uses[0]['semantics'] != {'purpose': 'D19.default', 'native_steps': D19_STEPS}):
+        raise MetricRefusal('D19_QUALIFICATION_SCOPE_INVALID', 'constraint plan + native SDC copy only')
+    expected = {'purpose': D19_PURPOSE, 'native_steps': D19_STEPS,
+                'model_sources': d19_model_sources(), 'native_module': d19_native_module()}
+    if json.loads((project / uses[0]['config']['path']).read_text()) != expected:
+        raise MetricRefusal('D19_MODEL_QUALIFICATION_STALE', 'actual consumed model/module')
+    return qualified
+
+
 def accept_d19(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
     """Reopen the actual producer's existing contracts and all consumed files.
 
-    The exception obligation stays unimplemented until independently measured;
-    passing these two plan metrics cannot qualify the row or scan timing.
+    Read the actual exception census/approved plan and native SDC copy outputs.
+    This row does not claim later SDC semantic validation, STA or scan timing.
     """
     result = {"schema": SCHEMA, "row_id": "D19", "status": "NOT_MEASURED",
+              "metric_status": "NOT_MEASURED", "qualification": "NOT_MEASURED",
+              "scope": "constraint plan and Misc.LoadBaseSDC copy; not SDC validation or STA",
               "delivery_blocked": True, "obligations": []}
     try:
         current = d19_admission(project, context)
@@ -628,6 +771,19 @@ def accept_d19(project: Path, context: Mapping[str, Any], component: Mapping[str
                 result["obligations"].append({"id": oid, "status": "UNIMPLEMENTED_METRIC_BINDING"})
                 continue
             name = oid.split(".")[-1]
+            if name == "exception_justification":
+                try:
+                    values, authority, native_files = _d19_exception_observe(project, context, current, component)
+                    native_identity = dict(identity, consumed_inputs={**consumed, **native_files},
+                        tool_execution={"kind": "Misc.LoadBaseSDC", "scope": "copy only, no SDC semantics or STA"})
+                    measured = {"status": "MEASURED", "identity": native_identity, "value": values}
+                    status, detail = evaluate_operator(spec['operator'], measured, authority)
+                    result['obligations'].append({'id': oid, 'status': status,
+                        'measurement': measured, 'authority': authority, 'detail': detail})
+                except (MetricRefusal, OSError, ValueError, KeyError, TypeError, ImportError) as exc:
+                    result['obligations'].append({'id': oid, 'status': 'NOT_MEASURED',
+                        'reason': getattr(exc, 'code', 'D19_EXCEPTION_NOT_MEASURED'), 'detail': str(exc)})
+                continue
             if name == "mode_library_rc_mapping" and not context["features"]["technology_specific"]:
                 result["obligations"].append({"id": oid, "status": "NOT_MEASURED",
                     "reason": "D19_TARGET_TECHNOLOGY_NOT_SPECIFIED"})
@@ -641,13 +797,33 @@ def accept_d19(project: Path, context: Mapping[str, Any], component: Mapping[str
             result["obligations"].append({"id": oid, "status": status,
                 "measurement": measured, "authority": authority, "detail": detail})
         statuses = [item["status"] for item in result["obligations"]]
+        result["reason"] = "D19_REQUIRED_PLAN_INPUTS_OR_NATIVE_LOAD_NOT_MEASURED"
         if statuses and all(status == "PASS" for status in statuses):
-            result.update(status="PASS", delivery_blocked=False)
+            result['metric_status'] = 'PASS'
+            import flow109_admission as admission
+            try:
+                qualified = _d19_qualification(project, context)
+            except (admission.AdmissionRefusal, MetricRefusal, OSError, ValueError, KeyError, TypeError, ImportError) as exc:
+                qualified = {'status': 'NOT_MEASURED', 'reason': getattr(exc, 'code', 'D19_QUALIFICATION_NOT_MEASURED'), 'detail': str(exc)}
+            result['qualification'] = qualified['status']
+            result['admission'] = qualified
+            result['reason'] = qualified.get('reason', 'D19_QUALIFICATION_NOT_MEASURED')
+            if qualified['status'] == 'PASS':
+                result.update(status='PASS', delivery_blocked=False, reason='D19_PLAN_AND_NATIVE_COPY_QUALIFIED')
         elif "FAIL" in statuses:
-            result["status"] = "FAIL"
-        result["reason"] = "D19_PLAN_METRICS_ONLY_NATIVE_CONTROLS_NOT_QUALIFIED"
+            result['status'] = result['metric_status'] = 'FAIL'
+        if d19_admission(project, context) != current:
+            raise MetricRefusal('D19_INPUTS_CHANGED_DURING_READ', 'current plan changed')
     except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
-        result.update(reason=getattr(exc, "code", "D19_METRIC_REFUSED"), detail=str(exc))
+        # A final readback refusal revokes delivery, even after qualification.
+        # Preserve any already observed failure and its bound measurement.
+        failed = result['status'] == 'FAIL' or any(
+            item['status'] == 'FAIL' for item in result['obligations'])
+        result.update(status='FAIL' if failed else 'NOT_MEASURED',
+            metric_status='FAIL' if failed else 'NOT_MEASURED',
+            qualification='NOT_MEASURED', delivery_blocked=True,
+            reason=getattr(exc, "code", "D19_METRIC_REFUSED"),
+            detail=str(exc) + '; prior_reason=' + str(result.get('reason')))
     return result
 
 

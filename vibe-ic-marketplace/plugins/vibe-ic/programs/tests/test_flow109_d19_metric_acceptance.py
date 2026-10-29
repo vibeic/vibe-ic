@@ -104,7 +104,7 @@ def test_registry_denominator_is_read_from_real_contract():
     registry = json.loads(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
                                       'flow', 'flow109.json').read_text())
     row = next(row for row in registry['rows'] if row['id'] == 'D19')
-    assert set(metrics.D19_BINDINGS) < {item['id'] for item in row['obligations']}
+    assert set(metrics.D19_BINDINGS) == {item['id'] for item in row['obligations']}
     for obligation in row['obligations']:
         spec = metrics.D19_BINDINGS.get(obligation['id'])
         if spec:
@@ -150,7 +150,7 @@ def test_existing_artifacts_and_actual_consumer_are_source_bound(tmp_path, monke
     produced = metrics.d19_admission(tmp_path, context, publish=True)
     accepted = metrics.accept_d19(tmp_path, context, {'d19_plan_admission': produced})
     assert [item['status'] for item in accepted['obligations']] == [
-        'PASS', 'PASS', 'UNIMPLEMENTED_METRIC_BINDING']
+        'PASS', 'PASS', 'NOT_MEASURED']
     assert accepted['status'] == 'NOT_MEASURED' and accepted['delivery_blocked'] is True
     assert produced['native_controls_qualification'] == 'NOT_MEASURED'
     assert set(produced['artifacts']) == {
@@ -179,7 +179,7 @@ def test_complete_input_reaches_existing_emitter_and_retains_partial_scope(tmp_p
     assert calls == ['neutral']
     assert result.status == result.extras['default_row_status'] == 'NOT_MEASURED'
     assert [item['status'] for item in result.extras['metric_acceptance']['obligations']] == [
-        'PASS', 'PASS', 'UNIMPLEMENTED_METRIC_BINDING']
+        'PASS', 'PASS', 'NOT_MEASURED']
     assert result.extras['completed'] is False
 
 
@@ -267,7 +267,7 @@ def test_portable_soft_ip_reaches_real_producer_without_technology(tmp_path, mon
     assert result.extras['completed'] is False
     accepted = metrics.accept_d19(tmp_path, context, result.extras)
     assert [item['status'] for item in accepted['obligations']] == [
-        'PASS', 'NOT_MEASURED', 'UNIMPLEMENTED_METRIC_BINDING']
+        'PASS', 'NOT_MEASURED', 'NOT_MEASURED']
     assert accepted['obligations'][1]['reason'] == 'D19_TARGET_TECHNOLOGY_NOT_SPECIFIED'
     assert accepted['status'] == 'NOT_MEASURED' and accepted['delivery_blocked'] is True
     for output in result.extras['portable_sdc_outputs']:
