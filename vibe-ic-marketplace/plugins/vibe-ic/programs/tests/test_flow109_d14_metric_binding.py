@@ -126,7 +126,7 @@ def test_actual_consumer_rejects_changed_or_incomplete_evidence(case, change):
         path.write_text(path.read_text() + '\n// changed actual input\n')
     elif change in ('owner', 'result', 'incomplete'):
         path = formal / 'results.json'; result = json.loads(path.read_text())
-        if change == 'owner': result['program_owner_sha256']['formal_property_run.py'] = '0' * 64
+        if change == 'owner': result['program_owner_sha256']['formal_property_run.py'] = 'missing-owner'
         if change == 'result': result['properties'][0]['engine'] = 'invented engine'
         if change == 'incomplete':
             result.update(verdict='INCOMPLETE', unresolved_obligations=[{'id': 'missing'}])

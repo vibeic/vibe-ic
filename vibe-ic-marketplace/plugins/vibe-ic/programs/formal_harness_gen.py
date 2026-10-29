@@ -357,7 +357,10 @@ def _timing_semantics(value: Any, prefix: str = "") -> List[Tuple[str, str]]:
                     "extraction_evidence", "evidence", "source", "source_doc",
                     "note", "description", "matched_substring"}:
                 continue
-            if k in _PROVENANCE_KEYS:
+            if k in _PROVENANCE_KEYS or k == "semantic_provenance":
+                # Citations explain the canonical field; their count, wording,
+                # or convention rule is not another temporal requirement.
+                # declaration_obligations retains them and unresolved meaning.
                 continue
             p = f"{prefix}.{key}" if prefix else str(key)
             out.extend(_timing_semantics(child, p))
@@ -668,6 +671,47 @@ def l8_program_rule(data: dict, key: str, text: str,
     return _rule(claims) if claims else None
 
 
+
+def _provenance_evidence(data: dict, project: Path, source: Path) -> tuple:
+    """Retain field provenance separately; unknown meaning is missing input.
+
+    Reuse the existing conservative source/claim adjudicator. An unrecognized
+    citation cannot vanish, but it must not become a new assertion merely
+    because it contains reset/shift words. One unresolved source mapping per
+    canonical record stays visible regardless of repeated evidence entries.
+    """
+    evidence, gaps = [], []
+    def visit(value, prefix=""):
+        if isinstance(value, list):
+            for i, child in enumerate(value):
+                visit(child, f"{prefix}.{i}")
+        elif isinstance(value, dict):
+            metadata = value.get("semantic_provenance")
+            if metadata is not None:
+                unresolved = []
+                for field, provenance in (metadata.items() if isinstance(metadata, dict) else [("unknown", metadata)]):
+                    paths = _timing_semantics(provenance, f"{prefix}.semantic_provenance.{field}")
+                    supported = bool(paths) and all(
+                        _l8_provenance_rule(data, key, text, project) is not None
+                        for key, text in paths)
+                    evidence.append({"canonical_field": f"L8.{prefix}.{field}",
+                        "source": str(source), "canonical_value": value.get(field),
+                        "evidence": provenance,
+                        "status": "EQUIVALENT_TO_CANONICAL_FIELD" if supported else "NOT_DETERMINED"})
+                    if not supported:
+                        unresolved.append(field)
+                if unresolved:
+                    gaps.append({"id": f"L8.{prefix}.semantic_mapping_missing", "layer": "L8",
+                        "source": str(source), "kind": "input_mapping", "author": "formal-verify",
+                        "status": "NOT_DETERMINED", "fields": sorted(unresolved),
+                        "description": "citation meaning/source is not fully mapped to canonical structured fields; "
+                                       "resolve the input mapping, not an inferred temporal property"})
+            for key, child in value.items():
+                if key != "semantic_provenance":
+                    visit(child, f"{prefix}.{key}" if prefix else str(key))
+    visit(data)
+    return evidence, gaps
+
 def declaration_obligations(project: Optional[Path]) -> dict:
     """Build the exact L3/L6/L8 formal-authoring denominator.
 
@@ -701,6 +745,7 @@ def declaration_obligations(project: Optional[Path]) -> dict:
                 **read_state}
 
     obligations: List[dict] = []
+    provenance_evidence, provenance_gaps = [], []
     # #2183: a layer whose file could not be READ is not a layer the design
     # left undeclared. It gets its own row below and must not also be counted
     # here, or one unreadable file would be reported as an absent declaration.
@@ -746,6 +791,9 @@ def declaration_obligations(project: Optional[Path]) -> dict:
                     obligations.append(_obligation(
                         "L6", f"reject_rule.{idx}", str(rule), path))
             else:
+                evidence, gaps = _provenance_evidence(data, project, path)
+                provenance_evidence.extend(evidence)
+                provenance_gaps.extend(gaps)
                 for key, text in _timing_semantics(data):
                     row = _obligation(
                         "L8", key, f"declared temporal behavior {key}={text}", path)
@@ -773,6 +821,8 @@ def declaration_obligations(project: Optional[Path]) -> dict:
     return {
         "applicability": "APPLICABLE",
         "obligations": list(uniq.values()),
+        "provenance_evidence": provenance_evidence,
+        "provenance_gaps": list({r["id"]: r for r in provenance_gaps}.values()),
         "missing_declarations": missing,
         "layer_not_applicable": layer_na,
         **read_state,
@@ -2124,6 +2174,8 @@ def _declaration_read_state(decl: dict) -> dict:
         "declaration_root_present": bool(decl.get("declaration_root_present")),
         "declaration_root_error": decl.get("declaration_root_error"),
         "unreadable_declarations": list(decl.get("unreadable_declarations") or []),
+        "provenance_evidence": list(decl.get("provenance_evidence") or []),
+        "provenance_gaps": list(decl.get("provenance_gaps") or []),
     }
 
 
@@ -2136,7 +2188,7 @@ def _unresolved_declaration_rows(decl: dict) -> List[dict]:
     same three rows and the same sentence, so a phantom denominator was
     indistinguishable from an honest one.
     """
-    rows: List[dict] = []
+    rows: List[dict] = list(decl.get("provenance_gaps") or [])
     root = decl.get("declaration_root")
     root_present = bool(decl.get("declaration_root_present"))
     root_error = decl.get("declaration_root_error")

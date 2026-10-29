@@ -1720,9 +1720,13 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
         import flow109_metric_acceptance as metrics
         acceptance = metrics.accept_d14(project, context)
         row_status = 'FAIL' if status == 'FAIL' else acceptance['status']
+        if row_status == 'PASS' and (acceptance.get('qualification') != 'PASS'
+                or status != 'PASS' or completion.get('completed') is not True):
+            row_status = 'NOT_MEASURED'
         answer.update(metric_acceptance=acceptance, metric_acceptance_status=acceptance['status'],
+                      qualification=acceptance.get('qualification', 'NOT_MEASURED'),
                       default_row_status=row_status, flow109_acceptance=row_status,
-                      completed=False, normalized_chain_reason=acceptance.get('reason'))
+                      completed=row_status == 'PASS', normalized_chain_reason=acceptance.get('reason'))
     if row["id"] == "D30" and status == "PASS":
         admission = dft_preroute_admission(project, context)
         chain = _complete_preroute_chain(project, context, admission,
