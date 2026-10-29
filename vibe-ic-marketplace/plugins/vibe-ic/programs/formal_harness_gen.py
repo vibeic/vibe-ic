@@ -673,12 +673,13 @@ def l8_program_rule(data: dict, key: str, text: str,
 
 
 def _provenance_evidence(data: dict, project: Path, source: Path) -> tuple:
-    """Retain field provenance separately; unknown meaning is missing input.
+    """Retain field provenance separately; unknown meaning is diagnostic metadata.
 
     Reuse the existing conservative source/claim adjudicator. An unrecognized
     citation cannot vanish, but it must not become a new assertion merely
-    because it contains reset/shift words. One unresolved source mapping per
-    canonical record stays visible regardless of repeated evidence entries.
+    because it contains reset/shift words. One NOT_DETERMINED source mapping
+    per canonical record stays visible in declaration read-state metadata; it
+    is not a required hardware property or an expert property-authoring task.
     """
     evidence, gaps = [], []
     def visit(value, prefix=""):
@@ -2188,7 +2189,10 @@ def _unresolved_declaration_rows(decl: dict) -> List[dict]:
     same three rows and the same sentence, so a phantom denominator was
     indistinguishable from an honest one.
     """
-    rows: List[dict] = list(decl.get("provenance_gaps") or [])
+    # Citation diagnostics remain in _declaration_read_state, outside the
+    # hardware proof population. Real unreadable/missing declarations below
+    # remain unresolved requirements.
+    rows: List[dict] = []
     root = decl.get("declaration_root")
     root_present = bool(decl.get("declaration_root_present"))
     root_error = decl.get("declaration_root_error")
