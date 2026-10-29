@@ -4896,6 +4896,10 @@ def _main() -> int:
                            and str(getattr(args, 'exit_step', None)) == '13'))
     _post_dft_entry = (str(getattr(args, 'entry_step', None)) == '12'
                        and execution_policy_value['mode'] == 'default')
+    _d12_entry = (str(getattr(args, 'entry_step', None)) == '3'
+                   and str(getattr(args, 'exit_step', None)) == '3'
+                   and execution_policy_value['mode'] == 'default'
+                   and _flow109_selected_row('D12'))
     if getattr(args, "entry_step", None):
         try:
             import step_preflight as _spf_o          # noqa: PLC0415
@@ -4905,7 +4909,7 @@ def _main() -> int:
             return 2
         _entry_runner = _spf_o.runner_for_step(str(args.entry_step))
         if (_prelayout_entry or _sdc_early_entry or _sdc_postcheck_entry
-                or _dft_entry or _post_dft_entry):
+                or _dft_entry or _post_dft_entry or _d12_entry):
             # These retained Default owners have complete consumers and do
             # not need the larger dispatch span that normally contains them.
             _entry_runner = 'design_one_shot_runner'
@@ -5833,17 +5837,25 @@ def _main() -> int:
                 p2_admission.identity_sha256, _phase_env)
             d09_selected = _flow109_selected_row('D09')
             d11_selected = _flow109_selected_row('D11')
+            d12_selected = _flow109_selected_row('D12')
             d09_invocation: Dict[str, Any] = {}
             _phase_started["phase2"] = time.time()
             rc = _run_phase(
                 "PHASE 2 (= 2a + 2b)", runner, p2_args, env=p2_env,
-                invocation=d09_invocation if d09_selected or d11_selected else None)
+                invocation=d09_invocation if d09_selected or d11_selected or d12_selected else None)
+            phase2_report = _phase_report_path(project, 'phase2_one_shot.json')
+            if d12_selected:
+                context = flow109.validate_execution_context(json.loads(
+                    Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
+                phase2_report = flow109._bound_attempt(project, context,
+                    os.environ.get(flow109.ATTEMPT_ENV)) / 'phase2_one_shot.json'
             verdict, _fresh_why = _row_verdict(
                 project, "phase2_one_shot.json", rc,
-                _phase_started.get("phase2", t0), "phase2")
+                _phase_started.get("phase2", t0), "phase2",
+                **({'report_path': phase2_report} if d12_selected else {}))
             if _fresh_why:
                 advisories.append(_fresh_why)
-            rep = _read_report(_phase_report_path(project, "phase2_one_shot.json"))
+            rep = _read_report(phase2_report)
             if d09_selected:
                 d09_acceptance = _finish_d09_selected_owner(
                     project, rep, d09_invocation,

@@ -25087,7 +25087,10 @@ def _publish_d12_owner(project: Path, context: Mapping[str, Any], *, invocation_
     summary = {'project': str(project), 'steps': [asdict(row)], 'verdict': row.status,
         'declared_window': {'entry_step': '3', 'exit_step': '3', 'dispatched_step_ids': ['3']},
         'bounded_disclosures': ['complete current early RTL CDC/RDC read; no native graph replay; whole flow unmeasured']}
-    out = _pl.report_path(project, 'phase2_one_shot.json')
+    attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+    if (attempt / 'result.json').exists():
+        raise flow109.Flow109Error('FLOW109_ATTEMPT_RESULT_EXISTS', 'D12 attempt is immutable')
+    out = attempt / 'phase2_one_shot.json'
     _write_phase2_report(out, summary, project, invocation_context=invocation_context)
     reread = metrics.accept_d12(project, context)
     if reread != row.extras['metric_acceptance']:
