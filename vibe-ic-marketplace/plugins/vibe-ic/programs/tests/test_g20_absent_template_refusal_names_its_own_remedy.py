@@ -104,6 +104,16 @@ def _drive(project: Path) -> "tuple[int, str]":
     return rc, buf.getvalue()
 
 
+def _historical_declaration_fixture(project: Path):
+    """Consumer-only route fixture: the normal runner now stops before this.
+
+    Retain the old gate's marker/declaration cases using its real producer,
+    without making a route word satisfy the missing template reason.
+    """
+    import tapeout_declaration_gen as declaration
+    assert declaration.main([str(project), "--answers", str(project / ST.DESIGN_ANSWERS_REL)]) == 0
+
+
 def _gate(project: Path):
     """The step's first gate clause, exactly as `flow/...yaml` spells it."""
     import submission_template_check as CHK
@@ -145,7 +155,7 @@ def test_the_refusal_names_where_the_reason_is_supplied(project):
     """A refusal that names a floor and not its channel sends readers wrong."""
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 0
+    assert _drive(project)[0] == 2
     rc, check = _gate(project)
 
     assert rc == 1, "the verdict must NOT move: this change is disclosure only"
@@ -168,7 +178,8 @@ def test_the_refusal_names_the_route_it_read_and_why_it_bought_nothing(project):
     """
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 0
+    assert _drive(project)[0] == 2
+    _historical_declaration_fixture(project)
     assert (project / TD.SELF_TAPEOUT_REL).is_file()
 
     rc, check = _gate(project)
@@ -188,7 +199,7 @@ def test_the_refusal_names_the_route_it_read_and_why_it_bought_nothing(project):
 def test_the_run_discloses_the_missing_answer_before_the_step_refuses(project):
     """A decline that discloses nothing reads downstream as nothing-to-do."""
     rc, said = _drive(project)          # no answers file staged at all
-    assert rc == 0, "the producers must still RUN for a design that said nothing"
+    assert rc == 2, "lookup runs before missing input stops dependent producers"
     assert ST.DESIGN_ANSWERS_REL in said, said
     assert "operator_template.absent_reason" in said, said
     assert "NO_TEMPLATE_WITHOUT_REASON" in said, said
@@ -196,7 +207,7 @@ def test_the_run_discloses_the_missing_answer_before_the_step_refuses(project):
     # and the same disclosure when the file exists and answers the wrong half
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE}})
     rc, said = _drive(project)
-    assert rc == 0
+    assert rc == 2
     assert ST.DESIGN_ANSWERS_REL in said, said
     assert "operator_template.absent_reason" in said, said
 
@@ -212,10 +223,8 @@ def test_the_route_word_still_buys_nothing(project):
     """
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 0
-    assert (project / TD.SELF_TAPEOUT_REL).is_file(), (
-        "the route IS selected — which is why the refusal has to explain "
-        "itself rather than look like a flow that lost the declaration")
+    assert _drive(project)[0] == 2
+    assert not (project / TD.SELF_TAPEOUT_REL).exists()
     rc, check = _gate(project)
     assert (rc, check["verdict"]) == (1, ST.VERDICT_FAIL), check
     assert [r["rule"] for r in check["refusals"]] == ["NO_TEMPLATE_WITHOUT_REASON"]
@@ -258,7 +267,7 @@ def test_control_a_design_that_said_nothing_still_fails(project):
     This gate exists because a silently missing slot file is how a design gets
     taped out into the wrong geometry.
     """
-    assert _drive(project)[0] == 0
+    assert _drive(project)[0] == 2
     assert not (project / TD.SELF_TAPEOUT_REL).exists()
     rc, check = _gate(project)
     assert (rc, check["verdict"]) == (1, ST.VERDICT_FAIL), check
@@ -273,7 +282,8 @@ def test_control_a_marker_file_beside_no_declaration_is_not_a_declaration(projec
     """The FILE'S CONTENT declares the route, not the file's name."""
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 0
+    assert _drive(project)[0] == 2
+    _historical_declaration_fixture(project)
     marker = project / TD.SELF_TAPEOUT_REL
     assert marker.read_text(encoding="utf-8").splitlines()[0].strip() \
         == TD.SELF_TAPEOUT_MARKER
@@ -294,7 +304,8 @@ def test_control_the_hardmacro_route_is_untouched(project):
     """A HARDMACRO declaration writes no self-tape-out router, and still FAILs."""
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_HARDMACRO},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 0
+    assert _drive(project)[0] == 2
+    _historical_declaration_fixture(project)
     assert not (project / TD.SELF_TAPEOUT_REL).exists()
     rc, check = _gate(project)
     assert rc == 1
@@ -318,7 +329,8 @@ def test_declared_route_on_disk_separates_unreadable_from_undeclared(project):
 
     _answers(project, {"answers": {"deliverable": TD.DELIVERABLE_DIE},
                        TD.SYNTHESIS_AREA_BUDGET_KEY: _AREA})
-    assert _drive(project)[0] == 0
+    assert _drive(project)[0] == 2
+    _historical_declaration_fixture(project)
     assert reader(project, has_slots=False) == (TD.ROUTE_SELF_TAPEOUT, None)
 
     # THE OPERATOR'S ANSWER WINS, and this reader honours that ordering rather

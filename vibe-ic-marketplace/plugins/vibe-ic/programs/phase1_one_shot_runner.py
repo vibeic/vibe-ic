@@ -1074,6 +1074,38 @@ def _import_fetch_report_rel() -> str:
 #: Where `submission_template_fetch` writes the record `submission_template_
 #: answers --technology-json` reads. Imported, not spelled twice.
 _ST_FETCH_REPORT_REL = _import_fetch_report_rel()
+_ST_INPUT_REL = "reports/phase1/submission_template_input_obligation.json"
+
+
+def _submission_input_result(project: Path, invoked: List[str], *, waiting: bool) -> dict:
+    """Record the existing input-absent outcome, not a template/route approval."""
+    import hashlib
+    report = project / _ST.REPORT_REL
+    source = project / _ST.DESIGN_ANSWERS_REL
+    ingest = json.loads(report.read_text())["ingest"]
+    ref = lambda path: {"path": path.relative_to(project).as_posix(),
+                        "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
+    row = StepResult(
+        "submission_template_input", "NOT_MEASURED" if waiting else "PASS", 0.0,
+        detail=("NO_TEMPLATE_WITHOUT_REASON: supply " + _ST.DESIGN_ANSWERS_REL
+                + ", operator_template.absent_reason, or supply an operator template"
+                if waiting else "Current template input requirement resolved; canonical checks remain required"),
+        reason_class="input_absent" if waiting else "",
+        extras={"input_required": waiting,
+                "answer_path": _ST.DESIGN_ANSWERS_REL,
+                "answer_key": "operator_template.absent_reason",
+                "min_reason_chars": _ST.MIN_REASON_CHARS,
+                "required_provenance": "Explicit design-supplied answer in the named input file; current source path, SHA256 and key retained",
+                "source": ref(source) if source.is_file() else None,
+                "lookup": ingest["lookup"], "ingest": ref(report),
+                "invoked_producers": list(invoked),
+                "blocked_producers": ([_STEP_0_5IC_ANSWERS, _STEP_0_5IC_DECLARE]
+                                      if waiting else [])})
+    result = asdict(row)
+    path = project / _ST_INPUT_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(result, indent=2) + "\n")
+    return result
 
 
 def _step_0_5ic_answers(project: Path
@@ -1126,18 +1158,13 @@ def _pdk_of_this_run(extras: "Optional[List[str]]") -> str:
 
 @_spf.retained_step('0.5ic', canonical_acceptance=True)
 def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
-    """Run step 0.5ic's two producers, in the order the flow declares them.
+    """Run the existing lookup before dependent answers and declaration.
 
-    `submission_template_ingest` records what the OPERATOR published;
-    `tapeout_declaration_gen` records what the DESIGN declares about itself and
-    retires the marker the first one wrote when the design is a die doing its
-    own tape-out. The order is load-bearing and is the flow's own.
-
-    EXECUTION is not advisory: a producer that could not run, or that wrote no
-    report, FAILs Phase 1 — a step whose record is missing is indistinguishable
-    from a step that never ran, which is the whole defect this step exists to
-    refuse. The VERDICT on those records is not taken here; it belongs to the
-    step's own two gate clauses, which `flow_compliance_check` evaluates.
+    BLOCKING: confirmed absence without a usable design-supplied reason
+    records NOT_MEASURED(input_absent) and returns 2 before the dependent
+    producers. The same entry retries fresh lookup/source inputs; the
+    canonical submission checker retains its own refusal and provenance.
+    Producer errors remain errors, not evidence of template absence.
     """
     import execution_policy
     # Default owns this step's two canonical producers directly.  The live
@@ -1217,7 +1244,7 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
     # wrote it. A stale record from an earlier run is exactly how a producer
     # that died would still look like one that ran.
     records = [project / _ST.REPORT_REL, project / _TD.REPORT_REL]
-    for record in records:
+    for record in [*records, project / _ST_INPUT_REL]:
         try:
             record.unlink()
         except FileNotFoundError:
@@ -1286,6 +1313,7 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
     except OSError:
         pass
 
+    invoked = []
     for argv in (fetch, ingest, answers, declare):
         if argv is answers and answers_path is not None:
             # Refresh the design-owned source BEFORE the transcription reads it.
@@ -1326,6 +1354,7 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
                         return 1
                 argv = argv + ["--answers", str(src)]
         name = Path(argv[1]).name
+        invoked.append(name)
         # Same replacement as `_run_expert_track`, same reason. See there.
         res = _wd.run_host_supervised(argv, stall_grace_s=_TRACK_STALL_GRACE_S)
         if res.outcome in ("stalled", "ceiling"):
@@ -1335,6 +1364,7 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
                   f"doing nothing. An undispatched producer cannot pass.",
                   file=sys.stderr)
             return 1
+
         cp = _wd.completed_process(argv, res)
         for line in (cp.stdout or "").strip().splitlines():
             print(f"      {line}")
@@ -1343,6 +1373,21 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
                   f"{(cp.stderr or '').strip().splitlines()[-1:] or ['(no detail)']}",
                   file=sys.stderr)
             return 1
+
+        if argv is ingest:
+            # BLOCKING only after the real lookup has confirmed absence.
+            # Use the SAME reason validator as the canonical consumer; DIE,
+            # registry misses and generated router markers supply no answer.
+            doc = json.loads((project / _ST.REPORT_REL).read_text())["ingest"]
+            lookup = doc.get("lookup", {})
+            if (doc.get("status") == _ST.STATUS_ABSENT
+                    and lookup.get("attempted") is True and lookup.get("searched")
+                    and not _ST.declares_no_template(doc["status"], doc.get("no_template_reason"))):
+                import submission_template_check
+                submission_template_check.main([
+                    str(project), "--json", str(project / _ST.REPORT_REL)])
+                _submission_input_result(project, invoked, waiting=True)
+                return 2
 
     for record in records:
         if not record.is_file():
@@ -1357,6 +1402,7 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
                   f"parse ({exc}) — unreadable evidence is not evidence",
                   file=sys.stderr)
             return 1
+    _submission_input_result(project, invoked, waiting=False)
     return 0
 
 
@@ -1887,6 +1933,22 @@ def main() -> int:
     # of its documents.
     print("[phase1] step 0.5ic — submission template + tape-out declaration ...")
     rc_route = _run_step_0_5ic(project, pdk=_pdk_of_this_run(extras))
+    if rc_route == 2:
+        # The same entry resumes from fresh lookup/source on the next call.
+        # Do not run D1 or dependent answer/declaration producers meanwhile.
+        row = json.loads((project / _ST_INPUT_REL).read_text())
+        summary = {"phase": 1, "project": str(project),
+                   **_delivery_route.report_label(project),
+                   "verdict": "NOT_MEASURED", "reason_class": "input_absent",
+                   "steps": [row], "step_0_5ic": row,
+                   "input_obligation": _ST_INPUT_REL}
+        from benchmark_dispatch import _bind_runner_report
+        out = _pl.report_path(project, "phase1_one_shot.json")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        summary = _bind_runner_report(summary, project, __file__, out.name)
+        out.write_text(json.dumps(summary, indent=2) + "\n")
+        _lock.release()
+        return 2
 
     # Resolve mode. When auto-detect finds no input, fall through to
     # prompt mode so step_ingest_render emits a SKIP status (verdict

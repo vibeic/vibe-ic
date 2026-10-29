@@ -1054,9 +1054,8 @@ def test_dispatching_the_producers_cannot_buy_a_pass_on_its_own(tmp_path):
     """
     proj = tmp_path / "undeclared"
     proj.mkdir()
-    assert _drive_step_0_5ic(proj) == 0, (
-        "the producers must RUN for a design that declared nothing — a step "
-        "that produced no record is indistinguishable from one that never ran")
+    assert _drive_step_0_5ic(proj) == 2, (
+        "lookup must run, then missing design input must stop dependent producers")
 
     rc1, _rc2 = _step_0_5ic_verdicts(proj)
     assert rc1 == 1, (
@@ -1078,20 +1077,14 @@ def test_a_reason_that_is_not_a_reason_still_fails(tmp_path, reason, why):
     proj.mkdir()
     _answers(proj, {"operator_template": {"absent_reason": reason},
                     "answers": {"deliverable": TD.DELIVERABLE_DIE}})
-    assert _drive_step_0_5ic(proj) == 0
+    assert _drive_step_0_5ic(proj) == 2
     rc1, _rc2 = _step_0_5ic_verdicts(proj)
     assert rc1 == 1, why
     doc = json.loads((proj / ST.REPORT_REL).read_text())
     assert [r["rule"] for r in doc["check"]["refusals"]] == \
         ["NO_TEMPLATE_WITHOUT_REASON"]
-    # AND THE ROUTER IS STILL WRITTEN, which is not a contradiction and is
-    # worth pinning so nobody "fixes" it. Which route a design is on is decided
-    # by its `deliverable` answer alone; whether its absent template was BOUGHT
-    # is a different question, and `submission_template_check` is the thing
-    # that answers it. This gate's own docstring says as much — "THIS GATE'S
-    # OWN FAIL DOES NOT STOP EITHER PATH FROM BEING SELECTED". The step-level
-    # verdict is what refuses here, and it does.
-    assert (proj / TD.SELF_TAPEOUT_REL).is_file()
+    # The dependent declaration producer waits for a usable reason.
+    assert not (proj / TD.SELF_TAPEOUT_REL).exists()
 
 
 def test_a_design_with_an_operator_template_must_still_supply_its_slot(tmp_path):
