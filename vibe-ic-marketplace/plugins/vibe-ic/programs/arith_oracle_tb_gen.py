@@ -1482,6 +1482,53 @@ def arithmetic_observation(project: Path, spec: dict, *, top: Optional[str] = No
             'settle_ns': settle, 'binding': binding}, ''
 
 
+def _required_reset_observation(project: Path, case: dict, spec: dict) -> Tuple[Optional[dict], List[Path], str]:
+    """Read the existing D13 source decision; never derive reset values from RTL."""
+    import hashlib
+    authority = project / 'input/flow109/D13/source.json'
+    if not authority.is_file():
+        return None, [], ''
+    source = _read_json(authority)
+    requirements = source.get('scenario_requirements') if isinstance(source, dict) else None
+    row = requirements.get(case.get('name') or case.get('id')) if isinstance(requirements, dict) else None
+    observation = row.get('reset_observation') if isinstance(row, dict) else None
+    if not isinstance(observation, dict):
+        return None, [], 'required reset observation is missing'
+    if (observation.get('clock') != spec['clk'] or observation.get('edge') != 'rising'
+            or observation.get('reset') != spec['rst']
+            or type(observation.get('active_level')) is not int
+            or observation['active_level'] != int(not spec['reset_active_low'])
+            or not isinstance(observation.get('observation'), str) or not observation['observation'].strip()):
+        return None, [], 'reset observation clock, polarity or sampling scope is unsupported'
+    files = [authority]
+    for key in ('source_reference', 'original_requirement_reference'):
+        reference = observation.get(key)
+        if (not isinstance(reference, dict) or not isinstance(reference.get('path'), str)
+                or not reference['path']):
+            return None, [], 'reset observation reference is missing'
+        path = project / reference['path']
+        if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != reference.get('sha256'):
+            return None, [], 'reset observation reference is stale or unavailable'
+        files.append(path)
+    rtl = {p.resolve() for ext in ('*.v', '*.sv') for p in _pl.rtl_dir(project).rglob(ext)}
+    if files[1].resolve() not in rtl:
+        return None, [], 'reset observation source is outside the compiled RTL population'
+    required = observation.get('required_observations')
+    if not isinstance(required, list) or not required:
+        return None, [], 'required reset observation population is empty'
+    names = set()
+    for item in required:
+        if (not isinstance(item, dict) or set(item) != {'state', 'width', 'expected_value'}
+                or not isinstance(item.get('state'), str)
+                or re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', item['state']) is None
+                or item['state'] in names or type(item.get('width')) is not int or item['width'] < 1
+                or type(item.get('expected_value')) is not int or item['expected_value'] < 0
+                or item['expected_value'].bit_length() > item['width']):
+            return None, [], 'required reset observation population is malformed'
+        names.add(item['state'])
+    return observation, files, ''
+
+
 def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
                              *, request: Optional[dict] = None,
                              observation_top: Optional[str] = None,
@@ -1599,7 +1646,14 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
     if re.search(r'asynchronous|different\s+clock|power\s+(?:on|off)', text):
         defer('unmodeled asynchronous reset, clock or power scope')
         return None
-    files = [*_pl.generated_docs_dir(project).glob('L2*.json'),
+    reset_observation = None
+    reset_files = []
+    if intent['reset_situations']:
+        reset_observation, reset_files, reset_why = _required_reset_observation(project, case, spec)
+        if reset_why or (reset_observation and observation.get('postlayout_deadline')):
+            defer(reset_why or 'internal reset observation requires the declared RTL surface')
+            return None
+    files = [*reset_files, *_pl.generated_docs_dir(project).glob('L2*.json'),
              _pl.generated_docs_dir(project) / 'L9_INTEGRATION_SPEC.json',
              _pl.generated_docs_dir(project) / 'L10_TEST_CASES.json',
              project / 'plugin_output/declaration.json',
@@ -1626,6 +1680,8 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
             'comparisons': sum(p['comparisons'] for p in phases)}
     if len(phases) > 1:
         plan['populations'] = phases
+    if reset_observation is not None:
+        plan['reset_observation'] = reset_observation
     return plan
 
 
@@ -1807,6 +1863,24 @@ def emit_arithmetic_scenario_module(module_name: str, plan: dict, *,
               ' transactions,comparisons,errors,held_edges);',
               f' if(errors) $fatal(1,"FAIL: {module_name} scenario comparator");',
               f' $display("[TB {module_name}] PASS: declared arithmetic scenario");', '$finish;', 'end endmodule']
+    required_reset = (plan.get('reset_observation') or {}).get('required_observations', [])
+    if required_reset:
+        declarations, checks, summaries = [], [], []
+        for index, required in enumerate(required_reset):
+            state, width, expected = (required[k] for k in ('state', 'width', 'expected_value'))
+            samples, mismatches = f'reset_samples_{index}', f'reset_mismatches_{index}'
+            declarations.append(f'integer {samples}=0, {mismatches}=0;')
+            checks += [f'  {samples}={samples}+1;',
+                       f"  if($bits(dut.{state})!={width} || dut.{state} !== {width}'h{expected:x}) begin",
+                       f'   {mismatches}={mismatches}+1; errors=errors+1;',
+                       f'   $display("FAIL: reset expected state {state}");', '  end']
+            summaries.append(f'$display("ARITH_RESET_OBSERVATION state={state} width={width} expected={expected} samples=%0d mismatches=%0d", {samples},{mismatches});')
+        slot = lines.index('task clear_state(input integer holds); begin')
+        lines[slot:slot] = declarations
+        slot = next(i for i, line in enumerate(lines) if f'held_value={sout}; held_edges=' in line)
+        lines[slot:slot] = checks
+        slot = next(i for i, line in enumerate(lines) if 'ARITH_SCENARIO_DONE transactions=' in line)
+        lines[slot:slot] = summaries
     return '\n'.join(lines) + '\n'
 
 
@@ -1869,6 +1943,18 @@ def capture_arithmetic_scenario_execution(project: Path, tb: Path, transcript: P
         measured['framing'] = framing
     if populations is not None:
         measured['populations'] = populations
+    if plan.get('reset_observation'):
+        required = plan['reset_observation']['required_observations']
+        rows = [{'state': state.decode(), 'width': int(width), 'expected_value': int(value),
+                 'samples': int(samples), 'mismatches': int(mismatches)}
+                for state, width, value, samples, mismatches in re.findall(
+                    rb'^ARITH_RESET_OBSERVATION state=([A-Za-z_][A-Za-z0-9_$]*) width=(\d+) expected=(\d+) samples=(\d+) mismatches=(\d+)\r?$', raw, re.MULTILINE)]
+        identities = [{k: row[k] for k in ('state', 'width', 'expected_value')} for row in rows]
+        measured['reset_observations'] = rows
+        measured['complete'] = (measured['complete'] and identities == required
+                                and held > 0 and all(row['samples'] == held
+                                    and 0 <= row['mismatches'] <= row['samples'] for row in rows)
+                                and sum(row['mismatches'] for row in rows) <= errors)
     return measured, 'native declared scenario comparisons'
 
 
