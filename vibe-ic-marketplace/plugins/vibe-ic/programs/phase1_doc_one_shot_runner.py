@@ -40394,8 +40394,24 @@ def _v634_harvest_verification_intent(
         body_start = m.end()
         nxt = _V634_NEXT_HEADING_RE.search(text, body_start)
         body = text[body_start: nxt.start() if nxt else len(text)]
-        for bm in _V634_VERIF_BULLET_RE.finditer(body):
-            desc = re.sub(r"[`*]", "", bm.group(1)).strip()
+        lines = body.splitlines()
+        for index, line in enumerate(lines):
+            bm = _V634_VERIF_BULLET_RE.match(line)
+            if not bm:
+                continue
+            indent = len(line.expandtabs(4)) - len(line.expandtabs(4).lstrip())
+            parts = [bm.group(1)]
+            for continuation in lines[index + 1:]:
+                if not continuation.strip():
+                    continue
+                if (_V634_VERIF_BULLET_RE.match(continuation)
+                        or _V634_NEXT_HEADING_RE.match(continuation)):
+                    break
+                expanded = continuation.expandtabs(4)
+                if len(expanded) - len(expanded.lstrip()) <= indent:
+                    break
+                parts.append(continuation.strip())
+            desc = re.sub(r"[`*]", "", " ".join(parts)).strip()
             if len(desc) < 6:
                 continue
             slug = re.sub(r"[^a-z0-9]+", "_", desc.lower()).strip("_")[:48]

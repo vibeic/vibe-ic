@@ -526,5 +526,16 @@
     "version_observed": "v1.33.26, commit 8d6e9bbfb16ba4f2ffd10bef2c01397e79ccb8bc",
     "version_lkg": "",
     "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/issue3752_supply_ownership/L5_ANALOG_SPEC.md"
+  },
+  {
+    "issue": 3753,
+    "project": "phase1_wrapped_verification_intent",
+    "layer": "L7",
+    "field": "L7_TEST_DEBUG.json verification_strategy[].method; propagated L22_VERIFICATION_PLAN.json fields.verification_plan.unscoped_intent[].method",
+    "expected": "One typed tool-disclosure method preserves the entire logical bullet, including cornerMOShv.lib, cornerMOSlv.lib, cornerRES.lib, cornerCAP.lib, SIMULATED, not silicon sign-off and NOT LEVEL=1 standins. The next golden cross-check bullet stays separate and is never promoted to a design-time executable test. Section boundaries and other existing tests retain their current meaning.",
+    "actual": "Tool disclosure: IHP SG13G2 ships sectioned ngspice corner libraries for every device\n\nThe four library names and the simulation/signoff qualification are absent from that typed L7 method and transported L22 intent.",
+    "version_observed": "v1.33.28, commit 364400fd6a855012eed016a672e0e67c89ca386e\n\n## Acceptance boundary\n\nProve failure before repair on the verbatim input; preserve complete wrapped bullets and their polarity, boundary, and disclosure-vs-test role after repair. Exercise actual existing L7 and L22 consumers. Compare affected test IDs to the exact main base, with no new red IDs; reuse unchanged valid evidence. Root remains sole main/version writer. No complete-flow or simulator qualification may be inferred from this extraction repair.",
+    "version_lkg": "",
+    "fixture_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/tests/fixtures/phase1_local/phase1_wrapped_verification_intent/L5_ANALOG_SPEC.md"
   }
 ]

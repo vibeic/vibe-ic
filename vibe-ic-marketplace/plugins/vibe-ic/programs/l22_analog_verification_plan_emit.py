@@ -169,11 +169,17 @@ def _number(raw: str) -> Any:
 
 
 def _corner_matrix(intent: List[dict]) -> Optional[dict]:
+    # Reuse the existing positive documentation/oracle role contract. These
+    # rows remain literal intent in the plan, but do not declare campaigns.
+    from phase1_doc_one_shot_runner import _v2055_refuse_verification_intent
+
     process: List[str] = []
     temperatures: List[Any] = []
     evidence: List[str] = []
     for row in intent:
         method = str(row.get("method") or row.get("description") or "")
+        if _v2055_refuse_verification_intent(method, set()) is not None:
+            continue
         row_process = [m.group(1).upper()
                        for m in _PROCESS_CORNER_RE.finditer(method)]
         row_temperatures: List[Any] = []
