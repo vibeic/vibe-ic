@@ -458,6 +458,8 @@ def test_fetch_declares_cell_stream_units_not_lef_units(tmp_path, monkeypatch,
     monkeypatch.setattr(_container_exec, "no_container_route", lambda: local_route)
 
     def transport(argv, timeout=600):
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return 0, json.dumps([{"Config": {"Entrypoint": ["/dockerstartup/scripts/ui_startup.sh"]}}]), ""
         if local_route:
             assert argv[0] != "docker", "an in-image PDK read started nested Docker"
             command = list(argv)

@@ -6847,12 +6847,58 @@ server.tool(
     }
 
     // 3. Tech LEF: routing layers, RESISTANCE PER CUT
-    const tlRes = dockerExec(`grep -cE '^LAYER ' '${techlef}'; grep -c 'TYPE ROUTING' '${techlef}'; grep -c 'TYPE CUT' '${techlef}'; grep -c 'RESISTANCE' '${techlef}'`, 10000);
-    const lines = (tlRes.output || "").trim().split("\n");
-    const [nlayers, nrouting, ncut, nres] = lines.map(x => parseInt(x) || 0);
-    note("info", "tech_lef_layers", `${nlayers} layers (${nrouting} routing, ${ncut} cut)`);
-    if (nrouting < 3) note("error", "tech_lef_routing_layers", `only ${nrouting} routing layers — too few`);
-    if (nres === 0) note("warn", "tech_lef_resistance", "no RESISTANCE entries — eda_ir_drop will fail without via_resistance_ohm fallback");
+    const tlRes = dockerExec(`cat '${techlef}'`, 10000);
+    if (!tlRes.success) {
+      note("error", "tech_lef_parse_unavailable", `LEF declarations were not measured: ${tlRes.error || tlRes.output || "read failed"}`);
+    } else {
+      try {
+        // LEF comments and quoted PROPERTY values are not declarations.
+        // Keep statement boundaries: TYPE may span lines, but requires ';'.
+        const tokens = ((tlRes.output || "").match(/"(?:\\.|[^"\\])*"|#[^\r\n]*|[^\s;"#]+|;/g) || [])
+          .filter(t => !t.startsWith("#"));
+        let nlayers = 0, nrouting = 0, ncut = 0, nres = 0;
+        let layer = null, layerType = null;
+        const endStatement = start => {
+          let j = start;
+          while (j < tokens.length && tokens[j] !== ";" && tokens[j].toUpperCase() !== "END") j++;
+          if (tokens[j] !== ";") throw new Error("unterminated LEF statement");
+          return j;
+        };
+        for (let i = 0; i < tokens.length; i++) {
+          const t = tokens[i].toUpperCase();
+          if (t === "PROPERTY") { i = endStatement(i + 1); continue; }
+          if (!layer && ["VIA", "VIARULE", "MACRO", "SITE", "NONDEFAULTRULE", "PROPERTYDEFINITIONS"].includes(t)) {
+            const name = t === "PROPERTYDEFINITIONS" ? t : tokens[++i];
+            while (i < tokens.length && !(tokens[i].toUpperCase() === "END" && tokens[i + 1] === name)) i++;
+            if (i >= tokens.length) throw new Error(`unterminated ${t} block`);
+            i++;
+          } else if (!layer && t === "LAYER") {
+            layer = tokens[++i];
+            if (!layer || layer === ";" || layer === "END") throw new Error("missing LAYER name");
+            nlayers++; layerType = null;
+          } else if (layer && t === "END") {
+            if (tokens[++i] !== layer) throw new Error(`LAYER ${layer} END name mismatch: ${tokens[i]}`);
+            if (!layerType) throw new Error("missing LAYER TYPE statement");
+            layer = null;
+          } else if (layer && t === "TYPE") {
+            const kind = tokens[++i]?.toUpperCase();
+            if (layerType || !["ROUTING", "CUT", "MASTERSLICE", "OVERLAP", "IMPLANT"].includes(kind)) throw new Error("invalid or duplicate LAYER TYPE");
+            layerType = kind;
+            if (tokens[++i] !== ";") throw new Error("malformed LAYER TYPE statement");
+            if (kind === "ROUTING") nrouting++;
+            if (kind === "CUT") ncut++;
+          } else if (layer && t === "RESISTANCE") {
+            i = endStatement(i + 1); nres++;
+          }
+        }
+        if (layer) throw new Error("unterminated LAYER block");
+        note("info", "tech_lef_layers", `${nlayers} layers (${nrouting} routing, ${ncut} cut)`);
+        if (nrouting < 3) note("error", "tech_lef_routing_layers", `only ${nrouting} routing layers — too few`);
+        if (nres === 0) note("warn", "tech_lef_resistance", "no RESISTANCE entries — eda_ir_drop will fail without via_resistance_ohm fallback");
+      } catch (e) {
+        note("error", "tech_lef_parse_unavailable", `LEF declarations were not measured: ${e.message}`);
+      }
+    }
 
     // 4. Cell LEF: macro count, SITE definitions
     const clRes = dockerExec(`grep -cE '^MACRO ' '${celllef}'; grep -cE '^SITE ' '${celllef}'`, 10000);

@@ -342,6 +342,8 @@ def test_technology_facts_argv_carries_the_ceiling(monkeypatch):
     seen = {}
 
     def _fake_run(argv, timeout=None):
+        if argv[:3] == ["docker", "image", "inspect"]:
+            return 0, '[{"Config":{"Entrypoint":["/dockerstartup/scripts/ui_startup.sh"]}}]', ""
         seen["argv"] = list(argv)
         return 3, "NO_TECH_LEF\n", ""
 

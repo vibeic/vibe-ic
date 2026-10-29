@@ -12700,41 +12700,44 @@ def _read_declared_pdk_alternates(project: Path) -> List[str]:
 
 
 def _declares_resolved_pdk(resolved: str, declared_tokens: set) -> bool:
-    """Does a declared token set name the process that actually resolved?
+    """Match complete registered spellings and the registry's family tokens.
 
-    Exact token match, plus ONE deliberate tolerance: a declared token that
-    names a process FAMILY admits the family's revisions, so a design
-    declaring `<family>` may be built as `<family>D`. The tolerance is
-    strictly one-directional — a design that names a revision is NOT
-    satisfied by a different revision, because revisions differ in metal
-    stack and device flavour and are not interchangeable:
-
-        declared `<family>`   resolved `<family>D`   -> ACCEPT (family named)
-        declared `<family>D`  resolved `<family>A`   -> REFUSE (revision named)
-
-    chip-AGNOSTIC: the single-letter revision suffix is the naming convention
-    the flow's own PDK registry already encodes; no PDK name appears here.
+    Revision tolerance applies only to an actually registered distribution;
+    an explicit different revision or an arbitrary extended token is refused.
     """
-    r = (resolved or "").lower()
+    from pdk_family_identity import load_registry, normalise, family_tokens
+    r = normalise(resolved)
     if not r:
         return False
-    for d in declared_tokens:
-        if r == d:
+    if r in declared_tokens:
+        return True
+    for row in load_registry().get("pdks", []):
+        name = str(row.get("name") or "")
+        if normalise(name) != r:
+            continue
+        # Family tokens come from the existing identity authority, not a
+        # substring search over the input declaration.
+        aliases = {normalise(t) for t in family_tokens(name)
+                   if any(c.isdigit() for c in t)}
+        if any(t in aliases for t in declared_tokens):
             return True
-        if (len(r) == len(d) + 1 and r.startswith(d)
-                and r[len(d):].isalpha()):
-            return True
+        # Preserve the established unqualified-family -> registered revision
+        # direction, never infer an unregistered revision or swap revisions.
+        return name[-1:].isupper() and any(
+            len(r) == len(t) + 1 and r.startswith(t)
+            for t in declared_tokens)
     return False
 
 
 def _pdk_tokens(text: str) -> set:
-    """Lower-cased alphanumeric tokens of a PDK name, for containment tests.
+    """Complete name tokens, preserving hyphens/underscores before normalising.
 
-    `sky130A` -> {'sky130a'}; `sky130A / 1.8V` -> {'sky130a', '1', '8v'}.
-    Deliberately crude: the ONLY question asked is whether the resolved
-    OSS name appears in the declared target at all.
+    A name embedded in prose remains readable; a longer connected name must
+    never be split into a legitimate registered prefix plus an ignored suffix.
     """
-    return {t for t in re.split(r"[^A-Za-z0-9]+", text.lower()) if t}
+    from pdk_family_identity import normalise
+    return {normalise(t) for t in re.findall(
+        r"[A-Za-z0-9]+(?:[-_.][A-Za-z0-9]+)*", text)}
 
 
 def declared_pdk_target_guard(

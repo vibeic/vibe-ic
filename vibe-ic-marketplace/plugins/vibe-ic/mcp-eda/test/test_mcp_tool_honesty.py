@@ -80,6 +80,7 @@ function dockerExec(cmd) {
   calls.push(cmd);
   if (cmd.includes('GDS_CELL_COUNT') || /klayout.* -r /.test(cmd))
     return gdsResult || {success:true,output:'INLINE_PYTHON_PROBE_COMPLETED'};
+  if (cmd === "cat '/pdk/tech.lef'") return {success:true,output:'LAYER m1\nTYPE ROUTING ;\nEND m1\nLAYER m2\nTYPE ROUTING ;\nEND m2\nLAYER m3\nTYPE ROUTING ;\nEND m3'};
   if (cmd.includes('TYPE ROUTING')) return {success:true,output:'15\n6\n4\n20'};
   if (cmd.includes('^MACRO ')) return {success:true,output:'229\n1'};
   return {success:true,output:'240'};

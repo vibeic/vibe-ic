@@ -528,6 +528,35 @@ def _registry_entry(pdk: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _technology_probe(image: str, command: List[str], *, parser: bool = False
+                      ) -> Tuple[int, str, str]:
+    """Read technology bytes through this judged image's supported entrypoint.
+
+    The operator-template interpreter contract in `_in_image` is independent.
+    Only the legacy EDA launcher and a genuinely absent entrypoint are known.
+    """
+    rc, out, err = _run(["docker", "image", "inspect", image], timeout=120)
+    try:
+        records = json.loads(out) if rc == 0 else []
+        if len(records) != 1 or not isinstance(records[0]["Config"], dict):
+            raise ValueError("image Config unavailable")
+        entrypoint = records[0]["Config"].get("Entrypoint")
+        if entrypoint is None or entrypoint == []:
+            prefix = []
+        elif entrypoint == ["/dockerstartup/scripts/ui_startup.sh"]:
+            prefix = ["--skip"]
+        else:
+            raise ValueError(f"unsupported EDA image entrypoint {entrypoint!r}")
+    except (ValueError, TypeError, KeyError, IndexError) as exc:
+        return 126, "", f"technology image inspection unavailable: {exc}; {err.strip()}"
+    mounts = (["-v", f"{_HERE}:/vibeic_programs:ro",
+               "-e", "PYTHONPATH=/vibeic_programs",
+               "-e", "PYTHONDONTWRITEBYTECODE=1"] if parser else [])
+    return _run(["docker", "run", "--rm", *_dmem.docker_memory_flags(),
+                 "--cpus", "2", "--network", "none", *mounts,
+                 image, *prefix, *command], timeout=600)
+
+
 def technology_facts(pdk: str, image: str,
                      allow_pull: bool = False) -> Dict[str, Any]:
     """`{"database_unit_um": {...}}` from the PDK's cell GDS UNITS.
@@ -599,10 +628,7 @@ def technology_facts(pdk: str, image: str,
     if local:
         rc, out, err = _run(["bash", "-lc", script], timeout=600)
     else:
-        rc, out, err = _run(["docker", "run", "--rm",
-                             *_dmem.docker_memory_flags(),
-                             digest, "--skip",
-                             "bash", "-lc", script], timeout=600)
+        rc, out, err = _technology_probe(digest, ["bash", "-lc", script])
     path, line_no, statement = None, None, None
     for raw in (out or "").splitlines():
         s = raw.strip()
@@ -668,12 +694,8 @@ def technology_facts(pdk: str, image: str,
             sys.executable, "-B", "-c", local_probe, f"{root}/{gds_glob}"],
             timeout=600)
     else:
-        rc, out, err = _run([
-            "docker", "run", "--rm", *_dmem.docker_memory_flags(),
-            "-v", f"{_HERE}:/vibeic_programs:ro",
-            "-e", "PYTHONPATH=/vibeic_programs", "-e", "PYTHONDONTWRITEBYTECODE=1",
-            digest, "--skip", "python3", "-c", probe, f"{root}/{gds_glob}"],
-            timeout=600)
+        rc, out, err = _technology_probe(
+            digest, ["python3", "-c", probe, f"{root}/{gds_glob}"], parser=True)
     try:
         # The image entrypoint prints banners and the command itself. Only a
         # complete, uniquely marked result line belongs to this probe.
