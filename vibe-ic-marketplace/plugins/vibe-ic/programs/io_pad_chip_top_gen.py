@@ -358,12 +358,20 @@ def _drop_unimplemented_optional_ports(
 
 
 def _check_scan_interface(project: Path,
-                          ports: Sequence[Dict[str, object]]) -> Dict[str, object]:
+                          ports: Sequence[Dict[str, object]], *,
+                          test_access=None) -> Dict[str, object]:
     """Do not emit a wrapper with floating controls on the selected scan core.
 
     Reuse PnR's selector and the scan producer's functional-mode metadata.
     Proof-only tie values do not authorize permanent physical tie-offs or pads.
     """
+    if test_access is not None and test_access.get("profile") == "default_planned":
+        _ports, _sides, current = _default_planned_access(project, ports)
+        if current != test_access:
+            raise Refusal("DFT_TEST_ACCESS_INVALID", "planned/native inputs changed")
+        return {"selected_scan_netlist": True, "planned_test_access": current,
+                "physical_tieoff_authorized": False,
+                "scan_chain_qualification": "NOT_MEASURED"}
     from phase3_one_shot_runner import pnr_input_netlist
     from lec_run import netlist_top_ports, scan_mode_from_meta
 
@@ -407,6 +415,58 @@ def _check_scan_interface(project: Path,
 
 
 
+def _default_planned_access(project: Path, ports: Sequence[Dict[str, object]]):
+    """Connect planned public pads to the actual Default D24 native subject.
+
+    D36 still owns chain realization; no prestitched metadata is synthesized.
+    """
+    import flow109
+    from phase3_one_shot_runner import pnr_input_netlist
+    from lec_run import netlist_top_ports
+    try:
+        placement, params, unreadable, _scanned = LPP.read_project_placement(project)
+        if unreadable:
+            raise ValueError("functional pad source is unreadable")
+        additions, sides, plan = LPP.planned_test_access(project, placement, params)
+        if plan is None:
+            raise ValueError("approved Default planned view is unavailable")
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
+        if not (context["features"].get("physical") is True
+                and context["features"].get("requires_scan") is True):
+            raise ValueError("planned view requires the physical Default scan profile")
+        intent = flow109.dft_source_intent(project, context)
+        native = flow109.physical_d24_binding(project, context, intent)
+        core = json.loads((project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json").read_bytes())["top_module"]
+        netlist, note, is_scan = pnr_input_netlist(project, core)
+        adopted = native["adopted_netlist"]
+        if (not is_scan or netlist.is_symlink()
+                or not netlist.resolve().is_relative_to(project.resolve())
+                or netlist.resolve() != (project / adopted["path"]).resolve()
+                or _sha256(netlist) != adopted["sha256"]):
+            raise ValueError("selected native netlist lacks current D23/D24 lineage")
+        header = netlist_top_ports(netlist.read_text(), core)
+        actual = {name: (direction, rng.strip()) for direction, rng, name in header}
+        expected = {str(p["name"]): p for p in ports}
+        tests = {str(p["name"]): p for p in additions}
+        if len(actual) != len(header) or set(actual) != set(expected) | set(tests):
+            raise ValueError("actual native public-port population differs from the plan")
+        for name, p in {**expected, **tests}.items():
+            direction, rng = actual[name]
+            width = (1 if not rng else None)
+            match = re.fullmatch(r"\[\s*(-?\d+)\s*:\s*(-?\d+)\s*\]", rng)
+            if match:
+                width = abs(int(match[1]) - int(match[2])) + 1
+            if direction != (p.get("direction") or p.get("mode")) or width != p.get("width"):
+                raise ValueError("wrong native direction/width: " + name)
+        record = {**plan, "native_binding": native,
+                  "netlist": LPP.project_relative(netlist, project),
+                  "netlist_sha256": _sha256(netlist), "selection": note}
+        return [p for p in additions if p["name"] not in expected], sides, record
+    except (flow109.Flow109Error, LPP.PadPlacementError, OSError, ValueError, KeyError, TypeError) as exc:
+        raise Refusal("DFT_TEST_ACCESS_INVALID", str(exc)) from exc
+
+
 def _declared_test_access(project: Path, ports: Sequence[Dict[str, object]]):
     """Extend the physical interface only through an explicit, source-bound plan.
 
@@ -434,6 +494,8 @@ def _declared_test_access(project: Path, ports: Sequence[Dict[str, object]]):
         refuse(f"cannot read {LPP.project_relative(path, project)}: {exc}")
     if not isinstance(plan, dict) or plan.get("schema") != "vibeic.dft-test-access.v1":
         refuse("test access needs schema vibeic.dft-test-access.v1")
+    if plan.get("profile") == "default_planned":
+        return _default_planned_access(project, ports)
     if plan.get("mapping") != "dedicated_pads" or not plan.get("authority"):
         refuse("test access needs an explicit authority and dedicated_pads mapping")
     spec = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
@@ -2084,7 +2146,7 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
     rec["top_port_count"] = len(ports)
     if test_record is not None:
         rec["test_access"] = test_record
-    rec["scan_interface"] = _check_scan_interface(project, ports)
+    rec["scan_interface"] = _check_scan_interface(project, ports, test_access=test_record)
 
     side_ports, unresolved = LPP.expand_side_ports(placement, params)
     if unresolved:
@@ -2596,6 +2658,8 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
                                for m, b in sorted(bus_ports.items())
                                if m in {str(c.get("master")) for c in
                                         chosen.values()}}
+    if test_record is not None and test_record.get("profile") == "default_planned":
+        _check_scan_interface(project, ports, test_access=test_record)
     out_v.write_text(_emit_verilog(top, core, ordered, chosen, ports,
                                    supply_ports, tie_cells,
                                    str(tie_liberty or ""), bus_ports))
