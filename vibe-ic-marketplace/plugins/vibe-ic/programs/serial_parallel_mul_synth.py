@@ -570,6 +570,81 @@ def _merge_scenario_populations(prior: Dict[str, Any],
     return merged, conflicts
 
 
+def planned_declaration(project: Path, spec: Dict[str, Any]) -> Tuple[dict, Optional[dict]]:
+    """Pure author-preserving plan shared with the normal emit/refresh writer."""
+    source_decl = project / "plugin_output/declaration.json"
+    declaration = plugin_declaration(spec)
+    prior_declaration = None
+    populations = _declared_scenario_populations(project, spec)
+    if source_decl.exists():
+        try:
+            prior = json.loads(source_decl.read_text())
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"existing declaration is unreadable: {exc}") from exc
+        if not isinstance(prior, dict):
+            raise ValueError("existing declaration is not an object")
+        prior_declaration = prior
+        expected = dict(declaration, size_param=spec["size_default"])
+        conflicts = [name for name, value in expected.items()
+                     if name not in ("latency_cycles", "latency_cycles_origin")
+                     and name in prior and (type(prior[name]) is not type(value)
+                                           or prior[name] != value)]
+        if "latency_cycles" in prior:
+            from arith_oracle_tb_gen import settled_serial_latency, SERIAL_LATENCY_ORIGIN
+            before = (settled_serial_latency(prior["latency_cycles"],
+                prior.get("latency_cycles_origin", SERIAL_LATENCY_ORIGIN))
+                if type(prior["latency_cycles"]) is int else None)
+            produced = settled_serial_latency(declaration["latency_cycles"],
+                declaration["latency_cycles_origin"])
+            if before is None or before != produced:
+                conflicts.append("latency_cycles")
+            # An equivalent stated window does not authorize rewriting
+            # the author's integer or explicitly selected origin.
+            declaration["latency_cycles"] = prior["latency_cycles"]
+            if "latency_cycles_origin" in prior:
+                declaration["latency_cycles_origin"] = prior["latency_cycles_origin"]
+            else:
+                declaration.pop("latency_cycles_origin", None)
+        prior, population_conflicts = _merge_scenario_populations(
+            prior, populations)
+        conflicts.extend(population_conflicts)
+        if conflicts:
+            raise ValueError("existing declaration conflicts with serial RTL: "
+                                 + ", ".join(conflicts))
+        # Compatible author choices outside this solver's four fields
+        # remain available to the contract producer and its consumers.
+        declaration = dict(prior, **declaration)
+    elif populations:
+        declaration.update(populations)
+    return declaration, prior_declaration
+
+
+def inspect_current_outputs(project: Path, ic_class: str, *,
+                            source_project: Optional[Path] = None) -> Optional[dict]:
+    """Read-only current-output plan; no authority, publication or CLI launch.
+
+    Any output needed, conflict or unsupported population declines inspection.
+    The owning runner must separately prove D01, provenance and input identity.
+    """
+    try:
+        spec, _reason = extract_serial_parallel_mul_spec(source_project or project, ic_class)
+        if spec is None:
+            return None
+        rtl = project / "phase2/stage1/rtl" / (spec["top"] + ".v")
+        import rtl_provenance as provenance
+        if provenance.iter_rtl_files(rtl.parent) != [rtl]:
+            return None
+        if rtl.read_bytes() != emit_rtl(spec).encode("utf-8"):
+            return None
+        declaration, prior = planned_declaration(project, spec)
+        if prior is None or declaration != prior:
+            return None
+        return {"spec": spec, "rtl": str(rtl.relative_to(project)),
+                "declaration": "plugin_output/declaration.json"}
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
@@ -671,55 +746,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                 print(json.dumps({"verdict": "DEFER", "reason":
                                   "output declaration differs from the source author"}))
                 return 2
-        declaration = plugin_declaration(spec)
-        prior_declaration = None
-        populations = _declared_scenario_populations(source_project, spec)
-        if source_decl.exists():
-            try:
-                prior = json.loads(source_decl.read_text())
-            except (OSError, ValueError) as exc:
-                print(json.dumps({"verdict": "DEFER", "reason":
-                                  f"existing declaration is unreadable: {exc}"}))
-                return 2
-            if not isinstance(prior, dict):
-                print(json.dumps({"verdict": "DEFER", "reason":
-                                  "existing declaration is not an object"}))
-                return 2
-            prior_declaration = prior
-            expected = dict(declaration, size_param=spec["size_default"])
-            conflicts = [name for name, value in expected.items()
-                         if name not in ("latency_cycles", "latency_cycles_origin")
-                         and name in prior and (type(prior[name]) is not type(value)
-                                               or prior[name] != value)]
-            if "latency_cycles" in prior:
-                from arith_oracle_tb_gen import settled_serial_latency, SERIAL_LATENCY_ORIGIN
-                before = (settled_serial_latency(prior["latency_cycles"],
-                    prior.get("latency_cycles_origin", SERIAL_LATENCY_ORIGIN))
-                    if type(prior["latency_cycles"]) is int else None)
-                produced = settled_serial_latency(declaration["latency_cycles"],
-                    declaration["latency_cycles_origin"])
-                if before is None or before != produced:
-                    conflicts.append("latency_cycles")
-                # An equivalent stated window does not authorize rewriting
-                # the author's integer or explicitly selected origin.
-                declaration["latency_cycles"] = prior["latency_cycles"]
-                if "latency_cycles_origin" in prior:
-                    declaration["latency_cycles_origin"] = prior["latency_cycles_origin"]
-                else:
-                    declaration.pop("latency_cycles_origin", None)
-            prior, population_conflicts = _merge_scenario_populations(
-                prior, populations)
-            conflicts.extend(population_conflicts)
-            if conflicts:
-                print(json.dumps({"verdict": "DEFER", "reason":
-                                  "existing declaration conflicts with serial RTL: "
-                                  + ", ".join(conflicts)}))
-                return 2
-            # Compatible author choices outside this solver's four fields
-            # remain available to the contract producer and its consumers.
-            declaration = dict(prior, **declaration)
-        elif populations:
-            declaration.update(populations)
+        try:
+            declaration, prior_declaration = planned_declaration(source_project, spec)
+        except ValueError as exc:
+            print(json.dumps({"verdict": "DEFER", "reason": str(exc)}))
+            return 2
         if a.emit:
             rtl_dir.mkdir(parents=True, exist_ok=True)
             rtl_path.write_text(rtl)
