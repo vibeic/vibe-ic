@@ -1325,11 +1325,22 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
                 print(f"      ERROR: design area basis input unreadable: "
                       f"{area_error}", file=sys.stderr)
                 return 1
-            if _area_basis.derive(project, area_doc)["status"] == "WRITE":
-                if _area_basis.main([
-                        str(project), "--answers", str(answers_path),
-                        "--json", str(project / "reports/phase1/"
-                                     "area_budget_basis_design.json")]) != 0:
+            area_result = _area_basis.derive(project, area_doc)
+            area_provenance = area_doc.get(_TD.PROVENANCE_KEY)
+            record = (area_provenance.get(_area_basis.KEY)
+                      if isinstance(area_provenance, dict) else None)
+            withdraw_program = (
+                area_result["status"] == "NOT_DETERMINED"
+                and isinstance(record, dict)
+                and record.get("producer") == _area_basis.PROGRAM
+                and _TD.attestation_of(area_doc, _area_basis.KEY)["answered_by"]
+                == _TD.ANSWERED_BY_PROGRAM_VALUE)
+            if area_result["status"] == "WRITE" or withdraw_program:
+                area_rc = _area_basis.main([
+                    str(project), "--answers", str(answers_path),
+                    "--json", str(project / "reports/phase1/"
+                                 "area_budget_basis_design.json")])
+                if area_rc != (2 if withdraw_program else 0):
                     return 1
         if argv is declare:
             src = (merged_answers if merged_answers.is_file()
@@ -1345,12 +1356,21 @@ def _run_step_0_5ic(project: Path, pdk: str = "") -> int:
                           file=sys.stderr)
                     return 1
                 area_result = _area_basis.derive(project, area_doc)
-                if area_result["status"] == "WRITE":
+                area_provenance = area_doc.get(_TD.PROVENANCE_KEY)
+                record = (area_provenance.get(_area_basis.KEY)
+                          if isinstance(area_provenance, dict) else None)
+                withdraw_program = (
+                    area_result["status"] == "NOT_DETERMINED"
+                    and isinstance(record, dict)
+                    and record.get("producer") == _area_basis.PROGRAM
+                    and _TD.attestation_of(area_doc, _area_basis.KEY)["answered_by"]
+                    == _TD.ANSWERED_BY_PROGRAM_VALUE)
+                if area_result["status"] == "WRITE" or withdraw_program:
                     area_rc = _area_basis.main([
                         str(project), "--answers", str(src), "--json",
                         str(project / "reports/phase1/area_budget_basis.json"),
                     ])
-                    if area_rc != 0:
+                    if area_rc != (2 if withdraw_program else 0):
                         return 1
                 argv = argv + ["--answers", str(src)]
         name = Path(argv[1]).name
