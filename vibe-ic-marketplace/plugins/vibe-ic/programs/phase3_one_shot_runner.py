@@ -73384,6 +73384,19 @@ def _emit_ir_em_reports(project: Path, top: str, pdk: PdkConfig,
     else:
         def_file = pnr_out / f"{top}.def"
     if not def_file.is_file():
+        # Current IR owns its executed State/views, not the legacy top.def.
+        # Leave the separate direct/EM solve unmeasured when its DEF is absent.
+        import librelane_ir_antenna as _la
+        if (not em_only and _step24_primary_mode(project) != "direct"
+                and (project / _la.CURRENT_STA_RECORD).is_file()):
+            _librelane_step24_record(
+                project, top, pdk, _step24_primary_mode(project),
+                _pl.extracted_dir(project) / f"{top}.spef", [])
+            _step24_adopt_primary(project, None, notes)
+            import em_current_density_check as _emcd
+            primary = _emcd.validate_primary_ir(project)
+            notes.append("Direct/EM skipped: routed DEF missing; current IR validated separately")
+            return bool(primary["valid"]), False
         notes.append("IR/EM skipped: routed DEF missing")
         return False, False
     # T103 — publish the pre-route PDN EM sizing record (the PnR session's
