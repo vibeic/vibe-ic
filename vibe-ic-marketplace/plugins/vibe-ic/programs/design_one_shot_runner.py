@@ -2763,6 +2763,11 @@ def _try_spec_artifact_registry_rtl(
         output_files=[str(out)], extras=extras)
 
 
+_STRUCTURED_RTL_SPEC_PATHS = (
+    "phase2/stage1/rtl_spec.json", "phase2/rtl_spec.json", "input/rtl_spec.json",
+    "phase2/stage1/rtl_spec.yaml", "phase2/rtl_spec.yaml", "input/rtl_spec.yaml")
+
+
 def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepResult]:
     """since v0.1.10 — program-first RTL. If the project ships a structured RTL
     spec, route it through deterministic_rtl_dispatcher (FSM-table / truth-table /
@@ -2777,9 +2782,7 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
     if _pl.rtl_input(project) == "original":
         return None  # this emitter requires the separately selected structured-spec contract
     spec = None
-    for cand in ("phase2/stage1/rtl_spec.json", "phase2/rtl_spec.json",
-                 "input/rtl_spec.json", "phase2/stage1/rtl_spec.yaml",
-                 "phase2/rtl_spec.yaml", "input/rtl_spec.yaml"):
+    for cand in _STRUCTURED_RTL_SPEC_PATHS:
         p = project / cand
         if p.is_file():
             spec = p
@@ -8195,6 +8198,220 @@ def _supplied_rtl_defining_declared_top(project: Path
     return top, hits
 
 
+def _serial_current_json(raw: bytes) -> dict:
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("ambiguous current-source JSON")
+            result[key] = value
+        return result
+    return json.loads(raw, object_pairs_hook=unique)
+
+
+def _serial_d01_state(project: Path) -> dict:
+    """Reopen normal D01 admission; absence is never conditional acceptance."""
+    import ai_signed_judgement as judgement
+    report = _pl.report_path(project, "phase1_one_shot.json")
+    if not report.is_file() or not (project / "reports/audit/ai_judgements/D1.json").is_file():
+        raise ValueError("current D01 publication/review absent")
+    owner = _serial_current_json(report.read_bytes())
+    if (not isinstance(owner, dict) or owner.get("project") != str(project.resolve())
+            or not judgement._requested(project, "D1")):
+        raise ValueError("current D01 owner or reviewed population unavailable")
+    current, why = judgement.check(project, "D1")
+    evidence = judgement.evidence_sha256(project, "D1")
+    if not current or not evidence:
+        raise ValueError("current D01 admission refused: " + why)
+    return {"current": True, "detail": why, "evidence_sha256": evidence}
+
+
+def _serial_current_context(binding: _Phase1ProjectBinding,
+                            report: Optional[Path] = None) -> tuple:
+    """Bound the serial source inputs, not unrelated output/history trees.
+
+    This is a read-only eligibility read-set. The full write transaction's
+    snapshot, CAS and rollback population is unchanged. Transient inode guards
+    include every traversed ancestor and child; persisted identity is content.
+    """
+    project = binding.project
+    paths = {"input", "phase1", "config", "plugin_input", "plugin_output",
+             "reports/phase1", "reports/audit/ai_judgements/D1.json",
+             "reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json",
+             "provenance.jsonl", "phase2/stage1/rtl",
+             "phase2/stage1/rtl.provenance.json", "phase3/librelane_switch.json",
+             *_STRUCTURED_RTL_SPEC_PATHS}
+    paths.add(str(_pl.report_path(project, "phase1_one_shot.json").relative_to(project)))
+    entries, identities, report_raw = {}, {}, None
+    report_rel = str(report.relative_to(project)) if report is not None else None
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+
+    def visit(parent, name, rel, descend, semantic=True):
+        nonlocal report_raw
+        try:
+            info = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            if semantic:
+                entries[rel] = ["absent"]
+            identities[rel] = None
+            return
+        isdir = stat.S_ISDIR(info.st_mode)
+        if not isdir and not stat.S_ISREG(info.st_mode):
+            raise ValueError("current source has a symlink or special entry: " + rel)
+        fd = os.open(name, flags | (os.O_DIRECTORY if isdir else 0), dir_fd=parent)
+        try:
+            held = os.fstat(fd)
+            if not _phase1_same_inode(info, held):
+                raise ValueError("current source changed inode: " + rel)
+            if isdir:
+                if semantic:
+                    entries[rel] = ["dir", stat.S_IMODE(info.st_mode)]
+                if descend:
+                    names = sorted(os.listdir(fd))
+                    for child in names:
+                        visit(fd, child, rel + "/" + child, True, semantic)
+                    if names != sorted(os.listdir(fd)):
+                        raise ValueError("current source directory changed: " + rel)
+            else:
+                if not descend:
+                    raise ValueError("current source ancestor is not a directory")
+                raw = (_phase1_read_fd(fd) if rel.endswith(".json") or rel == report_rel else None)
+                digest = hashlib.sha256(raw).hexdigest() if raw is not None else _phase1_fd_digest(fd)
+                if raw is not None and rel.endswith(".json"):
+                    value = _serial_current_json(raw)
+                    if rel == "phase2/stage1/rtl.provenance.json":
+                        if set(value) != {"schema", "generator", "stamped_at", "files"}:
+                            raise ValueError("unsupported provenance publication")
+                        value = {k: v for k, v in value.items() if k != "stamped_at"}
+                        digest = hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
+                if semantic:
+                    entries[rel] = ["file", stat.S_IMODE(info.st_mode), digest]
+                if rel == report_rel:
+                    report_raw = raw
+            after = os.fstat(fd)
+            live = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            if (not _phase1_same_inode(held, live) or any(
+                    getattr(held, k) != getattr(after, k) for k in
+                    ("st_size", "st_mtime_ns", "st_ctime_ns"))):
+                raise ValueError("current source changed during read: " + rel)
+            identities[rel] = [held.st_dev, held.st_ino, held.st_size,
+                               held.st_mtime_ns, held.st_ctime_ns]
+        finally:
+            os.close(fd)
+
+    binding.require_current()
+    for rel in sorted(paths | ({report_rel} if report_rel else set())):
+        parent = os.dup(binding.project_fd)
+        try:
+            parts = Path(rel).parts
+            for index, part in enumerate(parts):
+                prefix = "/".join(parts[:index + 1])
+                last = index == len(parts) - 1
+                visit(parent, part, prefix, last, last and rel != report_rel)
+                if not last:
+                    try:
+                        child = os.open(part, flags | os.O_DIRECTORY, dir_fd=parent)
+                    except FileNotFoundError:
+                        if rel != report_rel:
+                            entries[rel] = ["absent"]
+                        break
+                    if list((os.fstat(child).st_dev, os.fstat(child).st_ino)) != identities[prefix][:2]:
+                        os.close(child)
+                        raise ValueError("current source ancestor replaced")
+                    os.close(parent)
+                    parent = child
+        finally:
+            os.close(parent)
+    binding.require_current()
+    return entries, identities, report_raw
+
+
+def _serial_current_plan(binding: _Phase1ProjectBinding, ic_class: str,
+                         source_project: Optional[Path] = None) -> Optional[dict]:
+    import serial_parallel_mul_synth as serial
+    project = binding.project
+    if (ic_class not in {"digital_arithmetic_primitive", "digital_datapath",
+                         "arithmetic_primitive", "pure_datapath"}
+            or _pl.rtl_input(project) != "structured"
+            or (project / "input/in_order_watchdog.json").exists()
+            or any((project / p).exists() for p in _STRUCTURED_RTL_SPEC_PATHS)
+            or _design_supplied_build_rtl(project)
+            or _design_supplied_unstageable_hdl(project)):
+        return None
+    gathered = _gather_phase1_plain_spec_text(project, project_binding=binding)
+    if gathered.refusal is not None:
+        return None
+    plan = serial.inspect_current_outputs(project, ic_class, source_project=source_project)
+    verdict, _why, evidence = _rtl_prov.classify(project)
+    ledger = _rtl_prov.load_ledger(project)
+    if (plan is None or verdict != _rtl_prov.GENERATED or evidence.get("removed")
+            or not ledger or ledger.get("generator") != "serial_parallel_mul_synth"):
+        return None
+    return plan
+
+
+def _serial_publication_proof(result: StepResult, binding: _Phase1ProjectBinding,
+                              source: _Phase1ProjectBinding, ic_class: str) -> Optional[dict]:
+    """Capture only inside the original normal transaction; never backfill."""
+    if result.status != "PASS" or result.extras.get("deterministic_generator") != "serial_parallel_mul_synth":
+        return None
+    try:
+        before = _serial_current_context(binding)
+        d01 = _serial_d01_state(source.project)
+        plan = _serial_current_plan(binding, ic_class, source.project)
+        if plan is None or before[:2] != _serial_current_context(binding)[:2]:
+            return None
+        return {"schema": "vibeic.serial-current-source.v1", "ic_class": ic_class,
+                "context": before[0], "D01": d01, "plan": plan}
+    except (OSError, ValueError, TypeError, KeyError, _Phase1RtlOutputRefused):
+        return None
+
+
+def _try_serial_current_source(binding: _Phase1ProjectBinding, ic_class: str,
+                               t0: float) -> Optional[StepResult]:
+    """Reuse a normal source publication only; no writers, stamps or claims."""
+    import _step_identity as identity
+    project = binding.project
+    report = _pl.report_path(project, "phase2_one_shot.json")
+    try:
+        before = _serial_current_context(binding, report)
+        document = _serial_current_json(before[2])
+        if document.get("project") != str(project):
+            return None
+        rows = [r for r in document.get("steps", []) if r.get("name") == "rtl_gen"]
+        if len(rows) != 1 or rows[0].get("status") != "PASS":
+            return None
+        row = rows[0]
+        extras = row["extras"]
+        proof = extras["current_source_proof"]
+        if (proof["schema"] != "vibeic.serial-current-source.v1" or proof["ic_class"] != ic_class
+                or extras.get("deterministic_generator") != "serial_parallel_mul_synth"
+                or extras.get("program_first") is not True or proof["context"] != before[0]):
+            return None
+        code, _why = identity.code_from_stored(proof["recording"], PROGRAMS_DIR)
+        if code is None or code != proof["code"]:
+            return None
+        d01 = _serial_d01_state(project)
+        plan = _serial_current_plan(binding, ic_class)
+        if (plan is None or proof["D01"] != d01 or proof["plan"] != plan
+                or extras.get("spec") != plan["spec"]):
+            return None
+        expected = [str(project / plan[k]) for k in ("rtl", "declaration")]
+        if row.get("output_files") != expected or before[:2] != _serial_current_context(binding, report)[:2]:
+            return None
+        result = StepResult(**row)
+        result.duration_s = time.time() - t0
+        result.detail = ("deterministic serial-parallel multiplier RTL (program-first; no LLM) "
+                         "validated at " + plan["rtl"] + "; L7 declaration -> " + plan["declaration"])
+        result.extras = dict(extras, current_source_read_only=True,
+                             current_source_reuse="READ_ONLY_CURRENT_SOURCE",
+                             contract_refreshed_from_retained_rtl=True)
+        binding.require_current()
+        return result
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, _Phase1RtlOutputRefused):
+        return None
+
+
 def step_rtl_gen(project: Path, ic_class: str,
                  force_regen: Optional[bool] = None) -> StepResult:
     """Run RTL dispatch in isolation, then CAS-publish its complete delta."""
@@ -8223,6 +8440,10 @@ def step_rtl_gen(project: Path, ic_class: str,
     committed = False
     try:
         binding = _Phase1ProjectBinding.open(project)
+        if not prior_owned and not (_FORCE_RTL_REGEN if force_regen is None else force_regen):
+            current = _try_serial_current_source(binding, ic_class, t0)
+            if current is not None:
+                return current
         stage_temp = tempfile.TemporaryDirectory(prefix="vibeic-rtl-step-")
         with contextlib.nullcontext(stage_temp.name) as td:
             stage_project = Path(td) / project.name
@@ -8236,10 +8457,27 @@ def step_rtl_gen(project: Path, ic_class: str,
             _RTL_SESSION_BINDING = None
             if prior_owned and prior_project == project:
                 _RTL_SESSION_PROJECT = stage_project
-            with _pl.rtl_input_view(stage_project, _pl.rtl_input(project)):
-                result = _step_rtl_gen_bound(
-                    stage_project, ic_class, force_regen, t0, stage_binding,
-                    snapshot_manifest=baseline)
+            import _step_recorder as recorder
+            import _step_identity as identity
+            record_serial = ic_class in {"digital_arithmetic_primitive", "digital_datapath",
+                                         "arithmetic_primitive", "pure_datapath"}
+            with (recorder.Recorder(PROGRAMS_DIR) if record_serial
+                  else contextlib.nullcontext(None)) as executed:
+                with _pl.rtl_input_view(stage_project, _pl.rtl_input(project)):
+                    result = _step_rtl_gen_bound(
+                        stage_project, ic_class, force_regen, t0, stage_binding,
+                        snapshot_manifest=baseline)
+                    proof = _serial_publication_proof(result, stage_binding, binding, ic_class)
+            if result.extras.get("deterministic_generator") == "serial_parallel_mul_synth":
+                result.extras["current_source_reuse"] = "UNAVAILABLE_FULL_TRANSACTION_USED"
+                if proof is not None:
+                    recording, why_not = executed.recorded()
+                    code, why = identity.code_from_recording(recording)
+                    if code is not None:
+                        result.extras["current_source_proof"] = dict(proof, recording=recording, code=code)
+                        result.extras["current_source_reuse"] = "NORMAL_PROOF_PUBLISHED"
+                    else:
+                        result.extras["current_source_reuse_detail"] = why_not or "; ".join(why)
             stage_binding.require_current()
             # #2183 — THE FILES, not only the StepResult. Every generator above
             # ran against `stage_project` and any of them may have recorded
