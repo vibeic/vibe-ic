@@ -2793,13 +2793,24 @@ def _d13_retained(project: Path, execution: Mapping, path: Path) -> Path:
     return _d13_file(project, matches[0])
 
 
-def _d13_execution(project: Path, source: Mapping) -> dict:
+def _d13_execution(project: Path, source: Mapping, *, case_name: str | None = None) -> dict:
     """Reopen independently adopted original owner/launch; never restamp old execution."""
-    authority, adopted = _approved_document(project, 'adopted/base_07/simulation_execution.json',
+    relative = ('adopted/base_07/simulation_execution.json' if case_name is None else
+                'adopted/base_07/scenario_executions/' + case_name + '.json')
+    if case_name is not None and not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', case_name):
+        raise MetricRefusal('D13_CASE_ID_INVALID', str(case_name))
+    authority, adopted = _approved_document(project, relative,
         authority='requirements_owner', schema='vibeic.flow109.adopted-reference.v1')
     approved_source = json.loads(_safe_project_file(project, authority['source']['path']).read_bytes())
     reference = adopted.get('reference')
-    if (approved_source != source or reference != source.get('execution')
+    if case_name is not None:
+        original_authority, _, current_source = _d13_authority(project, 'required_function_scenarios')
+        expected_source = {'purpose': D13_PURPOSE, 'project': str(project),
+            'subject': source['subject'], 'case': case_name,
+            'source_authority': original_authority['source'], 'execution': reference}
+        if approved_source != expected_source or current_source != source:
+            raise MetricRefusal('D13_CASE_AUTHORITY_UNBOUND', case_name)
+    if ((case_name is None and (approved_source != source or reference != source.get('execution')))
             or reference.get('project') != str(project) or source.get('project') != str(project)
             or source.get('subject') != d13_subject(project)):
         raise MetricRefusal('D13_EXECUTION_SUBJECT_MISMATCH', 'exact current same-project subject required')
@@ -2807,7 +2818,8 @@ def _d13_execution(project: Path, source: Mapping) -> dict:
     if (not isinstance(files, list) or not files or len({r['path'] for r in files}) != len(files)
             or any(Path(r['path']).is_absolute() for r in files)):
         raise MetricRefusal('D13_EXECUTION_POPULATION_INVALID', 'unique project-relative native readset required')
-    owner = json.loads(_d13_file(project, reference['original_owner'], external=True).read_bytes())
+    owner_path = _d13_file(project, reference['original_owner'], external=True)
+    owner = json.loads(owner_path.read_bytes())
     binding = owner.get('runner_binding') or {}
     producer = binding.get('producer')
     if (binding.get('schema') != 'vibeic.runner_report_binding.v1' or binding.get('project') != str(project)
@@ -2815,15 +2827,54 @@ def _d13_execution(project: Path, source: Mapping) -> dict:
             or producer != reference.get('original_producer')):
         raise MetricRefusal('D13_ORIGINAL_OWNER_UNBOUND', 'original invocation/producer must reopen')
     _d13_file(project, producer)
+    if case_name is not None:
+        import benchmark_dispatch as dispatch
+        if (owner.get('subject') != source['subject'] or owner.get('selected_cases') != [case_name]
+                or owner.get('model_sources') != d13_model_sources()
+                or producer.get('sha256') != d13_model_sources()['testbench_gen.py']
+                or owner.get('verdict') not in ('PASS', 'FAIL')
+                or owner.get('execution', {}).get('execution_record') !=
+                    str(project / reference['scenario_record']['path'])
+                or owner['execution'].get('results_xml') != str(project / reference['unit_junit']['path'])
+                or owner['execution'].get('tb_total') != 1
+                or binding.get('report_name') != 'phase2_one_shot.json'
+                or binding.get('source') != dispatch._runner_source_snapshot(binding['argv'],
+                    consumer=binding['source']['consumer']['path'])
+                or _d13_file(project, binding['source']['runner']) != _d13_file(project, producer)
+                or reference.get('original_invocation') == source['execution']['original_invocation']):
+            raise MetricRefusal('D13_CASE_OWNER_UNBOUND', case_name)
     for component in ('runner', 'consumer', 'executable'):
         _d13_file(project, binding['source'][component], external=component == 'executable')
     launch = json.loads(_d13_file(project, reference['original_launch'], external=True).read_bytes())
     terminal = json.loads(_d13_file(project, reference['original_terminal'], external=True).read_bytes())
+    expected_exit = 0 if case_name is None or owner.get('verdict') == 'PASS' else 1
     if (not re.fullmatch(r'[0-9a-f]{64}', str(launch.get('cid', '')))
             or not re.fullmatch(r'sha256:[0-9a-f]{64}', str(launch.get('image_id', '')))
-            or terminal.get('host_exit_verified') is not True or terminal.get('docker_cli_exit_code') != 0
-            or terminal.get('host_die_event_exit_code') != 0 or terminal.get('source_unchanged') is not True):
+            or terminal.get('host_exit_verified') is not True or terminal.get('docker_cli_exit_code') != expected_exit
+            or terminal.get('host_die_event_exit_code') != expected_exit or terminal.get('source_unchanged') is not True):
         raise MetricRefusal('D13_ORIGINAL_LAUNCH_UNPROVEN', 'actual original host CID/image/terminal required')
+    if case_name is not None:
+        old_launch = json.loads(_d13_file(project, source['execution']['original_launch'], external=True).read_bytes())
+        if launch['cid'] == old_launch.get('cid') or launch['image_id'] != old_launch.get('image_id'):
+            raise MetricRefusal('D13_CASE_BORROWED_EXECUTION', case_name)
+        path = _d13_file(project, reference['scenario_record'])
+        record = __import__('_l10_execution').load_record(project,
+            project / 'phase1/generated_docs/L10_TEST_CASES.json', path=path)
+        if (not record.get('available') or record.get('malformed') or set(record.get('rows', {})) != {case_name}
+                or record.get('producer') != 'testbench_gen.run_unit_tbs'
+                or path.parent != owner_path.parent
+                or _d13_file(project, reference['unit_junit']).parent != path.parent
+                or Path(record['rows'][case_name]['tb_file']).parent != path.parent / 'tb'
+                or Path(record['rows'][case_name].get('arithmetic_scenario', {}).get('transcript', '')).parent
+                    != path.parent / case_name):
+            raise MetricRefusal('D13_CASE_RECORD_UNPROVEN', case_name)
+        summary = __import__('_sim_results_bridge').parse_junit(_d13_file(project, reference['unit_junit']))
+        if (not summary or summary['tests'] != 1 or summary['skipped']
+                or summary['passed'] + summary['failures'] + summary['errors'] != 1
+                or (owner['verdict'] == 'PASS') != (summary['passed'] == 1)):
+            raise MetricRefusal('D13_CASE_JUNIT_UNPROVEN', case_name)
+        for required in (path, _d13_file(project, reference['unit_junit'])):
+            _d13_retained(project, reference, required)
     for record in source.get('source_refs', []):
         _d13_file(project, record)
     if not source.get('source_refs'):
@@ -2941,6 +2992,22 @@ def _d13_functions(project: Path, source: Mapping, execution: Mapping) -> list[d
                 raise MetricRefusal('D13_SCENARIO_POPULATION_UNPROVEN', name)
             row = _d13_scenario(project, name, source['scenario_requirements'][name],
                                 record, execution, source['declared'])
+            if row['status'] == 'FAIL':
+                observed.append(row)
+                continue
+            supplement = project / ('adopted/base_07/scenario_executions/' + name + '.json')
+            if supplement.exists() or supplement.is_symlink():
+                if source['scenario_requirements'][name].get('reset_observation') is None:
+                    raise MetricRefusal('D13_CASE_SUPPLEMENT_SCOPE_UNSUPPORTED', name)
+                selected = _d13_execution(project, source, case_name=name)
+                selected_record = cases.load_record(project, l10,
+                    path=_d13_file(project, selected['scenario_record']))
+                measured = _d13_scenario(project, name, source['scenario_requirements'][name],
+                    selected_record, selected, source['declared'])
+                # A newly measured mismatch is never hidden by an older PASS;
+                # an older real mismatch is never erased by supplementation.
+                row = (row if row['status'] == 'FAIL' else measured)
+                row['execution'] = selected
             if row['status'] == 'FAIL':
                 observed.append(row)
                 continue

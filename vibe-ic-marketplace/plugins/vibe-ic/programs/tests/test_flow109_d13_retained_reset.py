@@ -56,6 +56,20 @@ def test_d13_retained_native_reset_result(relative, expected):
         assert result['measured']['complete'] is True
 
 
+@pytest.mark.parametrize('relative,expected', CASES)
+def test_d13_explicit_case_record_reuses_retained_outcome(tmp_path, relative, expected):
+    project, record, required, execution, declared = native_case(relative)
+    # Copy only the immutable record bytes for the added explicit-path reader.
+    # TB/plan/transcript/source remain the exact readonly native packet.
+    explicit = tmp_path / 'separate-l10.json'
+    explicit.write_bytes(Path(record['path']).read_bytes())
+    current = cases.load_record(project, project/'phase1/generated_docs/L10_TEST_CASES.json', path=explicit)
+    assert current['path'] == str(explicit)
+    assert current['rows'] == record['rows']
+    result = metrics._d13_scenario(project, 'reset', required, current, execution, declared)
+    assert result['status'] == expected, result
+
+
 @pytest.mark.parametrize('change', ['order', 'one_point', 'omit', 'zero', 'stale_input'])
 def test_d13_reset_reader_refuses_partial_or_changed_population(change):
     project, record, required, execution, declared = native_case(CASES[0][0])
