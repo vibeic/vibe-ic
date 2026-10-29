@@ -8216,7 +8216,8 @@ def _serial_d01_state(project: Path) -> dict:
     if not report.is_file() or not (project / "reports/audit/ai_judgements/D1.json").is_file():
         raise ValueError("current D01 publication/review absent")
     owner = _serial_current_json(report.read_bytes())
-    if owner.get("project") != str(project.resolve()) or not judgement._requested(project, "D1"):
+    if (not isinstance(owner, dict) or owner.get("project") != str(project.resolve())
+            or not judgement._requested(project, "D1")):
         raise ValueError("current D01 owner or reviewed population unavailable")
     current, why = judgement.check(project, "D1")
     evidence = judgement.evidence_sha256(project, "D1")

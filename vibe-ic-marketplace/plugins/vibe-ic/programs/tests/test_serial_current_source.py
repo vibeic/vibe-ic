@@ -186,10 +186,11 @@ def test_real_missing_D01_cannot_publish_or_reuse(tmp_path):
         runner._serial_d01_state(tmp_path)
 
 
-def test_real_D01_owner_mismatch_is_not_current(tmp_path):
+@pytest.mark.parametrize('owner', [{'project':'foreign namespace'}, [], None])
+def test_real_D01_owner_mismatch_is_not_current(tmp_path,owner):
     report=runner._pl.report_path(tmp_path,'phase1_one_shot.json')
     report.parent.mkdir(parents=True)
-    report.write_text(json.dumps({'project':'foreign namespace'}))
+    report.write_text(json.dumps(owner))
     receipt=tmp_path/'reports/audit/ai_judgements/D1.json'
     receipt.parent.mkdir(parents=True)
     receipt.write_text('{}')
