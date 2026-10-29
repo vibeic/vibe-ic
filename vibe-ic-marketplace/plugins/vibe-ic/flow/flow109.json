@@ -3827,17 +3827,35 @@
           "tools": "Verilator.Lint + Checker.LintErrors + Checker.LintTimingConstructs",
           "native_steps": [
             "Verilator.Lint",
+            "Checker.LintTimingConstructs",
             "Checker.LintErrors",
-            "Checker.LintTimingConstructs"
+            "Checker.LintWarnings"
           ],
           "execution_status": "NATIVE_OWNER_WIRED_NOT_CASE_QUALIFIED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "2", "owner_entry_step": "2", "owner_exit_step": "2",
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "2",
+            "owner_entry_step": "2",
+            "owner_exit_step": "2",
             "producer": "design_one_shot_runner.py:step_rtl_lint_tool",
-            "consumer": "design_one_shot_runner retained lint acceptance",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "consumer": "flow109_metric_acceptance.accept_d11",
+            "engine_families": [
+              "verilator"
+            ],
+            "acceptance_scope": "D11_qualified_native_lint_and_complete_source_coverage",
+            "flow109_metrics_status": "IMPLEMENTED",
+            "engine_steps": {
+              "verilator": [
+                "Verilator.Lint",
+                "Checker.LintTimingConstructs",
+                "Checker.LintErrors",
+                "Checker.LintWarnings"
+              ]
+            },
+            "engine_executables": {
+              "verilator": "verilator"
+            }
           }
         }
       ],
@@ -3866,7 +3884,7 @@
             "checker.base_05.required_lint_violations",
             "producer.base_05.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_05.source_file_coverage",
@@ -3885,10 +3903,10 @@
             "checker.base_05.source_file_coverage",
             "producer.base_05.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_METRIC_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED",
       "gate_layer_ids": [
         "G1",
         "G2",

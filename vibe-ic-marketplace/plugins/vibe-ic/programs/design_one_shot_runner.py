@@ -14334,10 +14334,32 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
     are the step-9 synthesis input (`silicon_rtl_selection`), so a lint of a
     different or empty file set cannot pass."""
     import librelane_contract as _ll
+    raw_context = os.environ.get("VIBEIC_FLOW109_CONTEXT")
+    d11_context = None
+    d11_admission = None
+    if raw_context:
+        import flow109
+        import flow109_metric_acceptance as metrics
+        selected = flow109.validate_execution_context(json.loads(Path(raw_context).read_bytes()))
+        if selected['resolved_row']['id'] == 'D11':
+            t0 = time.time()
+            accepted = metrics.accept_d11(project, selected)
+            if accepted['status'] in ('PASS', 'FAIL') or not metrics.d11_fresh_request(project, selected):
+                return StepResult('rtl_lint_tool', accepted['component_status'], time.time() - t0,
+                    accepted['reason'], extras={'step_id': '2', 'completed': False,
+                        'default_row_status': 'NOT_MEASURED', 'metric_acceptance': accepted,
+                        'native_reused': True, 'context_sha256': selected['context_sha256']},
+                    reason_class='inconclusive' if accepted['status'] == 'NOT_MEASURED' else '')
+            d11_context = selected
     try:
         mode = _ll.selected_mode(project, "2")
     except _ll.Refusal as exc:
         return StepResult("rtl_lint_tool", "FAIL", 0.0, str(exc))
+    if d11_context is not None and mode != 'librelane':
+        return StepResult('rtl_lint_tool', 'NOT_MEASURED', time.time() - t0,
+            'D11_NATIVE_OWNER_MODE_UNSUPPORTED: qualified LibreLane lint required',
+            extras={'step_id': '2', 'completed': False, 'default_row_status': 'NOT_MEASURED'},
+            reason_class='inconclusive')
     if mode == "direct":
         if _pl.rtl_input(project) != "original":
             return None
@@ -14449,14 +14471,44 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
                 mounts=mounts, pdk_root=pdk_root)
             checks.append((sid, checked_config, state_in))
         input_hashes = {str(path): _ll.digest(path) for path in rtl}
+        if d11_context is not None:
+            d11_admission = metrics.d11_fresh_admission(project, d11_context,
+                json.loads(resolved.read_bytes()),
+                {sid: json.loads(cfg.read_bytes()) for sid, cfg, _ in checks})
+            namespace = 'D11/' + Path(os.environ[flow109.ATTEMPT_ENV]).name
+        else:
+            namespace = None
         folders = _ll.run_chain(
             project, image, [("Verilator.Lint", resolved, state_in), *checks,
-                             ("Yosys.JsonHeader", header_resolved, state_in)],
-            mounts=mounts, pdk_root=pdk_root, lane="step2")
+                *([] if d11_context is not None else [("Yosys.JsonHeader", header_resolved, state_in)])],
+            mounts=mounts, pdk_root=pdk_root, lane=None if namespace else "step2", namespace=namespace)
         folder, header_dir = folders[0], folders[-1]
+        if d11_admission is not None and metrics.d11_subject(project) != d11_admission['subject']:
+            raise _ll.Refusal('D11_INPUT_CHANGED', 'full original source/header population changed during lint')
         if input_hashes != {str(path): _ll.digest(path) for path in rtl}:
             raise _ll.Refusal("LL_LINT_INPUT_CHANGED", "RTL changed during native lint")
     except (_ll.Refusal, OSError, ValueError) as exc:
+        if isinstance(exc, _ll.Refusal) and exc.code == 'LL_STEP_FAILED':
+            native_base = project / 'phase3/librelane' / (namespace or 'step2')
+            failed_dirs = {sid: native_base / (f'{index:02d}-' + sid.lower().replace('.', '-'))
+                           for index, (sid, _, _) in enumerate(checks, 2)}
+            recorded_failure = {'code': exc.code, 'detail': str(exc),
+                'artifact_readset': {str(path): _ll.digest(path) for path in native_base.rglob('*') if path.is_file()}}
+            observed = _vlg.judge(native_base / '01-verilator-lint', rtl,
+                checker_dirs=failed_dirs, native_failure=recorded_failure)
+            observed['native_execution_refusal'] = recorded_failure
+            observed['input_sha256'] = input_hashes
+            observed['mode'] = mode
+            _ll.write_json(gate_json, observed)
+            if observed['verdict'] == 'FAIL':
+                return StepResult('rtl_lint_tool', 'FAIL', time.time() - t0,
+                    observed['reason'], [str(gate_json)], extras={'step_id': '2',
+                        'default_row_status': 'NOT_MEASURED', 'completed': False,
+                        'native_checks': observed['native_checks'], 'input_sha256': input_hashes,
+                        'mode': mode, 'native_lint_admission': d11_admission,
+                        'native_failure': recorded_failure, 'native_fresh': d11_context is not None,
+                        **({'native_lint_execution': metrics.d11_capture_execution(project, d11_context,
+                            native_base, d11_admission, gate_json)} if d11_context is not None else {})})
         stopped = (_ll.tool_stop_reason(exc.code)
                    if isinstance(exc, _ll.Refusal) else None)
         return StepResult("rtl_lint_tool", "NOT_MEASURED" if stopped else "FAIL",
@@ -14467,7 +14519,8 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
     # The step-2 port conformance, against the tool's elaborated interface.
     # Advisory like its flow clause: recorded, never the lint verdict.
     conformance = project / "reports/phase2/gates/spec_conformance_tool_ports.json"
-    json_h = json.loads((header_dir / "state_out.json").read_text()).get("json_h")
+    json_h = (json.loads((header_dir / "state_out.json").read_text()).get("json_h")
+              if d11_context is None else None)
     l9_path = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     conformance_rc = None
     if json_h and l9_path.is_file():
@@ -14479,7 +14532,7 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
              "--tool-ports", str(json_h), "--json", str(conformance)],
             capture_output=True, text=True).returncode
     report = _vlg.judge(folder, rtl, **({"checker_dirs": {
-        sid: path for (sid, _, _), path in zip(checks, folders[1:-1])}}
+        sid: path for (sid, _, _), path in zip(checks, folders[1:] if d11_context is not None else folders[1:-1])}}
         if mode == "librelane" else {}))
     report["input_sha256"] = input_hashes
     report["mode"] = mode
@@ -14513,7 +14566,11 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
     return StepResult("rtl_lint_tool", status, time.time() - t0, detail, outputs,
                       extras={"mode": mode, "spec_conformance_tool_ports_rc": conformance_rc,
                               "step_id": "2", "default_row_status": status,
-                              "completed": status == "PASS",
+                              "completed": status == "PASS" and d11_context is None,
+                              "native_fresh": d11_context is not None,
+                              "native_lint_admission": d11_admission,
+                              **({'native_lint_execution': metrics.d11_capture_execution(project,
+                                  d11_context, folder.parent, d11_admission)} if d11_context is not None else {}),
                               "native_checks": report.get("native_checks", {}),
                               "input_sha256": input_hashes},
                       reason_class=reason)
@@ -27770,8 +27827,13 @@ def main() -> int:
         _write_phase2_report(out, summary, project,
                             invocation_context=_dispatch_invocation_context)
         import flow109
-        finished = flow109.finish_native_window(project, summary, out)
-        status = (finished.get("default_row_status", "NOT_MEASURED")
+        # D11's front door reopens the actual fresh normal owner report before
+        # the sole canonical writer publishes; this child owns no row credit.
+        d11_selected = bool(raw_context and json.loads(Path(raw_context).read_bytes())
+                            .get('resolved_row', {}).get('id') == 'D11')
+        finished = None if d11_selected else flow109.finish_native_window(project, summary, out)
+        status = (row.status if d11_selected else
+                  finished.get("default_row_status", "NOT_MEASURED")
                   if raw_context and finished is not None
                   else "NOT_MEASURED" if raw_context else row.status)
         if status != summary["verdict"]:
