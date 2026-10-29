@@ -561,3 +561,91 @@ def test_d11_complete_required_source_set_order_is_semantic(case):
     result=accept(case)
     assert result['status']=='PASS',result
     assert [x['status'] for x in result['obligations']]==['PASS','PASS']
+
+
+def timing_first_native_case():
+    """Original E wait execution copied at its original path; no native replay."""
+    frozen=Path(os.environ.get('FLOW109_D11_TIMING_REFERENCE','/timing-reference'))
+    index=Path(os.environ.get('FLOW109_D11_TIMING_READSET','/controls/native-input-snapshot.json'))
+    if not frozen.is_dir() or not index.is_file():
+        pytest.skip('retained timing-first native input unavailable: NOT_MEASURED')
+    records=json.loads(index.read_bytes())['files']
+    for name,digest in records.items():
+        assert sha(frozen/name)==digest
+    case=next(r for r in json.loads((frozen/'NATIVE_CHAIN_CONTROLS.json').read_bytes())['results']
+              if r['id']=='D11.native_chain.wait')
+    project=Path('/evidence/fixtures/wait')
+    if project.exists():shutil.rmtree(project)
+    shutil.copytree(frozen/'fixtures/wait',project)
+    failure=dict(case['normal_chain_refusal'],artifact_readset={str(Path('/evidence')/name):digest
+        for name,digest in records.items() if name.startswith('fixtures/wait/')})
+    base=project/'phase3/librelane/step2'
+    checks={sid:base/(f'{i:02d}-'+sid.lower().replace('.','-'))
+            for i,sid in enumerate(metrics.D11_STEPS[1:],2)}
+    lint=base/'01-verilator-lint'
+    config=json.loads((lint/'config.json').read_bytes())
+    return project,lint,checks,[Path(p) for p in config['VERILOG_FILES']],failure
+
+
+def test_d11_retained_timing_first_failure_precedes_unexecuted_errors(tmp_path):
+    import verilator_lint_gate as gate
+    project,lint,checks,expected,failure=timing_first_native_case()
+    assert not checks['Checker.LintErrors'].exists()
+    assert not (checks['Checker.LintTimingConstructs']/'state_out.json').exists()
+    assert not checks['Checker.LintWarnings'].exists()
+    before={str(p):sha(p) for p in project.rglob('*') if p.is_file()}
+    result=gate.judge(lint,expected,checker_dirs=checks,native_failure=failure)
+    put(tmp_path/'actual-timing-first-reader.json',result)
+    assert result['verdict']=='FAIL',result
+    assert result['native_failure']['failed_step']=='Checker.LintTimingConstructs'
+    assert result['native_failure']['value']==1
+    assert result['native_failure']['exit_code']==255
+    assert before=={str(p):sha(p) for p in project.rglob('*') if p.is_file()}
+
+
+@pytest.mark.parametrize('mutation',['no_failure','wrong_rc','wrong_checker','log','launch'])
+def test_d11_timing_first_rejects_unbound_or_tampered_failure(mutation):
+    import verilator_lint_gate as gate
+    _,lint,checks,expected,failure=timing_first_native_case()
+    if mutation=='no_failure':failure=None
+    elif mutation=='wrong_rc':failure['detail']=failure['detail'].replace('rc=255','rc=137')
+    elif mutation=='wrong_checker':failure['detail']=failure['detail'].replace('Checker.LintTimingConstructs','Checker.LintErrors',1)
+    else:
+        path=checks['Checker.LintTimingConstructs']/('invocation.log' if mutation=='log' else 'input_fingerprint.json')
+        path.write_bytes(path.read_bytes()+b'\nchanged\n')
+    result=gate.judge(lint,expected,checker_dirs=checks,native_failure=failure)
+    assert result['verdict']=='NOT_MEASURED',result
+
+
+def test_d11_normal_lint_producer_captures_retained_timing_first_failure(monkeypatch,tmp_path):
+    """Only configuration/transport is isolated; actual typed producer/reader runs.
+
+    The upstream transport raises the original recorded Refusal over immutable
+    retained native files. This test does not execute or claim a new native run.
+    """
+    import design_one_shot_runner as design
+    project,lint,_,_,failure=timing_first_native_case()
+    original={str(p):sha(p) for p in lint.parent.rglob('*') if p.is_file()}
+    cfg=json.loads((lint/'config.json').read_bytes())
+    monkeypatch.delenv(flow109.CONTEXT_ENV,raising=False)
+    monkeypatch.setattr(contract,'selected_mode',lambda *args:'librelane')
+    monkeypatch.setattr(contract,'phase2_pdk',lambda *args,**kw:(cfg['PDK'],'SOFTWARE_CONFIGURATION_ONLY'))
+    monkeypatch.setattr(contract,'resolve_image',lambda *args:os.environ['VIBEIC_EDA_IMAGE'])
+    monkeypatch.setattr(contract,'pdk_root_resolution',lambda *args,**kw:{'path':'/foss/pdks'})
+    monkeypatch.setattr(design,'_rcvar_l9_top_ports',lambda *args:(cfg['DESIGN_NAME'],))
+    monkeypatch.setattr(design._pl,'rtl_dir',lambda root:root/'rtl')
+    def resolved(_project,_image,raw,output,**kwargs):
+        output.write_bytes(raw.read_bytes());return output
+    monkeypatch.setattr(contract,'resolve_step_config',resolved)
+    def retained_refusal(_project,_image,steps,**kwargs):
+        assert [s[0] for s in steps[:4]]==list(metrics.D11_STEPS)
+        raise contract.Refusal(failure['code'],failure['detail'].split(': ',1)[1])
+    monkeypatch.setattr(contract,'run_chain',retained_refusal)
+    row=design.step_rtl_lint_tool(project)
+    actual=json.loads((project/'reports/phase2/lint/verilator_lint_gate.json').read_bytes())
+    put(tmp_path/'actual-producer-gate.json',actual)
+    assert actual['verdict']=='FAIL',actual
+    assert row.status=='FAIL'
+    assert row.extras['native_checks']['Checker.LintTimingConstructs']['value']==1
+    assert row.extras['native_failure']['detail']==failure['detail']
+    assert all(sha(Path(p))==digest for p,digest in original.items())
