@@ -4363,7 +4363,7 @@
             "checker.base_08.unproved_required_properties",
             "producer.base_08.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D14_RUNTIME_BINDING"
         },
         {
           "id": "base_08.vacuous_required_proofs",
@@ -4383,7 +4383,7 @@
             "checker.base_08.vacuous_required_proofs",
             "producer.base_08.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D14_RUNTIME_BINDING"
         },
         {
           "id": "base_08.proof_partition_coverage",
@@ -4402,7 +4402,7 @@
             "checker.base_08.proof_partition_coverage",
             "producer.base_08.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D14_RUNTIME_BINDING"
         }
       ],
       "metric_acceptance_status": "UNIMPLEMENTED",
