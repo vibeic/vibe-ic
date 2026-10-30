@@ -529,15 +529,32 @@ def _registry_entry(pdk: str) -> Optional[Dict[str, Any]]:
 
 
 def _technology_probe(image: str, command: List[str], *, parser: bool = False,
-                      registry_root: Optional[str] = None) -> Tuple[int, str, str]:
+                      registry_root: Optional[str] = None,
+                      local: bool = False) -> Tuple[int, str, str]:
     """Read technology bytes through this judged image's supported entrypoint.
 
     The operator-template interpreter contract in `_in_image` is independent.
     Only the legacy EDA launcher and a genuinely absent entrypoint are known.
     """
-    rc, out, err = _run(["docker", "image", "inspect", image], timeout=120)
+    if local:
+        try:
+            import librelane_contract as contract
+            identity = contract.local_image_attestation(image)
+            raw = Path(identity["attestation_path"]).read_bytes()
+            if hashlib.sha256(raw).hexdigest() != identity["attestation_sha256"]:
+                raise ValueError("LOCAL launch receipt changed during read")
+            records = [item for item in json.loads(raw)["image_inspect"]
+                       if item["Id"] == identity["image_id"]]
+        except (contract.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
+            return 126, "", f"technology LOCAL image authority unavailable: {exc}"
+        err = ""
+    else:
+        rc, out, err = _run(["docker", "image", "inspect", image], timeout=120)
+        try:
+            records = json.loads(out) if rc == 0 else []
+        except ValueError:
+            records = []
     try:
-        records = json.loads(out) if rc == 0 else []
         if len(records) != 1 or not isinstance(records[0]["Config"], dict):
             raise ValueError("image Config unavailable")
         entrypoint = records[0]["Config"].get("Entrypoint")
@@ -579,6 +596,8 @@ def _technology_probe(image: str, command: List[str], *, parser: bool = False,
             command = [*command[:-1], str(root / registered.name) + "/" + relative]
     except (ValueError, TypeError, KeyError, IndexError) as exc:
         return 126, "", f"technology image inspection unavailable: {exc}; {err.strip()}"
+    if local:
+        return _run(command, timeout=600)
     mounts = (["-v", f"{_HERE}:/vibeic_programs:ro",
                "-e", "PYTHONPATH=/vibeic_programs",
                "-e", "PYTHONDONTWRITEBYTECODE=1"] if parser else [])
@@ -656,10 +675,7 @@ def technology_facts(pdk: str, image: str,
     # the pressure. Spliced immediately after the run verb, exactly as the one
     # other `docker run` in this file does.
     local = _cex.local_exec_mode(ATTRIBUTION)
-    if local:
-        rc, out, err = _run(lef_command, timeout=600)
-    else:
-        rc, out, err = _technology_probe(digest, lef_command, registry_root=root)
+    rc, out, err = _technology_probe(digest, lef_command, registry_root=root, local=local)
     path, line_no, statement = None, None, None
     for raw in (out or "").splitlines():
         s = raw.strip()
@@ -721,9 +737,9 @@ def technology_facts(pdk: str, image: str,
         "print('VIBEIC_STREAM_DBU=' + json.dumps({'cell_gds': path, 'value': layout.dbu_um}))\n")
     if local:
         local_probe = f"import sys; sys.path.insert(0, {str(_HERE)!r})\n" + probe
-        rc, out, err = _run([
+        rc, out, err = _technology_probe(digest, [
             sys.executable, "-B", "-c", local_probe, f"{root}/{gds_glob}"],
-            timeout=600)
+            parser=True, registry_root=root, local=True)
     else:
         rc, out, err = _technology_probe(
             digest, ["python3", "-c", probe, f"{root}/{gds_glob}"],

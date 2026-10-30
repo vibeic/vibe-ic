@@ -26,7 +26,7 @@ def _kit(root, unit):
 
 
 def _scene(tmp_path, monkeypatch, *, entrypoint=None, declared=True, legacy=False,
-           root_value=None, damage=None, quoted=False):
+           root_value=None, damage=None, quoted=False, local=False):
     name = 'registered_neutral'
     legacy_root = tmp_path / 'legacy' / name
     image_root = tmp_path / ("image root ' ; $HOST_VALUE" if quoted else 'image-pdks')
@@ -48,16 +48,37 @@ def _scene(tmp_path, monkeypatch, *, entrypoint=None, declared=True, legacy=Fals
     monkeypatch.setattr(stf, '_registry_entry', lambda _pdk: {
         'name': name, 'container_path': str(legacy_root),
         'tech_lef_glob': 'tech.lef', 'cell_gds_glob': 'cells.gds'})
-    monkeypatch.setattr(_container_exec, 'local_exec_mode', lambda *_: False)
+    monkeypatch.setattr(_container_exec, 'local_exec_mode', lambda *_: local)
     monkeypatch.setattr(_eda_image, 'judged_image', lambda **_: _eda_image.JudgedImage(
         IMAGE, 'sha256:' + '0' * 64, 'SOFTWARE', 'fixture', ''))
     monkeypatch.setenv('PDK_ROOT', str(tmp_path / 'HOST_ROOT_MUST_NOT_BE_USED'))
     monkeypatch.setenv('VIBEIC_DOCKER_MEMORY', '4g')
     calls = []
+    if local:
+        import librelane_contract as contract
+        cid = 'a' * 64
+        config_id = 'sha256:' + 'b' * 64
+        receipt = tmp_path / 'launch_identity.json'
+        receipt.write_text(json.dumps({
+            'cid': cid, 'image': IMAGE,
+            'container_inspect': {'Id': cid, 'Image': config_id,
+                'Config': {'Hostname': cid[:12], 'Image': IMAGE},
+                'State': {'Running': True}, 'HostConfig': {}},
+            'image_inspect': [{'Id': config_id, 'RepoDigests': [IMAGE], 'Config': metadata}]}))
+        monkeypatch.setenv(contract.LOCAL_ATTESTATION_ENV, str(receipt))
+        monkeypatch.setattr(contract.socket, 'gethostname', lambda: cid[:12])
 
     def transport(argv, timeout=600):
         if argv[:3] == ['docker', 'image', 'inspect']:
             return 0, json.dumps([{'Config': metadata}]), ''
+        if local:
+            command = list(argv)
+            calls.append(command)
+            if damage == 'process_failure' or (damage == 'gds_process_failure' and command[0] != 'bash'):
+                return 7, '', 'SOFTWARE process failure'
+            result = subprocess.run(command, capture_output=True, text=True,
+                env=dict(os.environ, PYTHONPATH=str(stf._HERE)), timeout=timeout)
+            return result.returncode, result.stdout, result.stderr
         assert argv[:3] == ['docker', 'run', '--rm']
         assert argv[argv.index('--cpus')+1] == '2'
         assert argv[argv.index('--network')+1] == 'none'
@@ -151,4 +172,43 @@ def test_malformed_or_duplicate_image_environment_refuses_before_process(tmp_pat
         fact = run()
         assert fact['value'] is None, fact
         assert fact['unavailable']
+    assert calls == []
+
+
+@pytest.mark.parametrize('declared,legacy', [(True, False), (True, True), (False, True)])
+def test_local_attested_image_root_is_consumed_by_both_probes(tmp_path, monkeypatch, declared, legacy):
+    run, calls, selected, old, _ = _scene(tmp_path, monkeypatch, local=True, declared=declared, legacy=legacy)
+    fact = run()
+    assert fact['value'] == (0.001 if declared else 0.02), fact
+    assert fact['cell_gds'] == str((selected if declared else old) / 'cells.gds')
+    assert fact['lef_database_unit_um'] == 0.0005
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize('damage', ['missing_file', 'invalid_gds', 'gds_process_failure'])
+def test_local_actual_failed_inputs_stay_unavailable(tmp_path, monkeypatch, damage):
+    run, calls, _, _, _ = _scene(tmp_path, monkeypatch, local=True, legacy=True, damage=damage)
+    fact = run()
+    assert fact['value'] is None, fact
+    assert fact['unavailable']
+    if damage != 'missing_file':
+        assert fact['lef_database_unit_um'] == 0.0005
+
+
+@pytest.mark.parametrize('damage', ['foreign_cid', 'changed_image', 'absent_receipt'])
+def test_local_probe_requires_actual_launch_authority(tmp_path, monkeypatch, damage):
+    run, calls, _, _, _ = _scene(tmp_path, monkeypatch, local=True, legacy=True)
+    receipt = tmp_path / 'launch_identity.json'
+    record = json.loads(receipt.read_text())
+    if damage == 'foreign_cid':
+        record['cid'] = 'c' * 64
+    elif damage == 'changed_image':
+        record['image'] = 'foreign@sha256:' + 'd' * 64
+    if damage == 'absent_receipt':
+        receipt.unlink()
+    else:
+        receipt.write_text(json.dumps(record))
+    fact = run()
+    assert fact['value'] is None, fact
+    assert fact['unavailable']
     assert calls == []
