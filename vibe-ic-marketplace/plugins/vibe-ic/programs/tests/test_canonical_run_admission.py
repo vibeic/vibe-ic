@@ -328,6 +328,11 @@ def test_direct_phase_runners_refuse_before_expensive_dispatch(tmp_path, monkeyp
     # The CLIs bootstrap before admission. Restore that in-process metadata
     # on teardown so a later caller does not inherit this fixture's project.
     monkeypatch.setattr(policy, '_ordinary_runtime', None)
+    # main() also installs a retained-tree callback on this shared module.
+    # Its closure belongs to the CLI fixture, not a later publisher invocation.
+    import _progress_run as progress
+    monkeypatch.setattr(progress, 'run', progress.run)
+    monkeypatch.setattr(sys, 'path', list(sys.path))
     project = _project(tmp_path / "proj")
     refused = cra.Admission(False, "DUPLICATE_NO_NEW_EVIDENCE", "x", {}, "control")
 
@@ -337,6 +342,13 @@ def test_direct_phase_runners_refuse_before_expensive_dispatch(tmp_path, monkeyp
     monkeypatch.setattr(sys, "argv", ["design_one_shot_runner.py", str(project)])
     assert design.main() == 2
     assert "canonical Phase-2 admission" in capsys.readouterr().err
+    # Cleanup must not weaken the active invocation's source guard.
+    import pytest
+    import runtime_program_tree
+    with pytest.raises(runtime_program_tree.RuntimeTreeError,
+                       match="LIVE_PLUGIN_PATH_AFTER_RETENTION"):
+        design._RUNTIME_PROGRAM_TREE.verify_command(
+            [sys.executable, str(PROGRAMS / 'serial_parallel_mul_synth.py')])
 
     # Phase 3 refuses an UNDECLARED delivery before it asks admission (#2376,
     # `_delivery_admission_refusal`), so without a declaration this arm was

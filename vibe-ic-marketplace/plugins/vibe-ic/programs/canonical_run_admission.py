@@ -278,6 +278,30 @@ def _phase2_reset_judgement_binding(project: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _rtl_snapshot_transport_isolatable(project: Path) -> bool:
+    """The existing RTL snapshot guard's condition, not report contents.
+
+    Never follow directory links or hash output payloads. Retargeting unsafe
+    links and ordinary report churn cannot manufacture distinct retry inputs.
+    The producer still checks its actual isolated snapshot before publication.
+    """
+    from design_one_shot_runner import _symlink_escapes_tree
+
+    def unreadable(error):
+        raise error
+
+    try:
+        for parent, directories, files in os.walk(project, followlinks=False, onerror=unreadable):
+            for name in directories + files:
+                path = Path(parent) / name
+                if path.is_symlink() and _symlink_escapes_tree(
+                        path.relative_to(project).as_posix(), os.readlink(path)):
+                    return False
+    except OSError:
+        return False
+    return True
+
+
 def build_identity(project: Path, span: str, *, container_image: str,
                    config: Dict[str, Any], program_paths: Iterable[Path],
                    program_source_sha256: Optional[str] = None) -> Dict[str, Any]:
@@ -314,6 +338,8 @@ def build_identity(project: Path, span: str, *, container_image: str,
         "dispatch_config": config,
     }
     if span == "phase2":
+        if config.get("entry_step") in (None, "1", "rtl_gen"):
+            identity["rtl_snapshot_transport_isolatable"] = _rtl_snapshot_transport_isolatable(project)
         judgement_binding = _phase2_step1_judgement_binding(project)
         if judgement_binding is not None:
             identity["current_consumer_evidence_bindings"] = {
@@ -381,6 +407,7 @@ def canonical_program_paths(programs_dir: Path) -> tuple[Path, ...]:
     return (
         programs_dir / "vibe_ic_one_shot_runner.py",
         programs_dir / "design_one_shot_runner.py",
+        programs_dir / "canonical_run_admission.py",
         programs_dir / "phase3_one_shot_runner.py",
         # Step 13 executes this producer directly.  Its source bytes must reopen
         # a Phase-2 span just like the runner that dispatches it; otherwise a

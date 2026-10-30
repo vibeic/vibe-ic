@@ -27,7 +27,7 @@ def admission_case(tmp_path, monkeypatch):
     (programs.parent / 'flow').mkdir()
     import librelane_contract
     for name in ['vibe_ic_one_shot_runner.py', 'design_one_shot_runner.py',
-                 'phase3_one_shot_runner.py',
+                 'phase3_one_shot_runner.py', 'canonical_run_admission.py',
                  'librelane_contract.py', 'execution_backend_producers.py',
                  'execution_policy.py', 'execution_modes.py',
                  'execution_frontend_providers.py',
