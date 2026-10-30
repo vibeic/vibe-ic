@@ -22,7 +22,7 @@ from test_librelane_contract import local_image  # noqa: E402,F401 — existing 
 
 @pytest.mark.parametrize('scenario', [
     'current', 'wrong_gds', 'missing_native_proof', 'nonzero_native_inconsistency',
-    'default_without_switch'])
+    'default_without_switch', 'standalone_clean', 'standalone_dirty'])
 def test_retained_native_antenna_reaches_original_consumer(tmp_path, monkeypatch, local_image, scenario):
     """Real chain/receipt and consumer; only the native process edge is neutral."""
     import librelane_contract as contract
@@ -31,7 +31,15 @@ def test_retained_native_antenna_reaches_original_consumer(tmp_path, monkeypatch
     gds = _project(tmp_path)
     root = tmp_path / 'pdk_root'
     tree = root / 'fixture_pdk'
-    parent = tree / 'libs.tech/klayout/tech/drc/main.drc'
+    standalone = scenario.startswith('standalone_')
+    if standalone:
+        # SOFTWARE_ONLY native-edge fixture, using the installed standalone
+        # runset's report/event shape; no native/adoption credit.
+        (tree/'libs.tech/klayout/tech/drc/rule_decks/antenna.rb').unlink()
+        parent = tree/'libs.tech/klayout/tech/drc/rule_decks/antenna.drc'
+        parent.write_text("source($input)\nreport('native report', $report)\nantenna_check(gate, conductor, ratio)\n")
+    else:
+        parent = tree / 'libs.tech/klayout/tech/drc/main.drc'
     put(tmp_path / 'phase3/librelane_switch.json', {
         'steps': {'26': 'librelane'}, 'image': image,
         'pdk': 'fixture_pdk', 'pdk_root_host': str(root)})
@@ -41,7 +49,7 @@ def test_retained_native_antenna_reaches_original_consumer(tmp_path, monkeypatch
         'KLAYOUT_ANTENNA_OPTIONS': {'decks': 'antenna'}})
     initial = put(tmp_path / 'phase3/librelane/native-input-state.json',
                   {'gds': str(gds), 'metrics': {}})
-    count = 1 if scenario == 'nonzero_native_inconsistency' else 0
+    count = 1 if scenario in ('nonzero_native_inconsistency', 'standalone_dirty') else 0
     calls = []
 
     def native_process(argv, **kwargs):
@@ -55,11 +63,11 @@ def test_retained_native_antenna_reaches_original_consumer(tmp_path, monkeypatch
         report.parent.mkdir(parents=True, exist_ok=True)
         report.write_text(_rdb(count, str(parent)).replace(
             '</generator>', '</generator><top-cell>neutral_core</top-cell>'))
-        put(folder / 'reports/antenna.klayout.json', {'ANT.1': 0, 'total': 0})
+        put(folder / 'reports/antenna.klayout.json', {'ANT.1': count if standalone else 0, 'total': count if standalone else 0})
         command = ['klayout', '-b', '-r', str(parent), '-rd', 'input=' + str(gds),
                    '-rd', 'topcell=neutral_core', '-rd', 'report=' + str(report), '-rd', 'decks=antenna']
         (folder / 'COMMANDS').write_text(shlex.join(command) + '\n')
-        return subprocess.CompletedProcess(argv, 0, _transcript(command, count), '')
+        return subprocess.CompletedProcess(argv, 0, '2026-10-30: Executing rule Ant.1\n' if standalone else _transcript(command, count), '')
 
     monkeypatch.setattr(contract, 'image_capability', lambda *a, **k: {})
     monkeypatch.setattr(contract, 'openroad_home', lambda *a, **k: None)
@@ -109,7 +117,15 @@ def test_retained_native_antenna_reaches_original_consumer(tmp_path, monkeypatch
     else:
         rc = gate.main([str(tmp_path), '--json', str(report)])
     result = json.loads(report.read_text())
-    if scenario in ('current', 'default_without_switch'):
+    (tmp_path/'retained-observed.json').write_text(json.dumps({'rc':rc,'result':result},indent=2))
+    if scenario == 'standalone_clean':
+        assert result['verdict'] == 'DISCLOSED_SKIP', result
+        assert rc == 2 and result['measurement'] == 'NOT_MEASURED'
+        assert result['violations'] == 0 and result['coverage_status'] == 'NOT_MEASURED'
+    elif scenario == 'standalone_dirty':
+        assert rc == 1 and result['verdict'] == 'FAIL', result
+        assert result['violations'] == 1
+    elif scenario in ('current', 'default_without_switch'):
         assert rc == 0, result
         assert result['verdict'] == 'PASS' and result['violations'] == 0
         assert result['evidence_basis'] == 'retained_KLayout.Antenna'

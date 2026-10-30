@@ -10589,7 +10589,27 @@
           "native_steps": [
             "KLayout.Antenna"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "EXISTING_COMPONENT_DISPATCH_NOT_109_ACCEPTANCE",
+          "dispatch": {
+            "adapter": "gds_antenna_deck_check",
+            "native_step_id": "flow109.D43",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "producer": "gds_antenna_deck_check.py:execute native candidate antenna",
+            "consumer": "gds_antenna_deck_check.py:_bound_native_count",
+            "engine_families": [
+              "klayout"
+            ],
+            "engine_steps": {
+              "klayout": [
+                "KLayout.Antenna"
+              ]
+            },
+            "engine_executables": {
+              "klayout": "klayout"
+            },
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         },
         {
           "id": "assembly",

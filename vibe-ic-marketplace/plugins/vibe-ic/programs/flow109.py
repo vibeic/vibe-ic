@@ -1240,8 +1240,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_pv = (row.get("id") == "D42" and profile.get("id") == "analog_die"
                  and isinstance(dispatch, Mapping)
                  and dispatch.get("adapter") == "analog_a6_native_pv")
+    analog_antenna = (row.get("id") == "D43" and profile.get("id") == "analog_die"
+                      and isinstance(dispatch, Mapping)
+                      and dispatch.get("adapter") == "gds_antenna_deck_check")
     if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
-                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_pv):
+                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_pv and not analog_antenna):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
@@ -1274,6 +1277,10 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             invalid = (common_invalid or not analog_pv or native != "flow109.D42"
                        or dispatch.get("producer") != "analog_a6_native_pv.py:execute native candidate PV"
                        or dispatch.get("consumer") != "analog_a6_native_pv.py:_klayout_drc_runner/_klayout_lvs_runset_runner")
+        elif adapter == "gds_antenna_deck_check":
+            invalid = (common_invalid or not analog_antenna or native != "flow109.D43"
+                       or dispatch.get("producer") != "gds_antenna_deck_check.py:execute native candidate antenna"
+                       or dispatch.get("consumer") != "gds_antenna_deck_check.py:_bound_native_count")
         elif adapter == "flow109_frontend":
             identities = {
                 "D05": ("flow109.D05", "l21_to_upf_emit.py:main",

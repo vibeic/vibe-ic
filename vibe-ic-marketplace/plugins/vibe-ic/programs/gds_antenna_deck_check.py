@@ -276,8 +276,18 @@ def _discover_deck(tree: str, read, list_files, list_tree):
     drc = posixpath.join(tree, *_DECK_DIR)
     rule = posixpath.join(drc, "rule_decks", "antenna.rb")
     rule_bytes = read(rule)
+    standalone = False
     if rule_bytes is None:
-        return None, f"selected PDK has no native antenna rule deck: {rule}"
+        # Some installed PDKs ship the antenna table as a complete executable
+        # .drc, not as the selectable parent's antenna.rb fragment.
+        rule = posixpath.join(drc, "rule_decks", "antenna.drc")
+        rule_bytes = read(rule)
+        if rule_bytes is None:
+            return None, f"selected PDK has no native antenna rule deck: {rule}"
+        source = rule_bytes.decode("utf-8", "replace")
+        if not all(token in source for token in ("antenna_check(", "source($input", "report(")):
+            return None, "standalone antenna runset does not declare its native input/report/check interface"
+        standalone = True
     candidates = list_files(drc, ".drc")
     if candidates is None:
         return None, f"native antenna rule exists, but {drc} could not be listed"
@@ -289,6 +299,8 @@ def _discover_deck(tree: str, read, list_files, list_tree):
         source = data.decode("utf-8", "replace")
         if "decks: $decks" in source and "rule_decks" in source:
             parents.append((candidate, data))
+    if standalone:
+        parents = [(rule, rule_bytes)]
     if len(parents) != 1:
         return None, (f"native antenna rule exists, but exactly one runnable "
                       f"parent with deck selection was required; found {len(parents)}")
@@ -301,6 +313,8 @@ def _discover_deck(tree: str, read, list_files, list_tree):
             "parent_sha256": hashlib.sha256(parents[0][1]).hexdigest(),
             "deck_dir": drc, "files": manifest,
             "read": read, "list_tree": list_tree}
+    if standalone:
+        deck["format"] = "standalone"
     for key in ("rule", "parent"):
         if manifest.get(deck[key]) != deck[f"{key}_sha256"]:
             return None, (f"native deck {key} {deck[key]} is not the file the "
@@ -398,6 +412,26 @@ def _executed_native_decks(log: str) -> set[str]:
 def _native_result_count(rdb: Path, transcript: Path, deck: Optional[dict]):
     """The same raw deck obligations for fresh and receipt-bound native runs."""
     log = transcript.read_text(errors="replace")
+    if deck is not None and deck.get("format") == "standalone":
+        # The native standalone table emits per-rule events and RDB categories,
+        # but no parent-framework completion tally. Keep that distinction.
+        import _a6_drc_authority as rules
+        import eda_report_audit as audit
+        text = rdb.read_text(errors="replace")
+        generator = _GENERATOR_RE.search(text)
+        if generator is None or generator.group(1) != deck["parent"]:
+            return None, "standalone RDB does not name the bound native runset", {}
+        graded = rules.lyrdb_text_rules(text)["graded"]
+        executed = set(re.findall(r"Executing (?:rule )?(Ant\.[A-Za-z0-9_]+)(?=\s|$)", log, re.I))
+        if (not graded or any(not re.fullmatch(r"Ant\.[A-Za-z0-9_]+", x, re.I) for x in graded)
+                or {x.casefold() for x in graded} != {x.casefold() for x in executed}):
+            return None, "standalone executed antenna rules and RDB graded rules are absent/incomplete", {}
+        count = audit._antenna_klayout_count(text)
+        if count is None:
+            return None, "standalone RDB has no usable antenna measurement", {}
+        return count, "", {"rdb_sha256": _sha(rdb), "transcript_sha256": _sha(transcript),
+                            "graded_rules": graded, "checked_gate_nets": None,
+                            "coverage_status": "NOT_MEASURED"}
     if not re.search(r"Executing rule\s+ANT\.", log):
         return None, "native transcript names no executed ANT rule", {}
     if deck is None:
@@ -513,6 +547,10 @@ def _retained_native_result(project: Path, gds: Path, router: Optional[str],
                       pdk_parent=deck['parent'], pdk_parent_sha256=deck['parent_sha256'],
                       verdict='FAIL' if count else 'PASS', measurement='MEASURED',
                       reason=f'{count} PDK-native antenna violation(s)' if count else '')
+        if count == 0 and hashes.get('coverage_status') == 'NOT_MEASURED':
+            result.update(verdict='DISCLOSED_SKIP', measurement='NOT_MEASURED',
+                          reason='retained standalone rules ran, but checked gate/net population is not reported; zero violations is not proven coverage')
+            return result
         raw_out = project / 'reports/phase3' / _RAW_REPORT_NAME
         _atomic_write_bytes(raw_out, json.dumps({'verdict': result['verdict'], 'violations': count}).encode())
         return _native_router_cross_check(project, router, raw_out, result, count)
@@ -540,12 +578,18 @@ def _rdb_red_count(rdb: Path) -> Optional[int]:
 
 
 def _run_native(project: Path, gds: Optional[str], router: Optional[str],
-                cell: Optional[str], receipt: dict) -> Dict[str, Any]:
+                cell: Optional[str], receipt: dict, *, local_launch=None,
+                work: Optional[Path] = None) -> Dict[str, Any]:
     def skip(reason: str, **extra) -> Dict[str, Any]:
         return {"verdict": "DISCLOSED_SKIP", "check": "gds_geometry_antenna_deck",
                 "measurement": "NOT_MEASURED", "method": "pdk_native_klayout",
                 "pdk_receipt": str(receipt["receipt"]), "reason": reason, **extra}
 
+    if local_launch is not None:
+        from librelane_contract import local_image_attestation
+        if (local_image_attestation() != local_launch
+                or receipt.get("image_id") != local_launch.get("image_id")):
+            return skip("local native launch does not bind the selected PDK image")
     image_bound = receipt["image_id"] is not None
     native = None
     if not image_bound:
@@ -568,23 +612,34 @@ def _run_native(project: Path, gds: Optional[str], router: Optional[str],
         gds_path = project / gds_path
     if gds_path is None or not gds_path.is_file():
         return skip("no streamed GDS for the selected native PDK deck")
-    retained = _retained_native_result(project, gds_path, router, cell, receipt)
+    retained = (_retained_native_result(project, gds_path, router, cell, receipt)
+                if local_launch is None else None)
     if retained is not None:
         return retained
     # An image-bound tree exists only inside that image: a host KLayout could
     # read nothing but the unverified host copy, so it is never asked.
-    runner = (_kl.find_container_runner(project=project) if image_bound
-              else _kl.find_runner(project=project))
+    runner = (_kl.find_runner(project=project) if local_launch is not None else
+              _kl.find_container_runner(project=project) if image_bound else
+              _kl.find_runner(project=project))
     if runner is None or not runner.covers(gds_path):
         return skip("no KLayout runner reaches the streamed GDS"
                     + (" inside the image the PDK root is bound to"
                        if image_bound else ""))
-    work = project / "reports" / "phase3"
+    work = Path(work) if work is not None else project / "reports" / "phase3"
     work.mkdir(parents=True, exist_ok=True)
     rdb, transcript = work / _NATIVE_RDB, work / _NATIVE_LOG
     if not runner.covers(work):
         return skip("KLayout runner cannot write native antenna evidence")
-    if image_bound:
+    if local_launch is not None:
+        if runner.kind != "host":
+            return skip("attested local native entry requires the direct image runner")
+        native, why = _discover_deck(receipt["guest_tree"], _kl.host_read_bytes,
+                                     _kl.host_list_files, _kl.host_list_tree)
+        if native is None:
+            return skip(why)
+        native.update(side="attested_local_image", image_id=local_launch['image_id'],
+                      image_bytes=local_launch)
+    elif image_bound:
         native, why = _image_bound_deck(runner, receipt)
         if native is None:
             return skip(why)
@@ -621,7 +676,12 @@ def _run_native(project: Path, gds: Optional[str], router: Optional[str],
                 "measurement": "NOT_MEASURED", "reason": why}
     argv = [runner.klayout_bin(), "-b", "-r", native["parent"],
             "-rd", f"input={runner.cpath(gds_path)}",
-            "-rd", f"report={runner.cpath(rdb)}", "-rd", "decks=antenna"]
+            "-rd", f"report={runner.cpath(rdb)}"]
+    if native.get("format") == "standalone":
+        argv.extend(["-rd", "threads=1", "-rd", "run_mode=deep",
+                     "-rd", f"log={runner.cpath(work / 'native_runset.log')}"])
+    else:
+        argv.extend(["-rd", "decks=antenna"])
     if cell:
         argv.extend(["-rd", f"topcell={cell}"])
     execution = runner.run_argv_supervised(
@@ -629,7 +689,7 @@ def _run_native(project: Path, gds: Optional[str], router: Optional[str],
         memory_limit_mb=_NATIVE_MEMORY_LIMIT_MB, progress_paths=(rdb,))
     rc, out, err = execution.rc, execution.out or "", execution.err or ""
     _atomic_write_bytes(transcript, (_BIND_PREFIX + before + "\n" + out + err).encode())
-    run_record = {"rc": rc, "outcome": execution.outcome,
+    run_record = {"argv": list(argv), "rc": rc, "outcome": execution.outcome,
                   "elapsed_s": execution.elapsed_s,
                   "stall_grace_s": _NATIVE_STALL_GRACE_S,
                   "memory_limit_mb": _NATIVE_MEMORY_LIMIT_MB,
@@ -668,6 +728,10 @@ def _run_native(project: Path, gds: Optional[str], router: Optional[str],
             "rdb": str(rdb), "transcript": str(transcript), "rc": rc,
             "execution": run_record}
     changed = _deck_changed(native)
+    if local_launch is not None:
+        from librelane_contract import local_image_attestation
+        if local_image_attestation() != local_launch:
+            return unbound(base, "local native execution launch changed")
     if changed:
         return unbound(base, changed)
     if native.get("reprove") is not None:
@@ -680,6 +744,9 @@ def _run_native(project: Path, gds: Optional[str], router: Optional[str],
     base.update(hashes)
     if why:
         return unbound(base, why)
+    if native.get("format") == "standalone" and count == 0:
+        return {**base, "verdict": "DISCLOSED_SKIP", "measurement": "NOT_MEASURED",
+                "violations": 0, "reason": "native standalone rules ran, but checked gate/net population is not reported; zero violations is not proven coverage"}
     raw = work / _RAW_REPORT_NAME
     _atomic_write_bytes(raw, json.dumps({"verdict": "PASS" if count == 0 else "FAIL",
                                          "violations": count}).encode())
@@ -965,6 +1032,91 @@ def main(argv=None) -> int:
         return PASS
     print(f"gds_antenna_deck_check: {verdict} — {res.get('reason')}")
     return FAIL
+
+
+
+def _d43_inputs(project):
+    from flow109_analog_floorplan import bound_file
+    from declared_pdk_is_the_pdk_used_check import declared_target
+    import analog_pdk_availability as resolver
+    config = project / 'input/flow109/D43.json'
+    if any(p.is_symlink() for p in (config, *config.parents)):
+        raise ValueError('D43_INPUT_SYMLINK')
+    data = json.loads(config.read_text())
+    gds = bound_file(project, data.get('layout'))
+    top = data.get('top')
+    if not isinstance(top, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*', top):
+        raise ValueError('D43_TOP_INVALID')
+    target, _ = declared_target(project)
+    if not isinstance(target, str) or not target.strip():
+        raise ValueError('D43_DECLARED_PDK_ABSENT')
+    facts = resolver.resolve_pdk(target, project=project)
+    if facts.get('source') != 'container_installed' or not facts.get('available'):
+        raise ValueError('D43_INSTALLED_DECLARED_PDK_UNAVAILABLE')
+    deck, why = _discover_deck(facts['pdk_root'], _kl.host_read_bytes,
+                                _kl.host_list_files, _kl.host_list_tree)
+    if deck is None:
+        raise ValueError('D43_NATIVE_DECK_UNAVAILABLE: ' + why)
+    ref = data.get('antenna_deck')
+    if not isinstance(ref, dict) or ref != {'path': deck['rule'], 'sha256': deck['rule_sha256']}:
+        raise ValueError('D43_DECLARED_PDK_DECK_UNBOUND_OR_STALE')
+    return dict(top=top, gds=str(gds), target=target, tree=facts['pdk_root'],
+                deck_files=deck['files'],
+                inputs={str(config): _sha(config), str(gds): _sha(gds)})
+
+
+def execute(project, context):
+    """Ordinary D43 candidate component; original native reports remain raw."""
+    import uuid
+    import librelane_contract as launch
+    from flow109_admission import require_launch_admission, AdmissionRefusal
+    project = Path(project).resolve(strict=True)
+    work = project / 'reports/flow109/D43' / uuid.uuid4().hex
+    work.mkdir(parents=True)
+    result = dict(step_id='D43', context_sha256=context.get('context_sha256'),
+                  component_status='NOT_MEASURED', default_row_status='NOT_MEASURED',
+                  completed=False, native_started=False, outputs=[], qualification='NOT_CLAIMED',
+                  flow109_acceptance='NOT_MEASURED', whole_flow_acceptance='NOT_MEASURED', delivery_accepted=False)
+    try:
+        if (context.get('requested_step') != 'D43' or context.get('native_step_id') != 'flow109.D43'
+                or context.get('resolved_row', {}).get('profile', {}).get('id') != 'analog_die'):
+            raise ValueError('D43_CONTEXT_INVALID')
+        result['launch_admission'] = require_launch_admission(project, 'flow109.D43', {'flow109_context': context})
+        result['native_launch'] = launch.local_image_attestation()
+        data = _d43_inputs(project)
+        result['inputs'] = data['inputs']
+        runner = _kl.find_runner(project=project)
+        if runner is None or runner.kind != 'host':
+            raise ValueError('D43_DIRECT_NATIVE_RUNNER_UNAVAILABLE')
+        readback = work / 'subject.json'; script = work / 'read_subject.py'
+        script.write_text('import pya,json\nl=pya.Layout();l.read(' + repr(data['gds']) +
+                          ')\njson.dump(dict(tops=[c.name for c in l.top_cells()],nonempty=not l.top_cells()[0].bbox().empty() if len(l.top_cells())==1 else False),open(' + repr(str(readback)) + ',"w"))\n')
+        result['native_started'] = True
+        rc, out, err = runner.run_argv([runner.klayout_bin(), '-b', '-r', str(script)], {})
+        (work/'subject.log').write_text(out+err)
+        subject = json.loads(readback.read_text()) if readback.is_file() else {}
+        if rc or subject != {'tops': [data['top']], 'nonempty': True}:
+            raise ValueError('D43_SUBJECT_TOP_ABSENT_AMBIGUOUS_OR_EMPTY')
+        receipt = dict(receipt=project/'input/flow109/D43.json', image_id=result['native_launch']['image_id'], guest_tree=data['tree'])
+        native = _run_native(project, data['gds'], None, data['top'], receipt,
+                             local_launch=result['native_launch'], work=work/'native')
+        result['native'] = native
+        (work/'native_result.json').write_text(json.dumps(native,indent=2)+'\n')
+        if _d43_inputs(project) != data or launch.local_image_attestation() != result['native_launch']:
+            raise ValueError('D43_INPUT_OR_LAUNCH_CHANGED')
+        if native.get('verdict') == 'FAIL':
+            result['component_status'] = 'FAIL'
+        # The legacy native format does not enumerate checked gates/nets
+        # either. Its gate verdict is retained, never promoted to D43 coverage.
+        result['reason'] = native.get('reason') or 'D43_REQUIRED_GATE_NET_AND_RULE_COVERAGE_NOT_MEASURED'
+    except (ValueError, OSError, KeyError, TypeError, AdmissionRefusal, launch.Refusal) as exc:
+        if result.get('native', {}).get('verdict') == 'FAIL':
+            result['component_status'] = 'FAIL'
+        result['reason'] = str(exc)
+    result['outputs'] = [{'path': str(p.relative_to(project)), 'sha256': _sha(p)}
+                         for p in sorted(work.rglob('*')) if p.is_file()]
+    (work/'component.json').write_text(json.dumps(result,indent=2)+'\n')
+    return result
 
 
 if __name__ == "__main__":
