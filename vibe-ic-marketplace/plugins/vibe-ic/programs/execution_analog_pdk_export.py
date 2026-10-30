@@ -42,8 +42,9 @@ _CONTAINER_COPY = r'''import hashlib,json,os,pathlib,re,shlex,stat,sys
 logical_path=pathlib.Path(sys.argv[1]); out=pathlib.Path(sys.argv[2]); request=json.loads(sys.argv[3])
 guest_root=pathlib.PurePosixPath(request['pdk_root'])
 max_files,max_bytes=request['max_files'],request['max_bytes']
+context={}
 def bad(code):
-    print(json.dumps({'status':'NOT_MEASURED','reason':code},sort_keys=True)); raise SystemExit(0)
+    print(json.dumps({'status':'NOT_MEASURED','reason':code,'diagnostic':context},sort_keys=True)); raise SystemExit(0)
 def under(path, base):
     try: return path.relative_to(base)
     except ValueError: bad('PDK_PATH_ESCAPE')
@@ -92,9 +93,10 @@ def measured_root_binding():
             bad('PDK_ROOT_ALIAS_REFUSED')
     return {'logical_root':guest_root.as_posix(),'link_text':link_text,
             'canonical_root':canonical_guest.as_posix()}, canonical
-if str(guest_root.parent)!='/foss/pdks': bad('PDK_ROOT_AUTHORITY_REFUSED')
+if str(guest_root.parent)!=request.get('root_authority','/foss/pdks'): bad('PDK_ROOT_AUTHORITY_REFUSED')
 root_binding,root=measured_root_binding()
 def checked(guest):
+    context.update(requested_path=str(guest))
     try: rel=under(guest,guest_root)
     except Exception: raise
     cursor=root
@@ -149,14 +151,23 @@ def includes(path, raw, config_mode=False):
     suffix=path.suffix.lower(); found=[]
     klayout=suffix in ('.drc','.lydrc','.lvs','.lylvs')
     slash_comments=suffix not in ('.tcl','.magic','.tech')
-    for line in raw.decode('utf-8',errors='replace').splitlines():
+    for number,line in enumerate(raw.decode('utf-8',errors='replace').splitlines(),1):
+        context.update(source_path=str(path), source_line=number)
+        if klayout and re.match(r'^\s*#\s*%include\s+',line,re.I):
+            line=re.sub(r'^(\s*)#\s*(?=%include\b)',r'\1',line,flags=re.I)
         statements=command_parts(line,slash_comments=slash_comments) if config_mode else [line]
         for statement in statements:
             s=statement.strip()
+            if klayout and re.match(r'^#\s*%include\s+',s,re.I):
+                s=s[1:].lstrip()
             if not s or s.startswith(('*','#','//',';')): continue
-            if klayout and re.fullmatch(r'source\s*\(\s*\$input(?:\s*,\s*\$top_cell)?\s*\)\s*;?',s):
+            if klayout and re.fullmatch(r'(?:[A-Za-z_]\w*\s*=\s*)?source\s*\(\s*\$input(?:\s*,\s*\$top_?cell)?\s*\)\s*;?',s):
                 # KLayout's source() supplies the layout input (and optional
                 # top cell); it is not a PDK include edge.
+                continue
+            if klayout and re.fullmatch(r'include\s+[A-Z]\w*(?:::[A-Z]\w*)*(?:\s*,\s*[A-Z]\w*(?:::[A-Z]\w*)*)*\s*;?',s):
+                # Ruby constant mixins are not file edges; %include is the
+                # KLayout file preprocessor directive (handled below).
                 continue
             if klayout and re.match(r'^source\s*\(',s): bad('PDK_DYNAMIC_INCLUDE_REFUSED')
             if klayout and re.match(r'^(require|require_relative|load)\b',s):
@@ -207,7 +218,7 @@ def includes(path, raw, config_mode=False):
                 bad('PDK_DYNAMIC_INCLUDE_REFUSED')
             if config_mode:
                 code=re.sub(r"\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'", '""', s)
-                if re.search(r'(?i)\b(?:%?include|source|require_relative|load)\s*(?=\(|["\']|[A-Za-z_$])',code):
+                if re.search(r'(?i)\b(?:%?include|source|require_relative|load)\b\s*(?=\(|["\']|[A-Za-z_$])',code):
                     bad('PDK_DYNAMIC_INCLUDE_REFUSED')
     return found
 config_seed_set=set(request.get('config_seeds',[]))
@@ -241,13 +252,14 @@ while todo:
         normalized=resolve_include(guest,name)
         children.append((normalized,next_config))
     if key not in seen:
-        relout=pathlib.Path(key)
-        dest=out/relout
-        dest.parent.mkdir(parents=True,exist_ok=True)
-        try:
-            fd=os.open(dest,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-            with os.fdopen(fd,'wb') as f: f.write(raw); f.flush(); os.fsync(f.fileno())
-        except OSError: bad('PDK_EXPORT_WRITE_FAILED')
+        if not request.get('verify_only',False):
+            relout=pathlib.Path(key)
+            dest=out/relout
+            dest.parent.mkdir(parents=True,exist_ok=True)
+            try:
+                fd=os.open(dest,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
+                with os.fdopen(fd,'wb') as f: f.write(raw); f.flush(); os.fsync(f.fileno())
+            except OSError: bad('PDK_EXPORT_WRITE_FAILED')
         seen[key]={'guest_path':guest.as_posix(),'relative_path':key,'size':len(raw),'sha256':digest}
         total+=len(raw)
     parsed.add((key,config_mode)); todo.extend(children)
@@ -405,7 +417,7 @@ def _result_from_receipt(receipt: dict, project: Path, reused: bool) -> dict:
         rewritten[field] = local if field == 'spice_libs' else local[0]
     if 'spice_libs' in rewritten:
         rewritten['spice_lib'] = rewritten['spice_libs'][0]
-    return dict(schema=SCHEMA, status='MEASURED', image_ref=receipt['image_ref'],
+    result = dict(schema=SCHEMA, status='MEASURED', image_ref=receipt['image_ref'],
                 image_id=receipt['image_id'], image_manifest_digest=receipt['image_manifest_digest'],
                 image_repo_digests=receipt['image_repo_digests'], target=receipt['target'],
                 pdk_family=receipt['pdk_family'], pdk_root=receipt['pdk_root'],
@@ -414,6 +426,10 @@ def _result_from_receipt(receipt: dict, project: Path, reused: bool) -> dict:
                 guest_to_project=mapping, resolver_fields=rewritten,
                 limits=receipt['limits'], not_measured=[], refusal_reasons=[],
                 receipt_digest=receipt['receipt_digest'], reused=reused)
+    if 'helper_sha256' in receipt:
+        result.update(helper_sha256=receipt['helper_sha256'],
+                      receipt_sha256=_sha256(root / '_receipt.json'))
+    return result
 
 
 def export_bounded_pdk(project: Path, *, target: str, image_ref: str,
@@ -436,7 +452,19 @@ def export_bounded_pdk(project: Path, *, target: str, image_ref: str,
     family, pdk_root, seeds, fields = _resolver_seeds(target, resolver_facts)
     import execution_analog_installation as installation
     try:
-        image = installation.inspect_image(image_ref, docker=docker)
+        local = lc.local_image_attestation(image_ref) if os.environ.get(lc.LOCAL_ATTESTATION_ENV) else None
+        if local is not None:
+            import analog_pdk_availability as resolver
+            resolver.local_pdks_root(image_ref)
+            selected = resolver.resolve_pdk(target)
+            if _resolver_seeds(target, selected) != (family, pdk_root, seeds, fields):
+                _refuse('ANALOG_PDK_EXPORT_ROOT_BINDING_INVALID')
+            authority = str(PurePosixPath(pdk_root).parent)
+            image = dict(image_ref=local['image'], image_id=local['image_id'],
+                         image_manifest_digest=image_ref.rsplit('@', 1)[-1],
+                         image_repo_digests=local['repo_digests'])
+        else:
+            image = installation.inspect_image(image_ref, docker=docker)
     except (em.Refusal, OSError, subprocess.SubprocessError) as exc:
         return dict(schema=SCHEMA, status='NOT_MEASURED', image_ref=image_ref, image_id=image_id,
                     pdk_family=family, pdk_root=pdk_root, output_root=None, files=[],
@@ -475,7 +503,14 @@ def export_bounded_pdk(project: Path, *, target: str, image_ref: str,
                                                    'max_files': max_files,
                                                    'max_bytes': max_bytes}, sort_keys=True)]
         safe_env = {k: v for k, v in os.environ.items() if not k.startswith('VIBEIC_EXECUTION')}
-        done = lc.run_container(argv, probe_deadline_s=120, env=safe_env)
+        if local is not None:
+            payload = json.loads(argv[-1])
+            payload['root_authority'] = authority
+            done = subprocess.run([_sys.executable, '-c', _CONTAINER_COPY, pdk_root,
+                                   str(scratch), json.dumps(payload, sort_keys=True)],
+                                  capture_output=True, text=True, env=safe_env, timeout=120)
+        else:
+            done = lc.run_container(argv, probe_deadline_s=120, env=safe_env)
         if done.returncode != 0:
             return dict(schema=SCHEMA, status='NOT_MEASURED', image_ref=image_ref, image_id=image_id,
                         pdk_family=family, pdk_root=pdk_root, output_root=None, files=[],
@@ -492,6 +527,7 @@ def export_bounded_pdk(project: Path, *, target: str, image_ref: str,
             return dict(schema=SCHEMA, status='NOT_MEASURED', image_ref=image_ref, image_id=image_id,
                         pdk_family=family, pdk_root=pdk_root, output_root=None, files=[],
                         guest_to_project={}, resolver_fields={}, limits=request['limits'],
+                        diagnostic=observed.get('diagnostic', {}),
                         not_measured=[str(observed.get('reason', 'PDK_EXPORT_INCOMPLETE'))],
                         refusal_reasons=[], receipt_digest=None)
         root_binding = observed.get('pdk_root_binding')
@@ -541,6 +577,8 @@ def export_bounded_pdk(project: Path, *, target: str, image_ref: str,
                     image_manifest_digest=image['image_manifest_digest'],
                     image_repo_digests=image['image_repo_digests'], resolver_fields=fields,
                     files=files, limits=request['limits'], total_bytes=total)
+        if local is not None:
+            body['helper_sha256'] = _sha256(Path(__file__))
         digest = hashlib.sha256(_canonical(body)).hexdigest()
         output_rel = (OUTPUT_BASE / digest).as_posix()
         final = project / output_rel
@@ -564,3 +602,64 @@ def export_bounded_pdk(project: Path, *, target: str, image_ref: str,
     finally:
         if scratch.exists():
             shutil.rmtree(scratch, ignore_errors=True)
+
+
+def read_bounded_export(project: Path, *, target: str, resolver_facts: Mapping[str, object],
+                        image: Mapping[str, object]) -> dict | None:
+    """Reopen one complete current installed population; never select a loose deck."""
+    import execution_analog_installation as installation
+    family, root, seeds, fields = _resolver_seeds(target, resolver_facts)
+    base = project / OUTPUT_BASE
+    if any((project / part).is_symlink() for part in (OUTPUT_BASE, *OUTPUT_BASE.parents)):
+        _refuse('ANALOG_PDK_EXPORT_OUTPUT_CHANGED')
+    matches = []
+    for directory in sorted(base.iterdir()) if base.is_dir() else []:
+        receipt_path = directory / '_receipt.json'
+        if (directory.is_symlink() or not re.fullmatch(r'[0-9a-f]{64}', directory.name)
+                or receipt_path.is_symlink()):
+            _refuse('ANALOG_PDK_EXPORT_OUTPUT_CHANGED')
+        receipt = json.loads(receipt_path.read_text())
+        body = {k: v for k, v in receipt.items() if k not in ('receipt_digest', 'output_root')}
+        if (receipt.get('receipt_digest') != directory.name
+                or receipt.get('output_root') != directory.relative_to(project).as_posix()
+                or hashlib.sha256(_canonical(body)).hexdigest() != directory.name
+                or receipt_path.read_bytes() != _canonical(receipt) + b'\n'):
+            _refuse('ANALOG_PDK_EXPORT_RECEIPT_UNBOUND')
+        # Historical source/image selections are immutable and remain available
+        # to their original consumers. They are not evidence for this request.
+        if (receipt.get('helper_sha256') != _sha256(Path(__file__))
+                or any(receipt.get(k) != image.get(k) for k in
+                       ('image_ref', 'image_id', 'image_manifest_digest'))):
+            continue
+        if (receipt.get('target') != target or receipt.get('pdk_family') != family
+                or receipt.get('pdk_root') != root or receipt.get('resolver_fields') != fields):
+            _refuse('ANALOG_PDK_EXPORT_SOURCE_OR_TARGET_CHANGED')
+        matches.append(receipt)
+    if not matches:
+        return None
+    if len(matches) != 1:
+        _refuse('ANALOG_PDK_EXPORT_POPULATION_UNBOUND', 'ambiguous current population')
+    receipt = matches[0]
+    exported = _result_from_receipt(receipt, project, False)
+    installation.export_inputs(project, exported, image)
+    # Replay the SAME parser against the current immutable installed source.
+    # A receipt's own rows cannot establish which reachable files it omitted.
+    limits = receipt['limits']
+    request = dict(pdk_root=root, root_authority=str(PurePosixPath(root).parent),
+                   seeds=seeds, config_seeds=fields.get('drc_deck', []) + fields.get('lvs_deck', []),
+                   max_files=limits['max_files'], max_bytes=limits['max_bytes'], verify_only=True)
+    safe_env = {k: v for k, v in os.environ.items() if not k.startswith('VIBEIC_EXECUTION')}
+    done = subprocess.run([_sys.executable, '-c', _CONTAINER_COPY, root,
+                           str(project / receipt['output_root']), json.dumps(request, sort_keys=True)],
+                          capture_output=True, text=True, env=safe_env, timeout=120)
+    try:
+        observed = json.loads((done.stdout or '').strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        _refuse('ANALOG_PDK_EXPORT_CLOSURE_UNAVAILABLE')
+    if done.returncode != 0 or observed.get('status') != 'MEASURED':
+        _refuse('ANALOG_PDK_EXPORT_CLOSURE_UNAVAILABLE', str(observed.get('reason')))
+    if (observed.get('files') != receipt['files']
+            or observed.get('total_bytes') != receipt['total_bytes']
+            or observed.get('pdk_root_binding') != receipt['pdk_root_binding']):
+        _refuse('ANALOG_PDK_EXPORT_CLOSURE_CHANGED')
+    return exported

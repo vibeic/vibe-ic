@@ -37,6 +37,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import hashlib
+import os
 import re
 import shlex
 import subprocess
@@ -48,6 +50,31 @@ import _container_exec as _ce  # noqa: E402 — the ONE guarded docker-exec argv
 import pdk_family_identity as _ident  # noqa: E402 — the ONE family matcher
 
 DEFAULT_PDKS_ROOT = "/foss/pdks"
+
+
+def local_pdks_root(image: Optional[str] = None) -> Optional[str]:
+    """The root declared by this attested image, never a caller-selected path."""
+    import librelane_contract as launch
+    if not os.environ.get(launch.LOCAL_ATTESTATION_ENV):
+        return None
+    bound = launch.local_image_attestation(image)
+    raw = Path(bound['attestation_path']).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != bound['attestation_sha256']:
+        raise ValueError('LOCAL_PDK_ROOT_ATTESTATION_CHANGED')
+    record = json.loads(raw)
+    installed = next(row for row in record['image_inspect'] if row['Id'] == bound['image_id'])
+    roots = [s.partition('=')[2] for s in installed['Config'].get('Env', [])
+             if s.startswith('PDK_ROOT=')]
+    if len(roots) != 1 or os.environ.get('PDK_ROOT') != roots[0]:
+        raise ValueError('LOCAL_PDK_ROOT_IMAGE_ENV_UNBOUND')
+    root = Path(roots[0])
+    if (not root.is_absolute() or '..' in root.parts or str(root) != roots[0]
+            or not (roots[0] == DEFAULT_PDKS_ROOT or roots[0].startswith('/nix/store/'))):
+        raise ValueError('LOCAL_PDK_ROOT_AUTHORITY_REFUSED')
+    for current in (root, *root.parents):
+        if current.is_symlink() or not current.is_dir():
+            raise ValueError('LOCAL_PDK_ROOT_AUTHORITY_REFUSED')
+    return roots[0]
 
 # Monte-Carlo STATISTICAL CARD keywords — the parse-verified signal that a model
 # lib actually carries statistical / mismatch distributions (vs a pure name-hint
@@ -593,6 +620,15 @@ def resolve_pdk(target: Optional[str], project=None,
                 "reason": "no target declared and no project-staged PDK found"}
 
     # ── rung 2: container-installed PDK family ──────────────────────────────
+    local_root = None
+    if lister is None and container is None and pdks_root == DEFAULT_PDKS_ROOT:
+        try:
+            local_root = local_pdks_root()
+        except (OSError, ValueError, KeyError, TypeError, StopIteration) as exc:
+            return {'available': False, 'probe_ok': False, 'target': target,
+                    'source': None, 'rung': None, 'reason': str(exc)}
+        if local_root is not None:
+            pdks_root, lister = local_root, _local_lister
     # Cache ONLY the real docker-probe path (expensive). An injected lister
     # (tests) or local-FS probe is cheap and its identity is not a stable cache
     # key (id() can be recycled), so skip the cache for it.
@@ -649,6 +685,20 @@ def resolve_pdk(target: Optional[str], project=None,
         return res
 
     pdk_root = f"{pdks_root.rstrip('/')}/{matched}"
+    installed_pdk_root = pdk_root
+    if local_root is not None and local_root.startswith('/nix/store/'):
+        # Nix's installed selection can expose libs.tech through a store link.
+        # Resolve that ONE selected technology tree before the strict copier;
+        # do not permit symlinks within the exported include population.
+        logical = Path(pdk_root) / 'libs.tech'
+        canonical = logical.resolve(strict=True)
+        selected = canonical.parent
+        if (canonical.name != 'libs.tech' or selected.name != matched
+                or not selected.is_relative_to(Path('/nix/store'))
+                or any(p.is_symlink() or not p.is_dir() for p in (selected, *selected.parents))):
+            return {'available': False, 'probe_ok': False, 'target': target,
+                    'reason': 'LOCAL_PDK_SELECTED_TECH_ROOT_UNBOUND'}
+        pdk_root = str(selected)
     tech_entries = lister(f"{pdk_root}/libs.tech")
     tech_present = {k: (k in tech_entries) for k in _TECH_KEYS}
     available = bool(tech_present.get("ngspice"))
@@ -674,6 +724,7 @@ def resolve_pdk(target: Optional[str], project=None,
         "family": _family_id(tnorm),
         "matched_dir": matched,
         "pdk_root": pdk_root,
+        "installed_pdk_root": installed_pdk_root,
         "installed": installed,
         "tech_present": tech_present,
         "spice_libs": spice_libs,

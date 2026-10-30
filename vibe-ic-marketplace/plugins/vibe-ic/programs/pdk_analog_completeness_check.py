@@ -168,6 +168,49 @@ _AXES: dict[str, Tuple[str, ...]] = {
 }
 
 
+def bounded_inventory(project: Path, *, stage: bool = False) -> dict:
+    """Read the selected bounded export only when legacy project axes are missing.
+
+    A refused export blocks inventory admission before any model launch. This
+    measures installed input availability, never model or tool qualification.
+    """
+    if all(_axis_status(project, axis)[0] for axis in _AXES):
+        return {}
+    import os
+    import analog_pdk_availability as resolver
+    import execution_analog_pdk_export as export
+    import librelane_contract as launch
+    from declared_pdk_is_the_pdk_used_check import declared_target
+    base = project / export.OUTPUT_BASE
+    if not os.environ.get(launch.LOCAL_ATTESTATION_ENV):
+        if base.exists() or base.is_symlink():
+            raise ValueError('ANALOG_PDK_EXPORT_LOCAL_SOURCE_UNAVAILABLE')
+        return {}
+    target, _ = declared_target(project)
+    if not target:
+        raise ValueError('ANALOG_PDK_EXPORT_DECLARED_TARGET_ABSENT')
+    local = launch.local_image_attestation()
+    facts = resolver.resolve_pdk(target, project=project)
+    image = dict(image_ref=local['image'], image_id=local['image_id'],
+                 image_manifest_digest=local['image'].rsplit('@', 1)[-1],
+                 image_repo_digests=local['repo_digests'])
+    result = export.read_bounded_export(project, target=target, resolver_facts=facts, image=image)
+    if result is None and stage:
+        result = export.export_bounded_pdk(project, target=target,
+            image_ref=image['image_ref'], image_id=image['image_id'], resolver_facts=facts)
+        if result.get('status') != 'MEASURED':
+            raise ValueError('ANALOG_PDK_EXPORT_INCOMPLETE:' + str(result.get('not_measured'))
+                             + ':' + str(result.get('diagnostic', {})))
+        result = export.read_bounded_export(project, target=target, resolver_facts=facts, image=image)
+    if result is None:
+        return {}
+    fields = result['resolver_fields']
+    paths = {'spice_models': fields.get('spice_libs', []),
+             'drc_deck': [fields['drc_deck']] if fields.get('drc_deck') else [],
+             'lvs_deck': [fields['lvs_deck']] if fields.get('lvs_deck') else []}
+    return {axis: (bool(values), ';'.join(values) or None) for axis, values in paths.items()}
+
+
 def _find_first(project: Path, globs) -> Optional[Path]:
     for pat in globs:
         for h in project.glob(pat):
@@ -265,6 +308,14 @@ def main() -> int:
     statuses = {
         axis: _axis_status(project, axis) for axis in _AXES
     }
+    try:
+        exported = bounded_inventory(project)
+    except Exception as exc:
+        print(f'[FAIL] pdk_analog_completeness_check: bounded export refused: {exc}')
+        return 1
+    for axis, observed in exported.items():
+        if not statuses[axis][0]:
+            statuses[axis] = observed
     missing: List[str] = [a for a, (ok, _) in statuses.items() if not ok]
     found:   List[Tuple[str, str]] = [
         (a, ev) for a, (ok, ev) in statuses.items() if ok and ev

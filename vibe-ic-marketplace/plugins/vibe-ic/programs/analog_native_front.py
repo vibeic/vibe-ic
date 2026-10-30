@@ -192,6 +192,11 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
         return finish('PASS', 'A01_SPEC_CONSUMER_PASS: current attributed specifications checked')
 
     if step_id == 'A02':
+        try:
+            from pdk_analog_completeness_check import bounded_inventory
+            bounded_inventory(project, stage=True)
+        except Exception as exc:
+            return finish('NOT_MEASURED', 'A02_PDK_EXPORT_REFUSED: ' + str(exc))
         inventory = call('pdk_analog_completeness_check.py', [project])
         failure = failed(inventory, 'A02_PDK_INVENTORY')
         if failure:
