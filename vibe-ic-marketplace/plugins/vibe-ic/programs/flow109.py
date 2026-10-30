@@ -1813,6 +1813,15 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
               "completed": status == "PASS" and completion.get("completed") is True,
               "flow109_acceptance": status,
               "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False}
+    if row["id"] in ("M08", "M09"):
+        import flow109_metric_acceptance as metrics
+        acceptance = metrics.accept_m89(project, context, result)
+        row_status = ("FAIL" if "FAIL" in (status, acceptance["status"]) else
+                      "PASS" if status == acceptance["status"] == "PASS"
+                      and completion.get("completed") is True else "NOT_MEASURED")
+        answer.update(metric_acceptance=acceptance, metric_acceptance_status=acceptance["status"],
+                      default_row_status=row_status, flow109_acceptance=row_status,
+                      completed=row_status == "PASS", normalized_chain_reason=acceptance.get("reason"))
     if row["id"] == "D24":
         import flow109_metric_acceptance as metrics
         acceptance = metrics.accept_d24(project, context, completion)

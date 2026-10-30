@@ -5681,3 +5681,9 @@ def accept_d15(project: Path, context: Mapping, component: Mapping) -> dict:
     except (flow109.Flow109Error, MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
         result.update(reason=getattr(exc, 'code', 'D15_PREDECESSOR_NOT_ACCEPTED'), detail=str(exc))
     return result
+
+
+def accept_m89(project: Path, context: Mapping, component: Mapping) -> dict:
+    """BLOCKING final mixed metrics; qualification remains independently owned."""
+    from flow109_mixed_native import bind_metrics
+    return bind_metrics(project, context, component)

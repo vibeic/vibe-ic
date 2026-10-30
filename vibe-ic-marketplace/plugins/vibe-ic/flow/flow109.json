@@ -16558,7 +16558,7 @@
             "checker.ams_final.final_ams_scenarios",
             "producer.ams_final.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_M89_RUNTIME_BINDING"
         },
         {
           "id": "ams_final.final_ams_noise_settling_calibration",
@@ -16581,10 +16581,10 @@
             "checker.ams_final.final_ams_noise_settling_calibration",
             "producer.ams_final.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_M89_RUNTIME_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_M89_RUNTIME",
       "gate_layer_ids": [
         "G1",
         "G2",
@@ -17245,7 +17245,7 @@
             "checker.base_M7.mixed_requirement_evidence",
             "producer.base_M7.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_M89_RUNTIME_BINDING"
         },
         {
           "id": "base_M7.mixed_model_final_geometry_identity",
@@ -17266,10 +17266,10 @@
             "checker.base_M7.mixed_model_final_geometry_identity",
             "producer.base_M7.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_M89_RUNTIME_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_M89_RUNTIME",
       "gate_layer_ids": [
         "G1",
         "G2",

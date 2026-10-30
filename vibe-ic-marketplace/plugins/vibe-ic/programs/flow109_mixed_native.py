@@ -449,4 +449,240 @@ def consume_default_row_completion(project, context, component):
         return {**base, "default_row_status": exc.status, "reason": exc.code, "detail": str(exc)}
 
 
-__all__ = ["ROWS", "execute", "consume_default_row_completion", "operation_sources"]
+def _accepted_upstream(project, manifest, step):
+    """Re-open the selected owner's completion; an asserted PASS is insufficient."""
+    import importlib
+    import flow109
+
+    path = _bound_ref(project, (manifest.get("upstream_receipts") or {}).get(step), step)
+    component = _read(path)
+    owner_component, owner_path = component, path
+    if step in ("M06", "M08") and component.get("schema") == COMPLETION_SCHEMA:
+        link = component.get("component_receipt")
+        if not isinstance(link, dict) or not re.fullmatch(r"[0-9a-f]{64}", str(link.get("sha256", ""))):
+            raise Refusal("M89_UPSTREAM_COMPONENT_LINK_INVALID", step)
+        owner_path = _bound_ref(project, link, step + " raw component")
+        if _bound_ref(project, component.get("receipt"), step + " owner receipt") != owner_path:
+            raise Refusal("M89_UPSTREAM_COMPONENT_LINK_INVALID", step)
+        owner_component = _read(owner_path)
+        if (owner_component.get("schema") != SCHEMA or owner_component.get("step_id") != step
+                or owner_component.get("context_sha256") != component.get("context_sha256")):
+            raise Refusal("M89_UPSTREAM_COMPONENT_LINK_INVALID", step)
+    if step in ("D69", "M08"):
+        role = "d69_receipt" if step == "D69" else "m08_receipt"
+        if _bound_ref(project, manifest.get(role), role) not in (path, owner_path):
+            raise Refusal("M89_UPSTREAM_RECEIPT_MISMATCH", step)
+    request = _read(project / "reports/flow109/requests" /
+                    (str(component.get("context_sha256")) + ".json"))
+    try:
+        request = flow109.validate_execution_context(request)
+    except flow109.Flow109Error as exc:
+        raise Refusal("M89_UPSTREAM_CONTEXT_INVALID", step) from exc
+    if request.get("requested_step") != step:
+        raise Refusal("M89_UPSTREAM_CONTEXT_INVALID", step)
+    dispatch = request["resolved_row"]["profile"].get("dispatch") or {}
+    adapter = importlib.import_module(dispatch["adapter"])
+    consume = getattr(adapter, "consume_default_row_completion", None)
+    if callable(consume):
+        completion = consume(project, request, owner_component)
+        if owner_component is not component:
+            for key in ("selected_obligations", "input_sha256", "source_sha256", "evidence", "component_receipt"):
+                if key in completion and component.get(key) != completion[key]:
+                    raise Refusal("M89_UPSTREAM_COMPLETION_MISMATCH", step + ": " + key)
+            # Keep canonical metric/prerequisite vetoes while re-opening raw
+            # owner evidence. Neither layer can upgrade the other's refusal.
+            states = (component.get("default_row_status"), completion.get("default_row_status"))
+            status = ("FAIL" if "FAIL" in states else "PASS"
+                      if states == ("PASS", "PASS") and component.get("completed") is True
+                      and completion.get("completed") is True else "NOT_MEASURED")
+            completion = {**component, **completion, "default_row_status": status,
+                          "completed": status == "PASS"}
+    elif step in ("D69", "D70"):
+        # These owners expose material validators, not the legacy completion API.
+        validate = (adapter.validate_final_parasitics if step == "D69"
+                    else adapter.validate_final_electrical)
+        validate(project, {"path": str(path.relative_to(project)), "sha256": _sha(path)})
+        completion = component
+    elif step == "M02":
+        prepared = adapter.prepare(project, request)
+        adapter._before(project, request, prepared)
+        import mixed_signal_m3_run as m3
+        m3.verify(project, "cosim")
+        if (component.get("inputs") != prepared["inputs"]
+                or component.get("operation_sources") != prepared["sources"]
+                or adapter._literal_measured_failures(project)):
+            raise Refusal("M89_UPSTREAM_NOT_ACCEPTED", step)
+        completion = component
+    elif step == "A17":
+        report = component.get("native_results") or {}
+        blocks = [row.get("name") or row.get("block") for row in adapter._declared_blocks(project)]
+        rows = [row for row in report.get("steps", ()) if row.get("step") == step]
+        if (not blocks or sorted(row.get("block") for row in rows) != sorted(blocks)
+                or report.get("source_sha256") != _sha(Path(adapter.__file__))):
+            raise Refusal("M89_A17_POPULATION_INVALID", step)
+        for row in rows:
+            views = {**(row.get("input_views") or {}), **(row.get("output_views") or {})}
+            current = adapter._input_views(project, row["block"], step)
+            if (row.get("status") != "PASS" or not current or not row.get("output_views")
+                    or any(row["input_views"].get(key) != value for key, value in current.items())
+                    or any(not Path(key).is_file() or _sha(key) != value for key, value in views.items())
+                    or (row.get("producer_context") or {}).get("image") != _runtime_image(project)):
+                raise Refusal("M89_A17_CURRENT_RESULT_INVALID", row["block"])
+        completion = component
+    elif step == "M05":
+        import mixed_signal_m3_run as m3
+        audit = m3.audit(project, "si")
+        raise Refusal("M05_SUBSTRATE_SUPPLY_MODEL_UNSUPPORTED_OPEN_DEFAULT", step,
+                      status="FAIL" if audit.get("verdict") == "FAIL" else "NOT_MEASURED")
+    else:
+        raise Refusal("M89_UPSTREAM_CONSUMER_UNAVAILABLE", step)
+    if completion.get("default_row_status") != "PASS" or completion.get("completed") is not True:
+        raise Refusal("M89_UPSTREAM_NOT_ACCEPTED", step,
+                      status="FAIL" if completion.get("default_row_status") == "FAIL" else "NOT_MEASURED")
+    if step == "M08":
+        accepted = bind_metrics(project, request, owner_component)
+        if accepted["status"] != "PASS":
+            raise Refusal("M89_UPSTREAM_METRICS_NOT_ACCEPTED", step, status=accepted["status"])
+    return completion
+
+
+def bind_metrics(project, context, component):
+    """BLOCKING M08/M09 metric consumption, read-only and without native replay.
+
+    Uses the existing owner completion, native M3 re-derivation and typed
+    requirement operators. Unsupported measurements stay NOT_MEASURED. This
+    result never establishes tool qualification or whole-IC acceptance.
+    """
+    import flow109_metric_acceptance as metrics
+    import mixed_signal_m3_run as m3
+    import _mixed_signal_native as native
+    import _mixed_signal_current as current
+    import flow109_final_extract as final_extract
+
+    project = Path(project).resolve()
+    step = context.get("requested_step")
+    answer = {"schema": metrics.SCHEMA, "step_id": step, "status": "NOT_MEASURED",
+              "metric_status": "NOT_MEASURED", "qualification": "NOT_MEASURED",
+              "delivery_blocked": True, "obligations": [],
+              "whole_flow_acceptance": "NOT_MEASURED", "whole_ic_acceptance": "NOT_MEASURED"}
+    observations = []
+    try:
+        if step not in ("M08", "M09"):
+            raise Refusal("M89_CONTEXT_INVALID", str(step))
+        completion = consume_default_row_completion(project, context, component)
+        if completion.get("default_row_status") != "PASS" or completion.get("completed") is not True:
+            raise Refusal(completion.get("reason", "M89_OWNER_INCOMPLETE"), step,
+                          status="FAIL" if completion.get("default_row_status") == "FAIL" else "NOT_MEASURED")
+        manifest = _read(project / "input/flow109" / (step + ".json"))
+        inputs = _current_inputs(project, step, manifest["top"], manifest)
+        native_inputs = m3.inputs(project, manifest["top"])
+        if not native_inputs or any(value is None for value in native_inputs.values()):
+            raise Refusal("M89_FINAL_INPUT_ABSENT", "current M3 inputs")
+        inputs = {**inputs, **native_inputs}
+        geometry = {"path": "phase3/mixed_signal/top_merged.gds",
+                    "sha256": _sha(project / "phase3/mixed_signal/top_merged.gds")}
+        if manifest.get("geometry_sha256") != geometry["sha256"]:
+            raise Refusal("M89_FINAL_GEOMETRY_STALE", step)
+        final_manifest = manifest if step == "M08" else _read(project / "input/flow109/M08.json")
+        final = final_extract.validate_final_parasitics(project, final_manifest.get("d69_receipt"))
+        final_gds = _bound_ref(project, final.get("final_gds"), "D69 final GDS")
+        if _sha(final_gds) != geometry["sha256"]:
+            raise Refusal("M89_FOREIGN_FINAL_GEOMETRY", "D69 and M3 consume different final GDS")
+        data = native.contract(project, manifest["top"])
+        if data.get("scope") != current.SCOPE or not data.get("_current"):
+            raise Refusal("M89_FINAL_MODEL_NOT_CURRENT", "schematic/component models cannot certify final AMS")
+        required_steps = (("M05", "M06", "A17", "D69", "D70") if step == "M08"
+                          else ("M02", "M06", "M08", "D70"))
+        upstream = {name: _accepted_upstream(project, manifest, name) for name in required_steps}
+        # Bind shared material, rather than merely comparing row labels.
+        for name, accepted in upstream.items():
+            shared = set(inputs) & set(accepted.get("input_sha256") or {})
+            if not shared or any(inputs[key] != accepted["input_sha256"][key] for key in shared):
+                raise Refusal("M89_UPSTREAM_CARRIER_MISMATCH", name)
+            if name in ("M06", "M08") and accepted["input_sha256"].get(geometry["path"]) != geometry["sha256"]:
+                raise Refusal("M89_UPSTREAM_CARRIER_MISMATCH", name + " geometry")
+        native_record = m3.verify(project, "cosim")
+        m3.verify(project, "si")
+        cosim, si = _read(project / m3.COSIM), _read(project / m3.SI)
+        identity = {"geometry": geometry, "consumed_inputs": inputs,
+                    "producer": {"name": m3.PROGRAM, "receipt_sha256": _sha(project / m3.RECEIPT)},
+                    "checker": operation_sources(), "tool_execution": native_record.get("execution"),
+                    "configuration": {"manifest_sha256": _sha(project / "input/flow109" / (step + ".json"))},
+                    "requirements": "bound-per-obligation"}
+
+        def evaluate(oid, operator, measured, authority):
+            status, reason = metrics.evaluate_operator(operator,
+                {"status": "MEASURED", "identity": {**identity, "requirements": authority}, **measured}, authority)
+            observations.append({"id": oid, "status": status, "reason": reason,
+                                 "measurement": measured, "authority": authority})
+
+        if step == "M08":
+            authority, _ = metrics._approved_authority(project,
+                "requirements/ams_final/final_ams_scenarios.json#/required_items", ("scenario",))
+            rows = cosim.get("scenarios")
+            if (not isinstance(rows, list) or not rows
+                    or any(row.get("status") != "PASS" for row in rows)):
+                raise Refusal("M89_FINAL_SCENARIOS_INCOMPLETE", "no complete native scenario population")
+            evaluate(ROWS[step]["obligations"][0], "covers_all",
+                     {"value": [{"scenario": row["id"]} for row in rows]}, authority)
+            authority, bounds = metrics._approved_document(project,
+                "requirements/ams_final/final_ams_noise_settling_calibration.json",
+                authority="requirements_owner", schema=metrics.AUTHORITY_SCHEMA)
+            limits, units = bounds.get("limits"), bounds.get("units")
+            if (not isinstance(limits, dict) or not limits or not isinstance(units, dict)
+                    or set(limits) != set(units)):
+                raise Refusal("M89_BOUNDS_INCOMPLETE", "nonempty matching limits/units required")
+            # Select only metrics the native reader re-derived from tool output.
+            values = {}
+            for row in rows:
+                for criterion in row.get("criteria", ()):
+                    key = row["id"] + "/" + criterion["native_metric"]
+                    unit = "V" if criterion["native_metric"] in (
+                        "settled_voltage_min_v", "settled_voltage_max_v") else "count"
+                    values[key] = {"value": criterion["measured"], "unit": unit}
+            noise = si.get("receiver_noise") or {}
+            for name, measured in (noise.get("metrics") or {}).items():
+                values["receiver_noise/" + name] = {"value": measured["measured"], "unit": measured["units"]}
+            for key, band in limits.items():
+                if key not in values:
+                    raise Refusal("M89_NATIVE_METRIC_ABSENT", key)
+                evaluate(ROWS[step]["obligations"][1], "within_declared_bounds", {"name": key, **values[key]},
+                         {**authority, "limits": band, "unit": units[key]})
+        else:
+            prerequisites = _m09_prerequisites(project, manifest)
+            authority, _ = metrics._approved_authority(project,
+                "requirements/base_M7/mixed_requirement_evidence.json#/required_items", ("step", "obligation"))
+            population = []
+            for name, accepted in upstream.items():
+                for obligation in accepted.get("selected_obligations", ()):
+                    population.append({"step": name, "obligation": obligation})
+            population.extend({"step": "A19", "obligation": block}
+                              for block in prerequisites["a19_packages"])
+            evaluate(ROWS[step]["obligations"][0], "covers_all", {"value": population}, authority)
+            authority, adopted = metrics._approved_document(project,
+                "adopted/base_M7/mixed_model_final_geometry_identity.json",
+                authority="requirements_owner", schema=metrics.AUTHORITY_SCHEMA)
+            # Identity covers every current model/interface/PEX input, including
+            # the A19 package readset, instead of just the merged GDS name.
+            reference = {"geometry": geometry, "inputs": inputs}
+            evaluate(ROWS[step]["obligations"][1], "matches_adopted_reference", {"value": reference},
+                     {**authority, "reference": adopted.get("reference"),
+                      "reference_identity": adopted.get("reference_identity")})
+        after = {**_current_inputs(project, step, manifest["top"], manifest),
+                 **m3.inputs(project, manifest["top"])}
+        if after != inputs:
+            raise Refusal("M89_INPUT_CHANGED_DURING_CONSUMPTION", step)
+        states = [item["status"] for item in observations]
+        status = "FAIL" if "FAIL" in states else "PASS" if states and all(s == "PASS" for s in states) else "NOT_MEASURED"
+        answer.update(status=status, metric_status=status, obligations=observations,
+                      reason="M89_CURRENT_METRICS_" + status, identity=identity)
+    except (Refusal, metrics.MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+        status = "FAIL" if (getattr(exc, "status", None) == "FAIL"
+            or getattr(exc, "rule", None) in ("FAILED_MEASUREMENT", "NATIVE_EXECUTION_FAILED")) or any(
+            row["status"] == "FAIL" for row in observations if isinstance(row, dict)) else "NOT_MEASURED"
+        answer.update(status=status, metric_status=status, obligations=observations,
+                      reason=getattr(exc, "code", getattr(exc, "rule", "M89_INPUT_UNAVAILABLE")), detail=str(exc))
+    return answer
+
+
+__all__ = ["ROWS", "execute", "consume_default_row_completion", "operation_sources", "bind_metrics"]
