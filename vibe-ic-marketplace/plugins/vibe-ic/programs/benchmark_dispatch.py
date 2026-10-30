@@ -7003,8 +7003,10 @@ def _validated_route_reentry_state(*, bench: str, dataset: str | Path | None,
                 _require_route_admission(run_p, task, receipt, require_d1=False)
             except (OSError, ValueError, TypeError, KeyError) as authority_error:
                 return {"status": "REFUSED", "reason": str(authority_error)}
-            return {"status": ("ACTIVE" if rtl_only
-                               else "D1_ONLY"), "reason": str(exc),
+            separate_d1 = (str(receipt["entry_step"]) == "D1"
+                           and (project / "input" / "flow109-manifest.json").is_file())
+            return {"status": "ACTIVE" if rtl_only and not separate_d1 else "D1_ONLY",
+                    "reason": str(exc),
                     "route_receipt": receipt, "task": task, "project": project,
                     "activation": None, "entry_step": str(receipt["entry_step"]),
                     "exit_step": expected_exit, "delivery_route": expected_route,
@@ -7014,11 +7016,18 @@ def _validated_route_reentry_state(*, bench: str, dataset: str | Path | None,
         _require_route_admission(run_p, task, receipt)
     except (OSError, ValueError, TypeError, KeyError) as exc:
         return {"status": "REFUSED", "reason": str(exc)}
+    effective_entry = "2" if supplied_rtl else str(receipt["entry_step"])
+    if not supplied_rtl and effective_entry == "D1" and expected_exit != "D1":
+        # Use the same post-prerequisite owner selected on initial entry.
+        order = {sid: i for i, sid in enumerate(_rd.canonical_dag()["steps"])}
+        effective_entry = next(
+            sid for sid in _tnr.NATURE_ENTRY[receipt["task_nature"]]["then"]
+            if sid in order and order[sid] <= order[expected_exit])
     return {"status": "ACTIVE", "route_receipt": receipt, "task": task,
             "project": project, "activation": activation,
             "entry_step": str(receipt["entry_step"]),
             "exit_step": expected_exit, "delivery_route": expected_route,
-            "effective_entry": "2" if supplied_rtl else str(receipt["entry_step"])}
+            "effective_entry": effective_entry}
 
 
 def _declared_route_ai_backup(routing: dict) -> dict:
@@ -8836,10 +8845,13 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 return _ResumeRunnerOutcome(
                     problem_id=pid, rc=(invocation or {}).get("rc"), collected_json=None,
                     error=f"D1_ONLY_REENTRY_REFUSED: {exc}", invocation=invocation)
-            return _ResumeRunnerOutcome(
-                problem_id=pid, rc=frontdoor.get("runner_rc"), collected_json=None,
-                error="D1_ONLY_REENTRY_COMPLETED_WITHOUT_DOWNSTREAM_SPAN",
-                invocation=frontdoor.get("runner_invocation"))
+            if state["exit_step"] == "D1":
+                return _ResumeRunnerOutcome(
+                    problem_id=pid, rc=frontdoor.get("runner_rc"), collected_json=None,
+                    error="D1_ONLY_REENTRY_COMPLETED_WITHOUT_DOWNSTREAM_SPAN",
+                    invocation=frontdoor.get("runner_invocation"))
+            # Reopen the just-created activation through normal admission below,
+            # then continue the originally requested author/verification closure.
         # The caller performs a state check before constructing a job. Repeat
         # it here at the actual fan-out seam so a pointer/anchor mutation after
         # planning cannot turn a valid plan into a later-span bypass.
@@ -8880,10 +8892,10 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             state["route_receipt"].get("input_contract") or "structured")
         _forward_product_manifest(run_p, proj)
         argv = _resume_solver_argv(
-            runner, proj, supplied_rtl, state["entry_step"],
+            runner, proj, supplied_rtl, state["effective_entry"],
             state["exit_step"], state["delivery_route"],
             input_contract) if input_contract == "original" else _resume_solver_argv(
-                runner, proj, supplied_rtl, state["entry_step"],
+                runner, proj, supplied_rtl, state["effective_entry"],
                 state["exit_step"], state["delivery_route"])
         if state["activation"] is None:
             _require_route_admission(run_p, state["task"], state["route_receipt"],
