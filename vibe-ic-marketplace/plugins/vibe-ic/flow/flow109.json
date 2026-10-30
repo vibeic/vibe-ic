@@ -8449,9 +8449,38 @@
           "id": "analog_die",
           "select_when": "analog_physical and not digital_physical",
           "provider": "other",
-          "tools": "KLayout Python + Magic + PDK floorplan generators",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "tools": "KLayout Python + native GDS readback",
+          "native_steps": [
+            "flow109.D31"
+          ],
+          "execution_status": "IMPLEMENTED_NATIVE_COMPONENT",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "flow109_analog_floorplan",
+            "native_step_id": "flow109.D31",
+            "producer": "flow109_analog_floorplan.py:native produce",
+            "consumer": "flow109_analog_floorplan.py:native consume",
+            "engine_families": [
+              "klayout"
+            ],
+            "engine_executables": {
+              "klayout": "klayout"
+            },
+            "engine_steps": {
+              "klayout": [
+                "flow109.D31"
+              ]
+            },
+            "native_required_outputs": [
+              "floorplan.gds",
+              "consume.json"
+            ],
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "component_scope": "Analog macro placement and native geometry; row qualification remains NOT_MEASURED",
+            "unsupported_scope": "Routing, DRC/LVS, G1-G9 and whole die acceptance",
+            "flow109_metrics_status": "IMPLEMENTED_NATIVE_GEOMETRY_COMPONENT"
+          }
         },
         {
           "id": "default",
