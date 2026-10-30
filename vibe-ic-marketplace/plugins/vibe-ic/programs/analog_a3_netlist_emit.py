@@ -778,9 +778,10 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
             try:
                 import analog_pdk_availability as _apa
                 declared = _declared_pdk_target(project)
-                if declared:
-                    res = _apa.resolve_pdk(declared, project=project,
-                                           container=container)
+                # Staged models resolve before the resolver's no-target guard;
+                # no L19 and no assets still returns without a container probe.
+                res = _apa.resolve_pdk(declared, project=project,
+                                       container=container)
             except _ce.ContainerImageMismatch:
                 # AN ENVIRONMENT REFUSAL IS NOT A RESOLVER OUTCOME. See the
                 # re-raise below for the measurement; this inner handler is the
