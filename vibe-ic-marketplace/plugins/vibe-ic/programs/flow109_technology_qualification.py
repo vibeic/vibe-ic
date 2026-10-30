@@ -2,7 +2,7 @@
 """D03 native technology selection. BLOCKING on native config/pin refusal.
 
 LibreLane resolves the design's configuration and validates its selected files;
-ciel identifies the installed PDK revision. This is technology-use qualification,
+Ciel or the existing PDK revision reader identifies the installed revision. This identifies the technology in use,
 not execution/signoff of every downstream tool, corner or physical deck.
 """
 from __future__ import annotations
@@ -31,6 +31,46 @@ def _record(path: Path) -> dict:
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
+def _installed_pin(pdk_root: Path, pdk: str, family: str) -> dict:
+    """Consume the installed layout's actual revision authority, not its name.
+
+    A Ciel installation still owes its Ciel pin; missing/deleted registration
+    cannot fall back to metadata. Other native SDK installations use the
+    existing PDK revision reader, which checks declared-source conflicts.
+    """
+    import ciel
+    tree = pdk_root / pdk
+    if not tree.is_dir():
+        raise D03Refusal("D03_PDK_TREE_UNRESOLVED", str(tree))
+    if pdk_root.parent.name == "versions":
+        installed = ciel.Version.get_all_installed(str(pdk_root.parents[3]), family)
+        pins = [v for v in installed
+                if Path(v.get_dir(str(pdk_root.parents[3]))).resolve() == pdk_root]
+        if len(pins) != 1:
+            raise D03Refusal("D03_CIEL_PIN_UNRESOLVED", str(pdk_root))
+        return {"family": family, "variant": pdk, "revision": pins[0].name,
+                "root": str(pdk_root), "authority": "ciel_installed_pin"}
+    import pdk_revision_resolve as revision
+    node_info = tree / ".config/nodeinfo.json"
+    if node_info.exists():
+        try:
+            node = json.loads(node_info.read_text())
+            if not isinstance(node, dict) or node.get("node") != pdk:
+                raise ValueError("nodeinfo does not identify the selected PDK variant")
+        except (OSError, ValueError) as exc:
+            raise D03Refusal("D03_PDK_PIN_AUTHORITY_INVALID", str(exc)) from exc
+    record = revision.resolve_tree(revision.Fs(), str(tree))
+    if record.get("resolved") is not True:
+        raise D03Refusal("D03_INSTALLED_PDK_PIN_UNRESOLVED",
+                         str(record.get("reason") or tree))
+    sources = [_record(Path(row["read_from"])) for row in record["sources"]
+               if row.get("sha256") is not None]
+    return {"family": family, "variant": pdk, "root": str(pdk_root),
+            "revision": record["revision"], "authority": "installed_pdk_revision",
+            "revision_record": record, "source_files": sources,
+            "reader_source": _record(Path(revision.__file__))}
+
+
 def _resolve(config_path: Path, pdk_root: Path):
     import ciel
     from librelane.flows import Flow
@@ -50,13 +90,7 @@ def _resolve(config_path: Path, pdk_root: Path):
     family = next((f for f in ciel.Family.by_name.values() if pdk in f.variants), None)
     if family is None:
         raise D03Refusal("D03_CIEL_FAMILY_UNRESOLVED", pdk)
-    installed = ciel.Version.get_all_installed(str(pdk_root.parents[3]), family.name) \
-        if pdk_root.parent.name == "versions" else []
-    pins = [v for v in installed if Path(v.get_dir(str(pdk_root.parents[3]))).resolve() == pdk_root]
-    if len(pins) != 1 or not (pdk_root / pdk).is_dir():
-        raise D03Refusal("D03_CIEL_PIN_UNRESOLVED", str(pdk_root))
-    return selected, {"family": family.name, "variant": pdk,
-                      "revision": pins[0].name, "root": str(pdk_root)}
+    return selected, _installed_pin(pdk_root, pdk, family.name)
 
 
 def execute(project: Path, context: Mapping) -> dict:
@@ -84,6 +118,9 @@ def execute(project: Path, context: Mapping) -> dict:
         resolved_path.parent.mkdir(parents=True, exist_ok=True)
         resolved_path.write_text(selected.dumps())
         inputs.append(_record(resolved_path))
+        inputs.extend(pin.get("source_files", []))
+        if pin.get("reader_source"):
+            inputs.append(pin["reader_source"])
         # Native Path values, including input RTL/SDC, Liberty, LEF and decks,
         # are validated by LibreLane, then hashed without a second file policy.
         from librelane.common import Path as NativePath
@@ -102,14 +139,16 @@ def execute(project: Path, context: Mapping) -> dict:
         tools = {name: version(name) for name in ("librelane", "ciel")}
         inputs.append(_record(Path(__file__)))
         metrics = {"required_capability_qualifications": {
-            "librelane_config_resolution": "PASS", "ciel_installed_pin": "PASS"},
+            "librelane_config_resolution": "PASS", pin["authority"]: "PASS"},
             "tool_deck_corner_binding": {"image": image, "tools": tools,
                 "pdk": pin, "standard_cell_library": selected["STD_CELL_LIBRARY"],
                 "default_corner": selected["DEFAULT_CORNER"],
                 "resolved_config": inputs[1]}}
         checks = [{"check": key, "status": value} for key, value in
                   metrics["required_capability_qualifications"].items()]
-        status, reason = "PASS", "D03_NATIVE_CONFIG_AND_CIEL_PIN_PASS"
+        status = "PASS"
+        reason = ("D03_NATIVE_CONFIG_AND_CIEL_PIN_PASS" if pin["authority"] == "ciel_installed_pin"
+                  else "D03_NATIVE_CONFIG_AND_INSTALLED_PIN_PASS")
     except D03Refusal as exc:
         reason = exc.code
         checks.append({"check": "native_qualification", "status": status, "detail": exc.detail})
@@ -127,5 +166,5 @@ def execute(project: Path, context: Mapping) -> dict:
         "native_started": native_started, "metric_acceptance_status": "IMPLEMENTED",
         "flow109_acceptance": status, "whole_flow_acceptance": "NOT_MEASURED",
         "delivery_accepted": False,
-        "scope": "native LibreLane configuration resolution and ciel installed PDK pin",
+        "scope": "native LibreLane configuration resolution and installed PDK revision",
         "unsupported_scope": "downstream synthesis, simulation, timing and physical signoff"}
