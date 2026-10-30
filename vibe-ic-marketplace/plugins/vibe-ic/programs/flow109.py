@@ -1261,8 +1261,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_final = (row.get("id") == "D70" and profile.get("id") == "analog_die"
                     and isinstance(dispatch, Mapping)
                     and dispatch.get("adapter") == "flow109_final_electrical")
+    analog_em = (row.get("id") == "D58" and profile.get("id") == "analog_die"
+                 and isinstance(dispatch, Mapping)
+                 and dispatch.get("adapter") == "em_current_density_check")
     if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
-                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_final_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir and not analog_power and not analog_final and not analog_si):
+                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_final_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir and not analog_power and not analog_em and not analog_final and not analog_si):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
@@ -1312,6 +1315,10 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             invalid = (common_invalid or not analog_ir or native != "flow109.D57"
                        or dispatch.get("producer") != "analog_bound_measurements.py:source-bound native voltage capture"
                        or dispatch.get("consumer") != "ir_drop_budget_check.py:_d57_grade and evaluate")
+        elif adapter == "em_current_density_check":
+            invalid = (common_invalid or not analog_em or native != "flow109.D58"
+                       or dispatch.get("producer") != "analog_native_interconnect_run.py:run native interconnect capture"
+                       or dispatch.get("consumer") != "analog_native_em.py:run grade_case")
         elif adapter == "analog_native_em":
             invalid = (common_invalid or not analog_power or native != "flow109.D56"
                        or dispatch.get("producer") != "analog_native_interconnect_run.py:execute retained native capture"

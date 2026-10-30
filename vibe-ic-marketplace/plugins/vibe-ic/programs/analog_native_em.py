@@ -880,6 +880,44 @@ def read_technology(project: Path, value, container: str, work: Path) -> tuple[s
     return flatten(root),{str(artifact):{'path':str(artifact),'sha256':_sha(artifact)}}
 
 
+def _limit_document_text(pdf: Path, expected: str, work: Path) -> tuple[str, dict]:
+    """Extract the actual bound PDF with an installed converter, no text override."""
+    import shutil
+    converter = shutil.which('pdftotext')
+    ghostscript = None
+    if not converter:
+        ghostscript = shutil.which('gs')
+        if not ghostscript:
+            cached = {str(p.resolve()) for p in Path('/nix/store').glob('*-ghostscript*/bin/gs')
+                      if p.is_file() and os.access(p, os.X_OK)}
+            if len(cached) > 1:
+                raise ValueError('installed PDF extraction executable is ambiguous')
+            ghostscript = next(iter(cached), None)
+    if converter:
+        command = [converter, '-layout', str(pdf), '-']
+    elif ghostscript:
+        converter = ghostscript
+        command = [converter, '-q', '-dSAFER', '-dBATCH', '-dNOPAUSE',
+                   '-sDEVICE=txtwrite', '-sOutputFile=-', str(pdf)]
+    else:
+        # Preserve the original unavailable-tool behavior (and caller mocks).
+        command = ['pdftotext', '-layout', str(pdf), '-']
+    before = _sha(Path(converter)) if converter else None
+    converted = subprocess.run(command, capture_output=True, text=True, check=True)
+    if _sha(pdf) != expected or (converter and _sha(Path(converter)) != before):
+        raise ValueError('limit PDF or extraction executable changed during conversion')
+    text = work/'process_limits.txt'; text.write_text(converted.stdout)
+    receipt = work/'limit_document_extraction.json'
+    receipt.write_text(json.dumps({'source_pdf': {'path': str(pdf), 'sha256': expected},
+        'converter': {'path': converter, 'sha256': before}, 'argv': command,
+        'returncode': getattr(converted, 'returncode', 0),
+        'text': {'path': str(text), 'sha256': _sha(text)}}, indent=2)+'\n')
+    views = {str(p): {'path': str(p), 'sha256': _sha(p)} for p in (text, receipt)}
+    if converter:
+        views[converter] = {'path': converter, 'sha256': before}
+    return converted.stdout, views
+
+
 def run(project: Path, block: str, setting: dict, *, container: str='', output_dir: Path|None=None) -> dict:
     project=Path(project).resolve();views={};outputs=[];cases=[]
     work=output_dir or project/'continuations/native-em-check'/f'{block}-{uuid.uuid4().hex[:12]}'
@@ -889,9 +927,10 @@ def run(project: Path, block: str, setting: dict, *, container: str='', output_d
         pdf=Path(meta['copy']);expected=meta['sha256']
         if _sha(pdf)!=expected:raise ValueError('foundry limit PDF differs from source receipt')
         for p in [source,pdf]:views[str(p)]={'path':str(p),'sha256':_sha(p)}
-        converted=subprocess.run(['pdftotext','-layout',str(pdf),'-'],capture_output=True,text=True,check=True)
-        limits=parse_process_limits(converted.stdout)
-        rating=process_rating_context(converted.stdout)
+        document,extraction_views=_limit_document_text(pdf,expected,work)
+        views.update(extraction_views)
+        limits=parse_process_limits(document)
+        rating=process_rating_context(document)
         if rating:rating.update(source_pdf=str(pdf),source_pdf_sha256=expected)
         technology,source_views=read_technology(project,setting.get('magic_tech'),container,work)
         views.update(source_views)

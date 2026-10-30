@@ -1995,5 +1995,213 @@ def main(argv: Optional[List[str]] = None) -> int:
     return {"PASS": 0, "FAIL": 1, "SKIPPED": 3, "NOT_MEASURED": 3}[verdict]
 
 
+def _d58_file(project, value):
+    """Existing measured paths must stay inside this project, without symlinks."""
+    from flow109_analog_floorplan import bound_file
+    if isinstance(value, dict):
+        return bound_file(project, value)
+    if not isinstance(value, str) or not value or '..' in Path(value).parts:
+        raise ValueError('D58_MEASURED_INPUT_ABSENT')
+    path = project / value
+    if not path.is_relative_to(project) or any(p.is_symlink() for p in (path, *path.parents)) or not path.is_file():
+        raise ValueError('D58_MEASURED_INPUT_FOREIGN_OR_ABSENT: ' + value)
+    return path.resolve(strict=True)
+
+
+def _d58_capture(project, block, case, work, current):
+    """Ordinary producer wraps the unchanged native interconnect executor."""
+    import shutil
+    import analog_native_em as em
+    import analog_native_interconnect_run as producer
+    from analog_native_flow import _local_ngspice_startup
+    settings_path = _d58_file(project, case['native_settings'])
+    settings_digest = em._sha(settings_path)
+    settings = em._read(settings_path)
+    for key in ('spice', 'geometry', 'testbench', 'model_view', 'testbench_dut', 'extraction_receipt'):
+        settings[key] = str(_d58_file(project, settings[key]))
+    binary = Path(shutil.which('ngspice') or '').resolve(strict=True)
+    if not binary.is_file():
+        raise ValueError('D58_NATIVE_TOOL_ABSENT')
+    work.mkdir(parents=True, exist_ok=False)
+    startup, init = _local_ngspice_startup(project, work, current['image'])
+    settings.update(ngspice_bin=str(binary), timeout_s=0, environment=startup)
+    if type(settings.get('capture_budget_bytes')) is not int or settings['capture_budget_bytes'] <= 0:
+        raise ValueError('D58_EXPLICIT_CAPTURE_BUDGET_REQUIRED')
+    settings['native_init_paths'] = [init['path']] if init else []
+    if init:
+        settings['spiceinit'] = init['path']
+    producer.write(work/'settings.json', settings)
+    driver = work/'d58_driver.py'; driver.write_bytes(Path(__file__).read_bytes())
+    record = producer.run(project, block, settings, work, '')
+    record.update(native_launch=current, tool={'path': str(binary), 'sha256': em._sha(binary)},
+                  operation_source={'path': str(Path(producer.__file__).resolve()), 'sha256': em._sha(Path(producer.__file__))},
+                  d58_driver={'path': str(driver), 'sha256': em._sha(driver)},
+                  d58_settings={'path': str(settings_path), 'sha256': settings_digest})
+    if em._sha(settings_path) != settings_digest:
+        record['unchanged'] = False
+        record['status'] = 'NOT_MEASURED'
+    producer.write(work/'command.json', record)
+    launch = Path(current['attestation_path']); host = em._read(launch)
+    for mount in sorted(host['container_inspect']['Mounts'], key=lambda m: len(m['Destination']), reverse=True):
+        if mount.get('Type') == 'bind' and launch.is_relative_to(Path(mount['Destination'])):
+            launch = Path(mount['Source']) / launch.relative_to(Path(mount['Destination'])); break
+    return {**case, 'receipt': str(work/'command.json'), 'geometry': settings['geometry'],
+            'spice': settings['spice'], 'extraction_receipt': settings['extraction_receipt'],
+            'launch': {'path': str(launch), 'sha256': current['attestation_sha256']}}
+
+
+def _d58_provenance(project, case, current):
+    """Authenticate original execution before any current can contribute a verdict."""
+    import inspect
+    import analog_native_em as em
+    import analog_native_interconnect_run as producer
+    from flow109 import _d23_original_launch
+    receipt = _d58_file(project, case['receipt']); rec = em._read(receipt)
+    origin = case.get('launch') or {}; path = Path(origin.get('path', ''))
+    if not path.is_absolute() or not path.is_file() or em._sha(path) != origin.get('sha256'):
+        raise ValueError('D58_ORIGINAL_LAUNCH_ABSENT_OR_STALE')
+    _d23_original_launch(rec.get('native_launch', {}), dict(current, attestation_path=str(path)))
+    host = em._read(path)
+    mounts = sorted((m for m in host['container_inspect']['Mounts'] if m.get('Type') == 'bind'),
+                    key=lambda m: len(m['Destination']), reverse=True)
+    def original(value):
+        if not isinstance(value, str) or not value.startswith('/') or '..' in Path(value).parts:
+            raise ValueError('D58_ORIGINAL_INPUT_PATH_INVALID')
+        target = Path(value)
+        for mount in mounts:
+            if target.is_relative_to(Path(mount['Destination'])):
+                return (Path(mount['Source']) / target.relative_to(Path(mount['Destination']))).resolve(strict=True)
+        return target.resolve(strict=True)
+    # Same canonical original artifact namespace may be mounted in a later CID;
+    # no equality with the current CID, release or image string is imposed.
+    stored, _ = em.native_capture(rec, transient=rec.get('analysis', {}).get('kind', '').upper() == 'TRAN')
+    original_receipt = original(str(stored)).parent / 'command.json'
+    if original_receipt.read_bytes() != receipt.read_bytes():
+        raise ValueError('D58_ORIGINAL_RECEIPT_CHANGED')
+    inputs, outputs = rec.get('inputs_before'), rec.get('outputs')
+    if not isinstance(inputs, dict) or not inputs or not isinstance(outputs, dict) or not outputs or rec.get('inputs_after') != inputs or rec.get('unchanged') is not True:
+        raise ValueError('D58_NATIVE_POPULATION_UNBOUND')
+    for key in ('geometry', 'spice', 'extraction_receipt'):
+        subject = _d58_file(project, case[key])
+        if inputs.get(str(subject)) != em._sha(subject):
+            raise ValueError('D58_CURRENT_GEOMETRY_OR_EXTRACTION_UNBOUND')
+    for name, digest in {**inputs, **outputs}.items():
+        if em._sha(original(name)) != digest or em._sha(Path(name)) != digest:
+            raise ValueError('D58_NATIVE_INPUT_OR_OUTPUT_CHANGED: ' + name)
+    for key in ('tool', 'operation_source', 'd58_driver', 'd58_settings'):
+        item = rec.get(key) or {}
+        if em._sha(original(item.get('path'))) != item.get('sha256') or em._sha(Path(item['path'])) != item['sha256']:
+            raise ValueError('D58_NATIVE_SOURCE_OR_TOOL_CHANGED')
+    if rec['operation_source']['sha256'] != em._sha(Path(producer.__file__)):
+        raise ValueError('D58_NATIVE_METHOD_CHANGED')
+    executed = ast.parse(Path(rec['d58_driver']['path']).read_text())
+    old = next((n for n in executed.body if isinstance(n, ast.FunctionDef) and n.name == '_d58_capture'), None)
+    if old is None or ast.dump(old) != ast.dump(ast.parse(inspect.getsource(_d58_capture)).body[0]):
+        raise ValueError('D58_CAPTURE_METHOD_CHANGED')
+    command = em._read(receipt.parent/'native-command.json')
+    native = em._read(receipt.parent/'native-execution.json')
+    if command.get('argv') != rec.get('argv') or native.get('argv') != rec.get('argv') or native.get('returncode') != rec.get('returncode') or command.get('environment') != rec.get('native_environment'):
+        raise ValueError('D58_NATIVE_COMMAND_OR_ENVIRONMENT_UNBOUND')
+    argv = rec['argv']; capture, _ = em.native_capture(rec, transient=rec['analysis']['kind'].upper() == 'TRAN')
+    executed_raw = (rec.get('native_raw') or {}).get('executed_path', str(capture))
+    if argv.count('-r') != 1 or argv[argv.index('-r')+1] != executed_raw or argv[-1] != rec.get('deck') or rec['tool']['path'] not in argv:
+        raise ValueError('D58_NATIVE_SUBJECT_MISMATCH')
+    import analog_bound_measurements as measured
+    closure = measured.consumed_input_views(project, Path(rec['deck']))
+    if any(inputs.get(v['path']) != v['sha256'] for v in closure.values()):
+        raise ValueError('D58_NATIVE_INCLUDE_CLOSURE_INCOMPLETE')
+    return rec
+
+
+def execute(project, context):
+    """D58 analog component: BLOCKING on missing evidence; never row signoff.
+
+    Reuses source-PDF limits, material mapping and grade_case through run.
+    Selected cases are measurements, not complete signal/mission qualification.
+    """
+    import uuid
+    import analog_native_em as em
+    import librelane_contract as launch
+    import flow109
+    from flow109_admission import require_launch_admission, AdmissionRefusal
+    project = Path(project).resolve(strict=True)
+    work = project/'reports/flow109/D58'/uuid.uuid4().hex; work.mkdir(parents=True)
+    result = dict(step_id='D58', context_sha256=context.get('context_sha256'), component_status='NOT_MEASURED',
+                  default_row_status='NOT_MEASURED', completed=False, native_started=False, blocks=[], outputs=[],
+                  qualification='NOT_CLAIMED', flow109_acceptance='NOT_MEASURED', whole_flow_acceptance='NOT_MEASURED', delivery_accepted=False)
+    try:
+        if context.get('requested_step') != 'D58' or context.get('native_step_id') != 'flow109.D58' or context.get('resolved_row', {}).get('profile', {}).get('id') != 'analog_die':
+            raise ValueError('D58_CONTEXT_INVALID')
+        result['launch_admission'] = require_launch_admission(project, 'flow109.D58', {'flow109_context': context})
+        current = launch.local_image_attestation(); config = _d58_file(project, 'input/flow109/D58.json')
+        before = em._sha(config); data = em._read(config); blocks = data.get('blocks')
+        if not isinstance(blocks, list) or not blocks:
+            raise ValueError('D58_EMPTY_BLOCK_POPULATION')
+        names = [b.get('block') for b in blocks if isinstance(b, dict)]
+        if len(names) != len(blocks) or len(set(names)) != len(names) or any(not isinstance(n, str) or not re.fullmatch(r'[A-Za-z_]\w*', n) for n in names):
+            raise ValueError('D58_BLOCK_IDENTITY_AMBIGUOUS')
+        retained = []
+        for item in blocks:
+            name = item['block']; selected = []
+            try:
+                settings = dict(item['settings']); cases = settings.get('cases'); required = settings.get('required_cases')
+                if not isinstance(required, list) or not required or any(not isinstance(n, str) or not n for n in required) or len(set(required)) != len(required):
+                    raise ValueError('D58_REQUIRED_CASE_POPULATION_ABSENT')
+                if not isinstance(cases, list) or not cases or any(not isinstance(c, dict) for c in cases):
+                    raise ValueError('D58_EMPTY_CASE_POPULATION')
+                ids = [c.get('name') for c in cases]
+                if any(not isinstance(n, str) or not n for n in ids) or len(set(ids)) != len(ids):
+                    raise ValueError('D58_CASE_IDENTITY_AMBIGUOUS')
+                source = _d58_file(project, settings['limits_source']); meta = em._read(source)
+                pdf = _d58_file(project, meta['copy']); tech = _d58_file(project, settings['magic_tech'])
+                limit_inputs = {str(p): em._sha(p) for p in (source, pdf, tech)}
+                rejected = []
+                for index, case in enumerate(cases):
+                    try:
+                        for key in ('geometry', 'spice', 'extraction_receipt'):
+                            if key in case: _d58_file(project, case[key])
+                        if 'receipt' not in case:
+                            result['native_started'] = True
+                            case = _d58_capture(project, name, case, work/(name+'-'+str(index)+'-native'), current)
+                        _d58_provenance(project, case, current)
+                        selected.append(case)
+                    except (OSError, ValueError, KeyError, TypeError, flow109.Flow109Error) as exc:
+                        rejected.append({'name': case.get('name'), 'status': 'NOT_MEASURED', 'detail': str(exc)})
+                settings.update(cases=selected, limits_source=str(source), magic_tech=str(tech))
+                answer = em.run(project, name, settings, output_dir=work/(name+'-grade'))
+                if rejected:
+                    answer['cases'].extend(rejected)
+                    if answer['status'] != 'FAIL': answer['status'] = 'NOT_MEASURED'
+                input_error = None
+                try:
+                    input_changed = any(em._sha(Path(p)) != digest for p, digest in limit_inputs.items())
+                except OSError as exc:
+                    input_changed = True
+                    input_error = str(exc)
+                if input_changed:
+                    if answer['status'] != 'FAIL': answer['status'] = 'NOT_MEASURED'
+                    answer['input_provenance'] = {'status': 'NOT_MEASURED',
+                        'reason': 'D58_LIMIT_SOURCE_CHANGED',
+                        'detail': input_error or 'consumed limit input hash changed'}
+                result['blocks'].append(dict(block=name, **answer))
+                retained.append({'block': name, 'settings': settings})
+            except (OSError, ValueError, KeyError, TypeError, flow109.Flow109Error) as exc:
+                result['blocks'].append({'block': name, 'status': 'NOT_MEASURED', 'detail': str(exc)})
+        states = [b['status'] for b in result['blocks']]
+        result['component_status'] = 'FAIL' if 'FAIL' in states else 'PASS' if states and set(states) == {'PASS'} else 'NOT_MEASURED'
+        if em._sha(config) != before or launch.local_image_attestation() != current:
+            if result['component_status'] != 'FAIL': result['component_status'] = 'NOT_MEASURED'
+            result['reason'] = 'D58_INPUT_OR_LAUNCH_CHANGED'
+        result['retained_inputs'] = str(work/'retained_inputs.json')
+        (work/'retained_inputs.json').write_text(json.dumps({'blocks': retained}, indent=2)+'\n')
+    except (OSError, ValueError, KeyError, TypeError, AdmissionRefusal, launch.Refusal) as exc:
+        if result['component_status'] != 'FAIL': result['component_status'] = 'NOT_MEASURED'
+        result['reason'] = str(exc)
+    result['scope'] = 'Source-rated native interconnect cases only; signal EM, complete branch/temperature/mission/lifetime coverage and Flow109 metrics NOT_MEASURED'
+    result['outputs'] = [str(p) for p in work.rglob('*') if p.is_file()]
+    (work/'component.json').write_text(json.dumps(result, indent=2)+'\n')
+    return result
+
+
 if __name__ == "__main__":
     sys.exit(main())

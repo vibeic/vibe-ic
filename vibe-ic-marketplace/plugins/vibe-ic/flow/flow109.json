@@ -13229,9 +13229,37 @@
           "select_when": "analog_physical and not digital_physical",
           "provider": "other",
           "tools": "ngspice branch currents + Python PDK EM limits",
-          "native_steps": [],
+          "native_steps": [
+            "ngspice interconnect capture",
+            "source-rated interconnect EM"
+          ],
           "capability_status": "PARTIAL_UNSUPPORTED_SIGNAL_EM",
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "EXISTING_COMPONENT_DISPATCH_NOT_109_ACCEPTANCE",
+          "dispatch": {
+            "adapter": "em_current_density_check",
+            "native_step_id": "flow109.D58",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "producer": "analog_native_interconnect_run.py:run native interconnect capture",
+            "consumer": "analog_native_em.py:run grade_case",
+            "engine_families": [
+              "python3",
+              "ngspice"
+            ],
+            "engine_steps": {
+              "python3": [
+                "source-rated interconnect EM"
+              ],
+              "ngspice": [
+                "native interconnect capture"
+              ]
+            },
+            "engine_executables": {
+              "python3": "python3",
+              "ngspice": "ngspice"
+            },
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         },
         {
           "id": "assembly",
