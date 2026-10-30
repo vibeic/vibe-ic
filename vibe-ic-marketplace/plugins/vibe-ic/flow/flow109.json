@@ -13714,9 +13714,37 @@
           "id": "analog_die",
           "select_when": "analog_physical and not digital_physical",
           "provider": "other",
-          "tools": "KLayout Python + Magic GDS stream-out",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "tools": "Magic GDS stream-out + KLayout native die hierarchy/view readback",
+          "native_steps": [
+            "flow109.D60"
+          ],
+          "execution_status": "IMPLEMENTED_NATIVE_COMPONENT",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "analog_hardmacro_gds_emit",
+            "native_step_id": "flow109.D60",
+            "producer": "analog_hardmacro_gds_emit.py:execute Magic native stream",
+            "consumer": "analog_hardmacro_gds_emit.py:_D60_READBACK KLayout native readback",
+            "engine_families": [
+              "magic",
+              "klayout"
+            ],
+            "engine_executables": {
+              "magic": "magic",
+              "klayout": "klayout"
+            },
+            "engine_steps": {
+              "magic": [
+                "flow109.D60"
+              ],
+              "klayout": [
+                "flow109.D60"
+              ]
+            },
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         },
         {
           "id": "assembly",

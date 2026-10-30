@@ -1231,8 +1231,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_fill = (row.get("id") == "D62" and profile.get("id") == "gds_only_analog"
                    and isinstance(dispatch, Mapping)
                    and dispatch.get("adapter") == "flow109_density_fill")
+    analog_stream = (row.get("id") == "D60" and profile.get("id") == "analog_die"
+                     and isinstance(dispatch, Mapping)
+                     and dispatch.get("adapter") == "analog_hardmacro_gds_emit")
     if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
-                                             and not analog_floorplan and not analog_fill):
+                                             and not analog_floorplan and not analog_fill and not analog_stream):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
@@ -1253,6 +1256,10 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
                        or dispatch.get("operation_scope") != "native_analog_step"
                        or not (HERE / "analog_native_flow.py").is_file()
                        or native not in legacy | {"flow109." + str(row.get("id"))})
+        elif adapter == "analog_hardmacro_gds_emit":
+            invalid = (common_invalid or not analog_stream or native != "flow109.D60"
+                       or dispatch.get("producer") != "analog_hardmacro_gds_emit.py:execute Magic native stream"
+                       or dispatch.get("consumer") != "analog_hardmacro_gds_emit.py:_D60_READBACK KLayout native readback")
         elif adapter == "flow109_frontend":
             identities = {
                 "D05": ("flow109.D05", "l21_to_upf_emit.py:main",

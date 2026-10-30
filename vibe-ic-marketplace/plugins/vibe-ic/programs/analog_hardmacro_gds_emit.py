@@ -755,6 +755,232 @@ def main(argv=None) -> int:
     return rc
 
 
+# D60 uses the same native Magic stream primitive, without A8 macro renaming or
+# LEF-frame adjustment. Its independent D31 input inventory identifies the die's
+# required macro population; no D31 row PASS is synthesized or required here.
+def _d60_inputs(project):
+    import hashlib
+    import analog_pdk_availability as resolver
+    from declared_pdk_is_the_pdk_used_check import declared_target
+    from flow109_analog_floorplan import bound_file
+    project = Path(project).resolve(strict=True)
+    records = {}
+    def remember(path):
+        path = Path(path)
+        records[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return path
+    def document(path):
+        if any(p.is_symlink() for p in (path, *path.parents)):
+            raise ValueError('D60_INPUT_SYMLINK')
+        value = json.loads(remember(path).read_text())
+        if not isinstance(value, dict):
+            raise ValueError('D60_INPUT_INVALID')
+        return value
+    config = document(project / 'input/flow109/D60.json')
+    plan = document(project / 'input/flow109/D31.json')
+    inventory = document(bound_file(project, plan.get('macro_inventory')))
+    required = inventory.get('instances')
+    if not isinstance(required, dict) or not required:
+        raise ValueError('D60_DIE_MACRO_INVENTORY_ABSENT')
+    layout = remember(bound_file(project, config.get('layout')))
+    top = config.get('top')
+    if not isinstance(top, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*', top) or layout.stem != top:
+        raise ValueError('D60_DIE_TOP_IDENTITY_INVALID')
+    # Magic's use order is master, instance. Duplicate instances cannot shrink
+    # the independently declared inventory to a convenient single macro.
+    pairs = re.findall(r'(?m)^\s*use\s+(\S+)\s+(\S+)\s*$', layout.read_text())
+    by_instance = {instance: master for master, instance in pairs}
+    if len(by_instance) != len(pairs):
+        raise ValueError('D60_DUPLICATE_INSTANCE')
+    views = {}
+    for instance, view in required.items():
+        if (not isinstance(view, dict) or by_instance.get(instance) != view.get('master')
+                or top == view.get('master')):
+            raise ValueError('D60_DIE_MACRO_POPULATION_MISMATCH')
+        source_view = str(remember(bound_file(project, view.get('gds'))))
+        if view['master'] in views and views[view['master']] != source_view:
+            raise ValueError('D60_ADOPTED_VIEW_COLLISION')
+        views[view['master']] = source_view
+    tech = tech_of(layout)
+    target, _ = declared_target(project)
+    if resolver.families_agree(target, tech) is not True:
+        raise ValueError('D60_DECLARED_TECHNOLOGY_MISMATCH')
+    facts = resolver.resolve_pdk(target, project=project)
+    if facts.get('source') != 'container_installed' or not facts.get('available'):
+        raise ValueError('D60_INSTALLED_TECHNOLOGY_UNAVAILABLE')
+    magic_dir = (Path(facts['pdk_root']) / 'libs.tech/magic').resolve(strict=True)
+    rcfile, techfile = magic_dir / (tech + '.magicrc'), magic_dir / (tech + '.tech')
+    if not rcfile.is_file() or not techfile.is_file():
+        raise ValueError('D60_NATIVE_LAYER_MAP_ABSENT')
+    technology_files = sorted(magic_dir.rglob('*'))
+    total = 0
+    for path in technology_files:
+        if path.is_symlink():
+            raise ValueError('D60_TECHNOLOGY_SYMLINK')
+        if path.is_file():
+            total += path.stat().st_size
+            remember(path)
+    if len(technology_files) > 512 or total > 67108864:
+        raise ValueError('D60_TECHNOLOGY_POPULATION_UNSUPPORTED')
+    cells, hierarchy = {}, {}
+    pending = [layout]
+    while pending:
+        path = pending.pop()
+        if path.stem in cells:
+            continue
+        if len(cells) >= 512 or any(p.is_symlink() for p in (path, *path.parents)):
+            raise ValueError('D60_LAYOUT_POPULATION_UNSUPPORTED')
+        remember(path)
+        text = path.read_text()
+        if is_stub_text(text) or tech_of(path) != tech:
+            raise ValueError('D60_LAYOUT_TECHNOLOGY_OR_STUB_INVALID')
+        cells[path.stem] = str(path)
+        hierarchy[path.stem] = {}
+        for cell in _MAG_USE_RE.findall(text):
+            hierarchy[path.stem][cell] = hierarchy[path.stem].get(cell, 0) + 1
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*', cell):
+                raise ValueError('D60_CHILD_IDENTITY_UNSUPPORTED')
+            child = layout.parent / (cell + '.mag')
+            if not child.is_file():
+                raise ValueError('D60_REQUIRED_CHILD_ABSENT: ' + cell)
+            pending.append(child)
+    return dict(top=top, tech=tech, pdk_root=str(Path(facts['pdk_root']).parent),
+                rcfile=str(rcfile), cells=cells, hierarchy=hierarchy, views=views,
+                instances=by_instance, inputs=records)
+
+
+_D60_READBACK = r'''import json,pathlib,pya,hashlib
+request=pathlib.Path(D60_REQUEST)
+data=json.loads(request.read_text()); answer={'status':'FAIL'}
+try:
+    layout=pya.Layout(); layout.read(data['gds'])
+    if sorted(c.name for c in layout.top_cells()) != [data['top']]:
+        raise ValueError('D60_STREAM_TOP_MISMATCH')
+    if sorted(c.name for c in layout.each_cell()) != sorted(data['cells']):
+        raise ValueError('D60_STREAM_HIERARCHY_MISMATCH')
+    for name,expected in data['hierarchy'].items():
+        actual={}
+        for inst in layout.cell(name).each_inst():
+            master=layout.cell(inst.cell_index).name
+            actual[master]=actual.get(master,0)+inst.size()
+        if actual != expected:
+            raise ValueError('D60_STREAM_HIERARCHY_EDGE_MISMATCH: '+name)
+    top=layout.cell(data['top'])
+    actual_instances={}
+    for inst in top.each_inst():
+        name=layout.cell(inst.cell_index).name
+        actual_instances[name]=actual_instances.get(name,0)+inst.size()
+    expected_instances={}
+    for name in data['instances'].values():
+        expected_instances[name]=expected_instances.get(name,0)+1
+    if actual_instances != expected_instances:
+        raise ValueError('D60_STREAM_INSTANCE_POPULATION_MISMATCH')
+    for master,path in data['views'].items():
+        source=pya.Layout(); source.read(path)
+        cell=source.cell(master); actual=layout.cell(master)
+        if cell is None or actual is None or cell.is_empty() or actual.is_empty():
+            raise ValueError('D60_ADOPTED_MASTER_ABSENT: '+master)
+        if source.dbu != layout.dbu:
+            raise ValueError('D60_ADOPTED_VIEW_DBU_UNSUPPORTED')
+        layers={(source.get_info(i).layer,source.get_info(i).datatype) for i in source.layer_indexes()}
+        layers|={(layout.get_info(i).layer,layout.get_info(i).datatype) for i in layout.layer_indexes()}
+        for layer,datatype in layers:
+            a=pya.Region(cell.begin_shapes_rec(source.layer(layer,datatype)))
+            b=pya.Region(actual.begin_shapes_rec(layout.layer(layer,datatype)))
+            if not (a^b).is_empty():
+                raise ValueError('D60_ADOPTED_VIEW_GEOMETRY_MISMATCH: '+master)
+    if top.is_empty() or top.bbox().empty():
+        raise ValueError('D60_STREAM_NO_GEOMETRY')
+    answer={'status':'PASS','top':data['top'],'gds_sha256':hashlib.sha256(pathlib.Path(data['gds']).read_bytes()).hexdigest(),'cells':sorted(c.name for c in layout.each_cell()),
+            'instances':actual_instances,'dbu':layout.dbu,
+            'layers':sorted([layout.get_info(i).to_s() for i in layout.layer_indexes()]),
+            'bbox':str(top.bbox())}
+except Exception as exc:
+    answer['reason']=str(exc)
+pathlib.Path(data['answer']).write_text(json.dumps(answer,sort_keys=True,indent=2)+'\n')
+'''
+
+
+def execute(project, context):
+    """D60 native stream component only; full stream metrics/signoff stay NM."""
+    import hashlib
+    import shutil
+    import subprocess
+    import uuid
+    import librelane_contract as launch
+    from flow109_admission import require_launch_admission, AdmissionRefusal
+    project = Path(project).resolve(strict=True)
+    output = project / 'reports/flow109/D60' / uuid.uuid4().hex
+    output.mkdir(parents=True)
+    record = dict(step_id='D60', context_sha256=context.get('context_sha256'),
+                  component_status='NOT_MEASURED', default_row_status='NOT_MEASURED',
+                  completed=False, native_started=False, outputs=[], executions=[],
+                  flow109_acceptance='NOT_MEASURED', whole_flow_acceptance='NOT_MEASURED',
+                  delivery_accepted=False, qualification='NOT_CLAIMED')
+    stage = Stage('host', output / 'work')
+    try:
+        if (context.get('requested_step') != 'D60' or context.get('native_step_id') != 'flow109.D60'
+                or context.get('resolved_row', {}).get('profile', {}).get('id') != 'analog_die'):
+            raise ValueError('D60_CONTEXT_INVALID')
+        record['launch_admission'] = require_launch_admission(project, 'flow109.D60', {'flow109_context': context})
+        record['native_launch'] = launch.local_image_attestation()
+        data = _d60_inputs(project)
+        record['inputs'] = data['inputs']
+        tools = {name: shutil.which(name) for name in ('magic', 'klayout')}
+        if not all(tools.values()):
+            raise ValueError('D60_NATIVE_TOOL_ABSENT')
+        record['tools'] = {name: {'path': path, 'sha256': hashlib.sha256(Path(path).resolve().read_bytes()).hexdigest()}
+                           for name, path in tools.items()}
+        if not stage.open()[0]:
+            raise ValueError('D60_STAGING_UNAVAILABLE')
+        for name, path in data['cells'].items():
+            if not stage.put(Path(path), name + '.mag')[0]:
+                raise ValueError('D60_STAGING_FAILED')
+        recipe = build_gds_write_tcl(data['top'], data['top'], data['top'] + '.gds')
+        if not stage.put_text(recipe, 'stream.tcl')[0]:
+            raise ValueError('D60_STAGING_FAILED')
+        command = (f"export PDK={shlex.quote(data['tech'])} PDK_ROOT={shlex.quote(data['pdk_root'])} && "
+                   f"cd {shlex.quote(stage.path)} && {shlex.quote(tools['magic'])} "
+                   f"-noconsole -dnull -rcfile {shlex.quote(data['rcfile'])} stream.tcl")
+        record['native_started'] = True
+        rc, stdout, stderr = stage.sh(command)
+        log = output / 'magic.log'; log.write_text(stdout + stderr)
+        record['executions'].append(dict(command=command, returncode=rc, log=str(log.relative_to(project)), log_sha256=hashlib.sha256(log.read_bytes()).hexdigest()))
+        gds = Path(stage.path) / (data['top'] + '.gds')
+        if (rc or re.search(r'(?im)(?:unknown|unrecognized)\s+layer|failure to read|error in writing', stdout + stderr)
+                or 'MAGIC_GDS_WRITE_DONE ' + data['top'] + ' ->' not in stdout
+                or not gds.is_file() or _gds_geometry_count(gds.read_bytes()) <= 0):
+            record['component_status'] = 'FAIL'
+            raise ValueError('D60_NATIVE_STREAM_REJECTED')
+        streamed_sha256 = hashlib.sha256(gds.read_bytes()).hexdigest()
+        request = output / 'readback-request.json'; answer = output / 'readback.json'
+        request.write_text(json.dumps({**data, 'gds': str(gds), 'answer': str(answer)}))
+        checker = output / 'readback.py'; checker.write_text(_D60_READBACK)
+        argv = [tools['klayout'], '-b', '-r', str(checker), '-rd', 'D60_REQUEST=' + str(request)]
+        done = subprocess.run(argv, capture_output=True, text=True)
+        log = output / 'klayout.log'; log.write_text(done.stdout + done.stderr)
+        record['executions'].append(dict(argv=argv, returncode=done.returncode, log=str(log.relative_to(project)), log_sha256=hashlib.sha256(log.read_bytes()).hexdigest()))
+        observed = json.loads(answer.read_text()) if answer.is_file() else {}
+        if done.returncode or observed.get('status') != 'PASS':
+            record['component_status'] = 'FAIL'
+            raise ValueError(str(observed.get('reason', 'D60_STREAM_READBACK_REJECTED')))
+        if (observed.get('gds_sha256') != streamed_sha256
+                or hashlib.sha256(gds.read_bytes()).hexdigest() != streamed_sha256):
+            raise ValueError('D60_STREAM_CHANGED_DURING_READBACK')
+        if _d60_inputs(project) != data or launch.local_image_attestation() != record['native_launch']:
+            raise ValueError('D60_INPUT_OR_LAUNCH_CHANGED')
+        record['component_status'] = 'PASS'
+        record['measurements'] = observed
+        record['outputs'] = [{'path': str(p.relative_to(project)), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                             for p in (gds, answer, checker, request, Path(stage.path) / 'stream.tcl')]
+        record['reason'] = 'Native die-top hierarchy stream/readback only; full adopted mapping, signoff and row acceptance unmeasured'
+    except (ValueError, OSError, KeyError, TypeError, AdmissionRefusal, launch.Refusal) as exc:
+        record['reason'] = str(exc)
+    finally:
+        stage.close()
+    (output / 'component.json').write_text(json.dumps(record, indent=2) + '\n')
+    return record
+
 if __name__ == "__main__":
     # A stall is not a verdict about the subject: it reaches the exit
     # code as rc 2 (UNDETERMINED), announced, never as a finding.
