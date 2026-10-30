@@ -257,7 +257,7 @@ class NativeCommands:
             if program == "@env":
                 native_tool = next((item for item in argv
                                     if not re.match(r"^[A-Za-z_]\w*=", item)), "")
-            if (self.step in ("A05", "A06", "A07", None)
+            if (self.step in ("A02", "A05", "A06", "A07", None)
                     and Path(native_tool).name == "ngspice" and not self.container
                     and os.environ.get("VIBEIC_LIBRELANE_LOCAL_ATTESTATION")):
                 startup_environment, native_init = _local_ngspice_startup(self.project, cwd, self.image)

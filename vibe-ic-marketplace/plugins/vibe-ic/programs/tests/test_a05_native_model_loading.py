@@ -1,4 +1,4 @@
-"""A05 LOCAL startup uses existing selected-PDK source, not a guessed model."""
+"""A02/A05 LOCAL startup uses existing selected-PDK source, not a guessed model."""
 import json
 import os
 from pathlib import Path
@@ -12,8 +12,8 @@ from declared_pdk_is_the_pdk_used_check import declared_target
 import librelane_contract as contract
 
 
-@pytest.fixture
-def case(tmp_path):
+@pytest.fixture(params=('A02', 'A05'))
+def case(tmp_path, request):
     raw = os.environ.get('A05_PATH_CONTROL_PROJECT')
     if not raw:
         pytest.skip('requires retained declaration and live LOCAL runtime')
@@ -34,7 +34,7 @@ def case(tmp_path):
         'blocks': [{'name': 'neutral', 'type': 'amplifier'}]}))
     deck = directory / 'op.sp'
     deck.write_text('* TEST_ONLY missing model fault\nxmissing a 0 missing_model_neutral\n.op\n.end\n')
-    args = SimpleNamespace(entry_step='A05', exit_step='A05', blocks='', container='',
+    args = SimpleNamespace(entry_step=request.param, exit_step=request.param, blocks='', container='',
                            image=os.environ['VIBEIC_EDA_IMAGE'], transport='LOCAL', pdk=target)
     return project, directory, init, args
 
