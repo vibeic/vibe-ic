@@ -1814,7 +1814,8 @@ def _d01_emit_dft_intent(project: Path) -> dict | None:
     import fault_scan_chain_insert as scan
     try:
         contract, _, _ = declaration.select_contract(project)
-        if not contract or not any(f.get('name') == 'dft' for f in contract['fields']):
+        if not contract or (not any(f.get('name') == 'dft' for f in contract['fields'])
+                            and declaration.explicit_non_scan_decision(project) is None):
             return None
         args = [str(project)]
         decisions = Path(project) / 'input/feature-decisions.json'
@@ -1844,7 +1845,7 @@ def _d01_emit_dft_intent(project: Path) -> dict | None:
         return None
 
 
-def _continue_d01_dft_intent(project: Path, previous_producer: Path) -> int:
+def _continue_d01_dft_intent(project: Path, previous_producer: Path | None) -> int:
     """Re-publish unchanged DFT only; retain the extraction owner's history.
 
     The previous source is evidence, never imported or executed. All normal
@@ -1855,51 +1856,136 @@ def _continue_d01_dft_intent(project: Path, previous_producer: Path) -> int:
     import shutil
     import tempfile
     import fault_scan_chain_insert as scan
+    import spec_declaration_emit as declaration
     report_path = _pl.report_path(project, 'phase1_one_shot.json')
     try:
         if report_path.is_symlink() or not report_path.is_file():
             raise ValueError('D01 owner report absent or symlinked')
-        previous_bytes = previous_producer.read_bytes()
+        previous_bytes = previous_producer.read_bytes() if previous_producer is not None else None
         report_bytes = report_path.read_bytes()
         report = json.loads(report_bytes)
         if (report.get('project') != str(project.resolve())
                 or any(report.get(k) != v for k, v in _delivery_route.report_label(project).items())):
             raise ValueError('D01 project or route differs')
-        binding, problems = scan.load_d09_dft_contract(project, _validate_owner=False)
-        if binding is None or problems:
-            raise ValueError(str(problems))
-        expected = {'producer': 'D01', 'path': binding['path'],
-                    'sha256': binding['sha256'], 'sources': binding['sources'],
-                    'producer_source_sha256': hashlib.sha256(previous_bytes).hexdigest()}
-        if report.get('dft_intent_output') != expected:
-            raise ValueError('historical D01 source or output identity differs')
-        def publisher_functions(source):
-            return {n.name: ast.dump(n, include_attributes=False)
-                    for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)
-                    and n.name in ('_d01_emit_dft_intent', '_as_the_producer')}
-        old = publisher_functions(previous_bytes)
-        if len(old) != 2 or old != publisher_functions(Path(__file__).read_bytes()):
-            raise ValueError('historical DFT publisher implementation differs')
+        initial = previous_producer is None
+        if initial:
+            if report.get('dft_intent_output') is not None:
+                raise ValueError('DFT output already exists; use historical-source continuation')
+            if (report.get('phase') != 1 or report.get('canonical_producer', {}).get('runner')
+                    != 'phase1_one_shot_runner'
+                    or report['canonical_producer'].get('site') != 'doc_extract'
+                    or report['canonical_producer'].get('step_id') != 'D1'):
+                raise ValueError('normal D01 extraction attribution required')
+            intent = declaration.explicit_non_scan_decision(project)
+            contract, _, _ = declaration.select_contract(project)
+            if intent is None or not contract:
+                raise ValueError('explicit current reasoned non-scan decision required')
+            path = project / contract['artifact_path']
+            checked = declaration.verify_declaration(project, contract, path)
+            if (checked['verdict'] != 'PASS' or checked['provenance_unverified']
+                    or checked['recovered_from_prose']):
+                raise ValueError('current normal declaration provenance required')
+            if path.is_symlink() or not path.resolve().is_relative_to(project.resolve()):
+                raise ValueError('declaration escapes project')
+            existing = json.loads(path.read_text())
+            decisions = json.loads((project / 'input/feature-decisions.json').read_text())
+            if any(k != 'dft' and (k not in existing or not declaration._same_declared_value(v, existing[k]))
+                   for k, v in decisions.items()):
+                raise ValueError('DFT-only input changes unrelated declaration choices')
+            if 'dft' in existing and existing['dft'] != intent:
+                raise ValueError('existing declaration conflicts with initial non-scan decision')
+            # Bind the actual prior publication, not just its decoded values.
+            sidecar = path.with_suffix('.provenance.json')
+            claims = [json.loads(line) for line in (project / 'provenance.jsonl').read_text().splitlines()
+                      if line.strip()]
+            claims = [r for r in claims if r.get('tool') == 'spec_declaration_emit'
+                      and str(path.relative_to(project)) in r.get('outputs', {})
+                      and r.get('exit_code') == 0]
+            if not claims:
+                raise ValueError('normal declaration publication required')
+            claim = claims[-1]
+            digest = lambda p: 'sha256:' + hashlib.sha256(p.read_bytes()).hexdigest()
+            argv = claim.get('argv', [])
+            if (not isinstance(argv, list) or len(argv) < 2 or not isinstance(argv[1], str)
+                    or Path(argv[1]).name != 'spec_declaration_emit.py'):
+                raise ValueError('prior declaration producer source unbound')
+            producer = Path(argv[1])
+            if not producer.is_absolute() or producer.is_symlink() or not producer.is_file():
+                raise ValueError('prior declaration producer source unavailable')
+            producer_bytes = producer.read_bytes()
+            if claim.get('source_sha256') != 'sha256:' + hashlib.sha256(producer_bytes).hexdigest():
+                raise ValueError('prior declaration producer source identity differs')
+            # Historical bytes are evidence, never executed. Compare the
+            # declaration/publication implementation, not a fixed release ID.
+            def publication_ast(source):
+                module = ast.parse(source)
+                module.body = [node for node in module.body if not (
+                    isinstance(node, ast.FunctionDef)
+                    and node.name == 'explicit_non_scan_decision')]
+                return ast.dump(module, include_attributes=False)
+            if publication_ast(producer_bytes) != publication_ast(Path(declaration.__file__).read_bytes()):
+                raise ValueError('prior declaration producer implementation differs')
+            for output in (path, sidecar):
+                if claim['outputs'].get(str(output.relative_to(project))) != digest(output):
+                    raise ValueError('prior declaration publication output differs')
+            if contract['source'] not in claim.get('inputs', {}):
+                raise ValueError('prior specification source unbound')
+            for rel, expected in claim['inputs'].items():
+                source = project / rel
+                if source in (path, sidecar):
+                    continue
+                if not source.resolve().is_relative_to(project.resolve()) or digest(source) != expected:
+                    raise ValueError('prior declaration source changed: ' + rel)
+            binding = {'path': contract['artifact_path']}
+        else:
+            binding, problems = scan.load_d09_dft_contract(project, _validate_owner=False)
+            if binding is None or problems:
+                raise ValueError(str(problems))
+            expected = {'producer': 'D01', 'path': binding['path'],
+                        'sha256': binding['sha256'], 'sources': binding['sources'],
+                        'producer_source_sha256': hashlib.sha256(previous_bytes).hexdigest()}
+            if report.get('dft_intent_output') != expected:
+                raise ValueError('historical D01 source or output identity differs')
+            def publisher_functions(source):
+                return {n.name: ast.dump(n, include_attributes=False)
+                        for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)
+                        and n.name in ('_d01_emit_dft_intent', '_as_the_producer')}
+            old = publisher_functions(previous_bytes)
+            if len(old) != 2 or old != publisher_functions(Path(__file__).read_bytes()):
+                raise ValueError('historical DFT publisher implementation differs')
         # No publication has happened before every old source/output check.
         archive = Path(tempfile.mkdtemp(prefix='d01-dft-', dir=report_path.parent))
         for path in (report_path, project / binding['path'],
                      (project / binding['path']).with_suffix('.provenance.json'),
                      project / 'provenance.jsonl'):
             shutil.copyfile(path, archive / path.name)
-        (archive / 'previous_producer.py').write_bytes(previous_bytes)
+        if previous_bytes is not None:
+            (archive / 'previous_producer.py').write_bytes(previous_bytes)
         current = _d01_emit_dft_intent(project)
-        if current is None or any(current[k] != expected[k] for k in
-                                  ('producer', 'path', 'sha256', 'sources')):
+        if initial:
+            published = json.loads((project / binding['path']).read_text())
+            if ({k: v for k, v in published.items() if k != 'dft'} !=
+                    {k: v for k, v in existing.items() if k != 'dft'}):
+                # The normal emitter may normally refresh other namespaces.
+                # This DFT-only invocation must not publish those changes.
+                for saved in (project / binding['path'],
+                              (project / binding['path']).with_suffix('.provenance.json'),
+                              project / 'provenance.jsonl'):
+                    shutil.copyfile(archive / saved.name, saved)
+                raise ValueError('DFT-only publication changed unrelated declaration fields')
+        if current is None or (not initial and any(current[k] != expected[k] for k in
+                                  ('producer', 'path', 'sha256', 'sources'))):
             raise ValueError('DFT producer did not re-emit the unchanged authorized intent')
         # Keep prior verdict, steps and extraction attribution, not a new D01 PASS.
         report['dft_intent_output'] = current
         report.setdefault('dft_intent_continuations', []).append({
             'previous_report': str((archive / report_path.name).relative_to(project)),
             'previous_report_sha256': hashlib.sha256(report_bytes).hexdigest(),
-            'previous_producer_source_sha256': expected['producer_source_sha256'],
+            **({'previous_producer_source_sha256': expected['producer_source_sha256']}
+               if not initial else {'initial_publication': True}),
             'producer_source_sha256': current['producer_source_sha256'],
             'argv': list(sys.argv), 'pid': os.getpid(), 'timestamp': time.time(),
-            'scope': 'unchanged DFT declaration only; no extraction or qualification'})
+            'scope': 'DFT declaration only; no extraction or qualification'})
         temporary = archive / 'current_report.json'
         temporary.write_text(json.dumps(report, indent=2) + '\n')
         os.replace(temporary, report_path)
@@ -1973,6 +2059,8 @@ def main() -> int:
                         "`vibe_ic_one_shot_runner` when a delivered answer is "
                         "on disk and the track's own record says nobody has "
                         "read it.")
+    p.add_argument("--publish-dft-intent", action="store_true",
+                   help="Initially publish explicit reasoned non-scan intent only; retain existing D01 extraction.")
     p.add_argument("--refresh-dft-intent-from-producer", type=Path,
                    help="Re-publish only unchanged declared DFT intent; requires the actual historical D01 producer source.")
     p.add_argument("--skip-analog", action="store_true",
@@ -1985,7 +2073,9 @@ def main() -> int:
     if not project.is_dir():
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
-    if args.refresh_dft_intent_from_producer is not None:
+    if args.publish_dft_intent or args.refresh_dft_intent_from_producer is not None:
+        if args.publish_dft_intent and args.refresh_dft_intent_from_producer is not None:
+            p.error('initial publication and historical refresh are separate invocations')
         if args.second_track_only:
             p.error('DFT continuation and expert second track are separate invocations')
         lock = _runner_lock.acquire_or_reenter(project, 'phase1_one_shot_runner')

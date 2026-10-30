@@ -127,8 +127,10 @@ def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=Non
     import spec_declaration_emit as declaration
     try:
         contract, why, _ = declaration.select_contract(project)
-        if not contract or not any(f['name'] == 'dft' for f in contract['fields']):
-            return None, ['D09_DFT_SPEC_MISSING: existing specification must declare dft']
+        outside_contract = bool(contract) and not any(f['name'] == 'dft' for f in contract['fields'])
+        non_scan = declaration.explicit_non_scan_decision(project) if outside_contract else None
+        if not contract or outside_contract and non_scan is None:
+            return None, ['D09_DFT_SPEC_MISSING: specification or explicit reasoned non-scan decision required']
         path = project / contract['artifact_path']
         if not path.resolve().is_relative_to(project.resolve()):
             raise ValueError('declaration escapes project')
@@ -162,6 +164,11 @@ def load_d09_dft_contract(project: Path, expected_clock=None, expected_reset=Non
         if contract['source'] not in sources:
             raise ValueError('the specification is not bound by the publication')
         intent = json.loads(path.read_text())['dft']
+        if outside_contract:
+            declared = json.loads(sidecar.read_text()).get('declared_outside_contract', {}).get('dft')
+            if (intent != non_scan or 'input/feature-decisions.json' not in sources
+                    or declared != {'value': intent, 'provenance': 'author_declared'}):
+                raise ValueError('explicit non-scan author provenance differs')
         if not isinstance(intent, dict):
             raise ValueError('DFT_INTENT_MISSING: intent must be an object')
         if ('scan' + '_test') in intent:

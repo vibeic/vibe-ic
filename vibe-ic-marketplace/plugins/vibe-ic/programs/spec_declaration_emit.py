@@ -336,6 +336,39 @@ def _placeholder_reason(value: Any) -> Optional[str]:
     return None
 
 
+def explicit_non_scan_decision(project: Path) -> Optional[Dict[str, Any]]:
+    """Read an authored negative decision; missing intent is never false.
+
+    Legacy declaration tables need not enumerate every outside-contract author
+    namespace. This permits only the existing reasoned non-scan input, not a
+    substitute source for scan topology or native test ports.
+    """
+    project = Path(project).resolve()
+    path = project / "input/feature-decisions.json"
+    try:
+        if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(project):
+            return None
+        body = json.loads(path.read_text())
+        intent = body.get('dft') if isinstance(body, dict) else None
+        if (not isinstance(intent, dict) or intent.get('requires_scan') is not False
+                or not isinstance(intent.get('reason'), str)
+                or _placeholder_reason(intent['reason']) is not None
+                or any(k in intent for k in ('scan_test', 'length', 'chain_length', 'scan_chains'))):
+            return None
+        selection = project / 'input/flow109-manifest.json'
+        if selection.exists():
+            if selection.is_symlink() or not selection.resolve().is_relative_to(project):
+                return None
+            manifest = json.loads(selection.read_text())
+            if not isinstance(manifest, dict) or not isinstance(manifest.get('features'), dict):
+                return None
+            if manifest['features'].get('requires_scan') is True:
+                return None
+        return intent
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def _same_declared_value(a: Any, b: Any) -> bool:
     """Is `a` the SAME declared value as `b` — type included, at every depth?
 

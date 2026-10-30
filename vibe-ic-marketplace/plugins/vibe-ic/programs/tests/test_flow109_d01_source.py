@@ -220,3 +220,186 @@ def test_dft_continuation_refuses_changed_authority_before_publication(tmp_path,
     assert _refresh(tmp_path, old_source, monkeypatch) == 2
     after = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
     assert after == before
+
+
+def _legacy_non_scan_owner(project, monkeypatch):
+    """Real normal emitter/report, legacy table without a DFT column."""
+    import spec_declaration_emit as declaration
+    docs = project / 'input/docs'
+    docs.mkdir(parents=True)
+    (docs / 'L7_verification_plan.md').write_text(
+        '# Verification\nThe Plugin MUST declare `plugin_output/declaration.json` before authoring:\n\n'
+        '| Field | Required | Example |\n|---|---|---|\n| `bit_order` | Yes | LSB_first |\n')
+    monkeypatch.setattr(execution_policy, '_ordinary_runtime', None)
+    monkeypatch.setattr(phase1, '_RUN', copy.deepcopy(phase1._RUN))
+    def extract(*_a):
+        assert declaration.main([str(project), '--set', 'bit_order=LSB_first']) == 0
+        return 0
+    monkeypatch.setattr(phase1, '_run_docs_mode', extract)
+    monkeypatch.setattr(phase1, '_run_step_0_5ic', lambda *_a, **_k: 0)
+    monkeypatch.setattr(phase1, 'run_phase1_second_track', lambda *_a: 2)
+    monkeypatch.setattr(sys, 'argv', [str(Path(phase1.__file__)), str(project),
+        '--route', 'ic', '--mode', 'docs', '--execution-mode', 'default'])
+    acquire = phase1._runner_lock.acquire_or_reenter
+    held = []
+    def capture(*a, **k):
+        lock = acquire(*a, **k)
+        if lock is not None:
+            held.append(lock)
+        return lock
+    monkeypatch.setattr(phase1._runner_lock, 'acquire_or_reenter', capture)
+    try:
+        phase1.main()
+    finally:
+        for lock in held:
+            lock.release()
+        monkeypatch.setattr(phase1._runner_lock, 'acquire_or_reenter', acquire)
+    report = layout.report_path(project, 'phase1_one_shot.json')
+    body = json.loads(report.read_text())
+    assert body['dft_intent_output'] is None
+    _write(project / 'input/feature-decisions.json', {
+        'dft': {'requires_scan': False, 'reason': 'explicit assigned baseline excludes scan'}})
+    return report, body
+
+
+def _publish_initial(project, monkeypatch):
+    monkeypatch.setattr(sys, 'argv', [str(Path(phase1.__file__)), str(project),
+        '--publish-dft-intent', '--execution-mode', 'default'])
+    return phase1.main()
+
+
+def test_legacy_explicit_non_scan_initial_publication_preserves_d01(tmp_path, monkeypatch):
+    report, body = _legacy_non_scan_owner(tmp_path, monkeypatch)
+    original = report.read_bytes()
+    artifact = tmp_path / 'plugin_output/declaration.json'
+    declaration = artifact.read_bytes()
+    prior_provenance = (tmp_path / 'provenance.jsonl').read_bytes()
+    for name in ('_run_docs_mode', '_run_step_0_5ic', 'run_phase1_second_track'):
+        def forbidden(*_a, **_k):
+            raise AssertionError('DFT-only publication must not run Phase1 tracks')
+        monkeypatch.setattr(phase1, name, forbidden)
+    assert _publish_initial(tmp_path, monkeypatch) == 0
+    current = json.loads(report.read_text())
+    assert {k: v for k, v in current.items() if k not in
+            ('dft_intent_output', 'dft_intent_continuations')} == {
+            k: v for k, v in body.items() if k not in ('dft_intent_output', 'dft_intent_continuations')}
+    history = current['dft_intent_continuations'][-1]
+    archive = (tmp_path / history['previous_report']).parent
+    assert history['initial_publication'] is True
+    assert (archive / report.name).read_bytes() == original
+    assert (archive / artifact.name).read_bytes() == declaration
+    assert (archive / 'provenance.jsonl').read_bytes() == prior_provenance
+    assert json.loads(artifact.read_text()) == {'bit_order': 'LSB_first', 'dft': {
+        'requires_scan': False, 'reason': 'explicit assigned baseline excludes scan'}}
+    context = {'features': profile()}
+    binding = flow109.dft_source_intent(tmp_path, context)
+    assert binding['requires_scan'] is False
+    assert binding['source_binding']['intent']['reason'] == 'explicit assigned baseline excludes scan'
+    assert binding['source_evidence']['D01']['producer_result']['sha256'] == hashlib.sha256(report.read_bytes()).hexdigest()
+
+
+@pytest.mark.parametrize('damage', ['missing_reason', 'legacy_key', 'missing_decision',
+    'selection_conflict', 'wrong_producer', 'declaration_drift', 'source_drift', 'unverified_choice'])
+def test_initial_non_scan_refuses_before_publication(tmp_path, monkeypatch, damage):
+    report, body = _legacy_non_scan_owner(tmp_path, monkeypatch)
+    decisions = tmp_path / 'input/feature-decisions.json'
+    if damage == 'missing_reason':
+        _write(decisions, {'dft': {'requires_scan': False}})
+    elif damage == 'legacy_key':
+        _write(decisions, {'dft': {'scan_test': False, 'reason': 'legacy'}})
+    elif damage == 'missing_decision':
+        decisions.unlink()
+    elif damage == 'selection_conflict':
+        _write(tmp_path / 'input/flow109-manifest.json', {'features': {'requires_scan': True}})
+    elif damage == 'wrong_producer':
+        body['canonical_producer']['runner'] = 'not_the_d01_owner'; _write(report, body)
+    elif damage == 'declaration_drift':
+        p = tmp_path / 'plugin_output/declaration.json'; p.write_text(p.read_text() + '\n')
+    elif damage == 'unverified_choice':
+        import spec_declaration_emit as declaration
+        (tmp_path / 'plugin_output/declaration.provenance.json').unlink()
+        assert declaration.main([str(tmp_path)]) == 0
+    else:
+        p = tmp_path / 'input/docs/L7_verification_plan.md'; p.write_text(p.read_text() + '\n')
+    before = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    assert _publish_initial(tmp_path, monkeypatch) == 2
+    assert {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()} == before
+
+
+@pytest.mark.parametrize('damage', ['producer', 'decision', 'outside_provenance'])
+def test_legacy_non_scan_consumer_keeps_owner_and_provenance_guards(tmp_path, monkeypatch, damage):
+    report, body = _legacy_non_scan_owner(tmp_path, monkeypatch)
+    assert _publish_initial(tmp_path, monkeypatch) == 0
+    if damage == 'producer':
+        body = json.loads(report.read_text()); body['dft_intent_output']['producer'] = 'D09'; _write(report, body)
+    elif damage == 'decision':
+        _write(tmp_path / 'input/feature-decisions.json', {'dft': {'requires_scan': False, 'reason': 'changed reason'}})
+    else:
+        p = tmp_path / 'plugin_output/declaration.provenance.json'; d = json.loads(p.read_text())
+        d['declared_outside_contract']['dft']['provenance'] = 'recovered_from_prose'; _write(p, d)
+    binding, problems = scan.load_d09_dft_contract(tmp_path)
+    assert binding is None and problems
+
+
+@pytest.mark.parametrize('damage', ['claim_source_digest', 'wrong_source_implementation', 'unrelated_choice'])
+def test_initial_publication_cannot_launder_prior_producer_or_other_choices(tmp_path, monkeypatch, capsys, damage):
+    report, _ = _legacy_non_scan_owner(tmp_path, monkeypatch)
+    if damage == 'unrelated_choice':
+        path = tmp_path / 'input/feature-decisions.json'
+        body = json.loads(path.read_text()); body['bit_order'] = 'MSB_first'; _write(path, body)
+        expected = 'DFT-only input changes unrelated declaration choices'
+    else:
+        path = tmp_path / 'provenance.jsonl'
+        claims = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+        claim = [row for row in claims if row.get('tool') == 'spec_declaration_emit'][-1]
+        if damage == 'claim_source_digest':
+            claim['source_sha256'] = 'sha256:' + '0' * 64
+            expected = 'prior declaration producer source identity differs'
+        else:
+            import spec_declaration_emit as declaration
+            wrong = tmp_path / 'wrong-producer/spec_declaration_emit.py'; wrong.parent.mkdir()
+            text = Path(declaration.__file__).read_text()
+            assert '"tool": "spec_declaration_emit"' in text
+            wrong.write_text(text.replace('"tool": "spec_declaration_emit"', '"tool": "forged_publisher"'))
+            claim['argv'][1] = str(wrong)
+            claim['source_sha256'] = 'sha256:' + hashlib.sha256(wrong.read_bytes()).hexdigest()
+            expected = 'prior declaration producer implementation differs'
+        path.write_text(''.join(json.dumps(row) + '\n' for row in claims))
+    before = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    assert _publish_initial(tmp_path, monkeypatch) == 2
+    assert expected in capsys.readouterr().err
+    assert {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()} == before
+
+
+
+def test_initial_publication_rejects_changed_historical_input_resolver(tmp_path, monkeypatch, capsys):
+    _legacy_non_scan_owner(tmp_path, monkeypatch)
+    import spec_declaration_emit as declaration
+    wrong = tmp_path / 'wrong-helper/spec_declaration_emit.py'; wrong.parent.mkdir()
+    text = Path(declaration.__file__).read_text()
+    # The real input resolver is used by select_contract/main, but was absent
+    # from the former publication-function whitelist. Keep those ten intact.
+    import ast
+    module = ast.parse(text)
+    node = next(n for n in module.body if isinstance(n, ast.FunctionDef) and n.name == '_iter_doc_texts')
+    original = ast.get_source_segment(text, node)
+    changed = original.replace('    ', '    # altered historical resolver\n    ', 1)
+    # A real semantic change, rather than a comment-only source difference.
+    changed += '\n    raise RuntimeError("altered historical input resolver")'
+    text = text.replace(original, changed, 1)
+    before_functions = {n.name: ast.dump(n, include_attributes=False) for n in module.body
+                        if isinstance(n, ast.FunctionDef) and n.name != '_iter_doc_texts'}
+    after_functions = {n.name: ast.dump(n, include_attributes=False) for n in ast.parse(text).body
+                       if isinstance(n, ast.FunctionDef) and n.name != '_iter_doc_texts'}
+    assert before_functions == after_functions  # includes all former ten
+    wrong.write_text(text)
+    path = tmp_path / 'provenance.jsonl'
+    claims = [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+    claim = [row for row in claims if row.get('tool') == 'spec_declaration_emit'][-1]
+    claim['argv'][1] = str(wrong)
+    claim['source_sha256'] = 'sha256:' + hashlib.sha256(wrong.read_bytes()).hexdigest()
+    path.write_text(''.join(json.dumps(row) + '\n' for row in claims))
+    before = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    assert _publish_initial(tmp_path, monkeypatch) == 2
+    assert 'prior declaration producer implementation differs' in capsys.readouterr().err
+    assert {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()} == before
