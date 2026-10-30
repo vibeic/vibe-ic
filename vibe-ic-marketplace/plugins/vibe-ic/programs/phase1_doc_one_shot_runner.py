@@ -40375,6 +40375,24 @@ _V634_VERIF_BULLET_RE = re.compile(r"(?m)^\s{0,6}(?:[-*+]|\d+[.)])\s+(.+?)\s*$")
 _V634_NEXT_HEADING_RE = re.compile(r"(?m)^\s{0,3}#{1,6}\s+\S")
 
 
+def _v634_hil_cosim_substitution(desc: str) -> bool:
+    """An explicit conditional verification method, never execution credit."""
+    label = _V2055_LABEL_RE.match(desc)
+    if label and (set(re.findall(r"[a-z]+", label.group(1).lower()))
+                  & _V2055_DOC_ROLE_WORDS):
+        return False
+    if (_V2055_COMPARE_RE.search(desc)
+            and _V2055_ORACLE_ARTEFACT_RE.search(desc)):
+        return False
+    if re.search(r"(?i)\b(?:not|never)\s+(?:waived|substitute)\b", desc):
+        return False
+    return bool(
+        re.search(r"(?i)\b(?:hardware[-\s]+in[-\s]+the[-\s]+loop|hil)\b"
+                  r"[^.;]*\bwaived\b", desc)
+        and re.search(r"(?i)\bsubstitute\s+(?:with\s+)?(?:a\s+)?(?:real\s+)?"
+                      r"mixed[-\s]+signal\s+co[-\s]?sim(?:ulation)?\b", desc))
+
+
 def _v634_harvest_verification_intent(
         extracted: Dict[str, str]) -> List[Dict[str, Any]]:
     """ORGANIC #634 facet (d). Mine the literal `## Verification intent`
@@ -40383,21 +40401,24 @@ def _v634_harvest_verification_intent(
     `{name,description,evidence,extraction_strategy}` dict. The harvest is
     bounded to the section body (stops at the next heading) so unrelated
     bullets never leak in. Empty when no `Verification intent` section
-    exists — NEVER fabricates. chip-AGNOSTIC: a generic section-heading +
-    bullet SHAPE; no chip/vendor/SKU literal."""
+    exists, except an explicit HIL-waiver/cosim-substitute relation in another
+    source section. That relation remains document intent, not a native waiver.
+    No chip/vendor/SKU literal."""
     out: List[Dict[str, Any]] = []
     seen: Set[str] = set()
+    intent_section_found = False
     for fname, text in (extracted or {}).items():
         if not isinstance(text, str) or not text:
             continue
-        m = _V634_VERIF_HEADING_RE.search(text)
-        if not m:
-            continue
-        body_start = m.end()
-        nxt = _V634_NEXT_HEADING_RE.search(text, body_start)
-        body = text[body_start: nxt.start() if nxt else len(text)]
-        lines = body.splitlines()
+        m = None if intent_section_found else _V634_VERIF_HEADING_RE.search(text)
+        body_start = m.end() if m else len(text)
+        nxt = _V634_NEXT_HEADING_RE.search(text, body_start) if m else None
+        body_end = nxt.start() if nxt else len(text)
+        lines = text.splitlines(keepends=True)
+        position = 0
         for index, line in enumerate(lines):
+            in_section = body_start <= position < body_end
+            position += len(line)
             bm = _V634_VERIF_BULLET_RE.match(line)
             if not bm:
                 continue
@@ -40414,8 +40435,11 @@ def _v634_harvest_verification_intent(
                     break
                 parts.append(continuation.strip())
             desc = re.sub(r"[`*]", "", " ".join(parts)).strip()
-            if len(desc) < 6:
+            if (len(desc) < 6
+                    or (not in_section and not _v634_hil_cosim_substitution(desc))):
                 continue
+            if in_section:
+                intent_section_found = True
             slug = re.sub(r"[^a-z0-9]+", "_", desc.lower()).strip("_")[:48]
             if not slug:
                 slug = f"verif_intent_{len(out) + 1}"
@@ -40425,12 +40449,11 @@ def _v634_harvest_verification_intent(
             out.append({
                 "name": slug,
                 "description": desc,
-                "evidence": (f"input/docs/{fname} "
-                             "(Verification intent section)"),
+                "evidence": (f"input/docs/{fname} " +
+                             ("(Verification intent section)" if in_section else
+                              "(explicit conditional verification substitution)")),
                 "extraction_strategy": "verification_intent_bullet_v634",
             })
-        if out:
-            break
     return out
 
 
@@ -40556,6 +40579,10 @@ def _v2055_refuse_verification_intent(desc, observables):
     text = (desc or "").strip()
     if not text:
         return ("EMPTY_SENTENCE", "the bullet carries no text")
+    if _v634_hil_cosim_substitution(text):
+        return ("DISCLOSURE_OR_METHOD_NOTE",
+                "Conditional HIL-to-cosim substitution is document-stage "
+                "verification intent, not a functional-test row or native waiver.")
     # (1) An ORACLE CROSS-CHECK. Both halves must be present — a comparison
     # act AND the artefact it compares against — so an ordinary analog
     # acceptance that merely says "compare to the declared limit" is not
