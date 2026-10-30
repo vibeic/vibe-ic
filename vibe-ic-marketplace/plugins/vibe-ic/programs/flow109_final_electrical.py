@@ -32,7 +32,8 @@ def _native_refusal_status(code):
 
 
 def operation_sources():
-    paths = (Path(__file__), Path(signoff.__file__), Path(postroute.__file__), Path(extract.__file__))
+    paths = (Path(__file__), Path(signoff.__file__), Path(postroute.__file__), Path(extract.__file__),
+             HERE / 'flow109_final_perc.py')
     return {str(path.resolve()): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
 
 
@@ -70,6 +71,7 @@ def execute(project, context):
         require_launch_admission(project, 'flow109.D70', {'flow109_context': context})
         manifest = _read(project / INPUT)
         if manifest.get('schema') != SCHEMA: raise AdmissionRefusal('D70_REQUIRED_INPUT_INVALID', 'schema')
+        result['manifest'] = files._record(project, project / INPUT)
         required_corners = manifest.get('required_corners')
         required_population = _required_corner_population(required_corners)
         parasitics = extract.validate_final_parasitics(project, manifest.get('final_parasitics_receipt'))
@@ -149,11 +151,12 @@ def execute(project, context):
     return result
 
 
-def validate_final_electrical(project, receipt_ref):
+def validate_final_electrical(project, receipt_ref, *, require_pass=True):
     project = Path(project).resolve(); record = _read(files._bound(project, receipt_ref))
     if record.get('profile') == 'analog_die':
-        return validate_analog_mission(project, receipt_ref)
-    if record.get('schema') != SCHEMA or record.get('component_status') != 'PASS':
+        return validate_analog_mission(project, receipt_ref, require_pass=require_pass)
+    if (record.get('schema') != SCHEMA
+            or record.get('component_status') not in (('PASS',) if require_pass else ('PASS', 'FAIL'))):
         raise AdmissionRefusal('D70_COMPONENT_NOT_ACCEPTED', 'current native STA component PASS required')
     require_launch_admission(project, 'flow109.D70', {'flow109_context': record.get('execution_context')})
     if record.get('operation_sources') != operation_sources():
@@ -164,10 +167,12 @@ def validate_final_electrical(project, receipt_ref):
         raise AdmissionRefusal('D70_STA_STATE_CHANGED', str(folder))
     if signoff.judge_timing(signoff.corner_timing(folder)) != record['timing_judgment']:
         raise AdmissionRefusal('D70_TIMING_CHANGED', str(folder))
+    scan_status = 'PASS'
     if ((record.get('execution_context') or {}).get('features') or {}).get('requires_scan') is True:
         current = signoff.validate_scan_timing(project, record['execution_context'],
             record.get('scan_timing_coverage') or {}, state)
-        if current['status'] != 'PASS':
+        scan_status = current['status']
+        if current['status'] != 'PASS' and (require_pass or current['status'] != 'FAIL'):
             raise AdmissionRefusal('D70_SCAN_TIMING_FAIL' if current['status'] == 'FAIL' else 'D70_SCAN_MODES_NOT_ACQUIRED',
                 'declared shift/capture timing is ' + current['status'], status=current['status'])
     state_sdfs = postroute.corner_sdfs(state)
@@ -193,6 +198,7 @@ def validate_final_electrical(project, receipt_ref):
         raise AdmissionRefusal('D70_FINAL_PROVENANCE_MISMATCH', 'D69/state/corner provenance drifted')
     return {'sta_state': record['sta_state'], 'sdfs': record['sdfs'],
             'final_sdfs': record['final_sdfs'], 'required_corners': record['required_corners'],
+            'timing_status': 'FAIL' if 'FAIL' in (scan_status, record['timing_judgment']['verdict']) else record['timing_judgment']['verdict'],
             'component_electrical_current': True, 'flow109_acceptance': 'NOT_MEASURED'}
 
 
@@ -344,8 +350,8 @@ def bind_power_ir_owners(project, receipt_ref, input_path=OWNER_INPUT):
               'whole_ic_acceptance': 'NOT_MEASURED',
               'full_final_geometry_qualification': 'NOT_MEASURED',
               'dynamic_power_status': 'NOT_MEASURED', 'dynamic_ir_status': 'NOT_MEASURED',
-              'signal_em_status': 'NOT_MEASURED', 'thermal_status': 'NOT_APPLICABLE',
-              'aging_status': 'NOT_APPLICABLE'}
+              'signal_em_status': 'NOT_MEASURED', 'thermal_status': 'NOT_MEASURED',
+              'aging_status': 'NOT_MEASURED'}
     try:
         validate_final_electrical(project, receipt_ref)
         record = _read(files._bound(project, receipt_ref))
@@ -353,6 +359,9 @@ def bind_power_ir_owners(project, receipt_ref, input_path=OWNER_INPUT):
         if manifest.get('schema') != OWNER_INPUT_SCHEMA or manifest.get('d70_component') != receipt_ref:
             raise AdmissionRefusal('D70_OWNER_INPUT_INVALID', 'schema/current D70 component')
         features = (record.get('execution_context') or {}).get('features') or {}
+        for name in ('thermal', 'aging'):
+            if features.get('requires_' + name) is False:
+                result[name + '_status'] = 'NOT_APPLICABLE'
         if not features.get('requires_ir') and not features.get('requires_em'):
             raise AdmissionRefusal('D70_POWER_IR_NOT_APPLICABLE',
                                    'selected profile requires neither IR nor EM')
@@ -563,23 +572,28 @@ def _execute_analog(project, context):
     return result
 
 
-def validate_analog_mission(project, receipt_ref):
+def validate_analog_mission(project, receipt_ref, *, require_pass=True):
     """Current final extraction and raw mission values remain independently bound."""
     import corner_yield_vs_spec_check as limits
     project = Path(project).resolve(); record = _read(files._bound(project, receipt_ref))
     if (record.get('schema') != SCHEMA or record.get('step_id') != 'D70' or record.get('profile') != 'analog_die'
-            or record.get('component_status') != 'PASS' or record.get('operation_sources') != operation_sources()):
+            or record.get('component_status') not in (('PASS',) if require_pass else ('PASS', 'FAIL', 'NOT_MEASURED'))
+            or record.get('operation_sources') != operation_sources()):
         raise AdmissionRefusal('D70_ANALOG_COMPONENT_NOT_CURRENT', 'current native mission component required')
     require_launch_admission(project, 'flow109.D70', {'flow109_context': record.get('execution_context')})
-    manifest = _read(files._bound(project, record['manifest']))
+    manifest_path = files._bound(project, record['manifest'])
+    if manifest_path != project / INPUT:
+        raise AdmissionRefusal('D70_ANALOG_MISSION_INPUT_FOREIGN', 'current project D70 input required')
+    manifest = _read(manifest_path)
     if record.get('final_parasitics_receipt') != manifest.get('final_parasitics_receipt'):
         raise AdmissionRefusal('D70_ANALOG_FINAL_BASIS_CHANGED', 'final receipt differs')
-    if any(manifest.get(key) is not None for key in ('thermal', 'aging', 'signal_em', 'em')):
+    if require_pass and any(manifest.get(key) is not None for key in ('thermal', 'aging', 'signal_em', 'em')):
         raise AdmissionRefusal('D70_ANALOG_UNSUPPORTED_MISSION_REQUIREMENT', 'functional values cannot close coupled requirements')
     basis = _analog_basis(project, record['final_parasitics_receipt'])
     scenarios = _analog_inputs(project, manifest, basis)
     if len(scenarios) != len(record.get('scenarios') or []):
         raise AdmissionRefusal('D70_ANALOG_SCENARIO_COVERAGE_CHANGED', 'scenario population differs')
+    observations = []
     for (setting, paths, binding, bounds), observed in zip(scenarios, record['scenarios']):
         expected = {key: {'path': str(path.resolve()), 'sha256': digest(path)} for key, path in paths.items()}
         netlist = files._bound(project, basis['simulation_netlists'][setting['corner']])
@@ -587,8 +601,312 @@ def validate_analog_mission(project, receipt_ref):
         expected['models'] = [{**model, 'path': str(files._bound(project, model))} for model in manifest['models'][setting['corner']]]
         native = _read(files._bound(project, observed['native_receipt']))
         status, values = _analog_native_values(project, native, binding, expected)
+        violations = [name for name, bound in bounds.items() if name in values
+                      and limits._violates(values[name], bound['min'], bound['max'])]
+        if violations:
+            status = 'FAIL'
         if (observed.get('id') != setting['id'] or observed.get('corner') != setting['corner']
-                or observed.get('status') != 'PASS' or status != 'PASS' or observed.get('values') != values
-                or any(limits._violates(values[name], bound['min'], bound['max']) for name, bound in bounds.items())):
+                or observed.get('status') != status or observed.get('values') != values
+                or (require_pass and status != 'PASS')):
             raise AdmissionRefusal('D70_ANALOG_MISSION_CHANGED', setting['id'])
-    return {'component_electrical_current': True, 'flow109_acceptance': 'NOT_MEASURED', 'scope': 'final analog functional mission component only'}
+        observations.append({'scenario': setting['id'], 'corner': setting['corner'],
+                             'status': status, 'values': values, 'bounds': bounds,
+                             'units': {name: row.get('unit') for name, row in binding['measurements'].items()},
+                             'inputs': expected, 'native_receipt': observed['native_receipt']})
+    return {'component_electrical_current': True, 'flow109_acceptance': 'NOT_MEASURED',
+            'scenarios': observations, 'manifest': record['manifest'],
+            'scope': 'final analog functional mission component only'}
+
+
+# The same registry operators and authority documents as the shared metric
+# consumer. Unsupported producers have explicit bindings that refuse to measure.
+METRIC_BINDINGS = {
+    'final_mission_scenario_coverage': 'covers_all',
+    'final_timing_si_targets': 'within_declared_bounds',
+    'final_analog_mission_targets': 'within_declared_bounds',
+    'final_ir_em_thermal_aging_targets': 'within_declared_bounds',
+    'final_sdf_annotation': 'covers_all',
+    'thermal_temperature_gradient_targets': 'within_declared_bounds',
+    'thermal_aware_em_timing_feedback': 'covers_all',
+    'aged_timing_margin_targets': 'within_declared_bounds',
+    'aged_analog_margin_targets': 'within_declared_bounds',
+    'aging_mission_coverage': 'covers_all',
+}
+
+
+def _metric_analog_authority(project, name, observed):
+    """Use approved limits only when they are the limits the native owner used."""
+    import flow109_metric_acceptance as metrics
+    relative = 'requirements/final_electrical/' + name + '.json'
+    authority, body = metrics._approved_document(project, relative,
+        authority='requirements_owner', schema=metrics.AUTHORITY_SCHEMA)
+    expected = {row['scenario']: row['bounds'] for row in observed['scenarios']}
+    units = {row['scenario']: row['units'] for row in observed['scenarios']}
+    if body.get('limits') != expected or body.get('units') != units:
+        raise AdmissionRefusal('D70_ANALOG_LIMIT_AUTHORITY_DIFFERS',
+                               'approved scenario limits/units must equal consumed spec/bindings')
+    return authority, body
+
+
+def _metric_digital_basis(project, record):
+    """Bind native functional timing's libraries, RC inputs and configuration."""
+    import fnmatch
+    from librelane_contract import validate_step_receipt
+    manifest_path = files._bound(project, record['manifest'])
+    if manifest_path != project / INPUT:
+        raise AdmissionRefusal('D70_FINAL_INPUT_FOREIGN', 'current project D70 input required')
+    manifest = _read(manifest_path)
+    if manifest.get('final_parasitics_receipt') != record['final_parasitics_receipt']:
+        raise AdmissionRefusal('D70_FINAL_INPUT_CHANGED', 'manifest final parasitics differ')
+    folder, state = postroute.stapostpnr_state(project)
+    receipt = validate_step_receipt(folder, 'OpenROAD.STAPostPNR')
+    inputs = receipt['input']; config = _load(folder / 'config.json')
+    if (inputs.get('config') != digest(folder / 'config.json')
+            or set(config.get('STA_CORNERS') or []) != set(record['required_corners'])
+            or inputs.get('image') != (manifest.get('librelane') or {}).get('image')):
+        raise AdmissionRefusal('D70_NATIVE_CONFIG_CHANGED', 'image/config/corner identity differs')
+    timed = inputs.get('state_files') or {}
+    for path in [state.get('nl'), state.get('sdc'), *(state.get('spef') or {}).values()]:
+        if not path or not Path(path).is_file() or timed.get(path) != digest(Path(path)):
+            raise AdmissionRefusal('D70_NATIVE_TIMED_INPUT_CHANGED', str(path))
+    libraries = inputs.get('liberty_files') or {}
+    declared = config.get('CELL_LIBS') or config.get('LIB') or {}
+    if not libraries or not isinstance(declared, dict):
+        raise AdmissionRefusal('D70_NATIVE_LIBRARIES_ABSENT', 'per-corner native libraries required')
+    for corner in record['required_corners']:
+        matches = [group for pattern, group in declared.items() if fnmatch.fnmatchcase(corner, pattern)]
+        if len(matches) != 1 or not matches[0] or any(path not in libraries for path in matches[0]):
+            raise AdmissionRefusal('D70_NATIVE_LIBRARY_CORNER_MISMATCH', corner)
+    for path, expected in {**(inputs.get('config_files') or {}), **libraries}.items():
+        host = signoff._liberty_host_path(project, path, inputs.get('image'))
+        if host is None or digest(host) != expected:
+            raise AdmissionRefusal('D70_NATIVE_LIBRARY_OR_CONFIG_CHANGED', path)
+    return {'manifest': record['manifest'], 'native_receipt': files._record(project, folder / 'vibeic_receipt.json'),
+            'state_files': timed, 'liberty_files': libraries, 'configuration': inputs['config']}
+
+
+def _metric_prerequisites(project, context, record):
+    """Reuse accepted rows on this carrier; D69's current component is insufficient."""
+    import flow109
+    import flow109_final_perc as pv
+    plan = flow109.resolve_plan(context['features'], context['step_profiles'])
+    selected = {row['id'] for row in plan['rows']}
+    accepted, missing = {}, []
+    for step in context['resolved_row']['acceptance_deps']:
+        if step not in selected:
+            continue
+        try:
+            body, reference = flow109._accepted_row(project,
+                Path('reports/flow109/default_rows') / (step + '.json'), step)
+            original = _read(project / 'reports/flow109/requests' / (body['context_sha256'] + '.json'))
+            if (original.get('features') != context['features']
+                    or flow109.digest({k: v for k, v in original.items() if k != 'context_sha256'}) != body['context_sha256']
+                    or step not in {r['id'] for r in original.get('resolved_rows', [original.get('resolved_row', {})])}):
+                raise AdmissionRefusal('D70_PREREQUISITE_SELECTION_FOREIGN', step)
+            for key in ('receipt', 'canonical_receipt'):
+                if key in body:
+                    flow109._current_project_ref(project, body[key], 'D70_PREREQUISITE_RECEIPT_CHANGED')
+            if step == 'D69' and body.get('receipt') != record['final_parasitics_receipt']:
+                raise AdmissionRefusal('D70_ACCEPTED_D69_DIFFERS', 'accepted row is not the consumed final extraction')
+            if step == 'D65':
+                basis = extract.validate_final_parasitics(project, record['final_parasitics_receipt'])
+                final_def = basis.get('filled_def')
+                if not final_def:
+                    raise AdmissionRefusal('D70_D65_FINAL_GEOMETRY_BINDING_UNAVAILABLE', 'D69 final DEF required by current D65 owner')
+                files._bound(project, final_def)
+                native = _read(files._bound(project, body['canonical_receipt']))
+                binding = pv._canonical_step31_bindings(native, final_def['sha256'])
+                inputs = native['current_step_declared_producers']['input_identity']['files']
+                for name, sha in inputs.items():
+                    files._bound(project, {'path': name, 'sha256': sha})
+                for view in (basis['final_gds'], basis['adopted_views']['netlist']):
+                    files._bound(project, view)
+                    if view['sha256'] not in inputs.values():
+                        raise AdmissionRefusal('D70_D65_FINAL_SUBJECT_DIFFERS', view['path'])
+                for name, sha in binding['outputs'].items():
+                    files._bound(project, {'path': name, 'sha256': sha})
+            accepted[step] = reference
+        except (flow109.Flow109Error, AdmissionRefusal, Refusal, OSError, KeyError, TypeError, ValueError) as exc:
+            missing.append({'step': step, 'reason': getattr(exc, 'code', 'D70_PREREQUISITE_NOT_CURRENT'),
+                            'detail': str(exc)})
+    return {'status': 'NOT_MEASURED' if missing else 'PASS',
+            'accepted_dependencies': accepted, 'missing': missing}
+
+
+def accept_metric_obligations(project, context, component):
+    """BLOCKING metric readback; native component PASS alone never signs off D70.
+
+    Read the existing final producer and approved requirement documents. No
+    launch, inferred empty requirement set, SI/thermal/aging surrogate, or new
+    receipt system is introduced. Same-carrier prerequisite acceptance remains
+    a separate, unresolved requirement of the existing row owner.
+    """
+    import flow109
+    import flow109_metric_acceptance as metrics
+    project = Path(project).resolve()
+    result = {'schema': metrics.SCHEMA, 'row_id': 'D70', 'status': 'NOT_MEASURED',
+              'metric_status': 'NOT_MEASURED', 'delivery_blocked': True,
+              'obligations': [], 'unselected_obligations': [],
+              'scope': 'current final electrical metrics only; prerequisite acceptance remains required'}
+    try:
+        flow109.validate_execution_context(context)
+        row = context['resolved_row']
+        if row['id'] != 'D70':
+            raise AdmissionRefusal('D70_METRIC_CONTEXT_INVALID', 'D70 selection required')
+        declared = row['obligations']
+        if ({item['id'] for item in declared} != {'final_electrical.' + name for name in METRIC_BINDINGS}
+                or len(declared) != len(METRIC_BINDINGS)):
+            raise AdmissionRefusal('D70_METRIC_OBLIGATIONS_UNREGISTERED', 'exact registry population required')
+    except (flow109.Flow109Error, AdmissionRefusal, KeyError, TypeError, ValueError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D70_METRIC_CONTEXT_INVALID'), detail=str(exc))
+        return result
+    selected = []
+    for obligation in declared:
+        if flow109.predicate(obligation['when'], context['features']):
+            selected.append(obligation)
+        else:
+            result['unselected_obligations'].append({'id': obligation['id'],
+                'when': obligation['when'], 'reason': 'validated feature predicate is false'})
+    observed = record = None
+    failure = None
+    try:
+        reference = flow109._current_project_ref(project, component.get('receipt'), 'D70_METRIC_COMPONENT_FOREIGN')
+        record = _read(files._bound(project, reference))
+        if (record.get('step_id') != 'D70' or record.get('execution_context') != context
+                or record.get('context_sha256') != context['context_sha256']):
+            raise AdmissionRefusal('D70_METRIC_COMPONENT_FOREIGN', 'exact execution context required')
+        for name in ('manifest', 'final_parasitics_receipt'):
+            flow109._current_project_ref(project, record.get(name), 'D70_METRIC_CARRIER_INPUT_FOREIGN')
+        analog = row['profile']['id'] == 'analog_die'
+        observed = (validate_analog_mission(project, reference, require_pass=False) if analog else
+                    validate_final_electrical(project, reference, require_pass=False))
+        if not analog:
+            observed['native_basis'] = _metric_digital_basis(project, record)
+    except (flow109.Flow109Error, AdmissionRefusal, Refusal, OSError, KeyError, TypeError, ValueError) as exc:
+        failure = {'reason': getattr(exc, 'code', 'D70_METRIC_NATIVE_EVIDENCE_INVALID'), 'detail': str(exc)}
+    for obligation in selected:
+        name = obligation['metric']; operator = METRIC_BINDINGS[name]
+        item = {'id': obligation['id'], 'metric': name, 'operator': operator,
+                'status': 'NOT_MEASURED'}
+        expectation = obligation['expectation']
+        relative = 'requirements/final_electrical/' + name + '.json'
+        correct = (expectation.get('operator') == operator and
+                   (expectation.get('required_set_ref') == relative + '#/required_items'
+                    if operator == 'covers_all' else
+                    expectation.get('bounds_ref') == relative + '#/limits'
+                    and expectation.get('unit_ref') == relative + '#/units'))
+        if not correct:
+            item['reason'] = 'D70_METRIC_EXPECTATION_UNREGISTERED'
+        elif failure:
+            item.update(failure)
+        elif name == 'final_timing_si_targets':
+            item.update(status='FAIL' if observed['timing_status'] == 'FAIL' else 'NOT_MEASURED',
+                        reason=('D70_NATIVE_FUNCTIONAL_OR_SCAN_TIMING_FAIL'
+                                if observed['timing_status'] == 'FAIL' else 'D70_SI_PRODUCER_UNAVAILABLE'),
+                        timing=observed)
+        elif name in ('final_mission_scenario_coverage', 'final_analog_mission_targets') and analog:
+            try:
+                scenes = observed['scenarios']
+                consumed = {str(files._bound(project, record['manifest'])): record['manifest']['sha256']}
+                for scene in scenes:
+                    for key, view in scene['inputs'].items():
+                        for value in view if key == 'models' else [view]:
+                            consumed[str(files._bound(project, value))] = value['sha256']
+                identity = {'producer': component['receipt'], 'checker': operation_sources(),
+                    'tool_execution': {row['scenario']: row['native_receipt'] for row in scenes},
+                    'consumed_inputs': consumed, 'requirements': {'path': relative},
+                    'configuration': {'context_sha256': context['context_sha256'], 'manifest': record['manifest']}}
+                if name == 'final_mission_scenario_coverage':
+                    authority, _ = metrics._approved_authority(project, relative + '#/required_items',
+                                                               ('scenario', 'corner'))
+                    value = [{key: scene[key] for key in ('scenario', 'corner')} for scene in scenes]
+                    measurement = {'status': 'MEASURED', 'value': value, 'identity': identity}
+                    identity['requirements'] = authority
+                    status, detail = metrics.evaluate_operator(operator, measurement, authority)
+                    item.update(status=status, detail=detail, measurement=measurement, authority=authority)
+                elif any(scene['status'] == 'FAIL' for scene in scenes):
+                    item.update(status='FAIL', reason='D70_NATIVE_ANALOG_MISSION_FAIL', scenarios=scenes)
+                else:
+                    authority, body = _metric_analog_authority(project, name, observed)
+                    identity['requirements'] = authority
+                    checks = []
+                    for scene in scenes:
+                        for metric, value in scene['values'].items():
+                            measurement = {'status': 'MEASURED', 'value': value,
+                                'unit': scene['units'][metric], 'identity': identity}
+                            bound = {'status': 'APPROVED', 'limits': body['limits'][scene['scenario']][metric],
+                                     'unit': body['units'][scene['scenario']][metric]}
+                            status, detail = metrics.evaluate_operator(operator, measurement, bound)
+                            checks.append({'scenario': scene['scenario'], 'corner': scene['corner'],
+                                'metric': metric, 'status': status, 'detail': detail, 'measurement': measurement})
+                    statuses = [check['status'] for check in checks]
+                    item.update(status='FAIL' if 'FAIL' in statuses else 'PASS' if statuses and
+                                all(status == 'PASS' for status in statuses) else 'NOT_MEASURED',
+                                checks=checks, authority=authority)
+            except (metrics.MetricRefusal, AdmissionRefusal, Refusal, OSError, KeyError, TypeError, ValueError) as exc:
+                item.update(reason=getattr(exc, 'code', 'D70_METRIC_AUTHORITY_INVALID'), detail=str(exc))
+        elif name == 'final_ir_em_thermal_aging_targets' and not analog:
+            try:
+                manifest = _read(project / OWNER_INPUT)
+                if (manifest.get('schema') != OWNER_INPUT_SCHEMA
+                        or manifest.get('d70_component') != component['receipt']):
+                    raise AdmissionRefusal('D70_OWNER_INPUT_INVALID', 'current final component required')
+                basis = extract.validate_final_parasitics(project, record['final_parasitics_receipt'])
+                activity = _activity_binding(project, manifest, record['netlist'])
+                power = _power_binding(project, record, basis, manifest)
+                ir = _ir_binding(project, basis, manifest)
+                failed = any(owner.get('verdict') == 'FAIL' for owner in (power, ir))
+                item.update(status='FAIL' if failed else 'NOT_MEASURED',
+                            reason='D70_APPLICABLE_OWNER_MEASURED_FAIL' if failed
+                                   else 'D70_COUPLED_RELIABILITY_PRODUCER_UNAVAILABLE',
+                            static_owners={'activity': activity, 'power': power, 'ir': ir},
+                            dynamic_ir_status='NOT_MEASURED', signal_em_status='NOT_MEASURED')
+            except (AdmissionRefusal, Refusal, OSError, KeyError, TypeError, ValueError) as exc:
+                item.update(reason=getattr(exc, 'code', 'D70_OWNER_EVIDENCE_INVALID'), detail=str(exc))
+        else:
+            reasons = {'final_mission_scenario_coverage': 'D70_FINAL_ACTIVITY_MISSION_NOT_CONSUMED',
+                       'final_sdf_annotation': 'D70_SDF_GENERATION_IS_NOT_ANNOTATION',
+                       'final_ir_em_thermal_aging_targets': 'D70_COUPLED_RELIABILITY_PRODUCER_UNAVAILABLE',
+                       'thermal_temperature_gradient_targets': 'D70_THERMAL_PRODUCER_UNAVAILABLE',
+                       'thermal_aware_em_timing_feedback': 'D70_THERMAL_FEEDBACK_PRODUCER_UNAVAILABLE',
+                       'aged_timing_margin_targets': 'D70_AGED_TIMING_PRODUCER_UNAVAILABLE',
+                       'aged_analog_margin_targets': 'D70_AGED_ANALOG_PRODUCER_UNAVAILABLE',
+                       'aging_mission_coverage': 'D70_AGING_PRODUCER_UNAVAILABLE'}
+            item['reason'] = reasons.get(name, 'D70_REQUIRED_NATIVE_PRODUCER_UNAVAILABLE')
+        result['obligations'].append(item)
+    statuses = [item['status'] for item in result['obligations']]
+    result['metric_status'] = ('FAIL' if 'FAIL' in statuses else 'PASS' if statuses and
+                              all(status == 'PASS' for status in statuses) else 'NOT_MEASURED')
+    upstream = (_metric_prerequisites(project, context, record) if observed is not None else
+                {'status': 'NOT_MEASURED', 'reason': 'D70_CURRENT_NATIVE_BASIS_UNAVAILABLE'})
+    status = ('FAIL' if result['metric_status'] == 'FAIL' else 'PASS'
+              if result['metric_status'] == upstream['status'] == 'PASS'
+              and record.get('component_status') == 'PASS' else 'NOT_MEASURED')
+    result.update(status=status, delivery_blocked=status != 'PASS', prerequisites=upstream,
+                  reason='D70_MEASURED_METRIC_FAILURE' if result['metric_status'] == 'FAIL'
+                         else 'ALL_APPLICABLE_METRICS_AND_PREREQUISITES_PASS' if status == 'PASS'
+                         else 'D70_SELECTED_PREREQUISITE_ACCEPTANCE_UNPROVEN',
+                  required_acceptance_dependencies=[dep for dep in row['acceptance_deps']
+                      if dep in {r['id'] for r in flow109.resolve_plan(context['features'], context['step_profiles'])['rows']}])
+    if status == 'PASS':
+        from flow109_admission import require_admission
+        try:
+            result['qualification_admission'] = require_admission(project, context)
+            result['qualification'] = 'PASS'
+        except AdmissionRefusal as exc:
+            result.update(status='NOT_MEASURED', delivery_blocked=True, reason=exc.code,
+                          qualification='NOT_MEASURED', qualification_admission=exc.report)
+    return result
+
+
+def consume_default_row_completion(project, context, component):
+    """Use the existing adapter completion seam; whole-IC acceptance is separate."""
+    acceptance = accept_metric_obligations(project, context, component)
+    status = 'FAIL' if component.get('component_status') == 'FAIL' else acceptance['status']
+    result = {**component, 'step_id': 'D70', 'context_sha256': context['context_sha256'],
+            'metric_acceptance': acceptance, 'metric_acceptance_status': acceptance['metric_status'],
+            'default_row_status': status, 'flow109_acceptance': status, 'completed': status == 'PASS',
+            'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
+    if 'qualification' in acceptance:
+        result['qualification'] = acceptance['qualification']
+    return result

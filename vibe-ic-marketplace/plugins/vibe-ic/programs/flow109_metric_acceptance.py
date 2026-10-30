@@ -5759,3 +5759,8 @@ def accept_d66(project: Path, context: Mapping, component: Mapping) -> dict:
         if component.get('component_status') == 'FAIL' or getattr(exc, 'status', None) == 'FAIL':
             result['status'] = 'FAIL'
     return result
+
+def accept_d70(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    """Read the D70 owner through its existing completion/metric consumer."""
+    import flow109_final_electrical as final
+    return final.accept_metric_obligations(project, context, component)
