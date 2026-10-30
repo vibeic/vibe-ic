@@ -117,14 +117,42 @@ def original_input_sources(project: Path):
     return [prompt, *context]
 
 
+def _original_author_owner_closure(project: Path, entry_step, exit_step) -> bool:
+    """Recognize the current source-owned author closure, not a wider request."""
+    import json
+    import os
+    import flow109
+    raw = os.environ.get(flow109.CONTEXT_ENV)
+    if not raw:
+        return False
+    request = Path(raw)
+    try:
+        if (request.is_symlink() or request.resolve(strict=True).parent !=
+                (Path(project) / "reports/flow109/requests").resolve()):
+            return False
+        context = flow109.validate_execution_context(json.loads(request.read_text()))
+        rows = context.get("resolved_rows") or [context.get("resolved_row", {})]
+        dispatches = [row.get("profile", {}).get("dispatch", {}) for row in rows]
+        author = [d for d in dispatches if d.get("native_step_id") == "1"]
+        return bool(len(author) == 1
+                    and author[0].get("producer") == "design_one_shot_runner.py:step_rtl_gen"
+                    and str(entry_step) == author[0].get("owner_entry_step")
+                    and str(exit_step) == author[0].get("owner_exit_step")
+                    and all(d.get("native_step_id") in {"1", "P0", "2"}
+                            for d in dispatches))
+    except (OSError, ValueError, TypeError, KeyError):
+        return False
+
+
 def select_rtl_input(project: Path, kind: str, entry_step=None, exit_step=None) -> None:
     """Select the existing RTL owner's input for one bounded invocation."""
     global _RTL_INPUT
     if kind not in ("structured", "original"):
         raise ValueError("unknown RTL input contract")
     if kind == "original":
-        if str(entry_step) not in ("1", "2") or str(exit_step) not in ("1", "2"):
-            raise ValueError("original RTL input requires a bounded Step 1/2 window")
+        if (str(entry_step) not in ("1", "2") or str(exit_step) not in ("1", "2")):
+            if not _original_author_owner_closure(project, entry_step, exit_step):
+                raise ValueError("original RTL input requires a bounded Step 1/2 window")
         prompt = Path(project) / "input/phase1_prompt.md"
         if not prompt.is_file() or any(p.is_symlink() for p in
                                       (Path(project), Path(project) / "input", prompt)):

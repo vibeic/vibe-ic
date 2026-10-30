@@ -1188,5 +1188,35 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+
+def flow109_product_window(manifest: dict, entry: str, exit_step: str,
+                           delivery_route: str) -> tuple[str, str]:
+    """Translate an already-selected native window through current owners.
+
+    Features are explicit caller inputs, never guessed from a dataset or task
+    name. This changes addresses only; resolve_execution_window still refuses
+    unsupported crossings and unimplemented producers.
+    """
+    import flow109
+    plan = flow109.resolve_plan(manifest.get("features"), manifest.get("step_profiles"))
+    expected = "ic" if plan["features"]["ic"] else "ip"
+    if delivery_route != expected:
+        raise ValueError("FLOW109_ROUTE_CONFLICT: manifest and declared delivery differ")
+    rows = plan["rows"]
+    ids = {row["id"] for row in rows}
+    entry, exit_step = str(entry or "D1"), str(exit_step)
+    def identity(step):
+        if step in ids:
+            return step
+        matches = [row["id"] for row in rows
+                   if (row["profile"].get("dispatch") or {}).get("native_step_id") == step]
+        if len(matches) != 1:
+            raise ValueError("FLOW109_WINDOW_UNMAPPED: no unique producer for requested step")
+        return matches[0]
+    first, last = identity(entry), identity(exit_step)
+    flow109.resolve_execution_window(plan, first, last)
+    return first, last
+
+
 if __name__ == "__main__":
     raise SystemExit(main())

@@ -6030,7 +6030,7 @@ def _review_collection_supplied_rtl(task: dict, result: dict) -> bool:
         if argv.count(option) != 1 or any(arg.startswith(option + "=") for arg in argv):
             return False
         index = argv.index(option)
-        if index + 1 >= len(argv) or argv[index + 1] != "2":
+        if index + 1 >= len(argv) or argv[index + 1] not in {"2", "D11"}:
             return False
     if _runner_reentry_reason(task, result) is not None:
         return False
@@ -6039,6 +6039,29 @@ def _review_collection_supplied_rtl(task: dict, result: dict) -> bool:
     validation = [row for row in (report or {}).get("steps") or []
                   if row.get("name") == "rtl_validate"]
     return len(validation) == 1 and validation[0].get("status") in {"PASS", "FAIL"}
+
+
+def _stage_product_manifest(run_p: Path, source: str | Path | None) -> None:
+    """Retain explicit operator features; never synthesize absent feature facts."""
+    if source is None:
+        return
+    import flow109
+    try:
+        raw = Path(source).read_bytes()
+        manifest = _strict_json_loads(raw.decode("utf-8"))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ValueError("FLOW109_MANIFEST_INVALID: " + str(exc)) from exc
+    if not isinstance(manifest, dict):
+        raise ValueError("FLOW109_MANIFEST_INVALID: expected object")
+    flow109.resolve_plan(manifest.get("features"), manifest.get("step_profiles"))
+    _write_immutable_bytes(Path(run_p) / "input" / "flow109-manifest.json", raw)
+
+
+def _forward_product_manifest(run_p: Path, project: Path) -> None:
+    source = Path(run_p) / "input" / "flow109-manifest.json"
+    if source.is_file():
+        _write_immutable_bytes(Path(project) / "input" / "flow109-manifest.json",
+                               source.read_bytes())
 
 
 def _solver_argv(runner: Path, proj: Path, entry, exit_step,
@@ -6074,6 +6097,19 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
         argv += ["--exit-step", str(exit_step)]
     if entry and entry != "D1":
         argv += ["--entry-step", str(entry)]
+    manifest_path = Path(proj) / "input" / "flow109-manifest.json"
+    if manifest_path.is_file():
+        manifest = _strict_json_loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError("FLOW109_MANIFEST_INVALID: expected object")
+        first, last = tnr.flow109_product_window(
+            manifest, str(entry or "D1"), str(exit_step), delivery_route)
+        for option in ("--entry-step", "--exit-step"):
+            if option in argv:
+                index = argv.index(option)
+                del argv[index:index + 2]
+        argv += ["--flow", "109", "--flow109-manifest", str(manifest_path),
+                 "--entry-step", first, "--exit-step", last]
     return argv
 
 
@@ -7977,7 +8013,8 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                       worker_threads: int = 0,
                       routed_tasks: list[dict] | None = None,
                       route_decisions: dict[str, dict] | None = None,
-                      shape: str | None = None) -> int:
+                      shape: str | None = None,
+                      flow109_manifest: str | None = None) -> int:
     """Solve every problem through the GENERAL flow.
 
     This verb did not exist. A separate scaffold prepared the run and
@@ -8045,6 +8082,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 or config.get("diagnostic_limit") != int(limit or 0)):
             print("ERROR: route continuation differs from original run", file=sys.stderr)
             return 2
+    _stage_product_manifest(run_p, flow109_manifest)
     _write_runtime_pair_record(run_p, pair_record)
     runner = Path(__file__).resolve().parent / "vibe_ic_one_shot_runner.py"
     runner_budget = _RunnerBudget(jobs, heavy_jobs, worker_threads)
@@ -8194,6 +8232,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             if (current_route["receipt"].get("receipt_sha256")
                     != route_receipt.get("receipt_sha256")):
                 raise ValueError("ROUTE_RECEIPT_CURRENT_POINTER_MISMATCH")
+            _forward_product_manifest(run_p, proj)
             # `entry_step` and `verify_through` are derived by the Program
             # receipt. The semantic reviewer never supplies or overrides them.
             entry = str(route_receipt["entry_step"])
@@ -8220,6 +8259,13 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 activation = None
                 planned_snapshot = None
                 admitted_steps = list(route_receipt["verify_closed_steps"])
+            elif (rtl_delivery and entry == "D1"
+                  and (proj / "input" / "flow109-manifest.json").is_file()):
+                phase1_frontdoor, pending, activation = _activate_route_d1(
+                    proj, route_task, route_receipt, runner, runner_budget,
+                    run_scope=run_scope,
+                    delivery_route=str(verdict.get("delivery_route") or "ip"))
+                effective_entry = str(tnr.NATURE_ENTRY[verdict["entry_nature"]]["then"][0])
             elif rtl_delivery:
                 pending = _prepare_route_d1(
                     proj, route_task, route_receipt, run_scope=run_scope)
@@ -8517,14 +8563,15 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
 
 def cmd_solve(bench: str, dataset: str, run: str, limit: int = 0,
               jobs: int = 1, heavy_jobs: int | None = None,
-              worker_threads: int = 0, shape: str | None = None) -> int:
+              worker_threads: int = 0, shape: str | None = None,
+              flow109_manifest: str | None = None) -> int:
     """Run the sole solve coordinator under an exclusive run-root lock."""
     try:
         with _run_root_coordinator_lock(Path(run), "solve"):
             return _cmd_solve_locked(
                 bench, dataset, run, limit=limit, jobs=jobs,
                 heavy_jobs=heavy_jobs, worker_threads=worker_threads,
-                shape=shape)
+                shape=shape, flow109_manifest=flow109_manifest)
     except _CoordinatorBusy as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -8831,6 +8878,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         # exit still applies; otherwise resume expands a step-2/4 task into LEC.
         input_contract = str(
             state["route_receipt"].get("input_contract") or "structured")
+        _forward_product_manifest(run_p, proj)
         argv = _resume_solver_argv(
             runner, proj, supplied_rtl, state["entry_step"],
             state["exit_step"], state["delivery_route"],
@@ -10919,7 +10967,8 @@ def cmd_resume(bench: str, dataset: str, run: str, jobs: int = 1,
                worker_threads: int = 0,
                review_correction: str | None = None,
                program_regate: str | None = None,
-               program_retry: str | None = None) -> int:
+               program_retry: str | None = None,
+               flow109_manifest: str | None = None) -> int:
     """Run the sole resume coordinator under an exclusive run-root lock.
 
     TWO explicit operations remain, separate and mutually exclusive: a review
@@ -10950,6 +10999,7 @@ def cmd_resume(bench: str, dataset: str, run: str, jobs: int = 1,
                                     if review_correction is not None
                                     else _REGATE_REFUSED))
         with _run_root_coordinator_lock(Path(run), "resume"):
+            _stage_product_manifest(Path(run), flow109_manifest)
             _guard_program_regate_journals(Path(run).resolve())
             if review_correction is not None:
                 try:
@@ -10998,6 +11048,9 @@ def main():
                          "evidence-backed OVERRIDE_PROGRAM and is the final "
                          "semantic authority. No benchmark-specific solver is "
                          "involved.")
+    ap.add_argument("--flow109-manifest", type=str,
+                    help="Explicit operator feature manifest for the common --flow 109 entry; "
+                         "retained unchanged across solve/resume. No feature defaults are invented.")
     ap.add_argument("--resume", action="store_true",
                     help="Advance needs_ai_routing.jsonl before any runner, "
                          "then needs_ai_backup.jsonl, needs_ai_review.jsonl, "
@@ -11069,6 +11122,8 @@ def main():
                     help="OPT-IN: score even if the run lacks Vibe-IC runner entry evidence "
                          "(NON-CANONICAL). Default HARD-BLOCKs direct-agent authoring/patching.")
     a = ap.parse_args()
+    if a.flow109_manifest and not (a.solve or a.resume):
+        ap.error("--flow109-manifest requires --solve or --resume")
     if a.shape and not a.solve:
         ap.error("--shape selects I/O at --solve; --resume retains that selection")
     if a.review_correction and (not a.resume or a.solve or a.score or a.show or a.list):
@@ -11138,14 +11193,15 @@ def main():
             heavy_jobs=a.heavy_jobs, worker_threads=a.worker_threads,
             review_correction=a.review_correction,
             program_regate=a.program_regate,
-            program_retry=a.program_retry))
+            program_retry=a.program_retry,
+            flow109_manifest=a.flow109_manifest))
     if a.solve:
         if not (a.dataset and a.run):
             raise SystemExit("--solve requires --dataset and --run")
         sys.exit(cmd_solve(
             a.bench, a.dataset, a.run, limit=a.limit, jobs=a.jobs,
             heavy_jobs=a.heavy_jobs, worker_threads=a.worker_threads,
-            shape=a.shape))
+            shape=a.shape, flow109_manifest=a.flow109_manifest))
     # default: show plan + env status
     env = _env_check()
     print(f"# Environment: iverilog={'OK' if env['iverilog'] else 'MISSING'}, "

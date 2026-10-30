@@ -1413,6 +1413,14 @@ def resolve_execution_window(plan: Mapping, entry: str | None, exit_: str | None
                     else dispatches[0]["native_step_id"])
     native_exit = (dispatches[-1].get("owner_exit_step") if kind == "canonical_owner_window"
                    else dispatches[-1]["native_step_id"])
+    if kind == "canonical_owner_window":
+        # A selected producer may own checks beyond the last selected row
+        # (RTL authoring owns 1..4). Never truncate its native closure when a
+        # later semantic row, such as lint, has an earlier native endpoint.
+        from task_nature_route import flow_step_ids
+        order = {step: index for index, step in enumerate(flow_step_ids())}
+        native_exit = max((d["owner_exit_step"] for d in dispatches),
+                          key=lambda step: order[step])
     return {"requested_entry": entry, "requested_exit": exit_,
             "resolved_rows": rows, "dispatch_kind": kind,
             "native_entry_step": native_entry,

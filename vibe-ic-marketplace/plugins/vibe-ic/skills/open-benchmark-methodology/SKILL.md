@@ -162,7 +162,7 @@ plugin change is measured only in a new clean-room run.
 
 ```bash
 python3 programs/benchmark_dispatch.py <bench> \
-  --solve --dataset <DATASET> --run <FRESH_RUN>
+  --solve --dataset <DATASET> --run <FRESH_RUN> --flow109-manifest <EXPLICIT_FEATURE_INPUT.json>
 
 # Complete needs_ai_routing.jsonl from the visible input only. Then --resume
 # validates ALL issued route records and starts the normal Program runner.
@@ -548,3 +548,38 @@ across different agents.
 ## Handoff
 
 End with `## Summary` or `## Verdict`, followed by a clear `Next:` statement.
+
+### Current common-product feature input
+
+`benchmark_dispatch.py --solve` and `--resume` accept
+`--flow109-manifest <explicit-feature-input.json>`. Supply the ordinary Flow109
+manifest resolved from the visible request and the operator's actual declared
+feature choices. The dispatcher validates the existing registry, retains those
+exact bytes as run input, and forwards them into each routed project's common
+`--flow 109` entry. It never guesses missing feature Booleans from a dataset
+name, problem ID or expected answer. An absent, invalid or conflicting input
+remains a refusal; this option does not approve a route or qualify tools.
+
+The confirmed task-nature receipt still controls the native entry and evidence
+exit. The bridge translates that window through current registry owner mappings
+to stable Flow109 IDs; supplied RTL resumes at validation and cannot expand a
+lint task into physical design. Structured completion retains its normal D1
+prerequisite and semantic admission before the RTL-owner window. Existing AI
+routing, candidate review, challenge and official-score requirements are
+unchanged. Infrastructure controls and reaching an owner boundary are not a
+benchmark score or whole-product PASS.
+
+For example, supply the visible-request feature input once when creating a run:
+
+```bash
+python3 programs/benchmark_dispatch.py BENCH --solve --dataset VISIBLE_INPUTS --run FRESH_RUN --flow109-manifest EXPLICIT_FEATURE_INPUT.json
+python3 programs/benchmark_dispatch.py BENCH --resume --dataset VISIBLE_INPUTS --run FRESH_RUN
+```
+
+The same run retains that feature input; `--resume` does not require another
+per-task approval or feature file. Existing input-only AI routing still must be
+confirmed before the normal Program author executes. Authoring is the current
+RTL-author producer, not structural preflight merely sharing its native start
+number. Its existing owner verification closure remains mandatory, and a
+functional-evidence request additionally retains the functional-verification
+responsibility.
