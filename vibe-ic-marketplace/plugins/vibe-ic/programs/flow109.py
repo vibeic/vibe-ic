@@ -1783,7 +1783,7 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
         raise Flow109Error("FLOW109_COMPONENT_RESULT_INVALID", row["id"])
     completion = dict(result)
     consume = getattr(adapter, "consume_default_row_completion", None)
-    if callable(consume) and (row["id"] == "D15" or not (result.get("completed") is True
+    if callable(consume) and (row["id"] in ("D15", "A18") or not (result.get("completed") is True
                                   and result.get("default_row_status") in ("PASS", "FAIL", "NOT_MEASURED"))):
         completion = dict(consume(project, context, result))
         if (completion.get("step_id") != row["id"]

@@ -717,6 +717,196 @@ def execute_window(project, context):
                 "native_started": False, "reason": str(exc)}
 
 
+def _a18_current_rows(project, report, step, blocks, image):
+    """Reopen the existing native attempt and its complete declared readset."""
+    import flow109
+    attempt = Path(report["attempt"])
+    ref = {"path": str((attempt / "result.json").relative_to(project)),
+           "sha256": _sha(attempt / "result.json")}
+    flow109._current_project_ref(project, ref, "A18_NATIVE_ATTEMPT_FOREIGN")
+    stored = _read(attempt / "result.json")
+    if report != stored and report != {"attempt": str(attempt), "steps": [
+            row for row in stored.get("steps", []) if row.get("step") == step]}:
+        raise ValueError("A18_NATIVE_ATTEMPT_RECORD_MISMATCH")
+    report = stored
+    if (not attempt.resolve().is_relative_to(project / "reports/analog_native")
+            or report.get("source_sha256") != _sha(Path(__file__))
+            or report.get("image") != image):
+        raise ValueError("A18_NATIVE_ATTEMPT_STALE")
+    rows = [row for row in report["steps"] if row.get("step") == step]
+    if sorted(row["block"] for row in rows) != sorted(blocks):
+        raise ValueError("A18_NATIVE_BLOCK_POPULATION_MISMATCH")
+    readset = {str(attempt / "result.json"): ref["sha256"]}
+    for row in rows:
+        producer = row.get("producer_context", {})
+        if (row.get("status") != "PASS" or producer.get("image") != image
+                or producer.get("driver_sha256") != report["source_sha256"]
+                or not row.get("input_views") or not row.get("output_views")
+                or any(row["input_views"].get(key) != digest
+                       for key, digest in _input_views(project, row["block"], step).items())):
+            raise ValueError("A18_NATIVE_ROW_NOT_CURRENT")
+        for key in ("input_views", "output_views"):
+            for name, digest in row[key].items():
+                path = Path(name)
+                path = path if path.is_absolute() else project / path
+                if (not path.is_file() or _sha(path) != digest
+                        or key == "output_views" and not path.resolve().is_relative_to(project)):
+                    raise ValueError("A18_NATIVE_READSET_STALE: " + name)
+                readset[str(path)] = digest
+    return rows, readset
+
+
+def _a18_prerequisites(project, context, blocks, image):
+    """Consume accepted source-selected predecessors and their material readers."""
+    import importlib
+    import flow109
+    import flow109_admission as admission
+    selected = {r["id"] for r in flow109.resolve_plan(context["features"], context["step_profiles"])["rows"]}
+    readset, accepted = {}, {}
+    for step in context["resolved_row"]["acceptance_deps"]:
+        if step not in selected:
+            continue
+        body, ref = flow109._accepted_row(project, Path("reports/flow109/default_rows") / (step + ".json"), step)
+        if body.get("component_status") != "PASS":
+            raise ValueError("A18_PREREQUISITE_NATIVE_NOT_PASS: " + step)
+        readset[str(project / ref["path"])] = ref["sha256"]
+        request_path = project / "reports/flow109/requests" / (body["context_sha256"] + ".json")
+        original = flow109.validate_execution_context(_read(request_path))
+        original = flow109.component_context(original, requested_step=step)
+        if (original["features"] != context["features"]
+                or original["context_sha256"] != body["context_sha256"]):
+            raise ValueError("A18_PREREQUISITE_CARRIER_FOREIGN: " + step)
+        readset[str(request_path)] = _sha(request_path)
+        owner = importlib.import_module(original["resolved_row"]["profile"]["dispatch"]["adapter"])
+        if step == "A17":
+            _, views = _a18_current_rows(project, body["native_results"], step, blocks, image)
+            readset.update(views)
+            import analog_hardmacro_check as packages
+            if set(packages.run_audit(project).summary.get("design_bound_blocks", [])) != set(blocks):
+                raise ValueError("A18_A17_MATERIAL_POPULATION_MISMATCH")
+        elif step == "D32":
+            material = owner._d32_inputs(project)
+            if (body.get("inputs") != material["inputs"] or body.get("unmeasured")
+                    or body.get("native_db", {}).get("top") != material["top"]
+                    or body.get("native_launch", {}).get("image") != image):
+                raise ValueError("A18_D32_MATERIAL_NOT_ACCEPTED")
+            for use in original["runtime_tool_uses"]:
+                tool = body.get("tools", {}).get(use["tool_id"], {})
+                if (tool.get("sha256") != use["build_sha256"]
+                        or Path(tool.get("path", "")).resolve() != Path(use["executable"]["path"]).resolve()):
+                    raise ValueError("A18_D32_NATIVE_TOOL_UNQUALIFIED")
+            readset.update(material["inputs"])
+            if not body.get("outputs"):
+                raise ValueError("A18_D32_OUTPUTS_ABSENT")
+            for view in body["outputs"]:
+                flow109._current_project_ref(project, view, "A18_D32_OUTPUT_STALE")
+                readset[str(project / view["path"])] = view["sha256"]
+        elif step == "D31":
+            if not isinstance(body.get("outputs"), list) or len(body["outputs"]) != 2:
+                raise ValueError("A18_D31_OUTPUT_POPULATION_INCOMPLETE")
+            flow109._current_project_ref(project, body["outputs"][0], "A18_D31_OUTPUT_STALE")
+            raw_path = (project / body["outputs"][0]["path"]).parent / "component.json"
+            raw = _read(raw_path)
+            if (raw.get("context_sha256") != body["context_sha256"]
+                    or raw.get("component_status") != "PASS" or raw.get("outputs") != body["outputs"]):
+                raise ValueError("A18_D31_COMPONENT_LINK_FOREIGN")
+            readset[str(raw_path)] = _sha(raw_path)
+            completion = owner.consume_default_row_completion(project, original, raw)
+            if completion.get("default_row_status") != "PASS" or completion.get("completed") is not True:
+                raise ValueError("A18_D31_GEOMETRY_NOT_ACCEPTED")
+        elif step == "D03":
+            if not body.get("inputs"):
+                raise ValueError("A18_D03_READSET_ABSENT")
+            for view in body["inputs"]:
+                path = Path(view["path"])
+                path = path if path.is_absolute() else project / path
+                if not path.is_file() or _sha(path) != view["sha256"]:
+                    raise ValueError("A18_D03_INPUT_STALE")
+                readset[str(path)] = view["sha256"]
+        else:
+            raise ValueError("A18_PREREQUISITE_CONSUMER_UNAVAILABLE: " + step)
+        admission.require_admission(project, original)
+        accepted[step] = ref
+    return accepted, readset
+
+
+def consume_default_row_completion(project, context, component):
+    """Complete A18 only from current native metrics and qualified predecessors."""
+    if context.get("requested_step") != "A18":
+        return component
+    project = Path(project).resolve()
+    base = {"step_id": "A18", "context_sha256": context.get("context_sha256"),
+            "default_row_status": "NOT_MEASURED", "completed": False,
+            "flow109_acceptance": "NOT_MEASURED", "whole_flow_acceptance": "NOT_MEASURED",
+            "delivery_accepted": False, "qualification": "NOT_MEASURED"}
+    if component.get("component_status") == "FAIL":
+        return {**base, "default_row_status": "FAIL", "reason": component.get("reason")}
+    try:
+        import flow109
+        import flow109_admission as admission
+        import flow109_metric_acceptance as metrics
+        import librelane_contract as launch
+        context = flow109.validate_execution_context(context)
+        if component.get("component_status") != "PASS" or context["native_step_id"] != "flow109.A18":
+            raise ValueError("A18_NATIVE_COMPONENT_NOT_PASS")
+        qualified = admission.require_admission(project, context)
+        sources = {p.name: _sha(p) for p in (Path(__file__), Path(metrics.__file__))}
+        for use in context["runtime_tool_uses"]:
+            config = _read(project / use["config"]["path"])
+            if config != {"purpose": use["semantics"]["purpose"],
+                          "native_steps": use["semantics"]["native_steps"], "model_sources": sources}:
+                raise ValueError("A18_QUALIFIED_MODEL_STALE")
+        image = launch.resolve_image(project, record=False)
+        blocks = [b.get("name") or b.get("block") for b in _declared_blocks(project)]
+        rows, readset = _a18_current_rows(project, component["native_results"], "A18", blocks, image)
+        config = _read(project / "input/analog_flow.json")
+        settings = config["analog_top"]
+        receipt = Path(settings["evidence"])
+        receipt = receipt if receipt.is_absolute() else project / receipt
+        limits = project / "requirements/analog_top_route/analog_sensitive_route_constraints.json"
+        observations = []
+        for row in rows:
+            executions = row.get("executions", [])
+            if len(executions) != 1 or executions[0].get("returncode") != 0 or executions[0].get("missing_outputs"):
+                raise ValueError("A18_NATIVE_EXECUTION_INCOMPLETE")
+            execution = executions[0]
+            script = Path(settings["implementation_script"])
+            script = script if script.is_absolute() else project / script
+            argv = ["magic", "-dnull", "-noconsole"]
+            if settings.get("magicrc"):
+                argv += ["-rcfile", str(settings["magicrc"])]
+            if execution.get("argv") != argv or execution.get("cwd") != str(script.parent):
+                raise ValueError("A18_QUALIFIED_INVOCATION_MISMATCH")
+            log = Path(execution["log"])
+            log = log if log.is_absolute() else project / log
+            flow109._current_project_ref(project,
+                {"path": str(log.relative_to(project)), "sha256": execution["log_sha256"]}, "A18_NATIVE_LOG_STALE")
+            readset[str(log)] = execution["log_sha256"]
+            observed = _a18_metrics(project, row["block"], settings, _read(receipt), executions[0],
+                                    row["input_views"].get(str(limits)))
+            observations.append(observed)
+            readset.update(observed["input_views"])
+        obligations = context["resolved_row"]["obligations"]
+        if sorted(item["metric"] for item in obligations) != sorted(observations[0]["metrics"]):
+            raise ValueError("A18_REQUIRED_METRIC_POPULATION_MISMATCH")
+        status = _aggregate(observations)
+        base["metric_acceptance"] = {"status": status, "blocks": observations}
+        base["metric_acceptance_status"] = status
+        if status != "PASS":
+            return {**base, "default_row_status": status, "reason": "A18_METRICS_NOT_CURRENT_OR_PASS"}
+        accepted, views = _a18_prerequisites(project, context, blocks, image)
+        readset.update(views)
+        if (any(not Path(path).is_file() or _sha(path) != digest for path, digest in readset.items())
+                or admission.require_admission(project, context) != qualified):
+            raise ValueError("A18_INPUT_CHANGED_DURING_COMPLETION")
+        return {**base, "default_row_status": "PASS", "completed": True,
+                "flow109_acceptance": "PASS", "qualification": "PASS",
+                "reason": "A18_CURRENT_METRICS_PREREQUISITES_AND_QUALIFICATION_PASS",
+                "accepted_dependencies": accepted, "input_views": readset}
+    except (ValueError, OSError, TypeError, KeyError, AttributeError, launch.Refusal) as exc:
+        return {**base, "reason": getattr(exc, "code", "A18_COMPLETION_INPUT_NOT_CURRENT"), "detail": str(exc)}
+
+
 def execute(project, context):
     """Existing whole-flow front-door adapter for one analog row."""
     report = execute_window(project, context)

@@ -10438,7 +10438,7 @@
             "checker.analog_top_route.analog_top_pad_core_connectivity_errors",
             "producer.analog_top_route.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED"
         },
         {
           "id": "analog_top_route.analog_sensitive_route_constraints",
@@ -10460,10 +10460,10 @@
             "checker.analog_top_route.analog_sensitive_route_constraints",
             "producer.analog_top_route.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED",
       "gate_layer_ids": [
         "G1",
         "G2",

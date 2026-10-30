@@ -265,3 +265,249 @@ def test_ordered_window_a18_actual_consumer(carrier, monkeypatch, producer):
     assert result["whole_flow_acceptance"] == "NOT_MEASURED"
     assert result["delivery_accepted"] is False
     assert rc == (1 if producer == "retained_fail" else 2)
+
+
+@pytest.fixture
+def completion_case(carrier, monkeypatch):
+    import copy
+    import shutil
+    from types import SimpleNamespace
+    import flow109
+    import flow109_admission as admission
+    import flow109_metric_acceptance as metrics
+    import pad_ring_gen as pads
+    import analog_hardmacro_check as packages
+    import librelane_contract as launch
+    import _delivery_route
+
+    root, evidence, run = carrier
+    image = "ghcr.io/vibeic/vibeic-eda@sha256:1fb01aadad86b5aea7c84cffb723f10d3b20aab7b6bf938f428a215a3233cfda"
+    config = {"analog_top": {"implementation_script": str(root / "input/top.tcl"),
+        "evidence": str(root / "top/a18.json"), "outputs": [str(root / "top" / name)
+        for name in ("top.gds", "top.extracted.spice", "a18.json")]}}
+    put(root, "input/analog_flow.json", config)
+    put(root, "phase3/analog/analog_block_list.json", {"blocks": [{"name": "core", "type": "ldo"}]})
+    features = copy.deepcopy(next(p["features"] for p in flow109.load_registry()["reference_profiles"]
+                                 if p["name"] == "Analog IC external trim"))
+    plan = flow109.resolve_plan(features)
+    model_sources = {Path(native.__file__).name: digest(Path(native.__file__)),
+                     Path(metrics.__file__).name: digest(Path(metrics.__file__))}
+    contexts = {}
+    for step in ("D03", "A17", "D31", "D32", "A18"):
+        row = flow109.resolve_step(plan, step)
+        uses, qualified = [], []
+        reference = put(root, "reports/qualification/" + step + "-reference.txt", "SYNTHETIC SOURCE CONTROL ONLY")
+        for index, use in enumerate(row["tool_uses"]):
+            binary = Path(shutil.which(use["executable_name"])).resolve()
+            selected = put(root, f"input/qualification/{step}-{index}.json", {
+                "purpose": use["purpose"], "native_steps": use["native_steps"], "model_sources": model_sources})
+            identity = {"use_id": use["use_id"], "tool_id": use["tool_id"], "version": "synthetic-control",
+                "build_sha256": digest(binary), "executable": {"path": str(binary), "sha256": digest(binary)},
+                "config": {"path": str(selected.relative_to(root)), "sha256": digest(selected)},
+                "pdk": {"applicable": False, "reason": "synthetic source control"},
+                "deck": {"applicable": False, "reason": "synthetic source control"}, "corner": "synthetic",
+                "semantics": {"purpose": use["purpose"], "native_steps": use["native_steps"]}}
+            record = {"use_id": use["use_id"], "status": "QUALIFIED", "identity": identity,
+                      "reference_evidence": [{"path": str(reference.relative_to(root)), "sha256": digest(reference)}]}
+            qualified.append(record)
+            uses.append({**identity, "qualification_sha256": admission.canonical_sha(record)})
+        registry = put(root, "reports/qualification/" + step + ".json", {"schema": "vibeic.flow109.qualifications.v1", "uses": qualified})
+        contexts[step] = flow109.execution_context(plan, step, step, runtime_tool_uses=uses,
+                                                  qualification_registry=str(registry.relative_to(root)))
+        put(root, "reports/flow109/requests/" + contexts[step]["context_sha256"] + ".json", contexts[step])
+    material = put(root, "reports/prerequisite-material.gds", "SYNTHETIC MATERIAL SEAM")
+    material_inputs = {str(material): digest(material)}
+    def native_row(step):
+        return {"step": step, "block": "core", "status": "PASS",
+                "input_views": native._input_views(root, "core", step),
+                "output_views": {str(root / "phase3/analog/core/core.gds"): digest(root / "phase3/analog/core/core.gds")},
+                "producer_context": {"image": image, "driver_sha256": digest(Path(native.__file__))}}
+    def report(step, rows):
+        path = root / "reports/analog_native" / ("synthetic-" + step)
+        value = {"attempt": str(path), "source_sha256": digest(Path(native.__file__)),
+                 "image": image, "steps": rows, "window_verdict": native._aggregate(rows)}
+        put(root, str((path / "result.json").relative_to(root)), value)
+        return value
+    a17 = report("A17", [native_row("A17")])
+    for step in ("D03", "A17", "D31", "D32"):
+        body = {"step_id": step, "component_status": "PASS", "default_row_status": "PASS", "completed": True,
+                "context_sha256": contexts[step]["context_sha256"], "native_results": a17,
+                "inputs": [{"path": str(material), "sha256": digest(material)}] if step == "D03" else material_inputs,
+                "outputs": [{"path": str(material.relative_to(root)), "sha256": digest(material)}],
+                "native_db": {"top": "synthetic_top"}, "native_launch": {"image": image},
+                "tools": {u["tool_id"]: {"path": u["executable"]["path"], "sha256": u["build_sha256"]}
+                          for u in contexts[step]["runtime_tool_uses"]}}
+        if step == "D31":
+            consume_report = put(root, "reports/prerequisite-consume.json", {"status": "PASS"})
+            body["outputs"].append({"path": str(consume_report.relative_to(root)), "sha256": digest(consume_report)})
+        put(root, "reports/flow109/default_rows/" + step + ".json", body)
+        if step == "D31":
+            put(root, "reports/component.json", {k: v for k, v in body.items()
+                if k not in ("default_row_status", "completed")})
+    def d31_material(project, context, component):
+        for view in component["outputs"]:
+            flow109._current_project_ref(project, view, "SYNTHETIC_D31_GEOMETRY_STALE")
+        return {"status": "PASS", "qualification": "PASS", "reason": "SYNTHETIC NATIVE MATERIAL SEAM"}
+    monkeypatch.setattr(metrics, "accept_d31", d31_material)
+    monkeypatch.setattr(pads, "_d32_inputs", lambda project: {"top": "synthetic_top", "inputs": {str(material): digest(material)}})
+    monkeypatch.setattr(packages, "run_audit", lambda project: SimpleNamespace(summary={"design_bound_blocks": ["core"]}))
+    monkeypatch.setattr(launch, "resolve_image", lambda *args, **kwargs: image)
+    monkeypatch.setattr(_delivery_route, "report_label", lambda project: {"delivery_route": "IC"})
+    def generate():
+        observed = {**native_row("A18"), **run()}
+        observed["input_views"].update({v["path"]: v["sha256"] for v in observed["native_inputs"].values()})
+        invocation_log = put(root, "reports/analog_native/synthetic-A18/magic.log", "SYNTHETIC MAGIC EXECUTION SEAM")
+        observed["executions"][0].update(argv=["magic", "-dnull", "-noconsole"],
+            cwd=str(root / "input"), log=str(invocation_log), log_sha256=digest(invocation_log))
+        observed["output_views"] = native._output_views(observed)
+        return report("A18", [observed])
+    current_report = generate()
+    monkeypatch.setattr(native, "execute_window", lambda *args: current_report)
+    def invoke():
+        context = contexts["A18"]
+        return flow109._selected_step_result(root, context, native.execute(root, context), native)
+    return SimpleNamespace(root=root, contexts=contexts, evidence=evidence, invoke=invoke,
+                           report=current_report, generate=generate, config=config, features=features)
+
+
+def test_a18_completion_automatic_canonical_pass(completion_case):
+    result = completion_case.invoke()
+    assert result["default_row_status"] == "PASS", (result.get("reason"), result.get("detail"))
+    assert result["completed"] is True and result["qualification"] == "PASS", result
+    assert set(result["accepted_dependencies"]) == {"D03", "A17", "D31", "D32"}
+    assert result["whole_flow_acceptance"] == "NOT_MEASURED" and result["delivery_accepted"] is False
+
+
+@pytest.mark.parametrize("fault", ["missing_qualification", "stale_qualification", "stale_model",
+    "missing_prerequisite", "foreign_prerequisite", "foreign_prerequisite_image", "stale_prerequisite_material", "missing_block",
+    "duplicate_block", "missing_route_quantity", "stale_native_receipt"])
+def test_a18_completion_refuses_incomplete_evidence(completion_case, fault):
+    import copy
+    import flow109
+    case = completion_case
+    if fault == "missing_qualification":
+        case.contexts["A18"]["runtime_tool_uses"] = None
+        payload = {k: v for k, v in case.contexts["A18"].items() if k != "context_sha256"}
+        case.contexts["A18"]["context_sha256"] = flow109.digest(payload)
+    elif fault in ("stale_qualification", "stale_model"):
+        import flow109_admission as admission
+        context = case.contexts["A18"]
+        use = context["runtime_tool_uses"][0]
+        path = case.root / use["config"]["path"]
+        if fault == "stale_qualification":
+            path.write_text("changed")
+        else:
+            value = json.loads(path.read_text());value["model_sources"] = {"foreign": "f" * 64}
+            path.write_text(json.dumps(value))
+            registry = case.root / context["qualification_registry"]
+            data = json.loads(registry.read_text())
+            use["config"]["sha256"] = digest(path)
+            record = next(r for r in data["uses"] if r["use_id"] == use["use_id"])
+            record["identity"]["config"] = use["config"]
+            use["qualification_sha256"] = admission.canonical_sha(record)
+            registry.write_text(json.dumps(data))
+            context["context_sha256"] = flow109.digest({k: v for k, v in context.items() if k != "context_sha256"})
+    elif fault == "missing_prerequisite":
+        (case.root / "reports/flow109/default_rows/D32.json").unlink()
+    elif fault == "foreign_prerequisite":
+        path = case.root / "reports/flow109/default_rows/D32.json"
+        body = json.loads(path.read_text());body["context_sha256"] = "f" * 64
+        path.write_text(json.dumps(body))
+    elif fault == "foreign_prerequisite_image":
+        path = case.root / "reports/flow109/default_rows/D32.json"
+        body = json.loads(path.read_text());body["native_launch"]["image"] = "foreign"
+        path.write_text(json.dumps(body))
+    elif fault == "stale_prerequisite_material":
+        (case.root / "reports/prerequisite-material.gds").write_text("FOREIGN MATERIAL")
+    elif fault in ("missing_block", "duplicate_block"):
+        if fault == "missing_block":
+            case.report["steps"] = []
+        else:
+            case.report["steps"].append(copy.deepcopy(case.report["steps"][0]))
+        put(case.root, str((Path(case.report["attempt"]) / "result.json").relative_to(case.root)), case.report)
+    elif fault == "missing_route_quantity":
+        case.evidence["route_measurements"][0].pop("length_um")
+        replacement = case.generate()
+        case.report.clear();case.report.update(replacement)
+    elif fault == "stale_native_receipt":
+        (case.root / "top/a18.json").write_text("{}")
+    result = case.invoke()
+    assert result["default_row_status"] == "NOT_MEASURED", result
+    assert result["completed"] is False, result
+
+
+def test_a18_completion_retained_connectivity_failure(completion_case):
+    case = completion_case
+    fixture = Path(__file__).parent / "fixtures/flow109_a18/ldo_ic_top_a18_evidence.json"
+    retained = json.loads(fixture.read_text())
+    assert retained["checks"]["analog_top_pad_core_connectivity_errors"] == 2
+    case.evidence.clear();case.evidence.update(retained)
+    replacement = case.generate()
+    case.report.clear();case.report.update(replacement)
+    result = case.invoke()
+    assert result["default_row_status"] == "FAIL" and result["completed"] is False, result
+
+
+def test_a18_completion_non_a18_unchanged():
+    component = {"step_id": "A17", "component_status": "NOT_MEASURED"}
+    consume = getattr(native, "consume_default_row_completion", None)
+    assert consume is None or consume(Path("/unused"), {"requested_step": "A17"}, component) is component
+
+
+def test_a18_completion_front_door_automatically_finishes(completion_case):
+    from types import SimpleNamespace
+    import flow109
+    case = completion_case
+    context = case.contexts["A18"]
+    manifest = put(case.root, "manifest.json", {"features": case.features,
+        "runtime_tool_uses": context["runtime_tool_uses"], "qualification_registry": context["qualification_registry"]})
+    args = SimpleNamespace(flow="109", flow109_manifest=manifest, flow109_plan_only=False,
+                           execution_mode="default", entry_step="A18", exit_step="A18")
+    assert flow109.prepare_front_door(args, case.root) == 0
+    result = json.loads((case.root / "reports/flow109/components/A18.json").read_text())
+    assert result["completed"] is True and result["default_row_status"] == "PASS", result
+    assert result["whole_flow_acceptance"] == "NOT_MEASURED" and result["delivery_accepted"] is False
+
+
+def test_a18_integration_completed_flag_cannot_bypass_qualification(completion_case):
+    import flow109
+    case = completion_case
+    context = case.contexts["A18"]
+    context["runtime_tool_uses"] = None
+    context["context_sha256"] = flow109.digest({k: v for k, v in context.items() if k != "context_sha256"})
+    component = native.execute(case.root, context)
+    component.update(completed=True, default_row_status="PASS")
+    result = flow109._selected_step_result(case.root, context, component, native)
+    assert result["default_row_status"] == "NOT_MEASURED", result
+    assert result["completed"] is False
+
+
+def test_a18_integration_preserves_a17_material_reader(completion_case):
+    import flow109_mixed_native as mixed
+    case = completion_case
+    path = case.root / "reports/flow109/default_rows/A17.json"
+    manifest = {"upstream_receipts": {"A17": {"path": str(path.relative_to(case.root)), "sha256": digest(path)}}}
+    (case.root / "phase3/analog/core/core.gds").write_text("FOREIGN A17 GEOMETRY")
+    with pytest.raises(mixed.Refusal, match="A17_CURRENT_RESULT_INVALID"):
+        mixed._accepted_upstream(case.root, manifest, "A17")
+
+
+def test_a18_integration_registry_metrics_bound():
+    import flow109
+    row = next(row for row in flow109.load_registry()["rows"] if row["id"] == "A18")
+    assert row["metric_acceptance_status"] == "IMPLEMENTED"
+    assert [item["status"] for item in row["obligations"]] == ["IMPLEMENTED", "IMPLEMENTED"]
+    assert row["obligations"][0]["expectation"]["value"] == 0
+    assert row["obligations"][1]["expectation"]["missing_bounds"] == "BLOCKED"
+
+
+
+def test_a18_completion_accepts_existing_window_projection(completion_case):
+    case = completion_case
+    path = case.root / "reports/flow109/default_rows/A17.json"
+    body = json.loads(path.read_text())
+    report = body["native_results"]
+    body["native_results"] = {"attempt": report["attempt"], "steps": report["steps"]}
+    path.write_text(json.dumps(body))
+    result = case.invoke()
+    assert result["default_row_status"] == "PASS", (result.get("reason"), result.get("detail"))

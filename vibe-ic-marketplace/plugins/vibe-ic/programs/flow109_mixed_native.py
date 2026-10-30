@@ -483,7 +483,7 @@ def _accepted_upstream(project, manifest, step):
     dispatch = request["resolved_row"]["profile"].get("dispatch") or {}
     adapter = importlib.import_module(dispatch["adapter"])
     consume = getattr(adapter, "consume_default_row_completion", None)
-    if callable(consume):
+    if callable(consume) and step != "A17":
         completion = consume(project, request, owner_component)
         if owner_component is not component:
             for key in ("selected_obligations", "input_sha256", "source_sha256", "evidence", "component_receipt"):
