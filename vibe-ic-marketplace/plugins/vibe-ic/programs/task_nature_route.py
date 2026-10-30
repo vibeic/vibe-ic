@@ -410,9 +410,9 @@ def _delivery_prose(text: str) -> str:
     # Names remain in the original prompt/semantic payload. Only the delivery
     # noun scan excludes these explicitly declared identifier positions.
     return re.sub(
-        r"\bmodule\s+(?:named|called)\s+\w+\b|"
+        r"\b(?P<artifact>module)\s+(?:named|called)\s+\w+\b|"
         r"\b\w+\s+(?:input|output|inout)\s+port\b",
-        "", text, flags=re.I)
+        lambda match: match.group("artifact") or "", text, flags=re.I)
 
 
 def _delivered_object_families(text: str) -> list[str]:

@@ -131,6 +131,45 @@ def test_unapproved_route_still_refuses_before_any_runner(tmp_path):
     assert not (tmp_path/'runner_invocation.json').exists()
 
 
+@pytest.mark.parametrize('name_clause', ['named LogicBlock', 'called LogicBlock', 'named chip'])
+def test_named_module_background_reaches_soft_ip_owner(subject, monkeypatch, capsys, name_clause):
+    project, manifest = subject
+    prompt = (f'Implement a Verilog module {name_clause} with two inputs and one output. '
+              'The RefUnit is a chip with a logic gate. '
+              'The module should implement the same functionality as the RefUnit chip.')
+    (project / 'input/phase1_prompt.md').write_text(prompt)
+    requirements = routing.prompt_delivery_requirements(prompt)
+    resolved = routing.resolve_prompt_delivery_target(requirements, 'rtl')
+    assert resolved['ok'] is True
+    delivery = routing.delivery_route_for_target(resolved['target'], resolved['route_family'])
+    assert delivery == 'ip', requirements
+    assert routing.flow109_product_window(manifest, '1', '2', delivery) == ('D09', 'D11')
+    argv = dispatch._solver_argv(Path(public.__file__), project, '1', '2', delivery, 'original')
+    observed = observe_public(argv, monkeypatch, capsys)
+    assert observed['outcome'] == 'OWNER_REACHED', observed
+    assert observed['owner'] == 'design_one_shot_runner'
+    assert observed['entry'] == '1' and observed['exit'] == '4'
+
+
+@pytest.mark.parametrize('obligation', [
+    'Deliver the final chip.',
+    'Deliver GDS for fabrication.',
+    'Deliver the modeled device in a physical package.',
+])
+def test_named_module_cannot_erase_independent_physical_delivery(subject, obligation):
+    project, manifest = subject
+    prompt = ('Implement a Verilog module named LogicBlock that models a chip. '
+              + obligation)
+    requirements = routing.prompt_delivery_requirements(prompt)
+    resolved = routing.resolve_prompt_delivery_target(requirements, None)
+    assert resolved['ok'] is True
+    delivery = routing.delivery_route_for_target(resolved['target'], resolved['route_family'])
+    assert delivery == 'ic', requirements
+    with pytest.raises(ValueError, match='FLOW109_ROUTE_CONFLICT'):
+        routing.flow109_product_window(manifest, '1', '2', delivery)
+    assert not (project / 'reports/flow109/owner_route.json').exists()
+
+
 @pytest.mark.parametrize('mode',['solve','resume'])
 def test_cli_forwards_explicit_operator_input(subject,monkeypatch,mode):
     project,_=subject;seen=[]
