@@ -2122,6 +2122,34 @@ def observe_d10_frontend_metrics(project: Path, context: Mapping[str, Any], p0: 
     return answer
 
 
+def d09_owned_metrics(project: Path, author: Mapping) -> dict:
+    """Recompute the supported source-bound author metrics, never trust a stamp."""
+    import serial_parallel_mul_synth as serial
+    import design_one_shot_runner as runner
+    if (author.get('status') != 'PASS'
+            or author.get('extras', {}).get('program_first') is not True
+            or author.get('extras', {}).get('deterministic_generator') != 'serial_parallel_mul_synth'):
+        raise MetricRefusal('D09_AUTHOR_UNSUPPORTED', 'normal supported serial producer required')
+    d01 = runner._serial_d01_state(project)
+    binding = runner._Phase1ProjectBinding.open(project)
+    try:
+        current = runner._try_serial_current_source(binding,
+            'digital_arithmetic_primitive', __import__('time').time())
+        if current is None:
+            raise MetricRefusal('D09_SOURCE_PROOF_STALE', 'current normal source publication required')
+        result = serial.d09_owned_metrics(project, 'digital_arithmetic_primitive')
+        binding.require_current()
+        if runner._serial_d01_state(project) != d01:
+            raise MetricRefusal('D09_D01_CHANGED', 'upstream evidence changed during comparison')
+    finally:
+        binding.close()
+    published = json.loads((project / 'reports/orchestrator/phase2_one_shot.json').read_bytes())
+    if (author.get('extras', {}).get('d09_owned_metrics') != result
+            or published.get('d09_owned_metrics') != result):
+        raise MetricRefusal('D09_METRICS_STALE', 'published metrics differ from current source/RTL checks')
+    return result
+
+
 def d10_adopted_rtl(project: Path) -> dict:
     """BLOCKING: D10 consumes the completed D09 subject without regenerating it."""
     import _specrtl_common as sources

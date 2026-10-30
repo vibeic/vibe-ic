@@ -1628,14 +1628,10 @@ def test_bounded_owner_finish_does_not_change_legacy_execution(tmp_path, monkeyp
 
 def _d09_report_body(tmp_path, *, lint="PASS", reference="PASS", cdc="PASS"):
     """Create only producer evidence; the product path must add its binding."""
-    rtl = tmp_path / "phase2/stage1/rtl/chip_top.sv"
-    rtl.parent.mkdir(parents=True, exist_ok=True)
-    rtl.write_text("module chip_top(input logic clk); endmodule\n")
+    from test_flow109_d09_owned_metrics import populate, normal_author
+    populate(tmp_path)
     source_input = tmp_path / "input/spec.md"
-    source_input.parent.mkdir(parents=True, exist_ok=True)
-    source_input.write_bytes(require_repo(
-        "vibe-ic-marketplace", "plugins", "vibe-ic", "flow",
-        "flow109.json").read_bytes())
+    author = normal_author(tmp_path)
     evidence = []
     for name in ("crossing", "async_input", "reset_dep"):
         path = tmp_path / f"reports/phase2/cdc/{name}.json"
@@ -1645,11 +1641,10 @@ def _d09_report_body(tmp_path, *, lint="PASS", reference="PASS", cdc="PASS"):
     return {
         "project": str(tmp_path.resolve()),
         "verdict": "PASS",
-        "declared_window": {"entry_step": "1", "exit_step": "4",
-                            "dispatched_step_ids": ["1", "2", "3", "4"]},
+        "declared_window": {"entry_step": "1", "exit_step": "1",
+                            "dispatched_step_ids": ["1"]},
         "steps": [
-            {"name": "rtl_gen", "status": "PASS_WITH_WAIVERS",
-             "extras": {"preserved": True, "rtl_provenance": "AUTHORED"}},
+            author,
             {"name": "rtl_lint_tool", "status": lint, "extras": {}},
             {"name": "phase2_manifests", "status": "PASS",
              "output_files": evidence, "extras": {}},
@@ -1665,10 +1660,15 @@ def _d09_owner_report(tmp_path, monkeypatch, *, lint="PASS", reference="PASS",
     import design_one_shot_runner as design
     import vibe_ic_one_shot_runner as runner
 
+    from test_flow109_d09_owned_metrics import d01_precondition
+    monkeypatch.setattr(design, '_serial_d01_state', d01_precondition)
     report = _d09_report_body(
         tmp_path, lint=lint, reference=reference, cdc=cdc)
     if generated is not None:
-        report['steps'][0] = generated
+        original = report['steps'][0]
+        if generated.get('extras'):
+            generated['extras'] = dict(original['extras'], **generated['extras'])
+        original.update(generated)
     out = tmp_path / "reports/orchestrator/phase2_one_shot.json"
 
     def child(command, *, env=None, **_kwargs):
@@ -1681,7 +1681,7 @@ def _d09_owner_report(tmp_path, monkeypatch, *, lint="PASS", reference="PASS",
     invocation = {}
     assert runner._run_phase(
         "D09 focused child", runner.PROGRAMS_DIR / "phase2_one_shot_runner.py",
-        [str(tmp_path), "--entry-step", "1", "--exit-step", "4"],
+        [str(tmp_path), "--entry-step", "1", "--exit-step", "1"],
         env=dict(os.environ), invocation=invocation) == 0
     report = json.loads(out.read_text())
     context = flow109.execution_context(flow109.resolve_plan(profile()),
@@ -1692,7 +1692,7 @@ def _d09_owner_report(tmp_path, monkeypatch, *, lint="PASS", reference="PASS",
     monkeypatch.setenv(flow109.ATTEMPT_ENV,
                        str(flow109._new_attempt(tmp_path, context)))
     return (runner, report,
-            tmp_path / "phase2/stage1/rtl/chip_top.sv",
+            tmp_path / "phase2/stage1/rtl/unit.v",
             tmp_path / "input/spec.md", invocation)
 
 
@@ -1701,10 +1701,10 @@ def _d09_owner_report(tmp_path, monkeypatch, *, lint="PASS", reference="PASS",
     ('no_generator', 'NOT_MEASURED'), ('failed', 'FAIL'),
 ])
 def test_d09_generated_rtl_requires_current_bound_producer(tmp_path, monkeypatch, kind, expected):
-    rtl = tmp_path / 'phase2/stage1/rtl/chip_top.sv'
+    rtl = tmp_path / 'phase2/stage1/rtl/unit.v'
     generated = {'name': 'rtl_gen', 'status': 'PASS',
-                 'output_files': [str(rtl)],
-                 'extras': {'program_first': True, 'deterministic_generator': 'neutral'}}
+                 'output_files': [str(rtl), str(tmp_path/'plugin_output/declaration.json')],
+                 'extras': {'program_first': True, 'deterministic_generator': 'serial_parallel_mul_synth'}}
     if kind == 'unbound':
         generated['output_files'] = [str(tmp_path / 'elsewhere.sv')]
     if kind == 'no_generator':
@@ -1736,11 +1736,11 @@ def test_d09_completion_requires_full_bound_owner_report_and_preserves_rtl(
     component = terminal["components"][0]
     assert component["step_id"] == "D09"
     assert component["completed"] is True
-    assert answer["evidence"]["rtl_inventory"][0]["path"] == "chip_top.sv"
+    assert answer["evidence"]["rtl_inventory"][0]["path"] == "unit.v"
 
 
 @pytest.mark.parametrize("case,expected", [
-    ("missing_lint", "NOT_MEASURED"),
+    ("missing_lint", "PASS"),
     ("missing_handoff", "NOT_MEASURED"),
     ("lint_fail", "FAIL"),
     ("reference_fail", "FAIL"),
@@ -1764,7 +1764,7 @@ def test_d09_completion_fails_closed_on_missing_failed_or_foreign_evidence(
         report["steps"] = [row for row in report["steps"]
                            if row["name"] != "rtl_lint_tool"]
     elif case == "missing_handoff":
-        report["steps"][0]["extras"]["preserved"] = False
+        report["steps"][0]["extras"].pop("current_source_proof", None)
     elif case == "changed_rtl":
         rtl.write_text("module changed; endmodule\n")
     elif case == "changed_input":
@@ -1823,17 +1823,9 @@ def _public_d09_entry(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "_activate_runtime_program_tree", lambda _p: None)
     monkeypatch.setattr(runner, "_capture_container_image", lambda *_a, **_k: {
         "verdict": "PASS"})
-    real_prepare = flow109.prepare_front_door
-
-    def prepare_with_owned_span(args, project):
-        result = real_prepare(args, project)
-        if result is None:
-            context = json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text())
-            if context.get("requested_step") == "D09":
-                args.exit_step = "4"
-        return result
-
-    monkeypatch.setattr(flow109, "prepare_front_door", prepare_with_owned_span)
+    import design_one_shot_runner as design
+    from test_flow109_d09_owned_metrics import d01_precondition
+    monkeypatch.setattr(design, '_serial_d01_state', d01_precondition)
     monkeypatch.setattr(
         runner._canonical_admission, "admit_span",
         lambda *_a, **_k: SimpleNamespace(admitted=True,
@@ -2090,7 +2082,7 @@ def test_owner_route_uses_native_span_without_generic_qualification_registry(
 
 def test_d09_owner_span_routes_validation_without_neighbor_row_credit(
         tmp_path, monkeypatch):
-    """D09 may consume the native span, but only D09 receives a row result."""
+    """D09 owns only the authoring span; neighboring rows receive no credit."""
     plan = flow109.resolve_plan(profile())
     row = flow109.resolve_step(plan, "D09")
     assert row["position"] == 17
@@ -2099,12 +2091,12 @@ def test_d09_owner_span_routes_validation_without_neighbor_row_credit(
         "owner_runner": "design_one_shot_runner",
         "native_step_id": "1",
         "owner_entry_step": "1",
-        "owner_exit_step": "4",
+        "owner_exit_step": "1",
         "producer": "design_one_shot_runner.py:step_rtl_gen",
         "consumer": "design_one_shot_runner rtl_gen retained acceptance",
         "engine_families": [],
         "acceptance_scope": "existing_native_component_only",
-        "flow109_metrics_status": "UNIMPLEMENTED",
+        "flow109_metrics_status": "SUPPORTED_SERIAL_GENERATOR",
     }
 
     monkeypatch.setenv(flow109.CONTEXT_ENV, "")
@@ -2118,11 +2110,11 @@ def test_d09_owner_span_routes_validation_without_neighbor_row_credit(
                            entry_step="D09", exit_step="D09")
 
     assert flow109.prepare_front_door(args, tmp_path) is None
-    assert (args.entry_step, args.exit_step) == ("1", "4")
+    assert (args.entry_step, args.exit_step) == ("1", "1")
     route = json.loads((tmp_path / "reports/flow109/owner_route.json").read_text())
     assert route["owner_runner"] == "design_one_shot_runner"
     assert (route["native_step_id"], route["entry_step"], route["exit_step"]) == (
-        "1", "1", "4")
+        "1", "1", "1")
     request = json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text())
     report = {"steps": [{
         "status": "PASS", "extras": {"step_id": "1",

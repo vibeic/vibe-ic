@@ -3616,12 +3616,12 @@
             "owner_runner": "design_one_shot_runner",
             "native_step_id": "1",
             "owner_entry_step": "1",
-            "owner_exit_step": "4",
+            "owner_exit_step": "1",
             "producer": "design_one_shot_runner.py:step_rtl_gen",
             "consumer": "design_one_shot_runner rtl_gen retained acceptance",
             "engine_families": [],
             "acceptance_scope": "existing_native_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "flow109_metrics_status": "SUPPORTED_SERIAL_GENERATOR"
           }
         }
       ],
@@ -3638,7 +3638,7 @@
           "when": "has_digital",
           "expectation": {
             "operator": "covers_all",
-            "required_set_ref": "requirements/base_03/rtl_requirement_mapping.json#/required_items",
+            "required_set_ref": "reports/orchestrator/phase2_one_shot.json#/d09_owned_metrics/required_rtl_items",
             "empty_set_policy": "requires validated absence/applicability evidence"
           },
           "binding_keys": [
@@ -3648,7 +3648,7 @@
             "checker.base_03.rtl_requirement_mapping",
             "producer.base_03.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "SUPPORTED_SERIAL_GENERATOR"
         },
         {
           "id": "base_03.declared_ports_parameters",
@@ -3656,7 +3656,7 @@
           "when": "has_digital",
           "expectation": {
             "operator": "matches_adopted_reference",
-            "reference_ref": "adopted/base_03/declared_ports_parameters.json"
+            "reference_ref": "reports/orchestrator/phase2_one_shot.json#/d09_owned_metrics/declared_reference"
           },
           "binding_keys": [
             "design.requirements",
@@ -3665,10 +3665,10 @@
             "checker.base_03.declared_ports_parameters",
             "producer.base_03.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "SUPPORTED_SERIAL_GENERATOR"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "SUPPORTED_SERIAL_GENERATOR",
       "gate_layer_ids": [
         "G1",
         "G2",

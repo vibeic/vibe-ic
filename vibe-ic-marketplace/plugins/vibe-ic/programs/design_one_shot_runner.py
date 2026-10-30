@@ -367,6 +367,19 @@ def _write_phase2_report(out: Path, summary: Any, project: Path, *,
     """The ONE seam every phase-2 report is written through, so the refusal
     above cannot be bypassed by a second `write_text` added later."""
     _refuse_relocated_copy_in_record(summary, project)
+    # Only the selected D09 owner emits its two metrics; no downstream refresh.
+    if (str(summary.get("declared_window", {}).get("entry_step")) == "1"
+            and str(summary.get("declared_window", {}).get("exit_step")) == "1"):
+        import serial_parallel_mul_synth as serial
+        for row in summary.get("steps", []):
+            extras = row.get("extras") or {}
+            if row.get("name") == "rtl_gen" and row.get("status") == "PASS" and extras.get("deterministic_generator") == "serial_parallel_mul_synth":
+                try:
+                    extras["d09_owned_metrics"] = serial.d09_owned_metrics(project, "digital_arithmetic_primitive")
+                    summary["d09_owned_metrics"] = extras["d09_owned_metrics"]
+                except (OSError, ValueError, TypeError, KeyError) as exc:
+                    extras["d09_owned_metrics_refusal"] = str(exc)
+                row["extras"] = extras
     from benchmark_dispatch import _bind_runner_report
     summary = _bind_runner_report(summary, project, __file__, out.name,
                                   context=invocation_context)

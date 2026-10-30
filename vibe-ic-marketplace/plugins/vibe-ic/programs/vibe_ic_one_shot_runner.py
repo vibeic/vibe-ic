@@ -1760,15 +1760,6 @@ def _d09_bound_phase2_evidence(
                 or hashlib.sha256(producer_path.read_bytes()).hexdigest()
                 != producer.get('sha256')):
             raise ValueError('report producer is not the current Phase-2 author')
-        entry = argv.index('--entry-step')
-        exit_ = argv.index('--exit-step')
-        declared = report.get('declared_window') or {}
-        if (argv[entry + 1] != '1' or argv[exit_ + 1] != '4'
-                or str(declared.get('entry_step')) != '1'
-                or str(declared.get('exit_step')) != '4'
-                or not {'1', '2', '3', '4'}.issubset(
-                    {str(item) for item in declared.get('dispatched_step_ids', ())})):
-            raise ValueError('Phase-2 report does not own the complete native 1..4 span')
         material = binding['material']
         rtl = material.get('output_rtl')
         if not isinstance(rtl, dict) or not rtl:
@@ -1779,66 +1770,44 @@ def _d09_bound_phase2_evidence(
     steps = report.get('steps')
     if not isinstance(steps, list) or not all(isinstance(row, Mapping) for row in steps):
         return 'NOT_MEASURED', {}, 'D09_REQUIRED_EVIDENCE_ABSENT: invalid step population'
-
-    def unique(names: tuple[str, ...]) -> Mapping | None:
-        found = [row for row in steps if row.get('name') in names]
-        return found[0] if len(found) == 1 else None
-
-    author = unique(('rtl_gen',))
-    lint = unique(('rtl_lint_tool', 'rtl_validate'))
-    manifests = unique(('phase2_manifests',))
-    reference = unique(('reference_tb',))
-    required_names = {'rtl_gen', 'rtl_lint_tool', 'rtl_validate',
-                      'phase2_manifests', 'reference_tb'}
-    failures = sorted({str(row.get('name')) for row in steps
-                       if row.get('name') in required_names
-                       and row.get('status') == 'FAIL'})
+    # D09 does not execute D11/D12/D13. If a real failure is nevertheless
+    # supplied here, do not hide it behind the narrower authoring contract.
+    failures = sorted({str(row.get('name')) for row in steps if row.get('status') == 'FAIL'})
     if failures:
         return 'FAIL', {}, 'D09_REQUIRED_CHECK_FAILED: ' + ', '.join(failures)
-    author_extras = (author or {}).get('extras') or {}
-    preserved = (author is not None and author.get('status') == 'PASS_WITH_WAIVERS'
-                 and author_extras.get('preserved') is True)
-    outputs = (author or {}).get('output_files') or ()
-    generated_rtl = {str(Path(path).resolve()) for path in outputs
-                     if isinstance(path, str) and Path(path).suffix in {'.v', '.sv'}}
-    bound_rtl = {str((project / 'phase2/stage1/rtl' / path).resolve()) for path in rtl}
-    generated = (author is not None and author.get('status') == 'PASS'
-                 and author_extras.get('program_first') is True
-                 and isinstance(author_extras.get('deterministic_generator'), str)
-                 and bool(author_extras['deterministic_generator'].strip())
-                 and bool(generated_rtl) and generated_rtl == bound_rtl)
-    if (author is None or lint is None or manifests is None or reference is None
-            or not (preserved or generated)
-            or lint.get('status') != 'PASS'
-            or manifests.get('status') != 'PASS'
-            or reference.get('status') != 'PASS'):
-        return ('NOT_MEASURED', {},
-                'D09_REQUIRED_EVIDENCE_ABSENT: preserved or bound generated RTL, '
-                'validation/lint PASS, manifests PASS, and reference-TB PASS are required')
-
-    cdc_paths = tuple(f'reports/phase2/cdc/{name}.json'
-                      for name in ('crossing', 'async_input', 'reset_dep'))
-    if not set(cdc_paths).issubset(set(manifests.get('output_files') or ())):
-        return 'NOT_MEASURED', {}, 'D09_REQUIRED_EVIDENCE_ABSENT: CDC/RDC outputs undeclared'
-    cdc_receipts = []
-    for relative in cdc_paths:
-        path = project / relative
-        try:
-            if path.is_symlink() or not path.is_file():
-                raise ValueError('absent or symlink')
-            raw = path.read_bytes()
-            body = json.loads(raw)
-        except (OSError, ValueError, TypeError, json.JSONDecodeError) as exc:
-            return 'NOT_MEASURED', {}, f'D09_REQUIRED_EVIDENCE_ABSENT: {relative}: {exc}'
-        if not isinstance(body, Mapping):
-            return 'NOT_MEASURED', {}, f'D09_REQUIRED_EVIDENCE_ABSENT: {relative} is not an object'
-        if body.get('verdict') == 'FAIL':
-            return 'FAIL', {}, f'D09_REQUIRED_CHECK_FAILED: {relative}'
-        if body.get('verdict') != 'PASS':
-            return 'NOT_MEASURED', {}, f'D09_REQUIRED_EVIDENCE_ABSENT: {relative} is not PASS'
-        cdc_receipts.append({'path': relative,
-                             'sha256': hashlib.sha256(raw).hexdigest()})
-
+    for row in steps:
+        if row.get('name') == 'phase2_manifests':
+            for relative in row.get('output_files') or ():
+                if relative in {f'reports/phase2/cdc/{name}.json' for name in ('crossing', 'async_input', 'reset_dep')}:
+                    path = project / relative
+                    try:
+                        if path.is_file() and not path.is_symlink() and json.loads(path.read_bytes()).get('verdict') == 'FAIL':
+                            return 'FAIL', {}, 'D09_REQUIRED_CHECK_FAILED: ' + relative
+                    except (OSError, ValueError, TypeError, AttributeError):
+                        return 'NOT_MEASURED', {}, 'D09_REQUIRED_EVIDENCE_ABSENT: ' + relative
+    try:
+        entry = argv.index('--entry-step')
+        exit_ = argv.index('--exit-step')
+        declared = report.get('declared_window') or {}
+        if (argv[entry + 1] != '1' or argv[exit_ + 1] != '1'
+                or str(declared.get('entry_step')) != '1'
+                or str(declared.get('exit_step')) != '1'
+                or {str(item) for item in declared.get('dispatched_step_ids', ())} != {'1'}):
+            raise ValueError('Phase-2 report does not own the D09 authoring span 1..1')
+    except (ValueError, IndexError, KeyError, TypeError) as exc:
+        return 'NOT_MEASURED', {}, 'D09_REPORT_UNBOUND: ' + str(exc)
+    authors = [row for row in steps if row.get('name') == 'rtl_gen']
+    if len(authors) != 1:
+        return 'NOT_MEASURED', {}, 'D09_REQUIRED_EVIDENCE_ABSENT: unique author required'
+    try:
+        import flow109_metric_acceptance as metrics
+        owned = metrics.d09_owned_metrics(project, authors[0])
+    except (metrics.MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+        return 'NOT_MEASURED', {}, 'D09_OWNED_METRICS_UNAVAILABLE: ' + str(exc)
+    if owned['declared_ports_parameters'] == 'FAIL':
+        return 'FAIL', {}, 'D09_DECLARED_PORTS_PARAMETERS_MISMATCH'
+    if owned['rtl_requirement_mapping'] != 'PASS':
+        return 'NOT_MEASURED', {}, 'D09_REQUIRED_MAPPING_MISSING: ' + ', '.join(owned['missing_items'])
     inventory = [{'path': path, **record} for path, record in sorted(rtl.items())]
     evidence = {
         'runner_invocation_id': binding['invocation_id'],
@@ -1848,11 +1817,11 @@ def _d09_bound_phase2_evidence(
             material, sort_keys=True, separators=(',', ':')).encode()).hexdigest(),
         'rtl_inventory': inventory,
         'input_inventory': material.get('input', {}),
-        'cdc_rdc_receipts': cdc_receipts,
+        'owned_metrics': owned,
         'phase2_report': {'path': str(report_path.relative_to(project)),
                           'sha256': hashlib.sha256(report_path.read_bytes()).hexdigest()},
     }
-    return 'PASS', evidence, 'complete same-invocation D09 owner evidence'
+    return 'PASS', evidence, 'current bound D09 requirement mapping and declared interface'
 
 
 def _finish_d09_selected_owner(

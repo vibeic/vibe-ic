@@ -645,6 +645,313 @@ def inspect_current_outputs(project: Path, ic_class: str, *,
         return None
 
 
+def _d09_requirement_trace(project, body, spec, l9, interface_match, bound):
+    """Join reviewed source addresses to existing consuming responsibilities.
+
+    Ownership is determined by L-layer/field contracts, never words in a demand
+    ID or sentence. The reviewed expectation's structured fact is matched to
+    the exact generator's supported contract; it is not a new prose oracle.
+    Later owners remain unmeasured even when their requirements are traceable.
+    """
+    import hashlib
+    import phase1_expert_parse_track as track
+    import l_doc_taxonomy as taxonomy
+    expectations = body.get("expectations")
+    register = body.get("responsibility_register", [])
+    if not isinstance(expectations, list) or not isinstance(register, list):
+        raise ValueError("D09_EXPECTATION_OWNERSHIP_MISSING: expectations/responsibility_register")
+    def index(rows, label):
+        result = {}
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("id"), str) or row["id"] in result:
+                raise ValueError("D09_OWNERSHIP_POPULATION_INVALID: " + label)
+            result[row["id"]] = row
+        return result
+    expected = index(expectations, "expectations")
+    responsibilities = index(register, "responsibility_register")
+    demand_ids = {row["id"] for row in body["source_demands"]}
+    if (set(expected) | set(responsibilities)) - demand_ids:
+        raise ValueError("D09_SOURCE_POPULATION_DIFFERS: expectation/responsibility has no source demand")
+    declaration, _ = bound("plugin_output/declaration.json")
+    layers = {"L9_INTEGRATION_SPEC": l9}
+    layer_hashes = {}
+    def layer_doc(name):
+        if name not in layers:
+            layers[name], layer_hashes[name] = bound("phase1/generated_docs/" + name + ".json")
+        return layers[name]
+    # These are the current flow's consumer responsibilities (flow109 rows),
+    # not claims that any of them ran or that optional work became mandatory.
+    later = {
+        "L19_CONSTRAINTS_PDK": ("D02", "D03", "D06", "D19", "D21", "D31", "D32", "D49", "D56", "D77", "D80"),
+        "L20_DFT_SCAN_TOPOLOGY": ("D23", "D36", "D52"),
+        "L21_POWER_INTENT": ("D05", "D15", "D46"),
+        "L22_VERIFICATION_PLAN": ("D13", "D14"),
+        "L24_SIGNOFF": ("D65", "D66", "D77", "D80", "D81"),
+        "L25_RELIABILITY_MISSION_PROFILE": ("D59",),
+        "L10_TEST_CASES": ("D13",), "L12_BEHAVIORAL_SEQUENCES": ("D13",),
+        "L3_CMD_PROTOCOL": ("D01", "D16"), "L4_REGMAP": ("D01", "D16"),
+        "L5_ADI_SPEC": ("A01",), "L11_OTP_CONTENT": ("D01", "D16"),
+        "L13_LAB_CALIBRATION": ("D01",), "L23_SECURITY_REQUIREMENTS": ("D17", "D73"),
+    }
+    registry_path = Path(__file__).resolve().parents[1] / "flow/flow109.json"
+    registry = json.loads(registry_path.read_bytes())
+    owners = {row["id"]: row["name"] for row in registry["rows"]}
+    if any(owner not in owners for group in later.values() for owner in group):
+        raise ValueError("D09_OWNER_CONTRACT_UNAVAILABLE")
+    polarity = "active-low" if spec["rst_active_low"] else "active-high"
+    reset = {"name": spec["rst"], "polarity": polarity, "mode": spec["reset_mode"],
+             "clear": "one cycle", "release_value": 0, "ready": "finite N cycle; L7 verification remains D13"}
+    # Witnesses contain derived model facts, never copied free-text source
+    # descriptions. Otherwise a new RTL demand could prove itself by echo.
+    parameters = [{"name": spec["size_param"], "default": spec["size_default"]}]
+    ports = [{"name": name, "direction": direction, "width": width} for name, direction, width in (
+        (spec["clk"], "input", 1), (spec["rst"], "input", 1),
+        (spec["parallel"], "input", spec["size_default"]),
+        (spec["serial_in"], "input", 1), (spec["serial_out"], "output", 1))]
+    interface = {"top_module": spec["top"], "parameters": parameters,
+                 "ports": ports, "roles": {spec["parallel"]: "parallel multiplicand",
+                 spec["serial_in"]: "serial multiplier", spec["serial_out"]: "serial product"},
+                 "reset": reset}
+    parameter = {"parameter": spec["size_param"], "default": spec["size_default"],
+                 "minimum": spec.get("size_min")}
+    latency = serial_path_latency(emit_rtl(spec), spec["serial_in"], spec["serial_out"])
+    # Every witness below is backed by inspect_current_outputs' full byte and
+    # population equality, not a token search through arbitrary authored RTL.
+    frs_facts = [
+        {"operator": "modulo multiplication", "equation": f'{spec["serial_out"]} {spec["parallel"]} {spec["serial_in"]} mod 2 N'},
+        {"modulo": "N-bit pattern", "integer_encoding": declaration["integer_encoding"]},
+        parameter,
+        {"latency": latency, "stream": f'{spec["serial_in"]} bit i to {spec["serial_out"]} cycle'},
+        {"bit_order": declaration["bit_order"], "declaration_owner": "L7"},
+        {"functional": "selected exact multiplier", "algorithm": "carry-save", "pending": "L9 timing DRC LVS"},
+    ]
+    architecture = {"selected": "single module with flop state", "top_module": spec["top"],
+                    "namespace_check_pending": "PDK std-cell; D10 remains unmeasured", "language": "V"}
+    build = {"declaration": {k: v for k, v in declaration.items() if k in set(plugin_declaration(spec)) | {"size_param"}},
+             "derived_algorithm": {"multiplier_algorithm": "carry_save_bit_serial"}, "scope": "latency_cycles product cycle size_param",
+             "parameters": parameters, "parameter_domain": parameter}
+    facts = {("L1_DATASHEET", "ic_name"): [spec["top"]],
+             ("L2_FRS", "frs_sections"): frs_facts,
+             ("L8_RTL_CONSTANTS", "parameters"): [parameter],
+             ("L8_TIMING_WAVEFORM", "clock_and_reset_waveform"): [{"clock": spec["clk"], "edge": "posedge", "reset": reset}],
+             ("L9_INTEGRATION_SPEC", "top_module"): [spec["top"]],
+             ("L9_INTEGRATION_SPEC", "top_ports"): [interface],
+             ("L9_INTEGRATION_SPEC", "parameters"): [parameter],
+             ("L9_INTEGRATION_SPEC", "resets"): [reset],
+             ("L9_INTEGRATION_SPEC", "integration.reset_boot"): [reset],
+             ("L9_INTEGRATION_SPEC", "integration.external_interface"): [interface],
+             ("L9_INTEGRATION_SPEC", "integration.architecture"): [architecture],
+             ("L9_INTEGRATION_SPEC", "integration.build_declaration"): [build]}
+    def address(leaf):
+        path = str(leaf.get("field_path") or "").strip('/').replace('/', '.')
+        path = '.'.join(part for part in path.split('.') if not part.isdigit())
+        return track._normalise_field_path(path, leaf.get("layer"))
+    mapped, missing, traces, required = [], [], [], []
+    for demand in body["source_demands"]:
+        identity = demand["id"]
+        parent = expected.get(identity)
+        retained = responsibilities.get(identity)
+        record = {"id": identity, "source_demand": demand, "targets": [], "verification_status": "NOT_MEASURED"}
+        if retained is not None:
+            if (retained.get("responsibility_kind") not in ("native_only", "mixed_ic_and_native")
+                    or not isinstance(retained.get("normal_owner"), dict)
+                    or not retained["normal_owner"].get("role") or not retained["normal_owner"].get("input_authority")):
+                missing.append(identity)
+                record["reason"] = "existing responsibility_register.normal_owner is missing or malformed"
+            else:
+                leafs = parent.get("sub_expectations", [parent]) if isinstance(parent, dict) else []
+                if not isinstance(leafs, list) or any(not isinstance(leaf, dict) for leaf in leafs):
+                    raise ValueError("D09_OWNERSHIP_POPULATION_INVALID: expectation leaves")
+                # A field-address spelling cannot turn an RTL-owned layer into
+                # native-only. Use the same consuming responsibility as below.
+                conflict = any(leaf.get("layer") in {key[0] for key in facts}
+                    and not (leaf.get("layer") == "L9_INTEGRATION_SPEC"
+                        and address(leaf).startswith("integration.verification"))
+                    for leaf in leafs)
+                authority = retained["normal_owner"]["input_authority"]
+                authority = [authority] if isinstance(authority, str) else authority
+                if not isinstance(authority, list) or not authority:
+                    raise ValueError("D09_OWNER_AUTHORITY_MISSING: " + identity)
+                references = {}
+                for relative in authority:
+                    if not isinstance(relative, str):
+                        raise ValueError("D09_OWNER_AUTHORITY_INVALID: " + identity)
+                    path = project / "input" / relative
+                    if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to((project / "input").resolve()):
+                        raise ValueError("D09_OWNER_AUTHORITY_UNAVAILABLE: " + relative)
+                    references[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+                flag = retained["normal_owner"].get("selected_flag")
+                if flag is not None:
+                    manifest, _ = bound("input/flow109-manifest.json")
+                    actual = manifest.get("features", {}).get(flag)
+                    if flag not in registry["predicate_names"] or type(actual) is not bool or actual is not retained["normal_owner"].get("selection_value"):
+                        raise ValueError("D09_OWNER_SELECTION_MISMATCH: " + identity)
+                if conflict:
+                    required.append(identity)
+                    missing.append(identity)
+                    record.update(mapping_status="OWNER_CONFLICT", reason="native-only label conflicts with RTL-owned reviewed address")
+                else:
+                    record.update(normal_owner=retained["normal_owner"], retained_responsibility=retained,
+                                  input_authority_sha256=references, mapping_status="RESPONSIBILITY_PRESERVED")
+            traces.append(record)
+            continue
+        if parent is None or parent.get("requirement") != demand["requirement"] or parent.get("evidence") != demand["evidence"]:
+            missing.append(identity)
+            record["reason"] = "source_demands item lacks identical reviewed expectation ownership"
+            traces.append(record)
+            continue
+        leaves = parent.get("sub_expectations", [parent])
+        if not isinstance(leaves, list) or not leaves or any(not isinstance(leaf, dict) for leaf in leaves):
+            missing.append(identity); record["reason"] = "empty expectation leaf population"; traces.append(record); continue
+        own = False
+        complete = True
+        for leaf in leaves:
+            layer = leaf.get("layer")
+            raw_path = leaf.get("field_path")
+            path = address(leaf)
+            target = {"layer": layer, "field_path": raw_path, "source_expectation": leaf,
+                      "verification_status": "NOT_MEASURED"}
+            if layer in later or (layer == "L9_INTEGRATION_SPEC" and path.startswith("integration.verification")):
+                ids = later.get(layer, ("D13", "D14", "D26", "D65"))
+                target.update(normal_owner={"steps": {k: owners[k] for k in ids},
+                    "input_authority": layer, "live_consumption": "NOT_CHECKED"},
+                    mapping_status="DOWNSTREAM_RESPONSIBILITY_PRESERVED")
+                # Read the actual retained layer, bind its bytes, but do not
+                # demand that its native tools or unresolved parameters pass.
+                layer_doc(layer)
+            else:
+                own = True
+                target["normal_owner"] = {"steps": {"D09": owners["D09"]}, "input_authority": layer}
+                tokens = leaf.get("expected_tokens")
+                scopes = [key for key in facts if key[0] == layer and
+                          (path == key[1] or path.startswith(key[1] + "."))]
+                selected = max(scopes, key=lambda key: len(key[1])) if scopes else None
+                candidates = facts.get(selected, [])
+                node = (track.subtree_at(layer_doc(layer), raw_path, layer)
+                        if layer in {key[0] for key in facts} else None)
+                if (node is None or not interface_match or not isinstance(tokens, list) or not tokens
+                        or track.unaskable_tokens(tokens)):
+                    complete = False; target["mapping_status"] = "UNMAPPED_RTL_REQUIREMENT"
+                else:
+                    witness = next((fact for fact in candidates if all(
+                        track.phrase_present(token, json.dumps(node, ensure_ascii=False))
+                        and track.phrase_present(token, json.dumps(fact, ensure_ascii=False))
+                        for token in tokens)), None)
+                    if witness is None:
+                        complete = False
+                        target.update(mapping_status="UNMAPPED_RTL_REQUIREMENT",
+                            reason="not established by selected/derived implementation evidence",
+                            unestablished_tokens=[token for token in tokens if not any(
+                                track.phrase_present(token, json.dumps(fact, ensure_ascii=False)) for fact in candidates)])
+                    else:
+                        target.update(mapping_status="MAPPED_TO_EXACT_GENERATOR", generator_contract=witness,
+                                      rtl={"path": "phase2/stage1/rtl/" + spec["top"] + ".v", "top": spec["top"]})
+            record["targets"].append(target)
+        if own:
+            required.append(identity)
+            if complete:
+                mapped.append({"id": identity, "targets": record["targets"]})
+            else:
+                missing.append(identity)
+        record["mapping_status"] = ("RTL_MAPPED" if own else "DOWNSTREAM_RESPONSIBILITY_PRESERVED") if complete else "UNMAPPED_RTL_REQUIREMENT"
+        traces.append(record)
+    if not required:
+        raise ValueError("D09_EMPTY_RTL_REQUIREMENT_POPULATION: no validated absence is inferred")
+    # Source choices remain available as source contracts. They are deliberately
+    # outside `facts`: an allowed alternative is not the implementation chosen.
+    option_context = {"used_as_selected_evidence": False,
+        "parameter_declarations": l9["parameters"],
+        "declaration_contract": l9.get("integration", {}).get("build_declaration", []),
+        "architecture_contract": l9.get("integration", {}).get("architecture", [])}
+    return {"mapped_items": mapped, "missing_items": missing, "required_rtl_items": required,
+            "source_option_context": option_context,
+            "responsibility_register": traces, "layer_source_sha256": layer_hashes,
+            "ownership_contract": {"registry_sha256": hashlib.sha256(registry_path.read_bytes()).hexdigest(),
+                                   "taxonomy_sha256": hashlib.sha256(Path(taxonomy.__file__).read_bytes()).hexdigest()}}
+
+
+def d09_owned_metrics(project: Path, ic_class: str) -> dict:
+    """Check the supported generator's source claims; unknown claims stay owed.
+
+    Every source demand remains in the responsibility trace. Only RTL-owned
+    facts enter D09's required set; later execution stays explicitly pending.
+    Structured reviewed source addresses bind exact generator witnesses.
+    """
+    import hashlib
+    def bound(relative):
+        path = project / relative
+        if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(project.resolve()):
+            raise ValueError("D09_SOURCE_UNAVAILABLE: " + relative)
+        raw = path.read_bytes()
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise ValueError("D09_DUPLICATE_SOURCE_KEY: " + key)
+                result[key] = value
+            return result
+        return json.loads(raw, object_pairs_hook=unique), hashlib.sha256(raw).hexdigest()
+    body, body_sha = bound("reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json")
+    l9, l9_sha = bound("phase1/generated_docs/L9_INTEGRATION_SPEC.json")
+    if not isinstance(body, dict) or not isinstance(l9, dict):
+        raise ValueError("D09_SOURCE_OBJECT_INVALID")
+    demands = body.get("source_demands")
+    if (not isinstance(demands, list) or not demands
+            or any(not isinstance(d, dict) or not isinstance(d.get("id"), str)
+                   or not d["id"] or not isinstance(d.get("requirement"), str)
+                   or not d["requirement"].strip() or not isinstance(d.get("evidence"), list)
+                   or not d["evidence"] or not all(isinstance(e, str) and e.strip() for e in d["evidence"])
+                   for d in demands)
+            or len({d["id"] for d in demands}) != len(demands)):
+        raise ValueError("D09_REQUIRED_POPULATION_INVALID")
+    plan = inspect_current_outputs(project, ic_class)
+    if plan is None:
+        raise ValueError("D09_SERIAL_SPEC_RTL_OR_DECLARATION_MISMATCH")
+    spec = plan["spec"]
+    # Complete L9 population, not merely the five roles selected by extraction.
+    expected_ports = {spec["clk"]: ("input", 1), spec["rst"]: ("input", 1),
+                      spec["parallel"]: ("input", spec["size_default"]),
+                      spec["serial_in"]: ("input", 1), spec["serial_out"]: ("output", 1)}
+    expected_ports.update({name: (direction, 1) for name, direction in spec.get("reserved_test_ports", {}).items()})
+    ports = l9.get("top_ports")
+    parameters = l9.get("parameters")
+    if not isinstance(ports, list) or not isinstance(parameters, list) or not parameters:
+        raise ValueError("D09_L9_INTERFACE_POPULATION_MISSING")
+    actual_ports = {}
+    for port in ports:
+        if not isinstance(port, dict) or port.get("name") in actual_ports:
+            raise ValueError("D09_L9_PORT_POPULATION_INVALID")
+        name = port.get("name")
+        direction = port.get("direction") or port.get("mode")
+        width = port.get("width")
+        if not isinstance(name, str) or direction not in ("input", "output", "inout") or type(width) is not int or width < 1:
+            raise ValueError("D09_L9_PORT_POPULATION_INVALID")
+        actual_ports[name] = (direction, width)
+    actual_parameters = {}
+    for parameter in parameters:
+        if not isinstance(parameter, dict) or not isinstance(parameter.get("name"), str) or parameter["name"] in actual_parameters:
+            raise ValueError("D09_L9_PARAMETER_POPULATION_INVALID")
+        value = parameter.get("default")
+        if isinstance(value, bool) or not re.fullmatch(r"[0-9]+", str(value)):
+            raise ValueError("D09_L9_PARAMETER_DEFAULT_UNSUPPORTED")
+        actual_parameters[parameter["name"]] = int(value)
+    interface_match = (actual_ports == expected_ports
+                       and actual_parameters == {spec["size_param"]: spec["size_default"]})
+    trace = _d09_requirement_trace(project, body, spec, l9, interface_match, bound)
+    mapped, missing = trace["mapped_items"], trace["missing_items"]
+    return {"schema": "vibeic.d09.owned-metrics.v1",
+            "source_demands": demands, **trace,
+            "rtl_requirement_mapping": "NOT_MEASURED" if missing else "PASS",
+            "declared_ports_parameters": "PASS" if interface_match else "FAIL",
+            "reference_ports": {k: list(v) for k, v in actual_ports.items()}, "reference_parameters": actual_parameters,
+            "generator_ports": {k: list(v) for k, v in expected_ports.items()},
+            "declared_reference": {"ports": {k: list(v) for k, v in actual_ports.items()},
+                                   "parameters": actual_parameters},
+            "source": {"expectations_sha256": body_sha, "L9_sha256": l9_sha,
+                       "rtl_sha256": hashlib.sha256((project / plan["rtl"]).read_bytes()).hexdigest()},
+            "scope": "D09 only; no lint, CDC, simulation or whole-IC credit"}
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("project")
