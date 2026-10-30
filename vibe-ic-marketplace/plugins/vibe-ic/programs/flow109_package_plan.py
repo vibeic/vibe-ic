@@ -200,7 +200,7 @@ def _current_bare_die_load(project: Path, io: Mapping) -> tuple[dict, list[dict]
         raise D06Refusal("D06_DELIVERY_SCOPE_OWNER_FACT_MISSING",
                          str(TAPEOUT_DECLARATION))
 
-    if (project / CURRENT_REPAIR).is_file():
+    if (project / CURRENT_REPAIR).exists() or (project / CURRENT_REPAIR).is_symlink():
         repair, repair_ref = _bound_json(project, CURRENT_REPAIR)
         final = repair.get("final")
         if repair.get("verdict") != "PASS" or not isinstance(final, Mapping):

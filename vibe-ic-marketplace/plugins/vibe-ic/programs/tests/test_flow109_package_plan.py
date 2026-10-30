@@ -542,3 +542,19 @@ def test_native_sta_fallback_refuses_stale_or_foreign_load(tmp_path, monkeypatch
     result = d06.execute(tmp_path, _context())
     assert result['component_status'] != 'PASS', result
     assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('shape', ['dangling_symlink', 'directory'])
+def test_existing_invalid_repair_shape_cannot_be_treated_as_absent(tmp_path, monkeypatch, shape):
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    _native_signoff_fixture(tmp_path)
+    repair = tmp_path / d06.CURRENT_REPAIR
+    if shape == 'directory':
+        repair.mkdir()
+    else:
+        repair.symlink_to(tmp_path / 'missing-repair.json')
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] == 'NOT_MEASURED', result
+    assert result['reason'] in {'D06_EVIDENCE_WRONG_SOURCE', 'D06_EVIDENCE_ABSENT_OR_INVALID'}
