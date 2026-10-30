@@ -5687,3 +5687,75 @@ def accept_m89(project: Path, context: Mapping, component: Mapping) -> dict:
     """BLOCKING final mixed metrics; qualification remains independently owned."""
     from flow109_mixed_native import bind_metrics
     return bind_metrics(project, context, component)
+
+
+def accept_d66(project: Path, context: Mapping, component: Mapping) -> dict:
+    """Consume current D66 evidence; category coverage cannot imply pad physics."""
+    import flow109_final_perc as owner
+    project = Path(project).resolve()
+    specs = {
+        'final_perc.final_esd_supply_topology': {
+            'operator': 'covers_all',
+            'required_set_ref': 'requirements/final_perc/final_esd_supply_topology.json#/required_items'},
+        'final_perc.final_perc_latchup_errors': {
+            'operator': 'eq', 'value': 0, 'unit': 'count'},
+    }
+    result = {'schema': SCHEMA, 'row_id': 'D66', 'status': 'NOT_MEASURED',
+              'metric_status': 'NOT_MEASURED', 'delivery_blocked': True, 'obligations': []}
+    try:
+        declared = context['resolved_row']['obligations']
+        if (len(declared) != len(specs) or {r['id'] for r in declared} != set(specs)
+                or any(any(r['expectation'].get(k) != v for k, v in specs[r['id']].items())
+                       for r in declared)):
+            raise MetricRefusal('METRIC_OBLIGATIONS_UNREGISTERED', 'D66')
+        measurements = owner.metric_measurements(project, component['receipt'])
+        record = owner._read(owner._bound(project, component['receipt'], 'D66 component'))
+        if (record.get('execution_context') != context
+                or record.get('context_sha256') != context.get('context_sha256')
+                or record.get('component_status') != component.get('component_status')):
+            raise MetricRefusal('METRIC_EXECUTION_EVIDENCE_INVALID', 'D66 context/result differs')
+        for obligation in declared:
+            oid = obligation['id']; spec = specs[oid]
+            measurement = dict(measurements[oid])
+            try:
+                if measurement['status'] != 'MEASURED':
+                    status, detail = measurement['status'], measurement['reason']
+                    authority = None
+                else:
+                    if spec['operator'] == 'covers_all':
+                        authority, _ = _approved_authority(project, spec['required_set_ref'], ('category',))
+                    else:
+                        authority = {'status': 'APPROVED', 'value': 0, 'unit': 'count',
+                                     'source': 'flow109_registry_contract'}
+                    measurement['identity'] = {
+                        'producer': component['receipt'],
+                        'checker': record['outputs'],
+                        'tool_execution': record['runtime_image'],
+                        'consumed_inputs': record['inputs'],
+                        'requirements': authority,
+                        'configuration': {'owner': record['operation_sources'],
+                                          'consumer_sha256': _sha(Path(__file__).read_bytes())},
+                    }
+                    status, detail = evaluate_operator(spec['operator'], measurement, authority)
+                result['obligations'].append({'id': oid, 'metric': obligation['metric'],
+                    'operator': spec['operator'], 'status': status, 'detail': detail,
+                    'measurement': measurement, 'authority': authority})
+            except (MetricRefusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                result['obligations'].append({'id': oid, 'status': 'NOT_MEASURED',
+                    'reason': getattr(exc, 'code', 'METRIC_EXECUTION_EVIDENCE_INVALID'), 'detail': str(exc)})
+        statuses = [r['status'] for r in result['obligations']]
+        if 'FAIL' in statuses:
+            result.update(status='FAIL', metric_status='FAIL')
+        elif component.get('component_status') == 'FAIL':
+            result['status'] = 'FAIL'
+        elif statuses and all(s == 'PASS' for s in statuses):
+            result['metric_status'] = 'PASS'
+        result['reason'] = 'D66_COMPLETION_DEPENDENCIES_PENDING' if result['metric_status'] == 'PASS' else 'D66_METRIC_BINDINGS_INCOMPLETE'
+    except (owner.AdmissionRefusal, MetricRefusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result['reason'] = getattr(exc, 'code', 'METRIC_EXECUTION_EVIDENCE_INVALID')
+        result['detail'] = str(exc)
+        result['obligations'] = [{'id': oid, 'status': 'NOT_MEASURED',
+                                  'reason': result['reason']} for oid in specs]
+        if component.get('component_status') == 'FAIL' or getattr(exc, 'status', None) == 'FAIL':
+            result['status'] = 'FAIL'
+    return result

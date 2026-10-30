@@ -1406,11 +1406,15 @@
           "native_steps": [],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "phase1_one_shot_runner",
-            "native_step_id": "D1", "owner_entry_step": "D1", "owner_exit_step": "D1",
+            "kind": "canonical_owner_window",
+            "owner_runner": "phase1_one_shot_runner",
+            "native_step_id": "D1",
+            "owner_entry_step": "D1",
+            "owner_exit_step": "D1",
             "producer": "phase1_one_shot_runner.py:doc_extract",
             "consumer": "phase1_one_shot_runner canonical D1 acceptance",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "engine_families": [],
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
         }
@@ -1531,11 +1535,15 @@
           "native_steps": [],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "phase1_one_shot_runner",
-            "native_step_id": "0.5ic", "owner_entry_step": "D1", "owner_exit_step": "D1",
+            "kind": "canonical_owner_window",
+            "owner_runner": "phase1_one_shot_runner",
+            "native_step_id": "0.5ic",
+            "owner_entry_step": "D1",
+            "owner_exit_step": "D1",
             "producer": "phase1_one_shot_runner.py:_run_step_0_5ic",
             "consumer": "phase1_one_shot_runner route declaration acceptance",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "engine_families": [],
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
         }
@@ -3452,9 +3460,17 @@
             "native_step_id": "flow109.D08",
             "producer": "ip_integration_check.py:audit",
             "consumer": "flow109_macro_mixed.py:_d08",
-            "engine_families": ["python3"],
-            "engine_executables": {"python3": "python3"},
-            "engine_steps": {"python3": ["macro view-set audit"]},
+            "engine_families": [
+              "python3"
+            ],
+            "engine_executables": {
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "python3": [
+                "macro view-set audit"
+              ]
+            },
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
             "component_scope": "current macro view-set component only",
@@ -3596,11 +3612,15 @@
           "native_steps": [],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "1", "owner_entry_step": "1", "owner_exit_step": "4",
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "1",
+            "owner_entry_step": "1",
+            "owner_exit_step": "4",
             "producer": "design_one_shot_runner.py:step_rtl_gen",
             "consumer": "design_one_shot_runner rtl_gen retained acceptance",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "engine_families": [],
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
         }
@@ -3701,13 +3721,29 @@
           ],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "P0", "owner_entry_step": "1", "owner_exit_step": "1",
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "P0",
+            "owner_entry_step": "1",
+            "owner_exit_step": "1",
             "producer": "vibe_ic_one_shot_runner.py:_d10_p0_native",
             "consumer": "flow109_metric_acceptance.py:accept_d10",
-            "engine_families": ["yosys", "verilator"],
-            "engine_steps": {"yosys": ["Yosys.JsonHeader"], "verilator": ["Verilator.Lint"]},
-            "engine_executables": {"yosys": "yosys", "verilator": "verilator"},
+            "engine_families": [
+              "yosys",
+              "verilator"
+            ],
+            "engine_steps": {
+              "yosys": [
+                "Yosys.JsonHeader"
+              ],
+              "verilator": [
+                "Verilator.Lint"
+              ]
+            },
+            "engine_executables": {
+              "yosys": "yosys",
+              "verilator": "verilator"
+            },
             "acceptance_scope": "source_owned_D10_metrics_and_dft_ports",
             "flow109_metrics_status": "IMPLEMENTED"
           }
@@ -4324,18 +4360,111 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "SymbiYosys + ABC PDR/BMC3 + SMTBMC/Yices cover + Python readers",
-          "native_steps": ["SymbiYosys.Prove", "SymbiYosys.Bmc", "SymbiYosys.Cover", "Yosys.FormalRead", "Yosys.Prep", "ABC.PDR", "ABC.BMC3", "SMTBMC.Cover", "Yices.SMT2Cover", "formal_harness_gen.generate", "formal_property_run.run", "formal_property_run.run_reachability", "D14.RetainedReaders"],
+          "native_steps": [
+            "SymbiYosys.Prove",
+            "SymbiYosys.Bmc",
+            "SymbiYosys.Cover",
+            "Yosys.FormalRead",
+            "Yosys.Prep",
+            "ABC.PDR",
+            "ABC.BMC3",
+            "SMTBMC.Cover",
+            "Yices.SMT2Cover",
+            "formal_harness_gen.generate",
+            "formal_property_run.run",
+            "formal_property_run.run_reachability",
+            "D14.RetainedReaders"
+          ],
           "capability_status": "SUPPORTED_SUBSET_NOT_QUALIFIED",
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "5", "owner_entry_step": "4", "owner_exit_step": "5",
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "5",
+            "owner_entry_step": "4",
+            "owner_exit_step": "5",
             "producer": "design_one_shot_runner.py:sim",
             "consumer": "design_one_shot_runner formal manifest acceptance",
-            "engine_families": ["sby", "yosys", "yosys-abc", "yosys-smtbmc", "yices-smt2", "python3"],
-            "engine_executables": {"sby": "sby", "yosys": "yosys", "yosys-abc": "yosys-abc", "yosys-smtbmc": "yosys-smtbmc", "yices-smt2": "yices-smt2", "python3": "python3"},
-            "engine_steps": {"sby": ["SymbiYosys.Prove", "SymbiYosys.Bmc", "SymbiYosys.Cover"], "yosys": ["Yosys.FormalRead", "Yosys.Prep"], "yosys-abc": ["ABC.PDR", "ABC.BMC3"], "yosys-smtbmc": ["SMTBMC.Cover"], "yices-smt2": ["Yices.SMT2Cover"], "python3": ["formal_harness_gen.generate", "formal_property_run.run", "formal_property_run.run_reachability", "D14.RetainedReaders"]}, "acceptance_scope": "existing_native_component_only",
-            "qualification_modes": {"smt_yices": {"purpose": "D14.default.smt_yices", "engine_families": ["sby", "yosys", "yosys-smtbmc", "yices-smt2", "python3"], "engine_steps": {"sby": ["SymbiYosys.Prove", "SymbiYosys.Cover"], "yosys": ["Yosys.FormalRead", "Yosys.Prep"], "yosys-smtbmc": ["SMTBMC.Prove", "SMTBMC.Cover"], "yices-smt2": ["Yices.SMT2Prove", "Yices.SMT2Cover"], "python3": ["formal_harness_gen.generate", "formal_property_run.run", "formal_property_run.run_reachability", "D14.RetainedReaders"]}}},
+            "engine_families": [
+              "sby",
+              "yosys",
+              "yosys-abc",
+              "yosys-smtbmc",
+              "yices-smt2",
+              "python3"
+            ],
+            "engine_executables": {
+              "sby": "sby",
+              "yosys": "yosys",
+              "yosys-abc": "yosys-abc",
+              "yosys-smtbmc": "yosys-smtbmc",
+              "yices-smt2": "yices-smt2",
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "sby": [
+                "SymbiYosys.Prove",
+                "SymbiYosys.Bmc",
+                "SymbiYosys.Cover"
+              ],
+              "yosys": [
+                "Yosys.FormalRead",
+                "Yosys.Prep"
+              ],
+              "yosys-abc": [
+                "ABC.PDR",
+                "ABC.BMC3"
+              ],
+              "yosys-smtbmc": [
+                "SMTBMC.Cover"
+              ],
+              "yices-smt2": [
+                "Yices.SMT2Cover"
+              ],
+              "python3": [
+                "formal_harness_gen.generate",
+                "formal_property_run.run",
+                "formal_property_run.run_reachability",
+                "D14.RetainedReaders"
+              ]
+            },
+            "acceptance_scope": "existing_native_component_only",
+            "qualification_modes": {
+              "smt_yices": {
+                "purpose": "D14.default.smt_yices",
+                "engine_families": [
+                  "sby",
+                  "yosys",
+                  "yosys-smtbmc",
+                  "yices-smt2",
+                  "python3"
+                ],
+                "engine_steps": {
+                  "sby": [
+                    "SymbiYosys.Prove",
+                    "SymbiYosys.Cover"
+                  ],
+                  "yosys": [
+                    "Yosys.FormalRead",
+                    "Yosys.Prep"
+                  ],
+                  "yosys-smtbmc": [
+                    "SMTBMC.Prove",
+                    "SMTBMC.Cover"
+                  ],
+                  "yices-smt2": [
+                    "Yices.SMT2Prove",
+                    "Yices.SMT2Cover"
+                  ],
+                  "python3": [
+                    "formal_harness_gen.generate",
+                    "formal_property_run.run",
+                    "formal_property_run.run_reachability",
+                    "D14.RetainedReaders"
+                  ]
+                }
+              }
+            },
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
         }
@@ -5653,17 +5782,30 @@
           "provider": "vibeic",
           "tools": "Python SDC emitter + LibreLane Misc.LoadBaseSDC",
           "native_steps": [
-            "Python.SDCPlan", "Misc.LoadBaseSDC"
+            "Python.SDCPlan",
+            "Misc.LoadBaseSDC"
           ],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "7", "owner_entry_step": "7", "owner_exit_step": "7",
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "7",
+            "owner_entry_step": "7",
+            "owner_exit_step": "7",
             "producer": "design_one_shot_runner.py:step_asic_sdc",
             "consumer": "design_one_shot_runner retained SDC acceptance",
-            "engine_families": ["python3"],
-            "engine_executables": {"python3": "python3"},
-            "engine_steps": {"python3": ["Python.SDCPlan", "Misc.LoadBaseSDC"]},
+            "engine_families": [
+              "python3"
+            ],
+            "engine_executables": {
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "python3": [
+                "Python.SDCPlan",
+                "Misc.LoadBaseSDC"
+              ]
+            },
             "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "SOURCE_BOUND_PLAN_AND_NATIVE_COPY_NOT_PLATFORM_QUALIFIED"
           }
@@ -5790,11 +5932,15 @@
           "native_steps": [],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "8", "owner_entry_step": "8", "owner_exit_step": "8",
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "8",
+            "owner_entry_step": "8",
+            "owner_exit_step": "8",
             "producer": "design_one_shot_runner.py:step_asic_sdc",
             "consumer": "design_one_shot_runner.py:step_sdc_validation early preflight",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "engine_families": [],
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
         }
@@ -6213,11 +6359,15 @@
           "native_steps": [],
           "execution_status": "NATIVE_OWNER_WIRED_NOT_CASE_QUALIFIED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "11", "owner_entry_step": "11", "owner_exit_step": "11",
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "11",
+            "owner_entry_step": "11",
+            "owner_exit_step": "11",
             "producer": "design_one_shot_runner.py:_step_dft_insertion",
             "consumer": "design_one_shot_runner retained Step 11 canonical acceptance",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "engine_families": [],
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
         }
@@ -6331,14 +6481,42 @@
           "select_when": "otherwise",
           "provider": "other",
           "tools": "LibreLane Yosys.Resynthesis + bound logical scan-cell census",
-          "native_steps": ["Yosys.Resynthesis", "D24.ScanCellPreservation"],
+          "native_steps": [
+            "Yosys.Resynthesis",
+            "D24.ScanCellPreservation"
+          ],
           "execution_status": "NATIVE_OWNER_WIRED_NOT_CASE_QUALIFIED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "12", "owner_entry_step": "12", "owner_exit_step": "12",
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "12",
+            "owner_entry_step": "12",
+            "owner_exit_step": "12",
             "producer": "design_one_shot_runner.py:_d24_resynthesis",
             "consumer": "flow109_metric_acceptance.py:accept_d24 via selected public owner",
-            "engine_families": ["python3", "yosys", "yosys-abc"], "engine_executables": {"python3": "python3", "yosys": "yosys", "yosys-abc": "yosys-abc"}, "engine_steps": {"python3": ["Yosys.Resynthesis"], "yosys": ["Yosys.Resynthesis", "D24.ScanCellPreservation"], "yosys-abc": ["Yosys.Resynthesis.ABCMapping"]}, "acceptance_scope": "existing_native_component_only",
+            "engine_families": [
+              "python3",
+              "yosys",
+              "yosys-abc"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "yosys": "yosys",
+              "yosys-abc": "yosys-abc"
+            },
+            "engine_steps": {
+              "python3": [
+                "Yosys.Resynthesis"
+              ],
+              "yosys": [
+                "Yosys.Resynthesis",
+                "D24.ScanCellPreservation"
+              ],
+              "yosys-abc": [
+                "Yosys.Resynthesis.ABCMapping"
+              ]
+            },
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "SOURCE_BOUND_NOT_PLATFORM_QUALIFIED"
           }
         }
@@ -6454,11 +6632,15 @@
           ],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "13", "owner_entry_step": "11", "owner_exit_step": "13",
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "13",
+            "owner_entry_step": "11",
+            "owner_exit_step": "13",
             "producer": "design_one_shot_runner.py:step_dft_lec_chain",
             "consumer": "design_one_shot_runner retained DFT/LEC acceptance",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "engine_families": [],
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
         }
@@ -6600,11 +6782,15 @@
           ],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "10", "owner_entry_step": "10", "owner_exit_step": "10",
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "10",
+            "owner_entry_step": "10",
+            "owner_exit_step": "10",
             "producer": "vibe_ic_one_shot_runner.py:_complete_prelayout_timing",
             "consumer": "canonical Step10 pre-layout timing acceptance + design_one_shot_runner.py:step_sdc_validation_post_prelayout",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "engine_families": [],
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
         }
@@ -7138,11 +7324,15 @@
           "native_steps": [],
           "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
           "dispatch": {
-            "kind": "canonical_owner_window", "owner_runner": "design_one_shot_runner",
-            "native_step_id": "14", "owner_entry_step": "14", "owner_exit_step": "14",
+            "kind": "canonical_owner_window",
+            "owner_runner": "design_one_shot_runner",
+            "native_step_id": "14",
+            "owner_entry_step": "14",
+            "owner_exit_step": "14",
             "producer": "design_one_shot_runner.py:step_synthesis_handoff",
             "consumer": "design_one_shot_runner retained handoff acceptance",
-            "engine_families": [], "acceptance_scope": "existing_native_component_only",
+            "engine_families": [],
+            "acceptance_scope": "existing_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED"
           }
         }
@@ -8339,9 +8529,22 @@
             "native_step_id": "flow109.M03",
             "producer": "mixed_signal_top_lvs_run.py:run",
             "consumer": "ip_integration_check.py:audit",
-            "engine_families": ["klayout", "python3"],
-            "engine_executables": {"klayout": "klayout", "python3": "python3"},
-            "engine_steps": {"klayout": ["current macro instance merge"], "python3": ["merge receipt consumer"]},
+            "engine_families": [
+              "klayout",
+              "python3"
+            ],
+            "engine_executables": {
+              "klayout": "klayout",
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "klayout": [
+                "current macro instance merge"
+              ],
+              "python3": [
+                "merge receipt consumer"
+              ]
+            },
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
             "component_scope": "current analog macro integration component only",
@@ -8901,9 +9104,22 @@
             "native_step_id": "flow109.M04",
             "producer": "mixed_signal_power_domain_run.py:main",
             "consumer": "power_domain_crossing_check.py:main",
-            "engine_families": ["yosys", "python3"],
-            "engine_executables": {"yosys": "yosys", "python3": "python3"},
-            "engine_steps": {"yosys": ["power-domain connectivity"], "python3": ["crossing consumers"]},
+            "engine_families": [
+              "yosys",
+              "python3"
+            ],
+            "engine_executables": {
+              "yosys": "yosys",
+              "python3": "python3"
+            },
+            "engine_steps": {
+              "yosys": [
+                "power-domain connectivity"
+              ],
+              "python3": [
+                "crossing consumers"
+              ]
+            },
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
             "component_scope": "current mixed power-domain component only",
@@ -11909,9 +12125,15 @@
               "opensta": "sta"
             },
             "engine_steps": {
-              "python3": ["PathDelayCoverageConsumer"],
-              "yosys": ["PathDelayATPG"],
-              "opensta": ["PathDelayATPG"]
+              "python3": [
+                "PathDelayCoverageConsumer"
+              ],
+              "yosys": [
+                "PathDelayATPG"
+              ],
+              "opensta": [
+                "PathDelayATPG"
+              ]
             },
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
@@ -12062,9 +12284,15 @@
               "opensta": "sta"
             },
             "engine_steps": {
-              "python3": ["SmallDelayDefectCoverageConsumer"],
-              "yosys": ["SmallDelayDefectATPG"],
-              "opensta": ["SmallDelayDefectATPG"]
+              "python3": [
+                "SmallDelayDefectCoverageConsumer"
+              ],
+              "yosys": [
+                "SmallDelayDefectATPG"
+              ],
+              "opensta": [
+                "SmallDelayDefectATPG"
+              ]
             },
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
@@ -13806,17 +14034,38 @@
             "native_step_id": "flow109.M06",
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
-            "engine_families": ["python3", "ngspice", "iverilog", "vvp", "opensta"],
+            "engine_families": [
+              "python3",
+              "ngspice",
+              "iverilog",
+              "vvp",
+              "opensta"
+            ],
             "engine_executables": {
-              "python3": "python3", "ngspice": "ngspice", "iverilog": "iverilog",
-              "vvp": "vvp", "opensta": "sta"
+              "python3": "python3",
+              "ngspice": "ngspice",
+              "iverilog": "iverilog",
+              "vvp": "vvp",
+              "opensta": "sta"
             },
             "engine_steps": {
-              "python3": ["mixed_signal_m3_run", "mixed_signal_cosim_check", "mixed_signal_interface_si_check"],
-              "ngspice": ["mixed_signal_m3_run.native_measurement"],
-              "iverilog": ["mixed_signal_m3_run.wrapper_compile"],
-              "vvp": ["mixed_signal_m3_run.wrapper_measurement"],
-              "opensta": ["mixed_signal_m3_run.interface_timing"]
+              "python3": [
+                "mixed_signal_m3_run",
+                "mixed_signal_cosim_check",
+                "mixed_signal_interface_si_check"
+              ],
+              "ngspice": [
+                "mixed_signal_m3_run.native_measurement"
+              ],
+              "iverilog": [
+                "mixed_signal_m3_run.wrapper_compile"
+              ],
+              "vvp": [
+                "mixed_signal_m3_run.wrapper_measurement"
+              ],
+              "opensta": [
+                "mixed_signal_m3_run.interface_timing"
+              ]
             }
           }
         }
@@ -14168,15 +14417,32 @@
             "native_step_id": "flow109.M07",
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
-            "engine_families": ["python3", "klayout", "magic", "netgen"],
+            "engine_families": [
+              "python3",
+              "klayout",
+              "magic",
+              "netgen"
+            ],
             "engine_executables": {
-              "python3": "python3", "klayout": "klayout", "magic": "magic", "netgen": "netgen"
+              "python3": "python3",
+              "klayout": "klayout",
+              "magic": "magic",
+              "netgen": "netgen"
             },
             "engine_steps": {
-              "python3": ["mixed_signal_top_lvs_run", "mixed_signal_merge_check"],
-              "klayout": ["mixed_signal_top_lvs_run.merge"],
-              "magic": ["mixed_signal_top_lvs_run.extract"],
-              "netgen": ["mixed_signal_top_lvs_run.lvs"]
+              "python3": [
+                "mixed_signal_top_lvs_run",
+                "mixed_signal_merge_check"
+              ],
+              "klayout": [
+                "mixed_signal_top_lvs_run.merge"
+              ],
+              "magic": [
+                "mixed_signal_top_lvs_run.extract"
+              ],
+              "netgen": [
+                "mixed_signal_top_lvs_run.lvs"
+              ]
             }
           }
         }
@@ -15258,7 +15524,7 @@
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
             "component_scope": "final_subject_open_source_perc_with_manual_residuals",
-            "flow109_metrics_status": "UNIMPLEMENTED_MANUAL_REVIEW_PENDING",
+            "flow109_metrics_status": "BOUND_CURRENT_METRICS_REQUIRES_QUALIFIED_MODELS",
             "producer": "execution_backend_producers.py:produce",
             "producer_sites": [
               "phase3_one_shot_runner.py:_emit_perc_equivalent"
@@ -15315,7 +15581,7 @@
             "checker.final_perc.final_esd_supply_topology",
             "producer.final_perc.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D66_RUNTIME_BINDING"
         },
         {
           "id": "final_perc.final_perc_latchup_errors",
@@ -15335,10 +15601,10 @@
             "checker.final_perc.final_perc_latchup_errors",
             "producer.final_perc.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D66_RUNTIME_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_D66_RUNTIME",
       "gate_layer_ids": [
         "G1",
         "G2",
@@ -15718,14 +15984,25 @@
             "native_step_id": "flow109.D69",
             "producer": "flow109_final_extract.py:execute",
             "consumer": "flow109_final_extract.py:validate_final_parasitics",
-            "engine_families": ["magic"],
-            "engine_executables": {"magic": "magic"},
-            "engine_steps": {"magic": ["vibeic-final-fill-spef extract"]},
+            "engine_families": [
+              "magic"
+            ],
+            "engine_executables": {
+              "magic": "magic"
+            },
+            "engine_steps": {
+              "magic": [
+                "vibeic-final-fill-spef extract"
+              ]
+            },
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
             "component_scope": "native_final_gds_floating_fill_component",
             "flow109_metrics_status": "UNIMPLEMENTED",
-            "native_required_outputs": ["hash-bound FINAL_FILL_EXTRACTION.json", "min/nom/max floating-fill SPEF consumer census"]
+            "native_required_outputs": [
+              "hash-bound FINAL_FILL_EXTRACTION.json",
+              "min/nom/max floating-fill SPEF consumer census"
+            ]
           }
         }
       ],
@@ -15985,14 +16262,24 @@
             "native_step_id": "flow109.D70",
             "producer": "flow109_final_electrical.py:execute",
             "consumer": "flow109_final_electrical.py:validate_final_electrical",
-            "engine_families": ["openroad"],
-            "engine_executables": {"openroad": "openroad"},
-            "engine_steps": {"openroad": ["OpenROAD.STAPostPNR"]},
+            "engine_families": [
+              "openroad"
+            ],
+            "engine_executables": {
+              "openroad": "openroad"
+            },
+            "engine_steps": {
+              "openroad": [
+                "OpenROAD.STAPostPNR"
+              ]
+            },
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
             "component_scope": "final_sta_native_component_only",
             "flow109_metrics_status": "UNIMPLEMENTED",
-            "native_required_outputs": ["all declared STAPostPNR corners and SDFs"]
+            "native_required_outputs": [
+              "all declared STAPostPNR corners and SDFs"
+            ]
           }
         }
       ],
@@ -16515,17 +16802,38 @@
             "native_step_id": "flow109.M08",
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
-            "engine_families": ["python3", "ngspice", "iverilog", "vvp", "opensta"],
+            "engine_families": [
+              "python3",
+              "ngspice",
+              "iverilog",
+              "vvp",
+              "opensta"
+            ],
             "engine_executables": {
-              "python3": "python3", "ngspice": "ngspice", "iverilog": "iverilog",
-              "vvp": "vvp", "opensta": "sta"
+              "python3": "python3",
+              "ngspice": "ngspice",
+              "iverilog": "iverilog",
+              "vvp": "vvp",
+              "opensta": "sta"
             },
             "engine_steps": {
-              "python3": ["mixed_signal_m3_run", "mixed_signal_cosim_check", "mixed_signal_interface_si_check"],
-              "ngspice": ["mixed_signal_m3_run.native_measurement"],
-              "iverilog": ["mixed_signal_m3_run.wrapper_compile"],
-              "vvp": ["mixed_signal_m3_run.wrapper_measurement"],
-              "opensta": ["mixed_signal_m3_run.interface_timing"]
+              "python3": [
+                "mixed_signal_m3_run",
+                "mixed_signal_cosim_check",
+                "mixed_signal_interface_si_check"
+              ],
+              "ngspice": [
+                "mixed_signal_m3_run.native_measurement"
+              ],
+              "iverilog": [
+                "mixed_signal_m3_run.wrapper_compile"
+              ],
+              "vvp": [
+                "mixed_signal_m3_run.wrapper_measurement"
+              ],
+              "opensta": [
+                "mixed_signal_m3_run.interface_timing"
+              ]
             }
           }
         }
@@ -17202,17 +17510,37 @@
             "native_step_id": "flow109.M09",
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
-            "engine_families": ["python3", "openroad", "magic", "klayout", "netgen"],
+            "engine_families": [
+              "python3",
+              "openroad",
+              "magic",
+              "klayout",
+              "netgen"
+            ],
             "engine_executables": {
-              "python3": "python3", "openroad": "openroad", "magic": "magic",
-              "klayout": "klayout", "netgen": "netgen"
+              "python3": "python3",
+              "openroad": "openroad",
+              "magic": "magic",
+              "klayout": "klayout",
+              "netgen": "netgen"
             },
             "engine_steps": {
-              "python3": ["mixed_signal_signoff_run", "mixed_signal_signoff_check"],
-              "openroad": ["mixed_signal_signoff_run.router_antenna"],
-              "magic": ["mixed_signal_signoff_run.drc_lvs"],
-              "klayout": ["mixed_signal_signoff_run.density_antenna"],
-              "netgen": ["mixed_signal_signoff_run.lvs"]
+              "python3": [
+                "mixed_signal_signoff_run",
+                "mixed_signal_signoff_check"
+              ],
+              "openroad": [
+                "mixed_signal_signoff_run.router_antenna"
+              ],
+              "magic": [
+                "mixed_signal_signoff_run.drc_lvs"
+              ],
+              "klayout": [
+                "mixed_signal_signoff_run.density_antenna"
+              ],
+              "netgen": [
+                "mixed_signal_signoff_run.lvs"
+              ]
             }
           }
         }

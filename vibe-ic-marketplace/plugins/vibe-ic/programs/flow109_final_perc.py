@@ -381,9 +381,25 @@ def _manual_and_limits(summary):
               if row.get("status") == "MANUAL_REVIEW"]
     if summary.get("manual_review_pending") != manual:
         raise AdmissionRefusal("D66_MANUAL_DISCLOSURE_MISMATCH", repr(manual))
-    if not REQUIRED_MANUAL.issubset(manual):
+    names = [row["category"] for row in categories]
+    if len(names) != len(set(names)):
+        raise AdmissionRefusal("D66_PERC_RESULT_INVALID", "duplicate category")
+    if not REQUIRED_MANUAL.issubset(names):
         raise AdmissionRefusal("D66_REQUIRED_REVIEW_CATEGORY_ABSENT",
-                               repr(sorted(REQUIRED_MANUAL - set(manual))))
+                               repr(sorted(REQUIRED_MANUAL - set(names))))
+    # Required categories may be completed by the existing machine producer.
+    # A manual signature, geometry REVIEW, N/A or an unknown result is not
+    # completed device-physics evidence.
+    for row in categories:
+        if row["category"] in REQUIRED_MANUAL and not (
+                (row.get("status") == "MANUAL_REVIEW"
+                 and row.get("result") == "MANUAL_REVIEW")
+                or (row.get("status") == "AUTOMATED"
+                    and row.get("result") in {"PASS", "FAIL", "INCOMPLETE"})):
+            raise AdmissionRefusal("D66_REQUIRED_CATEGORY_NOT_MEASURED", row["category"])
+        if row.get("status") == "AUTOMATED" and row.get("result") not in {
+                "PASS", "FAIL", "INCOMPLETE"}:
+            raise AdmissionRefusal("D66_PERC_RESULT_INVALID", "unknown automated result")
     failed = [row["category"] for row in categories
               if row.get("status") == "AUTOMATED" and row.get("result") == "FAIL"]
     incomplete = [row["category"] for row in categories
@@ -399,10 +415,11 @@ def _manual_and_limits(summary):
         raise AdmissionRefusal("D66_PERC_RESULT_INVALID", "verdict/capability disclosure")
     unsupported = []
     residual = summary.get("geometry_foundry_data_residual")
-    if not isinstance(residual, str) or not residual.strip():
+    if not isinstance(residual, str):
         raise AdmissionRefusal("D66_FOUNDRY_CAPABILITY_DISCLOSURE_ABSENT",
-                               "device-physics residual required")
-    unsupported.append(residual)
+                               "explicit device-physics capability disclosure required")
+    if residual.strip():
+        unsupported.append(residual)
     return manual, failed, incomplete, unsupported
 
 
@@ -464,15 +481,28 @@ def _output_records(project):
 
 
 def _io_sources(summary):
-    sources = next((row.get("library_sources") or []
-                    for row in summary.get("categories", [])
-                    if row.get("category") == "ESD protection presence"), [])
+    row = next((row for row in summary.get("categories", [])
+                if row.get("category") == "ESD protection presence"), {})
+    if row.get("library_errors"):
+        raise AdmissionRefusal("D66_PAD_LIBRARY_EVIDENCE_INVALID",
+                               repr(row["library_errors"]))
+    sources = row.get("library_sources") or []
     if not isinstance(sources, list) or not sources or any(
             not isinstance(item, dict) or not isinstance(item.get("path"), str)
             or not isinstance(item.get("sha256"), str)
             or not SHA256_RE.fullmatch(item["sha256"])
             for item in sources):
         raise AdmissionRefusal("D66_PAD_LIBRARY_EVIDENCE_INVALID", "IO library sources")
+    if row.get("status") == "AUTOMATED":
+        if row.get("library_errors") != []:
+            raise AdmissionRefusal("D66_PAD_LIBRARY_EVIDENCE_INVALID",
+                                   "completed category requires explicit library diagnostics")
+        for source in sources:
+            path = Path(source["path"])
+            if (not path.is_absolute() or not path.is_file()
+                    or _sha(path) != source["sha256"]):
+                raise AdmissionRefusal("D66_PAD_LIBRARY_EVIDENCE_INVALID",
+                                       "completed IO library absent or changed: " + str(path))
     return sources
 
 
@@ -601,3 +631,101 @@ def validate_final_perc(project, receipt_ref):
             "d65_evidence_kind": prepared["d65_evidence_kind"],
             "perc_receipt": receipt_ref, "flow109_acceptance": "NOT_MEASURED",
             "whole_ic_acceptance": "NOT_MEASURED"}
+
+
+def metric_measurements(project, receipt_ref):
+    """Read the two obligations from current owner evidence, without defaults.
+
+    Coverage names categories actually completed by the producer. More detailed
+    pad/domain requirements cannot be inferred from a category-level result.
+    Geometry REVIEW and ordinary CVC never complete device-physics categories.
+    """
+    current = validate_final_perc(project, receipt_ref)
+    record = _read(_bound(project, receipt_ref, "D66 component"))
+    rows = {row["category"]: row for row in record["perc_summary"]["categories"]}
+    groups = {
+        "final_perc.final_esd_supply_topology": {
+            "ESD protection presence", "io_supply_pad_sufficiency",
+            "ESD discharge-path topology (connectivity)", "Native CVC electrical rules"},
+        "final_perc.final_perc_latchup_errors": {
+            "Latch-up / well-tap (spacing + device-physics)",
+            "Latch-up well-tap presence", "Latch-up tap spacing (geometry)",
+            "Native CVC electrical rules"},
+    }
+    measurements = {}
+    for oid, names in groups.items():
+        selected = [rows[name] for name in sorted(names) if name in rows]
+        # A generic CVC electrical failure blocks the component, but is not
+        # itself a measured ESD-topology or latch-up violation.
+        if any(row["category"] != "Native CVC electrical rules"
+               and row.get("status") == "AUTOMATED" and row.get("result") == "FAIL"
+               for row in selected):
+            measurements[oid] = {"status": "FAIL", "reason": "D66_REQUIRED_CATEGORY_FAILED"}
+        elif (len(selected) != len(names)
+              or current["component_status"] != "PASS"
+              or any(row.get("status") != "AUTOMATED" or row.get("result") != "PASS"
+                     for row in selected)):
+            measurements[oid] = {"status": "NOT_MEASURED",
+                                 "reason": "D66_REQUIRED_CATEGORY_NOT_COMPLETED"}
+        else:
+            measurements[oid] = {
+                "status": "MEASURED",
+                "value": ([{"category": name} for name in sorted(names)]
+                          if oid.endswith("final_esd_supply_topology") else 0),
+                "evidence": receipt_ref,
+                "final_subjects": current["final_subjects"],
+                "operation_sources": record["operation_sources"],
+            }
+            if oid.endswith("final_perc_latchup_errors"):
+                measurements[oid]["unit"] = "count"
+    return measurements
+
+
+def consume_default_row_completion(project, context, component):
+    """Complete the existing D66 row only with current metrics, D65 and qualification."""
+    from flow109_admission import require_admission
+    from flow109_metric_acceptance import accept_d66
+
+    project = Path(project).resolve()
+    acceptance = accept_d66(project, context, component)
+    status, reason = acceptance["status"], acceptance.get("reason")
+    qualification = {"status": "NOT_MEASURED"}
+    if component.get("component_status") != "PASS":
+        status = component.get("component_status", "NOT_MEASURED")
+        reason = component.get("reason") or reason
+    if (component.get("component_status") == "PASS" and status != "FAIL"
+            and acceptance["metric_status"] == "PASS"):
+        try:
+            prepared = _prepare(project, context)
+            _d65_geometry_current(project, prepared)
+            # Legacy window components may carry only a minimal receipt. Full
+            # completion requires the existing canonical Step-31 consumer too.
+            bindings = _canonical_step31_bindings(
+                prepared["d65_receipt"], _sha(prepared["paths"]["geometry_def"]))
+            _bound(project, bindings["routed_def"], "D65 routed DEF")
+            for path, digest in bindings["outputs"].items():
+                _bound(project, {"path": path, "sha256": digest}, "D65 canonical output")
+            # Engineering-native admission is not per-use qualification.
+            qualification = require_admission(project, context)
+            if qualification.get("status") != "PASS" or not qualification.get("uses"):
+                raise AdmissionRefusal("D66_QUALIFICATION_NOT_VERIFIED", "strict per-use PASS required")
+            validate_final_perc(project, component["receipt"])
+            _assert_current(prepared)
+            if require_admission(project, context) != qualification:
+                raise AdmissionRefusal("QUALIFICATION_STALE", "changed during D66 completion")
+            status, reason = "PASS", "D66_CURRENT_METRICS_D65_AND_QUALIFICATION_PASS"
+        except AdmissionRefusal as exc:
+            status, reason = exc.status, exc.code
+            acceptance["detail"] = str(exc)
+        except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+            status, reason = "NOT_MEASURED", "D66_COMPLETION_EVIDENCE_INVALID"
+            acceptance["detail"] = str(exc)
+    acceptance.update(status=status, reason=reason, qualification=qualification,
+                      delivery_blocked=status != "PASS")
+    return {"step_id": "D66", "context_sha256": context.get("context_sha256"),
+            "default_row_status": status, "completed": status == "PASS", "reason": reason,
+            "metric_acceptance": acceptance,
+            "metric_acceptance_status": acceptance["metric_status"],
+            "qualification": qualification,
+            "flow109_acceptance": status, "whole_flow_acceptance": "NOT_MEASURED",
+            "whole_ic_acceptance": "NOT_MEASURED", "delivery_accepted": False}
