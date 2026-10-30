@@ -1650,5 +1650,142 @@ def main(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+
+_D32_DB_READ = r"""import odb,json,sys
+request=json.load(open(sys.argv[-1]));db=odb.dbDatabase.create()
+for lef in request['lefs']: odb.read_lef(db,lef)
+odb.read_def(db.getTech(),request['def'])
+b=db.getChip().getBlock()
+answer={'top':b.getName(),'instances':{i.getName():{'master':i.getMaster().getName(),'placed':i.isPlaced(),'origin':list(i.getOrigin()),'orient':str(i.getOrient())} for i in b.getInsts()},'ports':{p.getName():p.getNet().getName() if p.getNet() else None for p in b.getBTerms()},'nets':{n.getName():{'bterms':[p.getName() for p in n.getBTerms()],'iterms':[i.getInst().getName()+'/'+i.getMTerm().getName() for i in n.getITerms()]} for n in b.getNets()}}
+odb.write_db(db,request['odb'])
+json.dump(answer,open(request['out'],'w'),indent=2)
+"""
+
+_D32_GDS_READ = r"""import pya,json
+r=json.load(open(D32_REQUEST));layout=pya.Layout()
+for path in r['gds']:layout.read(path)
+json.dump({name:{'present':layout.cell(name) is not None,'nonempty':layout.cell(name) is not None and not layout.cell(name).bbox().empty(),'bbox':str(layout.cell(name).dbbox()) if layout.cell(name) is not None else None} for name in r['masters']},open(r['out'],'w'),indent=2)
+"""
+
+
+def _d32_inputs(project):
+    import hashlib
+    from flow109_analog_floorplan import bound_file
+    from declared_pdk_is_the_pdk_used_check import declared_target
+    import analog_pdk_availability as resolver
+    import analog_lvs_comparison_prep as prep
+    def digest(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+    config=project/'input/flow109/D32.json'
+    if any(p.is_symlink() for p in (config,*config.parents)):
+        raise ValueError('D32_INPUT_SYMLINK')
+    data=json.loads(config.read_text());top=data.get('top')
+    if not isinstance(top,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*',top):
+        raise ValueError('D32_TOP_INVALID')
+    floor=bound_file(project,data.get('floorplan_def'));assignment=bound_file(project,data.get('pad_assignment'));logical=bound_file(project,data.get('logical_netlist'))
+    ports=prep.declared_ports(logical.read_text(),top)
+    if not ports or len(re.findall(r'(?im)^\s*\.subckt\s+'+re.escape(top)+r'(?=\s|$)',logical.read_text()))!=1:
+        raise ValueError('D32_LOGICAL_INTERFACE_ABSENT_OR_AMBIGUOUS')
+    die=PR.read_def(floor)
+    if set(die.pins)!=set(ports):
+        raise ValueError('D32_DECLARED_PORT_POPULATION_MISMATCH')
+    target,_=declared_target(project)
+    if not isinstance(target,str) or not target.strip():raise ValueError('D32_DECLARED_PDK_ABSENT')
+    facts=resolver.resolve_pdk(target,project=project)
+    if facts.get('source')!='container_installed' or not facts.get('available'):
+        raise ValueError('D32_INSTALLED_PDK_UNAVAILABLE')
+    tree=Path(facts['pdk_root']);lefs=PR.discover_io_lefs(str(tree.parent),tree.name)
+    available_gds={p for lef in lefs for p in (lef.parent.parent/'gds').glob('*.gds')}
+    techs=set(tree.glob('libs.ref/*/lef/*tech*.lef'))
+    records={str(p):digest(p) for p in (config,floor,assignment,logical)}
+    def selected(refs,allowed,label):
+        if not isinstance(refs,list) or not refs:raise ValueError('D32_VIEW_ABSENT: '+label)
+        result=[]
+        for ref in refs:
+            if not isinstance(ref,dict) or ref.get('path') not in {str(p) for p in allowed}:
+                raise ValueError('D32_SELECTED_PDK_VIEW_FOREIGN: '+label)
+            path=Path(ref['path'])
+            if not path.is_file() or digest(path)!=ref.get('sha256'):
+                raise ValueError('D32_SELECTED_PDK_VIEW_STALE: '+label)
+            result.append(str(path));records[str(path)]=digest(path)
+        if len(result)!=len(set(result)):raise ValueError('D32_SELECTED_PDK_VIEW_AMBIGUOUS: '+label)
+        return result
+    io=selected(data.get('io_lefs'),set(lefs),'IO LEF');gds=selected(data.get('io_gds'),available_gds,'IO GDS');tech=selected([data.get('technology_lef')],techs,'technology LEF')
+    macro=[]
+    for ref in data.get('macro_lefs',[]):
+        path=bound_file(project,ref);macro.append(str(path));records[str(path)]=digest(path)
+    for path in PR.discover_io_library_configs(str(tree.parent),tree.name)+PR.discover_io_site_declarations(str(tree.parent),tree.name):records[str(path)]=digest(path)
+    return dict(top=top,ports=ports,floorplan=str(floor),assignment=str(assignment),logical=str(logical),target=target,pdk_root=str(tree.parent),pdk=tree.name,io_lefs=io,gds=gds,lefs=tech+io+macro,inputs=records)
+
+
+def execute(project,context):
+    """D32 existing pad placer/checker plus native view and net readback.
+
+    This constructs/checks a component only. Native pad-terminal coincidence,
+    physical rail conduction, ESD and the three row obligations stay unmeasured.
+    """
+    import hashlib,json,shlex,shutil,uuid
+    import librelane_contract as launch
+    import pad_ring_check as checker
+    from analog_hardmacro_gds_emit import Stage
+    from flow109_admission import require_launch_admission,AdmissionRefusal
+    project=Path(project).resolve(strict=True);work=project/'reports/flow109/D32'/uuid.uuid4().hex;work.mkdir(parents=True)
+    result=dict(step_id='D32',context_sha256=context.get('context_sha256'),component_status='NOT_MEASURED',default_row_status='NOT_MEASURED',completed=False,native_started=False,outputs=[],executions=[],qualification='NOT_CLAIMED',flow109_acceptance='NOT_MEASURED',whole_flow_acceptance='NOT_MEASURED',delivery_accepted=False)
+    stage=Stage('host',work)
+    def digest(p):return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+    def run(argv,name):
+        result['native_started']=True
+        rc,out,err=stage.sh(shlex.join(argv));log=work/(name+'.log');log.write_text(out+err)
+        result['executions'].append({'argv':argv,'returncode':rc,'log':str(log.relative_to(project)),'sha256':digest(log)})
+        if rc:raise ValueError('D32_NATIVE_READBACK_FAILED: '+name)
+    try:
+        if (context.get('requested_step')!='D32' or context.get('native_step_id')!='flow109.D32' or context.get('resolved_row',{}).get('profile',{}).get('id')!='analog_die'):
+            raise ValueError('D32_CONTEXT_INVALID')
+        result['launch_admission']=require_launch_admission(project,'flow109.D32',{'flow109_context':context});result['native_launch']=launch.local_image_attestation()
+        data=_d32_inputs(project);result['inputs']=data['inputs']
+        case=work/'case';(case/PR.FLOORPLAN_DEF_REL).parent.mkdir(parents=True)
+        shutil.copyfile(data['floorplan'],case/PR.FLOORPLAN_DEF_REL);shutil.copyfile(data['assignment'],case/PR.ASSIGNMENT_REL)
+        args=[str(case),'--pdk-root',data['pdk_root'],'--pdk',data['pdk']]
+        for lef in data['io_lefs']:args+=['--io-lef',lef]
+        rc=main(args);report=case/PR.REPORT_REL
+        producer=json.loads(report.read_text());result['placement']=producer
+        if producer.get('verdict')=='FAIL':result['component_status']='FAIL'
+        if rc or producer.get('verdict')!='PASS':raise ValueError('D32_EXISTING_PLACEMENT_NOT_PASS: '+producer.get('reason',''))
+        checked=checker.main(args);consumer=json.loads(report.read_text());result['consumer']=consumer
+        if checked or consumer.get('verdict')!='PASS':
+            result['component_status']='FAIL';raise ValueError('D32_EXISTING_RING_CHECK_FAILED')
+        tools={name:shutil.which(name) for name in ('openroad','klayout')}
+        if not all(tools.values()):raise ValueError('D32_NATIVE_TOOL_UNAVAILABLE')
+        result['tools']={k:{'path':v,'sha256':digest(Path(v).resolve())} for k,v in tools.items()}
+        dbscript=work/'read_db.py';dbscript.write_text(_D32_DB_READ);dbout=work/'native_db.json';request=work/'db-request.json'
+        request.write_text(json.dumps({'lefs':data['lefs'],'def':str(case/PR.PADRING_DEF_REL),'odb':str(work/'padring.odb'),'out':str(dbout)}))
+        run([tools['openroad'],'-exit','-python',str(dbscript),str(request)],'OpenDB')
+        db=json.loads(dbout.read_text());result['native_db']=db
+        if db.get('top')!=data['top'] or set(db.get('ports',{}))!=set(data['ports']):raise ValueError('D32_NATIVE_PORT_POPULATION_MISMATCH')
+        pads=producer['pads'];required={p['instance']:p['master'] for p in pads+producer['corners']+producer['fillers']}
+        if not pads or not required:raise ValueError('D32_EMPTY_NATIVE_PAD_POPULATION')
+        for name,master in required.items():
+            native=db.get('instances',{}).get(name,{})
+            if native.get('master')!=master or native.get('placed') is not True:raise ValueError('D32_NATIVE_MASTER_OR_PLACEMENT_MISMATCH: '+name)
+        for pad in pads:
+            signal=pad.get('signal');net=db['ports'].get(signal);terms=db.get('nets',{}).get(net,{}).get('iterms',[])
+            if not signal or not any(t.startswith(pad['instance']+'/') for t in terms):
+                result['component_status']='FAIL';raise ValueError('D32_NATIVE_DECLARED_PAD_PIN_DISCONNECTED: '+pad['instance'])
+        gdsscript=work/'read_gds.py';gdsscript.write_text(_D32_GDS_READ);gdsrequest=work/'gds-request.json';gdsout=work/'native_gds.json'
+        gdsrequest.write_text(json.dumps({'gds':data['gds'],'masters':sorted(set(required.values())),'out':str(gdsout)}))
+        run([tools['klayout'],'-b','-r',str(gdsscript),'-rd','D32_REQUEST='+str(gdsrequest)],'KLayout')
+        views=json.loads(gdsout.read_text());result['native_gds']=views
+        if set(views)!=set(required.values()) or any(v.get('present') is not True or v.get('nonempty') is not True for v in views.values()):
+            result['component_status']='FAIL';raise ValueError('D32_NATIVE_REQUIRED_CELL_VIEW_ABSENT_OR_EMPTY')
+        if _d32_inputs(project)!=data or launch.local_image_attestation()!=result['native_launch']:
+            raise ValueError('D32_INPUT_OR_LAUNCH_CHANGED')
+        result['component_status']='PASS'
+        result['unmeasured']=['native_pad_terminal_coincidence','ESD','physical_PG_rail_conduction','full_D32_metrics','ADC_signoff']
+        result['reason']='Existing pad ring placement, IO view census and named input-port connectivity only; physical terminal/ESD/PG and whole row unmeasured'
+    except (ValueError,OSError,KeyError,TypeError,AdmissionRefusal,launch.Refusal,PR.DefError) as exc:
+        result['reason']=str(exc)
+    result['outputs']=[{'path':str(p.relative_to(project)),'sha256':digest(p)} for p in sorted(work.rglob('*')) if p.is_file()]
+    (work/'component.json').write_text(json.dumps(result,indent=2)+'\n');return result
+
+
 if __name__ == "__main__":
     sys.exit(main())

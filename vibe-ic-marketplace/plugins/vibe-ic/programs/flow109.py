@@ -1243,8 +1243,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_antenna = (row.get("id") == "D43" and profile.get("id") == "analog_die"
                       and isinstance(dispatch, Mapping)
                       and dispatch.get("adapter") == "gds_antenna_deck_check")
+    analog_pad = (row.get("id") == "D32" and profile.get("id") == "analog_die"
+                  and isinstance(dispatch, Mapping)
+                  and dispatch.get("adapter") == "pad_ring_gen")
     if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
-                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_pv and not analog_antenna):
+                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_pv and not analog_antenna and not analog_pad):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
@@ -1281,6 +1284,10 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             invalid = (common_invalid or not analog_antenna or native != "flow109.D43"
                        or dispatch.get("producer") != "gds_antenna_deck_check.py:execute native candidate antenna"
                        or dispatch.get("consumer") != "gds_antenna_deck_check.py:_bound_native_count")
+        elif adapter == "pad_ring_gen":
+            invalid = (common_invalid or not analog_pad or native != "flow109.D32"
+                       or dispatch.get("producer") != "pad_ring_gen.py:execute existing pad ring"
+                       or dispatch.get("consumer") != "pad_ring_check.py:main and native IO/net readback")
         elif adapter == "flow109_frontend":
             identities = {
                 "D05": ("flow109.D05", "l21_to_upf_emit.py:main",

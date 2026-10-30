@@ -8645,9 +8645,46 @@
           "id": "analog_die",
           "select_when": "analog_physical and not digital_physical",
           "provider": "other",
-          "tools": "KLayout Python + Magic + PDK pad/ESD/PG generators",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "tools": "Existing pad_ring_gen + pad_ring_check + OpenDB/KLayout readback",
+          "native_steps": [
+            "pad_ring_gen",
+            "pad_ring_check",
+            "OpenDB",
+            "KLayout"
+          ],
+          "execution_status": "EXISTING_COMPONENT_DISPATCH_NOT_109_ACCEPTANCE",
+          "dispatch": {
+            "adapter": "pad_ring_gen",
+            "native_step_id": "flow109.D32",
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "producer": "pad_ring_gen.py:execute existing pad ring",
+            "consumer": "pad_ring_check.py:main and native IO/net readback",
+            "engine_families": [
+              "python3",
+              "openroad",
+              "klayout"
+            ],
+            "engine_steps": {
+              "python3": [
+                "pad_ring_gen",
+                "pad_ring_check"
+              ],
+              "openroad": [
+                "read_def",
+                "write_db"
+              ],
+              "klayout": [
+                "Layout.read"
+              ]
+            },
+            "engine_executables": {
+              "python3": "python3",
+              "openroad": "openroad",
+              "klayout": "klayout"
+            },
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         },
         {
           "id": "default",
