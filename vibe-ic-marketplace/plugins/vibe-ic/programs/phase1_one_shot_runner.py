@@ -1844,6 +1844,75 @@ def _d01_emit_dft_intent(project: Path) -> dict | None:
         return None
 
 
+def _continue_d01_dft_intent(project: Path, previous_producer: Path) -> int:
+    """Re-publish unchanged DFT only; retain the extraction owner's history.
+
+    The previous source is evidence, never imported or executed. All normal
+    declaration/source checks run before emission, except the obsolete owner
+    source identity which is checked against those actual historical bytes.
+    """
+    import ast
+    import shutil
+    import tempfile
+    import fault_scan_chain_insert as scan
+    report_path = _pl.report_path(project, 'phase1_one_shot.json')
+    try:
+        if report_path.is_symlink() or not report_path.is_file():
+            raise ValueError('D01 owner report absent or symlinked')
+        previous_bytes = previous_producer.read_bytes()
+        report_bytes = report_path.read_bytes()
+        report = json.loads(report_bytes)
+        if (report.get('project') != str(project.resolve())
+                or any(report.get(k) != v for k, v in _delivery_route.report_label(project).items())):
+            raise ValueError('D01 project or route differs')
+        binding, problems = scan.load_d09_dft_contract(project, _validate_owner=False)
+        if binding is None or problems:
+            raise ValueError(str(problems))
+        expected = {'producer': 'D01', 'path': binding['path'],
+                    'sha256': binding['sha256'], 'sources': binding['sources'],
+                    'producer_source_sha256': hashlib.sha256(previous_bytes).hexdigest()}
+        if report.get('dft_intent_output') != expected:
+            raise ValueError('historical D01 source or output identity differs')
+        def publisher_functions(source):
+            return {n.name: ast.dump(n, include_attributes=False)
+                    for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)
+                    and n.name in ('_d01_emit_dft_intent', '_as_the_producer')}
+        old = publisher_functions(previous_bytes)
+        if len(old) != 2 or old != publisher_functions(Path(__file__).read_bytes()):
+            raise ValueError('historical DFT publisher implementation differs')
+        # No publication has happened before every old source/output check.
+        archive = Path(tempfile.mkdtemp(prefix='d01-dft-', dir=report_path.parent))
+        for path in (report_path, project / binding['path'],
+                     (project / binding['path']).with_suffix('.provenance.json'),
+                     project / 'provenance.jsonl'):
+            shutil.copyfile(path, archive / path.name)
+        (archive / 'previous_producer.py').write_bytes(previous_bytes)
+        current = _d01_emit_dft_intent(project)
+        if current is None or any(current[k] != expected[k] for k in
+                                  ('producer', 'path', 'sha256', 'sources')):
+            raise ValueError('DFT producer did not re-emit the unchanged authorized intent')
+        # Keep prior verdict, steps and extraction attribution, not a new D01 PASS.
+        report['dft_intent_output'] = current
+        report.setdefault('dft_intent_continuations', []).append({
+            'previous_report': str((archive / report_path.name).relative_to(project)),
+            'previous_report_sha256': hashlib.sha256(report_bytes).hexdigest(),
+            'previous_producer_source_sha256': expected['producer_source_sha256'],
+            'producer_source_sha256': current['producer_source_sha256'],
+            'argv': list(sys.argv), 'pid': os.getpid(), 'timestamp': time.time(),
+            'scope': 'unchanged DFT declaration only; no extraction or qualification'})
+        temporary = archive / 'current_report.json'
+        temporary.write_text(json.dumps(report, indent=2) + '\n')
+        os.replace(temporary, report_path)
+        verified, problems = scan.load_d09_dft_contract(project)
+        if verified is None or problems:
+            raise ValueError(str(problems))
+        print('D01_DFT_INTENT_REPUBLISHED: ' + str(report_path))
+        return 0
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, SyntaxError) as exc:
+        print('D01_DFT_CONTINUATION_REFUSED: ' + str(exc), file=sys.stderr)
+        return 2
+
+
 def _as_the_producer(fn):
     """`fn` is the D1 extraction: when the preflight lets it RUN, this run is
     the doc producer of record.
@@ -1904,6 +1973,8 @@ def main() -> int:
                         "`vibe_ic_one_shot_runner` when a delivered answer is "
                         "on disk and the track's own record says nobody has "
                         "read it.")
+    p.add_argument("--refresh-dft-intent-from-producer", type=Path,
+                   help="Re-publish only unchanged declared DFT intent; requires the actual historical D01 producer source.")
     p.add_argument("--skip-analog", action="store_true",
                    help="Preserve the parent invocation's explicit analog routing choice.")
     import execution_policy as _execution
@@ -1914,6 +1985,16 @@ def main() -> int:
     if not project.is_dir():
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
+    if args.refresh_dft_intent_from_producer is not None:
+        if args.second_track_only:
+            p.error('DFT continuation and expert second track are separate invocations')
+        lock = _runner_lock.acquire_or_reenter(project, 'phase1_one_shot_runner')
+        if lock is None:
+            return 3
+        try:
+            return _continue_d01_dft_intent(project, args.refresh_dft_intent_from_producer)
+        finally:
+            lock.release()
     _execution.bootstrap(project, parameters={"ic_name": args.ic_name,
         "skip_analog": bool(args.skip_analog)}, phase1_only=True)
     _RUN.update(project=project, second_track_only=bool(args.second_track_only),

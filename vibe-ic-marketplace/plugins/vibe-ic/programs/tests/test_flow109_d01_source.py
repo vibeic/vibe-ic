@@ -136,3 +136,87 @@ def test_obsolete_author_input_is_not_converted(tmp_path, monkeypatch):
     assert result is None
     binding, problems = scan.load_d09_dft_contract(tmp_path)
     assert binding is None and problems
+
+
+def _historical_dft_owner(project, monkeypatch):
+    """Actual publisher writes its own source identity; no receipt is forged."""
+    current_source = phase1.__file__
+    old_source = project.parent / (project.name + '-previous-producer.py')
+    old_source.write_bytes(Path(current_source).read_bytes() + b'\n# Earlier unrelated release metadata.\n')
+    monkeypatch.setattr(phase1, '__file__', str(old_source))
+    acquire = phase1._runner_lock.acquire_or_reenter
+    held = []
+    def capture(*a, **k):
+        lock = acquire(*a, **k)
+        if lock is not None:
+            held.append(lock)
+        return lock
+    monkeypatch.setattr(phase1._runner_lock, 'acquire_or_reenter', capture)
+    try:
+        context, report, body = _produce(project, monkeypatch)
+    finally:
+        for lock in held:
+            lock.release()
+        monkeypatch.setattr(phase1._runner_lock, 'acquire_or_reenter', acquire)
+    monkeypatch.setattr(phase1, '__file__', current_source)
+    return context, report, body, old_source
+
+
+def _refresh(project, old_source, monkeypatch):
+    monkeypatch.setattr(sys, 'argv', [str(Path(phase1.__file__)), str(project),
+        '--refresh-dft-intent-from-producer', str(old_source), '--execution-mode', 'default'])
+    return phase1.main()
+
+
+def test_dft_continuation_runs_publisher_without_docs_and_reaches_d19(tmp_path, monkeypatch):
+    import flow109_metric_acceptance as metrics
+    context, report, body, old_source = _historical_dft_owner(tmp_path, monkeypatch)
+    original = report.read_bytes()
+    artifact = tmp_path / body['dft_intent_output']['path']
+    declaration = artifact.read_bytes()
+    unrelated = tmp_path / 'phase1/generated_docs/retained.json'
+    _write(unrelated, {'scope': 'unrelated accepted fixture'})
+    retained = unrelated.read_bytes()
+    calls = []
+    for name, rc in (('_run_docs_mode', 0), ('_run_step_0_5ic', 0), ('run_phase1_second_track', 2)):
+        def record(*a, _name=name, _rc=rc, **k):
+            calls.append(_name)
+            return _rc
+        monkeypatch.setattr(phase1, name, record)
+    assert scan.load_d09_dft_contract(tmp_path)[0] is None
+    assert _refresh(tmp_path, old_source, monkeypatch) == 0
+    assert calls == []
+    current = json.loads(report.read_text())
+    assert current['verdict'] == body['verdict']  # no new Phase-1 credit
+    assert artifact.read_bytes() == declaration and unrelated.read_bytes() == retained
+    history = current['dft_intent_continuations'][-1]
+    assert (tmp_path / history['previous_report']).read_bytes() == original
+    assert history['previous_report_sha256'] == hashlib.sha256(original).hexdigest()
+    assert flow109.dft_source_intent(tmp_path, context)['requires_scan'] is True
+    # D19 now reads normal D01 authority and reaches the next actual missing input.
+    with pytest.raises(metrics.MetricRefusal) as error:
+        metrics.d19_admission(tmp_path, context, publish=False)
+    assert 'D19_D01_AUTHORITY_UNAVAILABLE' not in str(error.value)
+    assert 'MISSING' in str(error.value)
+    claims = [json.loads(x) for x in (tmp_path / 'provenance.jsonl').read_text().splitlines()]
+    assert len([x for x in claims if x.get('tool') == 'spec_declaration_emit']) == 2
+
+
+@pytest.mark.parametrize('damage', ['changed_source', 'missing_source', 'declaration',
+                                    'decision', 'historical_source'])
+def test_dft_continuation_refuses_changed_authority_before_publication(tmp_path, monkeypatch, damage):
+    _, report, body, old_source = _historical_dft_owner(tmp_path, monkeypatch)
+    if damage == 'changed_source':
+        (tmp_path / 'input/docs/L7_verification_plan.md').write_text('changed authority')
+    elif damage == 'missing_source':
+        (tmp_path / 'input/docs/L7_verification_plan.md').unlink()
+    elif damage == 'declaration':
+        path = tmp_path / body['dft_intent_output']['path']; path.write_text(path.read_text() + '\n')
+    elif damage == 'decision':
+        _write(tmp_path / 'input/feature-decisions.json', {'dft': {'requires_scan': True}})
+    elif damage == 'historical_source':
+        old_source.write_text('tampered source')
+    before = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    assert _refresh(tmp_path, old_source, monkeypatch) == 2
+    after = {str(p.relative_to(tmp_path)): p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    assert after == before
