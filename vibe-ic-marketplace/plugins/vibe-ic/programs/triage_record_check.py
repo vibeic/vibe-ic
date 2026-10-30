@@ -30,6 +30,15 @@ Two failure shapes recur in real triage JSON (ORGANIC-20260606 #481):
 This linter checks the **mechanical self-consistency** of the records;
 the *correctness* of each category assignment is still the § 4 LLM core.
 
+Operational attempt receipts may instead use category PRODUCT_ENTRY_DEFECT or
+PENDING_ACCEPTANCE with verdict NOT_MEASURED. Their evidence must reference
+``solve_report.json#<id>`` and its sibling
+``program_first_ai_review_acceptance.json`` must reconcile the same population.
+The consumer reads only those metadata files, never project RTL or an oracle.
+Missing provenance, measured failures, conflicting claims and forged completion
+counts refuse this exception. Clean operational input yields VALID_UNMEASURED
+(exit 0 means records valid), never benchmark completion or scoring permission.
+
 Input
 =====
 A JSON file holding triage records. Both shapes are accepted:
@@ -73,7 +82,9 @@ Exit codes
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -153,11 +164,9 @@ def extract_letter(rec: Dict[str, Any]) -> Optional[str]:
     s = str(raw).strip()
     if not s:
         return None
-    # "A. Benchmark ↔ TB" / "Category F" / "F" → first alpha char
-    for ch in s:
-        if ch.isalpha():
-            return ch.upper()
-    return None
+    # A category name beginning with E or F is not itself a rubric letter.
+    match = re.match(r"^(?:Category\s+)?([A-H])(?:$|[\s.:)\-])", s, re.I)
+    return match[1].upper() if match else None
 
 
 def extract_closeloop(rec: Dict[str, Any]) -> bool:
@@ -224,10 +233,225 @@ def _coerce_records(data: Any) -> List[Dict[str, Any]]:
         if not isinstance(r, dict):
             raise TriageInputError(f"record[{i}] is not an object")
         out.append(r)
+    validate_operational_envelope(data, out)
     return out
 
 
 # ── core checking ────────────────────────────────────────────────────────
+OPERATIONAL_CATEGORIES = {"PRODUCT_ENTRY_DEFECT", "PENDING_ACCEPTANCE"}
+_VERDICT_KEYS = ("verdict", "triage_verdict", "outcome", "classification", "label")
+_BLIND_KEYS = ("independent_blind_passes", "blind_passes", "ai_blind_passes",
+               "independent_solve_passes", "blind_solve_passes", "ai_solved_blind")
+_BENCH_KEYS = ("bench", "benchmark", "dataset", "suite")
+_PHASE_KEYS = ("phase1_routing", "phase2_solving", "phase3_verifying",
+               "phase4_debugging")
+
+
+def _require(condition: bool, message: str) -> None:
+    if not condition:
+        raise ValueError(message)
+
+
+def _pending_claims(value: Dict[str, Any]) -> None:
+    for key in ("benchmark_complete", "scorable", "accepted"):
+        _require(value.get(key) in (None, False, 0),
+                 f"operational input cannot claim {key}")
+    for key in ("status", "benchmark_status", "acceptance_status"):
+        if key in value:
+            _require(str(value[key]).strip().upper() in
+                     {"NOT_MEASURED", "PENDING", "BLOCKED", "BLOCKED_NOT_MEASURED", "ERROR"},
+                     f"operational input has unsupported {key}")
+    if "score_status" in value:
+        _require(value["score_status"] == "NOT_MEASURED",
+                 "operational score_status must remain NOT_MEASURED")
+
+
+def validate_operational_envelope(data: Any, records: List[Dict[str, Any]]) -> None:
+    """A wrapper cannot promote pending rows by inventing complete totals."""
+    if not isinstance(data, dict) or not any(
+            str(_first_present(r, _CATEGORY_KEYS)).strip().upper() in OPERATIONAL_CATEGORIES
+            for r in records):
+        return
+    try:
+        _pending_claims(data)
+        for key in ("total", "n_records"):
+            if key in data:
+                _require(type(data[key]) is int and data[key] == len(records),
+                         f"wrapper {key} must equal the retained record population")
+    except ValueError as exc:
+        raise TriageInputError(str(exc)) from exc
+
+
+def _failure_path(value: Any, path: str = "record") -> Optional[str]:
+    """Inspect status metadata, including nested native gate failures."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            here = f"{path}.{key}"
+            if key in {"failed", "failures", "unclassified_status"} and item:
+                return here
+            hit = _failure_path(item, here)
+            if hit:
+                return hit
+    elif isinstance(value, list):
+        for i, item in enumerate(value):
+            hit = _failure_path(item, f"{path}[{i}]")
+            if hit:
+                return hit
+    elif isinstance(value, str) and re.match(r"^FAIL(?:ED)?(?:$|[:_\s])", value, re.I):
+        return path
+    return None
+
+
+def _load_operational_source(path: Path) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Validate existing dispatcher metadata without following its file refs."""
+    raw = path.read_bytes()
+    solve = json.loads(raw)
+    acceptance_path = path.with_name("program_first_ai_review_acceptance.json")
+    acceptance_raw = acceptance_path.read_bytes()
+    acceptance = json.loads(acceptance_raw)
+    _require(isinstance(solve, dict) and isinstance(acceptance, dict),
+             "solve and acceptance metadata must be objects")
+    rows, total = solve.get("results"), solve.get("total")
+    _require(isinstance(rows, list) and type(total) is int and total > 0
+             and len(rows) == total, "solve total must equal nonempty results")
+    _require(all(isinstance(r, dict) and isinstance(r.get("id"), str)
+                 and r["id"].strip() and type(r.get("accepted")) is bool
+                 for r in rows), "every source row needs id and bool accepted")
+    ids = [r["id"] for r in rows]
+    _require(len(set(ids)) == total, "source ids must be unique")
+    accepted_ids = [r["id"] for r in rows if r["accepted"]]
+    _require(type(solve.get("accepted")) is int
+             and solve["accepted"] == len(accepted_ids),
+             "solve accepted count contradicts its rows")
+    _require(acceptance.get("schema") == "vibeic.benchmark.program_first_ai_review.v3"
+             and acceptance.get("status") == "PENDING",
+             "operational provenance requires PENDING acceptance")
+    _require(type(acceptance.get("total")) is int and acceptance["total"] == total
+             and type(acceptance.get("accepted")) is int
+             and acceptance["accepted"] == len(accepted_ids) < total
+             and isinstance(acceptance.get("accepted_ids"), list)
+             and sorted(acceptance["accepted_ids"]) == sorted(accepted_ids),
+             "acceptance count/ids/total contradict solve population")
+    proof = {"solve_path": str(path), "solve_sha256": hashlib.sha256(raw).hexdigest(),
+             "acceptance_path": str(acceptance_path),
+             "acceptance_sha256": hashlib.sha256(acceptance_raw).hexdigest(),
+             "bench": solve.get("bench"), "total": total,
+             "accepted": len(accepted_ids)}
+    return solve, proof
+
+
+def operational_records(records: List[Dict[str, Any]],
+                        source_path: Optional[Path] = None) -> Dict[str, Any]:
+    """Shared consumer seam: validate an operational claim before exemption.
+
+    Invalid operational records are retained as violations, not fed back into
+    first-letter parsing. Functional records still traverse the original rubric.
+    """
+    violations, unmeasured, provenance = [], [], {}
+    operational = set()
+    cache = {}
+    if not records:
+        violations.append({"id": "population", "rule": "empty_population",
+                           "detail": "zero records cannot establish completion"})
+    for i, rec in enumerate(records):
+        category = str(_first_present(rec, _CATEGORY_KEYS) or "").strip().upper()
+        verdict = str(_first_present(rec, _VERDICT_KEYS) or "").strip().upper()
+        rid = extract_id(rec, i)
+        if category not in OPERATIONAL_CATEGORIES:
+            if verdict == "NOT_MEASURED":
+                violations.append({"id": rid, "rule": "unmeasured_requires_operational_category",
+                                   "detail": "NOT_MEASURED alone cannot bypass functional triage"})
+            continue
+        operational.add(i)
+        try:
+            _require(verdict == "NOT_MEASURED", "operational verdict must be NOT_MEASURED")
+            _pending_claims(rec)
+            for keys, expected in [(_CATEGORY_KEYS, category), (_VERDICT_KEYS, verdict)]:
+                _require(all(str(v).strip().upper() == expected
+                             for k, v in rec.items() if k.lower() in keys and v is not None),
+                         "conflicting category/verdict aliases")
+            _require(all(v is None for k, v in rec.items() if k.lower() in _BLIND_KEYS),
+                     "an operational record cannot claim a measured blind result")
+            _require(not _failure_path(rec), "record contains a measured FAIL")
+            _require(isinstance(rec.get("id"), str) and bool(rec["id"].strip())
+                     and isinstance(rec.get("bench"), str) and bool(rec["bench"].strip()),
+                     "operational record requires explicit id and bench")
+            evidence = rec.get("evidence")
+            _require(isinstance(evidence, str) and evidence.count("#") == 1,
+                     "evidence must reference solve_report.json#id")
+            filename, fragment = evidence.rsplit("#", 1)
+            path = Path(filename)
+            _require(path.name == "solve_report.json" and fragment == rid,
+                     "evidence must name solve_report.json and the same id")
+            if not path.is_absolute():
+                _require(source_path is not None, "relative evidence needs the input JSON path")
+                path = source_path.parent / path
+            path = path.resolve()
+            if path not in cache:
+                cache[path] = _load_operational_source(path)
+            solve, proof = cache[path]
+            bench = rec["bench"]
+            _require(solve.get("bench") == bench, "source bench does not match record")
+            population = [extract_id(r, j) for j, r in enumerate(records)
+                          if _first_present(r, _BENCH_KEYS) == bench]
+            ids = [r["id"] for r in solve["results"]]
+            _require(sorted(population) == sorted(ids),
+                     "triage ids must retain the exact source population for this bench")
+            if "evidence_sha256" in rec:
+                _require(rec["evidence_sha256"] == proof["solve_sha256"],
+                         "source SHA-256 does not match evidence_sha256")
+            row = next(r for r in solve["results"] if r["id"] == rid)
+            _require(row["accepted"] is False, "accepted row is not pending")
+            _require(all(v is None for k, v in row.items() if k.lower() in _BLIND_KEYS),
+                     "source contains a measured blind result")
+            phases = row.get("phases")
+            _require(isinstance(phases, dict)
+                     and all(isinstance(phases.get(k), dict) for k in _PHASE_KEYS),
+                     "source requires all four phase metadata objects")
+            failure = _failure_path(row)
+            _require(not failure,
+                     f"measured FAIL at {failure}; retain original functional triage obligations")
+            if category == "PRODUCT_ENTRY_DEFECT":
+                _require(row.get("worker_status") == "ERROR"
+                         and isinstance(row.get("worker_error"), str)
+                         and bool(row["worker_error"].strip())
+                         and row.get("candidate_ready") is False
+                         and row.get("candidate_origin") == "NONE"
+                         and all(phases[k].get("status") == "NOT_MEASURED"
+                                 for k in _PHASE_KEYS),
+                         "entry defect requires worker ERROR, no candidate and unmeasured phases")
+            else:
+                _require(row.get("worker_status") != "ERROR"
+                         and not row.get("worker_error")
+                         and ((row.get("candidate_origin") in {"PROGRAM", "AI_BACKUP", "AI_REPAIR"}
+                               and row.get("candidate_ready") is True
+                               and row.get("awaiting_ai_review") is True)
+                              or (row.get("candidate_origin") == "AI_BACKUP_PENDING"
+                                  and row.get("candidate_ready") is False
+                                  and row.get("awaiting_ai_backup") is True)),
+                         "pending acceptance requires an outstanding AI acceptance obligation")
+            provenance[str(path)] = proof
+            unmeasured.append({"index": i, "id": rid, "bench": bench, "category": category})
+        except (OSError, ValueError, TypeError, StopIteration) as exc:
+            violations.append({"id": rid, "bench": rec.get("bench"),
+                               "rule": "operational_provenance_invalid", "detail": str(exc)})
+    return {"indices": operational, "violations": violations,
+            "unmeasured": unmeasured, "n_unmeasured": len(unmeasured),
+            "n_invalid_operational": len(operational) - len(unmeasured),
+            "n_functional": len(records) - len(operational),
+            "provenance": list(provenance.values()),
+            "benchmark_complete": False, "scorable": False,
+            "score_status": "NOT_MEASURED" if operational else "NOT_VERIFIED"}
+
+
+def record_validity(report: Dict[str, Any], operational: Dict[str, Any]) -> None:
+    """Record validity is not a claim about benchmark completion or scoring."""
+    report.update({k: v for k, v in operational.items() if k not in {"indices", "violations"}})
+    report["records_valid"] = not (report["n_violations"] or report.get("n_reviews", 0))
+    report["verdict"] = ("FAIL" if not report["records_valid"] else
+                         "VALID_UNMEASURED" if operational["indices"] else "PASS")
+
+
 def floor_keyword_hit(text: str) -> Optional[str]:
     low = text.lower()
     for kw in FLOOR_KEYWORDS:
@@ -236,11 +460,15 @@ def floor_keyword_hit(text: str) -> Optional[str]:
     return None
 
 
-def check_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
-    violations: List[Dict[str, Any]] = []
+def check_records(records: List[Dict[str, Any]],
+                  source_path: Optional[Path] = None) -> Dict[str, Any]:
+    operational = operational_records(records, source_path)
+    violations: List[Dict[str, Any]] = list(operational["violations"])
     reviews: List[Dict[str, Any]] = []
 
     for i, rec in enumerate(records):
+        if i in operational["indices"]:
+            continue
         rid = extract_id(rec, i)
         letter = extract_letter(rec)
         closeloop = extract_closeloop(rec)
@@ -290,7 +518,7 @@ def check_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
                                "is mislabeled (§ 4 judgment needed)"),
                 })
 
-    return {
+    report = {
         "program": "triage_record_check",
         "n_records": len(records),
         "violations": violations,
@@ -298,6 +526,8 @@ def check_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "n_violations": len(violations),
         "n_reviews": len(reviews),
     }
+    record_validity(report, operational)
+    return report
 
 
 # ── CLI ──────────────────────────────────────────────────────────────────
@@ -318,14 +548,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"IO ERROR: {e}", file=sys.stderr)
         return 2
 
-    report = check_records(records)
+    report = check_records(records, path)
     report["path"] = str(path)
 
     n_v = report["n_violations"]
     n_r = report["n_reviews"]
     if n_v == 0 and n_r == 0:
-        report["verdict"] = "PASS"
         _emit(a, report)
+        if report["n_unmeasured"]:
+            print(f"VALID_UNMEASURED: {report['n_unmeasured']} operational record(s); "
+                  "records valid; benchmark incomplete; score NOT_MEASURED; unscorable")
+            return 0
         print(f"PASS: {report['n_records']} triage record(s) self-consistent "
               "(§ 4 A-E⇒floor / F-H⇒closeloop|skip; no letter↔rationale clash)")
         return 0

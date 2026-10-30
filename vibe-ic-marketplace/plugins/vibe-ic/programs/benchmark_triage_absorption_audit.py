@@ -64,6 +64,11 @@ Additionally, ANY record with independent_blind_passes == true is AI-solvable
 regardless of its verdict label — this is what stops a "FLOOR" label from
 laundering a fail the AI actually solved.
 
+Operational PRODUCT_ENTRY_DEFECT / PENDING_ACCEPTANCE records with verdict
+NOT_MEASURED use triage_record_check's shared metadata validation. They count
+as neither absorbed nor floor-exempt. VALID_UNMEASURED (exit 0) means only
+mechanically valid records; benchmark_complete and scorable remain false.
+
 Exit codes
 ==========
   0 — PASS  (every AI-solvable fail absorbed; every floor/defect has evidence)
@@ -77,6 +82,9 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from triage_record_check import (TriageInputError, operational_records,
+                                 record_validity, validate_operational_envelope)
 
 # ── verdict vocabulary ────────────────────────────────────────────────────
 # Verdicts whose meaning is "the AI can solve this with a general no-cheat
@@ -258,11 +266,16 @@ def _coerce_records(data: Any) -> List[Dict[str, Any]]:
         if not isinstance(r, dict):
             raise AuditInputError(f"record[{i}] is not an object")
         out.append(r)
+    try:
+        validate_operational_envelope(data, out)
+    except TriageInputError as exc:
+        raise AuditInputError(str(exc)) from exc
     return out
 
 
 # ── core audit ─────────────────────────────────────────────────────────────
-def audit_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+def audit_records(records: List[Dict[str, Any]],
+                  source_path: Optional[Path] = None) -> Dict[str, Any]:
     """Return the audit report. Each violation is one of:
       * unabsorbed_ai_solvable   — AI-solvable verdict with no absorption_ref
       * blind_pass_unabsorbed    — independent_blind_passes==true, no absorption_ref
@@ -271,11 +284,14 @@ def audit_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
                                    was actually solvable — not a floor)
       * unknown_verdict          — verdict not in the recognised vocabulary
     """
-    violations: List[Dict[str, Any]] = []
+    operational = operational_records(records, source_path)
+    violations: List[Dict[str, Any]] = list(operational["violations"])
     absorbed: List[str] = []
     exempt: List[str] = []
 
     for i, rec in enumerate(records):
+        if i in operational["indices"]:
+            continue
         rid = extract_id(rec, i)
         verdict = extract_verdict(rec)
         blind = extract_bool(rec, _BLIND_KEYS)
@@ -397,7 +413,7 @@ def audit_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         })
 
     n_v = len(violations)
-    return {
+    report = {
         "program": "benchmark_triage_absorption_audit",
         "n_records": len(records),
         "n_absorbed": len(absorbed),
@@ -408,6 +424,8 @@ def audit_records(records: List[Dict[str, Any]]) -> Dict[str, Any]:
         "n_violations": n_v,
         "verdict": "PASS" if n_v == 0 else "FAIL",
     }
+    record_validity(report, operational)
+    return report
 
 
 # ── CLI ─────────────────────────────────────────────────────────────────────
@@ -438,11 +456,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         print(f"IO ERROR: {e}", file=sys.stderr)
         return 2
 
-    report = audit_records(records)
+    report = audit_records(records, path)
     report["path"] = str(path)
     _emit(a, report)
 
-    if report["verdict"] == "PASS":
+    if report["records_valid"]:
+        if report["n_unmeasured"]:
+            print(f"VALID_UNMEASURED: {report['n_unmeasured']} operational record(s); "
+                  "records valid; benchmark incomplete; score NOT_MEASURED; unscorable")
+            return 0
         print(f"PASS: {report['n_records']} fail(s) — {report['n_absorbed']} "
               f"absorbed, {report['n_exempt']} floor/defect-exempt; every "
               "AI-solvable fail carries an absorption_ref (§ 4.2 convergence)")
