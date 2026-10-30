@@ -348,6 +348,65 @@ def _dispatch(step, project, block, options, run):
     return run_step(step, project, block, options, run)
 
 
+
+def _declared_blocks(project):
+    """Keep native producers and file-based checkers on the same declaration."""
+    from analog_native_front import _stale
+
+    def blocks_at(path, key):
+        body = _read(path)
+        blocks = body.get(key) if isinstance(body, dict) else (body if key == 'blocks' else None)
+        if (not isinstance(blocks, list) or not blocks
+                or any(not isinstance(block, dict) for block in blocks)):
+            raise ValueError(f"nonempty object block list required: {path}")
+        if isinstance(body, dict):
+            if 'block_count' in body and (type(body['block_count']) is not int
+                                         or body['block_count'] != len(blocks)):
+                raise ValueError(f"block list count mismatch: {path}")
+            if _stale(project, body):
+                raise ValueError(f"block list source changed: {path}")
+        names = [block.get('name') or block.get('block') for block in blocks]
+        if (any(not isinstance(name, str)
+                or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.-]*', name)
+                or name in ('.', '..') for name in names)
+                or len(set(names)) != len(names)):
+            raise ValueError(f"block list names must be unique safe components: {path}")
+        return blocks
+
+    def agrees(first, second):
+        from analog_a1_spec_emit import _canonical_type
+        first = {block.get('name') or block.get('block'): block for block in first}
+        second = {block.get('name') or block.get('block'): block for block in second}
+        return first.keys() == second.keys() and all(
+            _canonical_type(first[name].get('type') or first[name].get('block_type'))
+            == _canonical_type(second[name].get('type') or second[name].get('block_type'))
+            for name in first) and all(
+            first[name][key] == second[name][key]
+            for name in first for key in ('count', 'multiplicity', 'spec', 'pins', 'ports')
+            if key in first[name] and key in second[name])
+
+    candidates = [layout.analog_dir(project) / 'analog_block_list.json',
+                  project / 'phase1/analog/analog_block_list.json']
+    existing = [(path, blocks_at(path, 'blocks')) for path in candidates if path.exists()]
+    l5 = layout.generated_docs_dir(project) / 'L5_ADI_SPEC.json'
+    source_blocks = blocks_at(l5, 'analog_blocks') if l5.exists() else None
+    if existing:
+        blocks = existing[0][1]
+        if (any(not agrees(blocks, other) for _, other in existing[1:])
+                or source_blocks is not None and not agrees(blocks, source_blocks)):
+            raise ValueError('conflicting analog block declarations')
+        return blocks
+    if source_blocks is None:
+        raise ValueError('a nonempty design analog block list is required')
+    # The legacy runner already materializes this L5 fallback before running
+    # its file-based checkers. Keep the full population before subset selection.
+    write_json(candidates[0], {
+        'blocks': source_blocks, 'block_count': len(source_blocks),
+        '_provenance': {'producer': 'analog_native_flow',
+                        'input': {'path': str(l5.relative_to(project)), 'sha256': _sha(l5)}}})
+    return source_blocks
+
+
 def run_window(project, args, *, features=None):
     project = Path(project).resolve()
     entry = getattr(args, "entry_step", None) or "A01"
@@ -363,19 +422,8 @@ def run_window(project, args, *, features=None):
         manifest_path = project / "manifest-formal.json"
     manifest = _read(Path(manifest_path), {})
     features = features if features is not None else manifest.get("features", config.get("features", {}))
-    block_path = layout.analog_dir(project) / "analog_block_list.json"
-    declared = _read(block_path)
-    if declared is None:
-        l5 = _read(layout.generated_docs_dir(project) / "L5_ADI_SPEC.json", {})
-        declared = l5.get("analog_blocks")
-    blocks = declared.get("blocks") if isinstance(declared, dict) else declared
-    if not isinstance(blocks, list) or not blocks:
-        raise ValueError("a nonempty design analog block list is required")
-    blocks = [dict(block) for block in blocks]
+    blocks = [dict(block) for block in _declared_blocks(project)]
     names = [block.get("name") or block.get("block") for block in blocks]
-    if any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", name)
-           or name in (".", "..") for name in names) or len(set(names)) != len(names):
-        raise ValueError("analog block names must be unique safe path components")
     declared_names = set(names)
     wanted = {name.strip() for name in (getattr(args, "blocks", "") or "").split(",") if name.strip()}
     if wanted:
