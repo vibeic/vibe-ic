@@ -278,7 +278,8 @@ _REQUESTED_RTL = re.compile(
     r"(?:(?:the\s+)?(?:bug|error)\s+in\s+)?"
     r"(?:(?:only|a|an|the|this|that|its|following|supplied|provided|existing|"
     r"partial|incomplete|internal|faulty|broken|synthesizable|verilog|"
-    r"systemverilog|hdl|rtl)\s+)*(?:module|rtl)\b|"
+    r"systemverilog|hdl|rtl)\s+)*(?:module|rtl|"
+    r"(?:verilog|systemverilog|hdl)\s+(?:source|code)(?:\s+files?)?)\b|"
     r"\b(?:implement|write|design|build|create)\b[^.;]*\bas\s+"
     r"(?:(?:a|an|the|synthesizable|verilog|systemverilog|hdl|rtl)\s+)*"
     r"module\b", re.I)
@@ -333,9 +334,18 @@ def _physical_package_obligations(text: str) -> list[str]:
     """
     out = []
     for start, end, _kind in _clause_spans(_prose_view(text)):
-        for clause in re.split(r"\b(?:but|however)\b", text[start:end], flags=re.I):
+        model_description = False
+        for clause in re.split(r"\b(?:and|then|but|however)\b", text[start:end], flags=re.I):
             clause = clause.strip()
             if _REQUESTED_RTL.match(clause):
+                model_description = True
+                continue
+            # A coordinated property continues the model description. An
+            # independent action or modal requirement introduces an obligation.
+            if model_description and not (
+                    _RTL_DELIVERY_ACT.search(clause)
+                    or _REQUIREMENT_SENTENCE.search(clause)
+                    or re.match(r"(?:physically\s+package|ship|assemble|place)\b", clause, re.I)):
                 continue
             relations = list(_RTL_PHYSICAL_PACKAGE.finditer(clause))
             for i, relation in enumerate(relations):
@@ -357,10 +367,57 @@ def _physical_package_obligations(text: str) -> list[str]:
     return out
 
 
+def _delivery_prose(text: str) -> str:
+    """Remove HDL and identifier roles, retaining surrounding delivery prose."""
+    ends = [match.end() for match in _ENDMODULE.finditer(text)]
+    prose = []
+    cursor = 0
+    # Include unfinished interface headers. Their ports are identifiers even
+    # when the requester has not yet supplied a closing parenthesis/semicolon.
+    heads = {head.start(): head for head in re.finditer(
+        r"^[ \t]*module\s+\w+\s*(?:#\s*)?\([^\n;]*", text, re.M)}
+    for head in _MODULE_HEAD.finditer(text):
+        header = _dms.strip_comments(head.group())
+        if (re.match(r"\s*module\s+\w+\s*(?:#\s*\(|\(|;)", header)
+                and header.count("(") == header.count(")")):
+            heads[head.start()] = head
+    for head in sorted(heads.values(), key=lambda match: match.start()):
+        if head.start() < cursor:
+            continue
+        prose.append(text[cursor:head.start()])
+        header_end = head.end()
+        depth = 0
+        for token in re.finditer(r'/\*.*?\*/|//[^\n]*|"(?:\\.|[^"\\])*"|[()]',
+                                 head.group(), re.S):
+            if token.group() == "(":
+                depth += 1
+            elif token.group() == ")":
+                depth -= 1
+                if depth == 0:
+                    tail = _dms.strip_comments(head.group()[token.end():])
+                    if re.match(r"\s*\(", tail):
+                        continue
+                    if not re.fullmatch(r"\s*;", tail):
+                        header_end = head.start() + token.end()
+                    break
+        end_index = bisect_right(ends, header_end)
+        if header_end == head.end() and head.group().endswith(";") and end_index < len(ends):
+            cursor = ends[end_index]
+        else:
+            cursor = header_end
+    prose.append(text[cursor:])
+    text = " ".join(" ".join(prose).split())
+    # Names remain in the original prompt/semantic payload. Only the delivery
+    # noun scan excludes these explicitly declared identifier positions.
+    return re.sub(
+        r"\bmodule\s+(?:named|called)\s+\w+\b|"
+        r"\b\w+\s+(?:input|output|inout)\s+port\b",
+        "", text, flags=re.I)
+
+
 def _delivered_object_families(text: str) -> list[str]:
     """Conservative object selection; unresolved physical choices are blocking."""
-    source_text = text
-    text = " ".join(text.split())
+    text = _delivery_prose(text)
     hardmacro = bool(_HARDMACRO_ROUTE.search(text))
     die = bool(_REQUESTED_DIE.search(text))
     ip = bool(_REQUESTED_IP.search(text))
@@ -392,17 +449,6 @@ def _delivered_object_families(text: str) -> list[str]:
         return ["HARDMACRO"]
     if _REQUESTED_RTL.search(text) and not any(
             rx.search(text) for _, rx in _PROMPT_DELIVERY_PATTERNS):
-        ends = [match.end() for match in _ENDMODULE.finditer(source_text)]
-        prose = []
-        cursor = 0
-        for head in _MODULE_HEAD.finditer(source_text):
-            if head.start() < cursor:
-                continue
-            prose.append(source_text[cursor:head.start()])
-            end_index = bisect_right(ends, head.end())
-            cursor = ends[end_index] if end_index < len(ends) else head.end()
-        prose.append(source_text[cursor:])
-        text = " ".join(" ".join(prose).split())
         unresolved_reference = any(
             re.search(r"\b(?:it|them|they)\b", clause, re.I)
             and not _RTL_IO_DESCRIPTION.fullmatch(clause)
@@ -415,6 +461,20 @@ def _delivered_object_families(text: str) -> list[str]:
                 and not _RTL_PHYSICAL_CONTEXT.search(text)):
             references = {match.group("name").casefold()
                           for match in _RTL_FUNCTION_REFERENCE.finditer(text)}
+            # Descriptive subject/property clauses supply background, rather
+            # than naming a delivered object. Unmatched named references and
+            # statements of identity/obligation remain unresolved.
+            clauses = []
+            for start, end, kind in _clause_spans(text):
+                clause = text[start:end]
+                names = {match.group("name").casefold()
+                         for match in _NAMED_DIE_BACKGROUND.finditer(clause)}
+                if kind == "narration" and not (names - references):
+                    clause = re.sub(r"\b" + _DIE_OBJECT +
+                                    r"\b(?=\s+(?:has|contains)\b)",
+                                    "", clause, flags=re.I)
+                clauses.append(clause)
+            text = " ".join(clauses)
             text = _NAMED_DIE_BACKGROUND.sub(
                 lambda match: "" if match.group("name").casefold() in references
                 else match.group(), text)
