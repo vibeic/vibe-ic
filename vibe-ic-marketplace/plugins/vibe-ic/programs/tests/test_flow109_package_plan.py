@@ -406,3 +406,62 @@ def test_early_d03_entry_reaches_pad_producer_and_keeps_its_refusal(tmp_path, mo
     assert result['reason'] == 'D06_PAD_ASSIGNMENT_OWNER_FACT_MISSING'
     assert result['component_status'] == 'NOT_MEASURED'
     assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+def _named_l7_plan(project):
+    _early_docs(project)
+    _io(project)
+    _write(project / 'input/docs/L7.md', '- **Reference method**: documented input/output comparison\n')
+    path = project / d06.L7_REPORT
+    body = json.loads(path.read_text())
+    named = {'name': 'Reference method', 'kind': 'named_scenario',
+             'stimulus': 'documented input/output comparison',
+             'expected': 'documented DV scenario reproduced',
+             'evidence': 'L7.md', 'extraction_strategy': 'named_scenario_list'}
+    body['test_scenarios'].append(named)
+    _write(path, body)
+    return named
+
+
+def test_l7_named_prose_is_retained_without_fabricating_l10_case(tmp_path):
+    named = _named_l7_plan(tmp_path)
+    io = json.loads((tmp_path / d06.IO_REPORT).read_text())
+    result, evidence = d06._early_test_access(tmp_path, _context(), io)
+    assert result['functional_cases'] == 1
+    assert result['additional_named_verification_scenarios'] == [named]
+    assert any(item['path'] == 'input/docs/L7.md' for item in evidence)
+    assert len(json.loads((tmp_path / d06.L10_REPORT).read_text())['test_cases']) == 1
+
+
+@pytest.mark.parametrize('damage', ['missing_case', 'changed_expected', 'duplicate_case',
+                                    'unknown_extra_kind', 'wrong_named_strategy',
+                                    'wrong_named_source', 'missing_named_source',
+                                    'empty_named_stimulus', 'ambiguous_named_source'])
+def test_l7_additional_prose_does_not_hide_missing_or_unbound_cases(tmp_path, damage):
+    _named_l7_plan(tmp_path)
+    l7 = json.loads((tmp_path / d06.L7_REPORT).read_text())
+    l10 = json.loads((tmp_path / d06.L10_REPORT).read_text())
+    if damage == 'missing_case':
+        l10['test_cases'] = []
+    elif damage == 'changed_expected':
+        l10['test_cases'][0]['expected'] = 'different outcome'
+    elif damage == 'duplicate_case':
+        l10['test_cases'].append(dict(l10['test_cases'][0]))
+    elif damage == 'unknown_extra_kind':
+        l7['test_scenarios'][-1]['kind'] = 'undeclared_role'
+    elif damage == 'wrong_named_strategy':
+        l7['test_scenarios'][-1]['extraction_strategy'] = 'invented'
+    elif damage == 'wrong_named_source':
+        l7['test_scenarios'][-1]['evidence'] = 'unrelated.md'
+    elif damage == 'missing_named_source':
+        (tmp_path / 'input/docs/L7.md').unlink()
+    elif damage == 'empty_named_stimulus':
+        l7['test_scenarios'][-1]['stimulus'] = ''
+    else:
+        l7['source_documents'].append('input/other/L7.md')
+        l10['source_documents'].append('input/other/L7.md')
+    _write(tmp_path / d06.L7_REPORT, l7)
+    _write(tmp_path / d06.L10_REPORT, l10)
+    io = json.loads((tmp_path / d06.IO_REPORT).read_text())
+    with pytest.raises(d06.D06Refusal):
+        d06._early_test_access(tmp_path, _context(), io)

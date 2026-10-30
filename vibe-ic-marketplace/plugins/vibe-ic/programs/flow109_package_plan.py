@@ -265,17 +265,35 @@ def _early_test_access(project: Path, context: Mapping,
             or not l7_cases or any(not isinstance(row, Mapping)
                                    for row in l7_cases + l10_cases)):
         raise D06Refusal("D06_FUNCTIONAL_TEST_PLAN_MISMATCH", "L7/L10 cases")
+    # The normal L7 owner adds named prose scenarios after the shared table
+    # cases; L10 owns the shared cases, not that additional verification prose.
+    # Retain and source-bind the extra plan instead of demanding a fabricated
+    # L10 executable case for it. Shared case population and values stay exact.
+    named = [row for row in l7_cases if row.get("kind") == "named_scenario"]
+    shared = [row for row in l7_cases if row.get("kind") != "named_scenario"]
+    if any(row.get("extraction_strategy") != "named_scenario_list"
+           or any(not isinstance(row.get(key), str) or not row[key].strip()
+                  for key in ("name", "stimulus", "expected", "evidence")) for row in named):
+        raise D06Refusal("D06_FUNCTIONAL_TEST_PLAN_MISMATCH", "unbound named L7 scenario")
     normalized = lambda rows: [{key: row.get(key) for key in keys} for row in rows]
-    if (normalized(l7_cases) != normalized(l10_cases)
+    if (normalized(shared) != normalized(l10_cases)
             or not any(row.get("kind") == "functional_vector" for row in l10_cases)):
         raise D06Refusal("D06_FUNCTIONAL_TEST_PLAN_MISMATCH", "L7/L10 cases")
     l7_sources = l7.get("source_documents")
     if (not isinstance(l7_sources, list) or not l7_sources
             or any(not isinstance(row.get("evidence"), str)
                    or not any(row["evidence"].startswith(source) for source in l7_sources)
-                   for row in l7_cases)
+                   for row in shared)
             or not set(l7_sources).issubset(set(l10.get("source_documents") or []))):
         raise D06Refusal("D06_EVIDENCE_WRONG_SOURCE", "L7/L10 source documents")
+
+    for row in named:
+        sources = [source for source in l7_sources
+                   if row["evidence"] == source or row["evidence"] == Path(source).name]
+        if len(sources) != 1:
+            raise D06Refusal("D06_EVIDENCE_WRONG_SOURCE", "named L7 scenario source")
+        source = _project_path(project, sources[0], "named L7 scenario source")
+        evidence.append(_record(project, source))
 
     waveform = l8.get("clock_and_reset_waveform")
     if not isinstance(waveform, Mapping):
@@ -297,6 +315,7 @@ def _early_test_access(project: Path, context: Mapping,
         raise D06Refusal("D06_FUNCTIONAL_ACCESS_INCOMPLETE",
                          "clock/reset/stimulus/observe pads are required")
     return {"mode": "functional_unscanned", "functional_cases": len(l10_cases),
+            "additional_named_verification_scenarios": [dict(row) for row in named],
             "clock_pads": sorted(clocks), "reset_pads": sorted(resets),
             "stimulus_pads": stimulus, "observe_pads": observe,
             "authority": "resolved Flow109 no-DFT route + matched L7/L10 + native IO map"}, evidence
