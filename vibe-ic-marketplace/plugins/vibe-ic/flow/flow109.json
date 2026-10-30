@@ -11515,9 +11515,32 @@
           "id": "analog_die",
           "select_when": "analog_physical and not digital_physical",
           "provider": "other",
-          "tools": "ngspice noise/coupling analysis",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "tools": "ngspice source-bound coupling transient and native capture consumer",
+          "native_steps": [
+            "flow109.D48"
+          ],
+          "execution_status": "IMPLEMENTED_NATIVE_COMPONENT",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "si_crosstalk_check",
+            "native_step_id": "flow109.D48",
+            "producer": "analog_bound_measurements.py:run_measurements",
+            "consumer": "si_crosstalk_check.py:_d48_consume",
+            "engine_families": [
+              "ngspice"
+            ],
+            "engine_executables": {
+              "ngspice": "ngspice"
+            },
+            "engine_steps": {
+              "ngspice": [
+                "flow109.D48"
+              ]
+            },
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         },
         {
           "id": "assembly",

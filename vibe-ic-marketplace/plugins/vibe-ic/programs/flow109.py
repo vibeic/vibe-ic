@@ -1252,8 +1252,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_power = (row.get("id") == "D56" and profile.get("id") == "analog_die"
                     and isinstance(dispatch, Mapping)
                     and dispatch.get("adapter") == "analog_native_em")
+    analog_si = (row.get("id") == "D48" and profile.get("id") == "analog_die"
+                 and isinstance(dispatch, Mapping)
+                 and dispatch.get("adapter") == "si_crosstalk_check")
     if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
-                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir and not analog_power):
+                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir and not analog_power and not analog_si):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
@@ -1302,6 +1305,10 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             invalid = (common_invalid or not analog_power or native != "flow109.D56"
                        or dispatch.get("producer") != "analog_native_interconnect_run.py:execute retained native capture"
                        or dispatch.get("consumer") != "analog_native_em.py:execute supply_wave_statistics")
+        elif adapter == "si_crosstalk_check":
+            invalid = (common_invalid or not analog_si or native != "flow109.D48"
+                       or dispatch.get("producer") != "analog_bound_measurements.py:run_measurements"
+                       or dispatch.get("consumer") != "si_crosstalk_check.py:_d48_consume")
         elif adapter == "flow109_frontend":
             identities = {
                 "D05": ("flow109.D05", "l21_to_upf_emit.py:main",

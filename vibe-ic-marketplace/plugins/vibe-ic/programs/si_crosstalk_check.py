@@ -21,6 +21,8 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 import argparse
 import json
+import math
+import re
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -297,6 +299,212 @@ def build_report(findings: List[Finding], stats: dict,
         },
         "findings": [asdict(f) for f in findings],
     }
+
+
+def _d48_unique(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError('D48_DUPLICATE_INPUT_KEY: ' + key)
+        result[key] = value
+    return result
+
+
+def _d48_inputs(project):
+    import analog_bound_measurements as measured
+    config = project / 'input/flow109/D48.json'
+    data = json.loads(config.read_text(), object_pairs_hook=_d48_unique)
+    inputs = {'settings': {'path': str(config), 'sha256': measured.sha(config)}}
+    for role in ('netlist', 'testbench', 'coupling_model'):
+        view = data[role]
+        path = project / view['path']
+        resolved = path.resolve(strict=True)
+        if (not resolved.is_relative_to(project) or resolved != path.absolute()
+                or not resolved.is_file() or measured.sha(resolved) != view['sha256']):
+            raise ValueError('D48_INPUT_UNBOUND: ' + role)
+        inputs[role] = {'path': str(resolved), 'sha256': view['sha256']}
+    analysis = data['analysis']
+    if analysis.get('kind') != 'TRAN':
+        raise ValueError('D48_EXPLICIT_TRAN_REQUIRED')
+    windows = data['windows']
+    if not isinstance(windows, list) or not windows:
+        raise ValueError('D48_DECLARED_WINDOWS_REQUIRED')
+    names = set()
+    for window in windows:
+        name = window['id']
+        if not isinstance(name, str) or not name or name in names:
+            raise ValueError('D48_UNIQUE_WINDOW_IDS_REQUIRED')
+        names.add(name)
+        for key in ('baseline_v', 'from_s', 'to_s', 'max_noise_v', 'min_aggressor_swing_v'):
+            value = window[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+                raise ValueError('D48_FINITE_WINDOW_LIMIT_REQUIRED: ' + key)
+        if window['max_noise_v'] < 0 or window['min_aggressor_swing_v'] <= 0:
+            raise ValueError('D48_INVALID_NOISE_OR_EXCITATION_LIMIT')
+        for key in ('aggressor', 'victim'):
+            if not isinstance(window[key], str) or not re.fullmatch(
+                    r'v\([A-Za-z0-9_.$:/#\[\]!-]+\)', window[key], re.I):
+                raise ValueError('D48_EXPLICIT_VOLTAGE_VECTOR_REQUIRED: ' + key)
+        if window['aggressor'].casefold() == window['victim'].casefold():
+            raise ValueError('D48_DISTINCT_AGGRESSOR_AND_VICTIM_REQUIRED')
+    closure = measured.consumed_input_views(project, Path(inputs['testbench']['path']))
+    included = {view['path'] for view in closure.values()}
+    if not {inputs[role]['path'] for role in ('netlist', 'coupling_model')} <= included:
+        raise ValueError('D48_CIRCUIT_OR_COUPLING_NOT_IN_EXECUTED_CLOSURE')
+    return data, inputs
+
+
+def _d48_bindings(data, binary):
+    measurements, capture = {}, {}
+    for index, window in enumerate(data['windows']):
+        prefix = 'w' + str(index)
+        for suffix, expression, statistic in (
+                ('noise', f"abs({window['victim']}-({window['baseline_v']:.17g}))", 'MAX'),
+                ('amax', window['aggressor'], 'MAX'), ('amin', window['aggressor'], 'MIN')):
+            measurements[prefix + '_' + suffix] = {
+                'analysis': 'TRAN', 'expression': expression, 'statistic': statistic,
+                'from_s': window['from_s'], 'to_s': window['to_s']}
+        capture[prefix + '_aggressor'] = window['aggressor']
+        capture[prefix + '_victim'] = window['victim']
+    return {'analysis': data['analysis'], 'measurements': measurements, 'capture': capture,
+            'execution': {'threads': 1, 'wait_policy': 'PASSIVE', 'ngspice_bin': binary}}
+
+
+def _d48_consume(project, native, data, inputs):
+    """Consume this producer's execution and capture. No stored evidence is upgraded."""
+    import analog_bound_measurements as measured
+    if native.get('status') != 'PASS':
+        return native.get('status', 'NOT_MEASURED'), 'D48_NATIVE_MEASUREMENT_' + str(native.get('status')), []
+    executions = native.get('executions')
+    if not isinstance(executions, list) or len(executions) != 1:
+        raise ValueError('D48_EXECUTED_CAPTURE_REQUIRED')
+    execution = executions[0]
+    if execution.get('returncode') != 0 or not execution.get('argv'):
+        raise ValueError('D48_SUCCESSFUL_NATIVE_EXECUTION_REQUIRED')
+    log = Path(execution['log'])
+    if measured.sha(log) != execution['log_sha256']:
+        raise ValueError('D48_NATIVE_LOG_CHANGED')
+    current, why = measured.validate_consumed_inputs(project, native['native_inputs'])
+    if not current:
+        raise ValueError('D48_NATIVE_CLOSURE_UNBOUND: ' + why)
+    for view in [*inputs.values(), *native['native_inputs'].values()]:
+        if measured.sha(view['path']) != view['sha256']:
+            raise ValueError('D48_EXECUTED_INPUT_CHANGED: ' + view['path'])
+    capture = native['capture']
+    path = Path(capture['path'])
+    if measured.sha(path) != capture['sha256']:
+        raise ValueError('D48_CAPTURE_CHANGED_OR_TRUNCATED')
+    rows = path.read_text().splitlines()
+    expected = ['time', *('bound_' + name for name in native['bindings']['capture'])]
+    if not rows or rows[0].split() != expected:
+        raise ValueError('D48_NATIVE_CAPTURE_VECTORS_INVALID')
+    samples = [list(map(float, row.split())) for row in rows[1:]]
+    if (len(samples) < 2 or any(len(row) != len(expected) or
+            any(not math.isfinite(value) for value in row) for row in samples)
+            or any(b[0] <= a[0] for a, b in zip(samples, samples[1:]))):
+        raise ValueError('D48_NATIVE_CAPTURE_INCOMPLETE')
+    analysis = data['analysis']
+    tolerance = analysis['step_s'] * 1e-5
+    if (samples[0][0] > analysis.get('start_s', 0) + tolerance
+            or samples[-1][0] < analysis['stop_s'] - tolerance
+            or any(b[0] - a[0] > analysis['step_s'] * 1.01
+                   for a, b in zip(samples, samples[1:]))):
+        raise ValueError('D48_NATIVE_CAPTURE_INTERVAL_INCOMPLETE')
+    results = []
+    for index, window in enumerate(data['windows']):
+        first, last = window['from_s'], window['to_s']
+        selected = [row for row in samples if first <= row[0] <= last]
+        for boundary in (first, last):
+            if any(row[0] == boundary for row in selected):
+                continue
+            bracket = next(((a, b) for a, b in zip(samples, samples[1:])
+                            if a[0] < boundary < b[0]), None)
+            if bracket is None:
+                raise ValueError('D48_WINDOW_NOT_CAPTURED')
+            a, b = bracket
+            fraction = (boundary - a[0]) / (b[0] - a[0])
+            selected.append([boundary, *(x + fraction * (y - x) for x, y in zip(a[1:], b[1:]))])
+        aggressor = [row[1 + index * 2] for row in selected]
+        victim = [row[2 + index * 2] for row in selected]
+        peak = max(abs(value - window['baseline_v']) for value in victim)
+        maximum, minimum = max(aggressor), min(aggressor)
+        values = native['measurements']
+        for suffix, observed in (('noise', peak), ('amax', maximum), ('amin', minimum)):
+            # ngspice's text measurement and wrdata have different print precision.
+            if not math.isclose(observed, values['w' + str(index) + '_' + suffix], rel_tol=5e-5, abs_tol=1e-12):
+                raise ValueError('D48_CAPTURE_AND_NATIVE_MEASUREMENT_DISAGREE')
+        results.append({**window, 'peak_noise_v': peak, 'aggressor_swing_v': maximum - minimum,
+                        'samples': len(selected), 'noise_status':
+                        'FAIL' if peak > window['max_noise_v'] else 'PASS'})
+    if any(row['noise_status'] == 'FAIL' for row in results):
+        return 'FAIL', 'D48_NOISE_LIMIT_EXCEEDED', results
+    if any(row['aggressor_swing_v'] < row['min_aggressor_swing_v'] for row in results):
+        return 'NOT_MEASURED', 'D48_AGGRESSOR_NOT_EXERCISED', results
+    return 'PASS', 'D48_DECLARED_COUPLING_METHOD_ONLY', results
+
+
+def execute(project, context):
+    """D48 analog native method. Excess noise blocks; partial SI stays NOT_MEASURED.
+
+    input/flow109/D48.json binds netlist, testbench and coupling_model by path
+    and sha256. Its TRAN analysis and windows explicitly declare aggressor,
+    victim, baseline_v, from_s, to_s, max_noise_v and min_aggressor_swing_v.
+    Required population, timing-window signoff, delay and physical provenance
+    are outside this method result. Digital audit predicates are independent.
+    """
+    import shutil
+    import uuid
+    import analog_bound_measurements as measured
+    from analog_native_flow import NativeCommands
+    from flow109_admission import require_launch_admission, AdmissionRefusal
+    import librelane_contract as launch
+    from _atomic_artefact import write_json
+    project = Path(project).resolve(strict=True)
+    output = project / 'reports/flow109/D48' / uuid.uuid4().hex
+    output.mkdir(parents=True)
+    record = dict(step_id='D48', context_sha256=context.get('context_sha256'),
+                  component_status='NOT_MEASURED', default_row_status='NOT_MEASURED',
+                  flow109_acceptance='NOT_MEASURED', whole_flow_acceptance='NOT_MEASURED',
+                  completed=False, native_started=False, delivery_accepted=False,
+                  qualification='NOT_CLAIMED', outputs=[], windows=[],
+                  required_population_status='NOT_MEASURED', timing_window_signoff=False,
+                  timing_window_status='NOT_MEASURED',
+                  delay_status='NOT_MEASURED', physical_binding_status='NOT_MEASURED')
+    try:
+        if (context.get('requested_step') != 'D48' or context.get('native_step_id') != 'flow109.D48'
+                or context.get('resolved_row', {}).get('profile', {}).get('id') != 'analog_die'):
+            raise ValueError('D48_CONTEXT_INVALID')
+        record['launch_admission'] = require_launch_admission(project, 'flow109.D48', {'flow109_context': context})
+        record['native_launch'] = launch.local_image_attestation()
+        data, inputs = _d48_inputs(project)
+        record['inputs'] = inputs
+        binary = shutil.which('ngspice')
+        if not binary:
+            raise ValueError('D48_NGSPICE_UNAVAILABLE')
+        bindings = _d48_bindings(data, binary)
+        measured.emit_deck(Path(inputs['testbench']['path']).read_text(), bindings, output / 'curve.dat')
+        runner = NativeCommands(project, output, '', record['native_launch']['image'], step='D48')
+        native = measured.run_measurements(project, Path(inputs['netlist']['path']),
+            Path(inputs['testbench']['path']), bindings, output, runner)
+        record['native'] = native
+        record['native_started'] = runner.count > 0
+        native_path = output / 'native.json'
+        write_json(native_path, native)
+        status, reason, windows = _d48_consume(project, native, data, inputs)
+        if _d48_inputs(project) != (data, inputs) or launch.local_image_attestation() != record['native_launch']:
+            raise ValueError('D48_INPUT_OR_LAUNCH_CHANGED')
+        record.update(component_status=status, reason=reason, windows=windows)
+        files = [native_path, *(Path(path) for path in native.get('outputs', []) if path)]
+        record['outputs'] = [{'path': str(path.relative_to(project)), 'sha256': measured.sha(path)}
+                             for path in files if path.is_file()]
+    except (ValueError, OSError, KeyError, TypeError, AttributeError, AdmissionRefusal, launch.Refusal) as exc:
+        if record['component_status'] != 'FAIL':
+            record['component_status'] = 'NOT_MEASURED'
+        record['reason'] = 'D48_REFUSED: ' + str(exc)
+    if record['component_status'] == 'FAIL':
+        record['default_row_status'] = record['flow109_acceptance'] = 'FAIL'
+    write_json(output / 'component.json', record)
+    return record
 
 
 def main(argv: list = None) -> int:
