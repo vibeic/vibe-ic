@@ -196,3 +196,53 @@ def test_real_D01_owner_mismatch_is_not_current(tmp_path,owner):
     receipt.write_text('{}')
     with pytest.raises(ValueError,match='owner'):
         runner._serial_d01_state(tmp_path)
+
+
+@pytest.mark.parametrize('tamper',[None,'input','rtl','provenance'],ids=['normal-finalization','input-tamper','rtl-tamper','provenance-tamper'])
+def test_declaration_log_publication_remains_current_after_finalization(tmp_path,monkeypatch,tamper):
+    """Actual emitter -> stage path rewrite -> finalizer -> normal consumer."""
+    from test_flow109_d09_owned_metrics import populate,d01_precondition
+    import flow109_metric_acceptance as metrics
+    project=tmp_path/'unit';populate(project)
+    docs=project/'input/docs';docs.mkdir()
+    (docs/'L7_verification_plan.md').write_text(
+        '## 7.0 Plugin Declaration Requirements\n\n'
+        'Plugin 在開始 RTL 設計前,必須於 `plugin_output/declaration.json` 聲明:\n\n'
+        '| 欄位 | 必填 | 範例值 | 說明 |\n|---|---|---|---|\n'
+        '| `bit_order` | ✅ | `"LSB_first"` / `"MSB_first"` | serial bit order |\n'
+        '| `integer_encoding` | ✅ | `"signed_2c"` / `"unsigned"` | interpretation |\n')
+    monkeypatch.setattr(runner,'_serial_d01_state',d01_precondition) # TEST_ONLY upstream admission.
+    try:
+        result=runner.step_rtl_gen(project,CLASS)
+        assert result.status=='PASS',result
+        assert result.extras['declaration_before_simulation']['emitted'] is True,result.extras['declaration_before_simulation']
+        assert 'provenance.jsonl' in result.extras['stage_path_rewritten_in']
+        assert result.extras['current_source_reuse']=='NORMAL_PROOF_PUBLISHED'
+        out=runner._pl.report_path(project,'phase2_one_shot.json')
+        runner._write_phase2_report(out,{'project':str(project),'verdict':'PASS','steps':[asdict(result)],
+            'declared_window':{'entry_step':'1','exit_step':'1','dispatched_step_ids':['1']}},project)
+        end_run() # Same finalizer ordering as the actual CLI.
+        report=json.loads(out.read_text());author=report['steps'][0]
+        binding=runner._Phase1ProjectBinding.open(project)
+        try:
+            now=runner._serial_current_context(binding)[0]
+            proof=author['extras']['current_source_proof']
+            assert proof['context']==now,{k:(proof['context'].get(k),now.get(k))
+                for k in proof['context'].keys()|now.keys() if proof['context'].get(k)!=now.get(k)}
+        finally:binding.close()
+        if tamper=='input':
+            (project/'input/spec.md').write_text('changed consumed source')
+        elif tamper=='rtl':
+            (project/'phase2/stage1/rtl/unit.v').write_text('module unit; endmodule\n')
+        elif tamper=='provenance':
+            with (project/'provenance.jsonl').open('a') as stream:stream.write('{"unexpected_external_record":true}\n')
+        if tamper:
+            with pytest.raises(metrics.MetricRefusal,match='D09_SOURCE_PROOF_STALE'):
+                metrics.d09_owned_metrics(project,author)
+        else:
+            answer=metrics.d09_owned_metrics(project,author)
+            assert answer['rtl_requirement_mapping']=='PASS'
+            assert answer['declared_ports_parameters']=='PASS'
+            assert len(answer['source_demands'])==len(answer['required_rtl_items'])==3
+        assert not (project/'reports/flow109/default_rows').exists()
+    finally:end_run()

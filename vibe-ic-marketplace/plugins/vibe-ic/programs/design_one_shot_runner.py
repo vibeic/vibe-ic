@@ -8480,6 +8480,11 @@ def step_rtl_gen(project: Path, ic_class: str,
                     result = _step_rtl_gen_bound(
                         stage_project, ic_class, force_regen, t0, stage_binding,
                         snapshot_manifest=baseline)
+                    # Bind the committed spelling of our own artifacts, not
+                    # the temporary stage paths that publication removes.
+                    _stage_rewrites = _phase1_remap_stage_tree(
+                        stage_project, project, baseline)
+                    stage_binding.require_current()
                     proof = _serial_publication_proof(result, stage_binding, binding, ic_class)
             if result.extras.get("deterministic_generator") == "serial_parallel_mul_synth":
                 result.extras["current_source_reuse"] = "UNAVAILABLE_FULL_TRANSACTION_USED"
@@ -8492,17 +8497,8 @@ def step_rtl_gen(project: Path, ic_class: str,
                     else:
                         result.extras["current_source_reuse_detail"] = why_not or "; ".join(why)
             stage_binding.require_current()
-            # #2183 — THE FILES, not only the StepResult. Every generator above
-            # ran against `stage_project` and any of them may have recorded
-            # that root inside an artefact this transaction is about to
-            # publish. #2158 remapped `result.detail`/`output_files`/`extras`
-            # three lines below and nothing ever remapped the files, so the
-            # scratch directory reached the canonical tree and outlived itself.
-            # Runs BEFORE the publish manifest so `final` describes the bytes
-            # that are actually committed.
-            _stage_rewrites = _phase1_remap_stage_tree(
-                stage_project, project, baseline)
-            stage_binding.require_current()
+            # Path canonicalization and proof capture above precede this
+            # manifest; CAS therefore publishes exactly the attested bytes.
             final = _phase1_tree_manifest_fd(
                 stage_binding.project_fd, project)
             # PASS and WAIVED branches intentionally publish deterministic RTL
