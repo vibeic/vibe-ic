@@ -5611,3 +5611,73 @@ def accept_d14(project: Path, context: Mapping[str, Any]) -> dict:
         answer['obligations'] = [{'id': oid, 'status': 'NOT_MEASURED', 'reason': answer['reason']}
                                  for oid in D14_BINDINGS]
     return answer
+
+
+def accept_d15(project: Path, context: Mapping, component: Mapping) -> dict:
+    """BLOCKING: two existing D15 metrics, with accepted D05/D09 preserved.
+
+    Engineering observations never grant full-UPF or whole-flow qualification.
+    Accepted prerequisites and the existing qualified native method complete automatically.
+    """
+    import flow109
+    import flow109_frontend as owner
+    result = {'schema': SCHEMA, 'row_id': 'D15', 'status': 'NOT_MEASURED',
+              'delivery_blocked': True, 'qualification': 'NOT_MEASURED', 'obligations': [],
+              'whole_flow_acceptance': 'NOT_MEASURED'}
+    try:
+        current = flow109.validate_execution_context(context)
+        row = current['resolved_row']
+        expected = {'power_verify.required_power_transitions',
+                    'power_verify.isolation_retention_behavior_errors'}
+        if (row['id'] != 'D15' or {o['id'] for o in row['obligations']} != expected
+                or row['acceptance_deps'] != ['D05', 'D09']):
+            raise MetricRefusal('D15_OBLIGATIONS_UNREGISTERED', 'existing obligations/prerequisites required')
+        observed = owner.consume_d15(project, current, component)
+        result.update(obligations=observed['obligations'], native_observation=observed)
+        if observed['status'] != 'PASS':
+            result.update(status=observed['status'], reason=observed.get('reason', 'D15_OBLIGATION_FAILED'))
+            return result
+        dependencies = {}
+        for step in ('D05', 'D09'):
+            body, ref = flow109._accepted_row(Path(project),
+                Path('reports/flow109/default_rows') / (step + '.json'), step)
+            original, _ = flow109._bound_project_json(Path(project),
+                Path('reports/flow109/requests') / (str(body.get('context_sha256')) + '.json'),
+                'D15_PREDECESSOR_CONTEXT_ABSENT')
+            prior = flow109.validate_execution_context(original)
+            if prior['features'] != current['features'] or prior['requested_step'] != step:
+                raise MetricRefusal('D15_PREDECESSOR_CONTEXT_FOREIGN', step)
+            manifest = owner._d15_json(Path(project) / owner.D15_INPUT)
+            if step == 'D05':
+                power = owner._d05_prepare(project, prior)
+                if body.get('input_sha256') != power['inputs']:
+                    raise MetricRefusal('D15_D05_INPUT_STALE', 'accepted native readset differs')
+                if power['manifest']['upf'] != manifest['upf']:
+                    raise MetricRefusal('D15_D05_UPF_IDENTITY_MISMATCH', 'accepted power intent differs')
+            else:
+                inventory = body['evidence']['rtl_inventory']
+                expected_rtl = {}
+                for item in inventory:
+                    relative = 'phase2/stage1/rtl/' + item['path']
+                    if Path(relative).suffix not in ('.v', '.sv'):
+                        continue
+                    owner._d15_bound(project, {'path': relative, 'sha256': item['sha256']})
+                    if relative in expected_rtl:
+                        raise MetricRefusal('D15_D09_RTL_IDENTITY_MISMATCH', 'duplicate adopted RTL')
+                    expected_rtl[relative] = item['sha256']
+                actual_rtl = {r['path']: r['sha256'] for r in manifest['rtl']}
+                if not expected_rtl or expected_rtl != actual_rtl:
+                    raise MetricRefusal('D15_D09_RTL_IDENTITY_MISMATCH', 'complete accepted RTL population differs')
+            dependencies[step] = ref
+        result['accepted_dependencies'] = dependencies
+        admitted = owner.d15_native_qualification(project, current, component['tool'])
+        if component.get('launch_admission') != admitted:
+            raise MetricRefusal('D15_ORIGINAL_EXECUTION_UNQUALIFIED',
+                                'qualification must have been consumed before the original native launch')
+        result.update(qualification='PASS', qualification_admission=admitted,
+                      status=observed['status'], delivery_blocked=False)
+        if observed.get('reason'):
+            result['reason'] = observed['reason']
+    except (flow109.Flow109Error, MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D15_PREDECESSOR_NOT_ACCEPTED'), detail=str(exc))
+    return result

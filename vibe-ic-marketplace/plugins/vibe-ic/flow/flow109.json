@@ -4458,16 +4458,39 @@
         {
           "id": "default",
           "select_when": "otherwise",
-          "provider": "other",
-          "tools": "Synopsys VCS Native Low Power + VC LP",
-          "native_steps": [],
-          "capability_status": "CONDITIONAL_COMMERCIAL_UNAVAILABLE_UNTIL_LICENSED",
-          "execution_status": "UNIMPLEMENTED"
+          "provider": "vibeic",
+          "tools": "xezim bounded power-aware runtime subset",
+          "native_steps": [
+            "flow109.D15"
+          ],
+          "capability_status": "SELECTED_NOT_ROUTE_QUALIFIED",
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "canonical_component",
+            "adapter": "flow109_frontend",
+            "native_step_id": "flow109.D15",
+            "producer": "xezim --simulate --no-cache --upf",
+            "consumer": "flow109_frontend.py:consume_d15",
+            "engine_families": [
+              "xezim"
+            ],
+            "engine_steps": {
+              "xezim": [
+                "flow109.D15"
+              ]
+            },
+            "engine_executables": {
+              "xezim": "xezim"
+            },
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "BOUND_DECLARED_RUNTIME_SUBSET_ONLY"
+          }
         }
       ],
       "complementary_tools": [],
-      "capability_status": "CONDITIONAL_COMMERCIAL_UNAVAILABLE_UNTIL_LICENSED",
-      "availability_status": "NOT_INVENTORIED_NO_LICENSE_NO_SUPPORT",
+      "capability_status": "SELECTED_NOT_ROUTE_QUALIFIED",
+      "availability_status": "AVAILABLE_NATIVE_BOUNDED_SUBSET_ONLY",
       "source_components": [
         "power_domain_crossing_check"
       ],
@@ -4489,7 +4512,7 @@
             "checker.power_verify.required_power_transitions",
             "producer.power_verify.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "BOUND_DECLARED_RUNTIME_SUBSET_ONLY"
         },
         {
           "id": "power_verify.isolation_retention_behavior_errors",
@@ -4509,10 +4532,10 @@
             "checker.power_verify.isolation_retention_behavior_errors",
             "producer.power_verify.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "BOUND_DECLARED_RUNTIME_SUBSET_ONLY"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "BOUND_DECLARED_RUNTIME_SUBSET_ONLY",
       "gate_layer_ids": [
         "G1",
         "G2",

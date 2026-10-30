@@ -686,8 +686,295 @@ def _execute_dft_tail(project, context):
     return record
 
 
+D15_INPUT = 'input/flow109/D15.json'
+D15_SCHEMA = 'vibeic.flow109.power-simulation.v1'
+D15_REQUIRED = 'requirements/power_verify/required_power_transitions.json#/required_items'
+# Deliberately bounded to literal UPF commands with runtime semantics in the
+# pinned engine. Tcl scripts/includes and parsed-only commands need another
+# native method; accepting them here would silently qualify ignored intent.
+D15_COMMANDS = {'set_design_top', 'create_power_domain', 'create_supply_net',
+                'create_supply_port', 'connect_supply_net', 'set_domain_supply_net',
+                'create_power_switch', 'set_isolation', 'set_isolation_control',
+                'set_retention'}
+D15_OPTIONS = {
+    'set_design_top': set(), 'create_power_domain': {'-elements'},
+    'create_supply_net': {'-domain', '-reuse'},
+    'create_supply_port': {'-domain', '-direction'}, 'connect_supply_net': {'-ports'},
+    'set_domain_supply_net': {'-primary_power_net', '-primary_ground_net'},
+    'create_power_switch': {'-domain', '-input_supply_port', '-output_supply_port',
+                            '-control_port', '-on_state', '-off_state'},
+    'set_isolation': {'-domain', '-applies_to', '-clamp_value', '-isolation_power_net',
+                      '-isolation_ground_net', '-elements', '-update'},
+    'set_isolation_control': {'-domain', '-isolation_signal', '-isolation_sense'},
+    'set_retention': {'-domain', '-elements'},
+}
+
+
+def _d15_env():
+    # Simulator options, preload hooks and external package paths are not
+    # part of this fixed invocation/readset.
+    return {key: os.environ[key] for key in ('PATH', 'HOME', 'TMPDIR') if key in os.environ} | {
+        'LANG': 'C', 'LC_ALL': 'C'}
+
+
+def _d15_json(path):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate JSON key: ' + key)
+            result[key] = value
+        return result
+    return json.loads(Path(path).read_text(), object_pairs_hook=unique)
+
+
+def _d15_bound(project, ref):
+    import flow109
+    try:
+        flow109._current_project_ref(project, ref, 'D15_INPUT_STALE')
+    except flow109.Flow109Error as exc:
+        raise AdmissionRefusal(exc.code, exc.detail) from exc
+    return Path(project) / ref['path']
+
+
+def _d15_sources():
+    return {str(p.relative_to(HERE.parent)): _sha(p) for p in
+            (Path(__file__), HERE / 'flow109.py', HERE / 'flow109_metric_acceptance.py')}
+
+
+def _d15_tool():
+    """Bind executable, interpreter and full transitive ELF dependency list."""
+    binary = shutil.which('xezim')
+    if not binary:
+        raise AdmissionRefusal('D15_NATIVE_TOOL_ABSENT', 'xezim')
+    binary = str(Path(binary).resolve(strict=True))
+    env = _d15_env()
+    deps = subprocess.run(['ldd', binary], text=True, capture_output=True, env=env)
+    if deps.returncode or 'not found' in deps.stdout:
+        raise AdmissionRefusal('D15_TOOL_READSET_UNRESOLVED', deps.stdout + deps.stderr)
+    paths = {Path(binary)}
+    for path in re.findall(r'(/[^\s()]+)', deps.stdout):
+        paths.add(Path(path).resolve(strict=True))
+    return {'executable': binary, 'readset': {str(p): _sha(p) for p in sorted(paths)}}
+
+
+def _d15_prepare(project, context):
+    import flow109
+    import flow109_metric_acceptance as metrics
+    current = flow109.validate_execution_context(context)
+    if current.get('requested_step') != 'D15':
+        raise AdmissionRefusal('D15_CONTEXT_MISMATCH', 'D15 only')
+    manifest_path = _d15_bound(project, {'path': D15_INPUT, 'sha256': _sha(Path(project) / D15_INPUT)})
+    manifest = _d15_json(manifest_path)
+    if (not isinstance(manifest, dict)
+            or set(manifest) != {'schema', 'top', 'rtl', 'testbench', 'upf', 'expected_checks'}
+            or manifest.get('schema') != D15_SCHEMA
+            or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$]*', str(manifest.get('top')))
+            or not isinstance(manifest.get('rtl'), list) or not manifest['rtl']):
+        raise AdmissionRefusal('D15_INPUT_INVALID', 'complete declared native inputs required')
+    upf = _d15_bound(project, manifest['upf'])
+    rtl = [_d15_bound(project, ref) for ref in manifest['rtl']]
+    testbench = _d15_bound(project, manifest['testbench'])
+    if len({p.resolve() for p in [*rtl, testbench]}) != len(rtl) + 1:
+        raise AdmissionRefusal('D15_INPUT_INVALID', 'duplicate RTL/testbench input')
+    # This is a refusal boundary, not an alternative UPF interpreter.
+    for line in upf.read_text().replace('\\\n', ' ').splitlines():
+        line = line.strip()
+        if not line or line.startswith('#'):
+            continue
+        command = line.split()[0]
+        if (command not in D15_COMMANDS or any(c in line for c in '$;[]')
+                or not set(re.findall(r'(?<!\w)-[a-zA-Z_]\w*', line)) <= D15_OPTIONS.get(command, set())
+                or re.search(r'-applies_to\s+\{?inputs\b|-clamp_value\s+\{?latch\b', line)
+                or re.search(r'-elements\s+\{[^}]*[\[\]]', line)):
+            raise AdmissionRefusal('D15_UPF_UNSUPPORTED', line)
+    for path in [*rtl, testbench]:
+        if re.search(r'`include|\$(?:fopen|readmem\w*|system)|\bDPI-[C]\b|\bsupply_partial_on\b', path.read_text()):
+            raise AdmissionRefusal('D15_EXTERNAL_READSET_UNRESOLVED', str(path))
+    # Also reject duplicate keys in the existing authority reader's input.
+    _d15_json(Path(project) / D15_REQUIRED.split('#')[0])
+    authority, body = metrics._approved_authority(
+        Path(project), D15_REQUIRED, ('id', 'domain', 'state', 'time'))
+    source = _d15_json(_d15_bound(project, authority['source']))
+    checks = manifest['expected_checks']
+    required = authority['required_items']
+    if (not required or source.get('required_items') != body['required_items']
+            or source.get('expected_checks') != checks
+            or not isinstance(checks, dict) or set(checks) != {'isolation', 'retention'}
+            or any(not isinstance(v, list) or not v or any(
+                not isinstance(s, str) or not s.startswith('ok   ') or '\n' in s
+                for s in v) for v in checks.values())
+            or len({r['id'] for r in required}) != len(required)
+            or any(r['state'] not in {'up', 'down'} or not r['time'].isdigit()
+                   or not re.fullmatch(r'[A-Za-z_][\w$]*', r['domain']) for r in required)):
+        raise AdmissionRefusal('D15_SCENARIO_POPULATION_INVALID', 'owner-approved nonempty population/checks required')
+    paths = [Path(project) / D15_INPUT, upf, *rtl, testbench,
+             Path(project) / D15_REQUIRED.split('#')[0],
+             Path(project) / authority['source']['path']]
+    return {'manifest': manifest, 'rtl': rtl, 'testbench': testbench, 'upf': upf, 'required': required,
+            'authority': authority, 'sources': _d15_sources(),
+            'inputs': {str(p.relative_to(project)): _sha(p) for p in paths}}
+
+
+def consume_d15(project, context, component):
+    """BLOCKING D15 consumer: rc0 never substitutes for behavior or coverage.
+
+    Observations cover only the declared simulated subset. Canonical row
+    acceptance and D05/D09 prerequisites remain separate root-owned decisions.
+    """
+    project = Path(project).resolve()
+    answer = {'status': 'NOT_MEASURED', 'obligations': [], 'delivery_blocked': True}
+    try:
+        prepared = _d15_prepare(project, context)
+        if (component.get('schema') != D15_SCHEMA or component.get('step_id') != 'D15'
+                or component.get('native_started') is not True
+                or component.get('context_sha256') != context['context_sha256']
+                or component.get('input_sha256') != prepared['inputs']
+                or component.get('source_sha256') != prepared['sources']
+                or component.get('tool') != _d15_tool()):
+            raise AdmissionRefusal('D15_PRODUCER_IDENTITY_STALE', 'context/input/source/tool changed')
+        expected_argv = [component['tool']['executable'], '--simulate', '--no-cache',
+                         '-s', prepared['manifest']['top'], '--upf', str(prepared['upf']),
+                         *map(str, prepared['rtl']), str(prepared['testbench'])]
+        if component.get('argv') != expected_argv:
+            raise AdmissionRefusal('D15_PRODUCER_IDENTITY_STALE', 'native argv differs')
+        out = _d15_bound(project, component['stdout']).read_text()
+        err = _d15_bound(project, component['stderr']).read_text()
+        if re.search(r'warning|unresolved|ignored|unsupported|not supported', out + err, re.I):
+            raise AdmissionRefusal('D15_NATIVE_FEATURE_UNRESOLVED', 'native diagnostic')
+        if not re.search(r'(?m)^Simulation finished at time \d+ \(\$finish called\)$', out):
+            raise AdmissionRefusal('D15_NATIVE_INCOMPLETE', 'no terminal $finish')
+        events = {(m[0], m[1], m[2]) for m in re.findall(
+            r"(?m)^\[UPF\] Time: (\d+), Power domain '([^']+)' is powered (up|down)$", out)}
+        covered = [r['id'] for r in prepared['required']
+                   if (r['time'], r['domain'], r['state']) in events]
+        failures = re.findall(r'(?mi)^FAIL\b.*|^.*\$(?:error|fatal).*|^Error:.*', out + err)
+        missing_checks = [s for values in prepared['manifest']['expected_checks'].values()
+                          for s in values if s not in out.splitlines()]
+        errors = len(failures)
+        if missing_checks and not failures:
+            raise AdmissionRefusal('D15_BEHAVIOR_CHECKS_INCOMPLETE', ', '.join(missing_checks))
+        if type(component.get('returncode')) is not int or component['returncode'] != 0:
+            raise AdmissionRefusal('D15_NATIVE_PROCESS_FAILED', str(component.get('returncode')))
+        answer['obligations'] = [
+            {'id': 'power_verify.required_power_transitions', 'observed_value': covered,
+             'required_items': [r['id'] for r in prepared['required']],
+             'status': 'PASS' if len(covered) == len(prepared['required']) else 'FAIL'},
+            {'id': 'power_verify.isolation_retention_behavior_errors',
+             'observed_value': errors, 'status': 'PASS' if errors == 0 else 'FAIL'}]
+        answer.update(status='PASS' if all(r['status'] == 'PASS' for r in answer['obligations']) else 'FAIL',
+                      missing_checks=missing_checks, failures=failures,
+                      scope='declared xezim runtime subset only')
+    except (AdmissionRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+        answer.update(reason=getattr(exc, 'code', 'D15_EVIDENCE_INVALID'), detail=str(exc))
+    return answer
+
+
+def d15_model_sources():
+    """The existing qualification config binds this bounded native method."""
+    import ast
+    names = {'_d15_env', '_d15_json', '_d15_bound', '_d15_sources', '_d15_tool',
+             '_d15_prepare', 'consume_d15', '_execute_d15', 'd15_model_sources',
+             'd15_native_qualification', 'consume_default_row_completion'}
+    constants = {'D15_INPUT', 'D15_SCHEMA', 'D15_REQUIRED', 'D15_COMMANDS', 'D15_OPTIONS'}
+    result = {}
+    for path, functions, assignments in (
+            (Path(__file__), names, constants),
+            (HERE / 'flow109_metric_acceptance.py', {'accept_d15'}, set()),
+            (HERE / 'flow109.py', {'_accepted_row', '_selected_step_result'}, set())):
+        source = path.read_text()
+        selected = {}
+        for node in ast.parse(source).body:
+            if isinstance(node, ast.FunctionDef) and node.name in functions:
+                selected[node.name] = node
+            elif isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name) and target.id in assignments:
+                        selected[target.id] = node
+        if set(selected) != functions | assignments:
+            raise AdmissionRefusal('D15_MODEL_CONSUMER_ABSENT', path.name)
+        for name, node in selected.items():
+            result[path.name + ':' + name] = hashlib.sha256(
+                ast.get_source_segment(source, node).encode()).hexdigest()
+    return result
+
+
+def d15_native_qualification(project, context, tool):
+    """Reuse generic per-use qualification; bind its actual D15 method/readset."""
+    from flow109_admission import require_admission
+    admitted = require_admission(project, context)
+    uses = context['runtime_tool_uses']
+    if len(uses) != 1 or uses[0]['tool_id'] != 'xezim':
+        raise AdmissionRefusal('D15_QUALIFICATION_SCOPE_INVALID', 'one native xezim use required')
+    use = uses[0]
+    expected = {'purpose': 'D15.default.power_aware_runtime_subset',
+                'native_steps': ['flow109.D15'], 'model_sources': d15_model_sources(),
+                'tool_readset': tool['readset']}
+    config = _d15_json(_d15_bound(project, use['config']))
+    if (use['semantics'] != {'purpose': 'D15.default', 'native_steps': ['flow109.D15']}
+            or config != expected):
+        raise AdmissionRefusal('D15_MODEL_QUALIFICATION_STALE', 'current method and ELF readset required')
+    if (str(Path(use['executable']['path']).resolve()) != tool['executable']
+            or use['build_sha256'] != tool['readset'][tool['executable']]):
+        raise AdmissionRefusal('D15_NATIVE_TOOL_UNQUALIFIED', 'executed binary differs')
+    return admitted
+
+
+def consume_default_row_completion(project, context, component):
+    """Use the platform's automatic completed-owner contract for D15 only."""
+    if context.get('requested_step') != 'D15':
+        return dict(component)
+    import flow109_metric_acceptance as metrics
+    accepted = metrics.accept_d15(project, context, component)
+    status = 'FAIL' if component['component_status'] == 'FAIL' else accepted['status']
+    return {**component, 'metric_acceptance': accepted,
+            'metric_acceptance_status': accepted['status'],
+            'qualification': accepted['qualification'], 'default_row_status': status,
+            'completed': status == 'PASS', 'flow109_acceptance': status,
+            'normalized_chain_reason': accepted.get('reason')}
+
+
+def _execute_d15(project, context):
+    """Existing native engine invocation; publication never grants row credit."""
+    project = Path(project).resolve()
+    attempt = project / 'reports/flow109/D15' / uuid.uuid4().hex
+    attempt.mkdir(parents=True, exist_ok=False)
+    record = {'schema': D15_SCHEMA, 'step_id': 'D15', 'component_status': 'NOT_MEASURED',
+              'default_row_status': 'NOT_MEASURED', 'completed': False,
+              'flow109_acceptance': 'NOT_MEASURED', 'whole_flow_acceptance': 'NOT_MEASURED',
+              'delivery_accepted': False, 'native_started': False,
+              'context_sha256': context.get('context_sha256')}
+    try:
+        prepared = _d15_prepare(project, context)
+        tool = _d15_tool()
+        record.update(tool=tool, input_sha256=prepared['inputs'], source_sha256=prepared['sources'])
+        if context.get('runtime_tool_uses') is not None or context.get('qualification_registry') is not None:
+            record['launch_admission'] = d15_native_qualification(project, context, tool)
+        argv = [tool['executable'], '--simulate', '--no-cache', '-s', prepared['manifest']['top'],
+                '--upf', str(prepared['upf']), *map(str, prepared['rtl']), str(prepared['testbench'])]
+        env = _d15_env()
+        record.update(argv=argv, native_started=True)
+        native = subprocess.run(argv, cwd=attempt, env=env, capture_output=True, text=True)
+        record['returncode'] = native.returncode
+        for key, value in (('stdout', native.stdout), ('stderr', native.stderr)):
+            path = attempt / (key + '.log')
+            path.write_text(value)
+            record[key] = {'path': str(path.relative_to(project)), 'sha256': _sha(path)}
+        observed = consume_d15(project, context, record)
+        record.update(component_status=observed['status'], metric_acceptance=observed,
+                      metric_acceptance_status=observed['status'])
+    except (AdmissionRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+        record.update(reason=getattr(exc, 'code', 'D15_NATIVE_INPUT_UNAVAILABLE'), detail=str(exc))
+    write_json(attempt / 'component.json', record)
+    record['receipt'] = {'path': str((attempt / 'component.json').relative_to(project)),
+                         'sha256': _sha(attempt / 'component.json')}
+    return record
+
+
 def execute(project, context):
     step = context.get('requested_step')
+    if step == 'D15':
+        return _execute_d15(project, context)
     if step == 'D05':
         return _execute_d05(project, context)
     if step == 'D22':

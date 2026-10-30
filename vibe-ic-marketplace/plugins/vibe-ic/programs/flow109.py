@@ -1333,6 +1333,8 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
                        or dispatch.get("consumer") != "flow109_final_electrical.py:validate_analog_mission")
         elif adapter == "flow109_frontend":
             identities = {
+                "D15": ("flow109.D15", "xezim --simulate --no-cache --upf",
+                        "flow109_frontend.py:consume_d15"),
                 "D05": ("flow109.D05", "l21_to_upf_emit.py:main",
                         "flow109_frontend.py:_execute_d05"),
                 "D22": ("9", "design_one_shot_runner.py:step_yosys_synth",
@@ -1781,8 +1783,8 @@ def _selected_step_result(project: Path, context: Mapping, result: Mapping,
         raise Flow109Error("FLOW109_COMPONENT_RESULT_INVALID", row["id"])
     completion = dict(result)
     consume = getattr(adapter, "consume_default_row_completion", None)
-    if callable(consume) and not (result.get("completed") is True
-                                  and result.get("default_row_status") in ("PASS", "FAIL", "NOT_MEASURED")):
+    if callable(consume) and (row["id"] == "D15" or not (result.get("completed") is True
+                                  and result.get("default_row_status") in ("PASS", "FAIL", "NOT_MEASURED"))):
         completion = dict(consume(project, context, result))
         if (completion.get("step_id") != row["id"]
                 or completion.get("context_sha256") != context["context_sha256"]):
