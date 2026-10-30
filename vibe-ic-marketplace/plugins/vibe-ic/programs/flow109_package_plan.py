@@ -302,7 +302,7 @@ def _early_test_access(project: Path, context: Mapping,
             "authority": "resolved Flow109 no-DFT route + matched L7/L10 + native IO map"}, evidence
 
 
-def _current_pdk(project: Path) -> str:
+def _current_pdk(project: Path, *, evidence: list | None = None) -> str:
     """Read PDK from the one current native state owner, not the old IO log."""
     candidates = []
     repair = project / "reports/phase3/librelane_postroute_repair.json"
@@ -352,6 +352,47 @@ def _current_pdk(project: Path) -> str:
             pdk = _read(config).get("PDK")
             if isinstance(pdk, str) and pdk:
                 candidates.append(pdk)
+    # D06 precedes STA/IR too: consume the current normal D03 publication,
+    # retaining its producer/config/file bindings instead of requiring a later row.
+    d03_path = Path("reports/flow109/default_rows/D03.json")
+    if (project / d03_path).exists():
+        d03, d03_ref = _bound_json(project, d03_path)
+        if (d03.get("schema") != "vibeic.flow109.technology-qualification.v1"
+                or d03.get("program") != "flow109_technology_qualification"
+                or d03.get("step_id") != "D03"
+                or d03.get("component_status") != "PASS"
+                or d03.get("default_row_status") != "PASS"
+                or d03.get("completed") is not True):
+            raise D06Refusal("D06_CURRENT_D03_AUTHORITY_INVALID", str(d03_path))
+        inputs = d03.get("inputs")
+        if not isinstance(inputs, list) or not inputs:
+            raise D06Refusal("D06_CURRENT_D03_AUTHORITY_INVALID", "D03 input bindings")
+        bound = []
+        for item in inputs:
+            if (not isinstance(item, Mapping) or not isinstance(item.get("path"), str)
+                    or not item["path"] or not isinstance(item.get("sha256"), str)):
+                raise D06Refusal("D06_CURRENT_D03_AUTHORITY_INVALID", "D03 input binding")
+            path = Path(item["path"])
+            if not path.is_absolute():
+                path = project / path
+            if not path.is_file() or _sha(path) != item["sha256"]:
+                raise D06Refusal("D06_CURRENT_D03_AUTHORITY_STALE", str(path))
+            bound.append({"path": str(path), "sha256": item["sha256"]})
+        hashes = {item["path"]: item["sha256"] for item in bound}
+        producer = HERE / "flow109_technology_qualification.py"
+        config = project / "phase3/librelane/config.json"
+        resolved = project / "reports/flow109/D03/resolved.json"
+        if (not any(Path(item["path"]).name == producer.name
+                    and item["sha256"] == _sha(producer) for item in bound)
+                or not config.is_file() or hashes.get(str(config)) != _sha(config)
+                or not resolved.is_file() or hashes.get(str(resolved)) != _sha(resolved)):
+            raise D06Refusal("D06_CURRENT_D03_AUTHORITY_INVALID", "D03 producer/config binding")
+        pdk = _read(resolved).get("PDK")
+        if not isinstance(pdk, str) or not pdk or _read(config).get("PDK") != pdk:
+            raise D06Refusal("D06_CURRENT_D03_AUTHORITY_INVALID", "D03 PDK binding")
+        candidates.append(pdk)
+        if evidence is not None:
+            evidence.extend([d03_ref, *bound])
     if len(set(candidates)) != 1:
         raise D06Refusal("D06_CURRENT_PDK_AUTHORITY_UNRESOLVED",
                          f"current PDK candidates: {candidates}")
@@ -380,7 +421,7 @@ def execute(project: Path, context: Mapping) -> dict:
                 or context.get("native_step_id") != NATIVE_STEP
                 or not context.get("context_sha256")):
             raise D06Refusal("D06_CONTEXT_INVALID", "current D06 context required")
-        pdk = _current_pdk(project)
+        pdk = _current_pdk(project, evidence=record["inputs"])
         pdk_root = os.environ.get("PDK_ROOT", "/foss/pdks")
         sources = operation_sources()
         record["operation_sources"] = sources

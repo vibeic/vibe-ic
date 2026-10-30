@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import pytest
 from pathlib import Path
 
 import flow109_package_plan as d06
@@ -32,7 +33,7 @@ def _producer(monkeypatch, verdict: str, rc: int):
             _write(out, {"PAD_SOUTH": ["u_pad_a"]})
         return rc
     monkeypatch.setattr(d06.pad_assignment_gen, "main", run)
-    monkeypatch.setattr(d06, "_current_pdk", lambda project: "neutral_pdk")
+    monkeypatch.setattr(d06, "_current_pdk", lambda project, **kwargs: "neutral_pdk")
 
 
 def _early_docs(project: Path, *, dft=False):
@@ -330,3 +331,78 @@ def test_declared_physical_package_cannot_inherit_bare_die_metrics(tmp_path, mon
     result = d06.execute(project, _context())
     assert result["reason"] == "D06_PHYSICAL_PACKAGE_SCOPE_UNRESOLVED"
     assert not result.get("completed")
+
+
+def _early_d03_binding(project):
+    """SOFTWARE-only neutral publication; actual producer coverage is separate."""
+    producer = Path(d06.__file__).with_name('flow109_technology_qualification.py')
+    config = _write(project / 'phase3/librelane/config.json', {'PDK': 'neutral_pdk'})
+    resolved = _write(project / 'reports/flow109/D03/resolved.json', {'PDK': 'neutral_pdk'})
+    rtl = _write(project / 'neutral.v', 'module neutral; endmodule\n')
+    import hashlib
+    body = {'schema': 'vibeic.flow109.technology-qualification.v1',
+            'program': 'flow109_technology_qualification', 'step_id': 'D03',
+            'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True,
+            'inputs': [{'path': str(p), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                       for p in (producer, config, resolved, rtl)]}
+    return _write(project / 'reports/flow109/default_rows/D03.json', body), rtl
+
+
+def test_current_pdk_uses_early_d03_without_later_sta_or_ir(tmp_path):
+    _early_d03_binding(tmp_path)
+    inputs = []
+    assert d06._current_pdk(tmp_path, evidence=inputs) == 'neutral_pdk'
+    assert any(x['path'] == 'reports/flow109/default_rows/D03.json' for x in inputs)
+    assert any(x['path'].endswith('/neutral.v') for x in inputs)
+
+
+def test_early_d03_cannot_hide_conflicting_later_pdk(tmp_path):
+    _early_d03_binding(tmp_path)
+    _bare_die_load(tmp_path)
+    config = tmp_path / 'phase3/librelane/current/config.json'
+    _write(config, {'PDK': 'other_pdk'})
+    with pytest.raises(d06.D06Refusal, match='D06_CURRENT_PDK_AUTHORITY_UNRESOLVED'):
+        d06._current_pdk(tmp_path)
+
+
+@pytest.mark.parametrize('damage', ['stale_rtl', 'missing_rtl', 'failed_row',
+                                    'missing_producer', 'missing_config_binding',
+                                    'stale_resolved', 'empty_inputs', 'malformed_input'])
+def test_early_d03_rejects_unbound_or_stale_authority(tmp_path, damage):
+    receipt, rtl = _early_d03_binding(tmp_path)
+    body = json.loads(receipt.read_text())
+    if damage == 'stale_rtl':
+        rtl.write_text('changed\n')
+    elif damage == 'missing_rtl':
+        rtl.unlink()
+    elif damage == 'failed_row':
+        body['component_status'] = 'FAIL'
+    elif damage == 'missing_producer':
+        body['inputs'] = body['inputs'][1:]
+    elif damage == 'missing_config_binding':
+        body['inputs'].pop(1)
+    elif damage == 'stale_resolved':
+        _write(tmp_path / 'reports/flow109/D03/resolved.json', {'PDK': 'other_pdk'})
+    elif damage == 'empty_inputs':
+        body['inputs'] = []
+    else:
+        body['inputs'] = ['bad']
+    _write(receipt, body)
+    with pytest.raises(d06.D06Refusal, match='D06_CURRENT_D03_AUTHORITY_(INVALID|STALE)'):
+        d06._current_pdk(tmp_path)
+
+
+def test_early_d03_entry_reaches_pad_producer_and_keeps_its_refusal(tmp_path, monkeypatch):
+    _early_d03_binding(tmp_path)
+    called = []
+    def producer(argv):
+        called.append(argv)
+        report = Path(argv[argv.index('--json') + 1])
+        _write(report, {'verdict': 'NOT_ASKED', 'reason': 'neutral owner pad intent absent'})
+        return 2
+    monkeypatch.setattr(d06.pad_assignment_gen, 'main', producer)
+    result = d06.execute(tmp_path, _context())
+    assert called and result['native_started']
+    assert result['reason'] == 'D06_PAD_ASSIGNMENT_OWNER_FACT_MISSING'
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
