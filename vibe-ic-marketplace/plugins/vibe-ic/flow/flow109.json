@@ -8557,7 +8557,7 @@
             "checker.base_20.floorplan_boundary_pin_feasibility",
             "producer.base_20.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_FOR_ANALOG_DIE"
         },
         {
           "id": "base_20.illegal_macro_overlap",
@@ -8578,10 +8578,10 @@
             "checker.base_20.illegal_macro_overlap",
             "producer.base_20.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_FOR_ANALOG_DIE"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_FOR_ANALOG_DIE_ONLY",
       "gate_layer_ids": [
         "G1",
         "G2",

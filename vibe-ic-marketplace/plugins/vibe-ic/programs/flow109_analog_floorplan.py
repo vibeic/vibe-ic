@@ -336,6 +336,11 @@ def execute(project, context):
             raise Refusal("D31_CONTEXT_INVALID")
         from flow109_admission import require_launch_admission
         record["launch_admission"] = require_launch_admission(project, "flow109.D31", {"flow109_context": context})
+        import librelane_contract as launch
+        try:
+            record["native_launch"] = launch.local_image_attestation()
+        except launch.Refusal as exc:
+            record["native_launch"] = {"status": "NOT_MEASURED", "reason": exc.code}
         inputs = load_inputs(project)["inputs"]
         executable = shutil.which("klayout")
         if not executable:
@@ -370,6 +375,8 @@ def execute(project, context):
                 or load_inputs(project)["inputs"] != inputs
                 or operation_sources() != record["operation_sources"]):
             raise Refusal("D31_EVIDENCE_CHANGED_BEFORE_PUBLICATION")
+        if record["native_launch"].get("cid") and launch.local_image_attestation() != record["native_launch"]:
+            raise Refusal("D31_NATIVE_LAUNCH_CHANGED")
         record["reason"] = "Native placed-view readback " + record["component_status"] + "; row qualification remains unmeasured"
     except (Refusal, OSError, ValueError, KeyError, TypeError) as exc:
         # A late unreadable/stale output must never retain an earlier PASS.
@@ -379,6 +386,158 @@ def execute(project, context):
         record["reason"] = str(exc)
     (output / "component.json").write_text(json.dumps(record, indent=2))
     return record
+
+
+def observe_component(project, context, component):
+    """Reopen a normal attempt and read its GDS; never rerun placement.
+
+    Original requests/source/outputs remain immutable. The original worker
+    source must reopen at its recorded path, hash exactly, and have identical
+    consumed definitions to this reader. A release number is not a reuse test.
+    Fresh readback is required because coherent edits to printed measurements
+    and their JSON hashes cannot establish native geometry or population.
+    """
+    import ast
+    import flow109
+    project = Path(project).resolve(strict=True)
+    current = flow109.validate_execution_context(context)
+    if (current.get("requested_step") != "D31"
+            or current["resolved_row"]["profile"]["id"] != "analog_die"):
+        raise Refusal("D31_METRIC_CONTEXT_INVALID")
+    if not isinstance(component, dict) or component.get("step_id") != "D31":
+        raise Refusal("D31_COMPONENT_ABSENT")
+    outputs = component.get("outputs")
+    if not isinstance(outputs, list) or len(outputs) != 2:
+        raise Refusal("D31_OUTPUT_POPULATION_INCOMPLETE")
+    paths = [bound_file(project, ref) for ref in outputs]
+    directory = paths[0].parent
+    if (paths != [directory / "floorplan.gds", directory / "consume.json"]
+            or directory.parent != project / "reports/flow109/D31"
+            or not re.fullmatch(r"[0-9a-f]{32}", directory.name)):
+        raise Refusal("D31_OUTPUT_ATTEMPT_FOREIGN")
+    raw_path = directory / "component.json"
+    raw_bytes = raw_path.read_bytes()
+    bound_file(project, {"path": str(raw_path.relative_to(project)), "sha256": hashlib.sha256(raw_bytes).hexdigest()})
+    raw = json.loads(raw_bytes)
+    if raw != component or raw.get("native_started") is not True:
+        raise Refusal("D31_COMPONENT_RECORD_MISMATCH")
+    original_hash = raw.get("context_sha256")
+    if not isinstance(original_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", original_hash):
+        raise Refusal("D31_ORIGINAL_CONTEXT_ABSENT")
+    original_path = project / "reports/flow109/requests" / (original_hash + ".json")
+    original_bytes = original_path.read_bytes()
+    bound_file(project, {"path": str(original_path.relative_to(project)), "sha256": hashlib.sha256(original_bytes).hexdigest()})
+    original = json.loads(original_bytes)
+    payload = {k: v for k, v in original.items() if k != "context_sha256"}
+    if (flow109.digest(payload) != original_hash or original.get("context_sha256") != original_hash
+            or original.get("requested_step") != "D31"
+            or original.get("native_step_id") != "flow109.D31"
+            or original.get("features") != current["features"]):
+        raise Refusal("D31_ORIGINAL_CONTEXT_STALE")
+    def semantic_row(row):
+        row = json.loads(json.dumps(row))
+        row.pop("metric_acceptance_status", None)
+        for obligation in row.get("obligations", []):
+            obligation.pop("status", None)
+        return row
+    if semantic_row(original.get("resolved_row", {})) != semantic_row(current["resolved_row"]):
+        raise Refusal("D31_ORIGINAL_SELECTION_CHANGED")
+    data = load_inputs(project)
+    if raw.get("inputs") != data["inputs"]:
+        raise Refusal("D31_CURRENT_INPUTS_STALE")
+    executions = raw.get("executions")
+    if not isinstance(executions, list) or len(executions) != 2:
+        raise Refusal("D31_EXECUTION_POPULATION_INCOMPLETE")
+    executable = shutil.which("klayout")
+    if not executable or raw.get("tool") != {"path": str(Path(executable).resolve()), "sha256": sha(Path(executable).resolve())}:
+        raise Refusal("D31_EXECUTION_TOOL_CHANGED")
+    retained_source = None
+    readset = {str(raw_path.relative_to(project)): hashlib.sha256(raw_bytes).hexdigest(),
+               str(original_path.relative_to(project)): hashlib.sha256(original_bytes).hexdigest(), **data["inputs"]}
+    for mode, execution in zip(("produce", "consume"), executions):
+        argv = execution.get("argv")
+        if (execution.get("returncode") != 0 or not isinstance(argv, list) or len(argv) != 6
+                or Path(argv[0]).resolve() != Path(executable).resolve()
+                or argv[1:3] != ["-b", "-r"] or argv[4] != "-rd"
+                or argv[5] != "D31_REQUEST=" + str(directory / (mode + "-request.json"))):
+            raise Refusal("D31_EXECUTION_INVOCATION_INVALID")
+        source = Path(argv[3])
+        if source.name != Path(__file__).name or source.is_symlink() or not source.is_file():
+            raise Refusal("D31_ORIGINAL_SOURCE_ABSENT")
+        if retained_source is not None and source != retained_source:
+            raise Refusal("D31_ORIGINAL_SOURCE_MISMATCH")
+        retained_source = source
+        request_path = directory / (mode + "-request.json")
+        if read(request_path) != {"project": str(project), "output": str(directory), "mode": mode}:
+            raise Refusal("D31_EXECUTION_PROJECT_MISMATCH")
+        log = bound_file(project, {"path": execution.get("log"), "sha256": execution.get("log_sha256")})
+        for path in (request_path, log, directory / (mode + ".json")):
+            readset[str(path.relative_to(project))] = sha(path)
+    sources = {"programs/" + p.name: sha(p) for p in (retained_source, retained_source.parent / "_pad_ring.py")}
+    if sources != raw.get("operation_sources"):
+        raise Refusal("D31_ORIGINAL_SOURCE_STALE")
+    original_tree, current_tree = ast.parse(retained_source.read_text()), ast.parse(Path(__file__).read_text())
+    def definitions(tree):
+        return {n.name: ast.dump(n, include_attributes=False) for n in tree.body
+                if isinstance(n, (ast.FunctionDef, ast.ClassDef))}
+    before, after = definitions(original_tree), definitions(current_tree)
+    original_constants = {n.targets[0].id: ast.dump(n.value, include_attributes=False)
+        for n in original_tree.body if isinstance(n, ast.Assign) and len(n.targets) == 1
+        and isinstance(n.targets[0], ast.Name) and n.targets[0].id in ("PLAN", "BOUNDS")}
+    current_constants = {n.targets[0].id: ast.dump(n.value, include_attributes=False)
+        for n in current_tree.body if isinstance(n, ast.Assign) and len(n.targets) == 1
+        and isinstance(n.targets[0], ast.Name) and n.targets[0].id in ("PLAN", "BOUNDS")}
+    native_names = ("Refusal", "sha", "read", "number", "box", "bound_file", "lef_envelope", "load_inputs", "native")
+    if (any(after.get(name) != before.get(name) or name not in before for name in native_names)
+            or original_constants != current_constants
+            or sha(retained_source.parent / "_pad_ring.py") != sha(HERE / "_pad_ring.py")):
+        raise Refusal("D31_NATIVE_METHOD_CHANGED")
+    source_registry = retained_source.parent.parent / "flow/flow109.json"
+    if (sha(source_registry) != original.get("registry_sha256")
+            or sha(retained_source.parent / "flow109.py") != original.get("planner_sha256")):
+        raise Refusal("D31_ORIGINAL_PLANNER_UNBOUND")
+    produced, consumed = read(directory / "produce.json"), read(paths[1])
+    if (produced.get("inputs") != data["inputs"] or consumed.get("inputs") != data["inputs"]
+            or produced.get("gds_sha256") != sha(paths[0])
+            or consumed.get("gds_sha256") != sha(paths[0])
+            or consumed != raw.get("measurements")
+            or raw.get("component_status") != consumed.get("status")):
+        raise Refusal("D31_NATIVE_RECORD_MISMATCH")
+    current_sources = operation_sources()
+    check_dir = project / "reports/flow109/D31_metric_readback" / uuid.uuid4().hex
+    check_dir.mkdir(parents=True)
+    shutil.copyfile(paths[0], check_dir / "floorplan.gds")
+    request = check_dir / "consume-request.json"
+    request.write_text(json.dumps({"project": str(project), "output": str(check_dir), "mode": "consume"}))
+    argv = [executable, "-b", "-r", str(Path(__file__).resolve()), "-rd", "D31_REQUEST=" + str(request)]
+    run = subprocess.run(argv, text=True, capture_output=True)
+    log = check_dir / "consume.log"
+    log.write_text(run.stdout + run.stderr)
+    observed = read(check_dir / "consume.json")
+    if run.returncode or observed != consumed:
+        raise Refusal("D31_NATIVE_READBACK_DISAGREEMENT")
+    readset.update({r["path"]: r["sha256"] for r in outputs})
+    if (any(sha(project / name) != digest for name, digest in readset.items())
+            or load_inputs(project)["inputs"] != data["inputs"]
+            or operation_sources() != current_sources
+            or any(sha(retained_source.parent.parent / name) != digest for name, digest in sources.items())
+            or sha(Path(executable).resolve()) != raw['tool']['sha256']):
+        raise Refusal("D31_EVIDENCE_CHANGED_DURING_METRIC_READ")
+    return {"measurement": observed, "original_context": original, "component": raw,
+        "readset": readset, "component_ref": {"path": str(raw_path.relative_to(project)), "sha256": hashlib.sha256(raw_bytes).hexdigest()},
+        "source_projection": {"original": sources, "current": current_sources, "consumed_definitions_unchanged": True},
+        "readback": {"argv": argv, "returncode": run.returncode, "log": {"path": str(log.relative_to(project)), "sha256": sha(log)},
+                     "report": {"path": str((check_dir / "consume.json").relative_to(project)), "sha256": sha(check_dir / "consume.json")}}}
+
+
+def consume_default_row_completion(project, context, component):
+    """Normal D31 metric hook; scoped geometry alone cannot finish the row."""
+    import flow109_metric_acceptance as metrics
+    accepted = metrics.accept_d31(Path(project), context, component)
+    return {"step_id": "D31", "context_sha256": context["context_sha256"],
+            "default_row_status": accepted["status"], "completed": accepted["status"] == "PASS",
+            "flow109_acceptance": accepted["status"], "whole_flow_acceptance": "NOT_MEASURED",
+            "delivery_accepted": False, "metric_acceptance": accepted, "reason": accepted.get("reason")}
 
 
 if __name__ == "__main__" and "D31_REQUEST" in globals():

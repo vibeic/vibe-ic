@@ -171,6 +171,19 @@ D62_BINDINGS = {
     },
 }
 
+D31_BINDINGS = {
+    "base_20.floorplan_boundary_pin_feasibility": {
+        "operator": "within_declared_bounds",
+        "bounds_ref": "requirements/base_20/floorplan_boundary_pin_feasibility.json#/limits",
+        "unit_ref": "requirements/base_20/floorplan_boundary_pin_feasibility.json#/units",
+        "missing_bounds": "BLOCKED",
+    },
+    "base_20.illegal_macro_overlap": {
+        "operator": "eq", "value": 0, "unit": "count",
+        "source": "contract invariant: no unresolved required violations",
+    },
+}
+
 D71_BINDINGS = {
     "final_gls.final_sdf_annotation": {
         "operator": "covers_all",
@@ -3688,6 +3701,248 @@ def accept_a01(project: Path, context: Mapping[str, Any],
         result.update(status="FAIL", reason="MEASURED_METRIC_FAILURE")
     else:
         result["reason"] = "METRIC_BINDING_INCOMPLETE_OR_NOT_CURRENT"
+    return result
+
+
+def d31_model_sources() -> dict:
+    """Bind only D31's actually consumed producer/checker definitions."""
+    import ast
+    import flow109_analog_floorplan as owner
+    import flow109
+    import analog_hardmacro_check as packages
+    import librelane_contract as launch
+    modules = [(Path(owner.__file__), ('execute', 'number', 'box', 'bound_file', 'read', 'sha',
+        'lef_envelope', 'load_inputs', 'native', 'observe_component', 'consume_default_row_completion')),
+        (Path(__file__), ('d31_model_sources', '_d31_upstream', '_d31_original_launch', '_d31_qualification', 'accept_d31')),
+        (Path(launch.__file__), ('local_image_attestation',)),
+        (Path(flow109.__file__), ('_d23_original_launch',))]
+    result = {}
+    for path, names in modules:
+        text = path.read_text()
+        nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
+        for name in names:
+            result[path.name + ':' + name] = _sha(ast.get_source_segment(text, nodes[name]).encode())
+    result['_pad_ring.py'] = _sha((HERE / '_pad_ring.py').read_bytes())
+    result['analog_hardmacro_check.py'] = _sha(Path(packages.__file__).read_bytes())
+    result['flow109_metric_acceptance.py:D31_BINDINGS'] = _sha(_json_key(D31_BINDINGS).encode())
+    return result
+
+
+def _d31_upstream(project: Path, context: Mapping, component: Mapping) -> dict:
+    """Reuse normal accepted predecessors and the existing A17 design audit.
+
+    A neutral library macro has real geometry but is not a design-bound A17
+    package. No substitute netlist, upstream PASS or adoption is generated.
+    """
+    import flow109
+    import analog_hardmacro_check as packages
+    import _path_layout as layout
+    import flow109_analog_floorplan as owner
+    selected = {r['id'] for r in flow109.resolve_plan(context['features'], context['step_profiles'])['rows']}
+    refs, missing, a17_outputs = {}, [], {}
+    for step in context['resolved_row']['acceptance_deps']:
+        if step not in selected:
+            continue
+        try:
+            body, ref = flow109._accepted_row(project, Path('reports/flow109/default_rows') / (step + '.json'), step)
+            if not body.get('context_sha256'):
+                raise MetricRefusal('D31_UPSTREAM_CONTEXT_ABSENT', step)
+            original = json.loads((project / 'reports/flow109/requests' / (body['context_sha256'] + '.json')).read_bytes())
+            if (original.get('features') != context['features'] or original.get('requested_step') != step
+                    or flow109.digest({k: v for k, v in original.items() if k != 'context_sha256'}) != body['context_sha256']):
+                raise MetricRefusal('D31_UPSTREAM_SELECTION_FOREIGN', step)
+            if step == 'A17':
+                rows = [r for r in body.get('native_results', {}).get('steps', []) if r.get('step') == 'A17']
+                if not rows or any(r.get('status') != 'PASS' for r in rows):
+                    raise MetricRefusal('D31_A17_NATIVE_POPULATION_ABSENT', 'actual accepted package rows required')
+                for row in rows:
+                    for key in ('input_views', 'output_views'):
+                        if not isinstance(row.get(key), dict) or not row[key]:
+                            raise MetricRefusal('D31_A17_READSET_ABSENT', key)
+                        for name, digest in row[key].items():
+                            path = Path(name)
+                            path = path if path.is_absolute() else project / path
+                            owner.bound_file(project, {'path': str(path.relative_to(project)), 'sha256': digest})
+                            if key == 'output_views':
+                                a17_outputs[str(path.relative_to(project))] = digest
+            elif step == 'D03':
+                inputs = body.get('inputs')
+                if not isinstance(inputs, list) or not inputs:
+                    raise MetricRefusal('D31_D03_READSET_ABSENT', 'native technology inputs required')
+                for item in inputs:
+                    path = Path(item['path'])
+                    path = path if path.is_absolute() else project / path
+                    if owner.sha(path) != item['sha256']:
+                        raise MetricRefusal('D31_D03_READSET_STALE', str(path))
+            refs[step] = ref
+        except (flow109.Flow109Error, MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            missing.append({'step': step, 'reason': getattr(exc, 'code', 'D31_UPSTREAM_NOT_CURRENT'), 'detail': str(exc)})
+    audit = packages.run_audit(project)
+    blocks = set(audit.summary.get('design_bound_blocks', []))
+    plan = owner.read(project / owner.PLAN)
+    inventory = owner.read(owner.bound_file(project, plan['macro_inventory']))
+    logical, physical = {}, {}
+    for instance, view in inventory['instances'].items():
+        block = view.get('block', view['master'])
+        if not isinstance(block, str) or not _SAFE.fullmatch(block):
+            missing.append({'instance': instance, 'reason': 'D31_A17_BLOCK_IDENTITY_UNBOUND'})
+            continue
+        package = layout.hardmacro_dir(project) / block
+        expected = {kind: package / (block + '.' + suffix) for kind, suffix in
+                    (('gds', 'gds'), ('lef', 'lef'), ('logical', 'v'))}
+        if (block not in blocks or any(not p.is_file() for p in expected.values())
+                or any(owner.sha(expected[kind]) != view[kind]['sha256'] for kind in ('gds', 'lef'))):
+            missing.append({'instance': instance, 'reason': 'D31_DESIGN_BOUND_A17_REFERENCE_ABSENT'})
+            continue
+        for path in expected.values():
+            owner.bound_file(project, {'path': str(path.relative_to(project)), 'sha256': owner.sha(path)})
+            if a17_outputs.get(str(path.relative_to(project))) != owner.sha(path):
+                raise MetricRefusal('D31_A17_ADOPTED_VIEW_UNBOUND', str(path))
+        logical[instance] = {'path': str(expected['logical'].relative_to(project)), 'sha256': owner.sha(expected['logical'])}
+        physical[instance] = {kind: dict(view[kind]) for kind in ('gds', 'lef')}
+    if len(logical) != len(inventory['instances']) or 'A17' not in refs:
+        missing.append({'reason': 'D31_LOGICAL_AND_ADOPTED_VIEW_POPULATION_INCOMPLETE'})
+    declared_blocks = {v.get('block', v['master']) for v in inventory['instances'].values()}
+    if declared_blocks != blocks:
+        missing.append({'reason': 'D31_A17_DESIGN_BLOCK_POPULATION_MISMATCH'})
+    return {'status': 'NOT_MEASURED' if missing else 'PASS', 'accepted_dependencies': refs,
+            'logical': logical, 'adopted_physical': physical, 'missing': missing,
+            'A17_audit': audit.summary}
+
+
+def _d31_original_launch(original: Mapping, current: Mapping) -> None:
+    """Reuse the existing host-retained launch reader, without a same-CID gate.
+
+    This does not adopt or rewrite a launch. The recorded original path/hash,
+    CID, immutable image and host inspection must reopen under the same native
+    image. Legacy components without an original host receipt stay unmeasured.
+    """
+    import flow109
+    if (not isinstance(original, dict) or not original.get('cid')
+            or not isinstance(original.get('attestation_path'), str)
+            or not original['attestation_path']):
+        raise MetricRefusal('D31_ORIGINAL_LAUNCH_UNBOUND', 'actual original host receipt required; never restamp')
+    try:
+        flow109._d23_original_launch(original,
+            {**current, 'attestation_path': original['attestation_path']})
+    except flow109.Flow109Error as exc:
+        raise MetricRefusal('D31_ORIGINAL_LAUNCH_UNPROVEN', str(exc)) from exc
+
+
+def _d31_qualification(project: Path, context: Mapping, observed: Mapping) -> dict:
+    """Use the existing per-use inventory; source-owned launch is not qualified."""
+    import flow109_admission as admission
+    import librelane_contract as launch
+    qualified = admission.require_admission(project, context)
+    uses = context['runtime_tool_uses']
+    if len(uses) != 1 or uses[0]['tool_id'] != 'klayout':
+        raise MetricRefusal('D31_QUALIFICATION_SCOPE_INVALID', 'one actual KLayout method use required')
+    config = json.loads((project / uses[0]['config']['path']).read_bytes())
+    expected = {'purpose': uses[0]['semantics']['purpose'], 'native_steps': ['flow109.D31'],
+                'model_sources': d31_model_sources()}
+    if config != expected:
+        raise MetricRefusal('D31_MODEL_QUALIFICATION_STALE', 'current consumed method/metric model required')
+    original = admission.require_admission(project, observed['original_context'])
+    if observed['component'].get('launch_admission') != original:
+        raise MetricRefusal('D31_ORIGINAL_EXECUTION_UNQUALIFIED', 'original native admission must reopen; never restamp')
+    if uses[0]['build_sha256'] != observed['component']['tool']['sha256']:
+        raise MetricRefusal('D31_ORIGINAL_TOOL_UNQUALIFIED', 'actual executed binary differs')
+    try:
+        current_launch = launch.local_image_attestation()
+    except launch.Refusal as exc:
+        raise MetricRefusal('D31_CURRENT_LAUNCH_UNBOUND', str(exc)) from exc
+    _d31_original_launch(observed['component'].get('native_launch'), current_launch)
+    return qualified
+
+
+def accept_d31(project: Path, context: Mapping, component: Mapping) -> dict:
+    """Bind the two D31 obligations to current native geometry and its population.
+
+    Observations may be complete on a neutral carrier while logical/adopted
+    source authority, accepted dependencies or per-use qualification are absent.
+    These remain separate named blockers; no geometry scalar finishes the row.
+    """
+    import flow109_analog_floorplan as owner
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': 'D31', 'status': 'NOT_MEASURED',
+        'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+        'delivery_blocked': True, 'obligations': [],
+        'scope': 'D31 placed floorplan geometry only; not routing, G1-G9 or whole die signoff'}
+    obligations = context.get('resolved_row', {}).get('obligations', [])
+    try:
+        if [r.get('id') for r in obligations] != list(D31_BINDINGS) or any(
+                r.get('expectation') != D31_BINDINGS[r['id']] for r in obligations):
+            raise MetricRefusal('D31_OBLIGATIONS_UNREGISTERED', 'exact two existing obligations required')
+        observed = owner.observe_component(project, context, component)
+        result['observation'] = observed
+        measurement = observed['measurement']
+        count = _finite_number(measurement.get('illegal_macro_overlap'), count=True)
+        feasibility = measurement.get('floorplan_boundary_pin_feasibility')
+        if feasibility not in ('PASS', 'FAIL') or type(measurement.get('violations')) is not list:
+            raise MetricRefusal('D31_MEASUREMENT_INCOMPLETE', 'typed native boundary/pin population required')
+        native_states = [feasibility, 'PASS' if count == 0 else 'FAIL']
+        result['metric_status'] = 'FAIL' if 'FAIL' in native_states else 'PASS'
+        result['obligations'] = [{'id': row['id'], 'measurement_complete': True,
+            'measurement_status': state, 'status': 'FAIL' if state == 'FAIL' else 'NOT_MEASURED',
+            'reason': 'D31_NATIVE_MEASUREMENT_CURRENT_BINDINGS_PENDING'}
+            for row, state in zip(obligations, native_states)]
+        upstream = _d31_upstream(project, context, component)
+        result['upstream'] = upstream
+        bindings = {'netlist.logical': upstream['logical'],
+            'layout.routed': {'artifacts': component['outputs'], 'scope': 'placed floorplan, not routed-layout acceptance'},
+            'constraints.physical': {k: v for k, v in observed['readset'].items()
+                if k in (str(owner.PLAN), str(owner.BOUNDS))},
+            'technology.models': {k: v for k, v in observed['readset'].items() if k in component['inputs']
+                and k not in (str(owner.PLAN), str(owner.BOUNDS))},
+            'producer.base_20.execution': observed['component_ref']}
+        result['obligations'] = []
+        for row in obligations:
+            boundary = row['id'] == 'base_20.floorplan_boundary_pin_feasibility'
+            actual = feasibility if boundary else ('PASS' if count == 0 else 'FAIL')
+            key_bindings = dict(bindings)
+            key_bindings['requirements.' + row['id']] = ({'path': str(owner.BOUNDS),
+                'sha256': component['inputs'][str(owner.BOUNDS)]} if boundary else D31_BINDINGS[row['id']])
+            key_bindings['checker.' + row['id']] = {'model_sources': d31_model_sources(), 'readback': observed['readback']}
+            if set(row['binding_keys']) != set(key_bindings):
+                raise MetricRefusal('D31_BINDING_KEYS_UNREGISTERED', row['id'])
+            complete = upstream['status'] == 'PASS'
+            result['obligations'].append({'id': row['id'], 'metric': row['metric'],
+                'operator': row['expectation']['operator'], 'measurement_complete': True,
+                'measurement_status': actual, 'status': 'FAIL' if actual == 'FAIL' else 'PASS' if complete else 'NOT_MEASURED',
+                'observed_value': measurement if boundary else count,
+                'unit': owner.read(project / owner.BOUNDS)['units'] if boundary else 'count',
+                'bindings': key_bindings, 'binding_status': 'PASS' if complete else 'NOT_MEASURED',
+                'reason': 'D31_NATIVE_MEASUREMENT_CURRENT' if complete else 'D31_LOGICAL_OR_ADOPTED_REFERENCE_UNBOUND'})
+        states = [r['measurement_status'] for r in result['obligations']]
+        result['metric_status'] = 'FAIL' if 'FAIL' in states else 'PASS'
+        try:
+            qualified = _d31_qualification(project, context, observed)
+        except (MetricRefusal, ValueError, OSError, KeyError, TypeError) as exc:
+            qualified = {'status': 'NOT_MEASURED', 'reason': getattr(exc, 'code', 'D31_QUALIFICATION_NOT_MEASURED'), 'detail': str(exc)}
+        result['qualification'], result['admission'] = qualified['status'], qualified
+        result['reason'] = qualified.get('reason', 'D31_REQUIRED_BINDINGS_NOT_MEASURED')
+        # Native failure is not erased by a later absent qualification/reference.
+        if result['metric_status'] == 'FAIL':
+            result.update(status='FAIL', reason='D31_NATIVE_METRIC_FAILURE')
+        elif upstream['status'] == qualified['status'] == 'PASS' and all(r['status'] == 'PASS' for r in result['obligations']):
+            result.update(status='PASS', delivery_blocked=False, reason='D31_REQUIRED_BINDINGS_CURRENT_AND_QUALIFIED')
+        for name, digest in observed['readset'].items():
+            if owner.sha(project / name) != digest:
+                raise MetricRefusal('D31_INPUT_CHANGED_BEFORE_METRIC_PUBLICATION', name)
+        if _d31_upstream(project, context, component) != upstream:
+            raise MetricRefusal('D31_ADOPTED_INPUT_CHANGED_BEFORE_METRIC_PUBLICATION', 'current dependencies/design-bound views changed')
+        if qualified['status'] == 'PASS' and _d31_qualification(project, context, observed) != qualified:
+            raise MetricRefusal('D31_QUALIFICATION_CHANGED_BEFORE_METRIC_PUBLICATION', 'per-use qualification changed')
+    except (MetricRefusal, owner.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        failed = result['metric_status'] == 'FAIL'
+        reason = (str(exc).partition(':')[0] if isinstance(exc, owner.Refusal)
+                  else getattr(exc, 'code', 'D31_METRIC_EVIDENCE_REFUSED'))
+        result.update(status='FAIL' if failed else 'NOT_MEASURED',
+            metric_status='FAIL' if failed else 'NOT_MEASURED', qualification='NOT_MEASURED', delivery_blocked=True,
+            reason=reason, detail=str(exc))
+        if not failed:
+            result['obligations'] = [{'id': k, 'status': 'NOT_MEASURED',
+                'reason': result['reason'], 'detail': result['detail']} for k in D31_BINDINGS]
     return result
 
 
