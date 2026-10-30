@@ -11241,12 +11241,33 @@
         {
           "id": "analog_die",
           "select_when": "analog_physical and not digital_physical",
-          "provider": "librelane",
-          "tools": "Magic.RCX",
+          "provider": "other",
+          "tools": "Magic native candidate extraction + existing recipe/output audit; actual RC depth disclosed",
           "native_steps": [
-            "Magic.RCX"
+            "flow109.D47"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "IMPLEMENTED_NATIVE_COMPONENT",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "magic_extract_spice_emit",
+            "native_step_id": "flow109.D47",
+            "producer": "magic_extract_spice_emit.py:execute native candidate extraction",
+            "consumer": "magic_extract_spice_emit.py:_d47_audit",
+            "engine_families": [
+              "magic"
+            ],
+            "engine_executables": {
+              "magic": "magic"
+            },
+            "engine_steps": {
+              "magic": [
+                "flow109.D47"
+              ]
+            },
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         },
         {
           "id": "assembly",

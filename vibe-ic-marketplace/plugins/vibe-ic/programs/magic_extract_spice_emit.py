@@ -863,5 +863,199 @@ def main(argv: list = None) -> int:
     return 0
 
 
+
+def _d47_inputs(project):
+    """Candidate inputs only: no later stream-out record or D60 helper."""
+    import hashlib
+    import math
+    import analog_pdk_availability as resolver
+    import analog_a7_post_layout_emit as a7
+    from analog_hardmacro_gds_emit import tech_of, _MAG_USE_RE
+    from flow109_analog_floorplan import bound_file
+    from declared_pdk_is_the_pdk_used_check import declared_target
+    project = Path(project).resolve(strict=True)
+    records = {}
+    def remember(path):
+        path = Path(path)
+        if any(p.is_symlink() for p in (path, *path.parents)) or not path.is_file():
+            raise ValueError('D47_INPUT_ABSENT_OR_SYMLINK: ' + str(path))
+        records[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return path
+    config_path = remember(project / 'input/flow109/D47.json')
+    config = json.loads(config_path.read_text())
+    if not isinstance(config, dict):
+        raise ValueError('D47_INPUT_INVALID')
+    layout = remember(bound_file(project, config.get('layout')))
+    logical = remember(bound_file(project, config.get('logical_netlist')))
+    top = config.get('top')
+    if not isinstance(top, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*', top) or layout.stem != top:
+        raise ValueError('D47_CANDIDATE_TOP_INVALID')
+    if _count_elements(logical.read_text())[2].count(top) != 1:
+        raise ValueError('D47_LOGICAL_TOP_ABSENT_OR_AMBIGUOUS')
+    ports = a7.subckt_ports(logical.read_text(), top)
+    if ports is None:
+        raise ValueError('D47_LOGICAL_INTERFACE_ABSENT')
+    options = config.get('options')
+    if not isinstance(options, dict) or set(options) != set(MagicResimExtractOptions.__dataclass_fields__):
+        raise ValueError('D47_EXTRACTION_SETTINGS_ABSENT')
+    if (type(options['cthresh']) not in (int, float) or not math.isfinite(options['cthresh'])
+            or options['cthresh'] < 0 or type(options['extresist_threshold_mohm']) is not int
+            or options['extresist_threshold_mohm'] < 0
+            or any(type(options[k]) is not bool for k in ('extresist', 'ext2spice_scale_off'))
+            or type(config.get('require_resistance')) is not bool):
+        raise ValueError('D47_EXTRACTION_SETTINGS_INVALID')
+    _rthresh_token(options['rthresh'])
+    tech = tech_of(layout)
+    target, _ = declared_target(project)
+    if resolver.families_agree(target, tech) is not True:
+        raise ValueError('D47_DECLARED_TECHNOLOGY_MISMATCH')
+    facts = resolver.resolve_pdk(target, project=project)
+    if facts.get('source') != 'container_installed' or not facts.get('available'):
+        raise ValueError('D47_INSTALLED_TECHNOLOGY_UNAVAILABLE')
+    directory = (Path(facts['pdk_root']) / 'libs.tech/magic').resolve(strict=True)
+    rcfile, techfile = directory / (tech + '.magicrc'), directory / (tech + '.tech')
+    remember(rcfile); remember(techfile)
+    styles = a7.extraction_styles(techfile)
+    if options['extract_style'] not in styles:
+        raise ValueError('D47_STYLE_NOT_DECLARED_BY_TECHNOLOGY')
+    total = 0
+    technology_files = sorted(directory.rglob('*'))
+    for path in technology_files:
+        if path.is_symlink():
+            raise ValueError('D47_TECHNOLOGY_SYMLINK')
+        if path.is_file():
+            total += path.stat().st_size
+            remember(path)
+    if len(technology_files) > 512 or total > 67108864:
+        raise ValueError('D47_TECHNOLOGY_POPULATION_UNSUPPORTED')
+    cells = {}
+    pending = [layout]
+    while pending:
+        path = pending.pop()
+        if path.stem in cells:
+            continue
+        if len(cells) >= 512:
+            raise ValueError('D47_CANDIDATE_HIERARCHY_UNSUPPORTED')
+        remember(path)
+        if tech_of(path) != tech:
+            raise ValueError('D47_CHILD_TECHNOLOGY_MISMATCH')
+        cells[path.stem] = str(path)
+        for cell in _MAG_USE_RE.findall(path.read_text()):
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*', cell):
+                raise ValueError('D47_CHILD_IDENTITY_UNSUPPORTED')
+            child = layout.parent / (cell + '.mag')
+            if not child.is_file():
+                raise ValueError('D47_REQUIRED_CHILD_ABSENT: ' + cell)
+            pending.append(child)
+    return dict(top=top, ports=ports, logical=str(logical), cells=cells,
+                options=options, require_resistance=config['require_resistance'],
+                rcfile=str(rcfile), tech=tech, pdk_root=str(Path(facts['pdk_root']).parent),
+                summed_models=sorted(a7.summed_device_models(a7._tech_text(techfile))), inputs=records)
+
+
+def _d47_audit(data, spice, res_ext):
+    """Use the existing output audit, port and device consumers on real bytes."""
+    import analog_a7_post_layout_emit as a7
+    text = spice.read_text() if spice.is_file() else ''
+    audit = audit_extracted_netlist(text,
+        res_ext.read_text() if res_ext.is_file() else None,
+        spice_file=str(spice), res_ext_file=str(res_ext),
+        require_resistance=data['require_resistance'],
+        extresist_expected=data['options']['extresist'])
+    if (not audit.passed or audit.summary['subckts'].count(data['top']) != 1
+            or a7.subckt_ports(text, data['top']) != data['ports']):
+        return {'status': 'FAIL', 'reason': 'D47_NATIVE_PARASITIC_OR_INTERFACE_AUDIT_FAILED', 'audit': asdict(audit)}
+    inventory = a7.device_inventory(
+        a7.device_instances(Path(data['logical']).read_text(), data['top']),
+        a7.device_instances(text, data['top']), set(data['summed_models']))
+    return {'status': 'PASS' if inventory['result'] == 'MATCH' else 'FAIL',
+            'reason': 'D47_NATIVE_EXTRACTION_AUDITED' if inventory['result'] == 'MATCH' else 'D47_SOURCE_DEVICE_INVENTORY_MISMATCH',
+            'audit': asdict(audit), 'device_inventory': inventory,
+            'inventory_scope': 'existing A7 top-level external X-model inventory, not LVS or complete net coverage'}
+
+
+def execute(project, context):
+    """D47 native candidate extraction; actual depth never implies row PASS."""
+    import hashlib
+    import shlex
+    import shutil
+    import uuid
+    import librelane_contract as launch
+    from analog_hardmacro_gds_emit import Stage
+    from flow109_admission import require_launch_admission, AdmissionRefusal
+    project = Path(project).resolve(strict=True)
+    output = project / 'reports/flow109/D47' / uuid.uuid4().hex
+    output.mkdir(parents=True)
+    record = dict(step_id='D47', context_sha256=context.get('context_sha256'),
+                  component_status='NOT_MEASURED', default_row_status='NOT_MEASURED',
+                  completed=False, native_started=False, outputs=[], executions=[],
+                  flow109_acceptance='NOT_MEASURED', whole_flow_acceptance='NOT_MEASURED',
+                  delivery_accepted=False, qualification='NOT_CLAIMED')
+    stage = Stage('host', output / 'work')
+    try:
+        if (context.get('requested_step') != 'D47' or context.get('native_step_id') != 'flow109.D47'
+                or context.get('resolved_row', {}).get('profile', {}).get('id') != 'analog_die'):
+            raise ValueError('D47_CONTEXT_INVALID')
+        record['launch_admission'] = require_launch_admission(project, 'flow109.D47', {'flow109_context': context})
+        record['native_launch'] = launch.local_image_attestation()
+        data = _d47_inputs(project)
+        record['inputs'] = data['inputs']
+        record['settings'] = data['options']
+        record['require_resistance'] = data['require_resistance']
+        tool = shutil.which('magic')
+        if not tool:
+            raise ValueError('D47_MAGIC_UNAVAILABLE')
+        record['tool'] = {'path': tool, 'sha256': hashlib.sha256(Path(tool).resolve().read_bytes()).hexdigest()}
+        if not stage.open()[0]:
+            raise ValueError('D47_STAGING_UNAVAILABLE')
+        for name, path in data['cells'].items():
+            if not stage.put(Path(path), name + '.mag')[0]:
+                raise ValueError('D47_STAGING_FAILED')
+        recipe = build_extraction_tcl(data['top'], 'candidate.spice', MagicResimExtractOptions(**data['options'])) + 'quit -noprompt\n'
+        validation = validate_extraction_tcl(recipe)
+        record['recipe_validation'] = asdict(validation)
+        if not validation.passed or not stage.put_text(recipe, 'extract.tcl')[0]:
+            raise ValueError('D47_EXTRACTION_RECIPE_REFUSED')
+        command = (f"export PDK={shlex.quote(data['tech'])} PDK_ROOT={shlex.quote(data['pdk_root'])} && "
+                   f"cd {shlex.quote(stage.path)} && {shlex.quote(tool)} -noconsole -dnull "
+                   f"-rcfile {shlex.quote(data['rcfile'])} extract.tcl")
+        record['native_started'] = True
+        rc, stdout, stderr = stage.sh(command)
+        log = output / 'magic.log'; log.write_text(stdout + stderr)
+        record['executions'].append(dict(command=command, returncode=rc,
+            log=str(log.relative_to(project)), log_sha256=hashlib.sha256(log.read_bytes()).hexdigest()))
+        spice = Path(stage.path) / 'candidate.spice'
+        res_ext = Path(stage.path) / (data['top'] + '.res.ext')
+        if (rc or 'MAGIC_EXTRACT_RESIM_DONE ' + data['top'] + ' ->' not in stdout
+                or re.search(r'(?im)(?:unknown|unrecognized)\s+layer|failure to read|error in writing', stdout + stderr)):
+            record['component_status'] = 'FAIL'
+            raise ValueError('D47_NATIVE_EXTRACTION_REJECTED')
+        extracted_sha = hashlib.sha256(spice.read_bytes()).hexdigest() if spice.is_file() else None
+        companions = {p: hashlib.sha256(p.read_bytes()).hexdigest() for p in Path(stage.path).glob('*.ext')}
+        answer = _d47_audit(data, spice, res_ext)
+        record['measurements'] = answer
+        audit_path = output / 'audit.json'; audit_path.write_text(json.dumps(answer, indent=2) + '\n')
+        if answer['status'] != 'PASS':
+            record['component_status'] = 'FAIL'
+            raise ValueError(answer['reason'])
+        if (_d47_inputs(project) != data or _d47_audit(data, spice, res_ext) != answer
+                or hashlib.sha256(spice.read_bytes()).hexdigest() != extracted_sha
+                or any(not p.is_file() or hashlib.sha256(p.read_bytes()).hexdigest() != h for p, h in companions.items())
+                or launch.local_image_attestation() != record['native_launch']):
+            raise ValueError('D47_INPUT_OUTPUT_OR_LAUNCH_CHANGED')
+        record['component_status'] = 'PASS'
+        record['extraction_depth'] = answer['audit']['depth']
+        record['settings'] = data['options']
+        record['require_resistance'] = data['require_resistance']
+        record['outputs'] = [{'path': str(p.relative_to(project)), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                             for p in (spice, audit_path, Path(stage.path) / 'extract.tcl', *companions)]
+        record['reason'] = 'Native candidate extraction depth=' + record['extraction_depth'] + '; coverage, RC corner, SI and row/signoff acceptance unmeasured'
+    except (ValueError, OSError, KeyError, TypeError, AdmissionRefusal, launch.Refusal) as exc:
+        record['reason'] = str(exc)
+    finally:
+        stage.close()
+    (output / 'component.json').write_text(json.dumps(record, indent=2) + '\n')
+    return record
+
 if __name__ == "__main__":
     sys.exit(main())

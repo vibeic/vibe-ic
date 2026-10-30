@@ -1234,8 +1234,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_stream = (row.get("id") == "D60" and profile.get("id") == "analog_die"
                      and isinstance(dispatch, Mapping)
                      and dispatch.get("adapter") == "analog_hardmacro_gds_emit")
+    analog_extract = (row.get("id") == "D47" and profile.get("id") == "analog_die"
+                      and isinstance(dispatch, Mapping)
+                      and dispatch.get("adapter") == "magic_extract_spice_emit")
     if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
-                                             and not analog_floorplan and not analog_fill and not analog_stream):
+                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
@@ -1260,6 +1263,10 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             invalid = (common_invalid or not analog_stream or native != "flow109.D60"
                        or dispatch.get("producer") != "analog_hardmacro_gds_emit.py:execute Magic native stream"
                        or dispatch.get("consumer") != "analog_hardmacro_gds_emit.py:_D60_READBACK KLayout native readback")
+        elif adapter == "magic_extract_spice_emit":
+            invalid = (common_invalid or not analog_extract or native != "flow109.D47"
+                       or dispatch.get("producer") != "magic_extract_spice_emit.py:execute native candidate extraction"
+                       or dispatch.get("consumer") != "magic_extract_spice_emit.py:_d47_audit")
         elif adapter == "flow109_frontend":
             identities = {
                 "D05": ("flow109.D05", "l21_to_upf_emit.py:main",
