@@ -15877,9 +15877,39 @@
           "id": "analog_die",
           "select_when": "analog_physical and not digital_physical",
           "provider": "other",
-          "tools": "ngspice + Python mission/EM/reliability checks",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "tools": "Existing ngspice bound measurements and final D69 analog mission consumer",
+          "native_steps": [
+            "analog_bound_measurements",
+            "flow109_final_electrical"
+          ],
+          "execution_status": "IMPLEMENTED_NATIVE_COMPONENT",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "flow109_final_electrical",
+            "native_step_id": "flow109.D70",
+            "producer": "analog_bound_measurements.py:explicit final analog mission",
+            "consumer": "flow109_final_electrical.py:validate_analog_mission",
+            "engine_families": [
+              "python3",
+              "ngspice"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "ngspice": "ngspice"
+            },
+            "engine_steps": {
+              "python3": [
+                "analog_bound_measurements",
+                "flow109_final_electrical"
+              ],
+              "ngspice": [
+                "final_analog_mission"
+              ]
+            },
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "flow109_metrics_status": "UNIMPLEMENTED"
+          }
         },
         {
           "id": "assembly",

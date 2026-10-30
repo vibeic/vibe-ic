@@ -1258,8 +1258,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_si = (row.get("id") == "D48" and profile.get("id") == "analog_die"
                  and isinstance(dispatch, Mapping)
                  and dispatch.get("adapter") == "si_crosstalk_check")
+    analog_final = (row.get("id") == "D70" and profile.get("id") == "analog_die"
+                    and isinstance(dispatch, Mapping)
+                    and dispatch.get("adapter") == "flow109_final_electrical")
     if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
-                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_final_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir and not analog_power and not analog_si):
+                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_final_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir and not analog_power and not analog_final and not analog_si):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
@@ -1317,6 +1320,10 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             invalid = (common_invalid or not analog_si or native != "flow109.D48"
                        or dispatch.get("producer") != "analog_bound_measurements.py:run_measurements"
                        or dispatch.get("consumer") != "si_crosstalk_check.py:_d48_consume")
+        elif adapter == "flow109_final_electrical" and profile.get("id") == "analog_die":
+            invalid = (common_invalid or not analog_final or native != "flow109.D70"
+                       or dispatch.get("producer") != "analog_bound_measurements.py:explicit final analog mission"
+                       or dispatch.get("consumer") != "flow109_final_electrical.py:validate_analog_mission")
         elif adapter == "flow109_frontend":
             identities = {
                 "D05": ("flow109.D05", "l21_to_upf_emit.py:main",

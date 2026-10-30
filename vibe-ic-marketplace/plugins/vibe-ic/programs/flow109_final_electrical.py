@@ -54,6 +54,8 @@ def _required_corner_population(value):
 
 
 def execute(project, context):
+    if context.get("resolved_row", {}).get("profile", {}).get("id") == "analog_die":
+        return _execute_analog(project, context)
     project = Path(project).resolve(); attempt = project / 'reports/flow109/D70' / uuid.uuid4().hex
     attempt.mkdir(parents=True, exist_ok=False)
     result = {'schema': SCHEMA, 'step_id': 'D70', 'component_status': 'NOT_MEASURED',
@@ -149,6 +151,8 @@ def execute(project, context):
 
 def validate_final_electrical(project, receipt_ref):
     project = Path(project).resolve(); record = _read(files._bound(project, receipt_ref))
+    if record.get('profile') == 'analog_die':
+        return validate_analog_mission(project, receipt_ref)
     if record.get('schema') != SCHEMA or record.get('component_status') != 'PASS':
         raise AdmissionRefusal('D70_COMPONENT_NOT_ACCEPTED', 'current native STA component PASS required')
     require_launch_admission(project, 'flow109.D70', {'flow109_context': record.get('execution_context')})
@@ -375,3 +379,216 @@ def bind_power_ir_owners(project, receipt_ref, input_path=OWNER_INPUT):
     write_json(path, result)
     result['receipt'] = files._record(project, path)
     return result
+
+
+def _analog_basis(project, reference):
+    """Only D69's final analog owner can authenticate a final mission basis."""
+    files._bound(project, reference)
+    basis = extract.validate_final_parasitics(project, reference)
+    if (basis.get('component_parasitics_current') is not True
+            or basis.get('extraction_depth') != 'RC'
+            or (basis.get('fill_sensitive_parasitics') or {}).get('status') != 'PASS'):
+        raise AdmissionRefusal('D70_FINAL_ANALOG_BASIS_UNQUALIFIED',
+                               'current qualified final RC required; C_ONLY and D47 cannot substitute')
+    # The current C_ONLY D69 interface has no simulator-ready final RC view.
+    # Only its owner-validated projection may provide that view in future.
+    netlists = basis.get('simulation_netlists')
+    if (not isinstance(netlists, dict) or not netlists
+            or set(netlists) != set(basis.get('final_spefs') or {})):
+        raise AdmissionRefusal('D70_FINAL_SIMULATION_NETLIST_UNAVAILABLE',
+                               'D69-bound per-corner simulator-ready RC netlists required')
+    for view in netlists.values():
+        files._bound(project, view)
+    return basis
+
+
+def _analog_inputs(project, manifest, basis):
+    import math
+    import corner_yield_vs_spec_check as limits
+    if manifest.get('schema') != SCHEMA or not isinstance(manifest.get('mission'), str) or not manifest['mission'].strip():
+        raise AdmissionRefusal('D70_ANALOG_MISSION_ABSENT', 'explicit mission required')
+    corners = _required_corner_population(manifest.get('required_corners'))
+    scenarios = manifest.get('scenarios')
+    if (not isinstance(scenarios, list) or not scenarios
+            or any(not isinstance(s, dict) or not isinstance(s.get('id'), str) or not s['id'] for s in scenarios)
+            or len({s['id'] for s in scenarios}) != len(scenarios)):
+        raise AdmissionRefusal('D70_ANALOG_SCENARIOS_ABSENT', 'nonempty unique mission scenarios required')
+    if {s.get('corner') for s in scenarios} != corners or not corners <= set(basis['simulation_netlists']):
+        raise AdmissionRefusal('D70_ANALOG_CORNER_COVERAGE_MISSING', 'each declared corner requires a final-basis scenario')
+    import flow109_analog_model_check as models
+    requirements = _read(files._bound(project, manifest.get('model_requirements')))
+    report = _read(files._bound(project, manifest.get('model_report')))
+    if not requirements.get('required_smokes') or models.consume(project, requirements, report)['verdict'] != 'PASS':
+        raise AdmissionRefusal('D70_ANALOG_MODEL_EVIDENCE_UNAVAILABLE', 'current declared native model smokes required')
+    declared_models = manifest.get('models') or {}
+    smokes = requirements['required_smokes']
+    for corner in corners:
+        selected = declared_models.get(corner)
+        if not isinstance(selected, list) or not selected:
+            raise AdmissionRefusal('D70_ANALOG_MODELS_ABSENT', corner)
+        for model in selected:
+            files._bound(project, model)
+            section = model.get('section')
+            if (section is not None and (not isinstance(section, str) or not section.strip())
+                    or not any(row['corner'] == corner
+                               and row['model']['sha256'] == model['sha256']
+                               and row['model'].get('section') == section for row in smokes)):
+                raise AdmissionRefusal('D70_ANALOG_MODEL_CORNER_UNQUALIFIED',
+                                       corner + ': selected library section must match the qualified smoke')
+    resolved = []
+    for setting in scenarios:
+        paths = {key: files._bound(project, setting.get(key)) for key in ('testbench', 'bindings', 'load', 'spec')}
+        binding = _read(paths['bindings']); analysis = binding.get('analysis') or {}
+        temperature = analysis.get('temperature_c')
+        if type(temperature) not in (int, float) or not math.isfinite(temperature):
+            raise AdmissionRefusal('D70_ANALOG_TEMPERATURE_ABSENT', setting['id'])
+        bounds = limits._spec_limits(_read(paths['spec']))
+        if (not bounds or set(bounds) != set(binding.get('measurements') or {})
+                or any(not math.isfinite(v) for limit in bounds.values() for v in limit.values() if v is not None)
+                or any(limit['min'] is not None and limit['max'] is not None and limit['min'] > limit['max'] for limit in bounds.values())):
+            raise AdmissionRefusal('D70_ANALOG_EXPLICIT_LIMITS_ABSENT', setting['id'])
+        resolved.append((setting, paths, binding, bounds))
+    return resolved
+
+
+def _analog_native_values(project, record, binding, expected):
+    """Reopen actual producer input closure and raw measurements, not scalar status."""
+    import math
+    import shlex
+    import analog_bound_measurements as measured
+    import analog_native_sim as sim
+    import analog_real_corner_sweep as sweep
+    valid, reason = measured.validate_consumed_inputs(project, record.get('native_inputs'))
+    if not valid:
+        raise AdmissionRefusal('D70_ANALOG_NATIVE_INPUT_CHANGED', reason)
+    views = record['native_inputs']
+    for view in views.values():
+        files._bound(project, view)
+    for name in ('netlist', 'testbench', 'bindings'):
+        if views.get(name) != expected[name]:
+            raise AdmissionRefusal('D70_ANALOG_INPUT_NOT_CONSUMED', name)
+    included = list(v for k, v in views.items() if k.startswith('include:'))
+    for required in [expected['netlist'], expected['load'], *expected['models']]:
+        if not any(v['path'] == required['path'] and v['sha256'] == required['sha256'] for v in included):
+            raise AdmissionRefusal('D70_ANALOG_MODEL_OR_LOAD_NOT_CONSUMED', required['path'])
+        section = required.get('section')
+        if section is not None:
+            found = False
+            for view in views.values():
+                for line in Path(view['path']).read_text(errors='replace').splitlines():
+                    if not line.lstrip().lower().startswith('.lib '):
+                        continue
+                    tokens = shlex.split(line, comments=True)
+                    if len(tokens) == 3 and tokens[0].lower() == '.lib':
+                        path = (Path(view['path']).parent / tokens[1]).resolve()
+                        found |= str(path) == required['path'] and tokens[2] == section
+            if not found:
+                raise AdmissionRefusal('D70_ANALOG_MODEL_SECTION_NOT_CONSUMED', str(section))
+    if record.get('bindings') != binding or not record.get('executions'):
+        raise AdmissionRefusal('D70_ANALOG_NATIVE_RECEIPT_INVALID', 'bindings/execution absent')
+    for execution in record['executions']:
+        files._bound(project, {'path': execution.get('log'), 'sha256': execution.get('log_sha256')})
+    transcript = '\n'.join(sim._log_text(e) for e in record['executions'])
+    if any(e.get('returncode') != 0 for e in record['executions']) or any(sweep._scan_analysis_failures(transcript)):
+        return 'FAIL', {}
+    if record.get('status') != 'PASS' or (record.get('temperature') or {}).get('matched') is not True:
+        raise AdmissionRefusal('D70_ANALOG_NATIVE_MEASUREMENT_INCOMPLETE', record.get('detail', ''))
+    values = {k.casefold(): v for k, v in sweep.native_meas_rows(transcript).items()}
+    for match in sweep._MEAS_LINE_RE.finditer(transcript):
+        for key, value in sweep._KV_RE.findall(match.group(1)):
+            values.setdefault(key.casefold(), float(value))
+    if any(name not in values or not math.isfinite(values[name]) or record.get('measurements', {}).get(name) != values[name]
+           for name in binding['measurements']):
+        raise AdmissionRefusal('D70_ANALOG_RAW_MEASUREMENT_MISSING', 'finite named native values required')
+    return 'PASS', {name: values[name] for name in binding['measurements']}
+
+
+def _execute_analog(project, context):
+    import librelane_contract as launch
+    import analog_bound_measurements as measured
+    import corner_yield_vs_spec_check as limits
+    from analog_native_flow import NativeCommands
+    project = Path(project).resolve()
+    attempt = project / 'reports/flow109/D70' / uuid.uuid4().hex
+    attempt.mkdir(parents=True, exist_ok=False)
+    result = dict(schema=SCHEMA, step_id='D70', profile='analog_die', component_status='NOT_MEASURED',
+                  completed=False, qualification='NOT_CLAIMED', flow109_acceptance='NOT_MEASURED',
+                  whole_flow_acceptance='NOT_MEASURED', delivery_accepted=False, native_started=False,
+                  context_sha256=context.get('context_sha256'), execution_context=context, scenarios=[],
+                  unmeasured_obligations=['final_thermal_aging_signal_em', 'full_final_mission_signoff'])
+    measured_failure = False
+    try:
+        require_launch_admission(project, 'flow109.D70', {'flow109_context': context})
+        result['native_launch'] = launch.local_image_attestation()
+        manifest_path = project / INPUT
+        manifest_ref = files._record(project, manifest_path); manifest = _read(manifest_path)
+        basis = _analog_basis(project, manifest.get('final_parasitics_receipt'))
+        scenarios = _analog_inputs(project, manifest, basis)
+        result.update(final_parasitics_receipt=manifest['final_parasitics_receipt'], manifest=manifest_ref,
+                      operation_sources=operation_sources())
+        run = NativeCommands(project, attempt, '', result['native_launch']['image'])
+        statuses = []
+        for index, (setting, paths, binding, bounds) in enumerate(scenarios):
+            netlist = files._bound(project, basis['simulation_netlists'][setting['corner']])
+            expected = {key: {'path': str(path.resolve()), 'sha256': digest(path)} for key, path in paths.items()}
+            expected['netlist'] = {'path': str(netlist), 'sha256': digest(netlist)}
+            expected['models'] = [{**model, 'path': str(files._bound(project, model))} for model in manifest['models'][setting['corner']]]
+            destination = attempt / ('mission-' + str(index))
+            argv = [str(project), '--netlist', str(netlist), '--testbench', str(paths['testbench']),
+                    '--bindings', str(paths['bindings']), '--out', str(destination), '--container', '',
+                    '--image', result['native_launch']['image']]
+            result['native_started'] = True
+            execution = run('analog_bound_measurements.py', argv)
+            record_path = destination / 'result.json'; record = _read(record_path)
+            status, values = _analog_native_values(project, record, binding, expected)
+            violations = [name for name, bound in bounds.items() if name in values and limits._violates(values[name], bound['min'], bound['max'])]
+            if violations: status = 'FAIL'
+            measured_failure |= status == 'FAIL'; statuses.append(status)
+            result['scenarios'].append(dict(id=setting['id'], corner=setting['corner'], status=status,
+                values=values, violations=violations, native_receipt=files._record(project, record_path),
+                expected_inputs=expected, execution=execution))
+        # A valid functional result cannot satisfy unsupported coupled obligations.
+        unsupported = [key for key in ('thermal', 'aging', 'signal_em', 'em') if manifest.get(key) is not None]
+        result['unsupported_requirements'] = unsupported
+        _analog_inputs(project, manifest, basis)
+        if files._record(project, manifest_path) != manifest_ref or _analog_basis(project, manifest['final_parasitics_receipt']) != basis:
+            raise AdmissionRefusal('D70_ANALOG_CURRENT_BASIS_CHANGED', 'mission/final extraction changed during acquisition')
+        result['component_status'] = 'FAIL' if measured_failure else 'NOT_MEASURED' if unsupported else 'PASS'
+        result['reason'] = 'D70_ANALOG_MISSION_' + result['component_status']
+    except Exception as exc:
+        result.update(component_status='FAIL' if measured_failure else 'NOT_MEASURED',
+                      reason=getattr(exc, 'code', 'D70_ANALOG_MISSION_UNAVAILABLE'), detail=str(exc))
+    result['outputs'] = [str(p) for p in attempt.rglob('*') if p.is_file()]
+    path = attempt / 'component.json'; write_json(path, result); result['receipt'] = files._record(project, path)
+    return result
+
+
+def validate_analog_mission(project, receipt_ref):
+    """Current final extraction and raw mission values remain independently bound."""
+    import corner_yield_vs_spec_check as limits
+    project = Path(project).resolve(); record = _read(files._bound(project, receipt_ref))
+    if (record.get('schema') != SCHEMA or record.get('step_id') != 'D70' or record.get('profile') != 'analog_die'
+            or record.get('component_status') != 'PASS' or record.get('operation_sources') != operation_sources()):
+        raise AdmissionRefusal('D70_ANALOG_COMPONENT_NOT_CURRENT', 'current native mission component required')
+    require_launch_admission(project, 'flow109.D70', {'flow109_context': record.get('execution_context')})
+    manifest = _read(files._bound(project, record['manifest']))
+    if record.get('final_parasitics_receipt') != manifest.get('final_parasitics_receipt'):
+        raise AdmissionRefusal('D70_ANALOG_FINAL_BASIS_CHANGED', 'final receipt differs')
+    if any(manifest.get(key) is not None for key in ('thermal', 'aging', 'signal_em', 'em')):
+        raise AdmissionRefusal('D70_ANALOG_UNSUPPORTED_MISSION_REQUIREMENT', 'functional values cannot close coupled requirements')
+    basis = _analog_basis(project, record['final_parasitics_receipt'])
+    scenarios = _analog_inputs(project, manifest, basis)
+    if len(scenarios) != len(record.get('scenarios') or []):
+        raise AdmissionRefusal('D70_ANALOG_SCENARIO_COVERAGE_CHANGED', 'scenario population differs')
+    for (setting, paths, binding, bounds), observed in zip(scenarios, record['scenarios']):
+        expected = {key: {'path': str(path.resolve()), 'sha256': digest(path)} for key, path in paths.items()}
+        netlist = files._bound(project, basis['simulation_netlists'][setting['corner']])
+        expected['netlist'] = {'path': str(netlist), 'sha256': digest(netlist)}
+        expected['models'] = [{**model, 'path': str(files._bound(project, model))} for model in manifest['models'][setting['corner']]]
+        native = _read(files._bound(project, observed['native_receipt']))
+        status, values = _analog_native_values(project, native, binding, expected)
+        if (observed.get('id') != setting['id'] or observed.get('corner') != setting['corner']
+                or observed.get('status') != 'PASS' or status != 'PASS' or observed.get('values') != values
+                or any(limits._violates(values[name], bound['min'], bound['max']) for name, bound in bounds.items())):
+            raise AdmissionRefusal('D70_ANALOG_MISSION_CHANGED', setting['id'])
+    return {'component_electrical_current': True, 'flow109_acceptance': 'NOT_MEASURED', 'scope': 'final analog functional mission component only'}
