@@ -918,6 +918,198 @@ def run(project: Path, block: str, setting: dict, *, container: str='', output_d
     return record
 
 
+
+def _d56_capture(project,case,work,current_launch):
+    """Ordinary D56 producer: existing native executor, source-bound receipt.
+
+    No physical extraction or PDK qualification is implied by a supply capture.
+    """
+    import shutil
+    import analog_native_interconnect_run as producer
+    import analog_bound_measurements as measured
+    from analog_native_flow import _local_ngspice_startup
+    from flow109_analog_floorplan import bound_file
+    work.mkdir(parents=True,exist_ok=False)
+    deck=bound_file(project,case.get('deck'));binary=Path(shutil.which('ngspice') or '').resolve(strict=True)
+    if not binary.is_file():raise ValueError('D56_NATIVE_TOOL_ABSENT')
+    startup,init_source=_local_ngspice_startup(project,work,current_launch['image'])
+    init=work/'.spiceinit'
+    init.write_text((Path(init_source['path']).read_text() if init_source else '')+'\nset num_threads=1\nset filetype=binary\n')
+    driver=work/'executed_driver.py';driver.write_bytes(Path(__file__).read_bytes())
+    inputs={str(p):_sha(p) for p in (deck,binary,Path(producer.__file__).resolve(),Path(__file__).resolve(),init)}
+    closure=measured.consumed_input_views(project,deck)
+    inputs.update({v['path']:v['sha256'] for v in closure.values()})
+    if init_source:inputs[init_source['path']]=init_source['sha256']
+    environment={**startup,'OMP_NUM_THREADS':'1','OMP_WAIT_POLICY':'PASSIVE','GOMP_SPINCOUNT':'0','SPICE_USERINIT_DIR':str(work)}
+    capture=work/'tran.raw';log=work/'native.log'
+    compress,scratch=producer._storage_options(project,case)
+    storage=producer._capture_target(capture,scratch,'') if compress else None
+    budget=case.get('capture_budget_bytes')
+    if type(budget) is not int or budget<=0:raise ValueError('D56_EXPLICIT_CAPTURE_BUDGET_REQUIRED')
+    rec=producer.execute([str(binary),'-b','-r',str(capture),str(deck)],work,'',environment,0,log,capture,budget)
+    producer.write(work/'native-execution.json',rec)
+    rec.update(inputs_before=inputs,inputs_after={p:producer.current_sha(Path(p)) for p in inputs},deck=str(deck),analysis={'kind':'TRAN','window_s':case.get('window_s')},native_launch=current_launch,tool={'path':str(binary),'sha256':_sha(binary)},operation_source={'path':str(Path(producer.__file__).resolve()),'sha256':_sha(Path(producer.__file__))},native_environment=environment,native_init_before={str(init):inputs[str(init)]},native_init_after={str(init):producer.current_sha(init)},native_inputs={'deck':{'path':str(deck),'sha256':inputs[str(deck)]},**closure})
+    rec['executed_driver_copy']=str(driver)
+    rec['unchanged']=rec['inputs_before']==rec['inputs_after'] and rec['native_init_before']==rec['native_init_after']
+    stored=None
+    if compress and capture.is_file():
+        stored=producer._store_raw(storage,work);rec['native_raw']=stored[0];capture=Path(rec['native_raw']['stored_path'])
+        producer._cleanup_raw_storage(stored,work)
+    rec['outputs']={str(p):_sha(p) for p in work.rglob('*') if p.is_file() and p.name!='command.json'}
+    # Completion here is transport only; the consumer checks log, vectors,
+    # source identity and the complete measurement window before any PASS.
+    rec['status']='PASS' if rec['returncode']==0 and rec['unchanged'] and capture.is_file() and not rec['capture_budget_exceeded'] else 'NOT_MEASURED'
+    receipt=work/'command.json';producer.write(receipt,rec)
+    def ref(path):return {'path':str(path.relative_to(project)),'sha256':_sha(path)}
+    host=_read(Path(current_launch['attestation_path']));launch_path=Path(current_launch['attestation_path'])
+    for mount in sorted(host['container_inspect']['Mounts'],key=lambda m:len(m['Destination']),reverse=True):
+        if mount.get('Type')=='bind' and launch_path.is_relative_to(Path(mount['Destination'])):
+            launch_path=Path(mount['Source'])/launch_path.relative_to(mount['Destination']);break
+    return {**case,'receipt':ref(receipt),'capture':ref(capture),'log':ref(log),'launch':{'path':str(launch_path),'sha256':current_launch['attestation_sha256']}}
+
+
+def _d56_case(project, case, current_launch):
+    """Reopen the original native electrical producer, not a new PASS label."""
+    from flow109_analog_floorplan import bound_file
+    from flow109 import _d23_original_launch
+    import analog_bound_measurements as measured
+    import analog_native_waveform as waveform
+    import analog_native_interconnect_run as producer
+    import analog_real_corner_sweep as sweep
+    receipt=bound_file(project,case.get('receipt'));rec=_read(receipt)
+    launch_ref=case.get('launch')
+    if not isinstance(launch_ref,dict):raise ValueError('D56_ORIGINAL_LAUNCH_ABSENT')
+    original_launch=Path(launch_ref.get('path',''))
+    if not original_launch.is_absolute() or not original_launch.is_file() or _sha(original_launch)!=launch_ref.get('sha256'):
+        raise ValueError('D56_ORIGINAL_LAUNCH_STALE')
+    _d23_original_launch(rec.get('native_launch',{}),dict(current_launch,attestation_path=str(original_launch)))
+    host=_read(original_launch)
+    mounts=[(m['Destination'],m['Source']) for m in host['container_inspect']['Mounts'] if m.get('Type')=='bind']
+    def original(value):
+        if not isinstance(value,str) or not value.startswith('/') or '..' in Path(value).parts:
+            raise ValueError('D56_ORIGINAL_INPUT_PATH_INVALID')
+        path=Path(value)
+        for guest,host in sorted(mounts,key=lambda m:len(m[0]),reverse=True):
+            if path.is_relative_to(Path(guest)):
+                return (Path(host)/path.relative_to(Path(guest))).resolve(strict=True)
+        return path.resolve(strict=True)
+    deck=bound_file(project,case.get('deck'));capture=bound_file(project,case.get('capture'));log=bound_file(project,case.get('log'))
+    native_deck=original(rec.get('deck'))
+    stored_path,_=waveform.native_capture(rec,transient=True)
+    original_receipt=original(str(stored_path)).parent/'command.json'
+    if not original_receipt.is_file() or original_receipt.read_bytes()!=receipt.read_bytes():
+        raise ValueError('D56_ORIGINAL_PRODUCER_RECORD_CHANGED')
+    inputs=rec.get('inputs_before');outputs=rec.get('outputs')
+    if not isinstance(inputs,dict) or not inputs or not isinstance(outputs,dict) or not outputs or rec.get('inputs_after')!=inputs or rec.get('unchanged') is not True:
+        raise ValueError('D56_NATIVE_INPUT_POPULATION_UNBOUND')
+    driver=original(rec.get('executed_driver_copy')) if rec.get('executed_driver_copy') else None
+    for path,digest in {**inputs,**outputs}.items():
+        if path in inputs and driver is not None and _sha(driver)==digest:
+            continue  # Existing retained executed-driver-copy semantics.
+        if _sha(original(path))!=digest:raise ValueError('D56_ORIGINAL_INPUT_OR_OUTPUT_STALE: '+path)
+    if driver is not None:
+        import ast,inspect
+        old=next((n for n in ast.parse(driver.read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='_d56_capture'),None)
+        now=ast.parse(inspect.getsource(_d56_capture)).body[0]
+        if old is None or ast.dump(old)!=ast.dump(now):raise ValueError('D56_NATIVE_CAPTURE_METHOD_CHANGED')
+    operation=rec.get('operation_source') or {};tool=rec.get('tool') or {}
+    if (operation.get('sha256')!=_sha(Path(producer.__file__)) or _sha(original(operation.get('path')))!=operation.get('sha256')
+            or _sha(original(tool.get('path')))!=tool.get('sha256')):
+        raise ValueError('D56_NATIVE_METHOD_OR_TOOL_CHANGED')
+    native_outputs={Path(p).name:(p,digest) for p,digest in outputs.items()}
+    stored,raw_identity=waveform.native_capture(rec,transient=True)
+    if (str(stored) not in outputs or _sha(capture)!=outputs[str(stored)]
+            or _sha(original(str(stored)))!=_sha(capture) or _sha(deck)!=inputs.get(rec['deck'])
+            or _sha(log)!=native_outputs.get('native.log',(None,None))[1]):
+        raise ValueError('D56_CAPTURE_DECK_OR_LOG_CHANGED')
+    native_command=_read(original(native_outputs['native-command.json'][0]))
+    if native_command.get('environment')!=rec.get('native_environment'):
+        raise ValueError('D56_NATIVE_ENVIRONMENT_UNBOUND')
+    init=rec.get('native_init_before')
+    if not isinstance(init,dict) or not init or rec.get('native_init_after')!=init:
+        raise ValueError('D56_NATIVE_INITIALIZATION_UNBOUND')
+    if any(inputs.get(p)!=h or _sha(original(p))!=h for p,h in init.items()):
+        raise ValueError('D56_NATIVE_INITIALIZATION_CHANGED')
+    native_inputs=rec.get('native_inputs')
+    if not isinstance(native_inputs,dict) or native_inputs.get('deck')!={'path':rec['deck'],'sha256':inputs[rec['deck']]}:
+        raise ValueError('D56_NATIVE_INCLUDE_CLOSURE_UNBOUND')
+    execution=_read(original(native_outputs['native-execution.json'][0]))
+    if execution.get('argv')!=rec.get('argv') or native_command.get('argv')!=rec.get('argv') or execution.get('returncode')!=rec.get('returncode'):
+        raise ValueError('D56_NATIVE_EXECUTION_CHANGED')
+    argv=rec['argv']
+    executed_raw=(rec.get('native_raw') or {}).get('executed_path',str(stored))
+    if (argv.count('-r')!=1 or argv[argv.index('-r')+1]!=executed_raw
+            or argv.count(rec['deck'])!=1 or argv[-1]!=rec['deck'] or tool.get('path') not in argv):
+        raise ValueError('D56_NATIVE_INVOCATION_SUBJECT_MISMATCH')
+    # The original producer input population must include every real include;
+    # a receipt's own list is not evidence of an omitted model/include.
+    closure=measured.consumed_input_views(project,native_deck)
+    consumed={str(original(path)):digest for path,digest in inputs.items()}
+    recorded_closure={str(original(v['path'])):v['sha256'] for k,v in native_inputs.items() if k.startswith('include:')}
+    if recorded_closure!={str(Path(v['path']).resolve()):v['sha256'] for v in closure.values()} or any(consumed.get(str(Path(v['path']).resolve()))!=v['sha256'] for v in closure.values()):
+        raise ValueError('D56_NATIVE_INCLUDE_CLOSURE_INCOMPLETE')
+    text=log.read_text(errors='replace')
+    if rec.get('returncode')!=0 or any(sweep._scan_analysis_failures(text)) or re.search(r'(?i)fatal error|simulation(?:\(s\))? aborted|timestep too small',text):
+        return {'status':'FAIL','reason':'bound native electrical analysis failed','receipt':str(receipt)}
+    if rec.get('status')!='PASS' or str((rec.get('analysis') or {}).get('kind','')).upper()!='TRAN':
+        raise ValueError('D56_COMPLETED_TRANSIENT_CAPTURE_REQUIRED')
+    supplies=case.get('supplies');required=case.get('required_rails');external=case.get('external');ground=case.get('signal_ground')
+    if (not isinstance(supplies,dict) or not supplies or not isinstance(required,list) or not required
+            or any(not isinstance(x,str) or not x for x in required) or len(set(required))!=len(required)
+            or set(supplies)!=set(required) or not isinstance(external,dict) or set(external)!=set(required)
+            or not isinstance(ground,str) or not ground):
+        raise ValueError('D56_REQUIRED_RAIL_POPULATION_OR_GROUND_UNBOUND')
+    window=case.get('window_s')
+    if not isinstance(window,list) or len(window)!=2 or any(isinstance(x,bool) or not isinstance(x,(float,int)) for x in window):
+        raise ValueError('D56_TIME_WINDOW_ABSENT')
+    raw=waveform.NativeRaw(capture,**raw_identity)
+    stats=supply_wave_statistics(raw,window,deck.read_text(),supplies,external)
+    if set(stats)!=set(required) or any(v['negative_node'].casefold()!=ground.casefold() for v in stats.values()):
+        raise ValueError('D56_SUPPLY_POLARITY_OR_REFERENCE_MISMATCH')
+    return {'status':'PASS','rails':stats,'units':{'current_a':'A','voltage_v':'V','power_w':'W','window_s':'s'},
+            'capture_shape':list(raw.shape),'native_launch':rec['native_launch'],'receipt':str(receipt),
+            'scope':'selected native rail/window integration only; mission, layout/activity and source power bounds unmeasured'}
+
+
+def execute(project,context):
+    """D56 consumes genuine completed native supply-current captures; no replay."""
+    import librelane_contract as launch
+    from flow109_admission import require_launch_admission,AdmissionRefusal
+    import flow109
+    project=Path(project).resolve(strict=True);work=project/'reports/flow109/D56'/uuid.uuid4().hex;work.mkdir(parents=True)
+    result=dict(step_id='D56',context_sha256=context.get('context_sha256'),component_status='NOT_MEASURED',default_row_status='NOT_MEASURED',completed=False,native_started=False,outputs=[],cases=[],qualification='NOT_CLAIMED',flow109_acceptance='NOT_MEASURED',whole_flow_acceptance='NOT_MEASURED',delivery_accepted=False)
+    try:
+        if context.get('requested_step')!='D56' or context.get('native_step_id')!='flow109.D56' or context.get('resolved_row',{}).get('profile',{}).get('id')!='analog_die':raise ValueError('D56_CONTEXT_INVALID')
+        result['launch_admission']=require_launch_admission(project,'flow109.D56',{'flow109_context':context});current=launch.local_image_attestation()
+        config=project/'input/flow109/D56.json'
+        if any(p.is_symlink() for p in (config,*config.parents)):raise ValueError('D56_INPUT_SYMLINK')
+        before=_sha(config);settings=_read(config);cases=settings.get('cases')
+        if not isinstance(cases,list) or not cases:raise ValueError('D56_EMPTY_NATIVE_CASE_POPULATION')
+        names=[c.get('name') for c in cases if isinstance(c,dict)]
+        if len(names)!=len(cases) or any(not isinstance(n,str) or not n for n in names) or len(set(names))!=len(names):raise ValueError('D56_NATIVE_CASE_IDENTITY_AMBIGUOUS')
+        for case in cases:
+            try:
+                selected=case
+                if 'receipt' not in case:
+                    result['native_started']=True
+                    selected=_d56_capture(project,case,work/(str(len(result['cases']))+'-native'),current)
+                data=_d56_case(project,selected,current);data['name']=case['name'];data['retained_case']=selected;result['cases'].append(data)
+            except (ValueError,OSError,KeyError,TypeError,flow109.Flow109Error) as exc:
+                result['cases'].append({'name':case['name'],'status':'NOT_MEASURED','reason':str(exc)})
+        states=[c['status'] for c in result['cases']]
+        result['component_status']='FAIL' if 'FAIL' in states else 'PASS' if states and set(states)=={'PASS'} else 'NOT_MEASURED'
+        if _sha(config)!=before or launch.local_image_attestation()!=current:
+            if result['component_status']!='FAIL':result['component_status']='NOT_MEASURED'
+            raise ValueError('D56_INPUT_OR_LAUNCH_CHANGED')
+        result['activity_coverage']='NOT_MEASURED';result['power_bounds']='NOT_MEASURED'
+        retained=work/'retained_inputs.json'
+        retained.write_text(json.dumps({'cases':[c['retained_case'] for c in result['cases'] if 'retained_case' in c]},indent=2)+'\n')
+        result['retained_inputs']={'path':str(retained.relative_to(project)),'sha256':_sha(retained)}
+        result['reason']='Source-bound native rail current/I*V over explicit windows only; subset/full-row activity, power bounds and ADC acceptance unmeasured'
+    except (ValueError,OSError,KeyError,TypeError,AdmissionRefusal,launch.Refusal) as exc:result['reason']=str(exc)
+    target=work/'component.json';target.write_text(json.dumps(result,indent=2)+'\n');return result
+
+
 if __name__=='__main__':
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('project',type=Path);ap.add_argument('--block',required=True);ap.add_argument('--settings',type=Path,required=True);ap.add_argument('--container',default='');ap.add_argument('--out',type=Path)
     args=ap.parse_args();result=run(args.project,args.block,_read(args.settings),container=args.container,output_dir=args.out);print(json.dumps(result,indent=2));sys.exit({'PASS':0,'FAIL':1,'NOT_MEASURED':2}[result['status']])
