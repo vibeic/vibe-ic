@@ -465,3 +465,80 @@ def test_l7_additional_prose_does_not_hide_missing_or_unbound_cases(tmp_path, da
     io = json.loads((tmp_path / d06.IO_REPORT).read_text())
     with pytest.raises(d06.D06Refusal):
         d06._early_test_access(tmp_path, _context(), io)
+
+
+def _native_signoff_fixture(project):
+    """SOFTWARE-only native-publication shape, not tool qualification evidence."""
+    import hashlib
+    state = _bare_die_load(project)
+    (project / d06.CURRENT_REPAIR).unlink()
+    config = json.loads((state.parent / 'config.json').read_text())
+    config.update(DESIGN_DIR=str(project), meta={'step': 'OpenROAD.STAPostPNR'})
+    _write(state.parent / 'config.json', config)
+    values = json.loads(state.read_text())
+    values = {k: str(project / Path(v).relative_to('/project')) for k, v in values.items()}
+    _write(state, values)
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    receipt = {'input': {'step': 'OpenROAD.STAPostPNR',
+                        'state_files': {v: sha(Path(v)) for v in values.values()}},
+               'sha256': {'state_out.json': sha(state), 'config.json': sha(state.parent / 'config.json')}}
+    _write(state.parent / 'vibeic_receipt.json', receipt)
+    report = _write(project / 'reports/phase3/sta_postpnr_signoff.json', {
+        'mode': 'librelane', 'judgment': {'verdict': 'PASS'},
+        'sta_state': str(state), 'sta_state_sha256': sha(state)})
+    return state, report
+
+
+def test_bare_die_load_uses_bound_native_sta_without_repair(tmp_path, monkeypatch):
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    _native_signoff_fixture(tmp_path)
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] == 'PASS', result
+    assert result['metrics']['package_escape_feasibility']['capacitance_library_units'] == 0.07
+    assert any(row['path'] == 'reports/phase3/sta_postpnr_signoff.json' for row in result['inputs'])
+    assert not (tmp_path / d06.CURRENT_REPAIR).exists()
+    assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('damage', ['failed_signoff', 'missing_state', 'stale_state',
+                                    'wrong_producer', 'changed_config', 'changed_sdc',
+                                    'changed_netlist', 'missing_input_binding',
+                                    'missing_receipt', 'outside_owner', 'invalid_repair'])
+def test_native_sta_fallback_refuses_stale_or_foreign_load(tmp_path, monkeypatch, damage):
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    state, report = _native_signoff_fixture(tmp_path)
+    receipt_path = state.parent / 'vibeic_receipt.json'
+    body = json.loads(receipt_path.read_text())
+    if damage == 'failed_signoff':
+        row = json.loads(report.read_text());row['judgment']['verdict'] = 'FAIL';_write(report, row)
+    elif damage == 'missing_state':
+        state.unlink()
+    elif damage == 'stale_state':
+        _write(state, {'changed': True})
+    elif damage == 'wrong_producer':
+        body['input']['step'] = 'Other.Step';_write(receipt_path, body)
+    elif damage == 'changed_config':
+        _write(state.parent / 'config.json', {'PDK': 'other_pdk'})
+    elif damage == 'changed_sdc':
+        Path(json.loads(state.read_text())['sdc']).write_text('set_load 99 [all_outputs]\n')
+    elif damage == 'changed_netlist':
+        Path(json.loads(state.read_text())['nl']).write_text('module other; endmodule\n')
+    elif damage == 'missing_input_binding':
+        body['input']['state_files'] = {};_write(receipt_path, body)
+    elif damage == 'missing_receipt':
+        receipt_path.unlink()
+    elif damage == 'outside_owner':
+        import hashlib
+        values = json.loads(state.read_text());values['nl'] = str(tmp_path.parent / 'foreign.v')
+        _write(state, values)
+        digest = hashlib.sha256(state.read_bytes()).hexdigest();body['sha256']['state_out.json'] = digest
+        _write(receipt_path, body);row = json.loads(report.read_text());row['sta_state_sha256'] = digest;_write(report, row)
+    else:
+        _write(tmp_path / d06.CURRENT_REPAIR, {'verdict': 'FAIL'})
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] != 'PASS', result
+    assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
