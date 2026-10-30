@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import uuid
@@ -263,7 +264,156 @@ def validate_filled_odb(project, receipt_ref):
             'extraction_fill_sensitivity': 'NOT_VERIFIED'}
 
 
+def _gds_sources():
+    paths = [Path(__file__), HERE / 'metal_fill_emit.py',
+             HERE / '_klayout_launch.py', HERE / '_metal_fill_capacity.py',
+             HERE / '_inplace_chain.py', HERE / 'flow109_admission.py']
+    return {str(p.relative_to(HERE.parent)): _sha(p) for p in paths}
+
+
+def _gds_input(project, entry):
+    """Explicit project input, never a pick-first stream or another carrier."""
+    if (not isinstance(entry, dict) or not isinstance(entry.get('path'), str)
+            or Path(entry['path']).is_absolute() or '..' in Path(entry['path']).parts):
+        raise AdmissionRefusal('D62_GDS_INPUT_UNBOUND', 'project-relative path/SHA required')
+    path = _bound(project, entry)
+    if not path.is_relative_to(project) or (project / entry['path']).is_symlink():
+        raise AdmissionRefusal('D62_GDS_INPUT_FOREIGN', entry['path'])
+    return path
+
+
+def _execute_gds(project, context):
+    """Existing KLayout fill component; no ODB or final-geometry credit.
+
+    The actual emitter owns density/floor/keepout semantics. This caller binds
+    its explicit stream and rule config and preserves its negative verdict.
+    Full D62 metrics still use their existing qualified consumer and refuse
+    unsupported GDS qualification; a component PASS is never row signoff.
+    """
+    import metal_fill_emit as emitter
+    import librelane_contract as launch
+    import _klayout_launch as klayout
+    project = Path(project).resolve()
+    attempt = project / 'phase3/flow109/D62' / (
+        datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + uuid.uuid4().hex[:8])
+    attempt.mkdir(parents=True, exist_ok=False)
+    result = {'schema': SCHEMA, 'step_id': 'D62', 'geometry_format': 'GDS',
+              'component_status': 'NOT_MEASURED', 'native_started': False,
+              'context_sha256': context['context_sha256'],
+              'flow109_acceptance': 'NOT_MEASURED', 'whole_flow_acceptance': 'NOT_MEASURED',
+              'qualification_status': 'NOT_MEASURED', 'completed': False}
+    try:
+        if context.get('requested_step') != 'D62' or context.get('native_step_id') != 'flow109.D62':
+            raise AdmissionRefusal('D62_CONTEXT_MISMATCH', 'registered D62 GDS component required')
+        manifest_path = project / INPUT
+        manifest = _read(manifest_path)
+        if manifest.get('schema') != SCHEMA:
+            raise AdmissionRefusal('D62_INPUT_INVALID', 'existing D62 invocation schema required')
+        paths = {key: _gds_input(project, manifest.get(key)) for key in ('input_gds', 'rules')}
+        cfg = _read(paths['rules'])
+        if not isinstance(cfg.get('layers'), list) or not cfg['layers']:
+            raise AdmissionRefusal('D62_RULES_ABSENT', 'declared per-layer GDS fill configuration required')
+        cell = manifest.get('cell')
+        if not isinstance(cell, str) or not cell.strip():
+            raise AdmissionRefusal('D62_GDS_CELL_UNBOUND', 'explicit input top cell required')
+        # Remain in this launched runtime. Never attach a shared container via
+        # the legacy launcher's docker-exec fallback when KLayout is absent.
+        binary = shutil.which('strmrun') or shutil.which('klayout')
+        if not binary:
+            raise AdmissionRefusal('D62_KLAYOUT_UNAVAILABLE', 'local KLayout required')
+        runner = klayout.find_runner()
+        if not isinstance(runner, klayout.HostRunner):
+            raise AdmissionRefusal('D62_KLAYOUT_UNAVAILABLE', 'current runtime host runner required')
+        executable = Path(binary).resolve()
+        # This source-owned method uses the existing vendored engine. A stale
+        # image override must not silently ignore the source's declared
+        # protected-instance configuration. The normal locator consumes this
+        # explicit root in the child; no global/runtime install is changed.
+        engine = HERE / 'metal_fill/metal_fill.py'
+        if not engine.is_file():
+            raise AdmissionRefusal('D62_GDS_ENGINE_UNAVAILABLE', 'existing density-fill engine absent')
+        sources = _gds_sources()
+        result.update(inputs={k: _record(project, p) for k, p in paths.items()},
+                      manifest=_record(project, manifest_path), operation_sources=sources,
+                      engine={'path': str(engine.resolve()), 'sha256': _sha(engine)},
+                      tool={'path': str(executable), 'sha256': _sha(executable),
+                            'runner': runner.detail})
+        result['launch_admission'] = require_launch_admission(
+            project, 'flow109.D62', {'flow109_context': context})
+        result['native_launch'] = launch.local_image_attestation()
+        output, report, observed = (attempt / n for n in ('filled.gds', 'fill-report.json', 'emitter-result.json'))
+        argv = [sys.executable, '-B', str(HERE / 'metal_fill_emit.py'), str(project),
+                '--gds', str(paths['input_gds']), '--config', str(paths['rules']),
+                '--out', str(output), '--cell', cell, '--report', str(report), '--json', str(observed)]
+        result['native_started'] = True
+        proc = subprocess.run(argv, capture_output=True, text=True,
+                              env={**os.environ, 'VIBEIC_KLAYOUT_TOOLS': str(HERE)})
+        (attempt / 'producer.stdout').write_text(proc.stdout)
+        (attempt / 'producer.stderr').write_text(proc.stderr)
+        result['execution'] = {'argv': argv, 'returncode': proc.returncode,
+                               'environment': {'VIBEIC_KLAYOUT_TOOLS': str(HERE)}}
+        emitted = _read(observed)
+        result['emitter_result'] = emitted
+        if proc.returncode == emitter.SKIP or emitted.get('verdict') == 'DISCLOSED_SKIP':
+            raise AdmissionRefusal('D62_GDS_FILL_NOT_MEASURED', emitted.get('reason', 'emitter did not run'))
+        if proc.returncode != emitter.PASS:
+            raise AdmissionRefusal('D62_GDS_FILL_FAILED', emitted.get('reason', 'native density target not reached'), status='FAIL')
+        above_floor = (emitter._clears_foundry_floor(emitted, cfg)
+                       if emitted.get('verdict') == 'PARTIAL' else None)
+        success = (emitted.get('verdict') == 'PASS' or (above_floor is not None
+                   and emitted.get('promoted_on_foundry_floor') == above_floor))
+        if not success:
+            raise AdmissionRefusal('D62_GDS_FILL_FAILED',
+                'emitter verdict does not satisfy its existing success semantics',
+                status='FAIL' if emitted.get('verdict') in ('FAIL', 'PARTIAL') else 'NOT_MEASURED')
+        reread = emitter.verify_only(project, str(report))
+        raw = _read(report)
+        if (reread.get('verdict') != emitted.get('verdict')
+                or raw.get('layers') != emitted.get('layers')
+                or emitted.get('runner') != 'host:' + runner.detail
+                or Path(raw.get('gds_in', '')).resolve() != paths['input_gds']
+                or Path(raw.get('gds_out', '')).resolve() != output.resolve()
+                or not isinstance(raw.get('layers'), list) or not raw['layers']
+                or not output.is_file() or output.stat().st_size == 0):
+            raise AdmissionRefusal('D62_GDS_REPORT_UNBOUND', 'fresh native report/output/runner mismatch', status='FAIL')
+        result['verify_only'] = reread
+        result['component_status'] = 'PASS'
+    except AdmissionRefusal as exc:
+        result.update(component_status='FAIL' if exc.status == 'FAIL' else 'NOT_MEASURED',
+                      reason=exc.code, detail=str(exc))
+    except (OSError, ValueError, KeyError, TypeError, launch.Refusal) as exc:
+        result.update(reason='D62_GDS_EXECUTION_INCOMPLETE', detail=str(exc))
+    # Reopen bindings even on a native negative, retaining all raw failed data.
+    try:
+        for entry in result.get('inputs', {}).values():
+            _gds_input(project, entry)
+        if result.get('manifest'):
+            _bound(project, result['manifest'])
+        if result.get('native_started') and (
+                _gds_sources() != result['operation_sources']
+                or (HERE / 'metal_fill/metal_fill.py').resolve() != Path(result['engine']['path'])
+                or _sha(Path(result['engine']['path'])) != result['engine']['sha256']
+                or _sha(Path(result['tool']['path'])) != result['tool']['sha256']
+                or launch.local_image_attestation() != result['native_launch']):
+            raise AdmissionRefusal('D62_GDS_EXECUTION_STALE', 'source/tool/launch changed during native execution')
+    except (AdmissionRefusal, OSError, ValueError, KeyError, TypeError, launch.Refusal) as exc:
+        result.update(component_status='NOT_MEASURED', reason='D62_GDS_BINDING_STALE', detail=str(exc))
+    result['outputs'] = {p.name: _record(project, p) for p in attempt.iterdir() if p.is_file()}
+    receipt = attempt / 'receipt.json'
+    _write(receipt, result)
+    result['receipt'] = _record(project, receipt)
+    result['metric_acceptance'] = accept_d62(project, context, result)
+    result['metric_acceptance_status'] = result['metric_acceptance']['status']
+    result['default_row_status'] = result['metric_acceptance_status']
+    # The existing metric consumer cannot qualify this new GDS method merely
+    # from its native component verdict; no accepted ODB/GDS handoff is issued.
+    result['completed'] = False
+    return result
+
+
 def execute(project, context):
+    if context.get('resolved_row', {}).get('profile', {}).get('id') == 'gds_only_analog':
+        return _execute_gds(project, context)
     project = Path(project).resolve()
     stamp = datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S%fZ') + '-' + uuid.uuid4().hex[:8]
     attempt = project / 'phase3/flow109/D62' / stamp

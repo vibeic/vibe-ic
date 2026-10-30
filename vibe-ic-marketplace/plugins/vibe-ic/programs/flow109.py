@@ -1228,7 +1228,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_floorplan = (row.get("id") == "D31" and profile.get("id") == "analog_die"
                         and isinstance(dispatch, Mapping)
                         and dispatch.get("adapter") == "flow109_analog_floorplan")
-    if not isinstance(dispatch, Mapping) or (profile.get("id") != "default" and not analog_floorplan):
+    analog_fill = (row.get("id") == "D62" and profile.get("id") == "gds_only_analog"
+                   and isinstance(dispatch, Mapping)
+                   and dispatch.get("adapter") == "flow109_density_fill")
+    if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
+                                             and not analog_floorplan and not analog_fill):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
