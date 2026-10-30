@@ -153,6 +153,14 @@ def _docker_exec(container: str, cmd: str, timeout: int = 600, *,
     way it always was, by `_tool_on_path` returning None BEFORE the run.
     chip/tool-AGNOSTIC.
     """
+    if container == "host":
+        # The canonical entry already runs inside its freshly attested image.
+        # Reuse the existing supervised direct-process path, never docker exec.
+        from analog_hardmacro_gds_emit import Stage
+        result = Stage("host", Path.cwd()).sh(cmd, timeout=timeout)
+        if log_path is not None:
+            log_path.write_text(result[1] + result[2])
+        return result
     if marker is None:
         return _docker_exec_raw(container, cmd, timeout)
     try:
@@ -310,7 +318,8 @@ def _klayout_run(binc: str, deck: str, gds: str, block: str, container: str,
         # already in the argv, so the watchdog can find this job's process
         # tree in the container and read its CPU. No ceiling: a DRC that is
         # still working is never cut off, and one that has stopped moving is.
-        rc, out, err = _docker_exec(container, cmd, marker=deck_c)
+        rc, out, err = _docker_exec(container, cmd, marker=deck_c,
+                                          log_path=report_host.with_suffix(".log"))
         rcs.append(rc)
         tail = (out + err)[-300:]
         if rc == 0:
@@ -623,6 +632,7 @@ def _klayout_lvs_runset_runner(deck: str, gds: str, netlist: str, block: str,
     rc, out, err = _docker_exec(
         container,
         marker=_to_container_path(container, str(db)),
+        log_path=work / "lvs.log",
         cmd=f"{shlex.quote(binc)} -b -r "
         f"{shlex.quote(_to_container_path(container, deck))} "
         f"-rd input={shlex.quote(_to_container_path(container, str(cmp_gds)))} "
@@ -1373,3 +1383,120 @@ def run_block_pv(project: Path, block: str, res: Dict[str, Any],
             "reason": ("; ".join(reasons) if not ran
                        else "native per-block PV executed"),
             "drc": drc_result, "lvs": lvs_result}
+
+
+def _d42_inputs(project):
+    """Exact candidate GDS/reference and installed declared-PDK runsets.
+
+    The immutable native image binds the runsets' installed include tree.
+    This is not a block lookup, a later stream-out dependency or an adoption.
+    """
+    from flow109_analog_floorplan import bound_file
+    from declared_pdk_is_the_pdk_used_check import declared_target
+    import analog_pdk_availability as resolver
+    project = Path(project).resolve(strict=True)
+    config_path = project / 'input/flow109/D42.json'
+    if any(p.is_symlink() for p in (config_path, *config_path.parents)):
+        raise ValueError('D42_INPUT_SYMLINK')
+    config = json.loads(config_path.read_text())
+    layout = bound_file(project, config.get('layout'))
+    logical = bound_file(project, config.get('logical_netlist'))
+    top = config.get('top')
+    if not isinstance(top, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*', top):
+        raise ValueError('D42_CANDIDATE_TOP_INVALID')
+    import analog_lvs_comparison_prep as prep
+    if (len(re.findall(r'(?im)^\s*\.subckt\s+' + re.escape(top) + r'(?=\s|$)', logical.read_text())) != 1
+            or not prep.declared_ports(logical.read_text(), top)):
+        raise ValueError('D42_LOGICAL_INTERFACE_ABSENT')
+    target, _ = declared_target(project)
+    if not isinstance(target, str) or not target.strip():
+        raise ValueError('D42_DECLARED_PDK_ABSENT')
+    facts = resolver.resolve_pdk(target, project=project)
+    if facts.get('source') != 'container_installed' or not facts.get('available'):
+        raise ValueError('D42_INSTALLED_PDK_UNAVAILABLE')
+    selected = {}
+    for key, candidates in (('drc_deck', 'drc_deck_candidates'), ('lvs_deck', 'lvs_deck_candidates')):
+        ref = config.get(key)
+        if not isinstance(ref, dict) or ref.get('path') not in facts.get(candidates, []):
+            raise ValueError('D42_DECLARED_PDK_DECK_UNBOUND: ' + key)
+        deck = Path(ref['path'])
+        if deck.is_symlink() or not deck.is_file() or _sha256(deck) != ref.get('sha256'):
+            raise ValueError('D42_DECLARED_PDK_DECK_CHANGED: ' + key)
+        selected[key] = str(deck)
+    if deck_kind(selected['drc_deck']) != 'klayout' or lvs_deck_kind(selected['lvs_deck']) != 'klayout':
+        raise ValueError('D42_PDK_DECK_METHOD_UNSUPPORTED')
+    files = [config_path, layout, logical, *map(Path, selected.values()),
+             *_auth.extra_runsets(Path(selected['drc_deck']).parent)]
+    if any(p.is_symlink() or not p.is_file() for p in files):
+        raise ValueError('D42_INPUT_ABSENT_OR_SYMLINK')
+    return dict(top=top, layout=str(layout), logical=str(logical), target=target,
+                **selected, inputs={str(p): _sha256(p) for p in files})
+
+
+def execute(project, context):
+    """D42 candidate DRC/LVS component; never whole-die pin/signoff acceptance."""
+    import uuid
+    import librelane_contract as launch
+    from flow109_admission import require_launch_admission, AdmissionRefusal
+    project = Path(project).resolve(strict=True)
+    output = project / 'reports/flow109/D42' / uuid.uuid4().hex
+    output.mkdir(parents=True)
+    record = dict(step_id='D42', context_sha256=context.get('context_sha256'),
+                  component_status='NOT_MEASURED', default_row_status='NOT_MEASURED',
+                  completed=False, native_started=False, outputs=[],
+                  flow109_acceptance='NOT_MEASURED', whole_flow_acceptance='NOT_MEASURED',
+                  qualification='NOT_CLAIMED', delivery_accepted=False)
+    try:
+        if (context.get('requested_step') != 'D42' or context.get('native_step_id') != 'flow109.D42'
+                or context.get('resolved_row', {}).get('profile', {}).get('id') != 'analog_die'):
+            raise ValueError('D42_CONTEXT_INVALID')
+        record['launch_admission'] = require_launch_admission(project, 'flow109.D42', {'flow109_context': context})
+        record['native_launch'] = launch.local_image_attestation()
+        data = _d42_inputs(project)
+        record['inputs'] = data['inputs']
+        # Native readback selects the exact top, not an arbitrary first macro.
+        tool = _tool_on_path('host', 'klayout')
+        if not tool:
+            raise ValueError('D42_KLAYOUT_UNAVAILABLE')
+        record['tool'] = {'path': tool, 'sha256': _sha256(Path(tool).resolve())}
+        script = output / 'read_subject.py'
+        identity = output / 'subject.json'
+        script.write_text('import pya,json\nl=pya.Layout();l.read(' + repr(data['layout']) +
+                          ')\nc=l.cell(' + repr(data['top']) + ')\njson.dump(dict(present=c is not None,nonempty=c is not None and not c.bbox().empty()),open(' + repr(str(identity)) + ',"w"))\n')
+        record['native_started'] = True
+        rc, out, err = _docker_exec('host', f'{shlex.quote(tool)} -b -r {shlex.quote(str(script))}',
+                                    marker=str(script), log_path=output / 'read_subject.log')
+        subject = json.loads(identity.read_text()) if identity.is_file() else {}
+        if rc or subject != {'present': True, 'nonempty': True}:
+            raise ValueError('D42_CANDIDATE_TOP_ABSENT_OR_EMPTY')
+        count, drc = _klayout_drc_runner(data['drc_deck'], data['layout'], data['top'], 'host', output / 'drc.lyrdb')
+        if not drc.get('authoritative', {}).get('graded'):
+            count = None
+        record['drc'] = dict(meta=drc, violations=count, status='NOT_MEASURED' if count is None else 'FAIL' if count else 'PASS')
+        verdict, lvs = _klayout_lvs_runset_runner(data['lvs_deck'], data['layout'], data['logical'], data['top'], 'host', output / 'lvs')
+        db = Path(lvs.get('report') or output / 'absent.lvsdb')
+        # An empty-source/vacuous comparison cannot establish pin coverage.
+        lvs_measured = (lvs.get('rc') == 0 and db.is_file() and db.stat().st_size > 0
+                        and isinstance(lvs.get('source_devices'), int) and lvs['source_devices'] > 0)
+        record['connectivity'] = dict(meta=lvs, observed_verdict=verdict,
+            status=('PASS' if verdict == 'MATCH' else 'FAIL' if verdict == 'MISMATCH' else 'NOT_MEASURED')
+                   if lvs_measured else 'NOT_MEASURED')
+        observed = {p: _sha256(p) for p in output.rglob('*') if p.is_file()}
+        if _d42_inputs(project) != data or launch.local_image_attestation() != record['native_launch']:
+            raise ValueError('D42_INPUT_OR_LAUNCH_CHANGED')
+        if any(not p.is_file() or _sha256(p) != h for p,h in observed.items()):
+            raise ValueError('D42_NATIVE_OUTPUT_CHANGED')
+        statuses = [record['drc']['status'], record['connectivity']['status']]
+        record['component_status'] = 'FAIL' if 'FAIL' in statuses else 'PASS' if statuses == ['PASS','PASS'] else 'NOT_MEASURED'
+        record['reason'] = ('Native candidate DRC/LVS component only; required-pin population, candidate parasitics, mission profile and row acceptance remain unmeasured'
+                            if record['component_status'] == 'PASS' else
+                            'Native candidate DRC/connectivity violation' if record['component_status'] == 'FAIL' else
+                            'D42_NATIVE_COMPONENT_INCOMPLETE: a clean DRC report alone or zero-device LVS does not measure required pin connectivity')
+        record['outputs'] = [{'path': str(p.relative_to(project)), 'sha256': h} for p,h in observed.items()]
+    except (ValueError, OSError, KeyError, TypeError, AdmissionRefusal, launch.Refusal) as exc:
+        # A bound earlier native violation remains blocking under a later gap.
+        if any(record.get(k, {}).get('status') == 'FAIL' for k in ('drc','connectivity')):
+            record['component_status'] = 'FAIL'
+        record['reason'] = str(exc)
+    (output / 'component.json').write_text(json.dumps(record, indent=2) + '\n')
+    return record

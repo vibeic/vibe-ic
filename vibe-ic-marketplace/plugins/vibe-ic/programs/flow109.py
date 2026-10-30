@@ -1237,8 +1237,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_extract = (row.get("id") == "D47" and profile.get("id") == "analog_die"
                       and isinstance(dispatch, Mapping)
                       and dispatch.get("adapter") == "magic_extract_spice_emit")
+    analog_pv = (row.get("id") == "D42" and profile.get("id") == "analog_die"
+                 and isinstance(dispatch, Mapping)
+                 and dispatch.get("adapter") == "analog_a6_native_pv")
     if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
-                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract):
+                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_pv):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
@@ -1267,6 +1270,10 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             invalid = (common_invalid or not analog_extract or native != "flow109.D47"
                        or dispatch.get("producer") != "magic_extract_spice_emit.py:execute native candidate extraction"
                        or dispatch.get("consumer") != "magic_extract_spice_emit.py:_d47_audit")
+        elif adapter == "analog_a6_native_pv":
+            invalid = (common_invalid or not analog_pv or native != "flow109.D42"
+                       or dispatch.get("producer") != "analog_a6_native_pv.py:execute native candidate PV"
+                       or dispatch.get("consumer") != "analog_a6_native_pv.py:_klayout_drc_runner/_klayout_lvs_runset_runner")
         elif adapter == "flow109_frontend":
             identities = {
                 "D05": ("flow109.D05", "l21_to_upf_emit.py:main",
