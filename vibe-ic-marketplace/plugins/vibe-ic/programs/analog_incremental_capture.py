@@ -631,6 +631,8 @@ def run_point(project: Path, netlist: Path, template: Path, spec_path: Path,
                 "project": str(project.resolve()), "settings": settings, "native_inputs": views,
                 "executions": [], "clock": list(clock), "incremental_decode": declaration, "decoded": {}}
     execution = run(deck, destination)
+    if isinstance(execution.get("native_init"), dict):
+        views["native_init"] = execution["native_init"]
     native_log = Path(execution["log"]).read_text(errors="replace")
     interrupted = execution.get("returncode") in (124, 130, 137, 143) or execution.get("returncode", 0) < 0
     failed = execution.get("returncode") != 0 or native_failed(native_log)
@@ -833,8 +835,14 @@ def consume_study(project: Path, name: str, entry: dict, options: dict, run, ste
         container, image = options.get("container"), options.get("image")
         cpus = min(int(options.get("cpus", 1)), int(entry.get("cpus", options.get("cpus", 1))))
         workers = min(int(options.get("workers", 1)), int(entry.get("workers", options.get("workers", 1))))
-        if not container or not image or cpus < common["threads"] or workers < 1:
+        if not image or cpus < common["threads"] or workers < 1:
             raise ValueError("actual container/image and a sufficient bounded CPU budget are required")
+        if not container:
+            import librelane_contract as launch
+            try:
+                launch.local_image_attestation(image)
+            except launch.Refusal as exc:
+                raise ValueError(str(exc)) from exc
         if common != original:
             digest = hashlib.sha256(json.dumps(common, sort_keys=True).encode()).hexdigest()[:16]
             effective = score_path.parent / ("method-settings-" + digest + ".json")
@@ -951,14 +959,26 @@ def main(argv=None):
     os.environ["VIBEIC_EDA_IMAGE"] = args.image
     def native(deck, target):
         import _container_exec
-        command = _container_exec.docker_exec_argv(args.container, "bash", "-lc", 'exec "$@"', "incremental-native",
-            "env", "-u", "GOMP_SPINCOUNT", f"OMP_NUM_THREADS={int(settings.get('threads', 4))}", f"OMP_WAIT_POLICY={wait_policy}",
-            *(["GOMP_SPINCOUNT=0"] if wait_policy == "PASSIVE" else []), "ngspice", "-b", str(deck),
-            opts=("--user", f"{os.getuid()}:{os.getgid()}", "-w", str(template.parent)))
+        native_command = ["env", "-u", "GOMP_SPINCOUNT",
+            f"OMP_NUM_THREADS={int(settings.get('threads', 4))}", f"OMP_WAIT_POLICY={wait_policy}",
+            *(["GOMP_SPINCOUNT=0"] if wait_policy == "PASSIVE" else []), "ngspice", "-b", str(deck)]
+        environment, startup, native_init = dict(os.environ), {}, None
+        if args.container:
+            command = _container_exec.docker_exec_argv(args.container, "bash", "-lc", 'exec "$@"',
+                "incremental-native", *native_command,
+                opts=("--user", f"{os.getuid()}:{os.getgid()}", "-w", str(template.parent)))
+        else:
+            import librelane_contract as launch
+            from analog_native_flow import _local_ngspice_startup
+            launch.local_image_attestation(args.image)
+            startup, native_init = _local_ngspice_startup(project, template.parent, args.image)
+            environment.update(startup)
+            command = native_command
         path = target / "ngspice.log"
         start = time.monotonic()
         with path.open("w") as stream:
-            process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT)
+            process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT,
+                                       cwd=template.parent if not args.container else None, env=environment)
             stat_text = Path(f"/proc/{process.pid}/stat").read_text()
             producer_stat = Path(f"/proc/{os.getpid()}/stat").read_text()
             producer_argv = [os.fsdecode(item) for item in Path(f"/proc/{os.getpid()}/cmdline").read_bytes().split(b"\0") if item]
@@ -969,8 +989,13 @@ def main(argv=None):
                 "started_at": datetime.now(timezone.utc).isoformat(), "log": str(path)})
             print(json.dumps({"status": "RUNNING", "pid": process.pid, "log": str(path)}), flush=True)
             code = process.wait()
+        if native_init and bound.sha(Path(native_init["path"])) != native_init["sha256"]:
+            code = code or 1
+            with path.open("a") as stream:
+                stream.write("\nNATIVE_STARTUP_CHANGED_DURING_EXECUTION\n")
         return {"returncode": code, "argv": command, "log": str(path), "log_sha256": bound.sha(path),
-                "duration_s": time.monotonic() - start}
+                "duration_s": time.monotonic() - start, "native_init": native_init,
+                "native_environment": startup}
     template = Path(settings.get("testbench", bdir / ("tb_" + args.block + ".sp")))
     if not template.is_absolute():
         template = project / template

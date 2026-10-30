@@ -267,6 +267,8 @@ def run_measurements(project: Path, netlist: Path, template: Path, bindings: dic
                     [*environment, native_binary or "ngspice", "-b", str(deck)] if environment else ["-b", str(deck)],
                     cwd=template.parent)
     report["executions"] = [execution]
+    if isinstance(execution.get("native_init"), dict):
+        report["native_inputs"]["native_init"] = execution["native_init"]
     text = sim._log_text(execution)
     values = {key.casefold(): value for key, value in sweep.native_meas_rows(text).items()}
     for match in re.finditer(r"(?m)^\s*MEAS\b(.*)$", text):

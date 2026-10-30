@@ -183,7 +183,7 @@ def _output_views(result):
 
 
 
-def _a05_local_startup(project, cwd, image):
+def _local_ngspice_startup(project, cwd, image):
     """Select ngspice's existing startup stream from the attested PDK."""
     import analog_pdk_availability as availability
     import librelane_contract as launch
@@ -253,9 +253,14 @@ class NativeCommands:
             environment.pop("VIBEIC_FLOW109_ATTEMPT", None)
             if self.image:
                 environment["VIBEIC_EDA_IMAGE"] = self.image
-            if (self.step == "A05" and program == "@ngspice" and not self.container
+            native_tool = program[1:] if program.startswith("@") else ""
+            if program == "@env":
+                native_tool = next((item for item in argv
+                                    if not re.match(r"^[A-Za-z_]\w*=", item)), "")
+            if (self.step in ("A05", "A06", "A07", None)
+                    and Path(native_tool).name == "ngspice" and not self.container
                     and os.environ.get("VIBEIC_LIBRELANE_LOCAL_ATTESTATION")):
-                startup_environment, native_init = _a05_local_startup(self.project, cwd, self.image)
+                startup_environment, native_init = _local_ngspice_startup(self.project, cwd, self.image)
                 environment.update(startup_environment)
                 if native_init:
                     self.native_inputs[native_init['path']] = native_init['sha256']
