@@ -182,14 +182,43 @@ def _output_views(result):
     return {str(path): _sha(path) for path in paths if path.is_file()}
 
 
+
+def _a05_local_startup(project, cwd, image):
+    """Select ngspice's existing startup stream from the attested PDK."""
+    import analog_pdk_availability as availability
+    import librelane_contract as launch
+    from declared_pdk_is_the_pdk_used_check import declared_target
+
+    try:
+        root = availability.local_pdks_root(image)
+    except launch.Refusal as exc:
+        raise ValueError(str(exc)) from exc
+    if root is None:
+        return {}, None
+    target, _ = declared_target(project)
+    selected = availability.resolve_pdk(target, project=project, container='')
+    if not selected.get('available') or selected.get('source') != 'container_installed':
+        return {}, None  # Project-staged/builtin models keep their existing startup.
+    init = Path(cwd) / '.spiceinit'
+    if not init.is_file():
+        init = Path(selected['pdk_root']) / 'libs.tech/ngspice/.spiceinit'
+    environment = {'PDK_ROOT': root, 'PDK': selected['matched_dir']}
+    if not init.is_file():
+        return environment, None  # An absent optional init is not a model verdict.
+    environment['SPICE_USERINIT_DIR'] = str(init.parent)
+    return environment, {'path': str(init), 'sha256': _sha(init)}
+
+
 class NativeCommands:
     """One subprocess seam: retain the tool's command, output and exit status."""
 
-    def __init__(self, project, destination, container, image=""):
+    def __init__(self, project, destination, container, image="", step=None):
         self.project = Path(project)
         self.destination = Path(destination)
         self.container = container
         self.image = image
+        self.step = step
+        self.native_inputs = {}
         self.count = 0
 
     def __call__(self, program, argv, *, cwd=None, outputs=None, input_text=None):
@@ -215,6 +244,7 @@ class NativeCommands:
                        'exec "$@"', "analog-native", *command]
         log = self.destination / f"{self.count:02d}-{Path(program).stem.lstrip('@')}.log"
         started = time.monotonic()
+        native_init, startup_environment = None, {}
         try:
             environment = dict(os.environ)
             # This native path uses tools directly. Do not make a child's
@@ -223,10 +253,19 @@ class NativeCommands:
             environment.pop("VIBEIC_FLOW109_ATTEMPT", None)
             if self.image:
                 environment["VIBEIC_EDA_IMAGE"] = self.image
+            if (self.step == "A05" and program == "@ngspice" and not self.container
+                    and os.environ.get("VIBEIC_LIBRELANE_LOCAL_ATTESTATION")):
+                startup_environment, native_init = _a05_local_startup(self.project, cwd, self.image)
+                environment.update(startup_environment)
+                if native_init:
+                    self.native_inputs[native_init['path']] = native_init['sha256']
             completed = subprocess.run(command, cwd=cwd, env=environment,
                                        capture_output=True, text=True, errors="replace",
                                        input=input_text)
             rc, stdout, stderr = completed.returncode, completed.stdout, completed.stderr
+            if native_init and _sha(native_init['path']) != native_init['sha256']:
+                rc = rc or 1
+                stderr += "\nA05_NATIVE_STARTUP_CHANGED_DURING_EXECUTION"
         except OSError as exc:
             rc, stdout, stderr = 127, "", str(exc)
         log.write_text(stdout + stderr)
@@ -237,7 +276,8 @@ class NativeCommands:
                 "stdout": stdout, "stderr": stderr, "log": str(log),
                 "log_sha256": _sha(log), "duration_s": time.monotonic() - started,
                 "outputs": {str(path): _sha(path) for path in expected if path.is_file()},
-                "missing_outputs": missing}
+                "missing_outputs": missing, "native_init": native_init,
+                "native_environment": startup_environment}
 
 
 def _views(step, project, block, options, run):
@@ -493,7 +533,7 @@ def run_window(project, args, *, features=None):
         name = block.get("name") or block.get("block")
         directory = attempt / step / name
         directory.mkdir(parents=True)
-        runner = NativeCommands(project, directory, container, image)
+        runner = NativeCommands(project, directory, container, image, step=step)
         started = time.monotonic()
         try:
             result = _dispatch(step, project, block, options, runner)
@@ -510,6 +550,7 @@ def run_window(project, args, *, features=None):
                                       "transport": transport,
                                       "driver_sha256": report["source_sha256"]}
         result["input_views"] = _input_views(project, name, step)
+        result["input_views"].update(runner.native_inputs)
         for view in (result.get("native_inputs") or {}).values():
             if isinstance(view, dict) and view.get("path") and view.get("sha256"):
                 result["input_views"][view["path"]] = view["sha256"]
