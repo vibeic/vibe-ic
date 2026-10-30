@@ -1246,8 +1246,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_pad = (row.get("id") == "D32" and profile.get("id") == "analog_die"
                   and isinstance(dispatch, Mapping)
                   and dispatch.get("adapter") == "pad_ring_gen")
+    analog_ir = (row.get("id") == "D57" and profile.get("id") == "analog_die"
+                 and isinstance(dispatch, Mapping)
+                 and dispatch.get("adapter") == "ir_drop_budget_check")
     if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
-                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_pv and not analog_antenna and not analog_pad):
+                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
@@ -1288,6 +1291,10 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             invalid = (common_invalid or not analog_pad or native != "flow109.D32"
                        or dispatch.get("producer") != "pad_ring_gen.py:execute existing pad ring"
                        or dispatch.get("consumer") != "pad_ring_check.py:main and native IO/net readback")
+        elif adapter == "ir_drop_budget_check":
+            invalid = (common_invalid or not analog_ir or native != "flow109.D57"
+                       or dispatch.get("producer") != "analog_bound_measurements.py:source-bound native voltage capture"
+                       or dispatch.get("consumer") != "ir_drop_budget_check.py:_d57_grade and evaluate")
         elif adapter == "flow109_frontend":
             identities = {
                 "D05": ("flow109.D05", "l21_to_upf_emit.py:main",
