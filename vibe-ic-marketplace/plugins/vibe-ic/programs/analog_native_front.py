@@ -292,8 +292,10 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
             args = [project, '--block', name]
             if options.get('pdk'):
                 args.extend(['--pdk', options['pdk']])
-            if options.get('container'):
-                args.extend(['--container', options['container']])
+            if options.get('container') or options.get('transport') == 'LOCAL':
+                # An empty LOCAL selection must survive the emitter's legacy
+                # named-container CLI default.
+                args.extend(['--container', options.get('container') or ''])
             failure = failed(call('analog_a3_netlist_emit.py', args), 'A05_NETLIST_PRODUCER')
             if failure:
                 return failure

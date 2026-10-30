@@ -18,6 +18,11 @@ that consume a filesystem path). A path is flagged FAIL when it is absolute
 Whitelist (canonical PDK include roots):
     /foss/pdks/
 
+A LOCAL image may instead install its declared PDK in an immutable store.
+That is not a store-wide whitelist: the existing live image attestation and
+selected-PDK resolver must bind the canonical model tree, and the exact file
+must exist there without symlink or traversal indirection.
+
 Honest-FAIL guarantees:
   * absent / non-directory project -> exit 2
   * a deck with `.include /home/me/my_models.lib` -> exit 1
@@ -199,6 +204,46 @@ def _is_whitelisted(path_tok: str, project_root: str = "") -> bool:
     return False
 
 
+
+def _local_model_root(project: Path):
+    """Bind the selected installed model tree, never the whole image store."""
+    import analog_pdk_availability as availability
+    import librelane_contract as launch
+    from declared_pdk_is_the_pdk_used_check import declared_target
+
+    if not _os.environ.get(launch.LOCAL_ATTESTATION_ENV):
+        return None, None
+    try:
+        if availability.local_pdks_root() is None:
+            return None, None
+        target, _ = declared_target(project)
+        if not target:
+            return None, 'LOCAL_PDK_TARGET_ABSENT'
+        selected = availability.resolve_pdk(target, project=project, container='')
+        if not selected.get('available') or selected.get('source') != 'container_installed':
+            return None, selected.get('reason') or 'LOCAL_INSTALLED_PDK_UNBOUND'
+        root = Path(selected['pdk_root']) / 'libs.tech' / 'ngspice'
+        if not str(root).startswith('/nix/store/'):
+            return None, None  # Existing /foss and project-copy rules suffice.
+        if root.resolve(strict=True) != root or not root.is_dir():
+            return None, 'LOCAL_PDK_MODEL_ROOT_NOT_CANONICAL'
+        return root, None
+    except (OSError, ValueError, KeyError, TypeError, StopIteration, launch.Refusal) as exc:
+        return None, str(exc)
+
+
+def _is_local_model_path(path_tok: str, root: Optional[Path]) -> bool:
+    if root is None:
+        return False
+    path = Path(path_tok)
+    try:
+        path.relative_to(root)
+        return (str(path) == path_tok and '..' not in path.parts
+                and path.is_file() and path.resolve(strict=True) == path)
+    except (OSError, ValueError):
+        return False
+
+
 def run_audit(project: Path,
               real_root: "Optional[Path]" = None, block: Optional[str] = None) -> AuditResult:
     """`real_root` names the REAL project the decks belong to when `project`
@@ -240,6 +285,7 @@ def run_audit(project: Path,
              f"project's include/lib paths have NOT been linted."),
             "no_sp_files")
 
+    local_root, local_refusal = _local_model_root(Path(project_root))
     checked = 0
     files_with_includes = 0
     bad_paths = 0
@@ -260,8 +306,9 @@ def run_audit(project: Path,
                 continue
             had_include = True
             path_tok = m.group(2)
+            local_path = _is_local_model_path(path_tok, local_root)
             if path_tok.startswith("/") and \
-                    not _is_whitelisted(path_tok, project_root):
+                    not (_is_whitelisted(path_tok, project_root) or local_path):
                 bad_paths += 1
                 result.findings.append(Finding(
                     rule="NON_WHITELISTED_ABSOLUTE_PATH",
@@ -274,6 +321,11 @@ def run_audit(project: Path,
                     file=rel,
                     line=idx,
                 ))
+            elif local_path:
+                result.findings.append(Finding(
+                    rule="LOCAL_SELECTED_PDK_ABSOLUTE_PATH", severity="INFO",
+                    message=f"{rel}: '{path_tok}' binds the attested selected PDK model tree",
+                    file=rel, line=idx))
             elif path_tok.startswith("/") and \
                     not any(path_tok.startswith(p)
                             for p in WHITELIST_PREFIXES):
@@ -297,13 +349,15 @@ def run_audit(project: Path,
         result.findings.append(Finding(
             rule="PATH_LINT_OK", severity="INFO",
             message=(f"all include/lib paths absolute-only under "
-                     f"{WHITELIST_PREFIXES[0]} or relative")))
+                     f"{WHITELIST_PREFIXES[0]}, this project, the attested selected PDK, or relative")))
     result.verdict = "PASS" if result.passed else "FAIL"
     result.summary = {
         "skipped": False,
         "files_checked": checked,
         "files_with_includes": files_with_includes,
         "non_whitelisted_absolute_paths": bad_paths,
+        "local_pdk_model_root": str(local_root) if local_root else None,
+        "local_pdk_binding_refusal": local_refusal,
         "pass": result.passed,
     }
     # `examined` is the count of decks READ AND PUT THROUGH THE RULE, not the

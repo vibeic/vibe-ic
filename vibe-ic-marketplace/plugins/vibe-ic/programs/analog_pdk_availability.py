@@ -621,7 +621,7 @@ def resolve_pdk(target: Optional[str], project=None,
 
     # ── rung 2: container-installed PDK family ──────────────────────────────
     local_root = None
-    if lister is None and container is None and pdks_root == DEFAULT_PDKS_ROOT:
+    if lister is None and container in (None, "") and pdks_root == DEFAULT_PDKS_ROOT:
         try:
             local_root = local_pdks_root()
         except (OSError, ValueError, KeyError, TypeError, StopIteration) as exc:
