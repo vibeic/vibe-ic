@@ -742,6 +742,104 @@ def _d09_requirement_trace(project, body, spec, l9, interface_match, bound):
              ("L9_INTEGRATION_SPEC", "integration.external_interface"): [interface],
              ("L9_INTEGRATION_SPEC", "integration.architecture"): [architecture],
              ("L9_INTEGRATION_SPEC", "integration.build_declaration"): [build]}
+    def contract_relation(leaf, node, scope):
+        """Map a source relation to this exact implementation, not every option.
+
+        The caller has already matched the complete emitted RTL and declaration.
+        Unknown clauses/tokens remain owed. Mapping records never prove the
+        algebra, all parameter values, or the later verifier's result.
+        """
+        tokens = leaf["expected_tokens"]
+        requirement = str(leaf.get("requirement", ""))
+        if re.search(r"\b(only|exclusively|must use|shall use)\b", requirement, re.I):
+            return None
+        def units(value):
+            if isinstance(value, dict):
+                for key, item in value.items():
+                    if key in ("content", "evidence", "type") and isinstance(item, str):
+                        yield from re.split(r"(?m)^#{1,6} ", item)
+                    elif isinstance(item, (dict, list)):
+                        yield from units(item)
+            elif isinstance(value, list):
+                for item in value:
+                    yield from units(item)
+            elif isinstance(value, str):
+                yield from re.split(r"(?m)^#{1,6} ", value)
+        contracts = list(units(node))
+        contains = lambda text: all(track.phrase_present(t, text) for t in tokens)
+        def result(kind, selected, contract, *, verification=False):
+            answer = {"relation": kind, "selected": selected,
+                "source_contract_sha256": hashlib.sha256(contract.encode()).hexdigest(),
+                "source_address": {"layer": leaf["layer"], "field_path": leaf["field_path"]}}
+            if verification:
+                answer["later_verification"] = {"steps": {k: owners[k] for k in ("D13", "D14")},
+                    "status": "NOT_MEASURED", "scope": "mapping is not functional/algebraic/all-width proof"}
+            return answer
+        choices = re.search(r"\b(?:allow\w*|permit\w*|either|choos\w*|may)\b|可選|任選|自由", requirement, re.I)
+        # The existing declaration table separates allowed values from the
+        # actual selected build. Compare membership in the same named row.
+        if scope == ("L9_INTEGRATION_SPEC", "integration.build_declaration") and (choices or re.search(r"\bprimary\b.*\bor\b.*\bsecondary\b", requirement, re.I)):
+            for contract in contracts:
+                for line in contract.splitlines():
+                    for field in ("bit_order", "integer_encoding", "size_param"):
+                        if (re.match(r"\s*\|\s*`?" + field + r"`?\s*\|", line)
+                                and field in declaration and contains(line)
+                                and track.phrase_present(str(declaration[field]), line)):
+                            return result("DECLARED_CHOICE_MEMBERSHIP", {field: declaration[field]}, line)
+        if scope == ("L2_FRS", "frs_sections"):
+            for contract in contracts:
+                if not contains(contract):
+                    continue
+                # An explicit bit-order choice, not a demand for the opposite
+                # order. Both the source and reviewed clause must allow choice.
+                if (choices and re.search(r"可選|may choose|either", contract, re.I)
+                        and all(t in ("LSB-first", "MSB-first", "LSB_first", "MSB_first", "L7") for t in tokens)
+                        and track.phrase_present(declaration["bit_order"].replace("_", "-"), contract)):
+                    return result("DECLARED_CHOICE_MEMBERSHIP", {"bit_order": declaration["bit_order"]}, contract, verification=True)
+                # The modulo datapath and interpretation declaration are the
+                # implementation seam. Signed/unsigned equivalence is left to
+                # the real verifier, never asserted as a proof here.
+                if (set(tokens) <= {"signed_2c", "unsigned", "modulo"}
+                        and "modulo" in tokens and spec["operator"] == "*"
+                        and re.search(r"bit.pattern|位元", contract, re.I)
+                        and declaration["integer_encoding"] in ("signed_2c", "unsigned")):
+                    return result("MODULO_INTERPRETATION_IMPLEMENTATION", {
+                        "operator": "*", "width_parameter": spec["size_param"],
+                        "integer_encoding": declaration["integer_encoding"]}, contract, verification=True)
+                # Parameter domain is mapped to the emitted parameter/guard,
+                # not to simultaneous builds of every example width.
+                parameters = l9.get("parameters", [])
+                for param in parameters:
+                    domain = str(param.get("type", ""))
+                    minimum = spec.get("size_min")
+                    if (param.get("name") == spec["size_param"] and minimum is not None
+                            and set(tokens) <= {spec["size_param"], str(spec["size_default"]), str(minimum), *re.findall(r"\d+", domain)}
+                            and spec["size_param"] in tokens and re.search(r">=|≥", domain)
+                            and re.search(r"every|any|任意", requirement, re.I)):
+                        return result("PARAMETERIZED_IMPLEMENTATION_DOMAIN", parameter, domain, verification=True)
+        if scope == ("L9_INTEGRATION_SPEC", "integration.architecture"):
+            rtl = emit_rtl(spec)
+            # The supported generator's exact source population is one module;
+            # these conditions are never inferred from an arbitrary RTL prefix.
+            module_names = re.findall(r"(?m)^module\s+(\w+)", rtl)
+            if module_names != [spec["top"]]:
+                return None
+            vocabulary = {"single", "module", "sub-module", "FSM", "SV", "V", "port", "input", "stub", "flop", "Top module"}
+            if not set(tokens) <= vocabulary:
+                return None
+            for contract in contracts:
+                if not contains(contract):
+                    continue
+                if (re.search(r"if .*submodule|if .*sub-module|假如.*sub-module", requirement, re.I)
+                        and re.search(r"假如.*sub-module|if .*sub-module", contract, re.I)):
+                    return result("CONDITIONAL_NONUSE", {"module_names": module_names,
+                        "reason": "exact single-module generator has no submodule instances"}, contract)
+                if (choices and re.search(r"可選|may choose|permitted", contract, re.I)
+                        and (re.search(r"單一.*module|single.*module", contract, re.I)
+                             or (set(tokens) <= {"SV", "V"} and re.search(r"SV.*V", contract)))):
+                    return result("PERMITTED_IMPLEMENTATION_SELECTION", {"module_names": module_names, "language": "V"}, contract)
+        return None
+
     def address(leaf):
         path = str(leaf.get("field_path") or "").strip('/').replace('/', '.')
         path = '.'.join(part for part in path.split('.') if not part.isdigit())
@@ -837,14 +935,16 @@ def _d09_requirement_trace(project, body, spec, l9, interface_match, bound):
                         track.phrase_present(token, json.dumps(node, ensure_ascii=False))
                         and track.phrase_present(token, json.dumps(fact, ensure_ascii=False))
                         for token in tokens)), None)
-                    if witness is None:
+                    relation = (contract_relation(leaf, node, selected)
+                                if witness is None else None)
+                    if witness is None and relation is None:
                         complete = False
                         target.update(mapping_status="UNMAPPED_RTL_REQUIREMENT",
                             reason="not established by selected/derived implementation evidence",
                             unestablished_tokens=[token for token in tokens if not any(
                                 track.phrase_present(token, json.dumps(fact, ensure_ascii=False)) for fact in candidates)])
                     else:
-                        target.update(mapping_status="MAPPED_TO_EXACT_GENERATOR", generator_contract=witness,
+                        target.update(mapping_status="MAPPED_TO_EXACT_GENERATOR", generator_contract=witness or relation,
                                       rtl={"path": "phase2/stage1/rtl/" + spec["top"] + ".v", "top": spec["top"]})
             record["targets"].append(target)
         if own:
