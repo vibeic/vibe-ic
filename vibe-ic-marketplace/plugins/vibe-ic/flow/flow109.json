@@ -15610,12 +15610,39 @@
         {
           "id": "analog_die",
           "select_when": "analog_physical and not digital_physical",
-          "provider": "librelane",
-          "tools": "Magic.RCX",
+          "provider": "other",
+          "tools": "Magic final-GDS extraction + shipped floating-node reduction; C_ONLY disclosed",
           "native_steps": [
-            "Magic.RCX"
+            "flow109.D69"
           ],
-          "execution_status": "UNIMPLEMENTED"
+          "execution_status": "NATIVE_COMPONENT_ONLY_NOT_109_ACCEPTED",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "flow109_final_extract",
+            "native_step_id": "flow109.D69",
+            "producer": "flow109_final_extract.py:execute",
+            "consumer": "flow109_final_extract.py:validate_final_parasitics",
+            "engine_families": [
+              "magic"
+            ],
+            "engine_executables": {
+              "magic": "magic"
+            },
+            "engine_steps": {
+              "magic": [
+                "flow109.D69"
+              ]
+            },
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "component_scope": "native_analog_final_gds_capacitance_component",
+            "flow109_metrics_status": "UNIMPLEMENTED",
+            "native_required_outputs": [
+              "current GDS fill producer and original launch/input bindings",
+              "adopted logical net census and declared native model/corners",
+              "per-corner raw/floating-reduced SPEF and original extraction launch"
+            ]
+          }
         },
         {
           "id": "assembly",

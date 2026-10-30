@@ -1161,8 +1161,8 @@ def test_analog_profile_cannot_be_forced_into_digital_default():
     features = profile("Analog hard-IP")
     plan = flow109.resolve_plan(features)
     assert flow109.resolve_step(plan, "D69")["selected_profile"] == "analog_die"
-    assert flow109.resolve_step(plan, "D69")["profile"]["tools"] == "Magic.RCX"
-    assert flow109.resolve_step(plan, "D69")["profile"]["native_steps"] == ["Magic.RCX"]
+    assert flow109.resolve_step(plan, "D69")["profile"]["dispatch"]["adapter"] == "flow109_final_extract"
+    assert flow109.resolve_step(plan, "D69")["profile"]["native_steps"] == ["flow109.D69"]
     with pytest.raises(flow109.Flow109Error, match="PROFILE_INAPPLICABLE"):
         flow109.resolve_plan(features, {"D69": "default"})
 

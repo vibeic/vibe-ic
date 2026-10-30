@@ -1237,6 +1237,9 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_extract = (row.get("id") == "D47" and profile.get("id") == "analog_die"
                       and isinstance(dispatch, Mapping)
                       and dispatch.get("adapter") == "magic_extract_spice_emit")
+    analog_final_extract = (row.get("id") == "D69" and profile.get("id") == "analog_die"
+                            and isinstance(dispatch, Mapping)
+                            and dispatch.get("adapter") == "flow109_final_extract")
     analog_pv = (row.get("id") == "D42" and profile.get("id") == "analog_die"
                  and isinstance(dispatch, Mapping)
                  and dispatch.get("adapter") == "analog_a6_native_pv")
@@ -1256,7 +1259,7 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
                  and isinstance(dispatch, Mapping)
                  and dispatch.get("adapter") == "si_crosstalk_check")
     if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
-                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir and not analog_power and not analog_si):
+                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_final_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir and not analog_power and not analog_si):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
@@ -1285,6 +1288,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             invalid = (common_invalid or not analog_extract or native != "flow109.D47"
                        or dispatch.get("producer") != "magic_extract_spice_emit.py:execute native candidate extraction"
                        or dispatch.get("consumer") != "magic_extract_spice_emit.py:_d47_audit")
+        elif adapter == "flow109_final_extract" and analog_final_extract:
+            invalid = (common_invalid or native != "flow109.D69"
+                       or dispatch.get("producer") != "flow109_final_extract.py:execute"
+                       or dispatch.get("consumer") != "flow109_final_extract.py:validate_final_parasitics"
+                       or dispatch.get("component_scope") != "native_analog_final_gds_capacitance_component")
         elif adapter == "analog_a6_native_pv":
             invalid = (common_invalid or not analog_pv or native != "flow109.D42"
                        or dispatch.get("producer") != "analog_a6_native_pv.py:execute native candidate PV"
