@@ -1,0 +1,179 @@
+{
+  "checks": {
+    "analog_sensitive_route_constraints": "WITHIN_DECLARED_BOUNDS",
+    "analog_top_pad_core_connectivity_errors": 2,
+    "klayout_drc_errors": 4,
+    "klayout_maximal_drc_errors": 0,
+    "lvs": "MISMATCH_OR_NOT_MEASURED",
+    "magic_drc_errors": 18
+  },
+  "component_status": "FAIL",
+  "core_embedded_unchanged": true,
+  "core_input_sha256": "7545a958595fd7a2b21ccdb34ccea530ea7b72d085b3f47279dbabcd600b0cde",
+  "core_performance": "REUSED_NOT_RERUN",
+  "drc": {
+    "klayout": {
+      "categories": 564,
+      "readable": true,
+      "violations": 4
+    },
+    "klayout_maximal": {
+      "categories": 272,
+      "readable": true,
+      "violations": 0
+    },
+    "magic_diagnostic_not_acceptance": {
+      "engine": "Magic.DRC",
+      "errors": 18,
+      "style": "drc(full)"
+    }
+  },
+  "expected_instances": [
+    {
+      "cell": "ldo",
+      "x": 100.0,
+      "y": 250.0
+    },
+    {
+      "cell": "sg13g2_IOPadAnalog",
+      "x": 100.0,
+      "y": 0.0
+    },
+    {
+      "cell": "sg13g2_IOPadIOVdd",
+      "x": 180.0,
+      "y": 0.0
+    },
+    {
+      "cell": "sg13g2_IOPadIOVss",
+      "x": 260.0,
+      "y": 0.0
+    },
+    {
+      "cell": "sg13g2_IOPadVdd",
+      "x": 420.0,
+      "y": 0.0
+    },
+    {
+      "cell": "sg13g2_IOPadVss",
+      "x": 340.0,
+      "y": 0.0
+    }
+  ],
+  "expected_ports": [
+    "VREF",
+    "IOVDD",
+    "IOVSS",
+    "VSS",
+    "VOUT"
+  ],
+  "extracted_ports": [
+    "VREF",
+    "VSS",
+    "VOUT"
+  ],
+  "instances": [
+    {
+      "cell": "ldo",
+      "x": 100.0,
+      "y": 250.0
+    },
+    {
+      "cell": "sg13g2_IOPadAnalog",
+      "x": 100.0,
+      "y": 0.0
+    },
+    {
+      "cell": "sg13g2_IOPadIOVdd",
+      "x": 180.0,
+      "y": 0.0
+    },
+    {
+      "cell": "sg13g2_IOPadIOVss",
+      "x": 260.0,
+      "y": 0.0
+    },
+    {
+      "cell": "sg13g2_IOPadVdd",
+      "x": 420.0,
+      "y": 0.0
+    },
+    {
+      "cell": "sg13g2_IOPadVss",
+      "x": 340.0,
+      "y": 0.0
+    }
+  ],
+  "outputs": {
+    "klayout_drc.lyrdb": {
+      "bytes": 114734,
+      "sha256": "0468e9c17fef147d73d15e10648d5dba732548eba84bdd1900417a2f22cf31f9"
+    },
+    "klayout_drc_maximal.lyrdb": {
+      "bytes": 46869,
+      "sha256": "23784f496c36f7a2d97fabd26f504f1d73b422dbaf8089dd74daef8d49d2bc6b"
+    },
+    "ldo_ic_top.cdl": {
+      "bytes": 517,
+      "sha256": "ea655faef1e0130ab87a098cb6a56099a813978858b81d606d49601f0a5ba715"
+    },
+    "ldo_ic_top.extracted.spice": {
+      "bytes": 38449,
+      "sha256": "f7ed88f7b78f15d2baf724a08dd88f4cde0acdaba2b5c0f5e218764a1dc4828a"
+    },
+    "ldo_ic_top.gds": {
+      "bytes": 20182020,
+      "sha256": "7b4a88fa557e4322b9a5401e5a2adf87fcc602c1011f5e20b3deb64e17534411"
+    },
+    "ldo_ic_top.lef": {
+      "bytes": 904,
+      "sha256": "42365529b80199c5f1fafbd0b596d4a0f5db08153e22d6bba5c9dd5962957743"
+    },
+    "ldo_ic_top.mag": {
+      "bytes": 3221,
+      "sha256": "d22989c286100b3b3b9ff6f921390ae9533a302342c6c75267c543a0294573ac"
+    },
+    "magic_drc.json": {
+      "bytes": 60,
+      "sha256": "7973ed4ee1396ce2e26901f3be4c1324dae7881750be5ed59c7f146a1cfa427a"
+    },
+    "netgen_lvs.log": {
+      "bytes": 105465,
+      "sha256": "ef7970929283c0185419641424d8940a7ece8d93413ec063064a82453deed8e7"
+    }
+  },
+  "route_measurements": [
+    {
+      "length_um": 250.14999999999998,
+      "max_length_um": 400.0,
+      "net": "IOVDD",
+      "pass": true,
+      "width_um": 1.64
+    },
+    {
+      "length_um": 357.71000000000004,
+      "max_length_um": 700.0,
+      "net": "VSS",
+      "pass": true,
+      "width_um": 2.0
+    },
+    {
+      "length_um": 140.84000000000003,
+      "max_length_um": 300.0,
+      "net": "VREF",
+      "pass": true,
+      "width_um": 0.6
+    },
+    {
+      "length_um": 349.1,
+      "max_length_um": 400.0,
+      "net": "VOUT",
+      "pass": true,
+      "width_um": 0.8
+    }
+  ],
+  "schema": "vibeic.flow109.a18-native-evidence.v1",
+  "scope": "standalone LDO IC test variant; A18 component only",
+  "step_id": "A18",
+  "whole_ic_acceptance": "NOT_MEASURED"
+}
