@@ -602,12 +602,16 @@ def candidate_trees_from_run(run: Path, fs: Fs, cap: int = 400
     to the first directory carrying a FILE-based declared source; failing that
     it takes the content-addressed install root the path itself names. A
     library under neither yields no tree — better than naming the wrong one.
+
+    Exclude owned plugin source logs before applying the real-log budget.
     """
     libs: List[str] = []
     scanned = 0
-    for log in sorted(run.rglob("*.log"))[:cap]:
-        if "/plugin_work/" in str(log) or "/plugin_" in str(log):
-            continue                     # the plugin's own tree is not the run
+    runtime_sources = run / ".vibeic" / "runtime-program-trees"
+    logs = (log for log in run.rglob("*.log")
+            if not log.is_relative_to(runtime_sources)
+            and "/plugin_work/" not in str(log) and "/plugin_" not in str(log))
+    for log in sorted(logs)[:cap]:
         try:
             text = log.read_text(errors="replace")
         except OSError:

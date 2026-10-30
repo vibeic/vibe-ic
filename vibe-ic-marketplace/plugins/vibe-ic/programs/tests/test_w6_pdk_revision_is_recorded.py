@@ -254,6 +254,100 @@ def test_a_run_that_loaded_no_library_says_so_rather_than_going_silent(tmp_path)
         "file and a recorded absence are different states")
 
 
+_RUNTIME_CALIBRATION = (
+    ".vibeic/runtime-program-trees/" + "e" * 64 + "/plugin/programs/calibration"
+)
+
+
+def _log_library(run, relative, tree):
+    log = run / relative
+    log.parent.mkdir(parents=True, exist_ok=True)
+    lib = (tree / "libs.ref/cellsA/lib/cellsA__tt.lib").resolve()
+    log.write_text(f"reading liberty {lib}\n")
+    return log
+
+
+def test_retained_calibration_log_is_not_current_run_evidence(log_safe_tmp):
+    calibration = _hostpaths.require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "calibration")
+    examples = [log for log in sorted(calibration.glob("*.log"))
+                if any(prr._install_root(lib)
+                       for lib in prr._ABS_LIB_RE.findall(log.read_text()))]
+    assert examples, "the source calibration corpus supplies no install-path log"
+    run = log_safe_tmp / "run"
+    copied = run / _RUNTIME_CALIBRATION / examples[0].name
+    copied.parent.mkdir(parents=True)
+    shutil.copyfile(examples[0], copied)
+    trees, scanned = prr.candidate_trees_from_run(run, prr.Fs(None))
+    assert (trees, scanned) == ([], 0), (trees, scanned)
+
+
+def test_cached_revision_cannot_compete_with_actual_run_library(log_safe_tmp):
+    real = _fix.synth_pdk_tree(log_safe_tmp / "actual_pdks", _REV_A)
+    cached = _fix.synth_pdk_tree(log_safe_tmp / "cached_pdks", _REV_B)
+    run = log_safe_tmp / "run"
+    _log_library(run, "reports/native.log", real)
+    _log_library(run, _RUNTIME_CALIBRATION + "/control.log", cached)
+    output = log_safe_tmp / "record.json"
+    assert prr.main(["--from-run", str(run), "--json", str(output)]) == 0
+    record = json.loads(output.read_text())
+    assert [row["resolved_tree"] for row in record["trees"]] == [str(real.resolve())]
+    assert record["revision"] == f"{prr.TREE_COMPONENT}:{_REV_A}"
+
+
+def test_cached_revision_cannot_fill_missing_real_evidence(log_safe_tmp):
+    cached = _fix.synth_pdk_tree(log_safe_tmp / "cached_pdks", _REV_B)
+    run = log_safe_tmp / "run"
+    _log_library(run, _RUNTIME_CALIBRATION + "/control.log", cached)
+    output = log_safe_tmp / "record.json"
+    assert prr.main(["--from-run", str(run), "--json", str(output)]) == 2
+    record = json.loads(output.read_text())
+    assert record["resolved"] is False and record["revision"] is None
+    assert prr.record_refusal(record) == prr.REFUSAL_NOT_RECORDED
+
+
+def test_actual_conflicting_tree_is_not_hidden_by_cached_revision(log_safe_tmp):
+    real = _fix.synth_pdk_tree(log_safe_tmp / "actual_pdks", _REV_A)
+    (real / ".config").mkdir()
+    (real / ".config/nodeinfo.json").write_text(
+        json.dumps({"commit": {"upstream_pdk": _REV_B}}))
+    cached = _fix.synth_pdk_tree(log_safe_tmp / "cached_pdks", _REV_B)
+    run = log_safe_tmp / "run"
+    _log_library(run, "reports/native.log", real)
+    _log_library(run, _RUNTIME_CALIBRATION + "/control.log", cached)
+    trees, _ = prr.candidate_trees_from_run(run, prr.Fs(None))
+    assert trees == [str(real.resolve())], trees
+    record = prr.build_record([prr.resolve_tree(prr.Fs(None), tree) for tree in trees],
+                              "host", "run tool logs")
+    assert record["resolved"] is False
+    assert "AMBIGUOUS" in record["trees"][0]["reason"]
+    assert prr.record_refusal(record) == prr.REFUSAL_NOT_RECORDED
+
+
+@pytest.mark.parametrize("cache", [_RUNTIME_CALIBRATION, "plugin_work/logs",
+                                  "plugin_copy/calibration"])
+def test_excluded_source_logs_do_not_spend_real_log_budget(log_safe_tmp, cache):
+    real = _fix.synth_pdk_tree(log_safe_tmp / "actual_pdks", _REV_A)
+    cached = _fix.synth_pdk_tree(log_safe_tmp / "cached_pdks", _REV_B)
+    run = log_safe_tmp / "run"
+    for number in range(3):
+        _log_library(run, f"{cache}/{number}.log", cached)
+    _log_library(run, "reports/native.log", real)
+    trees, scanned = prr.candidate_trees_from_run(run, prr.Fs(None), cap=1)
+    assert (trees, scanned) == ([str(real.resolve())], 1), (trees, scanned)
+
+
+@pytest.mark.parametrize("relative", [
+    "reports/runtime-program-trees/native.log",
+    ".vibeic/runtime-program-trees-audit/native.log"])
+def test_cache_words_outside_owned_source_root_remain_real_logs(log_safe_tmp, relative):
+    real = _fix.synth_pdk_tree(log_safe_tmp / "actual_pdks", _REV_A)
+    run = log_safe_tmp / "run"
+    _log_library(run, relative, real)
+    trees, scanned = prr.candidate_trees_from_run(run, prr.Fs(None))
+    assert (trees, scanned) == ([str(real.resolve())], 1), (trees, scanned)
+
+
 # ---------------------------------------------------------------------------
 # THE GATE. BLOCKING, at publish. The control pair.
 # ---------------------------------------------------------------------------
