@@ -17,6 +17,7 @@ import test_ai_first_route_handoff as fixture
 import _runtime_pair_fixture as runtime
 import emit_attestation as ea
 import _path_layout as pl
+from _hostpaths import require_repo
 PRODUCTION_RUN = bd._RunnerBudget.run
 
 @pytest.fixture(autouse=True)
@@ -80,6 +81,261 @@ def _ready_backup(tmp_path, monkeypatch, prompt=None):
 
 frozen = SimpleNamespace(issue=_issue, resume=_resume)
 prior = SimpleNamespace(ready_backup=_ready_backup)
+
+
+@pytest.mark.parametrize("prompt,nature", [
+    pytest.param(
+        "Implement a Verilog module that reproduces the truth table of a small logic chip. "
+        "All signals are single bits.\nmodule CoreBlock(input x, output y);\n",
+        "spec_generation", id="implement-module"),
+    pytest.param(
+        "Write a SystemVerilog module that models an integrated circuit.",
+        "spec_generation", id="write-module"),
+    pytest.param(
+        "Complete the following partial RTL module modeling a chip.",
+        "completion", id="complete-module"),
+    pytest.param(
+        "Modify this module to emulate the behavior of a logic chip.",
+        "functional_modification", id="modify-module"),
+    pytest.param(
+        "Fix the bug in this Verilog module that models a die.",
+        "debug", id="fix-module"),
+    pytest.param(
+        "Write RTL that models an integrated circuit.",
+        "spec_generation", id="write-rtl"),
+    pytest.param(
+        "Implement the truth table of a small chip as a Verilog module.",
+        "spec_generation", id="implement-as-module"),
+    pytest.param(
+        "I need a synthesizable module that models a chip.",
+        "spec_generation", id="need-module"),
+    pytest.param(
+        "Implement a Verilog module with this interface.\n"
+        "module CoreBlock(input x, output chip);\n",
+        "spec_generation", id="ansi-port-chip"),
+    pytest.param(
+        "Modify this Verilog module to invert its output.\n"
+        "module CoreBlock(x, chip);\ninput x;\noutput chip;\n"
+        "assign chip = x;\nendmodule\n",
+        "functional_modification", id="nonansi-port-chip"),
+    pytest.param(
+        "The ReferenceUnit device is a chip with several logic gates. "
+        "Create a Verilog module with the same functionality as the ReferenceUnit device.\n"
+        "module CoreBlock(input a, output y);\n",
+        "spec_generation", id="existing-device-functionality"),
+    pytest.param(
+        "A family of small integrated circuits contains a few gates each. "
+        "The ReferencePart is a chip with several gates. "
+        "Create a module in Verilog with the same functionality as the ReferencePart chip.",
+        "spec_generation", id="existing-chip-functionality"),
+    pytest.param(
+        "The 93 device is a chip with several OR gates. "
+        "Create a module in Verilog with the same functionality as the 93 device. "
+        "It has several inputs and two outputs.",
+        "spec_generation", id="numeric-device-background"),
+    pytest.param(
+        "The Q7 device is a chip with AND gates and OR gates. "
+        "Create a Verilog module with the same functionality as the Q7 device. "
+        "It has several inputs.",
+        "spec_generation", id="declarative-input-background"),
+])
+def test_module_requests_do_not_inherit_described_chip_family(
+        tmp_path, monkeypatch, prompt, nature):
+    dataset, run, task, answer, calls = frozen.issue(
+        tmp_path, monkeypatch, prompt)
+    answer["disposition"] = "OVERRIDE"
+    answer["ai_nature"] = nature
+    answer["prompt_evidence"] = [{
+        "excerpt": prompt, "supports": f"The visible input requests {nature}.",
+    }]
+    answer["semantic_decision"] = {
+        "nature": nature, "delivery_target": "rtl",
+        "semantic_payload_sha256": task["semantic_payload_sha256"],
+    }
+    fixture._write_answer(task, answer)
+    decision, reasons = bd._validate_ai_route(task, run)
+    record("module-delivery", {
+        "prompt": prompt, "requirements": task["prompt_delivery_requirements"],
+        "decision": decision, "reasons": reasons,
+    })
+    assert decision is not None, reasons
+    assert decision["delivery_route"] == "ip"
+    assert decision["delivery_target"] == "rtl"
+    assert frozen.resume(dataset, run) == 2
+    assert calls
+    assert {argv[argv.index("--route") + 1] for argv in calls} == {"ip"}
+
+
+def test_module_delivery_reentry_consumes_checked_in_flow_registry(
+        tmp_path, monkeypatch):
+    flow = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "flow",
+                        "phase1_phase2_phase3.yaml")
+    monkeypatch.setattr(tnr, "_FLOW_YAML", flow)
+    dataset, run, task, calls = prior.ready_backup(
+        tmp_path, monkeypatch,
+        prompt="Implement a Verilog module that models a logic chip.")
+    assert frozen.resume(dataset, run) == 2
+    assert len(calls) == 1
+    argv = calls[0]
+    exit_step = argv[argv.index("--exit-step") + 1]
+    record("module-reentry", {
+        "requirements": task["prompt_delivery_requirements"], "argv": argv,
+        "flow_sha256": hashlib.sha256(flow.read_bytes()).hexdigest(),
+        "flow_steps": tnr.flow_step_ids(flow),
+    })
+    assert argv[argv.index("--route") + 1] == "ip"
+    assert exit_step == "2"
+    assert exit_step in tnr.flow_step_ids(flow)
+    assert "--skip-phase3" in argv
+
+
+@pytest.mark.parametrize("prompt,minimum", [
+    pytest.param("The Verilog module describes a chip.", None,
+                 id="module-description"),
+    pytest.param("Design a complete IC. Implement its RTL module.", None,
+                 id="explicit-ic"),
+    pytest.param("Need a complete chip. Implement its internal RTL module.", None,
+                 id="need-complete-chip"),
+    pytest.param("Output a complete chip. Include its RTL module.", None,
+                 id="output-complete-chip"),
+    pytest.param("Write a module for a chip. Deliver a complete chip.", None,
+                 id="explicit-chip-after-module"),
+    pytest.param("Implement a module for a logic chip and deliver GDSII.", "gds",
+                 id="gds"),
+    pytest.param("Write the module for a chip for tapeout.", "shippable_gds",
+                 id="tapeout"),
+    pytest.param("Complete a module for the chip's shuttle run.", None,
+                 id="shuttle"),
+])
+def test_module_words_preserve_physical_delivery_requirements(prompt, minimum):
+    requirements = tnr.prompt_delivery_requirements(prompt)
+    resolution = tnr.resolve_prompt_delivery_target(requirements, "rtl")
+    record("physical-with-module", {
+        "prompt": prompt, "requirements": requirements, "resolution": resolution,
+    })
+    assert requirements["route_family"] == "DIE"
+    assert requirements["minimum_target"] == minimum
+    assert resolution["ok"] is (minimum is None)
+
+
+@pytest.mark.parametrize("prompt", [
+    "Deliver the final chip. Implement its RTL module.",
+    "Implement a chip. Write a Verilog module for its controller.",
+    "Build a silicon chip. Write RTL for its controller.",
+    "Deliver the final chip and implement its RTL module.",
+    "Build a silicon chip with its controller as a Verilog module.",
+    "Make a chip. Write its RTL module.",
+    "Develop the final IC. Implement its RTL module.",
+    "Write RTL and fabricate the chip.",
+    "Write a module for a chip and fabricate it.",
+    "Implement RTL that models a chip, then manufacture it.",
+    "Write a module for a chip. Fabricate it.",
+    "Implement RTL that models a chip. Manufacture it.",
+    "Write a module for a chip. It must be fabricated.",
+    "Implement RTL that models a chip. It shall be manufactured.",
+    "Write a module for a chip and its companion. They must be fabricated.",
+])
+def test_explicit_chip_object_survives_module_request(prompt):
+    requirements = tnr.prompt_delivery_requirements(prompt)
+    resolution = tnr.resolve_prompt_delivery_target(requirements, "rtl")
+    route = tnr.delivery_route_for_target(
+        resolution["target"], resolution["route_family"])
+    record("chip-object-with-module", {
+        "prompt": prompt, "requirements": requirements,
+        "resolution": resolution, "route": route,
+    })
+    assert route == "ic"
+    assert requirements["route_family"] == "DIE"
+    assert not tnr.resolve_prompt_delivery_target(requirements, "ip_hardmacro")["ok"]
+
+
+@pytest.mark.parametrize("prompt", [
+    pytest.param("Write a module for a chip. You must fabricate it.", id="second-person-obligation"),
+    pytest.param("Write a module for a chip. It needs to be fabricated.", id="needs-passive"),
+    pytest.param("Write a module for a chip. It is to be fabricated.", id="is-to-passive"),
+    pytest.param("Write a module for a chip. We require you to fabricate it.", id="indirect-obligation"),
+    pytest.param("Write a module for a chip. Please fabricate this.", id="demonstrative-object"),
+    pytest.param("Write a module for a chip. The latter must be fabricated.", id="latter-reference"),
+    pytest.param("Write a module for a chip. Fabricate the device.", id="device-fabrication"),
+    pytest.param("Implement RTL that models a chip. Manufacture the device.", id="device-manufacturing"),
+    pytest.param("Write a module for a chip. Fabrication is required.", id="fabrication-context"),
+    pytest.param("Write a module for a chip. Use the specified manufacturing process.", id="manufacturing-context"),
+    pytest.param("Write a module for a chip. Send the device to the foundry.", id="foundry-context"),
+    pytest.param("Write a module for a chip. Produce the device on a wafer.", id="wafer-context"),
+    pytest.param("Write a module for a chip. We will process it using the selected technology.", id="unknown-it-clause"),
+    pytest.param("Write a module for a chip. They are the final devices.", id="unknown-they-clause"),
+    pytest.param("Write a module for a chip. Our team will deliver them to the package vendor.", id="unknown-them-clause"),
+    pytest.param("Write a module for a chip. It has 10 inputs and 2 outputs and is the final deliverable.",
+                 id="io-with-extra-obligation"),
+])
+def test_unresolved_module_reference_preserves_chip_family(prompt):
+    requirements = tnr.prompt_delivery_requirements(prompt)
+    resolution = tnr.resolve_prompt_delivery_target(requirements, "rtl")
+    route = tnr.delivery_route_for_target(
+        resolution["target"], resolution["route_family"])
+    record("unresolved-module-reference", {
+        "prompt": prompt, "requirements": requirements,
+        "resolution": resolution, "route": route,
+    })
+    assert route == "ic"
+    assert requirements["route_family"] == "DIE"
+    assert not tnr.resolve_prompt_delivery_target(requirements, "ip_hardmacro")["ok"]
+
+
+@pytest.mark.parametrize("description", [
+    "It has 10 inputs and 2 outputs.",
+    "It has several inputs and two outputs.",
+    "It has several inputs.",
+])
+def test_pure_io_description_keeps_module_delivery(description):
+    prompt = "Write a module for a chip. " + description
+    requirements = tnr.prompt_delivery_requirements(prompt)
+    resolution = tnr.resolve_prompt_delivery_target(requirements, "rtl")
+    record("module-io-description", {
+        "prompt": prompt, "requirements": requirements, "resolution": resolution,
+    })
+    assert requirements["route_family"] is None
+    assert resolution["ok"] is True
+    assert tnr.delivery_route_for_target(
+        resolution["target"], resolution["route_family"]) == "ip"
+
+
+@pytest.mark.parametrize("description", [
+    pytest.param("It has three\ninputs and five outputs.", id="wrapped-input-field"),
+    pytest.param("It has three inputs and\nfive outputs.", id="wrapped-output-field"),
+])
+def test_wrapped_io_description_keeps_module_delivery(description):
+    prompt = ("The Q device is a chip with gates. "
+              "Create a module with the same functionality as the Q device.\n"
+              + description)
+    requirements = tnr.prompt_delivery_requirements(prompt)
+    resolution = tnr.resolve_prompt_delivery_target(requirements, "rtl")
+    record("module-wrapped-io-description", {
+        "prompt": prompt, "requirements": requirements, "resolution": resolution,
+    })
+    assert requirements["route_family"] is None
+    assert resolution["ok"] is True
+    assert tnr.delivery_route_for_target(
+        resolution["target"], resolution["route_family"]) == "ip"
+
+
+@pytest.mark.parametrize("prompt,minimum", [
+    ("Write a module for a chip and deliver GDS.", "gds"),
+    ("Write RTL for a chip. Foundry handoff is required.", "foundry_handoff"),
+    ("Write RTL for a chip and hand off to the foundry.", "foundry_handoff"),
+    ("Write RTL for a chip and produce a GDS.", "gds"),
+    ("Write RTL for a chip and generate GDSII.", "gds"),
+    ("Write RTL for a chip with shippable GDS.", "shippable_gds"),
+])
+def test_module_request_cannot_flip_physical_delivery_to_hardmacro(prompt, minimum):
+    requirements = tnr.prompt_delivery_requirements(prompt)
+    resolution = tnr.resolve_prompt_delivery_target(requirements, "ip_hardmacro")
+    record("module-physical-flip", {
+        "prompt": prompt, "requirements": requirements, "resolution": resolution,
+    })
+    assert resolution["ok"] is False
+    assert requirements["route_family"] == "DIE"
+    assert requirements["minimum_target"] == minimum
 
 
 @pytest.mark.parametrize("mutate_route", [False, True])
@@ -494,3 +750,100 @@ def test_co_mutated_d1_must_come_from_a_fresh_typed_gate(tmp_path, monkeypatch):
     _resume(dataset, run)
     print(json.dumps({'calls':calls,'original_activation':original,'replacement_activation':replacement}))
     assert calls == [], f'An unissued replacement D1 gate reached the child boundary: {calls}'
+
+
+@pytest.mark.parametrize('prompt', [
+    'Write a module that models a chip. Deliver the modeled device in a physical package.',
+    'Write a module for a chip. Deliver that device in a physical package.',
+    'Write a module that models a chip. Ship the modeled device in a physical package.',
+    'Write a module that models a chip. Assemble the modeled device in a physical package.',
+    'Write a module that models a chip. Place the modeled device in a physical package.',
+    'Write a module that models a chip. The modeled device is required in a physical package.',
+    'Write a module that models a chip. Physically package the modeled device.',
+    'Write a module that models a chip. The modeled device must be physically packaged.',
+])
+def test_physical_package_delivery_cannot_become_rtl_only(prompt):
+    requirements = tnr.prompt_delivery_requirements(prompt)
+    rtl = tnr.resolve_prompt_delivery_target(requirements, 'rtl')
+    record('physical-package-floor', {'prompt': prompt, 'requirements': requirements, 'rtl': rtl})
+    assert rtl['ok'] == False, rtl
+    assert requirements['route_family'] == 'DIE'
+    resolved = tnr.resolve_prompt_delivery_target(requirements, None)
+    assert resolved['ok'] == True
+    assert tnr.delivery_route_for_target(resolved['target'], resolved['route_family']) == 'ic'
+    assert not tnr.resolve_prompt_delivery_target(requirements, 'ip_hardmacro')['ok']
+
+
+@pytest.mark.parametrize('obligation', [
+    'Deliver the modeled device.',
+    'Deliver that device.',
+    'The modeled device must be delivered.',
+    'Production of the modeled device is required.',
+])
+def test_independent_delivery_is_not_erased_with_its_reference(obligation):
+    prompt = 'Write a module that models a chip. ' + obligation
+    requirements = tnr.prompt_delivery_requirements(prompt)
+    resolved = tnr.resolve_prompt_delivery_target(requirements, 'rtl')
+    assert requirements['route_family'] == 'DIE', requirements
+    assert resolved['ok'] == True
+    assert tnr.delivery_route_for_target(resolved['target'], resolved['route_family']) == 'ic'
+
+
+@pytest.mark.parametrize('suffix', [
+    'Deliver only RTL source.',
+    'Produce a Verilog module.',
+])
+def test_explicit_rtl_artifact_delivery_is_not_a_physical_obligation(suffix):
+    prompt = 'Write a module that models a chip. ' + suffix
+    requirements = tnr.prompt_delivery_requirements(prompt)
+    resolved = tnr.resolve_prompt_delivery_target(requirements, 'rtl')
+    assert tnr.delivery_route_for_target(resolved['target'], resolved['route_family']) == 'ip'
+
+
+@pytest.mark.parametrize('prompt', [
+    'Write a module that models a chip in a physical package.',
+    'Write a module that models a chip. The model is not in a physical package.',
+    'Write a module that models a chip. Deliver only the RTL module.',
+])
+def test_physical_package_description_is_not_an_independent_obligation(prompt):
+    requirements = tnr.prompt_delivery_requirements(prompt)
+    resolved = tnr.resolve_prompt_delivery_target(requirements, 'rtl')
+    assert resolved['ok'] == True, resolved
+    assert requirements['minimum_target'] is None
+    assert tnr.delivery_route_for_target(resolved['target'], resolved['route_family']) == 'ip'
+
+
+@pytest.mark.parametrize('negative', [
+    'No delivery in a physical package is required.',
+    'Delivery in a physical package is not required.',
+    'There is no requirement for delivery in a physical package.',
+    'Do not physically package the modeled device.',
+    'The modeled device must not be physically packaged.',
+])
+def test_denied_package_relation_cannot_invent_a_delivery_floor(negative):
+    prompt = 'Write a module that models a chip. ' + negative
+    req = tnr.prompt_delivery_requirements(prompt)
+    resolved = tnr.resolve_prompt_delivery_target(req, 'rtl')
+    assert resolved['ok'] == True, resolved
+    assert req['minimum_target'] is None, req
+
+
+@pytest.mark.parametrize('positive', [
+    'Ship the modeled device in a physical package, not the accessory.',
+    'Place the modeled device in a physical package with no spare pins.',
+])
+def test_unrelated_negative_qualifier_cannot_erase_package_obligation(positive):
+    prompt = 'Write a module that models a chip. ' + positive
+    req = tnr.prompt_delivery_requirements(prompt)
+    resolved = tnr.resolve_prompt_delivery_target(req, 'rtl')
+    assert resolved['ok'] == False, resolved
+    assert req['route_family'] == 'DIE'
+
+
+def test_denied_relation_does_not_waive_a_separate_affirmative_relation():
+    prompt = ('Write a module that models a chip. '
+              'No delivery in a physical package is required. '
+              'Physically package the modeled device.')
+    req = tnr.prompt_delivery_requirements(prompt)
+    assert tnr.resolve_prompt_delivery_target(req, 'rtl')['ok'] == False
+    assert req['route_family'] == 'DIE'

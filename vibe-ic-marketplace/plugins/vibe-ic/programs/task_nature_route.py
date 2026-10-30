@@ -267,9 +267,50 @@ _HARDMACRO_ROUTE = re.compile(
 _DIE_OBJECT = r"(?:die|chip|ic|integrated\s+circuit)"
 _IP_OBJECT = r"(?:ip\s+)?hard[- ]?macro"
 _REQUESTED_DIE = re.compile(
-    r"\b(?:design|build|create|deliver|produce|complete|output(?:\s+is)?)\s+"
+    r"\b(?:design|build|create|deliver|produce|complete|need|want|"
+    r"output(?=\s+(?:is|a|an|the|complete|whole|full|standalone)\b|\s+"
+    + _DIE_OBJECT + r"\b(?!\s*[,;)]))(?:\s+is)?)\s+"
     r"(?:(?:a|an|the)\s+)?(?:(?:complete|whole|full|standalone)\s+)?"
     + _DIE_OBJECT + r"\b", re.I)
+_REQUESTED_RTL = re.compile(
+    r"\b(?:implement|write|design|build|create|complete|finish|modify|update|"
+    r"revise|fix|repair|debug|optimi[sz]e|need|want|deliver|produce)\s+"
+    r"(?:(?:the\s+)?(?:bug|error)\s+in\s+)?"
+    r"(?:(?:only|a|an|the|this|that|its|following|supplied|provided|existing|"
+    r"partial|incomplete|internal|faulty|broken|synthesizable|verilog|"
+    r"systemverilog|hdl|rtl)\s+)*(?:module|rtl)\b|"
+    r"\b(?:implement|write|design|build|create)\b[^.;]*\bas\s+"
+    r"(?:(?:a|an|the|synthesizable|verilog|systemverilog|hdl|rtl)\s+)*"
+    r"module\b", re.I)
+_RTL_DIE_REFERENCE = re.compile(
+    r"\b(?:model(?:s|ing|ling)?|describ(?:e|es|ing)|emulat(?:e|es|ing)|"
+    r"reproduc(?:e|es|ing)|simulat(?:e|es|ing)|"
+    r"(?:truth\s+table|behavio[u]?r)\s+of|(?:module|rtl)\s+for)\s+"
+    r"(?:(?:a|an|the|this|that|small|simple|logic|digital)\s+)*"
+    + _DIE_OBJECT + r"\b", re.I)
+# A separate delivery act cannot disappear with its antecedent. Only an
+# explicitly requested RTL artifact discharges it here; unknown objects stay
+# conservative without enumerating pronouns or descriptions of the device.
+_RTL_PHYSICAL_PACKAGE = re.compile(
+    r"\b(?:in\s+(?:(?:a|the)\s+)?physical\s+package|"
+    r"physically\s+packag(?:e|es|ed|ing))\b", re.I)
+_RTL_DELIVERY_ACT = re.compile(
+    r"\b(?:deliver(?:ed|ing|y)?|produc(?:e|es|ed|ing|tion))\b", re.I)
+_RTL_PHYSICAL_CONTEXT = re.compile(
+    r"\b(?:fabricat(?:e|es|ed|ing|ion)|manufactur(?:e|es|ed|ing)|"
+    r"foundr(?:y|ies)|wafers?|silicon)\b", re.I)
+_RTL_IO_FIELD = (
+    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|"
+    r"several|multiple|some|many)\s+(?:inputs?|outputs?)")
+_RTL_IO_DESCRIPTION = re.compile(
+    r"\s*it\s+has\s+" + _RTL_IO_FIELD + r"(?:\s+and\s+" + _RTL_IO_FIELD
+    + r")?\s*[.!?;:]?\s*", re.I)
+_RTL_FUNCTION_REFERENCE = re.compile(
+    r"\bsame\s+(?:functionality|behavio[u]?r)\s+as\s+(?:the\s+)?"
+    r"(?P<name>\w+)(?:\s+(?:device|" + _DIE_OBJECT + r"))?\b", re.I)
+_NAMED_DIE_BACKGROUND = re.compile(
+    r"\b(?:the\s+)?(?P<name>\w+)(?:\s+device)?\s+is\s+"
+    r"(?:a|an)\s+" + _DIE_OBJECT + r"\b", re.I)
 _REQUESTED_IP = re.compile(
     r"\b(?:deliver|produce|output(?:\s+is)?)\s+"
     r"(?:(?:a|an|the|separate)\s+)*(?:standalone\s+)?"
@@ -283,8 +324,42 @@ _CHIP_INTEGRATION = re.compile(
     + _DIE_OBJECT + r"\b", re.I)
 
 
+def _physical_package_obligations(text: str) -> list[str]:
+    """Positive package relations, with negation scoped to each relation.
+
+    Nominal/prepositional and verbal relations share the same delivery floor.
+    A model description is not delivery; neither is a denied requirement.
+    Negation of another object/qualifier cannot erase a positive relation.
+    """
+    out = []
+    for start, end, _kind in _clause_spans(_prose_view(text)):
+        for clause in re.split(r"\b(?:but|however)\b", text[start:end], flags=re.I):
+            clause = clause.strip()
+            if _REQUESTED_RTL.match(clause):
+                continue
+            relations = list(_RTL_PHYSICAL_PACKAGE.finditer(clause))
+            for i, relation in enumerate(relations):
+                left = clause[relations[i - 1].end() if i else 0:relation.start()]
+                right = clause[relation.end():relations[i + 1].start()
+                               if i + 1 < len(relations) else len(clause)]
+                modal = _REQUIREMENT_SENTENCE.search(left)
+                denied = (
+                    re.match(r"\s*(?:(?:there\s+(?:is|are)\s+)?no\b|"
+                             r"do\s+not\b|never\b|don['’]t\b)", left, re.I)
+                    or re.search(r"\b(?:not|never)\s+(?:(?:be|to)\s+)?$", left, re.I)
+                    or (modal and re.match(r"\s+not\b", left[modal.end():], re.I))
+                    or re.match(r"\s*(?:is|are|was|were)\s+(?:not|never)\s+"
+                                r"(?:required|needed|requested|mandatory|necessary)\b",
+                                right, re.I))
+                if not denied:
+                    out.append(clause)
+                    break
+    return out
+
+
 def _delivered_object_families(text: str) -> list[str]:
     """Conservative object selection; unresolved physical choices are blocking."""
+    source_text = text
     text = " ".join(text.split())
     hardmacro = bool(_HARDMACRO_ROUTE.search(text))
     die = bool(_REQUESTED_DIE.search(text))
@@ -315,6 +390,36 @@ def _delivered_object_families(text: str) -> list[str]:
         if re.search(r"\b" + _DIE_OBJECT + r"\b", text, re.I):
             return ["DIE", "HARDMACRO"]
         return ["HARDMACRO"]
+    if _REQUESTED_RTL.search(text) and not any(
+            rx.search(text) for _, rx in _PROMPT_DELIVERY_PATTERNS):
+        ends = [match.end() for match in _ENDMODULE.finditer(source_text)]
+        prose = []
+        cursor = 0
+        for head in _MODULE_HEAD.finditer(source_text):
+            if head.start() < cursor:
+                continue
+            prose.append(source_text[cursor:head.start()])
+            end_index = bisect_right(ends, head.end())
+            cursor = ends[end_index] if end_index < len(ends) else head.end()
+        prose.append(source_text[cursor:])
+        text = " ".join(" ".join(prose).split())
+        unresolved_reference = any(
+            re.search(r"\b(?:it|them|they)\b", clause, re.I)
+            and not _RTL_IO_DESCRIPTION.fullmatch(clause)
+            for clause in _SENTENCE_SPLIT.split(text))
+        unresolved_delivery = any(
+            not _REQUESTED_RTL.match(text, action.start())
+            for action in _RTL_DELIVERY_ACT.finditer(text))
+        if (not unresolved_reference and not unresolved_delivery
+                and not _physical_package_obligations(text)
+                and not _RTL_PHYSICAL_CONTEXT.search(text)):
+            references = {match.group("name").casefold()
+                          for match in _RTL_FUNCTION_REFERENCE.finditer(text)}
+            text = _NAMED_DIE_BACKGROUND.sub(
+                lambda match: "" if match.group("name").casefold() in references
+                else match.group(), text)
+            text = _RTL_FUNCTION_REFERENCE.sub("", text)
+            text = _RTL_DIE_REFERENCE.sub("", text)
     return ["DIE"] if _DIE_ROUTE.search(text) else []
 
 
@@ -327,6 +432,12 @@ def prompt_delivery_requirements(prompt: str) -> Dict[str, Any]:
         hit = rx.search(text)
         if hit:
             matches.append({"target": target, "excerpt": hit.group(0)})
+    # A separately asserted physical delivery needs at least a physical
+    # artifact; the existing GDS floor does not claim a fabricated package.
+    # Reuse clause boundaries so this stays linear and an RTL modelling
+    # request is not itself mistaken for an independent delivery command.
+    for clause in _physical_package_obligations(text):
+        matches.append({"target": "gds", "excerpt": clause})
     route_family = None
     status = "UNSPECIFIED"
     minimum_target = None
