@@ -129,6 +129,35 @@ def preflight(env=None) -> dict:
     verdict does not have to.
     """
     env = os.environ if env is None else env
+    if env.get("VIBEIC_LIBRELANE_LOCAL_ATTESTATION"):
+        from _container_exec import no_container_route
+        if no_container_route():
+            import librelane_contract as local
+            identity, required, error = None, None, ""
+            try:
+                required = _pin.resolved_image_digest(env)
+                if env[local.LOCAL_ATTESTATION_ENV] != os.environ.get(local.LOCAL_ATTESTATION_ENV):
+                    raise local.Refusal("LL_LOCAL_IMAGE_UNATTESTED",
+                                        "attestation differs from the process environment")
+                identity = local.local_image_attestation(
+                    f"{_pin.image_repo(env)}@{required}")
+            except (local.Refusal, _pin.ImageNotResolvable) as exc:
+                error = str(exc)
+            ok = identity is not None
+            return {
+                "schema": "vibeic.runtime.pair_preflight.v1",
+                "verdict": RUNTIME_PAIR_MATCH if ok else RUNTIME_PAIR_MISMATCH,
+                "checks": [_check(name, ok, "" if ok else "LOCAL_IMAGE_UNATTESTED",
+                                  identity["attestation_sha256"] if ok else error)
+                           for name in PREFLIGHT_CHECKS],
+                "container": identity["cid"] if ok else "LOCAL",
+                "required_digest": required,
+                "found_digest": required if ok else None,
+                "disagreed": None if ok else PREFLIGHT_CHECKS[0],
+                "evidence": [] if ok else [error],
+                "execution_route": "LOCAL",
+                "local_launch": identity,
+            }
     checks: list[dict] = []
     evidence: list[str] = []
     disagreed: Optional[str] = None
