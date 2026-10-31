@@ -84,7 +84,7 @@ def test_real_repo_instructions_are_document_data():
     from _hostpaths import repo_path
     source = repo_path('vibe-ic-marketplace/plugins/vibe-ic/programs/blindness_audit.py')
     document = ast.get_docstring(ast.parse(source.read_text()))
-    assert 'benchmark_dispatch.py' in document and '--score' in document
+    assert 'benchmark_dispatch' in document and '--score' in document
     command = heredoc("from pathlib import Path\nPath('/tmp/guide.md').write_text(" + repr(document) + ')')
     assert audit(wrapper(command)) == []
 
