@@ -55,6 +55,7 @@ def contract(project, top):
     data = api().read(local(project, CONTRACT))
     # This is derived material, never a caller admission flag.
     data.pop("_current", None)
+    data.pop("_current_interfaces", None)
     if data.get("schema") != INPUT_SCHEMA or data.get("top") != top:
         raise api().Refusal("WRONG_DESIGN", "native input contract schema/top mismatch")
     if data.get("scope") == "current_post_layout_interface":
@@ -70,17 +71,19 @@ def contract(project, top):
 
 def input_paths(project, top):
     data = contract(project, top)
-    d, a = data["digital"], data["analog"]
-    paths = {CONTRACT, d["netlist"], a["netlist"], *d.get("extra_sources", []),
-             *a.get("dependencies", [])}
-    si = data.get("si")
-    if isinstance(si, dict):
-        paths.update(si[k] for k in ("netlist", "sdc", "spef") if k in si)
-        paths.update(si.get("liberties", []))
+    views = list(data["_current_interfaces"].values()) if "_current_interfaces" in data else [data]
+    paths = {CONTRACT}
     from _mixed_signal_receiver_noise import input_paths as receiver_inputs
-    paths.update(receiver_inputs(project, data))
-    if "_current" in data:
-        paths.update(data["_current"]["inputs"])
+    for view in views:
+        d, a = view["digital"], view["analog"]
+        paths.update({d["netlist"], a["netlist"], *d.get("extra_sources", []), *a.get("dependencies", [])})
+        si = view.get("si")
+        if isinstance(si, dict):
+            paths.update(si[k] for k in ("netlist", "sdc", "spef") if k in si)
+            paths.update(si.get("liberties", []))
+        paths.update(receiver_inputs(project, view))
+        if "_current" in view:
+            paths.update(view["_current"]["inputs"])
     for rel in paths:
         local(project, rel)
     return paths
@@ -557,7 +560,8 @@ def produce(project, top, container):
             engine.version(name, args, root)
         for row in rows:
             try:
-                scenarios.append(simulate(project, data, row, root / row["id"], token, engine))
+                from _mixed_signal_current import for_scenario
+                scenarios.append(simulate(project, for_scenario(data, row), row, root / row["id"], token, engine))
             except (m3.Refusal, OSError, KeyError, ValueError) as exc:
                 scenarios.append({"id": row["id"], "status": "FAIL" if getattr(exc, "rule", "") in
                                   ("NATIVE_EXECUTION_FAILED", "FAILED_MEASUREMENT") else "NOT_MEASURED",
@@ -653,8 +657,10 @@ def verify(project, record, kind):
         cosim_actual = actual if kind == "cosim" else m3.read(project / m3.COSIM)
         native = []
         for row in rows:
+            from _mixed_signal_current import for_scenario
+            view = for_scenario(data, row)
             work = root / row["id"]
-            d = data["digital"]
+            d = view["digital"]
             sources = [str(local(project, d["netlist"])), *(str(local(project, p)) for p in d.get("extra_sources", []))]
             specs = [
                 (["iverilog", "-g2012", "-s", "m3_sampled_tb", "-o", str(work / "drive.vvp"),
@@ -688,12 +694,12 @@ def verify(project, record, kind):
             if (work / "initial.mem").read_text() != "0\n" * cycles:
                 raise m3.Refusal("CONTRADICTS_NATIVE_OUTPUT", "initial RNM state differs from declared reset drive run")
             first = observations(work / "drive.log", record["run_id"], cycles)
-            if (work / "scenario.sp").read_text() != deck(project, data, row, first, work / "wave.txt"):
+            if (work / "scenario.sp").read_text() != deck(project, view, row, first, work / "wave.txt"):
                 raise m3.Refusal("CONTRADICTS_NATIVE_OUTPUT", "deck differs from actual current wrapper drive")
             for name, feedback in (("drive", work / "initial.mem"), ("response", work / "feedback.mem")):
-                if (work / (name + "_tb.v")).read_text() != tb(data, row, feedback, record["run_id"]):
+                if (work / (name + "_tb.v")).read_text() != tb(view, row, feedback, record["run_id"]):
                     raise m3.Refusal("CONTRADICTS_NATIVE_OUTPUT", "instrument differs from current contract")
-            native.append(grade(project, data, row, work, record["run_id"]))
+            native.append(grade(project, view, row, work, record["run_id"]))
         passed = all(r["status"] == "PASS" for r in native)
         if (cosim_actual.get("scenarios") != native or cosim_actual.get("verdict") != ("PASS" if passed else "FAIL")
                 or cosim_actual.get("all_scenarios_passed") is not passed):
