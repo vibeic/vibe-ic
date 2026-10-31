@@ -904,6 +904,9 @@ def recover_observation_declaration(project: Path) -> Dict[str, Any]:
         if not claims:
             raise ValueError('original normal declaration publication claim missing')
         claim = claims[-1]
+        contract, _, _ = declaration.select_contract(project)
+        if not contract or contract['source'] not in claim.get('inputs', {}):
+            raise ValueError('normal publication specification input is unbound')
         if (claim.get('source_sha256') != 'sha256:' + sha256_file(Path(declaration.__file__))
                 or claim['outputs'].get('plugin_output/declaration.provenance.json')
                 != 'sha256:' + sha256_file(sidecar)):
@@ -914,9 +917,13 @@ def recover_observation_declaration(project: Path) -> Dict[str, Any]:
                     raise ValueError('normal publication input changed: ' + rel)
         owner = json.loads(owned('reports/orchestrator/phase1_one_shot.json').read_text())
         d01 = owner.get('dft_intent_output') or {}
+        sources = {p: d for p, d in claim['inputs'].items()
+                   if p not in ('plugin_output/declaration.json', 'plugin_output/declaration.provenance.json')
+                   and not p.startswith('phase1/generated_docs/')}
         authority = claim['outputs']['plugin_output/declaration.json']
         if (owner.get('project') != str(project) or d01.get('producer') != 'D01'
                 or d01.get('path') != 'plugin_output/declaration.json'
+                or not same(d01.get('sources'), sources)
                 or authority != 'sha256:' + str(d01.get('sha256'))):
             raise ValueError('original declaration claim is not bound by D01')
         functional = owned(str(record_path(project).relative_to(project)))
@@ -926,6 +933,7 @@ def recover_observation_declaration(project: Path) -> Dict[str, Any]:
         post = gate.get('post_padring') or {}
         pad = owned(CHIP_TOP_RECORD_REL)
         if (rec.get('program') != PROGRAM or rec.get('schema') != SCHEMA
+                or json.loads(pad.read_text()).get('program') != 'io_pad_chip_top_gen'
                 or post.get('project') != str(project)
                 or post.get('functional_record_sha256') != sha256_file(functional)
                 or post.get('chip_top_record_sha256') != sha256_file(pad)
@@ -986,6 +994,15 @@ def recover_observation_declaration(project: Path) -> Dict[str, Any]:
             return {**result, 'state': 'CURRENT'}
         if path.read_bytes() != current:
             raise ValueError('declaration changed during recovery proof')
+        if (saved and saved.get('state') == 'PREPARED'
+                and all(saved.get(k) == v for k, v in result.items() if k != 'state')
+                and saved.get('polluted_sha256') == hashlib.sha256(current).hexdigest()):
+            if owned(saved['polluted_declaration']).read_bytes() != current:
+                raise ValueError('prepared polluted declaration archive changed')
+            _atomic_write_text(path, original.decode('utf-8'))
+            saved['state'] = 'RECOVERED'
+            _atomic_write_text(report, json.dumps(saved, indent=2) + '\n')
+            return saved
         history = project / 'plugin_output/declaration_history' / str(time.time_ns())
         history.mkdir(parents=True, exist_ok=False)
         polluted = history / 'polluted_declaration.json'
@@ -1666,7 +1683,14 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="recover only a proven prior generated locator write; run no simulation")
     args = ap.parse_args(argv)
     if args.recover_observation_declaration:
-        rec = recover_observation_declaration(args.project)
+        import _runner_lock
+        lock = _runner_lock.acquire_or_reenter(args.project.resolve(), PROGRAM)
+        if lock is None:
+            return 2
+        try:
+            rec = recover_observation_declaration(args.project)
+        finally:
+            lock.release()
         text = json.dumps(rec, indent=2)
         if args.json:
             _atomic_write_text(args.json, text + '\n')

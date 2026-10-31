@@ -398,6 +398,36 @@ def test_recorded_observation_recovery_completes_interrupted_record(recorded_obs
     assert fs.recover_observation_declaration(project) == result
 
 
+def test_recorded_observation_recovery_reenters_before_atomic_restore(
+        recorded_observation_recovery, monkeypatch):
+    project, rec, _originals = recorded_observation_recovery
+    fs = _fsf()
+    target = project / 'plugin_output/declaration.json'
+    polluted = target.read_bytes()
+    write = fs._atomic_write_text
+    def interrupted(path, text):
+        if Path(path) == target:
+            raise OSError('controlled interruption before atomic restore')
+        return write(path, text)
+    monkeypatch.setattr(fs, '_atomic_write_text', interrupted)
+    failed = fs.recover_observation_declaration(project)
+    assert failed['state'] == 'REFUSED' and target.read_bytes() == polluted
+    report = project / 'reports/phase3/observation_declaration_recovery.json'
+    prepared = json.loads(report.read_text())
+    assert prepared['state'] == 'PREPARED'
+    monkeypatch.setattr(fs, '_atomic_write_text', write)
+    done = fs.recover_observation_declaration(project)
+    assert done['state'] == 'RECOVERED'
+    assert done['polluted_declaration'] == prepared['polluted_declaration']
+    assert target.read_bytes() == (project / rec['observation_provenance_refresh']['previous_declaration']).read_bytes()
+
+
+def test_recorded_observation_recovery_normal_cli(recorded_observation_recovery, capsys):
+    project, _rec, _originals = recorded_observation_recovery
+    assert _fsf().main([str(project), '--recover-observation-declaration']) == 0
+    assert json.loads(capsys.readouterr().out)['state'] == 'RECOVERED'
+
+
 @pytest.mark.parametrize('damage', [
     'wrapper_bytes', 'model_bytes', 'missing_model', 'incomplete_models',
     'author_schedule', 'author_clock', 'author_dft', 'author_other', 'author_source',

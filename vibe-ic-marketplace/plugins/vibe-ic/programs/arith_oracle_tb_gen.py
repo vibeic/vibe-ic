@@ -1491,6 +1491,11 @@ def arithmetic_observation(project: Path, spec: dict, *, top: Optional[str] = No
                 and hashlib.sha256(wrapper.read_bytes()).hexdigest() == actual[str(wrapper)]
                 and {p: d for p, d in binding.items() if p != stale[0]}
                 == {p: d for p, d in actual.items() if p != str(wrapper)}):
+            try:
+                if Path(stale[0]).exists() and hashlib.sha256(Path(stale[0]).read_bytes()).hexdigest() != binding[stale[0]]:
+                    return refuse('declared prior wrapper source bytes changed')
+            except OSError:
+                return refuse('declared prior wrapper source could not be read')
             binding = dict(actual)
     if selected != spec['top'] and (not actual or binding != actual):
         return refuse('observation binding does not match the selected wrapper and model bytes')
