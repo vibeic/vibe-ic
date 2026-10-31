@@ -77,6 +77,249 @@ def test_backend_window_authority_reads_the_shipped_canonical_row(monkeypatch):
 
 
 @pytest.fixture
+def canonical51_retained_subject(monkeypatch):
+    """Actual externally retained handoff, mounted at its original namespace."""
+    import json
+    import os
+    import flow109
+    from types import SimpleNamespace
+    root = os.environ.get('CANONICAL51_SUBJECT')
+    if not root:
+        pytest.skip('actual accepted post-synthesis handoff not supplied')
+    project = Path(root)
+    for name in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV):
+        monkeypatch.setenv(name, os.environ.get(name, ''))
+    args = SimpleNamespace(flow='109', execution_mode='default',
+        flow109_manifest=os.environ['CANONICAL51_MANIFEST'], flow109_plan_only=False,
+        entry_step='D31', exit_step='D31', route='ic', container='', delivery_target=None)
+    assert flow109.prepare_front_door(args, project) is None
+    originals = {}
+
+    def change(relative, content=None):
+        path = project / relative
+        originals.setdefault(path, path.read_bytes() if path.is_file() else None)
+        if content is None:
+            path.unlink()
+        else:
+            path.write_bytes(content)
+        return path
+
+    stance = project / 'reports/phase3/single_corner_stance.json'
+    originals[stance] = stance.read_bytes() if stance.is_file() else None
+    try:
+        yield project, change
+    finally:
+        for path, raw in originals.items():
+            if raw is None:
+                path.unlink(missing_ok=True)
+            else:
+                path.write_bytes(raw)
+
+
+def _observe_canonical51_constraints(project, monkeypatch):
+    import json
+    import os
+    import step_preflight as preflight
+    import step_output_collector as versions
+    import vibe_ic_one_shot_runner as owner
+    hook = getattr(owner, '_complete_canonical51_constraints', None)
+    if hook is not None:
+        return hook(project)
+    # Base executes its actual legacy read/re-author decision. Reuse the
+    # already measured failed producer result instead of replaying STA/tools.
+    failure = json.loads(Path(os.environ['CANONICAL51_FAILED_RESULT']).read_text())
+    monkeypatch.setattr(preflight, 'retained_call', lambda *a, **k: None)
+    monkeypatch.setattr(versions, 'current_acceptance', lambda *a, **k: [failure])
+    return owner._complete_step7_sdc(project, os.environ['CANONICAL51_TOP'],
+                                     os.environ['CANONICAL51_PDK'], '')
+
+
+def test_canonical51_actual_accepted_constraint_readset_reaches_existing_entry(
+        canonical51_retained_subject, monkeypatch):
+    import json
+    import os
+    project, _ = canonical51_retained_subject
+    sdc = project / f"phase2/stage2/constraints/{os.environ['CANONICAL51_TOP']}.sdc"
+    before = sdc.read_bytes()
+    result = _observe_canonical51_constraints(project, monkeypatch)
+    assert result['verdict'] == 'PASS', json.dumps(result, indent=2)
+    assert sdc.read_bytes() == before
+    stance = json.loads((project / 'reports/phase3/single_corner_stance.json').read_text())
+    assert stance['record_role'] == 'configuration'
+    assert stance['stance'] == 'CORNER_SET_RECORDED'
+    matrix = json.loads((project / 'phase2/stage2/constraints/pvt_matrix.json').read_text())
+    assert stance['corner_count'] == len(matrix['corners'])
+    assert result['qualification'] == 'NOT_CLAIMED'
+
+
+@pytest.mark.parametrize('damage', ['sdc', 'library', 'mode', 'source', 'matrix', 'missing_matrix'])
+def test_canonical51_actual_changed_constraint_inputs_refuse(
+        canonical51_retained_subject, monkeypatch, damage):
+    import json
+    import os
+    project, change = canonical51_retained_subject
+    if damage == 'sdc':
+        relative = f"phase2/stage2/constraints/{os.environ['CANONICAL51_TOP']}.sdc"
+    elif damage == 'library':
+        mapping = json.loads((project / 'adopted/base_10/mode_library_rc_mapping.json').read_text())
+        relative = mapping['reference'][0]['libraries'][0]['path']
+    elif damage == 'mode':
+        relative = 'requirements/base_10/scenario_constraints.json'
+    elif damage == 'source':
+        relative = 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+    else:
+        relative = 'phase2/stage2/constraints/pvt_matrix.json'
+    raw = (project / relative).read_bytes()
+    if damage == 'missing_matrix':
+        change(relative)
+    elif damage in ('mode', 'matrix'):
+        body = json.loads(raw)
+        body['required_modes' if damage == 'mode' else 'modes'] = ['changed_mode']
+        change(relative, json.dumps(body).encode())
+    else:
+        change(relative, raw + b'\n')
+    result = _observe_canonical51_constraints(project, monkeypatch)
+    assert result['verdict'] != 'PASS', result
+    if damage == 'missing_matrix':
+        assert result['verdict'] == 'NOT_MEASURED', result
+    assert not (project / 'reports/phase3/single_corner_stance.json').exists()
+
+
+@pytest.mark.parametrize('damage', ['source', 'project', 'output'])
+def test_canonical51_actual_foreign_handoff_bindings_refuse(
+        canonical51_retained_subject, monkeypatch, damage):
+    import hashlib
+    import json
+    project, change = canonical51_retained_subject
+    row_path = 'reports/flow109/default_rows/D30.json'
+    row = json.loads((project / row_path).read_text())
+    receipt_path = row['d30_delivery_receipt']['path']
+    receipt = json.loads((project / receipt_path).read_text())
+    if damage == 'project':
+        path = str(Path(receipt_path).with_name('request.json'))
+        request = json.loads((project / path).read_text())
+        request['project_root_sha256'] = hashlib.sha256(b'foreign project').hexdigest()
+        change(path, json.dumps(request).encode())
+    else:
+        if damage == 'source':
+            receipt['producer_source_sha256'] = hashlib.sha256(b'foreign source').hexdigest()
+        else:
+            receipt['delivered_netlist'] = receipt['source_netlist']
+            row['dft_preroute_admission']['normalized_preroute_chain']['references']['D30'] = receipt['source_netlist']
+        raw = json.dumps(receipt).encode()
+        change(receipt_path, raw)
+        row['d30_delivery_receipt']['sha256'] = hashlib.sha256(raw).hexdigest()
+        change(row_path, json.dumps(row).encode())
+    result = _observe_canonical51_constraints(project, monkeypatch)
+    assert result['verdict'] != 'PASS', result
+    assert not (project / 'reports/phase3/single_corner_stance.json').exists()
+
+
+def test_canonical51_actual_public_entry_reaches_backend_without_constraint_author(
+        canonical51_retained_subject, monkeypatch):
+    import json
+    import os
+    import step_preflight as preflight
+    import step_output_collector as versions
+    import vibe_ic_one_shot_runner as owner
+    project, _ = canonical51_retained_subject
+    sdc = project / f"phase2/stage2/constraints/{os.environ['CANONICAL51_TOP']}.sdc"
+    before = sdc.read_bytes()
+    failure = json.loads(Path(os.environ['CANONICAL51_FAILED_RESULT']).read_text())
+    # Retain the actual base failure if the old author branch is selected;
+    # this source control must not dispatch an upstream native producer.
+    calls = []
+    def retained(*args, **kwargs):
+        calls.append('constraint_author')
+    monkeypatch.setattr(preflight, 'retained_call', retained)
+    monkeypatch.setattr(versions, 'current_acceptance', lambda *a, **k: [failure])
+    def boundary(label, runner, args, **kwargs):
+        assert runner.name == 'phase3_one_shot_runner.py'
+        calls.append('physical_backend')
+        return 2
+    monkeypatch.setattr(owner, '_run_phase', boundary)
+    monkeypatch.setattr(sys, 'argv', [str(Path(owner.__file__)), str(project),
+        '--flow', '109', '--flow109-manifest', os.environ['CANONICAL51_MANIFEST'],
+        '--entry-step', 'D31', '--exit-step', 'D31', '--route', 'ic',
+        '--execution-mode', 'default', '--top-name', os.environ['CANONICAL51_TOP'],
+        '--ic-name', os.environ['CANONICAL51_TOP'], '--pdk', os.environ['CANONICAL51_PDK'],
+        '--no-dashboard'])
+    owner.main()
+    assert calls == ['physical_backend'], calls
+    assert sdc.read_bytes() == before
+
+
+def test_canonical51_actual_backend_reader_preserves_accepted_deck(
+        canonical51_retained_subject, monkeypatch):
+    import os
+    import design_one_shot_runner as design
+    import phase3_one_shot_runner as phase3
+    from _ppa import timing
+    project, _ = canonical51_retained_subject
+    pdk = design._phase2_pdk_config(project, os.environ['CANONICAL51_PDK'])
+    path = project / f"phase2/stage2/constraints/{os.environ['CANONICAL51_TOP']}.sdc"
+    before = path.read_bytes()
+    record, reason = timing.read_step7_asic_sdc(phase3, project,
+        os.environ['CANONICAL51_TOP'], pdk)
+    assert record is not None, reason
+    assert record['text'].encode() == before
+    assert path.read_bytes() == before
+    actual_path, detail = phase3._prepnr_constraint_file(project,
+        os.environ['CANONICAL51_TOP'], pdk)
+    assert actual_path == path, detail
+
+
+def test_canonical51_changed_source_unrelated_finalizers_remain_reusable(
+        canonical51_retained_subject):
+    import json
+    import os
+    import vibe_ic_one_shot_runner as owner
+    project, _ = canonical51_retained_subject
+    result = owner._complete_canonical51_constraints(project)
+    assert result['verdict'] == 'PASS', json.dumps(result, indent=2)
+    source = result['source_identity']['flow109.py']
+    assert source['original']['sha256'] != source['current_sha256']
+    assert '_complete_preroute_chain' in source['consumed_definitions']
+    assert 'finish_native_window' not in source['consumed_definitions']
+    Path(os.environ['CANONICAL51_BRIDGE_OBSERVATIONS']).with_name('positive-source-observation.json').write_text(json.dumps(
+        {'positive': result['source_identity'], 'qualification': result['qualification']}, indent=2))
+
+
+def test_canonical51_changed_source_consumed_guard_and_contract_refuse(
+        canonical51_retained_subject, monkeypatch):
+    import importlib.util
+    import json
+    import os
+    from types import SimpleNamespace
+    import vibe_ic_one_shot_runner as owner
+    project, _ = canonical51_retained_subject
+    observed = []
+    stance = project / 'reports/phase3/single_corner_stance.json'
+    original_stance = stance.read_bytes() if stance.is_file() else None
+    for name, variable in (('flow109', 'CANONICAL51_FLOW_VARIANT'),
+                           ('flow109_metric_acceptance', 'CANONICAL51_METRIC_VARIANT')):
+        with monkeypatch.context() as changed:
+            changed.setattr(sys, 'path', list(sys.path))
+            path = Path(os.environ[variable])
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            changed.setitem(sys.modules, name, module)
+            spec.loader.exec_module(module)
+            import flow109
+            args = SimpleNamespace(flow='109', execution_mode='default',
+                flow109_manifest=os.environ['CANONICAL51_MANIFEST'], flow109_plan_only=False,
+                entry_step='D31', exit_step='D31', route='ic', container='', delivery_target=None)
+            assert flow109.prepare_front_door(args, project) is None
+            result = owner._complete_canonical51_constraints(project)
+            assert result['verdict'] == 'NOT_MEASURED', result
+            assert (stance.read_bytes() if stance.is_file() else None) == original_stance
+            observed.append({'module': name, 'actual_source': str(path),
+                             'sha256': flow109._file_digest(path), 'result': result})
+    Path(os.environ['CANONICAL51_BRIDGE_OBSERVATIONS']).with_name('negative-source-observation.json').write_text(json.dumps(
+        {'negative': observed}, indent=2))
+
+
+@pytest.fixture
 def cross_phase_transport(monkeypatch):
     from test_execution_receipt_chain import isolated_transport
     transport = isolated_transport.__wrapped__(monkeypatch)

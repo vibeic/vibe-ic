@@ -930,6 +930,205 @@ def _revalidate_step5_checkpoint(project: Path) -> Optional[dict]:
             'producer_reused': True}
 
 
+def _complete_canonical51_constraints(project: Path) -> dict | None:
+    """Consume the accepted post-synthesis handoff before selected floorplan.
+
+    Stale or missing consumed inputs block this continuation. Legacy entries
+    retain their own SDC author; this branch never regenerates an accepted deck
+    or asserts runtime qualification.
+    """
+    import flow109
+    import flow109_metric_acceptance as metrics
+    import ast
+    import librelane_prelayout as prelayout
+    import phase3_one_shot_runner as phase3
+
+    request = os.environ.get(flow109.CONTEXT_ENV)
+    if not request:
+        return None
+    try:
+        project = Path(project).resolve()
+        context = flow109.validate_execution_context(json.loads(Path(request).read_text()))
+        current = flow109.component_context(context, native_step_id='15')
+        if current['resolved_row']['id'] != 'D31':
+            return None
+        flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+        plan = flow109.resolve_plan(current['features'], current['step_profiles'])
+        delivery, delivery_ref = flow109._accepted_row(
+            project, Path('reports/flow109/default_rows/D30.json'), 'D30')
+        handoff_context = flow109.execution_context(plan, 'D30', 'D30')
+        prior = delivery['dft_preroute_admission']
+        receipt_path = flow109._current_project_ref(
+            project, delivery['d30_delivery_receipt'], 'FLOW109_D30_DELIVERY_RECEIPT_UNBOUND')
+        receipt = json.loads((project / receipt_path['path']).read_text())
+        attempt = (project / receipt_path['path']).parent
+        if attempt.parent != flow109._attempt_root(project, create=False) or attempt.is_symlink():
+            raise ValueError('accepted delivery is outside its original attempt')
+        request_record, _ = flow109._bound_project_json(
+            project, (attempt / 'request.json').relative_to(project), 'FLOW109_D30_DELIVERY_REQUEST_UNBOUND')
+        profile = {'features_sha256': flow109.digest(current['features']),
+                   'step_profiles_sha256': flow109.digest(current['step_profiles'])}
+        identity = next(item['measurement']['identity'] for item in
+                        delivery['metric_acceptance']['obligations']
+                        if item['id'] == 'base_19.adopted_netlist_sdc_library')
+        original_context, _ = flow109._bound_project_json(project,
+            Path('reports/flow109/requests') / (delivery['context_sha256'] + '.json'),
+            'FLOW109_D30_ORIGINAL_CONTEXT_UNBOUND')
+        original_payload = {key: value for key, value in original_context.items()
+                            if key != 'context_sha256'}
+        if (flow109.digest(original_payload) != delivery['context_sha256']
+                or original_context['context_sha256'] != delivery['context_sha256']
+                or original_context['planner_sha256'] != receipt['flow109_source_sha256']
+                or {key: value for key, value in original_context.items()
+                    if key not in ('planner_sha256', 'context_sha256')} !=
+                   {key: value for key, value in handoff_context.items()
+                    if key not in ('planner_sha256', 'context_sha256')}):
+            raise ValueError('accepted D30 consumed context or registry contract changed')
+
+        captured = delivery['step14_producers']['current_step_producers']['input_identity']
+        frames = [Path(path).parent for path in captured['source_files']
+                  if Path(path).name == 'flow_declared_producer_run.py']
+        if len(frames) != 1:
+            raise ValueError('original handoff producer source frame is ambiguous')
+
+        def consumed_definitions(text, roots):
+            definitions = {}
+            for node in ast.parse(text).body:
+                if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                    definitions[node.name] = node
+                elif isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name):
+                            definitions[target.id] = node
+                elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                    definitions[node.target.id] = node
+                elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                    for alias in node.names:
+                        name = alias.asname or alias.name.split('.')[0]
+                        definitions[name] = (ast.Import(names=[alias]) if isinstance(node, ast.Import)
+                                             else ast.ImportFrom(module=node.module,
+                                                                 names=[alias], level=node.level))
+            pending, result = set(roots), {}
+            while pending:
+                name = pending.pop()
+                if name in result:
+                    continue
+                if name not in definitions:
+                    raise ValueError('consumed source definition is absent: ' + name)
+                node = definitions[name]
+                result[name] = ast.dump(node, include_attributes=False)
+                pending.update(part.id for part in ast.walk(node)
+                               if isinstance(part, ast.Name) and part.id in definitions
+                               and part.id not in result)
+            return result
+
+        source_identity = {}
+        for module, field, roots in (
+                (flow109, 'flow109_source_sha256',
+                 ('resolve_plan', 'execution_context', 'validate_execution_context',
+                  'component_context', '_bound_attempt', 'dft_preroute_admission',
+                  '_complete_preroute_chain', '_current_project_ref', '_accepted_row')),
+                (metrics, 'metric_reader_source_sha256',
+                 ('accept_d30', 'd30_consumed_timing', '_d19_ref', 'D30_BINDINGS'))):
+            original_path = frames[0] / Path(module.__file__).name
+            relative = original_path.relative_to(project).as_posix()
+            if captured['files'].get(relative) != receipt[field]:
+                raise ValueError('original consumed source is not producer-bound')
+            metrics._d30_file(project, {'path': relative, 'sha256': receipt[field]},
+                              'original consumed source')
+            before = consumed_definitions(original_path.read_text(), roots)
+            after = consumed_definitions(Path(module.__file__).read_text(), roots)
+            if before != after:
+                raise ValueError('D30 consumed source or contract changed: ' + Path(module.__file__).name)
+            source_identity[Path(module.__file__).name] = {
+                'original': {'path': relative, 'sha256': receipt[field]},
+                'current_sha256': flow109._file_digest(Path(module.__file__)),
+                'consumed_fields_sha256': flow109.digest(before),
+                'consumed_definitions': sorted(before)}
+        producer = frames[0] / 'design_one_shot_runner.py'
+        producer_rel = producer.relative_to(project).as_posix()
+        if captured['files'].get(producer_rel) != receipt['producer_source_sha256']:
+            raise ValueError('historical producer authority changed')
+        metrics._d30_file(project, {'path': producer_rel, 'sha256': receipt['producer_source_sha256']},
+                          'historical handoff producer')
+        if (request_record['project_root_sha256'] != hashlib.sha256(str(project).encode()).hexdigest()
+                or request_record['context_sha256'] != receipt['window_context_sha256']
+                or 'D30' not in request_record['component_ids']
+                or receipt['context_sha256'] != original_context['context_sha256']
+                or receipt['profile_identity'] != profile or prior['profile_identity'] != profile
+                or receipt['producer_source_sha256'] != identity['producer']['sha256']
+                or receipt['flow109_source_sha256'] != request_record['planner_sha256']
+                or receipt['metric_reader_source_sha256'] != identity['checker']['sha256']):
+            raise ValueError('accepted delivery project, profile or consumed source differs')
+        chain = prior['normalized_preroute_chain']
+        references = chain['references']
+        for reference in [*references.values(), receipt['handoff_record'],
+                          receipt['source_netlist'], receipt['delivered_netlist']]:
+            metrics._d30_file(project, reference, 'accepted handoff input/output')
+        if (chain['status'] != 'PASS' or references['D30'] != receipt['delivered_netlist']
+                or (project / references['D30']['path']).parent != attempt
+                or references['D30']['path'] == receipt['source_netlist']['path']):
+            raise ValueError('accepted independent delivery output differs')
+        # Completion stores normalized measurements under points and the
+        # original typed artifacts under references. The existing timing
+        # reader consumes those input artifacts, not normalization scalars.
+        timing_subject = {**prior, 'normalized_preroute_chain': {
+            'points': {name: {'input': reference} for name, reference in references.items()}}}
+        timing = metrics.d30_consumed_timing(project, timing_subject)
+        if timing['status'] != 'MEASURED' or timing != receipt['consumed_timing']:
+            raise ValueError('accepted native constraint readset differs: ' + str(timing))
+        sdcs = {json.dumps(point['sdc'], sort_keys=True) for point in timing['value']}
+        if len(sdcs) != 1:
+            raise ValueError('selected floorplan requires one accepted functional SDC')
+        sdc_ref = json.loads(sdcs.pop())
+        sdc_path = metrics._d30_file(project, sdc_ref, 'accepted functional SDC')
+        text = sdc_path.read_text()
+
+        constraint_plan, _ = flow109._accepted_row(
+            project, Path('reports/flow109/default_rows/D19.json'), 'D19')
+        for obligation in constraint_plan['metric_acceptance']['obligations']:
+            identity = obligation['measurement']['identity']
+            for path, sha in identity['consumed_inputs'].items():
+                metrics._d19_ref(project, {'path': path, 'sha256': sha}, path)
+            for reference in identity['requirements'].values():
+                metrics._d19_ref(project, reference, 'accepted constraint plan')
+            sources = identity['configuration']['sources']
+            intent = flow109.dft_source_intent(project, current)
+            if sources['D01'] != intent['source_binding']:
+                raise ValueError('accepted constraint source intent changed')
+            for name, reference in sources.items():
+                if name != 'D01':
+                    metrics._d19_ref(project, reference, name)
+
+        config_ref = receipt['consumed_timing']['native_records']['config.json']
+        config = json.loads(metrics._d30_file(project, config_ref, 'accepted native timing config').read_text())
+        matrix_path = project / 'phase2/stage2/constraints/pvt_matrix.json'
+        matrix = json.loads(matrix_path.read_text())
+        expected = prelayout.pvt_matrix_from_sta_corners(
+            config, None, phase3._classify_corner_from_name)
+        phase3.stamp_pvt_corner_coverage(expected, expected['corners'])
+        if matrix != expected:
+            raise ValueError('current PVT matrix differs from the accepted native corner/library configuration')
+        # This existing producer records configuration, never timing PASS.
+        disclosure = phase3.emit_step7_corner_disclosure(project, matrix)
+        return {'verdict': 'PASS', 'producer_reused': True,
+                'detail': 'current canonical handoff and consumed constraint readset',
+                'handoff': delivery_ref,
+                'source_identity': source_identity,
+                'sdc_record': {'path': str(sdc_path.relative_to(project)),
+                               'sha256': sdc_ref['sha256'],
+                               'deck_sha256': sdc_ref['sha256'], 'text': text,
+                               'top': prior['top'], 'pdk': config['PDK'],
+                               'library_sha256s': sorted({lib['sha256'] for point in timing['value']
+                                                         for lib in point['libraries']}),
+                               'source_handoff': delivery_ref},
+                'corner_disclosure': str(disclosure.relative_to(project)),
+                'qualification': 'NOT_CLAIMED'}
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return {'verdict': 'NOT_MEASURED', 'producer_reused': True,
+                'detail': f'canonical physical constraint handoff refused: {exc}'}
+
+
 def _complete_step7_sdc(project: Path, top: str, pdk_name: str,
                         container: str) -> dict:
     """Refresh stale Step7 SDC through its existing author and full consumer."""
@@ -5214,7 +5413,11 @@ def _main() -> int:
                 'current Step5 checkpoint acceptance did not pass'})
             lock.release()
             return 1 if step5_acceptance['verdict'] == 'FAIL' else 2
-        step7_acceptance = (_complete_step7_sdc(
+        canonical_constraints = (_complete_canonical51_constraints(project)
+                                 if execution_policy_value['mode'] == 'default'
+                                 and str(args.entry_step) == '15' else None)
+        step7_acceptance = (canonical_constraints if canonical_constraints is not None else
+                            _complete_step7_sdc(
             project, args.top_name, args.pdk, args.container)
             if execution_policy_value['mode'] == 'default'
             and str(args.entry_step) == '15' else None)
@@ -5236,7 +5439,8 @@ def _main() -> int:
             return 1 if status == 'FAIL' else 2
         # Only the signed Phase2 handoff adds Step14 here. Isolated backend
         # repairs without that checkpoint retain their existing entry scope.
-        step14_acceptance = (_complete_step14_handoff(project)
+        step14_acceptance = (canonical_constraints if canonical_constraints is not None else
+                             _complete_step14_handoff(project)
                              if step5_acceptance is not None else None)
         if step14_acceptance is not None and step14_acceptance['verdict'] != 'PASS':
             out = _pl.report_path(project, "vibe_ic_one_shot.json")
