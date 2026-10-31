@@ -1406,6 +1406,44 @@ def _d39_capture_repair_history(project, folder, initial, config):
     return {'path': str(output.relative_to(project)), 'sha256': snap.sha(output)}
 
 
+def _d38_sink_report_tcl():
+    """Read-only census in the existing STAMidPNR post-load report callback.
+
+    Reuse D34's OpenSTA sink grammar and query; also enumerate ALL register
+    clock pins so an unreached pin cannot vanish from the observation.
+    """
+    return '\n'.join([
+        'puts "CLOCK_PLAN_ROSTER_BEGIN"',
+        'set d38_all [all_registers -clock_pins]',
+        'foreach p $d38_all {puts "CLOCK_PLAN_ALL_SINK [get_full_name $p]"}',
+        'puts "CLOCK_PLAN_ALL_SINK_COUNT [llength $d38_all]"',
+        'foreach c [all_clocks] {',
+        '  set sources [get_full_name [get_property $c sources]]',
+        '  puts "CLOCK_PLAN_NATIVE [get_full_name $c]|[get_property $c period]|$sources"',
+        '  set pins [all_registers -clock $c -clock_pins]',
+        '  foreach p $pins {puts "CLOCK_PLAN_SINK [get_full_name $c]|[get_full_name $p]"}',
+        '  puts "CLOCK_PLAN_SINK_COUNT [get_full_name $c]|[llength $pins]"',
+        '}',
+        'puts "CLOCK_PLAN_DONE"', ''])
+
+
+def _d38_sink_report_config(ll, config):
+    """Use the native report callback only for this row's measurement config."""
+    config = Path(config)
+    body = json.loads(config.read_text())
+    script = config.parent / 'cts_sink_roster.tcl'
+    existing = body.get('STA_EXTRA_CORNER_TCL_FILE')
+    # Preserve another owner's custom callback instead of replacing it or
+    # silently claiming this measurement ran. No shared helper is changed.
+    if existing and (Path(existing) != script or not script.is_file()
+                     or script.read_text() != _d38_sink_report_tcl()):
+        raise em.Refusal('D38_NATIVE_REPORT_CALLBACK_ALREADY_BOUND', str(existing))
+    script.write_text(_d38_sink_report_tcl())
+    return ll.derive_step_config(config, config, {
+        'STA_EXTRA_CORNER_TCL_FILE': (str(script),
+            'row59 complete clock-reached sink-pin roster in the actual post-load native session')})
+
+
 def _cts_split(project, params, R, ll, pdk, overlay):
     """Selected predecessor -> CTS or resizer -> one measurement per corner.
 
@@ -1448,6 +1486,8 @@ def _cts_split(project, params, R, ll, pdk, overlay):
         native = configs['OpenROAD.STAMidPNR']
         selected = native.with_name('OpenROAD.STAMidPNR@' + corner + '.json')
         ll.derive_step_config(native, selected, {'PNR_CORNERS': ([corner], 'resolved STA_CORNERS, one measurement per corner')})
+        if sid == '19' and params.get('flow109_d38_targets') is not None:
+            selected = _d38_sink_report_config(ll, selected)
         chain.append(('OpenROAD.STAMidPNR', selected))
     mounts = [(root.resolve(), ll.PDK_GUEST_ROOT)]
     state = (_require(Path(params['state_in'])) if params.get('state_in') else
@@ -1479,7 +1519,9 @@ def _cts_split(project, params, R, ll, pdk, overlay):
                'views': dict(previous.get('views', {}))}
     if sid == '19' and params.get('flow109_d38_targets') is not None:
         receipt.update(flow109_d38_targets=params['flow109_d38_targets'],
-                       initial_state=str(state.relative_to(project)), initial_sha256=snap.sha(state))
+                       initial_state=str(state.relative_to(project)), initial_sha256=snap.sha(state),
+                       step_configs=[{'path': str(cfg.relative_to(project)), 'sha256': snap.sha(cfg)}
+                                     for _, cfg in chain])
     for view, info in handoff['views'].items():
         receipt['views']['post_' + ('cts' if sid == '19' else 'hold') + '_' + view] = {
             **info, 'dest': str(Path(info['dest']).relative_to(project))}

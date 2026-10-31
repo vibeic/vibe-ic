@@ -2190,7 +2190,7 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
         if receipt.is_file():
             component["canonical_receipt"] = {
                 "path": str(receipt.relative_to(project)), "sha256": _file_digest(receipt)}
-        if row['id'] in ('D35', 'D37', 'D39', 'D40'):
+        if row['id'] in ('D35', 'D37', 'D38', 'D39', 'D40'):
             # These owners judge native values again. A saved nested PASS is
             # provenance to bind, never the current metric verdict.
             import flow109_metric_acceptance as metrics
@@ -2216,7 +2216,11 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
                 return body
 
             try:
-                if row['id'] == 'D39':
+                if row['id'] == 'D38':
+                    chain = _d3537_read('reports/phase3/librelane_cts_handoff.json')
+                    first_step = 'OpenROAD.CTS'
+                    state = Path(chain['chain'][first_step]) / 'state_out.json'
+                elif row['id'] == 'D39':
                     chain = _d3537_read('reports/phase3/librelane_cts_hold_handoff.json')
                     first_step = 'OpenROAD.ResizerTimingPostCTS'
                     state = Path(chain['chain'][first_step]) / 'state_out.json'
@@ -2233,9 +2237,12 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
                 native_receipt = native_chain.validate_step_receipt(
                     state.parent, first_step)
                 judge = {'D35': metrics.accept_d35, 'D37': metrics.accept_d37,
-                         'D39': metrics.accept_d39, 'D40': metrics.accept_d40}[row['id']]
-                observed = judge(project, current, {
-                    'native_image': native_receipt['input']['image'], 'verdict': 'NOT_MEASURED'})
+                         'D38': metrics.accept_d38, 'D39': metrics.accept_d39,
+                         'D40': metrics.accept_d40}[row['id']]
+                owner_input = {'native_image': native_receipt['input']['image'], 'verdict': 'NOT_MEASURED'}
+                if row['id'] == 'D38':
+                    owner_input['flow109_d38_targets'] = chain.get('flow109_d38_targets')
+                observed = judge(project, current, owner_input)
                 if (not isinstance(observed, Mapping) or observed.get('row_id') != row['id']
                         or observed.get('status') not in ('PASS', 'FAIL', 'NOT_MEASURED')
                         or observed.get('metric_status') not in ('PASS', 'FAIL', 'NOT_MEASURED')):

@@ -7392,12 +7392,87 @@ def _d38_clock_network_latency(text: str, required_clocks: list[str]) -> dict:
             result[name] = max(values)
     return result
 
+def _d38_sink_roster(text: str) -> dict:
+    """Read the complete native post-load census, including unclocked pins."""
+    import _physical_current as native_census
+    if (text.splitlines().count('CLOCK_PLAN_ROSTER_BEGIN') != 1
+            or text.splitlines().count('CLOCK_PLAN_DONE') != 1):
+        raise MetricRefusal('D38_SINK_ROSTER_INCOMPLETE', 'native census did not close exactly once')
+    lines = text.splitlines()
+    start, end = lines.index('CLOCK_PLAN_ROSTER_BEGIN'), lines.index('CLOCK_PLAN_DONE')
+    if end <= start:
+        raise MetricRefusal('D38_SINK_ROSTER_INCOMPLETE', 'native census order')
+    body = '\n'.join(lines[start + 1:end])
+    clocks = re.findall(r'^CLOCK_PLAN_NATIVE ([^|\n]+)\|([^|\n]+)\|([^\n]+)$', body, re.M)
+    names = [name for name, _, _ in clocks]
+    if not names or len(set(names)) != len(names):
+        raise MetricRefusal('D38_SINK_CLOCK_POPULATION_INVALID', 'native clock identities')
+    for name, period, sources in clocks:
+        if not name.strip() or _finite_number(float(period)) <= 0 or not sources.strip():
+            raise MetricRefusal('D38_SINK_CLOCK_POPULATION_INVALID', name)
+    all_pins = re.findall(r'^CLOCK_PLAN_ALL_SINK ([^\n]+)$', body, re.M)
+    counts = re.findall(r'^CLOCK_PLAN_ALL_SINK_COUNT (\d+)$', body, re.M)
+    if (len(counts) != 1 or int(counts[0]) != len(all_pins)
+            or len(set(all_pins)) != len(all_pins) or any(not p.strip() for p in all_pins)):
+        raise MetricRefusal('D38_SINK_UNIVERSE_INCOMPLETE', 'all native register clock pins')
+    counted = re.findall(r'^CLOCK_PLAN_SINK_COUNT ([^|\n]+)\|(\d+)$', body, re.M)
+    if len(counted) != len(names) or len({name for name, _ in counted}) != len(names):
+        raise MetricRefusal('D38_SINK_ROSTER_INCOMPLETE', 'per-clock census')
+    domains = native_census.clock_plan_sinks(body, names)
+    reached = {pin for pins in domains.values() for pin in pins}
+    if not reached <= set(all_pins):
+        raise MetricRefusal('D38_SINK_UNIVERSE_INCOMPLETE', 'clock member outside native pin universe')
+    return {'clocks': domains, 'unclocked': sorted(set(all_pins) - reached),
+            'all_pins': sorted(all_pins)}
+
+
+def _d38_sink_authority(project: Path, specification: dict, read) -> tuple[dict, dict]:
+    """Bind the existing required set to D34's independently adopted census."""
+    import flow109_clock_plan as planning
+    reference = specification['expectation']['required_set_ref']
+    if reference != 'requirements/base_25/clock_tree_sink_coverage.json#/required_items':
+        raise MetricRefusal('D38_SINK_CONTRACT_CHANGED', reference)
+    adopted, body = _approved_document(project, planning.SINK_REFERENCE,
+        authority='requirements_owner', schema='vibeic.flow109.adopted-reference.v1')
+    read(planning.SINK_REFERENCE, adopted['sha256'])
+    _, raw_source = read(planning.SINK_SOURCE, adopted['source']['sha256'])
+    if (adopted['source']['path'] != planning.SINK_SOURCE
+            or json.loads(raw_source).get('clock_sink_inventory') !=
+                {k: v for k, v in body.items() if k not in ('schema', 'approval')}):
+        raise MetricRefusal('D38_SINK_REFERENCE_SOURCE_UNBOUND', planning.SINK_SOURCE)
+    census = body.get('reference')
+    if (not isinstance(census, dict) or set(census) != {'clocks', 'unclocked'}
+            or not isinstance(census['clocks'], dict) or not census['clocks']
+            or not isinstance(census['unclocked'], list)
+            or any(not isinstance(c, str) or not c or not isinstance(pins, list)
+                   or len(set(pins)) != len(pins) or any(not isinstance(p, str) or not p for p in pins)
+                   for c, pins in census['clocks'].items())
+            or any(not isinstance(p, str) or not p for p in census['unclocked'])):
+        raise MetricRefusal('D38_SINK_REFERENCE_SHAPE', planning.SINK_REFERENCE)
+    _identity_complete(body.get('reference_identity'))
+    for name, digest in body['reference_identity']['consumed_inputs'].items():
+        read(name, digest, external=True)
+    authority, requirement = _approved_authority(project, reference, ('clock', 'pin'))
+    read(authority['path'], authority['sha256'])
+    read(authority['source']['path'], authority['source']['sha256'])
+    allowed = [adopted['source'], {'path': planning.SINK_REFERENCE, 'sha256': adopted['sha256']}]
+    expected = [{'clock': clock, 'pin': pin} for clock, pins in sorted(census['clocks'].items()) for pin in sorted(pins)]
+    if (authority['source'] not in allowed
+            or sorted(authority['required_items'], key=_json_key) != sorted(expected, key=_json_key)):
+        raise MetricRefusal('D38_SINK_REQUIRED_SET_NOT_ADOPTED', 'exact independent D34 clock/pin population')
+    if not requirement['required_items']:
+        absence = requirement['validated_absence']['source_reference']
+        read(absence['path'], absence['sha256'])
+    return authority, census
+
+
 def accept_d38(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
     """BLOCKING CTS metric readback against the exact prelaunch authority.
 
-    Counts do not prove complete sink-pin coverage. That separate obligation
-    and runtime qualification remain NOT_MEASURED; planning targets alone
-    never establish actual tree acceptance.
+    The actual per-corner native session emits every clock-reached sink pin
+    and the full register-clock-pin universe. Compare with independently
+    adopted D34 requirements, then reuse existing admission. Planning targets
+    never substitute for actual skew/network-insertion/DRV measurements.
     """
     import flow109
     import inspect
@@ -7442,8 +7517,8 @@ def accept_d38(project: Path, context: Mapping[str, Any], component: Mapping[str
                     'unit_ref': 'requirements/base_25/clock_skew_insertion_drv.json#/units', 'missing_bounds': 'BLOCKED'}):
             raise MetricRefusal('D38_CONTRACT_CHANGED', 'CTS obligations')
         numerical = {'id': row['obligations'][1]['id'], 'status': 'NOT_MEASURED', 'measurements': []}
-        result['obligations'] = [{'id': row['obligations'][0]['id'], 'status': 'NOT_MEASURED',
-            'reason': 'D38_NATIVE_COMPLETE_SINK_PIN_ROSTER_UNAVAILABLE'}, numerical]
+        coverage = {'id': row['obligations'][0]['id'], 'status': 'NOT_MEASURED'}
+        result['obligations'] = [coverage, numerical]
         binding = d38_target_binding(project)
         if component.get('flow109_d38_targets') != binding:
             raise MetricRefusal('D38_PRELAUNCH_TARGET_BINDING_ABSENT', 'producer binding')
@@ -7459,7 +7534,10 @@ def accept_d38(project: Path, context: Mapping[str, Any], component: Mapping[str
             raise MetricRefusal('D38_NATIVE_CHAIN_UNBOUND', 'CTS handoff')
         previous, _ = read(handoff['initial_state'], handoff['initial_sha256'])
         base = project / 'phase3/librelane/execution-backend-19'
-        states, executions, ns_libraries = [], [], []
+        states, executions, ns_libraries, selected_configs = [], [], [], []
+        configs = handoff.get('step_configs')
+        if configs is not None and len(configs) != len(handoff['steps']):
+            raise MetricRefusal('D38_CONFIG_POPULATION_CHANGED', 'selected native configs')
         for index, step in enumerate(handoff['steps'], 1):
             folder = base / (f'{index:02d}-' + step.lower().replace('.', '-'))
             receipt = ll.validate_step_receipt(folder, step)
@@ -7473,7 +7551,16 @@ def accept_d38(project: Path, context: Mapping[str, Any], component: Mapping[str
                 raise MetricRefusal('D38_PRODUCER_SOURCE_CHANGED', step)
             read(previous, fp['state'])
             suffix = '@' + corners[index - 4] if index > 3 else ''
-            _, config = document('phase3/librelane/execution-backend-19-config/' + step + suffix + '.json', fp['config'])
+            cfgroot = project / 'phase3/librelane/execution-backend-19-config'
+            if configs is not None:
+                config_path, config = document(configs[index - 1]['path'], configs[index - 1]['sha256'])
+                if config_path.parent != cfgroot or configs[index - 1]['sha256'] != fp['config']:
+                    raise MetricRefusal('D38_CONFIG_POPULATION_CHANGED', step)
+            else:
+                # Older partial receipts can retain numerical readback. They
+                # still cannot manufacture the newly required native roster.
+                _, config = document(cfgroot / (step + suffix + '.json'), fp['config'])
+            selected_configs.append(config)
             if (config.get('STA_CORNERS') != corners or (index > 3 and config.get('PNR_CORNERS') != [corners[index - 4]])):
                 raise MetricRefusal('D38_CORNER_POPULATION_CHANGED', step)
             before = json.loads(previous.read_bytes())
@@ -7518,49 +7605,93 @@ def accept_d38(project: Path, context: Mapping[str, Any], component: Mapping[str
             'tool_execution': executions, 'consumed_inputs': dict(reads), 'requirements': binding['requirements'],
             'configuration': {'context_sha256': current['context_sha256'], 'targets': binding['targets']}}
 
-        def judge(field, values, complete, unit):
-            entry = {'field': field, 'status': 'NOT_MEASURED'}
-            numerical['measurements'].append(entry)
-            if not values or field not in binding['limits']:
-                entry['reason'] = 'D38_NATIVE_VALUE_OR_APPROVED_BOUND_ABSENT'
-                return
-            for value in values:
-                _finite_number(value, count=unit == 'count')
-            measured = {'status': 'MEASURED', 'value': max(values), 'unit': unit, 'identity': identity}
-            status, reason = evaluate_operator('within_declared_bounds', measured,
-                {'status': 'APPROVED', 'limits': binding['limits'][field], 'unit': binding['units'][field]})
-            entry.update(status=status if complete or status == 'FAIL' else 'NOT_MEASURED',
-                         reason=reason, measurement=measured, population_complete=complete)
+        failures = (MetricRefusal, ll.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError)
+        try:
+            def judge(field, values, complete, unit):
+                entry = {'field': field, 'status': 'NOT_MEASURED'}
+                numerical['measurements'].append(entry)
+                if not values or field not in binding['limits']:
+                    entry['reason'] = 'D38_NATIVE_VALUE_OR_APPROVED_BOUND_ABSENT'
+                    return
+                for value in values:
+                    _finite_number(value, count=unit == 'count')
+                measured = {'status': 'MEASURED', 'value': max(values), 'unit': unit, 'identity': identity}
+                status, reason = evaluate_operator('within_declared_bounds', measured,
+                    {'status': 'APPROVED', 'limits': binding['limits'][field], 'unit': binding['units'][field]})
+                entry.update(status=status if complete or status == 'FAIL' else 'NOT_MEASURED',
+                             reason=reason, measurement=measured, population_complete=complete)
 
-        skews, latencies = [], []
-        for index, corner in enumerate(corners):
-            ev = {'corners': [corner], 'metrics': states[index + 3].get('metrics', {})}
-            for key in ('clock__skew__worst_setup', 'clock__skew__worst_hold'):
-                value = reader.per_corner(ev, key)[corner]
-                if value is not None:
-                    skews.append(abs(_finite_number(value)))
-        judge('clock_skew_ns', skews, len(skews) == 2 * len(corners), 'ns')
-        for field in ('design__max_slew_violation__count', 'design__max_cap_violation__count', 'design__max_fanout_violation__count'):
-            values = [s.get('metrics', {}).get(field) for s in states[3:]]
-            judge(field, [v for v in values if v is not None], all(v is not None for v in values), 'count')
-        for index, corner in enumerate(corners):
-            folder = base / (f'{index + 4:02d}-openroad-stamidpnr')
-            _, log = read(folder / 'invocation.log')
-            propagation = log.decode().lower()
-            if 'unpropagating all clocks' in propagation or 'propagating all clocks' not in propagation:
-                raise MetricRefusal('D38_PROPAGATED_CLOCK_MEASUREMENT_UNPROVEN', corner)
-            _, raw = read(folder / corner / 'clock.rpt')
-            if not ns_libraries or not all(ns_libraries):
-                raise MetricRefusal('D38_CLOCK_REPORT_TIME_UNIT_UNSUPPORTED', corner)
-            measured = _d38_clock_network_latency(raw.decode(), binding['clocks'])
-            latencies.extend(measured.values())
-        judge('insertion_delay_ns', latencies, len(latencies) == len(corners) * len(binding['clocks']), 'ns')
-        numerical['status'] = ('FAIL' if any(v['status'] == 'FAIL' for v in numerical['measurements']) else
-            'PASS' if all(v['status'] == 'PASS' for v in numerical['measurements']) else 'NOT_MEASURED')
+            skews, latencies = [], []
+            for index, corner in enumerate(corners):
+                ev = {'corners': [corner], 'metrics': states[index + 3].get('metrics', {})}
+                for key in ('clock__skew__worst_setup', 'clock__skew__worst_hold'):
+                    value = reader.per_corner(ev, key)[corner]
+                    if value is not None:
+                        skews.append(abs(_finite_number(value)))
+            judge('clock_skew_ns', skews, len(skews) == 2 * len(corners), 'ns')
+            for field in ('design__max_slew_violation__count', 'design__max_cap_violation__count', 'design__max_fanout_violation__count'):
+                values = [s.get('metrics', {}).get(field) for s in states[3:]]
+                judge(field, [v for v in values if v is not None], all(v is not None for v in values), 'count')
+            for index, corner in enumerate(corners):
+                folder = base / (f'{index + 4:02d}-openroad-stamidpnr')
+                _, log = read(folder / 'invocation.log')
+                propagation = log.decode().lower()
+                if 'unpropagating all clocks' in propagation or 'propagating all clocks' not in propagation:
+                    raise MetricRefusal('D38_PROPAGATED_CLOCK_MEASUREMENT_UNPROVEN', corner)
+                _, raw = read(folder / corner / 'clock.rpt')
+                if not ns_libraries or not all(ns_libraries):
+                    raise MetricRefusal('D38_CLOCK_REPORT_TIME_UNIT_UNSUPPORTED', corner)
+                measured = _d38_clock_network_latency(raw.decode(), binding['clocks'])
+                latencies.extend(measured.values())
+            judge('insertion_delay_ns', latencies, len(latencies) == len(corners) * len(binding['clocks']), 'ns')
+            numerical['status'] = ('FAIL' if any(v['status'] == 'FAIL' for v in numerical['measurements']) else
+                'PASS' if all(v['status'] == 'PASS' for v in numerical['measurements']) else 'NOT_MEASURED')
+        except failures as exc:
+            numerical['status'] = ('FAIL' if any(v['status'] == 'FAIL' for v in numerical['measurements']) else 'NOT_MEASURED')
+            numerical.update(reason=getattr(exc, 'code', 'D38_NUMERICAL_UNMEASURED'), detail=str(exc))
+        try:
+            import execution_backend_producers as producer
+            rosters = []
+            for index, corner in enumerate(corners):
+                folder = base / (f'{index + 4:02d}-openroad-stamidpnr')
+                callback = selected_configs[index + 3].get('STA_EXTRA_CORNER_TCL_FILE')
+                expected = project / 'phase3/librelane/execution-backend-19-config/cts_sink_roster.tcl'
+                path, script = read(callback) if isinstance(callback, str) else (None, b'')
+                if path != expected or script.decode() != producer._d38_sink_report_tcl():
+                    raise MetricRefusal('D38_NATIVE_SINK_EMITTER_UNBOUND', corner)
+                _, log = read(folder / 'invocation.log')
+                rosters.append(_d38_sink_roster(log.decode()))
+            coverage['observed_rosters'] = dict(zip(corners, rosters))
+            authority, reference = _d38_sink_authority(project, row['obligations'][0], read)
+            measurements = []
+            coverage['measurements'] = measurements
+            for corner, roster in zip(corners, rosters):
+                values = [{'clock': clock, 'pin': pin} for clock, pins in sorted(roster['clocks'].items()) for pin in pins]
+                measurement = {'status': 'MEASURED', 'value': values, 'unit': 'set',
+                    'identity': {**identity, 'requirements': authority, 'consumed_inputs': dict(reads),
+                        'configuration': {**identity['configuration'], 'corner': corner}}}
+                status, reason = evaluate_operator('covers_all', measurement, authority)
+                required_clocks = {pin: {c for c, pins in reference['clocks'].items() if pin in pins}
+                                   for pin in {p for pins in reference['clocks'].values() for p in pins}}
+                observed_clocks = {pin: {c for c, pins in roster['clocks'].items() if pin in pins}
+                                   for pin in required_clocks}
+                # The registered operator is covers_all. Keep the complete
+                # observation (including unused tied-off spare clock pins),
+                # without promoting extra observed pins into requirements.
+                if (set(roster['clocks']) != set(reference['clocks'])
+                        or set(roster['clocks']) != set(binding['clocks'])
+                        or reference['unclocked'] or observed_clocks != required_clocks):
+                    status, reason = 'FAIL', 'required native clock association/unreached pin differs from adopted reference'
+                measurements.append({'corner': corner, 'status': status, 'reason': reason, 'measurement': measurement})
+            statuses = [m['status'] for m in measurements]
+            coverage['status'] = 'FAIL' if 'FAIL' in statuses else 'PASS' if statuses and all(s == 'PASS' for s in statuses) else 'NOT_MEASURED'
+        except failures as exc:
+            coverage.update(reason=getattr(exc, 'code', 'D38_SINK_ROSTER_UNMEASURED'), detail=str(exc))
         if d38_target_binding(project) != binding:
             raise MetricRefusal('D38_TARGETS_CHANGED_DURING_READ', 'approved targets')
         for name, digest in reads.items():
             read(name, digest, external=True)
+        identity['consumed_inputs'] = dict(reads)
         result['readset'] = dict(reads)
     except (MetricRefusal, flow109.Flow109Error, ll.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         result.update(reason=getattr(exc, 'code', 'D38_NATIVE_BINDING_UNPROVEN'), detail=str(exc))
@@ -7573,6 +7704,14 @@ def accept_d38(project: Path, context: Mapping[str, Any], component: Mapping[str
         for obligation in result['obligations']:
             if any(v['status'] == 'FAIL' for v in obligation.get('measurements', [])):
                 obligation['status'] = 'FAIL'
+    elif result['obligations'] and all(o['status'] == 'PASS' for o in result['obligations']):
+        result['metric_status'] = 'PASS'
+        import flow109_admission as admission
+        try:
+            result['qualification_receipt'] = admission.require_admission(project, current)
+            result.update(status='PASS', qualification='PASS', delivery_blocked=False)
+        except admission.AdmissionRefusal as exc:
+            result.update(reason=exc.code, qualification_receipt=exc.report)
     return result
 
 
