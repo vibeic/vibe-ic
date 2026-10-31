@@ -184,6 +184,85 @@ def _signoff_load_inputs(project: Path) -> tuple[Path, dict, Path, Path, list[di
     return state_path, config, current["sdc"], current["nl"], evidence
 
 
+def _handoff_load_inputs(project: Path) -> tuple[Path, dict, Path, Path, list[dict]]:
+    """Reopen the delivered pre-layout load scene without claiming post-route STA."""
+    import librelane_contract as native
+    row, row_ref = _bound_json(project, Path("reports/flow109/default_rows/D30.json"))
+    evidence = [row_ref]
+
+    def bound(record):
+        if (not isinstance(record, Mapping) or set(record) != {"path", "sha256"}
+                or not re.fullmatch(r"[0-9a-f]{64}", str(record.get("sha256", "")))):
+            raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "handoff file binding")
+        raw = record["path"]
+        if isinstance(raw, str) and Path(raw).is_absolute():
+            try:
+                raw = Path(raw).relative_to(project).as_posix()
+            except ValueError as exc:
+                raise D06Refusal("D06_EVIDENCE_WRONG_SOURCE", str(raw)) from exc
+        path = _project_path(project, raw, "handoff load input")
+        if not path.is_relative_to(project) or _sha(path) != record["sha256"]:
+            raise D06Refusal("D06_CURRENT_STA_AUTHORITY_STALE", str(raw))
+        evidence.append(_record(project, path))
+        return path
+
+    metrics = row.get("metric_acceptance") or {}
+    if (row.get("step_id") != "D30" or row.get("default_row_status") != "PASS"
+            or row.get("completed") is not True or metrics.get("status") != "PASS"
+            or not metrics.get("obligations")
+            or any(item.get("status") != "PASS" for item in metrics["obligations"])):
+        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "current netlist handoff")
+    delivery = _read(bound(row.get("d30_delivery_receipt")))
+    timing = delivery.get("consumed_timing") or {}
+    if (delivery.get("schema") != "vibeic.flow109.d30-delivery.v1"
+            or delivery.get("step_id") != "D30"
+            or delivery.get("context_sha256") != row.get("context_sha256")
+            or timing.get("status") != "MEASURED"):
+        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "delivered load scene")
+    record = _read(bound(delivery.get("handoff_record")))
+    if record.get("canonical_pass") is not True or record.get("status") != "PASS":
+        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "handoff canonical record")
+    netlist = bound(delivery.get("source_netlist"))
+    if _sha(bound(delivery.get("delivered_netlist"))) != _sha(netlist):
+        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_STALE", "delivered netlist")
+    reads = timing.get("consumed_inputs")
+    if not isinstance(reads, Mapping) or not reads:
+        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "timing readset")
+    for raw, digest in reads.items():
+        path = project / raw
+        if not path.is_file() or _sha(path) != digest:
+            raise D06Refusal("D06_CURRENT_STA_AUTHORITY_STALE", str(raw))
+        evidence.append({"path": raw, "sha256": digest})
+    records = timing.get("native_records") or {}
+    config_path, state_path = (bound(records.get(name)) for name in
+                               ("config.json", "state_out.json"))
+    receipt_path = bound(timing.get("native_receipt"))
+    if receipt_path.parent != state_path.parent or config_path.parent != state_path.parent:
+        raise D06Refusal("D06_EVIDENCE_WRONG_SOURCE", "native timing folder")
+    try:
+        receipt = native.validate_step_receipt(state_path.parent, "OpenROAD.STAPrePNR")
+    except native.Refusal as exc:
+        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_STALE", str(exc)) from exc
+    config, state = _read(config_path), _read(state_path)
+    if (config.get("meta", {}).get("step") != "OpenROAD.STAPrePNR"
+            or receipt["sha256"].get("config.json") != _sha(config_path)
+            or bound({"path": state.get("nl"), "sha256": _sha(netlist)}) != netlist):
+        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "native netlist/config")
+    scenes = timing.get("value")
+    if (not isinstance(scenes, list) or not scenes
+            or any(scene.get("mode") != "functional" for scene in scenes)):
+        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "functional load scenes")
+    sdcs = {bound(scene.get("sdc")) for scene in scenes}
+    if (receipt["input"].get("state_files", {}).get(str(netlist)) != _sha(netlist)
+            or len(sdcs) != 1 or any(
+                receipt["input"].get("config_files", {}).get(str(path)) != _sha(path)
+                or (reads.get(str(path)) != _sha(path)
+                    and reads.get(path.relative_to(project).as_posix()) != _sha(path))
+                for path in sdcs)):
+        raise D06Refusal("D06_CURRENT_STA_AUTHORITY_INVALID", "consumed load SDC")
+    return state_path, config, sdcs.pop(), netlist, evidence
+
+
 def _current_bare_die_load(project: Path, io: Mapping) -> tuple[dict, list[dict]]:
     """Bind the load scene consumed by the current STA state to current IO pads."""
     if not (project / TAPEOUT_DECLARATION).is_file():
@@ -218,6 +297,10 @@ def _current_bare_die_load(project: Path, io: Mapping) -> tuple[dict, list[dict]
         evidence = [declaration_ref, repair_ref, state_ref,
                     _record(project, config_path), _record(project, sdc_path),
                     _record(project, netlist_path)]
+    elif (project / "reports/flow109/default_rows/D30.json").exists():
+        state_path, config, sdc_path, netlist_path, native_refs = _handoff_load_inputs(project)
+        evidence = [declaration_ref, *native_refs]
+        state_ref = _record(project, state_path)
     else:
         state_path, config, sdc_path, netlist_path, native_refs = _signoff_load_inputs(project)
         evidence = [declaration_ref, *native_refs]
