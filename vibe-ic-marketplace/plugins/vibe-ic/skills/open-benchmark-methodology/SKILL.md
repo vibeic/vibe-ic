@@ -122,6 +122,18 @@ narrow structural exception does not allow a functional-only repair to omit its
 source contract. Embedded bodies, multiple modules, unsupported source context,
 incomplete extraction and malformed public manifests never become text-only.
 
+A functional rejection on a header-only input may use the distinct repair
+wrapper `vibeic.prompt_header_completion.v1`. It binds `prompt_sha256`,
+`parent_rtl_sha256`, whole-bundle `candidate_sha256`, `challenge_sha256`, the
+same attributed `author` and `oracle_accessed: false`, plus an exact relative
+`candidate_path`, its byte hash `candidate_file_sha256`, and the unchanged
+`prompt_header_preservation`. Normal completion replays that header proof;
+ordinary native gates, the immutable functional challenge and fresh hash-bound
+AI review remain mandatory. Header fidelity alone is not functional PASS.
+An active structural contract must keep its original structural wrapper and
+cannot be replaced by HeaderCompletion. Supplied bodies, multiple/ambiguous
+modules and unverified source authority retain their strict source obligations.
+
 Every candidate therefore has two required checks: deterministic product gates
 and semantic AI review. `program_first_ai_acceptance.json` must be `COMPLETE`
 before scoring.

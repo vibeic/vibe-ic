@@ -33,6 +33,7 @@ SCHEMA_MATRIX = "vibeic.public_elaboration_matrix.v1"
 SCHEMA_STRUCTURAL = "vibeic.native_structural_contract.v1"
 SCHEMA_PROMPT_STRUCTURAL = "vibeic.prompt_structural_contract.v1"
 SCHEMA_PROMPT_COMPLETION = "vibeic.prompt_structural_completion.v1"
+SCHEMA_HEADER_COMPLETION = "vibeic.prompt_header_completion.v1"
 STRUCTURAL_ABSTRACTION = "RTLIL_AFTER_PROC_OPT"
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
@@ -777,6 +778,67 @@ def prompt_header_preservation(facts: Mapping[str, Any]) -> Dict[str, Any]:
             **{key: facts[key] for key in ("prompt_sha256", "module", "header", "header_sha256")}}
 
 
+def validate_prompt_header(candidate_source: str, prompt: str, binding: Any,
+                           *, top: Optional[str] = None, require_header: bool = False) -> Dict[str, Any]:
+    """Reuse the same exact-header proof for functional and structural repair."""
+    report: Dict[str, Any] = {"verdict": "PASS", "findings": []}
+    def stop(verdict, code, message):
+        report.update(verdict=verdict, findings=[{"code": code, "message": message}])
+        return report
+    facts = prompt_rtl_source_facts(prompt)
+    if facts["kind"] == "UNSUPPORTED":
+        return stop("NOT_MEASURED", "STRUCTURAL_PROMPT_SOURCE_UNSUPPORTED", facts["reason"])
+    if facts["kind"] != "HEADER_ONLY":
+        if require_header or binding is not None:
+            return stop("REFUSED", "STRUCTURAL_PROMPT_HEADER_UNSUPPORTED",
+                        "header completion requires one supplied header, not source absence")
+        return report
+    if binding != prompt_header_preservation(facts):
+        return stop("REFUSED", "STRUCTURAL_PROMPT_HEADER_UNBOUND",
+                    "the unique supplied header must be bound exactly, including prompt and header hashes")
+    import module_port_audit as audit
+    issues: List[str] = []
+    regions = list(audit.module_regions(candidate_source, issues))
+    headers = [candidate_source[start:body] for name, start, body, _end in regions
+               if name == facts["module"]]
+    if (issues or top is not None and top != facts["module"] or len(headers) != 1
+            or _header_tokens(headers[0]) != _header_tokens(facts["header"])):
+        return stop("REFUSED", "STRUCTURAL_PROMPT_HEADER_CHANGED",
+                    "candidate changed or removed the supplied header's significant tokens")
+    return {**report, **prompt_header_preservation(facts)}
+
+
+def validate_header_completion(candidate_path: Path, contract: Mapping[str, Any],
+                               prompt: str) -> Dict[str, Any]:
+    """BLOCKING header fidelity only; immutable functional proof stays required.
+
+    This wrapper cannot carry or replace a structural contract. Its caller owns
+    whole-bundle identity, parent/challenge/author lineage and ordinary gates.
+    """
+    report: Dict[str, Any] = {"schema": SCHEMA_HEADER_COMPLETION, "verdict": "REFUSED", "findings": []}
+    def refuse(code, message):
+        report["findings"].append({"code": code, "message": message})
+        return report
+    if contract.get("schema") != SCHEMA_HEADER_COMPLETION:
+        return refuse("HEADER_COMPLETION_SCHEMA_INVALID", "expected explicit header completion schema")
+    if any(key in contract for key in ("structural", "native_structural_contract", "structural_verification", "preservation", "preservation_declaration", "elaboration_matrix", "public_elaboration_matrix", "source_sha256", "script", "command", "passes")):
+        return refuse("HEADER_COMPLETION_PROOF_CONFLICT", "header completion cannot replace other proof obligations")
+    if _safe_path(contract.get("candidate_path")) is None:
+        return refuse("HEADER_COMPLETION_PATH_INVALID", "exact relative candidate_path is required")
+    if contract.get("prompt_sha256") != sha256_text(prompt):
+        return refuse("HEADER_COMPLETION_PROMPT_STALE", "header completion prompt hash is stale")
+    try:
+        data = Path(candidate_path).read_bytes()
+    except OSError as exc:
+        return refuse("HEADER_COMPLETION_CANDIDATE_MISSING", str(exc))
+    if contract.get("candidate_file_sha256") != hashlib.sha256(data).hexdigest():
+        return refuse("HEADER_COMPLETION_CANDIDATE_STALE", "selected candidate file hash is stale")
+    header = validate_prompt_header(data.decode("utf-8", errors="replace"), prompt,
+        contract.get("prompt_header_preservation"), require_header=True)
+    return {**report, "verdict": header["verdict"], "header_preservation": header,
+            "findings": header["findings"]}
+
+
 def run_structural_contract(
     candidate_path: Path,
     declaration: Any,
@@ -867,28 +929,13 @@ def run_structural_contract(
                       "structural requirement quote is stale, absent, or ambiguous")
 
     if prompt_only:
-        facts = prompt_rtl_source_facts(requirement_text)
-        if facts["kind"] == "UNSUPPORTED":
-            return finish("NOT_MEASURED", "STRUCTURAL_PROMPT_SOURCE_UNSUPPORTED", facts["reason"])
-        header_binding = declaration.get("prompt_header_preservation")
-        if facts["kind"] == "HEADER_ONLY":
-            if header_binding != prompt_header_preservation(facts):
-                return finish("REFUSED", "STRUCTURAL_PROMPT_HEADER_UNBOUND",
-                              "the unique supplied header must be bound exactly, including prompt and header hashes")
-            import module_port_audit as audit
-            issues: List[str] = []
-            regions = list(audit.module_regions(candidate_source, issues))
-            headers = [candidate_source[start:body] for name, start, body, _end in regions
-                       if name == facts["module"]]
-            if (issues or declaration.get("top") != facts["module"] or len(headers) != 1
-                    or _header_tokens(headers[0]) != _header_tokens(facts["header"])):
-                return finish("REFUSED", "STRUCTURAL_PROMPT_HEADER_CHANGED",
-                              "candidate changed or removed the supplied header's significant tokens")
-            report["prompt_header_preservation"] = {
-                "verdict": "PASS", **prompt_header_preservation(facts)}
-        elif header_binding is not None:
-            return finish("REFUSED", "STRUCTURAL_PROMPT_HEADER_UNSUPPORTED",
-                          "header preservation was declared without a supplied header")
+        header = validate_prompt_header(candidate_source, requirement_text,
+            declaration.get("prompt_header_preservation"), top=declaration.get("top"))
+        if header["verdict"] != "PASS":
+            report.update(verdict=header["verdict"], findings=header["findings"])
+            return report
+        if header.get("schema"):
+            report["prompt_header_preservation"] = header
 
     top = declaration.get("top")
     if not isinstance(top, str) or not _IDENT.fullmatch(top):
@@ -1056,6 +1103,13 @@ def validate_normal_repair_contract(
     if not isinstance(contract, Mapping):
         return {"verdict": "REFUSED", "findings": [{"code": "DECLARATION_REFUSED",
                                                       "message": "normal repair contract is not an object"}]}
+    if contract.get("schema") == SCHEMA_HEADER_COMPLETION:
+        if original or candidate_path is None:
+            return {"verdict": "REFUSED", "findings": [{
+                "code": "HEADER_COMPLETION_SOURCE_CONFLICT",
+                "message": "header completion needs source-verified prompt-only input and one exact candidate"}]}
+        return validate_header_completion(candidate_path, contract,
+            (requirement_sources or {}).get("input/phase1_prompt.md", ""))
     preservation = contract.get("preservation", contract.get("preservation_declaration"))
     matrix = contract.get("elaboration_matrix", contract.get("public_elaboration_matrix"))
     structural = contract.get("structural", contract.get("native_structural_contract"))
