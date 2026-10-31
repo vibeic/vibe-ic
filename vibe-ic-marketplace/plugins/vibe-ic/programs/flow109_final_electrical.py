@@ -54,6 +54,57 @@ def _required_corner_population(value):
     return set(value)
 
 
+def _retained_sta(project, manifest, parasitics):
+    """Reopen an explicitly selected native producer; never fall back to a run.
+
+    Reuse is limited to this carrier's exact final physical/logical inputs.
+    The existing producer receipt, timing readers and SDF export consumer own
+    the evidence. Export availability says nothing about simulator annotation.
+    """
+    from librelane_contract import validate_step_receipt
+    path = files._bound(project, manifest.get('retained_sta_state'))
+    if not path.is_relative_to(project) or path.name != 'state_out.json':
+        raise AdmissionRefusal('D70_RETAINED_STA_FOREIGN', str(path))
+    folder, state = path.parent, _read(path)
+    receipt = validate_step_receipt(folder, 'OpenROAD.STAPostPNR')
+    expected = {'nl': parasitics['adopted_views']['netlist'],
+                'sdc': parasitics['adopted_views']['sdc'],
+                'def': parasitics['filled_def'], 'odb': parasitics['odb']}
+    timed = receipt['input'].get('state_files') or {}
+    for role, reference in expected.items():
+        source = files._bound(project, reference)
+        if (Path(str(state.get(role) or '')).resolve() != source
+                or timed.get(str(source)) != digest(source)):
+            raise AdmissionRefusal('D70_RETAINED_STA_BASIS_MISMATCH', role)
+    spefs = state.get('spef') or {}
+    scenes = {signoff.rc_corner(key): value for key, value in spefs.items()}
+    if (len(scenes) != len(spefs) or set(scenes) != set(parasitics['final_spefs'])
+            or any(Path(str(scenes[key])).resolve() != files._bound(project, ref)
+                   or timed.get(str(files._bound(project, ref))) != ref['sha256']
+                   for key, ref in parasitics['final_spefs'].items())):
+        raise AdmissionRefusal('D70_RETAINED_STA_BASIS_MISMATCH', 'final SPEF scenes')
+    _required_corner_population(manifest.get('required_corners'))
+    _metric_digital_basis(project, {
+        'manifest': files._record(project, project / INPUT),
+        'final_parasitics_receipt': manifest['final_parasitics_receipt'],
+        'required_corners': manifest['required_corners']}, native_state=(folder, state))
+    # Timing observations must belong to the original receipt, not newly
+    # supplied report text beside a valid SDF. Preserve every measured failure.
+    evidence = ['config.json']
+    if (folder / 'metrics.json').exists():
+        evidence.append('metrics.json')
+    for corner in manifest['required_corners']:
+        evidence.extend(str(Path(corner) / name) for name in
+                        ('sta.log', signoff.CORNER_REPORT, 'unpropagated.rpt'))
+    for name in evidence:
+        source = folder / name
+        if not source.is_file() or receipt['sha256'].get(name) != digest(source):
+            raise AdmissionRefusal('D70_RETAINED_STA_EVIDENCE_UNBOUND', name)
+    exports = postroute.bind_stapostpnr_sdfs(folder, state,
+        expected_netlist=files._bound(project, expected['nl']))
+    return folder, state, exports
+
+
 def execute(project, context):
     if context.get("resolved_row", {}).get("profile", {}).get("id") == "analog_die":
         return _execute_analog(project, context)
@@ -82,11 +133,18 @@ def execute(project, context):
         spefs = {signoff.rc_corner(c): files._bound(project, r) for c, r in parasitics['spefs'].items()}
         native = manifest.get('librelane') or {}
         if set(native) != {'image', 'pdk_root', 'pdk'}: raise AdmissionRefusal('D70_NATIVE_CONFIGURATION_ABSENT', 'image/pdk_root/pdk required')
-        result['native_started'] = True
         sources = operation_sources()
-        sta = signoff.run(project, native['image'], Path(native['pdk_root']), native['pdk'],
-                          routed_def=routed_def, routed_odb=odb, netlist=netlist, sdc=sdc,
-                          extract=False, time=True, direct_spefs=spefs, lane='flow109-d70-sta')
+        if 'retained_sta_state' in manifest:
+            folder, _, exports = _retained_sta(project, manifest, parasitics)
+            sta = {'sta': str(folder)}
+            result.update(native_reused=True, retained_sta_state=manifest['retained_sta_state'],
+                          retained_sta_receipt=files._record(project, folder / 'vibeic_receipt.json'),
+                          sdf_export=exports)
+        else:
+            result['native_started'] = True
+            sta = signoff.run(project, native['image'], Path(native['pdk_root']), native['pdk'],
+                              routed_def=routed_def, routed_odb=odb, netlist=netlist, sdc=sdc,
+                              extract=False, time=True, direct_spefs=spefs, lane='flow109-d70-sta')
         corners = signoff.corner_timing(Path(sta['sta'])); timing = signoff.judge_timing(corners)
         state_path, record_path = Path(sta['sta']) / 'state_out.json', project / postroute.STEP23_RECORD
         write_json(record_path, {'step': 'OpenROAD.STAPostPNR', 'mode': 'librelane',
@@ -117,7 +175,10 @@ def execute(project, context):
         status = timing['verdict']
         scan_required = (context.get('features') or {}).get('requires_scan') is True
         if scan_required:
-            coverage = signoff.run_scan_timing(project, context, 'D70', native, state)
+            coverage = (manifest.get('scan_timing_coverage') or {
+                'status': 'NOT_MEASURED', 'reason': 'D70_RETAINED_SCAN_COVERAGE_ABSENT'}
+                if result.get('native_reused') else
+                signoff.run_scan_timing(project, context, 'D70', native, state))
             scan_current = signoff.validate_scan_timing(project, context, coverage, state)
             # Preserve a valid measured failure, including when later coverage
             # becomes unmeasured. The raw acquisitions remain retained.
@@ -162,6 +223,18 @@ def validate_final_electrical(project, receipt_ref, *, require_pass=True):
     if record.get('operation_sources') != operation_sources():
         raise AdmissionRefusal('D70_OPERATION_SOURCE_CHANGED', 'adapter or retained consumer changed')
     parasitics = extract.validate_final_parasitics(project, record['final_parasitics_receipt'])
+    if record.get('native_reused') is True:
+        manifest_path = files._bound(project, record.get('manifest'))
+        manifest = _read(manifest_path)
+        if (manifest_path != project / INPUT
+                or manifest.get('final_parasitics_receipt') != record['final_parasitics_receipt']
+                or manifest.get('retained_sta_state') != record.get('retained_sta_state')):
+            raise AdmissionRefusal('D70_FINAL_INPUT_CHANGED', 'retained producer selection differs')
+        retained, _, exports = _retained_sta(project, manifest, parasitics)
+        if (exports != record.get('sdf_export')
+                or files._record(project, retained / 'vibeic_receipt.json') != record.get('retained_sta_receipt')
+                or files._record(project, retained / 'state_out.json') != record.get('sta_state')):
+            raise AdmissionRefusal('D70_FINAL_OUTPUT_BINDING_MISMATCH', 'retained STA export changed')
     folder, state = postroute.stapostpnr_state(project)
     if files._record(project, folder / 'state_out.json') != record['sta_state']:
         raise AdmissionRefusal('D70_STA_STATE_CHANGED', str(folder))
@@ -648,7 +721,7 @@ def _metric_analog_authority(project, name, observed):
     return authority, body
 
 
-def _metric_digital_basis(project, record):
+def _metric_digital_basis(project, record, *, native_state=None):
     """Bind native functional timing's libraries, RC inputs and configuration."""
     import fnmatch
     from librelane_contract import validate_step_receipt
@@ -658,7 +731,7 @@ def _metric_digital_basis(project, record):
     manifest = _read(manifest_path)
     if manifest.get('final_parasitics_receipt') != record['final_parasitics_receipt']:
         raise AdmissionRefusal('D70_FINAL_INPUT_CHANGED', 'manifest final parasitics differ')
-    folder, state = postroute.stapostpnr_state(project)
+    folder, state = native_state if native_state is not None else postroute.stapostpnr_state(project)
     receipt = validate_step_receipt(folder, 'OpenROAD.STAPostPNR')
     inputs = receipt['input']; config = _load(folder / 'config.json')
     if (inputs.get('config') != digest(folder / 'config.json')
