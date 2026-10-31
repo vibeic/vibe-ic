@@ -802,7 +802,18 @@ def _d60_inputs(project):
             raise ValueError('D60_ADOPTED_VIEW_COLLISION')
         views[view['master']] = source_view
     tech = tech_of(layout)
-    target, _ = declared_target(project)
+    target, target_source = declared_target(project)
+    if not isinstance(target_source, str):
+        raise ValueError('D60_PDK_DECLARATION_SOURCE_ABSENT')
+    relative = Path(target_source.rsplit(':', 1)[0])
+    declarations = [base / relative for base in (project, project / 'run')
+                    if (base / relative).is_file()]
+    if not declarations:
+        raise ValueError('D60_PDK_DECLARATION_SOURCE_UNBOUND')
+    for declaration in declarations:
+        if any(p.is_symlink() for p in (declaration, *declaration.parents)):
+            raise ValueError('D60_PDK_DECLARATION_SOURCE_UNBOUND')
+        remember(declaration)
     if resolver.families_agree(target, tech) is not True:
         raise ValueError('D60_DECLARED_TECHNOLOGY_MISMATCH')
     facts = resolver.resolve_pdk(target, project=project)
@@ -926,6 +937,7 @@ def execute(project, context):
         record['native_launch'] = launch.local_image_attestation()
         data = _d60_inputs(project)
         record['inputs'] = data['inputs']
+        record['metric_sources'] = _d60_metric_sources()
         tools = {name: shutil.which(name) for name in ('magic', 'klayout')}
         if not all(tools.values()):
             raise ValueError('D60_NATIVE_TOOL_ABSENT')
@@ -980,6 +992,152 @@ def execute(project, context):
         stage.close()
     (output / 'component.json').write_text(json.dumps(record, indent=2) + '\n')
     return record
+
+
+def _d60_metric_sources():
+    """Bind the existing stream/readback implementation, including shared primitives."""
+    import hashlib
+    here = Path(__file__).resolve().parent
+    return {name: hashlib.sha256((here / name).read_bytes()).hexdigest()
+            for name in ('analog_hardmacro_gds_emit.py', 'analog_pdk_availability.py',
+                         'declared_pdk_is_the_pdk_used_check.py', 'flow109_analog_floorplan.py')}
+
+
+def _d60_metric_readback(project, data, gds, tool):
+    """Reopen streamed geometry with the existing source-owned complete hierarchy."""
+    import uuid
+    import subprocess
+    target = project / 'reports/flow109/D60_metric_readback' / uuid.uuid4().hex
+    target.mkdir(parents=True)
+    script, request, answer = target / 'readback.py', target / 'request.json', target / 'readback.json'
+    script.write_text(_D60_READBACK)
+    request.write_text(json.dumps({**data, 'gds': str(gds), 'answer': str(answer)}))
+    argv = [tool['path'], '-b', '-r', str(script), '-rd', 'D60_REQUEST=' + str(request)]
+    done = subprocess.run(argv, capture_output=True, text=True)
+    log = target / 'klayout.log';log.write_text(done.stdout + done.stderr)
+    if done.returncode or not answer.is_file():
+        raise ValueError('D60_METRIC_NATIVE_READBACK_UNAVAILABLE')
+    return {'measurement': json.loads(answer.read_text()), 'execution':
+            {'argv': argv, 'returncode': done.returncode, 'log': str(log.relative_to(project))}}
+
+
+def _d60_metric_observation(project, context, component):
+    import hashlib
+    import flow109
+    from flow109_analog_floorplan import bound_file
+    current = flow109.validate_execution_context(context)
+    if (current['requested_step'] != 'D60' or current['resolved_row']['profile']['id'] != 'analog_die'
+            or component.get('step_id') != 'D60' or component.get('context_sha256') != current['context_sha256']):
+        raise ValueError('D60_METRIC_CONTEXT_MISMATCH')
+    if component.get('metric_sources') != _d60_metric_sources():
+        raise ValueError('D60_METRIC_SOURCE_CHANGED_OR_UNRECORDED')
+    data = _d60_inputs(project)
+    if component.get('inputs') != data['inputs']:
+        raise ValueError('D60_METRIC_INPUT_CHANGED')
+    outputs = component.get('outputs')
+    if not isinstance(outputs, list) or len(outputs) != 5:
+        raise ValueError('D60_METRIC_OUTPUT_POPULATION_INCOMPLETE')
+    paths = [bound_file(project, ref) for ref in outputs]
+    answers = [p for p in paths if p.name == 'readback.json']
+    if len(set(paths)) != 5 or len(answers) != 1:
+        raise ValueError('D60_METRIC_OUTPUT_POPULATION_AMBIGUOUS')
+    work = answers[0].parent
+    if work.parent != project / 'reports/flow109/D60' or any(not p.is_relative_to(work) for p in paths):
+        raise ValueError('D60_METRIC_OUTPUT_FOREIGN')
+    raw = work / 'component.json'
+    if any(p.is_symlink() for p in (raw, *raw.parents)) or json.loads(raw.read_text()) != component:
+        raise ValueError('D60_METRIC_ORIGINAL_COMPONENT_MISMATCH')
+    gds = work / 'work' / (data['top'] + '.gds')
+    if (set(paths) != {gds, work / 'readback.json', work / 'readback.py', work / 'readback-request.json', work / 'work/stream.tcl'}
+            or (work / 'readback.py').read_text() != _D60_READBACK
+            or (work / 'work/stream.tcl').read_text() != build_gds_write_tcl(data['top'], data['top'], data['top'] + '.gds')
+            or json.loads((work / 'readback-request.json').read_text()) !=
+               {**data, 'gds': str(gds), 'answer': str(work / 'readback.json')}):
+        raise ValueError('D60_METRIC_NATIVE_RECIPE_OR_REQUEST_CHANGED')
+    tools = component['tools']
+    if set(tools) != {'magic', 'klayout'} or any(hashlib.sha256(Path(t['path']).resolve(strict=True).read_bytes()).hexdigest()
+                                                != t.get('sha256') for t in tools.values()):
+        raise ValueError('D60_METRIC_TOOL_CHANGED')
+    executions = component.get('executions')
+    if component.get('native_started') is not True or not isinstance(executions, list) or len(executions) != 2:
+        raise ValueError('D60_METRIC_NATIVE_EXECUTION_INCOMPLETE')
+    logs = []
+    for execution in executions:
+        if type(execution.get('returncode')) is not int or execution['returncode'] != 0:
+            raise ValueError('D60_METRIC_NATIVE_EXECUTION_INCOMPLETE')
+        ref = {'path': execution['log'], 'sha256': execution['log_sha256']}
+        bound_file(project, ref);logs.append(ref)
+    observed = _d60_metric_readback(project, data, gds, tools['klayout'])
+    measurement = observed['measurement']
+    if measurement != component.get('measurements') or measurement != json.loads(answers[0].read_text()):
+        raise ValueError('D60_METRIC_NATIVE_READBACK_DISAGREEMENT')
+    if _d60_inputs(project) != data or component['metric_sources'] != _d60_metric_sources():
+        raise ValueError('D60_METRIC_CONSUMED_BASIS_CHANGED_DURING_READ')
+    for ref in [*outputs, *logs]:
+        bound_file(project, ref)
+    return {'measurement': measurement, 'required_cells': sorted(data['cells']),
+            'required_hierarchy': data['hierarchy'], 'required_instances': data['instances'],
+            'readback': observed['execution'], 'readset': {'inputs': data['inputs'], 'outputs': outputs,
+                'executions': executions, 'logs': logs, 'tools': tools, 'sources': component['metric_sources'],
+                'component': {'path': str(raw.relative_to(project)), 'sha256': hashlib.sha256(raw.read_bytes()).hexdigest()}}}
+
+
+def accept_d60(project, context, component):
+    """BLOCKING native hierarchy census; adopted layer/hierarchy mapping remains separate."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    result = {'schema': metrics.SCHEMA, 'row_id': 'D60', 'status': 'NOT_MEASURED',
+              'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    ids = ['base_41.stream_layer_hierarchy_mapping', 'base_41.unresolved_gds_cells']
+    try:
+        current = flow109.validate_execution_context(context)
+        if current['requested_step'] != 'D60' or [o['id'] for o in current['resolved_row']['obligations']] != ids:
+            raise ValueError('D60_METRIC_OBLIGATIONS_UNREGISTERED')
+        observation = _d60_metric_observation(Path(project).resolve(strict=True), current, component)
+        result['observation'] = observation
+        measured = observation['measurement'];failed = measured.get('status') == 'FAIL'
+        if measured.get('status') not in ('PASS', 'FAIL'):
+            raise ValueError('D60_METRIC_NATIVE_RESULT_INCOMPLETE')
+        result['obligations'] = [{'id': ids[0], 'status': 'FAIL' if failed else 'NOT_MEASURED',
+            'reason': measured.get('reason', 'D60_ADOPTED_LAYER_HIERARCHY_REFERENCE_UNBOUND')},
+            {'id': ids[1], 'status': 'NOT_MEASURED' if failed else 'PASS',
+             'observed_value': None if failed else 0, 'unit': 'count',
+             'reason': 'D60_SOURCE_OWNED_COMPLETE_NATIVE_HIERARCHY_REOPENED' if not failed else
+                       'D60_NATIVE_HIERARCHY_FAILED_COUNT_NOT_COMPLETE'}]
+        result.update(metric_status='FAIL' if failed else 'NOT_MEASURED',
+                      reason='D60_NATIVE_HIERARCHY_REOPENED_ADOPTED_MAPPING_PENDING')
+    except (ValueError, OSError, KeyError, TypeError, AttributeError, flow109.Flow109Error) as exc:
+        result.update(reason='D60_METRIC_EVIDENCE_UNAVAILABLE', detail=str(exc))
+        result['obligations'] = [{'id': oid, 'status': 'NOT_MEASURED', 'reason': str(exc)} for oid in ids]
+    if component.get('component_status') == 'FAIL' or result['metric_status'] == 'FAIL':
+        result.update(status='FAIL', reason='D60_MEASURED_FAILURE_PRESERVED')
+    return result
+
+
+def consume_default_row_completion(project, context, component):
+    accepted = accept_d60(project, context, component)
+    previous = component.get('metric_acceptance')
+    previous = previous if isinstance(previous, dict) else {}
+    metric_failed = (component.get('metric_acceptance_status') == 'FAIL' or
+                     previous.get('status') == 'FAIL' or previous.get('metric_status') == 'FAIL')
+    if metric_failed or component.get('default_row_status') == 'FAIL':
+        accepted = {**accepted, 'status': 'FAIL', 'delivery_blocked': True,
+            'metric_status': 'FAIL' if metric_failed else accepted['metric_status'],
+            'reason': 'D60_PRIOR_MEASURED_FAILURE_PRESERVED'}
+        prior = previous.get('obligations', [])
+        prior = prior if isinstance(prior, list) else []
+        failed_ids = {item.get('id') for item in prior if isinstance(item, dict) and item.get('status') == 'FAIL'}
+        accepted['prior_failed_obligation_ids'] = sorted(oid for oid in failed_ids if isinstance(oid, str))
+        accepted['obligations'] = [
+            {**item, 'status': 'FAIL', 'reason': 'D60_PRIOR_MEASURED_FAILURE_PRESERVED'}
+            if item.get('id') in failed_ids and item.get('status') == 'NOT_MEASURED' else item
+            for item in accepted['obligations']]
+    return {**component, 'step_id': 'D60', 'context_sha256': context['context_sha256'],
+        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['metric_status'],
+        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
+        'completed': False, 'qualification': 'NOT_MEASURED',
+        'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
 
 if __name__ == "__main__":
     # A stall is not a verdict about the subject: it reaches the exit

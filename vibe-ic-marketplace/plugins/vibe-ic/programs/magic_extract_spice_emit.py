@@ -906,7 +906,16 @@ def _d47_inputs(project):
         raise ValueError('D47_EXTRACTION_SETTINGS_INVALID')
     _rthresh_token(options['rthresh'])
     tech = tech_of(layout)
-    target, _ = declared_target(project)
+    target, target_source = declared_target(project)
+    if not isinstance(target_source, str):
+        raise ValueError('D47_PDK_DECLARATION_SOURCE_ABSENT')
+    relative = Path(target_source.rsplit(':', 1)[0])
+    declarations = [base / relative for base in (project, project / 'run')
+                    if (base / relative).is_file()]
+    if not declarations:
+        raise ValueError('D47_PDK_DECLARATION_SOURCE_UNBOUND')
+    for declaration in declarations:
+        remember(declaration)
     if resolver.families_agree(target, tech) is not True:
         raise ValueError('D47_DECLARED_TECHNOLOGY_MISMATCH')
     facts = resolver.resolve_pdk(target, project=project)
@@ -1000,6 +1009,7 @@ def execute(project, context):
         record['native_launch'] = launch.local_image_attestation()
         data = _d47_inputs(project)
         record['inputs'] = data['inputs']
+        record['metric_sources'] = _d47_metric_sources()
         record['settings'] = data['options']
         record['require_resistance'] = data['require_resistance']
         tool = shutil.which('magic')
@@ -1056,6 +1066,161 @@ def execute(project, context):
         stage.close()
     (output / 'component.json').write_text(json.dumps(record, indent=2) + '\n')
     return record
+
+
+def _d47_metric_sources():
+    """Current candidate extraction, native audit and device/interface readers."""
+    import hashlib
+    here = Path(__file__).resolve().parent
+    return {name: hashlib.sha256((here / name).read_bytes()).hexdigest()
+            for name in ('magic_extract_spice_emit.py', 'analog_a7_post_layout_emit.py',
+                'analog_hardmacro_gds_emit.py', 'declared_pdk_is_the_pdk_used_check.py',
+                'analog_pdk_availability.py', 'analog_lvs_comparison_prep.py')}
+
+
+def _d47_metric_values(data, spice, res_ext):
+    """Re-run the existing native-output audit; expose its exact measured depth.
+
+    The existing top-level external-device inventory is useful evidence. It
+    cannot stand for a complete net/corner or SI-applicability population.
+    """
+    result = _d47_audit(data, spice, res_ext)
+    return {'status': result['status'], 'reason': result['reason'],
+            'audit': result['audit'], 'device_inventory': result.get('device_inventory'),
+            'extraction_depth': result['audit']['depth'],
+            'required_logical_ports': list(data['ports']),
+            'required_nets_and_corners': None, 'si_applicability': 'NOT_MEASURED',
+            'inventory_scope': result.get('inventory_scope', 'native parasitic/interface audit only')}
+
+
+def _d47_metric_observation(project, context, component):
+    """Consume a normal candidate extraction; never rerun Magic or upgrade C_ONLY."""
+    import hashlib
+    import shlex
+    import flow109
+    from flow109_analog_floorplan import bound_file
+    current = flow109.validate_execution_context(context)
+    if (current['requested_step'] != 'D47' or current['resolved_row']['profile']['id'] != 'analog_die'
+            or component.get('step_id') != 'D47' or
+            component.get('context_sha256') != current['context_sha256']):
+        raise ValueError('D47_METRIC_CONTEXT_MISMATCH')
+    if component.get('metric_sources') != _d47_metric_sources():
+        raise ValueError('D47_METRIC_SOURCE_CHANGED_OR_UNRECORDED')
+    data = _d47_inputs(project)
+    if (component.get('inputs') != data['inputs'] or component.get('settings') != data['options']
+            or component.get('require_resistance') != data['require_resistance']):
+        raise ValueError('D47_METRIC_INPUT_OR_SETTINGS_CHANGED')
+    outputs = component.get('outputs')
+    if not isinstance(outputs, list) or not outputs:
+        raise ValueError('D47_METRIC_OUTPUTS_ABSENT')
+    paths = [bound_file(project, ref) for ref in outputs]
+    if len(set(paths)) != len(paths):
+        raise ValueError('D47_METRIC_OUTPUT_POPULATION_AMBIGUOUS')
+    audits = [p for p in paths if p.name == 'audit.json']
+    if len(audits) != 1:
+        raise ValueError('D47_METRIC_NATIVE_AUDIT_ABSENT')
+    work = audits[0].parent
+    if work.parent != project / 'reports/flow109/D47' or any(not p.is_relative_to(work) for p in paths):
+        raise ValueError('D47_METRIC_OUTPUT_FOREIGN')
+    raw = work / 'component.json'
+    if any(p.is_symlink() for p in (raw, *raw.parents)) or json.loads(raw.read_text()) != component:
+        raise ValueError('D47_METRIC_ORIGINAL_COMPONENT_MISMATCH')
+    spice, recipe, res_ext = work / 'work/candidate.spice', work / 'work/extract.tcl', work / 'work' / (data['top'] + '.res.ext')
+    if spice not in paths or recipe not in paths or res_ext.is_file() and res_ext not in paths:
+        raise ValueError('D47_METRIC_NATIVE_OUTPUT_UNRECORDED')
+    expected_recipe = build_extraction_tcl(data['top'], 'candidate.spice',
+                        MagicResimExtractOptions(**data['options'])) + 'quit -noprompt\n'
+    if recipe.read_text() != expected_recipe:
+        raise ValueError('D47_METRIC_EXECUTED_RECIPE_CHANGED')
+    tool = component['tool']
+    if hashlib.sha256(Path(tool['path']).resolve(strict=True).read_bytes()).hexdigest() != tool.get('sha256'):
+        raise ValueError('D47_METRIC_NATIVE_TOOL_CHANGED')
+    executions = component.get('executions')
+    if (component.get('native_started') is not True or not isinstance(executions, list) or len(executions) != 1
+            or type(executions[0].get('returncode')) is not int or executions[0]['returncode'] != 0):
+        raise ValueError('D47_METRIC_NATIVE_EXECUTION_INCOMPLETE')
+    command = (f"export PDK={shlex.quote(data['tech'])} PDK_ROOT={shlex.quote(data['pdk_root'])} && "
+               f"cd {shlex.quote(str(work / 'work'))} && {shlex.quote(tool['path'])} -noconsole -dnull "
+               f"-rcfile {shlex.quote(data['rcfile'])} extract.tcl")
+    if executions[0].get('command') != command:
+        raise ValueError('D47_METRIC_NATIVE_COMMAND_CHANGED')
+    log_ref = {'path': executions[0]['log'], 'sha256': executions[0]['log_sha256']}
+    log = bound_file(project, log_ref)
+    if log != work / 'magic.log' or 'MAGIC_EXTRACT_RESIM_DONE ' + data['top'] + ' ->' not in log.read_text():
+        raise ValueError('D47_METRIC_NATIVE_COMPLETION_ABSENT')
+    result = _d47_metric_values(data, spice, res_ext)
+    original = _d47_audit(data, spice, res_ext)
+    if json.loads(audits[0].read_text()) != original or component.get('measurements') != original:
+        raise ValueError('D47_METRIC_PRINTED_AUDIT_DISAGREES')
+    if component.get('extraction_depth') != result['extraction_depth']:
+        raise ValueError('D47_METRIC_PRINTED_DEPTH_DISAGREES')
+    if _d47_inputs(project) != data or component['metric_sources'] != _d47_metric_sources():
+        raise ValueError('D47_METRIC_CONSUMED_BASIS_CHANGED_DURING_READ')
+    for ref in [*outputs, log_ref]:
+        bound_file(project, ref)
+    result['readset'] = {'inputs': data['inputs'], 'outputs': outputs, 'native_log': log_ref,
+        'sources': component['metric_sources'], 'tool': tool, 'settings': data['options'],
+        'original_execution': executions[0], 'original_native_launch': component.get('native_launch'),
+        'component': {'path': str(raw.relative_to(project)),
+                      'sha256': hashlib.sha256(raw.read_bytes()).hexdigest()},
+        'context_sha256': current['context_sha256']}
+    return result
+
+
+def accept_d47(project, context, component):
+    """BLOCKING candidate audit metrics, with RC depth and missing populations explicit."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    result = {'schema': metrics.SCHEMA, 'row_id': 'D47', 'status': 'NOT_MEASURED',
+              'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    ids = ['base_29.candidate_parasitic_coverage', 'base_29.rc_corner_mapping', 'base_29.si_applicability_evidence']
+    try:
+        current = flow109.validate_execution_context(context)
+        if current['requested_step'] != 'D47' or [r['id'] for r in current['resolved_row']['obligations']] != ids:
+            raise ValueError('D47_METRIC_OBLIGATIONS_UNREGISTERED')
+        observed = _d47_metric_observation(Path(project).resolve(strict=True), current, component)
+        result['observation'] = observed
+        failed = observed['status'] == 'FAIL'
+        result['obligations'] = [{'id': ids[0], 'status': 'FAIL' if failed else 'NOT_MEASURED',
+            'measurement_status': observed['status'], 'extraction_depth': observed['extraction_depth'],
+            'reason': observed['reason'] if failed else 'D47_COMPLETE_SOURCE_NET_CORNER_POPULATION_UNPROVEN'},
+            {'id': ids[1], 'status': 'NOT_MEASURED', 'reason': 'D47_ADOPTED_RC_CORNER_MAPPING_UNBOUND'},
+            {'id': ids[2], 'status': 'NOT_MEASURED', 'reason': 'D47_INDEPENDENT_SI_APPLICABILITY_POPULATION_UNBOUND'}]
+        result.update(metric_status='FAIL' if failed else 'NOT_MEASURED',
+                      reason='D47_NATIVE_PARASITIC_AUDIT_REOPENED_REQUIRED_POPULATIONS_PENDING')
+    except (ValueError, OSError, KeyError, TypeError, AttributeError, flow109.Flow109Error) as exc:
+        result.update(reason='D47_METRIC_EVIDENCE_UNAVAILABLE', detail=str(exc))
+        result['obligations'] = [{'id': oid, 'status': 'NOT_MEASURED', 'reason': str(exc)} for oid in ids]
+    if component.get('component_status') == 'FAIL' or result['metric_status'] == 'FAIL':
+        result.update(status='FAIL', reason='D47_MEASURED_FAILURE_PRESERVED')
+    return result
+
+
+def consume_default_row_completion(project, context, component):
+    """Use the existing completion seam without treating an audit as whole-net RC proof."""
+    accepted = accept_d47(project, context, component)
+    previous = component.get('metric_acceptance')
+    previous = previous if isinstance(previous, dict) else {}
+    metric_failed = (component.get('metric_acceptance_status') == 'FAIL' or
+                     previous.get('status') == 'FAIL' or previous.get('metric_status') == 'FAIL')
+    if metric_failed or component.get('default_row_status') == 'FAIL':
+        accepted = {**accepted, 'status': 'FAIL', 'delivery_blocked': True,
+            'metric_status': 'FAIL' if metric_failed else accepted['metric_status'],
+            'reason': 'D47_PRIOR_MEASURED_FAILURE_PRESERVED'}
+        prior = previous.get('obligations', [])
+        prior = prior if isinstance(prior, list) else []
+        failed_ids = {item.get('id') for item in prior if isinstance(item, dict) and item.get('status') == 'FAIL'}
+        accepted['prior_failed_obligation_ids'] = sorted(oid for oid in failed_ids if isinstance(oid, str))
+        accepted['obligations'] = [
+            {**item, 'status': 'FAIL', 'reason': 'D47_PRIOR_MEASURED_FAILURE_PRESERVED'}
+            if item.get('id') in failed_ids and item.get('status') == 'NOT_MEASURED' else item
+            for item in accepted['obligations']]
+    return {**component, 'step_id': 'D47', 'context_sha256': context['context_sha256'],
+        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['metric_status'],
+        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
+        'completed': False, 'qualification': 'NOT_MEASURED',
+        'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
 
 if __name__ == "__main__":
     sys.exit(main())

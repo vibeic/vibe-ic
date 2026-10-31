@@ -1688,7 +1688,7 @@ def _d32_inputs(project):
     die=PR.read_def(floor)
     if set(die.pins)!=set(ports):
         raise ValueError('D32_DECLARED_PORT_POPULATION_MISMATCH')
-    target,_=declared_target(project)
+    target,target_source=declared_target(project)
     if not isinstance(target,str) or not target.strip():raise ValueError('D32_DECLARED_PDK_ABSENT')
     facts=resolver.resolve_pdk(target,project=project)
     if facts.get('source')!='container_installed' or not facts.get('available'):
@@ -1697,6 +1697,15 @@ def _d32_inputs(project):
     available_gds={p for lef in lefs for p in (lef.parent.parent/'gds').glob('*.gds')}
     techs=set(tree.glob('libs.ref/*/lef/*tech*.lef'))
     records={str(p):digest(p) for p in (config,floor,assignment,logical)}
+    if not isinstance(target_source, str):raise ValueError('D32_PDK_DECLARATION_SOURCE_ABSENT')
+    declaration = Path(target_source.rsplit(':',1)[0])
+    declarations = [base / declaration for base in (project,project/'run')
+                    if (base / declaration).is_file()]
+    if not declarations:raise ValueError('D32_PDK_DECLARATION_SOURCE_UNBOUND')
+    for path in declarations:
+        if any(p.is_symlink() for p in (path,*path.parents)):
+            raise ValueError('D32_PDK_DECLARATION_SOURCE_UNBOUND')
+        records[str(path)]=digest(path)
     def selected(refs,allowed,label):
         if not isinstance(refs,list) or not refs:raise ValueError('D32_VIEW_ABSENT: '+label)
         result=[]
@@ -1742,6 +1751,7 @@ def execute(project,context):
             raise ValueError('D32_CONTEXT_INVALID')
         result['launch_admission']=require_launch_admission(project,'flow109.D32',{'flow109_context':context});result['native_launch']=launch.local_image_attestation()
         data=_d32_inputs(project);result['inputs']=data['inputs']
+        result['metric_sources'] = _d32_metric_sources()
         case=work/'case';(case/PR.FLOORPLAN_DEF_REL).parent.mkdir(parents=True)
         shutil.copyfile(data['floorplan'],case/PR.FLOORPLAN_DEF_REL);shutil.copyfile(data['assignment'],case/PR.ASSIGNMENT_REL)
         args=[str(case),'--pdk-root',data['pdk_root'],'--pdk',data['pdk']]
@@ -1785,6 +1795,278 @@ def execute(project,context):
         result['reason']=str(exc)
     result['outputs']=[{'path':str(p.relative_to(project)),'sha256':digest(p)} for p in sorted(work.rglob('*')) if p.is_file()]
     (work/'component.json').write_text(json.dumps(result,indent=2)+'\n');return result
+
+
+def _d32_metric_sources():
+    """Bind only D32 definitions and the existing pad/DEF/LEF readers."""
+    import ast
+    import hashlib
+    here = Path(__file__).resolve().parent
+    names = {'_d32_inputs', 'execute', '_d32_metric_sources',
+             '_d32_native_population', '_d32_metric_observation', '_d32_metric_readback', 'accept_d32',
+             'consume_default_row_completion', '_D32_DB_READ', '_D32_GDS_READ'}
+    tree = ast.parse(Path(__file__).read_text())
+    selected = [ast.dump(node, include_attributes=False) for node in tree.body
+                if getattr(node, 'name', None) in names or
+                isinstance(node, ast.Assign) and any(
+                    isinstance(t, ast.Name) and t.id in names for t in node.targets)]
+    return {'D32_definitions': hashlib.sha256('\n'.join(selected).encode()).hexdigest(),
+            'pad_ring_gen.py': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+            **{name: hashlib.sha256((here / name).read_bytes()).hexdigest()
+               for name in ('_pad_ring.py', 'pad_ring_check.py', 'analog_lvs_comparison_prep.py',
+                            'declared_pdk_is_the_pdk_used_check.py', 'l_doc_consumer_contract.py',
+                            'analog_pdk_availability.py')}}
+
+
+def _d32_native_population(data, placement, db, views):
+    """Read the complete declared IO population independently of observed pads.
+
+    An IO census cannot establish ESD protection, physical rail conduction or
+    bond-terminal access. Those parts of the existing obligations stay named
+    NOT_MEASURED even when this bounded census agrees.
+    """
+    import analog_lvs_comparison_prep as prep
+    logical = Path(data['logical']).read_text()
+    ports = prep.declared_ports(logical, data['top'])
+    assignment = json.loads(Path(data['assignment']).read_text())
+    mapping = assignment.get('SIGNAL_MAP')
+    if (not ports or len(ports) != len(set(ports)) or not isinstance(mapping, dict)
+            or not mapping or any(not isinstance(k, str) or not k or
+                                  not isinstance(v, str) or not v for k, v in mapping.items())):
+        raise ValueError('D32_REQUIRED_IO_POPULATION_UNAVAILABLE')
+    declared = []
+    for side in PR.SIDES:
+        names = assignment.get(PR.SIDE_VAR[side])
+        if not isinstance(names, list) or any(not isinstance(n, str) or not n for n in names):
+            raise ValueError('D32_SOURCE_PAD_SIDE_POPULATION_UNAVAILABLE')
+        declared.extend(names)
+    if not declared or len(declared) != len(set(declared)) or not set(declared).issubset(mapping):
+        raise ValueError('D32_SOURCE_PAD_POPULATION_INVALID')
+    floor = PR.read_def(Path(data['floorplan']))
+    if set(floor.pins) != set(ports) or not set(ports).issubset({mapping[n] for n in declared}):
+        raise ValueError('D32_SOURCE_IO_POPULATION_INCOMPLETE')
+    expected = {}
+    for instance in declared:
+        signal = mapping[instance]
+        cell = floor.components.get(instance)
+        if cell is None:
+            raise ValueError('D32_DECLARED_PAD_ABSENT_FROM_SOURCE: ' + instance)
+        expected[instance] = {'instance': instance, 'signal': signal, 'master': cell.master}
+    pads = placement.get('pads')
+    if not isinstance(pads, list) or not pads or any(not isinstance(p, dict) for p in pads):
+        raise ValueError('D32_OBSERVED_IO_POPULATION_ABSENT')
+    observed = [{key: p.get(key) for key in ('instance', 'signal', 'master')} for p in pads]
+    failures = []
+    if (len(observed) != len(expected) or len({p['instance'] for p in observed}) != len(observed)
+            or {p['instance']: p for p in observed} != expected):
+        failures.append('D32_DECLARED_PAD_POPULATION_MISMATCH')
+    if db.get('top') != data['top'] or set(db.get('ports', {})) != set(ports):
+        failures.append('D32_NATIVE_LOGICAL_PORT_POPULATION_MISMATCH')
+    for name, pad in expected.items():
+        native = db.get('instances', {}).get(name, {})
+        view = views.get(pad['master'], {})
+        net = db.get('ports', {}).get(pad['signal'])
+        terms = db.get('nets', {}).get(net, {}).get('iterms', [])
+        if native.get('master') != pad['master'] or native.get('placed') is not True:
+            failures.append('D32_REQUIRED_NATIVE_PAD_MISSING_OR_UNPLACED: ' + name)
+        if view.get('present') is not True or view.get('nonempty') is not True:
+            failures.append('D32_REQUIRED_NATIVE_PAD_VIEW_MISSING: ' + name)
+        if not net or not any(isinstance(term, str) and term.startswith(name + '/') for term in terms):
+            failures.append('D32_REQUIRED_NATIVE_PAD_DISCONNECTED: ' + name)
+    return {'status': 'FAIL' if failures else 'PASS', 'failures': failures,
+            'required_io': sorted(expected.values(), key=lambda p: p['instance']),
+            'observed_io': observed, 'required_ports': list(ports),
+            'population_source': 'logical top ports and source floorplan/assignment, never observed pads',
+            'unmeasured': ['ESD_protection_inventory', 'physical_PG_rail_conduction',
+                           'native_pad_terminal_access_and_spacing']}
+
+
+def _d32_metric_observation(project, context, component):
+    """Reopen the normal producer's exact input, tool, source and output bytes."""
+    import hashlib
+    from flow109_analog_floorplan import bound_file
+    import flow109
+    current = flow109.validate_execution_context(context)
+    if (current.get('requested_step') != 'D32' or
+            current['resolved_row']['profile']['id'] != 'analog_die' or
+            component.get('step_id') != 'D32' or
+            component.get('context_sha256') != current['context_sha256']):
+        raise ValueError('D32_METRIC_CONTEXT_MISMATCH')
+    if component.get('metric_sources') != _d32_metric_sources():
+        raise ValueError('D32_CONSUMED_SOURCE_CHANGED_OR_UNRECORDED')
+    data = _d32_inputs(project)
+    if component.get('inputs') != data['inputs']:
+        raise ValueError('D32_CONSUMED_INPUT_CHANGED_OR_UNRECORDED')
+    outputs = component.get('outputs')
+    if not isinstance(outputs, list) or not outputs:
+        raise ValueError('D32_NATIVE_OUTPUTS_ABSENT')
+    paths = [bound_file(project, ref) for ref in outputs]
+    if len(set(paths)) != len(paths):
+        raise ValueError('D32_NATIVE_OUTPUT_POPULATION_AMBIGUOUS')
+    roots = {project / 'reports/flow109/D32' / p.relative_to(project / 'reports/flow109/D32').parts[0]
+             for p in paths if p.is_relative_to(project / 'reports/flow109/D32')
+             and len(p.relative_to(project / 'reports/flow109/D32').parts) >= 2}
+    if len(roots) != 1:
+        raise ValueError('D32_NATIVE_ATTEMPT_AMBIGUOUS')
+    work = roots.pop()
+    if work.parent != project / 'reports/flow109/D32' or any(not p.is_relative_to(work) for p in paths):
+        raise ValueError('D32_NATIVE_OUTPUT_FOREIGN')
+    raw = work / 'component.json'
+    if raw.is_symlink() or json.loads(raw.read_text()) != component:
+        raise ValueError('D32_ORIGINAL_COMPONENT_MISMATCH')
+    for name in ('native_db.json', 'native_gds.json', 'db-request.json', 'gds-request.json',
+                 'read_db.py', 'read_gds.py', 'case/' + PR.PADRING_DEF_REL):
+        if work / name not in paths:
+            raise ValueError('D32_NATIVE_READBACK_ABSENT: ' + name)
+    if ((work / 'read_db.py').read_text() != _D32_DB_READ or
+            (work / 'read_gds.py').read_text() != _D32_GDS_READ):
+        raise ValueError('D32_NATIVE_READER_SOURCE_CHANGED')
+    original_request = json.loads((work / 'db-request.json').read_text())
+    if original_request != {'lefs': data['lefs'], 'def': str(work / 'case' / PR.PADRING_DEF_REL),
+                            'odb': str(work / 'padring.odb'), 'out': str(work / 'native_db.json')}:
+        raise ValueError('D32_NATIVE_REQUEST_BASIS_CHANGED')
+    gds_request = json.loads((work / 'gds-request.json').read_text())
+    required_masters = sorted({p['master'] for key in ('pads', 'corners', 'fillers')
+                               for p in component['placement'][key]})
+    if gds_request != {'gds': data['gds'], 'masters': required_masters,
+                       'out': str(work / 'native_gds.json')}:
+        raise ValueError('D32_NATIVE_CELL_POPULATION_CHANGED')
+    tools = component.get('tools')
+    if not isinstance(tools, dict) or set(tools) != {'openroad', 'klayout'}:
+        raise ValueError('D32_NATIVE_TOOL_IDENTITY_ABSENT')
+    for tool in tools.values():
+        path = Path(tool['path']).resolve(strict=True)
+        if hashlib.sha256(path.read_bytes()).hexdigest() != tool.get('sha256'):
+            raise ValueError('D32_NATIVE_TOOL_CHANGED')
+    executions = component.get('executions')
+    if (component.get('native_started') is not True or not isinstance(executions, list)
+            or len(executions) != 2 or any(type(e.get('returncode')) is not int
+                or e['returncode'] != 0 or bound_file(project, {'path': e['log'],
+                    'sha256': e['sha256']}) not in paths for e in executions)):
+        raise ValueError('D32_NATIVE_EXECUTION_INCOMPLETE')
+    db = json.loads((work / 'native_db.json').read_text())
+    views = json.loads((work / 'native_gds.json').read_text())
+    if db != component.get('native_db') or views != component.get('native_gds'):
+        raise ValueError('D32_PRINTED_NATIVE_READBACK_MISMATCH')
+    fresh = _d32_metric_readback(project, data, work, tools)
+    if fresh['native_db'] != db or fresh['native_gds'] != views:
+        raise ValueError('D32_NATIVE_READBACK_DISAGREEMENT')
+    observation = _d32_native_population(data, component['placement'], db, views)
+    # Recheck the complete current readset before publishing any observation.
+    if _d32_inputs(project) != data or component['metric_sources'] != _d32_metric_sources():
+        raise ValueError('D32_CONSUMED_BASIS_CHANGED_DURING_READ')
+    for ref in [*outputs, *fresh['outputs']]:
+        bound_file(project, ref)
+    observation['readset'] = {'inputs': data['inputs'], 'outputs': outputs,
+        'sources': component['metric_sources'], 'tools': tools, 'executions': executions,
+        'original_native_launch': component.get('native_launch'), 'readback_outputs': fresh['outputs'],
+        'context_sha256': current['context_sha256'],
+        'component': {'path': str(raw.relative_to(project)),
+                      'sha256': hashlib.sha256(raw.read_bytes()).hexdigest()}}
+    observation['readback'] = fresh['executions']
+    return observation
+
+
+def _d32_metric_readback(project, data, work, tools):
+    """Reuse the existing native readers, so edited JSON cannot replace geometry."""
+    import hashlib
+    import shlex
+    import uuid
+    from analog_hardmacro_gds_emit import Stage
+    target = project / 'reports/flow109/D32_metric_readback' / uuid.uuid4().hex
+    target.mkdir(parents=True)
+    stage = Stage('host', target)
+    script = target / 'read_db.py'
+    script.write_text(_D32_DB_READ)
+    request = target / 'db-request.json'
+    request.write_text(json.dumps({'lefs': data['lefs'],
+        'def': str(work / 'case' / PR.PADRING_DEF_REL),
+        'odb': str(target / 'padring.odb'), 'out': str(target / 'native_db.json')}))
+    commands = [('OpenDB', [tools['openroad']['path'], '-exit', '-python', str(script), str(request)])]
+    gdsscript = target / 'read_gds.py'
+    gdsscript.write_text(_D32_GDS_READ)
+    gdssource = json.loads((work / 'gds-request.json').read_text())
+    # The requested cell population belongs to the original generated ring;
+    # its bytes are already part of the verified output readset.
+    gdsrequest = target / 'gds-request.json'
+    gdsrequest.write_text(json.dumps({'gds': data['gds'], 'masters': gdssource['masters'],
+                                     'out': str(target / 'native_gds.json')}))
+    commands.append(('KLayout', [tools['klayout']['path'], '-b', '-r', str(gdsscript),
+                                '-rd', 'D32_REQUEST=' + str(gdsrequest)]))
+    executions = []
+    for name, argv in commands:
+        rc, stdout, stderr = stage.sh(shlex.join(argv))
+        log = target / (name + '.log')
+        log.write_text(stdout + stderr)
+        executions.append({'argv': argv, 'returncode': rc,
+            'log': str(log.relative_to(project)), 'sha256': hashlib.sha256(log.read_bytes()).hexdigest()})
+        if rc:
+            raise ValueError('D32_METRIC_NATIVE_READBACK_FAILED: ' + name)
+    return {'native_db': json.loads((target / 'native_db.json').read_text()),
+            'native_gds': json.loads((target / 'native_gds.json').read_text()), 'executions': executions,
+            'outputs': [{'path': str(p.relative_to(project)), 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()}
+                        for p in sorted(target.iterdir()) if p.is_file()]}
+
+
+def accept_d32(project, context, component):
+    """BLOCKING D32 reader; a complete IO census never supplies missing physics."""
+    import flow109_metric_acceptance as metrics
+    import flow109
+    project = Path(project).resolve(strict=True)
+    ids = ['base_21.pad_io_esd_pg_inventory', 'base_21.pg_supply_connectivity_errors',
+           'base_21.pad_access_spacing']
+    result = {'schema': metrics.SCHEMA, 'row_id': 'D32', 'status': 'NOT_MEASURED',
+              'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    try:
+        row = flow109.validate_execution_context(context)['resolved_row']
+        if row['id'] != 'D32' or [o['id'] for o in row['obligations']] != ids:
+            raise ValueError('D32_METRIC_OBLIGATIONS_UNREGISTERED')
+        observed = _d32_metric_observation(project, context, component)
+        result['observation'] = observed
+        reasons = ['D32_ESD_AND_PG_POPULATION_NOT_MEASURED',
+                   'D32_PHYSICAL_PG_CONDUCTION_NOT_MEASURED',
+                   'D32_NATIVE_TERMINAL_ACCESS_AND_DECLARED_BOUNDS_NOT_MEASURED']
+        for index, oid in enumerate(ids):
+            failed = index == 0 and observed['status'] == 'FAIL'
+            result['obligations'].append({'id': oid,
+                'status': 'FAIL' if failed else 'NOT_MEASURED',
+                'reason': 'D32_REQUIRED_IO_INVENTORY_FAILED' if failed else reasons[index]})
+        result.update(reason='D32_NATIVE_IO_CENSUS_ONLY_PHYSICAL_METRICS_PENDING',
+                      metric_status='FAIL' if observed['status'] == 'FAIL' else 'NOT_MEASURED')
+    except (ValueError, OSError, KeyError, TypeError, AttributeError, flow109.Flow109Error) as exc:
+        result.update(reason='D32_METRIC_EVIDENCE_UNAVAILABLE', detail=str(exc))
+        result['obligations'] = [{'id': oid, 'status': 'NOT_MEASURED',
+                                  'reason': str(exc)} for oid in ids]
+    if component.get('component_status') == 'FAIL' or result['metric_status'] == 'FAIL':
+        result.update(status='FAIL', reason='D32_MEASURED_FAILURE_PRESERVED')
+    return result
+
+
+def consume_default_row_completion(project, context, component):
+    """The ordinary adapter completion seam; no component-to-row promotion."""
+    accepted = accept_d32(project, context, component)
+    previous = component.get('metric_acceptance')
+    previous = previous if isinstance(previous, dict) else {}
+    metric_failed = (component.get('metric_acceptance_status') == 'FAIL' or
+                     previous.get('status') == 'FAIL' or previous.get('metric_status') == 'FAIL')
+    if metric_failed or component.get('default_row_status') == 'FAIL':
+        accepted = {**accepted, 'status': 'FAIL', 'delivery_blocked': True,
+            'metric_status': 'FAIL' if metric_failed else accepted['metric_status'],
+            'reason': 'D32_PRIOR_MEASURED_FAILURE_PRESERVED'}
+        prior = previous.get('obligations', [])
+        prior = prior if isinstance(prior, list) else []
+        failed_ids = {item.get('id') for item in prior if isinstance(item, dict) and item.get('status') == 'FAIL'}
+        accepted['prior_failed_obligation_ids'] = sorted(oid for oid in failed_ids if isinstance(oid, str))
+        accepted['obligations'] = [
+            {**item, 'status': 'FAIL', 'reason': 'D32_PRIOR_MEASURED_FAILURE_PRESERVED'}
+            if item.get('id') in failed_ids and item.get('status') == 'NOT_MEASURED' else item
+            for item in accepted['obligations']]
+    return {**component, 'step_id': 'D32', 'context_sha256': context['context_sha256'],
+            'metric_acceptance': accepted, 'metric_acceptance_status': accepted['metric_status'],
+            'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
+            'completed': False, 'whole_flow_acceptance': 'NOT_MEASURED',
+            'delivery_accepted': False, 'qualification': 'NOT_MEASURED'}
 
 
 if __name__ == "__main__":

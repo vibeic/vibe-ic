@@ -1047,7 +1047,7 @@ def _d43_inputs(project):
     top = data.get('top')
     if not isinstance(top, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*', top):
         raise ValueError('D43_TOP_INVALID')
-    target, _ = declared_target(project)
+    target, target_source = declared_target(project)
     if not isinstance(target, str) or not target.strip():
         raise ValueError('D43_DECLARED_PDK_ABSENT')
     facts = resolver.resolve_pdk(target, project=project)
@@ -1060,9 +1060,16 @@ def _d43_inputs(project):
     ref = data.get('antenna_deck')
     if not isinstance(ref, dict) or ref != {'path': deck['rule'], 'sha256': deck['rule_sha256']}:
         raise ValueError('D43_DECLARED_PDK_DECK_UNBOUND_OR_STALE')
+    if not isinstance(target_source, str):
+        raise ValueError('D43_PDK_DECLARATION_SOURCE_ABSENT')
+    relative = Path(target_source.rsplit(':', 1)[0])
+    declarations = [base / relative for base in (project, project / 'run')
+                    if (base / relative).is_file()]
+    if not declarations or any(any(p.is_symlink() for p in (path, *path.parents)) for path in declarations):
+        raise ValueError('D43_PDK_DECLARATION_SOURCE_UNBOUND')
     return dict(top=top, gds=str(gds), target=target, tree=facts['pdk_root'],
                 deck_files=deck['files'],
-                inputs={str(config): _sha(config), str(gds): _sha(gds)})
+                inputs={str(p): _sha(p) for p in (config, gds, *declarations)})
 
 
 def execute(project, context):
@@ -1085,9 +1092,12 @@ def execute(project, context):
         result['native_launch'] = launch.local_image_attestation()
         data = _d43_inputs(project)
         result['inputs'] = data['inputs']
+        result['metric_sources'] = _d43_metric_sources()
         runner = _kl.find_runner(project=project)
         if runner is None or runner.kind != 'host':
             raise ValueError('D43_DIRECT_NATIVE_RUNNER_UNAVAILABLE')
+        executable = Path(runner.klayout_bin()).resolve(strict=True)
+        result['metric_tool'] = {'path': str(executable), 'sha256': _sha(executable)}
         readback = work / 'subject.json'; script = work / 'read_subject.py'
         script.write_text('import pya,json\nl=pya.Layout();l.read(' + repr(data['gds']) +
                           ')\njson.dump(dict(tops=[c.name for c in l.top_cells()],nonempty=not l.top_cells()[0].bbox().empty() if len(l.top_cells())==1 else False),open(' + repr(str(readback)) + ',"w"))\n')
@@ -1117,6 +1127,157 @@ def execute(project, context):
                          for p in sorted(work.rglob('*')) if p.is_file()]
     (work/'component.json').write_text(json.dumps(result,indent=2)+'\n')
     return result
+
+
+def _d43_metric_sources():
+    """D43's producer and actual native-count/rule readers, never a version label."""
+    here = Path(__file__).resolve().parent
+    return {name: _sha(here / name) for name in ('gds_antenna_deck_check.py',
+        'eda_report_audit.py', '_a6_drc_authority.py', 'declared_pdk_is_the_pdk_used_check.py',
+        'analog_pdk_availability.py')}
+
+
+def _d43_metric_readback(gds, rdb, transcript, gds_sha, deck):
+    """Regrade the existing native outputs, with their original source/GDS binding.
+
+    Graded rules are observations. They are never their own required population.
+    In particular, zero items cannot manufacture checked gate/net coverage.
+    """
+    count, reason, hashes = _bound_native_count(gds, rdb, transcript, gds_sha, deck=deck)
+    if reason or type(count) is not int or count < 0:
+        raise ValueError('D43_NATIVE_METRIC_UNBOUND: ' + str(reason))
+    from _a6_drc_authority import lyrdb_text_rules
+    rules = lyrdb_text_rules(rdb.read_text())
+    return {'violations': count, 'unit': 'count', 'observed_rules': rules['graded'],
+            'required_rules': None, 'checked_gate_nets': None,
+            'population_status': 'NOT_MEASURED', 'native_hashes': hashes,
+            'measurement_status': 'FAIL' if count else 'PASS',
+            'scope': 'native executed-deck item count; complete rule/gate population not established'}
+
+
+def _d43_metric_observation(project, context, component):
+    """Consume a normal D43 attempt without launching another native deck."""
+    import flow109
+    from flow109_analog_floorplan import bound_file
+    current = flow109.validate_execution_context(context)
+    if (current['requested_step'] != 'D43' or current['resolved_row']['profile']['id'] != 'analog_die'
+            or component.get('step_id') != 'D43'
+            or component.get('context_sha256') != current['context_sha256']):
+        raise ValueError('D43_METRIC_CONTEXT_MISMATCH')
+    if component.get('metric_sources') != _d43_metric_sources():
+        raise ValueError('D43_METRIC_SOURCE_CHANGED_OR_UNRECORDED')
+    data = _d43_inputs(project)
+    if component.get('inputs') != data['inputs']:
+        raise ValueError('D43_METRIC_INPUT_CHANGED_OR_UNRECORDED')
+    outputs = component.get('outputs')
+    if not isinstance(outputs, list) or not outputs:
+        raise ValueError('D43_METRIC_NATIVE_OUTPUTS_ABSENT')
+    paths = [bound_file(project, ref) for ref in outputs]
+    if len(set(paths)) != len(paths):
+        raise ValueError('D43_METRIC_OUTPUT_POPULATION_AMBIGUOUS')
+    base = project / 'reports/flow109/D43'
+    if any(not p.is_relative_to(base) or len(p.relative_to(base).parts) < 2 for p in paths):
+        raise ValueError('D43_METRIC_OUTPUT_FOREIGN')
+    attempts = {base / p.relative_to(base).parts[0] for p in paths}
+    if len(attempts) != 1:
+        raise ValueError('D43_METRIC_ATTEMPT_AMBIGUOUS')
+    work = attempts.pop()
+    raw = work / 'component.json'
+    if any(p.is_symlink() for p in (raw, *raw.parents)) or json.loads(raw.read_text()) != component:
+        raise ValueError('D43_METRIC_ORIGINAL_COMPONENT_MISMATCH')
+    native = component['native']
+    if (work / 'native_result.json' not in paths or
+            json.loads((work / 'native_result.json').read_text()) != native):
+        raise ValueError('D43_METRIC_NATIVE_RESULT_MISMATCH')
+    deck, reason = _discover_deck(data['tree'], _kl.host_read_bytes,
+                                 _kl.host_list_files, _kl.host_list_tree)
+    if deck is None or deck['files'] != data['deck_files']:
+        raise ValueError('D43_METRIC_DECK_UNAVAILABLE: ' + str(reason))
+    expected = {'pdk_rule': deck['rule'], 'pdk_rule_sha256': deck['rule_sha256'],
+                'pdk_parent': deck['parent'], 'pdk_parent_sha256': deck['parent_sha256'],
+                'pdk_deck_files': deck['files'], 'pdk_deck_manifest_sha256': _manifest_sha(deck['files']),
+                'gds': data['gds'], 'gds_sha256': _sha(Path(data['gds']))}
+    if any(native.get(key) != value for key, value in expected.items()):
+        raise ValueError('D43_METRIC_NATIVE_BASIS_CHANGED')
+    tool = component['metric_tool']
+    if _sha(Path(tool['path']).resolve(strict=True)) != tool.get('sha256'):
+        raise ValueError('D43_METRIC_TOOL_CHANGED')
+    if component.get('native_started') is not True or type(native.get('rc')) is not int or native['rc'] != 0:
+        raise ValueError('D43_METRIC_NATIVE_EXECUTION_INCOMPLETE')
+    rdb, transcript = Path(native['rdb']), Path(native['transcript'])
+    if rdb not in paths or transcript not in paths:
+        raise ValueError('D43_METRIC_NATIVE_OUTPUT_UNRECORDED')
+    observation = _d43_metric_readback(Path(data['gds']), rdb, transcript, native['gds_sha256'], deck)
+    if native.get('violations') != observation['violations']:
+        raise ValueError('D43_METRIC_PRINTED_COUNT_DISAGREES')
+    if (_d43_inputs(project) != data or _deck_changed(deck) or
+            component['metric_sources'] != _d43_metric_sources()):
+        raise ValueError('D43_METRIC_CONSUMED_BASIS_CHANGED_DURING_READ')
+    for ref in outputs:
+        bound_file(project, ref)
+    observation['readset'] = {'inputs': data['inputs'], 'deck_files': deck['files'],
+        'outputs': outputs, 'sources': component['metric_sources'], 'tool': tool,
+        'original_execution': native['execution'], 'original_native_launch': component.get('native_launch'),
+        'component': {'path': str(raw.relative_to(project)), 'sha256': _sha(raw)},
+        'context_sha256': current['context_sha256']}
+    return observation
+
+
+def accept_d43(project, context, component):
+    """BLOCKING D43 metrics: preserve measured violations and unknown coverage."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    result = {'schema': metrics.SCHEMA, 'row_id': 'D43', 'status': 'NOT_MEASURED',
+              'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    ids = ['base_35.antenna_net_pin_violations', 'base_35.antenna_rule_coverage']
+    try:
+        current = flow109.validate_execution_context(context)
+        if current['requested_step'] != 'D43' or [r['id'] for r in current['resolved_row']['obligations']] != ids:
+            raise ValueError('D43_METRIC_OBLIGATIONS_UNREGISTERED')
+        observed = _d43_metric_observation(Path(project).resolve(strict=True), current, component)
+        result['observation'] = observed
+        failed = observed['violations'] > 0
+        result['obligations'] = [{'id': ids[0], 'status': 'FAIL' if failed else 'NOT_MEASURED',
+            'measurement_status': 'FAIL' if failed else 'PASS', 'observed_value': observed['violations'],
+            'unit': 'count', 'reason': 'D43_NATIVE_ANTENNA_VIOLATIONS' if failed else
+            'D43_CHECKED_GATE_NET_AND_LOGICAL_MISSION_POPULATION_UNPROVEN'},
+            {'id': ids[1], 'status': 'NOT_MEASURED', 'observed_rules': observed['observed_rules'],
+             'reason': 'D43_SOURCE_OWNED_COMPLETE_RULE_POPULATION_NOT_ADOPTED'}]
+        result.update(metric_status='FAIL' if failed else 'NOT_MEASURED',
+                      reason='D43_NATIVE_COUNT_REOPENED_REQUIRED_POPULATIONS_PENDING')
+    except (ValueError, OSError, KeyError, TypeError, AttributeError, flow109.Flow109Error) as exc:
+        result.update(reason='D43_METRIC_EVIDENCE_UNAVAILABLE', detail=str(exc))
+        result['obligations'] = [{'id': oid, 'status': 'NOT_MEASURED', 'reason': str(exc)} for oid in ids]
+    if component.get('component_status') == 'FAIL' or result['metric_status'] == 'FAIL':
+        result.update(status='FAIL', reason='D43_MEASURED_FAILURE_PRESERVED')
+    return result
+
+
+def consume_default_row_completion(project, context, component):
+    """Use the existing completion seam; unknown population cannot finish D43."""
+    accepted = accept_d43(project, context, component)
+    previous = component.get('metric_acceptance')
+    previous = previous if isinstance(previous, dict) else {}
+    metric_failed = (component.get('metric_acceptance_status') == 'FAIL' or
+                     previous.get('status') == 'FAIL' or previous.get('metric_status') == 'FAIL')
+    if metric_failed or component.get('default_row_status') == 'FAIL':
+        accepted = {**accepted, 'status': 'FAIL', 'delivery_blocked': True,
+            'metric_status': 'FAIL' if metric_failed else accepted['metric_status'],
+            'reason': 'D43_PRIOR_MEASURED_FAILURE_PRESERVED'}
+        prior = previous.get('obligations', [])
+        prior = prior if isinstance(prior, list) else []
+        failed_ids = {item.get('id') for item in prior if isinstance(item, dict) and item.get('status') == 'FAIL'}
+        accepted['prior_failed_obligation_ids'] = sorted(oid for oid in failed_ids if isinstance(oid, str))
+        accepted['obligations'] = [
+            {**item, 'status': 'FAIL', 'reason': 'D43_PRIOR_MEASURED_FAILURE_PRESERVED'}
+            if item.get('id') in failed_ids and item.get('status') == 'NOT_MEASURED' else item
+            for item in accepted['obligations']]
+    return {**component, 'step_id': 'D43', 'context_sha256': context['context_sha256'],
+        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['metric_status'],
+        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
+        'completed': False, 'qualification': 'NOT_MEASURED',
+        'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
 
 
 if __name__ == "__main__":

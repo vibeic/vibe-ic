@@ -8925,7 +8925,8 @@
               "openroad": "openroad",
               "klayout": "klayout"
             },
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "flow109_metrics_status": "PARTIALLY_IMPLEMENTED",
+            "metric_consumer": "pad_ring_gen.py:accept_d32"
           }
         },
         {
@@ -9000,7 +9001,7 @@
             "checker.base_21.pad_io_esd_pg_inventory",
             "producer.base_21.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_21.pg_supply_connectivity_errors",
@@ -9021,7 +9022,7 @@
             "checker.base_21.pg_supply_connectivity_errors",
             "producer.base_21.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_21.pad_access_spacing",
@@ -9042,10 +9043,10 @@
             "checker.base_21.pad_access_spacing",
             "producer.base_21.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "PARTIALLY_IMPLEMENTED",
       "gate_layer_ids": [
         "G1",
         "G2",
@@ -10900,7 +10901,8 @@
             "engine_executables": {
               "klayout": "klayout"
             },
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "flow109_metrics_status": "PARTIALLY_IMPLEMENTED",
+            "metric_consumer": "gds_antenna_deck_check.py:accept_d43"
           }
         },
         {
@@ -10979,7 +10981,7 @@
             "checker.base_35.antenna_net_pin_violations",
             "producer.base_35.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_35.antenna_rule_coverage",
@@ -10999,10 +11001,10 @@
             "checker.base_35.antenna_rule_coverage",
             "producer.base_35.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "PARTIALLY_IMPLEMENTED",
       "gate_layer_ids": [
         "G1",
         "G2",
@@ -11602,7 +11604,8 @@
             },
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "flow109_metrics_status": "PARTIALLY_IMPLEMENTED",
+            "metric_consumer": "magic_extract_spice_emit.py:accept_d47"
           }
         },
         {
@@ -11676,7 +11679,7 @@
             "checker.base_29.candidate_parasitic_coverage",
             "producer.base_29.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_29.rc_corner_mapping",
@@ -11695,7 +11698,7 @@
             "checker.base_29.rc_corner_mapping",
             "producer.base_29.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_29.si_applicability_evidence",
@@ -11715,10 +11718,10 @@
             "checker.base_29.si_applicability_evidence",
             "producer.base_29.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "PARTIALLY_IMPLEMENTED",
       "gate_layer_ids": [
         "G1",
         "G2",
@@ -14241,7 +14244,8 @@
             },
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "flow109_metrics_status": "PARTIALLY_IMPLEMENTED",
+            "metric_consumer": "analog_hardmacro_gds_emit.py:accept_d60"
           }
         },
         {
@@ -14338,7 +14342,7 @@
             "checker.base_41.stream_layer_hierarchy_mapping",
             "producer.base_41.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_41.unresolved_gds_cells",
@@ -14358,10 +14362,10 @@
             "checker.base_41.unresolved_gds_cells",
             "producer.base_41.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "PARTIALLY_IMPLEMENTED",
       "gate_layer_ids": [
         "G1",
         "G2",
@@ -15160,11 +15164,12 @@
               ]
             },
             "acceptance_scope": "new_D62_geometry_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED",
+            "flow109_metrics_status": "PARTIALLY_IMPLEMENTED",
             "native_required_outputs": [
               "new final GDS and D62 ODB common geometry receipt",
               "native finishing XOR"
-            ]
+            ],
+            "metric_consumer": "flow109_final_geometry.py:accept_d64"
           }
         },
         {
@@ -15230,7 +15235,7 @@
             "checker.base_45.unexplained_stream_xor",
             "producer.base_45.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "base_45.allowed_finishing_change_identity",
@@ -15248,10 +15253,10 @@
             "checker.base_45.allowed_finishing_change_identity",
             "producer.base_45.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "PARTIALLY_IMPLEMENTED",
       "gate_layer_ids": [
         "G1",
         "G2",

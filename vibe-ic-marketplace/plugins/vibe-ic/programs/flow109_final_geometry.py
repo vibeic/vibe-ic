@@ -255,3 +255,101 @@ def validate_final_geometry(project, receipt_ref):
             'geometry_receipt': receipt_ref, 'adopted_views': record['adopted_views'],
             'component_geometry_current': True, 'final_geometry_adoption': 'NOT_MEASURED',
             'flow109_acceptance': 'NOT_MEASURED'}
+
+
+def _d64_metric_counts(project, xor):
+    """Count the actual finishing report; the independent design-pair census is mandatory."""
+    import klayout.rdb as rdb
+    pair_count = xor.get('design_pair_count')
+    if type(pair_count) is not int or pair_count <= 0:
+        raise AdmissionRefusal('D64_METRIC_PAIR_POPULATION_UNMEASURED', 'nonempty native design-pair census required')
+    report = stream._bound(project, xor['report'])
+    database = rdb.ReportDatabase();database.load(str(report))
+    count = database.num_items()
+    if type(count) is not int or count < 0:
+        raise AdmissionRefusal('D64_METRIC_COUNT_UNMEASURED', 'native report count required')
+    return {'unexplained_stream_xor': count, 'design_pair_count': pair_count,
+            'report': xor['report'], 'unit': 'count'}
+
+
+def _d64_metric_observation(project, context, component):
+    """Use the existing strict final-geometry validator, without an alternate qualification gate."""
+    import flow109
+    current = flow109.validate_execution_context(context)
+    if current['requested_step'] != 'D64' or component.get('context_sha256') != current['context_sha256']:
+        raise AdmissionRefusal('D64_METRIC_CONTEXT_MISMATCH', 'current D64 context required')
+    adopted = validate_final_geometry(project, component['receipt'])
+    record = _read(stream._bound(project, component['receipt']))
+    if record.get('execution_context') != current or any(component.get(key) != value for key, value in record.items()):
+        raise AdmissionRefusal('D64_METRIC_ORIGINAL_COMPONENT_MISMATCH', 'normal producer/consumer identity differs')
+    observed = _d64_metric_counts(project, record['finishing_xor'])
+    observed['geometry'] = adopted
+    observed['readset'] = {'component': component['receipt'], 'inputs': record['inputs'],
+        'sources': record['operation_sources'], 'stream_bridge': record['stream_bridge'],
+        'finishing_xor': record['finishing_xor'], 'geometry_proof': record['geometry_proof'],
+        'adopted_views': record['adopted_views'], 'context_sha256': current['context_sha256']}
+    # Preserve the existing validator's complete current-source and qualified
+    # native binding again before publishing the scalar.
+    if validate_final_geometry(project, component['receipt']) != adopted:
+        raise AdmissionRefusal('D64_METRIC_BASIS_CHANGED_DURING_READ', 'current geometry changed')
+    return observed
+
+
+def accept_d64(project, context, component):
+    """BLOCKING XOR metric; a clean report is not an adopted finishing-change reference."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    result = {'schema': metrics.SCHEMA, 'row_id': 'D64', 'status': 'NOT_MEASURED',
+              'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    ids = ['base_45.unexplained_stream_xor', 'base_45.allowed_finishing_change_identity']
+    try:
+        current = flow109.validate_execution_context(context)
+        if current['requested_step'] != 'D64' or [o['id'] for o in current['resolved_row']['obligations']] != ids:
+            raise AdmissionRefusal('D64_METRIC_OBLIGATIONS_UNREGISTERED', 'existing two metrics required')
+        observed = _d64_metric_observation(Path(project).resolve(strict=True), current, component)
+        result['observation'] = observed
+        count = observed['unexplained_stream_xor'];metrics._finite_number(count, count=True)
+        failed = count != 0
+        result['obligations'] = [{'id': ids[0], 'status': 'FAIL' if failed else 'PASS',
+            'observed_value': count, 'unit': 'count', 'design_pair_count': observed['design_pair_count'],
+            'reason': 'D64_CURRENT_NATIVE_FINISHING_XOR'},
+            {'id': ids[1], 'status': 'NOT_MEASURED', 'reason': 'D64_ADOPTED_ALLOWED_FINISHING_CHANGE_REFERENCE_UNBOUND'}]
+        result.update(metric_status='FAIL' if failed else 'NOT_MEASURED',
+                      reason='D64_NATIVE_XOR_REOPENED_ADOPTED_CHANGE_REFERENCE_PENDING')
+    except AdmissionRefusal as exc:
+        failed = exc.status == 'FAIL'
+        result.update(metric_status='FAIL' if failed else 'NOT_MEASURED', reason=exc.code, detail=str(exc))
+        result['obligations'] = [{'id': oid, 'status': 'FAIL' if failed and oid == ids[0] else 'NOT_MEASURED',
+                                  'reason': exc.code} for oid in ids]
+    except (ValueError, OSError, KeyError, TypeError, AttributeError, flow109.Flow109Error) as exc:
+        result.update(reason='D64_METRIC_EVIDENCE_UNAVAILABLE', detail=str(exc))
+        result['obligations'] = [{'id': oid, 'status': 'NOT_MEASURED', 'reason': str(exc)} for oid in ids]
+    if component.get('component_status') == 'FAIL' or result['metric_status'] == 'FAIL':
+        result.update(status='FAIL', reason='D64_MEASURED_FAILURE_PRESERVED')
+    return result
+
+
+def consume_default_row_completion(project, context, component):
+    accepted = accept_d64(project, context, component)
+    previous = component.get('metric_acceptance')
+    previous = previous if isinstance(previous, dict) else {}
+    metric_failed = (component.get('metric_acceptance_status') == 'FAIL' or
+                     previous.get('status') == 'FAIL' or previous.get('metric_status') == 'FAIL')
+    if metric_failed or component.get('default_row_status') == 'FAIL':
+        accepted = {**accepted, 'status': 'FAIL', 'delivery_blocked': True,
+            'metric_status': 'FAIL' if metric_failed else accepted['metric_status'],
+            'reason': 'D64_PRIOR_MEASURED_FAILURE_PRESERVED'}
+        prior = previous.get('obligations', [])
+        prior = prior if isinstance(prior, list) else []
+        failed_ids = {item.get('id') for item in prior if isinstance(item, dict) and item.get('status') == 'FAIL'}
+        accepted['prior_failed_obligation_ids'] = sorted(oid for oid in failed_ids if isinstance(oid, str))
+        accepted['obligations'] = [
+            {**item, 'status': 'FAIL', 'reason': 'D64_PRIOR_MEASURED_FAILURE_PRESERVED'}
+            if item.get('id') in failed_ids and item.get('status') == 'NOT_MEASURED' else item
+            for item in accepted['obligations']]
+    return {**component, 'step_id': 'D64', 'context_sha256': context['context_sha256'],
+        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['metric_status'],
+        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
+        'completed': False, 'qualification': 'NOT_MEASURED',
+        'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
