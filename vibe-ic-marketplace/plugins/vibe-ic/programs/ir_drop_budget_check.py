@@ -382,8 +382,91 @@ def _d57_grade(project, data, record, work):
             'native_report': str(report), 'budget_result': answer, 'sample_count': samples,
             'node_drops_mv': drops, 'source_node': data['source'], 'vdd_reference_v': reference,
             'required_nodes': data['nodes'], 'sampled_nodes': sorted(drops), 'window_s': window,
+            'analysis':data['bindings']['analysis'],'readset':{'declared_inputs':data['inputs'],
+                'native_inputs':record['native_inputs'],'executions':executions},
             'scope': 'selected source/node/window voltage-drop component only'}
 
+
+
+def _d57_metric_observation(project, component):
+    import tempfile
+    data = _d57_inputs(project)
+    # The retained native record is reparsed; no simulator or producer is called.
+    original = Path(component['measurement']['native_report'])
+    native_path = original.parent/'measurements/result.json'
+    if not native_path.resolve().is_relative_to(project) or native_path.is_symlink():
+        raise ValueError('D57_METRIC_NATIVE_RECORD_FOREIGN')
+    record = json.loads(native_path.read_text())
+    with tempfile.TemporaryDirectory(prefix='d57-consumer-') as temp:
+        observed = _d57_grade(project, data, record, Path(temp))
+    previous = component['measurement']
+    for key in ('status','node_drops_mv','source_node','vdd_reference_v','window_s'):
+        if observed.get(key) != previous.get(key):raise ValueError('D57_METRIC_PRINTED_MEASUREMENT_CHANGED')
+    for key in ('measured','budget','pass','findings'):
+        if observed.get('budget_result',{}).get(key) != previous.get('budget_result',{}).get(key):
+            raise ValueError('D57_METRIC_PRINTED_BUDGET_CHANGED')
+    if 'budget_result' in observed:observed['budget_result']['report_path']=str(original)
+    if _d57_inputs(project) != data:raise ValueError('D57_METRIC_INPUT_CHANGED')
+    observed.pop('native_report', None)
+    return observed
+
+
+def _d57_metric_acceptance(project, context, component):
+    """Bind actual source/node drop percentages; full routed static/dynamic IR is missing."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    ids = ['base_33.rail_source_coverage','base_33.static_dynamic_ir_limits']
+    failed = component.get('component_status') == 'FAIL' or (component.get('measurement') or {}).get('status') == 'FAIL'
+    result = {'row_id':'D57','status':'NOT_MEASURED','qualification':'NOT_MEASURED','obligations':[]}
+    try:
+        current = flow109.validate_execution_context(context)
+        if (current['resolved_row']['id'] != 'D57' or current['resolved_row']['profile']['id'] != 'analog_die'
+                or [o['id'] for o in current['resolved_row']['obligations']] != ids):raise ValueError('D57_METRIC_CONTEXT_UNREGISTERED')
+        observed = _d57_metric_observation(project, component)
+        result['native_observation'] = observed
+        failed = failed or observed['status']=='FAIL'
+        actual = [{'source':observed['source_node'],'node':n} for n in observed.get('sampled_nodes',[])]
+        try:
+            authority, body = metrics._approved_authority(project,
+                'requirements/base_33/rail_source_coverage.json#/required_items', ('source','node'))
+            if not authority['required_items'] or body.get('native_inputs') != observed['readset']['declared_inputs']:
+                raise ValueError('D57_INDEPENDENT_NETWORK_BINDINGS_ABSENT')
+            coverage = 'NOT_MEASURED' if all(i in actual for i in authority['required_items']) else 'FAIL'
+            result['coverage_authority'] = authority
+            coverage_reason = 'D57_PHYSICAL_GRID_PROVENANCE_UNMEASURED' if coverage=='NOT_MEASURED' else 'D57_REQUIRED_SOURCE_NODE_ABSENT'
+        except (metrics.MetricRefusal,OSError,ValueError,KeyError,TypeError) as exc:
+            coverage, coverage_reason = 'NOT_MEASURED', str(exc)
+        result['obligations'].append({'id':ids[0],'status':coverage,'reason':coverage_reason,'observed_items':actual})
+        # The existing native evaluator uses strict < and unrounded drop. Keep it.
+        value = max(observed['node_drops_mv'].values()) / (observed['vdd_reference_v']*1000.)*100.
+        result['obligations'].append({'id':ids[1],'status':'FAIL' if failed else 'NOT_MEASURED',
+            'measurement':{'value':value,'unit':'% Vdd','analysis':observed['analysis'],'window_s':observed['window_s']},
+            'budget_result':observed['budget_result'],
+            'reason':'D57_MEASURED_IR_FAILURE' if failed else 'D57_FULL_ROUTED_GRID_STATIC_DYNAMIC_MISSION_UNMEASURED'})
+    except (OSError,ValueError,KeyError,TypeError,AttributeError) as exc:
+        result['reason'] = str(exc)
+        known_failures = {o['id'] for o in result['obligations'] if o['status']=='FAIL'}
+        result['obligations'] = [{'id':oid,'status':'FAIL' if oid in known_failures or failed and oid==ids[1] else 'NOT_MEASURED','reason':str(exc)} for oid in ids]
+    if failed or any(o['status']=='FAIL' for o in result['obligations']):result['status']='FAIL'
+    return result
+
+
+def consume_default_row_completion(project, context, component):
+    """Canonical row completion; partial measurements do not qualify the row."""
+    accepted = _d57_metric_acceptance(Path(project).resolve(), context, component)
+    prior = component.get('metric_acceptance') or {}
+    prior_ids = {o.get('id') for o in prior.get('obligations', []) if o.get('status') == 'FAIL'} if isinstance(prior, dict) else set()
+    for item in accepted['obligations']:
+        if item['id'] in prior_ids and item['status'] != 'FAIL':
+            item.update(status='FAIL', reason='D57_PRIOR_MEASURED_FAILURE')
+    if (component.get('default_row_status') == 'FAIL' or component.get('metric_acceptance_status') == 'FAIL'
+            or isinstance(prior, dict) and prior.get('status') == 'FAIL' or prior_ids):
+        accepted['status'] = 'FAIL'
+        accepted['prior_failed_obligation_ids'] = sorted(prior_ids)
+    return {**component, 'step_id': 'D57', 'context_sha256': context['context_sha256'],
+        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['status'],
+        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
+        'completed': False, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
 
 def execute(project, context):
     """D57 analog entry: existing bound producer + unchanged numeric comparator."""

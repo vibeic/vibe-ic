@@ -2203,5 +2203,78 @@ def execute(project, context):
     return result
 
 
+
+def _d58_metric_observation(project, component):
+    import analog_native_em as em
+    import librelane_contract as launch
+    import uuid
+    retained = Path(component['retained_inputs'])
+    settings = json.loads(retained.read_text())
+    current = launch.local_image_attestation()
+    blocks = []
+    for block in settings['blocks']:
+        for case in block['settings']['cases']:_d58_provenance(project, case, current)
+        work = project/'reports/flow109/D58'/('metric-reader-'+uuid.uuid4().hex)
+        answer = em.run(project, block['block'], block['settings'], output_dir=work)
+        blocks.append(dict(answer, block=block['block']))
+    if launch.local_image_attestation() != current:raise ValueError('D58_METRIC_LAUNCH_CHANGED')
+    # Refused cases from the original selection remain visible.
+    actual = {b['block']:b for b in blocks}
+    for old in component.get('blocks') or []:
+        if old['block'] not in actual:continue
+        for case in old.get('cases') or []:
+            if case.get('status')=='NOT_MEASURED' and case.get('name') not in {c.get('name') for c in actual[old['block']]['cases']}:
+                actual[old['block']]['cases'].append(case)
+    return {'blocks':blocks,'retained_inputs':{'path':str(retained),'sha256':em._sha(retained)}}
+
+
+def _d58_metric_acceptance(project, context, component):
+    """Harvest source-rated DC comparisons; transient excess is not a lifetime failure."""
+    import flow109
+    ids = ['base_34.em_current_lifetime_limits','base_34.current_temperature_model_coverage']
+    failed = component.get('component_status') == 'FAIL' or any(b.get('status')=='FAIL' or
+        any(c.get('status')=='FAIL' for c in b.get('cases') or []) for b in component.get('blocks') or [])
+    result = {'row_id':'D58','status':'NOT_MEASURED','qualification':'NOT_MEASURED','obligations':[]}
+    try:
+        current = flow109.validate_execution_context(context)
+        if (current['resolved_row']['id'] != 'D58' or current['resolved_row']['profile']['id'] != 'analog_die'
+                or [o['id'] for o in current['resolved_row']['obligations']] != ids):raise ValueError('D58_METRIC_CONTEXT_UNREGISTERED')
+        observed = _d58_metric_observation(project, component)
+        failed = failed or any(b['status']=='FAIL' for b in observed['blocks'])
+        comparisons = [{'block':b['block'],'case':c.get('name'),'numeric_status':c.get('numeric_status'),
+            'rating_context':c.get('rating_context'),'interconnect_results':c.get('interconnect_results',[]),
+            'violations':c.get('violations',[]),'unmeasured':c.get('unmeasured',[])}
+            for b in observed['blocks'] for c in b.get('cases') or []]
+        result['native_observation'] = observed
+        result['obligations'].append({'id':ids[0],'status':'FAIL' if failed else 'NOT_MEASURED',
+            'comparisons':comparisons,'reason':'D58_MEASURED_DC_FAILURE' if failed else 'D58_FULL_MISSION_LIFETIME_UNMEASURED'})
+        result['obligations'].append({'id':ids[1],'status':'NOT_MEASURED',
+            'reason':'D58_INDEPENDENT_REQUIRED_CURRENT_TEMPERATURE_MODEL_POPULATION_UNBOUND',
+            'observed_items':[{'block':c['block'],'case':c['case'],'rating_context':c['rating_context']} for c in comparisons]})
+    except (OSError,ValueError,KeyError,TypeError,AttributeError) as exc:
+        result['reason'] = str(exc)
+        known_failures = {o['id'] for o in result['obligations'] if o['status']=='FAIL'}
+        result['obligations'] = [{'id':oid,'status':'FAIL' if oid in known_failures or failed and oid==ids[0] else 'NOT_MEASURED','reason':str(exc)} for oid in ids]
+    if failed:result['status']='FAIL'
+    return result
+
+
+def consume_default_row_completion(project, context, component):
+    """Canonical row completion; partial measurements do not qualify the row."""
+    accepted = _d58_metric_acceptance(Path(project).resolve(), context, component)
+    prior = component.get('metric_acceptance') or {}
+    prior_ids = {o.get('id') for o in prior.get('obligations', []) if o.get('status') == 'FAIL'} if isinstance(prior, dict) else set()
+    for item in accepted['obligations']:
+        if item['id'] in prior_ids and item['status'] != 'FAIL':
+            item.update(status='FAIL', reason='D58_PRIOR_MEASURED_FAILURE')
+    if (component.get('default_row_status') == 'FAIL' or component.get('metric_acceptance_status') == 'FAIL'
+            or isinstance(prior, dict) and prior.get('status') == 'FAIL' or prior_ids):
+        accepted['status'] = 'FAIL'
+        accepted['prior_failed_obligation_ids'] = sorted(prior_ids)
+    return {**component, 'step_id': 'D58', 'context_sha256': context['context_sha256'],
+        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['status'],
+        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
+        'completed': False, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
+
 if __name__ == "__main__":
     sys.exit(main())

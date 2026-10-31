@@ -724,114 +724,134 @@ def grade_case(project: Path, setting: dict, limits: dict, aliases: dict, known:
         statistics=window_statistics(capture,window,
             [(resolver(parts[1]),resolver(parts[2]),resistance) for parts,_,resistance in bound])
         native_stats={parts[0].lower():stats for (parts,_,_),stats in zip(bound,statistics)}
-    for line in currents[0].open():
-        mapping=json.loads(line)
-        key=(mapping['node_a'],mapping['node_b'],mapping['type'],mapping['resistance_ohm'])
-        if not bucket[key]:raise ValueError('current has no native geometry row')
-        row=bucket[key].pop()
-        nodes,resistance=spice.pop(mapping['spice_resistor'].lower())
-        if nodes!=mapping['spice_nodes'] or resistance!=mapping['spice_resistance_ohm'] or resistance<=0:
-            raise ValueError('current mapping differs from native SPICE resistor')
-        if not ((same(nodes[0],row['node_a']) and same(nodes[1],row['node_b'])) or
-                (same(nodes[1],row['node_a']) and same(nodes[0],row['node_b']))):
-            raise ValueError('native resistor endpoints differ from geometry')
-        native_mohm=struct.unpack('f',struct.pack('f',(0 if corrected else .5)+header['resist_scale']*row['ext_resistance_value']))[0]
-        if float(format(native_mohm/1000,'.6g'))!=resistance:
-            raise ValueError('native SPICE resistance differs from emitted EXT geometry row')
-        if resolver is not None and [resolver(n) for n in nodes]!=mapping['voltage_vectors']:
-            raise ValueError('native voltage vectors do not address the actual resistor endpoints')
-        if transient:
-            current_stats=native_stats[mapping['spice_resistor'].lower()]
-            if current_stats!=mapping.get('current_statistics_a'):
-                raise ValueError('current statistics differ from the actual native time grid')
-            value=current_stats['peak_abs']
-            va,vb=[voltage_stats[v.lower()] for v in mapping['voltage_vectors']]
-            low,high=min(va['min'],vb['min']),max(va['max'],vb['max'])
-        else:
-            va,vb=[voltages[v.lower()] for v in mapping['voltage_vectors']]
-            if [va,vb]!=mapping['voltage_v'] or (va-vb)/resistance!=mapping['current_a']:
-                raise ValueError('current mapping differs from actual native voltage/resistance')
-            value=(va-vb)/resistance;low,high=min(va,vb),max(va,vb)
-        span=ranges.setdefault(row['network'],{'min_v':low,'max_v':high,'sampled_endpoints':0})
-        span['min_v']=min(span['min_v'],low);span['max_v']=max(span['max_v'],high);span['sampled_endpoints']+=2
-        material=aliases.get(row['type']) or aliases.get(row.get('type_long'))
-        if not material:
-            if row['type'] not in known:raise ValueError('native material is not declared by extraction technology')
-            excluded[row['type']]+=1;continue
-        if material not in limits:raise ValueError('foundry interconnect current limit absent: '+material)
-        width=None if row['is_contact'] else row.get('width_grid',0)*scale
-        verdict=evaluate_row(dict(row,current_a=value),limits[material],width,
-                             drc_qualified=drc_qualified)
-        if transient:
-            verdict['current_statistics_a']=current_stats
-            verdict['current_scope']='measured transient window; peak comparison is a sufficient DC-capacity upper bound only'
-            if verdict['status']=='FAIL':
-                verdict['numeric_peak_comparison']='ABOVE_DC_TABLE'
-                verdict['status']='NOT_MEASURED'
-                verdict['detail']='peak exceeds the DC table; no source AC/lifetime derating rule is supplied'
-        results.append(dict(verdict,material=material,resistor=mapping['spice_resistor'],network=row['network']))
-    if spice or any(bucket.values()):raise ValueError('native resistor/geometry/current multiplicity differs')
-    for row in ideals:
-        material=aliases.get(row['type']) or aliases.get(row.get('type_long'))
-        if material:
-            results.append({'status':'NOT_MEASURED','material':material,'network':row['network'],
-                            'detail':'ideal interconnect current is not measured by voltage/resistance'})
-        elif row['type'] in known:excluded[row['type']]+=1
-        else:raise ValueError('native ideal material is not declared by extraction technology')
+    try:
+        for line in currents[0].open():
+            mapping=json.loads(line)
+            key=(mapping['node_a'],mapping['node_b'],mapping['type'],mapping['resistance_ohm'])
+            if not bucket[key]:raise ValueError('current has no native geometry row')
+            row=bucket[key].pop()
+            nodes,resistance=spice.pop(mapping['spice_resistor'].lower())
+            if nodes!=mapping['spice_nodes'] or resistance!=mapping['spice_resistance_ohm'] or resistance<=0:
+                raise ValueError('current mapping differs from native SPICE resistor')
+            if not ((same(nodes[0],row['node_a']) and same(nodes[1],row['node_b'])) or
+                    (same(nodes[1],row['node_a']) and same(nodes[0],row['node_b']))):
+                raise ValueError('native resistor endpoints differ from geometry')
+            native_mohm=struct.unpack('f',struct.pack('f',(0 if corrected else .5)+header['resist_scale']*row['ext_resistance_value']))[0]
+            if float(format(native_mohm/1000,'.6g'))!=resistance:
+                raise ValueError('native SPICE resistance differs from emitted EXT geometry row')
+            if resolver is not None and [resolver(n) for n in nodes]!=mapping['voltage_vectors']:
+                raise ValueError('native voltage vectors do not address the actual resistor endpoints')
+            if transient:
+                current_stats=native_stats[mapping['spice_resistor'].lower()]
+                if current_stats!=mapping.get('current_statistics_a'):
+                    raise ValueError('current statistics differ from the actual native time grid')
+                value=current_stats['peak_abs']
+                va,vb=[voltage_stats[v.lower()] for v in mapping['voltage_vectors']]
+                low,high=min(va['min'],vb['min']),max(va['max'],vb['max'])
+            else:
+                va,vb=[voltages[v.lower()] for v in mapping['voltage_vectors']]
+                if [va,vb]!=mapping['voltage_v'] or (va-vb)/resistance!=mapping['current_a']:
+                    raise ValueError('current mapping differs from actual native voltage/resistance')
+                value=(va-vb)/resistance;low,high=min(va,vb),max(va,vb)
+            span=ranges.setdefault(row['network'],{'min_v':low,'max_v':high,'sampled_endpoints':0})
+            span['min_v']=min(span['min_v'],low);span['max_v']=max(span['max_v'],high);span['sampled_endpoints']+=2
+            material=aliases.get(row['type']) or aliases.get(row.get('type_long'))
+            if not material:
+                if row['type'] not in known:raise ValueError('native material is not declared by extraction technology')
+                excluded[row['type']]+=1;continue
+            if material not in limits:raise ValueError('foundry interconnect current limit absent: '+material)
+            width=None if row['is_contact'] else row.get('width_grid',0)*scale
+            verdict=evaluate_row(dict(row,current_a=value),limits[material],width,
+                                 drc_qualified=drc_qualified)
+            if transient:
+                verdict['current_statistics_a']=current_stats
+                verdict['current_scope']='measured transient window; peak comparison is a sufficient DC-capacity upper bound only'
+                if verdict['status']=='FAIL':
+                    verdict['numeric_peak_comparison']='ABOVE_DC_TABLE'
+                    verdict['status']='NOT_MEASURED'
+                    verdict['detail']='peak exceeds the DC table; no source AC/lifetime derating rule is supplied'
+            results.append(dict(verdict,material=material,resistor=mapping['spice_resistor'],network=row['network']))
+        if spice or any(bucket.values()):raise ValueError('native resistor/geometry/current multiplicity differs')
+        for row in ideals:
+            material=aliases.get(row['type']) or aliases.get(row.get('type_long'))
+            if material:
+                results.append({'status':'NOT_MEASURED','material':material,'network':row['network'],
+                                'detail':'ideal interconnect current is not measured by voltage/resistance'})
+            elif row['type'] in known:excluded[row['type']]+=1
+            else:raise ValueError('native ideal material is not declared by extraction technology')
+    except (OSError,ValueError,KeyError,TypeError) as exc:
+        if not any(r['status']=='FAIL' for r in results):raise
+        return {'status':'FAIL','numeric_status':'FAIL','measurement_status':'NOT_MEASURED',
+                'receipt':str(receipt_path),'graded_segments':len(results),
+                'violations':[r for r in results if r['status']=='FAIL'],
+                'interconnect_results':results,'rating_context':rating,
+                'provenance_gap':str(exc),'scope':'known DC violations; remaining population unmeasured'},views
     states=[r['status'] for r in results]
     numeric_status=('FAIL' if 'FAIL' in states else 'NOT_MEASURED'
                     if not states or 'NOT_MEASURED' in states else 'PASS')
     status=('FAIL' if numeric_status=='FAIL' else 'PASS'
             if numeric_status=='PASS' and rating['qualification_status']=='PASS'
             else 'NOT_MEASURED')
-    roles={}
-    if block is not None:
-        topology=project/f'phase3/analog/{block}/topology.json'
-        if topology.is_file():
-            consume(topology);roles=_read(topology).get('rails') or {}
-    rail_vectors=setting.get('rails') or {net:external.get(str(net).lower(),str(net).lower()) for net in roles.values()}
-    feeds={net:voltages[vector.lower()] for net,vector in rail_vectors.items() if vector.lower() in voltages}
-    feed_ranges={}
-    if transient:
-        for role,net in roles.items():
-            vector=rail_vectors.get(net,'').lower()
-            if vector in voltage_stats:
-                stat=voltage_stats[vector];feed_ranges[net]={'min_v':stat['min'],'max_v':stat['max']}
-                feeds[net]=stat['min'] if role.lower() in ('vss','gnd','ground') else stat['max']
-        supply_stats=supply_wave_statistics(capture,window,deck_path.read_text(),
-                                           source_settings.get('supplies') or {},external)
-    stress={}
-    if block is not None:
-        try:
-            texts=[Path(p).read_text() for p in rec.get('inputs_before',{})
-                   if Path(p).suffix.lower() in ('.lib','.sp','.spice') and Path(p).is_file()]
-            stress=mos_stress((project/f'phase3/analog/{block}/{block}.sp').read_text(),
-                              _read(project/f'phase3/analog/{block}/topology.json'),block,
-                              raw.read_text(),texts,voltages,resolver)
-            if transient and stress.get('status')=='PASS':
-                pairs=('gs','gd','gb','ds','db','sb');expressions=[]
-                for device in stress['devices']:
-                    vectors=device['terminal_vectors']
-                    expressions.extend((vectors[pair[0]],vectors[pair[1]],1) for pair in pairs)
-                maxima=window_statistics(capture,window,expressions);position=0;models={}
-                for device in stress['devices']:
-                    device.pop('terminal_voltages_v',None)
-                    device['terminal_voltage_ranges_v']={terminal:voltage_stats[vector]
-                        for terminal,vector in device['terminal_vectors'].items()}
-                    device['pairs_v']={pair:maxima[position+i]['peak_abs'] for i,pair in enumerate(pairs)}
-                    position+=len(pairs)
-                    for pair,value in device['pairs_v'].items():
-                        prior=models.setdefault(device['model'],{}).get(pair,{'value_v':-1})
-                        if value>prior['value_v']:models[device['model']][pair]={'value_v':value,'instance':device['instance']}
-                stress.update(maxima_by_model=models,window_s=window,
-                              scope='actual MOS terminal extrema over the supplied native transient window')
-        except (OSError,ValueError,KeyError,TypeError) as exc:
-            stress={'status':'NOT_MEASURED','detail':str(exc)}
-    if any(not Path(view['path']).is_file() or _sha(Path(view['path']))!=view['sha256'] for view in views.values()):
-        raise ValueError('consumed native interconnect inputs changed during derivation')
+    completion_gap = None
+    try:
+        roles={}
+        if block is not None:
+            topology=project/f'phase3/analog/{block}/topology.json'
+            if topology.is_file():
+                consume(topology);roles=_read(topology).get('rails') or {}
+        rail_vectors=setting.get('rails') or {net:external.get(str(net).lower(),str(net).lower()) for net in roles.values()}
+        feeds={net:voltages[vector.lower()] for net,vector in rail_vectors.items() if vector.lower() in voltages}
+        feed_ranges={}
+        if transient:
+            for role,net in roles.items():
+                vector=rail_vectors.get(net,'').lower()
+                if vector in voltage_stats:
+                    stat=voltage_stats[vector];feed_ranges[net]={'min_v':stat['min'],'max_v':stat['max']}
+                    feeds[net]=stat['min'] if role.lower() in ('vss','gnd','ground') else stat['max']
+            supply_stats=supply_wave_statistics(capture,window,deck_path.read_text(),
+                                               source_settings.get('supplies') or {},external)
+        stress={}
+        if block is not None:
+            try:
+                texts=[Path(p).read_text() for p in rec.get('inputs_before',{})
+                       if Path(p).suffix.lower() in ('.lib','.sp','.spice') and Path(p).is_file()]
+                stress=mos_stress((project/f'phase3/analog/{block}/{block}.sp').read_text(),
+                                  _read(project/f'phase3/analog/{block}/topology.json'),block,
+                                  raw.read_text(),texts,voltages,resolver)
+                if transient and stress.get('status')=='PASS':
+                    pairs=('gs','gd','gb','ds','db','sb');expressions=[]
+                    for device in stress['devices']:
+                        vectors=device['terminal_vectors']
+                        expressions.extend((vectors[pair[0]],vectors[pair[1]],1) for pair in pairs)
+                    maxima=window_statistics(capture,window,expressions);position=0;models={}
+                    for device in stress['devices']:
+                        device.pop('terminal_voltages_v',None)
+                        device['terminal_voltage_ranges_v']={terminal:voltage_stats[vector]
+                            for terminal,vector in device['terminal_vectors'].items()}
+                        device['pairs_v']={pair:maxima[position+i]['peak_abs'] for i,pair in enumerate(pairs)}
+                        position+=len(pairs)
+                        for pair,value in device['pairs_v'].items():
+                            prior=models.setdefault(device['model'],{}).get(pair,{'value_v':-1})
+                            if value>prior['value_v']:models[device['model']][pair]={'value_v':value,'instance':device['instance']}
+                    stress.update(maxima_by_model=models,window_s=window,
+                                  scope='actual MOS terminal extrema over the supplied native transient window')
+            except (OSError,ValueError,KeyError,TypeError) as exc:
+                stress={'status':'NOT_MEASURED','detail':str(exc)}
+    except (OSError,ValueError,KeyError,TypeError) as exc:
+        if numeric_status != 'FAIL':raise
+        completion_gap = str(exc)
+        roles={};feeds={};feed_ranges={};rail_vectors={};stress={};supply_stats={}
+    provenance_gap = completion_gap
+    try:
+        if any(not Path(view['path']).is_file() or _sha(Path(view['path']))!=view['sha256'] for view in views.values()):
+            raise ValueError('consumed native interconnect inputs changed during derivation')
+    except (OSError,ValueError) as exc:
+        if numeric_status != 'FAIL':raise
+        provenance_gap = str(exc)
     return {'status':status,'numeric_status':numeric_status,'measurement_status':'PASS',
             'receipt':str(receipt_path),'graded_segments':len(results),
             'violations':[r for r in results if r['status']=='FAIL'],
+            'interconnect_results':results,'provenance_gap':provenance_gap,
             'unmeasured':[r for r in results if r['status']=='NOT_MEASURED'],
             'native_drc_bound_partitions':sum('density_bound_mA_per_um_exact' in r for r in results),
             'non_interconnect_materials':dict(excluded),'conditions':rec.get('source_binding',{}),
@@ -952,7 +972,8 @@ def run(project: Path, block: str, setting: dict, *, container: str='', output_d
                 'limits':limits,'native_inputs':views,
                 'scope':'only supplied native OP cases/transient windows; no omitted mission or lifetime extrapolation'}
     except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError) as exc:
-        record={'status':'NOT_MEASURED','detail':str(exc),'cases':cases,'native_inputs':views}
+        record={'status':'FAIL' if any(c.get('status')=='FAIL' for c in cases) else 'NOT_MEASURED',
+                'detail':str(exc),'cases':cases,'native_inputs':views}
     target=work/'result.json';target.write_text(json.dumps(record,indent=2)+'\n');outputs.append(str(target));record['outputs']=outputs
     return record
 
@@ -1042,8 +1063,9 @@ def _d56_case(project, case, current_launch):
     if not isinstance(inputs,dict) or not inputs or not isinstance(outputs,dict) or not outputs or rec.get('inputs_after')!=inputs or rec.get('unchanged') is not True:
         raise ValueError('D56_NATIVE_INPUT_POPULATION_UNBOUND')
     driver=original(rec.get('executed_driver_copy')) if rec.get('executed_driver_copy') else None
+    driver_sha=_sha(driver) if driver is not None else None
     for path,digest in {**inputs,**outputs}.items():
-        if path in inputs and driver is not None and _sha(driver)==digest:
+        if path in inputs and driver is not None and driver_sha==digest:
             continue  # Existing retained executed-driver-copy semantics.
         if _sha(original(path))!=digest:raise ValueError('D56_ORIGINAL_INPUT_OR_OUTPUT_STALE: '+path)
     if driver is not None:
@@ -1105,8 +1127,17 @@ def _d56_case(project, case, current_launch):
     stats=supply_wave_statistics(raw,window,deck.read_text(),supplies,external)
     if set(stats)!=set(required) or any(v['negative_node'].casefold()!=ground.casefold() for v in stats.values()):
         raise ValueError('D56_SUPPLY_POLARITY_OR_REFERENCE_MISMATCH')
+    readset={str(original(path)):digest for path,digest in {**inputs,**outputs}.items()
+             if driver is None or path not in inputs or digest!=driver_sha}
+    if driver is not None:readset[str(driver)]=driver_sha
+    readset[str(original_launch)]=launch_ref['sha256']
+    readset.update({str(path):case[role]['sha256'] for role,path in
+                    (('receipt',receipt),('deck',deck),('capture',capture),('log',log))})
+    if any(_sha(Path(path))!=digest for path,digest in readset.items()):
+        raise ValueError('D56_CONSUMED_SOURCE_CHANGED_DURING_INTEGRATION')
     return {'status':'PASS','rails':stats,'units':{'current_a':'A','voltage_v':'V','power_w':'W','window_s':'s'},
             'capture_shape':list(raw.shape),'native_launch':rec['native_launch'],'receipt':str(receipt),
+            'window_s':window,'analysis':rec['analysis'],'readset':readset,
             'scope':'selected native rail/window integration only; mission, layout/activity and source power bounds unmeasured'}
 
 
@@ -1145,9 +1176,124 @@ def execute(project,context):
         retained.write_text(json.dumps({'cases':[c['retained_case'] for c in result['cases'] if 'retained_case' in c]},indent=2)+'\n')
         result['retained_inputs']={'path':str(retained.relative_to(project)),'sha256':_sha(retained)}
         result['reason']='Source-bound native rail current/I*V over explicit windows only; subset/full-row activity, power bounds and ADC acceptance unmeasured'
-    except (ValueError,OSError,KeyError,TypeError,AdmissionRefusal,launch.Refusal) as exc:result['reason']=str(exc)
+    except (ValueError,OSError,KeyError,TypeError,AdmissionRefusal,launch.Refusal) as exc:
+        if any(c.get('status')=='FAIL' for c in result['cases']):result['component_status']='FAIL'
+        result['reason']=str(exc)
     target=work/'component.json';target.write_text(json.dumps(result,indent=2)+'\n');return result
 
+
+
+def _d56_metric_observation(project, component):
+    import librelane_contract as launch
+    config = project/'input/flow109/D56.json'
+    before = _sha(config)
+    settings = _read(config)
+    declared = {c['name']: c for c in settings['cases']}
+    if len(declared) != len(settings['cases']) or not declared:
+        raise ValueError('D56_METRIC_CASE_POPULATION_INVALID')
+    current = launch.local_image_attestation()
+    cases = []
+    for case in component.get('cases') or []:
+        source = declared[case['name']]
+        retained = case['retained_case']
+        keys = ('deck','supplies','external','required_rails','signal_ground','window_s')
+        if any(source.get(k) != retained.get(k) for k in keys):
+            raise ValueError('D56_METRIC_CASE_BINDING_CHANGED')
+        if 'receipt' in source and source != retained:
+            raise ValueError('D56_METRIC_RETAINED_SOURCE_CHANGED')
+        observed = _d56_case(project, retained, current)
+        if observed.get('rails') != case.get('rails') or observed['status'] != case['status']:
+            raise ValueError('D56_METRIC_PRINTED_MEASUREMENT_CHANGED')
+        cases.append(dict(observed, name=case['name']))
+    if {c['name'] for c in cases} != set(declared) or _sha(config) != before or launch.local_image_attestation() != current:
+        raise ValueError('D56_METRIC_POPULATION_OR_SOURCE_CHANGED')
+    return {'cases': cases, 'source_cases': declared, 'config': {'path':str(config),'sha256':before}}
+
+
+def _d56_metric_acceptance(project, context, component):
+    """Read native I*V integrals, independently declared case/rail scope and W bounds.
+
+    Coverage required_items has {case,rail}; case_bindings binds the existing
+    supplies/external/required_rails/signal_ground/window_s source fields.
+    limits[case][rail] contains avg and peak_abs scalar bounds, units=W.
+    Full physical activity and mission coverage are still unmeasured.
+    """
+    import flow109
+    import flow109_metric_acceptance as metrics
+    ids = ['base_40.power_activity_coverage', 'base_40.per_mode_rail_average_peak_power']
+    failed = component.get('component_status') == 'FAIL' or any(c.get('status') == 'FAIL' for c in component.get('cases') or [])
+    result = {'row_id':'D56','status':'NOT_MEASURED','qualification':'NOT_MEASURED','obligations':[]}
+    try:
+        current = flow109.validate_execution_context(context)
+        if (current['resolved_row']['id'] != 'D56' or current['resolved_row']['profile']['id'] != 'analog_die'
+                or [o['id'] for o in current['resolved_row']['obligations']] != ids):
+            raise ValueError('D56_METRIC_CONTEXT_UNREGISTERED')
+        observed = _d56_metric_observation(project, component)
+        failed = failed or any(c['status']=='FAIL' for c in observed['cases'])
+        result['native_observation'] = observed
+        actual = [{'case':c['name'],'rail':rail} for c in observed['cases'] for rail in c.get('rails',{})]
+        try:
+            authority, body = metrics._approved_authority(project,
+                'requirements/base_40/power_activity_coverage.json#/required_items', ('case','rail'))
+            required = authority['required_items']
+            names = {i['case'] for i in required}
+            keys = ('deck','supplies','external','required_rails','signal_ground','window_s')
+            if not required or body.get('case_bindings') != {n:{k:observed['source_cases'][n][k] for k in keys} for n in names}:
+                raise ValueError('D56_INDEPENDENT_CASE_BINDINGS_ABSENT')
+            missing = [i for i in required if i not in actual]
+            result['activity_authority'] = authority
+            coverage = 'FAIL' if missing else 'NOT_MEASURED'
+            coverage_reason = 'D56_REQUIRED_RAIL_CASE_ABSENT' if missing else 'D56_PHYSICAL_ACTIVITY_AND_MISSION_COVERAGE_UNMEASURED'
+        except (metrics.MetricRefusal,OSError,ValueError,KeyError,TypeError) as exc:
+            coverage, coverage_reason = 'NOT_MEASURED', str(exc)
+        result['obligations'].append({'id':ids[0],'status':coverage,'reason':coverage_reason,'observed_items':actual})
+        comparisons = []
+        try:
+            authority, body = metrics._approved_document(project, 'requirements/base_40/per_mode_rail_average_peak_power.json',
+                authority='requirements_owner', schema=metrics.AUTHORITY_SCHEMA)
+            if body.get('units') != 'W':raise ValueError('D56_POWER_BOUND_UNITS_UNBOUND')
+            for case in observed['cases']:
+                for rail, stats in case.get('rails',{}).items():
+                    for statistic in ('avg','peak_abs'):
+                        value = metrics._finite_number(stats['power_w'][statistic])
+                        limits = body['limits'][case['name']][rail][statistic]
+                        low, high = limits.get('min'), limits.get('max')
+                        if low is None and high is None:raise ValueError('D56_POWER_BOUNDS_ABSENT')
+                        if low is not None:metrics._finite_number(low)
+                        if high is not None:metrics._finite_number(high)
+                        if low is not None and high is not None and low > high:raise ValueError('D56_POWER_BOUNDS_INVALID')
+                        comparisons.append({'case':case['name'],'rail':rail,'statistic':statistic,'value':value,'unit':'W',
+                            'status':'FAIL' if (low is not None and value < low or high is not None and value > high) else 'PASS'})
+            result['power_authority'] = authority
+        except (metrics.MetricRefusal,OSError,ValueError,KeyError,TypeError) as exc:
+            result['power_bounds_gap'] = str(exc)
+        bounds_fail = failed or any(c['status']=='FAIL' for c in comparisons)
+        result['obligations'].append({'id':ids[1],'status':'FAIL' if bounds_fail else 'NOT_MEASURED','comparisons':comparisons,
+            'reason':'D56_NATIVE_POWER_FAILURE' if bounds_fail else 'D56_SELECTED_SUPPLY_WINDOWS_ONLY'})
+    except (OSError,ValueError,KeyError,TypeError,AttributeError) as exc:
+        result['reason'] = str(exc)
+        known_failures = {o['id'] for o in result['obligations'] if o['status']=='FAIL'}
+        result['obligations'] = [{'id':oid,'status':'FAIL' if oid in known_failures or failed and oid==ids[1] else 'NOT_MEASURED','reason':str(exc)} for oid in ids]
+    if failed or any(o['status']=='FAIL' for o in result['obligations']):result['status']='FAIL'
+    return result
+
+
+def consume_default_row_completion(project, context, component):
+    """Canonical row completion; partial measurements do not qualify the row."""
+    accepted = _d56_metric_acceptance(Path(project).resolve(), context, component)
+    prior = component.get('metric_acceptance') or {}
+    prior_ids = {o.get('id') for o in prior.get('obligations', []) if o.get('status') == 'FAIL'} if isinstance(prior, dict) else set()
+    for item in accepted['obligations']:
+        if item['id'] in prior_ids and item['status'] != 'FAIL':
+            item.update(status='FAIL', reason='D56_PRIOR_MEASURED_FAILURE')
+    if (component.get('default_row_status') == 'FAIL' or component.get('metric_acceptance_status') == 'FAIL'
+            or isinstance(prior, dict) and prior.get('status') == 'FAIL' or prior_ids):
+        accepted['status'] = 'FAIL'
+        accepted['prior_failed_obligation_ids'] = sorted(prior_ids)
+    return {**component, 'step_id': 'D56', 'context_sha256': context['context_sha256'],
+        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['status'],
+        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
+        'completed': False, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
 
 if __name__=='__main__':
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('project',type=Path);ap.add_argument('--block',required=True);ap.add_argument('--settings',type=Path,required=True);ap.add_argument('--container',default='');ap.add_argument('--out',type=Path)
