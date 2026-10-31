@@ -6837,7 +6837,7 @@
             "checker.base_11.unconstrained_required_paths",
             "producer.base_11.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D26_NATIVE_METRIC_BINDING"
         },
         {
           "id": "base_13.prelayout_timing_targets",
@@ -6858,7 +6858,7 @@
             "checker.base_13.prelayout_timing_targets",
             "producer.base_13.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D26_NATIVE_METRIC_BINDING"
         },
         {
           "id": "base_13.unconstrained_endpoints",
@@ -6878,7 +6878,7 @@
             "checker.base_13.unconstrained_endpoints",
             "producer.base_13.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D26_NATIVE_METRIC_BINDING"
         }
       ],
       "metric_acceptance_status": "UNIMPLEMENTED",
@@ -7377,7 +7377,7 @@
             "checker.base_19.adopted_netlist_sdc_library",
             "producer.base_19.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D30_NATIVE_METRIC_BINDING"
         },
         {
           "id": "base_19.post_synth_crossing_power_changes",
@@ -7396,7 +7396,7 @@
             "checker.base_19.post_synth_crossing_power_changes",
             "producer.base_19.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D30_NATIVE_METRIC_BINDING"
         }
       ],
       "metric_acceptance_status": "UNIMPLEMENTED",

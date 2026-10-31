@@ -148,7 +148,8 @@ def test_d30_correct_independent_bundle_passes_only_adopted_metric(tmp_path, mon
     result = metrics.accept_d30(tmp_path, context, component)
     assert _adopted(result)["status"] == "PASS", result
     assert result["status"] == "NOT_MEASURED" and result["delivery_blocked"] is True
-    assert result["obligations"][1]["status"] == "UNIMPLEMENTED_METRIC_BINDING"
+    assert result["obligations"][1]["status"] == "NOT_MEASURED"
+    assert result["obligations"][1]["reason"] == "D30_CHANGE_POPULATION_UNMEASURED"
     selected = flow109._selected_step_result(tmp_path, context, component)
     assert selected["metric_acceptance"] == result
     assert selected["default_row_status"] == "NOT_MEASURED" and selected["completed"] is False
@@ -252,5 +253,139 @@ def test_d30_missing_or_unexplained_census_cannot_promote_row(tmp_path, monkeypa
         _write(tmp_path / "requirements/base_19/post_synth_crossing_power_changes.json", census)
     result = metrics.accept_d30(tmp_path, context, _deliver(tmp_path, context))
     assert _adopted(result)["status"] == "PASS", result
-    assert result["obligations"][1]["status"] == "UNIMPLEMENTED_METRIC_BINDING"
+    assert result["obligations"][1]["status"] == "NOT_MEASURED"
     assert result["status"] == "NOT_MEASURED" and result["delivery_blocked"] is True
+
+
+def _independent_empty_changes(project, monkeypatch):
+    """Reader boundary double; no native LEC/power qualification is asserted."""
+    subject = {'fixture': 'independent neutral logical subject; NOT native qualification'}
+    source = project / 'input/independent-changes.json'
+    payload = {'required_items': [], 'subject': subject, 'has_power_intent': False,
+               'validated_absence': {'status': 'VALIDATED', 'authority': 'requirements_owner'}}
+    _write(source, {'post_synth_crossing_power_changes': payload})
+    reference = _ref(project, source)
+    authority = project / 'requirements/base_19/post_synth_crossing_power_changes.json'
+    _write(authority, {'schema': metrics.AUTHORITY_SCHEMA, **payload,
+        'validated_absence': {**payload['validated_absence'], 'source_reference': reference},
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': reference}})
+    observed = {'status': 'MEASURED', 'value': [], 'subject': subject, 'has_power_intent': False,
+        'population': {'scope': 'SOURCE CONTROL DOUBLE; actual graph reader tested separately'},
+        'consumed_inputs': {str(source): _sha(source)},
+        'execution_record': {'path': 'fixture-native-record', 'sha256': 'a' * 64}}
+    # Baseline has no change-population reader. Its existing accept_d30 must
+    # still produce its real UNIMPLEMENTED value, not fail on missing imports.
+    monkeypatch.setattr(metrics, 'd30_consumed_changes', lambda *_: observed, raising=False)
+    return authority, observed
+
+
+def test_d30_existing_consumer_closes_only_bound_independent_empty_population(tmp_path, monkeypatch):
+    context, _, _, _ = _case(tmp_path, monkeypatch)
+    _independent_empty_changes(tmp_path, monkeypatch)
+    result = metrics.accept_d30(tmp_path, context, _deliver(tmp_path, context))
+    assert [o['status'] for o in result['obligations']] == ['PASS', 'PASS'], result
+    assert result['status'] == 'PASS' and result['delivery_blocked'] is False
+
+
+@pytest.mark.parametrize('damage', ['absence', 'source_semantics', 'foreign_subject', 'unbound_producer'])
+def test_d30_empty_declaration_cannot_substitute_native_population(tmp_path, monkeypatch, damage):
+    context, _, _, _ = _case(tmp_path, monkeypatch)
+    authority, observed = _independent_empty_changes(tmp_path, monkeypatch)
+    component = _deliver(tmp_path, context)
+    body = json.loads(authority.read_text())
+    if damage == 'absence':
+        del body['validated_absence']
+    elif damage == 'source_semantics':
+        body['has_power_intent'] = True
+    elif damage == 'foreign_subject':
+        body['subject'] = {'fixture': 'different subject'}
+    else:
+        p = tmp_path / component['d30_delivery_receipt']['path']
+        doc = json.loads(p.read_text());doc.pop('consumed_changes');_write(p, doc)
+        component['d30_delivery_receipt'] = _ref(tmp_path, p)
+    _write(authority, body)
+    result = metrics.accept_d30(tmp_path, context, component)
+    assert result['obligations'][1]['status'] == 'NOT_MEASURED', result
+    assert result['status'] == 'NOT_MEASURED'
+
+
+def _graph_change_case(project, monkeypatch):
+    """Actual structural reader; only original LEC/role authority is doubled."""
+    import librelane_eqy as lec
+    native_view = {'modules': {'neutral': {'attributes': {'top': 1},
+        'ports': {'clk': {'direction': 'input', 'bits': [2]},
+                  'd': {'direction': 'input', 'bits': [3]},
+                  'q': {'direction': 'output', 'bits': [4]}},
+        'netnames': {'clk': {'bits': [2]}, 'd': {'bits': [3]}, 'q': {'bits': [4]}},
+        'cells': {'state': {'type': '$dff', 'parameters': {'CLK_POLARITY': 1},
+            'port_directions': {'CLK': 'input', 'D': 'input', 'Q': 'output'},
+            'connections': {'CLK': [2], 'D': [3], 'Q': [4]}}}}}}
+    rtl = project / 'input/neutral.v';rtl.parent.mkdir(parents=True)
+    rtl.write_text('module neutral(input clk,d, output reg q); always @(posedge clk) q<=d; endmodule\n')
+    raw_subject = {'rtl': [_ref(project, rtl)], 'fixture': 'not native LEC qualification'}
+    doc = {'row_contract': {'id': 'D25', 'obligations': []}, 'derivation': {}}
+    for side in ['gold', 'gate']:
+        p = project / 'derived' / side / 'after.json';_write(p, native_view)
+        doc['derivation'][side] = {'files': [_ref(project, p)]}
+    record = project / 'reports/lec_eqy_execution.json';_write(record, doc)
+    roles = {'clk': {'role': 'clock', 'clock': 'clk'}, 'd': {'role': 'synchronous_data', 'clock': 'clk'}}
+    source = project / 'input/roles.json'
+    source_doc = {'input_domains': roles,
+        'subject': {'input': {'rtl_files': [_ref(project, rtl)['path']], 'files': [_ref(project, rtl)]}}}
+    _write(source, source_doc)
+    authority = project / 'requirements/roles.json';_write(authority, {'fixture': True})
+    adopted = project / 'adopted/native.json';_write(adopted, {'fixture': True})
+    original = {'proof': {'verdict': 'PASS'}, 'mode': {'top': 'neutral', 'clock': {'port': 'clk'}},
+        'subject': raw_subject, 'consumed_inputs': {str(record): _sha(record)},
+        'execution_record': _ref(project, record), 'execution_authority': _ref(project, adopted)}
+    monkeypatch.setattr(metrics, '_d25_inputs', lambda *_: {'fixture': True})
+    def fixture_native_owner(*_):
+        # Fresh fixture producer only: graph mutations below retain a valid
+        # boundary double so the real structural reader, not a stale receipt,
+        # rejects the changed population. Never applied to real native data.
+        return {**original, 'execution_record': _ref(project, record),
+                'consumed_inputs': {str(record): _sha(record)}}
+    monkeypatch.setattr(lec, 'd25_reopen', fixture_native_owner)
+    monkeypatch.setattr(metrics, '_d12_source', lambda *_: (
+        {**_ref(project, authority), 'source': _ref(project, source)}, {}, source_doc))
+    from test_flow109_selection import profile
+    return {'features': profile()}, doc, record, source_doc
+
+
+def test_d30_actual_structural_reader_observes_complete_single_clock_population(tmp_path, monkeypatch):
+    context, _, _, _ = _graph_change_case(tmp_path, monkeypatch)
+    observed = metrics.d30_consumed_changes(tmp_path, context)
+    assert observed['status'] == 'MEASURED' and observed['value'] == [], observed
+    assert observed['population']['gold']['q_bits'] == observed['population']['gate']['q_bits'] == 1
+
+
+@pytest.mark.parametrize('damage', ['power_intent', 'stale_view', 'zero_state', 'unknown_cell',
+                                    'asynchronous_input', 'foreign_original', 'real_multiple_clocks'])
+def test_d30_missing_structural_or_power_population_never_becomes_empty(tmp_path, monkeypatch, damage):
+    context, doc, record, roles = _graph_change_case(tmp_path, monkeypatch)
+    p = tmp_path / doc['derivation']['gate']['files'][0]['path']
+    if damage == 'power_intent':
+        context['features']['has_power_intent'] = True
+    elif damage == 'stale_view':
+        p.write_text('{}\n')
+    elif damage == 'asynchronous_input':
+        roles['input_domains']['d']['role'] = 'asynchronous_data'
+    elif damage == 'foreign_original':
+        roles['subject']['input']['files'][0]['sha256'] = '0' * 64
+    else:
+        view = json.loads(p.read_text())
+        if damage == 'zero_state':
+            view['modules']['neutral']['cells'] = {}
+        elif damage == 'unknown_cell':
+            view['modules']['neutral']['cells']['state']['type'] = 'unknown_storage'
+        else:
+            from programs.tests._hostpaths import require_repo
+            fixture = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+                                   'tests', 'fixtures', 'cdc_netlist', 'multi_clock_sync.json')
+            # Retain the real graph's two clock domains. Only its top label
+            # changes to select it through the same explicitly doubled owner.
+            view = json.loads(fixture.read_text());view['modules']['neutral'] = view['modules'].pop(next(iter(view['modules'])))
+        _write(p, view);doc['derivation']['gate']['files'] = [_ref(tmp_path, p)];_write(record, doc)
+    observed = metrics.d30_consumed_changes(tmp_path, context)
+    assert observed['status'] == 'NOT_MEASURED', observed
+    assert observed.get('reason')

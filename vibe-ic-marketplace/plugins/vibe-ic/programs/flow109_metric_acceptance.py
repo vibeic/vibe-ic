@@ -223,6 +223,11 @@ D30_BINDINGS = {
         "operator": "matches_adopted_reference",
         "reference_ref": "adopted/base_19/adopted_netlist_sdc_library.json",
     },
+    "base_19.post_synth_crossing_power_changes": {
+        "operator": "covers_all",
+        "required_set_ref": "requirements/base_19/post_synth_crossing_power_changes.json#/required_items",
+        "empty_set_policy": "requires validated absence/applicability evidence",
+    },
 }
 
 
@@ -1810,6 +1815,291 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
     return result
 
 
+def accept_d26(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    """BLOCKING: measure functional pre-layout metrics from sealed native reads.
+
+    The owner separately checks the current timing-mode and mapped-SDC semantic
+    receipts. This reader supplies their missing registry metrics; it never
+    turns an absent report, corner, unit or source-owned bound into zero.
+    """
+    import fnmatch
+    import librelane_contract as native
+    import librelane_prelayout as sta
+    from eda_report_audit import _STA_TIME_TO_NS
+
+    project = Path(project).resolve()
+    specs = {
+        'base_11.unconstrained_required_paths': {'operator': 'eq', 'value': 0, 'unit': 'count'},
+        'base_13.prelayout_timing_targets': {
+            'operator': 'within_declared_bounds',
+            'bounds_ref': 'requirements/base_13/prelayout_timing_targets.json#/limits',
+            'unit_ref': 'requirements/base_13/prelayout_timing_targets.json#/units',
+            'missing_bounds': 'BLOCKED', 'modes': 'functional_only'},
+        'base_13.unconstrained_endpoints': {'operator': 'eq', 'value': 0, 'unit': 'count'},
+    }
+    result = {'schema': SCHEMA, 'row_id': 'D26', 'status': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    consumed = {}
+
+    def local(value):
+        path = Path(value)
+        name = path.relative_to(project).as_posix() if path.is_absolute() else path.as_posix()
+        path = _safe_project_file(project, name)
+        if not path.is_file() or not path.stat().st_size:
+            raise MetricRefusal('D26_NATIVE_INPUT_ABSENT', name)
+        consumed[str(path)] = _sha(path.read_bytes())
+        return path
+
+    def bound(record):
+        path = local(record['path'])
+        if consumed[str(path)] != record['sha256']:
+            raise MetricRefusal('D26_NATIVE_INPUT_STALE', str(path))
+        return path
+
+    try:
+        row = context['resolved_row']
+        obligations = row['obligations']
+        if (row['id'] != 'D26' or len(obligations) != len(specs)
+                or {o['id'] for o in obligations} != set(specs)
+                or any(any(o['expectation'].get(k) != v for k, v in specs[o['id']].items())
+                       for o in obligations)):
+            raise MetricRefusal('D26_METRIC_CONTRACT_UNSUPPORTED', 'existing three contracts required')
+        timing = json.loads(bound(component['timing_modes_receipt']).read_text())
+        if (timing['schema'] != 'vibeic.flow109.d26-timing-modes.v1'
+                or timing['step_id'] != 'D26' or timing['position'] != 38
+                or timing['aggregate_status'] not in ('PASS', 'FAIL')):
+            raise MetricRefusal('D26_TIMING_MODES_UNBOUND', 'current measured functional mode required')
+        if timing['scan']['applicability'] == 'NOT_APPLICABLE':
+            if timing['post_scan_arms']:
+                raise MetricRefusal('D26_TIMING_MODES_UNBOUND', 'unexpected post-scan arm')
+            gate = json.loads(local('phase3/librelane/prelayout/gates/step10_slack.json').read_text())
+            state_path = bound({'path': gate['source'], 'sha256': gate['state_out_sha256']})
+            folder = state_path.parent
+        else:
+            folder = local(Path(timing['post_scan_arms']['functional']['native']['folder'])
+                           / 'state_out.json').parent
+        receipt = native.validate_step_receipt(folder, 'OpenROAD.STAPrePNR')
+        local(folder / 'vibeic_receipt.json')
+        config, before, after = [json.loads(local(folder / name).read_text())
+                                 for name in ('config.json', 'state_in.json', 'state_out.json')]
+        fingerprint = receipt['input']
+        if (any(receipt['sha256'].get(name) != _sha(local(folder / name).read_bytes())
+                for name in ('config.json', 'state_in.json', 'state_out.json', 'pdk_root.json'))
+                or fingerprint.get('state') != _sha((folder / 'state_in.json').read_bytes())
+                or not _HEX.fullmatch(str(fingerprint.get('config', '')))
+                or config.get('meta', {}).get('step') != 'OpenROAD.STAPrePNR'
+                or before['nl'] != after['nl']
+                or fingerprint['state_files'].get(before['nl']) != _sha(local(before['nl']).read_bytes())):
+            raise MetricRefusal('D26_NATIVE_SUBJECT_UNBOUND', 'actual native input/output netlist differs')
+        mounts = json.loads(local(folder / 'pdk_root.json').read_text()).get('mounts_under_it', [])
+        mounts = sorted(mounts, key=lambda p: len(str(p[1])), reverse=True)
+
+        def actual_input(name):
+            path = Path(name)
+            if not path.is_absolute():
+                raise MetricRefusal('D26_NATIVE_READSET_UNBOUND', name)
+            source = next((Path(host) / path.relative_to(guest) for host, guest in mounts
+                           if path.is_relative_to(guest)), path)
+            expected = fingerprint.get('config_files', {}).get(name)
+            if (not _HEX.fullmatch(str(expected or '')) or not source.is_file()
+                    or _sha(source.read_bytes()) != expected):
+                raise MetricRefusal('D26_NATIVE_READSET_STALE', name)
+            consumed[str(source.resolve())] = expected
+
+        corners = sta._corners(folder)
+        if not corners or not config.get('STA_CORNERS') or config.get('MACROS'):
+            raise MetricRefusal('D26_NATIVE_POPULATION_UNMEASURED', 'complete standard-cell corner set required')
+        libraries = config.get('CELL_LIBS') or config.get('LIB') or {}
+        if config.get('PAD_LIBS') or config.get('EXTRA_LIBS'):
+            raise MetricRefusal('D26_NATIVE_POPULATION_UNMEASURED', 'additional libraries require native coverage')
+
+        def selected_libs(corner):
+            return sorted(str(p) for pattern, values in libraries.items()
+                          if fnmatch.fnmatch(corner, pattern)
+                          for p in (values if isinstance(values, list) else [values]))
+
+        rows, measured_models = {}, set()
+        for corner in corners:
+            for name in ('sta.log', 'checks.rpt'):
+                p = local(corner / name)
+                if receipt['sha256'].get(p.relative_to(folder).as_posix()) != _sha(p.read_bytes()):
+                    raise MetricRefusal('D26_NATIVE_REPORT_UNSEALED', str(p))
+            log = (corner / 'sta.log').read_text()
+            deck = config.get('PNR_SDC_FILE')
+            if (not deck or re.findall(r"^Reading design constraints file at '([^']+)'", log, re.M) != [deck]
+                    or re.findall(r"^Reading top-level netlist at '([^']+)'", log, re.M) != [before['nl']]):
+                raise MetricRefusal('D26_NATIVE_READSET_UNPROVEN', corner.name)
+            actual_input(deck)
+            read_libs = [path for label, path in native._STA_CELL_LIBRARY_RE.findall(log)
+                         if label == corner.name]
+            declared = selected_libs(corner.name)
+            if not declared or sorted(read_libs) != declared or len(set(read_libs)) != len(read_libs):
+                raise MetricRefusal('D26_NATIVE_READSET_UNPROVEN', corner.name + ': libraries')
+            for path in read_libs:
+                actual_input(path)
+            unit = sta._native_time_unit(folder, corner, read_libs)
+            if unit not in _STA_TIME_TO_NS:
+                raise MetricRefusal('D26_NATIVE_UNIT_UNMEASURED', corner.name)
+            local(corner / sta._TIME_UNIT_REPORT)
+            counts = sta.check_setup_counts((corner / 'checks.rpt').read_text(), sta.supply_names(config))
+            if counts is None or sta.black_boxes(log) or sta.sdc_diagnostics(log, Path(deck)):
+                raise MetricRefusal('D26_NATIVE_POPULATION_UNMEASURED', corner.name + ': incomplete linked timing')
+            values = {check + '_ws': _finite_number(after['metrics'].get(
+                f'timing__{check}__ws__corner:{corner.name}')) * _STA_TIME_TO_NS[unit]
+                      for check in ('setup', 'hold')}
+            rows[corner.name] = {'counts': counts, 'slack': values, 'unit': 'ns', 'native_unit': unit}
+            measured_models.add(tuple(declared))
+        if (set(rows) != {key.split('corner:', 1)[1] for key in after['metrics']
+                         if key.startswith('timing__setup__ws__corner:')}
+                or any(not selected_libs(c) or tuple(selected_libs(c)) not in measured_models
+                       for c in config['STA_CORNERS'])):
+            raise MetricRefusal('D26_NATIVE_POPULATION_UNMEASURED', 'missing configured timing model/corner')
+        identity = {'producer': {'receipt': _sha((folder / 'vibeic_receipt.json').read_bytes())},
+            'checker': {'source': _sha(Path(__file__).read_bytes())},
+            'tool_execution': {'step': 'OpenROAD.STAPrePNR',
+                'input_fingerprint_sha256': _sha(_json_key(fingerprint).encode())},
+            'consumed_inputs': consumed,
+            'requirements': {'obligations': [o['id'] for o in obligations]},
+            'configuration': {'mode': 'functional', 'corners': sorted(rows)}}
+        result['native_observation'] = {'corners': rows, 'consumed_inputs': consumed,
+            'scope': 'functional pre-layout estimate, ideal clocks and no routed parasitics'}
+        for obligation in obligations:
+            oid, spec = obligation['id'], specs[obligation['id']]
+            item = {'id': oid, 'operator': spec['operator']}
+            if spec['operator'] == 'eq':
+                endpoint = oid.endswith('unconstrained_endpoints')
+                value = sum(r['counts'].get('unconstrained_endpoints', 0) if endpoint
+                            else sum(r['counts'].values()) for r in rows.values())
+                status, reason = evaluate_operator('eq', {'status': 'MEASURED', 'identity': identity,
+                    'value': value, 'unit': 'count'}, {'status': 'APPROVED', 'value': 0, 'unit': 'count'})
+                item.update(status=status, reason=reason, observed_value=value, unit='count')
+            else:
+                try:
+                    authority, body = _approved_document(project, spec['bounds_ref'].split('#')[0],
+                        authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+                    payload = {k: v for k, v in body.items() if k not in ('schema', 'approval')}
+                    source = json.loads(bound(authority['source']).read_text())
+                    if (source.get('prelayout_timing_targets') != payload
+                            or not body.get('limits')
+                            or not set(body['limits']) <= {'setup_ws', 'hold_ws'}
+                            or set(body.get('units', {})) != set(body['limits'])):
+                        raise MetricRefusal('D26_BOUNDS_SOURCE_UNBOUND', 'exact independent declared slack payload required')
+                    bound({'path': authority['path'], 'sha256': authority['sha256']})
+                    checks = []
+                    for corner, row_values in rows.items():
+                        for field in body['limits']:
+                            value = row_values['slack'][field]
+                            status, reason = evaluate_operator('within_declared_bounds',
+                                {'status': 'MEASURED', 'identity': identity, 'value': value, 'unit': 'ns'},
+                                {'status': 'APPROVED', 'limits': body['limits'][field], 'unit': body['units'][field]})
+                            checks.append({'corner': corner, 'metric': field, 'value': value,
+                                           'unit': 'ns', 'status': status, 'reason': reason})
+                    states = [c['status'] for c in checks]
+                    item.update(status='FAIL' if 'FAIL' in states else 'PASS'
+                        if states and all(s == 'PASS' for s in states) else 'NOT_MEASURED',
+                        checks=checks, authority=authority)
+                except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+                    item.update(status='NOT_MEASURED', reason=getattr(exc, 'code', 'D26_BOUNDS_UNMEASURED'),
+                                detail=str(exc))
+            result['obligations'].append(item)
+        if any(_sha(Path(p).read_bytes()) != digest for p, digest in consumed.items()):
+            raise MetricRefusal('D26_INPUT_CHANGED_DURING_READ', 'native/authority readset')
+        states = [o['status'] for o in result['obligations']]
+        result['status'] = 'FAIL' if 'FAIL' in states else 'PASS' if states == ['PASS'] * 3 else 'NOT_MEASURED'
+        result['delivery_blocked'] = result['status'] != 'PASS'
+        result['reason'] = 'D26_NATIVE_METRICS_' + result['status']
+    except (native.Refusal, MetricRefusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result.update(status='FAIL' if any(o.get('status') == 'FAIL' for o in result['obligations'])
+                      else 'NOT_MEASURED', delivery_blocked=True,
+                      reason=getattr(exc, 'code', 'D26_NATIVE_METRICS_UNMEASURED'), detail=str(exc))
+    return result
+
+
+def d30_consumed_changes(project: Path, context: Mapping[str, Any]) -> dict:
+    """Observe the no-power-intent, single-clock logical change population.
+
+    Reuse the independently adopted original native LEC producer's complete
+    pre/post JSON views. This executes no synthesis or proof. Multi-clock,
+    asynchronous-reset and power-intent changes need their actual producer;
+    they are not covered by this conditional empty-population observation.
+    """
+    import _cdc_netlist as graph
+    import librelane_eqy as lec
+    import flow109
+    project = Path(project).resolve()
+    try:
+        if context.get('features', {}).get('has_power_intent') is not False:
+            raise MetricRefusal('D30_POWER_CHANGE_POPULATION_UNMEASURED', 'power-intent delta producer required')
+        prepared = _d25_inputs(project)
+        # This is a read-only current registry contract, never a new execution
+        # context/request. The adopted producer receipt must match it too.
+        row = flow109.resolve_step(flow109.resolve_plan(context['features']), 'D25')
+        original = lec.d25_reopen(project, prepared, {'resolved_row': row})
+        record = _d30_file(project, original['execution_record'], 'adopted native change views')
+        doc = json.loads(record.read_text())
+        if original['proof']['verdict'] != 'PASS':
+            raise MetricRefusal('D30_CHANGE_PROOF_UNQUALIFIED', 'adopted original LEC must pass')
+        authority, _, source = _d12_source(project, 'clock_reset_crossing_census', D12_FIELDS)
+        original_rtl = {r['path']: r['sha256'] for r in original['subject']['rtl']}
+        source_input = source['subject']['input']
+        source_rtl = {r['path']: r['sha256'] for r in source_input['files']
+                      if r['path'] in source_input['rtl_files']}
+        if source_rtl != original_rtl:
+            raise MetricRefusal('D30_CHANGE_INPUT_STALE', 'original RTL and input-role subjects differ')
+        consumed = dict(original['consumed_inputs'])
+        for ref in (original['execution_record'], original['execution_authority'], authority):
+            path = _d30_file(project, {k: ref[k] for k in ('path', 'sha256')}, 'change source')
+            consumed[str(path)] = _sha(path.read_bytes())
+        path = _d30_file(project, authority['source'], 'original input roles')
+        consumed[str(path)] = _sha(path.read_bytes())
+        for ref in source_input['files']:
+            path = _d30_file(project, ref, 'original role source input')
+            consumed[str(path)] = ref['sha256']
+        inputs = source['input_domains']
+        clock = original['mode']['clock']['port']
+        population = {}
+        combinational = {'$and', '$or', '$xor', '$xnor', '$not', '$logic_not', '$logic_and',
+            '$logic_or', '$mux', '$pmux', '$buf', '$pos', '$add', '$sub', '$mul', '$neg',
+            '$eq', '$ne', '$eqx', '$nex', '$lt', '$le', '$gt', '$ge', '$shl', '$shr',
+            '$sshl', '$sshr', '$shift', '$shiftx', '$slice', '$concat', '$reduce_and',
+            '$reduce_or', '$reduce_xor', '$reduce_xnor', '$reduce_bool', '$_BUF_', '$_NOT_',
+            '$_AND_', '$_OR_', '$_XOR_', '$_XNOR_', '$_MUX_', '$scopeinfo'}
+        for side in ('gold', 'gate'):
+            views = [r for r in doc['derivation'][side]['files'] if r['path'].endswith('/after.json')]
+            if len(views) != 1:
+                raise MetricRefusal('D30_CHANGE_POPULATION_UNMEASURED', side + ': original native JSON absent')
+            path = _d30_file(project, views[0], side + ' native JSON')
+            consumed[str(path)] = views[0]['sha256']
+            nl = graph.load(path, top=original['mode']['top'])
+            decoded = {f.name for f in nl.flops}
+            if (not decoded or nl.memories or nl.ambiguous_drivers
+                    or any(name not in decoded and c['type'] not in combinational
+                           for name, c in nl.cells.items())
+                    or any(not f.q or len(f.d) != len(f.q) or f.arst is not None
+                           or nl.sample_edge(f) != 1 for f in nl.flops)
+                    or graph.clock_domains(nl) != [clock]):
+                raise MetricRefusal('D30_CHANGE_POPULATION_UNMEASURED', side + ': not a complete synchronous single-clock graph')
+            ports = {name for name, (direction, _) in nl.ports.items() if direction in ('input', 'inout')}
+            if (set(inputs) != ports or any(r.get('clock') != clock
+                    or r.get('role') not in ('clock', 'synchronous_data', 'synchronous_reset', 'inactive')
+                    for r in inputs.values())):
+                raise MetricRefusal('D30_CHANGE_POPULATION_UNMEASURED', side + ': original input roles differ or are asynchronous')
+            q_bits = sum(len(f.q) for f in nl.flops)
+            if len(nl.flop_of_q()) != q_bits:
+                raise MetricRefusal('D30_CHANGE_POPULATION_UNMEASURED', side + ': state driver population differs')
+            population[side] = {'cells': len(nl.cells), 'flop_cells': len(nl.flops),
+                'q_bits': q_bits, 'clock_domains': [clock], 'native_view': views[0]}
+        if any(_sha(Path(name).read_bytes()) != digest for name, digest in consumed.items()):
+            raise MetricRefusal('D30_CHANGE_INPUT_STALE', 'native/role source changed')
+        return {'status': 'MEASURED', 'value': [], 'population': population,
+            'subject': original['subject'], 'has_power_intent': False,
+            'consumed_inputs': consumed, 'execution_record': original['execution_record'],
+            'scope': 'no register clock/reset-domain crossing changes in complete single-clock synchronous views; no authored power-intent changes; no physical power/timing qualification'}
+    except (graph.Refusal, MetricRefusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        return {'status': 'NOT_MEASURED', 'reason': getattr(exc, 'code', 'D30_CHANGE_POPULATION_UNMEASURED'),
+                'detail': str(exc)}
+
+
 def accept_d30(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
     """Bind the delivered bundle; the missing delta producer still blocks D30."""
     import flow109
@@ -1839,6 +2129,40 @@ def accept_d30(project: Path, context: Mapping[str, Any], component: Mapping[str
                     if (delivery.get("consumed_timing") != current
                             or delivery.get("metric_reader_source_sha256") != _sha(Path(__file__).read_bytes())):
                         raise MetricRefusal("D30_DELIVERY_READSET_STALE", "D30 producer did not bind current readset")
+                    if spec['operator'] == 'covers_all':
+                        observed = d30_consumed_changes(project, context)
+                        if observed['status'] != 'MEASURED':
+                            raise MetricRefusal(observed['reason'], observed.get('detail', 'native changes'))
+                        if delivery.get('consumed_changes') != observed:
+                            raise MetricRefusal('D30_DELIVERY_READSET_STALE', 'change population was not producer-bound')
+                        authority, body = _approved_authority(project, spec['required_set_ref'], ('kind', 'name'))
+                        source = json.loads((project / authority['source']['path']).read_text())
+                        payload = {k: v for k, v in body.items() if k not in ('schema', 'approval')}
+                        absence = dict(payload.get('validated_absence') or {})
+                        if absence.pop('source_reference', None) != authority['source']:
+                            raise MetricRefusal('D30_CHANGE_AUTHORITY_UNBOUND', 'conditional absence source differs')
+                        payload['validated_absence'] = absence
+                        if (source.get('post_synth_crossing_power_changes') != payload
+                                or body.get('subject') != observed['subject']
+                                or body.get('has_power_intent') is not False
+                                or not authority.get('validated_absence') or body['required_items']):
+                            raise MetricRefusal('D30_CHANGE_AUTHORITY_UNBOUND', 'independent exact conditional absence required')
+                        consumed = {**observed['consumed_inputs'], **current['consumed_inputs'],
+                            authority['path']: authority['sha256'],
+                            authority['source']['path']: authority['source']['sha256'],
+                            chain['d30_delivery_receipt']['path']: chain['d30_delivery_receipt']['sha256']}
+                        identity = {'producer': {'sha256': delivery['producer_source_sha256']},
+                            'checker': {'sha256': delivery['metric_reader_source_sha256']},
+                            'tool_execution': observed['execution_record'], 'consumed_inputs': consumed,
+                            'requirements': {k: authority[k] for k in ('path', 'sha256', 'source')},
+                            'configuration': {'profile': delivery['profile_identity']}}
+                        status, detail = evaluate_operator('covers_all', {'status': 'MEASURED',
+                            'identity': identity, 'value': observed['value']}, authority)
+                        if any(_sha(Path(project / name).read_bytes()) != digest for name, digest in consumed.items()):
+                            raise MetricRefusal('D30_SOURCE_CHANGED_DURING_READ', 'change observation')
+                        item.update(status=status, measurement=observed, authority=authority, detail=detail)
+                        result['obligations'].append(item)
+                        continue
                     authority, body = _approved_document(project, spec["reference_ref"],
                         authority="requirements_owner", schema="vibeic.flow109.adopted-reference.v1")
                     approved = json.loads((project / authority["source"]["path"]).read_text())

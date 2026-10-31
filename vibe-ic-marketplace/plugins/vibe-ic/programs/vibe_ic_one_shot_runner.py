@@ -2549,7 +2549,22 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
             timing_ref = None
 
     try:
+        import flow109_metric_acceptance as metrics
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+        if context.get('schema') == 'vibeic.flow109.execution-window.v1':
+            context = flow109.component_context(context, requested_step='D26')
+        measured = metrics.accept_d26(project, context, acceptance)
+        if metrics.accept_d26(project, context, acceptance) != measured:
+            raise ValueError('D26 metric input changed during finalization')
+        component_status = status
+        status = ('FAIL' if 'FAIL' in (status, measured['status']) else 'PASS'
+                  if status == measured['status'] == 'PASS' else 'NOT_MEASURED')
+        acceptance = {**acceptance, 'verdict': status, 'component_status': component_status,
+                      'metric_acceptance': measured}
         extras = {'step_id': '10', 'default_row_status': status,
+                  'native_component_status': component_status,
+                  'metric_acceptance': measured,
                   'completed': status == 'PASS'}
         if timing_ref is not None:
             extras['timing_modes_receipt'] = dict(timing_ref)
@@ -2558,7 +2573,7 @@ def _finish_d26_selected_owner(project: Path, acceptance: dict) -> dict:
         finished = flow109.finish_native_window(project, {'steps': [{
             'status': status, 'extras': extras,
         }]})
-    except flow109.Flow109Error as exc:
+    except (flow109.Flow109Error, ValueError, KeyError, TypeError) as exc:
         finished = None
         detail = f'D26_FINALIZATION_REFUSED: {exc}'
     except FileExistsError as exc:

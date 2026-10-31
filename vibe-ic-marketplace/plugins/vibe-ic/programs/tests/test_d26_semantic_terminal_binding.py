@@ -71,6 +71,12 @@ def _prepared(project, monkeypatch, semantic_status='FAIL'):
 def test_d26_terminal_preserves_current_timing_semantic_conjunction(
         tmp_path, monkeypatch, status, rc):
     acceptance, semantic, timing = _prepared(tmp_path, monkeypatch, status)
+    # This test isolates the genuine semantic owner. Its native STA boundary
+    # above is already a labelled double; registry metrics have separate real
+    # reader controls in test_flow109_d26_metric_acceptance.
+    import flow109_metric_acceptance as metrics
+    monkeypatch.setattr(metrics, 'accept_d26', lambda *_: {
+        'status': 'PASS', 'scope': 'SOURCE_CONTROL native timing boundary double'})
     protected = {p: p.read_bytes() for root in
                  [tmp_path / 'steps', semantic.parent] for p in root.rglob('*') if p.is_file()}
     native_bytes = timing.read_bytes()
