@@ -100,8 +100,11 @@ def read_declaration(project: Path) -> tuple[list[str] | None, dict[str, Any]]:
     L-doc would otherwise read as a design that names no IP.
     """
     import ip_catalog_query
-    docs = [path for rel, pattern in DECLARATION_DOCS
-            for path in sorted((project / rel).glob(pattern))]
+    import _path_layout as layout
+    original = layout.rtl_input(project) == "original"
+    docs = (layout.original_input_sources(project) if original else
+            [path for rel, pattern in DECLARATION_DOCS
+             for path in sorted((project / rel).glob(pattern))])
     record: dict[str, Any] = {
         "source": "ip_catalog_query.declared_catalog_reuse",
         "documents": [str(p.relative_to(project)) for p in docs]}
@@ -109,7 +112,7 @@ def read_declaration(project: Path) -> tuple[list[str] | None, dict[str, Any]]:
     for path in docs:
         try:
             text = path.read_text()
-            if path.suffix == ".json":
+            if not original and path.suffix == ".json":
                 json.loads(text)
         except (OSError, ValueError):
             unreadable.append(str(path.relative_to(project)))
@@ -310,7 +313,12 @@ def run(project: Path, image: str | None) -> tuple[int, dict[str, Any]]:
             f"declared catalog IP {unmapped} names no RTL file, so whether the "
             "top reaches it cannot be read"))
         return 1, report
-    top = frontend._top(project)
+    import _path_layout as layout
+    if layout.rtl_input(project) == "original":
+        from design_one_shot_runner import _v661_resolve_dut_module
+        top = _v661_resolve_dut_module(project, "", None)
+    else:
+        top = frontend._top(project)
     files = [str(p.resolve()) for p in rtl_source_files(project)]
     if not top or not files:
         report.update(verdict="NOT_MEASURED",
@@ -370,9 +378,12 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("project", type=Path)
     parser.add_argument("--image", default=None)
+    parser.add_argument("--rtl-input", choices=("structured", "original"), default="structured")
     parser.add_argument("--json", type=Path, default=None)
     args = parser.parse_args(argv)
     project = args.project.resolve()
+    import _path_layout as layout
+    layout.select_rtl_input(project, args.rtl_input, "1", "2")
     image = args.image or os.environ.get("VIBEIC_EDA_IMAGE") or None
     rc, report = run(project, image)
     write_json(args.json or project / REPORT_REL, report)

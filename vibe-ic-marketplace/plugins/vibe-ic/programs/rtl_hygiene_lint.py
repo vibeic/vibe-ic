@@ -8114,6 +8114,7 @@ def main():
     ap.add_argument('files', nargs='*', help='Verilog/SystemVerilog files')
     ap.add_argument('--project', type=Path,
                     help='Use the Default silicon RTL selection, declared L9 top and catalog top parameters')
+    ap.add_argument('--rtl-input', choices=('structured', 'original'), default='structured')
     ap.add_argument('--json', help='Write findings as JSON to this path')
     ap.add_argument('--top', help='Selected top; run fresh native driver elaboration for this closure')
     ap.add_argument('--define', action='append', default=[], help='Selected compile define (repeatable)')
@@ -8148,8 +8149,15 @@ def main():
             from _rtl_include_hub import silicon_rtl_selection
             from catalog_synth_safe_params_check import top_synth_parameters
             project = args.project.resolve()
-            spec = json.loads((project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json').read_text())
-            args.top = spec['top_module']
+            layout.select_rtl_input(project, args.rtl_input, "2", "2")
+            if args.rtl_input == 'original':
+                from design_one_shot_runner import _v661_resolve_dut_module
+                args.top = _v661_resolve_dut_module(project, "", None)
+                if not args.top:
+                    raise ValueError('original RTL has no unique selected top')
+            else:
+                spec = json.loads((project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json').read_text())
+                args.top = spec['top_module']
             args.files = [str(p) for p in silicon_rtl_selection(layout.rtl_dir(project))]
             pinned = top_synth_parameters(project, args.top)
             args.parameter = pinned[0] if pinned else []

@@ -10038,11 +10038,16 @@ def _v661_resolve_dut_module(project: Path,
     if not defined:
         return None  # no parseable rtl/ — caller keeps legacy behaviour
     defined_set = set(defined)
+    original = _pl.rtl_input(project) == "original"
+    if original:
+        declared = _phase1_declared_module_name(_gather_phase1_plain_spec_text(project).text)
+        if declared:
+            return declared if declared in defined_set else None
     # (a0) ORGANIC #672 — explicit synth-top override (same precedence as
     # step_yosys_synth) wins, but ONLY when it names a real module in rtl/ so we
     # never re-introduce a phantom. A phantom L9.top_module no longer wins over
     # a real phase2_synth_top/synth_top the synth step already honours.
-    synth_override = _v672_synth_top_override(project)
+    synth_override = None if original else _v672_synth_top_override(project)
     if synth_override and synth_override in defined_set:
         return synth_override
     # (a) honour the orchestrator's --top-name when it is a real module.
@@ -10679,6 +10684,7 @@ def step_catalog_synth_safe_params(project: Path) -> StepResult:
         sys.executable,
         str(PROGRAMS_DIR / "catalog_synth_safe_params_check.py"),
         str(project), "--json", str(report),
+        "--rtl-input", _pl.rtl_input(project),
     ], cwd=project, timeout=600)
     detail = (out or err).strip()
     try:

@@ -92,6 +92,10 @@ def _diagnostic_codes(log: str) -> list[dict[str, str]]:
 
 
 def _top(project: Path) -> str | None:
+    import _path_layout as layout
+    if layout.rtl_input(project) == "original":
+        from design_one_shot_runner import _v661_resolve_dut_module
+        return _v661_resolve_dut_module(project, "", None)
     for name in ("L9_INTEGRATION_SPEC.json", "L9_INTEGRATION.json"):
         path = project / "phase1/generated_docs" / name
         if path.is_file():
@@ -405,6 +409,10 @@ def _check(project: Path, image: str | None, scratch: Path, *,
         result["findings"].append("no authored RTL source")
         return result
     top = _top(project)
+    import _path_layout as layout
+    if layout.rtl_input(project) == "original" and not top:
+        result["findings"].append("original input top is absent or ambiguous in selected RTL")
+        return result
     names = [str(p.resolve()) for p in files]
     if any(not re.fullmatch(r"[A-Za-z0-9_./-]+", name) for name in names):
         result["findings"].append("RTL path requires unsafe Yosys command escaping")

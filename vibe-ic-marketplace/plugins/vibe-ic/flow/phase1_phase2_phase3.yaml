@@ -1538,6 +1538,15 @@ steps:
           - from: external
             path: "input/phase1_prompt.md"
         blocks_on: []
+        gate:
+          all_of:
+          - any_of: true
+            files_exist:
+            - phase2/stage1/rtl/*.sv
+            - phase2/stage1/rtl/*.v
+          - program_exit_zero: flow_step_output_content_check . --mode rtl --rtl-input original
+          - program_exit_zero: catalog_synth_safe_params_check . --json reports/phase2/gates/catalog_synth_safe_params.json
+              --rtl-input original
     # The content gate below rejects empty or incomplete module sources.
     # Design fidelity remains with the downstream spec/RTL checks and P0.
     skills: [spec-to-rtl]
@@ -1727,6 +1736,68 @@ steps:
           - from: external
             path: "input/phase1_prompt.md"
         blocks_on: [1]
+        gate:
+          all_of:
+          - program_exit_zero: crosslayer_rewrite_equivalence_check . --report reports/crosslayer/rewrite_equivalence.json
+              --baseline-marker reports/crosslayer/baseline_rtl --search-space reports/crosslayer/search_space.json --json
+              reports/crosslayer/rewrite_equivalence_check.json
+          - program_exit_zero: rtl_hygiene_lint --project . --define SYNTHESIS --severity ERROR --json reports/phase2/lint/rtl_hygiene.json
+              --rtl-input original
+          - program_exit_zero: rom_init_lint phase2/stage1/rtl/*.sv phase2/stage1/rtl/*.v --json reports/phase2/lint/rom_init_lint.json
+          - optional_program_exit_zero:
+              absent_condition_reason: The subject is a CLAIM, not a result. This clause validates the SCHEMA of an RTL-bug
+                report when one is filed; a run that files no bug claim has nothing to schema-check, and the failure mode
+                it exists for -- a malformed claim -- requires the claim to exist. Absence is the normal case here, not
+                the defect.
+              command: rtl_bug_report_schema_check . --json reports/phase2/gates/rtl_bug_schema.json
+              condition_files_exist:
+              - reports/phase2/rtl_bugs.json
+          - optional_program_exit_zero:
+              absent_condition_reason: 'Scoped to the presence of an RTL tree. An RTL-free run cannot reach a bare PASS
+                through this clause''s silence: step 2''s UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+                -- MEASURED on an empty project root, `rom_init_lint: missing file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+                flow_compliance_check reads as a disclosed vacuity, so the step reports VACUOUS_PASS and not PASS.'
+              command: nba_addr_read_race_check phase2/stage1/rtl --json reports/phase2/gates/nba_addr_race.json
+              condition_files_exist:
+              - phase2/stage1/rtl
+          - optional_program_exit_zero:
+              absent_condition_reason: 'Scoped to the presence of an RTL tree. An RTL-free run cannot reach a bare PASS
+                through this clause''s silence: step 2''s UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+                -- MEASURED on an empty project root, `rom_init_lint: missing file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+                flow_compliance_check reads as a disclosed vacuity, so the step reports VACUOUS_PASS and not PASS.'
+              command: periodic_timer_vs_rx_activity_check phase2/stage1/rtl --json reports/phase2/gates/periodic_timer.json
+              condition_files_exist:
+              - phase2/stage1/rtl
+          - optional_program_exit_zero:
+              absent_condition_reason: 'Scoped to the presence of an RTL tree. An RTL-free run cannot reach a bare PASS
+                through this clause''s silence: step 2''s UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+                -- MEASURED on an empty project root, `rom_init_lint: missing file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+                flow_compliance_check reads as a disclosed vacuity, so the step reports VACUOUS_PASS and not PASS.'
+              command: memory_read_pipeline_check phase2/stage1/rtl --json reports/phase2/gates/memory_read_pipeline.json
+              condition_files_exist:
+              - phase2/stage1/rtl
+          - optional_program_exit_zero:
+              absent_condition_reason: 'Scoped to the presence of an RTL tree. An RTL-free run cannot reach a bare PASS
+                through this clause''s silence: step 2''s UNCONDITIONAL rom_init_lint clause refuses the same absent tree
+                -- MEASURED on an empty project root, `rom_init_lint: missing file: phase2/stage1/rtl/*.sv`, rc 2 -- which
+                flow_compliance_check reads as a disclosed vacuity, so the step reports VACUOUS_PASS and not PASS.'
+              command: fpga_wrapper_input_polluter_check --rtl phase2/stage1/rtl --json reports/phase2/gates/fpga_input_polluter.json
+              condition_files_exist:
+              - phase2/stage1/rtl
+          - advisory_program_exit_zero:
+              advisory_reason: ADVISORY BY DESIGN, not a ratchet position. Every row this gate emits carries `measured=false`
+                / `basis=predicted-from-rtl-structure`, and a prediction may not buy a refusal (#2063); the property it
+                stands for -- slow-corner setup slack -- is only measurable by a multi-corner STA run on a placed and routed
+                netlist, which is Phase 3. Its HIGH rows are routed to `gate_directed_rtl_repair` as `slow-corner-wide-arithmetic`
+                (ESCALATE, never a rewrite) and its count reaches the compliance record through the report OBJECT this command's
+                `--json` writes. Promoting it to blocking would refuse deliveries on a prediction and manufacture a waiver
+                channel.
+              command: arith_ss_corner_risk_check --strict phase2/stage1/rtl --json reports/phase2/gates/arith_ss_corner_risk.json
+          - advisory_program_exit_zero:
+              advisory_reason: 'NOT A GATE: this is a producer/classifier, not a predicate. Every exit path is 0 (produced)
+                or 2 (no input), so there is nothing here that could refuse. It is wired in a gate slot and counted as gate
+                coverage; move it to a step output.'
+              command: fresh_agent_rtl_bug_density_metric . --no-learning-log
     closed_loop:
       fallback_to: 1
       trigger: >-
