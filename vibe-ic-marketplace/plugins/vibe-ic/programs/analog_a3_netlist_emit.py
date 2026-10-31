@@ -1192,6 +1192,74 @@ def _render_subcircuit(name, ports, body):
     return [f".subckt {name} {' '.join(ports)}", *body, f".ends {name}", ""]
 
 
+def resolve_admitted_geometry(ir, pdkctx, overrides):
+    """Resolve physical dimensions once, before simulation and LVS rendering.
+
+    The selected PDK context binds the manufacturing grid and each model's
+    drawing-step multiples to actual PDK source hashes. MOS W is total width:
+    snap the derived finger width, then restore the SAME finger count. No
+    capacitance target, topology, net, multiplicity or finger count is changed.
+    Missing admission context is explicitly unmeasured for legacy sources;
+    a supplied context must cover every dimensioned model or refuse.
+    """
+    import copy
+    import math
+    from decimal import Decimal, ROUND_HALF_UP
+    from analog_lef_gds_outline_check import manufacturing_grid_um
+
+    effective = copy.deepcopy(overrides)
+    evidence = pdkctx.get("geometry_admission")
+    if evidence is None:
+        return effective, {"status": "NOT_MEASURED", "devices": []}
+    sources = evidence["sources"]
+    if not sources:
+        raise ValueError("GEOMETRY_ADMISSION_SOURCE_MISSING")
+    for source, expected in sources.items():
+        if _sha256(Path(source)) != expected:
+            raise ValueError("GEOMETRY_ADMISSION_SOURCE_CHANGED: " + source)
+    grid_file = evidence["grid_source"]
+    if grid_file not in sources:
+        raise ValueError("GEOMETRY_ADMISSION_GRID_UNBOUND")
+    grid = manufacturing_grid_um(Path(grid_file).parent, grid_file)
+    if grid is None or not math.isfinite(grid) or grid <= 0:
+        raise ValueError("GEOMETRY_ADMISSION_GRID_ABSENT")
+    records = []
+    for device in ir["devices"]:
+        model = pdkctx["role_models"][device["role"]]
+        multiples = evidence["models"].get(model)
+        if multiples is None:
+            raise ValueError("GEOMETRY_ADMISSION_MODEL_UNBOUND: " + model)
+        values = effective.get(device["name"], {})
+        count = values.get("ng", device.get("ng", 1)) if device["role"] in ("nmos", "pmos") else 1
+        if isinstance(count, bool) or not isinstance(count, (int, float)) or not math.isfinite(count) or count < 1 or count != int(count):
+            raise ValueError("GEOMETRY_ADMISSION_INVALID_FINGER_COUNT")
+        count = int(count)
+        record = {"device": device["name"], "model": model, "ng": count,
+                  "dimensions_um": {}, "requested_um": {}}
+        for parameter in ("w", "l"):
+            multiple = multiples[parameter]
+            if type(multiple) is not int or multiple < 1:
+                raise ValueError("GEOMETRY_ADMISSION_INVALID_MULTIPLE")
+            value = values.get(parameter, device.get(parameter))
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError("GEOMETRY_ADMISSION_INVALID_DIMENSION: " + device["name"])
+            divisor = count if parameter == "w" else 1
+            step = Decimal(str(grid)) * multiple
+            requested = Decimal(str(value)) / divisor
+            admitted = (requested / step).to_integral_value(rounding=ROUND_HALF_UP) * step
+            if admitted <= 0:
+                raise ValueError("GEOMETRY_ADMISSION_ROUNDS_TO_ZERO: " + device["name"])
+            effective.setdefault(device["name"], {})[parameter] = float(admitted * divisor)
+            record["requested_um"][parameter] = value
+            record["dimensions_um"][parameter] = float(admitted * divisor)
+            if parameter == "w":
+                record["finger_width_um"] = float(admitted)
+        records.append(record)
+    return effective, {"status": "ADMITTED", "grid_um": grid,
+                       "sources": dict(sources), "devices": records,
+                       "rounding": "nearest drawing step, decimal half up; MOS W/ng first"}
+
+
 def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
                    prov_lines: List[str],
                    overrides: Dict[str, Dict[str, float]],
@@ -1203,10 +1271,15 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     # the project's shape before this was emittable. A library outside the
     # project is a host installation and keeps its absolute path.
     import analog_mos_geometry as _mos
-    _geometry = _mos.discover_context(pdkctx,
-        project=_project_root_of(deck_dir) if deck_dir is not None else None,
-        container=pdkctx.get("container", ""))
+    _geometry = pdkctx.get("mos_geometry")
+    if _geometry is None:
+        _geometry = _mos.discover_context(pdkctx,
+            project=_project_root_of(deck_dir) if deck_dir is not None else None,
+            container=pdkctx.get("container", ""))
     overrides, _finger_records = _mos.apply_fingers(ir, overrides, _geometry)
+    overrides, _admission = resolve_admitted_geometry(ir, pdkctx, overrides)
+    if _admission["status"] == "ADMITTED":
+        overrides, _finger_records = _mos.apply_fingers(ir, overrides, _geometry)
     block = ir["block"]
     metric = any(u == "metric" for u in
                  (pdkctx.get("geometry_units") or {}).values())
@@ -1263,8 +1336,11 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
             if v is None:
                 continue
             _name = _gp.get(p, p)
-            parts.append(f"{_name}={_fmt(float(v))}u" if metric
-                         else f"{_name}={_fmt(float(v))}")
+            rendered = _fmt(float(v))
+            if pdkctx.get("geometry_admission") is not None and float(rendered) != float(v):
+                rendered = str(float(v))
+            parts.append(f"{_name}={rendered}u" if metric
+                         else f"{_name}={rendered}")
         m = overrides.get(d["name"], {}).get("m", d.get("m"))
         if m is not None:
             parts.append(f"m={_fmt(float(m))}")
@@ -2859,6 +2935,25 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         return rec
     pdkctx["mos_geometry"] = _mos_context
     pdkctx["mos_fingering"] = _mos_records
+    try:
+        grid_input = project / "input" / "analog_geometry_admission.json"
+        if grid_input.is_file():
+            pdkctx["geometry_admission"] = json.loads(grid_input.read_text())
+        overrides, pdkctx["geometry_admission_result"] = resolve_admitted_geometry(ir, pdkctx, overrides)
+        # Grid admission cannot move a MOS outside its calibrated source domain.
+        if pdkctx["geometry_admission_result"]["status"] == "ADMITTED":
+            _explicit = {row["device"]: row["explicit"] for row in _mos_records}
+            overrides, _mos_records = _mos.apply_fingers(ir, overrides, _mos_context)
+            for row in _mos_records:
+                row["explicit"] = _explicit[row["device"]]
+            pdkctx["mos_fingering"] = _mos_records
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        gap = write_gap(bdir, project, name, btype,
+                        "GEOMETRY_NOT_REPRESENTABLE", str(exc))
+        rec.update(action="refused", emitted=False,
+                   status="GEOMETRY_NOT_REPRESENTABLE",
+                   gap_path=str(gap.relative_to(project)), reason=str(exc))
+        return rec
     # A3 owns final geometry: these values include bindings A2 could not yet
     # see. Refuse before emitting a deck that A5 could only clamp or reject.
     bound_limit_violations = bound_geometry_limit_violations(ir, pdkctx,
@@ -3250,6 +3345,9 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
                 "spec_bound_params; every other geometry is a library "
                 "nominal, not a solution of this design's spec."),
         },
+        "geometry_admission_input": ({"path": str(grid_input.relative_to(project)),
+                                       "sha256": _sha256(grid_input)}
+                                      if grid_input.is_file() else None),
         "pdk": dict({k: pdkctx[k] for k in
                      ("family", "registry_family", "model_lib", "typ_section",
                       "corner_sections", "role_models")},
@@ -3257,6 +3355,7 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
                     # to, so the sidecar answers "why THIS device" without a
                     # reader re-deriving it from the lib names.
                     role_model_election=pdkctx.get("role_model_election"),
+                    geometry_admission=pdkctx.get("geometry_admission_result"),
                     mos_geometry=pdkctx.get("mos_geometry", {}),
                     mos_fingering=pdkctx.get("mos_fingering", [])),
         "testbench": {"path": (f"tb_{name}.sp" if tb_text else None),
