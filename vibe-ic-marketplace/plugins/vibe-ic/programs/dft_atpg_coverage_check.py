@@ -89,6 +89,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -477,9 +478,16 @@ def l20_dft_applicability(project: Path) -> dict:
     # current intent without changing that skeleton or re-running DFT.
     try:
         import flow109
-        manifest, manifest_ref = flow109._bound_project_json(
-            project, Path("input/flow109-manifest.json"), "FLOW109_DFT_INTENT_MISSING")
-        plan = flow109.resolve_plan(manifest.get("features"), manifest.get("step_profiles"))
+        active_context = os.environ.get(flow109.CONTEXT_ENV)
+        if active_context is not None:
+            plan = flow109.validate_execution_context(
+                json.loads(Path(active_context).read_text(encoding="utf-8")))
+            manifest_ref = {"path": active_context,
+                            "context_sha256": plan["context_sha256"]}
+        else:
+            manifest, manifest_ref = flow109._bound_project_json(
+                project, Path("input/flow109-manifest.json"), "FLOW109_DFT_INTENT_MISSING")
+            plan = flow109.resolve_plan(manifest.get("features"), manifest.get("step_profiles"))
         intent = flow109.dft_source_intent(project, {"features": plan["features"]})
         if intent["requires_scan"] or plan["features"]["requires_dft"]:
             out["asserts_dft"] = True
