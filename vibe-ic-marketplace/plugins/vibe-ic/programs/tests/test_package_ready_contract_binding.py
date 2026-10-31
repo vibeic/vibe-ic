@@ -212,9 +212,11 @@ def test_positive_bare_die(sample):
                       for index, name in enumerate(NAMES)}
     assert result['metric_status'] == 'PASS'
     assert sample[1]['features']['package_interface'] is True
-    assert result['status'] == result['qualification'] == 'NOT_MEASURED'
+    assert result['status'] == 'PASS'
+    assert result['qualification'] == 'NOT_CLAIMED'
+    assert result['acceptance_scope'] == 'existing_native_component_only'
     completed = d75.consume_default_row_completion(*sample)
-    assert completed['completed'] is False and completed['delivery_accepted'] is False
+    assert completed['completed'] is True and completed['delivery_accepted'] is False
     assert completed['whole_flow_acceptance'] == 'NOT_MEASURED'
 
 
@@ -431,3 +433,300 @@ def test_full_pad_reference_retains_unbonded_corner(sample):
     result = consume(sample)
     assert item(result, NAMES[0])['status'] == 'PASS'
     assert item(result, NAMES[1])['status'] == 'PASS'
+
+
+# Incremental existing-admission controls. The original 32 test IDs above are
+# sealed evidence and are not selected by this follow-up's runner.
+@pytest.fixture
+def existing_admission_calls(sample, monkeypatch):
+    import flow109_admission as admission
+    actual = admission.require_admission
+    calls = []
+
+    def trace(project, current):
+        record = {'context_sha256': current['context_sha256']}
+        calls.append(record)
+        try:
+            result = actual(project, current)
+        except admission.AdmissionRefusal as exc:
+            record['refusal'] = exc.report
+            raise
+        record['receipt'] = result
+        return result
+
+    # This observer delegates to the unchanged implementation on every call.
+    monkeypatch.setattr(admission, 'require_admission', trace)
+    yield calls
+    write(sample[0].parent / 'existing-admission-calls.json',
+          {'scope': 'NEUTRAL_SOFTWARE_ADMISSION_CONTROL_ONLY', 'calls': calls})
+
+
+def _existing_admission_context(sample, runtime, registry):
+    project, previous, component = sample
+    plan = flow109.resolve_plan(previous['features'], previous['step_profiles'])
+    current = flow109.execution_context(plan, 'D75', 'D75',
+        runtime_tool_uses=runtime, qualification_registry=registry)
+    flow109.validate_execution_context(current)
+    path = project / d75.CONTEXT_REQUESTS / (current['context_sha256'] + '.json')
+    write(path, current)
+    previous_path = str(d75.CONTEXT_REQUESTS / (previous['context_sha256'] + '.json'))
+    component['inputs'] = [r for r in component['inputs'] if r['path'] != previous_path]
+    component['inputs'].append(d75._record(project, path))
+    component['context_sha256'] = current['context_sha256']
+    return project, current, component
+
+
+@pytest.fixture
+def existing_admission_sample(sample):
+    """Existing qualification schema, expressly synthetic reference evidence.
+
+    Like the admission module's own neutral fixture, these QUALIFIED records
+    test only binding behavior. They exist in the temporary control project;
+    they grant no production authority. Installed executables are hashed and
+    resolved by the real reader without running them or replacing which().
+    """
+    import shutil
+    import flow109_admission as admission
+    project, ctx, _ = sample
+    runtime, records = [], []
+
+    def artifact(name, value):
+        path = project / 'neutral-software-admission' / name
+        write(path, value)
+        return {'path': path.relative_to(project).as_posix(),
+                'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+
+    for index, use in enumerate(ctx['resolved_row']['tool_uses']):
+        executable = shutil.which(use['executable_name'])
+        assert executable, 'official runtime missing required executable: ' + use['executable_name']
+        path = Path(executable).resolve()
+        executable_ref = {'path': str(path), 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+        label = 'NEUTRAL_SOFTWARE_BINDING_CONTROL_NOT_NATIVE_QUALIFICATION'
+        identity = {'use_id': use['use_id'], 'tool_id': use['tool_id'], 'version': label,
+            'build_sha256': executable_ref['sha256'], 'executable': executable_ref,
+            'config': artifact(str(index) + '-config.json', {'fixture': label, 'kind': 'config'}),
+            'pdk': artifact(str(index) + '-pdk.json', {'fixture': label, 'kind': 'pdk'}),
+            'deck': artifact(str(index) + '-deck.json', {'fixture': label, 'kind': 'deck'}),
+            'corner': 'neutral_software_control_corner',
+            'semantics': {'purpose': use['purpose'], 'native_steps': use['native_steps']}}
+        record = {'use_id': use['use_id'], 'status': 'QUALIFIED', 'identity': identity,
+            'reference_evidence': [artifact(str(index) + '-reference.json',
+                {'fixture': label, 'native_qualification': 'NOT_MEASURED'})]}
+        records.append(record)
+        runtime.append({**identity, 'qualification_sha256': admission.canonical_sha(record)})
+    registry = 'neutral-software-admission/qualifications.json'
+    write(project / registry, {'schema': 'vibeic.flow109.qualifications.v1', 'uses': records,
+        'scope': 'NEUTRAL_SOFTWARE_ADMISSION_CONTROL_ONLY'})
+    return _existing_admission_context(sample, runtime, registry)
+
+
+def test_existing_admission_matching_receipt_completes_row(existing_admission_sample, existing_admission_calls):
+    sample = existing_admission_sample
+    accepted = consume(sample)
+    assert accepted['metric_status'] == 'PASS'
+    assert accepted['status'] == accepted['qualification'] == 'PASS'
+    assert accepted['qualification_receipt']['reason'] == 'QUALIFICATION_BINDINGS_CURRENT'
+    assert len(existing_admission_calls) == 1
+    assert accepted['qualification_receipt'] == existing_admission_calls[0]['receipt']
+    # Row completion preserves the separate whole-flow/delivery boundary.
+    row = d75.consume_default_row_completion(*sample)
+    assert row['default_row_status'] == row['flow109_acceptance'] == 'PASS'
+    assert row['completed'] is True and row['delivery_accepted'] is False
+    assert row['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('runtime,registry', [
+    (None, 'explicit-missing-qualifications.json'), ([], None), (None, '')],
+    ids=['registry_only', 'empty_runtime', 'empty_registry'])
+def test_existing_admission_explicit_generic_missing_runtime_refuses(sample, existing_admission_calls, runtime, registry):
+    sample = _existing_admission_context(sample, runtime, registry)
+    accepted = consume(sample)
+    assert accepted['metric_status'] == 'PASS'
+    assert accepted['status'] == accepted['qualification'] == 'NOT_MEASURED'
+    assert accepted['qualification_receipt']['reason'] == 'QUALIFICATION_RUNTIME_ABSENT'
+    assert len(existing_admission_calls) == 1
+
+
+def test_existing_admission_missing_registry_refuses(existing_admission_sample, existing_admission_calls):
+    project, current, _ = existing_admission_sample
+    (project / current['qualification_registry']).unlink()
+    accepted = consume(existing_admission_sample)
+    assert accepted['metric_status'] == 'PASS'
+    assert accepted['status'] == accepted['qualification'] == 'NOT_MEASURED'
+    assert accepted['qualification_receipt']['reason'] == 'QUALIFICATION_INPUT_ABSENT'
+    assert len(existing_admission_calls) == 1
+
+
+def test_existing_admission_runtime_identity_mismatch_refuses(existing_admission_sample, existing_admission_calls):
+    project, current, component = existing_admission_sample
+    runtime = copy.deepcopy(current['runtime_tool_uses'])
+    runtime[0]['corner'] = 'different_neutral_corner'
+    sample = _existing_admission_context(existing_admission_sample, runtime, current['qualification_registry'])
+    accepted = consume(sample)
+    assert accepted['metric_status'] == 'PASS'
+    assert accepted['status'] == accepted['qualification'] == 'NOT_MEASURED'
+    assert accepted['qualification_receipt']['reason'] == 'QUALIFICATION_IDENTITY_MISMATCH'
+    assert len(existing_admission_calls) == 1
+
+
+@pytest.mark.parametrize('artifact', ['registry', 'config', 'pdk', 'deck', 'reference'])
+def test_existing_admission_stale_artifact_refuses(existing_admission_sample, existing_admission_calls, artifact):
+    project, current, _ = existing_admission_sample
+    registry = project / current['qualification_registry']
+    body = json.loads(registry.read_text())
+    record = body['uses'][0]
+    if artifact == 'registry':
+        record['control_revision'] = 'changed_after_binding'
+        write(registry, body)
+    else:
+        reference = record['reference_evidence'][0] if artifact == 'reference' else record['identity'][artifact]
+        write(project / reference['path'], {'fixture': 'changed after qualification binding'})
+    accepted = consume(existing_admission_sample)
+    assert accepted['metric_status'] == 'PASS'
+    assert accepted['status'] == accepted['qualification'] == 'NOT_MEASURED'
+    assert accepted['qualification_receipt']['reason'] == 'QUALIFICATION_STALE'
+    assert len(existing_admission_calls) == 1
+
+
+def test_existing_admission_current_runtime_executable_required(existing_admission_sample, existing_admission_calls):
+    import flow109_admission as admission
+    project, current, _ = existing_admission_sample
+    registry_path = project / current['qualification_registry']
+    body = json.loads(registry_path.read_text())
+    record = body['uses'][0]
+    # A matching hashed reference to a different executable still must refuse.
+    foreign = record['identity']['config']
+    record['identity']['executable'] = {**foreign, 'path': str(project / foreign['path'])}
+    record['identity']['build_sha256'] = foreign['sha256']
+    write(registry_path, body)
+    runtime = copy.deepcopy(current['runtime_tool_uses'])
+    runtime[0] = {**record['identity'], 'qualification_sha256': admission.canonical_sha(record)}
+    sample = _existing_admission_context(existing_admission_sample, runtime, current['qualification_registry'])
+    accepted = consume(sample)
+    assert accepted['status'] == accepted['qualification'] == 'NOT_MEASURED'
+    assert accepted['qualification_receipt']['reason'] == 'QUALIFICATION_RUNTIME_UNSUPPORTED'
+    assert len(existing_admission_calls) == 1
+
+
+def test_existing_admission_measured_failure_precedes_qualification(existing_admission_sample, existing_admission_calls):
+    sample = existing_admission_sample
+    sample[2]['component_status'] = 'FAIL'
+    check(sample, 'provider_bond_pad_edge')['status'] = 'FAIL'
+    accepted = consume(sample)
+    assert accepted['status'] == accepted['metric_status'] == 'FAIL'
+    assert accepted['qualification'] == 'NOT_MEASURED'
+    assert item(accepted, NAMES[1])['failed_checks'] == ['provider_bond_pad_edge']
+    assert existing_admission_calls == []
+
+
+def test_existing_admission_prior_failed_id_precedes_qualification(existing_admission_sample, existing_admission_calls):
+    sample = existing_admission_sample
+    oid = 'package_ready.' + NAMES[0]
+    sample[2]['metric_acceptance'] = {'status': 'FAIL', 'obligations': [{'id': oid, 'status': 'FAIL'}]}
+    accepted = consume(sample)
+    assert accepted['status'] == accepted['metric_status'] == 'FAIL'
+    assert accepted['qualification'] == 'NOT_MEASURED'
+    assert accepted['prior_failed_obligation_ids'] == [oid]
+    assert item(accepted, NAMES[0])['reason'] == 'D75_PRIOR_MEASURED_FAILURE'
+    assert existing_admission_calls == []
+
+
+def test_existing_admission_incomplete_metrics_cannot_borrow_qualification(existing_admission_sample, existing_admission_calls):
+    sample = existing_admission_sample
+    (sample[0] / 'requirements/package_ready/escape_bond_feasibility.json').unlink()
+    accepted = consume(sample)
+    assert accepted['metric_status'] == accepted['status'] == accepted['qualification'] == 'NOT_MEASURED'
+    assert item(accepted, NAMES[1])['reason'] == 'METRIC_AUTHORITY_ABSENT'
+    assert existing_admission_calls == []
+
+
+def test_existing_admission_partial_native_observation_cannot_qualify(existing_admission_sample, existing_admission_calls):
+    sample = existing_admission_sample
+    sample[2]['component_status'] = 'NOT_MEASURED'
+    check(sample, 'pad_side_constraint_check')['status'] = 'NOT_MEASURED'
+    accepted = consume(sample)
+    assert accepted['status'] == accepted['metric_status'] == 'FAIL'
+    assert accepted['qualification'] == 'NOT_MEASURED'
+    feedback = item(accepted, NAMES[2])
+    assert feedback['measurement']['value'] == 1
+    assert feedback['measurement']['unresolved_required'] == ['pad_side_constraint_check']
+    assert existing_admission_calls == []
+
+
+@pytest.fixture
+def existing_launch_admission_calls(sample, monkeypatch, request):
+    import flow109_admission as admission
+    actual = admission.require_launch_admission
+    calls = []
+
+    def trace(project, step_id, params=None):
+        record = {'step_id': step_id, 'context_sha256': params['flow109_context']['context_sha256']}
+        calls.append(record)
+        try:
+            receipt = actual(project, step_id, params)
+        except admission.AdmissionRefusal as exc:
+            record['refusal'] = exc.report
+            raise
+        record['receipt'] = receipt
+        return receipt
+
+    monkeypatch.setattr(admission, 'require_launch_admission', trace)
+    yield calls
+    write(sample[0].parent / 'existing-launch-admission-calls.json',
+          {'scope': 'NEUTRAL_SOFTWARE_POLICY_CONTROL_ONLY', 'test_id': request.node.nodeid, 'calls': calls})
+
+
+def _source_owned_canonical(sample):
+    project, current, component = sample
+    row = flow109._selected_step_result(project, current, component, adapter=d75)
+    with (project.parent / 'D75-canonical-policy-observations.jsonl').open('a') as stream:
+        stream.write(json.dumps({'scope': 'NEUTRAL_SOFTWARE_POLICY_CONTROL_ONLY',
+            'context': current, 'original_component': component, 'canonical_result': row}, sort_keys=True) + '\n')
+    return row
+
+
+def test_existing_admission_source_owned_normal_scope(sample, existing_launch_admission_calls, existing_admission_calls):
+    # No synthetic qualification record is needed for this actual normal policy.
+    context = sample[1]
+    dispatch = context['resolved_row']['profile']['dispatch']
+    assert dispatch['admission_policy'] == 'source_owned_existing_native'
+    assert dispatch['acceptance_scope'] == 'existing_native_component_only'
+    assert context['runtime_tool_uses'] is None and context['qualification_registry'] is None
+    row = _source_owned_canonical(sample)
+    accepted = row['metric_acceptance']
+    assert accepted['metric_status'] == accepted['status'] == 'PASS'
+    assert accepted['qualification'] == 'NOT_CLAIMED'
+    receipt = accepted['qualification_receipt']
+    assert receipt['admitted'] is True
+    assert receipt['qualification_status'] == 'NOT_CLAIMED'
+    assert receipt['reason'] == 'SOURCE_OWNED_EXISTING_NATIVE_COMPONENT'
+    assert receipt['acceptance_scope'] == accepted['acceptance_scope'] == dispatch['acceptance_scope']
+    assert receipt['native_step_id'] == 'flow109.D75'
+    assert receipt['context_sha256'] == context['context_sha256']
+    assert row['default_row_status'] == row['flow109_acceptance'] == 'PASS'
+    assert row['completed'] is True
+    assert row['whole_flow_acceptance'] == 'NOT_MEASURED' and row['delivery_accepted'] is False
+    assert len(existing_launch_admission_calls) == 1
+    assert existing_admission_calls == []
+
+
+@pytest.mark.parametrize('damage', ['measured_failure', 'prior_failure', 'incomplete_metrics', 'partial_native'])
+def test_existing_admission_source_owned_failure_priority(sample, existing_launch_admission_calls, existing_admission_calls, damage):
+    if damage == 'measured_failure':
+        sample[2]['component_status'] = 'FAIL'
+        check(sample, 'provider_bond_pad_edge')['status'] = 'FAIL'
+    elif damage == 'prior_failure':
+        sample[2]['metric_acceptance'] = {'status': 'FAIL', 'obligations': [
+            {'id': 'package_ready.' + NAMES[0], 'status': 'FAIL'}]}
+    elif damage == 'incomplete_metrics':
+        (sample[0] / 'requirements/package_ready/escape_bond_feasibility.json').unlink()
+    else:
+        sample[2]['component_status'] = 'NOT_MEASURED'
+        check(sample, 'pad_side_constraint_check')['status'] = 'NOT_MEASURED'
+    row = _source_owned_canonical(sample)
+    expected = 'NOT_MEASURED' if damage == 'incomplete_metrics' else 'FAIL'
+    assert row['default_row_status'] == row['flow109_acceptance'] == expected
+    assert row['completed'] is False
+    assert row['metric_acceptance']['qualification'] == 'NOT_MEASURED'
+    assert row['whole_flow_acceptance'] == 'NOT_MEASURED' and row['delivery_accepted'] is False
+    assert existing_launch_admission_calls == existing_admission_calls == []

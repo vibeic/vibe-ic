@@ -66,6 +66,7 @@ def operation_sources() -> dict[str, str]:
     """Bind the exact adapter and existing consumers loaded for D75."""
     names = (
         "flow109_package_ready.py",
+        "flow109_admission.py",
         "flow109_metric_acceptance.py",
         "flow109_package_electrical.py",
         "submission_template_check.py",
@@ -1151,6 +1152,39 @@ def _d75_metric_acceptance(project, context, component):
         result.update(status='FAIL' if result['status'] == 'FAIL' else 'NOT_MEASURED',
                       metric_status='FAIL' if result['metric_status'] == 'FAIL' else 'NOT_MEASURED',
                       reason=str(exc))
+    prior = component.get('metric_acceptance')
+    prior_failed = (component.get('default_row_status') == 'FAIL'
+                    or component.get('metric_acceptance_status') == 'FAIL'
+                    or isinstance(prior, Mapping) and (
+                        prior.get('status') == 'FAIL' or any(
+                            item.get('status') == 'FAIL'
+                            for item in prior.get('obligations', []))))
+    if result['metric_status'] == 'PASS' and not prior_failed:
+        import flow109_admission as admission
+        try:
+            receipt = admission.require_launch_admission(
+                project, NATIVE_STEP, {'flow109_context': current})
+            result['qualification_receipt'] = receipt
+            if isinstance(receipt, Mapping) and receipt.get('status') == 'PASS':
+                result.update(status='PASS', qualification='PASS',
+                              reason='D75_METRICS_AND_QUALIFICATION_CURRENT')
+            elif (isinstance(receipt, Mapping)
+                  and receipt.get('status') == 'NOT_APPLICABLE'
+                  and receipt.get('admitted') is True
+                  and receipt.get('reason') == 'SOURCE_OWNED_EXISTING_NATIVE_COMPONENT'
+                  and receipt.get('qualification_status') == 'NOT_CLAIMED'
+                  and receipt.get('native_step_id') == NATIVE_STEP
+                  and receipt.get('context_sha256') == current['context_sha256']
+                  and receipt.get('acceptance_scope') == current['resolved_row']['profile'][
+                      'dispatch']['acceptance_scope']):
+                result.update(status='PASS', qualification=receipt['qualification_status'],
+                              acceptance_scope=receipt['acceptance_scope'],
+                              reason=receipt['reason'])
+            else:
+                raise admission.AdmissionRefusal(
+                    'D75_ADMISSION_SCOPE_MISMATCH', 'current D75 admission required')
+        except admission.AdmissionRefusal as exc:
+            result.update(reason=exc.code, qualification_receipt=exc.report)
     return result
 
 def consume_default_row_completion(project, context, component):
@@ -1168,4 +1202,5 @@ def consume_default_row_completion(project, context, component):
     return {**component, 'step_id': 'D75', 'context_sha256': context['context_sha256'],
         'metric_acceptance': accepted, 'metric_acceptance_status': accepted['status'],
         'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
-        'completed': False, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
+        'completed': accepted['status'] == 'PASS',
+        'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
