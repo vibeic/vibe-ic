@@ -1540,6 +1540,17 @@ def execution_context(plan: dict, entry: str, exit_: str, *,
         for mode, spec in modes.items():
             if purposes == {spec['purpose']}:
                 row['tool_uses'] = _tool_uses(row, row['profile'], mode=mode)
+    if "requested_step" in window and isinstance(runtime_tool_uses, list):
+        # A manifest may serve several rows. Exclude only uses owned by other
+        # selected source rows; unknown/malformed and duplicate current uses
+        # must reach strict admission unchanged rather than disappear here.
+        other_ids = {use["use_id"] for row in plan["rows"]
+                     if row["id"] != window["requested_step"]
+                     for use in row["tool_uses"]}
+        runtime_tool_uses = [item for item in runtime_tool_uses
+                            if not (isinstance(item, dict)
+                                    and isinstance(item.get("use_id"), str)
+                                    and item["use_id"] in other_ids)]
     schema = ("vibeic.flow109.execution-context.v1" if "requested_step" in window
               else "vibeic.flow109.execution-window.v1")
     context = {"schema": schema,

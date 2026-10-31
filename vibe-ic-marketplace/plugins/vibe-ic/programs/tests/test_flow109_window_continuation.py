@@ -530,3 +530,52 @@ def test_selected_row_native_not_applicable_is_not_laundered_to_pass(tmp_path, m
     assert result["component_status"] == "NOT_MEASURED"
     assert result["components"][0]["component_status"] == "NOT_MEASURED"
     assert "cannot inherit native NOT_APPLICABLE" in result["components"][0]["reason"]
+
+
+def test_single_row_runtime_projects_other_source_owned_rows(tmp_path, monkeypatch):
+    plan, window, _ = _window_fixture(tmp_path, monkeypatch, 'D10', 'D11')
+    runtime = window['runtime_tool_uses']
+    original = copy.deepcopy(runtime)
+    before = (tmp_path / 'qualifications.json').read_bytes()
+    context = flow109.execution_context(plan, 'D11', 'D11',
+        runtime_tool_uses=runtime, qualification_registry='qualifications.json')
+    observed = admission.admit_context(tmp_path, context)
+    assert observed['status'] == 'PASS'
+    assert [use['use_id'] for use in context['runtime_tool_uses']] == [
+        'flow109.D11.default.verilator']
+    assert context['runtime_tool_uses'][0] == original[-1]
+    assert runtime == original
+    assert (tmp_path / 'qualifications.json').read_bytes() == before
+    assert flow109.component_context(context, native_step_id='2') == context
+
+
+@pytest.mark.parametrize('damage, reason', [
+    ('missing', 'QUALIFICATION_RUNTIME_ABSENT'),
+    ('wrong_id', 'QUALIFICATION_USE_MISMATCH'),
+    ('identity', 'QUALIFICATION_IDENTITY_MISMATCH'),
+    ('duplicate', 'QUALIFICATION_USE_MISMATCH'),
+    ('foreign', 'QUALIFICATION_USE_MISMATCH'),
+    ('malformed', 'QUALIFICATION_USE_MISMATCH'),
+])
+def test_single_row_runtime_keeps_selected_authority_fail_closed(
+        tmp_path, monkeypatch, damage, reason):
+    plan, window, _ = _window_fixture(tmp_path, monkeypatch, 'D10', 'D11')
+    runtime = copy.deepcopy(window['runtime_tool_uses'])
+    selected = runtime[-1]
+    if damage == 'missing':
+        runtime.pop()
+    elif damage == 'wrong_id':
+        selected['use_id'] = 'flow109.D11.default.foreign'
+    elif damage == 'identity':
+        selected['version'] = 'forged-selected-identity'
+    elif damage == 'duplicate':
+        runtime.append(copy.deepcopy(selected))
+    elif damage == 'foreign':
+        runtime.append({**selected, 'use_id': 'not-a-source-owned-use'})
+    elif damage == 'malformed':
+        runtime.append(None)
+    context = flow109.execution_context(plan, 'D11', 'D11',
+        runtime_tool_uses=runtime, qualification_registry='qualifications.json')
+    observed = admission.admit_context(tmp_path, context)
+    assert observed['reason'] == reason
+    assert observed['native_started'] is False
