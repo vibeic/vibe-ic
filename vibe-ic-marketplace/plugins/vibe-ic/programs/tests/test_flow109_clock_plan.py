@@ -28,7 +28,7 @@ def test_missing_sdc_refuses_before_clock_native_launch(tmp_path):
     assert not (tmp_path / clock.OUTPUT).exists()
 
 
-# --- D34 metric binding: sink inventory reconciliation and planning targets ---
+# --- D34 metric binding: per-clock sink reconciliation and planning targets ---
 
 import hashlib
 import uuid
@@ -40,29 +40,63 @@ import flow109_admission
 
 LIBERTY = """
 library (demo) {
-  cell (DFF) { pin (CLK) { clock : true; } ff (IQ, IQN) { clocked_on : "CLK"; next_state : "D"; } }
-  cell (DFFN) { ff (IQ, IQN) { clocked_on : "!CLKN"; next_state : "D"; } }
-  cell (LAT) { latch (IQ, IQN) { enable : "E"; data_in : "D"; } }
-  cell (INV) { pin (A) { direction : input; } }
+  cell (DFF) { pin (CLK) { direction : input; clock : true; }
+               pin (D) { direction : input; } pin (Q) { direction : output; }
+               ff (IQ, IQN) { clocked_on : "CLK"; next_state : "D"; } }
+  cell (DFFN) { pin (CLKN) { direction : input; clock : true; }
+                pin (D) { direction : input; } pin (Q) { direction : output; }
+                ff (IQ, IQN) { clocked_on : "!CLKN"; next_state : "D"; } }
+  cell (LAT) { pin (E) { direction : input; } pin (D) { direction : input; }
+               pin (Q) { direction : output; } latch (IQ, IQN) { enable : "E"; data_in : "D"; } }
+  cell (BUF) { pin (A) { direction : input; timing () { related_pin : "A"; } }
+               pin (Z) { direction : output; } }
+  cell (PADIN) { pin (PAD) { direction : input; is_pad : true; } pin (PU) { direction : input; }
+                 pin (Y) { direction : output; } }
+  cell (AND2) { pin (A) { direction : input; } pin (B) { direction : input; }
+                pin (Z) { direction : output; } }
 }
 """
-DEF = """VERSION 5.8 ;
+
+
+def _def(clock_b_driver="( PIN clkb )", extra=""):
+    return f"""VERSION 5.8 ;
 DESIGN chip_top ;
-COMPONENTS 4 ;
+COMPONENTS 6 ;
+    - u_pad PADIN + PLACED ( 0 0 ) N ;
+    - u_buf BUF + PLACED ( 0 0 ) N ;
     - u_core/r\\[0\\] DFF + PLACED ( 0 0 ) N ;
     - u_core/r\\[1\\] DFFN + PLACED ( 0 0 ) N ;
     - u_core/l0 LAT + PLACED ( 0 0 ) N ;
-    - u_core/i0 INV + PLACED ( 0 0 ) N ;
+    - u_and AND2 + PLACED ( 0 0 ) N ;
 END COMPONENTS
+PINS 3 ;
+    - clka + NET clka + DIRECTION INPUT + USE SIGNAL ;
+    - clkb + NET clkb + DIRECTION INPUT + USE SIGNAL ;
+    - en + NET en + DIRECTION INPUT + USE SIGNAL ;
+END PINS
+NETS 5 ;
+    - clka ( PIN clka ) ( u_pad PAD ) ;
+    - ca ( u_pad Y ) ( u_buf A ) ;
+    - cka ( u_buf Z ) ( u_core/r\\[0\\] CLK ) ( u_core/l0 E ) ;
+    - clkb {clock_b_driver} ( u_core/r\\[1\\] CLKN ) ;
+    - en ( PIN en ) ( u_and B ) ;{extra}
+END NETS
 END DESIGN
 """
-SINKS = ["u_core/l0/E", "u_core/r[0]/CLK", "u_core/r[1]/CLKN"]
+
+
+SOURCES = {"clka": "clka", "clkb": "clkb"}
+DOMAINS = {"clka": ["u_core/l0/E", "u_core/r[0]/CLK"], "clkb": ["u_core/r[1]/CLKN"]}
+
+
+def _trace(def_text):
+    return clock.structural_clock_domains(def_text, clock.liberty_clock_pins(LIBERTY),
+                                          clock.liberty_pin_roles(LIBERTY), SOURCES)
 
 
 def _write(path, body):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body if isinstance(body, str) else json.dumps(body, sort_keys=True))
-    return {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
 def _rel(project, path):
@@ -70,62 +104,54 @@ def _rel(project, path):
             "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
-def _log(sinks):
-    lines = [f"CLOCK_PLAN_SINK clk|{pin}" for pin in sinks]
-    return "\n".join(["CLOCK_PLAN_NATIVE clk|24.0|clk", *lines,
-                      f"CLOCK_PLAN_SINK_COUNT clk|{len(sinks)}", "CLOCK_PLAN_DONE", ""])
+def _log(domains):
+    lines = ["CLOCK_PLAN_NATIVE clka|24.0|clka", "CLOCK_PLAN_NATIVE clkb|24.0|clkb"]
+    for name, pins in domains.items():
+        lines += [f"CLOCK_PLAN_SINK {name}|{pin}" for pin in pins]
+        lines.append(f"CLOCK_PLAN_SINK_COUNT {name}|{len(pins)}")
+    return "\n".join([*lines, "CLOCK_PLAN_DONE", ""])
 
 
 def _approved(project, relative, schema, payload, source):
-    body = {"schema": schema, **payload, "approval": {
+    _write(project / relative, {"schema": schema, **payload, "approval": {
         "authority": "requirements_owner", "status": "APPROVED",
-        "source_reference": _rel(project, project / source)}}
-    _write(project / relative, body)
+        "source_reference": _rel(project, project / source)}})
 
 
-def _d34_case(tmp_path, monkeypatch, *, reference=SINKS, skew=2.4, approval=True):
+def _d34_case(tmp_path, monkeypatch, *, measured=DOMAINS, reference=None, skew=2.4, approval=True):
     project = tmp_path
     log = project / "phase3/stage3/cts/clock_plan.log"
-    log.parent.mkdir(parents=True, exist_ok=True)
-    log.write_text(_log(SINKS))
-    plan = {"tool": "openroad", "primary_clock": "clk",
-            "clocks": [{"name": "clk", "period_ns": 24.0, "source": "clk"}],
-            "current": {"schema": current.SCHEMA, "step": "16", "stage": "stage3",
-                        "design": "chip_top", "pdk": "demo", "tool": "openroad",
-                        "inputs": {"floorplan": {"path": "phase3/stage3/pnr/floorplan.def",
-                                                 "sha256": "0" * 64, "bytes": 1}},
-                        "outputs": {"log": _rel(project, log)},
-                        "execution": {"rc": 0, "argv": ["openroad", "-exit", "clock_plan.tcl"]}},
-            "sinks": {"clk": SINKS},
-            "sink_census": {"method": current.CLOCK_SINK_METHOD, "counts": {"clk": len(SINKS)}}}
+    _write(log, _log(measured))
     plan_path = project / clock.OUTPUT
-    _write(plan_path, plan)
+    _write(plan_path, {
+        "tool": "openroad", "primary_clock": "clka",
+        "clocks": [{"name": n, "period_ns": 24.0, "source": n} for n in ("clka", "clkb")],
+        "current": {"schema": current.SCHEMA, "step": "16", "stage": "stage3",
+                    "design": "chip_top", "pdk": "demo", "tool": "openroad",
+                    "inputs": {"floorplan": {"path": "phase3/stage3/pnr/floorplan.def",
+                                             "sha256": "0" * 64, "bytes": 1}},
+                    "outputs": {"log": _rel(project, log)},
+                    "execution": {"rc": 0, "argv": ["openroad", "-exit", "clock_plan.tcl"]}},
+        "sinks": measured,
+        "sink_census": {"method": current.CLOCK_SINK_METHOD,
+                        "counts": {n: len(p) for n, p in measured.items()}}})
     targets = project / clock.PLANNING_TARGETS
-    _write(targets, {"schema": "vibeic.flow109.clock-planning-targets.v1",
-                     "targets": {"clock_skew_ns": skew, "insertion_delay_ns": 12.0},
+    _write(targets, {"targets": {"clock_skew_ns": skew, "insertion_delay_ns": 12.0},
                      "units": {"clock_skew_ns": "ns", "insertion_delay_ns": "ns"}})
     _write(project / "input/flow109/D34/requirement_source.json", {"basis": "owner-approved planning bound"})
     _approved(project, clock.TARGET_BOUNDS, "vibeic.flow109.requirement-authority.v1",
               {"limits": {"clock_skew_ns": {"max": 2.4}, "insertion_delay_ns": {"max": 12.0}},
                "units": {"clock_skew_ns": "ns", "insertion_delay_ns": "ns"}},
               "input/flow109/D34/requirement_source.json")
-    identity = {"producer": {"name": "structural"}, "checker": {"m": "x"},
-                "tool_execution": {"program": "propose"}, "consumed_inputs": {"def": "1" * 64},
-                "requirements": {"obligation": "base_22.clock_sink_inventory"},
-                "configuration": {"sinks": len(reference)}}
-    payload = {"reference": reference, "reference_identity": identity}
+    payload = {"reference": reference or {"clocks": DOMAINS, "unclocked": []}, "reference_identity": {
+        "producer": {"name": "structural"}, "checker": {"m": "x"}, "tool_execution": {"program": "propose"},
+        "consumed_inputs": {"def": "1" * 64}, "requirements": {"obligation": "base_22.clock_sink_inventory"},
+        "configuration": {"clocks": ["clka", "clkb"]}}}
     _write(project / clock.SINK_SOURCE, {"clock_sink_inventory": payload})
     if approval:
         _approved(project, clock.SINK_REFERENCE, "vibeic.flow109.adopted-reference.v1",
                   payload, clock.SINK_SOURCE)
-    for step in ("D20", "D32"):
-        _write(project / f"reports/flow109/default_rows/{step}.json",
-               {"step_id": step, "default_row_status": "PASS", "completed": True})
-    config = project / "reports/flow109/qualification/D34.json"
-    _write(config, {"purpose": clock.D34_PURPOSE, "model_sources": clock.d34_model_sources()})
     context = flow109.execution_context(flow109.resolve_plan(_profile()), "D34", "D34")
-    context = {**context, "runtime_tool_uses": [{"use_id": "flow109.D34.default.openroad",
-                                                 "config": {"path": str(config.relative_to(project))}}]}
     monkeypatch.setattr(flow109, "validate_execution_context", lambda ctx: ctx)
     monkeypatch.setattr(flow109_admission, "require_admission", lambda p, c: {"status": "PASS"})
     monkeypatch.setattr(current, "validate", lambda *a, **k: "")
@@ -138,50 +164,82 @@ def _d34_case(tmp_path, monkeypatch, *, reference=SINKS, skew=2.4, approval=True
     return project, context, {**record, "component_record": _rel(project, component)}
 
 
+def _complete(tmp_path, monkeypatch, **case):
+    project, context, component = _d34_case(tmp_path, monkeypatch, **case)
+    result = clock.consume_default_row_completion(project, context, component)
+    return result, {o["id"]: o for o in result.get("metric_acceptance", {}).get("obligations", [])}
+
+
 def test_clock_plan_sinks_closes_the_census_or_refuses():
-    assert current.clock_plan_sinks(_log(SINKS), ["clk"]) == {"clk": SINKS}
+    assert current.clock_plan_sinks(_log(DOMAINS), ["clka", "clkb"]) == DOMAINS
     with pytest.raises(ValueError, match="CLOCK_PLAN_SINK_CENSUS_INCOMPLETE"):
-        current.clock_plan_sinks(_log(SINKS).replace("SINK_COUNT clk|3", "SINK_COUNT clk|4"), ["clk"])
+        current.clock_plan_sinks(_log(DOMAINS).replace("SINK_COUNT clka|2", "SINK_COUNT clka|3"),
+                                 ["clka", "clkb"])
     with pytest.raises(ValueError, match="CLOCK_PLAN_SINK_CENSUS_INCOMPLETE"):
-        current.clock_plan_sinks("CLOCK_PLAN_SINK clk|a/CLK\n", ["clk"])
+        current.clock_plan_sinks("CLOCK_PLAN_SINK clka|a/CLK\n", ["clka"])
 
 
-def test_structural_census_reads_liberty_groups_not_cell_names():
-    pins = clock.liberty_clock_pins(LIBERTY)
-    assert pins == {"DFF": "CLK", "DFFN": "CLKN", "LAT": "E"}
-    assert clock.structural_sinks(DEF, pins) == SINKS
+def test_liberty_declarations_decide_sequential_cells_and_pin_roles():
+    assert clock.liberty_clock_pins(LIBERTY) == {"DFF": "CLK", "DFFN": "CLKN", "LAT": "E"}
+    roles = clock.liberty_pin_roles(LIBERTY)
+    assert roles["PADIN"]["PAD"] == {"direction": "input", "clock": False, "is_pad": True}
+    assert roles["BUF"]["A"]["direction"] == "input" and roles["BUF"]["Z"]["direction"] == "output"
     with pytest.raises(ValueError, match="D34_LIBERTY_CLOCK_EXPRESSION_UNSUPPORTED"):
         clock.liberty_clock_pins('cell (G) { ff (Q, QN) { clocked_on : "CLK & EN"; } }')
     with pytest.raises(ValueError, match="D34_LIBERTY_BANK_UNSUPPORTED"):
         clock.liberty_clock_pins('cell (B) { ff_bank (Q, QN, 2) { clocked_on : "CLK"; } }')
 
 
-def test_d34_passes_when_both_methods_and_targets_agree(tmp_path, monkeypatch):
-    project, context, component = _d34_case(tmp_path, monkeypatch)
-    result = clock.consume_default_row_completion(project, context, component)
-    assert result["default_row_status"] == "PASS" and result["completed"] is True
-    assert [o["status"] for o in result["metric_acceptance"]["obligations"]] == ["PASS", "PASS"]
+def test_structural_trace_assigns_each_sink_through_pads_and_buffers_to_its_clock():
+    assert _trace(_def()) == {"clocks": DOMAINS, "unclocked": []}
 
 
-def test_d34_fails_on_a_register_the_clock_does_not_reach(tmp_path, monkeypatch):
-    project, context, component = _d34_case(tmp_path, monkeypatch,
-                                            reference=[*SINKS, "u_core/r[2]/CLK"])
-    result = clock.consume_default_row_completion(project, context, component)
-    sinks = result["metric_acceptance"]["obligations"][0]
+def test_structural_trace_reports_a_clock_pin_without_driver_as_unclocked():
+    traced = _trace(_def(clock_b_driver=""))
+    assert traced["unclocked"] == ["u_core/r[1]/CLKN"] and traced["clocks"]["clkb"] == []
+
+
+def test_structural_trace_refuses_a_path_it_cannot_decide():
+    gated = _def(clock_b_driver="( u_and Z )", extra="\n    - ckb_in ( PIN clkb ) ( u_and A ) ;")
+    with pytest.raises(ValueError, match="D34_CLOCK_TRACE_UNRESOLVED"):
+        _trace(gated)
+
+
+def test_d34_sinks_reconcile_but_unconsumed_targets_stay_unmeasured(tmp_path, monkeypatch):
+    result, obligations = _complete(tmp_path, monkeypatch)
+    assert obligations["base_22.clock_sink_inventory"]["status"] == "PASS"
+    targets = obligations["base_22.skew_insertion_targets"]
+    assert targets["status"] == "NOT_MEASURED" and targets["reason"] == "D34_TARGET_CONSUMPTION_UNSUPPORTED"
+    assert result["default_row_status"] == "NOT_MEASURED" and result["completed"] is False
+
+
+def test_d34_fails_when_two_clocks_reach_each_others_sinks(tmp_path, monkeypatch):
+    swapped = {"clka": ["u_core/r[1]/CLKN"], "clkb": ["u_core/l0/E", "u_core/r[0]/CLK"]}
+    result, obligations = _complete(tmp_path, monkeypatch, measured=swapped)
+    sinks = obligations["base_22.clock_sink_inventory"]
+    assert result["default_row_status"] == "FAIL" and sinks["status"] == "FAIL"
+    assert sinks["unreached_sinks"]["clka"] == ["u_core/l0/E", "u_core/r[0]/CLK"]
+
+
+def test_d34_fails_on_a_required_sink_no_clock_reaches(tmp_path, monkeypatch):
+    reference = {"clocks": {"clka": DOMAINS["clka"], "clkb": []}, "unclocked": ["u_core/r[1]/CLKN"]}
+    measured = {"clka": DOMAINS["clka"], "clkb": []}
+    result, obligations = _complete(tmp_path, monkeypatch, measured=measured, reference=reference)
+    sinks = obligations["base_22.clock_sink_inventory"]
     assert result["default_row_status"] == "FAIL"
-    assert sinks["status"] == "FAIL" and sinks["unreached_sinks"] == ["u_core/r[2]/CLK"]
+    assert sinks["status"] == "FAIL" and sinks["unclocked_required_sinks"] == ["u_core/r[1]/CLKN"]
 
 
 def test_d34_fails_on_a_planning_target_beyond_its_bound(tmp_path, monkeypatch):
-    project, context, component = _d34_case(tmp_path, monkeypatch, skew=2.5)
-    result = clock.consume_default_row_completion(project, context, component)
+    result, obligations = _complete(tmp_path, monkeypatch, skew=2.5)
+    targets = obligations["base_22.skew_insertion_targets"]
     assert result["default_row_status"] == "FAIL"
-    assert result["metric_acceptance"]["obligations"][1]["checks"]["clock_skew_ns"]["status"] == "FAIL"
+    assert targets["reason"] == "D34_PLANNING_TARGET_EXCEEDS_BOUND"
+    assert targets["checks"]["clock_skew_ns"]["status"] == "FAIL"
 
 
 def test_d34_unapproved_reference_is_not_measured(tmp_path, monkeypatch):
-    project, context, component = _d34_case(tmp_path, monkeypatch, approval=False)
-    result = clock.consume_default_row_completion(project, context, component)
+    result, _ = _complete(tmp_path, monkeypatch, approval=False)
     assert result["default_row_status"] == "NOT_MEASURED"
     assert result["metric_acceptance"]["reason"] == "METRIC_AUTHORITY_ABSENT"
 
@@ -189,7 +247,7 @@ def test_d34_unapproved_reference_is_not_measured(tmp_path, monkeypatch):
 def test_d34_refuses_a_plan_changed_after_the_component(tmp_path, monkeypatch):
     project, context, component = _d34_case(tmp_path, monkeypatch)
     plan = project / clock.OUTPUT
-    plan.write_text(plan.read_text().replace('"period_ns": 24.0', '"period_ns": 25.0'))
+    plan.write_text(plan.read_text().replace('"period_ns": 24.0', '"period_ns": 25.0', 1))
     result = clock.consume_default_row_completion(project, context, component)
     assert result["default_row_status"] == "NOT_MEASURED"
     assert result["metric_acceptance"]["reason"] == "D34_PLAN_STALE"
@@ -197,8 +255,7 @@ def test_d34_refuses_a_plan_changed_after_the_component(tmp_path, monkeypatch):
 
 def test_d34_measurement_is_the_native_log_not_the_json_summary(tmp_path, monkeypatch):
     project, context, component = _d34_case(tmp_path, monkeypatch)
-    log = project / "phase3/stage3/cts/clock_plan.log"
-    log.write_text(_log(SINKS[:2]))
+    (project / "phase3/stage3/cts/clock_plan.log").write_text(_log({"clka": ["u_core/r[0]/CLK"], "clkb": []}))
     result = clock.consume_default_row_completion(project, context, component)
     assert result["default_row_status"] == "NOT_MEASURED"
     assert result["metric_acceptance"]["reason"] == "D34_SINK_CENSUS_DIFFERS_FROM_LOG"

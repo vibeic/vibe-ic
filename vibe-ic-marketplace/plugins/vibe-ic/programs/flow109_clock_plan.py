@@ -26,12 +26,13 @@ OUTPUT = "phase3/stage3/cts/clock_plan.json"
 NATIVE_STEP = "16"
 STEP17_REUSE_ENV = "VIBEIC_FLOW109_STEP17_REUSE_REQUEST"
 
-# D34 metric binding. The sink inventory is reconciled between two methods that
-# share no code: the timing graph's propagation (OpenSTA, in the native plan)
-# and a structural census (floorplan COMPONENTS x Liberty ff/latch groups),
-# the latter adopted by the requirements owner. Planning targets are only the
-# plan's declared CTS targets checked against requirement bounds; the actual
-# tree's skew and insertion delay are D38's measurement, not this row's.
+# D34 metric binding. The per-clock sink inventory is reconciled between two
+# methods that share no code: the timing graph's propagation (OpenSTA, in the
+# native plan) and a structural trace of the floorplan's NETS from each Liberty
+# ff/latch clock pin back to a declared clock source, the latter adopted by the
+# requirements owner. Planning targets have no supported consumer in the pinned
+# CTS, so they can only FAIL (outside their bound) or stay unmeasured; the
+# built tree's skew and insertion delay are D38's measurement, not this row's.
 SINK_REFERENCE = "adopted/base_22/clock_sink_inventory.json"
 SINK_SOURCE = "input/flow109/D34/clock_sink_inventory.json"
 PLANNING_TARGETS = "input/flow109/D34/clock_planning_targets.json"
@@ -316,20 +317,117 @@ def liberty_clock_pins(text: str) -> dict[str, str]:
     return pins
 
 
-def structural_sinks(def_text: str, clock_pins: dict[str, str]) -> list[str]:
-    """Every sequential instance's clock pin, read from the floorplan COMPONENTS.
+def _liberty_group(text: str, brace: int) -> tuple[str, int]:
+    """The body of the group whose ``{`` is at ``brace``, with nested groups blanked."""
+    depth, top = 0, []
+    for index in range(brace, len(text)):
+        char = text[index]
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0:
+                return "".join(top), index
+        elif depth == 1:
+            top.append(char)
+    raise ValueError("D34_LIBERTY_GROUP_UNTERMINATED")
 
-    DEF escapes are removed so the names compare with the timing graph's full
-    pin names; the divider is the DEF's own ``/``.
+
+def liberty_pin_roles(text: str) -> dict[str, dict[str, dict]]:
+    """``cell -> pin -> {direction, clock, is_pad}`` from each pin's own attributes.
+
+    Only a pin group's top-level attributes count; timing and power subgroups
+    are blanked so their keywords cannot be read as the pin's.
     """
     import re
-    section = re.search(r"\nCOMPONENTS\s+\d+\s*;(.*?)\nEND COMPONENTS", def_text, re.S)
-    if not section:
-        raise ValueError("D34_DEF_COMPONENTS_ABSENT")
-    sinks = {instance.replace("\\", "") + "/" + clock_pins[master]
-             for instance, master in re.findall(r"-\s+(\S+)\s+(\S+)", section.group(1))
-             if master in clock_pins}
-    return sorted(sinks)
+    roles = {}
+    for cell in re.finditer(r'\bcell\s*\(\s*"?([A-Za-z_][\w$]*)"?\s*\)\s*\{', text):
+        _, end = _liberty_group(text, cell.end() - 1)
+        block, pins = text[cell.end() - 1:end + 1], {}
+        for pin in re.finditer(r'\bpin\s*\(\s*"?([A-Za-z_][\w$]*)"?\s*\)\s*\{', block):
+            body, _ = _liberty_group(block, pin.end() - 1)
+            direction = re.search(r'\bdirection\s*:\s*"?(\w+)', body)
+            pins[pin.group(1)] = {
+                "direction": direction.group(1) if direction else None,
+                "clock": bool(re.search(r'\bclock\s*:\s*"?true', body)),
+                "is_pad": bool(re.search(r'\bis_pad\s*:\s*"?true', body))}
+        roles[cell.group(1)] = pins
+    return roles
+
+
+def structural_clock_domains(def_text: str, clock_pins: dict[str, str],
+                             pin_roles: dict[str, dict[str, dict]],
+                             clock_sources: dict[str, str]) -> dict:
+    """Assign every sequential clock pin to the clock whose source it traces back to.
+
+    The trace follows the floorplan's own NETS backwards from each register
+    clock pin through single-input cells, an input marked ``clock`` (clock
+    gates) or ``is_pad`` (IO pads), until it reaches a declared clock source:
+    a top-level port or a pin a clock is defined on. It shares no code with the
+    timing graph. A register whose clock pin has no driver, or whose source is
+    no declared clock, is ``unclocked`` and is a required sink the census must
+    report. Any path the rules cannot decide raises: an unknown association is
+    never guessed, so no reference exists and the row stays unmeasured.
+    """
+    import re
+
+    def section(name):
+        found = re.search(r"\n" + name + r"\s+\d+\s*;(.*?)\nEND " + name, def_text, re.S)
+        if not found:
+            raise ValueError("D34_DEF_" + name + "_ABSENT")
+        return found.group(1)
+
+    clean = lambda token: token.replace("\\", "")
+    masters = {clean(i): m for i, m in re.findall(r"-\s+(\S+)\s+(\S+)", section("COMPONENTS"))}
+    inputs = set()
+    for entry in section("PINS").split(";"):
+        name, direction = re.search(r"-\s+(\S+)", entry), re.search(r"\+\s+DIRECTION\s+(\w+)", entry)
+        if name and direction and direction.group(1) == "INPUT":
+            inputs.add(clean(name.group(1)))
+    net_of, members = {}, {}
+    for net, body in re.findall(r"-\s+(\S+)((?:\s*\(\s*\S+\s+\S+\s*\))+)", section("NETS")):
+        for owner, pin in re.findall(r"\(\s*(\S+)\s+(\S+)\s*\)", body):
+            node = (clean(owner), clean(pin))
+            net_of[node] = clean(net)
+            members.setdefault(clean(net), []).append(node)
+
+    def drivers(net):
+        return [(owner, pin) for owner, pin in members.get(net, [])
+                if (owner == "PIN" and pin in inputs) or (owner != "PIN" and
+                    pin_roles.get(masters.get(owner), {}).get(pin, {}).get("direction") == "output")]
+
+    domains, unclocked = {name: [] for name in set(clock_sources.values())}, []
+    for instance, master in sorted(masters.items()):
+        if master not in clock_pins:
+            continue
+        sink = instance + "/" + clock_pins[master]
+        node, seen, clock = (instance, clock_pins[master]), set(), None
+        while True:
+            net = net_of.get(node)
+            found = drivers(net) if net else []
+            if not found:
+                break
+            if len(found) > 1:
+                raise ValueError("D34_CLOCK_TRACE_UNRESOLVED: multiple drivers for " + sink)
+            owner, pin = found[0]
+            name = pin if owner == "PIN" else owner + "/" + pin
+            if name in clock_sources:
+                clock = clock_sources[name]
+                break
+            if owner == "PIN" or (owner, pin) in seen:
+                break
+            seen.add((owner, pin))
+            ins = {p: r for p, r in pin_roles.get(masters.get(owner), {}).items()
+                   if r.get("direction") == "input"}
+            follow = ([p for p, r in ins.items() if r["clock"]] or
+                      [p for p, r in ins.items() if r["is_pad"]] or
+                      (list(ins) if len(ins) == 1 else []))
+            if len(follow) != 1:
+                raise ValueError(f"D34_CLOCK_TRACE_UNRESOLVED: {sink} through {owner} ({masters.get(owner)})")
+            node = (owner, follow[0])
+        (domains[clock] if clock else unclocked).append(sink)
+    return {"clocks": {name: sorted(pins) for name, pins in domains.items()},
+            "unclocked": sorted(unclocked)}
 
 
 def d34_model_sources() -> dict[str, str]:
@@ -340,7 +438,8 @@ def d34_model_sources() -> dict[str, str]:
     sources = {}
     for module, names in ((Path(__file__), ("accept_d34", "_d34_observe", "_d34_targets",
                                             "consume_default_row_completion", "liberty_clock_pins",
-                                            "structural_sinks", "d34_model_sources")),
+                                            "_liberty_group", "liberty_pin_roles",
+                                            "structural_clock_domains", "d34_model_sources")),
                           (Path(current.__file__), ("clock_plan", "clock_plan_sinks")),
                           (Path(metrics.__file__), ("evaluate_operator", "_approved_document",
                                                     "_identity_complete"))):
@@ -398,7 +497,14 @@ def _d34_observe(project: Path, context: dict, component: dict) -> tuple[dict, d
 
 
 def _d34_targets(project: Path, component: dict, identity: dict) -> dict:
-    """Judge each declared planning target against its approved requirement bound."""
+    """A declared target outside its approved bound FAILS; inside it stays unmeasured.
+
+    The pinned LibreLane CTS exposes no skew or insertion-delay target, so no
+    supported tool consumes these planning budgets. Declared numbers within
+    bounds are a design decision, not evidence that a configuration was
+    consumed, and are never a PASS here. A contradiction of the requirement is
+    a real defect whether or not anything consumes it.
+    """
     import flow109_metric_acceptance as metrics
     declared = component.get("planning_targets")
     path = project / PLANNING_TARGETS
@@ -418,11 +524,14 @@ def _d34_targets(project: Path, component: dict, identity: dict) -> dict:
         checks[key] = metrics.evaluate_operator("within_declared_bounds",
             {"status": "MEASURED", "value": plan["targets"][key], "unit": units[key], "identity": identity},
             {"status": "APPROVED", "limits": limits[key], "unit": units[key]})
-    states = {state for state, _ in checks.values()}
-    status = "FAIL" if "FAIL" in states else "PASS" if states == {"PASS"} else "NOT_MEASURED"
-    return {"id": "base_22.skew_insertion_targets", "status": status, "authority": authority,
-            "value": plan["targets"], "checks": {k: {"status": s, "detail": d} for k, (s, d) in checks.items()},
-            "scope": "declared planning targets only; the built tree is D38's measurement"}
+    failed = any(state == "FAIL" for state, _ in checks.values())
+    return {"id": "base_22.skew_insertion_targets", "status": "FAIL" if failed else "NOT_MEASURED",
+            "reason": ("D34_PLANNING_TARGET_EXCEEDS_BOUND" if failed
+                       else "D34_TARGET_CONSUMPTION_UNSUPPORTED"),
+            "authority": authority, "value": plan["targets"],
+            "checks": {k: {"status": s, "detail": d} for k, (s, d) in checks.items()},
+            "scope": "declared planning targets; no supported CTS configuration consumes them, "
+                     "and the built tree is D38's measurement"}
 
 
 def accept_d34(project, context, component):
@@ -441,7 +550,6 @@ def accept_d34(project, context, component):
                        for o in obligations)):
             raise metrics.MetricRefusal("D34_OBLIGATIONS_UNREGISTERED", "the two base_22 operators only")
         plan, identity = _d34_observe(project, context, component)
-        measured = sorted({pin for pins in plan["sinks"].values() for pin in pins})
         adopted, body = metrics._approved_document(project, SINK_REFERENCE,
             authority="requirements_owner", schema="vibeic.flow109.adopted-reference.v1")
         source = json.loads((project / adopted["source"]["path"]).read_text())
@@ -450,14 +558,25 @@ def accept_d34(project, context, component):
                                                           if k not in ("schema", "approval")}):
             raise metrics.MetricRefusal("D34_SINK_REFERENCE_SOURCE_UNBOUND", SINK_REFERENCE)
         reference = body.get("reference")
+        if (not isinstance(reference, dict) or set(reference) != {"clocks", "unclocked"}
+                or not isinstance(reference["clocks"], dict) or not isinstance(reference["unclocked"], list)):
+            raise metrics.MetricRefusal("D34_SINK_REFERENCE_SHAPE", "per-clock domains plus unclocked sinks")
+        # Clock-domain association is the measurement: a sink reached by the
+        # wrong clock is as wrong as a sink reached by none.
         status, detail = metrics.evaluate_operator("matches_adopted_reference",
-            {"status": "MEASURED", "value": measured, "identity": identity},
-            {**adopted, "reference": reference, "reference_identity": body.get("reference_identity")})
+            {"status": "MEASURED", "value": plan["sinks"], "identity": identity},
+            {**adopted, "reference": reference["clocks"], "reference_identity": body.get("reference_identity")})
+        if reference["unclocked"]:
+            status, detail = "FAIL", "required sinks whose clock pin reaches no declared clock"
+        clocks = set(reference["clocks"]) | set(plan["sinks"])
         result["obligations"].append({
             "id": "base_22.clock_sink_inventory", "status": status, "detail": detail,
             "authority": adopted, "counts": plan["sink_census"]["counts"],
-            "unreached_sinks": sorted(set(reference or []) - set(measured)),
-            "unexpected_sinks": sorted(set(measured) - set(reference or []))})
+            "unclocked_required_sinks": reference["unclocked"],
+            "unreached_sinks": {c: sorted(set(reference["clocks"].get(c, [])) - set(plan["sinks"].get(c, [])))
+                                for c in sorted(clocks)},
+            "unexpected_sinks": {c: sorted(set(plan["sinks"].get(c, [])) - set(reference["clocks"].get(c, [])))
+                                 for c in sorted(clocks)}})
         result["obligations"].append(_d34_targets(project, component, identity))
         if any(item["status"] == "FAIL" for item in result["obligations"]):
             result.update(status="FAIL", reason="D34_METRIC_FAIL")
@@ -514,28 +633,40 @@ def propose_sink_reference(project: Path, liberties: list[Path]) -> dict:
     """
     project = Path(project).resolve()
     floorplan = project / "phase3/stage3/pnr/floorplan.def"
-    pins = {}
+    plan = json.loads((project / OUTPUT).read_text())
+    # Clock definitions come from the SDC the plan read; only the sink
+    # association is derived here, from the floorplan's own connectivity.
+    sources = {source: clock["name"] for clock in plan.get("clocks", [])
+               for source in str(clock.get("source", "")).split()}
+    if not sources:
+        raise ValueError("D34_CLOCK_SOURCES_ABSENT: " + OUTPUT)
+    pins, roles = {}, {}
     for path in liberties:
-        pins.update(liberty_clock_pins(Path(path).read_text(errors="ignore")))
+        text = Path(path).read_text(errors="ignore")
+        pins.update(liberty_clock_pins(text))
+        roles.update(liberty_pin_roles(text))
     if not pins:
         raise ValueError("D34_LIBERTY_SEQUENTIAL_CELLS_ABSENT")
-    reference = structural_sinks(floorplan.read_text(), pins)
-    consumed = {"phase3/stage3/pnr/floorplan.def": _sha(floorplan),
+    reference = structural_clock_domains(floorplan.read_text(), pins, roles, sources)
+    consumed = {"phase3/stage3/pnr/floorplan.def": _sha(floorplan), OUTPUT: _sha(project / OUTPUT),
                 **{str(Path(p).resolve()): _sha(Path(p)) for p in liberties}}
     payload = {"reference": reference, "reference_identity": {
-        "producer": {"name": "flow109_clock_plan.structural_sinks",
-                     "method": "floorplan COMPONENTS x Liberty ff/latch clock pins"},
+        "producer": {"name": "flow109_clock_plan.structural_clock_domains",
+                     "method": "floorplan NETS traced from each Liberty ff/latch clock pin to a declared clock source"},
         "checker": {"methods": d34_model_sources()},
         "tool_execution": {"program": "flow109_clock_plan.py propose-sink-reference"},
         "consumed_inputs": consumed,
         "requirements": {"obligation": "base_22.clock_sink_inventory"},
-        "configuration": {"sequential_cells": len(pins), "sinks": len(reference)}}}
+        "configuration": {"sequential_cells": len(pins), "clocks": sorted(set(sources.values())),
+                          "unclocked": len(reference["unclocked"])}}}
     target = project / SINK_SOURCE
     if target.exists():
         raise ValueError("D34_SINK_SOURCE_EXISTS: " + SINK_SOURCE)
     write_json(target, {"schema": "vibeic.flow109.d34-sink-reference-source.v1",
                         "clock_sink_inventory": payload})
-    return {"path": SINK_SOURCE, "sha256": _sha(target), "sinks": len(reference)}
+    return {"path": SINK_SOURCE, "sha256": _sha(target),
+            "sinks": {name: len(found) for name, found in reference["clocks"].items()},
+            "unclocked": len(reference["unclocked"])}
 
 
 if __name__ == "__main__":
