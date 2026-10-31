@@ -156,6 +156,9 @@ def test_physical_views_and_chinese_delivery_keep_their_owner_floor(prompt, fami
     'Implement the RTL module. LEF and Liberty views are not required.',
     '請設計晶片功能的 RTL，不需要投片、製造或封裝。',
     '請設計晶片的 RTL，不需要交付可投片的實體版圖。',
+    '請設計晶片內的 RTL 模組，只交付 Verilog。',
+    '請設計晶片的數位模組，只交付 RTL。',
+    '請設計晶片內部的可合成模組，只交付 RTL。',
 ])
 def test_denied_physical_delivery_does_not_override_an_rtl_request(prompt):
     requirements = route.prompt_delivery_requirements(prompt)

@@ -541,7 +541,9 @@ def _additional_delivery_requirements(text: str) -> list[dict]:
         r"(?P<object>晶片|芯片|積體電路|裸晶|硬巨集|硬宏)")
     for match in requested_object.finditer(prose):
         tail = prose[match.end():]
-        if re.match(r"(?:的)?\s*(?:RTL|Verilog|SystemVerilog|HDL|功能|行為|模型|模擬)", tail, re.I):
+        if re.match(r"(?:(?:的|(?:內部|中|內|裡)(?:的)?))?\s*"
+                    r"(?:(?:數位|數字|可合成|組合|時序)\s*)*"
+                    r"(?:RTL|Verilog|SystemVerilog|HDL|模組|模塊|功能|行為|模型|模擬)", tail, re.I):
             continue
         out.append({"family": ("HARDMACRO" if match.group("object") in ("硬巨集", "硬宏") else "DIE"),
                     "target": None, "excerpt": match.group()})
