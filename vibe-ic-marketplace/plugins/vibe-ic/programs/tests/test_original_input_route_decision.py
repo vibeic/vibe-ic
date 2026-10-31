@@ -97,14 +97,34 @@ def test_deeper_rtl_proof_retains_its_structured_input_requirements(evidence):
 
 
 @pytest.mark.parametrize(("nature", "entry"), [
-    ("completion", "D1"), ("functional_modification", "D1"),
-    ("optimization", "2"), ("debug", "4"),
+    ("completion", "1"), ("functional_modification", "1"), ("optimization", "2"),
 ])
-def test_other_task_natures_keep_their_existing_entry_and_d1_closure(nature, entry):
+def test_bounded_original_consumers_preserve_their_task_nature(nature, entry):
     receipt = _receipt(nature=nature)
     assert receipt["task_nature"] == nature
-    assert receipt["input_contract"] == "structured"
+    assert receipt["input_contract"] == "original"
     assert receipt["entry_step"] == entry
+    assert receipt["verify_through"] == "2"
+    assert receipt["verify_closed_steps"] == ["1", "2"]
+    assert rd.validate_route_receipt(receipt) == []
+
+
+def test_debug_still_owns_its_simulation_entry_and_structured_inputs():
+    receipt = _receipt(nature="debug")
+    assert receipt["task_nature"] == "debug"
+    assert receipt["input_contract"] == "structured"
+    assert receipt["entry_step"] == "4"
+    assert "D1" in receipt["verify_closed_steps"]
+    assert rd.validate_route_receipt(receipt) == []
+
+
+@pytest.mark.parametrize("nature", ["completion", "functional_modification", "optimization", "debug"])
+@pytest.mark.parametrize("evidence", ["behaviour", "proof", "area"])
+def test_transforms_with_deeper_consumers_retain_structured_authority(nature, evidence):
+    receipt = _receipt(nature=nature, evidence=evidence)
+    assert receipt["task_nature"] == nature
+    assert receipt["input_contract"] == "structured"
+    assert receipt["entry_step"] == tnr.NATURE_ENTRY[nature]["entry_step"]
     assert "D1" in receipt["verify_closed_steps"]
     assert rd.validate_route_receipt(receipt) == []
 
