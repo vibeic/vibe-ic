@@ -7070,10 +7070,56 @@ def _d0102_qualification(project: Path, context: Mapping, step: str, reads: dict
         raise MetricRefusal('D0102_CANONICAL_ACCEPTANCE_ABSENT', native)
     retained = record.get('result') or {}
     consumer = retained.get('canonical_consumer') or {}
-    if (retained.get('runner') != 'phase1_one_shot_runner'
-            or type(retained.get('producer_return')) is not int
-            or retained['producer_return'] != 0 or consumer.get('status') != 'PASS'):
+    producer_completed = (retained.get('runner') == 'phase1_one_shot_runner'
+                          and type(retained.get('producer_return')) is int
+                          and retained['producer_return'] == 0)
+    checkpoint = retained.get('checkpoint') or {}
+    checkpoint_completed = (
+        step == 'D01' and retained.get('runner') == 'vibe_ic_one_shot_runner'
+        and retained.get('site') == 'phase1_checkpoint_revalidation'
+        and isinstance(checkpoint, dict)
+        and checkpoint.get('producer_started') is False
+        and checkpoint.get('producer_reused') is True)
+    if (not (producer_completed or checkpoint_completed)
+            or consumer.get('status') != 'PASS'):
         raise MetricRefusal('D0102_COMPONENT_ONLY', native)
+    if checkpoint_completed:
+        import _phase1_producer_identity as identity
+        # These are the normal revalidator's original identity and observed
+        # complete consumer, not a new producer or a metadata-only PASS.
+        relative = (identity.sidecar_dir(project) / identity._si.SIDECAR).relative_to(project).as_posix()
+        _d0102_read(project, relative, reads)
+        if (reads[relative] != checkpoint.get('producer_identity_sha256')
+                or retained.get('observed_canonical_consumer') != consumer
+                or retained.get('detail')):
+            raise MetricRefusal('D0102_CHECKPOINT_LINEAGE_STALE', native)
+        current = identity.assess(project, HERE, checkpoint=True)
+        prior = checkpoint.get('source_assessment') or {}
+        if (current.get('state') not in (identity.REUSE, identity.REVALIDATE)
+                or not isinstance(prior, dict)
+                or prior.get('state') != current.get('state')
+                or prior.get('reason') != current.get('reason')):
+            raise MetricRefusal('D0102_CHECKPOINT_SOURCE_CHANGED', str(current))
+        if current['state'] == identity.REVALIDATE:
+            # Source-only drift stays drift. The retained current consumer
+            # must have discharged this exact old -> current code transition.
+            for epoch in ('old', 'new'):
+                code = (current.get(epoch) or {}).get('code')
+                if (not _HEX.fullmatch(str(code or ''))
+                        or (prior.get(epoch) or {}).get('code') != code):
+                    raise MetricRefusal('D0102_CHECKPOINT_TRANSITION_UNVALIDATED', epoch)
+        # Preserve all declared checks, including advisory results and genuine
+        # conditional non-execution. Required commands alone are only a subset.
+        if not isinstance(consumer.get('ledger'), list):
+            raise MetricRefusal('D0102_CANONICAL_CHECKS_INCOMPLETE', native)
+        remaining = [item.get('cmd') for item in consumer['ledger'] if isinstance(item, dict)]
+        for invocation in gates.program_invocations(row):
+            conditions = invocation['condition_files_exist']
+            if conditions and not any(any(project.glob(pattern)) for pattern in conditions):
+                continue
+            if invocation['command'] not in remaining:
+                raise MetricRefusal('D0102_CANONICAL_CHECKS_INCOMPLETE', invocation['command'])
+            remaining.remove(invocation['command'])
     commands, ledger = gates.required_commands(row), consumer.get('ledger')
     if (not commands or not isinstance(ledger, list)
             or consumer.get('required_commands') != commands
