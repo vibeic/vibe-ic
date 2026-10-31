@@ -182,12 +182,23 @@ def _scenario_prepare(project, context, manifest, sources):
 
 def _derive_scenario_authority(paths, ports):
     sdc = paths['sdc'].read_text()
-    clocks = re.findall(r'(?m)^\s*create_clock\b.*?-period\s+([0-9.eE+-]+)\s+\[get_ports\s+([A-Za-z_][A-Za-z0-9_$]*)\]', sdc)
+    clock_lines = re.findall(r'(?m)^[ \t]*create_clock\b[^\n]*', sdc)
+    clock = re.fullmatch(
+        r'\s*create_clock(?:\s+-name\s+(?P<name_before>[A-Za-z_][A-Za-z0-9_$]*))?'
+        r'\s+-period\s+(?P<period>[0-9.eE+-]+)'
+        r'(?:\s+-name\s+(?P<name_after>[A-Za-z_][A-Za-z0-9_$]*))?'
+        r'\s+\[get_ports\s+(?P<port>[A-Za-z_][A-Za-z0-9_$]*)\]\s*',
+        clock_lines[0]) if len(clock_lines) == 1 else None
     delays = re.findall(r'(?m)^\s*set_output_delay\s+([0-9.eE+-]+)\s+-clock\s+([A-Za-z_][A-Za-z0-9_$]*)\s+\[all_outputs\]', sdc)
     loads = re.findall(r'(?m)^\s*set_load\s+([0-9.eE+-]+)\s+\[all_outputs\]', sdc)
-    if len(clocks) != 1 or len(delays) != 1 or len(loads) != 1 or clocks[0][1] != delays[0][1]:
+    if (clock is None or (clock['name_before'] and clock['name_after'])
+            or len(delays) != 1 or len(loads) != 1):
         _fail('D55_SDC_ACTIVITY_AUTHORITY_UNIMPLEMENTED', 'one clock/output-delay/all-output-load declaration required')
-    period, output_delay, load = float(clocks[0][0]), float(delays[0][0]), float(loads[0])
+    clock_port = clock['port']
+    clock_name = clock['name_before'] or clock['name_after'] or clock_port
+    if clock_name != delays[0][1]:
+        _fail('D55_SDC_ACTIVITY_AUTHORITY_UNIMPLEMENTED', 'output delay must reference the declared clock name')
+    period, output_delay, load = float(clock['period']), float(delays[0][0]), float(loads[0])
     if not all(math.isfinite(value) and value > 0 for value in (period, output_delay, load)) \
             or output_delay >= period / 2:
         _fail('D55_SDC_ACTIVITY_AUTHORITY_INVALID', str((period, output_delay, load)))
@@ -218,7 +229,11 @@ def _derive_scenario_authority(paths, ports):
         mapped[port] = {'rail': default[0], 'capacitance_library_units': load}
     if not mapped:
         _fail('D55_OUTPUT_LOAD_COVERAGE', 'adopted design has no output ports')
-    return {'clock': clocks[0][1], 'period_ns': period,
+    clock_ports = [port for port in ports if port['name'] == clock_port]
+    if (len(clock_ports) != 1 or clock_ports[0]['direction'] != 'input'
+            or clock_ports[0]['width'] != 1):
+        _fail('D55_SDC_ACTIVITY_AUTHORITY_UNIMPLEMENTED', 'clock must target one declared scalar input port')
+    return {'clock': clock_port, 'period_ns': period,
             'gls_sample_offset_ns': output_delay,
             'external_loads': {'rails': {default[0]: {'voltage_v': voltage}},
                                'ports': mapped},
@@ -226,7 +241,7 @@ def _derive_scenario_authority(paths, ports):
                                'liberty': {'path': str(paths['liberty']), 'sha256': _sha(paths['liberty'])},
                                'pad_liberty': {'path': str(paths['pad_liberty']), 'sha256': _sha(paths['pad_liberty'])},
                                'io_connectivity': {'path': str(paths['io_connectivity']), 'sha256': _sha(paths['io_connectivity'])}},
-            'quotes': {'clock': f'create_clock -period {period} [get_ports {clocks[0][1]}]',
+            'quotes': {'clock': clock_lines[0].strip(),
                        'output_delay': f'set_output_delay {output_delay} -clock {delays[0][1]} [all_outputs]',
                        'load': f'set_load {load} [all_outputs]',
                        'default_power_rail': default[0],

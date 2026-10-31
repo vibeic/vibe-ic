@@ -205,6 +205,70 @@ def test_module_port_census_rejects_prose_about_formal_declarations(
         activity.dump.module_ports(discussed, 'adopted')
 
 
+@pytest.mark.parametrize('clock_command,clock_name', [
+    ('create_clock -name core_clock -period 24 [get_ports clk]', 'core_clock'),
+    ('create_clock -period 24 -name core_clock [get_ports clk]', 'core_clock'),
+    ('create_clock -period 24 [get_ports clk]', 'clk'),
+], ids=['named-before-period', 'named-after-period', 'unnamed'])
+def test_scenario_authority_resolves_clock_name_to_input_port(
+        tmp_path, clock_command, clock_name):
+    paths = _scenario_authority_files(tmp_path)
+    # Neutral control load only; this is not an adopted case constraint.
+    paths['sdc'].write_text(
+        f'{clock_command}\nset_output_delay 4.8 -clock {clock_name} [all_outputs]\n'
+        'set_load 0.125 [all_outputs]\n')
+    result = activity._derive_scenario_authority(paths, [
+        {'name': 'clk', 'direction': 'input', 'width': 1},
+        {'name': 'p', 'direction': 'output', 'width': 1}])
+    assert result['clock'] == 'clk'
+    assert result['period_ns'] == 24.0
+    assert result['gls_sample_offset_ns'] == 4.8
+    assert result['quotes']['clock'] == clock_command
+    assert result['external_loads']['ports']['p']['capacitance_library_units'] == 0.125
+    assert result['source_records']['sdc']['sha256'] == activity._sha(paths['sdc'])
+
+
+@pytest.mark.parametrize('clock_command,delay_clock,load_command', [
+    ('create_clock -name core_clock -period 24 [get_ports absent]', 'core_clock',
+     'set_load 0.125 [all_outputs]'),
+    ('create_clock -name core_clock -period 24 [get_ports p]', 'core_clock',
+     'set_load 0.125 [all_outputs]'),
+    ('create_clock -name core_clock -period 24 [get_ports x]', 'core_clock',
+     'set_load 0.125 [all_outputs]'),
+    ('create_clock -name core_clock -period 24 [get_ports clk]', 'unknown_clock',
+     'set_load 0.125 [all_outputs]'),
+    ('create_clock -name core_clock -period 24 [get_ports clk]', 'clk',
+     'set_load 0.125 [all_outputs]'),
+    ('create_clock -name core_clock -period 24 -name core_clock [get_ports clk]',
+     'core_clock', 'set_load 0.125 [all_outputs]'),
+    ('create_clock -name core_clock -period 24 [get_ports clk]\n'
+     'create_clock -period 24 [get_ports clk]', 'core_clock',
+     'set_load 0.125 [all_outputs]'),
+    ('create_clock -waveform {0 12} -name core_clock -period 24 [get_ports clk]',
+     'core_clock', 'set_load 0.125 [all_outputs]'),
+    ('create_clock -name -period 24 [get_ports clk]', 'clk',
+     'set_load 0.125 [all_outputs]'),
+    ('create_clock -name core_clock -period 24 [get_ports clk*]', 'core_clock',
+     'set_load 0.125 [all_outputs]'),
+    ('create_clock -name core_clock -period 24 [get_ports clk]', 'core_clock',
+     '# no adopted external load'),
+], ids=['absent-port', 'output-port', 'vector-port', 'unknown-clock', 'port-as-clock-name',
+        'duplicate-name', 'duplicate-clock', 'unsupported-option', 'missing-name',
+        'wildcard-port', 'missing-load'])
+def test_scenario_authority_refuses_unresolved_named_clock(
+        tmp_path, clock_command, delay_clock, load_command):
+    paths = _scenario_authority_files(tmp_path)
+    paths['sdc'].write_text(
+        f'{clock_command}\nset_output_delay 4.8 -clock {delay_clock} [all_outputs]\n'
+        f'{load_command}\n')
+    with pytest.raises(admission.AdmissionRefusal,
+                       match='D55_SDC_ACTIVITY_AUTHORITY_UNIMPLEMENTED'):
+        activity._derive_scenario_authority(paths, [
+            {'name': 'clk', 'direction': 'input', 'width': 1},
+            {'name': 'x', 'direction': 'input', 'width': 2},
+            {'name': 'p', 'direction': 'output', 'width': 1}])
+
+
 def test_scenario_authority_refuses_cell_pad_corner_mismatch(tmp_path):
     paths = _scenario_authority_files(tmp_path, pad_voltage='3.3')
     with pytest.raises(admission.AdmissionRefusal, match='D55_RAIL_LIBRARY_MISMATCH'):
