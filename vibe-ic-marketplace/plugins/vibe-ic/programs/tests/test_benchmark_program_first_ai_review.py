@@ -1200,7 +1200,8 @@ def _write_ai_repair_record(run: Path, task: dict, challenge: dict) -> dict:
     return record
 
 
-def _dispatched_parent_task(tmp_path: Path, *, supplied_source=True) -> tuple[Path, dict, Path]:
+def _dispatched_parent_task(tmp_path: Path, *, supplied_source=True,
+                            input_contract="structured") -> tuple[Path, dict, Path]:
     """Build the review worklist shape emitted after a dispatched runner call."""
     run = tmp_path / "run"
     (run / "responses").mkdir(parents=True)
@@ -1209,6 +1210,10 @@ def _dispatched_parent_task(tmp_path: Path, *, supplied_source=True) -> tuple[Pa
     rtl = project / "phase2/stage1/rtl/dut.v"
     rtl.write_text(
         "module dut(input wire a, output wire y); assign y = ~a; endmodule\n")
+    if input_contract == "original" and not supplied_source:
+        (project / "input/phase1_prompt.md").write_text(
+            "Design a module named dut with input a and output y. "
+            "Output y must always equal input a.\n")
     prompt = (project / "input/phase1_prompt.md").read_text()
     bio._stage_public_original("p1", prompt,
                                {"dut.v": rtl.read_text()} if supplied_source else {}, project)
@@ -1226,7 +1231,8 @@ _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
     'native_gate_status':'NOT_MEASURED',
 }, p)
 ''' % str(PROGRAMS))
-    argv = bd._resume_solver_argv(runner, project, True, "2", "8")
+    argv = bd._resume_solver_argv(runner, project, True, "2", "8",
+                                input_contract=input_contract)
     process = bd._RunnerBudget(1, None, 0).run(argv)
     assert process.error is None, process.error
     got = bd._collect_runner_result(process, argv, "rtllm", "p1", project)
@@ -1243,7 +1249,7 @@ _write_phase2_report(p/'reports/orchestrator/phase2_one_shot.json', {
     return run, task, runner
 
 
-def _stub_dispatched_reentry(monkeypatch):
+def _stub_dispatched_reentry(monkeypatch, input_contract="structured"):
     """Keep dispatched repair at the coordinator/consumer boundary.
 
     The route/D1 producer is covered by the normal-dispatch tests.  These
@@ -1255,8 +1261,8 @@ def _stub_dispatched_reentry(monkeypatch):
     monkeypatch.setattr(
         bd, "_validated_route_reentry_state",
         lambda **kwargs: {
-            "status": "ACTIVE", "entry_step": "2", "exit_step": "8",
-            "delivery_route": "ip", "route_receipt": {},
+            "status": "ACTIVE", "entry_step": "2", "effective_entry": "2", "exit_step": "8",
+            "delivery_route": "ip", "route_receipt": {"input_contract": input_contract},
             "activation": {}, "task": {"task_sha256": "fixture"},
         })
     monkeypatch.setattr(bd, "_capture_d1_evidence", lambda project: None)
@@ -1738,12 +1744,19 @@ def test_prompt_only_repair_keeps_identity_and_source_completion_guards(tmp_path
     assert reasons
 
 
+@pytest.mark.parametrize("original", [False, True])
 def test_dispatched_ai_repair_consumes_changed_rtl_before_regate(
-        tmp_path, monkeypatch):
+        tmp_path, monkeypatch, original):
     """A runner-bound parent receipt must reach supplied-RTL repair."""
-    run, task, runner = _dispatched_parent_task(tmp_path)
+    run, task, runner = _dispatched_parent_task(
+        tmp_path, supplied_source=not original,
+        input_contract="original" if original else "structured")
     _solve_report(run, task)
-    _write_review(task, _proven_fail_review(task))
+    review = _proven_fail_review(task)
+    if original:
+        for part in ("semantic_review", "verification_test"):
+            review[part]["prompt_evidence"][0]["excerpt"] = Path(task["prompt_path"]).read_text().strip()
+    _write_review(task, review)
     monkeypatch.setattr(
         bd, "_run_verification_challenge",
         lambda candidate, challenge: {
@@ -1751,14 +1764,24 @@ def test_dispatched_ai_repair_consumes_changed_rtl_before_regate(
             "candidate_rtl_sha256": candidate["rtl_sha256"],
             "challenge_sha256": challenge["sha256"],
         })
-    _stub_dispatched_reentry(monkeypatch)
+    _stub_dispatched_reentry(monkeypatch, "original" if original else "structured")
+    if original:
+        real_validate = bd._validate_ai_review
+        def validate_with_source_authority(current, **kwargs):
+            # The real prompt-only structural consumer uses this boundary.
+            # Simulation is stubbed here; source selection and runner receipts
+            # remain real, including the initial proof during coordinator resume.
+            if bd._original_prompt_without_context(current) is None:
+                return {"status": "REJECTED", "reasons": ["original source authority absent"]}
+            return real_validate(current, **kwargs)
+        monkeypatch.setattr(bd, "_validate_ai_review", validate_with_source_authority)
     real_argv = bd._resume_solver_argv
     monkeypatch.setattr(
         bd, "_resume_solver_argv",
         lambda _runner, project, supplied_rtl, entry, exit_step,
-               delivery_route="ip": real_argv(
+               delivery_route="ip", *args, **kwargs: real_argv(
                    runner, project, supplied_rtl, entry, exit_step,
-                   delivery_route))
+                   delivery_route, *args, **kwargs))
 
     assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
     repair = bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]
@@ -1780,7 +1803,7 @@ def test_dispatched_ai_repair_consumes_changed_rtl_before_regate(
         stale_hash_reason
     real_collect = bio.collect
     def collect_repaired(fmt, pid, project, **kwargs):
-        if kwargs.get("require_repair_contract"):
+        if kwargs.get("supplied_rtl"):
             return {
                 "ok": True,
                 "completion": Path(project /
@@ -1802,13 +1825,19 @@ def test_dispatched_ai_repair_consumes_changed_rtl_before_regate(
     assert Path(runner).is_file()
 
 
+@pytest.mark.parametrize("original", [False, True])
 @pytest.mark.parametrize("mutation", ["repair_record", "challenge"])
 def test_dispatched_changed_rtl_without_valid_repair_proof_stays_stale(
-        tmp_path, monkeypatch, mutation):
+        tmp_path, monkeypatch, mutation, original):
     """A changed output alone cannot discharge a stale runner receipt."""
-    run, task, _ = _dispatched_parent_task(tmp_path)
+    run, task, _ = _dispatched_parent_task(
+        tmp_path, supplied_source=not original,
+        input_contract="original" if original else "structured")
     _solve_report(run, task)
     review = _proven_fail_review(task)
+    if original:
+        for part in ("semantic_review", "verification_test"):
+            review[part]["prompt_evidence"][0]["excerpt"] = Path(task["prompt_path"]).read_text().strip()
     _write_review(task, review)
     monkeypatch.setattr(
         bd, "_run_verification_challenge",
@@ -1817,7 +1846,7 @@ def test_dispatched_changed_rtl_without_valid_repair_proof_stays_stale(
             "candidate_rtl_sha256": candidate["rtl_sha256"],
             "challenge_sha256": challenge["sha256"],
         })
-    _stub_dispatched_reentry(monkeypatch)
+    _stub_dispatched_reentry(monkeypatch, "original" if original else "structured")
     assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
 
     working_rtl = Path(task["working_rtl_paths"][0])
@@ -1827,7 +1856,8 @@ def test_dispatched_changed_rtl_without_valid_repair_proof_stays_stale(
     record = _write_ai_repair_record(run, task, challenge)
     if mutation == "repair_record":
         record["repaired_rtl_sha256"] = "0" * 64
-        record["repair_contract"]["candidate_sha256"] = "0" * 64
+        if "repair_contract" in record:
+            record["repair_contract"]["candidate_sha256"] = "0" * 64
         bd._repair_record_path(run, task).write_text(json.dumps(record))
     else:
         review.pop("verification_test")

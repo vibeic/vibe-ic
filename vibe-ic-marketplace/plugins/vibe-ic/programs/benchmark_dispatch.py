@@ -9687,16 +9687,13 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         except OSError:
             working_hash = None
         if working_hash != task.get("rtl_sha256"):
-            # Establish the semantic proof without laundering the stale
-            # invocation receipt. The receipt exception is considered only
-            # after this detached review is a real REPAIR_REQUIRED finding.
-            proof_task = dict(task)
-            verification = task.get("program_verification")
-            if isinstance(verification, dict) and "runner_invocation" in verification:
-                proof_verification = dict(verification)
-                proof_verification.pop("runner_invocation", None)
-                proof_task["program_verification"] = proof_verification
-            proof_verdict = _validate_ai_review(proof_task)
+            # Keep the measured source selection in its bound invocation.
+            # Only this exact working-output delta may differ while checking
+            # the frozen parent's proof. It authorizes no re-entry until the
+            # signed repair record and complete invocation are validated below.
+            proof_verdict = _validate_ai_review(
+                task, allow_repaired_output=True,
+                repaired_output_sha256=str(working_hash))
             challenge = proof_verdict.get("verified_challenge")
             if (proof_verdict.get("status") == "REPAIR_REQUIRED"
                     and isinstance(challenge, dict)):
