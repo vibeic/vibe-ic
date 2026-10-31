@@ -720,7 +720,7 @@ def arithmetic_plan_for_top(project: Path, case: dict, ic_class: str,
 
 def _refresh_stale_observation_binding(project: Path, top: dict, models: list,
                                        ic_class: str) -> Dict[str, Any]:
-    """Re-key one stale carrier-local wrapper locator to current provenance.
+    """Resolve one stale carrier-local wrapper locator without author writes.
 
     The observation schedule is author input.  The binding is generated
     provenance: on a retained carrier it can still name the prior carrier's
@@ -860,21 +860,148 @@ def _refresh_stale_observation_binding(project: Path, top: dict, models: list,
     if declaration_path.read_bytes() != original:
         return refuse("declaration changed while provenance refresh was being prepared")
 
-    history = (project / "plugin_output" / "declaration_history" /
-               str(time.time_ns()) / "declaration.json")
-    try:
-        history.parent.mkdir(parents=True, exist_ok=False)
-        history.write_bytes(original)
-        _atomic_write_text(
-            declaration_path,
-            json.dumps(updated, indent=2, ensure_ascii=False) + "\n")
-    except OSError as exc:
-        return refuse(f"could not publish atomic provenance refresh: {exc}")
-    return {"state": "UPDATED", "provenance": "generated",
+    return {"state": "RESOLVED", "provenance": "generated",
             "wrapper": str(wrapper_rel),
             "previous_wrapper": stale_raw,
-            "previous_declaration": str(history.relative_to(project)),
             "binding": replacement}
+
+
+def recover_observation_declaration(project: Path) -> Dict[str, Any]:
+    """Undo only this producer's recorded same-byte locator write.
+
+    The normal publisher's original byte claim is the authority. Neither a
+    history filename nor a generated refresh record can authorize other edits.
+    No D01/D26 report, publication claim, sidecar or functional verdict changes.
+    """
+    import spec_declaration_emit as declaration
+    project = Path(project).resolve()
+    report = project / 'reports/phase3/observation_declaration_recovery.json'
+    result = {'program': PROGRAM, 'check': 'observation_declaration_recovery',
+              'state': 'REFUSED'}
+
+    def owned(raw: str) -> Path:
+        rel = Path(raw)
+        path = project / rel
+        if (rel.is_absolute() or '..' in rel.parts
+                or not path.resolve().is_relative_to(project)
+                or any(p.is_symlink() for p in (path, *path.parents) if p != project)
+                or not path.is_file()):
+            raise ValueError('missing, symlinked or foreign recovery input: ' + str(raw))
+        return path
+
+    def same(a, b):
+        return json.dumps(a, sort_keys=True) == json.dumps(b, sort_keys=True)
+
+    try:
+        path = owned('plugin_output/declaration.json')
+        current = path.read_bytes()
+        sidecar = owned('plugin_output/declaration.provenance.json')
+        provenance = owned('provenance.jsonl')
+        claims = [json.loads(line) for line in provenance.read_text().splitlines() if line.strip()]
+        claims = [r for r in claims if r.get('tool') == 'spec_declaration_emit'
+                  and 'plugin_output/declaration.json' in r.get('outputs', {})
+                  and r.get('exit_code') == 0]
+        if not claims:
+            raise ValueError('original normal declaration publication claim missing')
+        claim = claims[-1]
+        if (claim.get('source_sha256') != 'sha256:' + sha256_file(Path(declaration.__file__))
+                or claim['outputs'].get('plugin_output/declaration.provenance.json')
+                != 'sha256:' + sha256_file(sidecar)):
+            raise ValueError('normal publication source or sidecar differs')
+        for rel, digest in claim.get('inputs', {}).items():
+            if rel not in ('plugin_output/declaration.json', 'plugin_output/declaration.provenance.json'):
+                if 'sha256:' + sha256_file(owned(rel)) != digest:
+                    raise ValueError('normal publication input changed: ' + rel)
+        owner = json.loads(owned('reports/orchestrator/phase1_one_shot.json').read_text())
+        d01 = owner.get('dft_intent_output') or {}
+        authority = claim['outputs']['plugin_output/declaration.json']
+        if (owner.get('project') != str(project) or d01.get('producer') != 'D01'
+                or d01.get('path') != 'plugin_output/declaration.json'
+                or authority != 'sha256:' + str(d01.get('sha256'))):
+            raise ValueError('original declaration claim is not bound by D01')
+        functional = owned(str(record_path(project).relative_to(project)))
+        rec = json.loads(functional.read_text())
+        gate_path = owned('reports/phase3/gates/full_stack_functional.json')
+        gate = json.loads(gate_path.read_text())
+        post = gate.get('post_padring') or {}
+        pad = owned(CHIP_TOP_RECORD_REL)
+        if (rec.get('program') != PROGRAM or rec.get('schema') != SCHEMA
+                or post.get('project') != str(project)
+                or post.get('functional_record_sha256') != sha256_file(functional)
+                or post.get('chip_top_record_sha256') != sha256_file(pad)
+                or not same(rec.get('design_input'), _design_input_digest(project))):
+            raise ValueError('current generated record, producer or input binding differs')
+        refresh = rec.get('observation_provenance_refresh') or {}
+        if refresh.get('state') != 'UPDATED' or refresh.get('provenance') != 'generated':
+            raise ValueError('no recorded generated locator write to recover')
+        prior_rel = Path(str(refresh.get('previous_declaration', '')))
+        if (prior_rel.parts[:2] != ('plugin_output', 'declaration_history')
+                or len(prior_rel.parts) != 4 or prior_rel.name != 'declaration.json'):
+            raise ValueError('archive is not the exact producer-recorded declaration history')
+        prior = owned(str(prior_rel))
+        original = prior.read_bytes()
+        if 'sha256:' + hashlib.sha256(original).hexdigest() != authority:
+            raise ValueError('original archive differs from the normal publication/D01 claim')
+        old = json.loads(original)
+        top = required_full_stack_top(project)
+        if any(rec.get('full_stack_top', {}).get(k) != top[k]
+               for k in ('pad_ring', 'module', 'source', 'source_sha256', 'core_module')):
+            raise ValueError('selected current wrapper differs from the recorded native producer')
+        if top.get('refusal') or not top.get('pad_ring') or refresh.get('wrapper') != top['source']:
+            raise ValueError('native wrapper publication is absent or changed')
+        choice = old['verification_stimuli']['arithmetic_observation'][top['module']]
+        stale = refresh['previous_wrapper']
+        suffix = Path(top['source']).parts
+        if (not Path(stale).is_absolute() or not suffix
+                or Path(stale).parts[-len(suffix):] != suffix
+                or choice['binding'].get(stale) != top['source_sha256']
+                or top['source'] in choice['binding']):
+            raise ValueError('archive does not contain the sole same-byte stale wrapper locator')
+        expected = json.loads(original)
+        replacement = expected['verification_stimuli']['arithmetic_observation'][top['module']]['binding']
+        replacement.pop(stale)
+        replacement[top['source']] = top['source_sha256']
+        if not same(replacement, refresh.get('binding')):
+            raise ValueError('recorded generated binding differs from the sole locator replacement')
+        restored = current == original
+        if not restored and not same(json.loads(current), expected):
+            raise ValueError('current declaration differs beyond the sole generated locator')
+        resolved = _refresh_stale_observation_binding(project, top, rec['models'], rec['ic_class'])
+        if resolved.get('state') != ('RESOLVED' if restored else 'CURRENT'):
+            raise ValueError('current wrapper/model/author proof refused: ' + str(resolved))
+        result.update(authority_sha256=authority.removeprefix('sha256:'),
+                      previous_declaration=str(prior_rel),
+                      generated_record_sha256=sha256_file(functional))
+        saved = _read_json(report)
+        if restored:
+            if saved and all(saved.get(k) == v for k, v in result.items() if k != 'state'):
+                polluted = owned(saved['polluted_declaration'])
+                if sha256_file(polluted) != saved['polluted_sha256']:
+                    raise ValueError('saved polluted declaration archive changed')
+                saved['state'] = 'RECOVERED'
+                text = json.dumps(saved, indent=2) + '\n'
+                if report.read_text() != text:
+                    _atomic_write_text(report, text)
+                return saved
+            return {**result, 'state': 'CURRENT'}
+        if path.read_bytes() != current:
+            raise ValueError('declaration changed during recovery proof')
+        history = project / 'plugin_output/declaration_history' / str(time.time_ns())
+        history.mkdir(parents=True, exist_ok=False)
+        polluted = history / 'polluted_declaration.json'
+        polluted.write_bytes(current)
+        for source, name in ((functional, 'functional_cases.json'), (gate_path, 'functional_gate.json'),
+                             (pad, 'io_pad_chip_top.json'), (provenance, 'provenance.jsonl')):
+            shutil.copyfile(source, history / name)
+        result.update(state='PREPARED', polluted_declaration=str(polluted.relative_to(project)),
+                      polluted_sha256=sha256_file(polluted))
+        _atomic_write_text(report, json.dumps(result, indent=2) + '\n')
+        _atomic_write_text(path, original.decode('utf-8'))
+        result['state'] = 'RECOVERED'
+        _atomic_write_text(report, json.dumps(result, indent=2) + '\n')
+        return result
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        return {**result, 'state': 'REFUSED', 'reason': str(exc)}
 
 
 def arithmetic_case_evidence(project: Path, case: dict, ic_class: str, top: dict,
@@ -1535,7 +1662,16 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--container", default=None)
     ap.add_argument("--route", default=None, choices=["DIE", "HARDMACRO"])
     ap.add_argument("--json", default=None)
+    ap.add_argument("--recover-observation-declaration", action="store_true",
+                    help="recover only a proven prior generated locator write; run no simulation")
     args = ap.parse_args(argv)
+    if args.recover_observation_declaration:
+        rec = recover_observation_declaration(args.project)
+        text = json.dumps(rec, indent=2)
+        if args.json:
+            _atomic_write_text(args.json, text + '\n')
+        print(text)
+        return 0 if rec['state'] in ('RECOVERED', 'CURRENT') else 2
     container = args.container
     if container is None:
         import _eda_pin as _pin
