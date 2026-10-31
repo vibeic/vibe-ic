@@ -1188,6 +1188,10 @@ def _project_root_of(deck_dir: Path) -> Optional[Path]:
     return None
 
 
+def _render_subcircuit(name, ports, body):
+    return [f".subckt {name} {' '.join(ports)}", *body, f".ends {name}", ""]
+
+
 def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
                    prov_lines: List[str],
                    overrides: Dict[str, Dict[str, float]],
@@ -1242,7 +1246,7 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
         L.append(f".lib {_portable_lib_path(pdkctx['model_lib'], deck_dir)} "
                  f"{section}".rstrip())
     L.append("")
-    L.append(f".subckt {block} {' '.join(ir['ports'])}")
+    body = []
     for d in ir["devices"]:
         model = pdkctx["role_models"][d["role"]]
         parts = [f"x{d['name']}"] + list(d["nets"]) + [model]
@@ -1274,12 +1278,134 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
             if k.casefold() in ("ng", "nf"):
                 continue
             parts.append(f"{k}={v}")
-        L.append(" ".join(parts))
-    L.append(f".ends {block}")
-    L.append("")
+        body.append(" ".join(parts))
+    L.extend(_render_subcircuit(block, ir["ports"], body))
     # Deliberately NO `.end`: this file is `.include`d by its testbench, and a
     # terminating card there truncates the caller's netlist.
     return "\n".join(L)
+
+
+_LVS_DEVICE_PREFIX = {
+    "nmos": "M", "pmos": "M", "nmos_hv": "M", "pmos_hv": "M",
+    "res": "R", "res_poly": "R", "res_high": "R", "res_silicided": "R",
+    "cap": "C", "cap_mim": "C", "cap_rfmim": "C",
+    "npn": "Q", "pnp": "Q", "diode": "D",
+}
+
+
+def _lvs_text(simulation, ir):
+    """Render the retained resolved body, never re-solve its device geometry."""
+    from _pad_ring import parse_spice_subckts
+
+    circuits = parse_spice_subckts(simulation, preserve_parameters=True, reject_duplicates=True)
+    block = ir["block"]
+    if block not in circuits or circuits[block][0] != ir["ports"]:
+        raise ValueError("LVS_SOURCE_PORTS_DIFFER_FROM_TOPOLOGY")
+    devices = {("x" + d["name"]).casefold(): d for d in ir["devices"]}
+    body = circuits[block][1]
+    actual = [t[0].casefold() for t in body if not t[0].startswith(".")]
+    if len(actual) != len(ir["devices"]) or len(set(actual)) != len(actual) or set(actual) != set(devices):
+        raise ValueError("LVS_SOURCE_DEVICE_INVENTORY_DIFFERS_FROM_TOPOLOGY")
+    models = {}
+    for tokens in body:
+        device = devices.get(tokens[0].casefold())
+        if device is None:
+            continue
+        n = len(device["nets"])
+        if tokens[1:n + 1] != device["nets"] or len(tokens) <= n + 1:
+            raise ValueError("LVS_SOURCE_NETS_DIFFER_FROM_TOPOLOGY: " + device["name"])
+        model = tokens[n + 1]
+        prefix = _LVS_DEVICE_PREFIX.get(device["role"])
+        if prefix is None and model not in circuits:
+            raise ValueError("LVS_DEVICE_KIND_UNBOUND: " + device["role"])
+        if model in models and models[model] != (prefix or "X"):
+            raise ValueError("LVS_DEVICE_KIND_CONFLICT: " + model)
+        models[model] = prefix or "X"
+
+    lines = ["* Structural LVS view; resolved simulation body preserved."]
+    # Retain the source's dimensional convention without loading electrical models.
+    inside, retained_continuation = False, False
+    for line in simulation.splitlines():
+        if re.match(r"(?i)^\s*\.subckt\b", line):
+            inside = True
+        elif re.match(r"(?i)^\s*\.ends\b", line):
+            inside = False
+        elif not inside:
+            keep = bool(re.match(r"(?i)^\s*\.(?:global\b|params?\b|options?\s+scale\s*=)", line))
+            keep |= retained_continuation and line.lstrip().startswith("+")
+            if keep:
+                lines.append(line)
+            retained_continuation = keep
+    for name, (ports, source_body) in circuits.items():
+        rendered = []
+        for tokens in source_body:
+            if tokens[0].casefold() in (".include", ".inc", ".lib", ".model"):
+                raise ValueError("LVS_BODY_HAS_ELECTRICAL_MODEL_DIRECTIVE: " + name)
+            tokens = list(tokens)
+            if tokens[0][:1].casefold() == "x":
+                end = next((i for i, t in enumerate(tokens[1:], 1) if "=" in t), len(tokens))
+                model = tokens[end - 1]
+                if model in models and model not in circuits:
+                    tokens[0] = models[model] + tokens[0][1:]
+                elif model not in circuits:
+                    raise ValueError("LVS_HIERARCHY_UNBOUND: " + model)
+            rendered.append(" ".join(tokens))
+        lines.extend(_render_subcircuit(name, ports, rendered))
+    return "\n".join(lines)
+
+
+def emit_lvs_view(project: Path, block: str, *,
+                  expected_simulation_sha256: Optional[str] = None) -> dict:
+    """Emit <block>.lvs.cdl from the unchanged, already resolved A3 simulation view."""
+    from _pad_ring import parse_spice_subckts
+
+    directory = Path(project) / _CANONICAL_ANALOG / block
+    simulation = directory / f"{block}.sp"
+    topology = directory / "topology.json"
+    source_sha = _sha256(simulation)
+    if expected_simulation_sha256 is not None and source_sha != expected_simulation_sha256:
+        raise ValueError("LVS_SIMULATION_SHA_CHANGED")
+    ir = json.loads(topology.read_text())
+    if ir.get("block") != block:
+        raise ValueError("LVS_TOPOLOGY_BLOCK_MISMATCH")
+    text = _lvs_text(simulation.read_text(), ir)
+    view = directory / f"{block}.lvs.cdl"
+    inventory = {name: {"ports": ports, "body": body}
+                 for name, (ports, body) in parse_spice_subckts(text, preserve_parameters=True).items()}
+    if _sha256(simulation) != source_sha:
+        raise ValueError("LVS_SIMULATION_CHANGED_DURING_EMISSION")
+    view.write_text(text)
+    record = {"producer": PRODUCER, "block": block,
+              "simulation": simulation.name, "simulation_sha256": source_sha,
+              "topology_sha256": _sha256(topology),
+              "view": view.name, "view_sha256": _sha256(view),
+              "producer_sha256": _sha256(Path(__file__)),
+              "subcircuits": inventory,
+              "geometry": "source W/L/ng/m and all other parameters preserved verbatim",
+              "electrical_model_includes": False}
+    (directory / "lvs_provenance.json").write_text(json.dumps(record, indent=2) + "\n")
+    return record
+
+
+def validate_lvs_view(project: Path, block: str) -> Path:
+    """Refuse stale or altered structural views, including changed device geometry."""
+    directory = Path(project) / _CANONICAL_ANALOG / block
+    record = json.loads((directory / "lvs_provenance.json").read_text())
+    simulation = directory / f"{block}.sp"
+    topology = directory / "topology.json"
+    view = directory / f"{block}.lvs.cdl"
+    from _pad_ring import parse_spice_subckts
+    inventory = {name: {"ports": ports, "body": body}
+                 for name, (ports, body) in parse_spice_subckts(
+                     view.read_text(), preserve_parameters=True, reject_duplicates=True).items()}
+    if (record.get("producer") != PRODUCER or record.get("block") != block
+            or record.get("simulation_sha256") != _sha256(simulation)
+            or record.get("topology_sha256") != _sha256(topology)
+            or record.get("view_sha256") != _sha256(view)
+            or record.get("subcircuits") != inventory
+            or view.read_text() != _lvs_text(simulation.read_text(), json.loads(topology.read_text()))):
+        raise ValueError("LVS_VIEW_SOURCE_OR_BODY_CHANGED: " + block)
+    return view
 
 
 # ── the integration control the emitted testbench carries ─────────────────
@@ -2545,7 +2671,8 @@ def _drop_stale(bdir: Path, block: str) -> List[str]:
     """Remove artefacts a PREVIOUS run of this producer left behind whose
     inputs no longer support them. Another author's file is never touched."""
     dropped = []
-    for name in (f"{block}.sp", f"tb_{block}.sp", "netlist_provenance.json"):
+    for name in (f"{block}.sp", f"tb_{block}.sp", "netlist_provenance.json",
+                 f"{block}.lvs.cdl", "lvs_provenance.json"):
         p = bdir / name
         if not p.is_file():
             continue
@@ -3055,6 +3182,7 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         ref = _pc.provenance_ref(rref, sp_rel, content_sha)
     else:
         sp_path.write_text(sp_text, encoding="utf-8")
+    lvs_record = emit_lvs_view(project, name)
     tb_content_sha = None
     if tb_text:
         tb_path = bdir / f"tb_{name}.sp"
@@ -3134,7 +3262,9 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         "testbench": {"path": (f"tb_{name}.sp" if tb_text else None),
                       "conditions": tb_notes},
         "verification": {"checkers": findings, "simulation": sim},
-        "outputs": [f"{name}.sp"] + ([f"tb_{name}.sp"] if tb_text else []),
+        "lvs_view": lvs_record,
+        "outputs": [f"{name}.sp", f"{name}.lvs.cdl", "lvs_provenance.json"]
+                   + ([f"tb_{name}.sp"] if tb_text else []),
     }
     (bdir / "netlist_provenance.json").write_text(
         json.dumps(sidecar, indent=2, ensure_ascii=False) + "\n",
@@ -3144,6 +3274,7 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         gapf.unlink()
     rec.update(action="emitted", emitted=True,
                netlist=str(sp_path.relative_to(project)),
+               lvs_netlist=str((bdir / f"{name}.lvs.cdl").relative_to(project)),
                testbench=(f"tb_{name}.sp" if tb_text else None),
                spec_bound_params=spec_bound,
                design_content=design_content,
@@ -3276,11 +3407,27 @@ def main(argv: Optional[List[str]] = None) -> int:
                          "ngspice in the EDA container; a deck that does not "
                          "converge is not emitted")
     ap.add_argument("--json", default=None)
+    ap.add_argument("--lvs-only", action="store_true",
+                    help="emit a structural LVS view from the retained resolved simulation body; do not resize or rewrite SPICE")
+    ap.add_argument("--expected-simulation-sha256", default=None)
     args = ap.parse_args(argv)
     project = args.project.resolve()
     if not project.is_dir():
         print(f"error: not a directory: {project}", file=sys.stderr)
         return 1
+    if args.lvs_only:
+        if not args.block:
+            ap.error("--lvs-only requires --block")
+        try:
+            report = emit_lvs_view(project, args.block,
+                expected_simulation_sha256=args.expected_simulation_sha256)
+        except (ValueError, OSError, KeyError) as exc:
+            print(f"LVS_VIEW_REFUSED: {exc}", file=sys.stderr)
+            return 2
+        if args.json:
+            Path(args.json).write_text(json.dumps(report, indent=2) + "\n")
+        print(f"{PRODUCER}: structural LVS view emitted for {args.block}; simulation unchanged")
+        return 0
     env_pdk = os.environ.get("VIBEIC_ANALOG_PDK")
     # An env var IS an explicit request — somebody typed it — and it is the one
     # `--pdk` has always read, so it keeps that meaning here.

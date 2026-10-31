@@ -817,7 +817,8 @@ def discover_io_netlists(pdk_root: Optional[str] = None,
     return list(out.values())
 
 
-def parse_spice_subckts(text: str
+def parse_spice_subckts(text: str, *, preserve_parameters: bool = False,
+                        reject_duplicates: bool = False
                         ) -> Dict[str, Tuple[List[str], List[List[str]]]]:
     """`{subckt: (ports, element_token_lines)}` from a SPICE / CDL netlist."""
     joined = re.sub(r"\n[ \t]*\+", " ", text)
@@ -833,14 +834,59 @@ def parse_spice_subckts(text: str
         head = toks[0].lower()
         if head == ".subckt" and len(toks) >= 2:
             cur, body = toks[1], []
-            ports = [t for t in toks[2:] if "=" not in t]
+            ports = list(toks[2:]) if preserve_parameters else [t for t in toks[2:] if "=" not in t]
         elif head == ".ends":
             if cur is not None:
+                if reject_duplicates and cur in out:
+                    raise ValueError("DUPLICATE_SPICE_SUBCIRCUIT: " + cur)
                 out.setdefault(cur, (ports, body))
             cur = None
         elif cur is not None:
             body.append(toks)
     return out
+
+
+def assemble_lvs_top(project: Path, destination: Path, top: str,
+                     ports: List[str], instances: List[List[str]],
+                     blocks: List[str], libraries: List[Path]) -> dict:
+    """Assemble structural block views; simulation SPICE is never a fallback."""
+    import hashlib
+    import analog_a3_netlist_emit as a3
+
+    views = [a3.validate_lvs_view(project, block) for block in blocks]
+    views += [Path(path) for path in libraries]
+    circuits = {}
+    inputs = {}
+    for path in views:
+        text = path.read_text()
+        if re.search(r"(?im)^\s*\.(?:lib|include|inc|model)\s", text):
+            raise ValueError("LVS_ASSEMBLY_REQUIRES_STRUCTURAL_VIEW: " + str(path))
+        parsed = parse_spice_subckts(text, reject_duplicates=True)
+        if not parsed:
+            raise ValueError("LVS_ASSEMBLY_SUBCIRCUITS_ABSENT: " + str(path))
+        if set(circuits).intersection(parsed):
+            raise ValueError("LVS_ASSEMBLY_DUPLICATE_SUBCIRCUIT: " + str(path))
+        circuits.update(parsed)
+        inputs[str(path)] = hashlib.sha256(path.read_bytes()).hexdigest()
+    names = set()
+    for tokens in instances:
+        if (len(tokens) < 2 or not tokens[0].casefold().startswith("x")
+                or tokens[0].casefold() in names or tokens[-1] not in circuits
+                or len(tokens[1:-1]) != len(circuits[tokens[-1]][0])):
+            raise ValueError("LVS_ASSEMBLY_INSTANCE_UNBOUND: " + " ".join(tokens))
+        names.add(tokens[0].casefold())
+    text = "\n".join(["* Structural analog top LVS assembly",
+                       *[f'.include "{path.resolve()}"' for path in views], "",
+                       f".subckt {top} {' '.join(ports)}",
+                       *[" ".join(tokens) for tokens in instances],
+                       f".ends {top}", ""])
+    destination = Path(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    destination.write_text(text)
+    return {"producer": "_pad_ring.assemble_lvs_top", "top": top,
+            "ports": list(ports), "instances": instances, "input_sha256": inputs,
+            "output": str(destination),
+            "output_sha256": hashlib.sha256(destination.read_bytes()).hexdigest()}
 
 
 def _series_r_neighbours(body: List[List[str]], node: str) -> List[str]:

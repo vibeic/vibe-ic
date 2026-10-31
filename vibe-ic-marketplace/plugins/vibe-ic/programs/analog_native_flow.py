@@ -94,6 +94,9 @@ def _input_views(project, name, step=None):
     directory = layout.analog_dir(project) / name
     paths += [directory / leaf for leaf in
               ("spec.json", "topology.json", "topology.md", f"{name}.sp", f"tb_{name}.sp")]
+    if step in ("A12", "A18"):
+        paths += [directory / f"{name}.lvs.cdl",
+                  directory / "lvs_provenance.json"]
     if step in STEPS[3:]:
         paths.append(directory / "sizing_inputs.json")
     if step in STEPS[10:]:
