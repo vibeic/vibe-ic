@@ -408,6 +408,9 @@ def canonical_program_paths(programs_dir: Path) -> tuple[Path, ...]:
         programs_dir / "vibe_ic_one_shot_runner.py",
         programs_dir / "design_one_shot_runner.py",
         programs_dir / "canonical_run_admission.py",
+        # Source-owned row selection/projection is consumed before native
+        # dispatch; its repair must not reuse the broken owner's identity.
+        programs_dir / "flow109.py",
         programs_dir / "phase3_one_shot_runner.py",
         # Step 13 executes this producer directly.  Its source bytes must reopen
         # a Phase-2 span just like the runner that dispatches it; otherwise a

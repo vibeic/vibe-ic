@@ -718,3 +718,37 @@ def test_current_reset_judgement_reopens_only_once_and_stale_is_ignored(tmp_path
     monkeypatch.setattr(judgement, 'check', lambda *_: (False, 'unresolved'))
     receipt.write_text(json.dumps(binding))
     assert not _admit(project).admitted
+
+
+def test_flow109_runtime_projection_source_reopens_only_once(tmp_path, monkeypatch):
+    import shutil
+    project = _project(tmp_path / 'project')
+    programs = tmp_path / 'plugin/programs'
+    for source in {*cra.canonical_program_paths(PROGRAMS), PROGRAMS / 'flow109.py'}:
+        target = programs.parent / source.relative_to(PROGRAMS.parent)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    monkeypatch.delenv('VIBEIC_LIBRELANE_LOCAL_ATTESTATION', raising=False)
+    monkeypatch.setattr(cra, 'image_identity', lambda _: 'sha256:' + 'a' * 64)
+    args = (project, 'phase2', programs, '')
+    config = {'entry_step': '2', 'exit_step': '2'}
+    first = cra.admit_span(*args, config)
+    assert first.admitted
+    assert not cra.admit_span(*args, config).admitted
+    source = programs / 'flow109.py'
+    original = source.read_text()
+    needle = '    if "requested_step" in window and isinstance(runtime_tool_uses, list):'
+    assert needle in original
+    source.write_text(original.replace(needle, needle.replace('if ', 'if False and ', 1)))
+    changed = cra.admit_span(*args, config)
+    assert changed.reason == 'ADMITTED'
+    assert changed.identity_sha256 != first.identity_sha256
+    assert not cra.admit_span(*args, config).admitted
+    reports = project / 'reports'
+    reports.mkdir(exist_ok=True)
+    (reports / 'phase2.json').write_text('{"status":"NOT_MEASURED"}\n')
+    assert not cra.admit_span(*args, config).admitted
+    source.write_text(original)
+    restored = cra.admit_span(*args, config)
+    assert restored.identity_sha256 == first.identity_sha256
+    assert restored.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
