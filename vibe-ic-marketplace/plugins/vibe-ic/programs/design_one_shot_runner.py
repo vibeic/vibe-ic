@@ -27758,12 +27758,34 @@ def step_synthesis_handoff(project: Path, *, plan=None) -> StepResult:
                               reason_class=_V.ReasonClass.UPSTREAM_FAILED)
         late_sdc = next((s for s in reversed(plan)
                          if s.name == 'sdc_validation'), None)
+        retained_native = False
+        if late_sdc is None and os.environ.get('VIBEIC_FLOW109_CONTEXT'):
+            # A handoff-only owner consumes accepted upstream checkpoints; it
+            # owns neither a new proof nor another mapped-SDC invocation.
+            try:
+                import flow109
+                context = flow109.validate_execution_context(json.loads(
+                    Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+                if context.get('requested_step') == 'D30':
+                    admission = flow109.dft_preroute_admission(project, context)
+                    mapped = _current_phase2_consumer(project, '8', 0.0)
+                    retained_native = (
+                        admission['functional_equivalence']['path'] == 'reports/lec_eqy_execution.json'
+                        and mapped is not None
+                        and mapped['result'].get('site') == 'step_sdc_validation_post_prelayout')
+            except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError):
+                retained_native = False
         if (late_sdc is None or late_sdc.status != 'PASS'
-                or late_sdc.extras.get('post_prelayout') is not True):
+                or late_sdc.extras.get('post_prelayout') is not True) and not retained_native:
             return StepResult('synthesis_handoff', 'NOT_MEASURED', 0.0,
                               'Step14 awaits current complete D26 mapped SDC acceptance',
                               reason_class=_V.ReasonClass.UPSTREAM_REFUSED)
         for sid in ('8', '9', '10', '13'):
+            if sid == '13' and retained_native:
+                # Preroute admission just reopened the independently adopted
+                # native consumer. An unrelated legacy no-population attempt
+                # is retained but cannot replace that qualified proof source.
+                continue
             if _current_phase2_consumer(project, sid, 0.0) is None:
                 return StepResult('synthesis_handoff', 'NOT_MEASURED', 0.0,
                                   f'Step14 awaits current complete Step{sid} acceptance',
@@ -29406,7 +29428,9 @@ def main() -> int:
     # refusal IS the improvement — it charges the absence to step 9 instead of
     # letting steps 11-13 report "not applicable" for something that was in
     # fact starved.
-    if _after_exit("dft_lec_chain"):
+    if _before_entry("dft_lec_chain", _entry_site):
+        plan.append(_entry_sentinel("dft_lec_chain"))
+    elif _after_exit("dft_lec_chain"):
         # The measured cost of NOT pruning here: a lint-evidence (exit 2) run
         # still paid for SAT LEC with a 3x7200s timeout budget, 13 canonical
         # steps past its own deliverable.
@@ -29716,6 +29740,45 @@ def main() -> int:
         _write_phase2_report(
             out, summary, project,
             invocation_context=_dispatch_invocation_context)
+    # A bounded handoff owns a real D30 delivery, not only the generic report.
+    # The sole existing writer reopens that fresh delivery and all metrics.
+    _owner_context = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+    if _bounded and _owner_context:
+        import flow109
+        _owner = flow109.validate_execution_context(json.loads(Path(_owner_context).read_text()))
+        if _owner.get('requested_step') == 'D30':
+            _handoff = next(s for s in reversed(plan) if s.name == 'synthesis_handoff')
+            _handoff.extras.update(step_id='14', context_sha256=_owner['context_sha256'],
+                default_row_status=_handoff.status, completed=_handoff.status == 'PASS',
+                native_component_status=_handoff.status)
+            summary['steps'] = [asdict(s) for s in plan]
+            try:
+                _finished = flow109.finish_native_window(project, summary, out)
+                _status = (_finished.get('default_row_status', 'NOT_MEASURED')
+                           if isinstance(_finished, dict) else 'NOT_MEASURED')
+                _components = _finished.get('components', []) if isinstance(_finished, dict) else []
+                if (not isinstance(_finished, dict)
+                        or _status not in ('PASS', 'FAIL', 'NOT_MEASURED')
+                        or _finished.get('schema') != 'vibeic.flow109.window-attempt-result.v1'
+                        or _finished.get('whole_flow_acceptance') != 'NOT_MEASURED'
+                        or _finished.get('delivery_accepted') is not False
+                        or len(_components) != 1 or _components[0].get('step_id') != 'D30'
+                        or _components[0].get('context_sha256') != _owner['context_sha256']
+                        or _components[0].get('default_row_status') != _status
+                        or _components[0].get('completed') is not (_status == 'PASS')):
+                    _status = 'NOT_MEASURED'
+                summary['d30_finalization'] = _finished
+            except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError) as exc:
+                _status = 'NOT_MEASURED'
+                summary['d30_finalization'] = {'status': _status, 'detail': str(exc)}
+            _handoff.status = _status
+            _handoff.reason_class = 'input_absent' if _status == 'NOT_MEASURED' else ''
+            _handoff.detail += '; D30 finalization: ' + _status
+            _handoff.extras.update(default_row_status=_status, completed=_status == 'PASS')
+            summary.update(steps=[asdict(s) for s in plan],
+                verdict=_aggregate_verdict(plan, project=project, started_at=_run_started_at))
+            _write_phase2_report(out, summary, project,
+                                invocation_context=_dispatch_invocation_context)
     print(f"\n=== design_one_shot_runner DONE — {out}")
     print(f"verdict: {summary['verdict']}")
     for s in plan:
