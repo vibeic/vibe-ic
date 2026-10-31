@@ -134,3 +134,49 @@ def test_delivery_after_balanced_interface_keeps_explicit_family_and_floor(heade
     assert resolved['ok'] is True
     assert resolved['target'] == 'gds'
     assert route.delivery_route_for_target(resolved['target'], resolved['route_family']) == 'ic'
+
+
+@pytest.mark.parametrize('prompt,family,target', [
+    ('Implement the RTL module and deliver its LEF and Liberty views.', 'HARDMACRO', 'ip_hardmacro'),
+    ('Implement the RTL module. Its LEF and Liberty views must be delivered.', 'HARDMACRO', 'ip_hardmacro'),
+    ('Implement the RTL module. LEF and Liberty views are required.', 'HARDMACRO', 'ip_hardmacro'),
+    ('請設計晶片並交付可投片的實體版圖，完成製造與封裝。', 'DIE', 'shippable_gds'),
+    ('請交付完整硬巨集。', 'HARDMACRO', 'ip_hardmacro'),
+])
+def test_physical_views_and_chinese_delivery_keep_their_owner_floor(prompt, family, target):
+    requirements = route.prompt_delivery_requirements(prompt)
+    assert requirements['route_family'] == family
+    assert requirements['minimum_target'] == target
+    assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is False
+
+
+@pytest.mark.parametrize('prompt', [
+    'Write a module that models a chip. Do not deliver GDS, LEF or Liberty.',
+    'Implement the RTL module and do not deliver its LEF and Liberty views.',
+    'Implement the RTL module. LEF and Liberty views are not required.',
+    '請設計晶片功能的 RTL，不需要投片、製造或封裝。',
+    '請設計晶片的 RTL，不需要交付可投片的實體版圖。',
+])
+def test_denied_physical_delivery_does_not_override_an_rtl_request(prompt):
+    requirements = route.prompt_delivery_requirements(prompt)
+    assert requirements['route_family'] is None
+    assert requirements['minimum_target'] is None
+    assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is True
+
+
+def test_unchanged_delivery_payload_retains_issued_r5_identity():
+    requirements = route.prompt_delivery_requirements('Debug the supplied RTL; return corrected Verilog.')
+    assert requirements['rules_version'] == 'r5'
+    assert requirements['requirements_sha256'] == '07c41201e7ecb110bef04f6d3632399c3023f4b71101ce00a2368aee60aa457d'
+
+
+@pytest.mark.parametrize('prompt,family', [
+    ('Implement RTL. No GDS is required, deliver LEF and Liberty views.', 'HARDMACRO'),
+    ('Implement RTL. LEF and Liberty views are not required and deliver GDS.', 'DIE'),
+])
+def test_a_denied_artifact_cannot_hide_an_independent_positive_delivery(prompt, family):
+    requirements = route.prompt_delivery_requirements(prompt)
+    resolved = route.resolve_prompt_delivery_target(requirements, None)
+    assert resolved['ok'] is True
+    assert resolved['route_family'] == family
+    assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is False

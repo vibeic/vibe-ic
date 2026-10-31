@@ -1622,20 +1622,36 @@ def component_context(context: Mapping, *, native_step_id: str | None = None,
 def _rtl_scope_inputs(project: Path) -> list[dict]:
     """Bind the ordinary original request and supplied RTL without changing it."""
     from _path_layout import original_input_sources
-    files = set(original_input_sources(project))
-    original_hashes = {_file_digest(path) for path in files}
-    for relative in ("input/docs", "input/rtl", "input/vendor_rtl"):
+
+    def supplied_files(relative):
         root = project / relative
         entries = [root, *root.rglob("*")] if root.exists() or root.is_symlink() else []
-        if any(path.is_symlink() for path in entries):
+        if any(path.is_symlink() for path in [*root.parents, *entries]):
             raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", "linked supplied source")
-        # The ordinary front door materializes byte-identical prompt/context
-        # copies under input/docs before extraction. Those build copies do not
-        # add source authority; new or changed content still changes this set.
-        files.update(path for path in entries if path.is_file()
-                     and (path in files or _file_digest(path) not in original_hashes))
-    return [{"path": path.relative_to(project).as_posix(), "sha256": _file_digest(path)}
-            for path in sorted(files)]
+        return {path for path in entries if path.is_file()}
+
+    prompt = project / "input/phase1_prompt.md"
+    try:
+        if prompt.exists() or prompt.is_symlink():
+            files = set(original_input_sources(project))
+        else:
+            # Both raw docs and canonical input_doc are normal front doors.
+            # Neither requires synthesizing a prompt that the owner never gave.
+            files = supplied_files("input/docs") or supplied_files("phase1/input_doc")
+        original_hashes = {_file_digest(path) for path in files}
+        for relative in ("input/docs", "input/rtl", "input/vendor_rtl"):
+            # The ordinary front door materializes byte-identical source copies.
+            # These add no authority; new or changed content still changes this set.
+            files.update(path for path in supplied_files(relative)
+                         if path in files or _file_digest(path) not in original_hashes)
+        if not files or not any(path.read_bytes().strip() for path in files):
+            raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", "no nonempty original design input")
+        return [{"path": path.relative_to(project).as_posix(), "sha256": _file_digest(path)}
+                for path in sorted(files)]
+    except (OSError, ValueError) as exc:
+        if isinstance(exc, Flow109Error):
+            raise
+        raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", str(exc)) from exc
 
 
 def _rtl_scope_window(context: Mapping) -> None:

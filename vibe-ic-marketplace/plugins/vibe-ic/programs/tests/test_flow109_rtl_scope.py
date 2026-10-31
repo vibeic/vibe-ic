@@ -154,3 +154,85 @@ def test_current_owner_physical_request_is_not_overridden(tmp_path, monkeypatch)
     with pytest.raises(flow109.Flow109Error, match='original source requests physical delivery'):
         flow109.prepare_front_door(args, tmp_path)
     assert owner.read_bytes() == before
+
+
+@pytest.mark.parametrize('source_root', ['input/docs', 'phase1/input_doc'])
+def test_docs_only_scope_uses_the_normal_document_input(tmp_path, monkeypatch, source_root):
+    args = _request(tmp_path, monkeypatch)
+    (tmp_path / 'input/phase1_prompt.md').unlink()
+    document = tmp_path / source_root / 'spec.md'
+    document.parent.mkdir(parents=True, exist_ok=True)
+    document.write_text('Implement a module whose output equals its input. Return RTL.\n')
+    flow109.prepare_front_door(args, tmp_path)
+    scope = flow109.active_rtl_scope(tmp_path)
+    assert any(row['path'] == source_root + '/spec.md' for row in scope['inputs'])
+    assert not (tmp_path / 'input/phase1_prompt.md').exists()
+    document.write_text(document.read_text() + 'A changed requirement.\n')
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_RTL_SCOPE_STALE'):
+        flow109.active_rtl_scope(tmp_path)
+
+
+@pytest.mark.parametrize('link_kind', ['document', 'directory', 'input_parent'])
+def test_docs_only_scope_refuses_linked_sources(tmp_path, monkeypatch, link_kind):
+    args = _request(tmp_path, monkeypatch)
+    (tmp_path / 'input/phase1_prompt.md').unlink()
+    elsewhere = tmp_path / 'elsewhere'
+    elsewhere.mkdir()
+    (elsewhere / 'spec.md').write_text('Return RTL.\n')
+    docs = tmp_path / 'input/docs'
+    if link_kind == 'document':
+        docs.mkdir()
+        (docs / 'spec.md').symlink_to(elsewhere / 'spec.md')
+    elif link_kind == 'directory':
+        docs.symlink_to(elsewhere, target_is_directory=True)
+    else:
+        (tmp_path / 'input').rename(tmp_path / 'original_input')
+        (tmp_path / 'input').symlink_to(tmp_path / 'original_input', target_is_directory=True)
+    with pytest.raises(flow109.Flow109Error, match='linked supplied source'):
+        flow109.prepare_front_door(args, tmp_path)
+
+
+def test_docs_only_scope_refuses_an_empty_design_source(tmp_path, monkeypatch):
+    args = _request(tmp_path, monkeypatch)
+    (tmp_path / 'input/phase1_prompt.md').unlink()
+    (tmp_path / 'input/rtl/unit.v').unlink()
+    docs = tmp_path / 'input/docs'
+    docs.mkdir()
+    (docs / 'empty.md').write_text('  \n')
+    with pytest.raises(flow109.Flow109Error, match='no nonempty original design input'):
+        flow109.prepare_front_door(args, tmp_path)
+
+
+@pytest.mark.parametrize('physical_request', [
+    'Implement the RTL module and deliver its LEF and Liberty views.',
+    '請設計晶片並交付可投片的實體版圖，完成製造與封裝。',
+])
+def test_public_rtl_scope_refuses_additional_physical_deliverables(tmp_path, monkeypatch, physical_request):
+    import subprocess
+    import sys
+    args = _request(tmp_path, monkeypatch)
+    (tmp_path / 'input/phase1_prompt.md').write_text(physical_request)
+    command = [sys.executable, str(Path(flow109.__file__).with_name('vibe_ic_one_shot_runner.py')),
+               str(tmp_path), '--flow', '109', '--flow109-manifest', str(args.flow109_manifest),
+               '--entry-step', 'D01', '--exit-step', 'D01', '--delivery-target', 'rtl',
+               '--flow109-plan-only', '--no-dashboard']
+    observed = subprocess.run(command, capture_output=True, text=True)
+    assert observed.returncode == 2, observed.stdout + observed.stderr
+    assert 'FLOW109_RTL_SCOPE_CONFLICT' in observed.stderr
+
+
+def test_public_rtl_scope_accepts_docs_without_a_synthetic_prompt(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+    args = _request(tmp_path, monkeypatch)
+    (tmp_path / 'input/phase1_prompt.md').unlink()
+    docs = tmp_path / 'input/docs'
+    docs.mkdir()
+    (docs / 'spec.md').write_text('Implement a module whose output equals its input. Return RTL.\n')
+    command = [sys.executable, str(Path(flow109.__file__).with_name('vibe_ic_one_shot_runner.py')),
+               str(tmp_path), '--flow', '109', '--flow109-manifest', str(args.flow109_manifest),
+               '--entry-step', 'D01', '--exit-step', 'D01', '--delivery-target', 'rtl',
+               '--flow109-plan-only', '--no-dashboard']
+    observed = subprocess.run(command, capture_output=True, text=True)
+    assert observed.returncode == 0, observed.stdout + observed.stderr
+    assert not (tmp_path / 'input/phase1_prompt.md').exists()
