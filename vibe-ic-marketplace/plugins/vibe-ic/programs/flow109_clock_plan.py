@@ -537,6 +537,9 @@ def _d34_targets(project: Path, component: dict, identity: dict) -> dict:
                        "the built tree is D38's measurement"}
     if any(state == "FAIL" for state, _ in checks.values()):
         return {**result, "status": "FAIL", "reason": "D34_PLANNING_TARGET_EXCEEDS_BOUND"}
+    if any(state != "PASS" for state, _ in checks.values()):
+        # An undeclared or unusable bound is not a satisfied bound.
+        return {**result, "status": "NOT_MEASURED", "reason": "D34_PLANNING_TARGET_BOUND_NOT_MEASURED"}
     if not (project / TARGET_CONSUMER).is_file():
         return {**result, "status": "NOT_MEASURED", "reason": "D34_TARGET_CONSUMER_ABSENT"}
     consumer, body = metrics._approved_document(project, TARGET_CONSUMER,
@@ -545,6 +548,9 @@ def _d34_targets(project: Path, component: dict, identity: dict) -> dict:
         return {**result, "status": "NOT_MEASURED", "reason": "D34_TARGET_CONSUMER_UNBOUND",
                 "consumer": consumer}
     held = {key: ((body.get("limits") or {}).get(key) or {}).get("max") for key in TARGET_KEYS}
+    if any(value is None for value in held.values()):
+        return {**result, "status": "NOT_MEASURED", "reason": "D34_TARGET_CONSUMER_INCOMPLETE",
+                "consumer": consumer, "consumed": held}
     if held != plan["targets"] or {k: (body.get("units") or {}).get(k) for k in TARGET_KEYS} != units:
         return {**result, "status": "FAIL", "reason": "D34_TARGET_CONSUMER_DIFFERS",
                 "consumer": consumer, "consumed": held}

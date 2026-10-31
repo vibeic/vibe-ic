@@ -119,7 +119,7 @@ def _approved(project, relative, schema, payload, source):
 
 
 def _d34_case(tmp_path, monkeypatch, *, measured=DOMAINS, reference=None, skew=2.4, approval=True,
-              consumer=None):
+              consumer=None, skew_bound=2.4):
     project = tmp_path
     log = project / "phase3/stage3/cts/clock_plan.log"
     _write(log, _log(measured))
@@ -141,7 +141,8 @@ def _d34_case(tmp_path, monkeypatch, *, measured=DOMAINS, reference=None, skew=2
                      "units": {"clock_skew_ns": "ns", "insertion_delay_ns": "ns"}})
     _write(project / "input/flow109/D34/requirement_source.json", {"basis": "owner-approved planning bound"})
     _approved(project, clock.TARGET_BOUNDS, "vibeic.flow109.requirement-authority.v1",
-              {"limits": {"clock_skew_ns": {"max": 2.4}, "insertion_delay_ns": {"max": 12.0}},
+              {"limits": {"clock_skew_ns": {} if skew_bound is None else {"max": skew_bound},
+                          "insertion_delay_ns": {"max": 12.0}},
                "units": {"clock_skew_ns": "ns", "insertion_delay_ns": "ns"}},
               "input/flow109/D34/requirement_source.json")
     payload = {"reference": reference or {"clocks": DOMAINS, "unclocked": []}, "reference_identity": {
@@ -153,6 +154,8 @@ def _d34_case(tmp_path, monkeypatch, *, measured=DOMAINS, reference=None, skew=2
         # The CTS row's acceptance authority, sourced from the D34 targets.
         held = {"clock_skew_ns": {"max": 2.4 if consumer != "differs" else 3.0},
                 "insertion_delay_ns": {"max": 12.0}}
+        if consumer == "incomplete":
+            held["clock_skew_ns"] = {}
         source = (clock.PLANNING_TARGETS if consumer != "unbound"
                   else "input/flow109/D34/requirement_source.json")
         _approved(project, clock.TARGET_CONSUMER, "vibeic.flow109.requirement-authority.v1",
@@ -297,3 +300,18 @@ def test_d34_measurement_is_the_native_log_not_the_json_summary(tmp_path, monkey
     result = clock.consume_default_row_completion(project, context, component)
     assert result["default_row_status"] == "NOT_MEASURED"
     assert result["metric_acceptance"]["reason"] == "D34_SINK_CENSUS_DIFFERS_FROM_LOG"
+
+
+def test_d34_a_missing_skew_bound_is_not_a_satisfied_bound(tmp_path, monkeypatch):
+    # Review round 2: an unmeasured bound check must never let the row pass.
+    result, obligations = _complete(tmp_path, monkeypatch, consumer="bound", skew_bound=None)
+    targets = obligations["base_22.skew_insertion_targets"]
+    assert targets["status"] == "NOT_MEASURED"
+    assert targets["reason"] == "D34_PLANNING_TARGET_BOUND_NOT_MEASURED"
+    assert result["default_row_status"] == "NOT_MEASURED" and result["completed"] is False
+
+
+def test_d34_a_cts_authority_missing_a_limit_is_not_consumption(tmp_path, monkeypatch):
+    result, obligations = _complete(tmp_path, monkeypatch, consumer="incomplete")
+    assert obligations["base_22.skew_insertion_targets"]["reason"] == "D34_TARGET_CONSUMER_INCOMPLETE"
+    assert result["default_row_status"] == "NOT_MEASURED"
