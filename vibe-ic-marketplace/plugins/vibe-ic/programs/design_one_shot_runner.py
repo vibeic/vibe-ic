@@ -14330,6 +14330,56 @@ def _step_rtl_hygiene_native(project: Path) -> StepResult:
         if status == "NOT_MEASURED" else "")
 
 
+def _step_d11_original_engineering(project, context, *, pdk_name, bounded_rtl,
+                                   top_name, container):
+    """BLOCKING component checks; qualified D11/full-flow obligations stay unmeasured."""
+    import flow109_engineering as engineering
+    t0 = time.time()
+    rows = []
+    try:
+        before = engineering.subject(project)
+        native = step_rtl_lint_tool(project, pdk_name=pdk_name, bounded_rtl=bounded_rtl,
+                                    top_name=top_name, container=container)
+        native.name = 'rtl_lint_tool'
+        rows.append(native)
+        # Retain the native bytes before the hygiene producer updates its shared report.
+        retained = Path(tempfile.mkdtemp(prefix='original-native-',
+            dir=project / 'reports/phase2/lint'))
+        retained_outputs = []
+        for index, output in enumerate(native.output_files):
+            destination = retained / (str(index) + '-' + Path(output).name)
+            shutil.copyfile(output, destination)
+            retained_outputs.append(str(destination))
+        native.output_files = retained_outputs
+        native_refs = [engineering.reference(project, p) for p in native.output_files]
+        rows.append(step_crosslayer_rewrite_fidelity(project))
+        hygiene = _step_rtl_hygiene_native(project)
+        hygiene.name = 'rtl_hygiene'
+        rows.append(hygiene)
+        from _rtl_include_hub import silicon_rtl_selection
+        out = project / 'reports/phase2/lint/rom_init_lint.json'
+        command = [sys.executable, str(PROGRAMS_DIR / 'rom_init_lint.py'),
+                   *map(str, silicon_rtl_selection(_pl.rtl_dir(project))), '--json', str(out)]
+        result = _pr.run(command, capture_output=True, text=True)
+        rows.append(StepResult('rom_init_lint',
+            {0: 'PASS', 1: 'FAIL'}.get(result.returncode, 'NOT_MEASURED'), time.time() - t0,
+            (result.stdout + result.stderr)[-2000:], [str(out)] if out.is_file() else [],
+            extras={'command': command, 'exit_code': result.returncode},
+            reason_class='execution_error' if result.returncode not in (0, 1) else ''))
+        if [engineering.reference(project, p) for p in native.output_files] != native_refs:
+            raise ValueError('ENGINEERING_NATIVE_OUTPUT_CHANGED')
+        record = engineering.evidence(project, before, rows)
+        status = engineering.consume(project, record, [asdict(row) for row in rows])
+        detail = 'D11_ORIGINAL_ENGINEERING_CHECKS_' + status
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        record, status, detail = {}, 'NOT_MEASURED', str(exc)
+    owner = StepResult('rtl_validate', status, time.time() - t0, detail,
+        extras={'engineering_evidence': record, 'context_sha256': context['context_sha256'],
+                'qualification_status': 'NOT_CLAIMED', 'default_row_status': 'NOT_MEASURED'},
+        reason_class='inconclusive' if status == 'NOT_MEASURED' else '')
+    return rows + [owner]
+
+
 def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
                        bounded_rtl: bool = False,
                        top_name: Optional[str] = None,
@@ -14356,7 +14406,8 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
         import flow109
         import flow109_metric_acceptance as metrics
         selected = flow109.validate_execution_context(json.loads(Path(raw_context).read_bytes()))
-        if selected.get('resolved_row', {}).get('id') == 'D11':
+        if (selected.get('resolved_row', {}).get('id') == 'D11'
+                and not __import__('flow109_engineering').selected_original(project, selected)):
             t0 = time.time()
             accepted = metrics.accept_d11(project, selected)
             if accepted['status'] in ('PASS', 'FAIL') or not metrics.d11_fresh_request(project, selected):
@@ -28186,7 +28237,9 @@ def main() -> int:
         args.skip_phase3 and str(args.entry_step) != "D1"
         and _lint_scope.is_rtl_only_evidence(exit_step=args.exit_step))
     if (str(args.entry_step) == "2" and str(args.exit_step) == "2"
-            and _lint_contract.selected_mode(project, "2") == "librelane"):
+            and (_lint_contract.selected_mode(project, "2") == "librelane"
+                 or (_pl.rtl_input(project) == "original"
+                     and os.environ.get("VIBEIC_FLOW109_CONTEXT")))):
         import flow109
         raw_context = os.environ.get("VIBEIC_FLOW109_CONTEXT")
         d11_selected = bool(raw_context and json.loads(Path(raw_context).read_bytes())
@@ -28199,13 +28252,21 @@ def main() -> int:
                 print('REFUSED: D11_ATTEMPT_ALREADY_COMPLETED', file=sys.stderr)
                 return 2
             out = attempt / 'phase2_one_shot.json'
-        row = step_rtl_lint_tool(
-            project, pdk_name=args.pdk, bounded_rtl=_bounded_rtl_lint,
-            top_name=args.top_name, container=args.container)
+        import flow109_engineering as engineering
+        engineering_selected = d11_selected and engineering.selected_original(project, context)
+        if engineering_selected:
+            lint_rows = _step_d11_original_engineering(project, context, pdk_name=args.pdk,
+                bounded_rtl=True, top_name=args.top_name, container=args.container)
+            row = lint_rows[-1]
+        else:
+            row = step_rtl_lint_tool(
+                project, pdk_name=args.pdk, bounded_rtl=_bounded_rtl_lint,
+                top_name=args.top_name, container=args.container)
+            lint_rows = [row]
         if raw_context:
             row.extras["context_sha256"] = json.loads(Path(raw_context).read_text())["context_sha256"]
         summary = {"project": str(project),
-                   "steps": [asdict(_entry_sentinel("rtl_gen")), asdict(row)], "verdict": row.status,
+                   "steps": [asdict(_entry_sentinel("rtl_gen")), *map(asdict, lint_rows)], "verdict": row.status,
                    "declared_window": {"entry_step": "2", "exit_step": "2",
                                        "dispatched_step_ids": ["2"]},
                    "bounded_disclosures": ["native lint only; whole flow not measured"]}
