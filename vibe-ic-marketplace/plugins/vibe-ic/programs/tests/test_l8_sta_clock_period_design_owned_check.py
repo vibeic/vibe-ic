@@ -260,3 +260,79 @@ def test_json_report_is_written(tmp_path):
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+@pytest.fixture
+def current_clockless_source(tmp_path, monkeypatch):
+    import os
+    import shutil
+    from argparse import Namespace
+    import flow109
+    supplied = os.environ.get('VIBEIC_NATIVE_SPEC_CASE')
+    if not supplied:
+        pytest.skip('requires the genuine complete source and signed producer review')
+    project = tmp_path / 'native'
+    for name in ('input', 'phase1', 'reports', 'source', 'phase2', 'phase3'):
+        origin = Path(supplied) / name
+        if origin.exists():
+            shutil.copytree(origin, project / name)
+    monkeypatch.chdir(project)
+    monkeypatch.setenv(flow109.CONTEXT_ENV, '')
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, '')
+    args = Namespace(flow='109', flow109_manifest=project/'input/flow109/selection.json',
+                     flow109_plan_only=False, execution_mode='default',
+                     entry_step='D01', exit_step='D01', delivery_target='rtl', route=None)
+    assert flow109.prepare_front_door(args, project) is None
+    return project
+
+
+def test_current_reviewed_clockless_source_is_declared_na(current_clockless_source):
+    import flow_compliance_check as consumer
+    from _flow_reason_taxonomy import infer_nonverdict_reason
+    project = current_clockless_source
+    rc, stdout = _run(project)
+    assert rc == 2
+    assert infer_nonverdict_reason(verdict='SKIP', message=stdout) == 'DESIGN_DECLARED_NA'
+    assert 'not measured' in stdout
+    consumer._check_program_exit_zero(project, 'l8_sta_clock_period_design_owned_check .')
+    record = consumer._gate_ledger_payload()[-1]
+    assert record['rc'] == 2
+    assert record['reason_class'] == 'DESIGN_DECLARED_NA'
+    assert record['verdict'] != 'PASS'
+
+
+@pytest.mark.parametrize('damage', ['missing-context', 'stale-source', 'foreign-context',
+                                     'missing-review', 'missing-producer', 'physical-selection',
+                                     'missing-clock-declaration'])
+def test_clockless_exemption_requires_current_complete_proof(current_clockless_source, monkeypatch, damage):
+    import os
+    import shutil
+    import flow109
+    from _flow_reason_taxonomy import infer_nonverdict_reason
+    project = current_clockless_source
+    if damage == 'missing-context':
+        monkeypatch.delenv(flow109.CONTEXT_ENV)
+    elif damage == 'stale-source':
+        target = project/'input/docs/unit.sv'
+        target.write_text(target.read_text() + '\n// changed after binding\n')
+    elif damage == 'foreign-context':
+        target = project/'foreign-context.json'
+        shutil.copyfile(os.environ[flow109.CONTEXT_ENV], target)
+        monkeypatch.setenv(flow109.CONTEXT_ENV, str(target))
+    elif damage == 'missing-review':
+        (project/'reports/audit/ai_judgements/D1.json').unlink()
+    elif damage == 'missing-producer':
+        (project/'reports/audit/phase1/expert_parse_track.json').unlink()
+    elif damage == 'physical-selection':
+        target = project/'input/flow109/selection.json'
+        data = json.loads(target.read_text())
+        data['features']['physical'] = True
+        target.write_text(json.dumps(data))
+    else:
+        target = project/'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+        data = json.loads(target.read_text())
+        del data['clock_ports']
+        target.write_text(json.dumps(data))
+    rc, stdout = _run(project)
+    assert rc == 2
+    assert infer_nonverdict_reason(verdict='SKIP', message=stdout) == 'EXECUTION_ERROR'

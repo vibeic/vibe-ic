@@ -419,6 +419,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "advisories": [],
     }
     if not clocked:
+        # Absence in staged outputs alone cannot establish task applicability.
+        try:
+            import flow109
+            import ai_signed_judgement as judgement
+            import phase1_expert_parse_track as track
+            from phase1_all_l_docs_present_check import fact_graph_layer_contract
+            scope = flow109.active_rtl_scope(project)
+            native = fact_graph_layer_contract(project) if scope else None
+            review_ok, _ = judgement.check(project, "D1") if native else (False, "")
+            receipt = project / "reports/audit/ai_judgements/D1.json"
+            sources = ([item for item in scope["inputs"]
+                        if Path(item["path"]).suffix.lower() in (".v", ".sv")]
+                       if scope else [])
+            explicit_clockless = isinstance(l9, dict) and l9.get("clock_ports") == []
+            source_clockless = bool(sources) and all(
+                not _EDGE_RE.search((project / item["path"]).read_text(encoding="utf-8"))
+                for item in sources)
+            if (native and explicit_clockless and source_clockless and review_ok
+                    and receipt.is_file() and not receipt.is_symlink()
+                    and track.check_report(project) == 0):
+                from _flow_reason_taxonomy import DESIGN_DECLARED_NA
+                report.update(verdict="SKIP", reason_class=DESIGN_DECLARED_NA,
+                              applicability={"scope": scope, "native": native,
+                                             "review_evidence_sha256": judgement.evidence_sha256(project, "D1"),
+                                             "clock_ports": [], "rtl_sources": sources})
+                print("[SKIP] l8_sta_clock_period_design_owned_check: current "
+                      "source-bound nonphysical RTL task declared no clock; "
+                      "complete source, native facts and signed producer review "
+                      "verified. STA period not applicable; STA not measured.")
+                _emit(args.json, report)
+                return 2
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            report["applicability_refusal"] = str(exc)
         print("[SKIP] l8_sta_clock_period_design_owned_check: the design "
               "declares no clock (no clock_domains[], no clock-role top pin, "
               "no edge-sensitive RTL, no staged create_clock) — there is no "
