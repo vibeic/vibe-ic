@@ -29,7 +29,7 @@ def sha(p):
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-def neutral_def(*, overlap=False, outside=False, missing=False):
+def neutral_def(*, overlap=False, outside=False, missing=False, native_pg=False, pg_outside=False):
     insts = [('m0', 'BLOCK0', 40000, 40000), ('m1', 'BLOCK0', 45000 if overlap else 60000, 40000),
              ('io0', 'PAD0', 0, 0), ('io1', 'PAD0', 20000, 0), ('esd', 'ESD0', 80000, 80000),
              ('pv', 'PAD0', 0, 80000), ('pg', 'PAD0', 20000, 80000)]
@@ -43,7 +43,15 @@ def neutral_def(*, overlap=False, outside=False, missing=False):
         f'- y + NET y + DIRECTION OUTPUT + USE SIGNAL + LAYER M1 ( 0 0 ) ( 2000 2000 ) + FIXED ( {110000 if outside else 20000} 0 ) N ;',
         'END PINS', 'NETS 2 ;', '- a ( PIN a ) ( io0 PAD ) ;', '- y ( PIN y ) ( io1 PAD ) ;',
         'END NETS', 'SPECIALNETS 2 ;', '- VDD ( pv VDD ) + USE POWER ;', '- VSS ( pg VSS ) + USE GROUND ;', 'END SPECIALNETS', 'END DESIGN', '']
-    return '\n'.join(lines)
+    text = '\n'.join(lines)
+    if native_pg:
+        pg = ('- VDD + NET VDD + SPECIAL + DIRECTION INOUT + USE POWER\n'
+              ' + PORT + LAYER M1 ( 0 0 ) ( 1000 1000 )\n'
+              f' + LAYER M1 ( {110000 if pg_outside else 2000} 0 ) '
+              f'( {111000 if pg_outside else 3000} 1000 )\n'
+              ' + FIXED ( 10000 10000 ) N ;\n')
+        text = text.replace('PINS 2 ;', 'PINS 3 ;').replace('END PINS', pg + 'END PINS')
+    return text
 
 
 def neutral_lef():
@@ -178,6 +186,64 @@ def test_floorplan_measures_def_not_cell_area_and_reuses_config_snapshot(digital
     assert all(ref['config_sha256'] == sha(digital.configs[ref['step']]) for ref in chain['states'])
     values = {m['field']: m['measurement']['value'] for o in result['obligations'] for m in o.get('measurements', [])}
     assert values['die_width_um'] == values['die_height_um'] == 100
+
+
+@pytest.mark.parametrize('use,orient', [('POWER', 'N'), ('GROUND', 'E')])
+def test_native_pg_rectangles_are_all_transformed(tmp_path, use, orient):
+    lef = tmp_path / 'native.lef'; lef.write_text(neutral_lef())
+    text = neutral_def(native_pg=True).replace('+ USE POWER', '+ USE ' + use)
+    text = text.replace('+ FIXED ( 10000 10000 ) N', '+ FIXED ( 10000 10000 ) ' + orient)
+    _d, _boxes, pins, values = metrics._digital_def_geometry(text, [lef])
+    assert len(pins) == 3 and len(pins['VDD']['rects']) == 2
+    expected = [[10000, 10000, 11000, 11000], [12000, 10000, 13000, 11000]] if orient == 'N' else [
+        [10000, 9000, 11000, 10000], [10000, 7000, 11000, 8000]]
+    assert pins['VDD']['rects'] == expected
+    assert values['pin_boundary_errors'] == (0, 'count')
+
+
+def test_native_pg_rectangles_normal_consumer_and_last_shape_failure(digital):
+    digital.geometry(native_pg=True)
+    assert digital.observe()['metric_status'] == 'PASS'
+    digital.geometry(native_pg=True, pg_outside=True)
+    result = digital.observe()
+    assert result['metric_status'] == result['status'] == 'FAIL', result
+    fields = {m['field']: m['measurement']['value'] for o in result['obligations']
+              for m in o.get('measurements', []) if 'measurement' in m}
+    assert fields['pin_boundary_errors'] == 1
+
+
+@pytest.mark.parametrize('damage', ['signal', 'multiple_ports', 'multiple_placements',
+    'polygon', 'via', 'malformed_rectangle', 'degenerate_rectangle', 'unknown_orientation'])
+def test_native_pg_rectangles_keep_unsupported_geometry_strict(tmp_path, damage):
+    lef = tmp_path / 'native.lef'; lef.write_text(neutral_lef())
+    text = neutral_def(native_pg=True)
+    if damage == 'signal': text = text.replace('+ USE POWER', '+ USE SIGNAL')
+    elif damage == 'multiple_ports': text = text.replace('+ LAYER M1 ( 2000', '+ PORT + LAYER M1 ( 2000')
+    elif damage == 'multiple_placements': text = text.replace('+ FIXED ( 10000', '+ PLACED ( 0 0 ) N + FIXED ( 10000')
+    elif damage == 'polygon': text = text.replace('+ LAYER M1 ( 2000', '+ POLYGON M1 ( 0 0 ) ( 1 1 ) + LAYER M1 ( 2000')
+    elif damage == 'via': text = text.replace('+ LAYER M1 ( 2000', '+ VIA V1 ( 0 0 ) + LAYER M1 ( 2000')
+    elif damage == 'malformed_rectangle': text = text.replace('( 3000 1000 )', '( invalid 1000 )')
+    elif damage == 'degenerate_rectangle': text = text.replace('( 3000 1000 )', '( 2000 1000 )')
+    else: text = text.replace('+ FIXED ( 10000 10000 ) N', '+ FIXED ( 10000 10000 ) UNKNOWN')
+    with pytest.raises(metrics.MetricRefusal, match='DIGITAL_PIN_'):
+        metrics._digital_def_geometry(text, [lef])
+
+
+def test_native_pg_rectangles_real_new_floorplan_readset():
+    raw = os.environ.get('DIGITAL_NATIVE_PROJECT')
+    if not raw:
+        pytest.skip('requires the retained current native floorplan readset')
+    project = Path(raw)
+    chain = json.loads((project / 'reports/phase3/execution-backend-15.json').read_text())
+    read, reads, states, _configs, _execs, lefs = metrics._digital_floorplan_readback(
+        project, {'native_image': chain['image']})
+    terminal = list(states.values())[-1][1]
+    before = {name: sha(project / name) for name in reads if not Path(name).is_absolute()}
+    _d, _boxes, pins, values = metrics._digital_def_geometry(read(terminal['def']).decode(), lefs)
+    assert len(pins) == 38 and len(pins['VDD']['rects']) > 1 and len(pins['VSS']['rects']) > 1
+    assert {n for n, p in pins.items() if len(p['rects']) > 1} == {'VDD', 'VSS'}
+    assert values['pin_boundary_errors'] == values['unplaced_pins'] == (0, 'count')
+    assert all(sha(project / name) == digest for name, digest in before.items())
 
 
 @pytest.mark.parametrize('bad', ['overlap', 'outside'])
