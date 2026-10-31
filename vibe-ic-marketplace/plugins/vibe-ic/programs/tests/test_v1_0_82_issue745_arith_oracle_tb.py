@@ -48,6 +48,29 @@ def _oracle_tbs(project: Path) -> list:
     return sorted(sd.glob("tb_*_oracle.v")) if sd.is_dir() else []
 
 
+@pytest.mark.parametrize("extra_ports", [
+    [{"name": "choose", "direction": "input", "width": 1}],
+    [{"name": "aux", "direction": "output", "width": 1}],
+    [{"name": "choose", "direction": "input", "width": 1},
+     {"name": "aux", "direction": "output", "width": 1}],
+    [{"name": "cin", "direction": "input", "width": 1},
+     {"name": "cout", "direction": "output", "width": 1}],
+])
+def test_binary_oracle_defers_unmodelled_controls_and_outputs(tmp_path, extra_ports):
+    ports = [{"name": "left", "direction": "input", "width": 6},
+             {"name": "right", "direction": "input", "width": 6},
+             {"name": "value", "direction": "output", "width": 6}]
+    project = _mk_project(tmp_path, top="selected_datapath",
+                          ports=ports + extra_ports,
+                          l2="value = left + right; a binary arithmetic datapath.")
+    report, rc = aotg.generate(project, "digital_arithmetic_primitive")
+    assert rc == 2, report
+    assert report["verdict"] == "DEFER"
+    assert report["fallback_skill"] == "testbench-gen"
+    assert "additional input controls or output functions" in report["reason"]
+    assert _oracle_tbs(project) == []
+
+
 # ── pure golden compute (testable WITHOUT iverilog) ──────────────────────────
 def test_compute_golden_mul_mod_2n_unsigned():
     # (x*y) mod 2^N, corner operands
