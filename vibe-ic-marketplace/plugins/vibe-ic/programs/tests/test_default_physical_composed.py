@@ -28,7 +28,7 @@ def clock_project(tmp_path, monkeypatch):
     pdk = SimpleNamespace(name="open_fixture", tech_lef=str(tech), cell_lef=str(cell),
                           liberty=str(liberty), macro_lefs=[])
     def native(project, tool, args, log):
-        Path(log).write_text("CLOCK_PLAN_PDK open_fixture\nCLOCK_PLAN_NATIVE system|12|tick\nCLOCK_PLAN_DONE\n")
+        Path(log).write_text("CLOCK_PLAN_PDK open_fixture\nCLOCK_PLAN_NATIVE system|12|tick\nCLOCK_PLAN_SINK_COUNT system|0\nCLOCK_PLAN_DONE\n")
         return 0, {"rc": 0, "argv": [tool, *args]}
     monkeypatch.setattr(current, "run_native", native)
     monkeypatch.setattr(runner, "_read_declared_pdk_target", lambda p: pdk.name)
