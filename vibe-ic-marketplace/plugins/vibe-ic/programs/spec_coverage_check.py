@@ -2997,13 +2997,8 @@ def _clock_target_direction(item: ChecklistItem) -> Optional[str]:
     return qualifiers[-1].lower() if qualifiers else None
 
 
-def _tb_has_other_clock_driver(rtl_text: str, tb_code: str,
-                               scope: str, clock: str) -> bool:
-    """Resolve only helper port ownership, never helper implementation.
-
-    A helper may observe a DUT clock through an input. An output, inout, or
-    unresolved direction sharing that net makes its measured owner ambiguous.
-    """
+def _tb_driver_context(rtl_text: str, tb_code: str, scope: str):
+    """Parse one immutable driver scope once for all of its observed nets."""
     from module_port_audit import lexical_mask, parse_modules, parse_instantiations
     try:
         rtl_text = lexical_mask(rtl_text)
@@ -3011,8 +3006,22 @@ def _tb_has_other_clock_driver(rtl_text: str, tb_code: str,
         helpers = {module.name: module for module in parse_modules(tb_code, "<testbench>")}
         instances = parse_instantiations(scope, "<testbench>", 1)
     except (ValueError, TypeError):
-        return True
+        return None
     design_types = set(re.findall(r"\bmodule\s+(\w+)\b", rtl_text, re.I))
+    return helpers, instances, design_types
+
+
+def _tb_has_other_clock_driver(rtl_text: str, tb_code: str,
+                               scope: str, clock: str, *, context=None) -> bool:
+    """Resolve only helper port ownership, never helper implementation.
+
+    A helper may observe a DUT clock through an input. An output, inout, or
+    unresolved direction sharing that net makes its measured owner ambiguous.
+    """
+    context = context if context is not None else _tb_driver_context(rtl_text, tb_code, scope)
+    if context is None:
+        return True
+    helpers, instances, design_types = context
     connected = lambda actual: re.search(rf"\b{re.escape(clock)}\b", actual, re.I)
     for instance in instances:
         if instance.module_name in design_types:
@@ -3062,9 +3071,12 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str) -> tuple:
     block, end = _SRC._extract_block(scope, initial.end())
     body = re.sub(r"^begin\b|\bend$", "", block).strip()
     outside = scope[:initial.start()] + scope[end:]
-    if (re.search(r"\b(?:always|always_comb|always_ff|force|task|function|"
-                  r"generate|if|for)\b", outside, re.I)
-            or _tb_has_other_clock_driver(rtl_text, tb_code, scope, clock)):
+    if re.search(r"\b(?:always|always_comb|always_ff|force|task|function|"
+                 r"generate|if|for)\b", outside, re.I):
+        return False, False
+    drivers = _tb_driver_context(rtl_text, tb_code, scope)
+    if drivers is None or _tb_has_other_clock_driver(
+            rtl_text, tb_code, scope, clock, context=drivers):
         return False, False
     roles = _tb_bound_port_roles(rtl_text, tb_code)
     top, = _tb_instantiated_module_types(scope, set(
@@ -3074,7 +3086,7 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str) -> tuple:
                and p.name.lower() in roles}
     if any(_assigned_expressions(scope, signal)
            or re.search(rf"\bforce\s+{re.escape(signal)}\b", scope, re.I)
-           or _tb_has_other_clock_driver(rtl_text, tb_code, scope, signal)
+           or _tb_has_other_clock_driver(rtl_text, tb_code, scope, signal, context=drivers)
            for signal in outputs):
         return False, False
     formal = [p.name for p in ports if roles.get(p.name.lower()) == clock]
@@ -3094,11 +3106,16 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str) -> tuple:
         return False, False  # X -> active at time zero already clocks the DUT
     time, edge_time, count = 0.0, 0.0, 0
     before, after = False, False
-    while body:
-        delay = re.match(r"#\s*(\d+(?:\.\d+)?)\s*;?", body)
-        assignment = re.match(r"(\w+)\s*=(?!=)\s*([^;]+);", body)
-        check = re.match(rf"if\s*\(\s*(\w+)\s*!==\s*({_HDL_INT})\s*\)", body, re.I)
-        system = re.match(r"\$(display|finish)\b\s*(?:\([^;]*\))?\s*;", body, re.I)
+    delay_pattern = re.compile(r"#\s*(\d+(?:\.\d+)?)\s*;?")
+    assignment_pattern = re.compile(r"(\w+)\s*=(?!=)\s*([^;]+);")
+    check_pattern = re.compile(rf"if\s*\(\s*(\w+)\s*!==\s*({_HDL_INT})\s*\)", re.I)
+    system_pattern = re.compile(r"\$(display|finish)\b\s*(?:\([^;]*\))?\s*;", re.I)
+    cursor = 0
+    while cursor < len(body):
+        delay = delay_pattern.match(body, cursor)
+        assignment = assignment_pattern.match(body, cursor)
+        check = check_pattern.match(body, cursor)
+        system = system_pattern.match(body, cursor)
         if delay:
             time += float(delay.group(1))
             consumed = delay.end()
@@ -3130,7 +3147,9 @@ def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str) -> tuple:
             consumed = system.end()
         else:
             return False, False
-        body = body[consumed:].strip()
+        cursor = consumed
+        while cursor < len(body) and body[cursor].isspace():
+            cursor += 1
     return False, False
 
 

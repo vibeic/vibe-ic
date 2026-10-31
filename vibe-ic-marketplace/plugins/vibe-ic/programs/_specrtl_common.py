@@ -506,7 +506,7 @@ def _extract_block(src: str, after: int) -> Tuple[str, int]:
     m = re.compile(r'\S').search(src, after)
     if not m:
         return '', len(src)
-    if not re.match(r'begin\b', src[m.start():]):
+    if not re.compile(r'begin\b').match(src, m.start()):
         semi = src.find(';', m.start())
         end = semi if semi != -1 else len(src)
         return src[m.start():end + 1], end + 1

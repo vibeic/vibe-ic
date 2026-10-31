@@ -43,6 +43,35 @@ def report(tb=TB, prompt=PROMPT, rtl=RTL):
     return coverage.run({"user_prompt": prompt}, rtl, tb, None, True)
 
 
+def long_linear_tb(clocks):
+    header, tail = TB.split(" x=1; #4; clk=1; #1;", 1)
+    cycles = []
+    for index in range(clocks):
+        value = index % 2
+        cycles.append(f" x={value}; #4; clk=1; #1;\n"
+                      f" if (observed !== 1'b{value}) begin "
+                      "$display(\"VIBEIC_AI_CHALLENGE=FAIL\"); $fatal(1); end\n"
+                      " clk=0; #1;\n")
+    return header + "".join(cycles) + tail[tail.index(' $display("VIBEIC_AI_CHALLENGE=PASS")'):]
+
+
+@pytest.mark.parametrize("clocks", [500, 1000, 2000])
+def test_long_linear_trace_keeps_initial_state_and_output_timing(clocks):
+    measured = report(long_linear_tb(clocks))
+    assert measured["blocking_gaps"] == 0, measured
+    assert {item["kind"] for item in measured["items"] if item["covered"]} >= {
+        "initial_state", "latency"}
+
+
+def test_long_linear_trace_does_not_skip_unknown_tail_after_valid_witnesses():
+    tb = long_linear_tb(500).replace(' $display("VIBEIC_AI_CHALLENGE=PASS")',
+                                    ' wait (x); $display("VIBEIC_AI_CHALLENGE=PASS")')
+    measured = report(tb)
+    assert measured["blocking_gaps"] > 0
+    assert all(item["covered"] is False for item in measured["items"]
+               if item["kind"] in {"initial_state", "latency"})
+
+
 def test_initial_state_is_a_blocking_obligation_covered_by_real_preclock_output_check():
     measured = report()
     assert measured["blocking_gaps"] == 0, measured
