@@ -9,7 +9,6 @@ import json
 import os
 from pathlib import Path
 import shutil
-import sys
 
 import pytest
 import phase1_expert_parse_track as track
@@ -18,12 +17,12 @@ import ai_signed_judgement as judgement
 import execution_backend_worker as worker
 
 
-def no_dispatch(event, args):
-    if event == 'subprocess.Popen':
+@pytest.fixture(autouse=True)
+def no_dispatch(monkeypatch):
+    def refuse(*args, **kwargs):
         raise AssertionError('No generation/review/native/control dispatch belongs in frame reopening')
 
-
-sys.addaudithook(no_dispatch)
+    monkeypatch.setattr('subprocess.Popen', refuse)
 PROJECT = os.environ.get('RETAINED_EXPERT_FRAME_PROJECT')
 pytestmark = pytest.mark.skipif(not PROJECT, reason='actual root-adopted retained frame required')
 
