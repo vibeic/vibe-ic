@@ -11108,6 +11108,7 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
         argv = _resume_solver_argv(
             runner, staged, True, admission["entry_step"],
             admission["exit_step"], admission["delivery_route"],
+            input_contract=str(admission["route_receipt"].get("input_contract") or "structured"),
             delivery_target=_rtl_delivery_target(admission["route_receipt"]))
         d1_snapshot = _capture_d1_evidence(staged)
         process = _run_from_d1_snapshot(
