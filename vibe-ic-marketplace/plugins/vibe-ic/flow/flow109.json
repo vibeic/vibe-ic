@@ -2943,7 +2943,7 @@
             "checker.base_A3.allocated_gain_noise_power_budgets",
             "producer.base_A3.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_A04_RUNTIME_BINDING"
         },
         {
           "id": "base_A3.topology_constraints",
@@ -2963,10 +2963,10 @@
             "checker.base_A3.topology_constraints",
             "producer.base_A3.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_A04_RUNTIME_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_A04_RUNTIME",
       "gate_layer_ids": [
         "G1",
         "G2",
@@ -3221,7 +3221,7 @@
             "checker.base_A5.measurement_window_errors",
             "producer.base_A5.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_A06_RUNTIME_BINDING"
         },
         {
           "id": "base_A5.known_stimulus_calibration",
@@ -3242,7 +3242,7 @@
             "checker.base_A5.known_stimulus_calibration",
             "producer.base_A5.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_A06_RUNTIME_BINDING"
         },
         {
           "id": "base_A5.unit_mismatches",
@@ -3263,10 +3263,10 @@
             "checker.base_A5.unit_mismatches",
             "producer.base_A5.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_A06_RUNTIME_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_A06_RUNTIME",
       "gate_layer_ids": [
         "G1",
         "G2",

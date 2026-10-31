@@ -7913,3 +7913,261 @@ def accept_a05(project: Path, context: Mapping, component: Mapping) -> dict:
     if component.get("component_status") == "FAIL":
         answer["status"] = "FAIL"
     return answer
+
+
+def accept_a04(project: Path, context: Mapping, component: Mapping) -> dict:
+    """Compare current topology facts and allocated design budgets with source authority."""
+    import analog_native_flow as native
+    import flow109_analog_a04 as topology
+    project = Path(project).resolve()
+    answer = {"schema": SCHEMA, "step_id": "A04", "status": "NOT_MEASURED", "metrics": {},
+              "scope": "source-authorized topology and allocated budgets; native performance NOT_MEASURED"}
+    if component.get("component_status") == "FAIL":
+        return {**answer, "status": "FAIL", "reason": "A04_NATIVE_COMPONENT_FAILED"}
+    try:
+        invocation = component.get("a04_invocation")
+        if not invocation or native._a04_invocation(project) != invocation:
+            raise MetricRefusal("A04_INVOCATION_INPUT_CHANGED_OR_ABSENT", "readset")
+        blocks = native._declared_blocks(project)
+        names = [row.get("name") or row.get("block") for row in blocks]
+        rows, readset = native._a18_current_rows(project, component["native_results"], "A04", names, invocation["image"])
+        facts, irs = [], {}
+        for row in rows:
+            name = row["block"]
+            path = project / "phase3/analog" / name / "topology.json"
+            if row["output_views"].get(str(path)) != _sha(path.read_bytes()):
+                raise MetricRefusal("A04_TOPOLOGY_OUTPUT_UNBOUND", name)
+            ir = topology._read(path)
+            if (ir.get("block") != name or not isinstance(ir.get("devices"), list) or not ir["devices"]
+                    or (ir.get("_provenance") or {}).get("producer") != "analog_a2_topology_emit"):
+                raise MetricRefusal("A04_TOPOLOGY_POPULATION_INVALID", name)
+            irs[name] = ir
+            for kind, value in (("block_type", ir.get("block_type")), ("selected_topology", ir.get("topology"))):
+                if not isinstance(value, str) or not value:
+                    raise MetricRefusal("A04_TOPOLOGY_FACT_ABSENT", name + ":" + kind)
+                facts.append({"block": name, "kind": kind, "value": value})
+            for role in sorted({device["role"] for device in ir["devices"]}):
+                facts.append({"block": name, "kind": "device_role", "value": role})
+            for port in ir.get("ports", []):
+                facts.append({"block": name, "kind": "port", "value": port})
+        authority, _ = _approved_authority(project,
+            "requirements/base_A3/topology_constraints.json#/required_items", ("block", "kind", "value"))
+        required = authority["required_items"]
+        if not required or len({_json_key(item) for item in required}) != len(required):
+            raise MetricRefusal("A04_REQUIRED_CONSTRAINTS_INVALID", "required_items")
+        missing = [item for item in required if item not in facts]
+        answer["metrics"]["topology_constraints"] = {
+            "status": "FAIL" if missing else "PASS", "value": facts, "missing": missing, "authority": authority}
+        manifest = topology._read(project / topology.INPUT)
+        _path, _body, allocations = topology._approved_requirements(project, manifest)
+        if set(allocations) != set(names):
+            raise MetricRefusal("A04_ALLOCATION_BLOCK_POPULATION_MISMATCH", "blocks")
+        bound_authority, bounds = _approved_document(project,
+            "requirements/base_A3/allocated_gain_noise_power_budgets.json",
+            authority="requirements_owner", schema=AUTHORITY_SCHEMA)
+        limits, units = bounds.get("limits"), bounds.get("units")
+        if (not isinstance(limits, dict) or not isinstance(units, dict)
+                or set(limits) != set(names) or set(units) != set(names)):
+            raise MetricRefusal("A04_BUDGET_LIMIT_POPULATION_ABSENT", "limits/units")
+        measured = []
+        for name in names:
+            allocation, ir = allocations[name], irs[name]
+            roles = sorted({device["role"] for device in ir["devices"]})
+            if (allocation["selected_topology"] != ir["topology"]
+                    or allocation["block_type"] != ir["block_type"]
+                    or sorted(allocation["required_device_roles"]) != roles):
+                answer["metrics"]["topology_constraints"]["status"] = "FAIL"
+            if set(limits[name]) != {"gain", "noise", "power"} or set(units[name]) != set(limits[name]):
+                raise MetricRefusal("A04_BUDGET_LIMIT_POPULATION_INVALID", name)
+            for kind in ("gain", "noise", "power"):
+                budget = allocation["budgets"][kind]
+                identity = {"producer": invocation["sources"], "checker": "flow109_analog_a04._approved_requirements",
+                            "tool_execution": invocation["tools"], "consumed_inputs": invocation["inputs"],
+                            "requirements": bound_authority, "configuration": {"image": invocation["image"]}}
+                state, reason = evaluate_operator("within_declared_bounds", {
+                    "status": "MEASURED", "value": budget["limit"], "unit": budget["unit"], "identity": identity}, {
+                    "status": "APPROVED", "limits": limits[name][kind], "unit": units[name][kind]})
+                measured.append({"block": name, "budget": kind, "value": budget["limit"],
+                                 "unit": budget["unit"], "status": state, "reason": reason})
+                answer["metrics"]["allocated_gain_noise_power_budgets"] = {
+                    "status": native._aggregate(measured), "allocations": measured}
+        if native._a04_invocation(project) != invocation:
+            raise MetricRefusal("A04_INPUT_CHANGED_DURING_ACCEPTANCE", "readset")
+        readset.update(invocation["inputs"])
+        answer.update(status=native._aggregate(list(answer["metrics"].values())),
+                      input_views=readset, reason="A04_SOURCE_ALLOCATIONS_AND_NATIVE_TOPOLOGY_EVALUATED")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        answer.update(status="FAIL" if any(row.get("status") == "FAIL" for row in answer["metrics"].values())
+                      else "NOT_MEASURED", reason=getattr(exc, "code", "A04_METRIC_INPUT_UNAVAILABLE"), detail=str(exc))
+    return answer
+
+
+def accept_a06(project: Path, context: Mapping, component: Mapping) -> dict:
+    """Reopen native study values and compare bench calibration with an independent reference."""
+    import analog_native_flow as native
+    import analog_native_sim as sim
+    import analog_bound_measurements as studies
+    import analog_real_corner_sweep as sweep
+    project = Path(project).resolve()
+    answer = {"schema": SCHEMA, "step_id": "A06", "status": "NOT_MEASURED", "metrics": {},
+              "scope": "measurement-bench calibration only; no on-chip trim or whole-flow claim"}
+    if component.get("component_status") == "FAIL":
+        return {**answer, "status": "FAIL", "reason": "A06_NATIVE_COMPONENT_FAILED"}
+    def bound(value, views):
+        path = Path(value)
+        path = path if path.is_absolute() else project / path
+        if path.is_relative_to(project):
+            path = _safe_project_file(project, str(path.relative_to(project)))
+        elif not any(tool["path"] == str(path.resolve()) and tool["sha256"] == views.get(str(path))
+                     for tool in invocation["tools"].values()):
+            raise MetricRefusal("A06_FOREIGN_INPUT", str(path))
+        if not path.is_file() or views.get(str(path)) != _sha(path.read_bytes()):
+            raise MetricRefusal("A06_INPUT_OR_NATIVE_OUTPUT_UNBOUND", str(path))
+        return path
+    try:
+        invocation = component.get("a06_invocation")
+        if not invocation or native._a06_invocation(project) != invocation:
+            raise MetricRefusal("A06_INVOCATION_INPUT_CHANGED_OR_ABSENT", "readset")
+        report = component["native_results"]
+        attempt = Path(report["attempt"])
+        stored = project / "reports/analog_native"
+        if not attempt.is_relative_to(stored):
+            raise MetricRefusal("A06_NATIVE_ATTEMPT_FOREIGN", str(attempt))
+        stored_path = _safe_project_file(project, str((attempt / "result.json").relative_to(project)))
+        if (json.loads(stored_path.read_bytes()) != report or report.get("image") != invocation["image"]
+                or report.get("source_sha256") != _sha(Path(native.__file__).read_bytes())):
+            raise MetricRefusal("A06_NATIVE_ATTEMPT_STALE", str(attempt))
+        names = [b.get("name") or b.get("block") for b in native._declared_blocks(project)]
+        rows = [row for row in report["steps"] if row.get("step") == "A06"]
+        if not names or sorted(row["block"] for row in rows) != sorted(names):
+            raise MetricRefusal("A06_BLOCK_POPULATION_MISMATCH", "blocks")
+        values, value_units, result_paths = {}, {}, set()
+        windows, mismatches, unit_complete = 0, 0, True
+        for row in rows:
+            name = row["block"]
+            if (row.get("producer_context", {}).get("image") != invocation["image"]
+                    or row["producer_context"].get("driver_sha256") != report["source_sha256"]):
+                raise MetricRefusal("A06_PRODUCER_CONTEXT_STALE", name)
+            for key in ("input_views", "output_views"):
+                if not row.get(key):
+                    raise MetricRefusal("A06_NATIVE_READSET_ABSENT", name)
+                for path in row[key]:
+                    bound(path, row[key])
+            if any(row["input_views"].get(path) != digest for path, digest in native._input_views(project, name, "A06").items()):
+                raise MetricRefusal("A06_NATIVE_INPUT_POPULATION_CHANGED", name)
+            spec = json.loads(bound(project / "phase3/analog" / name / "spec.json", invocation["inputs"]).read_bytes())
+            expected_units = {sweep.normalize_spec_label(item["name"]) or item["name"].casefold(): item.get("unit")
+                              for item in spec.get("specs", []) if isinstance(item, dict) and item.get("name")}
+            native_studies = (row.get("metrics") or {}).get("native_measurement_studies")
+            if not isinstance(native_studies, list) or not native_studies:
+                raise MetricRefusal("A06_CURRENT_NATIVE_CALIBRATION_STUDY_ABSENT", name)
+            values[name], value_units[name] = {}, {}
+            for study in native_studies:
+                path = bound(study["result"], row["output_views"])
+                result_paths.add(path)
+                record = json.loads(path.read_bytes())
+                current, reason = studies.validate_consumed_inputs(project, record.get("native_inputs"))
+                if not current:
+                    raise MetricRefusal("A06_NATIVE_STUDY_INPUTS_STALE", reason)
+                for view in record["native_inputs"].values():
+                    bound(view["path"], {view["path"]: view["sha256"]})
+                binary = record["native_inputs"].get("native_binary")
+                if (not isinstance(binary, dict) or str(Path(binary["path"]).resolve()) != invocation["tools"]["ngspice"]["path"]
+                        or binary["sha256"] != invocation["tools"]["ngspice"]["sha256"]):
+                    raise MetricRefusal("A06_NATIVE_TOOL_IDENTITY_ABSENT", name)
+                bindings_path = bound(study["bindings_path"], invocation["inputs"])
+                bindings = json.loads(bindings_path.read_bytes())
+                actual_bindings = record["native_inputs"].get("bindings", {})
+                if (record.get("bindings") != bindings or actual_bindings.get("path") != str(bindings_path)
+                        or actual_bindings.get("sha256") != _sha(bindings_path.read_bytes())
+                        or record["native_inputs"].get("netlist", {}).get("path")
+                        != str(project / "phase3/analog" / name / (name + ".sp"))):
+                    raise MetricRefusal("A06_NATIVE_STUDY_BINDINGS_STALE", name)
+                executions = record.get("executions")
+                if not executions:
+                    raise MetricRefusal("A06_NATIVE_STUDY_EXECUTION_ABSENT", name)
+                transcript = []
+                for execution in executions:
+                    log = bound(execution["log"], {execution["log"]: execution["log_sha256"]})
+                    transcript.append(log.read_text())
+                    expected_argv = [binary["path"], "-b", record["native_inputs"]["deck"]["path"]]
+                    if (execution.get("returncode") != 0 or execution.get("missing_outputs")
+                            or execution.get("argv") != expected_argv):
+                        raise MetricRefusal("A06_NATIVE_STUDY_EXECUTION_INCOMPLETE", name)
+                text = "\n".join(transcript)
+                if any(sweep._scan_analysis_failures(text)):
+                    raise MetricRefusal("A06_NATIVE_STUDY_DIAGNOSTIC_FAILED", name)
+                parsed = {key.casefold(): value for key, value in sweep.native_meas_rows(text).items()}
+                for match in sweep._MEAS_LINE_RE.finditer(text):
+                    for key, value in sweep._KV_RE.findall(match.group(1)):
+                        parsed.setdefault(key.casefold(), float(value))
+                for label, value in record.get("measurements", {}).items():
+                    _finite_number(value)
+                    if parsed.get(label) != value or label in values[name]:
+                        raise MetricRefusal("A06_NATIVE_VALUE_UNBOUND_OR_DUPLICATE", label)
+                    binding = bindings["measurements"][label]
+                    key = sweep.normalize_spec_label(binding.get("spec_key", label)) or binding.get("spec_key", label).casefold()
+                    actual_unit, expected_unit = binding.get("unit"), expected_units.get(key)
+                    if not actual_unit or not expected_unit:
+                        unit_complete = False
+                    elif actual_unit.replace("µ", "u").replace("μ", "u") != expected_unit.replace("µ", "u").replace("μ", "u"):
+                        mismatches += 1
+                    values[name][label], value_units[name][label] = value, actual_unit
+                deck = Path(record["native_inputs"]["deck"]["path"])
+                template = Path(record["native_inputs"]["testbench"]["path"])
+                expected_deck = studies.emit_deck(studies.contextual_template(template.read_text(), template.parent), bindings,
+                                                 deck.parent / "curve.dat")
+                if deck.read_text() != expected_deck:
+                    raise MetricRefusal("A06_NATIVE_DECK_DERIVATION_MISMATCH", name)
+                ready, reason, _ = sim._validate_deck(Path(record["native_inputs"]["netlist"]["path"]), deck,
+                    {"required_measurements": list(bindings["measurements"])})
+                if ready != "PASS":
+                    raise MetricRefusal("A06_NATIVE_MEASUREMENT_DECK_INVALID", reason)
+                span = sweep.measurement_span(sim._deck_text(deck))
+                stop = span.get("declared_stop_s")
+                windows += sum(stop is not None and item["end_s"] > stop for item in span["windowed"])
+            answer["metrics"]["measurement_window_errors"] = {
+                "status": "FAIL" if windows else "PASS", "value": windows, "unit": "count"}
+            answer["metrics"]["unit_mismatches"] = {"status": "FAIL" if mismatches else "PASS" if unit_complete else "NOT_MEASURED",
+                                                      "value": mismatches if mismatches or unit_complete else None, "unit": "count"}
+        relative = "requirements/base_A5/known_stimulus_calibration.json"
+        bound(project / relative, invocation["inputs"])
+        authority, requirement = _approved_document(project, relative, authority="requirements_owner", schema=AUTHORITY_SCHEMA)
+        reference = requirement.get("reference")
+        if not isinstance(reference, dict) or set(reference) != {"path", "sha256"}:
+            raise MetricRefusal("A06_INDEPENDENT_REFERENCE_ABSENT", relative)
+        known_path = bound(project / reference["path"], invocation["inputs"])
+        if _sha(known_path.read_bytes()) != reference["sha256"] or known_path in result_paths:
+            raise MetricRefusal("A06_INDEPENDENT_REFERENCE_UNBOUND", reference["path"])
+        known = json.loads(known_path.read_bytes())
+        if set(known.get("measurements", {})) != set(names) or set(known.get("units", {})) != set(names):
+            raise MetricRefusal("A06_REFERENCE_BLOCK_POPULATION_MISMATCH", "reference")
+        limits = requirement.get("limits", {}).get("ideal_model_sqnr_error_db")
+        unit = requirement.get("units", {}).get("ideal_model_sqnr_error_db")
+        if (not isinstance(limits, dict) or limits.get("max") != 1.0
+                or set(limits) - {"min", "max"} or limits.get("min", 0.0) != 0.0 or unit != "dB"):
+            raise MetricRefusal("A06_APPROVED_CALIBRATION_DECISION_MISMATCH", relative)
+        calibrated = []
+        for name in names:
+            expected = known["measurements"][name]
+            if not isinstance(expected, dict) or not expected or set(expected) != set(known["units"][name]):
+                raise MetricRefusal("A06_REFERENCE_MEASUREMENT_POPULATION_INVALID", name)
+            for label, independent in expected.items():
+                _finite_number(independent)
+                if label not in values[name] or value_units[name][label] != "dB" or known["units"][name][label] != "dB":
+                    raise MetricRefusal("A06_CALIBRATION_VALUE_OR_UNIT_ABSENT", name + ":" + label)
+                delta = values[name][label] - independent
+                calibrated.append({"block": name, "measurement": label, "measured": values[name][label],
+                    "independent_known": independent, "signed_delta_db": delta, "absolute_error_db": abs(delta),
+                    "status": "PASS" if abs(delta) <= 1.0 else "FAIL"})
+                answer["metrics"]["known_stimulus_calibration"] = {
+                    "status": native._aggregate(calibrated), "comparisons": calibrated,
+                    "reference": reference, "authority": authority}
+        if native._a06_invocation(project) != invocation:
+            raise MetricRefusal("A06_INPUT_CHANGED_DURING_ACCEPTANCE", "readset")
+        answer.update(status=native._aggregate(list(answer["metrics"].values())),
+                      input_views=invocation["inputs"], reason="A06_CURRENT_BENCH_CALIBRATION_METRICS_EVALUATED")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        answer.update(status="FAIL" if any(row.get("status") == "FAIL" for row in answer["metrics"].values())
+                      else "NOT_MEASURED", reason=getattr(exc, "code", "A06_METRIC_INPUT_UNAVAILABLE"), detail=str(exc))
+    return answer

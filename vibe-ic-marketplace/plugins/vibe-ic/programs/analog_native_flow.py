@@ -833,6 +833,82 @@ def _a18_prerequisites(project, context, blocks, image):
     return accepted, readset
 
 
+def _a04_invocation(project):
+    import shutil
+    import flow109_metric_acceptance as metrics
+    from execution_provider_catalog import source_closure
+    import analog_native_front
+    import flow109_analog_a04
+    import analog_a2_topology_select_check
+    project = Path(project).resolve()
+    container, image, transport = _adapter_transport(project)
+    if transport != "LOCAL" or container or not image:
+        return None
+    tools = {name: shutil.which(name) for name in ('python3',)}
+    if not all(tools.values()):
+        return None
+    inputs = {}
+    for block in _declared_blocks(project):
+        name = block.get("name") or block.get("block")
+        inputs.update(_input_views(project, name, "A04"))
+    paths = list((project / "requirements/base_A3").rglob("*"))
+    paths += [layout.analog_dir(project) / "analog_block_list.json",
+              project / "phase1/analog/analog_block_list.json"]
+    for path in list(paths):
+        if path.is_file() and path.suffix == ".json":
+            body = _read(path, {})
+            if isinstance(body, dict):
+                reference = body.get("reference")
+                if isinstance(reference, dict) and isinstance(reference.get("path"), str):
+                    paths.append(metrics._safe_project_file(project, reference["path"]))
+    inputs.update({str(path): _sha(path) for path in paths if path.is_file()})
+    sources = source_closure({Path(__file__), Path(metrics.__file__),
+                              Path(analog_native_front.__file__),
+                              Path(flow109_analog_a04.__file__),
+                              Path(analog_a2_topology_select_check.__file__)})
+    return {"image": image, "inputs": inputs,
+            "sources": {str(path): _sha(path) for path in sources},
+            "tools": {name: {"path": str(Path(path).resolve()), "sha256": _sha(path)}
+                      for name, path in tools.items()}}
+
+
+def _a06_invocation(project):
+    import shutil
+    import flow109_metric_acceptance as metrics
+    from execution_provider_catalog import source_closure
+    import analog_native_sim
+    import analog_bound_measurements
+    project = Path(project).resolve()
+    container, image, transport = _adapter_transport(project)
+    if transport != "LOCAL" or container or not image:
+        return None
+    tools = {name: shutil.which(name) for name in ('python3', 'ngspice')}
+    if not all(tools.values()):
+        return None
+    inputs = {}
+    for block in _declared_blocks(project):
+        name = block.get("name") or block.get("block")
+        inputs.update(_input_views(project, name, "A06"))
+    paths = list((project / "requirements/base_A5").rglob("*"))
+    paths += [layout.analog_dir(project) / "analog_block_list.json",
+              project / "phase1/analog/analog_block_list.json"]
+    for path in list(paths):
+        if path.is_file() and path.suffix == ".json":
+            body = _read(path, {})
+            if isinstance(body, dict):
+                reference = body.get("reference")
+                if isinstance(reference, dict) and isinstance(reference.get("path"), str):
+                    paths.append(metrics._safe_project_file(project, reference["path"]))
+    inputs.update({str(path): _sha(path) for path in paths if path.is_file()})
+    sources = source_closure({Path(__file__), Path(metrics.__file__),
+                              Path(analog_native_sim.__file__),
+                              Path(analog_bound_measurements.__file__)})
+    return {"image": image, "inputs": inputs,
+            "sources": {str(path): _sha(path) for path in sources},
+            "tools": {name: {"path": str(Path(path).resolve()), "sha256": _sha(path)}
+                      for name, path in tools.items()}}
+
+
 def _a05_invocation(project):
     import shutil
     import analog_native_front as front
@@ -896,6 +972,93 @@ def consume_default_row_completion(project, context, component):
         except (ValueError, OSError, TypeError, KeyError, AttributeError) as exc:
             return {**base, 'reason': getattr(exc, 'code', 'A01_COMPLETION_INPUT_NOT_CURRENT'),
                     'detail': str(exc)}
+    if context.get("requested_step") == "A03":
+        status = "FAIL" if component.get("component_status") == "FAIL" else "NOT_MEASURED"
+        return {**component, "step_id": "A03", "context_sha256": context.get("context_sha256"),
+                "default_row_status": status, "flow109_acceptance": status, "completed": False,
+                "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
+                "metric_acceptance_status": status,
+                "reason": "A03_APPLICABLE_NATIVE_TESTABILITY_PRODUCER_ABSENT"}
+    if context.get("requested_step") == "A04":
+        import flow109_metric_acceptance as metrics
+        measured = metrics.accept_a04(project, context, component)
+        status = "FAIL" if measured["status"] == "FAIL" else "NOT_MEASURED"
+        base = {**component, "step_id": "A04", "context_sha256": context.get("context_sha256"),
+                "metric_acceptance": measured, "metric_acceptance_status": measured["status"],
+                "default_row_status": status, "completed": False, "flow109_acceptance": status,
+                "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
+                "qualification": "NOT_MEASURED", "reason": measured.get("reason")}
+        if measured["status"] != "PASS":
+            return base
+        try:
+            import flow109
+            import flow109_admission as admission
+            import librelane_contract as launch
+            current = flow109.validate_execution_context(context)
+            if (component.get("component_status") != "PASS"
+                    or current["native_step_id"] != "flow109.A04"
+                    or sorted(item["metric"] for item in current["resolved_row"]["obligations"])
+                    != sorted(measured["metrics"])):
+                raise ValueError("A04_COMPONENT_OR_METRIC_POPULATION_MISMATCH")
+            qualified = admission.require_admission(project, current)
+            invocation = component["a04_invocation"]
+            if launch.resolve_image(project, record=False) != invocation["image"]:
+                raise ValueError("A04_QUALIFIED_IMAGE_MISMATCH")
+            for use in current["runtime_tool_uses"]:
+                if use["executable"] != invocation["tools"].get(use["tool_id"]):
+                    raise ValueError("A04_QUALIFIED_TOOL_MISMATCH")
+            accepted = {step: flow109._accepted_row(project,
+                Path("reports/flow109/default_rows") / (step + ".json"), step)[1]
+                for step in current["resolved_row"]["acceptance_deps"]}
+            if (metrics.accept_a04(project, current, component) != measured
+                    or admission.require_admission(project, current) != qualified):
+                raise ValueError("A04_INPUT_CHANGED_DURING_COMPLETION")
+            return {**base, "default_row_status": "PASS", "completed": True,
+                    "flow109_acceptance": "PASS", "qualification": qualified["status"],
+                    "accepted_dependencies": accepted, "reason": "A04_CURRENT_METRICS_AND_QUALIFICATION_PASS"}
+        except (ValueError, OSError, TypeError, KeyError, AttributeError, launch.Refusal) as exc:
+            return {**base, "reason": getattr(exc, "code", "A04_COMPLETION_INPUT_NOT_CURRENT"),
+                    "detail": str(exc)}
+    if context.get("requested_step") == "A06":
+        import flow109_metric_acceptance as metrics
+        measured = metrics.accept_a06(project, context, component)
+        status = "FAIL" if measured["status"] == "FAIL" else "NOT_MEASURED"
+        base = {**component, "step_id": "A06", "context_sha256": context.get("context_sha256"),
+                "metric_acceptance": measured, "metric_acceptance_status": measured["status"],
+                "default_row_status": status, "completed": False, "flow109_acceptance": status,
+                "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
+                "qualification": "NOT_MEASURED", "reason": measured.get("reason")}
+        if measured["status"] != "PASS":
+            return base
+        try:
+            import flow109
+            import flow109_admission as admission
+            import librelane_contract as launch
+            current = flow109.validate_execution_context(context)
+            if (component.get("component_status") != "PASS"
+                    or current["native_step_id"] != "flow109.A06"
+                    or sorted(item["metric"] for item in current["resolved_row"]["obligations"])
+                    != sorted(measured["metrics"])):
+                raise ValueError("A06_COMPONENT_OR_METRIC_POPULATION_MISMATCH")
+            qualified = admission.require_admission(project, current)
+            invocation = component["a06_invocation"]
+            if launch.resolve_image(project, record=False) != invocation["image"]:
+                raise ValueError("A06_QUALIFIED_IMAGE_MISMATCH")
+            for use in current["runtime_tool_uses"]:
+                if use["executable"] != invocation["tools"].get(use["tool_id"]):
+                    raise ValueError("A06_QUALIFIED_TOOL_MISMATCH")
+            accepted = {step: flow109._accepted_row(project,
+                Path("reports/flow109/default_rows") / (step + ".json"), step)[1]
+                for step in current["resolved_row"]["acceptance_deps"]}
+            if (metrics.accept_a06(project, current, component) != measured
+                    or admission.require_admission(project, current) != qualified):
+                raise ValueError("A06_INPUT_CHANGED_DURING_COMPLETION")
+            return {**base, "default_row_status": "PASS", "completed": True,
+                    "flow109_acceptance": "PASS", "qualification": qualified["status"],
+                    "accepted_dependencies": accepted, "reason": "A06_CURRENT_METRICS_AND_QUALIFICATION_PASS"}
+        except (ValueError, OSError, TypeError, KeyError, AttributeError, launch.Refusal) as exc:
+            return {**base, "reason": getattr(exc, "code", "A06_COMPLETION_INPUT_NOT_CURRENT"),
+                    "detail": str(exc)}
     if context.get("requested_step") == "A05":
         import flow109_metric_acceptance as metrics
         measured = metrics.accept_a05(project, context, component)
@@ -1085,11 +1248,23 @@ def execute(project, context):
                                         "python3": {"path": str(Path(sys.executable).resolve()),
                                                     "sha256": _sha(sys.executable)}}}
     a05_invocation = _a05_invocation(project) if step == "A05" else None
+    a04_invocation = _a04_invocation(project) if step == "A04" else None
+    a06_invocation = _a06_invocation(project) if step == "A06" else None
     report = execute_window(project, context)
     result = {"step_id": step, "component_status": report["window_verdict"],
               "flow109_acceptance": "NOT_MEASURED", "native_results": report,
               **({"native_started": False} if report.get("native_started") is False else {}),
               "reason": report.get("reason", "native analog step executed; whole IC acceptance remains separate")}
+    if step == "A04":
+        import flow109_metric_acceptance as metrics
+        result["a04_invocation"] = a04_invocation
+        measured = metrics.accept_a04(project, context, result)
+        result.update(metric_acceptance=measured, metric_acceptance_status=measured["status"])
+    if step == "A06":
+        import flow109_metric_acceptance as metrics
+        result["a06_invocation"] = a06_invocation
+        measured = metrics.accept_a06(project, context, result)
+        result.update(metric_acceptance=measured, metric_acceptance_status=measured["status"])
     if step == "A05":
         import flow109_metric_acceptance as metrics
         result["a05_invocation"] = a05_invocation
