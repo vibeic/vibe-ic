@@ -448,6 +448,7 @@ def admit_span(project: Path, span: str, programs_dir: Path,
     """Convenience entry point so all runners build the same identity."""
     paths = canonical_program_paths(programs_dir)
     program_digest, unavailable = _strict_program_digest(paths)
+    container_image = image_identity(container)
     if span == "phase2" and os.environ.get("VIBEIC_LIBRELANE_LOCAL_ATTESTATION"):
         import librelane_contract
         try:
@@ -455,9 +456,13 @@ def admit_span(project: Path, span: str, programs_dir: Path,
             fields = ("auto_remove", "network_mode", "memory", "memory_swap")
             if type(attested.get("auto_remove")) is not bool:
                 raise ValueError("missing attested AutoRemove")
+            # The existing LOCAL cache binds the verified current-CID image bytes.
+            container_image = attested["image_id"]
+            if not _eda_pin.is_bare_image_id(container_image):
+                raise ValueError("missing attested LOCAL image content identity")
             runtime = {field: attested[field] for field in fields}
         except (librelane_contract.Refusal, KeyError, ValueError) as exc:
-            identity = build_identity(project, span, container_image=image_identity(container),
+            identity = build_identity(project, span, container_image=container_image,
                                       config=config, program_paths=paths,
                                       program_source_sha256=program_digest)
             return Admission(False, "LOCAL_RUNTIME_UNATTESTED", identity_sha256(identity),
@@ -465,7 +470,7 @@ def admit_span(project: Path, span: str, programs_dir: Path,
         config = {**config, "local_runtime_conditions": runtime}
     if unavailable:
         identity = build_identity(
-            project, span, container_image=image_identity(container),
+            project, span, container_image=container_image,
             config=config, program_paths=paths,
             program_source_sha256=program_digest)
         root = Path(programs_dir).resolve().parent
@@ -476,7 +481,7 @@ def admit_span(project: Path, span: str, programs_dir: Path,
             False, "CANONICAL_PROGRAM_SOURCE_UNAVAILABLE",
             identity_sha256(identity), identity,
             "expected canonical program source is unavailable: " + detail)
-    return admit(project, span, container_image=image_identity(container),
+    return admit(project, span, container_image=container_image,
                  config=config, program_paths=paths,
                  program_source_sha256=program_digest)
 

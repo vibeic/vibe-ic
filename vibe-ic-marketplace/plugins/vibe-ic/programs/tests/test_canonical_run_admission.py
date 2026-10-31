@@ -8,6 +8,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 if str(PROGRAMS) not in sys.path:
@@ -673,7 +675,8 @@ def test_phase2_local_runtime_condition_reopens_once(tmp_path, monkeypatch):
     import librelane_contract
     project = _project(tmp_path / 'proj')
     monkeypatch.setenv(librelane_contract.LOCAL_ATTESTATION_ENV, '/host/receipt')
-    condition = {'auto_remove': False, 'network_mode': 'none', 'memory': 1024, 'memory_swap': 1024}
+    condition = {'auto_remove': False, 'network_mode': 'none', 'memory': 1024,
+                 'memory_swap': 1024, 'image_id': 'sha256:' + 'a' * 64}
     monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: condition.copy())
     args = (project, 'phase2', PROGRAMS, '')
     config = {'top_name': 'chip_top'}
@@ -684,6 +687,61 @@ def test_phase2_local_runtime_condition_reopens_once(tmp_path, monkeypatch):
     changed = cra.admit_span(*args, config)
     assert changed.admitted
     assert not cra.admit_span(*args, config).admitted
+
+
+def test_phase2_attested_image_change_reopens_only_once(tmp_path, monkeypatch):
+    import librelane_contract
+    project = _project(tmp_path / 'proj')
+    monkeypatch.setenv(librelane_contract.LOCAL_ATTESTATION_ENV, '/host/receipt')
+    monkeypatch.setattr(cra, 'image_identity', lambda _: 'IMAGE_UNAVAILABLE:docker absent')
+    attested = {'auto_remove': True, 'network_mode': 'none', 'memory': 1024,
+                'memory_swap': 1024, 'image_id': 'sha256:' + 'a' * 64}
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: attested.copy())
+    args = (project, 'phase2', PROGRAMS, '', {'top_name': 'chip_top'})
+    first = cra.admit_span(*args)
+    assert first.admitted
+    assert cra.admit_span(*args).reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    attested['image_id'] = 'sha256:' + 'b' * 64
+    changed = cra.admit_span(*args)
+    assert changed.admitted
+    assert changed.identity['container_image'] == attested['image_id']
+    assert changed.identity_sha256 != first.identity_sha256
+    assert cra.admit_span(*args).reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    attested['image_id'] = 'sha256:' + 'a' * 64
+    assert cra.admit_span(*args).reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+
+
+def test_phase2_local_image_identity_ignores_reference_and_cid_aliases(tmp_path, monkeypatch):
+    import librelane_contract
+    project = _project(tmp_path / 'proj')
+    monkeypatch.setenv(librelane_contract.LOCAL_ATTESTATION_ENV, '/host/receipt')
+    monkeypatch.setattr(cra, 'image_identity', lambda _: 'IMAGE_UNAVAILABLE:docker absent')
+    attested = {'auto_remove': True, 'network_mode': 'none', 'memory': 1024,
+                'memory_swap': 1024, 'image_id': 'sha256:' + 'a' * 64,
+                'image': 'registry/tool@sha256:' + 'b' * 64, 'cid': 'c' * 64}
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: attested.copy())
+    args = (project, 'phase2', PROGRAMS, '', {'top_name': 'chip_top'})
+    first = cra.admit_span(*args)
+    assert first.identity['container_image'] == attested['image_id']
+    attested.update(image='sha256:' + 'a' * 64, cid='d' * 64)
+    unchanged = cra.admit_span(*args)
+    assert not unchanged.admitted
+    assert unchanged.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    assert unchanged.identity_sha256 == first.identity_sha256
+
+
+@pytest.mark.parametrize('image_id', [None, '', 'tool:tag', 'sha256:' + 'g' * 64])
+def test_phase2_local_image_identity_must_be_attested_content_id(tmp_path, monkeypatch, image_id):
+    import librelane_contract
+    project = _project(tmp_path / 'proj')
+    monkeypatch.setenv(librelane_contract.LOCAL_ATTESTATION_ENV, '/host/receipt')
+    attested = {'auto_remove': True, 'network_mode': 'none', 'memory': 1024,
+                'memory_swap': 1024, 'image_id': image_id}
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: attested.copy())
+    result = cra.admit_span(project, 'phase2', PROGRAMS, '', {'top_name': 'chip_top'})
+    assert not result.admitted
+    assert result.reason == 'LOCAL_RUNTIME_UNATTESTED'
+    assert not cra.ledger_path(project).exists()
 
 
 def test_phase2_unattested_local_runtime_is_refused(tmp_path, monkeypatch):
