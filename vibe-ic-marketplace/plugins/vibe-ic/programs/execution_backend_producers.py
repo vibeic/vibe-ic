@@ -1586,6 +1586,24 @@ def produce_pnr(project, params):
         _publish_step17_timing_script(project, ll, by['Vibeic.PostGPLFanoutClosure'],
                                      configs['Vibeic.PostGPLFanoutClosure'], params['image_id'])
         _logs(project, by.values(), 'librelane_placement.log')
+        # This row owns placement metric readback. Component completion and
+        # Flow109 qualification remain separate verdicts.
+        result = {'verdict': 'PASS', 'native_image': params['image_id'],
+                  'detail': 'native ordered placement chain complete; canonical gates still required'}
+        context_path = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+        if context_path:
+            import flow109
+            from flow109_metric_acceptance import accept_d35
+            context = flow109.validate_execution_context(json.loads(Path(context_path).read_text()))
+            selected = context.get('resolved_rows') or [context['resolved_row']]
+            if any(row['id'] == 'D35' for row in selected):
+                current = flow109.component_context(context, requested_step='D35')
+                result['metric_acceptance'] = accept_d35(project, current, result)
+                result['metric_acceptance_status'] = result['metric_acceptance']['metric_status']
+                result['default_row_status'] = result['metric_acceptance']['status']
+                if result['metric_acceptance_status'] == 'FAIL':
+                    result['verdict'] = 'FAIL'
+        return result
     elif sid == '18':
         ids = ['Vibeic.InsertSpareCells']
         params = {**params, 'state_in': str(_predecessor_state(project, 'placed.def'))}
@@ -1608,6 +1626,22 @@ def produce_pnr(project, params):
                 project, native_plan)
             snap.dump(project / RPT / 'librelane_spare_handoff.json', handoff)
         R._emit_spare_cell_coverage(project, project / PNR / 'spare_cells.json')
+        result = {'verdict': 'PASS', 'native_image': params['image_id'],
+                  'detail': 'native spare insertion complete; canonical gates still required'}
+        context_path = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+        if context_path:
+            import flow109
+            from flow109_metric_acceptance import accept_d37
+            context = flow109.validate_execution_context(json.loads(Path(context_path).read_text()))
+            selected = context.get('resolved_rows') or [context['resolved_row']]
+            if any(row['id'] == 'D37' for row in selected):
+                current = flow109.component_context(context, requested_step='D37')
+                result['metric_acceptance'] = accept_d37(project, current, result)
+                result['metric_acceptance_status'] = result['metric_acceptance']['metric_status']
+                result['default_row_status'] = result['metric_acceptance']['status']
+                if result['metric_acceptance_status'] == 'FAIL':
+                    result['verdict'] = 'FAIL'
+        return result
     elif sid in ('19', '20'):
         return _cts_split(project, params, R, ll, pdk, overlay)
     elif sid == '21':
@@ -2446,6 +2480,15 @@ def produce(project, params):
             current['authority_verdict'] = authority_verdict
             current['authority_detail'] = reason
             result['current_step_declared_producers'] = current
+        if sid in ('17', '18') and 'metric_acceptance' in result:
+            result['canonical_receipts'] = [{
+                'schema': 'vibeic/backend-producer-receipt/1',
+                'producer': 'execution_backend_producers.produce', 'step_id': sid,
+                'verdict': result.get('verdict', 'NOT_MEASURED'),
+                'detail': result.get('detail', ''),
+                'current_step_declared_producers': result.get('current_step_declared_producers'),
+                'metric_acceptance': result['metric_acceptance'],
+            }]
         return result
     # The backend consumer runs immediately after this function.  Materialize
     # only this row's flow-declared producer outputs now; the phase runner's
@@ -2513,6 +2556,8 @@ def produce(project, params):
         'detail': result.get('detail', ''),
         'current_step_declared_producers': current,
     }]
+    if sid in ('17', '18') and 'metric_acceptance' in result:
+        result['canonical_receipts'][0]['metric_acceptance'] = result['metric_acceptance']
     if result.get('retained_drc_checkpoint'):
         result['canonical_receipts'][0]['retained_drc_checkpoint'] = result['retained_drc_checkpoint']
     result.setdefault('native_receipts', [])

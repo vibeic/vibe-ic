@@ -6875,3 +6875,702 @@ def accept_d01(project: Path, context: Mapping[str, Any]) -> dict:
 def accept_d02(project: Path, context: Mapping[str, Any]) -> dict:
     """Complete existing Step 2 metrics without regenerating its inputs."""
     return _accept_d0102(project, context, 'D02')
+
+
+def accept_d35(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    """BLOCKING metric readback of the existing placement chain, without EDA replay.
+
+    Component completion does not qualify the tool or close the Flow109 row.
+    Bounds remain requirements-owner inputs; missing metrics remain unmeasured.
+    """
+    import flow109
+    import librelane_contract as ll
+    import placement_legality_check as legality
+    from _ppa.backends import openroad as placement_metrics
+    import inspect
+    import execution_backend_producers as native_producer
+
+    project = Path(project).resolve()
+    names = ('placement_legality_errors', 'pre_cts_setup_drv_targets', 'congestion_targets')
+    result = {'schema': SCHEMA, 'row_id': 'D35', 'status': 'NOT_MEASURED',
+              'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    reads = {}
+
+    def _d35_bound(path, digest=None):
+        path = Path(path)
+        if not path.is_absolute():
+            path = project / path
+        if (path.is_symlink() or not path.resolve().is_relative_to(project)
+                or not path.is_file()):
+            raise MetricRefusal('D35_INPUT_UNBOUND', str(path))
+        raw = path.read_bytes()
+        sha = _sha(raw)
+        if digest is not None and sha != digest:
+            raise MetricRefusal('D35_INPUT_CHANGED', str(path))
+        reads[str(path.relative_to(project))] = sha
+        return path, raw
+
+    def _d35_document(path, digest=None):
+        path, raw = _d35_bound(path, digest)
+        return path, json.loads(raw)
+
+    try:
+        current = flow109.validate_execution_context(context)
+        row = current['resolved_row']
+        if row['id'] != 'D35' or tuple(o['metric'] for o in row['obligations']) != names:
+            raise MetricRefusal('D35_CONTRACT_CHANGED', 'placement obligations')
+        specs = row['obligations']
+        if (specs[0]['expectation'].get('operator') != 'eq'
+                or specs[0]['expectation'].get('value') != 0
+                or specs[0]['expectation'].get('unit') != 'count'
+                or any(o['expectation'].get('operator') != 'within_declared_bounds'
+                       or o['expectation'].get('bounds_ref') !=
+                       f"requirements/base_23/{o['metric']}.json#/limits"
+                       or o['expectation'].get('unit_ref') !=
+                       f"requirements/base_23/{o['metric']}.json#/units"
+                       for o in specs[1:])):
+            raise MetricRefusal('D35_CONTRACT_CHANGED', 'placement expectations')
+        _, chain = _d35_document('reports/phase3/execution-backend-17.json')
+        steps = chain['ordered_steps']
+        if (not isinstance(steps, list) or len(set(steps)) != len(steps)
+                or steps[0] != 'OpenROAD.GlobalPlacement'
+                or steps[-1] != 'OpenROAD.DetailedPlacement'
+                or 'OpenROAD.RepairDesignPostGPL' not in steps
+                or len(chain['states']) != len(steps)):
+            raise MetricRefusal('D35_CHAIN_UNBOUND', 'selected native placement chain')
+        previous, _ = _d35_bound(chain['initial_state'], chain['initial_sha256'])
+        executions = []
+        congestion = {}
+        for step, state_ref in zip(steps, chain['states']):
+            state_path, state = _d35_document(state_ref['state'], state_ref['sha256'])
+            if state_ref['step'] != step:
+                raise MetricRefusal('D35_CHAIN_UNBOUND', step)
+            folder = state_path.parent
+            receipt = ll.validate_step_receipt(folder, step)
+            _d35_bound(folder / 'vibeic_receipt.json')
+            for name, sha in receipt['sha256'].items():
+                _d35_bound(folder / name, sha)
+            fp = receipt['input']
+            if fp.get('image') != component.get('native_image') or not fp.get('image'):
+                raise MetricRefusal('D35_IMAGE_CHANGED', step)
+            if step.startswith(ll.PLUGIN_STEP_PREFIX) and fp.get('plugin') != ll._plugin_digests(step):
+                raise MetricRefusal('D35_PRODUCER_SOURCE_CHANGED', step)
+            _d35_bound(previous, fp['state'])
+            _d35_bound(project / 'phase3/librelane/execution-backend-17-config' / (step + '.json'), fp['config'])
+            if not fp.get('state_files') or not fp.get('config_files'):
+                raise MetricRefusal('D35_INPUT_POPULATION_ABSENT', step)
+            for path, sha in fp['state_files'].items():
+                _d35_bound(path, sha)
+            # Reopen actual model/deck bytes through the native owner's mount map.
+            mounts = json.loads((folder / 'pdk_root.json').read_text())['mounts_under_it']
+            for path, sha in fp['config_files'].items():
+                source = Path(path)
+                for host, guest in sorted(mounts, key=lambda m: len(m[1]), reverse=True):
+                    if source.is_relative_to(guest):
+                        source = Path(host) / source.relative_to(guest)
+                        break
+                if source.resolve().is_relative_to(project):
+                    _d35_bound(source, sha)
+                elif (source.is_symlink() or not source.is_file()
+                      or _sha(source.read_bytes()) != sha):
+                    raise MetricRefusal('D35_MODEL_CHANGED', str(source))
+                else:
+                    reads[str(source)] = sha
+            executions.append({'step': step, 'input': fp,
+                               'receipt_sha256': _sha((folder / 'vibeic_receipt.json').read_bytes())})
+            if step == 'OpenROAD.GlobalPlacement':
+                log, _ = _d35_bound(folder / 'invocation.log', receipt['sha256']['invocation.log'])
+                congestion = {record['metric']: record for record in placement_metrics.parse_log(log).records
+                              if record['metric'].startswith('route.congestion.')
+                              and record.get('scope', {}).get('stage') == 'global_placement'}
+            previous = state_path
+        _, handoff = _d35_document('reports/phase3/librelane_placement_handoff.json')
+        handed_state, _ = _d35_bound(handoff['state'], handoff['state_sha256'])
+        if handed_state != previous:
+            raise MetricRefusal('D35_HANDOFF_FOREIGN', 'not the terminal placement state')
+        for view, dest in (('def', 'placed.def'), ('odb', 'librelane_placed.odb')):
+            record = handoff['views'][view]
+            source, _ = _d35_bound(record['source'], record['source_sha256'])
+            target, _ = _d35_bound(record['dest'], record['dest_sha256'])
+            if (target != project / 'phase3/stage3/pnr' / dest
+                    or state.get(view) != str(source)
+                    or record['source_sha256'] != record['dest_sha256']):
+                raise MetricRefusal('D35_HANDOFF_FOREIGN', view)
+        # Bind the existing reader's complete log/density input population.
+        reader_paths = set(legality._verdict_logs(project))
+        for relative in legality._DENSITY_JSON_CANDIDATES:
+            if (project / relative).is_file():
+                reader_paths.add(project / relative)
+        for path in sorted(reader_paths):
+            _d35_bound(path)
+        # Use the existing semantic reader, not the wrapper's rc or PASS label.
+        verdict, _, findings, summary = legality.inspect(project)
+        result['component_status'] = verdict
+        measured = {'status': 'MEASURED' if verdict == 'PASS' else
+                    'FAIL' if verdict == 'FAIL' else 'NOT_MEASURED',
+                    'unit': 'count', 'reason': verdict, 'findings': findings}
+        if verdict == 'PASS':
+            measured['value'] = 0
+        authority = {'status': 'APPROVED', 'value': 0, 'unit': 'count',
+                     'source': 'canonical base_23.placement_legality_errors invariant'}
+        identity = {'producer': executions, 'checker': {'program': 'placement_legality_check.inspect',
+                    'sha256': _sha(Path(legality.__file__).read_bytes()),
+                    'congestion_parser_sha256': _sha(Path(placement_metrics.__file__).read_bytes()),
+                    'metric_reader_sha256': _sha(inspect.getsource(accept_d35).encode()),
+                    'producer_sha256': _sha(inspect.getsource(native_producer.produce_pnr).encode())},
+                    'tool_execution': executions, 'consumed_inputs': dict(reads),
+                    'requirements': authority, 'configuration': {'context_sha256': current['context_sha256']}}
+        measured['identity'] = identity
+        status, reason = evaluate_operator('eq', measured, authority)
+        result['obligations'].append({'id': specs[0]['id'], 'status': status,
+                                     'reason': reason, 'measurement': measured})
+        # Do not invent numeric selectors, units or bounds. The requirements
+        # owner names native state metric fields in limits/units dictionaries.
+        for spec in specs[1:]:
+            obligation = {'id': spec['id'], 'status': 'NOT_MEASURED'}
+            result['obligations'].append(obligation)
+            values = []
+            try:
+                relative = spec['expectation']['bounds_ref'].split('#/')[0]
+                auth, body = _approved_document(project, relative, authority='requirements_owner',
+                                               schema=AUTHORITY_SCHEMA)
+                _d35_bound(relative, auth['sha256'])
+                _d35_bound(auth['source']['path'], auth['source']['sha256'])
+                limits, units = body['limits'], body['units']
+                if (not isinstance(limits, dict) or not limits or set(limits) != set(units)
+                        or any(not isinstance(k, str) for k in limits)):
+                    raise MetricRefusal('D35_BOUNDS_INVALID', relative)
+                for field, bounds in limits.items():
+                    if spec['metric'] == 'congestion_targets':
+                        record = congestion.get(field) or {}
+                        value = record.get('value') if record.get('status') == 'MEASURED' else None
+                        unit = record.get('unit')
+                    else:
+                        if not (field in ('timing__setup__ws', 'timing__setup__tns') or (
+                                field.startswith('design__max_') and field.endswith('_violation__count'))):
+                            raise MetricRefusal('D35_NATIVE_FIELD_UNSUPPORTED', field)
+                        value = state.get('metrics', {}).get(field)
+                        unit = 'count' if field.endswith('__count') else 'ns'
+                        if value is not None and unit == 'count':
+                            _finite_number(value, count=True)
+                    if value is None or unit != units[field]:
+                        values.append({'field': field, 'status': 'NOT_MEASURED',
+                                       'reason': 'native metric absent or unit differs'})
+                        continue
+                    observation = {'status': 'MEASURED', 'value': value, 'unit': units[field],
+                                   'identity': {**identity, 'requirements': auth}}
+                    field_status, field_reason = evaluate_operator('within_declared_bounds', observation,
+                        {'status': 'APPROVED', 'limits': bounds, 'unit': units[field]})
+                    values.append({'field': field, 'status': field_status,
+                                   'reason': field_reason, 'measurement': observation})
+                statuses = [v['status'] for v in values]
+                obligation.update(status='FAIL' if 'FAIL' in statuses else
+                                  'PASS' if all(s == 'PASS' for s in statuses) else 'NOT_MEASURED',
+                                  measurements=values, authority=auth)
+            except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+                obligation['reason'] = str(exc)
+                if any(value['status'] == 'FAIL' for value in values):
+                    obligation.update(status='FAIL', measurements=values)
+        if set(legality._verdict_logs(project)) != set(p for p in reader_paths if p.suffix == '.log'):
+            raise MetricRefusal('D35_INPUT_CHANGED_DURING_READ', 'placement log population')
+        for path, sha in reads.items():
+            actual = Path(path) if Path(path).is_absolute() else project / path
+            if actual.is_symlink() or _sha(actual.read_bytes()) != sha:
+                raise MetricRefusal('D35_INPUT_CHANGED_DURING_READ', path)
+        result['readset'] = reads
+        statuses = [o['status'] for o in result['obligations']]
+        result['metric_status'] = ('FAIL' if 'FAIL' in statuses else
+                                   'PASS' if all(s == 'PASS' for s in statuses) else 'NOT_MEASURED')
+    except (MetricRefusal, flow109.Flow109Error, ll.Refusal,
+            OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D35_NATIVE_BINDING_UNPROVEN'), detail=str(exc))
+    # A measured failure survives a later missing/tampered sibling input.
+    if component.get('verdict') == 'FAIL' or result.get('component_status') == 'FAIL' or any(
+            o['status'] == 'FAIL' for o in result['obligations']):
+        result['status'] = result['metric_status'] = 'FAIL'
+    return result
+
+
+def accept_d37(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    """Read the original spare insertion census and current DEF; never remove spares.
+
+    Existing coverage/tie readers own their semantics and density floor.
+    Missing external bounds/qualification remain unmeasured.
+    """
+    import flow109
+    import librelane_contract as ll
+    import spare_cell_coverage_check as coverage
+    import inspect
+
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': 'D37', 'status': 'NOT_MEASURED',
+              'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    reads = {}
+
+    def _d37_bound(path, digest=None):
+        path = Path(path)
+        if not path.is_absolute():
+            path = project / path
+        if path.is_symlink() or not path.resolve().is_relative_to(project) or not path.is_file():
+            raise MetricRefusal('D37_INPUT_UNBOUND', str(path))
+        raw = path.read_bytes()
+        sha = _sha(raw)
+        if digest is not None and digest != sha:
+            raise MetricRefusal('D37_INPUT_CHANGED', str(path))
+        reads[str(path.relative_to(project))] = sha
+        return path, raw
+
+    def _d37_document(path, digest=None):
+        path, raw = _d37_bound(path, digest)
+        return path, json.loads(raw)
+
+    try:
+        current = flow109.validate_execution_context(context)
+        row = current['resolved_row']
+        specs = row['obligations']
+        if (row['id'] != 'D37' or [s['id'] for s in specs] != [
+                'base_24.required_spare_distribution', 'base_24.spare_tie_connectivity_errors']
+                or specs[0]['expectation'].get('operator') != 'within_declared_bounds'
+                or specs[0]['expectation'].get('bounds_ref') !=
+                    'requirements/base_24/required_spare_distribution.json#/limits'
+                or specs[0]['expectation'].get('unit_ref') !=
+                    'requirements/base_24/required_spare_distribution.json#/units'
+                or any(specs[1]['expectation'].get(k) != v for k, v in
+                       {'operator': 'eq', 'value': 0, 'unit': 'count'}.items())):
+            raise MetricRefusal('D37_CONTRACT_CHANGED', 'existing spare obligations only')
+        _, chain = _d37_document('reports/phase3/execution-backend-18.json')
+        step = 'Vibeic.InsertSpareCells'
+        if chain['ordered_steps'] != [step] or len(chain['states']) != 1:
+            raise MetricRefusal('D37_CHAIN_UNBOUND', 'single native insertion')
+        initial, _ = _d37_bound(chain['initial_state'], chain['initial_sha256'])
+        reference = chain['states'][0]
+        state_path, state = _d37_document(reference['state'], reference['sha256'])
+        if reference['step'] != step:
+            raise MetricRefusal('D37_CHAIN_UNBOUND', step)
+        folder = state_path.parent
+        receipt = ll.validate_step_receipt(folder, step)
+        _d37_bound(folder / 'vibeic_receipt.json')
+        for relative, sha in receipt['sha256'].items():
+            _d37_bound(folder / relative, sha)
+        fp = receipt['input']
+        if (fp.get('image') != component.get('native_image') or not fp.get('image')
+                or fp.get('plugin') != ll._plugin_digests(step)):
+            raise MetricRefusal('D37_PRODUCER_CHANGED', 'image or consumed plugin sources')
+        _d37_bound(initial, fp['state'])
+        _d37_bound(project / 'phase3/librelane/execution-backend-18-config' / (step + '.json'), fp['config'])
+        if not fp.get('state_files') or not fp.get('config_files'):
+            raise MetricRefusal('D37_INPUT_POPULATION_ABSENT', step)
+        for path, sha in fp['state_files'].items():
+            _d37_bound(path, sha)
+        mounts = json.loads((folder / 'pdk_root.json').read_text())['mounts_under_it']
+        for path, sha in fp['config_files'].items():
+            source = Path(path)
+            for host, guest in sorted(mounts, key=lambda m: len(m[1]), reverse=True):
+                if source.is_relative_to(guest):
+                    source = Path(host) / source.relative_to(guest)
+                    break
+            if source.resolve().is_relative_to(project):
+                _d37_bound(source, sha)
+            elif source.is_symlink() or not source.is_file() or _sha(source.read_bytes()) != sha:
+                raise MetricRefusal('D37_MODEL_CHANGED', str(source))
+            else:
+                reads[str(source)] = sha
+        _, handoff = _d37_document('reports/phase3/librelane_spare_handoff.json')
+        handed, _ = _d37_bound(handoff['state'], handoff['state_sha256'])
+        if handed != state_path:
+            raise MetricRefusal('D37_HANDOFF_FOREIGN', 'native insertion state')
+        for view, name in (('def', 'post_spare.def'), ('odb', 'post_spare.odb')):
+            rec = handoff['views'][view]
+            source, _ = _d37_bound(rec['source'], rec['source_sha256'])
+            dest, _ = _d37_bound(rec['dest'], rec['dest_sha256'])
+            if (dest != project / 'phase3/stage3/pnr' / name or state.get(view) != str(source)
+                    or rec['source_sha256'] != rec['dest_sha256']):
+                raise MetricRefusal('D37_HANDOFF_FOREIGN', view)
+        native_plans = [p for p in receipt['sha256'] if Path(p).name == 'spare_cells.json']
+        if len(native_plans) != 1:
+            raise MetricRefusal('D37_NATIVE_PLAN_UNBOUND', 'unique receipt-owned native plan required')
+        _, plan = _d37_document(folder / native_plans[0], receipt['sha256'][native_plans[0]])
+        _d37_bound('phase3/stage3/pnr/spare_cells.json', receipt['sha256'][native_plans[0]])
+        native = plan['measured']
+        count = _finite_number(native['inserted'], count=True)
+        placed = _finite_number(native['placed_cells'], count=True)
+        if count == 0:
+            result['component_status'] = 'FAIL'
+            raise MetricRefusal('D37_NO_SPARES_INSERTED', 'requires_spares remains selected')
+        inputs = native['tieoff_inputs']
+        if (not placed or not count or count != plan['count'] or count != len(plan['instances'])
+                or not isinstance(inputs, list) or not inputs
+                or inputs != plan['tie_off']['inputs']
+                or plan['actual_density'] != count / placed):
+            raise MetricRefusal('D37_NATIVE_CENSUS_INCOMPLETE', 'producer-owned DB census required')
+        observed = coverage.audit(project, post_spare_def=True)
+        result['component_status'] = observed['verdict']
+        identity = {'producer': {'receipt': _sha((folder / 'vibeic_receipt.json').read_bytes()),
+                                'native_input': fp},
+                    'checker': {'coverage_sha256': _sha(Path(coverage.__file__).read_bytes()),
+                                'metric_reader_sha256': _sha(inspect.getsource(accept_d37).encode())},
+                    'tool_execution': {'image': fp['image'], 'state_sha256': reference['sha256']},
+                    'consumed_inputs': dict(reads), 'requirements': 'bound per obligation',
+                    'configuration': {'context_sha256': current['context_sha256']}}
+        # The complete pin population is produced from every non-supply input
+        # ITerm of the native DB, including CLOCK pins, by the bound plugin.
+        connectivity_ok = (observed['tie_off_ok'] and observed['inserted_def']['verdict'] == 'PASS'
+                           and _finite_number(native['pg_unconnected'], count=True) == 0)
+        measured = {'status': 'MEASURED' if connectivity_ok else 'FAIL', 'unit': 'count',
+                    'identity': identity, 'reason': 'native per-pin and DEF connectivity',
+                    'pin_census': inputs, 'checker': observed}
+        if connectivity_ok:
+            measured['value'] = 0
+        status, reason = evaluate_operator('eq', measured, {'status': 'APPROVED', 'value': 0, 'unit': 'count'})
+        result['obligations'].append({'id': specs[1]['id'], 'status': status,
+                                     'reason': reason, 'measurement': measured})
+        distribution = {'id': specs[0]['id'], 'status': 'NOT_MEASURED'}
+        result['obligations'].append(distribution)
+        if not observed['density_ok'] or not observed['distribution_ok']:
+            distribution.update(status='FAIL', reason='existing density/distribution reader rejects native pool')
+        else:
+            values = {'actual_density': (count / placed, 'ratio'),
+                      'distribution_fraction': (observed['distinct_positions'] / count, 'ratio'),
+                      'distinct_positions': (observed['distinct_positions'], 'count'), 'count': (count, 'count')}
+            field_results = []
+            try:
+                relative = 'requirements/base_24/required_spare_distribution.json'
+                auth, body = _approved_document(project, relative, authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+                _d37_bound(relative, auth['sha256'])
+                _d37_bound(auth['source']['path'], auth['source']['sha256'])
+                limits, units = body['limits'], body['units']
+                if not isinstance(limits, dict) or not limits or set(limits) != set(units) or not set(limits) <= set(values):
+                    raise MetricRefusal('D37_BOUNDS_INVALID', relative)
+                for field, bounds in limits.items():
+                    value, unit = values[field]
+                    measurement = {'status': 'MEASURED', 'value': value, 'unit': unit,
+                                   'identity': {**identity, 'requirements': auth}}
+                    s, reason = evaluate_operator('within_declared_bounds', measurement,
+                        {'status': 'APPROVED', 'limits': bounds, 'unit': units[field]})
+                    field_results.append({'field': field, 'status': s, 'reason': reason, 'measurement': measurement})
+                statuses = [f['status'] for f in field_results]
+                distribution.update(status='FAIL' if 'FAIL' in statuses else
+                                    'PASS' if all(s == 'PASS' for s in statuses) else 'NOT_MEASURED',
+                                    measurements=field_results, authority=auth)
+            except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+                distribution['reason'] = str(exc)
+                if any(f['status'] == 'FAIL' for f in field_results):
+                    distribution.update(status='FAIL', measurements=field_results)
+        for relative, sha in reads.items():
+            path = Path(relative) if Path(relative).is_absolute() else project / relative
+            if path.is_symlink() or _sha(path.read_bytes()) != sha:
+                raise MetricRefusal('D37_INPUT_CHANGED_DURING_READ', relative)
+        result['readset'] = reads
+        statuses = [o['status'] for o in result['obligations']]
+        result['metric_status'] = 'FAIL' if 'FAIL' in statuses else 'PASS' if all(s == 'PASS' for s in statuses) else 'NOT_MEASURED'
+    except (MetricRefusal, flow109.Flow109Error, ll.Refusal,
+            OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D37_NATIVE_BINDING_UNPROVEN'), detail=str(exc))
+    if component.get('verdict') == 'FAIL' or result.get('component_status') == 'FAIL' or any(
+            o['status'] == 'FAIL' for o in result['obligations']):
+        result['status'] = result['metric_status'] = 'FAIL'
+    return result
+
+
+def accept_a02(project: Path, context: Mapping, component: Mapping) -> dict:
+    """Read the existing smoke logs against an independently declared population."""
+    import analog_native_flow as native
+    import flow109_analog_model_check as checker
+    import flow109_analog_a02 as models
+    import shutil
+    project = Path(project).resolve()
+    answer = {"schema": SCHEMA, "step_id": "A02", "status": "NOT_MEASURED",
+              "metrics": {}, "scope": "model smoke metrics only; qualification separate"}
+    readset = {}
+    def bound(value, views):
+        path = Path(value)
+        path = path if path.is_absolute() else project / path
+        relative = str(path.relative_to(project))
+        path = _safe_project_file(project, relative)
+        digest = views.get(str(path))
+        if not _HEX.fullmatch(str(digest or "")) or _sha(path.read_bytes()) != digest:
+            raise MetricRefusal("A02_NATIVE_INPUT_UNBOUND", relative)
+        readset[str(path)] = digest
+        return path
+    def document(path):
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise MetricRefusal("A02_DUPLICATE_JSON_KEY", key)
+                result[key] = value
+            return result
+        return json.loads(path.read_bytes(), object_pairs_hook=unique)
+    try:
+        invocation = component.get("a02_invocation")
+        if not isinstance(invocation, dict) or not invocation.get("inputs") or not invocation.get("sources"):
+            raise MetricRefusal("A02_INVOCATION_READSET_ABSENT", "consumed bytes were not captured before launch")
+        for value in invocation["inputs"]:
+            if not Path(value).is_relative_to(project / "requirements"):
+                bound(value, invocation["inputs"])
+        from execution_provider_catalog import source_closure
+        import analog_native_front as front
+        current_sources = {str(path): _sha(path.read_bytes()) for path in source_closure({
+            Path(native.__file__), Path(__file__), Path(front.__file__), Path(checker.__file__)})}
+        if invocation["sources"] != current_sources:
+            raise MetricRefusal("A02_PRODUCER_SOURCE_STALE", "source closure")
+        tool = invocation["tool"]
+        tool_path = Path(tool["path"])
+        if (not tool_path.is_file() or _sha(tool_path.read_bytes()) != tool["sha256"]
+                or Path(shutil.which("ngspice") or "").resolve() != tool_path):
+            raise MetricRefusal("A02_TOOL_STALE", str(tool_path))
+        report = component["native_results"]
+        if report.get("image") != invocation.get("image") or not invocation.get("image"):
+            raise MetricRefusal("A02_IMAGE_MISMATCH", "selected execution image")
+        attempt = Path(report["attempt"])
+        if not attempt.is_relative_to(project / "reports/analog_native"):
+            raise MetricRefusal("A02_NATIVE_ATTEMPT_FOREIGN", str(attempt))
+        stored_path = _safe_project_file(project, str((attempt / "result.json").relative_to(project)))
+        stored = document(stored_path)
+        if report != stored or report.get("source_sha256") != _sha(Path(native.__file__).read_bytes()):
+            raise MetricRefusal("A02_NATIVE_ATTEMPT_STALE", str(attempt))
+        readset[str(stored_path)] = _sha(stored_path.read_bytes())
+        blocks = native._declared_blocks(project)
+        names = sorted(b.get("name") or b.get("block") for b in blocks)
+        rows = [row for row in report["steps"] if row.get("step") == "A02"]
+        if not names or sorted(row["block"] for row in rows) != names:
+            raise MetricRefusal("A02_BLOCK_POPULATION_MISMATCH", str(names))
+        observed, errors = [], 0
+        for row in rows:
+            views = row["input_views"]
+            if any(invocation["inputs"].get(path) != digest for path, digest in views.items()):
+                raise MetricRefusal("A02_CONSUMED_INPUT_CHANGED", row["block"])
+            if not views or not row.get("output_views"):
+                raise MetricRefusal("A02_NATIVE_READSET_ABSENT", row["block"])
+            if any(views.get(key) != digest for key, digest in native._input_views(project, row["block"], "A02").items()):
+                raise MetricRefusal("A02_NATIVE_READSET_STALE", row["block"])
+            for value in views:
+                bound(value, views)
+            for value in row["output_views"]:
+                bound(value, row["output_views"])
+            producer = row["producer_context"]
+            if (not report.get("image") or producer.get("image") != report["image"]
+                    or producer.get("driver_sha256") != report["source_sha256"]):
+                raise MetricRefusal("A02_NATIVE_EXECUTION_IDENTITY_ABSENT", row["block"])
+            config = document(bound(project / "input/analog_flow.json", views))
+            cfg = (config.get("blocks") or {}).get(row["block"], {})
+            smokes = cfg.get("model_smokes", config.get("model_smokes"))
+            if smokes is None:
+                smokes = document(bound(project / "input/flow109/A02.json", views))["smokes"]
+            if not isinstance(smokes, list) or not smokes:
+                raise MetricRefusal("A02_SMOKE_DECLARATIONS_ABSENT", row["block"])
+            executions = row["executions"]
+            needs, receipts, ids, temperatures = [], [], set(), {}
+            for smoke in smokes:
+                ident = smoke["id"]
+                if ident in ids:
+                    raise MetricRefusal("A02_DUPLICATE_SMOKE", ident)
+                ids.add(ident)
+                model, deck = (bound(smoke[key]["path"] if isinstance(smoke[key], dict) else smoke[key], views)
+                               for key in ("model", "deck"))
+                for key, path in (("model", model), ("deck", deck)):
+                    if isinstance(smoke[key], dict) and smoke[key].get("sha256") != readset[str(path)]:
+                        raise MetricRefusal("A02_SMOKE_DECLARATION_STALE", ident)
+                need = {key: smoke[key] for key in ("id", "device", "corner", "required_measurements")}
+                need.update(model={"path": str(model.relative_to(project)), "sha256": readset[str(model)]},
+                            deck={"path": str(deck.relative_to(project)), "sha256": readset[str(deck)]})
+                declared_temperatures = re.findall(r"(?im)^\s*\.temp\s+(" + checker.NUMBER + r")\s*$", deck.read_text())
+                if len(declared_temperatures) != 1:
+                    raise MetricRefusal("A02_SMOKE_TEMPERATURE_UNDECLARED", ident)
+                temperature = _finite_number(float(declared_temperatures[0]))
+                temperatures[ident] = format(temperature, "g")
+                declared = {Path(value): {"path": str(Path(value).relative_to(project)), "sha256": digest}
+                            for value, digest in views.items() if Path(value).is_relative_to(project)}
+                closure = models._deck_contract(project, need, model, deck, declared)
+                for entry in closure["files"]:
+                    bound(project / entry["path"], views)
+                matches = [ex for ex in executions if ex.get("program") == "@ngspice"
+                           and ex.get("args", [])[-1:] == [str(deck)]]
+                if len(matches) != 1:
+                    raise MetricRefusal("A02_SMOKE_EXECUTION_UNBOUND", ident)
+                execution = matches[0]
+                if (execution.get("argv") != ["ngspice", *execution["args"]]
+                        or execution.get("cwd") != str(project)):
+                    raise MetricRefusal("A02_NATIVE_INVOCATION_MISMATCH", ident)
+                if execution.get("missing_outputs"):
+                    raise MetricRefusal("A02_SMOKE_OUTPUT_ABSENT", ident)
+                args = execution["args"]
+                if len(args) != 4 or args[:2] != ["-b", "-o"]:
+                    raise MetricRefusal("A02_SMOKE_INVOCATION_INVALID", ident)
+                log = bound(args[2], execution["outputs"])
+                bound(execution["log"], {execution["log"]: execution["log_sha256"]})
+                needs.append(need)
+                receipts.append({**need, "returncode": execution["returncode"],
+                                 "log": {"path": str(log.relative_to(project)), "sha256": readset[str(log)]}})
+            checked = checker.consume(project, {"required_smokes": needs}, {"smokes": receipts})
+            if checked["verdict"] != "PASS":
+                errors += 1
+            for item in checked["smokes"]:
+                log_text = (project / item["log"]["path"]).read_text()
+                native_temperatures = re.findall(r"(?im)Doing analysis at TEMP\s*=\s*(" + checker.NUMBER + r")", log_text)
+                if (not native_temperatures or any(format(float(value), "g") != temperatures[item["id"]]
+                                                   for value in native_temperatures)):
+                    raise MetricRefusal("A02_NATIVE_TEMPERATURE_UNBOUND", item["id"])
+                observed.append({"block": row["block"], "device": item["device"], "corner": item["corner"],
+                                 "temperature_c": temperatures[item["id"]]})
+        answer["metrics"]["device_model_load_errors"] = {
+            "status": "FAIL" if errors else "PASS", "value": errors, "unit": "count"}
+        relative = "requirements/base_A2/model_corner_statistics_coverage.json"
+        authority_path = _safe_project_file(project, relative)
+        bound(authority_path, invocation["inputs"])
+        document(authority_path)
+        authority, _ = _approved_authority(project, relative + "#/required_items", ("block", "device", "corner", "temperature_c"))
+        readset[str(authority_path)] = authority["sha256"]
+        bound(project / authority["source"]["path"], invocation["inputs"])
+        required = authority["required_items"]
+        if not required or len({_json_key(item) for item in required}) != len(required):
+            raise MetricRefusal("A02_REQUIRED_POPULATION_INVALID", relative)
+        missing = [item for item in required if item not in observed]
+        answer["metrics"]["model_corner_statistics_coverage"] = {
+            "status": "FAIL" if missing else "PASS", "value": observed,
+            "required_items": required, "missing": missing, "authority": authority}
+        if any(_sha(Path(path).read_bytes()) != digest for path, digest in readset.items()):
+            raise MetricRefusal("A02_INPUT_CHANGED_DURING_ACCEPTANCE", "readset")
+        answer.update(status="FAIL" if errors or missing else "PASS", reason="A02_NATIVE_METRICS_EVALUATED",
+                      input_views=readset)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        answer.update(status="FAIL" if any(row.get("status") == "FAIL" for row in answer["metrics"].values())
+                      else "NOT_MEASURED", reason=getattr(exc, "code", "A02_METRIC_INPUT_UNAVAILABLE"), detail=str(exc))
+    if component.get("component_status") == "FAIL":
+        answer["status"] = "FAIL"
+    return answer
+
+
+
+def accept_a05(project: Path, context: Mapping, component: Mapping) -> dict:
+    """Read connectivity findings and native OP values without claiming performance."""
+    import analog_native_flow as native
+    import analog_native_front as front
+    from analog_native_sim import _included_paths
+    import flow109_analog_model_check as model_checker
+    import _prose_polarity
+    project = Path(project).resolve()
+    answer = {"schema": SCHEMA, "step_id": "A05", "status": "NOT_MEASURED",
+              "metrics": {}, "scope": "connectivity and operating point only; performance NOT_MEASURED"}
+    def bound(value, views):
+        path = Path(value)
+        path = path if path.is_absolute() else project / path
+        relative = str(path.relative_to(project))
+        path = _safe_project_file(project, relative)
+        if not path.is_file() or views.get(str(path)) != _sha(path.read_bytes()):
+            raise MetricRefusal("A05_NATIVE_FILE_UNBOUND", relative)
+        return path
+    def document(path):
+        def unique(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise MetricRefusal("A05_DUPLICATE_JSON_KEY", key)
+                result[key] = value
+            return result
+        return json.loads(path.read_bytes(), object_pairs_hook=unique)
+    try:
+        invocation = component.get("a05_invocation")
+        if not invocation or native._a05_invocation(project) != invocation:
+            raise MetricRefusal("A05_INVOCATION_INPUT_CHANGED_OR_ABSENT", "captured input/source/tool readset")
+        blocks = [b.get("name") or b.get("block") for b in native._declared_blocks(project)]
+        rows, readset = native._a18_current_rows(project, component["native_results"], "A05", blocks, invocation["image"])
+        config = document(bound(project / "input/analog_flow.json", invocation["inputs"]))
+        values, connectivity_errors = {}, 0
+        for row in rows:
+            name = row["block"]
+            executions = row["executions"]
+            checks = [ex for ex in executions if ex.get("program") == "analog_netlist_connectivity_check.py"]
+            if len(checks) != 1:
+                raise MetricRefusal("A05_CONNECTIVITY_EXECUTION_ABSENT", name)
+            check = checks[0]
+            if check.get("returncode") != 0 or check.get("missing_outputs"):
+                raise MetricRefusal("A05_CONNECTIVITY_EXECUTION_INCOMPLETE", name)
+            args = check["args"]
+            if args[:3] != [str(project), "--block", name] or len(args) != 5 or args[3] != "--json":
+                raise MetricRefusal("A05_CONNECTIVITY_INVOCATION_MISMATCH", name)
+            report = bound(args[4], check["outputs"])
+            audit = document(report)
+            summary = audit.get("summary", {})
+            if (audit.get("program") != "analog_netlist_connectivity_check"
+                    or summary.get("skipped") is not False
+                    or type(summary.get("files_with_subckt")) is not int or summary["files_with_subckt"] < 1
+                    or not isinstance(audit.get("findings"), list)):
+                raise MetricRefusal("A05_CONNECTIVITY_POPULATION_ABSENT", name)
+            connectivity_errors += sum(item["severity"] == "ERROR" for item in audit["findings"])
+            cfg = (config.get("blocks") or {}).get(name, {})
+            bdir = project / "phase3/analog" / name
+            net = bound(bdir / (name + ".sp"), invocation["inputs"])
+            ops = [ex for ex in executions if ex.get("program") == "@ngspice"]
+            if len(ops) != 1:
+                raise MetricRefusal("A05_OP_EXECUTION_ABSENT", name)
+            op = ops[0]
+            argv = op["args"]
+            if (len(argv) != 4 or argv[:2] != ["-b", "-o"]
+                    or op.get("argv") != ["ngspice", *argv] or op.get("cwd") != str(bdir)
+                    or op.get("returncode") != 0 or op.get("missing_outputs")):
+                raise MetricRefusal("A05_OP_EXECUTION_INCOMPLETE", name)
+            deck = bound(argv[3], op["outputs"])
+            if cfg.get("op_deck"):
+                if deck != bound(cfg["op_deck"], invocation["inputs"]):
+                    raise MetricRefusal("A05_OP_DECK_MISMATCH", name)
+            else:
+                tb = bound(bdir / ("tb_" + name + ".sp"), invocation["inputs"])
+                if deck.read_text() != front._op_deck(tb.read_text()):
+                    raise MetricRefusal("A05_OP_DECK_MISMATCH", name)
+            included = _included_paths(deck)
+            if net.resolve() not in included:
+                raise MetricRefusal("A05_OP_DUT_NOT_INCLUDED", name)
+            for path in included - {deck}:
+                bound(path, invocation["inputs"])
+            log = bound(argv[2], op["outputs"])
+            text = log.read_text()
+            if model_checker._fatal_diagnostic(text, _prose_polarity):
+                answer["metrics"]["operating_point_targets"] = {"status": "FAIL", "reason": "A05_NATIVE_OP_FAILED"}
+                continue
+            observed = front._op_values(text)
+            if not observed:
+                raise MetricRefusal("A05_OP_VALUES_ABSENT", name)
+            values[name] = observed
+        answer["metrics"]["netlist_connectivity_errors"] = {
+            "status": "FAIL" if connectivity_errors else "PASS", "value": connectivity_errors, "unit": "count"}
+        relative = "requirements/base_A4/operating_point_targets.json"
+        document(bound(project / relative, invocation["inputs"]))
+        authority, bounds = _approved_document(project, relative, authority="requirements_owner", schema=AUTHORITY_SCHEMA)
+        bound(project / authority["source"]["path"], invocation["inputs"])
+        limits, units = bounds.get("limits"), bounds.get("units")
+        if not isinstance(limits, dict) or not isinstance(units, dict) or set(limits) != set(blocks) or set(units) != set(blocks):
+            raise MetricRefusal("A05_REQUIRED_TARGET_POPULATION_ABSENT", relative)
+        targets = []
+        for name in blocks:
+            if not isinstance(limits[name], dict) or not limits[name] or set(limits[name]) != set(units[name]):
+                raise MetricRefusal("A05_REQUIRED_TARGET_POPULATION_INVALID", name)
+            for node, limit in limits[name].items():
+                if node not in values.get(name, {}):
+                    targets.append({"block": name, "node": node, "status": "NOT_MEASURED", "reason": "A05_TARGET_NOT_OBSERVED"})
+                    continue
+                unit = "A" if node.endswith("#branch") else "V"
+                identity = {"producer": invocation["sources"], "checker": "analog_native_front._op_values",
+                            "tool_execution": invocation["tools"], "consumed_inputs": invocation["inputs"],
+                            "requirements": authority, "configuration": {"image": invocation["image"]}}
+                state, reason = evaluate_operator("within_declared_bounds",
+                    {"status": "MEASURED", "value": values[name][node], "unit": unit, "identity": identity},
+                    {"status": "APPROVED", "limits": limit, "unit": units[name][node]})
+                targets.append({"block": name, "node": node, "value": values[name][node], "unit": unit,
+                                "status": state, "reason": reason})
+        previous = answer["metrics"].get("operating_point_targets", {})
+        answer["metrics"]["operating_point_targets"] = {
+            "status": "FAIL" if previous.get("status") == "FAIL" else native._aggregate(targets), "targets": targets}
+        if native._a05_invocation(project) != invocation:
+            raise MetricRefusal("A05_INPUT_CHANGED_DURING_ACCEPTANCE", "readset")
+        readset.update(invocation["inputs"])
+        answer.update(status=native._aggregate(list(answer["metrics"].values())),
+                      input_views=readset, reason="A05_NATIVE_METRICS_EVALUATED")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        answer.update(status="FAIL" if any(row.get("status") == "FAIL" for row in answer["metrics"].values())
+                      else "NOT_MEASURED", reason=getattr(exc, "code", "A05_METRIC_INPUT_UNAVAILABLE"), detail=str(exc))
+    if component.get("component_status") == "FAIL":
+        answer["status"] = "FAIL"
+    return answer
