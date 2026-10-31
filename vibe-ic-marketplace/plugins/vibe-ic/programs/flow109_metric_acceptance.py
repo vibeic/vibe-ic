@@ -8012,6 +8012,451 @@ def accept_d39(project: Path, context: Mapping[str, Any], component: Mapping[str
     return result
 
 
+
+def _digital_floorplan_readback(project, component):
+    """Reopen only the selected default Step15 chain, including its real configs."""
+    import librelane_contract as ll
+    import execution_backend_producers as producer
+    reads = {}
+    def read(path, digest=None, *, external=False):
+        path = Path(path)
+        if not path.is_absolute():
+            path = project / path
+        if path.is_symlink() or not path.is_file() or (not external and not path.resolve().is_relative_to(project)):
+            raise MetricRefusal('DIGITAL_FLOORPLAN_INPUT_UNBOUND', str(path))
+        raw = path.read_bytes()
+        actual = _sha(raw)
+        key = str(path.relative_to(project)) if path.is_relative_to(project) else str(path)
+        if (digest is not None and actual != digest) or (key in reads and actual != reads[key]):
+            raise MetricRefusal('DIGITAL_FLOORPLAN_INPUT_CHANGED', str(path))
+        reads[key] = actual
+        return raw
+    chain = json.loads(read('reports/phase3/execution-backend-15.json'))
+    steps = chain['ordered_steps']
+    if (not steps or len(steps) != len(set(steps)) or len(steps) != len(chain['states'])
+            or steps[0] != 'Yosys.JsonHeader' or 'OpenROAD.Floorplan' not in steps
+            or 'OpenROAD.GeneratePDN' not in steps or chain['image'] != component.get('native_image')):
+        raise MetricRefusal('DIGITAL_FLOORPLAN_CHAIN_UNBOUND', 'normal Step15')
+    previous = Path(chain['initial_state'])
+    read(previous, chain['initial_sha256'])
+    states, configs, executions, lefs = {}, {}, [], set()
+    for step, ref in zip(steps, chain['states']):
+        path = Path(ref['state'])
+        if ref['step'] != step or path.parent.parent not in (
+                project / 'phase3/librelane/15-floorplan', project / 'phase3/librelane/execution-backend-15'):
+            raise MetricRefusal('DIGITAL_FLOORPLAN_FOREIGN_ROUTE', step)
+        state = json.loads(read(path, ref['sha256']))
+        receipt = ll.validate_step_receipt(path.parent, step)
+        read(path.parent / 'vibeic_receipt.json')
+        for name, digest in receipt['sha256'].items():
+            read(path.parent / name, digest)
+        fp = receipt['input']
+        if fp.get('step') != step or fp.get('image') != component.get('native_image'):
+            raise MetricRefusal('DIGITAL_FLOORPLAN_IMAGE_CHANGED', step)
+        if step.startswith(ll.PLUGIN_STEP_PREFIX) and fp.get('plugin') != ll._plugin_digests(step):
+            raise MetricRefusal('DIGITAL_FLOORPLAN_SOURCE_CHANGED', step)
+        before = json.loads(read(previous, fp['state']))
+        expected_state = {str(p): _sha(read(p)) for p in ll._walk_paths(
+            {k: v for k, v in before.items() if k != 'metrics'})}
+        config = json.loads(read(ref['config'], ref['config_sha256']))
+        if fp.get('config') != ref['config_sha256'] or config.get('meta', {}).get('step') != step:
+            raise MetricRefusal('DIGITAL_FLOORPLAN_CONFIG_CHANGED', step)
+        mounts = json.loads(read(path.parent / 'pdk_root.json'))['mounts_under_it']
+        ll._current_config_material(config, mounts)
+        expected_config = ll.config_file_hashes(config, mounts)
+        if fp.get('state_files') != expected_state or fp.get('config_files') != expected_config:
+            raise MetricRefusal('DIGITAL_FLOORPLAN_POPULATION_CHANGED', step)
+        for name, digest in expected_config.items():
+            source = Path(name)
+            for host, guest in sorted(mounts, key=lambda m: len(m[1]), reverse=True):
+                if source.is_relative_to(guest):
+                    source = Path(host) / source.relative_to(guest)
+                    break
+            read(source, digest, external=True)
+            if source.suffix.lower() == '.lef':
+                lefs.add(source)
+        states[step], configs[step] = (path, state), config
+        executions.append({'step': step, 'input': fp, 'receipt_sha256': _sha(read(path.parent / 'vibeic_receipt.json'))})
+        previous = path
+    portable = chain['portable_state']
+    read(portable['path'], portable['sha256'])
+    record = producer._read_step15_bounded_state(project)['record']
+    if (record['raw_state_sha256'] != _sha(read(previous))
+            or record['raw_pdn_state_sha256'] != _sha(read(states['OpenROAD.GeneratePDN'][0]))):
+        raise MetricRefusal('DIGITAL_FLOORPLAN_HANDOFF_FOREIGN', 'selected terminal/PDN')
+    # The existing portable owner validates these refs; include every byte in
+    # this consumer's currentness readset as well.
+    for ref in [record['native_state'], record['pdn_state'], record['handoff'],
+                record['upstream_sdc'], *record['views'].values()]:
+        read(ref['path'], ref['sha256'])
+    terminal = states[steps[-1]][1]
+    for view in ('def', 'odb'):
+        source = record['handoff_views'][view]
+        if terminal.get(view) != source['source']:
+            raise MetricRefusal('DIGITAL_FLOORPLAN_HANDOFF_FOREIGN', view)
+        read(source['source'], source['source_sha256'])
+    return read, reads, states, configs, executions, sorted(lefs)
+
+
+def _digital_def_geometry(text, lefs):
+    """Measure declared DEF geometry; reject truncated or ambiguous populations."""
+    import _pad_ring as pr
+    import pad_bterm_coincidence_check as pins
+    def section(name):
+        matches = list(re.finditer(r'^\s*' + name + r'\s+(\d+)\s*;(.*?)^\s*END\s+' + name + r'\s*$', text, re.M | re.S))
+        if len(matches) != 1:
+            raise MetricRefusal('DIGITAL_DEF_POPULATION_UNAVAILABLE', name)
+        declared, body = matches[0].groups()
+        records = [s.strip() for s in body.split(';') if s.strip()]
+        names = [re.match(r'-\s+(\S+)', s) for s in records]
+        if (len(records) != int(declared) or any(m is None for m in names)
+                or len({m[1] for m in names}) != len(names)):
+            raise MetricRefusal('DIGITAL_DEF_POPULATION_INVALID', name)
+        return records
+    components, pin_records = section('COMPONENTS'), section('PINS')
+    for name in ('NETS', 'SPECIALNETS'):
+        if re.search(r'^\s*' + name + r'\s', text, re.M):
+            section(name)
+    if not re.search(r'^\s*END DESIGN\s*$', text, re.M):
+        raise MetricRefusal('DIGITAL_DEF_TRUNCATED', 'END DESIGN')
+    d = pr.parse_def(text)
+    if (len(d.components) != len(components) or len(d.diearea) != 2
+            or not re.search(r'UNITS\s+DISTANCE\s+MICRONS\s+\d+\s*;', text)):
+        raise MetricRefusal('DIGITAL_DEF_GEOMETRY_UNAVAILABLE', 'components/die/units')
+    sizes, classes = {}, {}
+    for lef in lefs:
+        raw = lef.read_text()
+        for target, values in [(sizes, pr.parse_lef_macros(raw)), (classes, pr.parse_lef_macro_classes(raw))]:
+            for key, value in values.items():
+                if key in target and target[key] != value:
+                    raise MetricRefusal('DIGITAL_LEF_AMBIGUOUS', key)
+                target[key] = value
+    die = tuple(d.box)
+    if d.units <= 0 or die[0] >= die[2] or die[1] >= die[3]:
+        raise MetricRefusal('DIGITAL_DEF_GEOMETRY_UNAVAILABLE', 'nonpositive die/units')
+    def outside(box):
+        return box[0] < die[0] or box[1] < die[1] or box[2] > die[2] or box[3] > die[3]
+    boxes, macros, unplaced = {}, {}, 0
+    for name, comp in d.components.items():
+        if comp.master not in sizes or comp.master not in classes:
+            raise MetricRefusal('DIGITAL_LEF_MASTER_UNAVAILABLE', comp.master)
+        if not comp.placed:
+            if classes[comp.master].startswith('BLOCK'):
+                unplaced += 1
+            continue
+        w, h = pr.footprint(sizes[comp.master], comp.orient, d.units)
+        box = (comp.x, comp.y, comp.x + w, comp.y + h)
+        boxes[name] = box
+        if classes[comp.master].startswith('BLOCK'):
+            macros[name] = box
+    parsed_pins = pins.def_pins(text)
+    # The existing pin reader supports one rectangular port per BTerm. More
+    # complex geometry is unmeasured, rather than silently discarded.
+    if len(parsed_pins) != len(pin_records) or any(len(re.findall(r'\+\s*LAYER\b', s)) > 1 or re.search(r'\+\s*(?:POLYGON|VIA)\b', s) for s in pin_records):
+        raise MetricRefusal('DIGITAL_PIN_GEOMETRY_UNAVAILABLE', 'rectangular BTerm population')
+    for raw in pin_records:
+        name = re.match(r'-\s+(\S+)', raw)[1]
+        use = re.search(r'\+\s*USE\s+(\w+)', raw)
+        parsed_pins[name]['use'] = use[1] if use else 'SIGNAL'
+    for pin in parsed_pins.values():
+        if pin['rect'] is None:
+            continue
+        x, y, orient = pin['placement']
+        relative = (pin['rect'][0]-x, pin['rect'][1]-y, pin['rect'][2]-x, pin['rect'][3]-y)
+        try:
+            a, b, c, e = pr.orient_rect(relative, orient, (0, 0))
+        except KeyError as exc:
+            raise MetricRefusal('DIGITAL_PIN_ORIENTATION_UNAVAILABLE', orient) from exc
+        pin['rect'] = [a+x, b+y, c+x, e+y]
+    def overlap(a, b):
+        return min(a[2], b[2]) > max(a[0], b[0]) and min(a[3], b[3]) > max(a[1], b[1])
+    macro_boxes = list(macros.values())
+    values = {'die_width_um': ((die[2] - die[0]) / d.units, 'um'),
+        'die_height_um': ((die[3] - die[1]) / d.units, 'um'),
+        'macro_boundary_errors': (sum(outside(b) for b in macro_boxes), 'count'),
+        'unplaced_macros': (unplaced, 'count'),
+        'pin_boundary_errors': (sum(outside(p['rect']) for p in parsed_pins.values() if p['rect'] is not None), 'count'),
+        'unplaced_pins': (sum(p['rect'] is None for p in parsed_pins.values()), 'count'),
+        'illegal_macro_overlap': (sum(overlap(a, b) for i, a in enumerate(macro_boxes) for b in macro_boxes[i+1:]), 'count')}
+    return d, boxes, parsed_pins, values
+
+
+def _accept_digital_floorplan(project, context, component, row_id):
+    import flow109
+    import librelane_contract as ll
+    import inspect
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': row_id, 'status': 'NOT_MEASURED',
+        'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+        'delivery_blocked': True, 'obligations': []}
+    failures = (MetricRefusal, flow109.Flow109Error, ll.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError)
+    try:
+        current = flow109.validate_execution_context(context)
+        specs = current['resolved_row']['obligations']
+        names = ('floorplan_boundary_pin_feasibility', 'illegal_macro_overlap') if row_id == 'D31' else (
+            'pad_io_esd_pg_inventory', 'pg_supply_connectivity_errors', 'pad_access_spacing')
+        if current['resolved_row']['id'] != row_id or tuple(s['metric'] for s in specs) != names:
+            raise MetricRefusal('DIGITAL_FLOORPLAN_CONTRACT_CHANGED', row_id)
+        base = 'base_20' if row_id == 'D31' else 'base_21'
+        for spec in specs:
+            expect = spec['expectation']
+            op = ('eq' if spec['metric'] in ('illegal_macro_overlap', 'pg_supply_connectivity_errors')
+                  else 'covers_all' if spec['metric'] == 'pad_io_esd_pg_inventory' else 'within_declared_bounds')
+            if expect['operator'] != op or (op == 'eq' and (expect.get('value'), expect.get('unit')) != (0, 'count')):
+                raise MetricRefusal('DIGITAL_FLOORPLAN_CONTRACT_CHANGED', spec['id'])
+            if op == 'within_declared_bounds' and (expect.get('bounds_ref') != f"requirements/{base}/{spec['metric']}.json#/limits"
+                    or expect.get('unit_ref') != f"requirements/{base}/{spec['metric']}.json#/units"):
+                raise MetricRefusal('DIGITAL_FLOORPLAN_CONTRACT_CHANGED', spec['id'])
+        read, reads, states, configs, executions, lefs = _digital_floorplan_readback(project, component)
+        terminal = list(states.values())[-1][1]
+        d, boxes, pin_records, observations = _digital_def_geometry(read(terminal['def']).decode(), lefs)
+        identity = {'producer': executions, 'tool_execution': executions,
+            'checker': {'program': 'flow109_metric_acceptance.accept_' + row_id.lower() + '_digital',
+                'source_sha256': _sha(inspect.getsource(_accept_digital_floorplan).encode()),
+                'geometry_sha256': _sha(inspect.getsource(_digital_def_geometry).encode()),
+                'binding_sha256': _sha(inspect.getsource(_digital_floorplan_readback).encode())},
+            'consumed_inputs': reads, 'configuration': {'context_sha256': current['context_sha256']},
+            'requirements': {'source': 'canonical zero-count invariant'}}
+        def numeric(spec, values, required):
+            entry = {'id': spec['id'], 'status': 'NOT_MEASURED', 'measurements': []}
+            result['obligations'].append(entry)
+            try:
+                relative = f"requirements/{base}/{spec['metric']}.json"
+                auth, body = _approved_document(project, relative, authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+                read(relative, auth['sha256']); read(auth['source']['path'], auth['source']['sha256'])
+                limits, units = body['limits'], body['units']
+                if not isinstance(limits, dict) or not limits or set(limits) != set(units):
+                    raise MetricRefusal('DIGITAL_FLOORPLAN_BOUNDS_INVALID', relative)
+                for key, bound in limits.items():
+                    value, unit = values.get(key, (None, None))
+                    item = {'field': key, 'status': 'NOT_MEASURED'}
+                    entry['measurements'].append(item)
+                    if value is None or unit != units[key]:
+                        item['reason'] = 'DIGITAL_NATIVE_FIELD_OR_UNIT_UNAVAILABLE'
+                        continue
+                    _finite_number(value, count=unit == 'count')
+                    measurement = {'status': 'MEASURED', 'value': value, 'unit': unit,
+                        'identity': {**identity, 'requirements': auth}}
+                    status, reason = evaluate_operator('within_declared_bounds', measurement,
+                        {'status': 'APPROVED', 'limits': bound, 'unit': unit})
+                    item.update(status=status, reason=reason, measurement=measurement)
+                statuses = [v['status'] for v in entry['measurements']]
+                entry['status'] = ('FAIL' if 'FAIL' in statuses else 'PASS'
+                    if set(required) <= set(limits) and all(s == 'PASS' for s in statuses) else 'NOT_MEASURED')
+            except failures as exc:
+                entry.update(reason=getattr(exc, 'code', 'DIGITAL_BOUNDS_UNAVAILABLE'), detail=str(exc))
+                if any(v['status'] == 'FAIL' for v in entry['measurements']):
+                    entry['status'] = 'FAIL'
+        def invariant(spec, value, reason=None):
+            measurement = {'status': 'MEASURED' if value is not None else 'NOT_MEASURED',
+                'value': value, 'unit': 'count', 'identity': identity, 'reason': reason}
+            status, why = evaluate_operator('eq', measurement, {'status': 'APPROVED', 'value': 0, 'unit': 'count'})
+            result['obligations'].append({'id': spec['id'], 'status': status, 'reason': why, 'measurement': measurement})
+        if row_id == 'D31':
+            invariant(specs[1], observations['illegal_macro_overlap'][0])
+            header = terminal.get('json_h')
+            if not header:
+                raise MetricRefusal('DIGITAL_PIN_POPULATION_UNAVAILABLE', 'native Yosys.JsonHeader')
+            modules = json.loads(read(header))['modules']
+            top = configs['Yosys.JsonHeader'].get('DESIGN_NAME')
+            ports = modules[top]['ports']
+            expected_pins = set()
+            for name, port in ports.items():
+                width = len(port['bits'])
+                if width < 1:
+                    raise MetricRefusal('DIGITAL_PIN_POPULATION_UNAVAILABLE', name)
+                if width == 1:
+                    expected_pins.add(name)
+                else:
+                    offset = port.get('offset', 0)
+                    expected_pins.update(f'{name}[{i}]' for i in range(offset, offset + width))
+            actual_pins = {name for name, pin in pin_records.items() if pin['use'] not in ('POWER', 'GROUND')}
+            observations['pin_population_errors'] = (len(expected_pins ^ actual_pins), 'count')
+            numeric(specs[0], observations, set(observations) - {'illegal_macro_overlap'})
+        else:
+            if 'OpenROAD.PadRing' not in states:
+                raise MetricRefusal('DIGITAL_PADRING_NOT_SELECTED', row_id)
+            pad_path, pad_state = states['OpenROAD.PadRing']
+            handoff = json.loads(read('reports/phase3/librelane_padring_handoff.json'))
+            if Path(handoff['state']) != pad_path or handoff['state_sha256'] != _sha(read(pad_path)):
+                raise MetricRefusal('DIGITAL_PADRING_HANDOFF_FOREIGN', row_id)
+            # Inventory roles are declared by independent policy, never
+            # inferred from a master name. Physical instances/terminals are
+            # reopened from this native final DEF and selected LEFs.
+            import _pad_ring as pr
+            import pad_bterm_coincidence_check as coincidence
+            actual_nets = coincidence.def_net_terminals(read(terminal['def']).decode())
+            roles = {}
+            for lef in lefs:
+                for master, pins in pr.parse_lef_pin_roles(read(lef, external=True).decode()).items():
+                    for pin, role in pins.items():
+                        key = (master, pin)
+                        if key in roles and roles[key] != role:
+                            raise MetricRefusal('DIGITAL_LEF_AMBIGUOUS', str(key))
+                        roles[key] = role
+            inv = {'id': specs[0]['id'], 'status': 'NOT_MEASURED'}
+            result['obligations'].append(inv)
+            required = []
+            result['native_inventory'] = [{'instance': n, 'master': c.master, 'placed': c.placed}
+                for n, c in sorted(d.components.items())]
+            try:
+                relative = 'requirements/base_21/pad_io_esd_pg_inventory.json'
+                auth, body = _approved_document(project, relative, authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+                read(relative, auth['sha256']); read(auth['source']['path'], auth['source']['sha256'])
+                required = body['required_items']
+                if (not isinstance(required, list) or not required or any(not isinstance(i, dict)
+                        or i.get('kind') not in ('io', 'esd', 'power', 'ground')
+                        or set(i) != ({'kind', 'instance', 'master', 'pin', 'net'} if i['kind'] in ('power', 'ground')
+                                      else {'kind', 'instance', 'master'}) for i in required)):
+                    raise MetricRefusal('DIGITAL_PAD_INVENTORY_UNSUPPORTED', relative)
+                observed = []
+                for item in required:
+                    name, master, kind = item['instance'], item['master'], item['kind']
+                    if name not in boxes or d.components[name].master != master:
+                        continue
+                    if kind in ('power', 'ground'):
+                        net, pin = item['net'], item['pin']
+                        declared = configs['OpenROAD.GeneratePDN'].get('VDD_NETS' if kind == 'power' else 'GND_NETS') or []
+                        # A PSM-clean core grid alone cannot certify an
+                        # unconnected IO supply pad. Bind the exact native
+                        # terminal/net and its selected LEF USE as well.
+                        if (net not in declared or roles.get((master, pin), (None, None))[1] != kind.upper()
+                                or not any(i in (name, '*') and p == pin for i, p in actual_nets.get(net, []))):
+                            continue
+                    observed.append(item)
+                measurement = {'status': 'MEASURED', 'value': observed, 'identity': {**identity, 'requirements': auth}}
+                inv['status'], inv['reason'] = evaluate_operator('covers_all', measurement,
+                    {'status': 'APPROVED', 'required_items': required})
+                inv['measurement'] = measurement
+                if inv['status'] == 'PASS' and {i['kind'] for i in required} != {'io', 'esd', 'power', 'ground'}:
+                    inv.update(status='NOT_MEASURED', reason='DIGITAL_PAD_ESD_PG_POPULATION_UNDECLARED')
+            except failures as exc:
+                inv.update(reason=getattr(exc, 'code', 'DIGITAL_PAD_INVENTORY_UNAVAILABLE'), detail=str(exc))
+            pdn_path, pdn = states['OpenROAD.GeneratePDN']
+            config = configs['OpenROAD.GeneratePDN']
+            power, ground = config.get('VDD_NETS'), config.get('GND_NETS')
+            pg, why = None, 'DIGITAL_PG_PHYSICAL_EVIDENCE_UNAVAILABLE'
+            values = pdn.get('metrics', {})
+            total = values.get('design__power_grid_violation__count')
+            if total is not None:
+                _finite_number(total, count=True)
+                if total > 0:
+                    pg = total
+            invariant(specs[1], pg, why)
+            pg_entry = result['obligations'][-1]
+            nets = power + ground if isinstance(power, list) and isinstance(ground, list) else []
+            if nets and power and ground and len(nets) == len(set(nets)):
+                counts = [values.get('design__power_grid_violation__count__net:' + net) for net in nets]
+                for count in counts:
+                    if count is not None:
+                        _finite_number(count, count=True)
+                positives = sum(v for v in counts if v is not None)
+                if positives:
+                    pg = max(pg or 0, positives)
+                    pg_entry.update(status='FAIL', reason='native per-net connectivity errors',
+                        measurement={'status': 'MEASURED', 'value': pg, 'unit': 'count', 'identity': identity})
+                log = read(pdn_path.parent / 'invocation.log').decode()
+                reports = {p.name for p in pdn_path.parent.glob('*-grid-errors.rpt')}
+                expected = {n + '-grid-errors.rpt' for n in nets}
+                pg_receipt = ll.validate_step_receipt(pdn_path.parent, 'OpenROAD.GeneratePDN')
+                if reports == expected and expected <= pg_receipt['sha256'].keys():
+                    for net in nets:
+                        name = net + '-grid-errors.rpt'
+                        read(pdn_path.parent / name, pg_receipt['sha256'][name])
+                    if (total == 0 and all(v == 0 for v in counts)
+                            and all(re.search(r'\[INFO PSM-0040\]\s+All shapes on net ' + re.escape(net) + r' are connected\.', log) for net in nets)
+                            and not re.search(r'\[(?:ERROR|WARNING).*?(?:PSM-|Grid check)', log)):
+                        pg = 0
+            if pg is not None:
+                pg_entry.update(status='FAIL' if pg else 'PASS',
+                    measurement={'status': 'MEASURED', 'value': pg, 'unit': 'count', 'identity': identity})
+            lef_text = '\n'.join(read(p, external=True).decode() for p in lefs)
+            rc, access = coincidence.run(read(terminal['def']).decode(), lef_text, lefs)
+            signals = {name for name, pin in pin_records.items() if pin['use'] not in ('POWER', 'GROUND')}
+            rows = {r['pin']: r for r in access['nets']}
+            access_errors = (sum(rows[n]['verdict'] == 'NOT_CONNECTED' for n in signals) if signals
+                and signals <= rows.keys() and not any(rows[n]['verdict'] == 'UNDECIDED'
+                    or pin_records[n]['placement'] is None or pin_records[n]['placement'][2] != 'N' for n in signals) else None)
+            def gap(a, b):
+                dx, dy = max(a[0]-b[2], b[0]-a[2], 0), max(a[1]-b[3], b[1]-a[3], 0)
+                return math.hypot(dx, dy) / d.units
+            io = [boxes[i['instance']] for i in required if i.get('kind') == 'io' and i.get('instance') in boxes]
+            pad_gaps = [gap(a, b) for i, a in enumerate(io) for b in io[i+1:]]
+            pin_gaps = [gap(a['rect'], b['rect']) for i, (n, a) in enumerate(sorted(pin_records.items()))
+                for m, b in sorted(pin_records.items())[i+1:] if n in signals and m in signals and a['rect'] is not None and b['rect'] is not None and a['layer'] == b['layer']]
+            spacing = {'min_pad_spacing_um': (min(pad_gaps) if pad_gaps else None, 'um'),
+                'min_pin_access_spacing_um': (min(pin_gaps) if pin_gaps else None, 'um'),
+                'pin_access_errors': (access_errors, 'count')}
+            numeric(specs[2], spacing, spacing.keys())
+        for path, digest in list(reads.items()):
+            read(path, digest, external=True)
+        result['readset'] = dict(reads)
+    except failures as exc:
+        result.update(reason=getattr(exc, 'code', 'DIGITAL_FLOORPLAN_UNBOUND'), detail=str(exc))
+        for obligation in result['obligations']:
+            if obligation['status'] == 'PASS':
+                obligation.update(status='NOT_MEASURED', reason='DIGITAL_BINDING_INCOMPLETE')
+    if component.get('verdict') == 'FAIL' or any(o['status'] == 'FAIL' for o in result['obligations']):
+        result['status'] = result['metric_status'] = 'FAIL'
+    elif len(result['obligations']) == (2 if row_id == 'D31' else 3) and all(o['status'] == 'PASS' for o in result['obligations']):
+        result['metric_status'] = 'PASS'
+        import flow109_admission as admission
+        try:
+            result['qualification_receipt'] = admission.require_admission(project, current)
+            result.update(status='PASS', qualification='PASS', delivery_blocked=False)
+        except admission.AdmissionRefusal as exc:
+            result.update(reason=exc.code, qualification_receipt=exc.report)
+    return result
+
+
+def accept_d31_digital(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    return _accept_digital_floorplan(project, context, component, 'D31')
+
+
+def accept_d32_digital(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    return _accept_digital_floorplan(project, context, component, 'D32')
+
+
+def _d35_selected_congestion(text):
+    """Read the normal GPL pass and explicit revert, without borrowing GRT.
+
+    OpenROAD 89df516 src/gpl/src/routeBase.cpp emits GPL-0040/0055.
+    Weighted congestion is dimensionless; it is not routing overflow.
+    """
+    number = r'([0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?)'
+    pass_re = re.compile(r'\[INFO GPL-0040\] Routability pass (\d+): weighted congestion '
+        + number + r' \(target ' + number + r'\), (\d+) of (\d+) actionable tiles overflowed \('
+        + number + r'%\)\.')
+    revert_re = re.compile(r'\[INFO GPL-0055\] Reverting inflation and target density to the pass with the '
+        r'minimum observed routing congestion \(' + number + r'\), target density ' + number + r'\.')
+    passes, selected = [], None
+    for line in text.splitlines():
+        match = pass_re.fullmatch(line.strip())
+        if match:
+            _, value, _, count, population, percent = match.groups()
+            value, percent, count, population = float(value), float(percent), int(count), int(population)
+            if count > population or not 0 <= percent <= 100 or (population and abs(percent - 100*count/population) > .051):
+                raise MetricRefusal('D35_CONGESTION_INVALID', line)
+            selected = (value, count, percent)
+            passes.append(selected)
+        elif revert_re.fullmatch(line.strip()):
+            minimum = float(revert_re.fullmatch(line.strip())[1])
+            matches = {entry for entry in passes if entry[0] == minimum}
+            # A rounded minimum identifying multiple populations cannot bind
+            # their tile counts. The weighted value itself is still explicit.
+            selected = next(iter(matches)) if len(matches) == 1 else (minimum, None, None)
+        elif '[INFO GPL-0040]' in line or '[INFO GPL-0055]' in line:
+            raise MetricRefusal('D35_CONGESTION_UNSUPPORTED', line)
+    if selected is None:
+        return {}
+    return {key: {'metric': key, 'status': 'MEASURED', 'value': value, 'unit': unit,
+            'scope': {'stage': 'global_placement'}, 'source': 'GPL-0040/0055 selected native pass'}
+        for key, value, unit in [
+            ('route.congestion.weighted', selected[0], '1'),
+            ('route.congestion.overflowed_tiles.count', selected[1], '1'),
+            ('route.congestion.overflowed_tiles.pct', selected[2], '%')] if value is not None}
+
+
 def accept_d35(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
     """BLOCKING metric readback of the existing placement chain, without EDA replay.
 
@@ -8082,6 +8527,8 @@ def accept_d35(project: Path, context: Mapping[str, Any], component: Mapping[str
             if state_ref['step'] != step:
                 raise MetricRefusal('D35_CHAIN_UNBOUND', step)
             folder = state_path.parent
+            if folder.parent != project / 'phase3/librelane/execution-backend-17':
+                raise MetricRefusal('D35_FOREIGN_ROUTE', str(folder))
             receipt = ll.validate_step_receipt(folder, step)
             _d35_bound(folder / 'vibeic_receipt.json')
             for name, sha in receipt['sha256'].items():
@@ -8092,13 +8539,25 @@ def accept_d35(project: Path, context: Mapping[str, Any], component: Mapping[str
             if step.startswith(ll.PLUGIN_STEP_PREFIX) and fp.get('plugin') != ll._plugin_digests(step):
                 raise MetricRefusal('D35_PRODUCER_SOURCE_CHANGED', step)
             _d35_bound(previous, fp['state'])
-            _d35_bound(project / 'phase3/librelane/execution-backend-17-config' / (step + '.json'), fp['config'])
+            config_path = state_ref.get('config') or project / 'phase3/librelane/execution-backend-17-config' / (step + '.json')
+            _, selected_config = _d35_document(config_path, fp['config'])
+            if state_ref.get('config_sha256', fp['config']) != fp['config'] or selected_config.get('meta', {}).get('step') != step:
+                raise MetricRefusal('D35_CONFIG_CHANGED', step)
+            _, input_state = _d35_document(previous, fp['state'])
+            actual_state_files = {str(p): _sha(_d35_bound(p)[1]) for p in ll._walk_paths(
+                {k: v for k, v in input_state.items() if k != 'metrics'})}
+            if fp.get('state_files') != actual_state_files:
+                raise MetricRefusal('D35_INPUT_POPULATION_CHANGED', step)
             if not fp.get('state_files') or not fp.get('config_files'):
                 raise MetricRefusal('D35_INPUT_POPULATION_ABSENT', step)
             for path, sha in fp['state_files'].items():
                 _d35_bound(path, sha)
             # Reopen actual model/deck bytes through the native owner's mount map.
-            mounts = json.loads((folder / 'pdk_root.json').read_text())['mounts_under_it']
+            _, mapping = _d35_document(folder / 'pdk_root.json')
+            mounts = mapping['mounts_under_it']
+            ll._current_config_material(selected_config, mounts)
+            if fp['config_files'] != ll.config_file_hashes(selected_config, mounts):
+                raise MetricRefusal('D35_CONFIG_POPULATION_CHANGED', step)
             for path, sha in fp['config_files'].items():
                 source = Path(path)
                 for host, guest in sorted(mounts, key=lambda m: len(m[1]), reverse=True):
@@ -8119,6 +8578,7 @@ def accept_d35(project: Path, context: Mapping[str, Any], component: Mapping[str
                 congestion = {record['metric']: record for record in placement_metrics.parse_log(log).records
                               if record['metric'].startswith('route.congestion.')
                               and record.get('scope', {}).get('stage') == 'global_placement'}
+                congestion.update(_d35_selected_congestion(log.read_text()))
             previous = state_path
         _, handoff = _d35_document('reports/phase3/librelane_placement_handoff.json')
         handed_state, _ = _d35_bound(handoff['state'], handoff['state_sha256'])
@@ -8152,6 +8612,7 @@ def accept_d35(project: Path, context: Mapping[str, Any], component: Mapping[str
         identity = {'producer': executions, 'checker': {'program': 'placement_legality_check.inspect',
                     'sha256': _sha(Path(legality.__file__).read_bytes()),
                     'congestion_parser_sha256': _sha(Path(placement_metrics.__file__).read_bytes()),
+                    'selected_congestion_parser_sha256': _sha(inspect.getsource(_d35_selected_congestion).encode()),
                     'metric_reader_sha256': _sha(inspect.getsource(accept_d35).encode()),
                     'producer_sha256': _sha(inspect.getsource(native_producer.produce_pnr).encode())},
                     'tool_execution': executions, 'consumed_inputs': dict(reads),
@@ -8182,8 +8643,9 @@ def accept_d35(project: Path, context: Mapping[str, Any], component: Mapping[str
                         value = record.get('value') if record.get('status') == 'MEASURED' else None
                         unit = record.get('unit')
                     else:
-                        if not (field in ('timing__setup__ws', 'timing__setup__tns') or (
-                                field.startswith('design__max_') and field.endswith('_violation__count'))):
+                        if not (re.fullmatch(r'timing__setup__(?:ws|tns)(?:__corner:[^\s]+)?', field) or
+                                field in ('design__max_slew_violation__count', 'design__max_cap_violation__count',
+                                          'design__max_fanout_violation__count')):
                             raise MetricRefusal('D35_NATIVE_FIELD_UNSUPPORTED', field)
                         value = state.get('metrics', {}).get(field)
                         unit = 'count' if field.endswith('__count') else 'ns'
@@ -8219,11 +8681,18 @@ def accept_d35(project: Path, context: Mapping[str, Any], component: Mapping[str
                                    'PASS' if all(s == 'PASS' for s in statuses) else 'NOT_MEASURED')
     except (MetricRefusal, flow109.Flow109Error, ll.Refusal,
             OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
-        result.update(reason=getattr(exc, 'code', 'D35_NATIVE_BINDING_UNPROVEN'), detail=str(exc))
+        result.update(reason=getattr(exc, 'code', 'D35_NATIVE_BINDING_UNPROVEN'), detail=str(exc), metric_status='NOT_MEASURED')
     # A measured failure survives a later missing/tampered sibling input.
     if component.get('verdict') == 'FAIL' or result.get('component_status') == 'FAIL' or any(
             o['status'] == 'FAIL' for o in result['obligations']):
         result['status'] = result['metric_status'] = 'FAIL'
+    elif result['metric_status'] == 'PASS':
+        import flow109_admission as admission
+        try:
+            result['qualification_receipt'] = admission.require_admission(project, current)
+            result.update(status='PASS', qualification='PASS', delivery_blocked=False)
+        except admission.AdmissionRefusal as exc:
+            result.update(reason=exc.code, qualification_receipt=exc.report)
     return result
 
 
