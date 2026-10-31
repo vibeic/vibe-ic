@@ -418,6 +418,9 @@ def canonical_program_paths(programs_dir: Path) -> tuple[Path, ...]:
         # repaired LEC consumer is refused as duplicate work under the identity
         # of the broken producer generation.
         programs_dir / "lec_run.py",
+        # The complete canonical LEC gate consumes the adopted native proof.
+        # Its real reader repair must reopen admission with unchanged RTL.
+        programs_dir / "lec_equivalence_check.py",
         # LEC and backend entry consume the receipt-bound native handoff here.
         # A repaired resolver is new consumed source, even with identical RTL.
         programs_dir / "synth_handoff_netlist_check.py",

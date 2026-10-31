@@ -420,6 +420,58 @@ def verdict_was_decided(lc: dict, equivalent: Optional[bool],
 
 def audit(project: Path) -> AuditResult:
     res = AuditResult()
+    # The named observed-reset producer has its own independently adopted
+    # execution, not a lec_run report. Reopen that real consumer; never project
+    # it into legacy proof_identity fields or fall back after its refusal.
+    named = ('input/flow109/D25.json', 'input/flow109/D25_source_authority.json',
+             'reports/lec_eqy_execution.json')
+    if any((project / name).exists() or (project / name).is_symlink() for name in named):
+        import os
+        import hashlib
+        import flow109
+        import flow109_metric_acceptance as metrics
+        from lec_gate_netlist_select import pnr_consumed_netlist, step15_top
+        res.evidence_source = 'adopted_native_eqy'
+        try:
+            manifest = project / named[0]
+            if manifest.is_symlink() or not manifest.is_file():
+                raise metrics.MetricRefusal('D25_NATIVE_INPUT_UNBOUND', 'named manifest absent or linked')
+            owner = flow109.validate_execution_context(json.loads(
+                Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+            context = flow109.component_context(owner, requested_step='D25')
+            if context['resolved_row']['id'] != 'D25':
+                raise metrics.MetricRefusal('D25_CONTEXT_INVALID', 'not the selected LEC contract')
+            accepted = metrics.accept_d25(project, context)
+            res.summary = {'metric_acceptance': accepted,
+                           'qualification_scope': accepted.get('qualification_scope')}
+            execution = accepted.get('native_execution') or {}
+            proof = execution.get('proof') or {}
+            res.compared_points = proof.get('compared_points')
+            res.non_equivalent_points = len(proof.get('non_equivalent_points', []))
+            res.unproven_points = len(proof.get('unproven_points', []))
+            if accepted['status'] != 'PASS':
+                res.not_measured = accepted['status'] != 'FAIL'
+                raise metrics.MetricRefusal(accepted['reason'], 'named native consumer did not accept')
+            gate = execution['subject']['gate_netlist']
+            top = execution['mode']['top']
+            consumed, note, scan = pnr_consumed_netlist(project, step15_top(project, top))
+            if (consumed is None or not consumed.is_file() or scan
+                    or consumed.resolve() != (project / gate['path']).resolve()
+                    or hashlib.sha256(consumed.read_bytes()).hexdigest() != gate['sha256']):
+                raise metrics.MetricRefusal('LEC_SUBJECT_UNBOUND', 'native proof differs from delivered netlist: ' + note)
+            res.summary['subject_binding'] = {
+                'state': _B_MATCH, 'top': top, 'proved_path': gate['path'],
+                'proved_sha256': 'sha256:' + gate['sha256'],
+                'consumer_path': str(consumed.relative_to(project)),
+                'consumer_sha256': 'sha256:' + gate['sha256'],
+                'consumer_note': note, 'consumer_scan_inserted': scan,
+                'execution_record': execution['execution_record']}
+            res.passed = res.equivalent = True
+        except (flow109.Flow109Error, metrics.MetricRefusal, OSError, ValueError,
+                KeyError, TypeError) as exc:
+            res.findings.append(Finding(rule=getattr(exc, 'code', 'D25_NATIVE_UNBOUND'),
+                severity='ERROR', message=str(exc), file='reports/lec_eqy_execution.json'))
+        return res
     json_path = project / LEC_JSON_REL
     rpt_path = project / LEC_RPT_REL
 
@@ -1046,6 +1098,9 @@ def main(argv: Optional[List[str]] = None) -> int:
     # 300 chars of stdout and requires the token at line-start, so a long line
     # would be sliced mid-string and the disclosure would be lost.
     if result.not_measured:
+        if result.evidence_source == 'adopted_native_eqy':
+            print('NOT_MEASURED_NON_WAIVABLE: named native LEC consumer did not accept')
+            return 1
         print(f"LEC NOT_MEASURED: step budget exhausted "
               f"(resource: {result.exhausted_resource}) with no verdict — "
               f"nothing was decided, so nothing can be waived.")
