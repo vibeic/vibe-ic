@@ -957,7 +957,49 @@ def _a07_invocation(project, step="A07"):
 
 
 def _a08_invocation(project):
-    return _a07_invocation(project, step="A08")
+    """Bind the selected incremental manifest and its existing native readset."""
+    import flow109_metric_acceptance as metrics
+    project = Path(project).resolve()
+    invocation = _a07_invocation(project, step="A08")
+    if invocation is None:
+        return None
+    paths = set()
+    def referenced(value):
+        if isinstance(value, str) and value:
+            path = Path(value)
+            path = (path if path.is_absolute() else project / path).resolve()
+            paths.add(path)
+            return path
+    def views(record):
+        for view in (record.get("native_inputs") or {}).values():
+            if isinstance(view, dict):
+                referenced(view.get("path"))
+    for block in _declared_blocks(project):
+        name = block.get("name") or block.get("block")
+        selected = metrics._a08_selected(project, name)
+        pvt = selected.get("pvt") or {}
+        if pvt.get("kind") != "incremental_capture":
+            continue
+        path = referenced((pvt.get("manifest") or {}).get("path"))
+        manifest = _read(path, {}) if path else {}
+        views(manifest)
+        for context in manifest.get("contexts") or []:
+            views(context)
+            referenced((context.get("settings") or {}).get("path"))
+            score_path = referenced(context.get("score"))
+            score = _read(score_path, {}) if score_path else {}
+            entries = score.get("points") or []
+            if not entries and score_path:
+                entries = [{"path": str(p)} for p in score_path.parent.glob("point-[0-9][0-9][0-9]/result.json")]
+            for entry in entries:
+                point_path = referenced(entry.get("path"))
+                point = _read(point_path, {}) if point_path else {}
+                views(point)
+                referenced((point.get("capture") or {}).get("path"))
+                for execution in point.get("executions") or []:
+                    referenced(execution.get("log"))
+    invocation["inputs"].update({str(path): _sha(path) for path in paths if path.is_file()})
+    return invocation
 
 
 def _a05_invocation(project):

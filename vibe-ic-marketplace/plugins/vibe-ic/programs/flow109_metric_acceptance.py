@@ -9050,44 +9050,212 @@ def accept_a07(project: Path, context: Mapping, component: Mapping) -> dict:
     return answer
 
 
-def accept_a08(project: Path, context: Mapping, component: Mapping) -> dict:
-    """BLOCKING PVT binding: refuse legacy summaries without per-corner native identity.
+def _a08_selected(project, name):
+    """Use the A08 sidecar/config precedence of the existing native dispatcher."""
+    import analog_native_flow as native
+    import analog_native_sim as sim
+    sidecar = project / 'phase3/analog' / name / 'pvt_inputs.json'
+    defaults = native._read(sidecar, {})
+    if not isinstance(defaults, dict):
+        raise MetricRefusal('A08_PVT_INPUTS_INVALID', str(sidecar))
+    selected = sim._config({'config': native._read(project / 'input/analog_flow.json', {})}, {'name': name}, 'A08')
+    return {**defaults, **selected}
 
-    The existing legacy producer emits corner values/log paths but no bound
-    per-corner executable/argv or pre-execution model readset. Aggregate PASS
-    and corner counts cannot replace those absent producer fields. No runner
-    or invented receipt is introduced at this consumer boundary.
+
+def _a08_incremental_observation(project, row, invocation):
+    """Replay the selected producer; retained native FAIL precedes later gaps.
+
+    This is a reader of the existing manifest/collector, never a simulator or
+    an enrollment path for historical results without pre-execution identity.
     """
+    import analog_incremental_pvt as pvt
+    import analog_incremental_capture as capture
+    import analog_native_sim as sim
+    import analog_real_corner_sweep as sweep
+    if not callable(getattr(capture, 'validate_execution_identity', None)):
+        raise MetricRefusal('A08_PREEXEC_PRODUCER_DEPENDENCY_ABSENT', 'analog_incremental_capture.validate_execution_identity')
+    name = row['block']
+    selected = _a08_selected(project, name)
+    declaration = selected.get('pvt') or {}
+    if declaration.get('kind') != 'incremental_capture':
+        raise MetricRefusal('A08_PER_CORNER_EXECUTABLE_ARGV_AND_PREEXEC_MODEL_READSET_ABSENT', name)
+    reference = declaration['manifest']
+    path, manifest = sim._incremental_source_manifest(project, name, selected,
+        {'image': invocation['image']}, reference, 'incremental_capture_pvt')
+    if invocation['inputs'].get(str(path)) != reference['sha256']:
+        raise MetricRefusal('A08_SELECTED_MANIFEST_UNBOUND', str(path))
+    contexts = pvt._validate_manifest(manifest)
+    replayed = pvt.collect(manifest)  # existing non-launching native consumer
+    values = replayed.get('metrics') or {}
+    answer = {'status': replayed['status'], 'corners': [], 'gaps': [], 'required': [],
+              'manifest': {'path': str(path), 'sha256': reference['sha256']}}
+    try:
+        candidates = [Path(p) for p in row.get('outputs', []) if Path(p).name == 'pvt-studies.json']
+        if len(candidates) != 1:
+            raise MetricRefusal('A08_SELECTED_RESULT_POPULATION_INVALID', name)
+        result_path = candidates[0]
+        _a0708_file(project, result_path, row['output_views'][str(result_path)], invocation)
+        stored = json.loads(result_path.read_bytes())
+        recorded = {k: v for k, v in stored.get('metrics', {}).items() if k != 'execution_budget'}
+        if (stored.get('status') != replayed['status'] or recorded != values
+                or row.get('metrics') != stored.get('metrics')
+                or stored.get('native_inputs', {}).get('pvt_manifest') != answer['manifest']):
+            raise MetricRefusal('A08_SELECTED_RESULT_DIFFERS_FROM_REPLAY', name)
+        for role, view in replayed.get('native_inputs', {}).items():
+            if stored.get('native_inputs', {}).get(role) != view:
+                raise MetricRefusal('A08_RESULT_READSET_INCOMPLETE', role)
+            _a0708_file(project, view['path'], view['sha256'], invocation)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        answer['gaps'].append(str(exc))
+    spec_path = Path(manifest['native_inputs']['spec']['path'])
+    required = sim._source_measurement_coverage(spec_path, [])['required']
+    spec = json.loads(spec_path.read_bytes())
+    units = {sweep.normalize_spec_label(v['name']) or v['name'].casefold(): v.get('unit', v.get('units'))
+             for v in spec.get('specs', []) if isinstance(v, dict) and v.get('name')}
+    # The existing incremental decimator reports ENOB in bits, independently
+    # of a source document's spelling of that algorithm's output dimension.
+    units['enob'] = 'bit'
+    answer.update(required=required, units={key: units.get(key) for key in required})
+    indexed = {(v['process'], v['temperature_c']): v for v in values.get('contexts', [])}
+    if len(indexed) != len(contexts) or len(values.get('contexts', [])) != len(contexts):
+        answer['gaps'].append('A08_REPLAY_CORNER_POPULATION_MISMATCH')
+    for context in contexts:
+        coordinate = (context['process'], context['temperature_c'])
+        label = context['process'] + '_' + str(context['temperature_c']).replace('-', 'm')
+        observed = indexed.get(coordinate, {})
+        corner = {'name': label, 'status': observed.get('status', 'NOT_MEASURED'),
+                  'observations': {}, 'complete': False, 'score': context['score'], 'points_validated': 0}
+        try:
+            expected = json.loads(Path(context['settings']['path']).read_bytes())
+            score_path = Path(context['score'])
+            score = json.loads(score_path.read_bytes()) if score_path.is_file() else {}
+            entries = score.get('points') or []
+            phases = set()
+            for entry in entries:
+                point_path = _a0708_file(project, entry['path'], entry['sha256'], invocation)
+                point = json.loads(point_path.read_bytes())
+                current, why = capture.validate_execution_identity(point)
+                if not current:
+                    raise MetricRefusal('A08_POINT_EXECUTION_IDENTITY_UNAVAILABLE', why)
+                phase = point['settings']['phase_index']
+                if (phase in phases or point['settings'] != capture.phase_settings(expected, phase)
+                        or point.get('image') != invocation['image']
+                        or point.get('native_inputs', {}).get('native_binary') != invocation['tools']['ngspice']):
+                    raise MetricRefusal('A08_POINT_METHOD_TOOL_OR_IMAGE_CHANGED', str(point_path))
+                phases.add(phase)
+                corner['points_validated'] += 1
+            complete = (len(entries) == expected['series_length'] and phases == set(range(expected['series_length']))
+                and set(observed.get('measured_outputs', [])) == set(required) and bool(required)
+                and corner['status'] in ('PASS', 'FAIL'))
+            for key in observed.get('measured_outputs', []):
+                if key in required and key in observed.get('measurements', {}):
+                    corner['observations'][key] = {'value': _finite_number(observed['measurements'][key]),
+                                                  'unit': units.get(key)}
+            corner['complete'] = complete
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            corner['detail'] = str(exc)
+        answer['corners'].append(corner)
+    if (values.get('stage') != 'PRE' or values.get('total_corners') != len(contexts)
+            or values.get('corners_executed') != len(contexts) or values.get('full_pvt_sweep_executed') is not True
+            or values.get('design_traceable') is not True or values.get('gaps')
+            or any(not corner['complete'] for corner in answer['corners'])):
+        answer['gaps'].append('A08_COMPLETE_CURRENT_POINT_AND_CORNER_POPULATION_REQUIRED')
+    if answer['status'] != 'FAIL' and answer['gaps']:
+        answer['status'] = 'NOT_MEASURED'
+    return answer
+
+
+def accept_a08(project: Path, context: Mapping, component: Mapping) -> dict:
+    """BLOCKING selected incremental PVT metrics; qualification stays separate."""
+    import analog_native_flow as native
     project = Path(project).resolve()
     answer = {'schema': SCHEMA, 'step_id': 'A08', 'status': 'NOT_MEASURED', 'metrics': {},
-              'scope': 'PVT consumer refusal; missing producer identity is not qualification'}
+              'scope': 'selected current incremental PVT metrics; no qualification or whole-IC credit'}
     failed = component.get('component_status') == 'FAIL'
+    observations, gaps = {}, []
+    invocation = component.get('a08_invocation') or {}
+    # Collect before checking unrelated authority/readset gaps. The existing
+    # producer validates actual DUT/model identity and preserves numerical FAIL
+    # beside missing points; changed approved documents cannot cancel that FAIL.
+    for row in component.get('native_results', {}).get('steps', []):
+        if row.get('step') != 'A08':
+            continue
+        try:
+            value = _a08_incremental_observation(project, row, invocation)
+            failed = failed or value['status'] == 'FAIL'
+            if row['block'] in observations:
+                raise MetricRefusal('A08_DUPLICATE_BLOCK', row['block'])
+            observations[row['block']] = value
+            gaps.extend(value['gaps'])
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            gaps.append(str(exc))
+    answer['native_observation'] = observations
     try:
         invocation, rows = _a0708_rows(project, context, component, 'A08')
-        required, _ = _approved_authority(project, 'requirements/base_A7/pvt_load_modes.json#/required_items', ('block', 'name'))
-        wanted = {(v['block'], v['name']) for v in required['required_items']}
-        if not wanted:
-            raise MetricRefusal('A08_EMPTY_PVT_POPULATION', 'required_items')
-        observed = set()
-        for row in rows:
-            for path in row.get('outputs', []):
-                if Path(path).name != 'corner_results.json':
-                    continue
-                record = json.loads(Path(path).read_bytes())
-                for corner in record.get('corners', []):
-                    if isinstance(corner, dict) and corner.get('_provenance') == 'real_ngspice':
-                        observed.add((row['block'], corner['name']))
-        answer['metrics']['pvt_load_modes'] = {'status': 'NOT_MEASURED', 'required': sorted(wanted),
-            'observed': sorted(observed), 'missing': sorted(wanted - observed), 'authority': required}
-        answer['metrics']['prelayout_performance'] = {'status': 'NOT_MEASURED',
-            'reason': 'A08_PER_CORNER_EXECUTABLE_ARGV_AND_PREEXEC_MODEL_READSET_ABSENT',
-            'producer': 'analog_real_corner_sweep.py::_run_ngspice/_run_block',
-            'source_output': 'phase3/analog/<block>/corner_results.json#/corners'}
-        answer['reason'] = 'A08_PER_CORNER_EXECUTABLE_ARGV_AND_PREEXEC_MODEL_READSET_ABSENT'
+        if not observations and all((_a08_selected(project, row['block']).get('pvt') or {}).get('kind')
+                                   != 'incremental_capture' for row in rows):
+            # Preserve the existing unselected legacy summary diagnostics;
+            # the selected producer repair does not qualify that old route.
+            required, _ = _approved_authority(project, 'requirements/base_A7/pvt_load_modes.json#/required_items', ('block', 'name'))
+            wanted = {(v['block'], v['name']) for v in required['required_items']}
+            if not wanted:
+                raise MetricRefusal('A08_EMPTY_PVT_POPULATION', 'required_items')
+            observed = set()
+            for row in rows:
+                for path in row.get('outputs', []):
+                    if Path(path).name == 'corner_results.json':
+                        record = json.loads(Path(path).read_bytes())
+                        observed.update((row['block'], corner['name']) for corner in record.get('corners', [])
+                            if isinstance(corner, dict) and corner.get('_provenance') == 'real_ngspice')
+            answer['metrics']['pvt_load_modes'] = {'status': 'NOT_MEASURED', 'required': sorted(wanted),
+                'observed': sorted(observed), 'missing': sorted(wanted - observed), 'authority': required}
+            answer['metrics']['prelayout_performance'] = {'status': 'NOT_MEASURED',
+                'reason': 'A08_PER_CORNER_EXECUTABLE_ARGV_AND_PREEXEC_MODEL_READSET_ABSENT',
+                'producer': 'analog_real_corner_sweep.py::_run_ngspice/_run_block',
+                'source_output': 'phase3/analog/<block>/corner_results.json#/corners'}
+            answer.update(status='FAIL' if failed else 'NOT_MEASURED',
+                reason='A08_MEASURED_NATIVE_FAILURE_PRESERVED' if failed else
+                       'A08_PER_CORNER_EXECUTABLE_ARGV_AND_PREEXEC_MODEL_READSET_ABSENT')
+            return answer
+        if set(observations) != {row['block'] for row in rows}:
+            raise MetricRefusal('A08_SELECTED_BLOCK_POPULATION_INCOMPLETE', '; '.join(gaps))
+        expected = {(block, corner['name']) for block, value in observations.items() for corner in value['corners']}
+        observed = {(block, corner['name']) for block, value in observations.items() for corner in value['corners'] if corner['complete']}
+        try:
+            required, _ = _approved_authority(project, 'requirements/base_A7/pvt_load_modes.json#/required_items', ('block', 'name'))
+            wanted = {(v['block'], v['name']) for v in required['required_items']}
+            complete = (bool(expected) and wanted == expected == observed
+                and len(wanted) == len(required['required_items']) and not gaps)
+            answer['metrics']['pvt_load_modes'] = {'status': 'PASS' if complete else 'NOT_MEASURED',
+                'required': sorted(wanted), 'observed': sorted(observed), 'missing': sorted(wanted - observed),
+                'unexpected': sorted(expected - wanted), 'authority': required}
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            answer['metrics']['pvt_load_modes'] = {'status': 'NOT_MEASURED', 'detail': str(exc)}
+        try:
+            authority, document = _approved_document(project, 'requirements/base_A7/prelayout_performance.json',
+                authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+            limits, units = document['limits'], document['units']
+            comparisons = []
+            population = set(limits) == set(units) == set(observations)
+            for block, value in observations.items():
+                population = population and set(limits.get(block, {})) == set(units.get(block, {})) == set(value['required']) and bool(value['required'])
+                for corner in value['corners']:
+                    checked = _a0708_compare({block: corner['observations']}, {block: limits.get(block, {})}, {block: units.get(block, {})})
+                    comparisons.extend({**item, 'corner': corner['name']} for item in checked)
+            violated = any(v['status'] == 'FAIL' for v in comparisons)
+            answer['metrics']['prelayout_performance'] = {'status': 'FAIL' if violated or failed else
+                'PASS' if population and comparisons and not gaps and all(v['status'] == 'PASS' for v in comparisons) else 'NOT_MEASURED',
+                'comparisons': comparisons, 'authority': authority}
+            failed = failed or violated
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            answer['metrics']['prelayout_performance'] = {'status': 'FAIL' if failed else 'NOT_MEASURED', 'detail': str(exc)}
+        if native._a08_invocation(project) != invocation:
+            raise MetricRefusal('A08_INPUT_CHANGED_DURING_ACCEPTANCE', 'readset')
+        answer.update(status='FAIL' if failed else native._aggregate(list(answer['metrics'].values())),
+            input_views=invocation['inputs'], gaps=gaps, reason='A08_CURRENT_SELECTED_INCREMENTAL_PVT_METRICS_EVALUATED')
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
-        answer.update(reason=getattr(exc, 'code', 'A08_NATIVE_PVT_INPUT_ABSENT'), detail=str(exc))
-    if failed:
-        answer.update(status='FAIL', reason='A08_MEASURED_NATIVE_FAILURE_PRESERVED')
+        answer.update(status='FAIL' if failed else 'NOT_MEASURED',
+            reason=getattr(exc, 'code', 'A08_NATIVE_PVT_INPUT_ABSENT'), detail=str(exc), gaps=gaps)
     return answer
 
 
