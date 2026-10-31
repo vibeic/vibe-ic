@@ -9089,3 +9089,268 @@ def accept_a08(project: Path, context: Mapping, component: Mapping) -> dict:
     if failed:
         answer.update(status='FAIL', reason='A08_MEASURED_NATIVE_FAILURE_PRESERVED')
     return answer
+
+
+def _d40_routed_population(path: Path) -> tuple[list[dict], list[dict]]:
+    """Read every signal NETS record; reject truncation/duplicates/unknown syntax.
+
+    Reuse the existing DEF-net reader. SPECIALNETS and a wire keyword without
+    coordinates are not routed signal nets. An explicit empty section is data;
+    only the requirements owner can validate its applicability/absence.
+    """
+    from drc_feedback_repair import _def_nets
+    text = path.read_text()
+    sections = list(re.finditer(r'^NETS\s+(\d+)\s*;(.*?)^END NETS\s*$', text, re.M | re.S))
+    if len(sections) != 1 or not re.search(r'^END DESIGN\s*$', text, re.M):
+        raise MetricRefusal('D40_DEF_POPULATION_UNREADABLE', str(path))
+    section = sections[0]
+    body = section[2]
+    records = list(re.finditer(r'(?:^|\n)\s*-\s+(\S+)(.*?)\s*;', body, re.S))
+    remainder = re.sub(r'(?:^|\n)\s*-\s+(\S+)(.*?)\s*;', '', body, flags=re.S)
+    if (remainder.strip() or len(records) != int(section[1])
+            or len({r[1] for r in records}) != len(records)):
+        raise MetricRefusal('D40_DEF_POPULATION_INCOMPLETE', str(path))
+    if not records:
+        return [], []
+    _, nets = _def_nets(path)
+    if set(nets) != {r[1] for r in records}:
+        raise MetricRefusal('D40_DEF_POPULATION_INCOMPLETE', str(path))
+    observed, routed = [], []
+    for name, route in nets.items():
+        geometry = re.search(r'\+\s+(?:ROUTED|FIXED|COVER)\s+\S+\s+\(\s*(?:-?\d+|\*)\s+(?:-?\d+|\*)\s*\)', route) is not None
+        observed.append({'net': name, 'routed': geometry})
+        if geometry:
+            routed.append({'net': name})
+    return observed, routed
+
+
+def accept_d40(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    """BLOCKING current step21 route readback, then existing per-use admission.
+
+    Bind the complete native chain and views. Coverage uses only the approved
+    independent required set. DRC uses the receipt-bound rerouter's actual
+    terminal marker metric, corroborated by its raw report and route transcript.
+    Unknown/missing data is NOT_MEASURED; a measured FAIL survives later NI.
+    This function runs no tool and authors no approval/qualification authority.
+    """
+    import inspect
+    import flow109
+    import flow109_admission as admission
+    import librelane_contract as ll
+    import librelane_route as route
+    import phase3_one_shot_runner as R
+    import execution_backend_producers as native
+
+    project = Path(project).resolve()
+    reads = {}
+    result = {'schema': SCHEMA, 'row_id': 'D40', 'status': 'NOT_MEASURED',
+        'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+        'delivery_blocked': True, 'obligations': []}
+
+    def read(name, digest=None, *, external=False):
+        path = Path(name)
+        path = path if path.is_absolute() else project / path
+        if (path.is_symlink() or not path.is_file()
+                or (not external and not path.resolve().is_relative_to(project))
+                or any(p.is_symlink() for p in path.parents if p.is_relative_to(project))):
+            raise MetricRefusal('D40_INPUT_UNBOUND', str(path))
+        raw = path.read_bytes()
+        actual = _sha(raw)
+        key = str(path.relative_to(project)) if path.is_relative_to(project) else str(path)
+        if digest is not None and digest != actual or key in reads and reads[key] != actual:
+            raise MetricRefusal('D40_INPUT_CHANGED', key)
+        reads[key] = actual
+        return path, raw
+
+    def document(name, digest=None):
+        path, raw = read(name, digest)
+        return path, json.loads(raw)
+
+    failures = (MetricRefusal, flow109.Flow109Error, ll.Refusal, OSError, ValueError,
+                KeyError, TypeError, AttributeError)
+    try:
+        current = flow109.validate_execution_context(context)
+        row = current['resolved_row']
+        specs = row['obligations']
+        if (row['id'] != 'D40' or tuple(o['metric'] for o in specs) !=
+                ('routed_net_coverage', 'routing_drc_errors')
+                or specs[0]['expectation'] != {'operator': 'covers_all',
+                    'required_set_ref': 'requirements/base_27/routed_net_coverage.json#/required_items',
+                    'empty_set_policy': 'requires validated absence/applicability evidence'}
+                or specs[1]['expectation'].get('operator') != 'eq'
+                or specs[1]['expectation'].get('value') != 0
+                or specs[1]['expectation'].get('unit') != 'count'):
+            raise MetricRefusal('D40_CONTRACT_CHANGED', 'routing obligations')
+        coverage, drc = ({'id': spec['id'], 'status': 'NOT_MEASURED'} for spec in specs)
+        result['obligations'] = [coverage, drc]
+        _, chain = document('reports/phase3/execution-backend-21.json')
+        steps = chain['ordered_steps']
+        if (not isinstance(steps, list) or len(set(steps)) != len(steps)
+                or steps[0] != 'OpenROAD.GlobalRouting' or steps[-1] != 'OpenROAD.FillInsertion'
+                or route.DRT not in steps or route.NVR not in steps
+                or steps.index(route.NVR) != steps.index(route.DRT) + 1
+                or len(chain['states']) != len(steps)):
+            raise MetricRefusal('D40_CHAIN_UNBOUND', 'selected routing chain')
+        cfgroot = project / 'phase3/librelane/execution-backend-21-config'
+        read(cfgroot / 'flow_gates.json')
+        gated = ll.flow_gated_off(cfgroot)
+        if 'OpenROAD.RepairAntennas' not in steps and 'OpenROAD.RepairAntennas' not in gated:
+            raise MetricRefusal('D40_CHAIN_UNBOUND', 'antenna stage neither executed nor source-gated')
+        if any(step in gated for step in steps):
+            raise MetricRefusal('D40_CHAIN_UNBOUND', 'executed population conflicts with flow gates')
+        previous, _ = read(chain['initial_state'], chain['initial_sha256'])
+        executions, states, folders, logs = [], {}, {}, []
+        working_report = None
+        for index, (step, ref) in enumerate(zip(steps, chain['states']), 1):
+            state_path, state = document(ref['state'], ref['sha256'])
+            expected = project / 'phase3/librelane/execution-backend-21' / (
+                f'{index:02d}-' + step.lower().replace('.', '-'))
+            if ref['step'] != step or state_path.parent != expected:
+                raise MetricRefusal('D40_CHAIN_UNBOUND', step)
+            receipt = ll.validate_step_receipt(expected, step)
+            read(expected / 'vibeic_receipt.json')
+            for name, digest in receipt['sha256'].items():
+                read(expected / name, digest)
+            fp = receipt['input']
+            if fp.get('step') != step or not fp.get('image') or fp['image'] != component.get('native_image'):
+                raise MetricRefusal('D40_EXECUTION_CHANGED', step)
+            if step.startswith(ll.PLUGIN_STEP_PREFIX) and fp.get('plugin') != ll._plugin_digests(step):
+                raise MetricRefusal('D40_PRODUCER_SOURCE_CHANGED', step)
+            read(previous, fp['state'])
+            input_state = json.loads(previous.read_bytes())
+            actual = {str(p): _sha(p.read_bytes()) for p in ll._walk_paths(
+                {k: v for k, v in input_state.items() if k != 'metrics'})}
+            if not actual or actual != fp.get('state_files') or not any(Path(p).suffix == '.sdc' for p in actual):
+                raise MetricRefusal('D40_STATE_POPULATION_CHANGED', step)
+            for name, digest in actual.items():
+                read(name, digest)
+            # Strict timing, cell policy and NVR select derived configs. The
+            # existing producer records the actual path, not a guessed name.
+            config_path, config = document(ref['config'], ref['config_sha256'])
+            if (config_path.parent != cfgroot or ref['config_sha256'] != fp['config']
+                    or config.get('meta', {}).get('step') != step):
+                raise MetricRefusal('D40_CONFIG_CHANGED', step)
+            _, pdk = document(expected / 'pdk_root.json')
+            mounts = pdk['mounts_under_it']
+            config_inputs, recorded_inputs = dict(config), dict(fp.get('config_files') or {})
+            if step == route.NVR and 'VIBEIC_NVR_REPORT_PATH' in config:
+                # Native NamedViolationReroute overwrites this working OUTPUT
+                # from its bound DRT report before reading it. The generic
+                # fingerprint may include a prior file here; it is not an
+                # immutable input. All other config material remains exact.
+                working_report = Path(config_inputs.pop('VIBEIC_NVR_REPORT_PATH'))
+                if working_report != cfgroot / 'nvr/execution-backend-21' / R.ROUTER_DRC_REPORT_NAME:
+                    raise MetricRefusal('D40_WORKING_OUTPUT_FOREIGN', str(working_report))
+                recorded_inputs.pop(str(working_report), None)
+            if not recorded_inputs or ll.config_file_hashes(config_inputs, mounts) != recorded_inputs:
+                raise MetricRefusal('D40_CONFIG_POPULATION_CHANGED', step)
+            for name, digest in recorded_inputs.items():
+                path = Path(name)
+                for host, guest in sorted(mounts, key=lambda m: len(m[1]), reverse=True):
+                    if path.is_relative_to(guest):
+                        path = Path(host) / path.relative_to(guest)
+                        break
+                read(path, digest, external=True)
+            for log in sorted(expected.glob('*.log')):
+                read(log)
+                logs.append('# ' + str(expected.relative_to(project)) + '/' + log.name + '\n' +
+                            log.read_text(errors='replace') + '\n')
+            executions.append({'step': step, 'input': fp,
+                'receipt_sha256': _sha((expected / 'vibeic_receipt.json').read_bytes())})
+            states[step], folders[step], previous = state, expected, state_path
+        _, handoff = document('reports/phase3/execution-backend-execution-backend-21-handoff.json')
+        final, _ = read(handoff['state'], handoff['state_sha256'])
+        if final != previous:
+            raise MetricRefusal('D40_HANDOFF_FOREIGN', 'terminal routing state')
+        for view, target in (('def', 'routed.def'), ('odb', 'routed.odb'),
+                             ('nl', str(ll._def_design_name(Path(state['def']))) + '_pnr.v')):
+            ref = handoff['views'][view]
+            source, _ = read(ref['source'], ref['source_sha256'])
+            dest, _ = read(ref['dest'], ref['dest_sha256'])
+            if (state.get(view) != str(source) or dest != project / 'phase3/stage3/pnr' / target
+                    or ref['source_sha256'] != ref['dest_sha256']):
+                raise MetricRefusal('D40_HANDOFF_FOREIGN', view)
+        invariant = {'status': 'APPROVED', 'value': 0, 'unit': 'count',
+            'source': 'canonical base_27.routing_drc_errors invariant'}
+        identity = {'producer': executions, 'tool_execution': executions,
+            'checker': {'program': 'flow109_metric_acceptance.accept_d40',
+                'sha256': _sha(inspect.getsource(accept_d40).encode()),
+                'def_reader_sha256': _sha(inspect.getsource(_d40_routed_population).encode()),
+                'producer_sha256': _sha(inspect.getsource(native.produce_pnr).encode())},
+            'consumed_inputs': dict(reads), 'requirements': invariant,
+            'configuration': {'context_sha256': current['context_sha256']}}
+        # Judge a bound positive native count before any later reporting or
+        # requirements refusal; no report/admission NI may erase that FAIL.
+        try:
+            key = 'vibeic__route__named_reroute__markers_after'
+            value = states[route.NVR]['metrics'][key]
+            _finite_number(value, count=True)
+            measurement = {'status': 'MEASURED', 'value': value, 'unit': 'count', 'identity': identity}
+            drc['measurement'] = measurement
+            drc['status'], drc['reason'] = evaluate_operator('eq', measurement, invariant)
+            if states[steps[-1]].get('metrics', {}).get(key) != value:
+                raise MetricRefusal('D40_NATIVE_METRIC_CHANGED', key)
+            _, raw_log = read('phase3/stage3/pnr/openroad.log')
+            if raw_log.decode() != ''.join(logs):
+                raise MetricRefusal('D40_LOG_POPULATION_CHANGED', 'native chain transcript')
+            native_log = read(folders[route.DRT] / 'invocation.log')[1].decode()
+            if not R._detail_route_completed(native_log) or not R._detail_route_completed(raw_log.decode()):
+                raise MetricRefusal('D40_ROUTER_INCOMPLETE', 'native terminal marker absent')
+            _, native_report = read(folders[route.NVR] / 'named_viol_after.drc')
+            if working_report is not None and read(working_report)[1] != native_report:
+                raise MetricRefusal('D40_WORKING_OUTPUT_CHANGED', str(working_report))
+            _, published_report = read('phase3/stage3/pnr/' + R.ROUTER_DRC_REPORT_NAME)
+            report_count = len(R._router_drc_report_records(project / 'phase3/stage3/pnr'))
+            if (native_report != published_report or (native_report.strip() and not report_count)
+                    or report_count != value or R._drt_final_violations(raw_log.decode()) != value):
+                raise MetricRefusal('D40_ROUTER_REPORT_MISMATCH', 'native metric/report/transcript disagree')
+            _, receipt = document('phase3/stage3/pnr/' + R.ROUTER_DRC_RECEIPT_NAME)
+            expected = {'schema': 'vibeic.router_drc_receipt.v1',
+                'producer': 'phase3_one_shot_runner.step_pnr', 'report': R.ROUTER_DRC_REPORT_NAME,
+                'report_sha256': _sha(published_report), 'log': 'openroad.log',
+                'log_sha256': _sha(raw_log), 'routed_def': 'routed.def',
+                'routed_def_sha256': reads['phase3/stage3/pnr/routed.def'],
+                'final_drt_count': value, 'route_completed': True, 'current_invocation_count': value}
+            if receipt != expected:
+                raise MetricRefusal('D40_ROUTER_RECEIPT_CHANGED', 'current route/report binding')
+        except failures as exc:
+            if drc['status'] != 'FAIL':
+                drc['status'] = 'NOT_MEASURED'
+            drc.update(reason=getattr(exc, 'code', 'D40_ROUTER_UNMEASURED'), detail=str(exc))
+        try:
+            observed, routed = _d40_routed_population(project / 'phase3/stage3/pnr/routed.def')
+            coverage['observed_population'] = observed
+            auth, body = _approved_authority(project, specs[0]['expectation']['required_set_ref'], ('net',))
+            read(auth['path'], auth['sha256'])
+            read(auth['source']['path'], auth['source']['sha256'])
+            if not body['required_items']:
+                absence = body['validated_absence']['source_reference']
+                read(absence['path'], absence['sha256'])
+                if observed:
+                    raise MetricRefusal('D40_EMPTY_AUTHORITY_CONTRADICTED', 'observed signal nets exist')
+            measurement = {'status': 'MEASURED', 'value': routed, 'unit': 'set',
+                'identity': {**identity, 'requirements': auth, 'consumed_inputs': dict(reads)}}
+            coverage['measurement'] = measurement
+            coverage['status'], coverage['reason'] = evaluate_operator('covers_all', measurement, auth)
+        except failures as exc:
+            coverage.update(reason=getattr(exc, 'code', 'D40_COVERAGE_UNMEASURED'), detail=str(exc))
+        for name, digest in reads.items():
+            read(name, digest, external=True)
+        identity['consumed_inputs'] = dict(reads)
+        result['readset'] = dict(reads)
+    except failures as exc:
+        result.update(reason=getattr(exc, 'code', 'D40_NATIVE_BINDING_UNPROVEN'), detail=str(exc))
+        for obligation in result['obligations']:
+            if obligation['status'] == 'PASS':
+                obligation.update(status='NOT_MEASURED', reason='D40_BINDING_INCOMPLETE')
+    statuses = [o['status'] for o in result['obligations']]
+    if component.get('verdict') == 'FAIL' or 'FAIL' in statuses:
+        result['status'] = result['metric_status'] = 'FAIL'
+    elif statuses and all(s == 'PASS' for s in statuses):
+        result['metric_status'] = 'PASS'
+        try:
+            result['qualification_receipt'] = admission.require_admission(project, current)
+            result.update(status='PASS', qualification='PASS', delivery_blocked=False)
+        except admission.AdmissionRefusal as exc:
+            result.update(reason=exc.code, qualification_receipt=exc.report)
+    return result

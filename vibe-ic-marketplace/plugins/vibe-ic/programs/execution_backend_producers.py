@@ -1815,6 +1815,18 @@ def produce_pnr(project, params):
                    **route.STRICT_NATIVE_TIMING}
         ll, configs, by = _state_chain(project, params, ids, 'post_hold.def', overlay,
                                        respect_flow_gates=True)
+        if os.environ.get('VIBEIC_FLOW109_CONTEXT'):
+            # Retain the actual selected derived configs in this existing
+            # chain record; the receipt's digest must bind the same bytes.
+            chain_path = project / RPT / 'execution-backend-21.json'
+            chain = json.loads(_require(chain_path).read_text())
+            if [ref['step'] for ref in chain['states']] != list(by):
+                raise em.Refusal('BACKEND_ROUTER_CHAIN_CHANGED', sid)
+            for ref in chain['states']:
+                config = configs[ref['step']]
+                ref['config'] = str(config.relative_to(project))
+                ref['config_sha256'] = snap.sha(config)
+            snap.dump(chain_path, chain)
         _handoff(project, ll, list(by.values())[-1], {'def': PNR + 'routed.def', 'odb': PNR + 'routed.odb',
                                          'nl': PNR + top + '_pnr.v'})
         log = _logs(project, by.values())
@@ -1838,6 +1850,21 @@ def produce_pnr(project, params):
             [str(project / PNR / 'routed.def'), str(project / PNR / (top + '_pnr.v'))],
             produced_by='LibreLane native routing chain (step 21)',
             tool='openroad', exit_code=0)
+        result = {'verdict': 'PASS', 'detail': 'native ordered routing chain complete; canonical gates still required',
+                  'native_image': params['image_id']}
+        context = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+        if context:
+            from flow109_metric_acceptance import accept_d40
+            try:
+                current = json.loads(Path(context).read_text())
+            except (OSError, ValueError):
+                current = {}
+            result['metric_acceptance'] = accept_d40(project, current, result)
+            result['metric_acceptance_status'] = result['metric_acceptance']['metric_status']
+            result['default_row_status'] = result['metric_acceptance']['status']
+            if result['metric_acceptance_status'] == 'FAIL':
+                result['verdict'] = 'FAIL'
+        return result
     else:
         raise em.Refusal('BACKEND_UNKNOWN_PNR_STEP', sid)
     return {'verdict': 'PASS', 'detail': 'native ordered chain complete; canonical gates still required'}
@@ -2644,7 +2671,7 @@ def produce(project, params):
             current['authority_verdict'] = authority_verdict
             current['authority_detail'] = reason
             result['current_step_declared_producers'] = current
-        if sid in ('17', '18', '19', '20') and 'metric_acceptance' in result:
+        if sid in ('17', '18', '19', '20', '21') and 'metric_acceptance' in result:
             result['canonical_receipts'] = [{
                 'schema': 'vibeic/backend-producer-receipt/1',
                 'producer': 'execution_backend_producers.produce', 'step_id': sid,
@@ -2720,7 +2747,7 @@ def produce(project, params):
         'detail': result.get('detail', ''),
         'current_step_declared_producers': current,
     }]
-    if sid in ('17', '18', '19', '20') and 'metric_acceptance' in result:
+    if sid in ('17', '18', '19', '20', '21') and 'metric_acceptance' in result:
         result['canonical_receipts'][0]['metric_acceptance'] = result['metric_acceptance']
     if result.get('retained_drc_checkpoint'):
         result['canonical_receipts'][0]['retained_drc_checkpoint'] = result['retained_drc_checkpoint']
