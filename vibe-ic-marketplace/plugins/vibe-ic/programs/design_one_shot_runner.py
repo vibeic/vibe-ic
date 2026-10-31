@@ -27743,7 +27743,7 @@ def _d30_publish_delivery(project: Path, context: dict, attempt: Path,
             'sha256': hashlib.sha256(receipt.read_bytes()).hexdigest()}
 
 
-def step_synthesis_handoff(project: Path, *, plan=None) -> StepResult:
+def step_synthesis_handoff(project: Path, *, plan=None, owner_capture=False) -> StepResult:
     """Run the existing Step14 report producers and its complete consumer.
 
     A bounded caller must supply current Step9/13 acceptance. The established
@@ -27806,6 +27806,24 @@ def step_synthesis_handoff(project: Path, *, plan=None) -> StepResult:
                     'authority_verdict': authority, 'authority_detail': reason,
                     'current_step_producers': census}
 
+        if owner_capture:
+            # The selected owner has ONE capture: its outer normal gate. Finish
+            # this invocation's identity writes before that complete consumer.
+            import flow109
+            context = flow109.validate_execution_context(json.loads(
+                Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+            if context.get('requested_step') != 'D30':
+                raise ValueError('outer handoff capture requires selected D30 owner')
+            produced = produce_handoff()
+            _stamp_gate_report_dirs(project, written_after=t0)
+            status = produced['authority_verdict']
+            if status not in ('PASS', 'FAIL', 'NOT_MEASURED'):
+                status = 'NOT_MEASURED'
+            return StepResult('synthesis_handoff', status, time.time() - t0,
+                'Step14 producers: ' + status + '; outer complete capture pending',
+                extras={'step14_producers': produced},
+                reason_class=_V.ReasonClass.INPUT_ABSENT if status == 'NOT_MEASURED' else '')
+
         # Capture the real synthesis input before these report producers
         # write, then retain the unchanged complete Step14 consumer.
         retained = _spf.retained_call(
@@ -27843,6 +27861,35 @@ def step_synthesis_handoff(project: Path, *, plan=None) -> StepResult:
                       'Step14 complete handoff: ' + status,
                       extras=extras,
                       reason_class=_V.ReasonClass.INPUT_ABSENT if status == 'NOT_MEASURED' else '')
+
+
+def _d30_seal_captured_handoff(project: Path, result: StepResult, context: dict) -> StepResult:
+    """Seal delivery only after the selected owner's complete outer capture."""
+    if result.status != 'PASS':
+        return result
+    try:
+        import flow109
+        import step_output_collector as versions
+        context = flow109.validate_execution_context(context)
+        if context.get('requested_step') != 'D30':
+            raise ValueError('handoff delivery requires selected D30 owner')
+        accepted = _current_phase2_consumer(project, '14', 0)
+        if accepted is None:
+            latest = next((r for r in versions.current_acceptance(project, 0)
+                           if str(r['id']) == '14'), {})
+            result.status = 'FAIL' if latest.get('status') == 'FAIL' else 'NOT_MEASURED'
+            raise ValueError('selected D30 outer complete consumer did not accept')
+        result.extras['step14_handoff'] = {'verdict': 'PASS', 'folder': accepted['folder']}
+        result.extras['d30_delivery_receipt'] = _d30_publish_delivery(
+            project, context, Path(os.environ[flow109.ATTEMPT_ENV]), accepted['folder'])
+        result.detail = 'Step14 complete handoff: PASS'
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        if result.status != 'FAIL':
+            result.status = 'NOT_MEASURED'
+            result.reason_class = _V.ReasonClass.INPUT_ABSENT
+        result.extras['d30_delivery_error'] = str(exc)
+        result.detail = 'Step14 complete handoff: ' + result.status + '; ' + str(exc)
+    return result
 
 
 def _audit_after_declared_producers(project: Path, skip_analog: bool) -> StepResult:
@@ -29457,10 +29504,22 @@ def main() -> int:
         elif _after_exit('synthesis_handoff'):
             plan.append(_exit_sentinel('synthesis_handoff'))
         else:
-            plan.append(_spf.gate(
+            _handoff_context = None
+            if os.environ.get('VIBEIC_FLOW109_CONTEXT'):
+                import flow109
+                _candidate_context = flow109.validate_execution_context(json.loads(
+                    Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+                if _candidate_context.get('requested_step') == 'D30':
+                    _handoff_context = _candidate_context
+            _handoff = _spf.gate(
                 project, 'design_one_shot_runner', 'synthesis_handoff',
                 _preflight_refusal('synthesis_handoff'),
-                step_synthesis_handoff, project, plan=plan))
+                step_synthesis_handoff, project, plan=plan,
+                owner_capture=_handoff_context is not None,
+                _preflight_canonical_acceptance=_handoff_context is not None)
+            if _handoff_context is not None:
+                _handoff = _d30_seal_captured_handoff(project, _handoff, _handoff_context)
+            plan.append(_handoff)
 
     # Flow step FS1 (blocks on step 11). Its gate's producer is run here so
     # the report exists before the audit reads it. A declared window does
