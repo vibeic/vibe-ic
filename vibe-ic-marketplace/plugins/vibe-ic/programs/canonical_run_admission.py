@@ -21,6 +21,7 @@ import json
 import os
 import stat
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -449,7 +450,8 @@ def image_identity(container: str) -> str:
 
 
 def admit_span(project: Path, span: str, programs_dir: Path,
-               container: str, config: Dict[str, Any]) -> Admission:
+               container: str, config: Dict[str, Any], *,
+               writable_outputs: Iterable[Path] = ()) -> Admission:
     """Convenience entry point so all runners build the same identity."""
     paths = canonical_program_paths(programs_dir)
     program_digest, unavailable = _strict_program_digest(paths)
@@ -488,7 +490,8 @@ def admit_span(project: Path, span: str, programs_dir: Path,
             "expected canonical program source is unavailable: " + detail)
     return admit(project, span, container_image=container_image,
                  config=config, program_paths=paths,
-                 program_source_sha256=program_digest)
+                 program_source_sha256=program_digest,
+                 writable_outputs=writable_outputs)
 
 
 def delegated(identity_hash: str) -> bool:
@@ -520,11 +523,25 @@ def _read_ledger(handle) -> list[Dict[str, Any]]:
 
 def admit(project: Path, span: str, *, container_image: str,
           config: Dict[str, Any], program_paths: Iterable[Path],
-          program_source_sha256: Optional[str] = None) -> Admission:
+          program_source_sha256: Optional[str] = None,
+          writable_outputs: Iterable[Path] = ()) -> Admission:
     identity = build_identity(project, span, container_image=container_image,
                               config=config, program_paths=program_paths,
                               program_source_sha256=program_source_sha256)
     fingerprint = identity_sha256(identity)
+    # BLOCKING execution precondition, checked before the append-only ledger.
+    # Probe only destinations selected by the caller's actual dispatch window;
+    # a failed environment must not consume an otherwise unchanged admission.
+    for output in writable_outputs:
+        directory = Path(output)
+        try:
+            while not directory.exists():
+                directory = directory.parent
+            with tempfile.TemporaryFile(prefix=".vibeic-write-probe-", dir=directory):
+                pass
+        except OSError as exc:
+            return Admission(False, "OUTPUT_DIRECTORY_UNWRITABLE", fingerprint,
+                             identity, f"{output}: {exc}")
     if delegated(fingerprint):
         return Admission(True, "DELEGATED_PARENT_ADMISSION", fingerprint, identity)
 

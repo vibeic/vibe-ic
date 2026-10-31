@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import subprocess
 import sys
+import pytest
 from pathlib import Path
 
 import pytest
@@ -66,6 +68,70 @@ def _admit(root: Path, **changes):
     return cra.admit(root, "phase2", container_image=changes.pop(
         "image", "sha256:" + "a" * 64), config=cfg,
         program_paths=changes.pop("programs", [PROGRAMS / "design_one_shot_runner.py"]))
+
+
+def test_unwritable_selected_output_does_not_consume_admission(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("requires an unprivileged writer for real permission denial")
+    project = _project(tmp_path / "proj")
+    stage1 = project / "phase2/stage1"
+    output = stage1 / "sim_full_stack"
+    stage1.chmod(0o555)
+    kwargs = dict(container_image="sha256:" + "a" * 64,
+                  config={"entry_step": "4", "exit_step": "4"},
+                  program_paths=[PROGRAMS / "design_one_shot_runner.py"],
+                  writable_outputs=(output,))
+    try:
+        denied = cra.admit(project, "phase2", **kwargs)
+        assert not denied.admitted, denied
+        assert denied.reason == "OUTPUT_DIRECTORY_UNWRITABLE"
+        assert str(output) in denied.detail
+        assert not cra.ledger_path(project).exists()
+    finally:
+        stage1.chmod(0o755)
+    allowed = cra.admit(project, "phase2", **kwargs)
+    assert allowed.admitted
+    assert allowed.identity_sha256 == denied.identity_sha256
+    duplicate = cra.admit(project, "phase2", **kwargs)
+    assert duplicate.reason == "DUPLICATE_NO_NEW_EVIDENCE"
+    assert len(cra.ledger_path(project).read_text().splitlines()) == 1
+    assert not output.exists()
+
+
+def test_unselected_read_only_output_does_not_block_other_window(tmp_path):
+    project = _project(tmp_path / "proj")
+    stage1 = project / "phase2/stage1"
+    stage1.chmod(0o555)
+    try:
+        allowed = _admit(project, config={"entry_step": "2", "exit_step": "2"})
+        assert allowed.admitted
+        assert _admit(project, config={"entry_step": "2", "exit_step": "2"}).reason == "DUPLICATE_NO_NEW_EVIDENCE"
+    finally:
+        stage1.chmod(0o755)
+
+
+def test_selected_simulation_window_refuses_before_consuming_admission(tmp_path):
+    """Exercise the real runner, including its requested-window selection."""
+    if os.geteuid() == 0:
+        pytest.skip("requires an unprivileged writer for real permission denial")
+    project = _project(tmp_path / "proj")
+    docs = project / "phase1/generated_docs"
+    (docs / "L10_TEST_CASES.json").write_text('{"test_cases": []}\n')
+    (docs / "L12_BEHAVIORAL_SEQUENCES.json").write_text('{"sequences": []}\n')
+    stage1 = project / "phase2/stage1"
+    stage1.chmod(0o555)
+    try:
+        result = subprocess.run(
+            [sys.executable, str(PROGRAMS / "design_one_shot_runner.py"),
+             str(project), "--entry-step", "4", "--exit-step", "4",
+             "--top-name", "core", "--skip-hardware", "--skip-phase3",
+             "--skip-analog"], text=True, capture_output=True, timeout=30)
+        assert result.returncode == 2, result.stderr
+        assert not cra.ledger_path(project).exists(), result.stderr
+        assert "OUTPUT_DIRECTORY_UNWRITABLE" in result.stderr
+        assert str(stage1 / "sim_full_stack") in result.stderr
+    finally:
+        stage1.chmod(0o755)
 
 
 def _step1_review_project(root: Path) -> Path:
