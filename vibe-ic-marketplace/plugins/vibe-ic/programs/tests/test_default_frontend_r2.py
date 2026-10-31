@@ -110,6 +110,11 @@ def _synthesis(tmp_path, monkeypatch, *, ordinary=False):
     monkeypatch.setattr(LC, "resolve_image", lambda *_: "img")
     monkeypatch.setattr(LC, "pdk_root_resolution", lambda *a, **k: {"path": str(root)})
     monkeypatch.setattr(P3, "_detect_pdk", lambda project, name: pdk if name == "pdkA" else None)
+    # The production caller now validates the registry before this fixture's
+    # mocked detector. Keep the synthetic fixture target at that same seam.
+    assert_resolvable = P3._assert_pdk_name_resolvable
+    monkeypatch.setattr(P3, '_assert_pdk_name_resolvable', lambda name:
+                        None if name == 'pdkA' else assert_resolvable(name))
 
     def resolve(project, image, source, output, **kw):
         cfg = json.loads(source.read_text())
@@ -645,6 +650,116 @@ def test_runtime_pdk_rebinding_refuses_incomplete_or_unsafe_census(
         candidate.symlink_to(outside)
 
     assert H._runtime_pdk_mount(Path("/pdk"), Path("/pdk"), damaged) is None
+
+
+
+def _relocated_native_sources(tmp_path, monkeypatch, *, ciel=False):
+    """Existing full handoff consumer, with neutral retained Nix source paths."""
+    import importlib.util
+    import shutil
+
+    p, _, _ = _produce(tmp_path, monkeypatch, ordinary=True)
+    folder = p / 'phase3/librelane/02-yosys-synthesis'
+    store = tmp_path / 'store'
+    monkeypatch.setattr(H, '_NIX_STORE', store, raising=False)
+    revision = 'a' * 40
+    package = store / ('b' * 32 + '-pdk-pdkA-' + revision)
+    assets = package / 'pdkA'
+    assets.mkdir(parents=True)
+    liberty = assets / 'model.lib'
+    liberty.write_text('library (neutral) { cell (buf) { area : 1; } }\n')
+    lef = assets / 'tech.lef'
+    lef.write_text('VERSION 5.8 ;\n')
+    runtime = tmp_path / 'runtime-sdk'
+    (runtime / 'pdkA').mkdir(parents=True)
+    for asset in (liberty, lef):
+        (runtime / 'pdkA' / asset.name).symlink_to(asset)
+    module = store / ('c' * 32 + '-librelane-source') / 'lib/python3.12/site-packages/librelane'
+    (module / 'scripts').mkdir(parents=True)
+    (module / '__init__.py').write_text('')
+    sdc = module / 'scripts/base.sdc'
+    sdc.write_text('# neutral installed base SDC\n')
+    find_spec = importlib.util.find_spec
+    monkeypatch.setattr(importlib.util, 'find_spec', lambda name, *a, **k:
+                        SimpleNamespace(origin=str(module / '__init__.py')) if name == 'librelane'
+                        else find_spec(name, *a, **k))
+    monkeypatch.setenv('PDK_ROOT', str(runtime))
+    root = tmp_path / 'absent-sdk'
+    old_lib = ((root / 'ciel/family/versions' / revision / 'pdkA/model.lib') if ciel else
+               store / ('a' * 32 + '-pdk-pdkA-' + revision) / 'pdkA/model.lib')
+    old_sdc = store / ('d' * 32 + '-python-env') / 'lib/python3.12/site-packages/librelane/scripts/base.sdc'
+    cfg = json.loads((folder / 'config.json').read_text())
+    cfg.update(LIB={'*': [str(old_lib)]}, TECH_LEFS={'nom_*': str(root / 'pdkA/tech.lef')},
+               FALLBACK_SDC_FILE=str(old_sdc))
+    put(folder / 'config.json', cfg)
+    put(p / 'phase3/librelane/synthesis_resolved.json', cfg)
+    receipt_path = folder / 'vibeic_receipt.json'
+    receipt = json.loads(receipt_path.read_text())
+    receipt['input']['config'] = LC.digest(p / 'phase3/librelane/synthesis_resolved.json')
+    files = {str(root / 'pdkA/tech.lef'): LC.digest(lef), str(old_lib): LC.digest(liberty),
+             str(old_sdc): LC.digest(sdc)}
+    files.update({str(v): LC.digest(Path(v)) for v in cfg['VERILOG_FILES']})
+    receipt['input']['config_files'] = files
+    put(folder / 'input_fingerprint.json', receipt['input'])
+    put(folder / 'pdk_root.json', {'cli_pdk_root': str(root),
+        'mounts_under_it': [[str(tmp_path / 'absent-host'), str(root)]],
+        'stated_by': 'run_chain(pdk_root=...)'})
+    for name in ('config.json', 'input_fingerprint.json', 'pdk_root.json'):
+        receipt['sha256'][name] = LC.digest(folder / name)
+    put(receipt_path, receipt)
+    sidecar = p / 'phase2/stage2/synth/synth_inputs.json'
+    doc = json.loads(sidecar.read_text())
+    doc['librelane_synthesis']['receipt_sha256'] = LC.digest(receipt_path)
+    put(sidecar, doc)
+    return p, runtime, liberty, lef, sdc, files
+
+
+@pytest.mark.parametrize('ciel', [False, True])
+def test_native_handoff_rebinds_same_nix_or_ciel_sources(tmp_path, monkeypatch, ciel):
+    p, _, liberty, lef, sdc, files = _relocated_native_sources(tmp_path, monkeypatch, ciel=ciel)
+    report = H.bound_handoff(p)
+    assert report['verdict'] == 'PASS', report
+    assert set(report['consumed_config_files']) == set(files)
+    paths = {v['path'] for v in report['consumed_config_files'].values()}
+    assert {str(liberty), str(lef), str(sdc)} <= paths
+    assert {k: v['sha256'] for k, v in report['consumed_config_files'].items()} == files
+
+
+@pytest.mark.parametrize('damage', ['liberty', 'base_sdc', 'wrong_sdk', 'foreign_revision',
+                                     'unqualified_copy', 'escape_pdk', 'escape_sdc'])
+def test_native_handoff_relocated_sources_refuse_before_tool(tmp_path, monkeypatch, damage):
+    import shutil
+    p, runtime, liberty, lef, sdc, _ = _relocated_native_sources(tmp_path, monkeypatch)
+    if damage in ('liberty', 'base_sdc'):
+        changed = liberty if damage == 'liberty' else sdc
+        changed.write_text(changed.read_text() + '# changed consumed byte\n')
+    elif damage in ('wrong_sdk', 'foreign_revision'):
+        old = liberty.parent.parent
+        target = old.with_name('e' * 32 + '-pdk-' +
+                               ('otherPDK-' + 'a' * 40 if damage == 'wrong_sdk'
+                                else 'pdkA-' + 'f' * 40))
+        shutil.copytree(old, target)
+        if damage == 'wrong_sdk':
+            (target / 'pdkA').rename(target / 'otherPDK')
+        for link in (runtime / 'pdkA').iterdir():
+            link.unlink()
+            link.symlink_to(target / ('otherPDK' if damage == 'wrong_sdk' else 'pdkA') / link.name)
+    elif damage == 'unqualified_copy':
+        for link in (runtime / 'pdkA').iterdir():
+            content = link.read_bytes()
+            link.unlink()
+            link.write_bytes(content)
+    else:
+        link = runtime / 'pdkA/tech.lef' if damage == 'escape_pdk' else sdc
+        outside = tmp_path / 'foreign-file'
+        outside.write_bytes(link.read_bytes())
+        link.unlink()
+        link.symlink_to(outside)
+    monkeypatch.setattr(LC, 'run_chain', lambda *a, **k: pytest.fail('native tool dispatched'))
+    report = H.bound_handoff(p)
+    assert report['verdict'] == 'FAIL', report
+    assert report['reason_class'] == 'tool_handoff_invalid'
+    assert 'consumed_config_files' not in report
 
 
 def test_step9_default_keeps_existing_phase2_coupling_gate(tmp_path, monkeypatch):

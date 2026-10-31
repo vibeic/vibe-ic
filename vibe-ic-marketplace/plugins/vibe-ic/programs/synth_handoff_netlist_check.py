@@ -142,7 +142,64 @@ def critical_synthesis_checks(folder: Path, resolved: dict) -> dict[str, int]:
     return counts
 
 
-def _runtime_pdk_mount(root: Path, guest: Path, receipt: dict) -> Path | None:
+_NIX_STORE = Path('/nix/store')
+
+
+def _pdk_source_file(path: Path) -> tuple[str, str, Path] | None:
+    """Canonical distribution, source revision and asset, not a store build ID."""
+    try:
+        parts = path.relative_to(_NIX_STORE).parts
+    except ValueError:
+        parts = ()
+    if len(parts) >= 3:
+        match = re.fullmatch(r'[0-9abcdfghijklmnpqrsvwxyz]{32}-(.+)-([0-9a-f]{40})', parts[0])
+        if match and match[1].endswith('-' + parts[1]):
+            return parts[1], match[2], Path(*parts[2:])
+    parts = path.parts
+    for i, part in enumerate(parts):
+        if (part == 'ciel' and len(parts) > i + 5
+                and parts[i + 2] == 'versions'
+                and re.fullmatch(r'[0-9a-f]{40}', parts[i + 3])):
+            return parts[i + 4], parts[i + 3], Path(*parts[i + 5:])
+    return None
+
+
+def _runtime_source_file(path: Path, expected: str, pdk: str | None) -> Path | None:
+    """Rebind only a canonical PDK source asset or installed LibreLane base SDC."""
+    import importlib.util
+
+    if not path.is_absolute() or '..' in path.parts:
+        return None
+    source = _pdk_source_file(path)
+    try:
+        if source:
+            root = Path(os.environ['PDK_ROOT'])
+            if source[0] != pdk or not root.is_absolute() or root.is_symlink():
+                return None
+            candidate = root / source[0] / source[2]
+            resolved = candidate.resolve(strict=True)
+            if _pdk_source_file(resolved) != source:
+                return None
+        elif (path.is_relative_to(_NIX_STORE)
+              and path.parts[-4:] == ('site-packages', 'librelane', 'scripts', 'base.sdc')):
+            spec = importlib.util.find_spec('librelane')
+            if spec is None or not spec.origin:
+                return None
+            package = Path(spec.origin).resolve(strict=True).parent
+            resolved = (package / 'scripts/base.sdc').resolve(strict=True)
+            if not package.is_relative_to(_NIX_STORE) or not resolved.is_relative_to(package):
+                return None
+        else:
+            return None
+        if not resolved.is_file() or _sha(resolved) != expected:
+            return None
+        return resolved
+    except (OSError, RuntimeError, KeyError, ValueError, ImportError):
+        return None
+
+
+def _runtime_pdk_mount(root: Path, guest: Path, receipt: dict, *,
+                       pdk: str | None = None) -> Path | None:
     """Find an equivalent PDK mount in the current consumer runtime.
 
     A native producer can record its host-side cache path even though the
@@ -189,9 +246,30 @@ def _runtime_pdk_mount(root: Path, guest: Path, receipt: dict) -> Path | None:
         pdk_files.append((path, expected))
     if not pdk_files:
         return None
+    # The retained canonical Liberty/Ciel path anchors the selected PDK source
+    # revision. A different SDK cannot buy acceptance with a matching filename.
+    sources = {source[:2] for p in config_files
+               if (source := _pdk_source_file(Path(p))) is not None and source[0] == pdk}
     for path, expected in pdk_files:
         relative = path.relative_to(guest)
         candidate = raw_runtime_mount / relative
+        try:
+            resolved = candidate.resolve(strict=True)
+        except (OSError, RuntimeError):
+            resolved = _runtime_source_file(path, expected, pdk)
+        # Nix composes the SDK from immutable source packages. Preserve the
+        # exact distribution/revision/asset and digest across store build IDs.
+        source = _pdk_source_file(resolved) if resolved is not None else None
+        logical = path.relative_to(root)
+        if (source is not None and source[:2] in sources
+                and (logical == Path(source[0]) / source[2]
+                     or _pdk_source_file(path) == source)
+                and resolved.is_file() and _sha(resolved) == expected):
+            continue
+        if sources:
+            # Once the receipt names a canonical source revision, a plain
+            # byte copy into an unrelated SDK cannot establish that identity.
+            return None
         # The mount root itself may be the image's canonical PDK alias (for
         # example gf180mcuD -> ciel/...); a symlink below that root is not an
         # immutable file binding and must remain refused unless it resolves
@@ -245,6 +323,7 @@ def _receipt_pdk_mounts(folder: Path, receipt: dict) -> list[tuple[Path, str]]:
     if not isinstance(raw, list):
         raise ValueError("native receipt is missing PDK mount metadata")
     mounts: list[tuple[Path, str]] = []
+    pdk = json.loads((folder / 'config.json').read_text()).get('PDK')
     for item in raw:
         if not isinstance(item, list) or len(item) != 2:
             raise ValueError("native receipt has malformed PDK mount metadata")
@@ -254,11 +333,26 @@ def _receipt_pdk_mounts(folder: Path, receipt: dict) -> list[tuple[Path, str]]:
                 or not (guest == root or guest.is_relative_to(root))):
             raise ValueError("native receipt has a foreign PDK mount")
         if not host.is_dir():
-            runtime_host = _runtime_pdk_mount(root, guest, receipt)
+            runtime_host = _runtime_pdk_mount(root, guest, receipt, pdk=pdk)
             if runtime_host is None:
                 raise ValueError("native receipt has a foreign PDK mount")
             host = runtime_host
         mounts.append((host, guest_value))
+    # Canonical producer keys can name the old store's Liberty or installed
+    # base.sdc directly rather than the composed SDK. Keep those receipt keys;
+    # add only independently source- and digest-verified file translations.
+    for value, expected in receipt['input']['config_files'].items():
+        path = Path(value)
+        source = path
+        for host, guest in sorted(mounts, key=lambda m: len(str(m[1])), reverse=True):
+            if path.is_relative_to(guest):
+                source = Path(host) / path.relative_to(guest)
+                break
+        if source.is_file():
+            continue
+        rebound = _runtime_source_file(path, expected, pdk)
+        if rebound is not None:
+            mounts.append((rebound, value))
     return mounts
 
 
@@ -424,6 +518,16 @@ def _native_synthesis(project: Path, folder: Path, top: str, *, path_resolver=No
         {'files': external_config_files}, mounts))
     if inp.get('config_files') != expected_config_files:
         raise ValueError('producer consumed stale or incomplete config material')
+    consumed_config_files = {}
+    for recorded_path, recorded_sha in expected_config_files.items():
+        source = resolve_path(recorded_path)
+        if not source.is_relative_to(project.resolve()):
+            for host, guest in sorted(mounts, key=lambda m: len(str(m[1])), reverse=True):
+                if source.is_relative_to(guest):
+                    source = Path(host) / source.relative_to(guest)
+                    break
+        consumed_config_files[recorded_path] = {
+            'path': str(source.resolve(strict=True)), 'sha256': recorded_sha}
     for path, recorded in inp['state_files'].items():
         resolved = resolve_path(path)
         if not resolved.is_absolute() or not resolved.is_relative_to(project):
@@ -442,6 +546,7 @@ def _native_synthesis(project: Path, folder: Path, top: str, *, path_resolver=No
     report = check(raw, cfg)
     if report['verdict'] != 'PASS':
         raise ValueError('; '.join(report['findings']))
+    report['consumed_config_files'] = consumed_config_files
     return raw, cfg, report
 
 
