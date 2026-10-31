@@ -2412,6 +2412,12 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "follows_integrating": {"cc{i}": "miller_fraction_of_load * ota_compensation_scale"},
         },
         "spec_knobs": [
+            {"name": "ota_miller_capacitance_ff", "expr": "ota_miller_capacitance_ff",
+             "default": None, "optional": True,
+             "rationale": "one explicit total capacitance for both series Miller networks"},
+            {"name": "ota_miller_nulling_length_um", "expr": "ota_miller_nulling_length_um",
+             "default": None, "optional": True,
+             "rationale": "one physical resistor length for both series Miller networks; not an ideal resistance"},
             {"name": "ota_compensation_scale",
              "expr": "ota_compensation_scale", "default": 1.0,
              "rationale": ("ordinary sizing scale for integrator Miller "
@@ -2475,6 +2481,10 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                       'l': None}],
          'ratios': [{'device': 'mp_fc_bias_source', 'reference': 'mp_fc_bias', 'w_over_l_ratio': 1.0},
                     {'device': 'mn_fc_bias_sink', 'reference': 'mn_bias', 'w_over_l_ratio': 0.125}]},
+        "miller_nulling": {"capacitance_knob": "ota_miller_capacitance_ff",
+                           "length_knob": "ota_miller_nulling_length_um",
+                           "width_constant": "w_res", "cap_width_constant": "w_cap",
+                           "legacy_scale": "ota_compensation_scale"},
         "input_drain_cascodes": {
             "enable_knob": "ota_input_drain_cascodes",
             "bias": {"net": "ncas_bias", "upper": "vdd", "lower": "vcm",
@@ -2921,6 +2931,8 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                         {'device': 'mn_fc_load_ref{i}', 'reference': 'mn_fc_bias', 'w_over_l_ratio': 4.0},
                         {'device': 'mn_fc_cas_in{i}', 'reference': 'mn_fc_bias', 'w_over_l_ratio': 4.0},
                         {'device': 'mn_fc_cas_ref{i}', 'reference': 'mn_fc_bias', 'w_over_l_ratio': 4.0}]},
+            "miller_nulling": {"capacitor": "cc{i}", "resistor": "rz_cc{i}",
+                               "midpoint": "ncc{i}", "body": "vss"},
             "input_drain_cascodes": [
                 {"source": "mn_in{i}", "cascode": "mn_cas_in{i}",
                  "midpoint": "ncas_mid_in{i}"},
@@ -6529,6 +6541,135 @@ def folded_first_stage_problems(ir: Dict[str, Any], project: Optional[Path]) -> 
         return ["folded first stage: " + str(exc)]
 
 
+def expand_miller_nulling(lib: Dict[str, Any], values: Dict[str, float],
+                          knobs: Dict[str, Any], constants: Dict[str, Any],
+                          devices: List[Dict[str, Any]], nets: List[str],
+                          exprs: List[Dict[str, Any]], sizing: Dict[str, Any],
+                          project: Path) -> Optional[Dict[str, Any]]:
+    """Select two physical series networks through two source-coupled inputs."""
+    declaration = lib.get("miller_nulling")
+    if not declaration:
+        return None
+    cap_key, length_key = [declaration[k] for k in ("capacitance_knob", "length_knob")]
+    present = [key in knobs for key in (cap_key, length_key)]
+    if not any(present):
+        return None
+    if not all(present):
+        raise SizingInputsInvalid("series Miller compensation requires both capacitance and physical resistor length")
+    capacitance = _positive_sizing_number(knobs[cap_key], cap_key)
+    length = _positive_sizing_number(knobs[length_key], length_key)
+    if knobs.get(declaration["legacy_scale"], 1.0) != 1.0:
+        raise SizingInputsInvalid("absolute Miller capacitance and a nonunit legacy compensation scale conflict")
+    evidence = bind_topology_evidence(project, sizing)
+    width_key = declaration["width_constant"]
+    cap_width_key = declaration["cap_width_constant"]
+    width = _positive_sizing_number(constants.get(width_key), width_key)
+    by_name = {d["name"]: d for d in devices}
+    branches = []
+    for group in _stage_groups(lib):
+        template = group.get("miller_nulling")
+        if not template:
+            continue
+        for index in range(1, _group_count(group, values) + 1):
+            branch = {k: v.format(i=index) for k, v in template.items()}
+            cap = by_name[branch["capacitor"]]
+            if (cap.get("role") != "cap" or len(cap["nets"]) != 2
+                    or branch["resistor"] in by_name
+                    or branch["midpoint"] in set(nets) | set(lib["ports"])
+                    or branch["body"] not in set(nets) | set(lib["ports"])):
+                raise SizingInputsInvalid("inconsistent declared series Miller endpoints or identities")
+            branch["old_nets"] = list(cap["nets"])
+            cap["nets"] = [branch["midpoint"], cap["nets"][1]]
+            branch["new_nets"] = list(cap["nets"])
+            resistor = {"name": branch["resistor"], "role": "res",
+                "function": "physical series Miller nulling resistor",
+                "nets": [branch["old_nets"][0], branch["midpoint"], branch["body"]],
+                "w": width, "l": length}
+            devices.append(resistor)
+            by_name[resistor["name"]] = resistor
+            nets.append(branch["midpoint"])
+            for parameter in ("w", "l"):
+                exprs[:] = [e for e in exprs if (e["device"], e["param"]) != (cap["name"], parameter)]
+                row = {"device": cap["name"], "param": parameter,
+                       "expr": cap_width_key if parameter == "w" else cap_l_expr(cap_key),
+                       "rationale": "source-coupled total Miller capacitance; ordinary physical capacitor realization"}
+                if parameter == "l":
+                    row["ff_expr"] = cap_key
+                exprs.append(row)
+            exprs.extend([
+                {"device": resistor["name"], "param": "w", "expr": width_key,
+                 "rationale": "source-owned resistor width, floored by the selected PDK rule"},
+                {"device": resistor["name"], "param": "l", "expr": length_key,
+                 "rationale": "one physical length for the paired model-backed resistors"}])
+            branches.append(branch)
+    if len(branches) < 2:
+        raise SizingInputsInvalid("matched Miller compensation requires at least two declared branches")
+    return {"capacitance_knob": cap_key, "length_knob": length_key,
+            "requested_capacitance_ff": capacitance, "requested_resistor_length_um": length,
+            "branches": branches, "input_view": sizing.get("input_view"), "evidence": evidence,
+            "independent_parameters": ["knobs." + cap_key, "knobs." + length_key],
+            "resistance_status": "PHYSICAL_GEOMETRY_NOT_IDEAL_OHMS; terminal resistance depends on selected model, bias and temperature",
+            "qualification": "DESIGN_INPUT_NOT_NATIVE_QUALIFICATION"}
+
+
+def finish_miller_nulling(record: Dict[str, Any], devices: List[Dict[str, Any]],
+                          exprs: List[Dict[str, Any]]) -> None:
+    """Retain every normal capacitor-array member and the real resistor cards."""
+    names = {b["resistor"] for b in record["branches"]}
+    for branch in record["branches"]:
+        names.update(d["name"] for d in devices
+                     if d["role"] == "cap" and branch["midpoint"] in d["nets"])
+    record["expanded_devices"] = [dict(d, nets=list(d["nets"])) for d in devices if d["name"] in names]
+    record["device_param_exprs"] = [dict(e) for e in exprs if e["device"] in names]
+
+
+def miller_nulling_problems(ir: Dict[str, Any], project: Optional[Path]) -> List[str]:
+    """Use the normal constructor to reconstruct only this selected component."""
+    try:
+        lib = LIBRARY.get(_canonical_type(ir.get("block_type"))) or {}
+        declaration = lib.get("miller_nulling")
+        record = ir.get("miller_nulling")
+        if not declaration:
+            if record:
+                raise SizingInputsInvalid("series Miller compensation is not declared")
+            return []
+        keys = [declaration[k] for k in ("capacitance_knob", "length_knob")]
+        sizing = read_sizing_inputs(Path(project), ir["block"]) if project is not None else {}
+        if not any(key in sizing.get("knobs", {}) for key in keys):
+            if record or any(key in ir.get("knobs", {}) for key in keys):
+                raise SizingInputsInvalid("unselected series Miller compensation carries a record or selector")
+            return []
+        family = ir.get("_provenance", {}).get("pdk_constants_source", {}).get("family")
+        if not family or project is None:
+            raise SizingInputsInvalid("selected series Miller compensation requires the normal PDK and current project")
+        values, path = bound_spec_values(Path(project), ir["block"])
+        fam, params = pdk_device_params(family)
+        measured, measured_prov = pdk_measured_params(family, Path(project))
+        _, minima = _minima.layout_minima(family)
+        _, maxima = _minima.layout_maxima(family)
+        expected = build_ir(ir["block"], ir["block_type"], {}, lib, values, path, Path(project),
+            fam, params, minima, _minima.minima_source(family), measured, measured_prov,
+            maxima, _minima.maxima_source(family), measured_loop=read_loop_measurement(Path(project), ir["block"]))
+        wanted = expected["miller_nulling"]
+        if record != wanted or any(ir.get("knobs", {}).get(key) != expected["knobs"][key] for key in keys):
+            raise SizingInputsInvalid("series Miller graph/input/evidence record is inconsistent or stale")
+        actual = {d["name"]: d for d in ir.get("devices", [])}
+        names = {d["name"] for d in wanted["expanded_devices"]}
+        if len(actual) != len(ir.get("devices", [])) or any(actual.get(d["name"]) != d for d in wanted["expanded_devices"]):
+            raise SizingInputsInvalid("series Miller endpoint/body/geometry/array member disagrees with normal source")
+        if [e for e in ir.get("device_param_exprs", []) if e["device"] in names] != wanted["device_param_exprs"]:
+            raise SizingInputsInvalid("series Miller coupling expressions disagree with normal source")
+        for branch in wanted["branches"]:
+            touching = {d["name"] for d in ir["devices"] if branch["midpoint"] in d["nets"]}
+            expected_touching = {d["name"] for d in wanted["expanded_devices"] if branch["midpoint"] in d["nets"]}
+            if (branch["midpoint"] not in ir.get("internal_nets", []) or touching != expected_touching
+                    or (branch["capacitor"] not in names and branch["capacitor"] in actual)):
+                raise SizingInputsInvalid("series Miller midpoint or capacitor-array inventory is inconsistent")
+        return []
+    except (SizingInputsInvalid, KeyError, TypeError, ValueError, AttributeError, OSError) as exc:
+        return ["series Miller compensation: " + str(exc)]
+
+
 def apply_matched_gain_length(lib: Dict[str, Any], values: Dict[str, float],
                               sizing: Dict[str, Any], devices: List[Dict[str, Any]],
                               exprs: List[Dict[str, Any]],
@@ -6833,6 +6974,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         lib, spec_values, knobs, devices, internal_nets, sizing_inputs, project)
     cascodes = expand_input_drain_cascodes(
         lib, spec_values, knobs, devices, internal_nets, sizing_inputs)
+    nulling = expand_miller_nulling(lib, spec_values, knobs, constants,
+        devices, internal_nets, param_exprs, sizing_inputs, project)
     apply_sizing_inputs(sizing_inputs, knobs, knob_sources, defaulted,
                         devices, param_exprs, role_minima,
                         dict(role_maxima or {}), lib.get("spec_knobs"))
@@ -7146,6 +7289,12 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         ir["folded_first_stage"] = folded
         ir["_provenance"]["inputs"].extend(
             dict(view, role=role) for role, view in folded["evidence"]["references"].items())
+    if nulling:
+        finish_miller_nulling(nulling, devices, param_exprs)
+        ir["miller_nulling"] = nulling
+        if not folded:
+            ir["_provenance"]["inputs"].extend(
+                dict(view, role=role) for role, view in nulling["evidence"]["references"].items())
     # THE DESIGN'S OWN PORT NAMES, when it declares them. The library names
     # ports after the circuit; the design declares them after the role they
     # play at chip level. Binding here — before the IR reaches A3, A5, A6 and
@@ -7159,7 +7308,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     if _renames:
         for _key in ("ports", "rails", "internal_nets", "devices",
                      "constants", "device_param_exprs", "measurements",
-                     "testbench", "stimulus", "input_drain_cascodes", "folded_first_stage"):
+                     "testbench", "stimulus", "input_drain_cascodes", "folded_first_stage", "miller_nulling"):
             if _key in ir:
                 ir[_key] = _rename_nets(ir[_key], _renames)
     ir["port_binding"] = {
