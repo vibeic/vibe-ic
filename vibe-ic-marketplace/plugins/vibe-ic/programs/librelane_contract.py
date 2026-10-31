@@ -806,6 +806,50 @@ class _Client:
         pass
 
 
+def _image_entrypoint(docker: str, image: str) -> Any:
+    """Read the local image's declared launch interface before starting tools."""
+    try:
+        inspected = subprocess.run(
+            [docker, 'image', 'inspect', image, '--format',
+             '{{json .Config.Entrypoint}}'],
+            capture_output=True, text=True, timeout=30)
+        if inspected.returncode:
+            raise ValueError(inspected.stderr.strip())
+        return json.loads(inspected.stdout)
+    except (OSError, subprocess.SubprocessError, ValueError) as exc:
+        raise Refusal('LL_IMAGE_ENTRYPOINT_UNAVAILABLE', str(exc)) from exc
+
+
+def _image_tool_argv(argv: list[str]) -> list[str]:
+    """Preserve the selected image's environment when entering a native tool.
+
+    Older images enter their tool environment via ui_startup.sh --skip; native
+    images have no entrypoint and execute the tool directly. Never infer this
+    distinction from a mutable tag, version string, or a failed tool launch.
+    """
+    image = _container_image_arg(argv)
+    if image is None:
+        return list(argv)
+    at = argv.index(image)
+    head, command = list(argv[:at]), list(argv[at + 1:])
+    if '--entrypoint' in head:
+        index = head.index('--entrypoint')
+        command = [head[index + 1], *command]
+        del head[index:index + 2]
+    elif command[:1] == ['--skip']:
+        command = command[1:]
+    else:
+        return list(argv)
+    entrypoint = _image_entrypoint(argv[0], str(image))
+    if entrypoint is None or entrypoint == []:
+        prefix = []
+    elif entrypoint == ['/dockerstartup/scripts/ui_startup.sh']:
+        prefix = ['--skip']
+    else:
+        raise Refusal('LL_IMAGE_ENTRYPOINT_UNSUPPORTED', repr(entrypoint))
+    return [*head, image, *prefix, *command]
+
+
 def run_container(argv: list[str], *, probe_deadline_s: float | None = None,
                   supervised: bool = False, log: Path | None = None,
                   **kw: Any) -> subprocess.CompletedProcess:
@@ -845,18 +889,7 @@ def run_container(argv: list[str], *, probe_deadline_s: float | None = None,
     if _ce.no_container_route():
         return _run_local(list(argv), probe_deadline_s=probe_deadline_s,
                           supervised=supervised, log=log, **kw)
-    # Use the image's normal environment, with its explicit skip front door.
-    # Overriding ENTRYPOINT bypassed that environment for resolved tool steps.
-    argv = list(argv)
-    if '--entrypoint' in argv:
-        index = argv.index('--entrypoint')
-        entrypoint = argv[index + 1]
-        image_index = next((i for i in range(index + 2, len(argv))
-                            if '@sha256:' in argv[i]), None)
-        if image_index is not None:
-            image = argv[image_index]
-            argv = [*argv[:index], *argv[index + 2:image_index], image,
-                    '--skip', entrypoint, *argv[image_index + 1:]]
+    argv = _image_tool_argv(argv)
     import _docker_watchdog as _dw  # the one naming rule for ephemeral containers
     at = argv.index('run') + 1
     binary = argv[0]
