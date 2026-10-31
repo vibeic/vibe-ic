@@ -1001,6 +1001,43 @@ def _unread_siblings(files: List[Path],
     return out
 
 
+def _native_spec_input(project: Path) -> Optional[dict]:
+    from phase1_all_l_docs_present_check import fact_graph_layer_contract
+    native = fact_graph_layer_contract(project)
+    if native is None:
+        return None
+    import flow109
+    import ai_signed_judgement as judgement
+    import phase1_expert_parse_track as track
+    import _path_layout as layout
+    scope = flow109.active_rtl_scope(project)
+    receipt = project / 'reports/audit/ai_judgements/D1.json'
+    current, reason = judgement.check(project, 'D1')
+    if not current or receipt.is_symlink() or not receipt.is_file():
+        raise ValueError('NATIVE_SPEC_REVIEW_UNBOUND: ' + reason)
+    if track.check_report(project) != 0:
+        raise ValueError('NATIVE_SPEC_PRODUCER_REVIEW_UNBOUND')
+    producer_path = layout.report_path(project, 'phase1/expert_parse_track.json')
+    producer = json.loads(producer_path.read_text())
+    answer_path = producer_path.parent / 'expert_parse_track_pack/l_doc_expectations.json'
+    answer = json.loads(answer_path.read_text())
+    demands = answer.get('source_demands')
+    observed = producer.get('ai_subtrack', {}).get('expectations', [])
+    if (producer.get('verdict') != 'PASS' or not isinstance(demands, list) or not demands
+            or len({item['id'] for item in demands}) != len(demands)
+            or {item['id'] for item in demands} != {item['id'] for item in observed}):
+        raise ValueError('NATIVE_SPEC_REVIEW_POPULATION_INCOMPLETE')
+    return {**native, 'source_inputs': scope['inputs'],
+            'context_sha256': scope['context_sha256'],
+            'source_demands': len(demands),
+            'source_demand_ids': [item['id'] for item in demands],
+            'review': {'path': str(receipt.relative_to(project)),
+                       'sha256': hashlib.sha256(receipt.read_bytes()).hexdigest(),
+                       'evidence_sha256': judgement.evidence_sha256(project, 'D1')},
+            'producer_review': {'path': str(producer_path.relative_to(project)),
+                                'sha256': hashlib.sha256(producer_path.read_bytes()).hexdigest()}}
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -1016,6 +1053,25 @@ def main() -> int:
 
     specs = list(a.paths) + ([a.spec] if a.spec else [])
     files = [Path(s) for s in specs if Path(s).is_file()]
+    native_input = None
+    try:
+        native_input = _native_spec_input(Path.cwd())
+        if native_input is not None:
+            allowed = {Path.cwd() / item['path'] for item in native_input['source_inputs']}
+            selected = [Path.cwd() / relative for relative in native_input['required_outputs']]
+            from fnmatch import fnmatch
+            from glob import has_magic
+            subjects = allowed | set(selected)
+            if (any(path.resolve() not in subjects for path in files)
+                    or any(not has_magic(spec) and Path(spec).resolve() not in subjects
+                           for spec in specs)
+                    or specs and not any(fnmatch(str(path), str(Path(spec).resolve()))
+                                         for path in subjects for spec in specs)):
+                raise ValueError('NATIVE_SPEC_INPUT_OUTSIDE_REVIEWED_SUBJECT')
+            files = selected
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        print('spec_review_lint: REFUSED — ' + str(exc), file=sys.stderr)
+        return 2
     if not files:
         print("spec_review_lint: MISSING — no spec file found", file=sys.stderr)
         return 2
@@ -1101,7 +1157,8 @@ def main() -> int:
     if a.json_out:
         Path(a.json_out).write_text(json.dumps(
             {"verdict": verdict, "errors": n_err, "warnings": n_warn,
-             "findings": all_findings, "spec_clarification": clarification}, indent=2) + "\n")
+             "findings": all_findings, "spec_clarification": clarification,
+             "native_input": native_input}, indent=2) + "\n")
 
     return 1 if fail else 0
 

@@ -23,6 +23,10 @@ sentence that covers an item must make the corpus red again.
   4. a single-file spec                  -> unchanged, a corpus of one document
 """
 import json
+import os
+import shutil
+
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -262,3 +266,135 @@ def test_a_json_contract_alongside_prose_does_not_break_the_corpus(tmp_path):
     f = json.loads(jf.read_text())['findings']
     assert len(uncovered_ids(f)) == 4, f
     assert res.returncode == 1
+
+
+@pytest.fixture
+def reviewed_native_case(tmp_path, monkeypatch):
+    supplied = os.environ.get('VIBEIC_NATIVE_SPEC_CASE')
+    if not supplied:
+        pytest.skip('requires explicitly staged genuine native source review')
+    original = Path(supplied)
+    project = tmp_path / 'native'
+    project.mkdir()
+    for name in ('input', 'phase1', 'reports', 'source'):
+        shutil.copytree(original / name, project / name)
+    monkeypatch.chdir(project)
+    sys.path.insert(0, str(SCRIPT.parent))
+    from argparse import Namespace
+    import flow109
+    args = Namespace(flow='109', flow109_manifest=project/'input/flow109/selection.json',
+                     flow109_plan_only=False, execution_mode='default',
+                     entry_step='D01', exit_step='D01', delivery_target='rtl', route=None)
+    monkeypatch.setenv(flow109.CONTEXT_ENV, '')
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, '')
+    assert flow109.prepare_front_door(args, project) is None
+    return project
+
+
+def _native_lint(project, source=None):
+    target = project / 'reports/native-spec-control.json'
+    if target.exists():
+        target.unlink()
+    selected = [str(source)] if source is not None else ['input/docs/*.md', 'input/docs/*.rst', 'input/*.md']
+    result = _lint(['--strict', '--json', str(target), *selected])
+    return result, json.loads(target.read_text()) if target.exists() else None
+
+
+@pytest.mark.parametrize('selection', ['missing_globs', 'single_reviewed_view'])
+def test_reviewed_native_spec_consumes_complete_current_population(reviewed_native_case, selection):
+    project = reviewed_native_case
+    receipt = project / 'reports/audit/ai_judgements/D1.json'
+    before = receipt.read_bytes()
+    selected = next(iter(sorted((project/'input/docs').rglob('*.md')))) if selection == 'single_reviewed_view' else None
+    result, report = _native_lint(project, selected)
+    assert result.returncode == 0, (result.stdout, result.stderr)
+    native = report['native_input']
+    assert native['review']['evidence_sha256'] == json.loads(before)['evidence_sha256']
+    from phase1_all_l_docs_present_check import fact_graph_layer_contract
+    expected = fact_graph_layer_contract(project)
+    assert native['required_outputs'] == expected['required_outputs']
+    assert native['facts'] == expected['facts']
+    answer = json.loads((project/'reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json').read_text())
+    assert native['source_demands'] == len(answer['source_demands'])
+    assert len(native['source_inputs']) > 0
+    assert receipt.read_bytes() == before
+
+
+@pytest.mark.parametrize('damage', ['absent_review', 'wrong_subject_review', 'changed_layer',
+                                   'missing_layer', 'changed_original', 'missing_demands',
+                                   'absent_scope', 'physical_graph_selection'])
+def test_native_spec_refuses_unbound_or_incomplete_reviewed_input(reviewed_native_case, damage):
+    project = reviewed_native_case
+    before, _ = _native_lint(project)
+    assert before.returncode == 0, (before.stdout, before.stderr)
+    if damage == 'absent_review':
+        (project/'reports/audit/ai_judgements/D1.json').unlink()
+    elif damage == 'wrong_subject_review':
+        shutil.copy2(os.environ['VIBEIC_NATIVE_SPEC_WRONG_REVIEW'],
+                     project/'reports/audit/ai_judgements/D1.json')
+    elif damage == 'changed_layer':
+        p = project/'phase1/generated_docs/L2_FRS.json'
+        value = json.loads(p.read_text())
+        value['requirements'][0]['text'] = 'changed source requirement'
+        p.write_text(json.dumps(value))
+    elif damage == 'missing_layer':
+        (project/'phase1/generated_docs/L22_VERIFICATION_PLAN.json').unlink()
+    elif damage == 'changed_original':
+        p = project/'input/docs/unit.sv'
+        p.write_text(p.read_text() + '// changed original bytes\n')
+    elif damage == 'missing_demands':
+        p = project/'reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json'
+        value = json.loads(p.read_text())
+        value['source_demands'].pop()
+        p.write_text(json.dumps(value))
+    elif damage == 'absent_scope':
+        os.environ.pop('VIBEIC_FLOW109_CONTEXT')
+    else:
+        from phase1_engine.schema import FactGraph
+        graph = FactGraph.load(project/'input/phase1_structured.yaml')
+        import flow109
+        features = next(r['features'] for r in flow109.load_registry()['reference_profiles']
+                        if r['features']['physical'])
+        graph.metadata['flow109_manifest']['features'] = features
+        graph.save(project/'input/phase1_structured.yaml')
+    result, _ = _native_lint(project)
+    assert result.returncode == 2, (result.stdout, result.stderr)
+
+
+@pytest.mark.parametrize('input_state', ['unreviewed_file', 'missing_file'])
+def test_native_review_does_not_authorize_a_different_explicit_input(reviewed_native_case, input_state):
+    project = reviewed_native_case
+    before, _ = _native_lint(project)
+    assert before.returncode == 0, (before.stdout, before.stderr)
+    foreign = project / 'reports/unreviewed-spec.md'
+    if input_state == 'unreviewed_file':
+        foreign.write_text('A different source document that was never reviewed.\n')
+    result, _ = _native_lint(project, foreign)
+    assert result.returncode == 2, (result.stdout, result.stderr)
+
+
+@pytest.mark.parametrize('population', ['reviewed_plus_missing', 'reviewed_plus_unreviewed',
+                                       'all_reviewed'])
+def test_mixed_explicit_native_inputs_require_every_selected_file(reviewed_native_case, population):
+    project = reviewed_native_case
+    reviewed = sorted((project/'input/docs').rglob('*.md'))
+    assert len(reviewed) >= 2
+    if population == 'all_reviewed':
+        second = reviewed[1]
+    else:
+        second = project/'reports/missing-unreviewed-spec.md'
+        if population == 'reviewed_plus_unreviewed':
+            second.write_text('An explicit document outside the genuine reviewed subject.\n')
+    receipt = project/'reports/audit/ai_judgements/D1.json'
+    signature = receipt.read_bytes()
+    target = project/'reports/mixed-native-spec.json'
+    result = _lint(['--strict', '--json', str(target), str(reviewed[0]), str(second)])
+    expected = 0 if population == 'all_reviewed' else 2
+    assert result.returncode == expected, (result.stdout, result.stderr)
+    if population == 'all_reviewed':
+        report = json.loads(target.read_text())
+        from phase1_all_l_docs_present_check import fact_graph_layer_contract
+        full = fact_graph_layer_contract(project)
+        assert report['native_input']['required_outputs'] == full['required_outputs']
+        assert report['native_input']['facts'] == full['facts']
+    assert receipt.read_bytes() == signature
