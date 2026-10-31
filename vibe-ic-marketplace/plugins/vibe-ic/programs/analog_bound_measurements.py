@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Run explicit source-bound OP/DC/AC/TRAN measurements on a delivered DUT.
 
-The supplied testbench owns the stimulus and conditions. This producer only
-replaces its analysis controls with the declared analysis/measurements. Its
+The supplied testbench owns the stimulus and conditions. This producer
+replaces analysis controls and can expose explicitly declared split-gate ports
+in a separate, hash-bound diagnostic view. The delivered DUT is retained. Its
 result covers those measurements, not whole-block or PVT acceptance.
 """
 from __future__ import annotations
@@ -26,6 +27,102 @@ from _atomic_artefact import write_json
 
 def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def instrument_split_gate_view(original: str, declaration: dict) -> tuple[str, dict]:
+    """Expose declared gate/sum ports without changing delivered device values."""
+    digest = hashlib.sha256(original.encode()).hexdigest()
+    if declaration.get("kind") != "split_gate" or declaration.get("source_sha256") != digest:
+        raise ValueError("split-gate source hash/kind differs from the delivered netlist")
+    lines = original.splitlines(keepends=True)
+    headers = [(i, line.split()) for i, line in enumerate(lines)
+               if line.lstrip().lower().startswith(".subckt ")]
+    if len(headers) != 1:
+        raise ValueError("split-gate view requires one flat delivered subcircuit")
+    header_index, header = headers[0]
+    cards = {line.split()[0].lower(): (i, line.split()) for i, line in enumerate(lines)
+             if line.lstrip().lower().startswith("x")}
+    if not cards or len(cards) != sum(line.lstrip().lower().startswith("x") for line in lines):
+        raise ValueError("split-gate view requires unique delivered device names")
+    gates, ports = declaration.get("gates"), declaration.get("ports")
+    if not isinstance(gates, list) or not gates or not isinstance(ports, list) or not ports:
+        raise ValueError("split-gate view requires explicit gate and port mappings")
+    port_names = [p.get("node") for p in ports]
+    top_names = [p.get("top_node") for p in ports]
+    if any(not isinstance(p, str) or not re.fullmatch(r"[A-Za-z_]\w*", p)
+           for p in port_names + top_names) or len(set(port_names)) != len(port_names) or len(set(top_names)) != len(top_names):
+        raise ValueError("split-gate ports must have unique explicit node names")
+    if set(port_names) & set(header[2:]):
+        raise ValueError("split-gate view cannot duplicate original ports")
+    model_indices = {}
+    for name, (_, tokens) in cards.items():
+        first_parameter = next((i for i, token in enumerate(tokens) if "=" in token), len(tokens))
+        model_indices[name] = first_parameter - 1
+    existing_nodes = {n for name, (_, tokens) in cards.items() for n in tokens[1:model_indices[name]]}
+    used, new_nodes = set(), set()
+    changes = []
+    for gate in gates:
+        name = str(gate.get("device", "")).lower()
+        if name not in cards or name in used:
+            raise ValueError("split-gate device is missing or repeated")
+        used.add(name)
+        index, tokens = cards[name]
+        old, new = gate.get("source_node"), gate.get("probe_node")
+        if gate.get("terminal") != "G" or gate.get("terminal_index") != 1 or model_indices[name] != 5:
+            raise ValueError("split-gate mapping must identify the MOS G terminal")
+        if tokens[2] != old or tokens[5] != gate.get("model"):
+            raise ValueError("split-gate original gate/model does not match the delivered card")
+        if new not in port_names or new in existing_nodes or new in new_nodes:
+            raise ValueError("split-gate probe must be a new exposed node")
+        new_nodes.add(new)
+        changed = tokens.copy()
+        changed[2] = new
+        lines[index] = " ".join(changed) + "\n"
+        changes.append({"device": name, "terminal": "G", "source_node": old, "probe_node": new})
+    if set(port_names) - existing_nodes - new_nodes:
+        raise ValueError("split-gate view exposes an undeclared new physical node")
+    lines[header_index] = " ".join(header + port_names) + "\n"
+    view = "".join(lines)
+    view_cards = {line.split()[0].lower(): line.split() for line in view.splitlines()
+                  if line.lstrip().lower().startswith("x")}
+    reconnected = {name: row.copy() for name, row in view_cards.items()}
+    for change in changes:
+        reconnected[change["device"]][2] = change["source_node"]
+    if reconnected != {name: row for name, (_, row) in cards.items()}:
+        raise ValueError("split-gate reconnection differs from delivered device cards")
+    mapping = [{"device": name, "original_pins": row[1:model_indices[name]],
+                "view_pins": view_cards[name][1:model_indices[name]],
+                "model_and_parameters": row[model_indices[name]:]} for name, (_, row) in cards.items()]
+    return view, {"source_sha256": digest, "view_sha256": hashlib.sha256(view.encode()).hexdigest(),
+                  "subcircuit": header[1], "original_ports": header[2:], "ports": ports,
+                  "changes": changes, "device_count": len(cards), "all_device_mapping": mapping,
+                  "reconnection": "EXACT_ALL_DELIVERED_DEVICE_CARDS", "scope": "diagnostic view only"}
+
+
+def validate_split_gate_reconnection(original: str, view: str, declaration: dict) -> dict:
+    expected, audit = instrument_split_gate_view(original, declaration)
+    if view != expected:
+        raise ValueError("split-gate view contains wrong or additional changes")
+    return audit
+
+
+def _split_gate_template(text: str, netlist: Path, view_path: Path, declaration: dict, audit: dict) -> str:
+    lines = text.splitlines()
+    includes = instances = 0
+    for i, line in enumerate(lines):
+        match = re.match(r'^\s*\.include\s+[\"\x27]?([^\"\x27\s]+)[\"\x27]?\s*$', line, re.I)
+        if match and Path(match[1]).resolve() == netlist.resolve():
+            lines[i] = '.include "' + str(view_path.resolve()) + '"'
+            includes += 1
+        tokens = line.split()
+        if tokens and tokens[0].casefold() == str(declaration.get("instance", "")).casefold():
+            if len(tokens) != len(audit["original_ports"]) + 2 or tokens[-1] != audit["subcircuit"]:
+                raise ValueError("split-gate template instance differs from original subcircuit ports")
+            lines[i] = " ".join(tokens[:-1] + [p["top_node"] for p in audit["ports"]] + tokens[-1:])
+            instances += 1
+    if includes != 1 or instances != 1:
+        raise ValueError("split-gate template needs one exact delivered include and instance")
+    return "\n".join(lines) + "\n"
 
 
 def consumed_input_views(project: Path, deck: Path) -> dict:
@@ -154,7 +251,8 @@ def emit_deck(template: str, bindings: dict, capture_path: Path | None = None) -
         raise ValueError("execution method must be trap or gear")
     # spinit can set num_threads independently of OMP_NUM_THREADS. Set the
     # caller's scheduling choice in the actual derived native control block.
-    commands = ([f"set num_threads={threads}"] if threads is not None else []) + [command]
+    commands = (["set numdgt=15"] if bindings.get("instrumentation") else [])
+    commands += ([f"set num_threads={threads}"] if threads is not None else []) + [command]
     for name, binding in measurements.items():
         emitted, measure_kind = (measurement_commands(name, binding, start, stop)
                                  if kind == "TRAN" else
@@ -222,6 +320,21 @@ def run_measurements(project: Path, netlist: Path, template: Path, bindings: dic
     deck = destination / "measurements.sp"
     capture_path = destination / "curve.dat"
     text = contextual_template(template.read_text(), template.parent)
+    delivered_netlist, instrumentation = netlist, None
+    if bindings.get("instrumentation") is not None:
+        try:
+            declaration = bindings["instrumentation"]
+            original = netlist.read_text()
+            view, instrumentation = instrument_split_gate_view(original, declaration)
+            validate_split_gate_reconnection(original, view, declaration)
+            view_path = destination / "split_gate_view.sp"
+            view_path.write_text(view)
+            text = _split_gate_template(text, netlist, view_path, declaration, instrumentation)
+            write_json(destination / "split_gate_mapping.json", instrumentation, indent=2)
+            netlist = view_path
+        except (ValueError, TypeError, KeyError, AttributeError) as exc:
+            return {"status": "NOT_MEASURED", "detail": str(exc), "measurements": {}, "executions": [],
+                    "native_inputs": {"delivered_netlist": {"path": str(delivered_netlist.resolve()), "sha256": sha(delivered_netlist)}}}
     deck.write_text(emit_deck(text, bindings, capture_path))
     status, detail, required = sim._validate_deck(netlist, deck,
         {"required_measurements": list(bindings.get("measurements", {}))})
@@ -241,6 +354,11 @@ def run_measurements(project: Path, netlist: Path, template: Path, bindings: dic
               "native_inputs": {role: {"path": str(path.resolve()), "sha256": sha(path)} for role, path in
                                 (("netlist", netlist), ("testbench", template), ("deck", deck))},
               "bindings": bindings, "measurements": {}, "executions": []}
+    if instrumentation is not None:
+        report["instrumentation"] = instrumentation
+        report["native_inputs"]["delivered_netlist"] = {"path": str(delivered_netlist.resolve()), "sha256": sha(delivered_netlist)}
+        report["native_inputs"]["split_gate_mapping"] = {"path": str((destination / "split_gate_mapping.json").resolve()), "sha256": sha(destination / "split_gate_mapping.json")}
+        report["native_inputs"]["instrumentation_producer"] = {"path": str(Path(__file__).resolve()), "sha256": sha(Path(__file__))}
     if status != "PASS":
         return report
     native_binary = (bindings.get("execution") or {}).get("ngspice_bin")
@@ -254,6 +372,9 @@ def run_measurements(project: Path, netlist: Path, template: Path, bindings: dic
         report["native_inputs"].update(consumed_input_views(project, deck))
     except (OSError, ValueError) as exc:
         report.update(status="NOT_MEASURED", detail="native model/include inputs unavailable: " + str(exc))
+        return report
+    if instrumentation is not None and sha(netlist) != instrumentation["view_sha256"]:
+        report.update(status="NOT_MEASURED", detail="split-gate view changed before native execution")
         return report
     scheduling = bindings.get("execution") or {}
     environment = []
