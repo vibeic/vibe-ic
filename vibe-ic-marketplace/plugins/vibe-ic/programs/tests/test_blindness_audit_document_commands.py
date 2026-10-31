@@ -1,4 +1,5 @@
 """Document data is distinct from executed scorer code; unsupported code stays raw."""
+import ast
 import json
 from pathlib import Path
 
@@ -81,8 +82,21 @@ def test_rebinding_passive_call_to_execution_does_not_hide_document():
 def test_real_repo_instructions_are_document_data():
     # Exercise a maintained repository artefact, not only fixtures authored here.
     from _hostpaths import repo_path
-    source = repo_path('vibe-ic-marketplace/plugins/vibe-ic/skills/open-benchmark-methodology/SKILL.md')
-    document = source.read_text()
+    source = repo_path('vibe-ic-marketplace/plugins/vibe-ic/programs/blindness_audit.py')
+    document = ast.get_docstring(ast.parse(source.read_text()))
     assert 'benchmark_dispatch.py' in document and '--score' in document
     command = heredoc("from pathlib import Path\nPath('/tmp/guide.md').write_text(" + repr(document) + ')')
     assert audit(wrapper(command)) == []
+
+
+@pytest.mark.parametrize('suffix', ['py', 'txt', 'md'])
+@pytest.mark.parametrize('payload', [COMMAND, 'import os; os.system(' + repr(COMMAND) + ')'])
+def test_generated_helper_remains_visible_across_separate_tool_frames(suffix, payload):
+    path = '/tmp/helper.' + suffix
+    command = heredoc('from pathlib import Path\nPath(' + repr(path) + ').write_text(' + repr(payload) + ')')
+    frames = [{'type': 'function_call', 'name': 'exec_command',
+               'arguments': json.dumps({'cmd': cmd})}
+              for cmd in [command, 'python3 ' + path]]
+    findings = ba.audit_text('\n'.join(json.dumps(x) for x in frames),
+                             Path('/neutral-dataset'), ['specification.md'], 'neutral.jsonl')
+    assert [f['kind'] for f in findings] == ['scorer-self-run']

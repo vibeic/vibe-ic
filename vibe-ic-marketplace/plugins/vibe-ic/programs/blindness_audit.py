@@ -544,6 +544,23 @@ _PY_HEREDOC_RE = re.compile(
 _JSON_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
 
 
+def _could_be_executable_document(value: str) -> bool:
+    # A later tool call can execute a generated .py/.txt/.md file. Never
+    # suppress a literal which could itself be code, regardless of suffix.
+    try:
+        ast.parse(value)
+    except (SyntaxError, ValueError):
+        pass
+    else:
+        return True
+    for line in re.split(r"[\n;|&]", value):
+        if (re.match(r"\s*(?:[$]\s*)?(?:python3?|[^\s]*score_[^\s]*|"
+                     r"benchmark_dispatch(?:\.py)?|eval|exec|bash|sh)\b", line)
+                and _SCORER_INVOKE_RE.search(line)):
+            return True
+    return False
+
+
 def _passive_python_document_view(body: str) -> str:
     """Elide direct document literals only in a closed, passive Python script.
 
@@ -597,6 +614,8 @@ def _passive_python_document_view(body: str) -> str:
                 and isinstance(node.args[0], ast.Constant)
                 and isinstance(node.args[0].value, str)):
             value = node.args[0]
+            if _could_be_executable_document(value.value):
+                continue
             spans.append((starts[value.lineno - 1] + value.col_offset,
                           starts[value.end_lineno - 1] + value.end_col_offset))
     encoded = body.encode("utf-8")
