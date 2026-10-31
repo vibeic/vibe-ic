@@ -1709,6 +1709,7 @@ def run_second_pass_only(project: Path, ic_name: str,
     from benchmark_dispatch import _bind_runner_report
     summary = _bind_runner_report(summary, project, __file__, out.name)
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
+    complete_retained_metrics(project)
     print("\n=== phase1_one_shot_runner DONE (mode=expert_second_pass) ===")
     print(f"verdict: {summary['verdict']}")
     print(f"second track: {summary['second_track']}")
@@ -2044,6 +2045,41 @@ def _as_the_producer(fn):
     return _run
 
 
+def complete_retained_metrics(project: Path) -> dict | None:
+    """Publish selected Step 1/2 completion from retained Phase1 evidence.
+
+    Also used at the normal report tail. This continuation never invokes an
+    extractor, expert author, declaration producer or L-document writer.
+    Original producer reports and retained canonical receipts stay unchanged.
+    """
+    import flow109
+    import flow109_metric_acceptance as metrics
+    context_path = os.environ.get(flow109.CONTEXT_ENV)
+    if not context_path:
+        return None
+    context = flow109.validate_execution_context(json.loads(Path(context_path).read_bytes()))
+    selected = context.get('resolved_rows') or [context['resolved_row']]
+    selected = [row for row in selected if row['id'] in ('D01', 'D02')]
+    if not selected:
+        return None
+    # finish_native_window consumes the same unchanged request and attempt;
+    # refuse a mixed owner window rather than supplying invented later rows.
+    if len(selected) != len(context.get('resolved_rows') or [context['resolved_row']]):
+        raise flow109.Flow109Error('D0102_WINDOW_DIFFERS', 'Phase1 Step 1/2 only')
+    steps = []
+    for row in selected:
+        current = flow109.component_context(context, requested_step=row['id'])
+        acceptance = (metrics.accept_d01 if row['id'] == 'D01' else metrics.accept_d02)(project, current)
+        status = acceptance['status']
+        steps.append({'status': status, 'extras': {
+            'step_id': row['profile']['dispatch']['native_step_id'],
+            'context_sha256': current['context_sha256'], 'default_row_status': status,
+            'completed': status == 'PASS', 'metric_acceptance': acceptance,
+            'metric_acceptance_status': status, 'qualification': acceptance['qualification'],
+            'reason': acceptance['reason']}})
+    return flow109.finish_native_window(project, {'steps': steps})
+
+
 def _project_arg() -> Optional[Path]:
     """The project positional, read the way `main`'s parser will read it."""
     for tok in sys.argv[1:]:
@@ -2084,6 +2120,8 @@ def main() -> int:
                         "`vibe_ic_one_shot_runner` when a delivered answer is "
                         "on disk and the track's own record says nobody has "
                         "read it.")
+    p.add_argument('--complete-retained-metrics', action='store_true',
+                   help='Complete selected Step 1/2 metrics from retained evidence; no extraction or document writes.')
     p.add_argument("--publish-dft-intent", action="store_true",
                    help="Initially publish explicit reasoned non-scan intent only; retain existing D01 extraction.")
     p.add_argument("--refresh-dft-intent-from-producer", type=Path,
@@ -2098,6 +2136,20 @@ def main() -> int:
     if not project.is_dir():
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
+    if args.complete_retained_metrics:
+        if args.second_track_only or args.publish_dft_intent or args.refresh_dft_intent_from_producer is not None:
+            p.error('retained metric completion is a separate continuation')
+        lock = _runner_lock.acquire_or_reenter(project, 'phase1_one_shot_runner')
+        if lock is None:
+            return 3
+        try:
+            completed = complete_retained_metrics(project)
+            if completed is None:
+                print('D0102_CONTEXT_ABSENT: selected existing Flow109 request required', file=sys.stderr)
+                return 2
+            return 0 if completed['default_row_status'] == 'PASS' else 1
+        finally:
+            lock.release()
     if args.publish_dft_intent or args.refresh_dft_intent_from_producer is not None:
         if args.publish_dft_intent and args.refresh_dft_intent_from_producer is not None:
             p.error('initial publication and historical refresh are separate invocations')
@@ -2313,6 +2365,7 @@ def main() -> int:
         summary = _bind_runner_report(summary, project, __file__, _p1.name)
         _p1.write_text(
             json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
+        complete_retained_metrics(project)
         return max(rc, rc_route)
 
     # Prompt mode: original phase1_engine path
@@ -2421,6 +2474,7 @@ def main() -> int:
     summary = _bind_runner_report(summary, project, __file__, _p1.name)
     _p1.write_text(
         json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
+    complete_retained_metrics(project)
     print(f"\n=== phase1_one_shot_runner DONE (mode={mode}) ===")
     print(f"verdict: {summary['verdict']}")
     for s in plan:

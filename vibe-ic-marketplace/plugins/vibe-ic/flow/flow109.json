@@ -1415,7 +1415,7 @@
             "consumer": "phase1_one_shot_runner canonical D1 acceptance",
             "engine_families": [],
             "acceptance_scope": "existing_native_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "flow109_metrics_status": "IMPLEMENTED_D0102_RETAINED"
           }
         }
       ],
@@ -1443,7 +1443,7 @@
             "checker.base_01.unresolved_route_facts",
             "producer.base_01.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D0102_RETAINED_BINDING"
         },
         {
           "id": "base_01.observed_vs_declared_features",
@@ -1462,7 +1462,7 @@
             "checker.base_01.observed_vs_declared_features",
             "producer.base_01.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D0102_RETAINED_BINDING"
         },
         {
           "id": "base_01.requirements_trace",
@@ -1482,10 +1482,10 @@
             "requirements.approval",
             "source.input"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D0102_RETAINED_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_D0102_RETAINED",
       "gate_layer_ids": [
         "G1",
         "G2",
@@ -1544,7 +1544,7 @@
             "consumer": "phase1_one_shot_runner route declaration acceptance",
             "engine_families": [],
             "acceptance_scope": "existing_native_component_only",
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "flow109_metrics_status": "IMPLEMENTED_D0102_RETAINED"
           }
         }
       ],
@@ -1572,7 +1572,7 @@
             "checker.base_02.endpoint_delivery_items",
             "producer.base_02.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D0102_RETAINED_BINDING"
         },
         {
           "id": "base_02.unassigned_requirements",
@@ -1591,10 +1591,10 @@
             "checker.base_02.unassigned_requirements",
             "producer.base_02.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_D0102_RETAINED_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_D0102_RETAINED",
       "gate_layer_ids": [
         "G1",
         "G2",

@@ -6535,3 +6535,287 @@ def accept_d70(project: Path, context: Mapping[str, Any], component: Mapping[str
     """Read the D70 owner through its existing completion/metric consumer."""
     import flow109_final_electrical as final
     return final.accept_metric_obligations(project, context, component)
+
+
+def _d0102_read(project: Path, relative: str, reads: dict) -> dict:
+    raw = _safe_project_file(project, relative).read_bytes()
+    value = json.loads(raw)
+    if not isinstance(value, dict):
+        raise MetricRefusal('D0102_INPUT_INVALID', relative)
+    reads[relative] = _sha(raw)
+    return value
+
+
+def _d0102_documents(project: Path, reads: dict) -> dict:
+    """Bind staged originals, not a generated extraction mirror."""
+    docs = sorted(p for p in (project / 'input/docs').rglob('*') if p.is_file())
+    if not docs:
+        docs = [project / name for name in ('input/phase1_prompt.md',
+                'input/phase1_structured.yaml') if (project / name).is_file()]
+    if not docs:
+        docs = sorted(p for p in (project / 'phase1/input_doc').rglob('*') if p.is_file())
+    if not docs:
+        raise MetricRefusal('D0102_SOURCE_DOCUMENTS_ABSENT', 'staged originals required')
+    result = {p.relative_to(project).as_posix(): _sha(_safe_project_file(
+        project, p.relative_to(project).as_posix()).read_bytes()) for p in docs}
+    reads.update(result)
+    return result
+
+
+def _d0102_population(project: Path, key: str, metric: str, reads: dict) -> tuple:
+    """Read existing approved requirements and the existing expert grammar.
+
+    The input source owns the complete population. Neither checker success nor
+    the generated declarations may shrink it or approve their own requirements.
+    """
+    reference = f'requirements/{key}/{metric}.json#/required_items'
+    authority, body = _approved_authority(project, reference, ('id',))
+    reads[authority['path']] = authority['sha256']
+    source_ref = authority['source']
+    if not source_ref['path'].startswith('input/'):
+        raise MetricRefusal('D0102_REQUIREMENTS_SOURCE_FOREIGN', source_ref['path'])
+    payload = _d0102_read(project, source_ref['path'], reads).get(metric)
+    if not isinstance(payload, dict) or payload.get('required_items') != body['required_items']:
+        raise MetricRefusal('D0102_SOURCE_POPULATION_DIFFERS', reference)
+    documents = _d0102_documents(project, reads)
+    refs = payload.get('source_documents')
+    if (not isinstance(refs, list) or not refs
+            or any(not isinstance(r, dict) or set(r) != {'path', 'sha256'} for r in refs)
+            or len({r['path'] for r in refs}) != len(refs)
+            or {r['path']: r['sha256'] for r in refs} != documents):
+        raise MetricRefusal('D0102_SOURCE_DOCUMENT_CENSUS_STALE', reference)
+    expectations = payload.get('expectations')
+    ids = [item['id'] for item in body['required_items']]
+    if (not isinstance(expectations, list) or not expectations
+            or any(not isinstance(e, dict) or not isinstance(e.get('id'), str) for e in expectations)
+            or len(set(ids)) != len(ids)
+            or len({e['id'] for e in expectations}) != len(expectations)
+            or set(ids) != {e['id'] for e in expectations}):
+        raise MetricRefusal('D0102_SOURCE_POPULATION_INCOMPLETE', reference)
+    # This is the retained expert pack's path:line/hash/literal citation form.
+    evidence_items = list(expectations)
+    if key == 'base_01':
+        features = payload.get('features')
+        if (not isinstance(features, list) or not features
+                or any(not isinstance(f, dict) or not isinstance(f.get('feature'), str)
+                       or type(f.get('declared')) is not bool for f in features)):
+            raise MetricRefusal('D0102_FEATURE_POPULATION_ABSENT', metric)
+        evidence_items += [{**f, 'id': f['feature']} for f in features]
+    for exp in evidence_items:
+        evidence = exp.get('evidence')
+        if not isinstance(evidence, list) or not evidence:
+            raise MetricRefusal('D0102_REQUIREMENT_SOURCE_ABSENT', exp['id'])
+        for cite in evidence:
+            match = re.fullmatch(r'(.+?):(\d+)\s+sha256:([0-9a-f]{64})\s+[—–-]\s+(.+)', str(cite))
+            if match is None:
+                raise MetricRefusal('D0102_REQUIREMENT_SOURCE_UNSUPPORTED', exp['id'])
+            relative, line, digest, literal = match.groups()
+            if relative.startswith('docs/'):
+                relative = 'input/' + relative
+            if documents.get(relative) != digest:
+                raise MetricRefusal('D0102_REQUIREMENT_SOURCE_STALE', exp['id'])
+            lines = (project / relative).read_text().splitlines()
+            if not 1 <= int(line) <= len(lines) or literal not in lines[int(line) - 1]:
+                raise MetricRefusal('D0102_REQUIREMENT_LITERAL_DIFFERS', exp['id'])
+    return authority, payload
+
+
+def _d0102_compare(project: Path, payload: dict, reads: dict) -> tuple:
+    import phase1_expert_parse_track as expert
+    actual, unresolved, unrouted = [], [], []
+    for exp in payload['expectations']:
+        # The actual comparator discards submitted met/observed/usable fields.
+        item = expert.converge_ai_expectation(project, exp)
+        if (item.get('usable') is not True
+                or item.get('layer_in_taxonomy') is False
+                or item.get('tokens_unaskable')):
+            unresolved.append(item)
+        else:
+            # A token found in another field cannot discharge the named route.
+            if item.get('layer_present') is False or item.get('field_path_status') == 'UNDECLARED':
+                unrouted.append(exp['id'])
+            elif item.get('met') is True:
+                actual.append({'id': exp['id']})
+    for path in expert.emitted_layer_files(project):
+        _d0102_read(project, path.relative_to(project).as_posix(), reads)
+    return actual, unresolved, unrouted
+
+
+def _d0102_value(project: Path, item: dict, reads: dict) -> list:
+    import phase1_expert_parse_track as expert
+    path = expert.resolve_layer_file(project, item.get('layer', ''))
+    if path is None:
+        raise MetricRefusal('D0102_OBSERVATION_ABSENT', str(item))
+    doc = _d0102_read(project, path.relative_to(project).as_posix(), reads)
+    values = expert.subtree_at(doc, item.get('field_path'), item.get('layer'))
+    if not isinstance(values, list) or not values:
+        raise MetricRefusal('D0102_OBSERVATION_UNRESOLVED', str(item))
+    return values
+
+
+def _d0102_addresses(expectation: dict) -> set:
+    children = expectation.get('sub_expectations')
+    if isinstance(children, list) and children:
+        return set().union(*(_d0102_addresses(child) for child in children))
+    return {(expectation.get('layer'), expectation.get('field_path'))}
+
+
+def _d0102_qualification(project: Path, context: Mapping, step: str, reads: dict) -> dict:
+    """Reuse current retained full canonical acceptance, not component PASS."""
+    import _flow_yaml
+    import _path_layout as layout
+    import step_output_collector as versions
+    import execution_backend_gates as gates
+    native = 'D1' if step == 'D01' else '0.5ic'
+    row = next(r for r in _flow_yaml.load()['steps'] if str(r['id']) == native)
+    record = versions.latest_pass(project, native)
+    if (not isinstance(record, dict) or record.get('canonical_pass') is not True
+            or record.get('current_inputs') is not True or record.get('capture_errors')
+            or record.get('id') != native or record.get('status') != 'PASS'):
+        raise MetricRefusal('D0102_CANONICAL_ACCEPTANCE_ABSENT', native)
+    retained = record.get('result') or {}
+    consumer = retained.get('canonical_consumer') or {}
+    if (retained.get('runner') != 'phase1_one_shot_runner'
+            or type(retained.get('producer_return')) is not int
+            or retained['producer_return'] != 0 or consumer.get('status') != 'PASS'):
+        raise MetricRefusal('D0102_COMPONENT_ONLY', native)
+    commands, ledger = gates.required_commands(row), consumer.get('ledger')
+    if (not commands or not isinstance(ledger, list)
+            or consumer.get('required_commands') != commands
+            or any(not any(e.get('cmd') == command and e.get('rc') == 0
+                           and e.get('verdict') == 'PASS' for e in ledger) for command in commands)):
+        raise MetricRefusal('D0102_CANONICAL_CHECKS_INCOMPLETE', native)
+    outputs = gates.contracts(project, row)
+    if outputs != consumer.get('outputs'):
+        raise MetricRefusal('D0102_CANONICAL_OUTPUTS_STALE', native)
+    for group in outputs.values():
+        reads.update(group)
+    inputs = record.get('inputs') or {}
+    for path, digest in _d0102_documents(project, reads).items():
+        value = inputs.get(path)
+        if (value.get('sha256') if isinstance(value, dict) else value) != digest:
+            raise MetricRefusal('D0102_PRODUCER_SOURCE_UNBOUND', path)
+    reference = f"{record.get('storage_root', 'steps')}/{record['folder']}/outputs.json"
+    _d0102_read(project, reference, reads)
+    report = _d0102_read(project, layout.report_path(project, 'phase1_one_shot.json')
+                           .relative_to(project).as_posix(), reads)
+    if report.get('project') != str(project) or report.get('phase') != 1:
+        raise MetricRefusal('D0102_PRODUCER_PROJECT_DIFFERS', native)
+    if step == 'D01' and (report.get('verdict') not in ('PASS', 'PASS_WITH_WAIVERS')
+                           or report.get('ai_judgements')):
+        raise MetricRefusal('D0102_PHASE1_QUALIFICATION_PENDING', native)
+    if context['resolved_row']['tool_uses']:
+        import flow109_admission as admission
+        return admission.require_admission(project, context)
+    return {'status': 'PASS', 'reason': 'CURRENT_RETAINED_CANONICAL_CONSUMER',
+            'native_step': native, 'record': {'path': reference, 'sha256': reads[reference]},
+            'scope': 'Phase1 source/checker acceptance; no native tool or image grant'}
+
+
+def _accept_d0102(project: Path, context: Mapping, step: str) -> dict:
+    import flow109
+    import _delivery_route as route
+    result = {'schema': SCHEMA, 'step_id': step, 'status': 'NOT_MEASURED',
+              'qualification': 'NOT_MEASURED', 'delivery_blocked': True,
+              'obligations': [], 'reason': 'D0102_EVIDENCE_ABSENT', 'consumed_inputs': {}}
+    reads = result['consumed_inputs']
+    try:
+        project = Path(project).resolve()
+        current = flow109.validate_execution_context(context)
+        if current['resolved_row']['id'] != step:
+            raise MetricRefusal('D0102_CONTEXT_DIFFERS', step)
+        key, metric = ('base_01', 'requirements_trace') if step == 'D01' else ('base_02', 'endpoint_delivery_items')
+        authority, payload = _d0102_population(project, key, metric, reads)
+        actual, unresolved, unrouted = _d0102_compare(project, payload, reads)
+        identity = {'producer': {'source_documents': payload['source_documents']},
+                    'checker': {name: _sha((HERE / name).read_bytes()) for name in
+                                ('flow109_metric_acceptance.py', 'phase1_expert_parse_track.py')},
+                    'tool_execution': {'kind': 'retained observations; expert comparator replay'},
+                    'consumed_inputs': dict(reads), 'requirements': authority,
+                    'configuration': {'step_id': step, 'context_sha256': current['context_sha256']}}
+        def add(name, value, operator='eq', approved=None):
+            measured = {'status': 'MEASURED', 'value': value, 'identity': identity,
+                        **({'unit': 'count'} if operator == 'eq' else {})}
+            status, reason = evaluate_operator(operator, measured, approved or {
+                'status': 'APPROVED', 'value': 0, 'unit': 'count',
+                'source': 'flow109 registry invariant'})
+            result['obligations'].append({'id': f'{key}.{name}', 'status': status,
+                                         'reason': reason, 'measurement': measured})
+        if unresolved:
+            result['unresolved_expectations'] = unresolved
+            raise MetricRefusal('D0102_UNSUPPORTED_REQUIREMENT', 'existing comparator could not decide')
+        add(metric, actual, 'covers_all', authority)
+        route_label = route.report_label(project)
+        endpoint = route_label.get('deliverable')
+        if endpoint not in ('DIE', 'HARDMACRO', 'SOFT_IP', 'RTL'):
+            raise MetricRefusal('D0102_ROUTE_UNRESOLVED', str(endpoint))
+        expected_route = ('IC' if current['features'].get('ic') else
+                          'IP' if current['features'].get('ip') else 'RTL')
+        if route_label.get('delivery_route') != expected_route:
+            result['status'] = 'FAIL'
+            raise MetricRefusal('D0102_ROUTE_CONTRADICTION', f'{route_label} vs {expected_route}')
+        if step == 'D01':
+            # Every source-owned requirement must have a usable owning route.
+            add('unresolved_route_facts', len(unrouted))
+            features = payload.get('features')
+            if (not isinstance(features, list) or not features
+                    or any(not isinstance(f, dict) or not isinstance(f.get('feature'), str) for f in features)
+                    or len({f['feature'] for f in features}) != len(features)):
+                raise MetricRefusal('D0102_FEATURE_POPULATION_ABSENT', metric)
+            mismatches = []
+            for item in features:
+                declared, observed = current['features'].get(item['feature']), _d0102_value(project, item, reads)
+                if type(declared) is not bool or len(observed) != 1 or type(observed[0]) is not bool:
+                    raise MetricRefusal('D0102_FEATURE_UNRESOLVED', item['feature'])
+                if observed[0] != item['declared'] or declared != item['declared']:
+                    mismatches.append({'feature': item['feature'], 'declared': item['declared'],
+                                       'selected': declared, 'observed': observed[0]})
+            result['feature_mismatches'] = mismatches
+            add('observed_vs_declared_features', len(mismatches))
+        else:
+            _, requirements = _d0102_population(project, 'base_01', 'requirements_trace', reads)
+            required = {e['id'] for e in requirements['expectations']}
+            assignments = payload.get('assignments')
+            if not isinstance(assignments, list) or any(not isinstance(a, dict) for a in assignments):
+                raise MetricRefusal('D0102_ASSIGNMENTS_UNOBSERVED', metric)
+            ids = [a.get('id') for a in assignments]
+            if len(set(ids)) != len(ids) or any(i not in required for i in ids):
+                raise MetricRefusal('D0102_ASSIGNMENTS_INVALID', metric)
+            assigned = set()
+            for item in assignments:
+                owner = next(e for e in requirements['expectations'] if e['id'] == item['id'])
+                if (item.get('layer'), item.get('field_path')) not in _d0102_addresses(owner):
+                    raise MetricRefusal('D0102_ASSIGNMENT_FOREIGN', item['id'])
+                values = _d0102_value(project, item, reads)
+                if any(v in (None, '', 'NOT_DETERMINED', 'UNKNOWN', [], {}) for v in values):
+                    raise MetricRefusal('D0102_ASSIGNMENT_UNRESOLVED', item['id'])
+                if item.get('endpoint') == endpoint:
+                    assigned.add(item['id'])
+            add('unassigned_requirements', len(required - assigned))
+        result['metric_status'] = 'FAIL' if any(o['status'] == 'FAIL' for o in result['obligations']) else 'PASS'
+        qualified = _d0102_qualification(project, current, step, reads)
+        result.update(qualification=qualified['status'], admission=qualified)
+        result['status'] = result['metric_status'] if qualified['status'] == 'PASS' else 'NOT_MEASURED'
+        result['reason'] = 'D0102_CURRENT_METRICS_' + result['status']
+    except (MetricRefusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D0102_EVIDENCE_UNAVAILABLE'), detail=str(exc))
+    if any(o['status'] == 'FAIL' for o in result['obligations']):
+        result['status'] = 'FAIL'
+    try:
+        for relative, digest in reads.items():
+            if _sha(_safe_project_file(project, relative).read_bytes()) != digest:
+                raise MetricRefusal('D0102_INPUT_CHANGED_DURING_READ', relative)
+    except (OSError, MetricRefusal) as exc:
+        result.update(status='NOT_MEASURED', qualification='NOT_MEASURED', reason=str(exc))
+    result['delivery_blocked'] = result['status'] != 'PASS'
+    return result
+
+
+def accept_d01(project: Path, context: Mapping[str, Any]) -> dict:
+    """Complete existing Step 1 metrics from current source-owned observations."""
+    return _accept_d0102(project, context, 'D01')
+
+
+def accept_d02(project: Path, context: Mapping[str, Any]) -> dict:
+    """Complete existing Step 2 metrics without regenerating its inputs."""
+    return _accept_d0102(project, context, 'D02')
