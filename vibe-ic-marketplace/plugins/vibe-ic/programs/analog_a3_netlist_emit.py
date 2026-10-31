@@ -1030,6 +1030,7 @@ def _validate_ir(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     problems: List[str] = _a2.input_drain_cascode_problems(ir, project)
     problems.extend(_a2.matched_gain_length_problems(ir, project))
     problems.extend(_a2.folded_first_stage_problems(ir, project))
+    problems.extend(_a2.miller_nulling_problems(ir, project))
     role_terms = ir.get("role_terminals") or {}
     ports = set(ir.get("ports") or [])
     rails = set((ir.get("rails") or {}).values())
