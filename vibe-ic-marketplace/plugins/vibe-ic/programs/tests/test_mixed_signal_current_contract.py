@@ -244,3 +244,183 @@ def test_normal_current_interface_refuses_unbound_pdk_namespace(current_interfac
         consumer.input_paths(project, "bridge_top")
     assert refused.value.rule == "CURRENT_INTERFACE_NOT_SUPPORTED"
 
+
+
+@pytest.fixture
+def explicit_multiblock_project(current_interface_project, monkeypatch):
+    """SOURCE_CONTROL ancestry, two block types and three explicit instances."""
+    import copy
+    import hashlib
+    import analog_a7_post_layout_emit as a7
+    import librelane_contract as lc
+    import mixed_signal_power_domain_run as power
+    from test_m3_native_supported import read, write
+
+    project = current_interface_project
+    def put(name, text):
+        path = project / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+        return path
+    def sha(path):
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    write(project / 'phase1/analog/analog_block_list.json', {'blocks': [
+        {'name': 'receiver', 'multiplicity': 2}, {'name': 'receiver_b', 'count': 1}]})
+    original = read(project / 'input/mixed_signal/native.json')
+    second = project / 'phase3/analog/receiver_b'
+    second.mkdir()
+    for name in ('receiver.gds', 'receiver.sp', 'topology.json'):
+        text = (project / 'phase3/analog/receiver' / name).read_text().replace('receiver', 'receiver_b').replace('receiver_b_r', 'receiver_r')
+        (second / name.replace('receiver', 'receiver_b')).write_text(text)
+    extracted = put('phase3/librelane/analog/receiver_b/a7_resim/rcx/receiver_b.spice',
+        (project / 'phase3/librelane/analog/receiver/a7_resim/rcx/receiver.spice').read_text().replace('receiver', 'receiver_b').replace('receiver_b_r', 'receiver_r'))
+    post = project / 'phase3/librelane/analog/receiver_b/a7_resim/receiver_b_post.sp'
+    post.write_text(a7.post_layout_netlist('receiver_b', ['drive', 'sense'], extracted.read_text(),
+        a7.model_binding_lines((second / 'receiver_b.sp').read_text(), second, post.parent))[0])
+    for name in ('vibeic_receipt.json','state_out.json','input_fingerprint.json','pdk_root.json'):
+        write(extracted.parent / name, {'scope':'SOURCE_CONTROL'})
+    (extracted.parent / 'invocation.log').write_text('SOURCE_CONTROL only\n')
+    record = copy.deepcopy(read(project / 'phase3/analog/receiver/a7_post_layout.json'))
+    record.update(block='receiver_b', layout_path='phase3/analog/receiver_b/receiver_b.gds',
+                  layout_sha256=sha(second / 'receiver_b.gds'))
+    record['corners'][0].update(step_dir=str(extracted.parent.relative_to(project)),
+        extracted_netlist=str(extracted.relative_to(project)), post_layout_netlist=str(post.relative_to(project)))
+    write(second / 'a7_post_layout.json', record)
+    write(second / 'pre_vs_post.json', {'_provenance': {'layout_path':record['layout_path'], 'layout_sha256':record['layout_sha256']}})
+    macro = project / 'phase3/analog/hardmacro/receiver_b'
+    macro.mkdir()
+    for suffix in ('.v','.gds','.lib','.lef'):
+        (macro / ('receiver_b'+suffix)).write_text((project / 'phase3/analog/hardmacro/receiver' / ('receiver'+suffix)).read_text().replace('receiver','receiver_b'))
+    manifest = read(project / 'phase3/analog/hardmacro/receiver/a8_views_provenance.json')
+    manifest.update(block='receiver_b', source_gds=record['layout_path'],source_gds_sha256=record['layout_sha256'])
+    manifest['views']={suffix:{'path':str((macro/('receiver_b'+suffix)).relative_to(project)), 'sha256':sha(macro/('receiver_b'+suffix))} for suffix in ('.gds','.v','.lib','.lef')}
+    write(macro / 'a8_views_provenance.json',manifest)
+    monkeypatch.setattr(lc,'validate_step_receipt',lambda folder,_sid:{'sha256':{p.name:sha(p) for p in folder.glob('*.spice')}})
+    lib=project/'input/pdk/liberty/current_tt.lib'
+    text=lib.read_text();body=next(body for name,body in power.groups(text,'cell') if name=='receiver')
+    lib.write_text(text.rsplit('}',1)[0]+'cell(receiver_b) {'+body+'}\n}\n')
+    entries=[];cells={};ports={name:{'bits':[i], 'direction':'input'} for i,name in enumerate(('clk','reset_n'),1)}
+    lines=['module bridge_top(input clk, reset_n, output '+', '.join(name+'_'+tag for tag in ('a0','a1','b0') for name in ('sense','enable','accepted'))+');']
+    components=[]
+    header=(project/'phase3/stage3/pnr/current.spef').read_text().split('*NAME_MAP')[0]
+    aliases={name:'*'+str(i+1) for i,name in enumerate(name for tag in ('a0','a1','b0') for name in ('u_driver_'+tag,'u_'+tag))}
+    spef=[header+'*NAME_MAP\n'+''.join(alias+' '+name+'\n' for name,alias in aliases.items())]
+    for index,(tag,block) in enumerate((('a0','receiver'),('a1','receiver'),('b0','receiver_b'))):
+        driver,instance='u_driver_'+tag,'u_'+tag
+        drive,sense,response='enable_'+tag,'sense_'+tag,'accepted_'+tag
+        bits=10+index*3
+        ports.update({drive:{'bits':[bits],'direction':'output'},sense:{'bits':[bits+1],'direction':'output'},response:{'bits':[bits+2],'direction':'output'}})
+        cells[driver]={'type':'BUF','connections':{'A':[2],'Y':[bits]}}
+        cells[instance]={'type':block,'connections':{'drive':[bits],'sense':[bits+1]}}
+        lines.extend([f'BUF {driver}(.A(reset_n),.Y({drive}));',f'{block} {instance}(.drive({drive}),.sense({sense}));',f'assign {response}={sense};'])
+        components.extend([f'- {driver} BUF + PLACED ( {100+index*2000} 100 ) N ;',f'- {instance} {block} + FIXED ( {1000+index*2000} 1000 ) N ;'])
+        spec=copy.deepcopy(original['canonical'])
+        spec.update(id=tag,block=block,instance=instance,driver_instance=driver,
+                    digital={'drive':drive,'sense':sense,'response':response})
+        entries.append(spec)
+        spef.extend([f'*D_NET {drive} 0.2\n*CONN\n*I {driver}:Y O\n*I {instance}:drive I\n*P {drive} O\n*CAP\n1 {driver}:Y 0.05\n2 {instance}:drive 0.05\n3 {instance}:drive {instance}:sense 0.1\n*RES\n1 {driver}:Y {instance}:drive 100\n2 {driver}:Y {drive} 1\n*END\n',
+                     f'*D_NET {sense} 0.2\n*CONN\n*I {instance}:sense O\n*P {sense} O\n*CAP\n1 {instance}:sense 0.1\n2 {instance}:sense {instance}:drive 0.1\n*RES\n1 {instance}:sense {sense} 1\n*END\n'])
+    lines.append('endmodule\n')
+    put('phase3/stage3/pnr/bridge_top_pnr.v','\n'.join(lines))
+    put('phase3/stage3/pnr/routed.def','DESIGN bridge_top ;\nUNITS DISTANCE MICRONS 1000 ;\nCOMPONENTS 6 ;\n'+'\n'.join(components)+'\nEND COMPONENTS\nEND DESIGN\n')
+    put('phase3/stage3/pnr/bridge_top.gds','SOURCE_CONTROL digital layout; not GDS proof\n')
+    spef.append('*D_NET reset_n 0.3\n*CONN\n*P reset_n I\n'+''.join(f'*I u_driver_{tag}:A I\n' for tag in ('a0','a1','b0'))+'*CAP\n'+''.join(f'{i+1} u_driver_{tag}:A 0.1\n' for i,tag in enumerate(('a0','a1','b0')))+'*RES\n'+''.join(f'{i+1} reset_n u_driver_{tag}:A 1\n' for i,tag in enumerate(('a0','a1','b0')))+'*END\n')
+    spef_text=''.join(spef)
+    for name,alias in aliases.items():
+        spef_text=spef_text.replace(name+':',alias+':')
+    put('phase3/stage3/pnr/current.spef',spef_text)
+    write(project/'reports/analog/mixed_signal/power_domain_tool/netlist.json',{'modules':{'bridge_top':{'ports':ports,'cells':cells}}})
+    original['canonical']={'interfaces':entries}
+    original['digital']['extra_sources'].append('phase3/analog/hardmacro/receiver_b/receiver_b.v')
+    original['si']['interfaces']=[{'pin':entry['instance']+'/'+pin,'criteria':[{'metric':'slew_rise_max','max':10}]} for entry in entries for pin in ('drive','sense')]
+    write(project/'input/mixed_signal/native.json',original)
+    plan=read(project/'phase1/generated_docs/L22_VERIFICATION_PLAN.json')
+    row=plan['fields']['verification_plan']['cosim_scenarios'][0]
+    plan['fields']['verification_plan']['cosim_scenarios']=[{**copy.deepcopy(row),'id':'mission_'+entry['id'],'interface':entry['id']} for entry in entries]
+    write(project/'phase1/generated_docs/L22_VERIFICATION_PLAN.json',plan)
+    write(project/'phase1/generated_docs/L5_ADI_SPEC.json',{'doc_id':'L5','fields':{'analog_digital_interfaces':[{'signal':entry['digital'][key]} for entry in entries for key in ('drive','sense')]}})
+    return project
+
+
+@pytest.mark.parametrize('case',['complete','missing_mapping','missing_model','missing_channel','bad_block','cross_coupling'])
+def test_explicit_multiblock_current_producer(explicit_multiblock_project,monkeypatch,record_property,case):
+    """Existing native loop/readback, SOURCE_CONTROL ancestors, no ADC credit."""
+    import mixed_signal_m3_run as m3
+    from test_m3_native_supported import read,write
+    project=explicit_multiblock_project
+    contract=project/'input/mixed_signal/native.json'
+    data=read(contract)
+    if case=='missing_mapping':
+        data['canonical']['interfaces'].pop()
+        write(contract,data)
+    elif case=='missing_model':
+        (project/'phase3/librelane/analog/receiver_b/a7_resim/receiver_b_post.sp').unlink()
+    elif case=='missing_channel':
+        data['canonical']['interfaces']=[entry for entry in data['canonical']['interfaces'] if entry['id']!='a1']
+        write(contract,data)
+        plan_path=project/'phase1/generated_docs/L22_VERIFICATION_PLAN.json'
+        plan=read(plan_path)
+        plan['fields']['verification_plan']['cosim_scenarios']=[row for row in plan['fields']['verification_plan']['cosim_scenarios'] if row['interface']!='a1']
+        write(plan_path,plan)
+    elif case=='bad_block':
+        data['canonical']['interfaces'][2]['noise']['criteria'][0]['max']=0.0
+        write(contract,data)
+    elif case=='cross_coupling':
+        path=project/'phase3/stage3/pnr/current.spef'
+        path.write_text(path.read_text().replace('3 *2:drive *2:sense 0.1','3 *2:drive *2:sense 0.1\n4 *2:drive *6:sense 0.01'))
+    calls=[]
+    original_run=consumer.Engine.run
+    def observed(self,command,log,stage,cwd=None):
+        calls.append(command)
+        return original_run(self,command,log,stage,cwd)
+    monkeypatch.setattr(consumer.Engine,'run',observed)
+    report=project/'current_multiblock.json'
+    rc=m3.main([str(project),'--top','bridge_top','--container','host','--json',str(report)])
+    result=read(report) if report.exists() else {}
+    record_property('scope','SOURCE_CONTROL ancestry + actual neutral native measurements; no ADC/final-geometry acceptance')
+    record_property('producer_result',result)
+    record_property('actual_rc',rc)
+    if case in ('missing_mapping','missing_model','missing_channel','cross_coupling'):
+        assert rc!=0,result
+        assert calls==[],calls
+        return
+    assert rc==({'complete':0,'bad_block':1}[case]),result
+    record=read(project/m3.RECEIPT)
+    assert record['scenario_ids']==['mission_a0','mission_a1','mission_b0']
+    assert record['full_design_verified'] is False
+    assert len([cmd for cmd in calls if 'ngspice' in cmd and '-b' in cmd])==3
+    si=read(project/m3.SI)
+    assert {(row['interface'],row['block'],row['instance']) for row in si['current_interfaces']}=={
+        ('a0','receiver','u_a0'),('a1','receiver','u_a1'),('b0','receiver_b','u_b0')}
+    assert m3.audit(project,'cosim')['verdict']==('PASS' if case=='complete' else 'FAIL')
+    assert m3.audit(project,'si')['verdict']==('PASS' if case=='complete' else 'FAIL')
+    if case=='bad_block':
+        assert next(row for row in si['current_interfaces'] if row['interface']=='b0')['verdict']=='FAIL'
+
+    if case=='complete':
+        # Reuse this one native run for hostile readback controls, then restore
+        # its exact bytes. The retained input census must still own every block.
+        original_si=(project/m3.SI).read_bytes()
+        original_receipt=(project/m3.RECEIPT).read_bytes()
+        bad=read(project/m3.SI); bad['current_interfaces'].pop()
+        write(project/m3.SI,bad)
+        rebound=read(project/m3.RECEIPT); rebound['outputs'][m3.SI]=m3.digest(project/m3.SI)
+        write(project/m3.RECEIPT,rebound)
+        try:
+            missing=m3.audit(project,'si')
+            assert missing['passed'] is False,missing
+            record_property('rehashed_missing_interface_readback',missing)
+        finally:
+            (project/m3.SI).write_bytes(original_si)
+            (project/m3.RECEIPT).write_bytes(original_receipt)
+        post=project/'phase3/librelane/analog/receiver_b/a7_resim/receiver_b_post.sp'
+        original_model=post.read_bytes()
+        post.write_bytes(original_model+b'\n* changed retained second-block model\n')
+        try:
+            stale=m3.audit(project,'cosim')
+            assert stale['passed'] is False,stale
+            record_property('stale_second_block_readback',stale)
+        finally:
+            post.write_bytes(original_model)
+        assert m3.audit(project,'cosim')['passed'] is True
+        assert m3.audit(project,'si')['passed'] is True

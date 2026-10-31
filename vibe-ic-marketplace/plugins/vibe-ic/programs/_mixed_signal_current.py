@@ -1,11 +1,13 @@
-"""M3's first supported current physical interface, using retained tool views.
+"""Current physical two-port interfaces resolved from retained tool views.
 
-One complete block/interface is supported. Larger or unresolved populations
-remain unmeasured. This does not extend the declared component contract.
+Explicit multi-interface populations use the existing sequential scenario loop.
+Shared/cross-coupled interfaces require a coupled method and remain unmeasured.
+This does not extend the declared component contract or qualify a whole design.
 """
 from __future__ import annotations
 
 import copy
+import json
 import math
 import re
 from pathlib import Path
@@ -27,7 +29,64 @@ def refuse(message):
     raise native().api().Refusal("CURRENT_INTERFACE_NOT_SUPPORTED", message)
 
 
+def for_scenario(data, row):
+    """Select only a caller-declared interface; never infer a row's wiring."""
+    interfaces = data.get("_current_interfaces")
+    if interfaces is None:
+        return data
+    name = row.get("interface")
+    if not isinstance(name, str) or name not in interfaces:
+        refuse("each scenario must name one complete current interface")
+    return interfaces[name]
+
+
 def resolve(project, original):
+    """Resolve the full explicit physical population before any execution."""
+    canonical = original.get("canonical") or {}
+    if "interfaces" not in canonical:
+        return _resolve_interface(project, original)
+    entries = canonical["interfaces"]
+    if (set(canonical) != {"interfaces"} or not isinstance(entries, list) or not entries
+            or any(not isinstance(item, dict) for item in entries)):
+        refuse("nonempty explicit canonical interfaces are required")
+    names = [item.get("id") for item in entries]
+    instances = [item.get("instance") for item in entries]
+    if (any(not isinstance(name, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", name) for name in names)
+            or len(set(names)) != len(names) or len(set(instances)) != len(instances)):
+        refuse("interface IDs and physical instances must be unique")
+    population = []
+    for item in entries:
+        roles = item.get("digital")
+        if (not isinstance(roles, dict) or not {"drive", "sense", "response"} <= set(roles)
+                or set(roles) - {"clock", "reset_n", "drive", "sense", "response"}):
+            refuse("each physical interface needs explicit digital port roles")
+        view = copy.deepcopy(original)
+        view["canonical"] = {key: value for key, value in item.items() if key not in ("id", "digital", "analog")}
+        view["digital"] = {**original["digital"], **roles}
+        view["analog"] = {**original["analog"], **item.get("analog", {})}
+        population.append(view)
+    signals = [view["digital"][key] for view in population for key in ("drive", "sense")]
+    if len(set(signals)) != len(signals):
+        refuse("shared physical drive/sense nets require a coupled multi-driver method")
+    rows = native().api().plan(project)
+    if (not rows or any(row.get("interface") not in names for row in rows)
+            or {row.get("interface") for row in rows} != set(names)):
+        refuse("the complete declared interface population must have explicit scenarios")
+    resolved = {}
+    for name, view in zip(names, population):
+        result = _resolve_interface(project, view, population)
+        result["_current"].update(interface_id=name, instance=view["canonical"]["instance"])
+        resolved[name] = result
+    data = copy.deepcopy(original)
+    data["si"] = resolved[names[0]]["si"]
+    if any(view["si"] != data["si"] for view in resolved.values()):
+        refuse("all interfaces must consume the same complete retained timing population")
+    data["_current"] = {"inputs": sorted({path for view in resolved.values() for path in view["_current"]["inputs"]})}
+    data["_current_interfaces"] = resolved
+    return data
+
+
+def _resolve_interface(project, original, population=None):
     """Resolve roles to existing A7/A8/M1/M2/STA material, never caller models."""
     import analog_a7_post_layout_emit as a7
     import analog_a7_post_layout_resim_check as a7_gate
@@ -37,7 +96,7 @@ def resolve(project, original):
     import librelane_postroute as postroute
     from _container_exec import localise_mounted_paths
     import path_spice_tool as spice
-    from _analog_a_check_common import load_block_list
+    from _analog_a_check_common import load_block_list, block_list_path
     from l_doc_consumer_contract import load_l_doc, l_doc_fields
     from l9_rtl_pin_consistency_check import extract_l9_ports_with_audit
     from si_signoff_timing_aware import parse_spef
@@ -46,8 +105,23 @@ def resolve(project, original):
     data = copy.deepcopy(original)
     c = data["canonical"]
     block, instance = c["block"], c["instance"]
-    if load_block_list(project) != [block]:
-        refuse("the complete master block population must be one supported block")
+    population = population or [data]
+    declared = load_block_list(project)
+    expected_blocks = {view["canonical"]["block"] for view in population}
+    if not declared or len(set(declared)) != len(declared) or set(declared) != expected_blocks:
+        refuse("the complete master block population must be mapped")
+    block_list = block_list_path(project)
+    declarations = json.loads(block_list.read_text())
+    declarations = declarations.get("blocks", []) if isinstance(declarations, dict) else declarations
+    for declaration in declarations:
+        if not isinstance(declaration, dict):
+            continue
+        counts = [declaration[key] for key in ("count", "multiplicity") if key in declaration]
+        name = declaration.get("name") or declaration.get("block")
+        if counts and (any(type(count) is not int or count <= 0 for count in counts)
+                       or len(set(counts)) != 1
+                       or sum(view["canonical"]["block"] == name for view in population) != counts[0]):
+            refuse("declared block multiplicity must match every explicit physical interface")
     bdir = project / "phase3/analog" / block
     record_path = bdir / "a7_post_layout.json"
     record = n.api().read(record_path)
@@ -83,14 +157,16 @@ def resolve(project, original):
     if top_lvs.get("verdict") != "PASS" or m1.validate_current_receipt(project, top_lvs) is not None:
         refuse("current M1 merge/LVS is not accepted")
     _, macros, views, netlist, detail, _ = m1.current_merge_inputs(project, data["top"])
-    if {p.stem for p in macros} != {block} or detail["placements"].get(block) is None:
-        refuse("M1 macro population differs from the master block population")
-    placement = detail["placements"][block]
-    if len(placement) != 1 or placement[0]["inst"] != instance:
-        refuse("all physical macro instances must be supported")
-    manifest_path = macros[0].parent / "a8_views_provenance.json"
+    expected_instances = {(view["canonical"]["block"], view["canonical"]["instance"]) for view in population}
+    actual_instances = [(cell, item["inst"]) for cell, items in detail["placements"].items() for item in items]
+    if ({p.stem for p in macros} != expected_blocks or len(actual_instances) != len(expected_instances)
+            or set(actual_instances) != expected_instances):
+        refuse("all physical macro instances must match the complete explicit mapping")
+    macro_gds = next(path for path in macros if path.stem == block)
+    macro_view = next(path for path in views if re.search(r"\bmodule\s+" + re.escape(block) + r"\b", m1._uncomment(path.read_text())))
+    manifest_path = macro_gds.parent / "a8_views_provenance.json"
     manifest = n.api().read(manifest_path)
-    if m1._a8_manifest_failure(project, macros[0], views[0]):
+    if m1._a8_manifest_failure(project, macro_gds, macro_view):
         refuse("current A8 views are not accepted")
     if (manifest["source_gds"] != record["layout_path"] or
             manifest["source_gds_sha256"] != record["layout_sha256"]):
@@ -175,7 +251,7 @@ def resolve(project, original):
         fields = l_doc_fields(doc) if doc else {}
         if layer == "L5" and isinstance(fields.get("analog_digital_interfaces"), list):
             declared = {r.get("signal", r.get("name")) for r in fields["analog_digital_interfaces"]}
-            if declared != {d["drive"], d["sense"]}:
+            if declared != {view["digital"][key] for view in population for key in ("drive", "sense")}:
                 refuse("the complete declared ADI signal population is unsupported")
         if layer == "L9":
             declared, discarded = extract_l9_ports_with_audit(fields)
@@ -200,15 +276,16 @@ def resolve(project, original):
             refuse("selected interface has an unsupported electrical load population")
     if module["ports"][d["sense"]].get("direction") != "output":
         refuse("the current physical sense port must observe the macro output")
-    if any({net_name(net) for net in pair} != expected_nets for pair in parsed["pair_cc"]):
-        refuse("the complete extracted coupled-net population is unsupported")
+    mapped_pairs = {frozenset((view["digital"]["drive"], view["digital"]["sense"])) for view in population}
+    if any(frozenset(net_name(net) for net in pair) not in mapped_pairs for pair in parsed["pair_cc"]):
+        refuse("cross-interface or unmapped coupling requires a coupled multi-driver method")
     if not parsed["topology"]["coupling_caps"]:
         refuse("no native mutual-capacitance population was extracted")
     selected_nodes = {node for node, owner in parsed["node_net"].items() if net_name(owner) in expected_nets}
     rc = parsed["topology"]
     rc = {"resistors": [r for r in rc["resistors"] if r[0] in selected_nodes and r[1] in selected_nodes],
           "ground_caps": [r for r in rc["ground_caps"] if r[0] in selected_nodes],
-          "coupling_caps": rc["coupling_caps"]}
+          "coupling_caps": [cap for cap in rc["coupling_caps"] if cap[0] in selected_nodes and cap[1] in selected_nodes]}
     def pin(name):
         found = [raw for raw in selected_nodes if raw.replace(parsed["delimiter"], "/") == name or
                  spice_pin(raw, parsed) == name]
@@ -257,7 +334,8 @@ def resolve(project, original):
     if (data["analog"]["drive_low_v"] != volts[config["GND_PIN"]] or
             data["analog"]["drive_high_v"] != volts[config["VDD_PIN"]]):
         refuse("sampled drive rails differ from the current PDK corner")
-    signal_pins = {instance + "/" + port for port in signal_ports}
+    signal_pins = {view["canonical"]["instance"] + "/" + view["canonical"][key]
+                   for view in population for key in ("macro_drive", "macro_sense")}
     if {item.get("pin") for item in data["si"]["interfaces"]} != signal_pins:
         refuse("timing criteria must consume every current macro signal pin")
     driver_views = [ports for source in sources for name, (ports, _) in
@@ -283,7 +361,7 @@ def resolve(project, original):
             if target not in model_inputs:
                 model_inputs.add(target)
                 pending.append(target)
-    inputs = {str(p.relative_to(project)) for p in [record_path, bdir / "pre_vs_post.json", bdir / "topology.json",
+    inputs = {str(p.relative_to(project)) for p in [block_list, record_path, bdir / "pre_vs_post.json", bdir / "topology.json",
         bdir / (block + ".sp"), extracted, post, step / "vibeic_receipt.json", step / "input_fingerprint.json",
         step / "state_out.json", step / "pdk_root.json", step / "invocation.log", manifest_path,
         project / "phase3/mixed_signal/m1_merge_receipt.json", project / "reports/analog/mixed_signal/top_lvs.json",
@@ -428,14 +506,17 @@ def measure(project, data, row, work, token):
             "subckt": m["block"], "temperature_c": m["temperature_c"]}
     # derive() checks the independent scalar/spectrum, actual band and tokens.
     noise_spec = noise.derive(project, spec, work, token, log_name="ngspice.log")
-    return {"id": row["id"], "scope": SCOPE, "noise": noise_spec,
+    attribution = ({"interface": m["interface_id"], "block": m["block"], "instance": m["instance"]}
+                   if "interface_id" in m else {})
+    return {"id": row["id"], "scope": SCOPE, **attribution, "noise": noise_spec,
             "crosstalk": {"criteria": criteria, "sample_count": len(values), "verdict": "PASS" if all(c["verdict"] == "PASS" for c in criteria) else "FAIL"},
             "verdict": "FAIL" if noise_spec["verdict"] == "FAIL" or any(c["verdict"] == "FAIL" for c in criteria) else "PASS"}
 
 
 def blend(project, data, root, result):
     result = {**result, "coverage": dict(result["coverage"]), "blockers": list(result["blockers"])}
-    measured = [measure(project, data, row, root.parent / row["id"], root.parent.name) for row in native().api().plan(project)]
+    measured = [measure(project, for_scenario(data, row), row, root.parent / row["id"], root.parent.name)
+                for row in native().api().plan(project)]
     result["current_interfaces"] = measured
     result["coverage"].update(noise="MEASURED", crosstalk="MEASURED")
     result["blockers"] = [] if result["coverage"]["timing"] == "MEASURED" else result["blockers"]
