@@ -440,6 +440,64 @@ def _read_pdk_file(path: str, container: str,
         return None, ""
 
 
+def _native_linked_pad_views(project: Path, recorded: List[str]):
+    """Resolve every currently selected IO view through native config/source hashes."""
+    import fnmatch
+    import hashlib
+    import json
+    from synth_handoff_netlist_check import _pdk_source_file, _runtime_source_file
+
+    row_path = project / "reports/flow109/default_rows/D03.json"
+    if not row_path.exists():
+        return None
+    raw = row_path.read_bytes()
+    row = json.loads(raw)
+    if (row.get("schema") != "vibeic.flow109.technology-qualification.v1"
+            or row.get("step_id") != "D03" or row.get("completed") is not True
+            or row.get("component_status") != "PASS"
+            or row.get("default_row_status") != "PASS"):
+        raise ValueError("current native PDK resolution is not PASS")
+    inputs = {item["path"]: item["sha256"] for item in row["inputs"]}
+    config_path = project / "reports/flow109/D03/resolved.json"
+    config_raw = config_path.read_bytes()
+    if inputs.get(str(config_path)) != hashlib.sha256(config_raw).hexdigest():
+        raise ValueError("current native PDK config is unbound")
+    config = json.loads(config_raw)
+    pdk = row["metrics"]["tool_deck_corner_binding"]["pdk"]
+    if config["PDK"] != pdk["variant"]:
+        raise ValueError("current native PDK variant differs")
+    identity = (pdk["variant"], pdk["revision"].split(":")[-1])
+    catalog = {_pdk_source_file(Path(path)) for path in recorded}
+    selected = set()
+    for corner in config["STA_CORNERS"]:
+        views = [path for pattern, paths in config["PAD_LIBS"].items()
+                 if fnmatch.fnmatchcase(corner, pattern) for path in paths]
+        if not views:
+            raise ValueError(f"no native IO view for {corner}")
+        selected.update(views)
+    if not selected:
+        raise ValueError("native IO view population is empty")
+    result = {}
+    for path in sorted(selected):
+        source = _pdk_source_file(Path(path).resolve())
+        if (source is None or source[:2] != identity or source not in catalog
+                or source[2].suffix != ".lib"):
+            raise ValueError(f"foreign IO source: {path}")
+        expected = {digest for value, digest in inputs.items()
+                    if _pdk_source_file(Path(value)) == source}
+        if len(expected) != 1:
+            raise ValueError(f"native IO hash is absent or ambiguous: {path}")
+        digest = expected.pop()
+        resolved = _runtime_source_file(Path(path).resolve(), digest, pdk["variant"])
+        if resolved is None:
+            raise ValueError(f"native IO source/hash differs: {path}")
+        result[str(resolved)] = digest
+    return result, {"record": str(row_path), "record_sha256": hashlib.sha256(raw).hexdigest(),
+                    "config": str(config_path), "config_sha256": hashlib.sha256(config_raw).hexdigest(),
+                    "corners": config["STA_CORNERS"], "recorded_catalog": recorded,
+                    "selected_views": result}
+
+
 def _signal_pad_instances(record: Dict[str, object]) -> Dict[str, object]:
     """The producer marks supply/connector records with ``kind``; they are
     not off-chip signal inputs or output timing paths."""
@@ -503,6 +561,15 @@ def _core_pad_models(project: Path, container: str = "",
         basis["why"] = "pad producer names no linked IO Liberty"
         return None, basis
 
+    expected_views = {}
+    try:
+        native_views = _native_linked_pad_views(project, libs)
+        if native_views is not None:
+            expected_views, basis["native_link"] = native_views
+            libs = list(expected_views)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        basis["why"] = f"current native IO link refused: {exc}"
+        return None, basis
     views: List[Dict[str, object]] = []
     cell_views: Dict[str, List[Tuple[str, str, float]]] = {}
     selected = {str(pad["master"]) for pad in pads.values()}
@@ -512,9 +579,15 @@ def _core_pad_models(project: Path, container: str = "",
         text, where = _read_pdk_file(path, container, to_container_path)
         if text is None:
             views.append({"liberty": path, "why": "NOT_READ"})
+            if expected_views:
+                basis["why"] = f"current native IO view unreadable: {path}"
+                return None, basis
             continue
         read_views += 1
         sha = hashlib.sha256(text.encode()).hexdigest()
+        if expected_views and expected_views.get(path) != sha:
+            basis["why"] = f"current native IO view changed while reading: {path}"
+            return None, basis
         unit_pf = _liberty_capacitance_unit_pf(text)
         found = []
         may_have_selected = _liberty_may_have_selected_cell(text, selected)
@@ -705,7 +778,8 @@ def _core_pad_translate_line(line: str, models: Dict[str, Dict[str, object]]
 
 def _translate_core_pad_boundary(project: Path, text: str, staged_rel: str,
                                  record: Dict[str, object], container: str,
-                                 to_container_path: Optional[Callable[[str, str], str]]
+                                 to_container_path: Optional[Callable[[str, str], str]],
+                                 time_scale: float = 1.0
                                  ) -> Tuple[str, Dict[str, object]]:
     """Keep package obligations as evidence and execute their core-side model."""
     models, basis = _core_pad_models(project, container, to_container_path)
@@ -746,6 +820,24 @@ def _translate_core_pad_boundary(project: Path, text: str, staged_rel: str,
             "reason": reason, "refused_staged_sdc_lines": refused,
             "sdc_lines": [], "pad_model_basis": basis, **identity,
         }
+    drive_default = None
+    if (any(re.match(r"\s*set_load\b", line) for line in text.splitlines())
+            and not any(re.match(r"\s*set_input_transition\b", line)
+                        for line in text.splitlines())):
+        drive = _resolve_undeclared_drive(project, {"applies": True}, container,
+                                          to_container_path)
+        if (drive.get("verdict") in ("DECLARED", "PDK_IO_TIER")
+                and str(drive.get("model", "")).startswith("set_input_transition")):
+            # The same existing design/IO-tier policy supplies omitted external
+            # edges; the wrapper then translates them through the real pad arc.
+            drive_default = drive
+            lines = render_pad_input_drive(drive, time_scale)
+            if drive["verdict"] == "PDK_IO_TIER":
+                # Static translation uses the existing intersection shared by
+                # all selected views; no scene is extrapolated.
+                lines = [f"set_input_transition -{sense} {float(drive['bracket'][key]) * time_scale:g} [all_inputs]"
+                         for sense, key in (("max", "common_max_ns"), ("min", "common_min_ns"))]
+            text = text.rstrip("\n") + "\n" + "\n".join(lines) + "\n"
     external: List[Dict[str, object]] = []
     generated: List[str] = []
     errors: List[Dict[str, object]] = []
@@ -795,6 +887,8 @@ def _translate_core_pad_boundary(project: Path, text: str, staged_rel: str,
         "missing": missing,
         **identity,
     }
+    if drive_default is not None:
+        translated_record["input_drive_default"] = drive_default
     if incomplete:
         translated_record["reason"] = (
             "pad-facing constraints could not be completely translated to the "
@@ -829,6 +923,15 @@ def _pdk_io_input_transition(project: Path, container: str = "",
         basis["why"] = (f"no IO Liberty recorded by the pad-ring producer "
                         f"({IO_PAD_RECORD} absent or without io_library_liberty)")
         return None, basis
+    expected_views = {}
+    try:
+        native_views = _native_linked_pad_views(project, libs)
+        if native_views is not None:
+            expected_views, basis["native_link"] = native_views
+            libs = list(expected_views)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        basis["why"] = f"current native IO link refused: {exc}"
+        return None, basis
     views: List[Dict[str, object]] = []
     masters = {p["master"] for p in _signal_pad_instances(record).values()
                if p.get("direction") in ("input", "inout") and p.get("master")}
@@ -839,6 +942,9 @@ def _pdk_io_input_transition(project: Path, container: str = "",
         if text is None:
             views.append({"liberty": lib, "why": "NOT_READ"})
             continue
+        if expected_views and expected_views.get(lib) != hashlib.sha256(text.encode()).hexdigest():
+            basis["why"] = f"current native IO view changed while reading: {lib}"
+            return None, basis
         view = _io_pad_view(text, masters or None)
         if masters and not view.get("selected_cells_present", True):
             continue  # This view models no input pad instantiated by the producer.
@@ -1236,7 +1342,7 @@ def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
         if (isinstance(boundary, dict)
                 and boundary.get("classification") == "CORE"):
             return _translate_core_pad_boundary(
-                project, text, staged_rel, record, container, to_container_path)
+                project, text, staged_rel, record, container, to_container_path, time_scale)
         return text, record
     own = [ln.strip() for ln in text.splitlines()
            if re.match(r"\s*(set_input_transition|set_driving_cell)\b", ln)]
