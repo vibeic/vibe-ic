@@ -151,14 +151,81 @@ def _transfer_timing(topology: dict, reset_node: str, node_map: dict | None = No
     return {"kind": "source_derived_sc_transfer_gates_v1", "columns": columns, "groups": groups}
 
 
+def _extra_node_voltages(netlist: Path | None, source: str, settings: dict,
+                         reset: str, prefix_columns: list[str]) -> dict | None:
+    """Bind optional local DUT nodes to the delivered instance and source."""
+    if "extra_node_voltages" not in settings:
+        return None
+    from _pad_ring import parse_spice_subckts
+    from analog_netlist_connectivity_check import _device_nets
+
+    requested = settings["extra_node_voltages"]
+    if not isinstance(requested, dict) or set(requested) != {"netlist_sha256", "nodes"}:
+        raise ValueError("extra voltage observables require netlist_sha256 and nodes only")
+    if netlist is None or not netlist.is_file() or netlist.is_symlink():
+        raise ValueError("extra voltage observables require the delivered netlist")
+    netlist_bytes = netlist.read_bytes()
+    if requested["netlist_sha256"] != hashlib.sha256(netlist_bytes).hexdigest():
+        raise ValueError("extra voltage observable source hash differs from the delivered netlist")
+    nodes = requested["nodes"]
+    if (not isinstance(nodes, list) or not nodes
+            or any(not isinstance(node, str) or not re.fullmatch(r"[A-Za-z0-9_:$-]+", node) for node in nodes)
+            or len({node.casefold() for node in nodes}) != len(nodes)):
+        raise ValueError("extra voltage observable nodes must be explicit and unique")
+    circuits = parse_spice_subckts(netlist_bytes.decode(), preserve_parameters=True, reject_duplicates=True)
+    if len(circuits) != 1:
+        raise ValueError("extra voltage observables require one flat delivered subcircuit")
+    circuit, (ports, body) = next(iter(circuits.items()))
+    inventory, device_names = {node.casefold() for node in ports}, set()
+    for tokens in body:
+        if tokens[0].startswith('.'):
+            continue
+        name = tokens[0].casefold()
+        if name in device_names:
+            raise ValueError("extra voltage observable source has duplicate device names")
+        device_names.add(name)
+        terminals = _device_nets(' '.join(tokens))
+        if terminals is None:
+            count = 4 if name.startswith('m') else 2 if name[:1] in ('r', 'c', 'l', 'v', 'i') else 0
+            if not count or len(tokens) < count + 2:
+                raise ValueError("extra voltage observable source device terminals are unavailable")
+            terminals = tokens[1:1 + count]
+        inventory.update(node.casefold() for node in terminals)
+    includes = re.findall(r'''(?im)^\s*\.include\s+(?:"([^"]+)"|'([^']+)'|(\S+))\s*$''', source)
+    if sum(Path(next(part for part in match if part)).resolve() == netlist.resolve() for match in includes) != 1:
+        raise ValueError("extra voltage observable source is not the unique delivered include")
+    instance = reset.rsplit('.', 1)[0]
+    matches = [line.split() for line in source.splitlines()
+               if line.split() and line.split()[0].casefold() == instance.casefold()]
+    if (len(matches) != 1 or len(matches[0]) != len(ports) + 2
+            or matches[0][-1].casefold() != circuit.casefold()
+            or circuit.casefold() in {name.casefold() for name in parse_spice_subckts(source)}):
+        raise ValueError("extra voltage observable DUT instance or subcircuit is ambiguous")
+    port_map = {port.casefold(): node for port, node in zip(ports, matches[0][1:-1])}
+    columns = []
+    for node in nodes:
+        if node.casefold() not in inventory:
+            raise ValueError("extra voltage observable node is absent from delivered devices: " + node)
+        actual = port_map.get(node.casefold(), instance + '.' + node)
+        if not re.fullmatch(r"[A-Za-z0-9_.:$-]+", actual):
+            raise ValueError("extra voltage observable instance node is unsafe")
+        column = f"v({actual})"
+        if column.casefold() in {name.casefold() for name in prefix_columns + columns}:
+            raise ValueError("extra voltage observable column duplicates an existing probe")
+        columns.append(column)
+    return {"netlist": {"path": str(netlist.resolve()), "sha256": requested["netlist_sha256"]},
+            "nodes": list(nodes), "columns": columns, "prefix_columns": list(prefix_columns)}
+
+
 def sampled_capture(path: Path, first_clock_s: float, period_s: float,
                     high_v: float, sample_fraction: float = 0.9,
-                    timing: dict | None = None) -> dict:
+                    timing: dict | None = None, observables: dict | None = None) -> dict:
     """Stream time/output/reset/input columns; retain only clock samples."""
     if period_s <= 0 or high_v <= 0 or not 0 < sample_fraction < 1:
         raise ValueError("invalid capture clock or sampling phase")
     samples, releases, assertions = [], [], []
     columns = (timing or {}).get("columns") or []
+    extra_columns = (observables or {}).get("columns") or []
     groups = (timing or {}).get("groups") or []
     pulses = [[] for _ in groups]
     opened = [None for _ in groups]
@@ -170,20 +237,29 @@ def sampled_capture(path: Path, first_clock_s: float, period_s: float,
     opener = gzip.open if path.suffix == ".gz" else open
     with opener(path, "rt") as stream:
         for line in stream:
+            fields = line.split()
             try:
-                row = tuple(float(value) for value in line.split()[:4 + len(columns)])
+                row = tuple(float(value) for value in fields)
             except ValueError:
-                fields = line.split()
                 if columns and fields and fields[0].casefold() == "time":
-                    if [field.casefold() for field in fields[4:]] != [name.casefold() for name in columns]:
+                    if observables and [field.casefold() for field in fields] != [
+                            name.casefold() for name in ["time", *observables["prefix_columns"], *extra_columns]]:
+                        raise ValueError("native observable header differs from the declared columns")
+                    if [field.casefold() for field in fields[4:]] != [name.casefold() for name in columns + extra_columns]:
                         raise ValueError("native transfer phase header differs from the source-derived probes")
                     phase_header = True
+                elif fields:
+                    try:
+                        float(fields[0])
+                    except ValueError:
+                        continue
+                    raise ValueError("non-numeric native capture columns")
                 continue
             if columns and not phase_header:
                 raise ValueError("native transfer phase header is absent")
-            if len(row) != 4 + len(columns):
+            if len(row) != 4 + len(columns) + len(extra_columns):
                 if columns and len(row) >= 4:
-                    raise ValueError("native transfer phase columns are absent")
+                    raise ValueError("native capture columns differ from the declared columns")
                 continue
             if not all(math.isfinite(value) for value in row):
                 raise ValueError("non-finite native capture value")
@@ -240,7 +316,15 @@ def decode_capture(path: Path, clock: tuple, declaration: dict,
     if not isinstance(timing, dict) or timing.get("kind") != "source_derived_sc_transfer_gates_v1" or not timing.get("groups"):
         return {"conversions": [], "discarded_intervals": [{"reason": "native_transfer_phase_attribution_absent"}],
                 "alignment": DECODER_REVISION}
-    capture = sampled_capture(path, first, period, high, settings.get("sample_fraction", 0.9), timing)
+    observables = declaration.get("extra_node_voltages")
+    requested = settings.get("extra_node_voltages")
+    if observables is not None or "extra_node_voltages" in settings:
+        if (not isinstance(observables, dict) or not isinstance(requested, dict)
+                or set(requested) != {"netlist_sha256", "nodes"}
+                or requested["nodes"] != observables.get("nodes")
+                or requested["netlist_sha256"] != (observables.get("netlist") or {}).get("sha256")):
+            raise ValueError("native observable declaration differs from executed settings")
+    capture = sampled_capture(path, first, period, high, settings.get("sample_fraction", 0.9), timing, observables)
     window = int(declaration["window_clocks"])
     samples = capture.pop("samples")
     transfer_pulses = capture.pop("transfer_pulses")
@@ -469,7 +553,8 @@ def validate_point(record: dict) -> tuple:
         deck = Path(views["deck"]["path"])
         expected, clock, declaration = prepare_deck(Path(views["testbench"]["path"]),
             json.loads(Path(views["spec"]["path"]).read_text()),
-            json.loads(Path(views["topology"]["path"]).read_text()), settings, deck.parent)
+            json.loads(Path(views["topology"]["path"]).read_text()), settings, deck.parent,
+            netlist=Path(views["netlist"]["path"]) if "extra_node_voltages" in settings else None)
         if deck.read_text() != expected or list(clock) != record["clock"] or declaration != record["incremental_decode"]:
             return False, "native conversion metadata differs from its executed deck"
     except (KeyError, TypeError, ValueError, OSError) as exc:
@@ -652,7 +737,8 @@ def replay_score(path: Path) -> dict:
         return {"status": "NOT_MEASURED", "detail": "native incremental score unavailable: " + str(exc)}
 
 
-def prepare_deck(template: Path, spec: dict, topology: dict, settings: dict, destination: Path) -> tuple:
+def prepare_deck(template: Path, spec: dict, topology: dict, settings: dict, destination: Path,
+                 *, netlist: Path | None = None) -> tuple:
     source = bound.contextual_template(template.read_text(), template.parent)
     plan = stimulus.plan(source, spec, topology)
     declaration = stimulus.incremental_decode(spec, topology)
@@ -702,6 +788,10 @@ def prepare_deck(template: Path, spec: dict, topology: dict, settings: dict, des
     dump = destination / "conversion.dat"
     probes = f"v({plan['output_node']}) v({reset}) v({plan['signal_input_port']})"
     probes += " " + " ".join(declaration["native_timing"]["columns"])
+    observables = _extra_node_voltages(netlist, source, settings, reset, probes.split())
+    if observables is not None:
+        declaration["extra_node_voltages"] = observables
+        probes += " " + " ".join(observables["columns"])
     text = body.rstrip() + "\n" + declaration["stamp"] + f"\n.save {probes}\n.control\nset num_threads={threads}\nset numdgt=15\n"
     text += f"tran {step:.17g} {first + clocks * period:.17g}\nset wr_singlescale\nset wr_vecnames\nwrdata {dump} {probes}\nrusage\n.endc\n.end\n"
     return text, clock, declaration
@@ -711,11 +801,14 @@ def run_point(project: Path, netlist: Path, template: Path, spec_path: Path,
               topology_path: Path, settings: dict, destination: Path, run, *, input_views=None) -> dict:
     destination.mkdir(parents=True, exist_ok=True)
     spec, topology = json.loads(spec_path.read_text()), json.loads(topology_path.read_text())
-    text, clock, declaration = prepare_deck(template, spec, topology, settings, destination)
+    text, clock, declaration = prepare_deck(template, spec, topology, settings, destination, netlist=netlist)
     deck = destination / "conversion.sp"
     deck.write_text(text)
     views = {role: {"path": str(path.resolve()), "sha256": bound.sha(path)} for role, path in
              (("deck", deck), ("netlist", netlist), ("testbench", template), ("spec", spec_path), ("topology", topology_path))}
+    if (declaration.get("extra_node_voltages") is not None
+            and declaration["extra_node_voltages"]["netlist"] != views["netlist"]):
+        raise ValueError("extra voltage observable source changed during deck preparation")
     views.update(bound.consumed_input_views(project, deck))
     views.update(input_views or {})
     if not declared_dut_consumed(views):
