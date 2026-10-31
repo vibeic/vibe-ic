@@ -432,7 +432,8 @@ def test_recorded_observation_recovery_normal_cli(recorded_observation_recovery,
     'wrapper_bytes', 'model_bytes', 'missing_model', 'incomplete_models',
     'author_schedule', 'author_clock', 'author_dft', 'author_other', 'author_source',
     'missing_archive', 'foreign_archive', 'symlink_archive', 'wrong_archive',
-    'missing_record', 'foreign_record', 'missing_claim', 'wrong_claim'])
+    'missing_record', 'foreign_record', 'foreign_record_locator',
+    'polluted_extra_newline', 'missing_claim', 'wrong_claim'])
 def test_recorded_observation_recovery_refuses_real_changes(recorded_observation_recovery, damage):
     project, rec, originals = recorded_observation_recovery
     fs = _fsf()
@@ -476,6 +477,10 @@ def test_recorded_observation_recovery_refuses_real_changes(recorded_observation
     elif damage == 'missing_record': functional.unlink()
     elif damage == 'foreign_record':
         rec['full_stack_top']['source'] = '/foreign/wrapper.v'; rewrite_record()
+    elif damage == 'foreign_record_locator':
+        gate = json.loads(gate_path.read_text()); gate['functional_record'] = '/foreign/functional_cases.json'
+        gate_path.write_text(json.dumps(gate, indent=2) + '\n')
+    elif damage == 'polluted_extra_newline': declaration.write_bytes(declaration.read_bytes() + b'\n')
     elif damage in ('missing_claim', 'wrong_claim'):
         p = project / 'provenance.jsonl'
         rows = [json.loads(line) for line in p.read_text().splitlines() if line.strip()]

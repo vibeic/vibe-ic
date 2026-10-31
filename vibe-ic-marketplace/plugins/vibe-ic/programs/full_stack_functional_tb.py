@@ -935,6 +935,7 @@ def recover_observation_declaration(project: Path) -> Dict[str, Any]:
         if (rec.get('program') != PROGRAM or rec.get('schema') != SCHEMA
                 or json.loads(pad.read_text()).get('program') != 'io_pad_chip_top_gen'
                 or post.get('project') != str(project)
+                or (project / str(gate.get('functional_record', ''))).resolve() != functional
                 or post.get('functional_record_sha256') != sha256_file(functional)
                 or post.get('chip_top_record_sha256') != sha256_file(pad)
                 or not same(rec.get('design_input'), _design_input_digest(project))):
@@ -972,7 +973,8 @@ def recover_observation_declaration(project: Path) -> Dict[str, Any]:
         if not same(replacement, refresh.get('binding')):
             raise ValueError('recorded generated binding differs from the sole locator replacement')
         restored = current == original
-        if not restored and not same(json.loads(current), expected):
+        expected_bytes = (json.dumps(expected, indent=2, ensure_ascii=False) + '\n').encode('utf-8')
+        if not restored and current != expected_bytes:
             raise ValueError('current declaration differs beyond the sole generated locator')
         resolved = _refresh_stale_observation_binding(project, top, rec['models'], rec['ic_class'])
         if resolved.get('state') != ('RESOLVED' if restored else 'CURRENT'):
