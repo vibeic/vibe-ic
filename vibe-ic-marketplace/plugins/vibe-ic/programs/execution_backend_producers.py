@@ -1912,6 +1912,99 @@ def produce_pnr(project, params):
     return {'verdict': 'PASS', 'detail': 'native ordered chain complete; canonical gates still required'}
 
 
+def _d41_filler_roster(path, patterns):
+    """Read the selected native ODB in-process; this does not run an engine."""
+    import fnmatch
+    import odb
+    database = odb.dbDatabase.create()
+    try:
+        odb.read_db(database, str(path))
+        block = database.getChip().getBlock()
+        return [{'instance':inst.getName(), 'master':inst.getMaster().getName(),
+                 'type':str(inst.getMaster().getType()), 'status':str(inst.getPlacementStatus()),
+                 'location':list(inst.getLocation()), 'orient':str(inst.getOrient())}
+            for inst in sorted(block.getInsts(), key=lambda i:i.getName())
+            if str(inst.getMaster().getType()) == 'CORE_SPACER'
+            or any(fnmatch.fnmatchcase(inst.getMaster().getName(), pattern) for pattern in patterns)]
+    finally:
+        odb.dbDatabase.destroy(database)
+
+
+def _d41_capture_native(project, params):
+    """Retain missing filler/report readback at this existing producer boundary."""
+    import flow109_metric_acceptance as metrics
+    import librelane_postroute_repair as repair
+    import hashlib
+    import inspect
+    project = Path(project).resolve()
+    basis = metrics._d41_native_basis(project, params['image_id'])
+    read, final = basis['read'], basis['bound']['final']
+    before = final['input_state']
+    after = json.loads(read(final['repair_state'])[1])
+    config = final['configs'][repair.REPAIR_STEP]
+    patterns = [p.replace("'", '') for key in ('FILL_CELLS', 'DECAP_CELLS') for p in config.get(key) or []]
+    record = {'schema':'vibeic.d41-native-readback.v1', 'program':'execution_backend_producers._d41_capture_native',
+        'image':params['image_id'],
+        'checker_sha256':hashlib.sha256(inspect.getsource(_d41_filler_roster).encode()).hexdigest(),
+        'source_report_sha256':basis['reads'][repair.REPORT_REL],
+        'before_odb':{'path':before['odb'], 'sha256':hashlib.sha256(read(before['odb'])[1]).hexdigest()},
+        'after_odb':{'path':after['odb'], 'sha256':hashlib.sha256(read(after['odb'])[1]).hexdigest()},
+        'patterns':patterns, 'filler':{'status':'NOT_MEASURED'}}
+    if record['before_odb']['sha256'] == record['after_odb']['sha256']:
+        record['filler'] = {'status':'MEASURED', 'method':'UNCHANGED_NATIVE_ODB'}
+    else:
+        try:
+            record['filler'] = {'status':'MEASURED', 'method':'NATIVE_ODB_ROSTER',
+                'before':_d41_filler_roster(read(before['odb'])[0], patterns),
+                'after':_d41_filler_roster(read(after['odb'])[0], patterns)}
+        except (ImportError, OSError, RuntimeError, ValueError, AttributeError) as exc:
+            record['filler']['reason'] = 'D41_NATIVE_ODB_READBACK_UNAVAILABLE: ' + str(exc)
+    # Preserve the actual existing signoff-scene outputs, not a rewritten STA
+    # report or a synthetic success marker. Absence stays explicit.
+    measured = basis['report']['final']
+    folder = Path(measured.get('native_timing_dir') or '')
+    record['missing_reports'] = []
+    for corner in basis['corners']:
+        for suffix in ('.rpt', '.tcl', '.log'):
+            path = folder / ('sta_' + corner + suffix)
+            try:
+                read(path)
+            except (metrics.MetricRefusal, OSError) as exc:
+                record['missing_reports'].append(str(exc))
+    if folder.is_dir():
+        read(folder / 'measurement_scene.sdc', measured.get('native_measurement_sdc_sha256'))
+    record['inputs'] = dict(basis['reads'])
+    first = final['folders'][0] / 'state_out.json'
+    record['states'] = [{'step':repair.REPAIR_STEP, 'state':str(first), 'sha256':snap.sha(first)}]
+    snap.dump(project / RPT / 'execution-backend-32.json', record)
+    return record
+
+
+def _d41_metric_result(project, params, result):
+    """Bind the existing Step32 result; never launch another repair/STA pass."""
+    context_path = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+    if not context_path:
+        return result
+    import flow109
+    import flow109_metric_acceptance as metrics
+    result['native_image'] = params['image_id']
+    try:
+        context = flow109.validate_execution_context(json.loads(Path(context_path).read_text()))
+        current = flow109.component_context(context, requested_step='D41')
+    except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError):
+        current = {}
+    try:
+        _d41_capture_native(project, params)
+    except (metrics.MetricRefusal, RuntimeError, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result['d41_readback_refusal'] = str(exc)
+    result['metric_acceptance'] = metrics.accept_d41(project, current, result)
+    result['metric_acceptance_status'] = result['metric_acceptance']['metric_status']
+    result['default_row_status'] = result['metric_acceptance']['status']
+    if result['metric_acceptance_status'] == 'FAIL':
+        result['verdict'] = 'FAIL'
+    return result
+
+
 def produce_signoff(project, params):
     R, ll, pdk, container = _parameters(project, params)
     sid, top = params['step_id'], params['top']
@@ -2200,7 +2293,7 @@ def produce_signoff(project, params):
                 if row.status == 'PASS':
                     return {'verdict': 'NOT_MEASURED',
                             'detail': 'current Step-32 bound producer decision absent'}
-                return {'verdict': row.status, 'detail': row.detail}
+                return _d41_metric_result(project, params, {'verdict': row.status, 'detail': row.detail})
             import librelane_postroute_repair as repair
             source = project / producer['source_report']
             report = json.loads(source.read_text())
@@ -2219,7 +2312,7 @@ def produce_signoff(project, params):
             if R._publish_step32_decision(
                     project, decision, source, source, out, producer, written, notes):
                 return {'verdict': 'NOT_MEASURED', 'detail': '; '.join(notes)}
-        return {'verdict': row.status, 'detail': row.detail}
+        return _d41_metric_result(project, params, {'verdict': row.status, 'detail': row.detail})
     elif sid == '33':
         # Run OpenSTA's native report_power on the selected current SPEFs.
         # The report reader below consumes the newly issued STA state.
@@ -2713,7 +2806,7 @@ def produce(project, params):
             current['authority_verdict'] = authority_verdict
             current['authority_detail'] = reason
             result['current_step_declared_producers'] = current
-        if sid in ('17', '18', '19', '20', '21') and 'metric_acceptance' in result:
+        if sid in ('17', '18', '19', '20', '21', '32') and 'metric_acceptance' in result:
             result['canonical_receipts'] = [{
                 'schema': 'vibeic/backend-producer-receipt/1',
                 'producer': 'execution_backend_producers.produce', 'step_id': sid,
@@ -2789,7 +2882,7 @@ def produce(project, params):
         'detail': result.get('detail', ''),
         'current_step_declared_producers': current,
     }]
-    if sid in ('17', '18', '19', '20', '21') and 'metric_acceptance' in result:
+    if sid in ('17', '18', '19', '20', '21', '32') and 'metric_acceptance' in result:
         result['canonical_receipts'][0]['metric_acceptance'] = result['metric_acceptance']
     if result.get('retained_drc_checkpoint'):
         result['canonical_receipts'][0]['retained_drc_checkpoint'] = result['retained_drc_checkpoint']

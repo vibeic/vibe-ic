@@ -2190,7 +2190,7 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
         if receipt.is_file():
             component["canonical_receipt"] = {
                 "path": str(receipt.relative_to(project)), "sha256": _file_digest(receipt)}
-        if row['id'] in ('D35', 'D37', 'D38', 'D39', 'D40'):
+        if row['id'] in ('D35', 'D37', 'D38', 'D39', 'D40', 'D41'):
             # These owners judge native values again. A saved nested PASS is
             # provenance to bind, never the current metric verdict.
             import flow109_metric_acceptance as metrics
@@ -2238,7 +2238,7 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
                     state.parent, first_step)
                 judge = {'D35': metrics.accept_d35, 'D37': metrics.accept_d37,
                          'D38': metrics.accept_d38, 'D39': metrics.accept_d39,
-                         'D40': metrics.accept_d40}[row['id']]
+                         'D40': metrics.accept_d40, 'D41': metrics.accept_d41}[row['id']]
                 owner_input = {'native_image': native_receipt['input']['image'], 'verdict': 'NOT_MEASURED'}
                 if row['id'] == 'D38':
                     owner_input['flow109_d38_targets'] = chain.get('flow109_d38_targets')
@@ -2309,6 +2309,12 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
                         (m.get('measurement', m).get('identity', {}).get('configuration', {})
                          .get('context_sha256')) != current['context_sha256'] for m in prior_measurements)):
                     raise Flow109Error('FLOW109_BACKEND_CONTEXT_MISMATCH', row['id'])
+                if row['id'] == 'D41':
+                    reference = prior.get('native_readback')
+                    if not isinstance(reference, Mapping) or reference != accepted.get('native_readback'):
+                        raise Flow109Error('FLOW109_D41_READBACK_STALE', 'original producer snapshot differs')
+                    _current_project_ref(project, reference, 'FLOW109_D41_READBACK_STALE')
+                    readset.append(reference)
                 qualified = admission.require_admission(project, current)
                 component['qualification'] = qualified
                 selected = {entry['id'] for entry in resolve_plan(
