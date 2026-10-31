@@ -737,7 +737,7 @@ def random_pair_goal_measurement(project: Path, goal: dict) -> Optional[dict]:
 
 def _emit_common_header(shape: dict) -> str:
     cr = shape["cr"]
-    clk = cr["clk"] or "clk"
+    clk_literal = json.dumps(cr["clk"]) if cr["clk"] is not None else "None"
     rst = cr["rst"]
     half = max(1, int(round(cr["period_ns"] / 2)))
     rst_on = "1" if cr["active_high"] else "0"
@@ -769,11 +769,21 @@ try:
 except Exception:
     _HAVE_COV = False
 
-CLK = "{clk}"
+CLK = {clk_literal}
 RST = {rst!r}
 HALF_NS = {half}
 SEED = int(os.environ.get("TB_SEED", "1"))
 DUT_INPUTS = {inputs_lit}   # all data inputs (clk/rst excluded); reset drives 0
+
+
+async def _wait_cycles(dut, cycles):
+    for _ in range(cycles):
+        if CLK is None:
+            # A combinational interface has no edge to await. Allow its
+            # driven inputs to settle without inventing a public clock port.
+            await Timer(2 * HALF_NS, units="ns")
+        else:
+            await RisingEdge(getattr(dut, CLK))
 
 
 async def _reset(dut):
@@ -786,15 +796,14 @@ async def _reset(dut):
             pass
     if RST is not None:
         getattr(dut, RST).value = {rst_on}
-        for _ in range(3):
-            await RisingEdge(getattr(dut, CLK))
+        await _wait_cycles(dut, 3)
         getattr(dut, RST).value = {rst_off}
-    for _ in range({cr.get('release_stages', 1)}):
-        await RisingEdge(getattr(dut, CLK))
+    await _wait_cycles(dut, {cr.get('release_stages', 1)})
 
 
 def _start_clock(dut):
-    cocotb.start_soon(Clock(getattr(dut, CLK), 2 * HALF_NS, units="ns").start())
+    if CLK is not None:
+        cocotb.start_soon(Clock(getattr(dut, CLK), 2 * HALF_NS, units="ns").start())
 '''
 
 
@@ -1071,8 +1080,7 @@ async def professional_smoke_test(dut):
     independent commit observer; a skipped zero store must fail both."""
     _start_clock(dut)
     await _reset(dut)
-    for _ in range(20):
-        await RisingEdge(getattr(dut, CLK))
+    await _wait_cycles(dut, 20)
     # reference_model hook — RAISES until filled (never a vacuous pass)
     raise _UNFILLED_HOOK(
         "reference_model hook unfilled for {top}: author the filled testbench "
