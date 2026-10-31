@@ -8013,6 +8013,506 @@ def accept_d39(project: Path, context: Mapping[str, Any], component: Mapping[str
 
 
 
+def _d41_native_basis(project, image):
+    """Read the existing adopted Step32 chain; no actuator or measurement runs."""
+    import librelane_postroute_repair as repair
+    import librelane_contract as ll
+    import librelane_signoff as signoff
+    import postroute_timing_repair_decision as decision
+    reads = {}
+    ctx = {}
+    def read(value, digest=None, *, external=False):
+        path = Path(value)
+        if not path.is_absolute():
+            path = project / path
+        if ctx:
+            path = repair._resume_host_path(project, ctx, str(path))
+        if path.is_symlink() or not path.is_file() or (not external and not path.resolve().is_relative_to(project)):
+            raise MetricRefusal('D41_INPUT_UNBOUND', str(path))
+        raw = path.read_bytes(); actual = _sha(raw)
+        key = str(path.relative_to(project)) if path.is_relative_to(project) else str(path)
+        if (digest is not None and actual != digest) or (key in reads and reads[key] != actual):
+            raise MetricRefusal('D41_INPUT_CHANGED', str(path))
+        reads[key] = actual
+        return path, raw
+    def document(value, digest=None):
+        path, raw = read(value, digest)
+        return path, json.loads(raw)
+    root = Path(repair.DECLARED_REPAIR_REL)
+    _, original = document(root / 'postroute_timing_repair_decision.json')
+    decision.verify_receipt(project, original)
+    if original.get('source_report') != repair.REPORT_REL or original.get('recorded_by') == decision.CANONICAL_RECORDER:
+        raise MetricRefusal('D41_PRODUCER_FOREIGN', 'original Step32 decision')
+    _, report = document(repair.REPORT_REL, original['source_report_sha256'])
+    _, canonical = document(root / 'postroute_timing_repair_decision.canonical.json')
+    decision.verify_receipt(project, canonical)
+    if (canonical.get('decision_scope') != 'step32_native' or report.get('step') != '32'
+            or report.get('image') != image or report.get('mode') not in ('librelane', 'dual')
+            or report.get('verdict') not in ('PASS', 'FAIL')):
+        raise MetricRefusal('D41_PRODUCER_FOREIGN', 'native scope/image/mode')
+    for record in (original, canonical):
+        for ref in record.get('inputs', []):
+            read(ref['path'], ref['sha256'])
+    arm = project / repair.ARM_REL
+    arm_report = report
+    if report.get('mode') == 'dual':
+        selected = report.get('selected_arm')
+        if selected not in ('postdrt', 'pregrt', 'pregrt_postdrt') or report.get('selection', {}).get('selection') != selected:
+            raise MetricRefusal('D41_ARM_UNBOUND', 'selected dual arm')
+        if any(report.get(key) != report['arms'][selected].get(key) for key in ('final', 'adopted', 'candidates', 'closure')):
+            raise MetricRefusal('D41_ARM_UNBOUND', 'selected report differs')
+        arm_report = report['arms'][selected]
+        arm /= selected
+    _, context = document(arm / repair.IMPL_DIR / repair.CONTEXT)
+    ctx.update(context)
+    _, current = document(arm / repair.IMPL_DIR / repair.CURRENT)
+    if (ctx.get('image') != image or current.get('candidate') != report.get('adopted')
+            or current.get('measurement') != report.get('final')):
+        raise MetricRefusal('D41_ADOPTION_UNBOUND', 'current pointer/report')
+    corners = ctx['corners']
+    _, sta_config = document(ctx['configs']['OpenROAD.STAPostPNR'])
+    if (not isinstance(corners, list) or not corners or len(set(corners)) != len(corners)
+            or report.get('corners') != corners or sta_config.get('STA_CORNERS') != corners):
+        raise MetricRefusal('D41_CORNERS_UNBOUND', 'complete declared population')
+    executions = []
+    bound = {}
+    measurements = [('baseline', report['baseline']), ('final', report['final'])]
+    for role, measured in measurements:
+        sta_path, sta_state = document(measured['sta_state'], measured['sta_state_sha256'])
+        lane = sta_path.parent.parent
+        if lane.parent != project / 'phase3/librelane' or not lane.name.startswith(ctx['lane'] + '-'):
+            raise MetricRefusal('D41_FOREIGN_CHAIN', str(lane))
+        required = (repair.REPAIR_STEP, *repair.MEASURE_STEPS)
+        folders = [lane / (f'{i:02d}-' + step.lower().replace('.', '-')) for i, step in enumerate(required, 1)]
+        first_receipt = ll.validate_step_receipt(folders[0], required[0])
+        if role == 'baseline' or not report.get('adopted'):
+            input_path = arm_report['input_state']
+        else:
+            selected_rows = [c for c in report['candidates'] if c.get('candidate') == report['adopted']]
+            if len(selected_rows) != 1:
+                raise MetricRefusal('D41_ADOPTION_UNBOUND', 'candidate population')
+            origin = selected_rows[0].get('from')
+            origins = [c for c in report['candidates'] if c.get('candidate') == origin]
+            input_path = arm_report['input_state'] if origin is None else origins[0]['repair_state'] if len(origins) == 1 else None
+            if input_path is None:
+                raise MetricRefusal('D41_ADOPTION_UNBOUND', 'candidate predecessor')
+        previous, before = document(input_path, first_receipt['input']['state'])
+        configs = {}
+        repair_state = None
+        for index, (step, folder) in enumerate(zip(required, folders)):
+            receipt = ll.validate_step_receipt(folder, step)
+            read(folder / 'vibeic_receipt.json')
+            for name, digest in receipt['sha256'].items():
+                read(folder / name, digest)
+            fp = receipt['input']
+            if fp.get('image') != image or fp.get('step') != step:
+                raise MetricRefusal('D41_IMAGE_CHANGED', step)
+            if step == repair.REPAIR_STEP and fp.get('plugin') != ll._plugin_digests(step):
+                raise MetricRefusal('D41_PRODUCER_CHANGED', step)
+            _, incoming = document(previous, fp['state'])
+            if fp.get('state_files') != {str(p): _sha(read(p)[1]) for p in ll._walk_paths(
+                    {k:v for k,v in incoming.items() if k != 'metrics'})}:
+                raise MetricRefusal('D41_STATE_POPULATION_CHANGED', step)
+            if index == 0:
+                matches = [p for p in (project / 'phase3/librelane/32-config').glob('*.json')
+                    if p.is_file() and not p.is_symlink() and _sha(p.read_bytes()) == fp['config']]
+                if not matches:
+                    raise MetricRefusal('D41_CONFIG_UNBOUND', step)
+                config_path = matches[0]
+            else:
+                config_path = ctx['configs'][step]
+            _, config = document(config_path, fp['config'])
+            if config.get('meta', {}).get('step') != step:
+                raise MetricRefusal('D41_CONFIG_UNBOUND', step)
+            _, mapping = document(folder / 'pdk_root.json')
+            mounts = mapping['mounts_under_it']
+            ll._current_config_material(config, mounts)
+            if fp.get('config_files') != ll.config_file_hashes(config, mounts):
+                raise MetricRefusal('D41_CONFIG_POPULATION_CHANGED', step)
+            for field in ('config_files', 'rcx_pdk_files', 'liberty_files'):
+                if field not in fp:
+                    if (step, field) in (('OpenROAD.RCX', 'rcx_pdk_files'), ('OpenROAD.STAPostPNR', 'liberty_files')):
+                        raise MetricRefusal('D41_MODELS_UNBOUND', step)
+                    continue
+                for name, digest in fp[field].items():
+                    if not _HEX.fullmatch(str(digest)):
+                        raise MetricRefusal('D41_MODELS_UNBOUND', str(name))
+                    read(name, digest, external=True)
+            if step == 'OpenROAD.RCX' and fp['rcx_pdk_files'] != ll._rcx_pdk_input_hashes(config, project, mounts):
+                raise MetricRefusal('D41_RCX_MODELS_CHANGED', step)
+            if step == 'OpenROAD.STAPostPNR' and fp['liberty_files'] != ll._sta_liberty_input_hashes(config, project, mounts):
+                raise MetricRefusal('D41_LIBERTY_CHANGED', step)
+            previous, state = document(folder / 'state_out.json', receipt['sha256']['state_out.json'])
+            for path in ll._walk_paths({k:v for k,v in state.items() if k != 'metrics'}):
+                read(path)
+            configs[step] = config
+            executions.append({'role':role, 'step':step, 'input':fp, 'receipt_sha256':_sha(read(folder / 'vibeic_receipt.json')[1])})
+            if index == 0:
+                repair_state = previous
+        if previous != sta_path:
+            raise MetricRefusal('D41_MEASUREMENT_FOREIGN', role)
+        # Reuse the RCX owner; this binds the actual ODB, every RC scene,
+        # extracted SPEF, ruleset and native extraction receipt.
+        rcx = signoff.bind_rcx_spefs(folders[2], repair_state, corners)
+        if measured.get('rcx_binding') != rcx:
+            raise MetricRefusal('D41_RCX_BINDING_CHANGED', role)
+        bound[role] = {'measurement':measured, 'state':sta_state, 'repair_state':repair_state,
+            'input_state':before, 'folders':folders, 'configs':configs}
+    selected_path, selected = document(report['adopted_state'])
+    if repair._resume_host_path(project, ctx, current['repair_state']) != selected_path:
+        raise MetricRefusal('D41_ADOPTION_UNBOUND', 'selected State')
+    measured_odb = bound['final']['measurement']['native_odb_sha256']
+    if _sha(read(selected['odb'])[1]) != measured_odb:
+        raise MetricRefusal('D41_ADOPTION_UNBOUND', 'selected ODB differs from measurement')
+    # Current routed views may be the selected repair's downstream native
+    # tail. Use the existing in-chain owner instead of pretending they must
+    # equal the pre-tail repair DEF.
+    if report.get('site') == 'after_route':
+        import execution_backend_producers as producer
+        actual, why = producer._runner_context()._postroute_repair_in_chain(project)
+        if actual is None or actual.get('final') != report['final']:
+            raise MetricRefusal('D41_ROUTE_HANDOFF_UNBOUND', why)
+        _, handoff = document('reports/phase3/librelane_route_handoff.json')
+        for ref in handoff['views'].values():
+            read(ref['source'], ref['source_sha256']); read(ref['dest'], ref['dest_sha256'])
+    elif report.get('site') == 'after_direct_route':
+        repair._validate_resume_subject(project, current, ctx)
+        _, handoff = document('reports/phase3/librelane_postroute_repair_handoff.json')
+        for ref in handoff['views'].values():
+            read(ref['source'], ref['source_sha256']); read(ref['dest'], ref['dest_sha256'])
+    else:
+        raise MetricRefusal('D41_SITE_UNBOUND', str(report.get('site')))
+    return {'read':read, 'reads':reads, 'document':document, 'report':report, 'context':ctx,
+        'current':current, 'arm':arm, 'corners':corners, 'bound':bound, 'selected':selected,
+        'executions':executions}
+
+
+def _d41_timing_values(basis, snapshot):
+    import _native_postroute_timing as native
+    import librelane_postroute_repair as repair
+    read = basis['read']
+    final = basis['bound']['final']
+    measured = basis['report']['final']
+    state = json.loads(read(final['repair_state'])[1])
+    folder = Path(measured['native_timing_dir'])
+    if folder != final['folders'][0] / 'native_signoff':
+        raise MetricRefusal('D41_TIMING_REPORT_FOREIGN', str(folder))
+    read(state['sdc'], measured['native_sdc_sha256'])
+    scene = folder / 'measurement_scene.sdc'
+    read(scene, measured['native_measurement_sdc_sha256'])
+    config = final['configs']['OpenROAD.RCX']
+    values = {}
+    for corner in basis['corners']:
+        paths = [folder / ('sta_' + corner + suffix) for suffix in ('.rpt', '.tcl', '.log')]
+        texts = []
+        for path in paths:
+            key = str(path.relative_to(Path(basis['context']['project'])))
+            digest = snapshot['inputs'].get(key)
+            if not digest:
+                raise MetricRefusal('D41_TIMING_REPORT_UNBOUND', key)
+            texts.append(read(path, digest)[1].decode())
+        body, script, log = texts
+        slacks = native._SLACK.findall(body)
+        ocv = native._OCV_BASIS.findall(body)
+        if (len(slacks) != 2 or {k for k,v in slacks} != {'min','max'} or len(ocv) != 1
+                or ocv[0] != measured['ocv_applied']['mode'] or not log.strip()
+                or repair._CRASH_SIGNATURE.search(log) or re.search(r'^\[ERROR\b', log, re.M)):
+            raise MetricRefusal('D41_TIMING_REPORT_INCOMPLETE', corner)
+        libs = native._one(config.get('LIB', config.get('CELL_LIBS')), corner, 'cell liberty')
+        pads = native._one(config['PAD_LIBS'], corner, 'pad liberty') if config.get('PAD_LIBS') else []
+        for path in [*libs, *pads]:
+            read(path, external=True)
+        expected = [f'read_db {native._q(state["odb"])}',
+            *[f'read_liberty {native._q(lib)}' for lib in [*libs,*pads]],
+            f'read_sdc {native._q(scene)}',
+            f'read_spef {native._q(measured["rcx_binding"]["scenes"][corner]["path"])}',
+            'set_propagated_clock [all_clocks]',
+            *native._ocv_tcl(paths[0], *basis['context']['derate'], basis['context'].get('aocv_table')),
+            f'report_worst_slack -max -digits 6 >> {native._q(paths[0])}',
+            f'report_worst_slack -min -digits 6 >> {native._q(paths[0])}', 'exit']
+        if script != '\n'.join(expected) + '\n':
+            raise MetricRefusal('D41_TIMING_SCRIPT_CHANGED', corner)
+        for kind, value in slacks:
+            number = _finite_number(float(value))
+            semantic = 'setup' if kind == 'max' else 'hold'
+            if measured[semantic + '_ws'].get(corner) != number:
+                raise MetricRefusal('D41_TIMING_SUMMARY_CHANGED', corner)
+            values[f'timing__{semantic}__ws__corner:{corner}'] = (number, 'ns')
+        for kind in ('slew','cap','fanout'):
+            key = f'design__max_{kind}_violation__count__corner:{corner}'
+            value = final['state'].get('metrics', {}).get(key)
+            _finite_number(value, count=True)
+            if measured['drv'][kind].get(corner) != value:
+                raise MetricRefusal('D41_DRV_SUMMARY_CHANGED', key)
+            values[key] = (value, 'count')
+    # The existing reader verifies every corner's complete DRV table/counters.
+    summary = repair.summarize(final['state']['metrics'], basis['corners'])
+    pins = repair.drv_pin_census(final['folders'][-1], summary, basis['corners'],
+        classifier=repair._drv_classifier(basis['context'], final['folders'][-1]))
+    for ref in pins['drv_pin_checks_sources'].values():
+        read(ref['path'], ref['sha256'])
+    if pins['drv_pin_checks_state'] != 'PASS' or pins['drv_pin_checks'] != measured.get('drv_pin_checks'):
+        raise MetricRefusal('D41_DRV_PIN_POPULATION_INCOMPLETE', str(pins['drv_pin_checks_missing']))
+    return values
+
+
+def _d41_filler_errors(basis, snapshot):
+    import fnmatch
+    import librelane_postroute_repair as repair
+    read = basis['read']; final = basis['bound']['final']
+    after = json.loads(read(final['repair_state'])[1])
+    before = final['input_state']
+    for role, state in [('before',before),('after',after)]:
+        if snapshot[role + '_odb'] != {'path':state['odb'], 'sha256':_sha(read(state['odb'])[1])}:
+            raise MetricRefusal('D41_FILLER_SUBJECT_CHANGED', role)
+    config = final['configs'][repair.REPAIR_STEP]
+    patterns = [p.replace("'", '') for key in ('FILL_CELLS','DECAP_CELLS') for p in config.get(key) or []]
+    if snapshot['patterns'] != patterns or snapshot['filler']['status'] != 'MEASURED':
+        raise MetricRefusal('D41_FILLER_NOT_MEASURED', str(snapshot['filler']))
+    metrics = after.get('metrics', {})
+    count = metrics.get('vibeic__prr__input_fillers')
+    _finite_number(count)
+    if count < 0 or int(count) != count:
+        raise MetricRefusal('D41_FILLER_CENSUS_UNBOUND', 'non-integral native metric')
+    count = int(count)
+    log = read(final['folders'][0] / 'invocation.log')[1].decode()
+    census = re.findall(r'^PRR: input instances=\d+ fillers=(\d+)\s*$', log, re.M)
+    if len(census) != 1 or int(census[0]) != count:
+        raise MetricRefusal('D41_FILLER_CENSUS_UNBOUND', 'native input count/log')
+    if snapshot['filler']['method'] == 'UNCHANGED_NATIVE_ODB':
+        if snapshot['before_odb']['sha256'] != snapshot['after_odb']['sha256'] or metrics.get('vibeic__prr__changed') != 0:
+            raise MetricRefusal('D41_FILLER_SUBJECT_CHANGED', 'no-op ODB')
+        return 0
+    if snapshot['filler']['method'] != 'NATIVE_ODB_ROSTER':
+        raise MetricRefusal('D41_FILLER_NOT_MEASURED', 'unsupported readback')
+    before_rows, after_rows = snapshot['filler']['before'], snapshot['filler']['after']
+    if (len({r['instance'] for r in before_rows}) != len(before_rows)
+            or len({r['instance'] for r in after_rows}) != len(after_rows)
+            or sum(r['type'] == 'CORE_SPACER' for r in before_rows) != count):
+        raise MetricRefusal('D41_FILLER_CENSUS_UNBOUND', 'complete native rosters')
+    survivors = {r['instance']:r for r in before_rows if r['type'] != 'CORE_SPACER' or r['status'] == 'LOCKED'}
+    actual = {r['instance']:r for r in after_rows}
+    errors = sum(actual.get(name) != row for name,row in survivors.items())
+    restored = [r for r in after_rows if r['instance'] not in survivors]
+    errors += sum(r['status'] not in ('PLACED','FIRM','LOCKED') or not any(
+        fnmatch.fnmatchcase(r['master'], p) for p in patterns) for r in restored)
+    placed = re.findall(r'^\[INFO DPL-0001\] Placed (\d+) filler instances\.\s*$', log, re.M)
+    if count > 0 and not placed:
+        raise MetricRefusal('D41_FILLER_RESTORE_UNMEASURED', 'native filler completion absent')
+    if placed:
+        errors += abs(sum(map(int,placed)) - len(restored))
+    elif restored:
+        raise MetricRefusal('D41_FILLER_RESTORE_UNMEASURED', 'unreported restored population')
+    return errors
+
+
+def _d41_history(basis):
+    """Count original retained attempts/iterations; never reset a budget."""
+    from _ppa import closure
+    import librelane_postroute_repair as repair
+    document, read, report = basis['document'], basis['read'], basis['report']
+    registry = closure.load_registry()
+    read(registry.path, external=True)
+    runs, candidates = report.get('closure'), report.get('candidates')
+    if not isinstance(runs,list) or not isinstance(candidates,list):
+        raise MetricRefusal('D41_HISTORY_INCOMPLETE', 'controller/candidate population')
+    trigger = repair.measured_repair_trigger(report['baseline'])
+    if trigger != report.get('repair_trigger'):
+        raise MetricRefusal('D41_HISTORY_CHANGED', 'original trigger')
+    ledger_path = basis['arm'] / repair.LEDGER
+    if ledger_path.is_file():
+        _, ledger = document(ledger_path)
+        recorded = ledger['candidates']
+    elif trigger['action'] == 'SKIP' and not candidates and not runs and report.get('adopted') is None:
+        recorded = []
+    elif not candidates and runs and all(run.get('outcome') == 'NOT_TRIGGERED' and not run.get('iterations') for run in runs):
+        recorded = []
+    else:
+        raise MetricRefusal('D41_HISTORY_INCOMPLETE', 'original ledger absent')
+    annotations = {'controller','closure_decision','closure_reason'}
+    if recorded != [{k:v for k,v in row.items() if k not in annotations} for row in candidates]:
+        raise MetricRefusal('D41_HISTORY_CHANGED', 'original candidate ledger')
+    names = [row['candidate'] for row in candidates]
+    if len(names) != len(set(names)):
+        raise MetricRefusal('D41_HISTORY_CHANGED', 'duplicate attempts')
+    iterations, adopted = 0, 0
+    incomplete = []; failed = []
+    for run in runs:
+        cid = run.get('controller')
+        if cid not in repair.CONTROLLERS or run.get('registry_digest') != registry.digest():
+            raise MetricRefusal('D41_POLICY_CHANGED', str(cid))
+        if run.get('digest') != closure.cj.digest_of({k:v for k,v in run.items() if k not in ('digest','refused_candidates')}):
+            raise MetricRefusal('D41_HISTORY_CHANGED', 'original controller digest')
+        policy = registry.controllers[cid]
+        acts = [it for it in run['iterations'] if it.get('argv')]
+        indices = [it['index'] for it in run['iterations']]
+        if len(indices) != len(set(indices)) or any(type(i) is not int or i < 0 or i >= policy.max_iterations for i in indices):
+            raise MetricRefusal('D41_HISTORY_CHANGED', 'declared iteration indices')
+        iterations += len(acts)
+        adopted += run['promoted']
+        own = [row for row in candidates if row.get('controller') == cid and not row.get('retry_of')]
+        if len(own) != len(acts):
+            raise MetricRefusal('D41_HISTORY_INCOMPLETE', 'actuation/candidate population')
+        outcome = run.get('outcome')
+        if (run.get('schema') != closure.SCHEMA_RUN or type(run.get('closed_loop_success')) is not bool
+                or not isinstance(run.get('collateral_regressions'), list)):
+            raise MetricRefusal('D41_HISTORY_INCOMPLETE', 'original closed-loop result')
+        if (run['collateral_regressions'] or outcome in ('PLATEAU','BUDGET_EXHAUSTED','HANDOFF_REQUIRED')):
+            failed.append({'controller':cid,'outcome':outcome,'reason':run.get('reason'),
+                'collateral_regressions':run['collateral_regressions']})
+        elif outcome not in ('CONVERGED','NOT_TRIGGERED') or not run['closed_loop_success']:
+            incomplete.append({'controller':cid,'outcome':outcome,'reason':run.get('reason')})
+    if runs and [run['controller'] for run in runs] != list(repair.CONTROLLERS):
+        raise MetricRefusal('D41_HISTORY_INCOMPLETE', 'full declared controller population')
+    for row in candidates:
+        if row.get('retry_of') and row['retry_of'] not in names:
+            raise MetricRefusal('D41_HISTORY_CHANGED', 'retry predecessor absent')
+        if row.get('config'):
+            document(row['config'])
+        if row.get('measurement'):
+            measured = row['measurement']
+            document(measured['sta_state'], measured['sta_state_sha256'])
+            document(row['repair_state'])
+        else:
+            matches = re.findall(r'(/[^;\s]+/invocation\.log)', row.get('reason',''))
+            for path in matches:
+                read(path)
+            if not matches:
+                incomplete.append({'candidate':row['candidate'],'reason':'failed attempt native log absent'})
+        if row.get('decision') == 'ACTUATOR_FAILED' or row.get('measurement_status') == 'NOT_MEASURED':
+            incomplete.append({'candidate':row['candidate'],'reason':row.get('reason')})
+    if report.get('adopted') is not None and not any(row['candidate'] == report['adopted']
+            and row.get('closure_decision') == 'PROMOTED' for row in candidates):
+        raise MetricRefusal('D41_ADOPTION_UNBOUND', 'no promoted original attempt')
+    return {'candidate_attempts':len(candidates), 'controller_iterations':iterations,
+            'adoptions':adopted, 'not_measured':incomplete, 'failed':failed,
+            'registry_digest':registry.digest(), 'outcomes':[run.get('outcome') for run in runs]}
+
+
+def accept_d41(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    """BLOCKING D41 readback of adopted native values; never run repair/RCX/STA.
+
+    Approved requirements and existing admission remain independent. Missing
+    filler/history/corner evidence is unmeasured; measured FAIL survives later NI.
+    """
+    import flow109
+    import librelane_contract as ll
+    import inspect
+    import execution_backend_producers as producer
+    project = Path(project).resolve()
+    result = {'schema':SCHEMA, 'row_id':'D41', 'status':'NOT_MEASURED', 'metric_status':'NOT_MEASURED',
+        'qualification':'NOT_MEASURED', 'delivery_blocked':True, 'obligations':[]}
+    failures = (MetricRefusal, flow109.Flow109Error, ll.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError)
+    try:
+        current = flow109.validate_execution_context(context)
+        specs = current['resolved_row']['obligations']
+        if current['resolved_row']['id'] != 'D41' or tuple(o['metric'] for o in specs) != (
+                'post_repair_timing_drv','filler_restore_errors','repair_iteration_budget'):
+            raise MetricRefusal('D41_CONTRACT_CHANGED', 'obligations')
+        for index,spec in enumerate(specs):
+            expect = spec['expectation']
+            if index == 1:
+                if (expect.get('operator'),expect.get('value'),expect.get('unit')) != ('eq',0,'count'):
+                    raise MetricRefusal('D41_CONTRACT_CHANGED',spec['id'])
+            elif (expect.get('operator') != 'within_declared_bounds'
+                    or expect.get('bounds_ref') != f"requirements/base_28/{spec['metric']}.json#/limits"
+                    or expect.get('unit_ref') != f"requirements/base_28/{spec['metric']}.json#/units"):
+                raise MetricRefusal('D41_CONTRACT_CHANGED',spec['id'])
+        basis = _d41_native_basis(project, component.get('native_image'))
+        read, reads = basis['read'], basis['reads']
+        path, raw = read('reports/phase3/execution-backend-32.json')
+        snapshot = json.loads(raw)
+        result['native_readback'] = {'path':str(path.relative_to(project)),'sha256':_sha(raw)}
+        if (snapshot.get('schema') != 'vibeic.d41-native-readback.v1'
+                or snapshot.get('program') != 'execution_backend_producers._d41_capture_native'
+                or snapshot.get('image') != component.get('native_image')
+                or snapshot.get('checker_sha256') != _sha(inspect.getsource(producer._d41_filler_roster).encode())
+                or snapshot.get('source_report_sha256') != reads['reports/phase3/librelane_postroute_repair.json']):
+            raise MetricRefusal('D41_READBACK_FOREIGN','producer snapshot')
+        for name,digest in snapshot['inputs'].items():
+            read(name,digest,external=True)
+        identity = {'producer':basis['executions'],'tool_execution':basis['executions'],
+            'checker':{'program':'flow109_metric_acceptance.accept_d41',
+                'source_sha256':_sha(inspect.getsource(accept_d41).encode()),
+                'native_reader_sha256':_sha(inspect.getsource(_d41_native_basis).encode()),
+                'timing_reader_sha256':_sha(inspect.getsource(_d41_timing_values).encode()),
+                'filler_reader_sha256':_sha(inspect.getsource(_d41_filler_errors).encode()),
+                'history_reader_sha256':_sha(inspect.getsource(_d41_history).encode())},
+            'consumed_inputs':reads,'requirements':None,
+            'configuration':{'context_sha256':current['context_sha256'], 'corners':basis['corners'],
+                'signoff_scene':{'derate':basis['context']['derate'],'ocv_applied':basis['report']['final']['ocv_applied']},
+                'native_readback':result['native_readback']}}
+        timing = {'id':specs[0]['id'],'status':'NOT_MEASURED','measurements':[]}
+        result['obligations'].append(timing)
+        try:
+            auth, body = _approved_document(project,'requirements/base_28/post_repair_timing_drv.json',authority='requirements_owner',schema=AUTHORITY_SCHEMA)
+            read(auth['path'],auth['sha256']);read(auth['source']['path'],auth['source']['sha256'])
+            if body.get('modes'):
+                raise MetricRefusal('D41_MODE_POPULATION_UNAVAILABLE','existing producer has one signoff SDC scene, not an additional mode roster')
+            limits, units = body['limits'],body['units']
+            if not isinstance(limits,dict) or not limits or set(limits) != set(units):
+                raise MetricRefusal('D41_BOUNDS_INVALID','timing/DRV')
+            values = _d41_timing_values(basis,snapshot)
+            for field,bounds in limits.items():
+                item={'field':field,'status':'NOT_MEASURED'};timing['measurements'].append(item)
+                value,unit = values.get(field,(None,None))
+                if value is None or unit != units[field]:
+                    item['reason']='D41_NATIVE_FIELD_OR_UNIT_UNAVAILABLE';continue
+                observation={'status':'MEASURED','value':value,'unit':unit,'identity':{**identity,'requirements':auth}}
+                status,reason = evaluate_operator('within_declared_bounds',observation,{'status':'APPROVED','limits':bounds,'unit':unit})
+                item.update(status=status,reason=reason,measurement=observation)
+            statuses=[v['status'] for v in timing['measurements']]
+            timing['status']=('FAIL' if 'FAIL' in statuses else 'PASS' if set(values) <= set(limits)
+                and all(s=='PASS' for s in statuses) else 'NOT_MEASURED')
+        except failures as exc:
+            timing.update(reason=getattr(exc,'code','D41_TIMING_UNBOUND'),detail=str(exc))
+            if any(v['status']=='FAIL' for v in timing['measurements']):timing['status']='FAIL'
+        filler={'id':specs[1]['id'],'status':'NOT_MEASURED'};result['obligations'].append(filler)
+        try:
+            count=_d41_filler_errors(basis,snapshot)
+            authority={'status':'APPROVED','value':0,'unit':'count','source':'canonical base_28 filler restore invariant'}
+            measurement={'status':'MEASURED','value':count,'unit':'count','identity':{**identity,'requirements':authority}}
+            filler['status'],filler['reason']=evaluate_operator('eq',measurement,authority)
+            filler['measurement']=measurement
+        except failures as exc:
+            filler.update(reason=getattr(exc,'code','D41_FILLER_UNBOUND'),detail=str(exc))
+        budget={'id':specs[2]['id'],'status':'NOT_MEASURED'};result['obligations'].append(budget)
+        try:
+            history=_d41_history(basis);budget['history']=history
+            auth,body=_approved_document(project,'requirements/base_28/repair_iteration_budget.json',authority='requirements_owner',schema=AUTHORITY_SCHEMA)
+            read(auth['path'],auth['sha256']);read(auth['source']['path'],auth['source']['sha256'])
+            selector=body.get('basis')
+            if selector not in ('candidate_attempts','controller_iterations','adoptions') or body.get('units')!='count':
+                raise MetricRefusal('D41_BUDGET_BASIS_OR_UNIT_UNAVAILABLE',str(selector))
+            measurement={'status':'MEASURED','value':history[selector],'unit':'count','identity':{**identity,'requirements':auth}}
+            budget['status'],budget['reason']=evaluate_operator('within_declared_bounds',measurement,{'status':'APPROVED','limits':body['limits'],'unit':'count'})
+            budget['measurement']=measurement
+            if history['failed']:
+                budget.update(status='FAIL',reason='D41_ORIGINAL_CONTROLLER_UNCLOSED')
+            elif history['not_measured'] and budget['status']!='FAIL':
+                budget.update(status='NOT_MEASURED',reason='D41_ORIGINAL_ATTEMPT_UNMEASURED')
+        except failures as exc:
+            budget.update(reason=getattr(exc,'code','D41_HISTORY_UNBOUND'),detail=str(exc))
+        for path,digest in list(reads.items()):read(path,digest,external=True)
+        result['readset']=dict(reads)
+    except failures as exc:
+        result.update(reason=getattr(exc,'code','D41_NATIVE_BINDING_UNPROVEN'),detail=str(exc))
+        for o in result['obligations']:
+            if o['status']=='PASS':o.update(status='NOT_MEASURED',reason='D41_BINDING_INCOMPLETE')
+    if component.get('verdict')=='FAIL' or any(o['status']=='FAIL' for o in result['obligations']):
+        result['status']=result['metric_status']='FAIL'
+    elif len(result['obligations'])==3 and all(o['status']=='PASS' for o in result['obligations']):
+        result['metric_status']='PASS'
+        import flow109_admission as admission
+        try:
+            result['qualification_receipt']=admission.require_admission(project,current)
+            result.update(status='PASS',qualification='PASS',delivery_blocked=False)
+        except admission.AdmissionRefusal as exc:
+            result.update(reason=exc.code,qualification_receipt=exc.report)
+    return result
+
+
+
 def _digital_floorplan_readback(project, component):
     """Reopen only the selected default Step15 chain, including its real configs."""
     import librelane_contract as ll
