@@ -1643,7 +1643,28 @@ def produce_pnr(project, params):
                     result['verdict'] = 'FAIL'
         return result
     elif sid in ('19', '20'):
-        return _cts_split(project, params, R, ll, pdk, overlay)
+        result = _cts_split(project, params, R, ll, pdk, overlay)
+        if sid == '20' and os.environ.get('VIBEIC_FLOW109_CONTEXT'):
+            import flow109
+            from flow109_metric_acceptance import accept_d39
+            try:
+                context = flow109.validate_execution_context(json.loads(
+                    Path(os.environ['VIBEIC_FLOW109_CONTEXT']).read_text()))
+                selected = context.get('resolved_rows') or [context['resolved_row']]
+                current = (flow109.component_context(context, requested_step='D39')
+                           if any(row['id'] == 'D39' for row in selected) else None)
+            except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError):
+                # The reader refuses missing authority and retains a native
+                # FAIL already observed before this readback boundary.
+                current = {}
+            if current is not None:
+                result['native_image'] = params['image_id']
+                result['metric_acceptance'] = accept_d39(project, current, result)
+                result['metric_acceptance_status'] = result['metric_acceptance']['metric_status']
+                result['default_row_status'] = result['metric_acceptance']['status']
+                if result['metric_acceptance_status'] == 'FAIL':
+                    result['verdict'] = 'FAIL'
+        return result
     elif sid == '21':
         import librelane_route as route
         ids = route.chain_ids(params['image_id'], canonical_routing_only=True)
@@ -2480,7 +2501,7 @@ def produce(project, params):
             current['authority_verdict'] = authority_verdict
             current['authority_detail'] = reason
             result['current_step_declared_producers'] = current
-        if sid in ('17', '18') and 'metric_acceptance' in result:
+        if sid in ('17', '18', '20') and 'metric_acceptance' in result:
             result['canonical_receipts'] = [{
                 'schema': 'vibeic/backend-producer-receipt/1',
                 'producer': 'execution_backend_producers.produce', 'step_id': sid,
@@ -2556,7 +2577,7 @@ def produce(project, params):
         'detail': result.get('detail', ''),
         'current_step_declared_producers': current,
     }]
-    if sid in ('17', '18') and 'metric_acceptance' in result:
+    if sid in ('17', '18', '20') and 'metric_acceptance' in result:
         result['canonical_receipts'][0]['metric_acceptance'] = result['metric_acceptance']
     if result.get('retained_drc_checkpoint'):
         result['canonical_receipts'][0]['retained_drc_checkpoint'] = result['retained_drc_checkpoint']

@@ -7262,6 +7262,180 @@ def accept_d02(project: Path, context: Mapping[str, Any]) -> dict:
     return _accept_d0102(project, context, 'D02')
 
 
+def accept_d39(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    """BLOCKING readback of the existing post-CTS resizer and per-corner STA.
+
+    The native chain has no stagnation-history producer. That obligation and
+    per-use qualification remain NOT_MEASURED; timing readback cannot close
+    the row by itself. This reader never executes tools or authors authority.
+    """
+    import flow109
+    import inspect
+    import librelane_contract as ll
+    import execution_backend_producers as native_producer
+
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': 'D39', 'status': 'NOT_MEASURED',
+              'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    reads = {}
+
+    def _d39_read(name, digest=None, *, external=False):
+        path = Path(name)
+        path = path if path.is_absolute() else project / path
+        if (path.is_symlink() or not path.is_file()
+                or (not external and not path.resolve().is_relative_to(project))):
+            raise MetricRefusal('D39_INPUT_UNBOUND', str(path))
+        raw = path.read_bytes()
+        actual = _sha(raw)
+        if digest is not None and actual != digest:
+            raise MetricRefusal('D39_INPUT_CHANGED', str(path))
+        key = str(path.relative_to(project)) if path.is_relative_to(project) else str(path)
+        if key in reads and reads[key] != actual:
+            raise MetricRefusal('D39_INPUT_CHANGED_DURING_READ', key)
+        reads[key] = actual
+        return path, raw
+
+    def _d39_json(name, digest=None):
+        path, raw = _d39_read(name, digest)
+        return path, json.loads(raw)
+
+    try:
+        current = flow109.validate_execution_context(context)
+        row = current['resolved_row']
+        names = ('post_cts_setup_hold_drv', 'repair_stagnation_iterations')
+        if (row['id'] != 'D39' or tuple(o['metric'] for o in row['obligations']) != names
+                or any(o['expectation'].get('operator') != 'within_declared_bounds'
+                       or o['expectation'].get('bounds_ref') !=
+                       f"requirements/base_26/{o['metric']}.json#/limits"
+                       or o['expectation'].get('unit_ref') !=
+                       f"requirements/base_26/{o['metric']}.json#/units"
+                       for o in row['obligations'])):
+            raise MetricRefusal('D39_CONTRACT_CHANGED', 'post-CTS repair obligations')
+        timing = {'id': row['obligations'][0]['id'], 'status': 'NOT_MEASURED', 'measurements': []}
+        result['obligations'] = [timing, {'id': row['obligations'][1]['id'],
+            'status': 'NOT_MEASURED', 'reason': 'D39_NATIVE_STAGNATION_HISTORY_UNAVAILABLE'}]
+        _, handoff = _d39_json('reports/phase3/librelane_cts_hold_handoff.json')
+        corners = handoff['corners']
+        repair = 'OpenROAD.ResizerTimingPostCTS'
+        sta = 'OpenROAD.STAMidPNR'
+        steps = [repair] + [sta] * len(corners)
+        if (not isinstance(corners, list) or not corners
+                or any(not isinstance(c, str) or not c or '/' in c for c in corners)
+                or len(set(corners)) != len(corners)
+                or handoff['program'] != 'execution_backend_producers._cts_split'
+                or handoff['image'] != component.get('native_image')
+                or not component.get('native_image') or handoff['steps'] != steps):
+            raise MetricRefusal('D39_CHAIN_UNBOUND', 'selected native repair/corners')
+        _, area = _d39_json('reports/phase3/pnr/hold_area.json')
+        previous, _ = _d39_read(area['sources']['before'])
+        base = project / 'phase3/librelane/execution-backend-20'
+        states, executions = [], []
+        for index, step in enumerate(steps, 1):
+            folder = base / (f'{index:02d}-' + step.lower().replace('.', '-'))
+            receipt = ll.validate_step_receipt(folder, step)
+            _d39_read(folder / 'vibeic_receipt.json')
+            for name, digest in receipt['sha256'].items():
+                _d39_read(folder / name, digest)
+            fp = receipt['input']
+            if fp['step'] != step or fp['image'] != component['native_image']:
+                raise MetricRefusal('D39_EXECUTION_CHANGED', step)
+            _d39_read(previous, fp['state'])
+            suffix = '@' + corners[index - 2] if index > 1 else ''
+            config_path, config = _d39_json(
+                'phase3/librelane/execution-backend-20-config/' + step + suffix + '.json', fp['config'])
+            if (config.get('STA_CORNERS') != corners or config.get('meta', {}).get('step') != step
+                    or (index > 1 and config.get('PNR_CORNERS') != [corners[index - 2]])):
+                raise MetricRefusal('D39_CORNER_POPULATION_CHANGED', str(config_path))
+            input_state = json.loads(previous.read_bytes())
+            actual_inputs = {str(p): _sha(p.read_bytes()) for p in ll._walk_paths(
+                {k: v for k, v in input_state.items() if k != 'metrics'})}
+            if not actual_inputs or fp['state_files'] != actual_inputs:
+                raise MetricRefusal('D39_STATE_POPULATION_CHANGED', step)
+            for name, digest in fp['state_files'].items():
+                _d39_read(name, digest)
+            _, pdk = _d39_json(folder / 'pdk_root.json')
+            mounts = pdk['mounts_under_it']
+            if not fp['config_files'] or ll.config_file_hashes(config, mounts) != fp['config_files']:
+                raise MetricRefusal('D39_MODEL_POPULATION_CHANGED', step)
+            for name, digest in fp['config_files'].items():
+                path = Path(name)
+                for host, guest in sorted(mounts, key=lambda m: len(m[1]), reverse=True):
+                    if path.is_relative_to(guest):
+                        path = Path(host) / path.relative_to(guest)
+                        break
+                _d39_read(path, digest, external=True)
+            previous, state = _d39_json(folder / 'state_out.json', receipt['sha256']['state_out.json'])
+            states.append(state)
+            executions.append({'step': step, 'input': fp,
+                'receipt_sha256': _sha((folder / 'vibeic_receipt.json').read_bytes())})
+        final, _ = _d39_read(handoff['measured_state'], handoff['measured_state_sha256'])
+        if (final != previous or handoff['chain'][repair] != str(base.relative_to(project) / '01-openroad-resizertimingpostcts')
+                or handoff['chain'][sta] != str(previous.parent.relative_to(project))
+                or project / area['sources']['after'] != base / '01-openroad-resizertimingpostcts/state_out.json'):
+            raise MetricRefusal('D39_HANDOFF_FOREIGN', 'terminal measurement or repaired state')
+        for view, name in [('def', 'post_hold.def'), ('odb', 'post_hold.odb')]:
+            ref = handoff['views']['post_hold_' + view]
+            source, _ = _d39_read(ref['source'], ref['source_sha256'])
+            dest, _ = _d39_read(ref['dest'], ref['dest_sha256'])
+            if (states[0].get(view) != str(source)
+                    or dest != project / 'phase3/stage3/pnr' / name
+                    or ref['source_sha256'] != ref['dest_sha256']
+                    or any(s.get(view) != str(source) for s in states[1:])):
+                raise MetricRefusal('D39_HANDOFF_FOREIGN', view)
+        relative = 'requirements/base_26/post_cts_setup_hold_drv.json'
+        auth, body = _approved_document(project, relative, authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+        _d39_read(relative, auth['sha256'])
+        _d39_read(auth['source']['path'], auth['source']['sha256'])
+        limits, units = body['limits'], body['units']
+        if not isinstance(limits, dict) or not limits or set(limits) != set(units):
+            raise MetricRefusal('D39_BOUNDS_INVALID', relative)
+        drv = {'design__max_slew_violation__count', 'design__max_cap_violation__count',
+               'design__max_fanout_violation__count'}
+        fields = {f'timing__{kind}__ws__corner:{corner}': states[index + 1]
+                  for index, corner in enumerate(corners) for kind in ('setup', 'hold')}
+        fields.update({key: states[-1] for key in drv})
+        identity = {'producer': executions, 'tool_execution': executions,
+            'checker': {'program': 'flow109_metric_acceptance.accept_d39',
+                        'sha256': _sha(inspect.getsource(accept_d39).encode()),
+                        'producer_sha256': _sha(inspect.getsource(native_producer._cts_split).encode())},
+            'consumed_inputs': dict(reads), 'requirements': auth,
+            'configuration': {'context_sha256': current['context_sha256'], 'corners': corners}}
+        for field, bounds in limits.items():
+            entry = {'field': field, 'status': 'NOT_MEASURED'}
+            timing['measurements'].append(entry)
+            expected_unit = 'count' if field in drv else 'ns'
+            value = fields.get(field, {}).get('metrics', {}).get(field)
+            if field not in fields or value is None or units[field] != expected_unit:
+                entry['reason'] = 'D39_NATIVE_FIELD_OR_UNIT_UNAVAILABLE'
+                continue
+            _finite_number(value, count=field in drv)
+            measurement = {'status': 'MEASURED', 'value': value, 'unit': expected_unit, 'identity': identity}
+            status, reason = evaluate_operator('within_declared_bounds', measurement,
+                {'status': 'APPROVED', 'limits': bounds, 'unit': expected_unit})
+            entry.update(status=status, reason=reason, measurement=measurement)
+        statuses = [v['status'] for v in timing['measurements']]
+        timing['status'] = ('FAIL' if 'FAIL' in statuses else 'PASS'
+            if set(fields) <= set(limits) and all(s == 'PASS' for s in statuses) else 'NOT_MEASURED')
+        for name, digest in reads.items():
+            _d39_read(name, digest, external=True)
+        result['readset'] = dict(reads)
+    except (MetricRefusal, flow109.Flow109Error, ll.Refusal, OSError, ValueError,
+            KeyError, TypeError, AttributeError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D39_NATIVE_BINDING_UNPROVEN'), detail=str(exc))
+        for obligation in result['obligations']:
+            if obligation['status'] == 'PASS':
+                obligation.update(status='NOT_MEASURED', reason='D39_BINDING_INCOMPLETE')
+    if component.get('verdict') == 'FAIL' or any(
+            o['status'] == 'FAIL' or any(v['status'] == 'FAIL' for v in o.get('measurements', []))
+            for o in result['obligations']):
+        result['status'] = result['metric_status'] = 'FAIL'
+        for obligation in result['obligations']:
+            if any(v['status'] == 'FAIL' for v in obligation.get('measurements', [])):
+                obligation['status'] = 'FAIL'
+    return result
+
+
 def accept_d35(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
     """BLOCKING metric readback of the existing placement chain, without EDA replay.
 
