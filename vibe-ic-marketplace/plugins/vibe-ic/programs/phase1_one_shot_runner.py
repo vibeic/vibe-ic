@@ -2108,12 +2108,24 @@ def complete_retained_metrics(project: Path) -> dict | None:
     # refuse a mixed owner window rather than supplying invented later rows.
     if len(selected) != len(context.get('resolved_rows') or [context['resolved_row']]):
         raise flow109.Flow109Error('D0102_WINDOW_DIFFERS', 'Phase1 Step 1/2 only')
+    submission_refusal = None
     if any(row['id'] == 'D02' for row in selected):
-        _complete_retained_submission_input(project)
+        try:
+            _complete_retained_submission_input(project)
+        except metrics.MetricRefusal as exc:
+            submission_refusal = exc
     steps = []
     for row in selected:
         current = flow109.component_context(context, requested_step=row['id'])
         acceptance = (metrics.accept_d01 if row['id'] == 'D01' else metrics.accept_d02)(project, current)
+        if row['id'] == 'D02' and submission_refusal is not None:
+            # Preserve the actual named refusal in the ordinary row/collector;
+            # a separately measured metric FAIL remains a failure.
+            failed = acceptance['status'] == 'FAIL' or any(
+                item['status'] == 'FAIL' for item in acceptance['obligations'])
+            acceptance.update(status='FAIL' if failed else 'NOT_MEASURED',
+                qualification='NOT_MEASURED', delivery_blocked=True,
+                reason=submission_refusal.code, detail=str(submission_refusal))
         status = acceptance['status']
         steps.append({'status': status, 'extras': {
             'step_id': row['profile']['dispatch']['native_step_id'],
