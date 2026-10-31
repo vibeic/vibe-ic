@@ -11,6 +11,39 @@ import blindness_audit as ba
 DATASET = Path("/neutral-dataset")
 
 
+@pytest.mark.parametrize("namespace", [None, "functions"])
+@pytest.mark.parametrize("extra", [{}, {"max_tokens": 6000, "yield_time_ms": 10000},
+                                    {"terminate": True}])
+def test_execution_wait_payload_is_fully_inspected(namespace, extra):
+    record = frame("wait", {"cell_id": "g37:5", **extra}, namespace=namespace)
+    findings, calls, unread = audit(record)
+    assert not findings and not unread and calls[0]["inspected"]
+    assert record["payload"]["arguments"] in ba._harvest_tool_strings(record)
+
+
+@pytest.mark.parametrize("payload", [
+    {}, {"cell_id": ""}, {"cell_id": 7}, {"cell_id": "g37:5", "max_tokens": True},
+    {"cell_id": "g37:5", "yield_time_ms": -1}, {"cell_id": "g37:5", "terminate": 1},
+    {"cell_id": "g37:5", "unknown": {}},
+    {"cell_id": "g37:5", "cmd": "cat /neutral-dataset/CaseOne/answer_ref.sv"},
+    {"cell_id": {"cmd": "python3 score_neutral.py"}},
+])
+def test_execution_wait_rejects_unknown_payloads_and_scans_commands(payload):
+    findings, calls, unread = audit(frame("wait", payload, namespace=None))
+    assert len(unread) == 1 and not calls[0]["inspected"]
+    if "cmd" in payload:
+        assert [x["kind"] for x in findings] == ["dataset-file-access"]
+    elif isinstance(payload.get("cell_id"), dict):
+        assert [x["kind"] for x in findings] == ["scorer-self-run"]
+    else:
+        assert not findings
+
+
+def test_execution_wait_requires_exact_tool_identity():
+    _, calls, unread = audit(frame("wait", {"cell_id": "g37:5"}, namespace="unknown"))
+    assert unread and not calls[0]["inspected"]
+
+
 def frame(name="send_message", arguments=None, namespace="collaboration"):
     if arguments is None:
         arguments = {"target": "/root/worker", "message": "The bounded source review is complete."}
