@@ -78,8 +78,8 @@ def test_a_combinational_adder_still_gets_its_oracle(tmp_path):
     # The direction that proves the guard is not simply refusing everything:
     # a purely combinational primitive with no clock must still be oracled.
     spec, why = _spec(tmp_path, [
-        _p("a", "input", 8), _p("b", "input", 8), _p("cin", "input", 1),
-        _p("sum", "output", 8), _p("cout", "output", 1),
+        _p("a", "input", 8), _p("b", "input", 8),
+        _p("sum", "output", 8),
     ], "Implement an 8-bit adder. sum = a + b.")
     assert spec is not None, why
     assert spec["operator"] == "+"
