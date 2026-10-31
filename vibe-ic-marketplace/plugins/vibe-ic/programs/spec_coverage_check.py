@@ -478,6 +478,17 @@ def _reset_context(text: str) -> str:
         if "reset" in s or re.search(r"\bpor\b", s)) or ""
 
 
+def _initial_state_clauses(text: str) -> List[str]:
+    """Explicit pre-operation state assumptions are not runtime reset inputs."""
+    return [clause.strip() for clause in re.findall(r"[^.;\n]+[.;\n]?", text)
+            if re.search(r"\binitially\b|\binitial\s+state\b", clause, re.I)
+            and re.search(r"\b(?:zero|one)\b|(?<!\w)[01](?!\w)", clause, re.I)
+            and re.search(r"\bbefore\b[^.;\n]*\b(?:begins?|starts?|first\s+"
+                          r"(?:clock\s+)?edge)\b", clause, re.I)
+            and not _prose_is_denied(clause)
+            and not re.search(r"\b(?:assert|deassert|input|port)\b", clause, re.I)]
+
+
 def _detect_reset_mode_polarity(text: str):
     """Return (mode, polarity) including the sync/async SHORTHAND that
     _specrtl_common misses. mode in {synchronous, asynchronous, None};
@@ -1847,14 +1858,21 @@ def extract_checklist(spec_text: str) -> List[ChecklistItem]:
             evidence=f"{p.direction} {p.name}",
             coverage_tokens=[p.name]))
 
-    # --- Reset ---
-    if _has_reset(spec_text):
-        mode, polarity = _detect_reset_mode_polarity(spec_text)
+    # Keep an explicit before-operation state assumption blocking, without
+    # inventing a runtime reset port. Independent runtime reset clauses remain.
+    reset_text = spec_text
+    for clause in _initial_state_clauses(spec_text):
+        items.append(ChecklistItem(
+            kind="initial_state", requirement="initial state before operation: " + clause,
+            evidence=clause))
+        reset_text = reset_text.replace(clause, "")
+    if _has_reset(reset_text):
+        mode, polarity = _detect_reset_mode_polarity(reset_text)
         qual = " ".join(x for x in (polarity, mode) if x) or "reset"
         items.append(ChecklistItem(
             kind="reset",
             requirement=f"reset behavior ({qual})",
-            evidence=_reset_context(spec_text).strip()[:120] or "reset",
+            evidence=_reset_context(reset_text).strip()[:120] or "reset",
             coverage_tokens=["reset", "rst", "por"]))
 
     # --- Latency / timing ---
@@ -3025,6 +3043,97 @@ def _tb_has_other_clock_driver(rtl_text: str, tb_code: str,
     return False
 
 
+def _tb_direct_state_checks(rtl_text: Optional[str], tb_code: str) -> tuple:
+    """Bounded inline initial/clocked output witnesses, not general SV execution.
+
+    Reuse DUT binding and the HDL block parser. Only a single finishing initial
+    with literal delays, direct assignments and fatal-backed case comparisons
+    is measured. Unknown control flow, other clock drivers and forced outputs
+    cannot earn credit. Native simulation still adjudicates the expected values.
+    """
+    clocks, scope = _tb_bound_clock_ports(rtl_text, tb_code)
+    if (len(clocks) != 1 or next(iter(clocks.values()), None) != "input"
+            or len(re.findall(r"\binitial\b", scope, re.I)) != 1):
+        return False, False
+    clock = next(iter(clocks))
+    initial = re.search(r"\binitial\s+(?=begin\b)", scope, re.I)
+    if not initial:
+        return False, False
+    block, end = _SRC._extract_block(scope, initial.end())
+    body = re.sub(r"^begin\b|\bend$", "", block).strip()
+    outside = scope[:initial.start()] + scope[end:]
+    if (re.search(r"\b(?:always|always_comb|always_ff|force|task|function|"
+                  r"generate|if|for)\b", outside, re.I)
+            or _tb_has_other_clock_driver(rtl_text, tb_code, scope, clock)):
+        return False, False
+    roles = _tb_bound_port_roles(rtl_text, tb_code)
+    top, = _tb_instantiated_module_types(scope, set(
+        re.findall(r"\bmodule\s+(\w+)", _HDL.strip_hdl_comments_and_strings(rtl_text))))
+    _, ports = _SRC.parse_rtl_ports(rtl_text, top)
+    outputs = {roles[p.name.lower()] for p in ports if p.direction == "output"
+               and p.name.lower() in roles}
+    if any(_assigned_expressions(scope, signal)
+           or re.search(rf"\bforce\s+{re.escape(signal)}\b", scope, re.I)
+           or _tb_has_other_clock_driver(rtl_text, tb_code, scope, signal)
+           for signal in outputs):
+        return False, False
+    formal = [p.name for p in ports if roles.get(p.name.lower()) == clock]
+    edges = {edge for name in formal for edge in re.findall(
+        rf"\b(posedge|negedge)\s+{re.escape(name)}\b",
+        _HDL.strip_hdl_comments_and_strings(rtl_text), re.I)}
+    if len(edges) != 1:
+        return False, False
+    active = 1 if next(iter(edges)).lower() == "posedge" else 0
+    declarations = list(re.finditer(
+        rf"\b(?:reg|logic|bit)\s+{re.escape(clock)}\s*=\s*({_HDL_INT})\s*;",
+        outside, re.I))
+    if len(_assigned_expressions(outside, clock)) != len(declarations) or len(declarations) > 1:
+        return False, False
+    level = _parse_hdl_int(declarations[0].group(1)) if declarations else None
+    if level is not None and level != 1 - active:
+        return False, False  # X -> active at time zero already clocks the DUT
+    time, edge_time, count = 0.0, 0.0, 0
+    before, after = False, False
+    while body:
+        delay = re.match(r"#\s*(\d+(?:\.\d+)?)\s*;?", body)
+        assignment = re.match(r"(\w+)\s*=(?!=)\s*([^;]+);", body)
+        check = re.match(rf"if\s*\(\s*(\w+)\s*!==\s*({_HDL_INT})\s*\)", body, re.I)
+        system = re.match(r"\$(display|finish)\b\s*(?:\([^;]*\))?\s*;", body, re.I)
+        if delay:
+            time += float(delay.group(1))
+            consumed = delay.end()
+        elif assignment:
+            signal, expression = assignment.groups()
+            if re.search(r"[()#@]", expression):
+                return False, False
+            if signal.lower() == clock:
+                value = _parse_hdl_int(expression)
+                if value not in (0, 1) or (level is None and value != 1 - active):
+                    return False, False
+                if level is not None and value != level and value == active:
+                    count += 1
+                    edge_time = time
+                level = value
+            consumed = assignment.end()
+        elif check:
+            branch, consumed = _SRC._extract_block(body, check.end())
+            branch = re.sub(r"^begin\b|\bend$", "", branch).strip()
+            if not re.fullmatch(r"(?:\$display\s*\([^;]*\)\s*;\s*)?"
+                                r"\$fatal\s*(?:\([^;]*\))?\s*;", branch, re.I):
+                return False, False
+            if check.group(1).lower() in outputs and level is not None:
+                before |= count == 0 and time > 0
+                after |= count > 0 and time > edge_time
+        elif system:
+            if system.group(1).lower() == "finish":
+                return before, after
+            consumed = system.end()
+        else:
+            return False, False
+        body = body[consumed:].strip()
+    return False, False
+
+
 def _direct_clock_periods(code: str, clock: str) -> List[float]:
     """Recognize a bounded inline proof on the successful sequential path.
 
@@ -3186,11 +3295,25 @@ def attribute_coverage(items: List[ChecklistItem], tb_text: Optional[str],
     register_loop_attempted, register_loop_offsets = \
         _tb_register_loop_coverage(
             _HDL.strip_hdl_comments_and_strings(tb_text), rtl_text)
+    initial_observed, clocked_observed = (
+        _tb_direct_state_checks(rtl_text, _HDL.strip_hdl_comments_and_strings(tb_text))
+        if any(it.kind in {"initial_state", "latency"} for it in items)
+        else (False, False))
 
     members_norm = {_norm_value(m) for m in enum_members_all
                     if re.fullmatch(r"(0[xXbB][0-9A-Fa-f_]+|\d+|\d+'[bdh][0-9A-Fa-fxXzZ_]+)", m)}
 
     for it in items:
+        if it.kind == "initial_state":
+            it.covered = initial_observed
+            it.coverage_note = ("fatal-backed DUT output literal check before the first bound clock edge"
+                                if it.covered else
+                                "no direct fatal-backed DUT output check before the first bound clock edge")
+            continue
+        if it.kind == "latency" and clocked_observed:
+            it.covered = True
+            it.coverage_note = "fatal-backed DUT output check after a literal transition of its bound clock"
+            continue
         if it.kind == "clock_frequency":
             role = _clock_requirement_role(it.evidence)
             if role == "historical":
