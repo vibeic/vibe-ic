@@ -8391,3 +8391,333 @@ def accept_a06(project: Path, context: Mapping, component: Mapping) -> dict:
         answer.update(status="FAIL" if any(row.get("status") == "FAIL" for row in answer["metrics"].values())
                       else "NOT_MEASURED", reason=getattr(exc, "code", "A06_METRIC_INPUT_UNAVAILABLE"), detail=str(exc))
     return answer
+
+
+def _a0708_file(project, path, digest, invocation):
+    """Reopen a selected-row input/output; foreign files require invocation binding."""
+    path = Path(path)
+    path = (path if path.is_absolute() else project / path).resolve()
+    if path.is_relative_to(project):
+        path = _safe_project_file(project, str(path.relative_to(project)))
+    elif invocation['inputs'].get(str(path)) != digest and not any(
+            tool['path'] == str(path) and tool['sha256'] == digest
+            for tool in invocation['tools'].values()):
+        raise MetricRefusal('A0708_FOREIGN_NATIVE_INPUT', str(path))
+    if not path.is_file() or _sha(path.read_bytes()) != digest:
+        raise MetricRefusal('A0708_NATIVE_INPUT_CHANGED', str(path))
+    return path
+
+
+def _a0708_rows(project, context, component, step):
+    import analog_native_flow as native
+    invocation = component.get(step.lower() + '_invocation')
+    current = getattr(native, '_' + step.lower() + '_invocation')(project)
+    if not invocation or current != invocation:
+        raise MetricRefusal(step + '_INVOCATION_CHANGED_OR_ABSENT', 'inputs/models/bounds/method/tool/source')
+    report = component['native_results']
+    attempt = Path(report['attempt']).resolve()
+    if not attempt.is_relative_to(project / 'reports/analog_native'):
+        raise MetricRefusal(step + '_NATIVE_ATTEMPT_FOREIGN', str(attempt))
+    stored = _safe_project_file(project, str((attempt / 'result.json').relative_to(project)))
+    if (json.loads(stored.read_bytes()) != report or report.get('image') != invocation['image']
+            or report.get('source_sha256') != _sha(Path(native.__file__).read_bytes())):
+        raise MetricRefusal(step + '_NATIVE_REPORT_STALE', str(attempt))
+    names = [b.get('name') or b.get('block') for b in native._declared_blocks(project)]
+    rows = [row for row in report['steps'] if row.get('step') == step]
+    if not names or sorted(row['block'] for row in rows) != sorted(names):
+        raise MetricRefusal(step + '_BLOCK_POPULATION_MISMATCH', 'blocks')
+    for row in rows:
+        owner = row.get('producer_context', {})
+        if owner.get('image') != invocation['image'] or owner.get('driver_sha256') != report['source_sha256']:
+            raise MetricRefusal(step + '_PRODUCER_CONTEXT_STALE', row['block'])
+        for key in ['input_views', 'output_views']:
+            if key == 'input_views' and not row.get(key):
+                raise MetricRefusal(step + '_READSET_ABSENT', row['block'])
+            for path, digest in row.get(key, {}).items():
+                _a0708_file(project, path, digest, invocation)
+        if any(row['input_views'].get(path) != digest for path, digest in
+               native._input_views(project, row['block'], step).items()):
+            raise MetricRefusal(step + '_INPUT_POPULATION_CHANGED', row['block'])
+    return invocation, rows
+
+
+def _a0708_transcript(project, executions, deck, invocation):
+    import analog_native_sim as sim
+    import analog_real_corner_sweep as sweep
+    if not executions:
+        raise MetricRefusal('A0708_NATIVE_EXECUTION_ABSENT', str(deck))
+    texts = []
+    for execution in executions:
+        log = _a0708_file(project, execution['log'], execution['log_sha256'], invocation)
+        argv = execution.get('argv')
+        if (not isinstance(argv, list) or len(argv) != 3 or argv[1:] != ['-b', str(deck)]
+                or argv[0] not in ('ngspice', invocation['tools']['ngspice']['path'])
+                or execution.get('returncode') != 0 or execution.get('missing_outputs')):
+            raise MetricRefusal('A0708_NATIVE_EXECUTION_INCOMPLETE', str(deck))
+        texts.append(log.read_text())
+    text = '\n'.join(texts)
+    if any(sweep._scan_analysis_failures(text)):
+        raise MetricRefusal('A0708_NATIVE_ANALYSIS_FAILED', str(deck))
+    parsed = {key.casefold(): value for key, value in sweep.native_meas_rows(text).items()}
+    for match in sweep._MEAS_LINE_RE.finditer(text):
+        for key, value in sweep._KV_RE.findall(match.group(1)):
+            parsed.setdefault(key.casefold(), float(value))
+    return parsed
+
+
+def _a0708_nominal_observation(project, row, invocation):
+    """Read the existing direct/study producers; never launch or invent a result."""
+    import analog_native_sim as sim
+    import analog_native_flow as native
+    import analog_bound_measurements as studies
+    import analog_real_corner_sweep as sweep
+    name = row['block']
+    config = sim._config({'config': native._read(project / 'input/analog_flow.json', {})}, {'name': name}, 'A07')
+    if config.get('nominal_testbench'):
+        config = {**config, 'testbench': config['nominal_testbench']}
+    netlist, template, spec_path = sim._inputs(project, name, config)
+    spec = json.loads(spec_path.read_bytes())
+    units = {sweep.normalize_spec_label(s['name']) or s['name'].casefold(): s.get('unit')
+             for s in spec.get('specs', []) if isinstance(s, dict) and s.get('name')}
+    records = (row.get('metrics') or {}).get('native_measurement_studies')
+    observations = {}
+    if records:
+        for study in records:
+            if not study.get('bindings_path'):
+                observed = _a07_incremental_observation(project, name, config, invocation)
+                if set(observed) & set(observations):
+                    raise MetricRefusal('A07_DUPLICATE_NATIVE_MEASUREMENT', name)
+                observations.update(observed)
+                continue
+            result_path = Path(study['result'])
+            _a0708_file(project, result_path, row['output_views'][str(result_path)], invocation)
+            record = json.loads(result_path.read_bytes())
+            current, reason = studies.validate_consumed_inputs(project, record.get('native_inputs'))
+            if not current:
+                raise MetricRefusal('A07_NATIVE_STUDY_CLOSURE_STALE', reason)
+            for view in record['native_inputs'].values():
+                _a0708_file(project, view['path'], view['sha256'], invocation)
+            binding_path = Path(study['bindings_path'])
+            _a0708_file(project, binding_path, invocation['inputs'][str(binding_path)], invocation)
+            bindings = json.loads(binding_path.read_bytes())
+            binary = record['native_inputs'].get('native_binary')
+            if (record.get('bindings') != bindings or binary != invocation['tools']['ngspice']
+                    or record['native_inputs']['netlist']['path'] != str(netlist.resolve())):
+                raise MetricRefusal('A07_NATIVE_STUDY_METHOD_OR_TOOL_CHANGED', name)
+            deck = Path(record['native_inputs']['deck']['path'])
+            expected = studies.emit_deck(studies.contextual_template(template.read_text(), template.parent),
+                                        bindings, deck.parent / 'curve.dat')
+            if deck.read_text() != expected:
+                # Each study owns its actual template, which may differ from the nominal default.
+                study_template = Path(record['native_inputs']['testbench']['path'])
+                expected = studies.emit_deck(studies.contextual_template(study_template.read_text(), study_template.parent),
+                                            bindings, deck.parent / 'curve.dat')
+                if deck.read_text() != expected:
+                    raise MetricRefusal('A07_NATIVE_STUDY_DECK_CHANGED', name)
+            parsed = _a0708_transcript(project, record['executions'], deck, invocation)
+            for label, value in record.get('measurements', {}).items():
+                if parsed.get(label) != value:
+                    raise MetricRefusal('A07_NATIVE_VALUE_UNBOUND', label)
+                definition = bindings['measurements'][label]
+                key = sweep.normalize_spec_label(definition.get('spec_key', label)) or definition.get('spec_key', label).casefold()
+                if key in observations:
+                    raise MetricRefusal('A07_DUPLICATE_NATIVE_MEASUREMENT', key)
+                observations[key] = {'value': _finite_number(value), 'unit': definition.get('unit'),
+                                     'method': definition, 'analysis': bindings['analysis']}
+    else:
+        ready, reason, required = sim._validate_deck(netlist, template, config)
+        if ready != 'PASS':
+            raise MetricRefusal('A07_NATIVE_DECK_INVALID', reason)
+        for view in studies.consumed_input_views(project, template).values():
+            if row['input_views'].get(view['path']) != view['sha256']:
+                raise MetricRefusal('A07_NATIVE_MODEL_READSET_INCOMPLETE', view['path'])
+        parsed = _a0708_transcript(project, row['executions'], template, invocation)
+        for label in required:
+            key = sweep.normalize_spec_label(label) or label.casefold()
+            if key in ('enob', 'sinad', 'sndr', 'snr'):
+                raise MetricRefusal('A07_COMPLETE_SAMPLED_DYNAMIC_METHOD_REQUIRED', key)
+            if label in parsed:
+                if (row.get('metrics') or {}).get(label) != parsed[label]:
+                    raise MetricRefusal('A07_NATIVE_VALUE_UNBOUND', label)
+                observations[key] = {'value': _finite_number(parsed[label]), 'unit': units.get(key),
+                                     'method': {'native_measurement': label, 'deck': str(template)}}
+    # Use the existing source-analysis selector: supply/load conditions are
+    # not silently added to the required performance measurement population.
+    required = sim._source_measurement_coverage(spec_path, [])['required']
+    if not required:
+        required = sorted(set(observations) & set(units))
+    return observations, {key: units.get(key) for key in required}
+
+
+def _a07_incremental_observation(project, name, config, invocation):
+    """Reopen the normal complete-series score through its existing CPU reader."""
+    import analog_incremental_capture as capture
+    import analog_bound_measurements as bound
+    entries = config.get('measurement_studies')
+    if entries is None:
+        entries = json.loads((project / 'phase3/analog' / name / 'measurement_studies.json').read_bytes())
+        entries = entries.get('studies', []) if isinstance(entries, dict) else entries
+    selected = [v for v in entries if v.get('kind') == 'incremental_capture']
+    if len(selected) != 1:
+        raise MetricRefusal('A07_INCREMENTAL_METHOD_POPULATION_INVALID', name)
+    entry = selected[0]
+    score = Path(entry['result'])
+    score = score if score.is_absolute() else project / score
+    settings = Path(entry['settings'])
+    settings = settings if settings.is_absolute() else project / settings
+    for path in [score, settings]:
+        _a0708_file(project, path, invocation['inputs'][str(path)], invocation)
+    common = json.loads(settings.read_bytes())
+    common.setdefault('threads', 1)
+    common.setdefault('openmp_wait_policy', 'PASSIVE')
+    saved = json.loads(score.read_bytes())
+    points = saved.get('points', [])
+    if not points or len(points) != common['series_length']:
+        raise MetricRefusal('A07_COMPLETE_INCREMENTAL_POINT_POPULATION_REQUIRED', name)
+    phases = set()
+    for reference in points:
+        path = _a0708_file(project, reference['path'], reference['sha256'], invocation)
+        point = json.loads(path.read_bytes())
+        phase = point['settings']['phase_index']
+        if point['settings'] != capture.phase_settings(common, phase) or phase in phases or point.get('image') != invocation['image']:
+            raise MetricRefusal('A07_INCREMENTAL_POINT_METHOD_CHANGED', str(phase))
+        phases.add(phase)
+        views = point['native_inputs']
+        current, why = bound.validate_consumed_inputs(project, views)
+        if not current or not capture.declared_dut_consumed(views):
+            raise MetricRefusal('A07_INCREMENTAL_POINT_MODEL_UNBOUND', why)
+        for view in views.values():
+            _a0708_file(project, view['path'], view['sha256'], invocation)
+        _a0708_transcript(project, point['executions'], Path(views['deck']['path']), invocation)
+    if phases != set(range(common['series_length'])):
+        raise MetricRefusal('A07_INCREMENTAL_PHASE_POPULATION_INCOMPLETE', name)
+    replay = capture.replay_score(score)
+    if replay.get('status') not in ('PASS', 'FAIL') or not replay.get('measurements'):
+        raise MetricRefusal('A07_INCREMENTAL_SCORE_NOT_MEASURED', replay.get('detail', name))
+    return {label: {'value': _finite_number(value), 'unit': 'bit' if label == 'enob' else 'dB',
+                    'method': {'settings': str(settings), 'score': str(score), 'series_length': common['series_length']}}
+            for label, value in replay['measurements'].items()}
+
+
+def _a0708_compare(observations, limits, units, *, reference=None):
+    """Grade every point, retaining a measured violation beside missing points."""
+    comparisons = []
+    for block, expected in limits.items():
+        if not isinstance(expected, dict) or not expected:
+            comparisons.append({'block': block, 'status': 'NOT_MEASURED', 'reason': 'A0708_BOUND_POPULATION_EMPTY'})
+            continue
+        for label, edges in expected.items():
+            item = {'block': block, 'measurement': label}
+            try:
+                observation = observations.get(block, {}).get(label)
+                if not observation:
+                    raise MetricRefusal('A0708_REQUIRED_NATIVE_POINT_ABSENT', block + ':' + label)
+                unit = units.get(block, {}).get(label)
+                if not unit or not observation.get('unit'):
+                    raise MetricRefusal('A0708_NATIVE_UNIT_ABSENT', label)
+                compatible = observation['unit'].replace('µ', 'u').replace('μ', 'u') == unit.replace('µ', 'u').replace('μ', 'u')
+                if not isinstance(edges, dict) or not edges or set(edges) - {'min', 'max'}:
+                    raise MetricRefusal('A0708_BOUND_INVALID', label)
+                for limit in edges.values():
+                    _finite_number(limit)
+                value = _finite_number(observation['value'])
+                if reference is not None:
+                    known = _finite_number(reference['measurements'][block][label])
+                    if reference['units'][block][label] != unit:
+                        raise MetricRefusal('A0708_REFERENCE_UNIT_MISMATCH', label)
+                    compared = abs(value - known)
+                else:
+                    known, compared = None, value
+                failed = not compatible or any((edge == 'min' and compared < bound) or
+                    (edge == 'max' and compared > bound) for edge, bound in edges.items())
+                item.update(value=value, unit=observation['unit'], reference=known, compared_value=compared,
+                            bounds=edges, status='FAIL' if failed else 'PASS')
+            except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                item.update(status='NOT_MEASURED', reason=getattr(exc, 'code', 'A0708_POINT_INPUT_ABSENT'), detail=str(exc))
+            comparisons.append(item)
+    return comparisons
+
+
+def accept_a07(project: Path, context: Mapping, component: Mapping) -> dict:
+    """BLOCKING nominal binding; current complete metrics still require row qualification."""
+    import analog_native_flow as native
+    project = Path(project).resolve()
+    answer = {'schema': SCHEMA, 'step_id': 'A07', 'status': 'NOT_MEASURED', 'metrics': {},
+              'scope': 'native nominal metrics only; no qualification or whole-IC credit'}
+    failed = component.get('component_status') == 'FAIL'
+    try:
+        invocation, rows = _a0708_rows(project, context, component, 'A07')
+        observations, declared_units = {}, {}
+        for row in rows:
+            observations[row['block']], declared_units[row['block']] = _a0708_nominal_observation(project, row, invocation)
+        answer['native_observation'] = observations
+        for metric in ['nominal_performance', 'early_model_correlation']:
+            try:
+                relative = 'requirements/base_A6/' + metric + '.json'
+                authority, requirement = _approved_document(project, relative, authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+                limits, units = requirement['limits'], requirement['units']
+                reference = None
+                if metric == 'early_model_correlation':
+                    ref = requirement['reference']
+                    path = _a0708_file(project, ref['path'], ref['sha256'], invocation)
+                    if invocation['inputs'].get(str(path)) != ref['sha256']:
+                        raise MetricRefusal('A07_INDEPENDENT_REFERENCE_UNBOUND', str(path))
+                    reference = json.loads(path.read_bytes())
+                comparisons = _a0708_compare(observations, limits, units, reference=reference)
+                # Every declared source measurement is required; no narrower authority population earns PASS.
+                required = {(block, label) for block, values in declared_units.items() for label in values}
+                actual = {(row['block'], row['measurement']) for row in comparisons}
+                status = 'FAIL' if any(row['status'] == 'FAIL' for row in comparisons) else 'PASS' if actual == required and actual and set(limits) == set(units) == set(observations) and all(row['status'] == 'PASS' for row in comparisons) else 'NOT_MEASURED'
+                answer['metrics'][metric] = {'status': status, 'comparisons': comparisons, 'authority': authority}
+            except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+                answer['metrics'][metric] = {'status': 'NOT_MEASURED', 'reason': getattr(exc, 'code', 'A07_AUTHORITY_OR_POINT_ABSENT'), 'detail': str(exc)}
+        if native._a07_invocation(project) != invocation:
+            raise MetricRefusal('A07_INPUT_CHANGED_DURING_ACCEPTANCE', 'readset')
+        answer.update(status='FAIL' if failed or any(v['status'] == 'FAIL' for v in answer['metrics'].values())
+                      else native._aggregate(list(answer['metrics'].values())), input_views=invocation['inputs'],
+                      reason='A07_CURRENT_NATIVE_NOMINAL_METRICS_EVALUATED')
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        answer.update(status='FAIL' if failed or any(v['status'] == 'FAIL' for v in answer['metrics'].values())
+                      else 'NOT_MEASURED', reason=getattr(exc, 'code', 'A07_NATIVE_METRIC_INPUT_ABSENT'), detail=str(exc))
+    return answer
+
+
+def accept_a08(project: Path, context: Mapping, component: Mapping) -> dict:
+    """BLOCKING PVT binding: refuse legacy summaries without per-corner native identity.
+
+    The existing legacy producer emits corner values/log paths but no bound
+    per-corner executable/argv or pre-execution model readset. Aggregate PASS
+    and corner counts cannot replace those absent producer fields. No runner
+    or invented receipt is introduced at this consumer boundary.
+    """
+    project = Path(project).resolve()
+    answer = {'schema': SCHEMA, 'step_id': 'A08', 'status': 'NOT_MEASURED', 'metrics': {},
+              'scope': 'PVT consumer refusal; missing producer identity is not qualification'}
+    failed = component.get('component_status') == 'FAIL'
+    try:
+        invocation, rows = _a0708_rows(project, context, component, 'A08')
+        required, _ = _approved_authority(project, 'requirements/base_A7/pvt_load_modes.json#/required_items', ('block', 'name'))
+        wanted = {(v['block'], v['name']) for v in required['required_items']}
+        if not wanted:
+            raise MetricRefusal('A08_EMPTY_PVT_POPULATION', 'required_items')
+        observed = set()
+        for row in rows:
+            for path in row.get('outputs', []):
+                if Path(path).name != 'corner_results.json':
+                    continue
+                record = json.loads(Path(path).read_bytes())
+                for corner in record.get('corners', []):
+                    if isinstance(corner, dict) and corner.get('_provenance') == 'real_ngspice':
+                        observed.add((row['block'], corner['name']))
+        answer['metrics']['pvt_load_modes'] = {'status': 'NOT_MEASURED', 'required': sorted(wanted),
+            'observed': sorted(observed), 'missing': sorted(wanted - observed), 'authority': required}
+        answer['metrics']['prelayout_performance'] = {'status': 'NOT_MEASURED',
+            'reason': 'A08_PER_CORNER_EXECUTABLE_ARGV_AND_PREEXEC_MODEL_READSET_ABSENT',
+            'producer': 'analog_real_corner_sweep.py::_run_ngspice/_run_block',
+            'source_output': 'phase3/analog/<block>/corner_results.json#/corners'}
+        answer['reason'] = 'A08_PER_CORNER_EXECUTABLE_ARGV_AND_PREEXEC_MODEL_READSET_ABSENT'
+    except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        answer.update(reason=getattr(exc, 'code', 'A08_NATIVE_PVT_INPUT_ABSENT'), detail=str(exc))
+    if failed:
+        answer.update(status='FAIL', reason='A08_MEASURED_NATIVE_FAILURE_PRESERVED')
+    return answer

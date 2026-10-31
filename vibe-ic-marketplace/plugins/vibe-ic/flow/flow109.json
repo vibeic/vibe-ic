@@ -3373,7 +3373,7 @@
             "checker.base_A6.nominal_performance",
             "producer.base_A6.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_SOURCE_BOUND"
         },
         {
           "id": "base_A6.early_model_correlation",
@@ -3394,10 +3394,10 @@
             "checker.base_A6.early_model_correlation",
             "producer.base_A6.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_SOURCE_BOUND"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_SOURCE_BOUND",
       "gate_layer_ids": [
         "G1",
         "G2",
