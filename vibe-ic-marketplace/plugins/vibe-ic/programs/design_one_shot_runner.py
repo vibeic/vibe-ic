@@ -19247,7 +19247,47 @@ def _phase2_pdk_config(project: Path, pdk_name: Optional[str] = None):
     import phase3_one_shot_runner as _p3
 
     declared_pdk, _ = _ll.phase2_pdk(project, selected=pdk_name)
-    pdk = _p3._detect_pdk(project, declared_pdk)
+    _p3._assert_pdk_name_resolvable(declared_pdk)
+    reg = _p3._pdk_registry_entry(declared_pdk)
+    if reg is not None and _p3._local_exec_mode():
+        image = _ll.resolve_image(project)
+        installed = (None if _ll._provider_for_image(image) is not None
+                     else _ll.image_pdk_root(image))
+        root_glob = str(reg.get("container_path_glob") or "")
+        if (installed is not None and root_glob
+                and not (Path(installed["pdk_root"]) / declared_pdk).is_dir()
+                and _p3._registry_path_under_root(
+                    installed["pdk_root"].rstrip("/") + "/", root_glob)):
+            # A LOCAL Ciel install need not expose PDK_ROOT/<variant>.
+            # Probe only the registry glob inside the attested provider root.
+            selected_root = _p3._registry_container_root(
+                os.environ.get("EDA_CONTAINER") or _p3._pin.default_container_name(), reg)
+            if (selected_root is None or not _p3._registry_path_under_root(
+                    installed["pdk_root"].rstrip("/") + "/", selected_root)):
+                raise _ll.Refusal("LL_PHASE2_PDK_UNRESOLVED",
+                                  "installed registry PDK root did not resolve exactly")
+            root = Path(selected_root)
+        else:
+            resolved = _ll.pdk_root_resolution(
+                project, declared_pdk, image=image, native_handoff=True)
+            root = Path(resolved["path"]) / declared_pdk
+        # Keep the registry's exact library/variant asset contract, but bind
+        # this invocation to the installed provider instead of a /foss glob.
+        # Installed distributions may compose both asset directories from one
+        # immutable tree. Bind that tree without weakening asset containment.
+        if (root / "libs.ref").is_symlink():
+            refs = (root / "libs.ref").resolve(strict=True)
+            tech = (root / "libs.tech").resolve(strict=True)
+            if (refs.parent != tech.parent or refs.parent.name != declared_pdk
+                    or refs.name != "libs.ref" or tech.name != "libs.tech"):
+                raise _ll.Refusal("LL_PHASE2_PDK_UNRESOLVED",
+                                  "installed PDK asset trees disagree")
+            root = refs.parent
+        reg = dict(reg, container_path=str(root))
+        reg.pop("container_path_glob", None)
+        pdk = _p3._pdk_config_from_registry(project, reg)
+    else:
+        pdk = _p3._detect_pdk(project, declared_pdk)
     if pdk is None or pdk.name != declared_pdk:
         raise _ll.Refusal(
             "LL_PHASE2_PDK_UNRESOLVED",
