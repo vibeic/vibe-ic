@@ -2417,6 +2417,10 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
              "rationale": ("ordinary sizing scale for integrator Miller "
                            "compensation; does not resize sampling, integrating "
                            "or DAC capacitors or change loop coefficients")},
+            {"name": "ota_folded_cascode_first_stage",
+             "expr": "ota_folded_cascode_first_stage", "default": False,
+             "type": "boolean", "optional": True,
+             "rationale": "explicit folded first-stage graph; physical sizing and bound topology evidence required"},
             {"name": "ota_input_drain_cascodes",
              "expr": "ota_input_drain_cascodes", "default": False,
              "type": "boolean",
@@ -2424,6 +2428,48 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                            "resistive bias; explicit device sizing and native "
                            "headroom, stability and settling remain required")},
         ],
+        "folded_first_stage": {'enable_knob': 'ota_folded_cascode_first_stage',
+         'conflicts_with': 'ota_input_drain_cascodes',
+         'internal_nets': ['fc_p_ref', 'fc_p_fold', 'fc_n_ref', 'fc_n_cas'],
+         'devices': [{'name': 'mp_fc_bias',
+                      'role': 'pmos',
+                      'function': 'diode-connected PMOS replica; its actual Vsg tracks top/folding devices',
+                      'nets': ['fc_p_ref', 'fc_p_ref', 'vdd', 'vdd'],
+                      'w': None,
+                      'l': None},
+                     {'name': 'mn_fc_bias_sink',
+                      'role': 'nmos',
+                      'function': 'physical Iref sink at original nbias; W/L is one eighth of retained '
+                                  'mn_bias',
+                      'nets': ['fc_p_fold', 'nbias', 'vss', 'vss'],
+                      'w': None,
+                      'l': None},
+                     {'name': 'mp_fc_bias_source',
+                      'role': 'pmos',
+                      'function': 'physical PMOS Iref source for NMOS replica branch',
+                      'nets': ['fc_n_cas', 'fc_p_ref', 'vdd', 'vdd'],
+                      'w': None,
+                      'l': None},
+                     {'name': 'mn_fc_bias',
+                      'role': 'nmos',
+                      'function': 'diode-connected NMOS replica; quarter W/L of folded NMOS branches',
+                      'nets': ['fc_n_ref', 'fc_n_ref', 'vss', 'vss'],
+                      'w': None,
+                      'l': None},
+                     {'name': 'r_fc_p_shift',
+                      'role': 'res',
+                      'function': 'physical rppd shift below PMOS replica, not an ideal gate voltage',
+                      'nets': ['fc_p_ref', 'fc_p_fold', 'vss'],
+                      'w': None,
+                      'l': None},
+                     {'name': 'r_fc_n_shift',
+                      'role': 'res',
+                      'function': 'physical rppd shift above NMOS replica, not an ideal gate voltage',
+                      'nets': ['fc_n_cas', 'fc_n_ref', 'vss'],
+                      'w': None,
+                      'l': None}],
+         'ratios': [{'device': 'mp_fc_bias_source', 'reference': 'mp_fc_bias', 'w_over_l_ratio': 1.0},
+                    {'device': 'mn_fc_bias_sink', 'reference': 'mn_bias', 'w_over_l_ratio': 0.125}]},
         "input_drain_cascodes": {
             "enable_knob": "ota_input_drain_cascodes",
             "bias": {"net": "ncas_bias", "upper": "vdd", "lower": "vcm",
@@ -2798,6 +2844,73 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                             "mp_ld2_{i}", "mp_o{i}", "mn_o{i}"],
                 "cascode_targets": ["mn_cas_in{i}", "mn_cas_ref{i}"],
             },
+            "folded_first_stage": {'remove': ['mp_ld1_{i}', 'mp_ld2_{i}'],
+             'rewire': {'mn_tail{i}': ['ntail{i}', 'nbias', 'vss', 'vss'],
+                        'mn_in{i}': ['fc_u_in{i}', 'vsum{i}', 'ntail{i}', 'vss'],
+                        'mn_ref{i}': ['fc_u_ref{i}', 'vcm', 'ntail{i}', 'vss']},
+             'internal_nets': ['fc_u_in{i}', 'fc_u_ref{i}', 'fc_l_in{i}', 'fc_l_ref{i}'],
+             'devices': [{'name': 'mp_fc_top_in{i}',
+                          'role': 'pmos',
+                          'function': 'folding-node PMOS source; 12x diode reference W/L',
+                          'nets': ['fc_u_in{i}', 'fc_p_ref', 'vdd', 'vdd'],
+                          'w': None,
+                          'l': None},
+                         {'name': 'mp_fc_top_ref{i}',
+                          'role': 'pmos',
+                          'function': 'matched folding-node PMOS source',
+                          'nets': ['fc_u_ref{i}', 'fc_p_ref', 'vdd', 'vdd'],
+                          'w': None,
+                          'l': None},
+                         {'name': 'mp_fc_in{i}',
+                          'role': 'pmos',
+                          'function': 'PMOS common-gate folding branch into reference mirror',
+                          'nets': ['nd1_{i}', 'fc_p_fold', 'fc_u_in{i}', 'vdd'],
+                          'w': None,
+                          'l': None},
+                         {'name': 'mp_fc_ref{i}',
+                          'role': 'pmos',
+                          'function': 'PMOS common-gate folding branch into signal output',
+                          'nets': ['nd2_{i}', 'fc_p_fold', 'fc_u_ref{i}', 'vdd'],
+                          'w': None,
+                          'l': None},
+                         {'name': 'mn_fc_load_in{i}',
+                          'role': 'nmos',
+                          'function': 'NMOS reference mirror main; gate senses cascode drain',
+                          'nets': ['fc_l_in{i}', 'nd1_{i}', 'vss', 'vss'],
+                          'w': None,
+                          'l': None},
+                         {'name': 'mn_fc_load_ref{i}',
+                          'role': 'nmos',
+                          'function': 'matched NMOS output mirror main',
+                          'nets': ['fc_l_ref{i}', 'nd1_{i}', 'vss', 'vss'],
+                          'w': None,
+                          'l': None},
+                         {'name': 'mn_fc_cas_in{i}',
+                          'role': 'nmos',
+                          'function': 'low-current-density NMOS reference cascode',
+                          'nets': ['nd1_{i}', 'fc_n_cas', 'fc_l_in{i}', 'vss'],
+                          'w': None,
+                          'l': None},
+                         {'name': 'mn_fc_cas_ref{i}',
+                          'role': 'nmos',
+                          'function': 'matched NMOS signal cascode',
+                          'nets': ['nd2_{i}', 'fc_n_cas', 'fc_l_ref{i}', 'vss'],
+                          'w': None,
+                          'l': None}],
+             'matched_pairs': [['mn_in{i}', 'mn_ref{i}'],
+                               ['mp_fc_top_in{i}', 'mp_fc_top_ref{i}'],
+                               ['mp_fc_in{i}', 'mp_fc_ref{i}'],
+                               ['mn_fc_load_in{i}', 'mn_fc_load_ref{i}'],
+                               ['mn_fc_cas_in{i}', 'mn_fc_cas_ref{i}']],
+             'ratios': [{'device': 'mn_tail{i}', 'reference': 'mn_bias', 'w_over_l_ratio': 2.0},
+                        {'device': 'mp_fc_top_in{i}', 'reference': 'mp_fc_bias', 'w_over_l_ratio': 12.0},
+                        {'device': 'mp_fc_top_ref{i}', 'reference': 'mp_fc_bias', 'w_over_l_ratio': 12.0},
+                        {'device': 'mp_fc_in{i}', 'reference': 'mp_fc_bias', 'w_over_l_ratio': 4.0},
+                        {'device': 'mp_fc_ref{i}', 'reference': 'mp_fc_bias', 'w_over_l_ratio': 4.0},
+                        {'device': 'mn_fc_load_in{i}', 'reference': 'mn_fc_bias', 'w_over_l_ratio': 4.0},
+                        {'device': 'mn_fc_load_ref{i}', 'reference': 'mn_fc_bias', 'w_over_l_ratio': 4.0},
+                        {'device': 'mn_fc_cas_in{i}', 'reference': 'mn_fc_bias', 'w_over_l_ratio': 4.0},
+                        {'device': 'mn_fc_cas_ref{i}', 'reference': 'mn_fc_bias', 'w_over_l_ratio': 4.0}]},
             "input_drain_cascodes": [
                 {"source": "mn_in{i}", "cascode": "mn_cas_in{i}",
                  "midpoint": "ncas_mid_in{i}"},
@@ -6001,11 +6114,13 @@ def read_sizing_inputs(project: Path, block: str) -> Dict[str, Any]:
     except (OSError, ValueError) as exc:
         raise SizingInputsInvalid(f"cannot read sizing_inputs.json: {exc}") from exc
     if not isinstance(data, dict) or set(data) - {
-            "knobs", "device_parameters", "matched_gain_length_um", "rationale"}:
-        raise SizingInputsInvalid("sizing_inputs.json expects knobs, device_parameters, optional matched_gain_length_um and rationale")
+            "knobs", "device_parameters", "matched_gain_length_um", "topology_evidence", "rationale"}:
+        raise SizingInputsInvalid("sizing_inputs.json expects knobs, device_parameters, optional matched_gain_length_um, topology_evidence and rationale")
     for key in ("knobs", "device_parameters"):
         if not isinstance(data.get(key, {}), dict):
             raise SizingInputsInvalid(f"sizing_inputs.{key} must be an object")
+    if "topology_evidence" in data and not isinstance(data["topology_evidence"], dict):
+        raise SizingInputsInvalid("sizing_inputs.topology_evidence must be an object")
     if "matched_gain_length_um" in data:
         _positive_sizing_number(data["matched_gain_length_um"], "matched_gain_length_um")
     data["input_view"] = {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
@@ -6184,6 +6299,185 @@ def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
                 if high is not None and number > float(high):
                     raise SizingInputsInvalid(f"{name}.{parameter}={number}um exceeds PDK maximum {high}um")
         device.update(normalized)
+
+
+def bind_topology_evidence(project: Path, sizing: Dict[str, Any]) -> Dict[str, Any]:
+    """Bind the decision, retained history and characterization, without grading them."""
+    project = project.resolve()
+    evidence = sizing.get("topology_evidence")
+    roles = {"decision", "parent_history", "device_characterization"}
+    if not isinstance(evidence, dict) or set(evidence) != roles:
+        raise SizingInputsInvalid("folded first stage requires decision, parent_history and device_characterization references")
+    result = {}
+    for role in sorted(roles):
+        ref = evidence[role]
+        if (not isinstance(ref, dict) or set(ref) != {"path", "sha256"}
+                or not isinstance(ref["path"], str)
+                or not isinstance(ref["sha256"], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", ref["sha256"])):
+            raise SizingInputsInvalid("folded topology evidence missing or invalid " + role)
+        path = Path(ref["path"])
+        if not path.is_absolute():
+            path = project / path
+        if (not path.resolve().is_relative_to(project.resolve())
+                or path.is_symlink() or not path.is_file()
+                or path.stat().st_size == 0
+                or _sha256(path) != ref["sha256"]):
+            raise SizingInputsInvalid("folded topology evidence absent, outside project or stale: " + role)
+        result[role] = {"path": str(path.relative_to(project)), "sha256": ref["sha256"]}
+    try:
+        history = json.loads((project / result["parent_history"]["path"]).read_text())
+        if not isinstance(history.get("iterations"), list) or not history["iterations"]:
+            raise ValueError("empty history")
+    except (OSError, ValueError, AttributeError) as exc:
+        raise SizingInputsInvalid("folded topology requires the nonempty original parent history") from exc
+    return {"references": result, "parent_history_entries": len(history["iterations"]),
+            "characterization_status": "REFERENCE_BOUND_NOT_QUALIFIED",
+            "new_sizing_budget": False}
+
+
+def expand_folded_first_stage(lib: Dict[str, Any], values: Dict[str, float],
+                              knobs: Dict[str, Any], devices: List[Dict[str, Any]],
+                              nets: List[str], sizing: Dict[str, Any],
+                              project: Path) -> Optional[Dict[str, Any]]:
+    """Expand the entry's selected physical graph; geometry remains explicit input."""
+    declaration = lib.get("folded_first_stage")
+    if not declaration:
+        return None
+    enabled = knobs.get(declaration["enable_knob"], False)
+    if not isinstance(enabled, bool):
+        raise SizingInputsInvalid("folded first-stage enable must be boolean")
+    if not enabled:
+        return None
+    if knobs.get(declaration["conflicts_with"], False):
+        raise SizingInputsInvalid("folded first stage and input-drain cascodes are mutually exclusive")
+    if "matched_gain_length_um" in sizing:
+        raise SizingInputsInvalid("matched gain length is not declared for the selected folded first stage")
+    evidence = bind_topology_evidence(project, sizing)
+    by_name = {d["name"]: d for d in devices}
+    if len(by_name) != len(devices):
+        raise SizingInputsInvalid("duplicate source device before folded expansion")
+    removed, rewired, added = [], {}, []
+    internal = list(declaration["internal_nets"])
+    ratios = [dict(r) for r in declaration["ratios"]]
+    pairs = []
+    for group in _stage_groups(lib):
+        selected = group.get("folded_first_stage")
+        if not selected:
+            continue
+        for index in range(1, _group_count(group, values) + 1):
+            def expand(value):
+                if isinstance(value, str):
+                    return value.format(i=index)
+                if isinstance(value, list):
+                    return [expand(v) for v in value]
+                if isinstance(value, dict):
+                    return {k: expand(v) for k, v in value.items()}
+                return value
+            removed.extend(expand(selected["remove"]))
+            for name, endpoints in selected["rewire"].items():
+                name = expand(name)
+                if name in rewired:
+                    raise SizingInputsInvalid("duplicate folded rewire target")
+                rewired[name] = expand(endpoints)
+            added.extend(expand(selected["devices"]))
+            internal.extend(expand(selected["internal_nets"]))
+            ratios.extend(expand(selected["ratios"]))
+            pairs.extend(expand(selected["matched_pairs"]))
+    added.extend(dict(d, nets=list(d["nets"])) for d in declaration["devices"])
+    if (not removed or len(set(removed)) != len(removed)
+            or any(n not in by_name or n in rewired for n in removed)
+            or any(n not in by_name or len(endpoints) != ROLE_TERMINALS[by_name[n]["role"]]
+                   for n, endpoints in rewired.items())):
+        raise SizingInputsInvalid("unknown or inconsistent folded source target")
+    names = [d["name"] for d in added]
+    known = set(lib.get("ports", [])) | set(nets)
+    if (len(set(names)) != len(names) or set(names) & set(by_name)
+            or len(set(internal)) != len(internal) or set(internal) & known):
+        raise SizingInputsInvalid("folded device or internal-net identity collision")
+    for d in added:
+        if d.get("role") not in ("nmos", "pmos", "res") or len(d.get("nets", [])) != ROLE_TERMINALS[d["role"]]:
+            raise SizingInputsInvalid("folded graph requires real MOS/resistor roles and complete terminals")
+    required = list(rewired) + names
+    for name in required:
+        geometry = sizing.get("device_parameters", {}).get(name)
+        if not isinstance(geometry, dict) or not {"w", "l"} <= set(geometry):
+            raise SizingInputsInvalid(name + ": folded physical device requires explicit w/l sizing")
+    before = [dict(by_name[name]) for name in removed + list(rewired)]
+    devices[:] = [d for d in devices if d["name"] not in removed]
+    for name, endpoints in rewired.items():
+        by_name[name]["nets"] = endpoints
+    devices.extend(added)
+    nets.extend(internal)
+    return {"enable_knob": declaration["enable_knob"], "input_view": sizing.get("input_view"),
+            "evidence": evidence, "removed_devices": removed, "before_devices": before,
+            "selected_devices": required, "source_ratios": ratios, "matched_pairs": pairs,
+            "ratio_basis": "requested total W*m/L before normal finger/grid resolution; not measured current ratios",
+            "geometry_status": "DESIGN_INPUT_SEED_NOT_MEASURED",
+            "independent_sizing_inputs": sorted(
+                ["knobs." + k for k in sizing.get("knobs", {})] +
+                ["device_parameters." + n + "." + p
+                 for n, row in sizing.get("device_parameters", {}).items() for p in row])}
+
+
+def finish_folded_first_stage(record: Dict[str, Any], devices: List[Dict[str, Any]]) -> None:
+    """Check source-owned physical matching/ratios after ordinary sizing."""
+    by_name = {d["name"]: d for d in devices}
+    for pair in record["matched_pairs"]:
+        a, b = [by_name[n] for n in pair]
+        if any(a.get(p, 1) != b.get(p, 1) for p in ("w", "l", "m", "ng")):
+            raise SizingInputsInvalid("folded matched geometry disagrees: " + ", ".join(pair))
+    for row in record["source_ratios"]:
+        def aspect(name):
+            d = by_name[name]
+            return (_positive_sizing_number(d.get("w"), name + ".w") *
+                    _positive_sizing_number(d.get("m", 1), name + ".m") /
+                    _positive_sizing_number(d.get("l"), name + ".l"))
+        actual = aspect(row["device"]) / aspect(row["reference"])
+        if not math.isclose(actual, row["w_over_l_ratio"], rel_tol=1e-12):
+            raise SizingInputsInvalid("folded source-owned W/L ratio disagrees: " + row["device"])
+    record["expanded_devices"] = [dict(by_name[n], nets=list(by_name[n]["nets"]))
+                                  for n in record["selected_devices"]]
+
+
+def folded_first_stage_problems(ir: Dict[str, Any], project: Optional[Path]) -> List[str]:
+    """Reconstruct the selected graph and evidence from current normal inputs."""
+    try:
+        lib = LIBRARY.get(_canonical_type(ir.get("block_type"))) or {}
+        declaration = lib.get("folded_first_stage")
+        record = ir.get("folded_first_stage")
+        if not declaration:
+            if record:
+                raise SizingInputsInvalid("folded first stage is not declared for this topology")
+            return []
+        key = declaration["enable_knob"]
+        sizing = read_sizing_inputs(Path(project), ir["block"]) if project is not None else {}
+        selected = sizing.get("knobs", {}).get(key, False)
+        if not isinstance(selected, bool) or ir.get("knobs", {}).get(key, False) != selected:
+            raise SizingInputsInvalid("folded selector disagrees with current normal input")
+        if not selected:
+            if record:
+                raise SizingInputsInvalid("disabled folded first stage carries an expansion record")
+            return []
+        values, _ = bound_spec_values(Path(project), ir["block"])
+        expected, nets, exprs, _ = expand_stages(lib, values)
+        wanted = expand_folded_first_stage(lib, values, ir["knobs"], expected, nets, sizing, Path(project))
+        apply_sizing_inputs({"device_parameters": sizing.get("device_parameters", {})},
+                            {}, {}, [], expected, exprs, {}, {})
+        finish_folded_first_stage(wanted, expected)
+        renames = (ir.get("port_binding") or {}).get("renamed") or {}
+        wanted = _rename_nets(wanted, renames)
+        if record != wanted:
+            raise SizingInputsInvalid("folded graph/evidence expansion record is inconsistent or stale")
+        actual = {d["name"]: d for d in ir.get("devices", [])}
+        if len(actual) != len(ir.get("devices", [])) or any(n in actual for n in wanted["removed_devices"]):
+            raise SizingInputsInvalid("folded graph duplicates devices or retains replaced mirror loads")
+        for d in wanted["expanded_devices"]:
+            if actual.get(d["name"]) != d:
+                raise SizingInputsInvalid(d["name"] + ": folded endpoint/body/geometry disagrees with normal source")
+        return []
+    except (SizingInputsInvalid, KeyError, TypeError, ValueError, AttributeError) as exc:
+        return ["folded first stage: " + str(exc)]
 
 
 def apply_matched_gain_length(lib: Dict[str, Any], values: Dict[str, float],
@@ -6450,10 +6744,14 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
             _choice["chosen"]["window_clocks"])
         spec_values.update(effective_spec_values)
 
+    sizing_inputs = read_sizing_inputs(project, block)
     knobs: Dict[str, Any] = {}
     knob_sources: Dict[str, str] = {}
     defaulted: List[str] = []
     for k in lib.get("spec_knobs", []):
+        if (k.get("optional") and k["name"] not in sizing_inputs.get("knobs", {})
+                and k["name"] not in spec_values):
+            continue
         names = [t for t in _expr_names(k["expr"])]
         if all(n in spec_values for n in names):
             try:
@@ -6476,13 +6774,14 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         constants[_res_stim_delay_key()] = float(_fb_delay)
     # Optional topology is selected before device sizing: newly introduced
     # devices then use exactly the same geometry/fingering path as all others.
-    sizing_inputs = read_sizing_inputs(project, block)
     _apply_sizing_knobs(sizing_inputs, knobs, knob_sources, defaulted,
                         lib.get("spec_knobs"))
     # An entry with no `stage` key comes back with its own lists untouched,
     # so every pre-existing entry takes the identical path it always did.
     devices, internal_nets, param_exprs, stage_rec = expand_stages(
         lib, spec_values)
+    folded = expand_folded_first_stage(
+        lib, spec_values, knobs, devices, internal_nets, sizing_inputs, project)
     cascodes = expand_input_drain_cascodes(
         lib, spec_values, knobs, devices, internal_nets, sizing_inputs)
     apply_sizing_inputs(sizing_inputs, knobs, knob_sources, defaulted,
@@ -6629,7 +6928,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         "ratio_matching_groups": loop_ratio_groups(_loop_decl, stage_rec,
                                                    devices),
         "devices": devices,
-        "spec_knobs": [dict(k) for k in lib.get("spec_knobs", [])],
+        "spec_knobs": [dict(k) for k in lib.get("spec_knobs", [])
+                       if not k.get("optional") or k["name"] in knobs],
         "knobs": knobs,
         "knob_sources": knob_sources,
         "device_param_exprs": param_exprs,
@@ -6792,6 +7092,11 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         ir["input_drain_cascodes"] = cascodes
     if matched_length:
         ir["matched_gain_length"] = matched_length
+    if folded:
+        finish_folded_first_stage(folded, devices)
+        ir["folded_first_stage"] = folded
+        ir["_provenance"]["inputs"].extend(
+            dict(view, role=role) for role, view in folded["evidence"]["references"].items())
     # THE DESIGN'S OWN PORT NAMES, when it declares them. The library names
     # ports after the circuit; the design declares them after the role they
     # play at chip level. Binding here — before the IR reaches A3, A5, A6 and
@@ -6805,7 +7110,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     if _renames:
         for _key in ("ports", "rails", "internal_nets", "devices",
                      "constants", "device_param_exprs", "measurements",
-                     "testbench", "stimulus", "input_drain_cascodes"):
+                     "testbench", "stimulus", "input_drain_cascodes", "folded_first_stage"):
             if _key in ir:
                 ir[_key] = _rename_nets(ir[_key], _renames)
     ir["port_binding"] = {
@@ -7298,6 +7603,10 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
                       measured, measured_prov,
                       role_maxima, _minima.maxima_source(pdk),
                       measured_loop=read_loop_measurement(project, name))
+    except SizingInputsInvalid as exc:
+        return _gap("INVALID_SIZING_INPUT",
+                    [{"requirement": "current normal sizing inputs and topology evidence",
+                      "detail": str(exc)}], informational)
     except _record.RecordNotDerivable as exc:
         # Same shape as an admission refusal, and for the same reason: a deck
         # whose record this declaration cannot size must not reach disk. The
@@ -7413,7 +7722,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     elif rc == _pc.RC_HONEST_GAP:
         print(_pc.honest_gap_line(
             PRODUCER,
-            f"NO block type is in the topology library — "
+            f"no topology emitted — "
             f"{report['blocks_gap']} topology_gap.json written; "
             f"invoke skill `{SKILL}`"), file=sys.stderr)
     else:
