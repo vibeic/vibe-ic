@@ -5118,9 +5118,9 @@ def _validate_ai_review(task: dict, *,
         status = _NOT_MEASURED
         decision_reasons = unmeasurable + [
             "NOT_MEASURED is not a verdict about this candidate or this "
-            "review. This host lacks the capability the proof needs; install "
-            "it and re-run --resume. Nothing is accepted on the strength of a "
-            "test that did not run."]
+            "review. Resolve the specific tool, proof-contract or coverage "
+            "limitation listed above, then re-run --resume. Missing evidence "
+            "does not authorize acceptance."]
     elif semantic_verdict == "FAIL":
         status = "REPAIR_REQUIRED"
         decision_reasons = ["AI semantic authority rejected the current RTL; "
@@ -10376,10 +10376,10 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     }
     _atomic_write_json(run_p / _ACCEPTANCE_REPORT, acceptance)
     if not_measured:
-        print(f"\n{len(not_measured)}/{total} NOT_MEASURED: this host could not "
-              f"run the verification challenge, so those reviews were neither "
-              f"proven nor disproven. This is a host capability gap, not a "
-              f"finding about the candidates.")
+        print(f"\n{len(not_measured)}/{total} NOT_MEASURED: required verification "
+              f"evidence could not be established. See not_measured_detail for "
+              f"the specific tool, proof-contract or coverage limitation. This "
+              f"does not establish a candidate defect or authorize acceptance.")
     print(f"\n{len(accepted_ids)}/{total} Program First + AI Review accepted; status "
           f"{acceptance['status']} -> {run_p / _ACCEPTANCE_REPORT}")
     if complete:
