@@ -63,7 +63,16 @@ def _lef_uses(paths: list[dict]) -> dict[tuple[str, str], str]:
             if "use" in model}
 
 
-def _is_physical_pin(pin: dict, models: dict, modeled_cells: set[str]) -> bool:
+def _supply_only_cells(models: dict) -> set[str]:
+    cells = {}
+    for (cell, _), model in models.items():
+        cells[cell] = (cells.get(cell, True) and model.get('direction') == 'INOUT'
+                       and model.get('use') in ('POWER', 'GROUND'))
+    return {cell for cell, supply_only in cells.items() if supply_only}
+
+
+def _is_physical_pin(pin: dict, models: dict, modeled_cells: set[str],
+                     supply_cells: set[str] | None = None) -> bool:
     """A passive LEF corner, spacer or supply master can lack a Liberty cell.
 
     Keep it in the pin inventory; only its absent timing check is inapplicable.
@@ -73,6 +82,9 @@ def _is_physical_pin(pin: dict, models: dict, modeled_cells: set[str]) -> bool:
     master_class = model.get("class") or ""
     physical = (master_class == "PAD SPACER" or
                 master_class.split()[:1] == ["ENDCAP"])
+    if master_class in ("CORE SPACER", "CORE WELLTAP"):
+        physical = pin.get('cell') in (
+            _supply_only_cells(models) if supply_cells is None else supply_cells)
     if master_class in ("PAD POWER", "PAD AREAIO"):
         # AREAIO alone also denotes functional IO. Require the complete LEF
         # to describe an INOUT-only supply master, with typed power/ground.

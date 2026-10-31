@@ -209,7 +209,7 @@ foreach _p $_pins {
     set _logic [sta::pin_sim_logic_value $_p]
     set _ideal [sta::is_ideal_clock $_p]
   } else {
-    set _driver [expr {[get_property $_p direction] in {input inout}}]
+    set _driver [expr {[get_property $_p direction] in {input inout bidirect}}]
     set _logic X
     set _ideal 0
   }
@@ -444,6 +444,99 @@ def openroad_identity(image: str, *, run=None) -> dict:
     return record
 
 
+def publish_scene_census(plan: dict, bundle: dict, scene: dict, scene_dir: Path,
+                         extraction_receipt: dict, max_count: int) -> dict:
+    """Publish the existing raw scene evidence without launching a tool."""
+    counts = dict((kind, int(value)) for kind, value in _COUNTER.findall(
+        (scene_dir / "counters.log").read_text()))
+    control_counts = dict((kind, int(value)) for kind, value in _COUNTER.findall(
+        (scene_dir / "positive_control_counters.log").read_text()))
+    if set(counts) != set(KINDS) or set(control_counts) != set(KINDS):
+        raise ValueError("OpenSTA did not emit every DRV counter")
+    annotation = (scene_dir / "annotation.rpt").read_text()
+    unannotated = re.findall(
+        r"Found\s+(\d+)\s+(?:partially\s+)?unannotated\s+(?:drivers|nets)",
+        annotation)
+    row = dict(scene)
+    row.pop("positive_control_expected", None)
+    all_rows = parse_check_types((scene_dir / "all_limits.rpt").read_text(),
+                                 scene=scene["name"],
+                                 mode=scene["mode"], violators_only=False)
+    population = {kind: len(all_rows[kind]) for kind in KINDS}
+    census = None
+    try:
+        census = derive_census(scene_dir, scene["linked_liberties"], all_rows,
+                               scene.get("linked_lefs"), allow_unproven=True,
+                               signoff_sdc=Path(plan["current"]["sources"]["signoff_sdc"]["path"]),
+                               core_liberty=scene.get("liberty"))
+        population = census["population"]
+        if bundle["pins"] and set(bundle["pins"]) != set(census["pins"]):
+            raise ValueError("OpenSTA pin names differ between scenes")
+        if not bundle["pins"]:
+            bundle["pins"] = census["pins"]
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        census_error = str(exc)
+    annotation_census = None
+    row_annotation_error = "pin census or linked LEF inventory absent"
+    if census is not None and scene.get("linked_lefs"):
+        try:
+            annotation_census = derive_annotation(
+                scene_dir, census["pins"], scene["linked_liberties"],
+                scene["linked_lefs"],
+                Path(plan["identity"]["artifacts"]["def"]["path"]),
+                Path(scene["spef"]["path"]))
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            row_annotation_error = str(exc)
+    # A plan is only a request for measurement. It cannot attest which
+    # pins OpenSTA excluded from its own DRV checks.
+    row.pop("excluded_pins", None)
+    row.pop("excluded_pins_recorded", None)
+    row.pop("excluded_pins_report", None)
+    row.pop("clock_network_pins", None)
+    row["spef_extraction_receipt"] = extraction_receipt
+    row.update(fresh_process=True, postroute=True, propagated_clocks=True,
+               excluded_pins_recorded=census is not None,
+               command=_COMMAND, all_limits_max_count=max_count,
+               population=population,
+               positive_control_fresh_process=True,
+               counters=counts, positive_control_counters=control_counts,
+               unannotated_nets=(len(annotation_census["unresolved"])
+                                 if annotation_census is not None else
+                                 sum(map(int, unannotated)) if unannotated else None),
+               report=_ref(scene_dir / "violators.rpt"),
+               all_limits_report=_ref(scene_dir / "all_limits.rpt"),
+               counter_report=_ref(scene_dir / "counters.log"),
+               positive_control_report=_ref(scene_dir / "positive_control.rpt"),
+               positive_control_all_limits_report=_ref(scene_dir / "positive_control_all_limits.rpt"),
+               parasitic_annotation_report=_ref(scene_dir / "annotation.rpt"),
+               clock_properties=_ref(scene_dir / "clocks.rpt"),
+               tool_scripts=[_ref(scene_dir / "measure.tcl"),
+                             _ref(scene_dir / "positive_control.tcl")])
+    if census is not None:
+        excluded_path = scene_dir / "excluded_pins.json"
+        write_text(excluded_path, json.dumps(census["excluded"], sort_keys=True) + "\n")
+        row.update(excluded_pins=census["excluded"],
+                   pins=census["pins"],
+                   excluded_pins_report=_ref(excluded_path),
+                   clock_network_pins=census["clock_network_pins"],
+                   driver_pin_census=census["driver_pins"],
+                   unproven_omitted_pins=census["unproven"],
+                   pin_census_report=_ref(scene_dir / "pin_census.tsv"),
+                   net_census_report=_ref(scene_dir / "net_census.rpt"),
+                   disabled_edges_report=_ref(scene_dir / "disabled_edges.rpt"))
+    else:
+        row["census_error"] = census_error
+    if annotation_census is not None:
+        annotation_path = scene_dir / "annotation_census.json"
+        write_text(annotation_path,
+                   json.dumps(annotation_census, sort_keys=True) + "\n")
+        row["annotation_census"] = annotation_census
+        row["annotation_census_report"] = _ref(annotation_path)
+    elif scene.get("linked_lefs"):
+        row["annotation_census_error"] = row_annotation_error
+    return row
+
+
 def capture(plan: dict, out_dir: Path, *, image: str | None = None) -> dict:
     """Run each scene and its planted control; return a content-addressed bundle."""
     import instrument_calibration
@@ -554,93 +647,8 @@ def capture(plan: dict, out_dir: Path, *, image: str | None = None) -> dict:
             if not commit:
                 raise ValueError("fresh process did not report OpenSTA commit")
             bundle["identity"]["opensta_commit"] = commit.group(1)
-        counts = dict((kind, int(value)) for kind, value in _COUNTER.findall(
-            (scene_dir / "counters.log").read_text()))
-        control_counts = dict((kind, int(value)) for kind, value in _COUNTER.findall(
-            (scene_dir / "positive_control_counters.log").read_text()))
-        if set(counts) != set(KINDS) or set(control_counts) != set(KINDS):
-            raise ValueError("OpenSTA did not emit every DRV counter")
-        annotation = (scene_dir / "annotation.rpt").read_text()
-        unannotated = re.findall(
-            r"Found\s+(\d+)\s+(?:partially\s+)?unannotated\s+(?:drivers|nets)",
-            annotation)
-        row = dict(scene)
-        row.pop("positive_control_expected", None)
-        all_rows = parse_check_types((scene_dir / "all_limits.rpt").read_text(),
-                                     scene=scene["name"],
-                                     mode=scene["mode"], violators_only=False)
-        population = {kind: len(all_rows[kind]) for kind in KINDS}
-        census = None
-        try:
-            census = derive_census(scene_dir, scene["linked_liberties"], all_rows,
-                                   scene.get("linked_lefs"), allow_unproven=True,
-                                   signoff_sdc=Path(plan["current"]["sources"]["signoff_sdc"]["path"]),
-                                   core_liberty=scene.get("liberty"))
-            population = census["population"]
-            if bundle["pins"] and set(bundle["pins"]) != set(census["pins"]):
-                raise ValueError("OpenSTA pin names differ between scenes")
-            if not bundle["pins"]:
-                bundle["pins"] = census["pins"]
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            census_error = str(exc)
-        annotation_census = None
-        row_annotation_error = "pin census or linked LEF inventory absent"
-        if census is not None and scene.get("linked_lefs"):
-            try:
-                annotation_census = derive_annotation(
-                    scene_dir, census["pins"], scene["linked_liberties"],
-                    scene["linked_lefs"],
-                    Path(plan["identity"]["artifacts"]["def"]["path"]),
-                    Path(scene["spef"]["path"]))
-            except (OSError, ValueError, KeyError, TypeError) as exc:
-                row_annotation_error = str(exc)
-        # A plan is only a request for measurement. It cannot attest which
-        # pins OpenSTA excluded from its own DRV checks.
-        row.pop("excluded_pins", None)
-        row.pop("excluded_pins_recorded", None)
-        row.pop("excluded_pins_report", None)
-        row.pop("clock_network_pins", None)
-        row["spef_extraction_receipt"] = extraction_receipt
-        row.update(fresh_process=True, postroute=True, propagated_clocks=True,
-                   excluded_pins_recorded=census is not None,
-                   command=_COMMAND, all_limits_max_count=max_count,
-                   population=population,
-                   positive_control_fresh_process=True,
-                   counters=counts, positive_control_counters=control_counts,
-                   unannotated_nets=(len(annotation_census["unresolved"])
-                                     if annotation_census is not None else
-                                     sum(map(int, unannotated)) if unannotated else None),
-                   report=_ref(scene_dir / "violators.rpt"),
-                   all_limits_report=_ref(scene_dir / "all_limits.rpt"),
-                   counter_report=_ref(scene_dir / "counters.log"),
-                   positive_control_report=_ref(scene_dir / "positive_control.rpt"),
-                   positive_control_all_limits_report=_ref(scene_dir / "positive_control_all_limits.rpt"),
-                   parasitic_annotation_report=_ref(scene_dir / "annotation.rpt"),
-                   clock_properties=_ref(scene_dir / "clocks.rpt"),
-                   tool_scripts=[_ref(scene_dir / "measure.tcl"),
-                                 _ref(scene_dir / "positive_control.tcl")])
-        if census is not None:
-            excluded_path = scene_dir / "excluded_pins.json"
-            write_text(excluded_path, json.dumps(census["excluded"], sort_keys=True) + "\n")
-            row.update(excluded_pins=census["excluded"],
-                       pins=census["pins"],
-                       excluded_pins_report=_ref(excluded_path),
-                       clock_network_pins=census["clock_network_pins"],
-                       driver_pin_census=census["driver_pins"],
-                       unproven_omitted_pins=census["unproven"],
-                       pin_census_report=_ref(scene_dir / "pin_census.tsv"),
-                       net_census_report=_ref(scene_dir / "net_census.rpt"),
-                       disabled_edges_report=_ref(scene_dir / "disabled_edges.rpt"))
-        else:
-            row["census_error"] = census_error
-        if annotation_census is not None:
-            annotation_path = scene_dir / "annotation_census.json"
-            write_text(annotation_path,
-                       json.dumps(annotation_census, sort_keys=True) + "\n")
-            row["annotation_census"] = annotation_census
-            row["annotation_census_report"] = _ref(annotation_path)
-        elif scene.get("linked_lefs"):
-            row["annotation_census_error"] = row_annotation_error
+        row = publish_scene_census(plan, bundle, scene, scene_dir,
+                                   extraction_receipt, max_count)
         bundle["scenes"].append(row)
     return bundle
 

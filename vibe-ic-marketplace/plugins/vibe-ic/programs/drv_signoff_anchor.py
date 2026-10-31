@@ -74,17 +74,19 @@ def pdk_source_identity(provenance: dict, *, project: Path) -> dict:
 
 
 _IMAGE_PROBE = r'''
-import hashlib, json, os, pathlib, sys
+import hashlib, json, os, pathlib, re, sys
 pdk, library = sys.argv[1:]
 root = pathlib.Path(os.environ.get("PDK_ROOT", "/foss/pdks"))
 suffix = (pdk, "libs.tech", "librelane", library, "config.tcl")
-matches = [path for path in root.rglob("config.tcl")
-           if path.is_file() and path.parts[-len(suffix):] == suffix]
-if len(matches) != 1:
-    raise SystemExit("expected exactly one installed PDK config, found %d" % len(matches))
-path = matches[0]
-parts = path.parts
+path = root.joinpath(*suffix)
+if not path.is_file():
+    raise SystemExit("installed canonical PDK config absent: %s" % path)
+parts = path.resolve().parts
 version = parts[parts.index("versions") + 1] if "versions" in parts else None
+if version is None:
+    revisions = [match.group(1) for part in parts
+                 if (match := re.fullmatch(r"[^/]*-pdk-" + re.escape(pdk) + r"-([0-9a-f]{40})", part))]
+    version = revisions[0] if len(revisions) == 1 else None
 print(json.dumps({"path": str(path),
                   "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
                   "pdk_commit": version}))

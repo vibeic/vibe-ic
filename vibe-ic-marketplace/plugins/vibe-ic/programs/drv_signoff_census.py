@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from drv_signoff_judge import KINDS, _NUM, _liberty_limits, port_to_pad
-from drv_signoff_annotation import _is_physical_pin, _lef_pin_models
+from drv_signoff_annotation import _is_physical_pin, _lef_pin_models, _supply_only_cells
 
 
 def _pins(path: Path) -> dict[str, dict]:
@@ -50,6 +50,7 @@ def _nets(path: Path) -> dict[str, dict]:
         cap = re.search(r"(?m)^ Total capacitance:\s*(\S+)", rest)
         loads = re.search(r"(?ms)^Load pins\n(.*?)(?:\n\n|\Z)", rest)
         drivers = re.search(r"(?ms)^Driver pins\n(.*?)(?:\n\n|\Z)", rest)
+        others = re.search(r"(?ms)^Other pins\n(.*?)(?:\n\n|\Z)", rest)
         counts = {kind: re.search(rf"(?m)^ Number of {kind}:[ \t]*(\d+)[ \t]*$", rest)
                   for kind in ("drivers", "loads", "pins")}
         if not cap or not all(counts.values()) or name in nets:
@@ -59,13 +60,17 @@ def _nets(path: Path) -> dict[str, dict]:
                        if line.strip()] if loads is not None else [])
         driver_names = ([line.strip().split()[0] for line in drivers.group(1).splitlines()
                          if line.strip()] if drivers is not None else [])
+        other_names = ([line.strip().split()[0] for line in others.group(1).splitlines()
+                        if line.strip()] if others is not None else [])
         if len(load_names) != populations["loads"]:
             raise ValueError("OpenSTA net load count differs from raw report")
         if len(driver_names) != populations["drivers"]:
             raise ValueError("OpenSTA net driver count differs from raw report")
         if (len(set(load_names)) != len(load_names) or
                 len(set(driver_names)) != len(driver_names) or
-                len(set(driver_names + load_names)) != populations["pins"]):
+                len(set(other_names)) != len(other_names) or
+                set(other_names).intersection(driver_names + load_names) or
+                len(set(driver_names + load_names + other_names)) != populations["pins"]):
             raise ValueError("OpenSTA net pin count differs from raw report")
         # report_net prints a min-max capacitance range when the linked
         # process has distinct rise/fall values.  Retain the larger endpoint
@@ -76,7 +81,8 @@ def _nets(path: Path) -> dict[str, dict]:
         cap_pf = max(float(value) for value in cap_range.groups() if value is not None)
         if not math.isfinite(cap_pf) or cap_pf < 0:
             raise ValueError("OpenSTA net capacitance census is not finite")
-        nets[name] = {"cap_pf": cap_pf, "loads": load_names, "drivers": driver_names}
+        nets[name] = {"cap_pf": cap_pf, "loads": load_names, "drivers": driver_names,
+                      "other_pins": other_names}
         raw_blocks[name] = block.strip()
     return nets
 
@@ -169,6 +175,12 @@ def derive(scene_dir: Path, linked_liberties: list[dict],
     """Reconcile reported rows with pin and net identities from one STA run."""
     pins = _pins(scene_dir / "pin_census.tsv")
     nets = _nets(scene_dir / "net_census.rpt")
+    for name, pin in pins.items():
+        if pin['kind'] == 'port' and pin['direction'] == 'bidirect':
+            net = nets.get(pin['net']) or {}
+            if name not in net.get('drivers', []) or name not in net.get('loads', []):
+                raise ValueError('bidirectional port lacks independent net endpoint proof: ' + name)
+            pin['driver'] = True
     disabled = _disabled(scene_dir / "disabled_edges.rpt")
     libs = []
     for item in linked_liberties:
@@ -179,6 +191,7 @@ def derive(scene_dir: Path, linked_liberties: list[dict],
     core_only = (_core_only_kinds(signoff_sdc.read_text(), core_cells)
                  if signoff_sdc is not None and core_cells else set())
     lef_models = _lef_pin_models(linked_lefs) if linked_lefs else {}
+    supply_cells = _supply_only_cells(lef_models)
     lef_uses = {key: model["use"] for key, model in lef_models.items()
                 if "use" in model}
     modeled_cells = {cell for _, limits in libs for cell in limits["cells"]}
@@ -199,7 +212,7 @@ def derive(scene_dir: Path, linked_liberties: list[dict],
             matches = [(lib_name, limits) for lib_name, limits in libs
                        if pin["cell"] in limits["cells"] and
                        pin["cell_pin"] in limits["cells"][pin["cell"]]]
-            if not matches and _is_physical_pin(pin, lef_models, modeled_cells):
+            if not matches and _is_physical_pin(pin, lef_models, modeled_cells, supply_cells):
                 liberty, cell_class = None, "physical"
             elif len(matches) != 1:
                 raise ValueError(f"OpenSTA instance {name} lacks unique linked Liberty pin")

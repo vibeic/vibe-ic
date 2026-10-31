@@ -284,9 +284,10 @@ def _installed_image_digest(image: str) -> str | None:
 
 
 def _script_reads(body: str) -> list[tuple[str, str]]:
-    return re.findall(
-        r"(?m)^\s*(read_liberty|read_verilog|read_sdc|read_spef)\s+\{([^{}]+)\}\s*$",
-        body)
+    return [(command + (' -path ' + instance if instance else ''), path)
+            for command, instance, path in re.findall(
+                r"(?m)^\s*(read_liberty|read_verilog|read_sdc|read_spef)\s+"
+                r"(?:-path\s+\{([^{}]+)\}\s+)?\{([^{}]+)\}\s*$", body)]
 
 
 def _owner_records(project: Path | None, identity: dict, current: dict,
@@ -1318,10 +1319,16 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
             ("read_liberty", str(Path(item["path"]).resolve()))
             for item in scene.get("linked_liberties") or []
             if isinstance(item, dict) and item.get("path")]
+            + [("read_verilog", str(Path(item['path']).resolve()))
+               for item in scene.get('linked_verilogs', [])]
             + [("read_verilog", str(Path((identity.get("artifacts") or {}).get(
                 "sta_netlist", {}).get("path") or "").resolve())),
                ("read_sdc", str(Path(sdc.get("path") or "").resolve())),
-               ("read_spef", str(Path((scene.get("spef") or {}).get("path") or "").resolve()))])
+               ("read_spef", str(Path((scene.get("spef") or {}).get("path") or "").resolve()))]
+            + [('read_spef -path ' + item['instance'], str(Path(item['path']).resolve()))
+               for item in scene.get('instance_spefs', [])])
+        for item in [*scene.get('linked_verilogs', []), *scene.get('instance_spefs', [])]:
+            _evidence(item, missing, f'{name} native macro input')
         scripts = scene.get("tool_scripts") or []
         if not isinstance(scripts, list) or len(scripts) != 2:
             missing.append(f"{name}: fresh STA tool scripts absent")
