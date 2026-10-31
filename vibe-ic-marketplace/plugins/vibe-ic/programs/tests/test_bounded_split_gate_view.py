@@ -92,3 +92,20 @@ def test_model_includes_resolve_from_original_delivered_directory(tmp_path, circ
     assert str(tmp_path/'case/input/pdk/models/corner.lib') in view
     assert audit['source_sha256'] == declaration['source_sha256']
     bound.validate_split_gate_reconnection(original, view, declaration, source)
+
+
+def test_shared_state_control_preserves_shared_original_gate_node(circuit):
+    original, declaration = circuit
+    original = original.replace('.ends ota', 'xstate a sum vss vss nmos w=2u l=0.15u\n.ends ota')
+    declaration['source_sha256'] = hashlib.sha256(original.encode()).hexdigest()
+    declaration['gates'].append({**declaration['gates'][0], 'device':'xstate'})
+    view, audit = bound.instrument_split_gate_view(original, declaration)
+    assert len(audit['changes']) == 2
+    bound.validate_split_gate_reconnection(original, view, declaration)
+
+
+def test_shared_probe_cannot_short_different_original_nodes(circuit):
+    original, declaration = circuit
+    declaration['gates'].append({**declaration['gates'][0], 'device':'xtail', 'source_node':'bias'})
+    with pytest.raises(ValueError, match='different original gate nodes'):
+        bound.instrument_split_gate_view(original, declaration)

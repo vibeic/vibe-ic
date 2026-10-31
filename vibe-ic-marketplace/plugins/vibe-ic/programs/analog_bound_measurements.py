@@ -59,7 +59,7 @@ def instrument_split_gate_view(original: str, declaration: dict, source_director
         first_parameter = next((i for i, token in enumerate(tokens) if "=" in token), len(tokens))
         model_indices[name] = first_parameter - 1
     existing_nodes = {n for name, (_, tokens) in cards.items() for n in tokens[1:model_indices[name]]}
-    used, new_nodes = set(), set()
+    used, new_nodes = set(), {}
     changes = []
     for gate in gates:
         name = str(gate.get("device", "")).lower()
@@ -72,14 +72,16 @@ def instrument_split_gate_view(original: str, declaration: dict, source_director
             raise ValueError("split-gate mapping must identify the MOS G terminal")
         if tokens[2] != old or tokens[5] != gate.get("model"):
             raise ValueError("split-gate original gate/model does not match the delivered card")
-        if new not in port_names or new in existing_nodes or new in new_nodes:
+        if new not in port_names or new in existing_nodes:
             raise ValueError("split-gate probe must be a new exposed node")
-        new_nodes.add(new)
+        if new in new_nodes and new_nodes[new] != old:
+            raise ValueError("split-gate probe cannot join different original gate nodes")
+        new_nodes[new] = old
         changed = tokens.copy()
         changed[2] = new
         lines[index] = " ".join(changed) + "\n"
         changes.append({"device": name, "terminal": "G", "source_node": old, "probe_node": new})
-    if set(port_names) - existing_nodes - new_nodes:
+    if set(port_names) - existing_nodes - set(new_nodes):
         raise ValueError("split-gate view exposes an undeclared new physical node")
     lines[header_index] = " ".join(header + port_names) + "\n"
     view = "".join(lines)
