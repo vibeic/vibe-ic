@@ -1910,13 +1910,27 @@ def accept_d26(project: Path, context: Mapping[str, Any], component: Mapping[str
         if not corners or not config.get('STA_CORNERS') or config.get('MACROS'):
             raise MetricRefusal('D26_NATIVE_POPULATION_UNMEASURED', 'complete standard-cell corner set required')
         libraries = config.get('CELL_LIBS') or config.get('LIB') or {}
-        if config.get('PAD_LIBS') or config.get('EXTRA_LIBS'):
-            raise MetricRefusal('D26_NATIVE_POPULATION_UNMEASURED', 'additional libraries require native coverage')
 
         def selected_libs(corner):
-            return sorted(str(p) for pattern, values in libraries.items()
-                          if fnmatch.fnmatch(corner, pattern)
-                          for p in (values if isinstance(values, list) else [values]))
+            selected = []
+            # Match the native resolver's complete standard/pad/extra library
+            # population. Every selected path must occur in the actual read
+            # log and retain its original fingerprint SHA and native unit.
+            for group in (libraries, config.get('PAD_LIBS'), config.get('EXTRA_LIBS')):
+                if group is None:
+                    continue
+                groups = ([values for pattern, values in group.items()
+                           if fnmatch.fnmatch(corner, pattern)]
+                          if isinstance(group, Mapping) else [group])
+                for values in groups:
+                    values = [values] if isinstance(values, str) else values
+                    if (not isinstance(values, (list, tuple))
+                            or any(not isinstance(p, str) or not p for p in values)):
+                        raise MetricRefusal('D26_NATIVE_POPULATION_UNMEASURED', 'invalid library selector')
+                    selected.extend(values)
+            if len(set(selected)) != len(selected):
+                raise MetricRefusal('D26_NATIVE_POPULATION_UNMEASURED', 'duplicate configured library')
+            return sorted(selected)
 
         rows, measured_models = {}, set()
         for corner in corners:
