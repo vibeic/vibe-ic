@@ -99,6 +99,30 @@ def test_residual_population_may_omit_only_verified_accepted_rows(
 
 
 @pytest.mark.parametrize('consumer', CONSUMERS)
+@pytest.mark.parametrize('mutation', ['valid', 'missing_review', 'wrong_status', 'string_flag'])
+def test_validated_source_question_is_unmeasured_not_a_floor(tmp_path, consumer, mutation):
+    rec, source, _ = operational(tmp_path, 'PENDING_ACCEPTANCE')
+    solve = json.loads(source.read_text())
+    row = solve['results'][0]
+    row.update(awaiting_ai=False, awaiting_ai_review=False,
+               awaiting_spec_clarification=True,
+               program_first_ai_review={'status': 'SPEC_CLARIFICATION_REQUIRED',
+                                        'semantic_verdict': 'NEEDS_CLARIFICATION'})
+    if mutation == 'missing_review':
+        row.pop('program_first_ai_review')
+    elif mutation == 'wrong_status':
+        row['program_first_ai_review']['status'] = 'REPAIR_REQUIRED'
+    elif mutation == 'string_flag':
+        row['awaiting_spec_clarification'] = 'true'
+    write(source, solve)
+    cp, report = cli(tmp_path, consumer, [rec])
+    assert cp.returncode == (0 if mutation == 'valid' else 1), (cp.stdout, cp.stderr)
+    assert report['verdict'] == ('VALID_UNMEASURED' if mutation == 'valid' else 'FAIL')
+    assert report['benchmark_complete'] is report['scorable'] is False
+    assert report.get('n_exempt', 0) == report.get('n_absorbed', 0) == 0
+
+
+@pytest.mark.parametrize('consumer', CONSUMERS)
 @pytest.mark.parametrize('mutation', [
     'missing_evidence', 'missing_source', 'missing_acceptance', 'wrong_fragment',
     'wrong_bench', 'wrong_id', 'bad_status', 'blind_pass', 'ambiguous_blind',

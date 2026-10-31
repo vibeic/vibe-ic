@@ -423,11 +423,18 @@ def operational_records(records: List[Dict[str, Any]],
                                  for k in _PHASE_KEYS),
                          "entry defect requires worker ERROR, no candidate and unmeasured phases")
             else:
+                review = row.get("program_first_ai_review")
+                source_question_pending = (
+                    row.get("awaiting_spec_clarification") is True
+                    and isinstance(review, dict)
+                    and review.get("status") == "SPEC_CLARIFICATION_REQUIRED"
+                    and review.get("semantic_verdict") == "NEEDS_CLARIFICATION")
                 _require(row.get("worker_status") != "ERROR"
                          and not row.get("worker_error")
                          and ((row.get("candidate_origin") in {"PROGRAM", "AI_BACKUP", "AI_REPAIR"}
                                and row.get("candidate_ready") is True
-                               and row.get("awaiting_ai_review") is True)
+                               and (row.get("awaiting_ai_review") is True
+                                    or source_question_pending))
                               or (row.get("candidate_origin") == "AI_BACKUP_PENDING"
                                   and row.get("candidate_ready") is False
                                   and row.get("awaiting_ai_backup") is True)),
