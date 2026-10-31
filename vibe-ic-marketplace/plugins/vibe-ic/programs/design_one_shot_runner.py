@@ -28428,7 +28428,9 @@ def main() -> int:
          "skip_analog": args.skip_analog, "entry_step": args.entry_step,
          "exit_step": args.exit_step, "force_rtl_regen": args.force_rtl_regen,
          "dry_run": args.dry_run,
-         "lec_max_completed_rungs": args.lec_max_completed_rungs})
+         "lec_max_completed_rungs": args.lec_max_completed_rungs},
+        writable_outputs=(_pl.sim_full_stack_dir(project),)
+        if not args.dry_run and _step_requested("4") else ())
     if not _canonical.admitted:
         print(f"REFUSED: canonical Phase-2 admission: {_canonical.reason} "
               f"({_canonical.detail})", file=sys.stderr)
