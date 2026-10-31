@@ -485,12 +485,23 @@ def _delivered_object_families(text: str) -> list[str]:
 
 def _positive_delivery_prose(text: str) -> str:
     """Mask denied delivery clauses without changing positive-source offsets."""
+    metadata = re.compile(
+        r"^[ \t]*_IC:[ \t]*\*\*[^*\n]+\*\*[ \t]*•[ \t]*"
+        r"Class:[ \t]*`[^`\n]+`[ \t]*•[ \t]*"
+        r"Source-of-truth:[ \t]*`[^`\n]+`_[ \t]*$|"
+        r"^[ \t]*(?:class_path:[ \t]*[\w.-]+|ic:[ \t]*false)[ \t]*$",
+        re.I | re.M)
+    text = metadata.sub(lambda match: " " * len(match.group()), text)
+    text = re.sub(
+        r"\n[ \t]+(?=(?:is|are|was|were)\s+(?:not|never)\s+"
+        r"(?:required|needed|requested|mandatory|necessary|specified)\b)",
+        lambda match: " " * len(match.group()), text, flags=re.I)
     boundary = re.compile(
         r"[.;!?\n。；！？，]|\b(?:but|however)\b|"
         r"(?:\band\s+|,\s*)(?=(?:do\s+not|don['’]t|never|no\s+need|"
         r"deliver|produce|generate|provide|ship|output|supply)\b)", re.I)
     physical = re.compile(
-        r"\b(?:die|chip|hard[- ]?macro|gdsii?|lef|liberty|tape[- ]?out|"
+        r"\b(?:die|chip|ic|integrated\s+circuit|hard[- ]?macro|gdsii?|lef|liberty|tape[- ]?out|"
         r"fabricat\w*|manufactur\w*|packag\w*|foundry|layout)\b|"
         r"晶片|芯片|積體電路|裸晶|硬巨集|硬宏|版圖|佈局|布局|投片|製造|封裝", re.I)
     denied_prefix = re.compile(
@@ -499,7 +510,7 @@ def _positive_delivery_prose(text: str) -> str:
         r"(?:請)?(?:不要|不需要|不需|不用|不必|無需|毋須|勿|不得))", re.I)
     denied_suffix = re.compile(
         r"\b(?:is|are|was|were)\s+(?:not|never)\s+"
-        r"(?:required|needed|requested|mandatory|necessary)\b|"
+        r"(?:required|needed|requested|mandatory|necessary|specified)\b|"
         r"(?:並非|不是)(?:必要|需求)|(?:不需要|無需)(?:交付|提供|產出)", re.I)
     pieces = []
     start = 0

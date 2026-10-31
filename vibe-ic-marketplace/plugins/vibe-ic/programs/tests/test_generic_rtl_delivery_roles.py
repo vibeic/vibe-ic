@@ -183,3 +183,72 @@ def test_a_denied_artifact_cannot_hide_an_independent_positive_delivery(prompt, 
     assert resolved['ok'] is True
     assert resolved['route_family'] == family
     assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is False
+
+
+def _source_scope_request(tmp_path, monkeypatch, text):
+    from test_flow109_rtl_scope import _request
+    args = _request(tmp_path, monkeypatch)
+    context = tmp_path / 'input/docs/context.md'
+    context.parent.mkdir(parents=True, exist_ok=True)
+    context.write_text(text)
+    return args, context
+
+
+_NATIVE_HEADER = '_IC: **sample**  •  Class: `any-ic`  •  Source-of-truth: `L1_DATASHEET.json`_'
+
+
+@pytest.mark.parametrize('context', [
+    pytest.param(_NATIVE_HEADER, id='renderer-identity'),
+    pytest.param(_NATIVE_HEADER + '\n- **design_scope**: Existing bounded RTL simulation carrier; physical IC implementation is not specified by these source files.', id='renderer-unspecified'),
+    pytest.param('Physical IC implementation is not specified by these source files.', id='unspecified-implementation'),
+    pytest.param('Physical IC implementation\n    is not specified by these source files.', id='wrapped-unspecified'),
+    pytest.param('class_path: any-ic', id='native-class-identifier'),
+    pytest.param('ic: false', id='native-negative-feature'),
+    pytest.param('class_path: any-ic\nmetadata:\n  features:\n    ic: false\nfacts:\n- path: L1.design_scope\n  value: Existing bounded RTL simulation carrier; physical IC implementation\n    is not specified by these source files.', id='native-folded-fact'),
+])
+def test_native_input_identity_and_unspecified_implementation_are_not_delivery(context, tmp_path, monkeypatch):
+    import flow109
+    args, source = _source_scope_request(tmp_path, monkeypatch, context)
+    before = source.read_bytes()
+    try:
+        flow109.prepare_front_door(args, tmp_path)
+        issuance = 'ISSUED'
+    except flow109.Flow109Error as exc:
+        issuance = exc.code
+    assert issuance == 'ISSUED'
+    requirements = route.prompt_delivery_requirements(context)
+    assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is True
+    assert requirements['route_family'] is None
+    assert requirements['minimum_target'] is None
+    assert flow109.active_rtl_scope(tmp_path)['project'] == str(tmp_path.resolve())
+    assert source.read_bytes() == before
+
+
+@pytest.mark.parametrize('physical_request,family', [
+    pytest.param('Deliver GDS.', 'DIE', id='later-gds'),
+    pytest.param('Design a complete chip.', 'DIE', id='later-chip'),
+    pytest.param('Deliver a hard macro.', 'HARDMACRO', id='later-hardmacro'),
+    pytest.param('The chip is for tapeout.', 'DIE', id='later-tapeout'),
+    pytest.param('Deliver LEF and Liberty views.', 'HARDMACRO', id='later-physical-views'),
+])
+@pytest.mark.parametrize('position', ['before', 'after'])
+def test_positive_physical_request_survives_native_metadata_and_absence(physical_request, family, position, tmp_path, monkeypatch):
+    context = _NATIVE_HEADER + '\nPhysical IC implementation is not specified by the reference source.'
+    prompt = physical_request + '\n' + context if position == 'before' else context + '\n' + physical_request
+    requirements = route.prompt_delivery_requirements(prompt)
+    resolved = route.resolve_prompt_delivery_target(requirements, None)
+    assert resolved['ok'] is True
+    assert resolved['route_family'] == family
+    import flow109
+    args, source = _source_scope_request(tmp_path, monkeypatch, prompt)
+    before = source.read_bytes()
+    with pytest.raises(flow109.Flow109Error, match='FLOW109_RTL_SCOPE_CONFLICT'):
+        flow109.prepare_front_door(args, tmp_path)
+    assert source.read_bytes() == before
+
+
+def test_native_false_feature_does_not_override_a_physical_request():
+    requirements = route.prompt_delivery_requirements('class_path: any-ic\nic: false\nProduce GDS.')
+    assert route.resolve_prompt_delivery_target(requirements, None)['route_family'] == 'DIE'
+    assert requirements['minimum_target'] == 'gds'
+    assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is False
