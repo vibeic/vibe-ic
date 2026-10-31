@@ -49,6 +49,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from dataclasses import asdict
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -68,6 +69,156 @@ def _solve(exit_step="2", ran=None, not_attempted=None, **extra):
                "not_attempted": dict(not_attempted or {})}}}
     row.update(extra)
     return row
+
+
+@pytest.mark.parametrize("status,expected", [("PASS", "ELIGIBLE"),
+    ("FAIL", "INELIGIBLE"), ("NOT_MEASURED", "NOT_MEASURED")])
+@pytest.mark.parametrize("site,exit_step", [("rtl_validate", "2"), ("sim", "4")])
+def test_actual_producer_ownership_scopes_results_without_display_aliases(tmp_path, status, expected, site, exit_step):
+    import design_one_shot_runner as runner
+    import flow_phase_attribution as attribution
+    row = runner.StepResult("arbitrary_consumer_name", status, reason_class="tool_absent")
+    (tmp_path / "phase2/stage1/rtl").mkdir(parents=True)
+    (tmp_path / "phase2/stage1/rtl/cell.v").write_text("module cell; endmodule\n")
+    bound = runner._required_site_row(tmp_path, site, row)
+    report = {"steps": [asdict(bound)], "required_site_rtl_sha256": bound.extras["required_site"]["rtl_sha256"]}
+    phases = attribution.phase3_verifying(report, None)
+    phases["ran"].update(rtl_gen="PASS", rtl_validate="PASS")
+    result = {"exit": exit_step, "phases": {"phase3_verifying": phases}}
+    ledger = BD._required_gate_ledger(result)
+    assert ledger["eligibility"] == expected, ledger
+    assert ledger["in_scope"][site] == status
+    assert ledger["unscoped"]["arbitrary_consumer_name"] == status
+
+
+def test_absent_ownership_does_not_invent_display_aliases():
+    row = _solve(exit_step="4", ran={"rtl_gen": "PASS", "rtl_lint_tool": "PASS",
+                                     "reference_tb": "PASS"})
+    ledger = BD._required_gate_ledger(row)
+    assert ledger["eligibility"] == "NOT_MEASURED"
+    assert ledger["unmeasured_required"] == ["rtl_validate", "sim"]
+
+
+def test_recorded_failure_cannot_be_laundered_by_pass_in_ownership_copy():
+    row = _solve(ran={"rtl_gen": "PASS", "named_check": "FAIL"})
+    row["phases"]["phase3_verifying"]["required_site_results"] = [{
+        "result_name": "named_check", "status": "PASS", "ownership": {
+            "runner": "design_one_shot_runner", "site": "rtl_validate", "flow_steps": ["2", "3"], "rtl_sha256": "a" * 64}}]
+    row["phases"]["phase3_verifying"]["required_site_rtl_sha256"] = "a" * 64
+    ledger = BD._required_gate_ledger(row)
+    assert ledger["eligibility"] == "INELIGIBLE"
+    assert ledger["failed_required"] == ["rtl_validate"]
+
+
+@pytest.mark.parametrize("tamper", ["runner", "site", "flow_steps", "status", "name", "list",
+                                   "site_list", "name_list", "status_list"])
+def test_malformed_ownership_never_hides_an_existing_in_scope_failure(tamper):
+    row = _solve(ran={"rtl_gen": "PASS", "rtl_validate": "FAIL", "named_check": "PASS"})
+    proof = {"result_name": "named_check", "status": "PASS", "ownership": {
+        "runner": "design_one_shot_runner", "site": "rtl_validate", "flow_steps": ["2", "3"], "rtl_sha256": "a" * 64}}
+    row["phases"]["phase3_verifying"]["required_site_rtl_sha256"] = "a" * 64
+    if tamper in {"runner", "site", "flow_steps"}:
+        proof["ownership"][tamper] = "wrong"
+    elif tamper == "status": proof["status"] = "UNKNOWN"
+    elif tamper == "name": proof["result_name"] = "absent"
+    elif tamper == "site_list": proof["ownership"]["site"] = []
+    elif tamper == "name_list": proof["result_name"] = []
+    elif tamper == "status_list": proof["status"] = []
+    row["phases"]["phase3_verifying"]["required_site_results"] = {} if tamper == "list" else [proof]
+    ledger = BD._required_gate_ledger(row)
+    assert ledger["eligibility"] == "INELIGIBLE", ledger
+    assert ledger["failed_required"] == ["rtl_validate"]
+    assert "invalid required-site evidence" in ledger["unmeasured_required"]
+
+
+def test_out_of_window_owned_failure_is_visible_and_retry_failure_is_not_erased(tmp_path):
+    import design_one_shot_runner as runner
+    import flow_phase_attribution as attribution
+    (tmp_path / "phase2/stage1/rtl").mkdir(parents=True)
+    (tmp_path / "phase2/stage1/rtl/cell.v").write_text("module cell; endmodule\n")
+    rows = [asdict(runner._required_site_row(tmp_path, "sim", runner.StepResult("check", status)))
+            for status in ["FAIL", "PASS"]]
+    phases = attribution.phase3_verifying({"steps": rows,
+        "required_site_rtl_sha256": rows[-1]["extras"]["required_site"]["rtl_sha256"]}, None)
+    phases["ran"].update(rtl_gen="PASS", rtl_validate="PASS")
+    result = {"exit": "2", "phases": {"phase3_verifying": phases}}
+    short = BD._required_gate_ledger(result)
+    assert short["eligibility"] == "ELIGIBLE", short
+    assert short["out_of_scope"]["sim"] == "FAIL"
+    result["exit"] = "4"
+    full = BD._required_gate_ledger(result)
+    assert full["eligibility"] == "INELIGIBLE", full
+    assert full["failed_required"] == ["sim"]
+
+
+def test_repaired_candidate_does_not_inherit_failed_gate_on_different_bytes(tmp_path):
+    import design_one_shot_runner as runner
+    import flow_phase_attribution as attribution
+    rtl = tmp_path / "phase2/stage1/rtl/cell.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module cell; wire x=1'b0; endmodule\n")
+    old = asdict(runner._required_site_row(tmp_path, "sim", runner.StepResult("check", "FAIL")))
+    rtl.write_text("module cell; wire x=1'b1; endmodule\n")
+    new = asdict(runner._required_site_row(tmp_path, "sim", runner.StepResult("check", "PASS")))
+    phases = attribution.phase3_verifying({"steps": [old, new],
+        "required_site_rtl_sha256": new["extras"]["required_site"]["rtl_sha256"]}, None)
+    phases["ran"].update(rtl_gen="PASS", rtl_validate="PASS")
+    ledger = BD._required_gate_ledger({"exit": "4", "phases": {"phase3_verifying": phases}})
+    assert ledger["eligibility"] == "ELIGIBLE", ledger
+    assert phases["superseded_required_site_results"] == [{"result_name": "check", "status": "FAIL", "ownership": old["extras"]["required_site"]}]
+
+
+@pytest.mark.parametrize("prior", ["unrelated", "same_name", "malformed"])
+def test_superseded_record_never_unbinds_current_raw_failure(tmp_path, prior):
+    import design_one_shot_runner as runner
+    import flow_phase_attribution as attribution
+    rtl = tmp_path / "phase2/stage1/rtl/cell.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module cell; wire x=1'b0; endmodule\n")
+    name = "check" if prior == "same_name" else "unrelated_check"
+    old = asdict(runner._required_site_row(tmp_path, "sim", runner.StepResult(name, "FAIL")))
+    if prior == "malformed":
+        old["extras"]["required_site"]["runner"] = "unknown_runner"
+    rtl.write_text("module cell; wire x=1'b1; endmodule\n")
+    good = asdict(runner._required_site_row(tmp_path, "rtl_validate", runner.StepResult("check", "PASS")))
+    # Legacy/unannotated observations still occur at existing redispatch sites.
+    # Their current-name FAIL must not disappear behind unrelated old metadata.
+    failed = asdict(runner.StepResult("check", "FAIL"))
+    phases = attribution.phase3_verifying({"steps": [old, good, failed],
+        "required_site_rtl_sha256": good["extras"]["required_site"]["rtl_sha256"]}, None)
+    phases["ran"]["rtl_gen"] = "PASS"
+    assert phases["ran"]["check"] == "FAIL"
+    ledger = BD._required_gate_ledger({"exit": "2", "phases": {"phase3_verifying": phases}})
+    assert ledger["eligibility"] == "INELIGIBLE", ledger
+    assert ledger["failed_required"] == ["rtl_validate"]
+
+
+@pytest.mark.parametrize("tamper", ["runner", "site", "flow_steps", "status", "rtl", "ownership", "list"])
+def test_invalid_superseded_observation_cannot_qualify_current_pass(tmp_path, tamper):
+    import design_one_shot_runner as runner
+    import flow_phase_attribution as attribution
+    rtl = tmp_path / "phase2/stage1/rtl/cell.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module cell; wire x=1'b0; endmodule\n")
+    old = asdict(runner._required_site_row(tmp_path, "sim", runner.StepResult("old_check", "PASS")))
+    rtl.write_text("module cell; wire x=1'b1; endmodule\n")
+    good = asdict(runner._required_site_row(tmp_path, "rtl_validate", runner.StepResult("check", "PASS")))
+    if tamper in {"runner", "site", "flow_steps"}:
+        old["extras"]["required_site"][tamper] = "wrong"
+    elif tamper == "status":
+        old["status"] = "UNKNOWN"
+    elif tamper == "rtl":
+        old["extras"]["required_site"]["rtl_sha256"] = "not-a-digest"
+    elif tamper == "ownership":
+        old["extras"]["required_site"] = []
+    phases = attribution.phase3_verifying({"steps": [old, good],
+        "required_site_rtl_sha256": good["extras"]["required_site"]["rtl_sha256"]}, None)
+    if tamper == "list":
+        phases["superseded_required_site_results"] = {}
+    phases["ran"]["rtl_gen"] = "PASS"
+    ledger = BD._required_gate_ledger({"exit": "2", "phases": {"phase3_verifying": phases}})
+    assert ledger["eligibility"] == "NOT_MEASURED", ledger
+    assert "invalid required-site evidence" in ledger["unmeasured_required"]
 
 
 # ── the scope oracle is the runner's own, not one this fix invented ────────

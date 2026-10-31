@@ -1613,6 +1613,64 @@ def _required_gate_ledger(solve_result: Any) -> dict:
                          "can be placed on the flow")
         return ledger
 
+    # New producer reports bind required results to their actual dispatch
+    # site. Preserve old reports as unknown: never guess display-name aliases.
+    # Keep every occurrence, including an earlier failure in a retry chain.
+    owned = p3.get("required_site_results", [])
+    superseded = p3.get("superseded_required_site_results", [])
+    invalid_ownership = False
+    if not isinstance(owned, list):
+        ledger["why"] = "required-site evidence is malformed"
+        invalid_ownership = True
+        owned = []
+    if not isinstance(superseded, list):
+        ledger["why"] = "superseded required-site evidence is malformed"
+        invalid_ownership = True
+        superseded = []
+    grouped = {}
+    spans = dict(sites)
+    current_rtl = p3.get("required_site_rtl_sha256")
+    for current, observations in ((True, owned), (False, superseded)):
+        for row in observations:
+            binding = row.get("ownership") if isinstance(row, dict) else None
+            site = binding.get("site") if isinstance(binding, dict) else None
+            if (not isinstance(binding, dict)
+                    or binding.get("runner") != "design_one_shot_runner"
+                    or not isinstance(site, str) or site not in spans
+                    or binding.get("flow_steps") != spans[site]
+                    or not isinstance(current_rtl, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", current_rtl)
+                    or not isinstance(binding.get("rtl_sha256"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", binding["rtl_sha256"])
+                    or (binding["rtl_sha256"] == current_rtl) != current
+                    or not isinstance(row.get("result_name"), str)
+                    or row["result_name"] not in recorded
+                    or not isinstance(row.get("status"), str) or row["status"] not in {
+                        "PASS", "FAIL", "NOT_MEASURED", "NOT_APPLICABLE", "PASS_WITH_WAIVERS"}):
+                ledger["why"] = "required-site evidence disagrees with the runner plan or results"
+                invalid_ownership = True
+                continue
+            if not current:
+                continue
+            grouped.setdefault(site, []).append(row["status"])
+            # An old observation never authorizes discarding a failure in
+            # the published current-name result, even for that same name.
+            grouped[site].append(recorded[row["result_name"]])
+    for site, statuses in grouped.items():
+        if site in recorded:
+            statuses.append(recorded[site])
+        if any(status.upper() in _GATE_FAILED for status in statuses):
+            recorded[site] = "FAIL"
+        elif invalid_ownership:
+            recorded[site] = _NOT_MEASURED
+        elif any(status not in {"PASS", "NOT_APPLICABLE", "PASS_WITH_WAIVERS"}
+                 for status in statuses):
+            recorded[site] = _NOT_MEASURED
+        elif "PASS_WITH_WAIVERS" in statuses:
+            recorded[site] = "PASS_WITH_WAIVERS"
+        else:
+            recorded[site] = "PASS" if "PASS" in statuses else "NOT_APPLICABLE"
+
     pruned = _spf.exit_pruned_sites(sites, ledger["declared_exit"])
     if pruned is None:
         ledger["unscoped"] = dict(sorted(recorded.items()))
@@ -1654,6 +1712,8 @@ def _required_gate_ledger(solve_result: Any) -> dict:
         ledger[key] = dict(sorted(ledger[key].items()))
     ledger["failed_required"] = sorted(set(ledger["failed_required"]))
     ledger["unmeasured_required"] = sorted(set(ledger["unmeasured_required"]))
+    if invalid_ownership:
+        ledger["unmeasured_required"].append("invalid required-site evidence")
     if ledger["failed_required"]:
         ledger["eligibility"] = "INELIGIBLE"
     elif ledger["unmeasured_required"]:
