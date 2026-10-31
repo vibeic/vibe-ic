@@ -309,7 +309,7 @@ def _container_image_arg(argv: list[Any]) -> Any | None:
     except ValueError:
         return None
     value_options = {'-v', '-e', '--entrypoint', '--memory', '--memory-swap',
-                     '--network', '--workdir', '--cpus', '--shm-size'}
+                     '--network', '--workdir', '--cpus', '--shm-size', '--user', '-u'}
     while at < len(argv):
         token = argv[at]
         if not isinstance(token, str):

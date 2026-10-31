@@ -38,12 +38,13 @@ def test_run_container_uses_the_image_launch_interface(monkeypatch, entrypoint, 
     (['/dockerstartup/scripts/ui_startup.sh'], ['--skip']),
 ])
 @pytest.mark.parametrize('explicit_entrypoint', [False, True])
+@pytest.mark.parametrize('user_option', [[], ['--user', '1000:1000'], ['-u', '1000:1000']])
 def test_tool_enters_the_selected_images_environment(monkeypatch, entrypoint,
-                                                    prefix, explicit_entrypoint):
+                                                    prefix, explicit_entrypoint, user_option):
     image = 'registry.invalid/tools@sha256:' + 'ab' * 32
     command = ['python3', '-c', 'print("neutral tool")']
     head = ['docker', 'run', '--rm', '--network', 'none',
-            '--memory', '1g', '--memory-swap', '1g', '-v', '/data:/data:ro']
+            '--memory', '1g', '--memory-swap', '1g', '-v', '/data:/data:ro', *user_option]
     argv = ([*head, '--entrypoint', command[0], image, *command[1:]]
             if explicit_entrypoint else [*head, image, '--skip', *command])
     def inspect(args, **kw):
