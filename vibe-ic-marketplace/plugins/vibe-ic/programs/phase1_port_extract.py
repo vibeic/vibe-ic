@@ -442,8 +442,15 @@ def _recover_debug_mux_output_width(text: str, ports: List[Dict[str, Any]]) -> N
     if len(outputs) != 1 or len(inputs) != count + 1 or len(ports) != len(inputs) + 1:
         return
     target = outputs[0]
-    if (target['width'] != 1 or any(p['source'] != 'verilog_code_region' for p in ports)
-            or '[' in target['source_line']):
+    if target['width'] != 1 or any(p['source'] != 'verilog_code_region' for p in ports):
+        return
+    # A source line can contain several declarations. Inspect this output's
+    # own packed range, never a bracket belonging to a neighbouring input.
+    module = _strip_subprograms(next(_MODULE_SPAN.finditer(clean)).group())
+    declarations = [m for m in _PORT_DECL_SPAN.finditer(module)
+                    if m.group(1) == 'output'
+                    and target['name'] in re.split(r'\s*,\s*', m.group(3))]
+    if len(declarations) != 1 or declarations[0].group(2) is not None:
         return
     name = re.escape(target['name'])
     if re.search(r'\bscalar\s+(?:output|result)\b|\b(?:output|result)\b[^.;\n]{0,64}\bscalar\b|'

@@ -88,3 +88,10 @@ def test_table_evidence_cannot_be_borrowed_as_the_buggy_header_shape():
     table = '| Name | Direction | Width |\n|---|---|---|\n| source_0 | input | 16 |\n| source_1 | input | 16 |\n'
     text = request(16, 2).replace('[15:0]', '[31:0]') + table
     assert _widths(text)['result'] == 1
+
+
+def test_compact_header_preserves_the_same_repair_authority():
+    text = request(12, 2)
+    prose, code = text.split('module ', 1)
+    compact = prose + 'module ' + ' '.join(code.splitlines())
+    assert _widths(compact)['result'] == 12
