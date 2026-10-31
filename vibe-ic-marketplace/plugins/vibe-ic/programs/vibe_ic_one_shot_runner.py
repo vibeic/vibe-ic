@@ -1114,9 +1114,10 @@ def _complete_canonical51_constraints(project: Path, *, read_only: bool = False)
         return {'verdict': 'PASS', 'producer_reused': True,
                 'detail': 'current canonical handoff and consumed constraint readset',
                 'handoff': delivery_ref,
-                'delivery': receipt, 'delivery_receipt': receipt_path,
-                'producer_source': {'path': producer_rel,
-                                    'sha256': receipt['producer_source_sha256']},
+                **({'delivery': receipt, 'delivery_receipt': receipt_path,
+                    'producer_source': {'path': producer_rel,
+                                        'sha256': receipt['producer_source_sha256']}}
+                   if read_only else {}),
                 'source_identity': source_identity,
                 'sdc_record': {'path': str(sdc_path.relative_to(project)),
                                'sha256': sdc_ref['sha256'],
