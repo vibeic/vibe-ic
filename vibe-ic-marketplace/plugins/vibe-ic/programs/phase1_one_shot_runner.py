@@ -2147,8 +2147,22 @@ def main() -> int:
     # and on every path, because 0.5ic `blocks_on: []` and takes no input from
     # D1: which delivery route a design is on is a property of the DESIGN, not
     # of its documents.
-    print("[phase1] step 0.5ic — submission template + tape-out declaration ...")
-    rc_route = _run_step_0_5ic(project, pdk=_pdk_of_this_run(extras))
+    import flow109
+    rtl_scope = flow109.active_rtl_scope(project)
+    if rtl_scope is not None:
+        # Applicability comes from this parent's source-bound RTL request;
+        # neither a fake owner declaration nor a template absence is needed.
+        print("[phase1] step 0.5ic — NOT_APPLICABLE: source-bound RTL request")
+        scope_record = {"name": "submission_template", "status": "NOT_APPLICABLE",
+                        "reason": "bounded RTL request has no physical submission obligation",
+                        "delivery_scope": rtl_scope}
+        scope_path = project / "reports/phase1/submission_scope.json"
+        scope_path.parent.mkdir(parents=True, exist_ok=True)
+        scope_path.write_text(json.dumps(scope_record, indent=2) + "\n")
+        rc_route = 0
+    else:
+        print("[phase1] step 0.5ic — submission template + tape-out declaration ...")
+        rc_route = _run_step_0_5ic(project, pdk=_pdk_of_this_run(extras))
     if rc_route == 2:
         # The same entry resumes from fresh lookup/source on the next call.
         # Do not run D1 or dependent answer/declaration producers meanwhile.
@@ -2284,7 +2298,7 @@ def main() -> int:
         # A, the vendor-document front door) without a steps tree.
         summary["steps_view"] = _pl.emit_steps_view(
             project, PROGRAMS_DIR, runner="phase1_one_shot_runner")
-        summary["step_0_5ic"] = "ran" if rc_route == 0 else "FAILED to run"
+        summary["step_0_5ic"] = "NOT_APPLICABLE" if rtl_scope is not None else "ran" if rc_route == 0 else "FAILED to run"
         # R-0915-160 — PASS 1 NAMES THE SIDECAR IT WROTE, so the second pass can carry the name
         # instead of re-deriving it from an ordering that is guaranteed backwards.
         _name_the_sidecar_this_pass_wrote(project, summary, d1_ran=not refused)
@@ -2370,7 +2384,7 @@ def main() -> int:
                   "source": "extraction, sufficiency and route without expert track"},
         "second_track": ("not run — D1 was REFUSED" if _refused else
                          _expert_track_summary(project)),
-        "step_0_5ic": "ran" if rc_route == 0 else "FAILED to run",
+        "step_0_5ic": "NOT_APPLICABLE" if rtl_scope is not None else "ran" if rc_route == 0 else "FAILED to run",
         "sufficiency": _suff,
         "extraction_gap": _gap,
     }

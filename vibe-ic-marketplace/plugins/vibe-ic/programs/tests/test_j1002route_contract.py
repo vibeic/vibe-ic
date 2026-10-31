@@ -750,3 +750,51 @@ def test_reverse_mutation_of_receipt_is_rejected():
     mutated = dict(receipt)
     mutated["verify_through"] = "1"
     assert "ROUTE_RECEIPT_DIGEST_MISMATCH" in rd.validate_route_receipt(mutated)
+
+
+@pytest.mark.parametrize('prompt,affected', [
+    ('Debug the supplied RTL; return corrected Verilog.', False),
+    ('Implement the RTL module and deliver its LEF and Liberty views.', True),
+    ('請設計晶片並交付可投片的實體版圖，完成製造與封裝。', True),
+])
+def test_issued_r5_route_replays_only_when_source_requirements_are_unchanged(
+        tmp_path, monkeypatch, prompt, affected):
+    import hashlib
+    run = tmp_path / 'run'
+    project = run / 'projects/neutral_delivery'
+    staged = bio.stage('cvdp', {'id': 'neutral_delivery',
+                              'record': {'input': {'prompt': prompt, 'context': {}}}}, project)
+    proposal = tnr.route_task(prompt)
+    current = tnr.prompt_delivery_requirements(prompt)
+    legacy = dict(current, status='UNSPECIFIED', route_family=None,
+                  minimum_target=None, evidence=[], reasons=[])
+    legacy['requirements_sha256'] = hashlib.sha256(json.dumps(
+        {key: value for key, value in legacy.items() if key != 'requirements_sha256'},
+        sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    with monkeypatch.context() as old:
+        old.setattr(tnr, 'prompt_delivery_requirements', lambda _text: legacy)
+        task = bd._make_ai_route_task('neutral_delivery', project, staged, proposal, run, 'cvdp')
+    response = {
+        'schema': bd._AI_ROUTE_SCHEMA, 'id': task['id'], 'task_sha256': task['task_sha256'],
+        'prompt_sha256': task['prompt_sha256'],
+        'source_sha256': task['public_original_input']['source_sha256'],
+        'routing_contract_sha256': task['routing_contract_sha256'],
+        'disposition': 'CONFIRM', 'ai_nature': proposal['entry_nature'],
+        'author': {'kind': 'AI', 'model': 'neutral-source-review'},
+        'blind': {'oracle_accessed': False},
+        'rationale': 'The visible source asks for this ordinary design task and its declared outputs.',
+        'prompt_evidence': [{'excerpt': prompt, 'supports': 'This source states the requested ordinary design task.'}],
+        'semantic_decision': {'nature': proposal['entry_nature'], 'delivery_target': 'rtl',
+                              'semantic_payload_sha256': task['semantic_payload_sha256']},
+    }
+    path = Path(task['response_path'])
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(response))
+    assert task['routing_contract_sha256'] == bd._route_contract_sha256()
+    decision, reasons = bd._validate_ai_route(task, run)
+    if affected:
+        assert decision is None
+        assert any('prompt delivery requirements changed after issue' in reason for reason in reasons)
+    else:
+        assert current == legacy
+        assert decision is not None, reasons

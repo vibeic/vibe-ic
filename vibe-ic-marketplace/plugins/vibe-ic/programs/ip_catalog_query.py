@@ -360,6 +360,10 @@ def load_project_facts(project: Path) -> Dict[str, Any]:
     Plus a string concatenation of all doc text under key "_full_text"
     for substring matching against matches_when patterns.
     """
+    import _path_layout as layout
+    if layout.rtl_input(project) == "original":
+        return {"_full_text": "\n".join(p.read_text() for p in layout.original_input_sources(project)),
+                "_layer_text": {}}
     facts: Dict[str, Any] = {}
     full_text_parts: List[str] = []
     # v-orch 4a — per-layer text so matches_when predicates keyed on a

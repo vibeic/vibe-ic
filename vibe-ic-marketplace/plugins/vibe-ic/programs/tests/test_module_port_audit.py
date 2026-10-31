@@ -832,5 +832,30 @@ class TestStripComments:
         assert '"hello // world"' in out
 
 
+@pytest.mark.parametrize("preserve_literals", [False, True])
+def test_statement_lines_survive_multiline_boundaries_comments_and_literals(preserve_literals):
+    body = '''\n// semicolon ; begin does not split code
+generate
+begin :
+  selected
+    neutral_leaf first(.a("begin;\\nend"));
+end : selected
+endgenerate
+/* comment\n spans lines; */
+neutral_leaf second(.a({left, right}));
+'''
+    statements = mpa._collect_statements(body, preserve_literals=preserve_literals)
+    assert len(statements) == 2
+    for (text, line), name in zip(statements, ("first", "second")):
+        expected = body.index("neutral_leaf " + name)
+        assert line == body.count("\n", 0, expected)
+        assert mpa.lexical_mask(text).lstrip().startswith("neutral_leaf " + name)
+    assert ('"begin;\\nend"' in statements[0][0]) is preserve_literals
+    instances = mpa.parse_instantiations(body, "neutral.sv", 7)
+    assert [(instance.instance_name, instance.line) for instance in instances] == [
+        (name, 7 + body.count("\n", 0, body.index("neutral_leaf " + name)))
+        for name in ("first", "second")]
+
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

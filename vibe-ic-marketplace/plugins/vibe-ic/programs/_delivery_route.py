@@ -48,13 +48,22 @@ def _disclose_undeclared(reason: str, doc: object) -> str:
             f"citation={attestation['citation']!r}")
 
 
-def admit(project: Path, route: Optional[str] = None) -> Optional[str]:
+def admit(project: Path, route: Optional[str] = None, *, allow_rtl_scope: bool = True) -> Optional[str]:
     """Return a refusal, or write/accept the owner's route before Phase 1.
 
     The raw file is the source for new runs. A resumed run with only an
     owner-attested generated declaration is also accepted, as Phase 3 accepts
     it; a present but unanswered raw file cannot be rescued by that fallback.
     """
+    if allow_rtl_scope:
+        import flow109
+        try:
+            scope = flow109.active_rtl_scope(project)
+        except flow109.Flow109Error as exc:
+            return str(exc)
+        if scope is not None:
+            return ("FLOW109_RTL_SCOPE_CONFLICT: physical IC route requested"
+                    if route == "ic" else None)
     raw_rel = _st.DESIGN_ANSWERS_REL
     raw_path = project / raw_rel
     declaration = project / _td.DECLARATION_REL
@@ -113,6 +122,8 @@ def admit(project: Path, route: Optional[str] = None) -> Optional[str]:
 
 
 def refusal_message(reason: str) -> str:
+    if reason.startswith("FLOW109_"):
+        return "REFUSED: " + reason
     return ("REFUSED: DELIVERY_ROUTE_UNDECLARED: IC path or IP path? "
             f"{reason}. Fill {_st.DESIGN_ANSWERS_REL} fields "
             "answers.deliverable (DIE or HARDMACRO) and "
@@ -120,8 +131,14 @@ def refusal_message(reason: str) -> str:
             "the prompt sentence or the person's reply), or pass --route ic|ip.")
 
 
-def report_label(project: Path) -> dict:
-    """Route labels for the run's top-level report, from the same owner read."""
+def report_label(project: Path, *, allow_rtl_scope: bool = True) -> dict:
+    """Label the current RTL invocation or the owner's physical deliverable."""
+    if allow_rtl_scope:
+        import flow109
+        scope = flow109.active_rtl_scope(project)
+        if scope is not None:
+            return {"delivery_route": "RTL", "deliverable": "RTL",
+                    "delivery_scope": scope}
     rel = (_st.DESIGN_ANSWERS_REL if (project / _st.DESIGN_ANSWERS_REL).exists()
            else _td.DECLARATION_REL)
     _, delivery = _td.read_owner_delivery(project, rel)

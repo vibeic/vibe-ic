@@ -31,7 +31,7 @@ FLOW = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 ROUTE_RECEIPT_SCHEMA = "vibeic.route_decision_receipt.v1"
 # Semantic derivation changes must invalidate the existing routing-contract
 # digest even when the structured dependency edges themselves are unchanged.
-ROUTE_DERIVATION_RULES_VERSION = "2-original-rtl-input"
+ROUTE_DERIVATION_RULES_VERSION = "3-bounded-original-rtl-input"
 SEMANTIC_PAYLOAD_SCHEMA = "vibeic.route_semantic_payload.v1"
 COORDINATOR_BINDING_SCHEMA = "vibeic.route_coordinator_binding.v1"
 D1_ACTIVATION_SCHEMA = "vibeic.route_d1_activation.v1"
@@ -337,10 +337,14 @@ def _derive_route(*, nature: str, requested_evidence: str, delivery_target: str,
     selected = _contract_dag(dag, "structured")
     joined = _route_join((entry, evidence_min, target_min), dag=selected)
     input_contract = "structured"
-    if (nature == "spec_generation" and delivery_target == "rtl"
+    # Source authority follows the requested consumer closure. Completion and
+    # modification consume the supplied original request just as generation
+    # does; their task nature and authored interface remain unchanged. A
+    # debug/simulation entry or a deeper proof still consumes structured docs.
+    if (delivery_target == "rtl" and entry in {"D1", "1", "2"}
             and joined["step"] in {"1", "2"}):
         input_contract = "original"
-        entry = "1"
+        entry = "1" if entry == "D1" else entry
         selected = _contract_dag(dag, input_contract)
         joined = _route_join((entry, evidence_min, target_min), dag=selected)
     return {"entry_step": entry, "answer_step": answer,

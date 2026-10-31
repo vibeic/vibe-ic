@@ -99,19 +99,34 @@ def test_original_is_only_an_explicit_bounded_rtl_contract(tmp_path, scope):
         pl.select_rtl_input(root, "original", *scope)
 
 
-@pytest.mark.parametrize("supplied", ["embedded", "context", "vendor"])
-def test_supplied_rtl_cannot_be_renamed_spec_generation(tmp_path, supplied):
+@pytest.mark.parametrize("supplied", ["embedded", "context", "context_changed", "vendor"])
+def test_original_authority_keeps_supplied_rtl_bound_to_the_source(tmp_path, supplied):
     root = project(tmp_path, {"rtl/unit.sv": "module unit(input a,output y);assign y=a;endmodule"}
-                   if supplied == "context" else None)
-    if supplied == "embedded":
-        (root / "input/phase1_prompt.md").write_text(
-            "Fix this module.\n```verilog\nmodule unit(input a,output y);\nendmodule\n```\n")
+                   if supplied.startswith("context") else None,
+                   prompt=("Complete this module.\n```verilog\nmodule unit(input a,output y);\nendmodule\n```\n"
+                           if supplied == "embedded" else PROMPT))
+    if supplied == "context_changed":
+        (root / "input/rtl/unit.sv").write_text("module unit;endmodule\n")
     elif supplied == "vendor":
         source = root / "input/vendor_rtl/unit.sv"
         source.parent.mkdir(parents=True)
         source.write_text("module unit;endmodule\n")
-    with pytest.raises(ValueError, match="supplied RTL"):
+    if supplied in {"context_changed", "vendor"}:
+        with pytest.raises(ValueError, match="unbound supplied RTL"):
+            pl.select_rtl_input(root, "original", "1", "2")
+    else:
         pl.select_rtl_input(root, "original", "1", "2")
+        gathered = runner._gather_phase1_plain_spec_text(root)
+        if supplied == "embedded":
+            assert "module unit(input a,output y);" in gathered.text
+        else:
+            _, handoff = runner._stage_author_knowledge_digests(root)
+            context = handoff["read_context_from"]
+            assert len(context) == 1
+            assert Path(context[0]["path"]).read_bytes() == (
+                root / "input/rtl/unit.sv").read_bytes()
+            assert context[0]["sha256"] == hashlib.sha256(
+                Path(context[0]["path"]).read_bytes()).hexdigest()
     pl.select_rtl_input(root, "structured")
     assert pl.rtl_input(root) == "structured"
 
@@ -168,11 +183,14 @@ def test_original_direct_step2_runs_native_hygiene_without_future_synthesis(tmp_
     assert not (root / "phase2/stage2/synth/yosys.log").exists()
     # Consume the real ordinary report, including its actual entry sentinel.
     # No AI review, D1 PASS or site-status fixture is authored by this test.
-    program = Path(runner.__file__).parent / "vibe_ic_one_shot_runner.py"
+    # This is bounded native-consumer evidence, not D09-to-D11 acceptance.
+    from _route_fixture import stage_owner_route
+    stage_owner_route(root, "ip")
+    program = Path(runner.__file__)
     invocation = subprocess.run([
         sys.executable, str(program), str(root), "--entry-step", "2", "--exit-step", "2",
-        "--rtl-input", "original", "--route", "ip", "--top-name", "unit",
-        "--skip-analog", "--skip-hardware", "--skip-phase3", "--no-dashboard",
+        "--rtl-input", "original", "--top-name", "unit",
+        "--skip-analog", "--skip-hardware", "--skip-phase3",
     ], capture_output=True, text=True)
     report_path = root / "reports/orchestrator/phase2_one_shot.json"
     assert report_path.is_file(), invocation.stderr
@@ -195,9 +213,9 @@ def test_original_direct_step2_runs_native_hygiene_without_future_synthesis(tmp_
 
 @pytest.mark.parametrize("prose,allowed", [
     ("Write a new module lane_cell with input d and output q. The supplied module is context.", True),
-    ("Fix this module.", False),
-    ("Optimize this module for area.", False),
-    ("Complete this module.", False),
+    ("Fix this module.", True),
+    ("Optimize this module for area.", True),
+    ("Complete this module.", True),
 ])
 def test_embedded_context_uses_existing_task_nature(tmp_path, prose, allowed):
     prompt = prose + "\n```verilog\nmodule wrapper(input d,output q);\nassign q=d;\nendmodule\n```\n"
@@ -208,3 +226,108 @@ def test_embedded_context_uses_existing_task_nature(tmp_path, prose, allowed):
     else:
         with pytest.raises(ValueError, match="supplied RTL"):
             pl.select_rtl_input(root, "original", "1", "2")
+
+
+def test_original_catalog_consumer_reads_the_selected_complete_source(tmp_path):
+    import catalog_synth_safe_params_check as catalog
+    root = project(tmp_path, {"requirements.txt": "No catalog core is reused.\n"},
+                   prompt="Module name: neutral_unit\nInput a drives output q.\n")
+    pl.select_rtl_input(root, "original", "1", "2")
+    rc, result = catalog.run(root, None)
+    assert (rc, result["verdict"]) == (0, "NOT_APPLICABLE"), result
+    assert result["declaration"]["documents"] == [
+        str(p.relative_to(root)) for p in pl.original_input_sources(root)]
+    pl.select_rtl_input(root, "structured")
+    rc, reverse = catalog.run(root, None)
+    assert (rc, reverse["verdict"]) == (1, "NOT_MEASURED"), reverse
+    assert "declaration missing" in reverse["reason"]
+
+
+def test_original_consumer_projection_preserves_native_rtl_obligations(tmp_path):
+    from _hostpaths import require_repo
+    import execution_backend_gates as gates
+    # Read the shipped artifact; the test does not reconstruct either contract.
+    source = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "flow",
+                          "phase1_phase2_phase3.yaml")
+    root = project(tmp_path)
+    structured = {str(r["id"]): r for r in fy.load(source)["steps"]}
+    pl.select_rtl_input(root, "original", "1", "2")
+    original = {str(r["id"]): r for r in fy.load(source)["steps"]}
+    commands = gates.required_commands(original["2"])
+    assert any(c.startswith("rtl_hygiene_lint --project . --define SYNTHESIS --severity ERROR")
+               and "--rtl-input original" in c for c in commands)
+    assert any(c.startswith("rom_init_lint ") for c in commands)
+    assert any(c.startswith("crosslayer_rewrite_equivalence_check ") for c in commands)
+    assert not any(c.startswith("slot_pad_budget_check ") for c in commands)
+    assert "--rtl-input original" in gates.required_commands(original["1"])[-1]
+    for step in ("1", "2"):
+        assert sri.input_contract(original[step], "structured") == structured[step]
+    assert original["4"] == structured["4"]
+
+
+def test_original_native_top_cannot_be_replaced_by_a_different_sole_module(tmp_path):
+    root = project(tmp_path, prompt="Module name: requested_unit\nOutput q follows input a.\n")
+    rtl = root / "phase2/stage1/rtl/other_unit.v"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module other_unit(input a,output q);assign q=a;endmodule\n")
+    pl.select_rtl_input(root, "original", "1", "2")
+    assert runner._v661_resolve_dut_module(root, "", None) is None
+
+
+def test_original_ai_fidelity_review_is_still_required(tmp_path):
+    import ai_signed_judgement as judgement
+    root = project(tmp_path, prompt="Module name: neutral_unit\nOutput q follows input a.\n")
+    rtl = root / "phase2/stage1/rtl/neutral_unit.v"
+    rtl.parent.mkdir(parents=True)
+    # Native hygiene cannot decide this semantic error; the author handoff
+    # must still lack acceptance until its evidence-bound review is supplied.
+    rtl.write_text("module neutral_unit(input a,output q);assign q=~a;endmodule\n")
+    (rtl.parent.parent / "fallback_skill.md").write_text("spec-to-rtl\n")
+    pl.select_rtl_input(root, "original", "1", "2")
+    awaiting = judgement.pending(root, ("1",))
+    assert "1" in awaiting and "awaiting_signed_judgement" in awaiting["1"]
+    rows = [{"name": "rtl_gen", "status": "PASS", "detail": "native structure only"}]
+    judgement.demote_runner_rows(rows, awaiting)
+    assert rows[0]["status"] == "NOT_MEASURED"
+
+
+@pytest.mark.parametrize("broken", [False, True])
+@pytest.mark.parametrize("task_nature", ["spec_generation", "completion"])
+def test_original_shipped_gate_consumers_validate_the_actual_rtl(tmp_path, broken, task_nature):
+    if not shutil.which("verilator") or not shutil.which("yosys"):
+        pytest.skip("canonical RTL consumers require native Verilator and Yosys")
+    from _hostpaths import require_repo
+    import flow_compliance_check as compliance
+    import task_nature_route as nature
+    prompt = ("Module name: neutral_unit\nOutput q follows input a.\n"
+              if task_nature == "spec_generation" else
+              "Complete the following Verilog module without changing its interface. "
+              "Output q follows input a.\nmodule neutral_unit(input a,output q);\nendmodule\n")
+    root = project(tmp_path, prompt=prompt)
+    receipt = nature.route_decision_receipt(prompt, nature=task_nature,
+        requested_evidence="lint_validated", delivery_target="rtl")
+    assert receipt["input_contract"] == "original"
+    assert receipt["task_nature"] == task_nature
+    rtl = root / "phase2/stage1/rtl/neutral_unit.sv"
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text("module neutral_unit(input a,output q);\n" +
+                   ("missing_cell u(.a(a),.q(q));\n" if broken else "assign q=a;\n") +
+                   "endmodule\n")
+    pl.select_rtl_input(root, "original", "1", "2")
+    gathered = runner._gather_phase1_plain_spec_text(root)
+    assert gathered.text == prompt
+    source = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "flow",
+                          "phase1_phase2_phase3.yaml")
+    rows = {str(row["id"]): row for row in fy.load(source)["steps"]}
+    for step in ("1", "2"):
+        passed, reasons = compliance._evaluate_gate(root, rows[step]["gate"])
+        assert passed is not broken, (step, reasons)
+    assert not (root / "phase1/generated_docs").exists()
+    report = json.loads((root / "reports/phase2/lint/rtl_hygiene.json").read_text())
+    assert any(finding["severity"] == "ERROR" for finding in report) is broken
+    # Reverting the source selection restores the structured contract. The
+    # same source tree cannot manufacture missing D1/L9 evidence.
+    pl.select_rtl_input(root, "structured")
+    structured = {str(row["id"]): row for row in fy.load(source)["steps"]}
+    admitted = sri.check_one(root, structured["2"], structured, {}, None)
+    assert admitted["verdict"] != "READY", admitted

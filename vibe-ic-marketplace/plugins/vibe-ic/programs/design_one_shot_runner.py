@@ -363,7 +363,8 @@ def _refuse_relocated_copy_in_record(summary: Any, project: Path) -> None:
 
 
 def _write_phase2_report(out: Path, summary: Any, project: Path, *,
-                         invocation_context: Optional[dict] = None) -> None:
+                         invocation_context: Optional[dict] = None,
+                         publish_current: bool = False) -> None:
     """The ONE seam every phase-2 report is written through, so the refusal
     above cannot be bypassed by a second `write_text` added later."""
     _refuse_relocated_copy_in_record(summary, project)
@@ -391,8 +392,50 @@ def _write_phase2_report(out: Path, summary: Any, project: Path, *,
     from benchmark_dispatch import _bind_runner_report
     summary = _bind_runner_report(summary, project, __file__, out.name,
                                   context=invocation_context)
+    current = None
+    if publish_current:
+        # Qualified rows retain their D09 owner report. The ordinary original
+        # engineering continuation instead publishes its current Step-2 owner
+        # at the same path read by collection, attribution and invocation
+        # snapshots. The current publication binds the outer invocation
+        # and points to the child report with its original launch binding.
+        import flow109
+        import flow109_engineering as engineering
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
+        attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+        if (context['resolved_row']['id'] != 'D11'
+                or not engineering.selected_original(project, context)
+                or out != attempt / 'phase2_one_shot.json'
+                or (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink()):
+            raise ValueError('D11_CURRENT_REPORT_PUBLICATION_UNBOUND')
+        current = _pl.report_path(project, 'phase2_one_shot.json')
+        if (any(p.is_symlink() for p in (current, *current.parents))
+                or not current.resolve().is_relative_to(Path(project).resolve())):
+            raise ValueError('D11_CURRENT_REPORT_PATH_UNBOUND')
+    parent_context = None
+    if current is not None:
+        from benchmark_dispatch import _RUNNER_PARENT_CONTEXT_ENV
+        parent_raw = os.environ.get(_RUNNER_PARENT_CONTEXT_ENV)
+        if parent_raw is not None:
+            parent_context = json.loads(parent_raw)
+            # Validate the inherited parent source before publishing either
+            # role. The child keeps its own actual launch binding.
+            _bind_runner_report({}, project, __file__, out.name, context=parent_context)
+            summary['runner_binding']['parent_invocation'] = parent_context
+    raw = json.dumps(summary, indent=2, ensure_ascii=False) + "\n"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
+    _aa.write_text(out, raw)
+    if current is not None:
+        current_summary = summary
+        if parent_context is not None:
+            current_summary = _bind_runner_report(summary, project, __file__, out.name,
+                                                   context=parent_context)
+            current_summary['runner_binding']['owner_report'] = {
+                'path': str(out.relative_to(project)),
+                'sha256': hashlib.sha256(raw.encode('utf-8')).hexdigest()}
+        current.parent.mkdir(parents=True, exist_ok=True)
+        _aa.write_text(current, json.dumps(current_summary, indent=2, ensure_ascii=False) + "\n")
 
 
 def _runner_invocation_context() -> Optional[dict]:
@@ -10046,11 +10089,16 @@ def _v661_resolve_dut_module(project: Path,
     if not defined:
         return None  # no parseable rtl/ — caller keeps legacy behaviour
     defined_set = set(defined)
+    original = _pl.rtl_input(project) == "original"
+    if original:
+        declared = _phase1_declared_module_name(_gather_phase1_plain_spec_text(project).text)
+        if declared:
+            return declared if declared in defined_set else None
     # (a0) ORGANIC #672 — explicit synth-top override (same precedence as
     # step_yosys_synth) wins, but ONLY when it names a real module in rtl/ so we
     # never re-introduce a phantom. A phantom L9.top_module no longer wins over
     # a real phase2_synth_top/synth_top the synth step already honours.
-    synth_override = _v672_synth_top_override(project)
+    synth_override = None if original else _v672_synth_top_override(project)
     if synth_override and synth_override in defined_set:
         return synth_override
     # (a) honour the orchestrator's --top-name when it is a real module.
@@ -10687,6 +10735,7 @@ def step_catalog_synth_safe_params(project: Path) -> StepResult:
         sys.executable,
         str(PROGRAMS_DIR / "catalog_synth_safe_params_check.py"),
         str(project), "--json", str(report),
+        "--rtl-input", _pl.rtl_input(project),
     ], cwd=project, timeout=600)
     detail = (out or err).strip()
     try:
@@ -14332,6 +14381,56 @@ def _step_rtl_hygiene_native(project: Path) -> StepResult:
         if status == "NOT_MEASURED" else "")
 
 
+def _step_d11_original_engineering(project, context, *, pdk_name, bounded_rtl,
+                                   top_name, container):
+    """BLOCKING component checks; qualified D11/full-flow obligations stay unmeasured."""
+    import flow109_engineering as engineering
+    t0 = time.time()
+    rows = []
+    try:
+        before = engineering.subject(project)
+        native = step_rtl_lint_tool(project, pdk_name=pdk_name, bounded_rtl=bounded_rtl,
+                                    top_name=top_name, container=container)
+        native.name = 'rtl_lint_tool'
+        rows.append(native)
+        # Retain the native bytes before the hygiene producer updates its shared report.
+        retained = Path(tempfile.mkdtemp(prefix='original-native-',
+            dir=project / 'reports/phase2/lint'))
+        retained_outputs = []
+        for index, output in enumerate(native.output_files):
+            destination = retained / (str(index) + '-' + Path(output).name)
+            shutil.copyfile(output, destination)
+            retained_outputs.append(str(destination))
+        native.output_files = retained_outputs
+        native_refs = [engineering.reference(project, p) for p in native.output_files]
+        rows.append(step_crosslayer_rewrite_fidelity(project))
+        hygiene = _step_rtl_hygiene_native(project)
+        hygiene.name = 'rtl_hygiene'
+        rows.append(hygiene)
+        from _rtl_include_hub import silicon_rtl_selection
+        out = project / 'reports/phase2/lint/rom_init_lint.json'
+        command = [sys.executable, str(PROGRAMS_DIR / 'rom_init_lint.py'),
+                   *map(str, silicon_rtl_selection(_pl.rtl_dir(project))), '--json', str(out)]
+        result = _pr.run(command, capture_output=True, text=True)
+        rows.append(StepResult('rom_init_lint',
+            {0: 'PASS', 1: 'FAIL'}.get(result.returncode, 'NOT_MEASURED'), time.time() - t0,
+            (result.stdout + result.stderr)[-2000:], [str(out)] if out.is_file() else [],
+            extras={'command': command, 'exit_code': result.returncode},
+            reason_class='execution_error' if result.returncode not in (0, 1) else ''))
+        if [engineering.reference(project, p) for p in native.output_files] != native_refs:
+            raise ValueError('ENGINEERING_NATIVE_OUTPUT_CHANGED')
+        record = engineering.evidence(project, before, rows)
+        status = engineering.consume(project, record, [asdict(row) for row in rows])
+        detail = 'D11_ORIGINAL_ENGINEERING_CHECKS_' + status
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        record, status, detail = {}, 'NOT_MEASURED', str(exc)
+    owner = StepResult('rtl_validate', status, time.time() - t0, detail,
+        extras={'engineering_evidence': record, 'context_sha256': context['context_sha256'],
+                'qualification_status': 'NOT_CLAIMED', 'default_row_status': 'NOT_MEASURED'},
+        reason_class='inconclusive' if status == 'NOT_MEASURED' else '')
+    return rows + [owner]
+
+
 def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
                        bounded_rtl: bool = False,
                        top_name: Optional[str] = None,
@@ -14358,7 +14457,8 @@ def step_rtl_lint_tool(project: Path, *, pdk_name: Optional[str] = None,
         import flow109
         import flow109_metric_acceptance as metrics
         selected = flow109.validate_execution_context(json.loads(Path(raw_context).read_bytes()))
-        if selected.get('resolved_row', {}).get('id') == 'D11':
+        if (selected.get('resolved_row', {}).get('id') == 'D11'
+                and not __import__('flow109_engineering').selected_original(project, selected)):
             t0 = time.time()
             accepted = metrics.accept_d11(project, selected)
             if accepted['status'] in ('PASS', 'FAIL') or not metrics.d11_fresh_request(project, selected):
@@ -28221,7 +28321,9 @@ def main() -> int:
         args.skip_phase3 and str(args.entry_step) != "D1"
         and _lint_scope.is_rtl_only_evidence(exit_step=args.exit_step))
     if (str(args.entry_step) == "2" and str(args.exit_step) == "2"
-            and _lint_contract.selected_mode(project, "2") == "librelane"):
+            and (_lint_contract.selected_mode(project, "2") == "librelane"
+                 or (_pl.rtl_input(project) == "original"
+                     and os.environ.get("VIBEIC_FLOW109_CONTEXT")))):
         import flow109
         raw_context = os.environ.get("VIBEIC_FLOW109_CONTEXT")
         d11_selected = bool(raw_context and json.loads(Path(raw_context).read_bytes())
@@ -28234,18 +28336,27 @@ def main() -> int:
                 print('REFUSED: D11_ATTEMPT_ALREADY_COMPLETED', file=sys.stderr)
                 return 2
             out = attempt / 'phase2_one_shot.json'
-        row = step_rtl_lint_tool(
-            project, pdk_name=args.pdk, bounded_rtl=_bounded_rtl_lint,
-            top_name=args.top_name, container=args.container)
+        import flow109_engineering as engineering
+        engineering_selected = d11_selected and engineering.selected_original(project, context)
+        if engineering_selected:
+            lint_rows = _step_d11_original_engineering(project, context, pdk_name=args.pdk,
+                bounded_rtl=True, top_name=args.top_name, container=args.container)
+            row = lint_rows[-1]
+        else:
+            row = step_rtl_lint_tool(
+                project, pdk_name=args.pdk, bounded_rtl=_bounded_rtl_lint,
+                top_name=args.top_name, container=args.container)
+            lint_rows = [row]
         if raw_context:
             row.extras["context_sha256"] = json.loads(Path(raw_context).read_text())["context_sha256"]
         summary = {"project": str(project),
-                   "steps": [asdict(_entry_sentinel("rtl_gen")), asdict(row)], "verdict": row.status,
+                   "steps": [asdict(_entry_sentinel("rtl_gen")), *map(asdict, lint_rows)], "verdict": row.status,
                    "declared_window": {"entry_step": "2", "exit_step": "2",
                                        "dispatched_step_ids": ["2"]},
                    "bounded_disclosures": ["native lint only; whole flow not measured"]}
         _write_phase2_report(out, summary, project,
-                            invocation_context=_dispatch_invocation_context)
+                            invocation_context=_dispatch_invocation_context,
+                            publish_current=engineering_selected)
         # D11's front door reopens the actual fresh normal owner report before
         # the sole canonical writer publishes; this child owns no row credit.
         finished = None if d11_selected else flow109.finish_native_window(project, summary, out)
@@ -28256,7 +28367,8 @@ def main() -> int:
         if status != summary["verdict"]:
             summary["verdict"] = status
             _write_phase2_report(out, summary, project,
-                                invocation_context=_dispatch_invocation_context)
+                                invocation_context=_dispatch_invocation_context,
+                                publish_current=engineering_selected)
         print(f"native Step 2: {row.status} — {row.detail}")
         return {"PASS": 0, "FAIL": 1}.get(status, 2)
 

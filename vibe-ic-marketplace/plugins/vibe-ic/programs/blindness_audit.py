@@ -93,8 +93,10 @@ was counted, never read, and the audit printed PASS. Two rules close it:
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -295,6 +297,8 @@ def _harvest_tool_strings_cov(obj, calls: list[dict] | None = None
     for frame in _iter_call_frames(obj):
         got = _harvest_frame_strings(frame)
         communication = _collaboration_inspection_credit(frame)
+        if communication is None:
+            communication = _clock_inspection_credit(frame)
         inspected = bool(got) if communication is None else communication
         record = {
             "envelope_type": frame.get("type"),
@@ -373,6 +377,27 @@ def _iter_call_frames(obj) -> list[dict]:
     return found
 
 
+def _clock_inspection_credit(node) -> bool | None:
+    """Inspect the exact numeric sleep schema; unknown payloads still block.
+
+    Sleep neither opens files nor executes commands. Recognition requires the
+    real namespace, call type, sole argument and bounded integer duration.
+    Extra command/path fields remain scanned, but earn no coverage credit.
+    """
+    name = node.get("name") or node.get("tool_name")
+    if node.get("namespace") != "clock":
+        return False if name == "sleep" else None
+    if node.get("type") != "function_call" or name != "sleep":
+        return False
+    try:
+        payload = json.loads(node.get("arguments"))
+    except (TypeError, ValueError):
+        return False
+    return (isinstance(payload, dict) and set(payload) == {"duration_ms"}
+            and type(payload["duration_ms"]) is int
+            and 1 <= payload["duration_ms"] <= 43200000)
+
+
 def _collaboration_inspection_credit(node) -> bool | None:
     """Closed communication schemas, not a blanket exemption for text tools.
 
@@ -439,7 +464,10 @@ def _harvest_frame_strings(node, depth: int = 0) -> list[str]:
                   and _collaboration_inspection_credit(node)):
                 out.append(node["arguments"])  # the actual decoded empty payload
             return out
-        return _harvest_frame_strings(payload, depth + 1)
+        out = _harvest_frame_strings(payload, depth + 1)
+        if _clock_inspection_credit(node):
+            out.append(node["arguments"])
+        return out
     if isinstance(node, dict):
         out: list[str] = []
         for k, v in node.items():
@@ -533,6 +561,206 @@ def _is_or_fallback_family_twin(frag: str, start: int, base: str,
     return False
 
 
+# Only remove proven data literals from V2's command view. V1/V3 still see
+# the original fragment. Unsupported syntax/execution remains conservatively
+# visible; this is not a general shell/Python interpreter.
+_PY_HEREDOC_RE = re.compile(
+    r"(?m)^(?P<header>[ \t]*(?:python3?|/\S*/python3?) - <<'(?P<end>[A-Za-z_][A-Za-z_0-9]*)'[ \t]*\n)"
+    r"(?P<body>.*?)(?P<close>^(?P=end)[ \t]*$)", re.S | re.M)
+_JSON_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
+
+
+def _could_be_executable_document(value: str) -> bool:
+    # A later tool call can execute a generated .py/.txt/.md file. Never
+    # suppress a literal which could itself be code, regardless of suffix.
+    try:
+        ast.parse(value)
+    except (SyntaxError, ValueError):
+        pass
+    else:
+        return True
+    for line in re.split(r"[\n;|&]", value):
+        if (re.match(r"\s*(?:[$]\s*)?(?:python3?|[^\s]*score_[^\s]*|"
+                     r"benchmark_dispatch(?:\.py)?|eval|exec|bash|sh)\b", line)
+                and _SCORER_INVOKE_RE.search(line)):
+            return True
+    return False
+
+
+def _passive_python_document_view(body: str) -> str:
+    """Elide direct document literals only in a closed, passive Python script.
+
+    A stored command can be invoked indirectly: aliases, subprocess, exec,
+    imports, user functions, and unknown calls therefore keep ALL literals.
+    Even a direct write_text is not inert when the same script launches its
+    output. No source code is evaluated by the auditor.
+    """
+    try:
+        tree = ast.parse(body)
+    except (SyntaxError, ValueError):
+        return body
+    modules = {"pathlib", "json", "hashlib", "shutil"}
+    names = {"Path", "print", "str", "len", "list", "dict", "tuple", "set"}
+    methods = {"write_text", "write_bytes", "read_text", "read_bytes",
+               "items", "keys", "values", "append", "hexdigest",
+               "dumps", "loads", "sha256", "copyfile"}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef,
+                             ast.Lambda, ast.With, ast.AsyncWith, ast.Delete)):
+            return body
+        if isinstance(node, ast.Import) and any(
+                a.name not in modules or a.asname for a in node.names):
+            return body
+        if isinstance(node, ast.ImportFrom) and not (
+                node.module == "pathlib" and node.level == 0
+                and all(a.name == "Path" and not a.asname for a in node.names)):
+            return body
+        if isinstance(node, ast.Attribute) and (
+                node.attr not in methods or isinstance(node.ctx, ast.Store)):
+            return body
+        if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)
+                and node.id in modules | names):
+            return body
+        if isinstance(node, ast.Call):
+            f = node.func
+            if not ((isinstance(f, ast.Name) and f.id in names)
+                    or (isinstance(f, ast.Attribute) and f.attr in methods)):
+                return body
+    # The closed call vocabulary rules out evaluating strings or launching a
+    # generated helper, including aliases of execution APIs. Keep other text
+    # constants unchanged: only the actual literal sent to write_text is data.
+    spans = []
+    lines = body.splitlines(keepends=True)
+    starts = [0]
+    for line in lines:
+        starts.append(starts[-1] + len(line.encode("utf-8")))
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "write_text" and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and isinstance(node.args[0].value, str)):
+            value = node.args[0]
+            if _could_be_executable_document(value.value):
+                continue
+            spans.append((starts[value.lineno - 1] + value.col_offset,
+                          starts[value.end_lineno - 1] + value.end_col_offset))
+    encoded = body.encode("utf-8")
+    for lo, hi in sorted(spans, reverse=True):
+        encoded = encoded[:lo] + b'""' + encoded[hi:]
+    return encoded.decode("utf-8")
+
+
+def _python_argv_view(body: str) -> str:
+    """Expose literal argv pieces, including variables passed to aliases.
+
+    Joining the literal pieces of an execution argument lets the existing
+    command detector see [sys.executable, "score_x.py", "--run", ...].
+    This never imports or evaluates the recorded script. Unknown calls keep
+    their argument view rather than being assumed passive.
+    """
+    try:
+        tree = ast.parse(body)
+    except (SyntaxError, ValueError):
+        return body
+    bindings = {n.targets[0].id: n.value for n in ast.walk(tree)
+                if isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Name)}
+
+    def strings(node, seen=frozenset()):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            return [node.value]
+        if isinstance(node, ast.Name) and node.id in bindings and node.id not in seen:
+            return strings(bindings[node.id], seen | {node.id})
+        if isinstance(node, (ast.List, ast.Tuple, ast.Set)):
+            return [s for child in node.elts for s in strings(child, seen)]
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+            return strings(node.left, seen) + strings(node.right, seen)
+        return []
+
+    rebound_names = {n.id for n in ast.walk(tree)
+                     if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    rebound_attrs = {n.attr for n in ast.walk(tree)
+                     if isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Store)}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            rebound_names.update(a.asname or a.name for a in node.names)
+    views = [body]
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        function = node.func
+        if ((isinstance(function, ast.Name) and function.id not in rebound_names
+             and function.id in
+             {"Path", "print", "str", "len", "list", "dict", "tuple", "set"})
+                or (isinstance(function, ast.Attribute) and function.attr not in rebound_attrs
+                    and function.attr in
+                    {"write_text", "write_bytes", "read_text", "read_bytes",
+                     "items", "keys", "values", "append", "hexdigest",
+                     "dumps", "loads", "sha256", "copyfile"})):
+            continue
+        values = [s for arg in node.args for s in strings(arg)]
+        if values:
+            views.append(" ".join(values))
+            # An interpreter may be supplied through sys.executable, which is
+            # not a string literal. A script argv remains an invocation.
+            for value in values:
+                if re.fullmatch(r"(?:\S*/)?score_[a-z0-9_]+\.py", value, re.I):
+                    views.append("python3 " + value)
+    return "\n".join(views)
+
+
+def _scorer_command_view(fragment: str) -> str:
+    """Decode tool wrapper strings and inspect supported inline Python.
+
+    A heredoc body is executable Python, while a write_text string within it
+    is document data. Any shell continuation after the heredoc might execute
+    that output, so it prevents suppression. All unsupported contexts retain
+    the raw scorer scan (including shellouts/inline code/variable aliases).
+    """
+    def heredoc(match):
+        if fragment[match.end():].strip():
+            return match.group(0)
+        return (match["header"] + _python_argv_view(_passive_python_document_view(match["body"]))
+                + match["close"])
+
+    # Quoted -c code is executable too; argv strings must not conceal it.
+    try:
+        tokens = shlex.split(fragment)
+    except ValueError:
+        tokens = []
+    for index, token in enumerate(tokens[:-2]):
+        if (Path(token).name in {"python", "python3"}
+                and tokens[index + 1] == "-c"):
+            return fragment + "\n" + _python_argv_view(tokens[index + 2])
+    direct = _PY_HEREDOC_RE.sub(heredoc, fragment)
+    if direct != fragment:
+        return direct
+    # functions.exec wraps commands in JS string literals. Decode only JSON
+    # double-quoted strings; malformed/other JS strings retain raw scanning.
+    def literal(match):
+        try:
+            value = json.loads(match.group(0))
+        except ValueError:
+            return match.group(0)
+        if " -c " in value:
+            return json.dumps(_scorer_command_view(value), ensure_ascii=False)
+        if "<<" not in value or "\n" not in value:
+            return match.group(0)
+        cleaned = _PY_HEREDOC_RE.sub(
+            lambda m: (m["header"] + _python_argv_view(_passive_python_document_view(m["body"]))
+                       + m["close"]) if not value[m.end():].strip() else m.group(0),
+            value)
+        # A later tool command may execute a helper just written by this one.
+        # Only a sole command wrapper can prove the fragment has no such chain.
+        if cleaned != value and not re.fullmatch(
+                r'(?:\s*,\s*"[A-Za-z_][A-Za-z_0-9]*"\s*:\s*(?:[0-9]+|true|false|null))*'
+                r'\s*\}\s*\)*\s*(?:\.output)?\s*\)*\s*;?\s*',
+                fragment[match.end():]):
+            return match.group(0)
+        return json.dumps(cleaned, ensure_ascii=False)
+    return _JSON_STRING_RE.sub(literal, fragment)
+
+
 def _scan_fragment(frag: str, ds: str, allowed: list[str], source: str,
                    ln_no: int) -> list[dict]:
     """Run V1/V2/V3 over one already-isolated fragment (a JSON field value, or
@@ -567,7 +795,7 @@ def _scan_fragment(frag: str, ds: str, allowed: list[str], source: str,
             "evidence": frag.strip()[:300],
         })
     # V2 — agent-side scorer invocation (verdict-level oracle query)
-    if _SCORER_INVOKE_RE.search(frag):
+    if _SCORER_INVOKE_RE.search(_scorer_command_view(frag)):
         findings.append({
             "kind": "scorer-self-run",
             "class": "agent-side host-scorer invocation (oracle query)",

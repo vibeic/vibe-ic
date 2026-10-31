@@ -483,21 +483,102 @@ def _delivered_object_families(text: str) -> list[str]:
     return ["DIE"] if _DIE_ROUTE.search(text) else []
 
 
+def _positive_delivery_prose(text: str) -> str:
+    """Mask denied delivery clauses without changing positive-source offsets."""
+    boundary = re.compile(
+        r"[.;!?\n。；！？，]|\b(?:but|however)\b|"
+        r"(?:\band\s+|,\s*)(?=(?:do\s+not|don['’]t|never|no\s+need|"
+        r"deliver|produce|generate|provide|ship|output|supply)\b)", re.I)
+    physical = re.compile(
+        r"\b(?:die|chip|hard[- ]?macro|gdsii?|lef|liberty|tape[- ]?out|"
+        r"fabricat\w*|manufactur\w*|packag\w*|foundry|layout)\b|"
+        r"晶片|芯片|積體電路|裸晶|硬巨集|硬宏|版圖|佈局|布局|投片|製造|封裝", re.I)
+    denied_prefix = re.compile(
+        r"\s*(?:(?:please|we|you)\s+)?(?:do\s+not\b|don['’]t\b|never\b|"
+        r"no\b|without\b|(?:there\s+is\s+)?no\s+need\b|"
+        r"(?:請)?(?:不要|不需要|不需|不用|不必|無需|毋須|勿|不得))", re.I)
+    denied_suffix = re.compile(
+        r"\b(?:is|are|was|were)\s+(?:not|never)\s+"
+        r"(?:required|needed|requested|mandatory|necessary)\b|"
+        r"(?:並非|不是)(?:必要|需求)|(?:不需要|無需)(?:交付|提供|產出)", re.I)
+    pieces = []
+    start = 0
+    for separator in [*boundary.finditer(text), None]:
+        end = separator.start() if separator else len(text)
+        clause = text[start:end]
+        denied = physical.search(clause) and (denied_prefix.match(clause)
+                                             or denied_suffix.search(clause))
+        pieces.append(" " * len(clause) if denied else clause)
+        if separator:
+            pieces.append(separator.group())
+            start = separator.end()
+    return "".join(pieces)
+
+
+def _additional_delivery_requirements(text: str) -> list[dict]:
+    """Positive physical views and Chinese delivery acts use the same contract.
+
+    A view requested as an output is distinct from a model's chip-function
+    background. Negated clauses have already been masked by the owner reader.
+    """
+    prose = _delivery_prose(text)
+    out = []
+    views = re.compile(
+        r"\b(?:deliver|produce|generate|provide|ship|output|supply)\s+"
+        r"(?:(?:its|their|the|a|an|final|physical|abstract|timing)\s+)*"
+        r"(?:LEF|Liberty)\b(?:\s+(?:and|or)\s+(?:LEF|Liberty)\b)?"
+        r"(?:\s+(?:views?|models?|files?))?|"
+        r"\b(?:LEF|Liberty)\b(?:\s+and\s+(?:LEF|Liberty)\b)?\s+"
+        r"(?:views?|models?|files?)\s+(?:(?:must|shall|should)\s+)?"
+        r"(?:(?:be\s+)?(?:delivered|provided|produced|generated)|"
+        r"(?:are|is)\s+(?:required|needed|requested|mandatory|necessary))\b", re.I)
+    for match in views.finditer(prose):
+        out.append({"family": "HARDMACRO", "target": "ip_hardmacro",
+                    "excerpt": match.group()})
+    requested_object = re.compile(
+        r"(?:設計|製作|打造|建立|交付|提供|完成|產出|輸出)\s*"
+        r"(?:(?:一顆|一個|完整|可投片的?|實體的?)\s*)*"
+        r"(?P<object>晶片|芯片|積體電路|裸晶|硬巨集|硬宏)")
+    for match in requested_object.finditer(prose):
+        tail = prose[match.end():]
+        if re.match(r"(?:(?:的|(?:內部|中|內|裡)(?:的)?))?\s*"
+                    r"(?:(?:數位|數字|可合成|組合|時序)\s*)*"
+                    r"(?:RTL|Verilog|SystemVerilog|HDL|模組|模塊|功能|行為|模型|模擬)", tail, re.I):
+            continue
+        out.append({"family": ("HARDMACRO" if match.group("object") in ("硬巨集", "硬宏") else "DIE"),
+                    "target": None, "excerpt": match.group()})
+    physical_output = re.compile(
+        r"(?:交付|提供|產出|輸出|完成|生成|製作)\s*"
+        r"(?:(?:可投片的?|實體的?|製造用的?)\s*)*"
+        r"(?:版圖|佈局|布局|GDS(?:II)?)|"
+        r"(?:完成|進行|負責)\s*(?:晶片)?(?:製造|封裝|投片)", re.I)
+    for match in physical_output.finditer(prose):
+        out.append({"family": "DIE", "target": "shippable_gds" if "可投片" in match.group() else "gds",
+                    "excerpt": match.group()})
+    return out
+
+
 def prompt_delivery_requirements(prompt: str) -> Dict[str, Any]:
     """Derive an immutable delivery floor from explicit user prompt language."""
     text = str(prompt or "")
-    route_hits = _delivered_object_families(text)
+    delivery_text = _positive_delivery_prose(text)
+    route_hits = _delivered_object_families(delivery_text)
     matches = []
     for target, rx in _PROMPT_DELIVERY_PATTERNS:
-        hit = rx.search(text)
+        hit = rx.search(delivery_text)
         if hit:
             matches.append({"target": target, "excerpt": hit.group(0)})
     # A separately asserted physical delivery needs at least a physical
     # artifact; the existing GDS floor does not claim a fabricated package.
     # Reuse clause boundaries so this stays linear and an RTL modelling
     # request is not itself mistaken for an independent delivery command.
-    for clause in _physical_package_obligations(text):
+    for clause in _physical_package_obligations(delivery_text):
         matches.append({"target": "gds", "excerpt": clause})
+    for requirement in _additional_delivery_requirements(delivery_text):
+        if requirement["family"] not in route_hits:
+            route_hits.append(requirement["family"])
+        if requirement["target"] is not None:
+            matches.append({"target": requirement["target"], "excerpt": requirement["excerpt"]})
     route_family = None
     status = "UNSPECIFIED"
     minimum_target = None
@@ -508,8 +589,9 @@ def prompt_delivery_requirements(prompt: str) -> Dict[str, Any]:
     elif route_hits:
         route_family = route_hits[0]
         status = "EXPLICIT_ROUTE"
-    if matches:
-        strongest = max(matches, key=lambda row: _DELIVERY_ORDER[row["target"]])
+    ordered_matches = [row for row in matches if row["target"] in _DELIVERY_ORDER]
+    if ordered_matches:
+        strongest = max(ordered_matches, key=lambda row: _DELIVERY_ORDER[row["target"]])
         minimum_target = strongest["target"]
         if status == "UNSPECIFIED":
             status = "DELIVERY_ONLY"

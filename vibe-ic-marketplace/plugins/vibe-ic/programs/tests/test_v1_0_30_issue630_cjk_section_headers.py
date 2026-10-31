@@ -253,3 +253,39 @@ def test_same_sentence_host_install_commands_remain_nonfunctional(tmp_path):
     content = "\n".join(row.get("content", "") for row in actual["frs_sections"])
     assert output in content
     assert instruction not in content, actual["frs_sections"]
+
+
+@pytest.mark.parametrize("header", [
+    "module sample_unit(input wire a, output wire z);",
+    "module sample_unit(a, z);",
+    "module sample_unit #(parameter W=4)(input wire [W-1:0] a, output wire z);",
+])
+def test_unheaded_real_module_preserves_complete_functional_source(tmp_path, header):
+    text = header + "\nassign z = ^a;\nendmodule\nReturn the parity of a.\n"
+    R.gen_l2_frs(tmp_path, {"design.txt": text})
+    actual = json.loads((tmp_path / "phase1/generated_docs/L2_FRS.json").read_text())
+    assert any(text.strip() in row.get("content", "") for row in actual["frs_sections"])
+    assert actual.get("extraction_strategy") != "step_error_stub_v1_6_580"
+
+
+@pytest.mark.parametrize("text", [
+    "// module sample_unit(input wire a, output wire z);\n// Historical example.\n",
+    'The log says "module sample_unit(input wire a, output wire z);".\n',
+    "A module example (this is descriptive prose.);\n",
+])
+def test_commented_quoted_or_prose_header_cannot_invent_unheaded_owner(tmp_path, text):
+    R.gen_l2_frs(tmp_path, {"notes.txt": text})
+    actual = json.loads((tmp_path / "phase1/generated_docs/L2_FRS.json").read_text())
+    assert not any(row.get("section") == "unheaded" for row in actual["frs_sections"])
+
+
+def test_unheaded_checked_in_design_keeps_its_complete_requirements(tmp_path):
+    from programs.tests._hostpaths import require_repo
+    fixture = require_repo(
+        "vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "phase1_local", "plain_design_source_provenance",
+        "plain_combinational_input.txt")
+    text = fixture.read_text()
+    R.gen_l2_frs(tmp_path, {fixture.name: text})
+    actual = json.loads((tmp_path / "phase1/generated_docs/L2_FRS.json").read_text())
+    assert any(text.strip() in row.get("content", "") for row in actual["frs_sections"])

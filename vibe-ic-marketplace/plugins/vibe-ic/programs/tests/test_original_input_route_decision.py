@@ -97,14 +97,34 @@ def test_deeper_rtl_proof_retains_its_structured_input_requirements(evidence):
 
 
 @pytest.mark.parametrize(("nature", "entry"), [
-    ("completion", "D1"), ("functional_modification", "D1"),
-    ("optimization", "2"), ("debug", "4"),
+    ("completion", "1"), ("functional_modification", "1"), ("optimization", "2"),
 ])
-def test_other_task_natures_keep_their_existing_entry_and_d1_closure(nature, entry):
+def test_bounded_original_consumers_preserve_their_task_nature(nature, entry):
     receipt = _receipt(nature=nature)
     assert receipt["task_nature"] == nature
-    assert receipt["input_contract"] == "structured"
+    assert receipt["input_contract"] == "original"
     assert receipt["entry_step"] == entry
+    assert receipt["verify_through"] == "2"
+    assert receipt["verify_closed_steps"] == ["1", "2"]
+    assert rd.validate_route_receipt(receipt) == []
+
+
+def test_debug_still_owns_its_simulation_entry_and_structured_inputs():
+    receipt = _receipt(nature="debug")
+    assert receipt["task_nature"] == "debug"
+    assert receipt["input_contract"] == "structured"
+    assert receipt["entry_step"] == "4"
+    assert "D1" in receipt["verify_closed_steps"]
+    assert rd.validate_route_receipt(receipt) == []
+
+
+@pytest.mark.parametrize("nature", ["completion", "functional_modification", "optimization", "debug"])
+@pytest.mark.parametrize("evidence", ["behaviour", "proof", "area"])
+def test_transforms_with_deeper_consumers_retain_structured_authority(nature, evidence):
+    receipt = _receipt(nature=nature, evidence=evidence)
+    assert receipt["task_nature"] == nature
+    assert receipt["input_contract"] == "structured"
+    assert receipt["entry_step"] == tnr.NATURE_ENTRY[nature]["entry_step"]
     assert "D1" in receipt["verify_closed_steps"]
     assert rd.validate_route_receipt(receipt) == []
 
@@ -181,3 +201,36 @@ def test_explicit_structured_dag_argument_is_reprojected_by_semantics():
 def test_unknown_input_contract_is_rejected():
     with pytest.raises(ValueError, match="unknown route input contract"):
         rd.canonical_dag(input_contract="unverified")
+
+
+@pytest.mark.parametrize("nature", ["spec_generation", "completion", "debug"])
+def test_explicit_rtl_delivery_reaches_initial_and_resume_runner(tmp_path, nature):
+    import benchmark_dispatch as dispatch
+    evidence = "behaviour" if nature == "debug" else "lint_validated"
+    receipt = _receipt(nature=nature, evidence=evidence)
+    target = dispatch._rtl_delivery_target(receipt)
+    assert target == "rtl"
+    runner = Path(__file__).resolve().parents[1] / "vibe_ic_one_shot_runner.py"
+    for supplied in (False, True):
+        argv = dispatch._resume_solver_argv(
+            runner, tmp_path, supplied, receipt["entry_step"],
+            receipt["verify_through"], input_contract=receipt["input_contract"],
+            delivery_target=target)
+        assert argv.count("--delivery-target") == 1
+        assert argv[argv.index("--delivery-target") + 1] == "rtl"
+        assert argv[argv.index("--exit-step") + 1] == receipt["verify_through"]
+
+
+@pytest.mark.parametrize("target,evidence", [
+    ("gds", "lint_validated"), ("ip_hardmacro", "lint_validated"),
+    ("rtl", "area"), ("rtl", "timing"), ("rtl", "power"),
+])
+def test_physical_evidence_never_acquires_rtl_scope(target, evidence):
+    import benchmark_dispatch as dispatch
+    assert dispatch._rtl_delivery_target(_receipt(target=target, evidence=evidence)) is None
+
+
+def test_unscoped_runner_keeps_existing_delivery_admission(tmp_path):
+    import benchmark_dispatch as dispatch
+    runner = Path(__file__).resolve().parents[1] / "vibe_ic_one_shot_runner.py"
+    assert "--delivery-target" not in dispatch._solver_argv(runner, tmp_path, "D1", "D1")

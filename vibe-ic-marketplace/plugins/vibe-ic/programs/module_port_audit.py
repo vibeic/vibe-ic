@@ -928,6 +928,7 @@ def _collect_statements(body: str, *, preserve_literals=False) -> List[Tuple[str
     statements = []
     mask = lexical_mask(body, attributes=True)
     start = 0
+    line = start_line = 0
     stack = []
     # Generate/block boundaries do not end with semicolons. Keeping them on
     # the next statement hid the first instance after ``endgenerate`` and
@@ -939,6 +940,7 @@ def _collect_statements(body: str, *, preserve_literals=False) -> List[Tuple[str
     for index, ch in enumerate(mask):
         if not stack and index in boundaries:
             start = boundaries[index]
+            start_line = line + mask[index:start].count('\n')
         if ch in '([{':
             stack.append(ch)
         elif ch in ')]}':
@@ -950,8 +952,11 @@ def _collect_statements(body: str, *, preserve_literals=False) -> List[Tuple[str
             text = mask[start:index + 1]
             leading = len(text) - len(text.lstrip())
             statements.append((body[start:index + 1] if preserve_literals else text,
-                               mask[:start + leading].count('\n')))
+                               start_line + text[:leading].count('\n')))
             start = index + 1
+            start_line = line
+        if ch == '\n':
+            line += 1
     return statements
 
 

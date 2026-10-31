@@ -113,7 +113,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("project", type=Path)
     ap.add_argument("--mode", required=True, choices=("rtl", "rom_lint", "netlist", "si", "repair", "dfm", "stage_analog"))
+    ap.add_argument("--rtl-input", choices=("structured", "original"), default="structured")
     args = ap.parse_args()
+    import _path_layout as layout
+    args.project = args.project.resolve()
+    layout.select_rtl_input(args.project, args.rtl_input, "1", "2")
     if not args.project.is_dir():
         print(f"FAIL: project directory absent: {args.project}")
         return 2

@@ -647,3 +647,147 @@ def test_the_matching_pair_is_stated_not_asked_of_this_host(monkeypatch) -> None
     # A resolve that succeeds EXPORTS the identity into os.environ outside
     # monkeypatch; a stated pair must leave nothing behind for later tests.
     assert "VIBEIC_EDA_IMAGE" not in os.environ
+
+
+@pytest.mark.parametrize("mutation", [None, "projection", "commit_signal", "project", "checkpoint", "binding", "source"])
+def test_interrupted_solve_commits_workers_and_resume_reuses_only_matching_results(
+        tmp_path, mutation):
+    """Kill a real coordinator after p1 commits and while p2 is executing."""
+    import signal
+    child = tmp_path / "coordinator.py"
+    child.write_text('''
+import json, os, signal, sys, time
+from pathlib import Path
+import pytest
+sys.path.insert(0, sys.argv[1])
+import test_issue1970_benchmark_dispatch_parallel as fixture
+bd = fixture.bd
+run, mode = Path(sys.argv[2]), sys.argv[3]
+dataset = run.parent / "dataset"
+dataset.mkdir(exist_ok=True)
+patch = pytest.MonkeyPatch()
+fixture._install_solve_fakes(patch, {})
+original = bd.subprocess.run
+if mode == "resume" and sys.argv[4] == "source":
+    identity = bd._program_source_identity()
+    patch.setattr(bd, "_program_source_identity", lambda: {
+        **identity, "source_sha256": "0" * 64})
+if mode == "start" and sys.argv[4] == "commit_signal":
+    atomic = bd._atomic_write_json
+    def interrupt_after_commit(path, value):
+        atomic(path, value)
+        if Path(path).parent.name == "solve_checkpoints":
+            os.kill(os.getpid(), signal.SIGTERM)
+    patch.setattr(bd, "_atomic_write_json", interrupt_after_commit)
+
+def runner(argv, *args, **kwargs):
+    if argv[argv.index("--exit-step") + 1] != "D1":
+        pid = Path(argv[2]).name
+        with (run / "calls.jsonl").open("a") as out:
+            out.write(json.dumps(pid) + "\\n")
+        if mode == "start" and pid == "p2":
+            (run / "second-started").write_text("yes")
+            while True:
+                time.sleep(0.05)
+    return original(argv, *args, **kwargs)
+patch.setattr(bd.subprocess, "run", runner)
+if mode == "start":
+    result = fixture._solve_after_ai_route("rtllm", dataset, run, jobs=1)
+else:
+    result = bd.cmd_resume("rtllm", str(dataset), str(run), jobs=1)
+print("RESULT", result)
+''')
+    run = tmp_path / "run"
+    args = [sys.executable, str(child), str(Path(__file__).parent), str(run)]
+    with (tmp_path / "first.log").open("w") as log:
+        proc = subprocess.Popen([*args, "start", str(mutation)], stdout=log, stderr=log)
+        try:
+            deadline = time.monotonic() + 20
+            while mutation != "commit_signal" and not (run / "second-started").exists():
+                assert proc.poll() is None, (tmp_path / "first.log").read_text()
+                assert time.monotonic() < deadline, "second worker did not start"
+                time.sleep(0.02)
+            if mutation != "commit_signal":
+                proc.send_signal(signal.SIGTERM)
+            assert proc.wait(timeout=10) == -signal.SIGTERM
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+    report = json.loads((run / "solve_report.json").read_text())
+    # The pre-fix report has a concrete ROUTE_PENDING value even after p1
+    # completed; assert that stale value is gone before checking new fields.
+    assert report["results"][0].get("worker_status") != "ROUTE_PENDING"
+    assert report["solve_execution_status"] == "INTERRUPTED"
+    assert report["committed_ids"] == ([] if mutation == "commit_signal" else ["p1"])
+    assert report["remaining_ids"] == (["p1", "p2"] if mutation == "commit_signal" else ["p2"])
+    assert report["results"][0].get("worker_status") != "ERROR"
+    assert report["results"][1]["worker_status"] == "NOT_MEASURED"
+    assert all(p["status"] == "NOT_MEASURED"
+               for p in report["results"][1]["phases"].values())
+    assert report["accepted"] == 0
+    with pytest.raises(SystemExit, match="not COMPLETE"):
+        bd._require_program_first_ai_acceptance(run)
+    checkpoint = next((run / "solve_checkpoints").glob("*.json"))
+    if mutation == "projection":
+        # Simulate death after the checkpoint rename, before projection commit.
+        report["committed_ids"] = []
+        report["remaining_ids"] = ["p1", "p2"]
+        report["results"][0] = dict(report["results"][1], id="p1")
+        (run / "solve_report.json").write_text(json.dumps(report))
+    elif mutation == "project":
+        (run / "projects" / "p1" / "new.v").write_text("module changed; endmodule")
+    elif mutation == "checkpoint":
+        record = json.loads(checkpoint.read_text())
+        record["outcome"]["result_json"] = '{"id":"p1","accepted":true}'
+        checkpoint.write_text(json.dumps(record))
+    elif mutation == "binding":
+        record = json.loads(checkpoint.read_text())
+        record["binding_sha256"] = "0" * 64
+        checkpoint.write_text(json.dumps(record))
+    resumed = subprocess.run([*args, "resume", str(mutation)], capture_output=True, text=True, timeout=20)
+    assert resumed.returncode == 0, resumed.stdout + resumed.stderr
+    calls = [json.loads(line) for line in (run / "calls.jsonl").read_text().splitlines()]
+    assert calls.count("p1") == 1, "resume reran an already committed worker"
+    if mutation in {"project", "checkpoint", "binding", "source"}:
+        assert "SOLVE_CHECKPOINT_MISMATCH" in resumed.stdout + resumed.stderr
+        assert calls.count("p2") == 1, "mismatch must refuse before new execution"
+    else:
+        assert "RESULT 1" in resumed.stdout
+        assert calls.count("p2") == (1 if mutation == "commit_signal" else 2)
+        report = json.loads((run / "solve_report.json").read_text())
+        assert report["routing_phase"] == "COMPLETE"
+        assert report["solve_execution_status"] == "COMPLETE"
+        assert [row["id"] for row in report["results"]] == ["p1", "p2"]
+        assert not any(row.get("worker_status") == "ERROR" for row in report["results"])
+    with pytest.raises(SystemExit, match="not COMPLETE"):
+        bd._require_program_first_ai_acceptance(run)
+
+
+def test_checkpoint_source_binding_includes_callee_and_flow_configuration(tmp_path, monkeypatch):
+    plugin = tmp_path / "plugin"
+    (plugin / ".claude-plugin").mkdir(parents=True)
+    (plugin / ".claude-plugin/plugin.json").write_text('{"version":"test"}')
+    (plugin / "programs").mkdir()
+    dispatcher = plugin / "programs/benchmark_dispatch.py"
+    dispatcher.write_text("# unchanged dispatcher\n")
+    helper = plugin / "programs/helper.py"
+    helper.write_text("VALUE = 1\n")
+    (plugin / "flow").mkdir()
+    config = plugin / "flow/steps.json"
+    config.write_text('{"terminal":"2"}')
+    monkeypatch.setattr(bd, "__file__", str(dispatcher))
+    original = bd._program_source_identity()
+    helper.write_text("VALUE = 2\n")
+    assert bd._program_source_identity() != original
+    helper.write_text("VALUE = 1\n")
+    assert bd._program_source_identity() == original
+    config.write_text('{"terminal":"4"}')
+    assert bd._program_source_identity() != original
+
+
+def test_benchmark_workers_disable_detached_dashboard_writers(tmp_path):
+    runner = PROGRAMS / "vibe_ic_one_shot_runner.py"
+    for supplied in (False, True):
+        argv = bd._resume_solver_argv(runner, tmp_path, supplied, "2", "2")
+        assert argv.count("--no-dashboard") == 1

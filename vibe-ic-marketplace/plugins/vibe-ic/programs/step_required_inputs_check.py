@@ -116,11 +116,13 @@ def input_contract(step: Dict[str, Any], kind: str = "structured") -> Dict[str, 
     alternative = (step.get("input_contracts") or {}).get(kind)
     if not isinstance(alternative, dict):
         return step
-    return dict(step, _structured_input_contract={
-                    "required_inputs": step.get("required_inputs"),
-                    "blocks_on": step.get("blocks_on")},
-                required_inputs=alternative["required_inputs"],
-                blocks_on=alternative["blocks_on"])
+    # A source alternative also owns the consumers of that source. Keeping
+    # a structured-only gate after replacing its inputs makes it impossible
+    # for a complete original-source product to be accepted.
+    fields = ("required_inputs", "blocks_on", "gate", "required_outputs")
+    overrides = {key: alternative[key] for key in fields if key in alternative}
+    return dict(step, _structured_input_contract={key: step.get(key) for key in overrides},
+                **overrides)
 
 
 # Resolver parity with the OUTPUT side. Imported, never reimplemented: two

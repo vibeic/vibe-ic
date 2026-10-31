@@ -31,6 +31,9 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 SCHEMA_PRESERVATION = "vibeic.rtl_preservation_declaration.v1"
 SCHEMA_MATRIX = "vibeic.public_elaboration_matrix.v1"
 SCHEMA_STRUCTURAL = "vibeic.native_structural_contract.v1"
+SCHEMA_PROMPT_STRUCTURAL = "vibeic.prompt_structural_contract.v1"
+SCHEMA_PROMPT_COMPLETION = "vibeic.prompt_structural_completion.v1"
+SCHEMA_HEADER_COMPLETION = "vibeic.prompt_header_completion.v1"
 STRUCTURAL_ABSTRACTION = "RTLIL_AFTER_PROC_OPT"
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
@@ -678,6 +681,164 @@ def _docker_image_id(image: str, timeout: int) -> Tuple[Optional[str], Optional[
     return image_id, None
 
 
+def prompt_rtl_source_facts(prompt: str) -> Dict[str, Any]:
+    """Classify visible source conservatively, without manufacturing an RTL file.
+
+    A header is a distinct supplied-source fragment, never a complete module.
+    The existing module lexer parses only its framing; the temporary endmodule
+    is not included in the source quote or hash. Bodies/ambiguous scopes remain
+    unsupported instead of being discarded as prose.
+    """
+    import module_port_audit as audit
+    import task_nature_route as routing
+    unsupported = lambda reason: {"kind": "UNSUPPORTED", "reason": reason}
+    try:
+        mask = audit.lexical_mask(prompt, attributes=True)
+        plain_mask = audit.lexical_mask(prompt)
+        if plain_mask != mask:
+            return unsupported("supplied HDL attributes need a wider source contract")
+        if re.search(r"(?m)^[ \t]*`[A-Za-z_]\w*(?![\w`])", mask):
+            return unsupported("supplied preprocessor source needs a wider source contract")
+    except ValueError as exc:
+        return unsupported(str(exc))
+    def unscoped_source(text):
+        for found in routing._PARTIAL_BODY_SYNTAX.finditer(text):
+            fragment = found.group()
+            # The router normally applies this broad parameter arm INSIDE a
+            # module. Outside one, a prose mention is not a declaration.
+            if (re.match(r"(?:parameter|localparam)\b", fragment)
+                    and "=" not in fragment
+                    and not re.fullmatch(r"(?:parameter|localparam)\s+[A-Za-z_]\w*\s*;", fragment)):
+                continue
+            return True
+        return re.search(
+            r"(?m)^[ \t]*(?:package|interface|class|program|primitive|checker|config|import|typedef)\b[^;\n]*;", text) is not None
+
+    starts = list(re.finditer(r"(?m)^[ \t]*module\b", mask))
+    if not starts:
+        if re.search(r"\bmodule\s+(?:(?:automatic|static)\s+)?[A-Za-z_]\w*\s*[#(;]", mask):
+            return unsupported("inline or unbounded supplied module")
+        if unscoped_source(mask):
+            return unsupported("unscoped supplied HDL fragment")
+        code_blocks = re.finditer(
+            r"(?ims)^\s*```(?:verilog|systemverilog|sv)\b[^\n]*\n(.*?)(?:^\s*```|\Z)", mask)
+        if any(block.group(1).strip() for block in code_blocks):
+            return unsupported("HDL fence without a complete module header")
+        return {"kind": "NONE"}
+    if len(starts) != 1:
+        return unsupported("multiple supplied module headers")
+    start = starts[0].start()
+    # The module lexer, not this boundary search, judges balanced header syntax.
+    end = mask.find(";", start)
+    if end < 0:
+        return unsupported("incomplete supplied module header")
+    quote = prompt[start:end + 1]
+    if re.search(r"`[A-Za-z_]", mask[start:end + 1]):
+        return unsupported("macro-dependent header needs its complete source context")
+    issues: List[str] = []
+    regions = list(audit.module_regions(quote + "\nendmodule", issues))
+    if issues or len(regions) != 1 or regions[0][2] != len(quote):
+        return unsupported("unsupported supplied header: " + "; ".join(issues))
+    before = mask[:start]
+    fences = list(re.finditer(r"```", mask))
+    preceding = [m for m in fences if m.start() < start]
+    tail_end = len(mask)
+    if len(preceding) % 2:
+        opening_line_end = mask.find("\n", preceding[-1].end())
+        if opening_line_end < 0 or mask[opening_line_end + 1:start].strip():
+            return unsupported("additional supplied code before header")
+        closing = next((m.start() for m in fences if m.start() > end), len(mask))
+        tail_end = closing
+        # Other code blocks might carry source not represented by this header.
+        if len(fences) > 2:
+            return unsupported("multiple code blocks around supplied source")
+    if mask[end + 1:tail_end].strip():
+        return unsupported("supplied module body or unbounded trailing source")
+    outside = before + mask[tail_end:]
+    if unscoped_source(outside):
+        return unsupported("additional supplied HDL outside header")
+    return {"kind": "HEADER_ONLY", "module": regions[0][0], "header": quote,
+            "header_sha256": sha256_text(quote), "prompt_sha256": sha256_text(prompt)}
+
+
+def _header_tokens(source: str) -> List[str]:
+    # Lexical comparison only. Quoted values remain atomic, including spaces
+    # and comment-looking characters inside parameter string defaults.
+    clean = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/',
+                   lambda m: m.group() if m.group().startswith('"') else ' ',
+                   source, flags=re.S)
+    return re.findall(r'"(?:\\.|[^"\\])*"|[A-Za-z_$][\w$]*|'
+                      r"\d+'[sS]?[bBoOdDhH][0-9a-fA-F_xzXZ]+|\d+|"
+                      r"<<<|>>>|===|!==|<<|>>|<=|>=|==|!=|&&|\|\||::|\*\*|~\^|\^~|\S", clean)
+
+
+def prompt_header_preservation(facts: Mapping[str, Any]) -> Dict[str, Any]:
+    """The exact immutable header declaration a reviewer must carry forward."""
+    return {"schema": "vibeic.prompt_header_preservation.v1",
+            **{key: facts[key] for key in ("prompt_sha256", "module", "header", "header_sha256")}}
+
+
+def validate_prompt_header(candidate_source: str, prompt: str, binding: Any,
+                           *, top: Optional[str] = None, require_header: bool = False) -> Dict[str, Any]:
+    """Reuse the same exact-header proof for functional and structural repair."""
+    report: Dict[str, Any] = {"verdict": "PASS", "findings": []}
+    def stop(verdict, code, message):
+        report.update(verdict=verdict, findings=[{"code": code, "message": message}])
+        return report
+    facts = prompt_rtl_source_facts(prompt)
+    if facts["kind"] == "UNSUPPORTED":
+        return stop("NOT_MEASURED", "STRUCTURAL_PROMPT_SOURCE_UNSUPPORTED", facts["reason"])
+    if facts["kind"] != "HEADER_ONLY":
+        if require_header or binding is not None:
+            return stop("REFUSED", "STRUCTURAL_PROMPT_HEADER_UNSUPPORTED",
+                        "header completion requires one supplied header, not source absence")
+        return report
+    if binding != prompt_header_preservation(facts):
+        return stop("REFUSED", "STRUCTURAL_PROMPT_HEADER_UNBOUND",
+                    "the unique supplied header must be bound exactly, including prompt and header hashes")
+    import module_port_audit as audit
+    issues: List[str] = []
+    regions = list(audit.module_regions(candidate_source, issues))
+    headers = [candidate_source[start:body] for name, start, body, _end in regions
+               if name == facts["module"]]
+    if (issues or top is not None and top != facts["module"] or len(headers) != 1
+            or _header_tokens(headers[0]) != _header_tokens(facts["header"])):
+        return stop("REFUSED", "STRUCTURAL_PROMPT_HEADER_CHANGED",
+                    "candidate changed or removed the supplied header's significant tokens")
+    return {**report, **prompt_header_preservation(facts)}
+
+
+def validate_header_completion(candidate_path: Path, contract: Mapping[str, Any],
+                               prompt: str) -> Dict[str, Any]:
+    """BLOCKING header fidelity only; immutable functional proof stays required.
+
+    This wrapper cannot carry or replace a structural contract. Its caller owns
+    whole-bundle identity, parent/challenge/author lineage and ordinary gates.
+    """
+    report: Dict[str, Any] = {"schema": SCHEMA_HEADER_COMPLETION, "verdict": "REFUSED", "findings": []}
+    def refuse(code, message):
+        report["findings"].append({"code": code, "message": message})
+        return report
+    if contract.get("schema") != SCHEMA_HEADER_COMPLETION:
+        return refuse("HEADER_COMPLETION_SCHEMA_INVALID", "expected explicit header completion schema")
+    if any(key in contract for key in ("structural", "native_structural_contract", "structural_verification", "preservation", "preservation_declaration", "elaboration_matrix", "public_elaboration_matrix", "source_sha256", "script", "command", "passes")):
+        return refuse("HEADER_COMPLETION_PROOF_CONFLICT", "header completion cannot replace other proof obligations")
+    if _safe_path(contract.get("candidate_path")) is None:
+        return refuse("HEADER_COMPLETION_PATH_INVALID", "exact relative candidate_path is required")
+    if contract.get("prompt_sha256") != sha256_text(prompt):
+        return refuse("HEADER_COMPLETION_PROMPT_STALE", "header completion prompt hash is stale")
+    try:
+        data = Path(candidate_path).read_bytes()
+    except OSError as exc:
+        return refuse("HEADER_COMPLETION_CANDIDATE_MISSING", str(exc))
+    if contract.get("candidate_file_sha256") != hashlib.sha256(data).hexdigest():
+        return refuse("HEADER_COMPLETION_CANDIDATE_STALE", "selected candidate file hash is stale")
+    header = validate_prompt_header(data.decode("utf-8", errors="replace"), prompt,
+        contract.get("prompt_header_preservation"), require_header=True)
+    return {**report, "verdict": header["verdict"], "header_preservation": header,
+            "findings": header["findings"]}
+
+
 def run_structural_contract(
     candidate_path: Path,
     declaration: Any,
@@ -702,9 +863,11 @@ def run_structural_contract(
         report["findings"].append({"code": code, "message": message})
         return report
 
-    if not isinstance(declaration, Mapping) or declaration.get("schema") != SCHEMA_STRUCTURAL:
+    if not isinstance(declaration, Mapping) or declaration.get("schema") not in (
+            SCHEMA_STRUCTURAL, SCHEMA_PROMPT_STRUCTURAL):
         return finish("REFUSED", "STRUCTURAL_SCHEMA_UNSUPPORTED",
                       "unsupported or missing native structural contract schema")
+    report["schema"] = declaration["schema"]
     if any(key in declaration for key in ("script", "command", "passes")):
         return finish("REFUSED", "STRUCTURAL_COMMAND_INJECTION_REFUSED",
                       "structural authors cannot provide a Yosys script, command, or pass list")
@@ -715,13 +878,24 @@ def run_structural_contract(
         return finish("NOT_MEASURED", "STRUCTURAL_SCOPE_AMBIGUOUS",
                       "structural scope must explicitly be top_module_cells")
 
-    source_path = _safe_path(declaration.get("source_path"))
-    if source_path is None or original_source is None:
-        return finish("REFUSED", "STRUCTURAL_SOURCE_MISSING",
-                      "structural proof lacks its exact original source")
-    if declaration.get("source_sha256") != sha256_text(original_source):
-        return finish("REFUSED", "STRUCTURAL_SOURCE_HASH_MISMATCH",
-                      "structural contract original source hash is stale or wrong")
+    prompt_only = declaration.get("schema") == SCHEMA_PROMPT_STRUCTURAL
+    if prompt_only:
+        report["schema"] = SCHEMA_PROMPT_STRUCTURAL
+        if (original_source is not None or "source_path" in declaration
+                or "source_sha256" in declaration):
+            return finish("REFUSED", "STRUCTURAL_BINDING_CONFLICT",
+                          "prompt-only structure cannot claim supplied RTL preservation")
+        if _safe_path(declaration.get("candidate_path")) is None:
+            return finish("REFUSED", "STRUCTURAL_CANDIDATE_PATH_INVALID",
+                          "prompt-only structure requires an exact relative candidate_path")
+    else:
+        source_path = _safe_path(declaration.get("source_path"))
+        if source_path is None or original_source is None:
+            return finish("REFUSED", "STRUCTURAL_SOURCE_MISSING",
+                          "structural proof lacks its exact original source")
+        if declaration.get("source_sha256") != sha256_text(original_source):
+            return finish("REFUSED", "STRUCTURAL_SOURCE_HASH_MISMATCH",
+                          "structural contract original source hash is stale or wrong")
 
     candidate_path = Path(candidate_path).resolve()
     try:
@@ -738,6 +912,9 @@ def run_structural_contract(
         return finish("NOT_MEASURED", "STRUCTURAL_REQUIREMENT_AMBIGUOUS",
                       "structural scope lacks a source-bound requirement")
     requirement_path = _safe_path(requirement.get("path"))
+    if prompt_only and requirement_path != "input/phase1_prompt.md":
+        return finish("REFUSED", "STRUCTURAL_REQUIREMENT_PATH_INVALID",
+                      "prompt-only structure must bind the canonical public prompt")
     requirement_text = (requirement_sources or {}).get(requirement_path or "")
     quote = requirement.get("quote")
     if (requirement_path is None or requirement_text is None
@@ -750,6 +927,15 @@ def run_structural_contract(
     if requirement.get("quote_sha256") != sha256_text(quote) or requirement_text.count(quote) != 1:
         return finish("NOT_MEASURED", "STRUCTURAL_REQUIREMENT_AMBIGUOUS",
                       "structural requirement quote is stale, absent, or ambiguous")
+
+    if prompt_only:
+        header = validate_prompt_header(candidate_source, requirement_text,
+            declaration.get("prompt_header_preservation"), top=declaration.get("top"))
+        if header["verdict"] != "PASS":
+            report.update(verdict=header["verdict"], findings=header["findings"])
+            return report
+        if header.get("schema"):
+            report["prompt_header_preservation"] = header
 
     top = declaration.get("top")
     if not isinstance(top, str) or not _IDENT.fullmatch(top):
@@ -805,7 +991,8 @@ def run_structural_contract(
         output.mkdir()
         frozen.write_text(candidate_source)
         command = [
-            docker, "run", "--rm", "--cpus=2", "--memory=4g",
+            docker, "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}",
+            "--cpus=2", "--memory=4g",
             "--pids-limit=128", "--network=none", "--read-only",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
             "-v", f"{frozen}:/work/candidate.sv:ro",
@@ -813,6 +1000,10 @@ def run_structural_contract(
             "--skip", "yosys", "-Q", "-p", script,
         ]
         try:
+            # Share the admitted native/legacy entrypoint normalization. Keep
+            # this proof's own pinned image, caller UID and resource limits.
+            import librelane_contract as launch
+            command = launch._image_tool_argv(command, image=image)
             completed = subprocess.run(
                 command, capture_output=True, text=True,
                 timeout=min(max(timeout, 1), 300))
@@ -821,7 +1012,7 @@ def run_structural_contract(
                                    "stdout": exc.stdout or "", "stderr": exc.stderr or ""}
             return finish("NOT_MEASURED", "STRUCTURAL_PROOF_TIMEOUT",
                           "native Yosys structural proof timed out")
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, subprocess.SubprocessError, launch.Refusal) as exc:
             return finish("NOT_MEASURED", "STRUCTURAL_TOOL_UNAVAILABLE", str(exc))
         report["execution"] = {
             "command": command, "returncode": completed.returncode,
@@ -912,6 +1103,13 @@ def validate_normal_repair_contract(
     if not isinstance(contract, Mapping):
         return {"verdict": "REFUSED", "findings": [{"code": "DECLARATION_REFUSED",
                                                       "message": "normal repair contract is not an object"}]}
+    if contract.get("schema") == SCHEMA_HEADER_COMPLETION:
+        if original or candidate_path is None:
+            return {"verdict": "REFUSED", "findings": [{
+                "code": "HEADER_COMPLETION_SOURCE_CONFLICT",
+                "message": "header completion needs source-verified prompt-only input and one exact candidate"}]}
+        return validate_header_completion(candidate_path, contract,
+            (requirement_sources or {}).get("input/phase1_prompt.md", ""))
     preservation = contract.get("preservation", contract.get("preservation_declaration"))
     matrix = contract.get("elaboration_matrix", contract.get("public_elaboration_matrix"))
     structural = contract.get("structural", contract.get("native_structural_contract"))

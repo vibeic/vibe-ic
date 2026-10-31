@@ -96,6 +96,44 @@ This is a sequence, not two independent racing solvers:
    fresh independent AI review. AI is the final semantic authority only after
    this evidence chain is complete.
 
+A structural-only rejection still requires the frozen candidate to PASS the
+prompt-derived functional challenge. Supplied-RTL tasks retain the existing
+source-bound structural contract and Program functional PASS requirement. A
+source-verified `spec_generation` or `completion` task using original input may instead declare
+`vibeic.prompt_structural_contract.v1`: name its exact relative `candidate_path`,
+bind the candidate hash and a unique exact prompt quote, and use the task's
+immutable native image. Every active functional challenge must PASS and cover
+all blocking obligations before native `STRUCTURAL_CONTRACT_VIOLATION` permits
+repair. The repair record carries `vibeic.prompt_structural_completion.v1` and
+the unchanged structural declaration, rebinding only its candidate hash; normal
+completion replays it before a fresh independent review. Only structures
+retained at `RTLIL_AFTER_PROC_OPT` are supported. Functional equivalence cannot
+prove source syntax such as assign versus always, and an unsupported abstraction
+remains NOT_MEASURED.
+
+No public RTL files does not mean no supplied RTL: the authoritative original
+prompt may contain it. Source facts distinguish absent RTL from a single
+complete header with no body. The latter requires `prompt_header_preservation`
+in the structural payload, of schema `vibeic.prompt_header_preservation.v1`,
+with `prompt_sha256`, `module`, exact original `header` and `header_sha256`.
+The candidate must preserve the header's significant tokens; only whitespace
+and comments may vary. The same binding survives native repair replay. This
+narrow structural exception does not allow a functional-only repair to omit its
+source contract. Embedded bodies, multiple modules, unsupported source context,
+incomplete extraction and malformed public manifests never become text-only.
+
+A functional rejection on a header-only input may use the distinct repair
+wrapper `vibeic.prompt_header_completion.v1`. It binds `prompt_sha256`,
+`parent_rtl_sha256`, whole-bundle `candidate_sha256`, `challenge_sha256`, the
+same attributed `author` and `oracle_accessed: false`, plus an exact relative
+`candidate_path`, its byte hash `candidate_file_sha256`, and the unchanged
+`prompt_header_preservation`. Normal completion replays that header proof;
+ordinary native gates, the immutable functional challenge and fresh hash-bound
+AI review remain mandatory. Header fidelity alone is not functional PASS.
+An active structural contract must keep its original structural wrapper and
+cannot be replaced by HeaderCompletion. Supplied bodies, multiple/ambiguous
+modules and unverified source authority retain their strict source obligations.
+
 Every candidate therefore has two required checks: deterministic product gates
 and semantic AI review. `program_first_ai_acceptance.json` must be `COMPLETE`
 before scoring.

@@ -19,6 +19,17 @@ container_exec = importlib.import_module('_container_exec')
 eda_pin = importlib.import_module('_eda_pin')
 
 
+@pytest.fixture(autouse=True)
+def legacy_fixture_image_metadata(monkeypatch):
+    """These fictional transport fixtures model the legacy EDA environment.
+
+    Real native/legacy launch inspection is covered separately by
+    test_native_image_tool_launch; do not inspect a fictional registry here.
+    """
+    monkeypatch.setattr(contract, '_image_entrypoint',
+                        lambda docker, image: ['/dockerstartup/scripts/ui_startup.sh'])
+
+
 def put(path, obj):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj))

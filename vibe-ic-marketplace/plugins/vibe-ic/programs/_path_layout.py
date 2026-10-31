@@ -157,25 +157,23 @@ def select_rtl_input(project: Path, kind: str, entry_step=None, exit_step=None) 
         if not prompt.is_file() or any(p.is_symlink() for p in
                                       (Path(project), Path(project) / "input", prompt)):
             raise ValueError("original RTL input requires its regular original prompt")
-        import task_nature_route as nature
-        text = prompt.read_bytes().decode("utf-8")
-        # Quoted HDL is an artefact, not a request to transform that artefact.
-        # Use the same nature decision as the front door; a new module may be
-        # specified with an existing module as context.
-        embedded = nature.prompt_embeds_rtl(text) or nature.prompt_embeds_partial_rtl(text)
-        new_unit = re.search(
-            r"\b(?:create|write|implement|design|build)\s+(?:(?:a|the)\s+)?"
-            r"(?:new\s+module|submodule)\b", nature._prose_view(text), re.I)
-        if embedded and (not new_unit
-                         or nature.route_task(text).get("nature") != "spec_generation"):
-            raise ValueError("original RTL generation cannot replace a supplied RTL transform")
-        if any(p.suffix.lower() in (".v", ".sv", ".vhd", ".vhdl")
-               for p in original_input_sources(project)[1:]):
-            raise ValueError("original RTL generation cannot replace a supplied RTL transform")
+        # Original is a source contract, not a synonym for generation. The
+        # caller retains completion/modification semantics; embedded HDL and
+        # source-bound context are inputs the author must preserve or change
+        # as requested. A separate unbound RTL tree must never be silently
+        # omitted from that authority.
+        original_sources = original_input_sources(project)
+        original_bytes = {p.read_bytes() for p in original_sources[1:]}
         for source in (Path(project) / "input/rtl", Path(project) / "input/vendor_rtl"):
-            if source.is_dir() and any(p.suffix.lower() in (".v", ".sv", ".vhd", ".vhdl")
-                                       for p in source.rglob("*")):
-                raise ValueError("original RTL generation cannot consume supplied RTL as a new specification")
+            entries = [source, *source.rglob("*")] if source.exists() or source.is_symlink() else []
+            if any(p.is_symlink() for p in entries):
+                raise ValueError("original input context is a symbolic link")
+            # The intake adapter retains a byte-identical build copy beneath
+            # input/rtl. Its public snapshot, not a different filesystem name,
+            # is the authority for that copy.
+            if any(p.is_file() and p.suffix.lower() in (".v", ".sv", ".vhd", ".vhdl")
+                   and p.read_bytes() not in original_bytes for p in entries):
+                raise ValueError("original RTL input contains unbound supplied RTL")
     _RTL_INPUT = (str(Path(project).resolve()), kind)
 
 

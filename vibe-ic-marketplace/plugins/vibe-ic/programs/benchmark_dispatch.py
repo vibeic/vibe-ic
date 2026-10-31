@@ -53,6 +53,9 @@ from _atomic_artefact import write_bytes as _atomic_write_bytes
 import _runtime_pair_preflight as _runtime_pair
 import _progress_run
 import _container_exec as _challenge_exec
+from rtl_repair_contract import (SCHEMA_PROMPT_STRUCTURAL, SCHEMA_PROMPT_COMPLETION,
+                                 SCHEMA_HEADER_COMPLETION, prompt_rtl_source_facts,
+                                 prompt_header_preservation, validate_header_completion)
 
 HARNESS = Path(__file__).resolve().parent.parent / "benchmark"
 REGISTRY = HARNESS / "BENCHMARK_REGISTRY.json"
@@ -143,18 +146,27 @@ R = TypeVar("R")
 
 
 def _ordered_parallel_map(items: Iterable[T], worker: Callable[[T], R],
-                          jobs: int) -> list[R]:
+                          jobs: int, on_complete: Callable[[R], None] | None = None) -> list[R]:
     """Run unique-project work concurrently and return input-order results."""
     rows = list(items)
     if jobs <= 1 or len(rows) <= 1:
-        return [worker(row) for row in rows]
+        completed = []
+        for row in rows:
+            result = worker(row)
+            if on_complete is not None:
+                on_complete(result)
+            completed.append(result)
+        return completed
     ordered: list[R | None] = [None] * len(rows)
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=jobs)
     futures = {}
     try:
         futures = {pool.submit(worker, row): i for i, row in enumerate(rows)}
         for future in concurrent.futures.as_completed(futures):
-            ordered[futures[future]] = future.result()
+            result = future.result()
+            if on_complete is not None:
+                on_complete(result)
+            ordered[futures[future]] = result
     except BaseException:
         for future in futures:
             future.cancel()
@@ -180,6 +192,7 @@ class _ProcessOutcome:
 _RUNNER_REPORT_NAMES = ("phase1_one_shot.json", "phase2_one_shot.json",
                         "phase3_one_shot.json", "vibe_ic_one_shot.json")
 _RUNNER_CONTEXT_ENV = "VIBEIC_RUNNER_INVOCATION_CONTEXT"
+_RUNNER_PARENT_CONTEXT_ENV = "VIBEIC_PARENT_RUNNER_INVOCATION_CONTEXT"
 
 
 def _runner_source_snapshot(argv: list[str], *, consumer: str | None = None) -> dict:
@@ -324,6 +337,45 @@ def _runner_fresh_reports(before: dict, after: dict) -> list[str]:
             and record["sha256"] != before.get(name, {}).get("sha256")]
 
 
+def _runner_owner_report_current(project: Path, binding: dict, receipt: dict) -> None:
+    """Reopen the actual child owner behind an outer current publication."""
+    owner = binding.get("owner_report")
+    if owner is None:
+        return
+    relative = owner["path"]
+    path = project / relative
+    if (not isinstance(relative, str) or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+            or path.parent.parent != project / "reports/flow109/attempts"
+            or path.name != "phase2_one_shot.json"
+            or any(p.is_symlink() for p in (path, *path.parents))):
+        raise ValueError("child owner path is not a current-project attempt")
+    raw = path.read_bytes()
+    child = _strict_json_loads(raw)
+    current = _strict_json_loads((project / "reports/orchestrator/phase2_one_shot.json").read_bytes())
+    owned = child["runner_binding"]
+    expected_parent = {"invocation_id": receipt["invocation_id"], "argv": receipt["argv"],
+                       "project": receipt["project"], "source": receipt["source_before"]}
+    argv = owned["argv"]
+    source = owned["source"]
+    if (hashlib.sha256(raw).hexdigest() != owner["sha256"]
+            or {k:v for k,v in child.items() if k != "runner_binding"}
+                != {k:v for k,v in current.items() if k != "runner_binding"}
+            or owned.get("parent_invocation") != expected_parent
+            or owned.get("schema") != "vibeic.runner_report_binding.v1"
+            or owned.get("project") != str(project)
+            or not owned.get("invocation_id")
+            or owned.get("report_name") != "phase2_one_shot.json"
+            or owned.get("producer") != binding["producer"]
+            or owned.get("material") != receipt["material_after"]
+            or len(argv) < 3 or Path(argv[1]).name != "phase2_one_shot_runner.py"
+            or Path(argv[2]).resolve() != project
+            or argv[argv.index("--entry-step") + 1] != "2"
+            or argv[argv.index("--exit-step") + 1] != "2"
+            or source != _runner_source_snapshot(argv, consumer=source["consumer"]["path"])):
+        raise ValueError("child owner source/generation/material differs")
+
+
 def _runner_report_binding_reason(receipt: dict, *, require_phase2: bool) -> str | None:
     """The same report subject/generation check at collect, freeze and reentry."""
     fresh = _runner_fresh_reports(receipt["reports_before"], receipt["reports_after"])
@@ -348,6 +400,7 @@ def _runner_report_binding_reason(receipt: dict, *, require_phase2: bool) -> str
                     or binding["source"] != receipt["source_before"]
                     or binding["report_name"] != name):
                 raise ValueError("report invocation/source differs")
+            _runner_owner_report_current(Path(receipt["project"]), binding, receipt)
             producer = binding["producer"]
             if hashlib.sha256(Path(producer["path"]).read_bytes()).hexdigest() != producer["sha256"]:
                 raise ValueError("report producer source changed")
@@ -356,7 +409,7 @@ def _runner_report_binding_reason(receipt: dict, *, require_phase2: bool) -> str
             if (name != "phase1_one_shot.json" or not require_phase2):
                 if binding["material"] != receipt["material_after"]:
                     raise ValueError("report input/output material differs")
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
             return "RUNNER_REPORT_UNBOUND: report generation/source/material does not bind this invocation"
     return None
 
@@ -987,6 +1040,116 @@ class _SolveWorkerOutcome:
     review_task_json: str | None
     backup_task_json: str | None
     log_line: str
+
+
+def _checkpointed_solve_map(problem_rows, worker, jobs, *, run_p, binding):
+    """Commit each completed worker under the coordinator lock before reuse.
+
+    Checkpoints are the transaction record; solve_report is a reconstructible
+    projection. A process can die between those writes without losing a
+    completed worker. Reuse requires unchanged routes, code and project bytes.
+    """
+    root = run_p / "solve_checkpoints"
+    if root.is_symlink():
+        raise ValueError("SOLVE_CHECKPOINT_MISMATCH: checkpoint root is a symlink")
+    root.mkdir(exist_ok=True)
+    bound = _sha256_text(json.dumps(binding, sort_keys=True))
+    committed = {}
+    ids = [str(row[1]["id"]) for row in problem_rows]
+
+    def checkpoint_path(pid):
+        return root / (_sha256_text(pid) + ".json")
+
+    for index, problem in problem_rows:
+        pid = str(problem["id"])
+        path = checkpoint_path(pid)
+        if not path.exists():
+            continue
+        try:
+            record = _read_json_regular(path)
+            payload = record.get("outcome")
+            if (record.get("schema") != "vibeic.benchmark.solve_checkpoint.v1"
+                    or record.get("binding_sha256") != bound
+                    or not isinstance(payload, dict)
+                    or record.get("outcome_sha256") != _sha256_text(
+                        json.dumps(payload, sort_keys=True))):
+                raise ValueError("SOLVE_CHECKPOINT_MISMATCH: " + pid)
+            outcome = _SolveWorkerOutcome(**payload)
+            result = _strict_json_loads(outcome.result_json)
+            if (outcome.problem_id != pid or outcome.index != index
+                    or result.get("id") != pid or result.get("accepted") is not False
+                    or record.get("project_tree") != _regate_project_tree(
+                        run_p / "projects" / _safe_problem_id(pid))):
+                raise ValueError("SOLVE_CHECKPOINT_MISMATCH: " + pid)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise ValueError("SOLVE_CHECKPOINT_MISMATCH: " + pid) from exc
+        committed[pid] = outcome
+
+    def publish(status):
+        solve = _read_json_regular(run_p / "solve_report.json")
+        results = []
+        for pid in ids:
+            if pid in committed:
+                results.append(_strict_json_loads(committed[pid].result_json))
+            else:
+                phases = _phase_error_attribution()
+                for phase in phases.values():
+                    phase["reason"] = "SOLVE_WORKER_NOT_COMMITTED"
+                results.append({"id": pid, "accepted": False, "ok": False,
+                                "candidate_ready": False,
+                                "worker_status": "NOT_MEASURED",
+                                "phases": phases})
+        solve.update(results=results, solved=sum(bool(r.get("ok")) for r in results),
+                     accepted=0, routing_phase="PENDING", route_confirmed=len(ids),
+                     solve_execution_status=status,
+                     committed_ids=[pid for pid in ids if pid in committed],
+                     remaining_ids=[pid for pid in ids if pid not in committed])
+        _atomic_write_json(run_p / "solve_report.json", solve)
+        _atomic_write_json(run_p / _ACCEPTANCE_REPORT, {
+            "schema": _ACCEPTANCE_SCHEMA, "status": "PENDING", "accepted": 0,
+            "total": len(ids), "accepted_ids": [],
+            "pending_execution": len(ids) - len(committed)})
+
+    def commit(outcome):
+        pid = outcome.problem_id
+        payload = dict(vars(outcome))
+        result = _strict_json_loads(outcome.result_json)
+        if pid not in ids or result.get("id") != pid or result.get("accepted") is not False:
+            raise ValueError("SOLVE_CHECKPOINT_INVALID: " + pid)
+        _atomic_write_json(checkpoint_path(pid), {
+            "schema": "vibeic.benchmark.solve_checkpoint.v1",
+            "binding_sha256": bound, "outcome": payload,
+            "outcome_sha256": _sha256_text(json.dumps(payload, sort_keys=True)),
+            "project_tree": _regate_project_tree(
+                run_p / "projects" / _safe_problem_id(pid))})
+        committed[pid] = outcome
+        publish("INCOMPLETE")
+
+    previous = {}
+    def interrupted(signum, frame):
+        publish("INTERRUPTED")
+        handler = previous[signum]
+        if callable(handler):
+            handler(signum, frame)
+        elif handler != signal.SIG_IGN:
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+    publish("INCOMPLETE")
+    if threading.current_thread() is threading.main_thread():
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            previous[sig] = signal.getsignal(sig)
+            signal.signal(sig, interrupted)
+    try:
+        remaining = [row for row in problem_rows if str(row[1]["id"]) not in committed]
+        _ordered_parallel_map(remaining, worker, jobs, on_complete=commit)
+    except BaseException:
+        publish("INTERRUPTED")
+        raise
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    return [committed[pid] for pid in ids]
 
 
 @dataclass(frozen=True)
@@ -1998,6 +2161,13 @@ def _program_output_repair_contract(author_contract: dict, identity: dict,
         key = path[4:] if path.startswith("rtl/") else path
         return outputs[key]["sha256"]
 
+    if derived.get("schema") == SCHEMA_HEADER_COMPLETION:
+        derived["candidate_file_sha256"] = output_hash(derived.get("candidate_path"))
+        return derived
+    if derived.get("schema") == SCHEMA_PROMPT_COMPLETION:
+        structural = derived["structural"]
+        structural["candidate_sha256"] = output_hash(structural.get("candidate_path"))
+        return derived
     preservation = derived["preservation"]
     preservation.pop("candidate_sha256", None)
     for row in preservation["sources"]:
@@ -2487,6 +2657,20 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                         "structure. verification_test remains required and must PASS; "
                         "this native proof, not a fabricated simulation failure, must FAIL"),
                     "schema": "vibeic.native_structural_contract.v1",
+                    "_prompt_only_alternative": (
+                        "For source-verified spec_generation/completion with original input selection, use "
+                        "schema='vibeic.prompt_structural_contract.v1', replace source_path "
+                        "with candidate_path (exact relative RTL path), and omit source_sha256. "
+                        "The task's declared native image must be used. The current functional "
+                        "challenge and all active inherited challenges must PASS and cover "
+                        "every blocking obligation, even without Program functional PASS. "
+                        "Only structures preserved at RTLIL_AFTER_PROC_OPT are measurable; "
+                        "source-syntax methods are not established by functional equivalence. "
+                        "A unique header-only prompt also requires prompt_header_preservation: "
+                        "schema='vibeic.prompt_header_preservation.v1', prompt_sha256, module, "
+                        "header (exact original header text), header_sha256. Header tokens "
+                        "must survive unchanged. Embedded bodies, multiple modules or "
+                        "ambiguous extraction are NOT_MEASURED; never omit their source obligations."),
                     "source_path": "<exact public-original RTL relative path>",
                     "source_sha256": "<sha256 of that exact original source>",
                     "candidate_sha256": "<sha256 of exact selected candidate file>",
@@ -2701,17 +2885,129 @@ def _repair_record_path(run_p: Path, task: dict) -> Path:
             f"repair-of-{parent_hash}.json")
 
 
-def _requires_source_repair_contract(task: dict) -> bool:
-    """Preserve supplied RTL; a text-only generation has no RTL fragments.
+def _original_prompt_without_context(task: dict) -> str | None:
+    """Read the existing authoritative original contract, never a nature claim.
 
-    The original-input selection comes from the measured runner invocation,
-    not an author/reviewer label. All other inputs retain the source-bound
-    completion contract, including absent or malformed public-source records.
+    Both generation and completion may be text-only. An absent/malformed public
+    manifest, drifted prompt or real context is not evidence that source is absent.
     """
-    return not (
-        (task.get("public_original_input") or {}).get("status") == "NOT_PROVIDED"
-        and (task.get("program_routing") or {}).get("nature") == "spec_generation"
-        and _task_rtl_input(task) == "original")
+    if ((task.get("program_routing") or {}).get("nature") not in {"spec_generation", "completion"}
+            or (task.get("public_original_input") or {}).get("status") != "NOT_PROVIDED"):
+        return None
+    try:
+        if _task_rtl_input(task) != "original":
+            return None
+        import _path_layout as layout
+        import benchmark_io_adapter as bio
+        project = Path(str(task["project"]))
+        sources = layout.original_input_sources(project)
+        prompt = sources[0].read_text()
+        actual = bio.public_original_input(project, str(task["id"]),
+            str(task["prompt_sha256"]), expected=task.get("public_original_input"))
+        if (len(sources) != 1 or actual != task.get("public_original_input")
+                or actual.get("status") != "NOT_PROVIDED" or actual.get("files")
+                or _sha256_text(prompt) != task["prompt_sha256"]):
+            return None
+        return prompt
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def _requires_source_repair_contract(task: dict) -> bool:
+    """Only measured source absence permits a contract-free functional repair.
+
+    Embedded headers still carry preservation obligations. Their narrow prompt
+    structural binding is independent of this strict source-bound default.
+    """
+    prompt = _original_prompt_without_context(task)
+    return prompt is None or prompt_rtl_source_facts(prompt)["kind"] != "NONE"
+
+
+def _allows_prompt_structural_binding(task: dict) -> bool:
+    prompt = _original_prompt_without_context(task)
+    return (prompt is not None
+            and prompt_rtl_source_facts(prompt)["kind"] in {"NONE", "HEADER_ONLY"})
+
+
+def _requires_repair_contract(task: dict, contract=None) -> bool:
+    contract = contract if contract is not None else (
+        (task.get("repair_provenance") or {}).get("repair_contract"))
+    return (_requires_source_repair_contract(task)
+            or isinstance(contract, dict)
+            and contract.get("schema") in {SCHEMA_PROMPT_COMPLETION, SCHEMA_HEADER_COMPLETION})
+
+
+def _selected_repair_candidate(task: dict, relative_path) -> Path:
+    import benchmark_io_adapter as bio
+    relative = bio._public_relative(relative_path)
+    root = Path(str(task["project"])) / "phase2" / "stage1" / "rtl"
+    source = root / relative
+    if (not source.is_file() or source.is_symlink()
+            or any(parent.is_symlink() for parent in source.parents)
+            or not source.resolve().is_relative_to(root.resolve())):
+        raise ValueError("repaired candidate is absent, unsafe or a symlink")
+    return source
+
+
+def _rebound_structural_contract(task: dict, declaration: dict) -> dict:
+    expected = _strict_json_loads(json.dumps(declaration))
+    key = ("candidate_path" if expected.get("schema") == SCHEMA_PROMPT_STRUCTURAL
+           else "source_path")
+    source = _selected_repair_candidate(task, expected.get(key))
+    expected["candidate_sha256"] = _sha256_text(source.read_text(errors="replace"))
+    return expected
+
+
+def _inherited_structural_contract(task: dict, review: dict):
+    current = review.get("structural_verification")
+    if current is not None:
+        return current
+    prior = (task.get("repair_provenance") or {}).get("repair_contract")
+    if isinstance(prior, dict):
+        return prior.get("structural", prior.get("native_structural_contract"))
+    return None
+
+
+def _header_completion_facts(task: dict):
+    prompt = _original_prompt_without_context(task)
+    if prompt is None:
+        return None
+    facts = prompt_rtl_source_facts(prompt)
+    return facts if facts["kind"] == "HEADER_ONLY" else None
+
+
+def _repair_contract_requirements(task: dict, verdict: dict) -> dict:
+    """Emit the normal discriminated repair contract without dropping old proofs."""
+    inherited = _inherited_structural_contract(task, {
+        "structural_verification": verdict.get("verified_structural_contract")})
+    common = {
+        "prompt_sha256": task.get("prompt_sha256"),
+        "parent_rtl_sha256": task.get("rtl_sha256"),
+        "candidate_sha256": "sha256 of corrected working RTL",
+        "challenge_sha256": (verdict.get("verified_challenge") or {}).get("sha256"),
+        "author": {"kind": "AI", "model": "same as outer author"}, "oracle_accessed": False}
+    if isinstance(inherited, dict) and inherited.get("schema") == SCHEMA_PROMPT_STRUCTURAL:
+        structural = _strict_json_loads(json.dumps(inherited))
+        structural["candidate_sha256"] = "sha256 of corrected exact selected RTL file"
+        return {"repair_contract": {"schema": SCHEMA_PROMPT_COMPLETION,
+                                     **common, "structural": structural}}
+    facts = _header_completion_facts(task)
+    if inherited is None and facts is not None:
+        return {"repair_contract": {"schema": SCHEMA_HEADER_COMPLETION, **common,
+            "candidate_path": "exact relative working RTL path containing the supplied header",
+            "candidate_file_sha256": "sha256 of that exact corrected file",
+            "prompt_header_preservation": prompt_header_preservation(facts)}}
+    if _requires_source_repair_contract(task):
+        contract = {"schema": "vibeic.source_bounded_completion.v1", **common,
+            "source_sha256": (task.get("public_original_input") or {}).get("source_sha256"),
+            "preservation": "complete exact-path declaration required",
+            "elaboration_matrix": "complete exact-path declaration required"}
+        if inherited is not None:
+            contract["structural"] = ({**inherited,
+                "candidate_sha256": "sha256 of corrected exact selected RTL file"}
+                if isinstance(inherited, dict) else inherited)
+        return {"repair_contract": contract}
+    return {}
 
 
 def _validate_repair_record(path: Path, task: dict, repaired_hash: str,
@@ -2750,8 +3046,63 @@ def _validate_repair_record(path: Path, task: dict, repaired_hash: str,
     contract = record.get("repair_contract")
     public = task.get("public_original_input") or {}
     source_bound = _requires_source_repair_contract(task)
-    if not source_bound:
-        if contract is not None:
+    try:
+        review = _strict_json_loads(Path(str(task.get("review_path") or "")).read_text())
+    except (OSError, ValueError):
+        review = {}
+    inherited = _inherited_structural_contract(task, review if isinstance(review, dict) else {})
+    if isinstance(contract, dict) and contract.get("schema") == SCHEMA_HEADER_COMPLETION:
+        if inherited is not None:
+            reasons.append("header completion cannot replace an active structural contract")
+        if _header_completion_facts(task) is None:
+            reasons.append("header completion requires verified unique header-only original input")
+        bindings = {"prompt_sha256": task.get("prompt_sha256"),
+            "parent_rtl_sha256": task.get("rtl_sha256"), "candidate_sha256": repaired_hash,
+            "challenge_sha256": challenge.get("sha256"), "author": record.get("author"),
+            "oracle_accessed": False}
+        for key, value in bindings.items():
+            if contract.get(key) != value:
+                reasons.append(f"header repair_contract {key} is stale or wrong")
+        try:
+            source = _selected_repair_candidate(task, contract.get("candidate_path"))
+            prompt = Path(str(task["prompt_path"])).read_text()
+            measured = validate_header_completion(source, contract, prompt)
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            reasons.append(f"header completion candidate cannot be bound: {exc}")
+        else:
+            if measured["verdict"] != "PASS":
+                reasons.append("header completion proof did not PASS: " + str(measured["findings"]))
+        if reasons:
+            return None, reasons
+        return {**record, "path": str(path), "sha256": _sha256_text(raw)}, []
+    prompt_structure = (isinstance(inherited, dict)
+                        and inherited.get("schema") == SCHEMA_PROMPT_STRUCTURAL
+                        and _allows_prompt_structural_binding(task))
+    if not source_bound or prompt_structure:
+        if prompt_structure:
+            if not isinstance(contract, dict) or contract.get("schema") != SCHEMA_PROMPT_COMPLETION:
+                reasons.append("prompt-only structural repair requires its inherited repair_contract")
+            else:
+                bindings = {
+                    "prompt_sha256": task.get("prompt_sha256"),
+                    "parent_rtl_sha256": task.get("rtl_sha256"),
+                    "candidate_sha256": repaired_hash,
+                    "challenge_sha256": challenge.get("sha256"),
+                    "author": record.get("author"), "oracle_accessed": False,
+                }
+                for key, value in bindings.items():
+                    if contract.get(key) != value:
+                        reasons.append(f"prompt repair_contract {key} is stale or wrong")
+                if any(key in contract for key in ("source_sha256", "preservation", "elaboration_matrix")):
+                    reasons.append("prompt-only structure cannot declare supplied RTL preservation")
+                try:
+                    expected = _rebound_structural_contract(task, inherited)
+                except (KeyError, OSError, TypeError, ValueError) as exc:
+                    reasons.append(f"repair structural candidate cannot be bound: {exc}")
+                else:
+                    if contract.get("structural") != expected:
+                        reasons.append("repair_contract structural proof is missing, stale, or differs from the admitted native proof")
+        elif contract is not None:
             reasons.append("text-only generation cannot declare supplied RTL preservation")
         if reasons:
             return None, reasons
@@ -2782,8 +3133,7 @@ def _validate_repair_record(path: Path, task: dict, repaired_hash: str,
                 Path(str(task.get("review_path") or "")).read_text(errors="replace"))
         except (OSError, ValueError):
             review = {}
-        inherited_structural = review.get("structural_verification") \
-            if isinstance(review, dict) else None
+        inherited_structural = inherited
         if inherited_structural is not None:
             if not isinstance(inherited_structural, dict):
                 reasons.append("review structural_verification is malformed")
@@ -4271,34 +4621,45 @@ def _run_review_structural_proof(task: dict, candidate: dict,
         return {"verdict": "REFUSED", "findings": [{
             "code": "STRUCTURAL_DECLARATION_MISSING",
             "message": "structural_verification must be an object"}]}
-    source_path = declaration.get("source_path")
+    prompt_only = declaration.get("schema") == SCHEMA_PROMPT_STRUCTURAL
+    if prompt_only and _original_prompt_without_context(task) is None:
+        return {"verdict": "REFUSED", "findings": [{
+            "code": "STRUCTURAL_BINDING_CONFLICT",
+            "message": "prompt structural binding requires verified original-input generation/completion without public context files"}]}
+    source_path = declaration.get("candidate_path" if prompt_only else "source_path")
     try:
         relative = bio._public_relative(source_path)
     except (TypeError, ValueError):
         return {"verdict": "REFUSED", "findings": [{
             "code": "STRUCTURAL_SOURCE_PATH_INVALID",
-            "message": "structural source_path is unsafe"}]}
+            "message": "structural candidate path is unsafe"}]}
     project = Path(str(task.get("project") or "")).resolve()
-    original_path = project / "input" / "public_original" / "files" / relative
-    public_root = (project / "input" / "public_original" / "files").resolve()
-    lexical_original = original_path
-    if lexical_original.is_symlink() or any(
-            parent.is_symlink()
-            for parent in lexical_original.parents
-            if parent == public_root or public_root in parent.parents):
-        return {"verdict": "REFUSED", "findings": [{
-            "code": "STRUCTURAL_SOURCE_PATH_INVALID",
-            "message": "declared public original source traverses a symlink"}]}
-    try:
-        original_path = original_path.resolve(strict=True)
-    except OSError:
-        return {"verdict": "REFUSED", "findings": [{
-            "code": "STRUCTURAL_SOURCE_MISSING",
-            "message": "declared public original source is absent"}]}
-    if public_root not in original_path.parents or original_path.is_symlink():
-        return {"verdict": "REFUSED", "findings": [{
-            "code": "STRUCTURAL_SOURCE_PATH_INVALID",
-            "message": "declared public original source escapes its frozen root"}]}
+    original_source = None
+    if not prompt_only:
+        original_path = project / "input" / "public_original" / "files" / relative
+        public_root = (project / "input" / "public_original" / "files").resolve()
+        if any(parent.is_symlink() for parent in [original_path, *original_path.parents]):
+            return {"verdict": "REFUSED", "findings": [{
+                "code": "STRUCTURAL_SOURCE_PATH_INVALID",
+                "message": "declared public original source traverses a symlink"}]}
+        try:
+            original_path = original_path.resolve(strict=True)
+            if public_root not in original_path.parents:
+                raise ValueError("source escapes its frozen root")
+            original_source = original_path.read_text(errors="replace")
+        except (OSError, ValueError) as exc:
+            return {"verdict": "REFUSED", "findings": [{
+                "code": "STRUCTURAL_SOURCE_MISSING", "message": str(exc)}]}
+    else:
+        execution = _challenge_execution_for_task(task)
+        backend = declaration.get("backend")
+        backend = backend if isinstance(backend, dict) else {}
+        if (execution.get("backend") != "native"
+                or backend.get("image_id") != execution.get("image_id")
+                or not str(backend.get("image", "")).endswith("@" + str(execution.get("image_digest")))):
+            return {"verdict": "REFUSED", "findings": [{
+                "code": "STRUCTURAL_TOOL_IDENTITY_MISMATCH",
+                "message": "prompt structural proof must use the task's declared native image"}]}
 
     frozen_paths = [Path(str(p)).resolve() for p in candidate.get("rtl_paths") or []]
     source_paths = [Path(str(p)).resolve() for p in candidate.get("source_rtl_paths") or []]
@@ -4315,11 +4676,6 @@ def _run_review_structural_proof(task: dict, candidate: dict,
         return {"verdict": "REFUSED", "findings": [{
             "code": "STRUCTURAL_CANDIDATE_PATH_AMBIGUOUS",
             "message": "structural source_path does not select one immutable candidate file"}]}
-    try:
-        original_source = original_path.read_text(errors="replace")
-    except OSError as exc:
-        return {"verdict": "REFUSED", "findings": [{
-            "code": "STRUCTURAL_SOURCE_READ_ERROR", "message": str(exc)}]}
     return repair_contract.run_structural_contract(
         selected[0], declaration, original_source=original_source,
         requirement_sources={"input/phase1_prompt.md": prompt_text})
@@ -4546,12 +4902,14 @@ def _validate_ai_review(task: dict, *,
     execution_backend = _challenge_execution_for_task(task)
     structural_declaration = review.get("structural_verification")
     structural_result = None
+    prompt_structural = (isinstance(structural_declaration, dict)
+                         and structural_declaration.get("schema") == SCHEMA_PROMPT_STRUCTURAL)
     raw_supersessions = review.get("challenge_supersessions")
     supersession_requested = (
         isinstance(raw_supersessions, list) and bool(raw_supersessions))
     if semantic_verdict == "FAIL":
         if structural_declaration is not None:
-            if functional_evidence != "PASS":
+            if functional_evidence != "PASS" and not prompt_structural:
                 reasons.append(
                     "structural-only repair admission requires existing Program "
                     "functional evidence PASS; structure cannot replace function")
@@ -4698,14 +5056,14 @@ def _validate_ai_review(task: dict, *,
                 "this host, so the repair is neither proven nor disproven: "
                 + "; ".join(str(r) for r in result.get("reasons") or []))
         elif (result.get("status") == "FAIL"
-              and semantic_verdict == "FAIL"):
+              and semantic_verdict == "FAIL" and not prompt_structural):
             # A fresh AI rejection and an inherited prompt-derived failure
             # agree that this intermediate repair is still wrong.  That is
             # additional repair evidence, not a malformed review.  A claimed
             # PASS over the same failure remains rejected below.
             pass
         elif (result.get("status") == "INVALID"
-              and semantic_verdict == "FAIL"
+              and semantic_verdict == "FAIL" and not prompt_structural
               and (challenge_result or {}).get("status") == "FAIL"):
             # A broken older test must not deadlock an independently proven
             # repair.  This does NOT waive, supersede, or accept the invalid
@@ -4720,7 +5078,8 @@ def _validate_ai_review(task: dict, *,
             reasons.append("repair does not pass every immutable verification "
                            "test that proved its parent candidate wrong")
     program_review_coverage = None
-    if (semantic_verdict == "PASS" and confirmation_required
+    if (((semantic_verdict == "PASS" and confirmation_required)
+         or (semantic_verdict == "FAIL" and prompt_structural))
             and (challenge_result or {}).get("status") == "PASS"):
         active_challenges = [challenge] if challenge is not None else []
         for inherited, result in zip(
@@ -4741,7 +5100,7 @@ def _validate_ai_review(task: dict, *,
                            program_review_coverage.get(
                                "blocking_gap_items") or []]
                 reasons.append(
-                    "AI semantic PASS leaves structural prompt obligation(s) "
+                    "AI functional confirmation leaves structural prompt obligation(s) "
                     "uncovered by its active executable tests: "
                     + ", ".join(gap_ids))
     if semantic_verdict == "PASS":
@@ -4759,9 +5118,9 @@ def _validate_ai_review(task: dict, *,
         status = _NOT_MEASURED
         decision_reasons = unmeasurable + [
             "NOT_MEASURED is not a verdict about this candidate or this "
-            "review. This host lacks the capability the proof needs; install "
-            "it and re-run --resume. Nothing is accepted on the strength of a "
-            "test that did not run."]
+            "review. Resolve the specific tool, proof-contract or coverage "
+            "limitation listed above, then re-run --resume. Missing evidence "
+            "does not authorize acceptance."]
     elif semantic_verdict == "FAIL":
         status = "REPAIR_REQUIRED"
         decision_reasons = ["AI semantic authority rejected the current RTL; "
@@ -6064,8 +6423,20 @@ def _forward_product_manifest(run_p: Path, project: Path) -> None:
                                source.read_bytes())
 
 
+def _rtl_delivery_target(receipt: dict | None) -> str | None:
+    """Forward explicit RTL delivery only for the admitted RTL proof window."""
+    import task_nature_route as tnr
+    receipt = receipt or {}
+    if (receipt.get("delivery_target") == "rtl"
+            and tnr.is_rtl_only_evidence(receipt.get("requested_evidence"),
+                                         exit_step=receipt.get("verify_through"))):
+        return "rtl"
+    return None
+
+
 def _solver_argv(runner: Path, proj: Path, entry, exit_step,
-                 delivery_route: str = "ip", input_contract: str = "structured") -> list:
+                 delivery_route: str = "ip", input_contract: str = "structured",
+                 delivery_target: str | None = None) -> list:
     """One problem's runner argv, assembled from the routing verdict.
 
     Open RTL evaluations deliver IP/module evidence, so explicitly choose the
@@ -6081,7 +6452,10 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
     if delivery_route not in {"ic", "ip"}:
         raise ValueError(f"invalid delivery runner route: {delivery_route!r}")
     argv = [sys.executable, str(runner), str(proj),
-            "--route", delivery_route, "--skip-analog", "--skip-hardware"]
+            "--route", delivery_route, "--skip-analog", "--skip-hardware",
+            "--no-dashboard"]
+    if delivery_target == "rtl":
+        argv += ["--delivery-target", "rtl"]
     if input_contract == "original":
         argv += ["--rtl-input", "original"]
     elif input_contract != "structured":
@@ -6115,7 +6489,8 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
 
 def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
                         entry, exit_step, delivery_route: str = "ip",
-                        input_contract: str = "structured") -> list:
+                        input_contract: str = "structured",
+                        delivery_target: str | None = None) -> list:
     """Re-enter one routed problem without losing its declared exit.
 
     AI backup/repair supplies RTL, so it resumes at the first RTL-validation
@@ -6124,7 +6499,7 @@ def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
     """
     effective_entry = "2" if supplied_rtl and str(exit_step) != "1" else entry
     return _solver_argv(runner, proj, effective_entry, exit_step, delivery_route,
-                        input_contract)
+                        input_contract, delivery_target)
 
 
 def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
@@ -6163,8 +6538,9 @@ def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
         return {"status": "BLOCKED", "runner_rc": None,
                 "reason": f"front-door input is unreadable: {exc}"}
 
-    argv = _solver_argv(runner, project, "D1", "D1", delivery_route)
-    argv.append("--no-dashboard")
+    argv = _solver_argv(
+        runner, project, "D1", "D1", delivery_route,
+        delivery_target=_rtl_delivery_target(route_receipt))
     process = runner_budget.run(argv)
     diagnostic = _runner_diagnostics(process, argv, project, require_phase2=False)
     diagnostics = {"runner_diagnostics": diagnostic} if diagnostic else {}
@@ -8289,6 +8665,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 if entry != "D1":
                     phase1_frontdoor = _ensure_phase1_frontdoor(
                         runner, proj, runner_budget,
+                        route_receipt=route_receipt,
                         delivery_route=str(verdict.get("delivery_route") or "ip"))
                     if phase1_frontdoor.get("status") == "BLOCKED":
                         raise RuntimeError(str(phase1_frontdoor.get("reason")))
@@ -8328,7 +8705,8 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             else:
                 argv = _solver_argv(
                     runner, proj, effective_entry, exit_step,
-                    str(verdict.get("delivery_route") or "ip"), input_contract)
+                    str(verdict.get("delivery_route") or "ip"), input_contract,
+                    _rtl_delivery_target(route_receipt))
                 if activation is None:
                     _require_route_admission(run_p, route_task, route_receipt,
                                              require_d1=False)
@@ -8483,7 +8861,14 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 review_task_json=None, backup_task_json=None,
                 log_line=(f"  {pid:44s} NOT_MEASURED worker ERROR: {error}"))
 
-    outcomes = _ordered_parallel_map(problem_rows, _solve_one, jobs)
+    outcomes = _checkpointed_solve_map(
+        problem_rows, _solve_one, jobs, run_p=run_p, binding={
+            "bench": bench, "format": fmt, "dataset": str(ds),
+            "config": _read_json_regular(run_p / ".bench_config.json"),
+            "routes": routed_tasks, "decisions": route_decisions,
+            "source": _runner_source_snapshot([sys.executable, str(runner)]),
+            "program_source": _program_source_identity(),
+        })
     results: list[dict] = []
     backlog: list[dict] = []
     review_tasks: list[dict] = []
@@ -8528,6 +8913,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
         "solved": sum(1 for r in results if r["ok"]),
         "accepted": 0, "total": len(results),
         "routing_phase": "COMPLETE", "route_confirmed": len(results),
+        "solve_execution_status": "COMPLETE",
         "acceptance_policy": {
             "required": True,
             "rule": ("runner-owned RTL gate PASS (or supplied-RTL re-entry), "
@@ -8806,7 +9192,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             phase1_blocked[pid] = (
                 "canonical D1-entry run emitted no Phase-1 provenance")
             continue
-        frontdoor = _ensure_phase1_frontdoor(runner, proj, runner_budget)
+        frontdoor = _ensure_phase1_frontdoor(
+            runner, proj, runner_budget, route_receipt=receipt)
         if frontdoor.get("status") == "BLOCKED":
             phase1_blocked[pid] = str(
                 frontdoor.get("reason") or "Phase-1 front door blocked")
@@ -8894,9 +9281,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         argv = _resume_solver_argv(
             runner, proj, supplied_rtl, state["effective_entry"],
             state["exit_step"], state["delivery_route"],
-            input_contract) if input_contract == "original" else _resume_solver_argv(
-                runner, proj, supplied_rtl, state["effective_entry"],
-                state["exit_step"], state["delivery_route"])
+            input_contract, _rtl_delivery_target(state["route_receipt"]))
         if state["activation"] is None:
             _require_route_admission(run_p, state["task"], state["route_receipt"],
                                      require_d1=False)
@@ -9302,16 +9687,13 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         except OSError:
             working_hash = None
         if working_hash != task.get("rtl_sha256"):
-            # Establish the semantic proof without laundering the stale
-            # invocation receipt. The receipt exception is considered only
-            # after this detached review is a real REPAIR_REQUIRED finding.
-            proof_task = dict(task)
-            verification = task.get("program_verification")
-            if isinstance(verification, dict) and "runner_invocation" in verification:
-                proof_verification = dict(verification)
-                proof_verification.pop("runner_invocation", None)
-                proof_task["program_verification"] = proof_verification
-            proof_verdict = _validate_ai_review(proof_task)
+            # Keep the measured source selection in its bound invocation.
+            # Only this exact working-output delta may differ while checking
+            # the frozen parent's proof. It authorizes no re-entry until the
+            # signed repair record and complete invocation are validated below.
+            proof_verdict = _validate_ai_review(
+                task, allow_repaired_output=True,
+                repaired_output_sha256=str(working_hash))
             challenge = proof_verdict.get("verified_challenge")
             if (proof_verdict.get("status") == "REPAIR_REQUIRED"
                     and isinstance(challenge, dict)):
@@ -9567,7 +9949,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     repair_outcomes = iter(_ordered_parallel_map(
         [(p["id"], p["project"], True, None, p["result"].get("exit"),
           ({"repair_contract": ((p.get("repair_provenance") or {}).get("repair_contract")),
-            "require_repair_contract": _requires_source_repair_contract(p["task"]),
+            "require_repair_contract": _requires_repair_contract(
+                p["task"], (p.get("repair_provenance") or {}).get("repair_contract")),
             **({"expected_repaired_output_sha256": p["repaired_output_sha256"]}
                if p.get("repaired_output_sha256") is not None else {})}
            if p["task"].get("candidate_origin") == "AI_REPAIR" or p["kind"] == "run"
@@ -9774,26 +10157,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                         "author": {"kind": "AI", "model": "required"},
                         "oracle_accessed": False,
                         "rationale": "required",
-                        **({"repair_contract": {
-                            "schema": "vibeic.source_bounded_completion.v1",
-                            "prompt_sha256": task.get("prompt_sha256"),
-                            "source_sha256": (task.get("public_original_input") or {}).get(
-                                "source_sha256"),
-                            "parent_rtl_sha256": task.get("rtl_sha256"),
-                            "candidate_sha256": "sha256 of corrected working RTL",
-                            "challenge_sha256": (verdict.get("verified_challenge") or {}).get(
-                                "sha256"),
-                            "author": {"kind": "AI", "model": "same as outer author"},
-                            "oracle_accessed": False,
-                            "preservation": "complete exact-path declaration required",
-                            "elaboration_matrix": "complete exact-path declaration required",
-                            **({"structural": {
-                                **verdict["verified_structural_contract"],
-                                "candidate_sha256": (
-                                    "sha256 of the corrected exact selected RTL file"),
-                            }} if isinstance(verdict.get(
-                                "verified_structural_contract"), dict) else {}),
-                        }} if _requires_source_repair_contract(task) else {}),
+                        **_repair_contract_requirements(task, verdict),
                     },
                     "verified_prompt_evidence":
                         (verdict.get("override") or {}).get(
@@ -9824,7 +10188,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             repair_contract=(repair_contract
                              if task.get("candidate_origin") == "AI_REPAIR" else None),
             require_repair_contract=(task.get("candidate_origin") == "AI_REPAIR"
-                                     and _requires_source_repair_contract(task)),
+                                     and _requires_repair_contract(task)),
             required_top=_required_scorer_top(_entry(bench), fmt))
         if (not got.get("ok")
                 or _sha256_text(str(got.get("completion") or ""))
@@ -10009,10 +10373,10 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     }
     _atomic_write_json(run_p / _ACCEPTANCE_REPORT, acceptance)
     if not_measured:
-        print(f"\n{len(not_measured)}/{total} NOT_MEASURED: this host could not "
-              f"run the verification challenge, so those reviews were neither "
-              f"proven nor disproven. This is a host capability gap, not a "
-              f"finding about the candidates.")
+        print(f"\n{len(not_measured)}/{total} NOT_MEASURED: required verification "
+              f"evidence could not be established. See not_measured_detail for "
+              f"the specific tool, proof-contract or coverage limitation. This "
+              f"does not establish a candidate defect or authorize acceptance.")
     print(f"\n{len(accepted_ids)}/{total} Program First + AI Review accepted; status "
           f"{acceptance['status']} -> {run_p / _ACCEPTANCE_REPORT}")
     if complete:
@@ -10800,8 +11164,8 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
         bio.public_original_input(
             staged, pid, task["prompt_sha256"], expected=task["public_original_input"])
         input_material = _runner_material_snapshot(staged)
-        preservation = provenance["repair_contract"]["preservation"]
-        for row in preservation["sources"]:
+        preservation = provenance["repair_contract"].get("preservation", {})
+        for row in preservation.get("sources", []):
             source_relative = row["path"][4:] if row["path"].startswith("rtl/") else row["path"]
             expected = row.get("candidate_sha256", preservation.get("candidate_sha256"))
             if input_material["output_rtl"].get(source_relative, {}).get("sha256") != expected:
@@ -10828,7 +11192,9 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
         runner = Path(__file__).resolve().parent / "vibe_ic_one_shot_runner.py"
         argv = _resume_solver_argv(
             runner, staged, True, admission["entry_step"],
-            admission["exit_step"], admission["delivery_route"])
+            admission["exit_step"], admission["delivery_route"],
+            input_contract=str(admission["route_receipt"].get("input_contract") or "structured"),
+            delivery_target=_rtl_delivery_target(admission["route_receipt"]))
         d1_snapshot = _capture_d1_evidence(staged)
         process = _run_from_d1_snapshot(
             _RunnerBudget(1, 1, worker_threads), argv, d1_snapshot,
