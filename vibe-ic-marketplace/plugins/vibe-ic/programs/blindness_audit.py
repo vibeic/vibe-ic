@@ -297,6 +297,8 @@ def _harvest_tool_strings_cov(obj, calls: list[dict] | None = None
     for frame in _iter_call_frames(obj):
         got = _harvest_frame_strings(frame)
         communication = _collaboration_inspection_credit(frame)
+        if communication is None:
+            communication = _clock_inspection_credit(frame)
         inspected = bool(got) if communication is None else communication
         record = {
             "envelope_type": frame.get("type"),
@@ -375,6 +377,27 @@ def _iter_call_frames(obj) -> list[dict]:
     return found
 
 
+def _clock_inspection_credit(node) -> bool | None:
+    """Inspect the exact numeric sleep schema; unknown payloads still block.
+
+    Sleep neither opens files nor executes commands. Recognition requires the
+    real namespace, call type, sole argument and bounded integer duration.
+    Extra command/path fields remain scanned, but earn no coverage credit.
+    """
+    name = node.get("name") or node.get("tool_name")
+    if node.get("namespace") != "clock":
+        return False if name == "sleep" else None
+    if node.get("type") != "function_call" or name != "sleep":
+        return False
+    try:
+        payload = json.loads(node.get("arguments"))
+    except (TypeError, ValueError):
+        return False
+    return (isinstance(payload, dict) and set(payload) == {"duration_ms"}
+            and type(payload["duration_ms"]) is int
+            and 1 <= payload["duration_ms"] <= 43200000)
+
+
 def _collaboration_inspection_credit(node) -> bool | None:
     """Closed communication schemas, not a blanket exemption for text tools.
 
@@ -441,7 +464,10 @@ def _harvest_frame_strings(node, depth: int = 0) -> list[str]:
                   and _collaboration_inspection_credit(node)):
                 out.append(node["arguments"])  # the actual decoded empty payload
             return out
-        return _harvest_frame_strings(payload, depth + 1)
+        out = _harvest_frame_strings(payload, depth + 1)
+        if _clock_inspection_credit(node):
+            out.append(node["arguments"])
+        return out
     if isinstance(node, dict):
         out: list[str] = []
         for k, v in node.items():

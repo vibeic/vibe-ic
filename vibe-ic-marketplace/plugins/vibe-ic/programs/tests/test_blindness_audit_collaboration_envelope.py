@@ -127,3 +127,58 @@ def test_unknown_wait_arguments_do_not_get_inspection_credit(arguments):
     assert len(unread) == 1 and not calls[0]["inspected"]
     if "cmd" in arguments:
         assert [x["kind"] for x in findings] == ["dataset-file-access"]
+
+
+@pytest.mark.parametrize("duration", [1, 30000, 43200000])
+def test_numeric_clock_sleep_payload_is_fully_inspected(duration):
+    record = frame("sleep", {"duration_ms": duration}, namespace="clock")
+    findings, calls, unread = audit(record)
+    assert not findings and not unread and calls[0]["inspected"]
+    assert record["payload"]["arguments"] in ba._harvest_tool_strings(record)
+
+
+@pytest.mark.parametrize("arguments", [
+    {}, {"duration_ms": True}, {"duration_ms": "30000"},
+    {"duration_ms": 0}, {"duration_ms": 43200001}, {"duration_ms": 1.5},
+    {"duration_ms": 30000, "extra": {}},
+    {"duration_ms": 30000, "cmd": "cat /neutral-dataset/CaseOne/answer_ref.sv"},
+    {"duration_ms": {"cmd": "python3 score_neutral.py"}},
+])
+def test_invalid_clock_sleep_stays_uninspected_and_commands_visible(arguments):
+    findings, calls, unread = audit(frame("sleep", arguments, namespace="clock"))
+    assert len(unread) == 1 and not calls[0]["inspected"]
+    if "cmd" in arguments:
+        assert [x["kind"] for x in findings] == ["dataset-file-access"]
+    elif isinstance(arguments.get("duration_ms"), dict):
+        assert [x["kind"] for x in findings] == ["scorer-self-run"]
+    else:
+        assert not findings
+
+
+@pytest.mark.parametrize("record", [
+    frame("sleep", {"duration_ms": 30000}, namespace="unknown"),
+    frame("unknown", {"duration_ms": 30000}, namespace="clock"),
+    {"type": "custom_tool_call", "namespace": "clock", "name": "sleep",
+     "input": {"duration_ms": 30000}},
+])
+def test_clock_sleep_identity_and_envelope_are_required(record):
+    findings, calls, unread = audit(record)
+    assert not findings and len(unread) == 1 and not calls[0]["inspected"]
+
+
+def test_clock_sleep_actual_cli_census_and_reverse(tmp_path, monkeypatch):
+    record = frame("sleep", {"duration_ms": 30000}, namespace="clock")
+    transcript = tmp_path / "numeric-wait.jsonl"
+    transcript.write_text(json.dumps(record) + "\n")
+    original = transcript.read_bytes()
+    census = tmp_path / "coverage.json"
+    result = subprocess.run([sys.executable, str(Path(ba.__file__)), "--dataset", str(DATASET),
+        "--coverage-json", str(census), str(transcript)], capture_output=True, text=True)
+    assert result.returncode == ba.EXIT_CLEAN, result.stdout + result.stderr
+    report = json.loads(census.read_text())
+    assert (report["tool_calls"], report["inspected_tool_calls"],
+            report["uninspected_tool_calls"]) == (1, 1, 0)
+    assert transcript.read_bytes() == original
+    monkeypatch.setattr(ba, "_clock_inspection_credit", lambda node: None)
+    findings, calls, unread = audit(record)
+    assert not findings and len(unread) == 1 and not calls[0]["inspected"]
