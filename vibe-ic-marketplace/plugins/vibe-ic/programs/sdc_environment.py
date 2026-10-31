@@ -1143,6 +1143,9 @@ def render_pad_input_drive(record: Optional[Dict[str, object]],
         cell, pin = str(record.get("value")).split("/", 1)
         lines += [f"# R8 source: {source}",
                   f"set_driving_cell -lib_cell {cell} -pin {pin} [all_inputs]"]
+    elif verdict == "DECLARED" and record.get("model") == "design-staged SDC":
+        # These commands already carry the staged deck's units and port scopes.
+        lines += record["sdc_lines"]
     elif verdict == "DECLARED":
         lines += [f"# R8 source: {source}",
                   f"set_input_transition {float(record['value']) * time_scale:g} [all_inputs]"]
