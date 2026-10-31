@@ -820,14 +820,19 @@ def _image_entrypoint(docker: str, image: str) -> Any:
         raise Refusal('LL_IMAGE_ENTRYPOINT_UNAVAILABLE', str(exc)) from exc
 
 
-def _image_tool_argv(argv: list[str]) -> list[str]:
+def _image_tool_argv(argv: list[str], *, image: str | None = None) -> list[str]:
     """Preserve the selected image's environment when entering a native tool.
 
     Older images enter their tool environment via ui_startup.sh --skip; native
     images have no entrypoint and execute the tool directly. Never infer this
     distinction from a mutable tag, version string, or a failed tool launch.
+    A caller with its own validated image binding may supply that exact token
+    when its resource options exceed the narrow shared argv parser.
     """
-    image = _container_image_arg(argv)
+    if image is None:
+        image = _container_image_arg(argv)
+    elif argv.count(image) != 1:
+        raise Refusal('LL_IMAGE_TOKEN_AMBIGUOUS', 'declared image must occur exactly once')
     if image is None:
         return list(argv)
     at = argv.index(image)

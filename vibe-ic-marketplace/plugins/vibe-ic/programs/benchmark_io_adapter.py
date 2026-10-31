@@ -52,7 +52,7 @@ if str(_HERE) not in sys.path:
 import rtl_final_bundle_integrity as bundle_integrity  # noqa: E402
 from rtl_repair_contract import (  # noqa: E402
     load_json as _load_repair_json,
-    validate_normal_repair_contract,
+    validate_normal_repair_contract, SCHEMA_PROMPT_STRUCTURAL, SCHEMA_PROMPT_COMPLETION,
 )
 # R-0915-85 — THE VOCABULARY, IMPORTED RATHER THAN SPELLED.
 # This module READS the runner's step table and decides on its words. Spelling
@@ -542,6 +542,7 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
     required_marker = (not require_repair_contract and
                        (project / "reports" / "rtl_repair_contract.required").is_file())
     if contract is not None or require_repair_contract or required_marker:
+        prompt_structure = False
         if isinstance(contract, dict) and contract.get("_load_error"):
             repair_report = {"verdict": "REFUSED", "findings": [{
                 "code": "DECLARATION_READ_ERROR", "message": contract["_load_error"]}]}
@@ -550,7 +551,8 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
                 contract = {"preservation": contract}
             elif isinstance(contract, dict) and contract.get("schema") == "vibeic.public_elaboration_matrix.v1":
                 contract = {"elaboration_matrix": contract}
-            elif isinstance(contract, dict) and contract.get("schema") == "vibeic.native_structural_contract.v1":
+            elif isinstance(contract, dict) and contract.get("schema") in (
+                    "vibeic.native_structural_contract.v1", SCHEMA_PROMPT_STRUCTURAL):
                 contract = {"structural": contract}
             original_root = project / "input" / "public_original" / "files"
             original_sources: Dict[str, str] = {}
@@ -575,6 +577,8 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
                 if isinstance(contract, dict) else None
             structural = contract.get("structural", contract.get("native_structural_contract")) \
                 if isinstance(contract, dict) else None
+            prompt_structure = (isinstance(structural, dict)
+                                and structural.get("schema") == SCHEMA_PROMPT_STRUCTURAL)
             top = None
             if isinstance(matrix, dict):
                 top = matrix.get("top", matrix.get("top_module"))
@@ -625,11 +629,11 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
                         and len(rtl) == 1):
                     matrix_candidate_path = rtl[0]
             if isinstance(structural, dict):
-                wanted = structural.get("source_path")
+                wanted = structural.get("candidate_path" if prompt_structure else "source_path")
                 if isinstance(wanted, str):
                     wanted = wanted[4:] if wanted.startswith("rtl/") else wanted
-                    if wanted in original_sources and wanted in candidate_sources:
-                        source_for_structural = original_sources[wanted]
+                    if wanted in candidate_sources and (prompt_structure or wanted in original_sources):
+                        source_for_structural = None if prompt_structure else original_sources[wanted]
                         for source_path in rtl:
                             if str(source_path.relative_to(rtl_dir)) == wanted:
                                 structural_candidate_path = source_path
@@ -638,6 +642,22 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
                         repair_report = {"verdict": "REFUSED", "findings": [{
                             "code": "STRUCTURAL_SOURCE_PATH_INVALID",
                             "message": "structural source_path is absent from exact original and candidate maps"}]}
+            if prompt_structure:
+                try:
+                    prompt_text = (project / "input" / "phase1_prompt.md").read_text()
+                    prompt_hash = hashlib.sha256(prompt_text.encode()).hexdigest()
+                    public = public_original_input(project, problem_id, prompt_hash)
+                    if (public.get("status") != "NOT_PROVIDED" or original_sources
+                            or matrix is not None or contract.get("preservation") is not None):
+                        raise ValueError("prompt-only structure cannot replace supplied-source obligations")
+                    if require_repair_contract and (
+                            contract.get("schema") != SCHEMA_PROMPT_COMPLETION
+                            or contract.get("prompt_sha256") != prompt_hash
+                            or contract.get("candidate_sha256") != hashlib.sha256(text.encode()).hexdigest()):
+                        raise ValueError("prompt structural completion binding is missing, stale or wrong")
+                except (OSError, ValueError) as exc:
+                    repair_report = {"verdict": "REFUSED", "findings": [{
+                        "code": "STRUCTURAL_PROMPT_BINDING_INVALID", "message": str(exc)}]}
             if (matrix_candidate_path is not None and structural_candidate_path is not None
                     and matrix_candidate_path != structural_candidate_path):
                 repair_report = {"verdict": "REFUSED", "findings": [{
@@ -670,7 +690,7 @@ def collect(fmt_name: str, problem_id: str, project: Path, *,
         # Ordinary benchmark dispatch must consume both independently-bound
         # contracts immediately before completion; a single opt-in half is not
         # sufficient evidence for a repair candidate.
-        if require_repair_contract and isinstance(contract, dict):
+        if require_repair_contract and isinstance(contract, dict) and not prompt_structure:
             if not contract.get("preservation") or not contract.get("elaboration_matrix"):
                 repair_report = {"verdict": "REFUSED", "findings": [{
                     "code": "DECLARATION_INCOMPLETE",

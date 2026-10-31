@@ -96,6 +96,21 @@ This is a sequence, not two independent racing solvers:
    fresh independent AI review. AI is the final semantic authority only after
    this evidence chain is complete.
 
+A structural-only rejection still requires the frozen candidate to PASS the
+prompt-derived functional challenge. Supplied-RTL tasks retain the existing
+source-bound structural contract and Program functional PASS requirement. A
+text-only `spec_generation` task using original input may instead declare
+`vibeic.prompt_structural_contract.v1`: name its exact relative `candidate_path`,
+bind the candidate hash and a unique exact prompt quote, and use the task's
+immutable native image. Every active functional challenge must PASS and cover
+all blocking obligations before native `STRUCTURAL_CONTRACT_VIOLATION` permits
+repair. The repair record carries `vibeic.prompt_structural_completion.v1` and
+the unchanged structural declaration, rebinding only its candidate hash; normal
+completion replays it before a fresh independent review. Only structures
+retained at `RTLIL_AFTER_PROC_OPT` are supported. Functional equivalence cannot
+prove source syntax such as assign versus always, and an unsupported abstraction
+remains NOT_MEASURED.
+
 Every candidate therefore has two required checks: deterministic product gates
 and semantic AI review. `program_first_ai_acceptance.json` must be `COMPLETE`
 before scoring.

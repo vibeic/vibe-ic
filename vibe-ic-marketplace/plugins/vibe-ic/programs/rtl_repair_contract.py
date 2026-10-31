@@ -31,6 +31,8 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 SCHEMA_PRESERVATION = "vibeic.rtl_preservation_declaration.v1"
 SCHEMA_MATRIX = "vibeic.public_elaboration_matrix.v1"
 SCHEMA_STRUCTURAL = "vibeic.native_structural_contract.v1"
+SCHEMA_PROMPT_STRUCTURAL = "vibeic.prompt_structural_contract.v1"
+SCHEMA_PROMPT_COMPLETION = "vibeic.prompt_structural_completion.v1"
 STRUCTURAL_ABSTRACTION = "RTLIL_AFTER_PROC_OPT"
 
 _IDENT = re.compile(r"^[A-Za-z_][A-Za-z0-9_$]*$")
@@ -702,9 +704,11 @@ def run_structural_contract(
         report["findings"].append({"code": code, "message": message})
         return report
 
-    if not isinstance(declaration, Mapping) or declaration.get("schema") != SCHEMA_STRUCTURAL:
+    if not isinstance(declaration, Mapping) or declaration.get("schema") not in (
+            SCHEMA_STRUCTURAL, SCHEMA_PROMPT_STRUCTURAL):
         return finish("REFUSED", "STRUCTURAL_SCHEMA_UNSUPPORTED",
                       "unsupported or missing native structural contract schema")
+    report["schema"] = declaration["schema"]
     if any(key in declaration for key in ("script", "command", "passes")):
         return finish("REFUSED", "STRUCTURAL_COMMAND_INJECTION_REFUSED",
                       "structural authors cannot provide a Yosys script, command, or pass list")
@@ -715,13 +719,24 @@ def run_structural_contract(
         return finish("NOT_MEASURED", "STRUCTURAL_SCOPE_AMBIGUOUS",
                       "structural scope must explicitly be top_module_cells")
 
-    source_path = _safe_path(declaration.get("source_path"))
-    if source_path is None or original_source is None:
-        return finish("REFUSED", "STRUCTURAL_SOURCE_MISSING",
-                      "structural proof lacks its exact original source")
-    if declaration.get("source_sha256") != sha256_text(original_source):
-        return finish("REFUSED", "STRUCTURAL_SOURCE_HASH_MISMATCH",
-                      "structural contract original source hash is stale or wrong")
+    prompt_only = declaration.get("schema") == SCHEMA_PROMPT_STRUCTURAL
+    if prompt_only:
+        report["schema"] = SCHEMA_PROMPT_STRUCTURAL
+        if (original_source is not None or "source_path" in declaration
+                or "source_sha256" in declaration):
+            return finish("REFUSED", "STRUCTURAL_BINDING_CONFLICT",
+                          "prompt-only structure cannot claim supplied RTL preservation")
+        if _safe_path(declaration.get("candidate_path")) is None:
+            return finish("REFUSED", "STRUCTURAL_CANDIDATE_PATH_INVALID",
+                          "prompt-only structure requires an exact relative candidate_path")
+    else:
+        source_path = _safe_path(declaration.get("source_path"))
+        if source_path is None or original_source is None:
+            return finish("REFUSED", "STRUCTURAL_SOURCE_MISSING",
+                          "structural proof lacks its exact original source")
+        if declaration.get("source_sha256") != sha256_text(original_source):
+            return finish("REFUSED", "STRUCTURAL_SOURCE_HASH_MISMATCH",
+                          "structural contract original source hash is stale or wrong")
 
     candidate_path = Path(candidate_path).resolve()
     try:
@@ -738,6 +753,9 @@ def run_structural_contract(
         return finish("NOT_MEASURED", "STRUCTURAL_REQUIREMENT_AMBIGUOUS",
                       "structural scope lacks a source-bound requirement")
     requirement_path = _safe_path(requirement.get("path"))
+    if prompt_only and requirement_path != "input/phase1_prompt.md":
+        return finish("REFUSED", "STRUCTURAL_REQUIREMENT_PATH_INVALID",
+                      "prompt-only structure must bind the canonical public prompt")
     requirement_text = (requirement_sources or {}).get(requirement_path or "")
     quote = requirement.get("quote")
     if (requirement_path is None or requirement_text is None
@@ -805,7 +823,8 @@ def run_structural_contract(
         output.mkdir()
         frozen.write_text(candidate_source)
         command = [
-            docker, "run", "--rm", "--cpus=2", "--memory=4g",
+            docker, "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}",
+            "--cpus=2", "--memory=4g",
             "--pids-limit=128", "--network=none", "--read-only",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
             "-v", f"{frozen}:/work/candidate.sv:ro",
@@ -813,6 +832,10 @@ def run_structural_contract(
             "--skip", "yosys", "-Q", "-p", script,
         ]
         try:
+            # Share the admitted native/legacy entrypoint normalization. Keep
+            # this proof's own pinned image, caller UID and resource limits.
+            import librelane_contract as launch
+            command = launch._image_tool_argv(command, image=image)
             completed = subprocess.run(
                 command, capture_output=True, text=True,
                 timeout=min(max(timeout, 1), 300))
@@ -821,7 +844,7 @@ def run_structural_contract(
                                    "stdout": exc.stdout or "", "stderr": exc.stderr or ""}
             return finish("NOT_MEASURED", "STRUCTURAL_PROOF_TIMEOUT",
                           "native Yosys structural proof timed out")
-        except (OSError, subprocess.SubprocessError) as exc:
+        except (OSError, subprocess.SubprocessError, launch.Refusal) as exc:
             return finish("NOT_MEASURED", "STRUCTURAL_TOOL_UNAVAILABLE", str(exc))
         report["execution"] = {
             "command": command, "returncode": completed.returncode,
