@@ -606,6 +606,13 @@ def extract_arith_spec(project: Path,
             f"closed-form combinational oracle checks only the single data "
             f"result and cannot model a status/handshake output — defer to #654")
 
+    if len(inputs) != 2 or len(outputs) != 1:
+        return None, (
+            "closed-form binary oracle requires exactly two data inputs and "
+            "one output; additional input controls or output functions are "
+            "not verified by the selected binary expression — defer to "
+            "testbench-gen instead of emitting an incomplete oracle")
+
     # Per-port resolved widths (folds FACET-2 #643): a parametric port whose
     # numeric width is unknown is bound to the datapath width N so the operand
     # gets a real [N-1:0] declaration rather than a phantom 1-bit. The GOLDEN

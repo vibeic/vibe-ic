@@ -166,6 +166,12 @@
       ],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
+    "phase2.full_stack_tb.closed_form_arithmetic": {
+      "description": "Closed-form arithmetic model extraction and test generation; capture routing only, not a new flow step.",
+      "bucket_A_program": "programs/arith_oracle_tb_gen.py",
+      "bucket_A_related": ["programs/design_one_shot_runner.py"],
+      "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
+    },
     "phase2.l10_unit_tb.testbench_gen.run_unit_tbs": {
       "description": "L10 named unit-testbench generation, native execution, per-case JUnit and current execution receipt. This is the existing unit-TB owner, distinct from the full-stack professional testbench producer.",
       "bucket_A_program": "programs/testbench_gen.py",
