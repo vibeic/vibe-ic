@@ -5388,6 +5388,69 @@ def _main() -> int:
             lock.release()
             return 2
 
+    if (_entry_runner == 'phase1_one_shot_runner'
+            and os.environ.get('VIBEIC_FLOW109_CONTEXT')):
+        # The selected owner's native window ends in Phase1. A retained
+        # complete checkpoint needs its existing metric consumer, not another
+        # checkpoint invocation or an unrelated Phase2 admission.
+        import flow109
+        import step_output_collector as versions
+        _p1_context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
+        _p1_rows = _p1_context.get('resolved_rows') or [_p1_context['resolved_row']]
+        _p1_dispatches = [r['profile']['dispatch'] for r in _p1_rows]
+        if (str(args.entry_step) == str(args.exit_step) == 'D1'
+                and all(d.get('kind') == 'canonical_owner_window'
+                        and d.get('owner_runner') == _entry_runner
+                        and d.get('owner_entry_step') == d.get('owner_exit_step') == 'D1'
+                        for d in _p1_dispatches)):
+            _p1_attempt = flow109._bound_attempt(
+                project, _p1_context, os.environ.get(flow109.ATTEMPT_ENV))
+            _p1_result_path = _p1_attempt / 'result.json'
+            if _p1_result_path.exists():
+                raise flow109.Flow109Error('FLOW109_ATTEMPT_COMPLETED', str(_p1_attempt))
+            _p1_current = next((r for r in versions.current_acceptance(project, 0)
+                                if str(r['id']) == 'D1'), {})
+            _p1_retained = (_p1_current.get('canonical_pass') is True
+                            and _p1_current.get('status') == 'PASS'
+                            and _p1_current.get('current_inputs') is True
+                            and not _p1_current.get('capture_errors'))
+            _p1_args = [str(project), '--ic-name', args.ic_name, '--pdk', args.pdk]
+            if args.route:
+                _p1_args += ['--route', args.route]
+            if _p1_retained:
+                _p1_args.append('--complete-retained-metrics')
+            if args.skip_analog:
+                _p1_args.append('--skip-analog')
+            _p1_rc = _run_phase('PHASE 1 selected owner', _phase_runner('phase1'),
+                               _p1_args, env=_phase_env)
+            _p1_finished = _read_report(_p1_result_path)
+            _p1_status = _p1_finished.get('default_row_status', 'NOT_MEASURED')
+            _p1_components = _p1_finished.get('components') or []
+            if (_p1_finished.get('schema') != 'vibeic.flow109.window-attempt-result.v1'
+                    or _p1_finished.get('context_sha256') != _p1_context['context_sha256']
+                    or _p1_finished.get('whole_flow_acceptance') != 'NOT_MEASURED'
+                    or _p1_finished.get('delivery_accepted') is not False
+                    or _p1_status not in ('PASS', 'FAIL', 'NOT_MEASURED')
+                    or [c.get('step_id') for c in _p1_components] != [r['id'] for r in _p1_rows]):
+                _p1_status = 'NOT_MEASURED'
+            _p1_out = _pl.report_path(project, 'vibe_ic_one_shot.json')
+            _p1_out.parent.mkdir(parents=True, exist_ok=True)
+            _write_runner_summary(_p1_out, {
+                'program': 'vibe_ic_one_shot_runner', 'bounded': True,
+                'project': str(project), **_delivery_route.report_label(project),
+                'declared_window': {'entry_step': str(args.entry_step),
+                                    'exit_step': str(args.exit_step)},
+                'phases': [{'name': 'phase1', 'verdict': _p1_status, 'rc': _p1_rc}],
+                'dispatched_verdict': _p1_status, 'verdict': _p1_status,
+                'phase1_retained_metrics': _p1_retained,
+                'phase1_finalization': _p1_finished,
+                'whole_flow_verdict': 'NOT_MEASURED',
+                'completion_audit_axis': {'state': 'NOT_MEASURED',
+                    'reason': 'bounded Phase1 owner; whole-flow audit not refreshed'}}, project)
+            lock.release()
+            return _p1_rc or (0 if _p1_status == 'PASS' else 1 if _p1_status == 'FAIL' else 2)
+
     if _entry_runner == "phase3_one_shot_runner":
         # A Phase-3 entry is an isolated backend repair.  Do not run Phase 1,
         # Phase 2, analog, mixed signal or the whole-flow finalize tail here.
