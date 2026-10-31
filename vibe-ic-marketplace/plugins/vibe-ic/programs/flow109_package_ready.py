@@ -806,7 +806,7 @@ def execute(project: Path, context: Mapping) -> dict:
         status = _aggregate(checks)
         reason = "D75_BARE_DIE_INTERFACE_COMPONENT_" + status
     except D75Refusal as exc:
-        status = "FAIL" if exc.failed else "NOT_MEASURED"
+        status = "FAIL" if exc.failed or any(c["status"]=="FAIL" for c in checks) else "NOT_MEASURED"
         reason = exc.code
         checks.append(_check("adapter_refusal", status, exc.detail))
 
@@ -825,3 +825,78 @@ def execute(project: Path, context: Mapping) -> dict:
     }
     validate(project, result)
     return result
+
+
+def _d75_metric_values(checks):
+    """Harvest existing consumer results, keeping unknowns distinct from zero."""
+    by_name = {}
+    for check in checks:
+        by_name.setdefault(check['check'],[]).append(check)
+    failed_checks = sorted({c['check'] for c in checks if c.get('status')=='FAIL'})
+    pads = [c['detail'] for c in by_name.get('pad_bterm_coincidence_check',[]) if isinstance(c.get('detail'),dict)]
+    edges = [c['detail'] for c in by_name.get('provider_bond_pad_edge',[]) if isinstance(c.get('detail'),dict)]
+    return {'status':'FAIL' if failed_checks else 'NOT_MEASURED','failed_checks':failed_checks,
+            'pad_bterm':pads,'bond_pad_edge':edges,'checks':checks,
+            'scope':'existing bare-die pad/bond/PERC/test consumers; full package/reference coverage unmeasured'}
+
+
+def _d75_metric_observation(project, context, component):
+    validate(project, component)
+    saved = _read(project/CONTEXT_REQUESTS/f"{context['context_sha256']}.json")
+    if saved != context:raise ValueError('D75_METRIC_CONTEXT_CHANGED')
+    observed = _d75_metric_values(component['checks'])
+    observed.update(inputs=component['inputs'],consumer_load_identity=component['consumer_load_identity'],
+                    provider_identity=component.get('provider_identity'))
+    return observed
+
+
+def _d75_metric_acceptance(project, context, component):
+    import flow109
+    ids = ['package_ready.pad_bump_package_layout_agreement','package_ready.escape_bond_feasibility',
+           'package_ready.package_feedback_unresolved','package_ready.test_access_ready',
+           'package_ready.package_electrical_feedback_coverage']
+    checks = component.get('checks') or []
+    failed_names = {c.get('check') for c in checks if c.get('status')=='FAIL'}
+    failed = component.get('component_status')=='FAIL' or bool(failed_names)
+    result = {'row_id':'D75','status':'NOT_MEASURED','qualification':'NOT_MEASURED','obligations':[]}
+    try:
+        current = flow109.validate_execution_context(context)
+        if current['resolved_row']['id']!='D75' or [o['id'] for o in current['resolved_row']['obligations']]!=ids:
+            raise ValueError('D75_METRIC_CONTEXT_UNREGISTERED')
+        observed = _d75_metric_observation(project, context, component)
+        result['native_observation'] = observed
+        failed_names.update(observed['failed_checks'])
+        failed = failed or observed['status']=='FAIL'
+    except (OSError,ValueError,KeyError,TypeError,AttributeError) as exc:
+        result['reason'] = str(exc)
+    owners = [ {'pad_side_constraint_check','pad_bterm_coincidence_check'},
+               {'provider_bond_pad_edge'}, {'package_electrical_feedback'},
+               {'dft_atpg_coverage_check','test_access_applicability'}, {'package_electrical_feedback'} ]
+    gaps = ['D75_ADOPTED_FINAL_PAD_BUMP_LAYOUT_REFERENCE_UNAVAILABLE',
+            'D75_REQUIRED_BOND_POPULATION_AND_SOURCE_RULE_COVERAGE_UNMEASURED',
+            'D75_COMPLETE_REQUIRED_FEEDBACK_POPULATION_UNBOUND',
+            'D75_INDEPENDENT_REQUIRED_TEST_ACCESS_POPULATION_UNBOUND',
+            'D75_INDEPENDENT_REQUIRED_PACKAGE_ELECTRICAL_POPULATION_UNBOUND']
+    for oid, names, gap in zip(ids,owners,gaps):
+        failures = sorted(failed_names & names)
+        result['obligations'].append({'id':oid,'status':'FAIL' if failures else 'NOT_MEASURED',
+            'failed_checks':failures,'reason':'D75_EXISTING_CONSUMER_FAILURE' if failures else gap})
+    if failed:result['status']='FAIL'
+    return result
+
+def consume_default_row_completion(project, context, component):
+    """Canonical row completion; partial measurements do not qualify the row."""
+    accepted = _d75_metric_acceptance(Path(project).resolve(), context, component)
+    prior = component.get('metric_acceptance') or {}
+    prior_ids = {o.get('id') for o in prior.get('obligations', []) if o.get('status') == 'FAIL'} if isinstance(prior, dict) else set()
+    for item in accepted['obligations']:
+        if item['id'] in prior_ids and item['status'] != 'FAIL':
+            item.update(status='FAIL', reason='D75_PRIOR_MEASURED_FAILURE')
+    if (component.get('default_row_status') == 'FAIL' or component.get('metric_acceptance_status') == 'FAIL'
+            or isinstance(prior, dict) and prior.get('status') == 'FAIL' or prior_ids):
+        accepted['status'] = 'FAIL'
+        accepted['prior_failed_obligation_ids'] = sorted(prior_ids)
+    return {**component, 'step_id': 'D75', 'context_sha256': context['context_sha256'],
+        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['status'],
+        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
+        'completed': False, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}

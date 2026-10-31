@@ -595,3 +595,93 @@ def _validate_analog(project, record, receipt_ref=None):
                 extraction_depth='C_ONLY', component_parasitics_current=True,
                 fill_sensitive_parasitics=record['fill_sensitive_parasitics'],
                 flow109_acceptance='NOT_MEASURED')
+
+
+def _d69_metric_values(project, spefs, required_nets=None):
+    """Read the actual retained SPEF bytes with the existing native scanner.
+
+    Capacitance values retain their native unit tokens. Neither a parsed SPEF
+    nor the declared corner list proves extractor qualification/correlation.
+    """
+    import math
+    observations = {}
+    failures = []
+    for corner, ref in spefs.items():
+        path = _bound(project, ref)
+        facts = scan_spef(path)
+        text = path.read_text()
+        totals = []
+        for name, token in re.findall(r'(?m)^\*D_NET\s+(\S+)\s+(\S+)',text):
+            value = float(token)
+            if not math.isfinite(value):raise ValueError('D69_NONFINITE_NATIVE_NET_CAPACITANCE')
+            totals.append({'net':name,'capacitance':value})
+        names = [row['net'].lower() for row in totals]
+        required = set(required_nets) if required_nets is not None else None
+        bad = (not facts['has_header'] or not facts['has_design'] or not (facts['d_nets'] or facts['r_nets'])
+               or facts['negative_caps'] or facts['negative_net_totals']
+               or required is not None and (set(names)!=required or len(names)!=len(required)))
+        if bad:failures.append(corner)
+        observations[corner] = {'source':ref,'facts':facts,'net_capacitances':totals,
+            'capacitance_unit_tokens':re.findall(r'(?m)^\*C_UNIT\s+([^\n]+)',text),
+            'resistance_unit_tokens':re.findall(r'(?m)^\*R_UNIT\s+([^\n]+)',text)}
+        if _sha(path)!=ref['sha256']:raise ValueError('D69_METRIC_SPEF_CHANGED')
+    return {'status':'FAIL' if failures else 'NOT_MEASURED','corners':observations,
+            'failed_corners':failures,'required_nets':required_nets,
+            'reason':'D69_NATIVE_SPEF_CONSUMER_FAILURE' if failures else 'D69_EXTRACTOR_AND_FILL_REFERENCE_UNMEASURED'}
+
+
+def _d69_metric_observation(project, context, component):
+    receipt = component['receipt']
+    record = _read(_bound(project, receipt))
+    if (record.get('execution_context') or {}).get('context_sha256') != context['context_sha256']:
+        raise ValueError('D69_METRIC_CONTEXT_CHANGED')
+    current = validate_final_parasitics(project, receipt)
+    required = current.get('required_nets')
+    observed = _d69_metric_values(project, current['final_spefs'], required)
+    observed.update(current_parasitics=current, extraction_depth=record.get('extraction_depth'),
+                    inputs=record.get('input_binding',{}).get('inputs',record.get('inputs')),
+                    receipt=receipt)
+    return observed
+
+
+def _d69_metric_acceptance(project, context, component):
+    import flow109
+    ids = ['final_extract.final_extractor_qualification','final_extract.fill_sensitive_reference_correlation',
+           'final_extract.final_parasitic_corner_coverage']
+    failed = component.get('component_status')=='FAIL'
+    result = {'row_id':'D69','status':'NOT_MEASURED','qualification':'NOT_MEASURED','obligations':[]}
+    try:
+        current = flow109.validate_execution_context(context)
+        if current['resolved_row']['id']!='D69' or [o['id'] for o in current['resolved_row']['obligations']]!=ids:
+            raise ValueError('D69_METRIC_CONTEXT_UNREGISTERED')
+        observed = _d69_metric_observation(project, context, component)
+        failed = failed or observed['status']=='FAIL'
+        result['native_observation'] = observed
+        result['obligations'] = [
+            {'id':ids[0],'status':'NOT_MEASURED','reason':'D69_ADOPTED_EXTRACTOR_QUALIFICATION_UNAVAILABLE'},
+            {'id':ids[1],'status':'NOT_MEASURED','reason':'D69_CURRENT_FILL_REFERENCE_AND_APPROVED_ERROR_BOUNDS_UNAVAILABLE'},
+            {'id':ids[2],'status':'FAIL' if failed else 'NOT_MEASURED','measurement':observed,
+             'reason':'D69_NATIVE_PARASITIC_CENSUS_FAILURE' if failed else 'D69_INDEPENDENT_REQUIRED_CORNER_MODEL_POPULATION_UNBOUND'}]
+    except (AdmissionRefusal,Refusal,OSError,ValueError,KeyError,TypeError,AttributeError) as exc:
+        failed = failed or getattr(exc,'status',None)=='FAIL'
+        result['reason'] = str(exc)
+        result['obligations'] = [{'id':oid,'status':'FAIL' if failed and oid==ids[2] else 'NOT_MEASURED','reason':str(exc)} for oid in ids]
+    if failed:result['status']='FAIL'
+    return result
+
+def consume_default_row_completion(project, context, component):
+    """Canonical row completion; partial measurements do not qualify the row."""
+    accepted = _d69_metric_acceptance(Path(project).resolve(), context, component)
+    prior = component.get('metric_acceptance') or {}
+    prior_ids = {o.get('id') for o in prior.get('obligations', []) if o.get('status') == 'FAIL'} if isinstance(prior, dict) else set()
+    for item in accepted['obligations']:
+        if item['id'] in prior_ids and item['status'] != 'FAIL':
+            item.update(status='FAIL', reason='D69_PRIOR_MEASURED_FAILURE')
+    if (component.get('default_row_status') == 'FAIL' or component.get('metric_acceptance_status') == 'FAIL'
+            or isinstance(prior, dict) and prior.get('status') == 'FAIL' or prior_ids):
+        accepted['status'] = 'FAIL'
+        accepted['prior_failed_obligation_ids'] = sorted(prior_ids)
+    return {**component, 'step_id': 'D69', 'context_sha256': context['context_sha256'],
+        'metric_acceptance': accepted, 'metric_acceptance_status': accepted['status'],
+        'default_row_status': accepted['status'], 'flow109_acceptance': accepted['status'],
+        'completed': False, 'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}

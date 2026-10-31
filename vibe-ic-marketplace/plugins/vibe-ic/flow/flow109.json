@@ -15978,12 +15978,13 @@
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
             "component_scope": "native_analog_final_gds_capacitance_component",
-            "flow109_metrics_status": "UNIMPLEMENTED",
+            "flow109_metrics_status": "PARTIALLY_IMPLEMENTED",
             "native_required_outputs": [
               "current GDS fill producer and original launch/input bindings",
               "adopted logical net census and declared native model/corners",
               "per-corner raw/floating-reduced SPEF and original extraction launch"
-            ]
+            ],
+            "metric_consumer": "flow109_final_extract.py:consume_default_row_completion"
           }
         },
         {
@@ -16023,11 +16024,12 @@
             "admission_policy": "source_owned_existing_native",
             "acceptance_scope": "existing_native_component_only",
             "component_scope": "native_final_gds_floating_fill_component",
-            "flow109_metrics_status": "UNIMPLEMENTED",
+            "flow109_metrics_status": "PARTIALLY_IMPLEMENTED",
             "native_required_outputs": [
               "hash-bound FINAL_FILL_EXTRACTION.json",
               "min/nom/max floating-fill SPEF consumer census"
-            ]
+            ],
+            "metric_consumer": "flow109_final_extract.py:consume_default_row_completion"
           }
         }
       ],
@@ -16055,7 +16057,7 @@
             "checker.final_extract.final_extractor_qualification",
             "producer.final_extract.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "final_extract.fill_sensitive_reference_correlation",
@@ -16075,7 +16077,7 @@
             "checker.final_extract.fill_sensitive_reference_correlation",
             "producer.final_extract.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "final_extract.final_parasitic_corner_coverage",
@@ -16094,10 +16096,10 @@
             "checker.final_extract.final_parasitic_corner_coverage",
             "producer.final_extract.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "PARTIALLY_IMPLEMENTED",
       "gate_layer_ids": [
         "G1",
         "G2",
@@ -17938,7 +17940,8 @@
             "acceptance_scope": "existing_native_component_only",
             "component_scope": "existing_Default_bare_die_interface_component_only",
             "unsupported_scope": "package-model SI/PI/thermal co-design",
-            "flow109_metrics_status": "UNIMPLEMENTED"
+            "flow109_metrics_status": "PARTIALLY_IMPLEMENTED",
+            "metric_consumer": "flow109_package_ready.py:consume_default_row_completion"
           }
         }
       ],
@@ -17968,7 +17971,7 @@
             "checker.package_ready.pad_bump_package_layout_agreement",
             "producer.package_ready.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "package_ready.escape_bond_feasibility",
@@ -17990,7 +17993,7 @@
             "checker.package_ready.escape_bond_feasibility",
             "producer.package_ready.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "package_ready.package_feedback_unresolved",
@@ -18012,7 +18015,7 @@
             "checker.package_ready.package_feedback_unresolved",
             "producer.package_ready.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "package_ready.test_access_ready",
@@ -18033,7 +18036,7 @@
             "checker.package_ready.test_access_ready",
             "producer.package_ready.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         },
         {
           "id": "package_ready.package_electrical_feedback_coverage",
@@ -18054,10 +18057,10 @@
             "checker.package_ready.package_electrical_feedback_coverage",
             "producer.package_ready.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "PARTIALLY_IMPLEMENTED_METRIC_BINDING"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "PARTIALLY_IMPLEMENTED",
       "gate_layer_ids": [
         "G1",
         "G2",
