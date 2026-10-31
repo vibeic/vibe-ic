@@ -510,12 +510,49 @@ def d25_reopen(project: Path, prepared: dict, context: dict) -> dict:
     with tempfile.TemporaryDirectory(prefix='d25-reader-') as tmp:
         proof = judge_eqy(native, Path(tmp) / 'proof.json')
     parts = proof['partitions'] or {}
+    # EQY outbits include matched internal cutpoints. Derive the external
+    # interface independently from BOTH sealed native source views; projection
+    # of external coverage must never change the complete proof judgement.
+    external_views, point_views = [], []
+    for side in ('gold', 'gate'):
+        for filename in ('census.json', 'after.json'):
+            census = native.parent / side / filename
+            records = [r for r in doc['derivation'][side]['files']
+                       if project / r['path'] == census]
+            if (len(records) != 1 or records[0] not in doc['files']
+                    or digest(census) != records[0]['sha256']):
+                raise metrics.MetricRefusal('D25_PARTITION_CENSUS_UNBOUND', 'sealed native interface absent')
+            module = json.loads(census.read_text())['modules'][prepared['mode']['top']]
+            external = {name: list(range(len(port['bits'])))
+                        for name, port in module['ports'].items()
+                        if port['direction'] in ('output', 'inout')}
+            if not external or any(not bits for bits in external.values()):
+                raise metrics.MetricRefusal('D25_PARTITION_CENSUS_UNBOUND', 'empty native external interface')
+            external_views.append(external)
+            if filename == 'after.json':
+                points = set()
+                for name, net in module['netnames'].items():
+                    width = len(net['bits'])
+                    points.update((name, bit) for bit in range(width))
+                    if width > 1:
+                        points.update((f'{name}[{bit}]', 0)
+                                      for bit in range(net.get('offset', 0),
+                                                       net.get('offset', 0) + width))
+                point_views.append(points)
+    external = external_views[0]
+    if any(view != external for view in external_views[1:]) or external != prepared['mode']['outputs']:
+        raise metrics.MetricRefusal('D25_PARTITION_CENSUS_UNBOUND', 'native gold/gate and required interface differ')
+    matched_points = point_views[0] & point_views[1]
     output_bits = {}
     for name in parts:
         partition = json.loads((native / 'scratch/partitions' / (name + '.json')).read_text())['partition']
         for port, bits in partition['outbits'].items():
-            output_bits.setdefault(port, []).extend(bits)
-    if ({name: sorted(bits) for name, bits in output_bits.items()} != prepared['mode']['outputs']
+            if (not isinstance(bits, list) or not bits or any(type(bit) is not int
+                    or (port, bit) not in matched_points for bit in bits)):
+                raise metrics.MetricRefusal('D25_PARTITION_CENSUS_UNBOUND', 'foreign native output/cutpoint')
+            if port in external:
+                output_bits.setdefault(port, []).extend(bits)
+    if ({name: sorted(bits) for name, bits in output_bits.items()} != external
             or set(doc['live_cells']) - set(prepared['qualification']['qualified_cell_types'])
             or not doc['live_cells'] or doc['outputs'] != prepared['mode']['outputs']):
         raise metrics.MetricRefusal('D25_PARTITION_CENSUS_UNBOUND', 'output/cell population differs')
