@@ -299,6 +299,8 @@ def _harvest_tool_strings_cov(obj, calls: list[dict] | None = None
         communication = _collaboration_inspection_credit(frame)
         if communication is None:
             communication = _clock_inspection_credit(frame)
+        if communication is None:
+            communication = _execution_wait_inspection_credit(frame)
         inspected = bool(got) if communication is None else communication
         record = {
             "envelope_type": frame.get("type"),
@@ -375,6 +377,32 @@ def _iter_call_frames(obj) -> list[dict]:
 
     walk(obj)
     return found
+
+
+def _execution_wait_inspection_credit(node) -> bool | None:
+    """Inspect a tool-cell wait, keeping unknown payloads uninspected.
+
+    This operation resumes an existing execution cell. It carries no file or
+    command, and extra nested command fields remain visible to the scanner.
+    """
+    name = node.get("name") or node.get("tool_name")
+    if name != "wait":
+        return None
+    if node.get("namespace") not in (None, "functions") or node.get("type") != "function_call":
+        return False
+    try:
+        payload = json.loads(node.get("arguments"))
+    except (TypeError, ValueError):
+        return False
+    if (not isinstance(payload, dict) or "cell_id" not in payload
+            or set(payload) - {"cell_id", "max_tokens", "yield_time_ms", "terminate"}
+            or not isinstance(payload["cell_id"], str)
+            or re.fullmatch(r"[A-Za-z0-9_-]+(?::[0-9]+)?", payload["cell_id"]) is None):
+        return False
+    for key in ("max_tokens", "yield_time_ms"):
+        if key in payload and (type(payload[key]) is not int or payload[key] < 0):
+            return False
+    return "terminate" not in payload or type(payload["terminate"]) is bool
 
 
 def _clock_inspection_credit(node) -> bool | None:
@@ -466,6 +494,8 @@ def _harvest_frame_strings(node, depth: int = 0) -> list[str]:
             return out
         out = _harvest_frame_strings(payload, depth + 1)
         if _clock_inspection_credit(node):
+            out.append(node["arguments"])
+        if _execution_wait_inspection_credit(node):
             out.append(node["arguments"])
         return out
     if isinstance(node, dict):
