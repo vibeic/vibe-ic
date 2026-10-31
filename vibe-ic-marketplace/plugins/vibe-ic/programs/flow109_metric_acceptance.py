@@ -1394,6 +1394,76 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
             if not (project / 'reports/lec_eqy_execution.json').is_file():
                 raise MetricRefusal('D25_NATIVE_EXECUTION_ABSENT', 'current canonical native binding missing')
             return _d25_accept_eqy(project, current, result, specs)
+        if (all(current['features'].get(key) is False
+                for key in ('requires_dft', 'requires_scan'))
+                and (project / 'reports/lec_eqy.json').exists()):
+            # Reopen the existing generic producer's actual inputs and output.
+            # Named-purpose qualification still belongs to _d25_accept_eqy;
+            # a generic EQY observation never supplies that approval itself.
+            import librelane_contract as contract
+            import librelane_eqy as native
+            import synth_handoff_netlist_check as handoff
+            from _rtl_include_hub import silicon_rtl_selection
+            import tempfile
+            flow109.dft_source_intent(project, current)
+            flow109._accepted_row(project, Path('reports/flow109/default_rows/D22.json'), 'D22')
+            adopted = handoff.bound_handoff(project)
+            if adopted is None or adopted.get('verdict') != 'PASS':
+                raise MetricRefusal('D25_NATIVE_SUBJECT_UNBOUND', 'current D22 handoff absent')
+            folder = project / 'phase3/librelane/lec_eqy/01-yosys-eqy'
+            if folder.is_symlink() or not (folder / 'vibeic_receipt.json').is_file():
+                raise MetricRefusal('D25_NATIVE_EXECUTION_ABSENT', str(folder))
+            try:
+                receipt = contract.validate_step_receipt(folder, 'Yosys.EQY')
+            except contract.Refusal as exc:
+                raise MetricRefusal('D25_NATIVE_INPUT_STALE', str(exc)) from exc
+            root = project / 'phase3/librelane/lec-eqy-config'
+            cfg_path, state_path = root / 'eqy.resolved.json', root / 'state_in.json'
+            cfg, state = json.loads(cfg_path.read_bytes()), json.loads(state_path.read_bytes())
+            fp = receipt['input']
+            mapped = Path(adopted['mapped'])
+            rtl = list(silicon_rtl_selection(project / 'phase2/stage1/rtl'))
+            manifest, _ = flow109._bound_project_json(
+                project, Path('input/flow109/D22.json'), 'D25_NATIVE_SUBJECT_UNBOUND')
+            if (cfg.get('DESIGN_NAME') != manifest.get('top') or cfg.get('PDK') != manifest.get('pdk')
+                    or cfg.get('VERILOG_FILES') != [str(p.resolve()) for p in rtl]
+                    or state.get('nl') != str(mapped)
+                    or fp.get('state_files') != {str(mapped): contract.digest(mapped)}
+                    or fp.get('config') != contract.digest(cfg_path)
+                    or fp.get('state') != contract.digest(state_path)):
+                raise MetricRefusal('D25_NATIVE_SUBJECT_UNBOUND', 'native EQY source/state differs')
+            mounts = handoff._receipt_pdk_mounts(folder, receipt)
+            if contract.config_file_hashes(cfg, mounts) != fp.get('config_files'):
+                raise MetricRefusal('D25_NATIVE_INPUT_STALE', 'native EQY config files changed')
+            synthesis = json.loads((Path(adopted['native']).parent / 'config.json').read_bytes())
+            groups = synthesis.get('CELL_LIBS', synthesis.get('LIB')) or {}
+            selected = {value for group in groups.values() for value in group}
+            import fnmatch
+            proof_libraries = {value for pattern, group in (cfg.get('CELL_LIBS') or {}).items()
+                if fnmatch.fnmatch(cfg.get('DEFAULT_CORNER', ''), pattern) for value in group}
+            if (len(selected) != 1 or len(proof_libraries) != 1
+                    or {Path(p).resolve() for p in proof_libraries} !=
+                       {Path(p).resolve() for p in selected}):
+                raise MetricRefusal('D25_MODEL_NOT_QUALIFIED', 'EQY and adopted synthesis libraries differ')
+            script = Path(cfg['EQY_SCRIPT'])
+            if script.read_text() != native.eqy_script(
+                    manifest['top'], rtl, mapped, next(iter(proof_libraries))):
+                raise MetricRefusal('D25_NATIVE_CONFIGURATION_UNBOUND', 'EQY script differs')
+            try:
+                launch = contract.local_image_attestation()
+            except contract.Refusal as exc:
+                raise MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', str(exc)) from exc
+            original = fp.get('local_image') or {}
+            if any(launch.get(key) != original.get(key) for key in ('image', 'image_id')):
+                raise MetricRefusal('D25_NATIVE_EXECUTION_UNBOUND', 'native EQY image differs')
+            with tempfile.TemporaryDirectory() as temporary:
+                observed = native.judge_eqy(folder, Path(temporary) / 'lec_eqy.json')
+            component = observed['verdict'] if observed['verdict'] in ('PASS', 'FAIL') else 'NOT_MEASURED'
+            result.update(component_status=component, native_tool='Yosys.EQY',
+                native_consumer=observed,
+                reason='D25_NATIVE_TOOL_PURPOSE_UNQUALIFIED',
+                qualification_detail='generic EQY inputs are bound; named mode/model authority is still required')
+            return result
         consumed = {}
 
         def bound_file(record):

@@ -24554,10 +24554,11 @@ def step_lec_equivalence(project: Path, top_name: str, container: str,
     """
     results = list(results or [])
     d25_context = None
-    if any((project / relative).exists() or (project / relative).is_symlink()
-           for relative in (
-            'input/flow109/D25.json', 'input/flow109/D25_source_authority.json',
-            'reports/lec_eqy_execution.json')):
+    named_d25 = any((project / relative).exists() or (project / relative).is_symlink()
+                    for relative in (
+                     'input/flow109/D25.json', 'input/flow109/D25_source_authority.json',
+                     'reports/lec_eqy_execution.json'))
+    if named_d25 or os.environ.get("VIBEIC_FLOW109_CONTEXT"):
         import flow109
         try:
             owner = flow109.validate_execution_context(json.loads(
@@ -24611,7 +24612,30 @@ def step_lec_equivalence(project: Path, top_name: str, container: str,
                        time.time() - t0, _why,
                        reason_class=_V.ReasonClass.INPUT_ABSENT))
         return results
-    if d25_context is not None:
+    if (d25_context is not None and not named_d25
+            and all(d25_context['features'].get(key) is False
+                    for key in ('requires_dft', 'requires_scan'))):
+        try:
+            flow109.dft_source_intent(project, d25_context)
+            flow109._accepted_row(
+                project, Path('reports/flow109/default_rows/D22.json'), 'D22')
+            manifest, _ = flow109._bound_project_json(
+                project, Path('input/flow109/D22.json'), 'D25_NATIVE_SUBJECT_UNBOUND')
+            if (bound is None or bound.get('verdict') != 'PASS'
+                    or manifest.get('top') != top_name or _lec_subject_is_scan
+                    or Path(bound['mapped']).resolve() != (project / gate_netlist).resolve()):
+                raise flow109.Flow109Error('D25_NATIVE_SUBJECT_UNBOUND',
+                                          'functional LEC requires the accepted D22 mapped subject')
+            synthesis = json.loads((Path(bound['native']).parent / 'config.json').read_text())
+            if manifest.get('pdk') != synthesis.get('PDK'):
+                raise flow109.Flow109Error('D25_NATIVE_SUBJECT_UNBOUND', 'D22 PDK differs')
+        except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError) as exc:
+            return results + [StepResult(
+                'lec_equivalence', 'NOT_MEASURED', time.time() - t0, str(exc),
+                reason_class=_V.ReasonClass.INPUT_ABSENT)]
+        return _lec_eqy_arm(project, top_name, gate_netlist, results,
+                            functional_context=d25_context)
+    if d25_context is not None and named_d25:
         import flow109_metric_acceptance as metrics
         import librelane_eqy as native
         try:
@@ -24778,17 +24802,21 @@ def step_lec_equivalence(project: Path, top_name: str, container: str,
 
 
 def _lec_eqy_arm(project: Path, top_name: str, gate_netlist: str,
-                 results: List[StepResult]) -> List[StepResult]:
+                 results: List[StepResult], *,
+                 functional_context: Optional[dict] = None) -> List[StepResult]:
     """Step 13 arm B (opt-in via phase3/librelane_switch.json step "13").
 
-    lec_run (arm A) has already run. `librelane` and `dual` both add LibreLane
+    Canonical source-bound non-DFT D25 runs the registered EQY producer with
+    original RTL and the accepted D22 subject, without consuming an old arm A.
+    Otherwise lec_run (arm A) has already run. `librelane` and `dual` add LibreLane
     Yosys.EQY as arm B and keep the conclusive arm; EQY is never the sole
     evidence (see `librelane_eqy`). The step row is replaced by the combined
     verdict; both arm records stay on disk.
     """
     import librelane_contract as _llc
     try:
-        mode = _llc.selected_mode(project, "13")
+        mode = ('librelane' if functional_context is not None
+                else _llc.selected_mode(project, "13"))
     except _llc.Refusal as exc:
         return results + [StepResult("lec_equivalence_eqy", "FAIL", 0.0, str(exc))]
     if mode == "direct":
@@ -24797,17 +24825,22 @@ def _lec_eqy_arm(project: Path, top_name: str, gate_netlist: str,
     t0 = time.time()
     reports = project / "reports"
     try:
-        switch = json.loads((project / "phase3/librelane_switch.json").read_text())
-        pdk = switch.get("pdk")
+        switch_path = project / "phase3/librelane_switch.json"
+        switch = json.loads(switch_path.read_text()) if switch_path.is_file() else {}
+        pdk = (_llc.phase2_pdk(project, selected=switch.get("pdk"))[0]
+               if functional_context is not None else switch.get("pdk"))
         if not pdk:
             raise _llc.Refusal("LL_SWITCH_INCOMPLETE",
                                "step 13 needs pdk in phase3/librelane_switch.json")
         # Image and PDK root through the contract's resolvers (declared >
         # resolved at run time > refused, naming the cause).
         image = _llc.resolve_image(project)
-        root = _llc.pdk_root_resolution(project, str(pdk), image=image)["path"]
-        mounts: List[Tuple[Path, str]] = [(Path(root), "/pdk")]
-        pdk_root = "/pdk"
+        root = _llc.pdk_root_resolution(
+            project, str(pdk), image=image,
+            native_handoff=functional_context is not None)["path"]
+        local = functional_context is not None and _llc._ce.no_container_route()
+        mounts: List[Tuple[Path, str]] = [] if local else [(Path(root), "/pdk")]
+        pdk_root = str(root) if local else "/pdk"
         overlay = switch.get("development_eqy_overlay")
         if overlay:
             # Development input only: the released image ships no EQY plugins.
@@ -24816,13 +24849,25 @@ def _lec_eqy_arm(project: Path, top_name: str, gate_netlist: str,
             mounts += [(base / name, "/foss/tools/bin/" + name) for name in
                        ("eqy_combine.so", "eqy_partition.so", "eqy_recode.so")]
         rtl_dir = project / "phase2/stage1/rtl"
-        rtl = sorted(rtl_dir.glob("*.sv")) + sorted(rtl_dir.glob("*.v"))
+        if functional_context is not None:
+            from _rtl_include_hub import silicon_rtl_selection
+            rtl = list(silicon_rtl_selection(rtl_dir))
+        else:
+            rtl = sorted(rtl_dir.glob("*.sv")) + sorted(rtl_dir.glob("*.v"))
         netlist = Path(gate_netlist)
         if not netlist.is_absolute():
             netlist = project / netlist
+        library = switch.get("std_cell_library")
+        if functional_context is not None:
+            import synth_handoff_netlist_check as handoff
+            current = handoff.bound_handoff(project)
+            if current is None or current.get('verdict') != 'PASS':
+                raise _llc.Refusal('D25_NATIVE_SUBJECT_UNBOUND', 'current D22 handoff absent')
+            synthesis = json.loads((Path(current['native']).parent / 'config.json').read_text())
+            library = synthesis.get('STD_CELL_LIBRARY')
         folder = _eqy.run_eqy(project, image, str(pdk), top_name, rtl, netlist,
                               mounts=mounts, pdk_root=pdk_root,
-                              std_cell_library=switch.get("std_cell_library"))
+                              std_cell_library=library)
         eqy_doc = _eqy.judge_eqy(folder, reports / "lec_eqy.json")
         eqy_doc["subject"] = str(netlist)
         # The netlist PnR consumes. When arm A's subject is a different file
@@ -24843,7 +24888,8 @@ def _lec_eqy_arm(project: Path, top_name: str, gate_netlist: str,
         handoff_doc = None
         _llc.write_json(reports / "lec_eqy.json", eqy_doc)
     try:
-        lec_doc = json.loads((reports / "lec.json").read_text())
+        lec_doc = ({"verdict": "NOT_MEASURED"} if functional_context is not None
+                   else json.loads((reports / "lec.json").read_text()))
     except (OSError, ValueError):
         lec_doc = {"verdict": "NOT_MEASURED"}
     combined = _eqy.combine(lec_doc, eqy_doc)
