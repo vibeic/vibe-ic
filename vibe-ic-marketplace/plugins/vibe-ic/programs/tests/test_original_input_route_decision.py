@@ -201,3 +201,36 @@ def test_explicit_structured_dag_argument_is_reprojected_by_semantics():
 def test_unknown_input_contract_is_rejected():
     with pytest.raises(ValueError, match="unknown route input contract"):
         rd.canonical_dag(input_contract="unverified")
+
+
+@pytest.mark.parametrize("nature", ["spec_generation", "completion", "debug"])
+def test_explicit_rtl_delivery_reaches_initial_and_resume_runner(tmp_path, nature):
+    import benchmark_dispatch as dispatch
+    evidence = "behaviour" if nature == "debug" else "lint_validated"
+    receipt = _receipt(nature=nature, evidence=evidence)
+    target = dispatch._rtl_delivery_target(receipt)
+    assert target == "rtl"
+    runner = Path(__file__).resolve().parents[1] / "vibe_ic_one_shot_runner.py"
+    for supplied in (False, True):
+        argv = dispatch._resume_solver_argv(
+            runner, tmp_path, supplied, receipt["entry_step"],
+            receipt["verify_through"], input_contract=receipt["input_contract"],
+            delivery_target=target)
+        assert argv.count("--delivery-target") == 1
+        assert argv[argv.index("--delivery-target") + 1] == "rtl"
+        assert argv[argv.index("--exit-step") + 1] == receipt["verify_through"]
+
+
+@pytest.mark.parametrize("target,evidence", [
+    ("gds", "lint_validated"), ("ip_hardmacro", "lint_validated"),
+    ("rtl", "area"), ("rtl", "timing"), ("rtl", "power"),
+])
+def test_physical_evidence_never_acquires_rtl_scope(target, evidence):
+    import benchmark_dispatch as dispatch
+    assert dispatch._rtl_delivery_target(_receipt(target=target, evidence=evidence)) is None
+
+
+def test_unscoped_runner_keeps_existing_delivery_admission(tmp_path):
+    import benchmark_dispatch as dispatch
+    runner = Path(__file__).resolve().parents[1] / "vibe_ic_one_shot_runner.py"
+    assert "--delivery-target" not in dispatch._solver_argv(runner, tmp_path, "D1", "D1")

@@ -6224,8 +6224,20 @@ def _forward_product_manifest(run_p: Path, project: Path) -> None:
                                source.read_bytes())
 
 
+def _rtl_delivery_target(receipt: dict | None) -> str | None:
+    """Forward explicit RTL delivery only for the admitted RTL proof window."""
+    import task_nature_route as tnr
+    receipt = receipt or {}
+    if (receipt.get("delivery_target") == "rtl"
+            and tnr.is_rtl_only_evidence(receipt.get("requested_evidence"),
+                                         exit_step=receipt.get("verify_through"))):
+        return "rtl"
+    return None
+
+
 def _solver_argv(runner: Path, proj: Path, entry, exit_step,
-                 delivery_route: str = "ip", input_contract: str = "structured") -> list:
+                 delivery_route: str = "ip", input_contract: str = "structured",
+                 delivery_target: str | None = None) -> list:
     """One problem's runner argv, assembled from the routing verdict.
 
     Open RTL evaluations deliver IP/module evidence, so explicitly choose the
@@ -6243,6 +6255,8 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
     argv = [sys.executable, str(runner), str(proj),
             "--route", delivery_route, "--skip-analog", "--skip-hardware",
             "--no-dashboard"]
+    if delivery_target == "rtl":
+        argv += ["--delivery-target", "rtl"]
     if input_contract == "original":
         argv += ["--rtl-input", "original"]
     elif input_contract != "structured":
@@ -6276,7 +6290,8 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
 
 def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
                         entry, exit_step, delivery_route: str = "ip",
-                        input_contract: str = "structured") -> list:
+                        input_contract: str = "structured",
+                        delivery_target: str | None = None) -> list:
     """Re-enter one routed problem without losing its declared exit.
 
     AI backup/repair supplies RTL, so it resumes at the first RTL-validation
@@ -6285,7 +6300,7 @@ def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
     """
     effective_entry = "2" if supplied_rtl and str(exit_step) != "1" else entry
     return _solver_argv(runner, proj, effective_entry, exit_step, delivery_route,
-                        input_contract)
+                        input_contract, delivery_target)
 
 
 def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
@@ -6324,7 +6339,9 @@ def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
         return {"status": "BLOCKED", "runner_rc": None,
                 "reason": f"front-door input is unreadable: {exc}"}
 
-    argv = _solver_argv(runner, project, "D1", "D1", delivery_route)
+    argv = _solver_argv(
+        runner, project, "D1", "D1", delivery_route,
+        delivery_target=_rtl_delivery_target(route_receipt))
     process = runner_budget.run(argv)
     diagnostic = _runner_diagnostics(process, argv, project, require_phase2=False)
     diagnostics = {"runner_diagnostics": diagnostic} if diagnostic else {}
@@ -8449,6 +8466,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 if entry != "D1":
                     phase1_frontdoor = _ensure_phase1_frontdoor(
                         runner, proj, runner_budget,
+                        route_receipt=route_receipt,
                         delivery_route=str(verdict.get("delivery_route") or "ip"))
                     if phase1_frontdoor.get("status") == "BLOCKED":
                         raise RuntimeError(str(phase1_frontdoor.get("reason")))
@@ -8488,7 +8506,8 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             else:
                 argv = _solver_argv(
                     runner, proj, effective_entry, exit_step,
-                    str(verdict.get("delivery_route") or "ip"), input_contract)
+                    str(verdict.get("delivery_route") or "ip"), input_contract,
+                    _rtl_delivery_target(route_receipt))
                 if activation is None:
                     _require_route_admission(run_p, route_task, route_receipt,
                                              require_d1=False)
@@ -8974,7 +8993,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             phase1_blocked[pid] = (
                 "canonical D1-entry run emitted no Phase-1 provenance")
             continue
-        frontdoor = _ensure_phase1_frontdoor(runner, proj, runner_budget)
+        frontdoor = _ensure_phase1_frontdoor(
+            runner, proj, runner_budget, route_receipt=receipt)
         if frontdoor.get("status") == "BLOCKED":
             phase1_blocked[pid] = str(
                 frontdoor.get("reason") or "Phase-1 front door blocked")
@@ -9062,9 +9082,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         argv = _resume_solver_argv(
             runner, proj, supplied_rtl, state["effective_entry"],
             state["exit_step"], state["delivery_route"],
-            input_contract) if input_contract == "original" else _resume_solver_argv(
-                runner, proj, supplied_rtl, state["effective_entry"],
-                state["exit_step"], state["delivery_route"])
+            input_contract, _rtl_delivery_target(state["route_receipt"]))
         if state["activation"] is None:
             _require_route_admission(run_p, state["task"], state["route_receipt"],
                                      require_d1=False)
@@ -10996,7 +11014,8 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
         runner = Path(__file__).resolve().parent / "vibe_ic_one_shot_runner.py"
         argv = _resume_solver_argv(
             runner, staged, True, admission["entry_step"],
-            admission["exit_step"], admission["delivery_route"])
+            admission["exit_step"], admission["delivery_route"],
+            delivery_target=_rtl_delivery_target(admission["route_receipt"]))
         d1_snapshot = _capture_d1_evidence(staged)
         process = _run_from_d1_snapshot(
             _RunnerBudget(1, 1, worker_threads), argv, d1_snapshot,
