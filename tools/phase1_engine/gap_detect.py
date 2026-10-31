@@ -190,6 +190,62 @@ def _aggregate_required_facts(
     return out
 
 
+
+class RequiredFactsApplicabilityError(ValueError):
+    """An explicit applicability input is invalid; required-fact admission blocks."""
+
+
+def _applicable_required_facts(graph: FactGraph, required: dict) -> tuple[dict, list]:
+    """Apply the existing Flow109 selection to the common physical-chip facts.
+
+    No selection means the original full requirements. Only explicit digital
+    nonphysical delivery can omit physical-only obligations. Class-specific
+    requirements and all power-intent facts remain in force.
+    """
+    manifest = graph.metadata.get("flow109_manifest")
+    if manifest is None:
+        return required, []
+    try:
+        # The renderer already owns the installed-program path resolver.
+        from . import render
+        import flow109
+        if not isinstance(manifest, dict):
+            raise ValueError("manifest must be an object")
+        features = flow109.resolve_plan(manifest.get("features"),
+                                       manifest.get("step_profiles"))["features"]
+    except (ValueError, TypeError, KeyError) as exc:
+        raise RequiredFactsApplicabilityError("D01_APPLICABILITY_INVALID: " + str(exc)) from exc
+    if (features["physical"] or not features["has_digital"]
+            or features["has_analog"] or features["package_interface"]):
+        return required, []
+    physical = {"L1.part_number", "L1.package", "L1.pinout", "L1.pin_count",
+                "L1.electrical_characteristics", "L5.pads"}
+    if not features["requires_dft"]:
+        physical.add("L7.test_modes")
+    absent = {"L8.reset_timing.por_to_first_wake_ready_us": "L9.reset_ports",
+              "L8R.clock_frequency_hz": "L9.clock_ports"}
+    applicable, omitted = {}, []
+    for layer, entries in required.items():
+        applicable[layer] = []
+        for entry in entries:
+            path = layer + "." + entry.get("path", "")
+            reason = None
+            if entry.get("__from_class__") == "any-ic" and entry.get("required"):
+                if path in physical:
+                    reason = "explicit nonphysical digital delivery"
+                elif path in absent:
+                    declaration = graph.by_path(absent[path])
+                    if (declaration is not None and declaration.value == []
+                            and declaration.provenance.origin
+                            and declaration.provenance.source in ("user_stated", "derived")):
+                        reason = "source-cited empty " + absent[path]
+            if reason:
+                omitted.append({"path": path, "reason": reason})
+            else:
+                applicable[layer].append(entry)
+    return applicable, omitted
+
+
 def _spec_floor_from_chain(
     chain: List[str], templates_dir: Path
 ) -> Dict[str, Any]:
@@ -385,7 +441,8 @@ def detect_gaps(
     chain = _parent_chain(graph.class_path, tree)
     templates_dir = class_kb_root / "templates"
 
-    required = _aggregate_required_facts(chain, templates_dir)
+    required, _ = _applicable_required_facts(
+        graph, _aggregate_required_facts(chain, templates_dir))
     floor = _spec_floor_from_chain(chain, templates_dir)
     present = graph.paths()
 
