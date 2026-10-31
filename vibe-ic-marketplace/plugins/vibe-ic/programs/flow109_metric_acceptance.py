@@ -846,22 +846,78 @@ D20_REFERENCE = 'adopted/base_11/cdc_exception_reconciliation.json'
 
 
 def d20_model_sources():
-    """Only this Python validation method, never a mapped STA method."""
+    """Bind the Python SDC algorithms, their helpers/constants and D20 owner.
+
+    Importing a runner is not consuming every phase it can dispatch. Follow
+    symbol references only within this method's existing pure Python modules;
+    keep the two shared owner functions scoped to their own source segments.
+    """
     import ast
     import design_one_shot_runner as owner
-    from execution_provider_catalog import source_closure
+    modules = ('flow109_metric_acceptance', 'sdc_syntax_check',
+        'sdc_validator_check', 'sdc_exception_correlation_check',
+        'sdc_constraints', '_path_layout', '_reference_flow_boundary',
+        '_design_module_set')
+    texts, definitions, imports = {}, {}, {}
+    for module in modules:
+        path = Path(__file__) if module == 'flow109_metric_acceptance' else HERE / (module + '.py')
+        texts[module] = path.read_text()
+        definitions[module], imports[module] = {}, {}
+        for node in ast.parse(texts[module]).body:
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                definitions[module][node.name] = node
+            elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    for name in ast.walk(target):
+                        if isinstance(name, ast.Name):
+                            definitions[module][name.id] = node
+            elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                for name in node.names:
+                    alias = name.asname or name.name.split('.')[0]
+                    target = (name.name, None) if isinstance(node, ast.Import) else (node.module, name.name)
+                    imports[module][alias] = (node, target)
+    pending = [('flow109_metric_acceptance', name) for name in
+        ('d20_model_sources', 'd20_input_files', '_d20_observe', 'accept_d20')]
+    pending.extend(tuple(step.split('.')) for step in D20_STEPS)
+    pending.extend([('_design_module_set', '_source_files'),
+        ('_path_layout', 'rtl_dir'), ('_path_layout', 'fpga_early_dir'),
+        ('_path_layout', 'synth_dir')])
     result = {}
-    for module, names in ((Path(__file__), ('d20_model_sources', 'd20_input_files',
-            '_d20_observe', 'accept_d20', '_d19_exception_commands', '_d19_ref',
-            '_approved_authority', '_approved_document', '_safe_project_file',
-            '_identity_complete', 'evaluate_operator')),
-            (Path(owner.__file__), ('step_sdc_validation', '_complete_d20_validation'))):
-        text = module.read_text()
-        nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
-        for name in names:
-            result[module.name + ':' + name] = _sha(ast.get_source_segment(text, nodes[name]).encode())
-    for path in source_closure({HERE / (name.split('.')[0] + '.py') for name in D20_STEPS}):
-        result[str(path.relative_to(HERE.parent))] = _sha(path.read_bytes())
+    while pending:
+        module, name = pending.pop()
+        key = module + '.py:' + name
+        if key in result:
+            continue
+        node = definitions[module][name]
+        result[key] = _sha(ast.get_source_segment(texts[module], node).encode())
+        aliases = dict(imports[module])
+        for part in ast.walk(node):
+            if isinstance(part, (ast.Import, ast.ImportFrom)):
+                for item in part.names:
+                    alias = item.asname or item.name.split('.')[0]
+                    target = (item.name, None) if isinstance(part, ast.Import) else (part.module, item.name)
+                    aliases[alias] = (part, target)
+        for part in ast.walk(node):
+            if isinstance(part, ast.Name) and isinstance(part.ctx, ast.Load):
+                if part.id in definitions[module]:
+                    pending.append((module, part.id))
+                if part.id in aliases:
+                    declaration, (target, imported) = aliases[part.id]
+                    result[module + '.py:import:' + part.id] = _sha(
+                        ast.get_source_segment(texts[module], declaration).encode())
+                    if target in definitions and imported in definitions[target]:
+                        pending.append((target, imported))
+            elif isinstance(part, ast.Attribute) and isinstance(part.value, ast.Name):
+                binding = aliases.get(part.value.id)
+                if binding:
+                    target, imported = binding[1]
+                    if target in definitions and imported is None and part.attr in definitions[target]:
+                        pending.append((target, part.attr))
+    text = Path(owner.__file__).read_text()
+    nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
+    for name in ('step_sdc_validation', '_complete_d20_validation'):
+        result['design_one_shot_runner.py:' + name] = _sha(ast.get_source_segment(text, nodes[name]).encode())
     return result
 
 

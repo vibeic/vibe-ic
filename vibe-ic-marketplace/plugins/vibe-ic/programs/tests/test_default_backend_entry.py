@@ -1550,3 +1550,85 @@ def test_default_d26_scan_mode_prelayout_is_subject_bound_and_fail_closed(
         else:
             assert 'timing_modes_receipt' not in component
             assert 'D26_TIMING_MODES_RECEIPT_REFUSED' in final['detail']
+
+
+@pytest.mark.parametrize('change', ['unrelated_a3', 'unrelated_phase1', 'other_row',
+    'consumed_checker', 'consumed_helper', 'consumed_constant', 'missing_source',
+    'missing_model_key', 'tampered_model'])
+def test_d20_model_scope_actual_consumer(d20_metric_case, tmp_path, monkeypatch, change):
+    """Mutate scratch source identities; exercise the real D20 acceptance reader."""
+    import ast
+    import hashlib
+    import json
+    import shutil
+    import design_one_shot_runner as design
+    import execution_provider_catalog as catalog
+    import flow109
+    import flow109_admission as admission
+    import flow109_metric_acceptance as metrics
+    project, context = d20_metric_case
+    source = tmp_path / 'method' / 'programs'
+    source.mkdir(parents=True)
+    # The exact old implementation walks every local import. Keep its real
+    # reverse arm isolated too; never mutate the checkout or a loaded checker.
+    for path in metrics.HERE.glob('*.py'):
+        shutil.copyfile(path, source / path.name)
+    (source / '_ppa').mkdir()
+    shutil.copyfile(metrics.HERE / '_ppa/__init__.py', source / '_ppa/__init__.py')
+    before = metrics.d20_model_sources()
+    monkeypatch.setattr(metrics, 'HERE', source)
+    monkeypatch.setattr(metrics, '__file__', str(source / 'flow109_metric_acceptance.py'))
+    monkeypatch.setattr(design, '__file__', str(source / 'design_one_shot_runner.py'))
+    monkeypatch.setattr(catalog, 'HERE', source)
+    assert metrics.d20_model_sources() == before
+    row = design.step_sdc_validation(project)
+    assert row.status == 'PASS', row.detail
+    if change in ('missing_model_key', 'tampered_model'):
+        config = project / 'input/d20-method.json'
+        body = json.loads(config.read_text())
+        key = next(iter(body['model_sources']))
+        if change == 'missing_model_key':
+            del body['model_sources'][key]
+        else:
+            body['model_sources'][key] = '0' * 64
+        config.write_text(json.dumps(body))
+        # Rebind only this synthetic source-control fixture's config identity
+        # so the real purpose/model comparison, not an incidental SHA guard,
+        # has to reject it. This creates no real platform qualification.
+        registry = project / 'qualifications.json'
+        qualified = json.loads(registry.read_text())
+        record = qualified['uses'][0]
+        record['identity']['config']['sha256'] = hashlib.sha256(config.read_bytes()).hexdigest()
+        registry.write_text(json.dumps(qualified))
+        context = flow109.execution_context(flow109.resolve_plan(context['features']), 'D20', 'D20',
+            qualification_registry='qualifications.json', runtime_tool_uses=[{
+                **record['identity'], 'qualification_sha256': admission.canonical_sha(record)}])
+    elif change == 'missing_source':
+        (source / '_design_module_set.py').unlink()
+    elif change == 'consumed_constant':
+        path = source / '_design_module_set.py'
+        path.write_text(path.read_text().replace('_MAX_SOURCE_BYTES = 32 *', '_MAX_SOURCE_BYTES = 31 *'))
+    else:
+        module, name = {
+            'unrelated_a3': ('analog_a3_netlist_emit', None),
+            'unrelated_phase1': ('phase1_one_shot_runner', None),
+            'other_row': ('flow109_metric_acceptance', 'accept_d25'),
+            'consumed_checker': ('sdc_exception_correlation_check', '_known_async_pairs'),
+            'consumed_helper': ('_design_module_set', '_source_files'),
+        }[change]
+        path = source / (module + '.py')
+        text = path.read_text()
+        functions = [n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)]
+        node = next(n for n in functions if n.name == name) if name else functions[0]
+        lines = text.splitlines(keepends=True)
+        lines.insert(node.end_lineno, '    pass  # changed source-identity control\n')
+        path.write_text(''.join(lines))
+    observed = metrics.accept_d20(project, context, row.extras)
+    unchanged = change in ('unrelated_a3', 'unrelated_phase1', 'other_row')
+    assert observed['status'] == ('PASS' if unchanged else 'NOT_MEASURED'), observed
+    if unchanged:
+        assert metrics.d20_model_sources() == before
+    elif change in ('missing_model_key', 'tampered_model'):
+        assert observed['reason'] == 'D20_MODEL_QUALIFICATION_STALE', observed
+    elif change != 'missing_source':
+        assert observed['reason'] == 'D20_INPUT_OR_METHOD_STALE', observed
