@@ -1,12 +1,17 @@
 """Public A2 -> A3 controls for the remaining typed PR3511 geometry seam."""
 import copy
+import hashlib
 import json
+import math
+import shutil
 
 import pytest
 
 import _plugin_tree  # noqa: F401
 import analog_a2_topology_emit as a2
 import analog_a3_netlist_emit as a3
+import sizing_history_emit as history
+from _hostpaths import require_repo
 
 
 SPEC = {"order": 2.0, "osr": 512.0, "enob": 14.0, "vref": 1.0,
@@ -74,6 +79,172 @@ def _build(project, sizing):
         "converter", "delta_sigma", {"name": "converter"},
         a2.LIBRARY["delta_sigma"], SPEC, None, project, None, {},
         measured_params=MEASURED)
+
+
+def _matched_build(project, sizing, lib=None, **limits):
+    _write_inputs(project, sizing)
+    ir = a2.build_ir("converter", "delta_sigma", {}, lib or a2.LIBRARY["delta_sigma"],
+                     SPEC, None, project, None, {}, measured_params=MEASURED, **limits)
+    path = project / "phase3/analog/converter/topology.json"
+    path.write_text(json.dumps(ir))
+    return ir
+
+
+def _matched_history(project, ir, changed=None):
+    audit = ir["matched_gain_length"]
+    path = project / "phase3/analog/converter/topology.json"
+    return {"iterations": [{"iter": 0, "changes": "prospective typed input",
+        "changed_params": changed or audit["independent_parameters"],
+        "normal_topology": {"project": str(project), "block": "converter",
+                            "sha256": hashlib.sha256(path.read_bytes()).hexdigest()},
+        "expanded_device_delta": audit["expanded_devices"]}]}
+
+
+def test_matched_length_default_keeps_full_normal_ir_and_rendered_source(tmp_path):
+    declared = a2.LIBRARY["delta_sigma"]
+    old = copy.deepcopy(declared)
+    for group in a2._stage_groups(old):
+        group.pop("matched_gain_length", None)
+    current = _matched_build(tmp_path / "same", {})
+    legacy = _matched_build(tmp_path / "same", {}, old)
+    for ir in [current, legacy]:
+        ir.pop("_provenance")
+    assert current == legacy
+    ctx = _context(tmp_path)
+    assert a3.render_netlist(current, ctx, [], a3._resolve_params(current, SPEC)[0]) == a3.render_netlist(
+        legacy, ctx, [], a3._resolve_params(legacy, SPEC)[0])
+
+
+def test_one_matched_length_has_exact_normal_deltas_and_history_binding(tmp_path):
+    base = _matched_build(tmp_path / "base", {})
+    project = tmp_path / "matched"
+    ir = _matched_build(project, {"matched_gain_length_um": 1.5})
+    expected = {f"{n}{i}" for i in (1, 2) for n in (
+        "mn_in", "mn_ref", "mp_ld1_", "mp_ld2_", "mp_o", "mn_o")}
+    before = {d["name"]: d for d in base["devices"]}
+    after = {d["name"]: d for d in ir["devices"]}
+    assert {n for n in before if before[n] != after[n]} == expected
+    for name in before:
+        want = dict(before[name])
+        if name in expected:
+            want["l"] = max(1.5, want["l"])
+        assert after[name] == want
+    assert ir["ports"] == base["ports"]
+    assert ir["device_param_exprs"] == base["device_param_exprs"]
+    assert not a3._validate_ir(ir, _context(tmp_path), project)
+    assert not history.validate_history(_matched_history(project, ir))
+    assert len(ir["matched_gain_length"]["expanded_devices"]) == 12
+
+
+def test_matched_length_uses_retained_in_repo_spec_through_normal_consumer(tmp_path):
+    source = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+        "fixtures", "stage_analog_on_pass_review", "accept_adc_conv", "phase3", "analog",
+        "delta_sigma", "spec.json")
+    block = tmp_path / "phase3/analog/converter"
+    block.mkdir(parents=True)
+    shutil.copy2(source, block / "spec.json")
+    (block / "sizing_inputs.json").write_text(json.dumps({"matched_gain_length_um": 1.5}))
+    values, _ = a2.bound_spec_values(tmp_path, "converter")
+    ir = a2.build_ir("converter", "delta_sigma", {}, a2.LIBRARY["delta_sigma"],
+        values, None, tmp_path, None, {}, measured_params=MEASURED)
+    assert not a3._validate_ir(ir, _context(tmp_path), tmp_path)
+    assert len(ir["matched_gain_length"]["expanded_devices"]) == 6 * int(values["order"])
+
+
+@pytest.mark.parametrize("value", [True, False, 0, -1, "1.5", math.nan, math.inf,
+                                    {"length": 1.5, "w": 20}, [1.5]])
+def test_matched_length_malformed_value_refused(tmp_path, value):
+    with pytest.raises(a2.SizingInputsInvalid, match="finite positive"):
+        _matched_build(tmp_path, {"matched_gain_length_um": value})
+
+
+@pytest.mark.parametrize("value", [0.1, 6.0])
+def test_matched_length_selected_pdk_limits_refuse_before_ir(tmp_path, value):
+    with pytest.raises(a2.SizingInputsInvalid, match="PDK"):
+        _matched_build(tmp_path, {"matched_gain_length_um": value},
+            role_minima={r: {"min_length_um": 0.15} for r in ("nmos", "pmos")},
+            role_maxima={r: {"max_length_um": 5.0} for r in ("nmos", "pmos")})
+
+
+@pytest.mark.parametrize("parameter", ["l", "w"])
+def test_matched_length_direct_controlled_device_override_refuses(tmp_path, parameter):
+    with pytest.raises(a2.SizingInputsInvalid, match="conflicts with matched"):
+        _matched_build(tmp_path, {"matched_gain_length_um": 1.5,
+            "device_parameters": {"mn_in1": {parameter: 2}}})
+
+
+@pytest.mark.parametrize("problem", ["unknown", "expression"])
+def test_matched_length_invalid_source_owned_target_refuses(tmp_path, problem):
+    lib = copy.deepcopy(a2.LIBRARY["delta_sigma"])
+    if problem == "unknown":
+        lib["stage"][0]["matched_gain_length"]["targets"].append("nonexistent{i}")
+    else:
+        lib["stage"][0].setdefault("param_exprs", []).append(
+            {"device": "mn_in{i}", "param": "l", "expr": "1"})
+    with pytest.raises(a2.SizingInputsInvalid, match="target|expression-owned"):
+        _matched_build(tmp_path, {"matched_gain_length_um": 1.5}, lib)
+
+
+def test_matched_length_missing_real_cascode_bias_still_refuses(tmp_path):
+    with pytest.raises(a2.SizingInputsInvalid, match="physical|real bias resistor"):
+        _matched_build(tmp_path, {"matched_gain_length_um": 1.5,
+            "knobs": {"ota_input_drain_cascodes": True}})
+
+
+def test_matched_length_includes_added_cascodes_but_full_arm_still_exceeds_cap(tmp_path):
+    sizing = {"matched_gain_length_um": 1.5,
+        "knobs": {"ota_input_drain_cascodes": True},
+        "device_parameters": {"r_cas_top": {"w": 0.8, "l": 120},
+                              "r_cas_bottom": {"w": 0.8, "l": 40}}}
+    ir = _matched_build(tmp_path, sizing)
+    assert not a3._validate_ir(ir, _context(tmp_path), tmp_path)
+    rows = ir["matched_gain_length"]["expanded_devices"]
+    assert len(rows) == 16
+    assert all(row["after"]["l"] == 1.5 for row in rows)
+    complete = _matched_history(tmp_path, ir)
+    assert len(complete["iterations"][0]["changed_params"]) == 6
+    assert [v["rule"] for v in history.validate_history(complete)] == ["TOO_MANY_SIMULTANEOUS_CHANGES"]
+    disguised = _matched_history(tmp_path, ir,
+                                ["matched_gain_length_um", "knobs.ota_input_drain_cascodes"])
+    assert "INVALID_MATCHED_GAIN_LENGTH_AUDIT" in {v["rule"] for v in history.validate_history(disguised)}
+
+
+def test_matched_length_tampered_expansion_refused_by_actual_a3(tmp_path):
+    ir = _matched_build(tmp_path, {"matched_gain_length_um": 1.5})
+    next(d for d in ir["devices"] if d["name"] == "mn_in1")["l"] = 2
+    assert any("inconsistent matched" in p for p in a3._validate_ir(ir, _context(tmp_path), tmp_path))
+
+
+def test_matched_length_retains_original_longer_dimensions(tmp_path):
+    ir = _matched_build(tmp_path, {"matched_gain_length_um": 0.75})
+    rows = {r["device"]: r for r in ir["matched_gain_length"]["expanded_devices"]}
+    assert rows["mn_o1"]["after"]["l"] == 1.0
+    assert rows["mn_in1"]["after"]["l"] == 0.75
+
+
+def test_history_requires_current_exact_expansion_and_all_typed_inputs(tmp_path):
+    ir = _matched_build(tmp_path, {"matched_gain_length_um": 1.5})
+    valid = _matched_history(tmp_path, ir)
+    del valid["iterations"][0]["expanded_device_delta"]
+    assert history.validate_history(valid)[0]["rule"] == "INVALID_MATCHED_GAIN_LENGTH_AUDIT"
+    disguised = _matched_history(tmp_path, ir, ["two arbitrary grouped strings"])
+    assert history.validate_history(disguised)[0]["rule"] == "INVALID_MATCHED_GAIN_LENGTH_AUDIT"
+    path = tmp_path / "phase3/analog/converter/sizing_inputs.json"
+    path.write_text(json.dumps({"matched_gain_length_um": 1.5,
+                               "device_parameters": {"mn_tail1": {"w": 9}}}))
+    assert a2.matched_gain_length_problems(ir, tmp_path)
+
+
+def test_three_unrelated_parameters_stay_refused_and_cannot_hide_in_group(tmp_path):
+    changed = ["device_parameters.mn_tail1.w", "device_parameters.mn_tail2.w",
+               "device_parameters.mn_bias.w"]
+    violations = history.validate_history({"iterations": [{"iter": 0, "changes": "three",
+                                                           "changed_params": changed}]})
+    assert violations[0]["rule"] == "TOO_MANY_SIMULTANEOUS_CHANGES"
+    ir = _matched_build(tmp_path, {"matched_gain_length_um": 1.5,
+        "device_parameters": {"mn_tail1": {"w": 9}, "mn_tail2": {"w": 9}, "mn_bias": {"w": 5}}})
+    assert "INVALID_MATCHED_GAIN_LENGTH_AUDIT" in {v["rule"] for v in history.validate_history(
+        _matched_history(tmp_path, ir, ["matched_gain_length_um"]))}
 
 
 def test_public_a2_to_a3_emits_typed_cascode_graph_and_source_bound_fingers(

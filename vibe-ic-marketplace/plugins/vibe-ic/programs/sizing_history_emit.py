@@ -54,6 +54,7 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -150,6 +151,29 @@ def validate_history(data: dict) -> List[dict]:
         # free-text `changes` string are not counted (no schema regression);
         # to enforce, emit `changed_params: [<param>, ...]`.
         cp = rec.get("changed_params")
+        if isinstance(cp, list) and ("matched_gain_length_um" in cp or "normal_topology" in rec):
+            try:
+                import analog_a2_topology_emit as a2
+                view = rec["normal_topology"]
+                project = Path(view["project"])
+                path = project / "phase3/analog" / view["block"] / "topology.json"
+                raw = path.read_bytes()
+                if hashlib.sha256(raw).hexdigest() != view["sha256"]:
+                    raise ValueError("normal topology hash changed")
+                ir = json.loads(raw)
+                if ir.get("block") != view["block"]:
+                    raise ValueError("normal topology block disagrees with its history binding")
+                problems = a2.matched_gain_length_problems(ir, project)
+                if problems:
+                    raise ValueError("; ".join(problems))
+                audit = ir["matched_gain_length"]
+                if sorted(cp) != audit["independent_parameters"]:
+                    raise ValueError("changed_params does not enumerate all independent normal inputs")
+                if rec.get("expanded_device_delta") != audit["expanded_devices"]:
+                    raise ValueError("history lacks the exact expanded-device dimensions")
+            except (OSError, KeyError, TypeError, ValueError) as exc:
+                out.append({"rule": "INVALID_MATCHED_GAIN_LENGTH_AUDIT",
+                            "field": f"iterations[{i}]", "message": str(exc)})
         if isinstance(cp, list) and len(cp) > 2:
             out.append({"rule": "TOO_MANY_SIMULTANEOUS_CHANGES",
                         "field": f"iterations[{i}].changed_params",

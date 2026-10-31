@@ -2793,6 +2793,11 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             # separating those two makes the parity a consequence instead of
             # an assumption.
             "feedback_selectors": {"neg": "", "pos": "b"},
+            "matched_gain_length": {
+                "targets": ["mn_in{i}", "mn_ref{i}", "mp_ld1_{i}",
+                            "mp_ld2_{i}", "mp_o{i}", "mn_o{i}"],
+                "cascode_targets": ["mn_cas_in{i}", "mn_cas_ref{i}"],
+            },
             "input_drain_cascodes": [
                 {"source": "mn_in{i}", "cascode": "mn_cas_in{i}",
                  "midpoint": "ncas_mid_in{i}"},
@@ -5995,11 +6000,14 @@ def read_sizing_inputs(project: Path, block: str) -> Dict[str, Any]:
         data = json.loads(raw)
     except (OSError, ValueError) as exc:
         raise SizingInputsInvalid(f"cannot read sizing_inputs.json: {exc}") from exc
-    if not isinstance(data, dict) or set(data) - {"knobs", "device_parameters", "rationale"}:
-        raise SizingInputsInvalid("sizing_inputs.json expects knobs, device_parameters and optional rationale")
+    if not isinstance(data, dict) or set(data) - {
+            "knobs", "device_parameters", "matched_gain_length_um", "rationale"}:
+        raise SizingInputsInvalid("sizing_inputs.json expects knobs, device_parameters, optional matched_gain_length_um and rationale")
     for key in ("knobs", "device_parameters"):
         if not isinstance(data.get(key, {}), dict):
             raise SizingInputsInvalid(f"sizing_inputs.{key} must be an object")
+    if "matched_gain_length_um" in data:
+        _positive_sizing_number(data["matched_gain_length_um"], "matched_gain_length_um")
     data["input_view"] = {"path": str(path), "sha256": hashlib.sha256(raw).hexdigest()}
     return data
 
@@ -6178,6 +6186,101 @@ def apply_sizing_inputs(sizing: Dict[str, Any], knobs: Dict[str, Any],
         device.update(normalized)
 
 
+def apply_matched_gain_length(lib: Dict[str, Any], values: Dict[str, float],
+                              sizing: Dict[str, Any], devices: List[Dict[str, Any]],
+                              exprs: List[Dict[str, Any]],
+                              minima: Dict[str, Any], maxima: Dict[str, Any],
+                              cascodes: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """One scalar controls only the entry's declared matched MOS lengths.
+
+    Independent bias geometry and topology choices remain ordinary inputs.
+    This is opt-in: an absent input changes neither geometry nor IR fields.
+    """
+    key = "matched_gain_length_um"
+    if key not in sizing:
+        return None
+    length = _positive_sizing_number(sizing[key], key)
+    by_name = {d["name"]: d for d in devices}
+    targets: List[str] = []
+    for group in _stage_groups(lib):
+        declaration = group.get("matched_gain_length")
+        if declaration is None:
+            continue
+        if (not isinstance(declaration, dict)
+                or set(declaration) != {"targets", "cascode_targets"}
+                or any(not isinstance(declaration[k], list)
+                       for k in ("targets", "cascode_targets"))):
+            raise SizingInputsInvalid("invalid matched gain-length declaration")
+        templates = declaration["targets"] + (
+            declaration["cascode_targets"] if cascodes else [])
+        for index in range(1, _group_count(group, values) + 1):
+            for template in templates:
+                try:
+                    name = template.format(i=index)
+                except (AttributeError, KeyError, ValueError) as exc:
+                    raise SizingInputsInvalid("invalid matched gain-length target") from exc
+                if (name in targets or name not in by_name
+                        or by_name[name].get("role") not in ("nmos", "pmos")):
+                    raise SizingInputsInvalid("unknown or duplicate matched gain-length target: " + name)
+                if name in sizing.get("device_parameters", {}):
+                    raise SizingInputsInvalid(name + ": direct override conflicts with matched gain-length control")
+                targets.append(name)
+    if not targets:
+        raise SizingInputsInvalid("matched gain length is not declared for this topology")
+    geometry = lambda d: {k: d[k] for k in ("w", "l", "m", "ng") if k in d}
+    before = {name: geometry(by_name[name]) for name in targets}
+    apply_sizing_inputs({"device_parameters": {name: {"l": length} for name in targets}},
+                        {}, {}, [], [dict(d) for d in devices], exprs, minima, maxima)
+    expanded = {name: {"l": max(length, _positive_sizing_number(
+        by_name[name].get("l"), name + ".l"))} for name in targets}
+    # Reuse the normal expression-ownership and selected-PDK geometry checks.
+    apply_sizing_inputs({"device_parameters": expanded}, {}, {}, [],
+                        devices, exprs, minima, maxima)
+    dimensions = ([key] + ["knobs." + k for k in sizing.get("knobs", {})]
+                  + ["device_parameters." + name + "." + parameter
+                     for name, row in sizing.get("device_parameters", {}).items()
+                     for parameter in row])
+    return {"input": key, "requested_um": length,
+            "input_view": sizing.get("input_view"),
+            "independent_parameters": sorted(dimensions),
+            "expanded_devices": [
+                {"device": name, "before": before[name],
+                 "after": geometry(by_name[name])} for name in targets]}
+
+
+def matched_gain_length_problems(ir: Dict[str, Any],
+                                 project: Optional[Path]) -> List[str]:
+    """Reconstruct the typed expansion from current normal inputs at A3/history."""
+    try:
+        record = ir.get("matched_gain_length")
+        sizing = read_sizing_inputs(Path(project), ir["block"]) if project is not None else {}
+        if "matched_gain_length_um" not in sizing:
+            if record:
+                raise SizingInputsInvalid("matched gain-length record lacks its current typed input")
+            return []
+        lib = LIBRARY.get(_canonical_type(ir.get("block_type"))) or {}
+        values, _ = bound_spec_values(Path(project), ir["block"])
+        expected, nets, exprs, _ = expand_stages(lib, values)
+        cascodes = expand_input_drain_cascodes(
+            lib, values, ir.get("knobs") or {}, expected, nets, sizing)
+        apply_sizing_inputs({"device_parameters": sizing.get("device_parameters", {})},
+                            {}, {}, [], expected, exprs, {}, {})
+        want = apply_matched_gain_length(lib, values, sizing, expected, exprs,
+                                         {}, {}, cascodes)
+        if record != want:
+            raise SizingInputsInvalid("inconsistent matched gain-length expansion record")
+        actual = {d["name"]: d for d in ir.get("devices", [])}
+        if len(actual) != len(ir.get("devices", [])):
+            raise SizingInputsInvalid("duplicate device in matched gain-length expansion")
+        for row in want["expanded_devices"]:
+            d = actual.get(row["device"], {})
+            if {k: d[k] for k in ("w", "l", "m", "ng") if k in d} != row["after"]:
+                raise SizingInputsInvalid(row["device"] + ": inconsistent matched gain-length dimensions")
+        return []
+    except (SizingInputsInvalid, KeyError, TypeError, ValueError) as exc:
+        return ["matched gain length: " + str(exc)]
+
+
 def input_drain_cascode_problems(ir: Dict[str, Any],
                                  project: Optional[Path]) -> List[str]:
     """Reconstruct an enabled option's actual graph at the A3 boundary.
@@ -6234,6 +6337,8 @@ def input_drain_cascode_problems(ir: Dict[str, Any],
              "device_parameters": sizing.get("device_parameters", {})},
             {}, {}, [], expected, expected_exprs, {}, {},
             lib.get("spec_knobs"))
+        apply_matched_gain_length(lib, values, sizing, expected, expected_exprs,
+                                 {}, {}, expected_record)
         renames = (ir.get("port_binding") or {}).get("renamed") or {}
         ports = list(ir.get("ports") or [])
         mapped = {str(renames.get(port, port)).casefold()
@@ -6383,6 +6488,9 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     apply_sizing_inputs(sizing_inputs, knobs, knob_sources, defaulted,
                         devices, param_exprs, role_minima,
                         dict(role_maxima or {}), lib.get("spec_knobs"))
+    matched_length = apply_matched_gain_length(
+        lib, spec_values, sizing_inputs, devices, param_exprs,
+        role_minima, dict(role_maxima or {}), cascodes)
     # A counter group's WINDOW — the number of clock periods its ripple chain
     # takes to come back to zero — is computed during expansion and is not
     # otherwise nameable: the expression grammar has no logarithm, so nothing
@@ -6682,6 +6790,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     }
     if cascodes:
         ir["input_drain_cascodes"] = cascodes
+    if matched_length:
+        ir["matched_gain_length"] = matched_length
     # THE DESIGN'S OWN PORT NAMES, when it declares them. The library names
     # ports after the circuit; the design declares them after the role they
     # play at chip level. Binding here — before the IR reaches A3, A5, A6 and

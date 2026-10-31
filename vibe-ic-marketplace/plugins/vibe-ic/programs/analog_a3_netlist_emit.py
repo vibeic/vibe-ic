@@ -1028,6 +1028,7 @@ def _validate_ir(ir: Dict[str, Any], pdkctx: Dict[str, Any],
     """Structural problems that must stop emission. Every one of these was a
     real failure mode measured on a hand-built fixture."""
     problems: List[str] = _a2.input_drain_cascode_problems(ir, project)
+    problems.extend(_a2.matched_gain_length_problems(ir, project))
     role_terms = ir.get("role_terminals") or {}
     ports = set(ir.get("ports") or [])
     rails = set((ir.get("rails") or {}).values())
