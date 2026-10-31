@@ -680,6 +680,103 @@ def _docker_image_id(image: str, timeout: int) -> Tuple[Optional[str], Optional[
     return image_id, None
 
 
+def prompt_rtl_source_facts(prompt: str) -> Dict[str, Any]:
+    """Classify visible source conservatively, without manufacturing an RTL file.
+
+    A header is a distinct supplied-source fragment, never a complete module.
+    The existing module lexer parses only its framing; the temporary endmodule
+    is not included in the source quote or hash. Bodies/ambiguous scopes remain
+    unsupported instead of being discarded as prose.
+    """
+    import module_port_audit as audit
+    import task_nature_route as routing
+    unsupported = lambda reason: {"kind": "UNSUPPORTED", "reason": reason}
+    try:
+        mask = audit.lexical_mask(prompt, attributes=True)
+        plain_mask = audit.lexical_mask(prompt)
+        if plain_mask != mask:
+            return unsupported("supplied HDL attributes need a wider source contract")
+        if re.search(r"(?m)^[ \t]*`[A-Za-z_]\w*(?![\w`])", mask):
+            return unsupported("supplied preprocessor source needs a wider source contract")
+    except ValueError as exc:
+        return unsupported(str(exc))
+    def unscoped_source(text):
+        for found in routing._PARTIAL_BODY_SYNTAX.finditer(text):
+            fragment = found.group()
+            # The router normally applies this broad parameter arm INSIDE a
+            # module. Outside one, a prose mention is not a declaration.
+            if (re.match(r"(?:parameter|localparam)\b", fragment)
+                    and "=" not in fragment
+                    and not re.fullmatch(r"(?:parameter|localparam)\s+[A-Za-z_]\w*\s*;", fragment)):
+                continue
+            return True
+        return re.search(
+            r"(?m)^[ \t]*(?:package|interface|class|program|primitive|checker|config|import|typedef)\b[^;\n]*;", text) is not None
+
+    starts = list(re.finditer(r"(?m)^[ \t]*module\b", mask))
+    if not starts:
+        if re.search(r"\bmodule\s+(?:(?:automatic|static)\s+)?[A-Za-z_]\w*\s*[#(;]", mask):
+            return unsupported("inline or unbounded supplied module")
+        if unscoped_source(mask):
+            return unsupported("unscoped supplied HDL fragment")
+        code_blocks = re.finditer(
+            r"(?ims)^\s*```(?:verilog|systemverilog|sv)\b[^\n]*\n(.*?)(?:^\s*```|\Z)", mask)
+        if any(block.group(1).strip() for block in code_blocks):
+            return unsupported("HDL fence without a complete module header")
+        return {"kind": "NONE"}
+    if len(starts) != 1:
+        return unsupported("multiple supplied module headers")
+    start = starts[0].start()
+    # The module lexer, not this boundary search, judges balanced header syntax.
+    end = mask.find(";", start)
+    if end < 0:
+        return unsupported("incomplete supplied module header")
+    quote = prompt[start:end + 1]
+    if re.search(r"`[A-Za-z_]", mask[start:end + 1]):
+        return unsupported("macro-dependent header needs its complete source context")
+    issues: List[str] = []
+    regions = list(audit.module_regions(quote + "\nendmodule", issues))
+    if issues or len(regions) != 1 or regions[0][2] != len(quote):
+        return unsupported("unsupported supplied header: " + "; ".join(issues))
+    before = mask[:start]
+    fences = list(re.finditer(r"```", mask))
+    preceding = [m for m in fences if m.start() < start]
+    tail_end = len(mask)
+    if len(preceding) % 2:
+        opening_line_end = mask.find("\n", preceding[-1].end())
+        if opening_line_end < 0 or mask[opening_line_end + 1:start].strip():
+            return unsupported("additional supplied code before header")
+        closing = next((m.start() for m in fences if m.start() > end), len(mask))
+        tail_end = closing
+        # Other code blocks might carry source not represented by this header.
+        if len(fences) > 2:
+            return unsupported("multiple code blocks around supplied source")
+    if mask[end + 1:tail_end].strip():
+        return unsupported("supplied module body or unbounded trailing source")
+    outside = before + mask[tail_end:]
+    if unscoped_source(outside):
+        return unsupported("additional supplied HDL outside header")
+    return {"kind": "HEADER_ONLY", "module": regions[0][0], "header": quote,
+            "header_sha256": sha256_text(quote), "prompt_sha256": sha256_text(prompt)}
+
+
+def _header_tokens(source: str) -> List[str]:
+    # Lexical comparison only. Quoted values remain atomic, including spaces
+    # and comment-looking characters inside parameter string defaults.
+    clean = re.sub(r'"(?:\\.|[^"\\])*"|//[^\n]*|/\*.*?\*/',
+                   lambda m: m.group() if m.group().startswith('"') else ' ',
+                   source, flags=re.S)
+    return re.findall(r'"(?:\\.|[^"\\])*"|[A-Za-z_$][\w$]*|'
+                      r"\d+'[sS]?[bBoOdDhH][0-9a-fA-F_xzXZ]+|\d+|"
+                      r"<<<|>>>|===|!==|<<|>>|<=|>=|==|!=|&&|\|\||::|\*\*|~\^|\^~|\S", clean)
+
+
+def prompt_header_preservation(facts: Mapping[str, Any]) -> Dict[str, Any]:
+    """The exact immutable header declaration a reviewer must carry forward."""
+    return {"schema": "vibeic.prompt_header_preservation.v1",
+            **{key: facts[key] for key in ("prompt_sha256", "module", "header", "header_sha256")}}
+
+
 def run_structural_contract(
     candidate_path: Path,
     declaration: Any,
@@ -768,6 +865,30 @@ def run_structural_contract(
     if requirement.get("quote_sha256") != sha256_text(quote) or requirement_text.count(quote) != 1:
         return finish("NOT_MEASURED", "STRUCTURAL_REQUIREMENT_AMBIGUOUS",
                       "structural requirement quote is stale, absent, or ambiguous")
+
+    if prompt_only:
+        facts = prompt_rtl_source_facts(requirement_text)
+        if facts["kind"] == "UNSUPPORTED":
+            return finish("NOT_MEASURED", "STRUCTURAL_PROMPT_SOURCE_UNSUPPORTED", facts["reason"])
+        header_binding = declaration.get("prompt_header_preservation")
+        if facts["kind"] == "HEADER_ONLY":
+            if header_binding != prompt_header_preservation(facts):
+                return finish("REFUSED", "STRUCTURAL_PROMPT_HEADER_UNBOUND",
+                              "the unique supplied header must be bound exactly, including prompt and header hashes")
+            import module_port_audit as audit
+            issues: List[str] = []
+            regions = list(audit.module_regions(candidate_source, issues))
+            headers = [candidate_source[start:body] for name, start, body, _end in regions
+                       if name == facts["module"]]
+            if (issues or declaration.get("top") != facts["module"] or len(headers) != 1
+                    or _header_tokens(headers[0]) != _header_tokens(facts["header"])):
+                return finish("REFUSED", "STRUCTURAL_PROMPT_HEADER_CHANGED",
+                              "candidate changed or removed the supplied header's significant tokens")
+            report["prompt_header_preservation"] = {
+                "verdict": "PASS", **prompt_header_preservation(facts)}
+        elif header_binding is not None:
+            return finish("REFUSED", "STRUCTURAL_PROMPT_HEADER_UNSUPPORTED",
+                          "header preservation was declared without a supplied header")
 
     top = declaration.get("top")
     if not isinstance(top, str) or not _IDENT.fullmatch(top):

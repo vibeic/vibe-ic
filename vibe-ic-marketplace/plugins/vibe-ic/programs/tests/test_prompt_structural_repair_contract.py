@@ -51,7 +51,7 @@ def native(monkeypatch):
             "image_id": pinned, "image_digest": image.split("@", 1)[1]}
 
 
-def task_and_review(tmp_path, native, candidate=existing.WRONG):
+def task_and_review(tmp_path, native, candidate=existing.WRONG, *, nature=None, bind_header=False):
     run = tmp_path / "run"
     project = run / "projects" / "neutral"
     rtl = project / "phase2" / "stage1" / "rtl"
@@ -65,7 +65,8 @@ def task_and_review(tmp_path, native, candidate=existing.WRONG):
         {"name": "rtl_gen", "status": "PASS", "detail": "neutral control"}]}))
     bio._stage_public_original("neutral", PROMPT, {}, project)
     got = bio.collect("rtllm", "neutral", project)
-    task = bd._make_ai_review_task("neutral", project, got, existing.ROUTING, 0,
+    routing = {**existing.ROUTING, "nature": nature or existing.ROUTING["nature"]}
+    task = bd._make_ai_review_task("neutral", project, got, routing, 0,
         run, "PROGRAM", program_phases={"phase3_verifying": {"ran": {
             "step4_functional_evidence": "NOT_APPLICABLE"}}})
     task["verification_execution"] = native
@@ -73,7 +74,16 @@ def task_and_review(tmp_path, native, candidate=existing.WRONG):
     declaration["schema"] = PROMPT_SCHEMA
     declaration["candidate_path"] = declaration.pop("source_path")
     declaration.pop("source_sha256")
+    if bind_header:
+        # Author the known neutral fixture binding independently of the producer.
+        header = PROMPT.split("```verilog\n", 1)[1].split("\n```", 1)[0]
+        declaration["prompt_header_preservation"] = {
+            "schema": "vibeic.prompt_header_preservation.v1",
+            "prompt_sha256": bd._sha256_text(PROMPT), "module": "neutral_select",
+            "header": header, "header_sha256": bd._sha256_text(header)}
     review = existing._write_structural_review(task, candidate, declaration=declaration)
+    review["routing"]["ai_nature"] = routing["nature"]
+    Path(task["review_path"]).write_text(json.dumps(review))
     return task, review
 
 
@@ -173,6 +183,7 @@ def test_prompt_structure_repair_replays_same_contract_and_requires_fresh_review
     assert bd._validate_ai_review(fresh)["status"] == "PENDING"
     fresh_review = existing._write_structural_review(fresh, existing.RIGHT, declaration=structural)
     fresh_review.pop("structural_verification")
+    fresh_review["routing"]["ai_nature"] = fresh["program_routing"]["nature"]
     fresh_review["semantic_review"]["verdict"] = "PASS"
     fresh_review["semantic_review"]["findings"] = []
     save_review(fresh, fresh_review)
@@ -287,3 +298,187 @@ def test_program_output_rebinding_preserves_prompt_structure_obligations():
 def test_normalizer_refuses_an_ambiguous_explicit_image():
     with pytest.raises(launch.Refusal, match="LL_IMAGE_TOKEN_AMBIGUOUS"):
         launch._image_tool_argv(["docker", "run", "declared", "declared"], image="declared")
+
+
+HEADER = "module neutral_select(input wire a, b, s, output wire y);"
+PARAM_HEADER = "module neutral_select #(parameter P=1)(input wire a, b, s, output wire y);"
+
+
+def supplied_header_prompt(monkeypatch, header=HEADER, body=""):
+    prompt = PROMPT + "\n```verilog\n" + header + "\n" + body + "```\n"
+    monkeypatch.setitem(globals(), "PROMPT", prompt)
+    monkeypatch.setattr(existing, "PROMPT", prompt)
+    return prompt
+
+
+def test_pure_text_completion_uses_measured_source_absence(tmp_path, native):
+    task, _ = task_and_review(tmp_path, native, nature="completion")
+    assert bd._requires_source_repair_contract(task) is False
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REPAIR_REQUIRED", verdict
+    assert verdict["challenge_result"]["status"] == "PASS"
+    assert verdict["structural_result"]["verdict"] == "FAIL"
+
+
+def test_supplied_header_preserves_source_through_native_repair_and_fresh_review(tmp_path, native, monkeypatch):
+    supplied_header_prompt(monkeypatch)
+    monkeypatch.setattr(existing, "ROUTING", {**existing.ROUTING, "nature": "completion"})
+    original = task_and_review
+    def header_review(*args, **kwargs):
+        task, review = original(*args, **kwargs, nature="completion", bind_header=True)
+        assert bd._requires_source_repair_contract(task) is True
+        return task, review
+    monkeypatch.setitem(globals(), "task_and_review", header_review)
+    test_prompt_structure_repair_replays_same_contract_and_requires_fresh_review(tmp_path, native)
+
+
+def test_candidate_header_may_change_only_whitespace_and_comments(tmp_path, native, monkeypatch):
+    supplied_header_prompt(monkeypatch)
+    candidate = existing.WRONG.replace(HEADER, "module /* retained interface */ neutral_select (\ninput wire a,b,s, output wire y\n);")
+    task, _ = task_and_review(tmp_path, native, candidate, nature="completion", bind_header=True)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REPAIR_REQUIRED", verdict
+    assert verdict["structural_result"]["prompt_header_preservation"]["verdict"] == "PASS"
+
+
+@pytest.mark.parametrize("change", ["width", "direction", "name", "parameter_default", "removal"])
+def test_changed_header_is_not_a_structural_counterexample(tmp_path, native, monkeypatch, change):
+    supplied_header_prompt(monkeypatch, PARAM_HEADER)
+    header = PARAM_HEADER
+    if change == "width":
+        header = header.replace("input wire a", "input wire [1:0] a")
+    elif change == "direction":
+        header = header.replace("output wire y", "input wire y")
+    elif change == "name":
+        header = header.replace("wire a", "wire renamed")
+    elif change == "parameter_default":
+        header = header.replace("P=1", "P=2")
+    else:
+        header = "module neutral_select;"
+    candidate = existing.WRONG.replace(HEADER, header)
+    task, _ = task_and_review(tmp_path, native, candidate, nature="completion", bind_header=True)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REJECTED"
+    assert verdict["structural_result"]["verdict"] == "REFUSED"
+    assert any(x["code"] == "STRUCTURAL_PROMPT_HEADER_CHANGED" for x in verdict["structural_result"]["findings"])
+
+
+@pytest.mark.parametrize("nature", ["spec_generation", "completion"])
+def test_functional_only_repair_cannot_discard_embedded_source(tmp_path, native, monkeypatch, nature):
+    # Source/record boundary control: no structural declaration means no narrow
+    # structural exception, even if a functional repair record is otherwise bound.
+    monkeypatch.setattr(bd, "_task_rtl_input", lambda task: "original")
+    supplied_header_prompt(monkeypatch)
+    bad_function = existing.WRONG.replace("left | right", "left & right")
+    task, review = task_and_review(tmp_path, native, bad_function, nature=nature)
+    review.pop("structural_verification")
+    review["semantic_review"]["findings"] = ["Output y fails the prompt's selection function."]
+    review["semantic_review"]["rationale"] = "The exhaustive prompt-derived selection test fails on this exact frozen candidate."
+    save_review(task, review)
+    prior = bd._validate_ai_review(task)
+    assert prior["status"] == "REPAIR_REQUIRED"
+    assert prior["challenge_result"]["status"] == "FAIL"
+    working = Path(task["project"]) / "phase2/stage1/rtl/neutral_select.sv"
+    # A wider input retains every tested functional result, yet changes the
+    # supplied source. The repair record must reject it before later gates.
+    working.write_text(existing.RIGHT.replace("input wire a", "input wire [1:0] a"))
+    project = Path(task["project"])
+    got = bio.collect("rtllm", "neutral", project, supplied_rtl=True)
+    frozen = bd._archive_candidate("neutral", project, got, project.parent.parent,
+        "AI_REPAIR", archive_key="functional-header-mutation-control")
+    repaired_function = bd._run_verification_challenge(frozen,
+        {**prior["verified_challenge"], "execution_backend": native})
+    assert repaired_function["status"] == "PASS"
+    repaired = bd._sha256_text(bd._candidate_text(bd._rtl_files(Path(task["project"]))))
+    challenge = prior["verified_challenge"]
+    record = {"schema": bd._AI_REPAIR_RECORD_SCHEMA, "id": task["id"],
+              "prompt_sha256": task["prompt_sha256"], "parent_rtl_sha256": task["rtl_sha256"],
+              "repaired_rtl_sha256": repaired, "challenge_sha256": challenge["sha256"],
+              "author": {"kind": "AI", "model": "neutral-functional-repair"},
+              "oracle_accessed": False,
+              "rationale": "Bound neutral functional repair control that must not silently drop a supplied header."}
+    path = tmp_path / "functional_repair.json"
+    path.write_text(json.dumps(record))
+    validated, reasons = bd._validate_repair_record(path, task, repaired, challenge)
+    assert bool(validated) is False
+    assert validated is None
+    assert bd._requires_source_repair_contract(task) is True
+    assert any("lacks repair_contract" in x for x in reasons), reasons
+
+
+@pytest.mark.parametrize("source", [
+    HEADER + "\nwire retained;\n", HEADER + "\nassign y=a;\nendmodule\n",
+    HEADER + "\nmodule helper;\n", "module neutral_select(input a, output y\n",
+])
+def test_body_or_incomplete_source_cannot_be_reclassified_as_text(tmp_path, monkeypatch, source):
+    monkeypatch.setattr(bd, "_task_rtl_input", lambda task: "original")
+    prompt = PROMPT + "\n```verilog\n" + source + "```\n"
+    monkeypatch.setitem(globals(), "PROMPT", prompt)
+    monkeypatch.setattr(existing, "PROMPT", prompt)
+    task, _ = task_and_review(tmp_path, {"backend": "host"})
+    assert bd._requires_source_repair_contract(task) is True
+    assert rc.prompt_rtl_source_facts(prompt)["kind"] == "UNSUPPORTED"
+    assert bd._allows_prompt_structural_binding(task) is False
+
+
+def test_malformed_public_manifest_is_not_source_absence(tmp_path, monkeypatch):
+    monkeypatch.setattr(bd, "_task_rtl_input", lambda task: "original")
+    task, _ = task_and_review(tmp_path, {"backend": "host"}, nature="completion")
+    manifest = Path(task["project"]) / "input/public_original/manifest.json"
+    manifest.write_text("{invalid")
+    assert bd._requires_source_repair_contract(task) is True
+    assert bd._allows_prompt_structural_binding(task) is False
+
+
+def test_header_token_comparison_retains_string_defaults():
+    left = 'module cedar #(parameter S="a b//x")(input a);'
+    assert rc._header_tokens(left) != rc._header_tokens(left.replace("a b", "a  b"))
+    assert rc._header_tokens(left) == rc._header_tokens(left.replace("input a", "input /* same */ a"))
+
+
+def test_header_binding_cannot_be_omitted_or_replaced(tmp_path, native, monkeypatch):
+    supplied_header_prompt(monkeypatch)
+    task, review = task_and_review(tmp_path, native, nature="completion")
+    missing = bd._validate_ai_review(task)
+    assert missing["status"] == "REJECTED"
+    assert missing["structural_result"]["findings"][0]["code"] == "STRUCTURAL_PROMPT_HEADER_UNBOUND"
+    facts = rc.prompt_rtl_source_facts(PROMPT)
+    binding = rc.prompt_header_preservation(facts)
+    binding["header_sha256"] = "0" * 64
+    review["structural_verification"]["prompt_header_preservation"] = binding
+    save_review(task, review)
+    assert bd._validate_ai_review(task)["status"] == "REJECTED"
+
+
+def test_source_facts_retain_bodies_outside_fences_and_ignore_comments():
+    prompt = "Complete selection.\n```verilog\n" + HEADER + "\n```\n"
+    assert rc.prompt_rtl_source_facts(prompt)["kind"] == "HEADER_ONLY"
+    assert rc.prompt_rtl_source_facts(prompt + "assign y=a;\n")["kind"] == "UNSUPPORTED"
+    assert rc.prompt_rtl_source_facts("wire retained;\n")["kind"] == "UNSUPPORTED"
+    comment = "```verilog\n/* module old(input a); assign y=a; endmodule */\n```\n"
+    assert rc.prompt_rtl_source_facts(comment)["kind"] == "NONE"
+    assert rc.prompt_rtl_source_facts("logic should, where possible, be combinational.\n")["kind"] == "NONE"
+
+
+@pytest.mark.parametrize("prefix", ["`define W 1\n", "typedef logic flag_t;\n", "(* keep = 1 *)\n"])
+def test_header_only_does_not_discard_other_supplied_source(prefix):
+    prompt = "Complete the code.\n```verilog\n" + prefix + HEADER + "\n```\n"
+    assert rc.prompt_rtl_source_facts(prompt)["kind"] == "UNSUPPORTED"
+
+
+def test_embedded_body_native_scope_is_not_measured(tmp_path, native, monkeypatch):
+    supplied_header_prompt(monkeypatch, body="wire retained;\n")
+    task, _ = task_and_review(tmp_path, native, nature="completion")
+    verdict = bd._validate_ai_review(task)
+    assert verdict["challenge_result"]["status"] == "PASS"
+    assert verdict["status"] == bd._NOT_MEASURED
+    assert verdict["structural_result"]["verdict"] == "NOT_MEASURED"
+    assert verdict["structural_result"]["findings"][0]["code"] == "STRUCTURAL_PROMPT_SOURCE_UNSUPPORTED"
+
+
+
+def test_source_facts_do_not_treat_parameter_prose_or_markdown_names_as_hdl():
+    prompt = "Interface:\n`P` denotes a constant. The design should expose a parameter with a default of one; complete the selection function.\n"
+    assert rc.prompt_rtl_source_facts(prompt)["kind"] == "NONE"
+    assert rc.prompt_rtl_source_facts("Complete: module inline_unit(input a); assign y=a; endmodule")["kind"] == "UNSUPPORTED"
+    assert rc.prompt_rtl_source_facts("parameter P=1;\n")["kind"] == "UNSUPPORTED"

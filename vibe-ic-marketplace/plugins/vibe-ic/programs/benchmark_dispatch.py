@@ -53,7 +53,8 @@ from _atomic_artefact import write_bytes as _atomic_write_bytes
 import _runtime_pair_preflight as _runtime_pair
 import _progress_run
 import _container_exec as _challenge_exec
-from rtl_repair_contract import SCHEMA_PROMPT_STRUCTURAL, SCHEMA_PROMPT_COMPLETION
+from rtl_repair_contract import (SCHEMA_PROMPT_STRUCTURAL, SCHEMA_PROMPT_COMPLETION,
+                                 prompt_rtl_source_facts)
 
 HARNESS = Path(__file__).resolve().parent.parent / "benchmark"
 REGISTRY = HARNESS / "BENCHMARK_REGISTRY.json"
@@ -2653,14 +2654,19 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                         "this native proof, not a fabricated simulation failure, must FAIL"),
                     "schema": "vibeic.native_structural_contract.v1",
                     "_prompt_only_alternative": (
-                        "For text-only spec_generation with original input selection, use "
+                        "For source-verified spec_generation/completion with original input selection, use "
                         "schema='vibeic.prompt_structural_contract.v1', replace source_path "
                         "with candidate_path (exact relative RTL path), and omit source_sha256. "
                         "The task's declared native image must be used. The current functional "
                         "challenge and all active inherited challenges must PASS and cover "
                         "every blocking obligation, even without Program functional PASS. "
                         "Only structures preserved at RTLIL_AFTER_PROC_OPT are measurable; "
-                        "source-syntax methods are not established by functional equivalence."),
+                        "source-syntax methods are not established by functional equivalence. "
+                        "A unique header-only prompt also requires prompt_header_preservation: "
+                        "schema='vibeic.prompt_header_preservation.v1', prompt_sha256, module, "
+                        "header (exact original header text), header_sha256. Header tokens "
+                        "must survive unchanged. Embedded bodies, multiple modules or "
+                        "ambiguous extraction are NOT_MEASURED; never omit their source obligations."),
                     "source_path": "<exact public-original RTL relative path>",
                     "source_sha256": "<sha256 of that exact original source>",
                     "candidate_sha256": "<sha256 of exact selected candidate file>",
@@ -2875,17 +2881,48 @@ def _repair_record_path(run_p: Path, task: dict) -> Path:
             f"repair-of-{parent_hash}.json")
 
 
-def _requires_source_repair_contract(task: dict) -> bool:
-    """Preserve supplied RTL; a text-only generation has no RTL fragments.
+def _original_prompt_without_context(task: dict) -> str | None:
+    """Read the existing authoritative original contract, never a nature claim.
 
-    The original-input selection comes from the measured runner invocation,
-    not an author/reviewer label. All other inputs retain the source-bound
-    completion contract, including absent or malformed public-source records.
+    Both generation and completion may be text-only. An absent/malformed public
+    manifest, drifted prompt or real context is not evidence that source is absent.
     """
-    return not (
-        (task.get("public_original_input") or {}).get("status") == "NOT_PROVIDED"
-        and (task.get("program_routing") or {}).get("nature") == "spec_generation"
-        and _task_rtl_input(task) == "original")
+    if ((task.get("program_routing") or {}).get("nature") not in {"spec_generation", "completion"}
+            or (task.get("public_original_input") or {}).get("status") != "NOT_PROVIDED"):
+        return None
+    try:
+        if _task_rtl_input(task) != "original":
+            return None
+        import _path_layout as layout
+        import benchmark_io_adapter as bio
+        project = Path(str(task["project"]))
+        sources = layout.original_input_sources(project)
+        prompt = sources[0].read_text()
+        actual = bio.public_original_input(project, str(task["id"]),
+            str(task["prompt_sha256"]), expected=task.get("public_original_input"))
+        if (len(sources) != 1 or actual != task.get("public_original_input")
+                or actual.get("status") != "NOT_PROVIDED" or actual.get("files")
+                or _sha256_text(prompt) != task["prompt_sha256"]):
+            return None
+        return prompt
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def _requires_source_repair_contract(task: dict) -> bool:
+    """Only measured source absence permits a contract-free functional repair.
+
+    Embedded headers still carry preservation obligations. Their narrow prompt
+    structural binding is independent of this strict source-bound default.
+    """
+    prompt = _original_prompt_without_context(task)
+    return prompt is None or prompt_rtl_source_facts(prompt)["kind"] != "NONE"
+
+
+def _allows_prompt_structural_binding(task: dict) -> bool:
+    prompt = _original_prompt_without_context(task)
+    return (prompt is not None
+            and prompt_rtl_source_facts(prompt)["kind"] in {"NONE", "HEADER_ONLY"})
 
 
 def _requires_repair_contract(task: dict, contract=None) -> bool:
@@ -2948,18 +2985,19 @@ def _validate_repair_record(path: Path, task: dict, repaired_hash: str,
     contract = record.get("repair_contract")
     public = task.get("public_original_input") or {}
     source_bound = _requires_source_repair_contract(task)
-    if not source_bound:
-        try:
-            review = _strict_json_loads(Path(str(task.get("review_path") or "")).read_text())
-        except (OSError, ValueError):
-            review = {}
-        inherited = review.get("structural_verification") if isinstance(review, dict) else None
-        prior_contract = (task.get("repair_provenance") or {}).get("repair_contract")
-        prior_contract = prior_contract if isinstance(prior_contract, dict) else {}
-        if inherited is None and prior_contract.get("schema") == SCHEMA_PROMPT_COMPLETION:
-            inherited = prior_contract.get("structural")
-        prompt_structure = (isinstance(inherited, dict)
-                            and inherited.get("schema") == SCHEMA_PROMPT_STRUCTURAL)
+    try:
+        review = _strict_json_loads(Path(str(task.get("review_path") or "")).read_text())
+    except (OSError, ValueError):
+        review = {}
+    inherited = review.get("structural_verification") if isinstance(review, dict) else None
+    prior_contract = (task.get("repair_provenance") or {}).get("repair_contract")
+    prior_contract = prior_contract if isinstance(prior_contract, dict) else {}
+    if inherited is None and prior_contract.get("schema") == SCHEMA_PROMPT_COMPLETION:
+        inherited = prior_contract.get("structural")
+    prompt_structure = (isinstance(inherited, dict)
+                        and inherited.get("schema") == SCHEMA_PROMPT_STRUCTURAL
+                        and _allows_prompt_structural_binding(task))
+    if not source_bound or prompt_structure:
         if prompt_structure:
             if not isinstance(contract, dict) or contract.get("schema") != SCHEMA_PROMPT_COMPLETION:
                 reasons.append("prompt-only structural repair requires its inherited repair_contract")
@@ -4504,10 +4542,10 @@ def _run_review_structural_proof(task: dict, candidate: dict,
             "code": "STRUCTURAL_DECLARATION_MISSING",
             "message": "structural_verification must be an object"}]}
     prompt_only = declaration.get("schema") == SCHEMA_PROMPT_STRUCTURAL
-    if prompt_only and _requires_source_repair_contract(task):
+    if prompt_only and _original_prompt_without_context(task) is None:
         return {"verdict": "REFUSED", "findings": [{
             "code": "STRUCTURAL_BINDING_CONFLICT",
-            "message": "prompt-only structure is restricted to text-only original-input generation"}]}
+            "message": "prompt structural binding requires verified original-input generation/completion without public context files"}]}
     source_path = declaration.get("candidate_path" if prompt_only else "source_path")
     try:
         relative = bio._public_relative(source_path)
@@ -10061,7 +10099,9 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                                     "sha256 of the corrected exact selected RTL file"),
                             }} if isinstance(verdict.get(
                                 "verified_structural_contract"), dict) else {}),
-                        }} if _requires_source_repair_contract(task) else {
+                        }} if (_requires_source_repair_contract(task)
+                               and (verdict.get("verified_structural_contract") or {}).get(
+                                   "schema") != SCHEMA_PROMPT_STRUCTURAL) else {
                             "repair_contract": {
                                 "schema": SCHEMA_PROMPT_COMPLETION,
                                 "prompt_sha256": task.get("prompt_sha256"),
