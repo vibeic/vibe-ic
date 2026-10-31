@@ -9,6 +9,7 @@ import tempfile
 import time
 import json
 import os
+import re
 import shutil
 import shlex
 import sys
@@ -1297,6 +1298,114 @@ def _produce_step17_direct(project, params, R, ll, pdk):
             'detail': 'direct Step17 OpenROAD producer; canonical gates consume its current outputs'}
 
 
+def _d39_parse_repair_history(text):
+    """Read complete native setup/hold progress, never count STA corners.
+
+    Setup uses reported committed move counters; hold uses the native
+    inserted-buffer delta that determines its progress flag. Sparse/truncated
+    traces remain unmeasured. No numeric acceptance limit is chosen here.
+    """
+    phases, table, pending = {}, None, None
+    setup_rows, hold_rows = {}, []
+    error = None
+    try:
+        for line in text.splitlines():
+            if re.search(r'\bNo setup violations found\b', line):
+                phases['setup'] = {'complete': True, 'rows': [], 'stagnation_iterations': 0,
+                                   'basis': 'native explicit absence of setup violations'}
+            if re.search(r'\bNo hold violations found\b', line):
+                phases['hold'] = {'complete': True, 'rows': [], 'stagnation_iterations': 0,
+                                  'basis': 'native explicit absence of hold violations'}
+            columns = [part.strip() for part in line.split('|')]
+            if len(columns) > 6 and columns[0] in ('Iter', 'Iteration'):
+                table = 'setup' if 'Removed' in columns else 'hold'
+                continue
+            if 'repair_hold' in line:
+                match = re.search(r'\bpass (\d+) hold slack \S+ setup slack \S+', line)
+                if match:
+                    if pending is not None:
+                        raise ValueError('hold progress delta absent')
+                    pending = int(match[1])
+                match = re.search(r'\binserted (\d+)\s*$', line)
+                if match:
+                    if pending is None or (hold_rows and pending <= hold_rows[-1]['native_pass']):
+                        raise ValueError('hold progress order is not current')
+                    hold_rows.append({'native_pass': pending, 'inserted_buffers': int(match[1])})
+                    pending = None
+            setup_label = re.fullmatch(r'(\d+)[A-Za-z]?', columns[0])
+            if table == 'setup' and len(columns) > 6 and setup_label:
+                number = int(setup_label[1])
+                moves = [int(value) for value in columns[1:6]]
+                if any(value < 0 for value in moves) or number < max(setup_rows, default=0):
+                    raise ValueError('setup progress order/counters invalid')
+                setup_rows[number] = moves
+            if table and columns[0] == 'final':
+                if table == 'setup':
+                    if (not setup_rows or sorted(setup_rows) != list(range(max(setup_rows) + 1))
+                            or [int(v) for v in columns[1:6]] != setup_rows[max(setup_rows)]):
+                        raise ValueError('setup iteration population is incomplete')
+                    run = longest = 0
+                    previous = None
+                    for number, moves in sorted(setup_rows.items()):
+                        if previous is not None:
+                            if any(a < b for a, b in zip(moves, previous)):
+                                raise ValueError('setup cumulative move counters decreased')
+                            run = run + 1 if moves == previous else 0
+                            longest = max(longest, run)
+                        previous = moves
+                    phases['setup'] = {'complete': True,
+                        'rows': [{'native_iteration': n, 'committed_moves': m} for n, m in sorted(setup_rows.items())],
+                        'stagnation_iterations': longest,
+                        'basis': 'consecutive native iterations with unchanged committed move counters'}
+                else:
+                    if not hold_rows or pending is not None:
+                        raise ValueError('hold iteration population is incomplete')
+                    run = longest = 0
+                    for index, row in enumerate(hold_rows):
+                        if row['inserted_buffers'] == 0 and index + 1 < len(hold_rows):
+                            raise ValueError('native hold loop continued after its no-progress stop')
+                        run = run + 1 if row['inserted_buffers'] == 0 else 0
+                        longest = max(longest, run)
+                    phases['hold'] = {'complete': True, 'rows': hold_rows,
+                        'stagnation_iterations': longest, 'basis': 'native hold inserted-buffer progress flag'}
+                table = None
+        if set(phases) != {'setup', 'hold'} or pending is not None:
+            raise ValueError('both native repair phases must close')
+    except (ValueError, TypeError) as exc:
+        error = str(exc)
+    result = {'status': 'NOT_MEASURED' if error else 'MEASURED', 'phases': phases}
+    if error:
+        result['reason'] = error
+    else:
+        result['value'] = max(p['stagnation_iterations'] for p in phases.values())
+        result['unit'] = 'count'
+    return result
+
+
+def _d39_capture_repair_history(project, folder, initial, config):
+    """Publish this native resizer's log-derived history in its existing handoff."""
+    import librelane_contract as ll
+    project, folder = Path(project), Path(folder)
+    receipt = ll.validate_step_receipt(folder, 'OpenROAD.ResizerTimingPostCTS')
+    log = folder / 'invocation.log'
+    record = {'schema': 'vibeic.post-cts-repair-history.v1',
+        'program': 'execution_backend_producers._d39_capture_repair_history',
+        'native_step': 'OpenROAD.ResizerTimingPostCTS',
+        'native_receipt': {'path': str((folder / 'vibeic_receipt.json').relative_to(project)),
+                           'sha256': snap.sha(folder / 'vibeic_receipt.json')},
+        'input': receipt['input'],
+        'sources': {str(Path(p).relative_to(project)): snap.sha(Path(p))
+                    for p in (initial, config, log, folder / 'state_out.json')},
+        'observation': _d39_parse_repair_history(log.read_text())}
+    if (receipt['input']['state'] != snap.sha(Path(initial))
+            or receipt['input']['config'] != snap.sha(Path(config))
+            or receipt['sha256'].get('invocation.log') != snap.sha(log)):
+        raise em.Refusal('D39_HISTORY_NATIVE_INPUT_CHANGED', str(folder))
+    output = project / RPT / 'pnr/post_cts_repair_history.json'
+    snap.dump(output, record)
+    return {'path': str(output.relative_to(project)), 'sha256': snap.sha(output)}
+
+
 def _cts_split(project, params, R, ll, pdk, overlay):
     """Selected predecessor -> CTS or resizer -> one measurement per corner.
 
@@ -1350,8 +1459,10 @@ def _cts_split(project, params, R, ll, pdk, overlay):
                 raise MetricRefusal('D38_TARGETS_CHANGED_BEFORE_EXECUTION', sid)
         except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
             raise em.Refusal('D38_TARGETS_CHANGED_BEFORE_EXECUTION', str(exc)) from exc
+    history = sid == '20' and bool(os.environ.get('VIBEIC_FLOW109_CONTEXT'))
+    telemetry = {'openroad_init': ['set_debug_level RSZ repair_hold 1']} if history else {}
     folders = ll.run_chain(project, image, [(s, cfg, state) for s, cfg in chain],
-                          mounts=mounts, lane=lane, pdk_root=ll.PDK_GUEST_ROOT)
+                          mounts=mounts, lane=lane, pdk_root=ll.PDK_GUEST_ROOT, **telemetry)
     production = folders[len(ids) - 1]
     names = {'def': PNR + ('post_cts.def' if sid == '19' else 'post_hold.def'),
              'odb': PNR + ('post_cts.odb' if sid == '19' else 'post_hold.odb')}
@@ -1379,6 +1490,9 @@ def _cts_split(project, params, R, ll, pdk, overlay):
         receipt['views']['cts_rpt'] = {'source': str(report), 'source_sha256': snap.sha(report),
                                      'dest': str(destination.relative_to(project)), 'dest_sha256': snap.sha(destination)}
     else:
+        if history:
+            receipt['repair_history'] = _d39_capture_repair_history(
+                project, production, state, configs['OpenROAD.ResizerTimingPostCTS'])
         before_area = json.loads(state.read_text()).get('metrics', {}).get('design__instance__area__stdcell')
         after_metrics = json.loads((production / 'state_out.json').read_text()).get('metrics', {})
         snap.dump(project / RPT / 'pnr/hold_area.json', {

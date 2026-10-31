@@ -2190,7 +2190,7 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
         if receipt.is_file():
             component["canonical_receipt"] = {
                 "path": str(receipt.relative_to(project)), "sha256": _file_digest(receipt)}
-        if row['id'] in ('D35', 'D37'):
+        if row['id'] in ('D35', 'D37', 'D39'):
             # These owners judge native values again. A saved nested PASS is
             # provenance to bind, never the current metric verdict.
             import flow109_metric_acceptance as metrics
@@ -2216,8 +2216,14 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
                 return body
 
             try:
-                chain = _d3537_read('reports/phase3/execution-backend-' + native + '.json')
-                state = Path(chain['states'][0]['state'])
+                if row['id'] == 'D39':
+                    chain = _d3537_read('reports/phase3/librelane_cts_hold_handoff.json')
+                    first_step = 'OpenROAD.ResizerTimingPostCTS'
+                    state = Path(chain['chain'][first_step]) / 'state_out.json'
+                else:
+                    chain = _d3537_read('reports/phase3/execution-backend-' + native + '.json')
+                    first_step = chain['states'][0]['step']
+                    state = Path(chain['states'][0]['state'])
                 state = state if state.is_absolute() else project / state
                 native_path = (state.parent / 'vibeic_receipt.json').relative_to(project)
                 native_ref = {'path': native_path.as_posix(),
@@ -2225,8 +2231,9 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
                 _current_project_ref(project, native_ref, 'FLOW109_BACKEND_RECEIPT_UNBOUND')
                 readset.append(native_ref)
                 native_receipt = native_chain.validate_step_receipt(
-                    state.parent, chain['states'][0]['step'])
-                judge = metrics.accept_d35 if row['id'] == 'D35' else metrics.accept_d37
+                    state.parent, first_step)
+                judge = {'D35': metrics.accept_d35, 'D37': metrics.accept_d37,
+                         'D39': metrics.accept_d39}[row['id']]
                 observed = judge(project, current, {
                     'native_image': native_receipt['input']['image'], 'verdict': 'NOT_MEASURED'})
                 if (not isinstance(observed, Mapping) or observed.get('row_id') != row['id']

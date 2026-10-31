@@ -7368,7 +7368,6 @@ def d38_target_binding(project: Path) -> dict:
         'limits': limits, 'units': units, 'clock_plan': {'path': clock_path, 'sha256': _sha(clock_raw)},
         'clocks': clocks}))
 
-
 def _d38_clock_network_latency(text: str, required_clocks: list[str]) -> dict:
     """Read OpenSTA clock.rpt network latency, excluding SDC source latency.
 
@@ -7392,7 +7391,6 @@ def _d38_clock_network_latency(text: str, required_clocks: list[str]) -> dict:
                 _finite_number(value)
             result[name] = max(values)
     return result
-
 
 def accept_d38(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
     """BLOCKING CTS metric readback against the exact prelaunch authority.
@@ -7581,9 +7579,9 @@ def accept_d38(project: Path, context: Mapping[str, Any], component: Mapping[str
 def accept_d39(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
     """BLOCKING readback of the existing post-CTS resizer and per-corner STA.
 
-    The native chain has no stagnation-history producer. That obligation and
-    per-use qualification remain NOT_MEASURED; timing readback cannot close
-    the row by itself. This reader never executes tools or authors authority.
+    Re-read native state and complete repair history against current approved
+    limits. Reuse existing per-use admission; never execute tools or author
+    qualification authority. Missing evidence cannot erase a measured FAIL.
     """
     import flow109
     import inspect
@@ -7629,8 +7627,8 @@ def accept_d39(project: Path, context: Mapping[str, Any], component: Mapping[str
                        for o in row['obligations'])):
             raise MetricRefusal('D39_CONTRACT_CHANGED', 'post-CTS repair obligations')
         timing = {'id': row['obligations'][0]['id'], 'status': 'NOT_MEASURED', 'measurements': []}
-        result['obligations'] = [timing, {'id': row['obligations'][1]['id'],
-            'status': 'NOT_MEASURED', 'reason': 'D39_NATIVE_STAGNATION_HISTORY_UNAVAILABLE'}]
+        history = {'id': row['obligations'][1]['id'], 'status': 'NOT_MEASURED'}
+        result['obligations'] = [timing, history]
         _, handoff = _d39_json('reports/phase3/librelane_cts_hold_handoff.json')
         corners = handoff['corners']
         repair = 'OpenROAD.ResizerTimingPostCTS'
@@ -7699,40 +7697,86 @@ def accept_d39(project: Path, context: Mapping[str, Any], component: Mapping[str
                     or ref['source_sha256'] != ref['dest_sha256']
                     or any(s.get(view) != str(source) for s in states[1:])):
                 raise MetricRefusal('D39_HANDOFF_FOREIGN', view)
-        relative = 'requirements/base_26/post_cts_setup_hold_drv.json'
-        auth, body = _approved_document(project, relative, authority='requirements_owner', schema=AUTHORITY_SCHEMA)
-        _d39_read(relative, auth['sha256'])
-        _d39_read(auth['source']['path'], auth['source']['sha256'])
-        limits, units = body['limits'], body['units']
-        if not isinstance(limits, dict) or not limits or set(limits) != set(units):
-            raise MetricRefusal('D39_BOUNDS_INVALID', relative)
-        drv = {'design__max_slew_violation__count', 'design__max_cap_violation__count',
-               'design__max_fanout_violation__count'}
-        fields = {f'timing__{kind}__ws__corner:{corner}': states[index + 1]
-                  for index, corner in enumerate(corners) for kind in ('setup', 'hold')}
-        fields.update({key: states[-1] for key in drv})
         identity = {'producer': executions, 'tool_execution': executions,
             'checker': {'program': 'flow109_metric_acceptance.accept_d39',
                         'sha256': _sha(inspect.getsource(accept_d39).encode()),
                         'producer_sha256': _sha(inspect.getsource(native_producer._cts_split).encode())},
-            'consumed_inputs': dict(reads), 'requirements': auth,
+            'consumed_inputs': dict(reads), 'requirements': None,
             'configuration': {'context_sha256': current['context_sha256'], 'corners': corners}}
-        for field, bounds in limits.items():
-            entry = {'field': field, 'status': 'NOT_MEASURED'}
-            timing['measurements'].append(entry)
-            expected_unit = 'count' if field in drv else 'ns'
-            value = fields.get(field, {}).get('metrics', {}).get(field)
-            if field not in fields or value is None or units[field] != expected_unit:
-                entry['reason'] = 'D39_NATIVE_FIELD_OR_UNIT_UNAVAILABLE'
-                continue
-            _finite_number(value, count=field in drv)
-            measurement = {'status': 'MEASURED', 'value': value, 'unit': expected_unit, 'identity': identity}
-            status, reason = evaluate_operator('within_declared_bounds', measurement,
-                {'status': 'APPROVED', 'limits': bounds, 'unit': expected_unit})
-            entry.update(status=status, reason=reason, measurement=measurement)
-        statuses = [v['status'] for v in timing['measurements']]
-        timing['status'] = ('FAIL' if 'FAIL' in statuses else 'PASS'
-            if set(fields) <= set(limits) and all(s == 'PASS' for s in statuses) else 'NOT_MEASURED')
+        failures = (MetricRefusal, ll.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError)
+        try:
+            relative = 'requirements/base_26/post_cts_setup_hold_drv.json'
+            auth, body = _approved_document(project, relative, authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+            _d39_read(relative, auth['sha256'])
+            _d39_read(auth['source']['path'], auth['source']['sha256'])
+            limits, units = body['limits'], body['units']
+            if not isinstance(limits, dict) or not limits or set(limits) != set(units):
+                raise MetricRefusal('D39_BOUNDS_INVALID', relative)
+            drv = {'design__max_slew_violation__count', 'design__max_cap_violation__count',
+                   'design__max_fanout_violation__count'}
+            fields = {f'timing__{kind}__ws__corner:{corner}': states[index + 1]
+                      for index, corner in enumerate(corners) for kind in ('setup', 'hold')}
+            fields.update({key: states[-1] for key in drv})
+            identity['requirements'] = auth
+            for field, bounds in limits.items():
+                entry = {'field': field, 'status': 'NOT_MEASURED'}
+                timing['measurements'].append(entry)
+                expected_unit = 'count' if field in drv else 'ns'
+                value = fields.get(field, {}).get('metrics', {}).get(field)
+                if field not in fields or value is None or units[field] != expected_unit:
+                    entry['reason'] = 'D39_NATIVE_FIELD_OR_UNIT_UNAVAILABLE'
+                    continue
+                _finite_number(value, count=field in drv)
+                measurement = {'status': 'MEASURED', 'value': value, 'unit': expected_unit, 'identity': identity}
+                status, reason = evaluate_operator('within_declared_bounds', measurement,
+                    {'status': 'APPROVED', 'limits': bounds, 'unit': expected_unit})
+                entry.update(status=status, reason=reason, measurement=measurement)
+            statuses = [v['status'] for v in timing['measurements']]
+            timing['status'] = ('FAIL' if 'FAIL' in statuses else 'PASS'
+                if set(fields) <= set(limits) and all(s == 'PASS' for s in statuses) else 'NOT_MEASURED')
+        except failures as exc:
+            timing.update(reason=getattr(exc, 'code', 'D39_TIMING_UNBOUND'), detail=str(exc))
+            timing['status'] = ('FAIL' if any(m['status'] == 'FAIL' for m in timing['measurements'])
+                                else 'NOT_MEASURED')
+        try:
+            reference = handoff['repair_history']
+            if reference.get('path') != 'reports/phase3/pnr/post_cts_repair_history.json':
+                raise MetricRefusal('D39_HISTORY_FOREIGN', 'canonical producer output path')
+            _, record = _d39_json(reference['path'], reference['sha256'])
+            folder = base / '01-openroad-resizertimingpostcts'
+            native_receipt = folder / 'vibeic_receipt.json'
+            before = project / area['sources']['before']
+            config = project / 'phase3/librelane/execution-backend-20-config' / (repair + '.json')
+            expected_sources = {str(p.relative_to(project)): _sha(_d39_read(p)[1])
+                                for p in (before, config, folder / 'invocation.log', folder / 'state_out.json')}
+            if (record.get('schema') != 'vibeic.post-cts-repair-history.v1'
+                    or record.get('program') != 'execution_backend_producers._d39_capture_repair_history'
+                    or record.get('native_step') != repair
+                    or record.get('native_receipt') != {'path': str(native_receipt.relative_to(project)),
+                                                        'sha256': executions[0]['receipt_sha256']}
+                    or record.get('input') != executions[0]['input']
+                    or record.get('sources') != expected_sources
+                    or executions[0]['input'].get('openroad_init') != ['set_debug_level RSZ repair_hold 1']):
+                raise MetricRefusal('D39_HISTORY_FOREIGN', 'native repair receipt/input/log population')
+            observation = native_producer._d39_parse_repair_history(
+                _d39_read(folder / 'invocation.log')[1].decode())
+            if record.get('observation') != observation or observation.get('status') != 'MEASURED':
+                raise MetricRefusal('D39_HISTORY_INCOMPLETE', observation.get('reason', 'history changed'))
+            relative = 'requirements/base_26/repair_stagnation_iterations.json'
+            auth, body = _approved_document(project, relative, authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+            _d39_read(relative, auth['sha256'])
+            _d39_read(auth['source']['path'], auth['source']['sha256'])
+            if body.get('units') != 'count':
+                raise MetricRefusal('D39_HISTORY_UNIT_INVALID', relative)
+            _finite_number(observation['value'], count=True)
+            measurement = {'status': 'MEASURED', 'value': observation['value'], 'unit': 'count',
+                'identity': {**identity, 'requirements': auth, 'consumed_inputs': dict(reads),
+                    'history': reference}}
+            history['measurement'] = measurement
+            history['status'], history['reason'] = evaluate_operator('within_declared_bounds', measurement,
+                {'status': 'APPROVED', 'limits': body['limits'], 'unit': 'count'})
+        except failures as exc:
+            history.update(reason=getattr(exc, 'code', 'D39_HISTORY_UNBOUND'), detail=str(exc))
         for name, digest in reads.items():
             _d39_read(name, digest, external=True)
         result['readset'] = dict(reads)
@@ -7749,6 +7793,14 @@ def accept_d39(project: Path, context: Mapping[str, Any], component: Mapping[str
         for obligation in result['obligations']:
             if any(v['status'] == 'FAIL' for v in obligation.get('measurements', [])):
                 obligation['status'] = 'FAIL'
+    elif result['obligations'] and all(o['status'] == 'PASS' for o in result['obligations']):
+        result['metric_status'] = 'PASS'
+        import flow109_admission as admission
+        try:
+            result['qualification_receipt'] = admission.require_admission(project, current)
+            result.update(status='PASS', qualification='PASS', delivery_blocked=False)
+        except admission.AdmissionRefusal as exc:
+            result.update(reason=exc.code, qualification_receipt=exc.report)
     return result
 
 
