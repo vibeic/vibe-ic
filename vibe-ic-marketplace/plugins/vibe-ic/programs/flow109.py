@@ -502,7 +502,8 @@ def physical_d24_binding(project: Path, context: Mapping, intent: Mapping) -> di
         raise Flow109Error('FLOW109_D23_SCAN_CELLS_STALE', 'D24 list binding')
     return {'D24_result': ref, 'adopted_netlist': dict(adopted), 'scan_cell_reconciliation': check}
 def _preroute_chain_observation(project: Path, top: str, intent: Mapping,
-                                  adopted: Mapping, lec: Mapping, timing: Mapping) -> dict:
+                                  adopted: Mapping, lec: Mapping, timing: Mapping, *,
+                                  native_proof: Mapping | None = None) -> dict:
     """Observe separately bound inputs; D30 delivery is not yet produced here.
 
     The current canonical handoff owner emits audit reports but no independently
@@ -525,11 +526,16 @@ def _preroute_chain_observation(project: Path, top: str, intent: Mapping,
                     or Path(str(source.get('mapped') or '')).resolve() !=
                        (Path(project) / start['path']).resolve()):
                 raise ValueError('D22 native synthesis adoption not bound')
-        gate = lec['proof_identity']['gate_netlist']
-        gate_sha = gate['sha256']
-        if not isinstance(gate_sha, str) or not gate_sha.startswith('sha256:'):
-            raise ValueError('D25 proof netlist digest missing')
-        d25 = _current_project_ref(project, {'path': gate['path'], 'sha256': gate_sha[7:]},
+        if native_proof is not None:
+            gate = native_proof['subject']['gate_netlist']
+            proof_input = {key: gate[key] for key in ('path', 'sha256')}
+        else:
+            gate = lec['proof_identity']['gate_netlist']
+            gate_sha = gate['sha256']
+            if not isinstance(gate_sha, str) or not gate_sha.startswith('sha256:'):
+                raise ValueError('D25 proof netlist digest missing')
+            proof_input = {'path': gate['path'], 'sha256': gate_sha[7:]}
+        d25 = _current_project_ref(project, proof_input,
                                    'FLOW109_D25_PROOF_INPUT_STALE')
         if start_name == 'D24':
             native = timing['post_scan_arms']['functional']['native']
@@ -712,13 +718,29 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
             raise Flow109Error("FLOW109_D30_SCAN_REPORT_STALE", reason)
         if d24.get("native_scan_report") != report_ref:
             raise Flow109Error("FLOW109_D30_SCAN_REPORT_STALE", str(_SCAN_REPORT))
-    lec, lec_ref = _bound_project_json(project, _LEC_REPORT, "FLOW109_D25_PROOF_MISSING")
-    if lec.get("verdict") != "PASS" or lec.get("equivalent") is not True:
-        raise Flow109Error("FLOW109_D25_PROOF_NOT_ACCEPTED", str(_LEC_REPORT))
     import lec_gate_netlist_select as netlists
-    binding = netlists.proof_subject_binding(project, lec, top)
-    if binding.get("state") != netlists.BINDING_MATCH:
-        raise Flow109Error("FLOW109_D25_GATE_IDENTITY_MISMATCH", str(binding))
+    native_proof = None
+    named = ('input/flow109/D25.json', 'input/flow109/D25_source_authority.json',
+             'reports/lec_eqy_execution.json')
+    if any((project / name).exists() or (project / name).is_symlink() for name in named):
+        # The original native consumer binds its independent execution adoption,
+        # full partition census, mode, models and launch. Do not manufacture a
+        # legacy proof_identity or fall back to lec_run after a native refusal.
+        import flow109_metric_acceptance as metrics
+        current = execution_context(resolve_plan(context['features'], context['step_profiles']),
+                                    'D25', 'D25')
+        accepted = metrics.accept_d25(project, current)
+        if intent['requires_scan'] or accepted.get('status') != 'PASS':
+            raise Flow109Error('FLOW109_D25_PROOF_NOT_ACCEPTED', accepted.get('reason', 'native scope'))
+        native_proof = accepted['native_execution']
+        lec, lec_ref = {}, native_proof['execution_record']
+    else:
+        lec, lec_ref = _bound_project_json(project, _LEC_REPORT, "FLOW109_D25_PROOF_MISSING")
+        if lec.get("verdict") != "PASS" or lec.get("equivalent") is not True:
+            raise Flow109Error("FLOW109_D25_PROOF_NOT_ACCEPTED", str(_LEC_REPORT))
+        binding = netlists.proof_subject_binding(project, lec, top)
+        if binding.get("state") != netlists.BINDING_MATCH:
+            raise Flow109Error("FLOW109_D25_GATE_IDENTITY_MISMATCH", str(binding))
     consumed, note, is_scan = netlists.pnr_consumed_netlist(project, top)
     if consumed is None or not consumed.is_file() or is_scan is not intent["requires_scan"]:
         raise Flow109Error("FLOW109_D30_NETLIST_NOT_ADOPTED",
@@ -730,6 +752,9 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     adopted = {"artifact_id": ("D24_POST_SCAN_NETLIST" if is_scan
                                 else "D22_MAPPED_NETLIST"),
                "path": rel, "sha256": _file_digest(consumed)}
+    if (native_proof is not None and {key: adopted[key] for key in ('path', 'sha256')}
+            != native_proof['subject']['gate_netlist']):
+        raise Flow109Error('FLOW109_D25_GATE_IDENTITY_MISMATCH', 'native proof and delivered subject differ')
     chain = {"status": "NOT_APPLICABLE", "reason": "requires_scan is false"}
     if is_scan:
         if Path(rel) != _D24_NETLIST:
@@ -747,7 +772,8 @@ def dft_preroute_admission(project: Path, context: Mapping) -> dict:
     timing_modes = _d26_timing_modes_binding(
         project, _d26, intent, top, report=report, report_ref=report_ref,
         adopted=adopted)
-    observed_chain = _preroute_chain_observation(project, top, intent, adopted, lec, timing_modes)
+    observed_chain = _preroute_chain_observation(project, top, intent, adopted, lec, timing_modes,
+                                               native_proof=native_proof)
     if observed_chain.get('status') == 'FAIL':
         raise Flow109Error('FLOW109_PREROUTE_NETLIST_MISMATCH', str(observed_chain.get('mismatch')))
     if (observed_chain.get('status') != 'NOT_MEASURED'

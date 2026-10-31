@@ -1431,7 +1431,8 @@ def d30_consumed_timing(project: Path, admission: Mapping[str, Any]) -> dict:
                          if name == corner]
             declared = set()
             for field in ("CELL_LIBS", "PAD_LIBS", "EXTRA_LIBS"):
-                groups = config.get(field) or {}
+                groups = ((config.get('CELL_LIBS') or config.get('LIB'))
+                          if field == 'CELL_LIBS' else config.get(field)) or {}
                 groups = groups.items() if isinstance(groups, Mapping) else [("*", groups)]
                 for pattern, paths in groups:
                     if fnmatch.fnmatch(corner, pattern):
