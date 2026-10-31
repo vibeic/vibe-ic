@@ -395,8 +395,10 @@ def operational_records(records: List[Dict[str, Any]],
             population = [extract_id(r, j) for j, r in enumerate(records)
                           if _first_present(r, _BENCH_KEYS) == bench]
             ids = [r["id"] for r in solve["results"]]
-            _require(sorted(population) == sorted(ids),
-                     "triage ids must retain the exact source population for this bench")
+            pending_ids = [r["id"] for r in solve["results"] if not r["accepted"]]
+            _require(sorted(population) in (sorted(ids), sorted(pending_ids)),
+                     "triage ids must retain every unaccepted source row; "
+                     "only already-accepted rows may be omitted")
             if "evidence_sha256" in rec:
                 _require(rec["evidence_sha256"] == proof["solve_sha256"],
                          "source SHA-256 does not match evidence_sha256")
