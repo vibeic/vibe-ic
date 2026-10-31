@@ -2190,7 +2190,8 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
         if receipt.is_file():
             component["canonical_receipt"] = {
                 "path": str(receipt.relative_to(project)), "sha256": _file_digest(receipt)}
-        if row['id'] in ('D35', 'D37', 'D38', 'D39', 'D40'):
+        if (row['id'] in ('D35', 'D37', 'D38', 'D39', 'D40')
+                or (row['id'], native) in (('D31', '15'), ('D32', '15.5ic'))):
             # These owners judge native values again. A saved nested PASS is
             # provenance to bind, never the current metric verdict.
             import flow109_metric_acceptance as metrics
@@ -2225,7 +2226,8 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
                     first_step = 'OpenROAD.ResizerTimingPostCTS'
                     state = Path(chain['chain'][first_step]) / 'state_out.json'
                 else:
-                    chain = _d3537_read('reports/phase3/execution-backend-' + native + '.json')
+                    chain_native = '15' if native == '15.5ic' else native
+                    chain = _d3537_read('reports/phase3/execution-backend-' + chain_native + '.json')
                     first_step = chain['states'][0]['step']
                     state = Path(chain['states'][0]['state'])
                 state = state if state.is_absolute() else project / state
@@ -2236,7 +2238,8 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
                 readset.append(native_ref)
                 native_receipt = native_chain.validate_step_receipt(
                     state.parent, first_step)
-                judge = {'D35': metrics.accept_d35, 'D37': metrics.accept_d37,
+                judge = {'D31': metrics.accept_d31_digital, 'D32': metrics.accept_d32_digital,
+                         'D35': metrics.accept_d35, 'D37': metrics.accept_d37,
                          'D38': metrics.accept_d38, 'D39': metrics.accept_d39,
                          'D40': metrics.accept_d40}[row['id']]
                 owner_input = {'native_image': native_receipt['input']['image'], 'verdict': 'NOT_MEASURED'}

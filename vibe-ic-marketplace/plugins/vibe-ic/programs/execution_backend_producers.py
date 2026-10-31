@@ -1612,6 +1612,77 @@ def _produce_direct_pnr(project, params, R):
     return result
 
 
+def _publish_digital_floorplan_metrics(project, params, extras, *, configs=None, initial=None, steps=None):
+    """Retain this selected digital floorplan's existing native chain/configs.
+
+    The pad frontdoor already executed these steps. Reopen its receipts;
+    never replay the placer/PDN or borrow a direct-provider result.
+    """
+    import librelane_contract as ll
+    project = Path(project).resolve()
+    native = _require(extras['native_state'])
+    lane = native.parent.parent
+    order = list(steps or extras['librelane_steps'])
+    if not lane.is_relative_to(project / 'phase3/librelane') or not order:
+        raise em.Refusal('BACKEND_DIGITAL_FLOORPLAN_CHAIN_UNBOUND', str(lane))
+    cfgroot = project / 'phase3/librelane' / ('execution-backend-15-config' if configs is not None else '15-config')
+    first = _require(initial or cfgroot / 'bridge/state_in.json')
+    rows, previous = [], first
+    for index, step in enumerate(order, 1):
+        folder = lane / (f'{index:02d}-' + step.lower().replace('.', '-'))
+        receipt = ll.validate_step_receipt(folder, step)
+        fp = receipt['input']
+        if fp['image'] != params['image_id'] or fp['state'] != snap.sha(previous):
+            raise em.Refusal('BACKEND_DIGITAL_FLOORPLAN_INPUT_CHANGED', step)
+        if configs is not None:
+            selected = _require(configs[step])
+        else:
+            # The original receipt identifies config bytes by digest. Retain
+            # an exact snapshot; no filename or stale provider is guessed.
+            matches = [p for p in sorted(cfgroot.rglob('*.json')) if p.is_file()
+                       and not p.is_symlink() and snap.sha(p) == fp['config']]
+            if not matches:
+                raise em.Refusal('BACKEND_DIGITAL_FLOORPLAN_CONFIG_ABSENT', step)
+            selected = matches[0]
+        if snap.sha(selected) != fp['config']:
+            raise em.Refusal('BACKEND_DIGITAL_FLOORPLAN_CONFIG_CHANGED', step)
+        snapshot = project / RPT / 'floorplan-native-configs' / (f'{index:02d}-' + step + '.json')
+        _copy(selected, snapshot)
+        state = _require(folder / 'state_out.json')
+        rows.append({'step': step, 'state': str(state), 'sha256': snap.sha(state),
+                     'config': str(snapshot.relative_to(project)), 'config_sha256': fp['config']})
+        previous = state
+    if previous != native or 'OpenROAD.GeneratePDN' not in order:
+        raise em.Refusal('BACKEND_DIGITAL_FLOORPLAN_TERMINAL_CHANGED', str(native))
+    snap.dump(project / RPT / 'execution-backend-15.json', {
+        'program': 'execution_backend_producers._publish_digital_floorplan_metrics',
+        'image': params['image_id'], 'ordered_steps': order,
+        'initial_state': str(first), 'initial_sha256': snap.sha(first), 'states': rows,
+        'portable_state': {'path': PNR + 'step15_state.json', 'sha256': snap.sha(project / PNR / 'step15_state.json')}})
+
+
+def _digital_floorplan_metric_result(project, params, result, row_id):
+    """Attach only the two existing digital-default metric consumers."""
+    result = {**result, 'native_image': params['image_id']}
+    context_path = os.environ.get('VIBEIC_FLOW109_CONTEXT')
+    if not context_path:
+        return result
+    import flow109
+    import flow109_metric_acceptance as metrics
+    try:
+        context = flow109.validate_execution_context(json.loads(Path(context_path).read_text()))
+        current = flow109.component_context(context, requested_step=row_id)
+    except (flow109.Flow109Error, OSError, ValueError, KeyError, TypeError):
+        current = {}
+    judge = metrics.accept_d31_digital if row_id == 'D31' else metrics.accept_d32_digital
+    result['metric_acceptance'] = judge(project, current, result)
+    result['metric_acceptance_status'] = result['metric_acceptance']['metric_status']
+    result['default_row_status'] = result['metric_acceptance']['status']
+    if result['metric_acceptance_status'] == 'FAIL':
+        result['verdict'] = 'FAIL'
+    return result
+
+
 def produce_pnr(project, params):
     R, ll, pdk, container = _parameters(project, params)
     sid, top = params['step_id'], params['top']
@@ -1680,7 +1751,10 @@ def produce_pnr(project, params):
                 bounded_state=True)
             if row.status == 'PASS':
                 _publish_step15_bounded_state(project, row)
-            return {'verdict': row.status, 'detail': row.detail}
+                if os.environ.get('VIBEIC_FLOW109_CONTEXT'):
+                    _publish_digital_floorplan_metrics(project, params, row.extras)
+            return _digital_floorplan_metric_result(project, params,
+                {'verdict': row.status, 'detail': row.detail}, 'D31')
         ids = ['Yosys.JsonHeader'] + ll.flow_segment(params['image_id'],
                     'OpenROAD.Floorplan', 'Odb.RemovePDNObstructions', flow='Classic')
         # Floorplan starts from a netlist, not from a fabricated DEF bridge.
@@ -1723,6 +1797,12 @@ def produce_pnr(project, params):
             'odb': str(project / PNR / 'librelane_floorplan.odb'),
             'handoff': str(handoff_path),
         }))
+        if os.environ.get('VIBEIC_FLOW109_CONTEXT'):
+            _publish_digital_floorplan_metrics(project, params, {
+                'native_state': str(folders[-1] / 'state_out.json')},
+                configs=configs, initial=state, steps=ids)
+        return _digital_floorplan_metric_result(project, params,
+            {'verdict': 'PASS', 'detail': 'native digital floorplan and portable handoff complete'}, 'D31')
     elif sid == '15.5ic':
         # The Chip chain places pads before tap/PDN, as LibreLane requires.
         # Describe and independently check that actual native ring here;
@@ -1740,7 +1820,8 @@ def produce_pnr(project, params):
             raise em.Refusal('BACKEND_PADRING_STATE_CHANGED', str(exc)) from exc
         row = R.step_pad_ring_gen(project, container, pdk,
                                   librelane_state=ring_state)
-        return {'verdict': row.status, 'detail': row.detail}
+        return _digital_floorplan_metric_result(project, params,
+            {'verdict': row.status, 'detail': row.detail}, 'D32')
     elif sid == '17':
         ids = ll.flow_segment(params['image_id'], 'OpenROAD.GlobalPlacement', 'OpenROAD.DetailedPlacement')
         at = ids.index('OpenROAD.RepairDesignPostGPL')
@@ -1752,6 +1833,13 @@ def produce_pnr(project, params):
         _publish_step17_timing_script(project, ll, by['Vibeic.PostGPLFanoutClosure'],
                                      configs['Vibeic.PostGPLFanoutClosure'], params['image_id'])
         _logs(project, by.values(), 'librelane_placement.log')
+        if os.environ.get('VIBEIC_FLOW109_CONTEXT'):
+            path = project / RPT / 'execution-backend-17.json'
+            record = json.loads(_require(path).read_text())
+            for ref in record['states']:
+                config = configs[ref['step']]
+                ref.update(config=str(config.relative_to(project)), config_sha256=snap.sha(config))
+            snap.dump(path, record)
         # This row owns placement metric readback. Component completion and
         # Flow109 qualification remain separate verdicts.
         result = {'verdict': 'PASS', 'native_image': params['image_id'],
@@ -2713,7 +2801,7 @@ def produce(project, params):
             current['authority_verdict'] = authority_verdict
             current['authority_detail'] = reason
             result['current_step_declared_producers'] = current
-        if sid in ('17', '18', '19', '20', '21') and 'metric_acceptance' in result:
+        if sid in ('15', '15.5ic', '17', '18', '19', '20', '21') and 'metric_acceptance' in result:
             result['canonical_receipts'] = [{
                 'schema': 'vibeic/backend-producer-receipt/1',
                 'producer': 'execution_backend_producers.produce', 'step_id': sid,
@@ -2789,7 +2877,7 @@ def produce(project, params):
         'detail': result.get('detail', ''),
         'current_step_declared_producers': current,
     }]
-    if sid in ('17', '18', '19', '20', '21') and 'metric_acceptance' in result:
+    if sid in ('15', '15.5ic', '17', '18', '19', '20', '21') and 'metric_acceptance' in result:
         result['canonical_receipts'][0]['metric_acceptance'] = result['metric_acceptance']
     if result.get('retained_drc_checkpoint'):
         result['canonical_receipts'][0]['retained_drc_checkpoint'] = result['retained_drc_checkpoint']
