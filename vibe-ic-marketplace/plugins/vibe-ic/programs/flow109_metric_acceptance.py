@@ -2122,8 +2122,249 @@ def observe_d10_frontend_metrics(project: Path, context: Mapping[str, Any], p0: 
     return answer
 
 
+def _d09_supplied_owned_metrics(project: Path, author: Mapping, *, publish=False, invocation=None) -> dict:
+    """Recompute typed source facts for the ordinary supplied-source publisher.
+
+    This is source-author evidence, not functional simulation or D10 credit.
+    Unknown source claims remain owed. Existing D01 admission is mandatory.
+    """
+    import shutil
+    import tempfile
+    import design_one_shot_runner as runner
+    import reused_ip_rtl_consume as supplied
+    import p0_tool_frontend_check as frontend
+    import _specrtl_common as rtl
+    import _atomic_artefact as atomic
+    project = Path(project).resolve()
+    if (author.get('name') != 'reused_ip_consume' or author.get('status') != 'PASS'
+            or author.get('extras', {}).get('reused_ip') is not True):
+        raise MetricRefusal('D09_AUTHOR_UNSUPPORTED', 'ordinary supplied-source publisher required')
+    d01 = runner._serial_d01_state(project)
+    reads = {}
+    owner_sources = {p.name: _sha(p.read_bytes()) for p in (Path(__file__), Path(runner.__file__), Path(frontend.__file__))}
+    def bound(relative):
+        path = _safe_project_file(project, relative)
+        if not path.is_file():
+            raise MetricRefusal('D09_SOURCE_UNAVAILABLE', relative)
+        raw = path.read_bytes(); reads[relative] = _sha(raw)
+        return raw
+    def document(relative):
+        def unique(pairs):
+            value = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError('D09_DUPLICATE_SOURCE_KEY: ' + key)
+                value[key] = item
+            return value
+        return json.loads(bound(relative), object_pairs_hook=unique)
+    manifest_rel = 'phase2/stage1/rtl/SOURCE_MANIFEST.json'
+    if author['extras'].get('manifest_emitted') != manifest_rel:
+        raise MetricRefusal('D09_SUPPLIED_PUBLICATION_UNBOUND', 'normal consume manifest required')
+    manifest = document(manifest_rel)
+    originals = supplied.discover_provided_build_rtl(project)
+    names = [p.name for p in originals]
+    if not names or len(names) != len(set(names)):
+        raise MetricRefusal('D09_SUPPLIED_POPULATION_INVALID', 'unique complete source population required')
+    origins = {str(p.relative_to(project)): _sha(bound(str(p.relative_to(project)))) for p in originals}
+    if (manifest.get('generated_by') != 'phase2_runner_consume'
+            or manifest.get('build_rtl_provided') is not True
+            or set(manifest.get('staged_from_input', [])) != set(origins)
+            or manifest.get('staged_from_input_sha256') != origins):
+        raise MetricRefusal('D09_SUPPLIED_SOURCE_STALE', 'original source population or bytes differ')
+    files = rtl.rtl_source_files(project)
+    if {p.name for p in files} != set(names):
+        raise MetricRefusal('D09_SUPPLIED_POPULATION_INVALID', 'full staged/source population differs')
+    for src in originals:
+        staged = 'phase2/stage1/rtl/' + src.name
+        if _sha(bound(staged)) != origins[str(src.relative_to(project))]:
+            raise MetricRefusal('D09_SUPPLIED_SOURCE_STALE', staged)
+        if re.search(r'`include|\$(?:fopen|readmem\w*|system)|DPI-C', bound(staged).decode()):
+            raise MetricRefusal('D09_NATIVE_READSET_UNSUPPORTED', staged)
+    body = document('reports/audit/phase1/expert_parse_track_pack/l_doc_expectations.json')
+    l9 = document('phase1/generated_docs/L9_INTEGRATION_SPEC.json')
+    demands = body.get('source_demands'); expectations = body.get('expectations')
+    if (not isinstance(demands, list) or not demands or not isinstance(expectations, list)
+            or any(not isinstance(d, dict) or not d.get('id') or not d.get('requirement')
+                   or not isinstance(d.get('evidence'), list) or not d['evidence'] for d in demands)
+            or len({d['id'] for d in demands}) != len(demands)
+            or len({e.get('id') for e in expectations}) != len(expectations)
+            or {d['id'] for d in demands} != {e.get('id') for e in expectations}):
+        raise MetricRefusal('D09_REQUIRED_POPULATION_INVALID', 'complete adopted expectations required')
+    for expectation in expectations:
+        leaves = expectation.get('sub_expectations', [expectation])
+        if not isinstance(leaves, list) or not leaves or any(not isinstance(x, dict) for x in leaves):
+            raise MetricRefusal('D09_REQUIRED_POPULATION_INVALID', 'expectation leaves')
+        for leaf in leaves:
+            layer = leaf.get('layer')
+            if not isinstance(layer, str) or not re.fullmatch(r'L[0-9]+_[A-Z0-9_]+', layer):
+                raise MetricRefusal('D09_REQUIRED_POPULATION_INVALID', 'layer address')
+            if layer != 'L9_INTEGRATION_SPEC':
+                document('phase1/generated_docs/' + layer + '.json')
+    import benchmark_dispatch as dispatch
+    previous = author.get('extras', {}).get('d09_owned_metrics')
+    if not publish:
+        if not isinstance(previous, dict):
+            raise MetricRefusal('D09_SUPPLIED_PUBLICATION_STALE', 'normal source-author proof absent')
+        invocation = previous.get('publication_invocation')
+        published = document('reports/orchestrator/phase2_one_shot.json')
+        record = published.get('runner_binding', {})
+        candidates = [row for row in published.get('steps', []) if row.get('status') == 'PASS'
+                      and row.get('name') in ('rtl_gen', 'reused_ip_consume')]
+        if (candidates != [author] or published.get('d09_owned_metrics') != previous
+                or record.get('schema') != 'vibeic.runner_report_binding.v1'
+                or record.get('report_name') != 'phase2_one_shot.json'
+                or record.get('material') != dispatch._runner_material_snapshot(project)
+                or any(record.get(k) != (invocation or {}).get(k) for k in ('invocation_id','argv','project','source'))
+                or record.get('producer') != {'path':str(HERE / 'design_one_shot_runner.py'),
+                    'sha256':_sha((HERE / 'design_one_shot_runner.py').read_bytes())}):
+            raise MetricRefusal('D09_SUPPLIED_OWNER_UNBOUND', 'actual current child publisher/material required')
+        reads.pop('reports/orchestrator/phase2_one_shot.json', None)
+    if (not isinstance(invocation, dict) or set(invocation) != {'invocation_id','argv','project','source'}
+            or not invocation.get('invocation_id') or invocation.get('project') != str(project)
+            or invocation['source'] != dispatch._runner_source_snapshot(invocation['argv'],
+                consumer=invocation['source']['consumer']['path'])):
+        raise MetricRefusal('D09_SUPPLIED_OWNER_UNBOUND', 'normal current child invocation required')
+    argv = invocation['argv']
+    try:
+        if (len(argv) < 3 or Path(argv[1]).name != 'phase2_one_shot_runner.py'
+                or str(Path(argv[2]).resolve()) != str(project)
+                or argv[argv.index('--entry-step') + 1] != '1'
+                or argv[argv.index('--exit-step') + 1] != '1'):
+            raise ValueError('not the source-author span')
+    except (ValueError, IndexError, TypeError) as exc:
+        raise MetricRefusal('D09_SUPPLIED_OWNER_UNBOUND', str(exc)) from exc
+    top = l9.get('top_module')
+    if not isinstance(top, str) or not _SAFE.fullmatch(top):
+        raise MetricRefusal('D09_L9_INTERFACE_POPULATION_MISSING', 'top')
+    binary = shutil.which('yosys')
+    if not binary:
+        raise MetricRefusal('D09_NATIVE_WITNESS_UNAVAILABLE', 'yosys')
+    tool = {'path': str(Path(binary).resolve()), 'sha256': _sha(Path(binary).read_bytes())}
+    native_rel = 'reports/audit/phase2/d09_supplied_elaboration.json'
+    log_rel = 'reports/audit/phase2/d09_supplied_elaboration.log'
+    if not publish:
+        previous = author.get('extras', {}).get('d09_owned_metrics')
+        if not isinstance(previous, dict) or previous.get('source_sha256') != reads:
+            raise MetricRefusal('D09_SUPPLIED_PUBLICATION_STALE', 'original source-author proof required')
+        receipt = previous['native_witness']
+        if (receipt.get('tool') != tool or receipt.get('path') != native_rel
+                or _sha(bound(native_rel)) != receipt.get('sha256')
+                or _sha(bound(log_rel)) != receipt.get('log_sha256')):
+            raise MetricRefusal('D09_NATIVE_WITNESS_STALE', native_rel)
+    # Reuse the existing supervised native frontend, not a project-provided JSON
+    # or a new evaluator. The consumer independently recomputes the native facts.
+    with tempfile.TemporaryDirectory(prefix=frontend._ELAB_SCRATCH_PREFIX) as td:
+        target = Path(td) / 'rtl_elab.json'
+        paths = [str(p.resolve()) for p in files]
+        if any(not re.fullmatch(r'[A-Za-z0-9_./-]+', p) for p in paths):
+            raise MetricRefusal('D09_NATIVE_READSET_UNSUPPORTED', 'unsafe native path')
+        script = ('read_verilog -sv ' + ' '.join(paths)
+                  + '; hierarchy -check -top ' + top + '; proc; write_json ' + str(target))
+        native = frontend._invoke('yosys', ['-Q', '-T', '-p', script], project, None)
+        if native.returncode or not target.is_file():
+            raise MetricRefusal('D09_NATIVE_WITNESS_UNAVAILABLE', native.stdout + native.stderr)
+        raw = target.read_bytes(); graph = json.loads(raw)
+    if not publish and json.loads(bound(native_rel)) != graph:
+        raise MetricRefusal('D09_NATIVE_WITNESS_STALE', 'native replay differs')
+    module = graph['modules'][top]
+    actual_ports = {name: [port['direction'], len(port['bits'])] for name, port in module['ports'].items()}
+    ports = l9.get('top_ports'); parameters = l9.get('parameters')
+    if (not isinstance(ports, list) or not isinstance(parameters, list)
+            or len({p.get('name') for p in ports}) != len(ports)
+            or len({p.get('name') for p in parameters}) != len(parameters)):
+        raise MetricRefusal('D09_L9_INTERFACE_POPULATION_MISSING', 'complete ports/parameters required')
+    declared = {p['name']: [p['direction'], p['width']] for p in ports}
+    if any(type(p.get('width')) is not int or p['width'] < 1
+           or p.get('direction') not in ('input','output','inout') for p in ports):
+        raise MetricRefusal('D09_L9_INTERFACE_POPULATION_MISSING', 'typed port population required')
+    # Keep the ordinary L9 default field; unknown parameter expressions are
+    # not silently coerced. Empty populations are proved by the native IR.
+    raw_parameters = module.get('parameter_default_values', {})
+    if any(not isinstance(v,str) or not re.fullmatch('[01]+',v) for v in raw_parameters.values()):
+        raise MetricRefusal('D09_NATIVE_PARAMETER_UNSUPPORTED', 'nonconstant parameter')
+    actual_parameters = {k:int(v,2) for k,v in raw_parameters.items()}
+    declared_parameters = {}
+    for parameter in parameters:
+        value = parameter.get('default')
+        if isinstance(value,bool) or not re.fullmatch('[0-9]+',str(value)):
+            raise MetricRefusal('D09_NATIVE_PARAMETER_UNSUPPORTED', 'explicit integer default required')
+        declared_parameters[parameter['name']] = int(value)
+    interface = declared == actual_ports and declared_parameters == actual_parameters
+    mapped, missing, required, trace = [], [], [], []
+    by_id = {e['id']: e for e in expectations}
+    import phase1_expert_parse_track as track
+    def witness(node):
+        # Typed native IR properties only; prose/token echoes cannot prove a
+        # functional claim. Unsupported properties remain NOT_MEASURED.
+        if not isinstance(node, dict): return False
+        node = {k:v for k,v in node.items() if k not in ('id','text','evidence')}
+        if set(node) == {'constant'}:
+            item = node['constant']
+            if set(item) != {'module', 'port', 'bits'}: return False
+            bits = item['bits']
+            return (isinstance(bits, list) and bool(bits) and all(b in ('0', '1') for b in bits)
+                    and graph['modules'][item['module']]['ports'][item['port']]['bits'] == bits)
+        if set(node) == {'connection'}:
+            item = node['connection']
+            if set(item) != {'module', 'cell', 'type', 'cell_port', 'top_port'}: return False
+            parent = graph['modules'][item['module']]; cell = parent['cells'][item['cell']]
+            return cell['type'] == item['type'] and cell['connections'][item['cell_port']] == parent['ports'][item['top_port']]['bits']
+        return False
+    for demand in demands:
+        expect = by_id[demand['id']]
+        if any(expect.get(k) != demand[k] for k in ('requirement', 'evidence')):
+            raise MetricRefusal('D09_REQUIRED_POPULATION_INVALID', 'reviewed source relation differs')
+        leaves = expect.get('sub_expectations', [expect]); own = False; complete = True
+        for leaf in leaves:
+            layer, path = leaf.get('layer'), leaf.get('field_path')
+            if layer == 'L21_POWER_INTENT':
+                node = track.subtree_at(document('phase1/generated_docs/' + layer + '.json'), path, layer)
+                if node is None:
+                    raise MetricRefusal('D09_REQUIRED_POPULATION_INVALID', 'retained power authority field absent')
+                trace.append({'id':demand['id'], 'normal_owner':['D05','D15','D46'], 'status':'NOT_MEASURED'})
+                continue
+            own = True
+            doc = l9 if layer == 'L9_INTEGRATION_SPEC' else document('phase1/generated_docs/' + str(layer) + '.json')
+            node = track.subtree_at(doc, path, layer)
+            ok = interface and ((layer == 'L9_INTEGRATION_SPEC' and path in ('top_module','top_ports','parameters'))
+                                or (layer == 'L2_FRS' and isinstance(node, list) and len(node) == 1
+                                    and isinstance(node[0], dict) and node[0].get('id') == demand['id']
+                                    and node[0].get('text') == demand['requirement'] and witness(node[0])))
+            complete = complete and ok
+        if own:
+            required.append(demand['id'])
+            (mapped if complete else missing).append(demand['id'])
+    if not required:
+        raise MetricRefusal('D09_REQUIRED_POPULATION_INVALID', 'no RTL-owned source requirements')
+    # Reopen all consumed source bytes and accepted D01 before publication or
+    # observation. The native JSON is an output, not part of source identity.
+    reads.pop(native_rel, None)
+    reads.pop(log_rel, None)
+    if any(_sha(_safe_project_file(project, path).read_bytes()) != digest for path, digest in reads.items()) or runner._serial_d01_state(project) != d01:
+        raise MetricRefusal('D09_SOURCE_PROOF_STALE', 'source or accepted D01 changed during native read')
+    if owner_sources != {p.name: _sha(p.read_bytes()) for p in (Path(__file__), Path(runner.__file__), Path(frontend.__file__))} or _sha(Path(binary).read_bytes()) != tool['sha256']:
+        raise MetricRefusal('D09_SOURCE_PROOF_STALE', 'native tool or producer sources changed')
+    log = json.dumps({'argv':native.args,'returncode':native.returncode}) + '\n' + native.stdout + native.stderr
+    log_sha = _sha(log.encode()) if publish else previous['native_witness']['log_sha256']
+    result = {'schema':'vibeic.d09.owned-metrics.v1','source_demands':demands,
+              'mapped_items':mapped,'missing_items':missing,'required_rtl_items':required,
+              'responsibility_register':trace,'rtl_requirement_mapping':'PASS' if not missing else 'NOT_MEASURED',
+              'declared_ports_parameters':'PASS' if interface else 'FAIL',
+              'source_sha256':reads,'owner_source_sha256':owner_sources,'D01':d01,'publication_invocation':invocation,
+              'native_witness':{'path':native_rel,'sha256':_sha(raw),'log_path':log_rel,'log_sha256':log_sha,'tool':tool},
+              'scope':'D09 source facts only; no D10/D13 or physical/whole-flow credit'}
+    if publish:
+        atomic.write_bytes(project / native_rel, raw)
+        atomic.write_bytes(project / log_rel, log.encode())
+    elif previous != result:
+        raise MetricRefusal('D09_METRICS_STALE', 'published metrics differ from independent native/source facts')
+    return result
+
+
 def d09_owned_metrics(project: Path, author: Mapping) -> dict:
     """Recompute the supported source-bound author metrics, never trust a stamp."""
+    if author.get('name') == 'reused_ip_consume':
+        return _d09_supplied_owned_metrics(project, author)
     import serial_parallel_mul_synth as serial
     import design_one_shot_runner as runner
     if (author.get('status') != 'PASS'

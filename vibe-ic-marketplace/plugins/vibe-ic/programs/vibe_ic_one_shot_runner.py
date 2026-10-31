@@ -1796,7 +1796,12 @@ def _d09_bound_phase2_evidence(
             raise ValueError('Phase-2 report does not own the D09 authoring span 1..1')
     except (ValueError, IndexError, KeyError, TypeError) as exc:
         return 'NOT_MEASURED', {}, 'D09_REPORT_UNBOUND: ' + str(exc)
-    authors = [row for row in steps if row.get('name') == 'rtl_gen']
+    supplied = [row for row in steps if row.get('name') == 'reused_ip_consume'
+                and row.get('status') == 'PASS' and row.get('extras', {}).get('reused_ip') is True]
+    generated = [row for row in steps if row.get('name') == 'rtl_gen' and row.get('status') == 'PASS']
+    authors = supplied + generated
+    if not supplied:
+        authors = [row for row in steps if row.get('name') == 'rtl_gen']
     if len(authors) != 1:
         return 'NOT_MEASURED', {}, 'D09_REQUIRED_EVIDENCE_ABSENT: unique author required'
     try:

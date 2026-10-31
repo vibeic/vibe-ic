@@ -371,8 +371,16 @@ def _write_phase2_report(out: Path, summary: Any, project: Path, *,
     if (str(summary.get("declared_window", {}).get("entry_step")) == "1"
             and str(summary.get("declared_window", {}).get("exit_step")) == "1"):
         import serial_parallel_mul_synth as serial
+        import flow109_metric_acceptance as metrics
         for row in summary.get("steps", []):
             extras = row.get("extras") or {}
+            if row.get('name') == 'reused_ip_consume' and row.get('status') == 'PASS' and extras.get('reused_ip') is True:
+                try:
+                    extras['d09_owned_metrics'] = metrics._d09_supplied_owned_metrics(project, row, publish=True, invocation=invocation_context if invocation_context is not None else _runner_invocation_context())
+                    summary['d09_owned_metrics'] = extras['d09_owned_metrics']
+                except (OSError, ValueError, TypeError, KeyError) as exc:
+                    extras['d09_owned_metrics_refusal'] = str(exc)
+                row['extras'] = extras
             if row.get("name") == "rtl_gen" and row.get("status") == "PASS" and extras.get("deterministic_generator") == "serial_parallel_mul_synth":
                 try:
                     extras["d09_owned_metrics"] = serial.d09_owned_metrics(project, "digital_arithmetic_primitive")
