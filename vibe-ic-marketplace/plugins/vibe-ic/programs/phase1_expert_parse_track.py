@@ -4068,6 +4068,70 @@ def evaluate(project: Path) -> Dict[str, Any]:
     }
 
 
+def _retained_input_frame_current(project: Path, rep: dict, target: Path) -> bool:
+    """Reopen an unchanged expert reading across a proved normal input transition.
+
+    The normal D1 intake owns authored documents; runtime qualification trees
+    are not extra extraction prompts. Its existing transition reader must bind
+    current intent, while the independently signed old reading stays immutable.
+    """
+    try:
+        import _phase1_producer_identity as identity
+        import ai_signed_judgement as judgement
+        import execution_backend_worker as worker
+        import _flow_yaml
+        ai = rep['ai_subtrack']
+        handoff = ai['handoff']
+        frame = handoff['source_frame']
+        out = target.parent / 'expert_parse_track_pack'
+        # Same rules, schema, context and complete historical semantic reading.
+        # A different policy or a fabricated prior frame cannot buy reuse.
+        _, binding = _pack.phase1_frame(frame['semantic_text'], frame,
+            authoring_schema=authoring_schema(project), out_dir=out)
+        import inspect
+        mapping = hashlib.sha256(inspect.getsource(_input_projection).encode()).hexdigest()
+        answer_raw = (out / 'l_doc_expectations.json').read_bytes()
+        answer = json.loads(answer_raw)
+        if (binding != ai['input_frame_sha256']
+                or frame['responsibility_mapping_sha256'] != mapping
+                or frame['truncated'] is not False
+                or answer.get('input_frame_sha256') != binding
+                or hashlib.sha256(answer_raw).hexdigest() != ai['answer_sha256']
+                or not judgement.check(project, 'D1')[0]):
+            return False
+        row = next(r for r in _flow_yaml.load()['steps'] if str(r['id']) == 'D1')
+        opened = worker._declared_input_files(project, row['required_inputs'])
+        historical = {'input/' + m['path']: m for m in frame['members']}
+        # Do not hide a new or changed authored input under a context decision.
+        # Derived input_doc bytes are independently bound by the D1 judgement.
+        for name, digest in opened.items():
+            if not name.startswith('input/'):
+                continue
+            member = historical.get(name)
+            if member is None or member.get('complete') is not True or member['sha256'] != digest:
+                return False
+            text = (project / name).read_text().replace('\r\n', '\n').replace('\r', '\n')
+            if _input_projection(text)[0] != member['semantic_text']:
+                return False
+        record = identity._si.read_sidecar(identity.sidecar_dir(project), identity.KIND)
+        if not isinstance(record, dict):
+            return False
+        assessment = identity.assess(project, Path(__file__).parent,
+                                     record['knobs'], checkpoint=True)
+        new = assessment.get('new') or {}
+        basis = new.get('input_basis') or {}
+        if (assessment.get('state') != identity.REVALIDATE
+                or assessment.get('reason') != identity.DESIGN_INPUT_CHANGED
+                or basis.get('classification') != 'RECONSTRUCTED_VERIFIED_PREIMAGE'
+                or not new.get('consumed_inputs') or not new.get('intent')):
+            return False
+        # No report/answer/sidecar updates. This only admits the existing
+        # reading; the remaining complete-consumer/row qualification still run.
+        return True
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, StopIteration):
+        return False
+
+
 def check_report(project: Path) -> int:
     """D1 reads Phase 1's evidence without consuming or rewriting its subject.
 
@@ -4101,7 +4165,8 @@ def check_report(project: Path) -> int:
             _text, binding = _pack.phase1_frame(report["text"], report["source_frame"],
                 authoring_schema=authoring_schema(project),
                 out_dir=target.parent / "expert_parse_track_pack")
-            if binding != ai["input_frame_sha256"]:
+            if (binding != ai["input_frame_sha256"]
+                    and not _retained_input_frame_current(project, rep, target)):
                 raise ValueError("INPUT_FRAME_CHANGED: source/instructions changed since reading")
         if rc == 0:
             # R-0915-126-D1: a completed track has DECIDED its expectations,
