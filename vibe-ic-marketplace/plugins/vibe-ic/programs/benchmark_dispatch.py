@@ -143,18 +143,27 @@ R = TypeVar("R")
 
 
 def _ordered_parallel_map(items: Iterable[T], worker: Callable[[T], R],
-                          jobs: int) -> list[R]:
+                          jobs: int, on_complete: Callable[[R], None] | None = None) -> list[R]:
     """Run unique-project work concurrently and return input-order results."""
     rows = list(items)
     if jobs <= 1 or len(rows) <= 1:
-        return [worker(row) for row in rows]
+        completed = []
+        for row in rows:
+            result = worker(row)
+            if on_complete is not None:
+                on_complete(result)
+            completed.append(result)
+        return completed
     ordered: list[R | None] = [None] * len(rows)
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=jobs)
     futures = {}
     try:
         futures = {pool.submit(worker, row): i for i, row in enumerate(rows)}
         for future in concurrent.futures.as_completed(futures):
-            ordered[futures[future]] = future.result()
+            result = future.result()
+            if on_complete is not None:
+                on_complete(result)
+            ordered[futures[future]] = result
     except BaseException:
         for future in futures:
             future.cancel()
@@ -987,6 +996,116 @@ class _SolveWorkerOutcome:
     review_task_json: str | None
     backup_task_json: str | None
     log_line: str
+
+
+def _checkpointed_solve_map(problem_rows, worker, jobs, *, run_p, binding):
+    """Commit each completed worker under the coordinator lock before reuse.
+
+    Checkpoints are the transaction record; solve_report is a reconstructible
+    projection. A process can die between those writes without losing a
+    completed worker. Reuse requires unchanged routes, code and project bytes.
+    """
+    root = run_p / "solve_checkpoints"
+    if root.is_symlink():
+        raise ValueError("SOLVE_CHECKPOINT_MISMATCH: checkpoint root is a symlink")
+    root.mkdir(exist_ok=True)
+    bound = _sha256_text(json.dumps(binding, sort_keys=True))
+    committed = {}
+    ids = [str(row[1]["id"]) for row in problem_rows]
+
+    def checkpoint_path(pid):
+        return root / (_sha256_text(pid) + ".json")
+
+    for index, problem in problem_rows:
+        pid = str(problem["id"])
+        path = checkpoint_path(pid)
+        if not path.exists():
+            continue
+        try:
+            record = _read_json_regular(path)
+            payload = record.get("outcome")
+            if (record.get("schema") != "vibeic.benchmark.solve_checkpoint.v1"
+                    or record.get("binding_sha256") != bound
+                    or not isinstance(payload, dict)
+                    or record.get("outcome_sha256") != _sha256_text(
+                        json.dumps(payload, sort_keys=True))):
+                raise ValueError("SOLVE_CHECKPOINT_MISMATCH: " + pid)
+            outcome = _SolveWorkerOutcome(**payload)
+            result = _strict_json_loads(outcome.result_json)
+            if (outcome.problem_id != pid or outcome.index != index
+                    or result.get("id") != pid or result.get("accepted") is not False
+                    or record.get("project_tree") != _regate_project_tree(
+                        run_p / "projects" / _safe_problem_id(pid))):
+                raise ValueError("SOLVE_CHECKPOINT_MISMATCH: " + pid)
+        except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+            raise ValueError("SOLVE_CHECKPOINT_MISMATCH: " + pid) from exc
+        committed[pid] = outcome
+
+    def publish(status):
+        solve = _read_json_regular(run_p / "solve_report.json")
+        results = []
+        for pid in ids:
+            if pid in committed:
+                results.append(_strict_json_loads(committed[pid].result_json))
+            else:
+                phases = _phase_error_attribution()
+                for phase in phases.values():
+                    phase["reason"] = "SOLVE_WORKER_NOT_COMMITTED"
+                results.append({"id": pid, "accepted": False, "ok": False,
+                                "candidate_ready": False,
+                                "worker_status": "NOT_MEASURED",
+                                "phases": phases})
+        solve.update(results=results, solved=sum(bool(r.get("ok")) for r in results),
+                     accepted=0, routing_phase="PENDING", route_confirmed=len(ids),
+                     solve_execution_status=status,
+                     committed_ids=[pid for pid in ids if pid in committed],
+                     remaining_ids=[pid for pid in ids if pid not in committed])
+        _atomic_write_json(run_p / "solve_report.json", solve)
+        _atomic_write_json(run_p / _ACCEPTANCE_REPORT, {
+            "schema": _ACCEPTANCE_SCHEMA, "status": "PENDING", "accepted": 0,
+            "total": len(ids), "accepted_ids": [],
+            "pending_execution": len(ids) - len(committed)})
+
+    def commit(outcome):
+        pid = outcome.problem_id
+        payload = dict(vars(outcome))
+        result = _strict_json_loads(outcome.result_json)
+        if pid not in ids or result.get("id") != pid or result.get("accepted") is not False:
+            raise ValueError("SOLVE_CHECKPOINT_INVALID: " + pid)
+        _atomic_write_json(checkpoint_path(pid), {
+            "schema": "vibeic.benchmark.solve_checkpoint.v1",
+            "binding_sha256": bound, "outcome": payload,
+            "outcome_sha256": _sha256_text(json.dumps(payload, sort_keys=True)),
+            "project_tree": _regate_project_tree(
+                run_p / "projects" / _safe_problem_id(pid))})
+        committed[pid] = outcome
+        publish("INCOMPLETE")
+
+    previous = {}
+    def interrupted(signum, frame):
+        publish("INTERRUPTED")
+        handler = previous[signum]
+        if callable(handler):
+            handler(signum, frame)
+        elif handler != signal.SIG_IGN:
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+
+    publish("INCOMPLETE")
+    if threading.current_thread() is threading.main_thread():
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            previous[sig] = signal.getsignal(sig)
+            signal.signal(sig, interrupted)
+    try:
+        remaining = [row for row in problem_rows if str(row[1]["id"]) not in committed]
+        _ordered_parallel_map(remaining, worker, jobs, on_complete=commit)
+    except BaseException:
+        publish("INTERRUPTED")
+        raise
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    return [committed[pid] for pid in ids]
 
 
 @dataclass(frozen=True)
@@ -6081,7 +6200,8 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
     if delivery_route not in {"ic", "ip"}:
         raise ValueError(f"invalid delivery runner route: {delivery_route!r}")
     argv = [sys.executable, str(runner), str(proj),
-            "--route", delivery_route, "--skip-analog", "--skip-hardware"]
+            "--route", delivery_route, "--skip-analog", "--skip-hardware",
+            "--no-dashboard"]
     if input_contract == "original":
         argv += ["--rtl-input", "original"]
     elif input_contract != "structured":
@@ -6164,7 +6284,6 @@ def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
                 "reason": f"front-door input is unreadable: {exc}"}
 
     argv = _solver_argv(runner, project, "D1", "D1", delivery_route)
-    argv.append("--no-dashboard")
     process = runner_budget.run(argv)
     diagnostic = _runner_diagnostics(process, argv, project, require_phase2=False)
     diagnostics = {"runner_diagnostics": diagnostic} if diagnostic else {}
@@ -8483,7 +8602,14 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 review_task_json=None, backup_task_json=None,
                 log_line=(f"  {pid:44s} NOT_MEASURED worker ERROR: {error}"))
 
-    outcomes = _ordered_parallel_map(problem_rows, _solve_one, jobs)
+    outcomes = _checkpointed_solve_map(
+        problem_rows, _solve_one, jobs, run_p=run_p, binding={
+            "bench": bench, "format": fmt, "dataset": str(ds),
+            "config": _read_json_regular(run_p / ".bench_config.json"),
+            "routes": routed_tasks, "decisions": route_decisions,
+            "source": _runner_source_snapshot([sys.executable, str(runner)]),
+            "program_source": _program_source_identity(),
+        })
     results: list[dict] = []
     backlog: list[dict] = []
     review_tasks: list[dict] = []
@@ -8528,6 +8654,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
         "solved": sum(1 for r in results if r["ok"]),
         "accepted": 0, "total": len(results),
         "routing_phase": "COMPLETE", "route_confirmed": len(results),
+        "solve_execution_status": "COMPLETE",
         "acceptance_policy": {
             "required": True,
             "rule": ("runner-owned RTL gate PASS (or supplied-RTL re-entry), "
