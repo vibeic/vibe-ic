@@ -572,6 +572,97 @@ def test_a_staged_sdc_that_sets_its_own_drive_is_declared(tmp_path):
     assert rec["sdc_lines"] == ["set_input_transition 0.3 [all_inputs]"]
 
 
+@pytest.mark.parametrize("commands", [
+    ["set_driving_cell -lib_cell neutral_inv_1 -pin Z [get_ports {rst x* y}]",
+     "set_driving_cell -lib_cell neutral_inv_4 -pin Z [get_ports clk]"],
+    ["set_input_transition -max 300 [get_ports {a}]",
+     "set_input_transition -min 20 [get_ports {b}]"]])
+def test_staged_drive_renderer_preserves_units_and_scopes(tmp_path, commands):
+    import sdc_environment as SE
+    project = _die(tmp_path)
+    _io_record(project, [], core_module="neutral_core", chip_top_module="neutral_chip")
+    staged = "set_units -time ps\n" + "\n".join(commands) + "\n"
+    text, rec = SE.staged_sdc_pad_input_drive(
+        project, staged, "input/constraints/scoped.sdc", analysis_top="neutral_chip")
+    before = json.loads(json.dumps(rec))
+    assert rec["model"] == "design-staged SDC" and "value" not in rec
+    assert SE.render_pad_input_drive(rec, 1000.0) == commands
+    assert SE.pad_drive_sdc_lines(rec, 1000.0) == commands
+    assert text == staged and rec == before
+
+
+@pytest.mark.parametrize("record_state", ["unknown", "absent"])
+def test_staged_drive_renderer_refuses_unknown_boundary(tmp_path, record_state):
+    import sdc_environment as SE
+    project = _die(tmp_path)
+    if record_state == "unknown":
+        _io_record(project, [], core_module="neutral_core", chip_top_module="other_chip")
+    staged = "set_input_transition -max 300 [get_ports {a}]\n"
+    text, rec = SE.staged_sdc_pad_input_drive(
+        project, staged, "input/constraints/scoped.sdc", analysis_top="neutral_chip")
+    assert rec["verdict"] == "NOT_MEASURED"
+    assert rec["refused_staged_sdc_lines"] == [staged.strip()]
+    assert SE.pad_drive_sdc_lines(rec, 1000.0) == []
+    assert "NOT_MEASURED" in "\n".join(SE.render_pad_input_drive(rec))
+    assert not _commands(text, "set_input_transition")
+
+
+def test_staged_drive_renderer_does_not_default_missing_commands():
+    import sdc_environment as SE
+    with pytest.raises(KeyError):
+        SE.render_pad_input_drive({"applies": True, "verdict": "DECLARED",
+                                   "model": "design-staged SDC"})
+    assert SE.pad_drive_sdc_lines({"applies": True, "verdict": "NOT_MEASURED",
+                                   "model": "design-staged SDC", "sdc_lines": [
+                                       "set_input_transition 1 [all_inputs]"]}) == []
+
+
+def test_staged_drive_renderer_keeps_scalar_declaration_scaling():
+    import sdc_environment as SE
+    commands = SE.pad_drive_sdc_lines({"applies": True, "verdict": "DECLARED",
+                                      "model": "set_input_transition", "value": 0.3,
+                                      "source": "design L9"}, 1000.0)
+    assert commands == ["set_input_transition 300 [all_inputs]"]
+
+
+def test_staged_drive_renderer_pnr_caller_with_actual_declared_deck(tmp_path):
+    import os
+    from types import SimpleNamespace
+    import sdc_environment as SE
+    from _ppa import timing
+
+    subject_value = os.environ.get("PAD_DRIVE_SUBJECT")
+    if not subject_value:
+        pytest.skip("set PAD_DRIVE_SUBJECT to the retained native project readset")
+    subject = Path(subject_value)
+    accepted = subject / "phase2/stage2/constraints/spm.sdc"
+    original = accepted.read_bytes()
+    wrapper = subject / SE.IO_PAD_RECORD
+    wrapper_bytes = wrapper.read_bytes()
+    wrapper_doc = json.loads(wrapper_bytes)
+    project = _die(tmp_path)
+    copied_wrapper = project / SE.IO_PAD_RECORD
+    copied_wrapper.parent.mkdir(parents=True, exist_ok=True)
+    copied_wrapper.write_bytes(wrapper_bytes)
+    liberty = tmp_path / "units.lib"
+    liberty.write_text('library (units) { time_unit : "1ps"; }\n')
+    rec = {"text": original.decode(), "design_staged": True,
+           "staged_sdc": "input/constraints/functional.sdc"}
+    result = timing._derive_pnr_pad_input_drive(
+        SimpleNamespace(), project, wrapper_doc["core_module"],
+        SimpleNamespace(liberty=liberty), "", rec)
+    expected = [ln.strip() for ln in original.decode().splitlines()
+                if ln.lstrip().startswith(("set_input_transition ", "set_driving_cell "))]
+    assert expected and all("[all_inputs]" not in ln for ln in expected)
+    saved = json.loads((project / SE.PAD_INPUT_DRIVE_REPORT).read_text())
+    assert result["applied"] and result["verdict"] == "DECLARED"
+    assert result["analysis_top"] == wrapper_doc["chip_top_module"]
+    assert saved == rec["pad_input_drive_record"]
+    assert saved["sdc_lines"] == expected and "value" not in saved
+    assert rec["text"] == original.decode()
+    assert accepted.read_bytes() == original and wrapper.read_bytes() == wrapper_bytes
+
+
 def _core_wrapper_project(tmp_path, *, related_pin="PAD"):
     project = _die(tmp_path)
     liberty = tmp_path / "pdk" / "neutral_io.lib"
