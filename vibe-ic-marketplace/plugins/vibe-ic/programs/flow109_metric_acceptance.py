@@ -3600,6 +3600,45 @@ def _d13_retained_component_owner(project: Path, reference: Mapping, owner: Mapp
             refuse('native output differs from original collector: ' + key)
 
 
+def _d13_retained_input_readset(project: Path, reference: Mapping, owner: Mapping) -> dict:
+    """Project captured producer inputs without rewriting adopted execution bytes."""
+    path = _d13_file(project, reference['scenario_record'])
+    native = json.loads(path.read_bytes())
+    if (native.get('schema') != 'vibeic.l10_execution.v1'
+            or native.get('producer') != 'testbench_gen.run_unit_tbs'
+            or not isinstance(native.get('cases'), list) or not native['cases']):
+        raise MetricRefusal('D13_NATIVE_INPUT_POPULATION_INVALID', 'normal per-case producer record required')
+    bindings = dict(owner['inputs'])
+    for row in native['cases']:
+        measured = row.get('arithmetic_scenario') or {}
+        plan = measured.get('plan') or {}
+        if (plan.get('schema') != 'vibeic.arithmetic_scenario.v1'
+                or not isinstance(plan.get('binding'), dict) or not plan['binding']
+                or not isinstance(measured.get('sources'), dict) or not measured['sources']):
+            raise MetricRefusal('D13_NATIVE_INPUT_POPULATION_INVALID', str(row.get('id')))
+        for name, digest in [*plan['binding'].items(), *measured['sources'].items()]:
+            candidate = Path(name)
+            try:
+                rel = candidate.relative_to(project).as_posix()
+            except ValueError as exc:
+                raise MetricRefusal('D13_FOREIGN_ACTUAL_INPUT', name) from exc
+            if rel in bindings and bindings[rel] != digest:
+                raise MetricRefusal('D13_NATIVE_INPUT_CONFLICT', rel)
+            bindings[rel] = digest
+    retained = {r['path']: r['sha256'] for r in reference['artifacts']}
+    effective = dict(reference)
+    artifacts = list(reference['artifacts'])
+    for rel, expected in sorted(bindings.items()):
+        input_path = _d13_file(project, {'path': rel, 'sha256': expected})
+        actual = _sha(input_path.read_bytes())
+        if rel in retained and retained[rel] != actual:
+            raise MetricRefusal('D13_NATIVE_INPUT_CONFLICT', rel)
+        if rel not in retained:
+            artifacts.append({'path': rel, 'sha256': actual})
+    effective.update(artifacts=artifacts)
+    return effective
+
+
 def _d13_execution(project: Path, source: Mapping, *, case_name: str | None = None) -> dict:
     """Reopen independently adopted original owner/launch; never restamp old execution."""
     relative = ('adopted/base_07/simulation_execution.json' if case_name is None else
@@ -3637,7 +3676,7 @@ def _d13_execution(project: Path, source: Mapping, *, case_name: str | None = No
             _d13_file(project, record)
         if not source.get('source_refs'):
             raise MetricRefusal('D13_SOURCE_AUTHORITY_ABSENT', 'independent original requirements required')
-        return dict(reference)
+        return _d13_retained_input_readset(project, reference, owner)
     binding = owner.get('runner_binding') or {}
     producer = binding.get('producer')
     if (binding.get('schema') != 'vibeic.runner_report_binding.v1' or binding.get('project') != str(project)
