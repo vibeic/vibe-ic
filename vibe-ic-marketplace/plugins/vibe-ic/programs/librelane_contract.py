@@ -855,8 +855,21 @@ def run_container(argv: list[str], *, probe_deadline_s: float | None = None,
                             if '@sha256:' in argv[i]), None)
         if image_index is not None:
             image = argv[image_index]
-            argv = [*argv[:index], *argv[index + 2:image_index], image,
-                    '--skip', entrypoint, *argv[image_index + 1:]]
+            try:
+                inspected = subprocess.run(
+                    [argv[0], 'image', 'inspect', '--format',
+                     '{{json .Config.Entrypoint}}', image],
+                    capture_output=True, text=True, timeout=PROBE_DEADLINE_S)
+                if inspected.returncode:
+                    raise ValueError(inspected.stderr)
+                image_entrypoint = json.loads(inspected.stdout)
+                if image_entrypoint is not None and not isinstance(image_entrypoint, list):
+                    raise ValueError('image Entrypoint is not a list or null')
+            except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+                raise Refusal('LL_IMAGE_ENTRYPOINT_UNVERIFIED', str(exc)) from exc
+            if image_entrypoint:
+                argv = [*argv[:index], *argv[index + 2:image_index], image,
+                        '--skip', entrypoint, *argv[image_index + 1:]]
     import _docker_watchdog as _dw  # the one naming rule for ephemeral containers
     at = argv.index('run') + 1
     binary = argv[0]
@@ -2553,28 +2566,31 @@ def _materialise_image_pdk(image: str, found: dict[str, str], pdk: str,
         scratch = Path(tempfile.mkdtemp(prefix=f'.{pdk}.partial-', dir=root))
     except OSError as exc:
         raise Refusal('LL_PDK_ROOT_CACHE_UNWRITABLE', f'{root}: {exc}') from None
-    created = subprocess.run([docker, 'create', *_dmem.docker_memory_flags(),
-                              '--network', 'none', '--entrypoint', 'true',
-                              found['image_id']], capture_output=True, text=True)
     try:
-        if created.returncode:
-            raise Refusal('LL_IMAGE_PDK_NOT_EXTRACTABLE',
-                          f'{image}: docker create rc={created.returncode} {created.stderr.strip()[:200]}')
-        copied = subprocess.run([docker, 'cp', '-L', f'{created.stdout.strip()}:{guest}',
-                                 str(scratch / pdk)], capture_output=True, text=True)
+        # Nix PDK trees contain read-only directories and interior store
+        # symlinks. docker cp -L can install their mode before their children
+        # and cannot materialise that tree. Copy within the image, resolving
+        # its own links, and apply directory modes after their contents.
+        copied = subprocess.run([
+            docker, 'run', *_dmem.docker_memory_flags(), '--rm', '--network', 'none',
+            '--user', f'{os.getuid()}:{os.getgid()}',
+            '-v', f'{scratch}:{scratch}', '--entrypoint', 'python3', found['image_id'],
+            '-c', 'import shutil,sys;shutil.copytree(sys.argv[1],sys.argv[2],symlinks=False)',
+            guest, str(scratch / pdk)], capture_output=True, text=True)
         if copied.returncode or not (scratch / pdk).is_dir():
             raise Refusal('LL_IMAGE_PDK_ABSENT',
                           f'{image}: {guest} not a directory in the image '
                           f'(rc={copied.returncode} {copied.stderr.strip()[:200]})')
         try:
+            source_mode = (scratch / pdk).stat().st_mode
+            (scratch / pdk).chmod(source_mode | 0o200)
             (scratch / pdk).rename(root / pdk)
+            (root / pdk).chmod(source_mode)
         except OSError:
             if not (root / pdk).is_dir():   # another resolver won the rename; keep theirs
                 raise
         write_json(marker, {**want, 'image': image, 'host_path': str(root / pdk)})
     finally:
-        if not created.returncode:
-            subprocess.run([docker, 'rm', '-f', created.stdout.strip()], capture_output=True)
         shutil.rmtree(scratch, ignore_errors=True)
     return root, 'copied'
 
