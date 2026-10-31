@@ -2421,6 +2421,10 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
              "expr": "ota_folded_cascode_first_stage", "default": False,
              "type": "boolean", "optional": True,
              "rationale": "explicit folded first-stage graph; physical sizing and bound topology evidence required"},
+            {"name": "ota_folded_reference_diode",
+             "expr": "ota_folded_reference_diode", "default": False,
+             "type": "boolean", "optional": True,
+             "rationale": "folded reference load directly diode-connected; signal cascode and physical bias retained"},
             {"name": "ota_input_drain_cascodes",
              "expr": "ota_input_drain_cascodes", "default": False,
              "type": "boolean",
@@ -2429,6 +2433,7 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                            "headroom, stability and settling remain required")},
         ],
         "folded_first_stage": {'enable_knob': 'ota_folded_cascode_first_stage',
+         'reference_diode_knob': 'ota_folded_reference_diode',
          'conflicts_with': 'ota_input_drain_cascodes',
          'internal_nets': ['fc_p_ref', 'fc_p_fold', 'fc_n_ref', 'fc_n_cas'],
          'devices': [{'name': 'mp_fc_bias',
@@ -2845,6 +2850,11 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                 "cascode_targets": ["mn_cas_in{i}", "mn_cas_ref{i}"],
             },
             "folded_first_stage": {'remove': ['mp_ld1_{i}', 'mp_ld2_{i}'],
+             'reference_diode': {'remove_device': 'mn_fc_cas_in{i}',
+                                 'remove_internal_net': 'fc_l_in{i}',
+                                 'rewire_device': 'mn_fc_load_in{i}',
+                                 'old_nets': ['fc_l_in{i}', 'nd1_{i}', 'vss', 'vss'],
+                                 'new_nets': ['nd1_{i}', 'nd1_{i}', 'vss', 'vss']},
              'rewire': {'mn_tail{i}': ['ntail{i}', 'nbias', 'vss', 'vss'],
                         'mn_in{i}': ['fc_u_in{i}', 'vsum{i}', 'ntail{i}', 'vss'],
                         'mn_ref{i}': ['fc_u_ref{i}', 'vcm', 'ntail{i}', 'vss']},
@@ -6347,6 +6357,12 @@ def expand_folded_first_stage(lib: Dict[str, Any], values: Dict[str, float],
     enabled = knobs.get(declaration["enable_knob"], False)
     if not isinstance(enabled, bool):
         raise SizingInputsInvalid("folded first-stage enable must be boolean")
+    diode_key = declaration.get("reference_diode_knob")
+    diode = knobs.get(diode_key, False)
+    if not isinstance(diode, bool):
+        raise SizingInputsInvalid("folded reference-diode selector must be boolean")
+    if diode and not enabled:
+        raise SizingInputsInvalid("folded reference-diode variant requires the folded first stage")
     if not enabled:
         return None
     if knobs.get(declaration["conflicts_with"], False):
@@ -6361,6 +6377,7 @@ def expand_folded_first_stage(lib: Dict[str, Any], values: Dict[str, float],
     internal = list(declaration["internal_nets"])
     ratios = [dict(r) for r in declaration["ratios"]]
     pairs = []
+    reference_changes = []
     for group in _stage_groups(lib):
         selected = group.get("folded_first_stage")
         if not selected:
@@ -6380,10 +6397,29 @@ def expand_folded_first_stage(lib: Dict[str, Any], values: Dict[str, float],
                 if name in rewired:
                     raise SizingInputsInvalid("duplicate folded rewire target")
                 rewired[name] = expand(endpoints)
-            added.extend(expand(selected["devices"]))
-            internal.extend(expand(selected["internal_nets"]))
-            ratios.extend(expand(selected["ratios"]))
-            pairs.extend(expand(selected["matched_pairs"]))
+            stage_devices = expand(selected["devices"])
+            stage_nets = expand(selected["internal_nets"])
+            stage_ratios = expand(selected["ratios"])
+            stage_pairs = expand(selected["matched_pairs"])
+            if diode:
+                change = expand(selected["reference_diode"])
+                stage_by_name = {d["name"]: d for d in stage_devices}
+                load = stage_by_name[change["rewire_device"]]
+                if (load["nets"] != change["old_nets"]
+                        or change["remove_device"] not in stage_by_name
+                        or change["remove_internal_net"] not in stage_nets):
+                    raise SizingInputsInvalid("inconsistent folded reference-diode declaration")
+                load["nets"] = list(change["new_nets"])
+                stage_devices = [d for d in stage_devices if d["name"] != change["remove_device"]]
+                stage_nets.remove(change["remove_internal_net"])
+                stage_ratios = [row for row in stage_ratios
+                                if change["remove_device"] not in (row["device"], row["reference"])]
+                stage_pairs = [pair for pair in stage_pairs if change["remove_device"] not in pair]
+                reference_changes.append(dict(change, stage=index))
+            added.extend(stage_devices)
+            internal.extend(stage_nets)
+            ratios.extend(stage_ratios)
+            pairs.extend(stage_pairs)
     added.extend(dict(d, nets=list(d["nets"])) for d in declaration["devices"])
     if (not removed or len(set(removed)) != len(removed)
             or any(n not in by_name or n in rewired for n in removed)
@@ -6409,7 +6445,7 @@ def expand_folded_first_stage(lib: Dict[str, Any], values: Dict[str, float],
         by_name[name]["nets"] = endpoints
     devices.extend(added)
     nets.extend(internal)
-    return {"enable_knob": declaration["enable_knob"], "input_view": sizing.get("input_view"),
+    record = {"enable_knob": declaration["enable_knob"], "input_view": sizing.get("input_view"),
             "evidence": evidence, "removed_devices": removed, "before_devices": before,
             "selected_devices": required, "source_ratios": ratios, "matched_pairs": pairs,
             "ratio_basis": "requested total W*m/L before normal finger/grid resolution; not measured current ratios",
@@ -6418,6 +6454,10 @@ def expand_folded_first_stage(lib: Dict[str, Any], values: Dict[str, float],
                 ["knobs." + k for k in sizing.get("knobs", {})] +
                 ["device_parameters." + n + "." + p
                  for n, row in sizing.get("device_parameters", {}).items() for p in row])}
+    if diode:
+        record["reference_leg_variant"] = {"selector": diode_key,
+            "construction": "diode_reference_signal_cascode", "changes": reference_changes}
+    return record
 
 
 def finish_folded_first_stage(record: Dict[str, Any], devices: List[Dict[str, Any]]) -> None:
@@ -6455,6 +6495,11 @@ def folded_first_stage_problems(ir: Dict[str, Any], project: Optional[Path]) -> 
         selected = sizing.get("knobs", {}).get(key, False)
         if not isinstance(selected, bool) or ir.get("knobs", {}).get(key, False) != selected:
             raise SizingInputsInvalid("folded selector disagrees with current normal input")
+        diode_key = declaration.get("reference_diode_knob")
+        diode = sizing.get("knobs", {}).get(diode_key, False)
+        if (not isinstance(diode, bool) or ir.get("knobs", {}).get(diode_key, False) != diode
+                or (diode and not selected)):
+            raise SizingInputsInvalid("folded reference-diode selector disagrees with current normal input")
         if not selected:
             if record:
                 raise SizingInputsInvalid("disabled folded first stage carries an expansion record")
@@ -6470,8 +6515,12 @@ def folded_first_stage_problems(ir: Dict[str, Any], project: Optional[Path]) -> 
         if record != wanted:
             raise SizingInputsInvalid("folded graph/evidence expansion record is inconsistent or stale")
         actual = {d["name"]: d for d in ir.get("devices", [])}
-        if len(actual) != len(ir.get("devices", [])) or any(n in actual for n in wanted["removed_devices"]):
+        reference_changes = (wanted.get("reference_leg_variant") or {}).get("changes", [])
+        forbidden = wanted["removed_devices"] + [row["remove_device"] for row in reference_changes]
+        if len(actual) != len(ir.get("devices", [])) or any(n in actual for n in forbidden):
             raise SizingInputsInvalid("folded graph duplicates devices or retains replaced mirror loads")
+        if any(row["remove_internal_net"] in ir.get("internal_nets", []) for row in reference_changes):
+            raise SizingInputsInvalid("folded reference-diode graph retains a removed internal net")
         for d in wanted["expanded_devices"]:
             if actual.get(d["name"]) != d:
                 raise SizingInputsInvalid(d["name"] + ": folded endpoint/body/geometry disagrees with normal source")
