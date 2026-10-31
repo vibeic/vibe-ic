@@ -395,6 +395,7 @@ def collect(manifest):
         inputs[prefix + "common_settings"] = context["settings"]
         try:
             reference_rows, reference_gaps, phases = [], [], set()
+            point_gaps, native_failed = [], False
             score_path = Path(context["score"])
             score = json.loads(score_path.read_text()) if score_path.is_file() else {}
             expected_settings = json.loads(Path(context["settings"]["path"]).read_text())
@@ -409,44 +410,52 @@ def collect(manifest):
                 raise ValueError("corner has no actual native point references")
             outputs.append(str(score_path.parent))
             for entry in points:
-                point_path = Path(entry["path"])
-                if not point_path.is_file() or entry.get("sha256") != bound.sha(point_path):
-                    raise ValueError("native corner point reference changed or is absent")
-                point = json.loads(point_path.read_text())
-                views = point.get("native_inputs") or {}
-                phase = point.get("settings", {}).get("phase_index")
-                phases.add(phase)
-                if point.get("settings") != capture.phase_settings(expected_settings, phase) \
-                        or any(views.get(role, {}).get("sha256") != view["sha256"]
-                               for role, view in context["native_inputs"].items()):
-                    raise ValueError("native point does not belong to the exact prepared corner/method")
-                current, reason = bound.validate_consumed_inputs(Path(context["project"]), views)
-                if not current or not _current(views) or not capture.declared_dut_consumed(views):
-                    raise ValueError("corner native input closure is not current: " + reason)
-                if not point.get("image") or (manifest.get("image") and point["image"] != manifest["image"]):
-                    raise ValueError("corner native image differs from the prepared runtime")
-                images.add(point["image"])
-                inputs.update({prefix + f"point:{phase}:" + role: view for role, view in views.items()})
-                if capture.native_execution_failure(point):
-                    failed = True
-                    raise ValueError("native corner conversion execution failed")
-                for execution in point.get("executions") or []:
-                    log = Path(execution["log"])
-                    if execution.get("log_sha256") != bound.sha(log):
-                        raise ValueError("native corner transcript changed")
-                    inputs[prefix + f"point:{phase}:log"] = _view(log)
-                    temperatures = [float(value) for value in re.findall(
-                        r"Doing analysis at TEMP\s*=\s*([-+.\deE]+)", log.read_text(errors="replace"))]
-                    if not temperatures or any(not math.isclose(value, context["temperature_c"], rel_tol=0, abs_tol=1e-6)
-                                               for value in temperatures):
-                        raise ValueError("actual native TEMP differs from its PVT context")
-                    if "vref" in required:
-                        try:
-                            observation = _reference_measurement(point, log.read_text(errors="replace"), manifest['reference_ports'])
-                            reference_rows.append({"phase_index": phase, **observation})
-                            failed = failed or observation["violation"]
-                        except (OSError, ValueError, KeyError, TypeError) as exc:
-                            reference_gaps.append({"phase_index": phase, "detail": str(exc)})
+                try:
+                    point_path = Path(entry["path"])
+                    if not point_path.is_file() or entry.get("sha256") != bound.sha(point_path):
+                        raise ValueError("native corner point reference changed or is absent")
+                    point = json.loads(point_path.read_text())
+                    views = point.get("native_inputs") or {}
+                    phase = point.get("settings", {}).get("phase_index")
+                    phases.add(phase)
+                    if point.get("settings") != capture.phase_settings(expected_settings, phase) \
+                            or any(views.get(role, {}).get("sha256") != view["sha256"]
+                                   for role, view in context["native_inputs"].items()):
+                        raise ValueError("native point does not belong to the exact prepared corner/method")
+                    current, reason = bound.validate_consumed_inputs(Path(context["project"]), views)
+                    if not current or not _current(views) or not capture.declared_dut_consumed(views):
+                        raise ValueError("corner native input closure is not current: " + reason)
+                    if not point.get("image") or (manifest.get("image") and point["image"] != manifest["image"]):
+                        raise ValueError("corner native image differs from the prepared runtime")
+                    images.add(point["image"])
+                    inputs.update({prefix + f"point:{phase}:" + role: view for role, view in views.items()})
+                    if capture.native_execution_failure(point):
+                        failed, native_failed = True, True
+                        raise ValueError("native corner conversion execution failed")
+                    current, reason = capture.validate_execution_identity(point)
+                    if not current:
+                        raise ValueError(reason)
+                    for execution in point.get("executions") or []:
+                        log = Path(execution["log"])
+                        if execution.get("log_sha256") != bound.sha(log):
+                            raise ValueError("native corner transcript changed")
+                        inputs[prefix + f"point:{phase}:log"] = _view(log)
+                        temperatures = [float(value) for value in re.findall(
+                            r"Doing analysis at TEMP\s*=\s*([-+.\deE]+)", log.read_text(errors="replace"))]
+                        if not temperatures or any(not math.isclose(value, context["temperature_c"], rel_tol=0, abs_tol=1e-6)
+                                                   for value in temperatures):
+                            raise ValueError("actual native TEMP differs from its PVT context")
+                        if "vref" in required:
+                            try:
+                                observation = _reference_measurement(point, log.read_text(errors="replace"), manifest['reference_ports'])
+                                reference_rows.append({"phase_index": phase, **observation})
+                                failed = failed or observation["violation"]
+                            except (OSError, ValueError, KeyError, TypeError) as exc:
+                                reference_gaps.append({"phase_index": phase, "detail": str(exc)})
+                except (OSError, ValueError, KeyError, TypeError) as exc:
+                    point_gaps.append(str(exc))
+            if point_gaps:
+                raise ValueError(("native corner conversion execution failed; " if native_failed else "") + "; ".join(point_gaps))
             if score_missing:
                 raise ValueError("full native corner series/score has not completed")
             replayed = capture.replay_score(score_path)

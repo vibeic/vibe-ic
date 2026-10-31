@@ -15,7 +15,14 @@ from test_analog_incremental_capture import _method_record, _dump
 
 
 @pytest.fixture
-def method(tmp_path):
+def method(tmp_path, monkeypatch):
+    # These tests exercise the numerical/manifest consumers with explicitly
+    # synthetic waveforms, not native execution authority. The separate
+    # execution-identity module runs the real local producer without this seam.
+    native_identity = capture.validate_execution_identity
+    monkeypatch.setattr(capture, "validate_execution_identity", lambda record:
+        (True, "software fixture identity") if record.get("image") == "fixture-image"
+        else native_identity(record))
     project, common_path, _directory, _record = _method_record(tmp_path)
     bdir = project / "phase3/analog/converter"
     # The declared reference pair is an input; pin names are circuit-owned.
