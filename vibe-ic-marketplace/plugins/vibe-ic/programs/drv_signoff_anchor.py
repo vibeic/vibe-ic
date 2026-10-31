@@ -103,7 +103,7 @@ def image_pdk_anchor(image: str, pdk: str, library: str) -> dict:
     environment = ["-e", "PDK_ROOT=" + provider.pdk_root] if provider else []
     process = _ll.run_container(
         ["docker", "run", *_docker_memory.docker_memory_flags(), "--rm", "--network", network,
-         *environment, image, "--skip", *command],
+         *environment, '--entrypoint', command[0], image, *command[1:]],
         probe_deadline_s=90)
     if process.returncode:
         raise ValueError("installed PDK config probe failed: " + process.stderr[-300:])

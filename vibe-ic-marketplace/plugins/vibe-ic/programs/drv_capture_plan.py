@@ -16,6 +16,7 @@ source of scene identity.
 from __future__ import annotations
 
 import json
+import fnmatch
 import math
 import re
 import sys
@@ -800,6 +801,45 @@ def _capture_top(project: Path, state_path: Path, state: dict, netlist: Path,
     return top
 
 
+def _macro_scene_views(state_path: Path, scene: str) -> dict:
+    """Carry the native STA producer's byte-bound hierarchical readset."""
+    config_path = state_path.parent / 'config.json'
+    config = json.loads(config_path.read_text())
+    macros = config.get('MACROS') or {}
+    if not macros:
+        return {}
+    from librelane_contract import validate_step_receipt
+    receipt = validate_step_receipt(state_path.parent, 'OpenROAD.STAPostPNR')
+    bound = receipt['input']['config_files']
+
+    def reference(value):
+        item = _ref(Path(value))
+        if bound.get(value) != item['sha256']:
+            raise ValueError('macro STA input absent or changed: ' + value)
+        return item
+
+    verilog, libraries, parasitics = [], [], []
+    for macro in macros.values():
+        if config.get('STA_MACRO_PRIORITIZE_NL') and macro.get('nl'):
+            verilog.extend(reference(value) for value in macro['nl'])
+            selected = [value for pattern, paths in (macro.get('spef') or {}).items()
+                        if fnmatch.fnmatch(scene, pattern) for value in paths]
+            if macro.get('spef') and len(selected) != 1:
+                raise ValueError('macro SPEF corner population ambiguous: ' + scene)
+            for instance in macro.get('instances') or {}:
+                parasitics.extend({'instance': instance, **reference(value)}
+                                 for value in selected)
+        else:
+            selected = [value for pattern, paths in (macro.get('lib') or {}).items()
+                        if fnmatch.fnmatch(scene, pattern) for value in paths]
+            if not selected:
+                raise ValueError('macro timing model absent: ' + scene)
+            libraries.extend({'name': Path(value).stem, **reference(value)}
+                             for value in selected)
+    return {'linked_verilogs': verilog, 'instance_spefs': parasitics,
+            'macro_liberties': libraries}
+
+
 def build(project: Path, *, final_state: dict | None = None) -> dict:
     project = project.resolve()
     import execution_policy
@@ -883,6 +923,8 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
         # and PAD_LIBS were read into STA.
         generated_liberty = _run_path(project, state["lib"][actual_name])
         linked, lefs = _scene_files(env, root, pdk, pvt)
+        macro_views = _macro_scene_views(state_path, actual_name)
+        linked.extend(macro_views.pop('macro_liberties', []))
         io_library_paths.extend(_pad_lib_paths(env, root, pdk, pvt))
         for item in linked:
             existing = liberties.setdefault(item["name"], item)
@@ -895,6 +937,7 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
                        "generated_top_liberty": _ref(generated_liberty),
                        "liberty": linked[0]["name"], "linked_liberties": linked,
                        "linked_lefs": lefs,
+                       **macro_views,
                        "positive_control_limits": {"max_fanout": 1,
                                                    "max_slew": 1e-6,
                                                    "max_capacitance": 1e-6}})

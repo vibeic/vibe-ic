@@ -37,6 +37,24 @@ _READ_LOG_BYTES = 64 * 1024
 _TOOL_ERROR = re.compile(r"^Error(?:\s|:)")
 
 
+def _image_command(image: str, command: list[str]) -> list[str]:
+    if _ce.no_container_route():
+        return [image, '--skip', *command]
+    inspected = subprocess.run(
+        ['docker', 'image', 'inspect', image, '--format', '{{json .Config.Entrypoint}}'],
+        capture_output=True, text=True, timeout=30)
+    try:
+        if inspected.returncode:
+            raise ValueError(inspected.stderr)
+        entrypoint = json.loads(inspected.stdout)
+        if entrypoint is not None and not isinstance(entrypoint, list):
+            raise ValueError('Entrypoint is not a list or null')
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f'NOT_MEASURED: DRV image entrypoint unverified: {exc}') from exc
+    return ([image, '--skip', *command] if entrypoint else
+            ['--entrypoint', command[0], image, *command[1:]])
+
+
 def _ref(path: Path) -> dict:
     if not path.is_file():
         raise ValueError(f"capture input absent: {path}")
@@ -80,19 +98,21 @@ def _run_fresh(script: Path, roots: set[Path], *, image: str) -> str:
     mounts = []
     for root in sorted(roots):
         root = root.resolve()
-        mounts.extend(("-v", f"{root}:{root}"))
+        access = 'rw' if script.resolve().is_relative_to(root) else 'ro'
+        mounts.extend(("-v", f"{root}:{root}:{access}"))
     name = _docker_watchdog.ephemeral_container_name("vibeic_drv_sta")
     raw = script.with_suffix(".tool.log")
     cidfile = script.parent / f"{name}.container.cid"
     argv = ["docker", "run", *_docker_memory.docker_memory_flags(),
             "--rm", "--network", "none", "--cidfile", str(cidfile),
             "--name", name,
-            *mounts, image, "--skip", "bash", "-c",
-            f"sta -no_init -exit {shlex.quote(str(script.resolve()))}"]
+            *mounts]
     if "--memory" not in argv:
         # An opted-out or undeterminable ceiling is a refusal here, never an
         # unbounded OpenSTA container.
         raise RuntimeError("NOT_MEASURED: OpenSTA memory ceiling unavailable")
+    argv += _image_command(image, [
+        'bash', '-c', f'sta -no_init -exit {shlex.quote(str(script.resolve()))}'])
 
     def launch(cmd, **kw):
         kw.pop("stdout", None)
@@ -251,6 +271,11 @@ def _script(plan: dict, scene: dict, out: Path, *, control: bool,
             if native.get("sha256") != ref["sha256"]:
                 raise ValueError("native OCV measurement source changed")
     prefix = "".join(f"read_liberty {_tcl(path)}\n" for path in libs)
+    for item in scene.get('linked_verilogs', []):
+        path = Path(item['path'])
+        if _ref(path)['sha256'] != item['sha256']:
+            raise ValueError('macro STA input changed: ' + str(path))
+        prefix += f'read_verilog {_tcl(path)}\n'
     prefix += (f"read_verilog {_tcl(netlist)}\n"
                f"link_design {{{plan['top']}}}\n"
                f"read_sdc {_tcl(sdc)}\n"
@@ -258,6 +283,14 @@ def _script(plan: dict, scene: dict, out: Path, *, control: bool,
                   f"set_timing_derate -late {late}\n" if recipe else "")
                + f"read_spef {_tcl(spef)}\n"
                + "set_propagated_clock [all_clocks]\n")
+    for item in scene.get('instance_spefs', []):
+        path = Path(item['path'])
+        if _ref(path)['sha256'] != item['sha256']:
+            raise ValueError('macro SPEF input changed: ' + str(path))
+        instance = item['instance']
+        if not isinstance(instance, str) or any(c in instance for c in '{}\\\n\r'):
+            raise ValueError('unsafe Tcl instance')
+        prefix += f"read_spef -path {{{instance}}} {_tcl(path)}\n"
     if control:
         limits = scene["positive_control_limits"]
         prefix += ("set_max_fanout 1 [current_design]\n"
@@ -382,15 +415,15 @@ def openroad_identity(image: str, *, run=None) -> dict:
     disagree, a version with no commit, or no build at all leave it None with
     the reason, never a guess."""
     network, command = _ll.native_tool_command(image, ["bash", "-c", _OPENROAD_PROBE])
-    argv = ["docker", "run", *_docker_memory.docker_memory_flags(), "--rm", "--network", network,
-            image, "--skip", *command]
     try:
+        argv = ["docker", "run", *_docker_memory.docker_memory_flags(), "--rm", "--network", network,
+                *_image_command(image, command)]
         if run is None and _ce.no_container_route():
             done = _ll.run_container(argv, probe_deadline_s=300)
         else:
             done = (run or subprocess.run)(argv, capture_output=True, text=True, timeout=300)
         text = (done.stdout or "") + (done.stderr or "")
-    except (OSError, subprocess.TimeoutExpired) as exc:
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         return {"commit": None, "reason": f"OpenROAD version probe failed: {exc}"}
     binaries = [{"path": m.group(1), "sha256": m.group(2), "version": m.group(3)}
                 for m in _OPENROAD_LINE.finditer(text)]
@@ -471,7 +504,9 @@ def capture(plan: dict, out_dir: Path, *, image: str | None = None) -> dict:
             inputs.append(item)
         for scene in plan["scenes"]:
             inputs.extend([scene["spef"], *scene["linked_liberties"],
-                           *(scene.get("linked_lefs") or [])])
+                           *(scene.get("linked_lefs") or []),
+                           *scene.get('linked_verilogs', []),
+                           *scene.get('instance_spefs', [])])
         inputs.extend(plan["identity"]["artifacts"][name]
                       for name in ("sta_netlist", "def"))
         for item in inputs:
@@ -499,6 +534,8 @@ def capture(plan: dict, out_dir: Path, *, image: str | None = None) -> dict:
     roots = {out_dir}
     for scene in plan["scenes"]:
         for item in (*scene["linked_liberties"], scene["spef"],
+                     *scene.get('linked_verilogs', []),
+                     *scene.get('instance_spefs', []),
                      plan["identity"]["artifacts"]["sta_netlist"],
                      plan["current"]["sources"]["signoff_sdc"]):
             roots.add(Path(item["path"]).resolve().parent)
