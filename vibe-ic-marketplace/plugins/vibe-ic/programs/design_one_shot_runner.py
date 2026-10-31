@@ -24640,9 +24640,10 @@ def step_lec_equivalence(project: Path, top_name: str, container: str,
         import librelane_eqy as native
         try:
             execution = project / 'reports/lec_eqy_execution.json'
-            if execution.is_symlink() or not execution.is_file():
+            if execution.is_symlink() or (execution.exists() and not execution.is_file()):
                 raise metrics.MetricRefusal('D25_NATIVE_EXECUTION_ABSENT',
-                                            'qualified original execution is required for reuse')
+                                            'an existing execution must be a regular file')
+            reused = execution.is_file()
             rtl = sorted(_pl.rtl_dir(project).glob('*.sv')) + sorted(
                 _pl.rtl_dir(project).glob('*.v'))
             folder = native.d25_run(project, top_name, rtl, project / gate_netlist)
@@ -24650,9 +24651,9 @@ def step_lec_equivalence(project: Path, top_name: str, container: str,
             status = accepted['status']
             return results + [StepResult(
                 'lec_equivalence', status, time.time() - t0,
-                'retained named Yosys.EQY: ' + accepted['reason'],
+                ('retained' if reused else 'current') + ' named Yosys.EQY: ' + accepted['reason'],
                 extras={'native_reuse': {'folder': str(folder),
-                        'producer_reused': status in ('PASS', 'FAIL'),
+                        'producer_reused': reused and status in ('PASS', 'FAIL'),
                         'metric_acceptance': accepted}},
                 reason_class=_V.ReasonClass.INPUT_ABSENT if status == 'NOT_MEASURED' else '')]
         except (flow109.Flow109Error, native.Refusal, metrics.MetricRefusal,

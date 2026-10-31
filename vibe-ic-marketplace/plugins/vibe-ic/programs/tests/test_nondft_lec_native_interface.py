@@ -210,3 +210,196 @@ def test_consumer_reopens_empty_transport_without_claiming_proof(subject, damage
         assert observed['native_consumer']['compared_points'] == 0
     else:
         assert observed['reason'] in ('D25_NATIVE_INPUT_STALE', 'D25_NATIVE_SUBJECT_UNBOUND'), observed
+
+
+def test_named_fresh_caller_dispatches_existing_producer(subject, monkeypatch):
+    """Caller transport only; qualification remains inside unchanged d25_run."""
+    project, rtl, context, calls = subject
+    put(project / 'input/flow109/D25.json', {'purpose': 'functional_after_observed_reset'})
+    entered = []
+    def stop(p, top, gold, gate):
+        entered.append((p, top, gold, gate))
+        raise ReachedEQY
+    monkeypatch.setattr(EQY, 'd25_run', stop)
+    with pytest.raises(ReachedEQY):
+        D.step_lec_equivalence(project, 'top', 'unused')
+    assert entered == [(project, 'top', [rtl], project / 'phase2/stage2/synth/top_synth.v')]
+    assert not (project / 'reports/lec_eqy_execution.json').exists()
+
+
+def test_named_fresh_invalid_authority_refuses_in_real_producer(subject, monkeypatch):
+    """Actual producer/input reader must reject before any native command."""
+    import copy
+    import sys
+    project, rtl, context, calls = subject
+    put(project / 'input/flow109/D25.json', {'purpose': 'functional_after_observed_reset'})
+    put(project / 'requirements/base_16/required_lec_partitions.json', {
+        'schema': 'vibeic.flow109.requirement-authority.v1',
+        'approval': {'status': 'UNAPPROVED', 'authority': 'requirements_owner'}})
+    attempt = flow109._new_attempt(project, context)
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
+    entered = []
+    native_commands = []
+    original_run = D.subprocess.run
+    def no_native(argv, *args, **kwargs):
+        if Path(str(argv[0])).name in ('yosys', 'eqy', 'iverilog', 'sby'):
+            native_commands.append(argv)
+            raise AssertionError('native tool dispatched before authority admission')
+        return original_run(argv, *args, **kwargs)
+    monkeypatch.setattr(D.subprocess, 'run', no_native)
+    previous = sys.getprofile()
+    def observe(frame, event, arg):
+        if event == 'call' and frame.f_code.co_filename.endswith('librelane_eqy.py') and frame.f_code.co_name == 'd25_run':
+            entered.append(True)
+    sys.setprofile(observe)
+    try:
+        row = D.step_lec_equivalence(project, 'top', 'unused')[-1]
+    finally:
+        sys.setprofile(previous)
+    assert entered == [True]
+    assert row.status == 'NOT_MEASURED' and 'METRIC_AUTHORITY_UNAPPROVED' in row.detail
+    assert not native_commands
+    assert not (project / 'reports/lec_eqy_execution.json').exists()
+
+
+def test_named_fresh_foreign_execution_symlink_still_refuses(subject, monkeypatch, tmp_path):
+    project, rtl, context, calls = subject
+    put(project / 'input/flow109/D25.json', {'purpose': 'functional_after_observed_reset'})
+    foreign = tmp_path / 'foreign-execution.json'
+    foreign.write_text('{}')
+    target = project / 'reports/lec_eqy_execution.json'
+    target.symlink_to(foreign)
+    entered = []
+    def stop(*args):
+        entered.append(True)
+        raise ReachedEQY
+    monkeypatch.setattr(EQY, 'd25_run', stop)
+    row = D.step_lec_equivalence(project, 'top', 'unused')[-1]
+    assert row.status == 'NOT_MEASURED' and 'D25_NATIVE_EXECUTION_ABSENT' in row.detail
+    assert not entered
+
+
+def _fresh_source_handoff(project, reference):
+    """Synthetic handoff envelope over unchanged native reference bytes, not proof."""
+    import synth_handoff_netlist_check as handoff
+    sidecar = project / 'phase2/stage2/synth/synth_inputs.json'
+    binding = json.loads(sidecar.read_text())['librelane_synthesis']
+    original = reference / binding['folder']
+    receipt = json.loads((original / 'vibeic_receipt.json').read_text())
+    state = json.loads((original / 'state_out.json').read_text())
+    resolver = handoff._project_path_resolver(reference, original, state)
+    raw = resolver(state['nl'])
+    assert LC.digest(raw) == binding['netlist_sha256']
+    assert LC.digest(project / binding['mapped']) == binding['netlist_sha256']
+    # Like the existing synthesis factory, author a transport envelope at the
+    # current fixture paths. Never re-sign the original native receipt/PASS.
+    folder = project / 'phase3/librelane/source-fixture-synthesis'
+    folder.mkdir()
+    for name in (str(raw.relative_to(original)), 'reports/stat.json',
+                 'reports/pre_synth_chk.rpt', 'reports/chk.rpt'):
+        source = original / name
+        assert LC.digest(source) == receipt['sha256'][name], name
+        target = folder / name
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(source.read_bytes())
+    original_config = json.loads((original / 'config.json').read_text())
+    assert LC.digest(original / 'config.json') == receipt['sha256']['config.json']
+    assert LC.digest(original / 'state_out.json') == receipt['sha256']['state_out.json']
+    config = {key: original_config[key] for key in (
+        'meta', 'DESIGN_NAME', 'PDK', 'SYNTH_TIEHI_CELL', 'SYNTH_TIELO_CELL',
+        'TRISTATE_CELLS', 'SYNTH_CHECKS_ALLOW_TRISTATE', 'SYNTH_STRATEGY') if key in original_config}
+    manifest = json.loads((project / 'input/flow109/D25.json').read_text())
+    config['VERILOG_FILES'] = [str(project / ref['path']) for ref in manifest['rtl']]
+    config['CELL_LIBS'] = {'*': [manifest['liberty']['path']]}
+    assert LC.digest(Path(manifest['liberty']['path'])) == manifest['liberty']['sha256']
+    put(project / 'phase3/librelane/synthesis_resolved.json', config)
+    put(folder / 'config.json', config)
+    state['nl'] = str(folder / raw.relative_to(original))
+    put(folder / 'state_out.json', state)
+    # The fixture imports the already-produced mapped artifact; it does not
+    # replay synthesis or pretend to consume an unstaged old JsonHeader.
+    state_files = {str(project / binding['mapped']): binding['netlist_sha256']}
+    fingerprint = {'step': 'Yosys.Synthesis', 'image': 'SOFTWARE_FIXTURE_NOT_NATIVE',
+        'config': LC.digest(folder / 'config.json'), 'state_files': state_files,
+        'config_files': LC.config_file_hashes(config, [])}
+    put(folder / 'input_fingerprint.json', fingerprint)
+    put(folder / 'pdk_root.json', {'cli_pdk_root': '/foss/pdks',
+        'mounts_under_it': [], 'stated_by': 'run_chain(pdk_root=...)'})
+    put(folder / 'vibeic_receipt.json', {'input': fingerprint,
+        'source_fixture_only': True, 'original_native_receipt_sha256': LC.digest(
+            original / 'vibeic_receipt.json'),
+        'sha256': {str(p.relative_to(folder)): LC.digest(p)
+                   for p in folder.rglob('*') if p.is_file()}})
+    handoff.publish_handoff(project, folder, project / binding['mapped'], binding['top'])
+    current = handoff.bound_handoff(project)
+    assert current is not None and current['verdict'] == 'PASS', current
+
+
+@pytest.mark.skipif(not __import__('os').environ.get('FLOW109_D25_FRESH_REFERENCE'),
+                    reason='requires the matching cached old qualified runtime and immutable reference')
+@pytest.mark.parametrize('invalid_authority', [False, True])
+def test_fully_admitted_named_fresh_actual_producer(tmp_path, monkeypatch, invalid_authority):
+    """Root7 old-runtime source control; never starts or forges native proof."""
+    import os
+    import shutil
+    reference = Path(os.environ['FLOW109_D25_FRESH_REFERENCE'])
+    project = Path('/out/canonical/projects/good')
+    mounts = [line.split() for line in Path('/proc/self/mountinfo').read_text().splitlines()]
+    assert any(row[4] == str(project) and 'rw' in row[5].split(',') for row in mounts)
+    assert project.resolve() != reference.resolve()
+    for child in project.iterdir():
+        shutil.rmtree(child) if child.is_dir() and not child.is_symlink() else child.unlink()
+    shutil.copytree(reference, project, dirs_exist_ok=True)
+    # Only the disposable copy is fresh; retained original proof stays read-only.
+    (project / 'reports/lec_eqy_execution.json').unlink()
+    # This clone is an authored source fixture, not a new IC qualification.
+    # The old reference's unextracted L20 is not a no-DFT declaration.
+    _publish_dft_intent(project, {'requires_scan': False,
+        'reason': 'Synthetic fresh-dispatch fixture selects functional equivalence without DFT.'})
+    put(project / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json', {
+        'doc_id': 'L20', 'applicability': 'NOT_APPLICABLE',
+        'fields': {'dft_present': False, 'scan_chains': [],
+                   'jtag_tap': None, 'compression': None, 'bist_mbist': []}})
+    _fresh_source_handoff(project, reference)
+    features = profile()
+    assert features['requires_scan'] is features['requires_dft'] is False
+    context = flow109.execution_context(flow109.resolve_plan(features), 'D25', 'D25')
+    context_file = tmp_path / 'context.json'
+    put(context_file, context)
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(context_file))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(flow109._new_attempt(project, context)))
+    assert flow109.dft_source_intent(project, context)['requires_scan'] is False
+    if invalid_authority:
+        path = project / 'requirements/base_16/required_lec_partitions.json'
+        doc = json.loads(path.read_text())
+        doc['approval']['status'] = 'UNAPPROVED'
+        put(path, doc)
+    reached = []
+    # d25_sources is first called AFTER the actual _d25_inputs/admission,
+    # exact subject and fresh launch checks, BEFORE any census/tool process.
+    def stop_after_admission():
+        reached.append(True)
+        raise ReachedEQY
+    monkeypatch.setattr(EQY, 'd25_sources', stop_after_admission)
+    original_run = D.subprocess.run
+    commands = []
+    def no_native(argv, *args, **kwargs):
+        if Path(str(argv[0])).name in ('yosys', 'eqy', 'iverilog', 'sby'):
+            commands.append(argv)
+            raise AssertionError('source control must stop before native proof')
+        return original_run(argv, *args, **kwargs)
+    monkeypatch.setattr(D.subprocess, 'run', no_native)
+    if invalid_authority:
+        row = D.step_lec_equivalence(project, 'test_counter', '')[-1]
+        assert row.status == 'NOT_MEASURED' and 'METRIC_AUTHORITY_UNAPPROVED' in row.detail, (row.status, row.detail)
+        assert not reached, (row.status, row.detail)
+    else:
+        try:
+            rows = D.step_lec_equivalence(project, 'test_counter', '')
+        except ReachedEQY:
+            pass
+        else:
+            pytest.fail(f'producer sentinel not reached: {[(r.status, r.detail) for r in rows]}')
+        assert reached == [True]
+    assert not commands
+    assert not (project / 'reports/lec_eqy_execution.json').exists()
