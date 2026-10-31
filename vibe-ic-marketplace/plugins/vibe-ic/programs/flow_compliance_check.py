@@ -14404,6 +14404,11 @@ def _l_doc_declares_absence(project: Path, spec: Any
     if path is None or not isinstance(doc, dict):
         return None
     if doc_id == "L20":
+        from dft_atpg_coverage_check import l20_dft_applicability
+        authority = l20_dft_applicability(project)
+        if authority["asserts_dft"] is False and authority.get("source_authority"):
+            return (authority["source_authority"]["declaration"]["path"],
+                    authority["reason"], None)
         # DFT authority is explicit; unextracted skeleton defaults are not it.
         declaration = _condition_na_declaration(
             project, {"l_doc": doc_id, "applicability": ["NOT_APPLICABLE", "N/A", "NA"]})
