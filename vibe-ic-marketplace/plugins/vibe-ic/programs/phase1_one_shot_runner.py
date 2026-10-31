@@ -229,6 +229,11 @@ def _step_verdicts(plan):
 
 # ── Input-mode detection ────────────────────────────────────────────
 
+def _has_converged_fact_graph(project: Path) -> bool:
+    from _phase1_producer_identity import has_converged_fact_graph
+    return has_converged_fact_graph(project)
+
+
 def _detect_input_mode(project: Path) -> str:
     """Probe `<project>/` for input artefacts. Returns 'docs',
     'prompt', or 'none'.
@@ -243,6 +248,11 @@ def _detect_input_mode(project: Path) -> str:
       - none of the above:
             → 'none' (caller's choice to SKIP or error).
     """
+    # A converged fact graph is the reverse-renderer's existing input, not
+    # raw prose. Do not re-author its reviewed namespace through heuristics,
+    # including when an earlier extraction left an input_doc cache behind.
+    if _has_converged_fact_graph(project):
+        return "prompt"
     new_input_doc = _pl.input_doc_dir(project) if hasattr(_pl, "input_doc_dir") else None
     if new_input_doc and new_input_doc.is_dir() and any(new_input_doc.iterdir()):
         return "docs"
@@ -462,29 +472,42 @@ def step_ingest_render(project: Path, ic_name: str) -> StepResult:
     # traceback and reached the caller as a crash — a Phase-1 failure attributed
     # to the design, on a host that was merely busy. Doc extraction over a large
     # vendor corpus is exactly the honest long work a runtime bound murders.
-    res = _wd.run_host_supervised(cmd, stall_grace_s=_TRACK_STALL_GRACE_S,
-                                  cwd=str(repo_root), env=env)
-    if res.outcome in ("stalled", "ceiling"):
-        return StepResult("phase1_ingest_render", "FAIL",
-                          time.time() - t0,
-                          f"the ingest engine STALLED — no CPU, no I/O and no "
-                          f"output from its process tree for the "
-                          f"{_TRACK_STALL_GRACE_S}s grace, after "
-                          f"{res.elapsed_s:.0f}s. It was not slow; it was doing "
-                          f"nothing.")
-    cp = _wd.completed_process(cmd, res)
-    if cp.returncode != 0:
-        return StepResult("phase1_ingest_render", "FAIL",
-                          time.time() - t0,
-                          f"rc={cp.returncode} "
-                          f"stderr_tail={cp.stderr[-1200:]}")
+    if _has_converged_fact_graph(project):
+        # The owning D01 recorder must observe the renderer's actual writes.
+        # A child process produces bytes the parent cannot attest as written.
+        sys.path.insert(0, str(pkg_parent))
+        from phase1_engine import cli as engine
+        try:
+            rc = engine.main(cmd[3:])
+        except (OSError, ValueError, TypeError, KeyError) as exc:
+            return StepResult("phase1_ingest_render", "FAIL", time.time() - t0, str(exc))
+        if rc:
+            return StepResult("phase1_ingest_render", "FAIL", time.time() - t0, f"renderer rc={rc}")
+    else:
+        res = _wd.run_host_supervised(cmd, stall_grace_s=_TRACK_STALL_GRACE_S,
+                                      cwd=str(repo_root), env=env)
+        if res.outcome in ("stalled", "ceiling"):
+            return StepResult("phase1_ingest_render", "FAIL",
+                              time.time() - t0,
+                              f"the ingest engine STALLED — no CPU, no I/O and no "
+                              f"output from its process tree for the "
+                              f"{_TRACK_STALL_GRACE_S}s grace, after "
+                              f"{res.elapsed_s:.0f}s. It was not slow; it was doing "
+                              f"nothing.")
+        cp = _wd.completed_process(cmd, res)
+        if cp.returncode != 0:
+            return StepResult("phase1_ingest_render", "FAIL",
+                              time.time() - t0,
+                              f"rc={cp.returncode} "
+                              f"stderr_tail={cp.stderr[-1200:]}")
     # Deterministic structural-port seed: the LLM-based ingest captures only
     # ~17% of an AI's ports (CVDP audit), missing ports stated in markdown
     # interface tables / inline Verilog. Merge the program-extracted ports /
     # params / reset into L1.pinout + L8R so the structural facts that drive
     # correct RTL are present even on the deterministic path. Best-effort —
     # never fails the render.
-    seeded = _seed_structural_ports(project, out_dir)
+    seeded = (0 if _has_converged_fact_graph(project) else
+              _seed_structural_ports(project, out_dir))
     note = f"facts={facts.name} out={out_dir.name}"
     if seeded:
         note += f" +{seeded} structural ports seeded (L1.pinout/L8R)"
@@ -607,7 +630,9 @@ def step_human_docs(project: Path) -> StepResult:
     files when its `--also-human` flag is set. This step verifies those
     landed under <project>/human_docs/."""
     t0 = time.time()
-    hd = project / "human_docs"
+    hd = _pl.human_docs_dir(project)
+    if not hd.is_dir():
+        hd = project / "human_docs"  # Existing projects may use the flat layout.
     if not hd.is_dir() or not list(hd.glob("L*.md")):
         return StepResult("phase1_human_docs", "PASS_WITH_WAIVERS",
                           time.time() - t0,
@@ -2148,6 +2173,7 @@ def main() -> int:
     # exiting non-zero.
     detected = _detect_input_mode(project)
     mode, mode_redirect = _resolve_mode(args.mode, detected)
+    _RUN["knobs"]["mode"] = mode
     if mode_redirect:
         # A route the caller did not type is announced, never silent.
         print(f"[phase1] mode: {mode_redirect}")

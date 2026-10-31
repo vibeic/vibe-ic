@@ -186,6 +186,12 @@ def from_structured_yaml(yaml_path: Path) -> FactGraph:
     doc = yaml.safe_load(Path(yaml_path).read_text())
     if not isinstance(doc, dict):
         raise ValueError("structured YAML must be a mapping")
+    if "version" in doc and "facts" in doc:
+        # Preserve the existing graph's typed facts, provenance and selected
+        # applicability. This is already structured input, not an L-tree.
+        if not isinstance(doc["facts"], list):
+            raise ValueError("fact-graph facts must be a list")
+        return FactGraph.from_dict(doc)
 
     fg = FactGraph(
         ic_name=doc.get("ic_name", "__unknown__"),

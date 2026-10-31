@@ -94,3 +94,31 @@ def test_issue3583_headed_document_keeps_existing_section_shape(tmp_path):
              row["heading_shape"]) for row in l2["frs_sections"]] == [
         ("h2", "Output behavior",
          "The output must remain stable until acknowledged.", "md_atx")]
+
+
+@pytest.mark.parametrize("source", [
+    "module held_value(output logic [7:0] q); initial q=8'h5a; endmodule\n"
+    "module neutral_top(input enable, isolate, output [7:0] y); held_value state(y); endmodule\n",
+    "module neutral_top #(parameter W=8)(input [W-1:0] d, output [W-1:0] q); assign q=d; endmodule\n",
+    "module neutral_top(d,q); input d; output q; assign q=d; endmodule\n",
+])
+def test_raw_module_requirements_publish_through_normal_step(tmp_path, source):
+    passed, _ = producer._v1_6_580_run_step_with_watchdog(
+        lambda: producer.gen_l2_frs(tmp_path, {"design.sv": source}),
+        "L2_FRS", "L2_FRS", tmp_path)
+    assert passed is True
+    path=tmp_path/"phase1/generated_docs/L2_FRS.json"
+    body=json.loads(path.read_text())
+    assert [row["content"] for row in body["frs_sections"]] == [source.strip()]
+
+
+@pytest.mark.parametrize("source", [
+    "// module neutral_top(input d, output q); endmodule\n",
+    "/* module neutral_top(input d, output q); endmodule */\n",
+    'The log says "module neutral_top(input d, output q); endmodule".\n',
+    "For example:\nmodule neutral_top(input d, output q); endmodule\n",
+])
+def test_noncurrent_module_header_does_not_author_requirements(tmp_path, source):
+    producer.gen_l2_frs(tmp_path, {"design.txt": source})
+    body=json.loads((tmp_path/"phase1/generated_docs/L2_FRS.json").read_text())
+    assert body["frs_sections"] == []

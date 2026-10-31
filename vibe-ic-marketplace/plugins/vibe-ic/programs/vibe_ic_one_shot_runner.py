@@ -537,7 +537,7 @@ def _phase1_decision(project: Path, force_skip: bool,
     gd = _pl.generated_docs_dir(project)
     L_count = len(list(gd.glob("L*.json"))) if gd.is_dir() else 0
     # Already has the full L-doc set → the EXTRACTION has nothing to do.
-    if L_count >= 13:
+    if L_count >= 13 or (L_count > 0 and _p1id.has_converged_fact_graph(project)):
         # Existing L docs may still have an unread expert answer.
         pending, _why = _expert_answer_pending(project)
         if pending:
@@ -561,7 +561,7 @@ def _phase1_decision(project: Path, force_skip: bool,
             if not available and _design_input_present(project):
                 print("[phase1] RECOVER_PHASE1_FIRST_PASS — no usable extraction "
                       "summary to carry; running docs mode before expert consumption")
-                return (True, "docs")
+                return _phase1_decision_from_inputs(project)
             return (True, _P1_MODE_EXPERT_SECOND_PASS)
         # Reuse requires current producer identity, not L-doc existence.
         # Edited documents retain the existing refusal path.
@@ -576,7 +576,7 @@ def _phase1_decision(project: Path, force_skip: bool,
         # them were HANDED to this project; they ARE its input, and input is
         # never regenerated or judged stale.
         if _design_input_present(project):
-            return (True, "docs")
+            return _phase1_decision_from_inputs(project)
         return (False, "")
     return _phase1_decision_from_inputs(project)
 
@@ -622,7 +622,7 @@ def _demote_for_stale_generated_docs(overall: str, why: Optional[str],
 def _design_input_present(project: Path) -> bool:
     """Is there design input phase 1 could extract from? The same predicate
     the no-L-docs branch uses, asked on its own."""
-    return _phase1_decision_from_inputs(project) == (True, "docs")
+    return _phase1_decision_from_inputs(project)[0]
 
 
 def _phase1_freshness(project: Path,
@@ -5288,7 +5288,8 @@ def _main() -> int:
         and _request_routes.is_rtl_only_evidence(exit_step=args.exit_step))
     _rtl_source_before = (_p1id.input_tree_snapshot(project)
                           if _rtl_only_request else {})
-    _p1_knobs = {"ic_name": args.ic_name, "pdk": args.pdk, "mode": "docs"}
+    _p1_knobs = {"ic_name": args.ic_name, "pdk": args.pdk,
+                 "mode": _phase1_decision_from_inputs(project)[1] or "docs"}
     _p1_checkpoint = (_execution.request()['mode'] == 'default'
                       and args.rtl_input != "original")
     run_phase1, p1_mode = _phase1_decision(
@@ -5298,7 +5299,9 @@ def _main() -> int:
     _gd_now = _pl.generated_docs_dir(project)
     _p1_fresh = ((_phase1_checkpoint_freshness(project, _p1_knobs)
                   if _p1_checkpoint else _phase1_freshness(project, _p1_knobs))
-                 if _gd_now.is_dir() and len(list(_gd_now.glob("L*.json"))) >= 13
+                 if _gd_now.is_dir() and (len(list(_gd_now.glob("L*.json"))) >= 13
+                     or (_p1id.has_converged_fact_graph(project)
+                         and any(_gd_now.glob("L*.json"))))
                  else None)
     _p1_design_input = _design_input_present(project)
     _phase1_checkpoint_review = None
@@ -5307,7 +5310,7 @@ def _main() -> int:
                      "why": "these L docs have no design input behind them: "
                             "they were handed to the project and ARE its "
                             "input, never regenerated or judged stale"}
-    _p1_regenerating = (run_phase1 and p1_mode == "docs"
+    _p1_regenerating = (run_phase1 and p1_mode in ("docs", "prompt")
                         and _p1_fresh is not None
                         and _p1_fresh["state"] == _p1id.REGENERATE)
     if _p1_fresh is not None:

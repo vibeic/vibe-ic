@@ -431,12 +431,27 @@ class ProducerRecorder:
                 "listed": set(self._listed)}
 
 
+def has_converged_fact_graph(project: Path) -> bool:
+    """The existing structured input already carries the engine's fact schema."""
+    path = project / "input/phase1_structured.yaml"
+    if not path.is_file():
+        return False
+    try:
+        import yaml
+        doc = yaml.safe_load(path.read_text())
+    except (OSError, ValueError, yaml.YAMLError):
+        return False
+    return isinstance(doc, dict) and {"version", "facts", "ic_name", "class_path"} <= doc.keys()
+
+
 def design_input_mode(project: Path) -> Tuple[bool, str]:
     """Which design input a project carries: `(True, "docs")` when phase 1
     has something to extract from, else `(False, "")`. The ONE predicate the
     front door (`_phase1_decision`) and phase 2's `step_phase1` both ask;
     moved here verbatim from `vibe_ic_one_shot_runner`."""
     project = Path(project)
+    if has_converged_fact_graph(project):
+        return True, "prompt"
     p1_struct = project / "input" / "phase1_structured.yaml"
     p1_prompt = project / "input" / "phase1_prompt.md"
     docs = project / "input" / "docs"
