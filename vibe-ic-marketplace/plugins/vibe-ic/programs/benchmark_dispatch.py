@@ -1617,32 +1617,44 @@ def _required_gate_ledger(solve_result: Any) -> dict:
     # site. Preserve old reports as unknown: never guess display-name aliases.
     # Keep every occurrence, including an earlier failure in a retry chain.
     owned = p3.get("required_site_results", [])
+    superseded = p3.get("superseded_required_site_results", [])
     invalid_ownership = False
     if not isinstance(owned, list):
         ledger["why"] = "required-site evidence is malformed"
         invalid_ownership = True
         owned = []
+    if not isinstance(superseded, list):
+        ledger["why"] = "superseded required-site evidence is malformed"
+        invalid_ownership = True
+        superseded = []
     grouped = {}
     spans = dict(sites)
-    for row in owned:
-        binding = row.get("ownership") if isinstance(row, dict) else None
-        site = binding.get("site") if isinstance(binding, dict) else None
-        if (not isinstance(binding, dict)
-                or binding.get("runner") != "design_one_shot_runner"
-                or not isinstance(site, str) or site not in spans
-                or binding.get("flow_steps") != spans[site]
-                or not isinstance(binding.get("rtl_sha256"), str)
-                or not re.fullmatch(r"[0-9a-f]{64}", binding["rtl_sha256"])
-                or binding["rtl_sha256"] != p3.get("required_site_rtl_sha256")
-                or not isinstance(row.get("result_name"), str)
-                or row["result_name"] not in recorded
-                or not isinstance(row.get("status"), str) or row["status"] not in {
-                    "PASS", "FAIL", "NOT_MEASURED", "NOT_APPLICABLE", "PASS_WITH_WAIVERS"}):
-            ledger["why"] = "required-site evidence disagrees with the runner plan or results"
-            invalid_ownership = True
-            continue
-        grouped.setdefault(site, []).append(row["status"])
-        if not p3.get("superseded_required_site_results"):
+    current_rtl = p3.get("required_site_rtl_sha256")
+    for current, observations in ((True, owned), (False, superseded)):
+        for row in observations:
+            binding = row.get("ownership") if isinstance(row, dict) else None
+            site = binding.get("site") if isinstance(binding, dict) else None
+            if (not isinstance(binding, dict)
+                    or binding.get("runner") != "design_one_shot_runner"
+                    or not isinstance(site, str) or site not in spans
+                    or binding.get("flow_steps") != spans[site]
+                    or not isinstance(current_rtl, str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", current_rtl)
+                    or not isinstance(binding.get("rtl_sha256"), str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", binding["rtl_sha256"])
+                    or (binding["rtl_sha256"] == current_rtl) != current
+                    or not isinstance(row.get("result_name"), str)
+                    or row["result_name"] not in recorded
+                    or not isinstance(row.get("status"), str) or row["status"] not in {
+                        "PASS", "FAIL", "NOT_MEASURED", "NOT_APPLICABLE", "PASS_WITH_WAIVERS"}):
+                ledger["why"] = "required-site evidence disagrees with the runner plan or results"
+                invalid_ownership = True
+                continue
+            if not current:
+                continue
+            grouped.setdefault(site, []).append(row["status"])
+            # An old observation never authorizes discarding a failure in
+            # the published current-name result, even for that same name.
             grouped[site].append(recorded[row["result_name"]])
     for site, statuses in grouped.items():
         if site in recorded:
