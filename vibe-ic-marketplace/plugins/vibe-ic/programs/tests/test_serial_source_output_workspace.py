@@ -223,6 +223,10 @@ def test_private_output_mismatches_refuse_without_touching_source(source, tmp_pa
 
 def test_conflicting_retained_output_still_refuses(source, tmp_path):
     stage = _stage(source, tmp_path)
+    # This negative models an unpublished conflicting output. A retained
+    # reference may carry its source ledger; remove only that TEST_ONLY copy
+    # so the original assertion still proves no new provenance is minted.
+    (stage / 'phase2/stage1/rtl.provenance.json').unlink(missing_ok=True)
     rtl = stage / "phase2/stage1/rtl/spm.v"
     rtl.write_bytes(rtl.read_bytes() + b"\n// independently changed output\n")
     before = _files(source)
@@ -277,3 +281,110 @@ def test_source_inode_replacement_after_compiler_refuses(tmp_path, monkeypatch):
     assert result is not None and result.status == "FAIL", result
     assert set(_files(source)) == {"foreign-sentinel"}
     assert not (stage / "phase2/stage1/rtl.provenance.json").exists()
+
+
+def test_legacy_non_scan_owner_is_not_republished(source, tmp_path):
+    import fault_scan_chain_insert as scan
+    import spec_declaration_emit as declaration
+    contract, _, _ = declaration.select_contract(source)
+    assert contract and not any(f['name'] == 'dft' for f in contract['fields'])
+    binding, problems = scan.load_d09_dft_contract(source)
+    assert binding and not problems and binding['intent']['requires_scan'] is False
+    before = _files(source)
+    direct = runner.declaration_before_step4(source)
+    assert direct.get('producer') == 'D01' and direct.get('emitted') is True, direct
+    assert _files(source) == before
+    stage = _stage(source, tmp_path)
+    staged_before = _files(stage)
+    with _held_source_and_output(source, stage):
+        private = runner.declaration_before_step4(stage)
+    assert private.get('producer') == 'D01' and private.get('emitted') is True, private
+    assert _files(source) == before and _files(stage) == staged_before
+    assert scan.load_d09_dft_contract(source)[0] == binding
+    # A copied report is not a new owner for the private project namespace.
+    assert scan.load_d09_dft_contract(stage)[0] is None
+
+
+@pytest.mark.parametrize('damage', ['missing_reason', 'decision_drift', 'owner_drift',
+                                   'private_decision', 'private_declaration'])
+def test_legacy_non_scan_owner_refusal_cannot_fall_back_to_writer(source, tmp_path, damage):
+    if damage in ('missing_reason', 'decision_drift'):
+        path = source / 'input/feature-decisions.json'
+        body = json.loads(path.read_text())
+        if damage == 'missing_reason':
+            body['dft'].pop('reason')
+        else:
+            body['dft']['reason'] = 'changed unadopted decision'
+        path.write_text(json.dumps(body))
+    elif damage == 'owner_drift':
+        path = source / 'reports/orchestrator/phase1_one_shot.json'
+        body = json.loads(path.read_text()); body['dft_intent_output']['producer'] = 'not_D01'
+        path.write_text(json.dumps(body))
+    stage = _stage(source, tmp_path)
+    if damage == 'private_decision':
+        path = stage / 'input/feature-decisions.json'; path.write_text(path.read_text() + '\n')
+    elif damage == 'private_declaration':
+        path = stage / 'plugin_output/declaration.json'; path.write_text(path.read_text() + '\n')
+    before, staged_before = _files(source), _files(stage)
+    with _held_source_and_output(source, stage):
+        result = runner.declaration_before_step4(stage)
+    assert result.get('emitted') is False, result
+    assert result.get('producer') == 'D01', result
+    assert _files(source) == before and _files(stage) == staged_before
+
+
+def test_legacy_non_scan_normal_proof_survives_finalization(source):
+    from dataclasses import asdict
+    import flow109_metric_acceptance as metrics
+    before = _files(source)
+    result = runner.step_rtl_gen(source, 'digital_arithmetic_primitive')
+    assert result.status == 'PASS', result
+    assert result.extras['declaration_before_simulation']['producer'] == 'D01'
+    assert result.extras['declaration_before_simulation']['emitted'] is True
+    assert result.extras['current_source_reuse'] == 'NORMAL_PROOF_PUBLISHED'
+    try:
+        output = runner._pl.report_path(source, 'phase2_one_shot.json')
+        runner._write_phase2_report(output, {'project': str(source), 'verdict': 'PASS',
+            'steps': [asdict(result)], 'declared_window': {'entry_step': '1', 'exit_step': '1',
+            'dispatched_step_ids': ['1']}}, source)
+        runner._finalize_rtl_provenance()
+        runner._RTL_SESSION_OWNED = False
+        runner._RTL_SESSION_PROJECT = None
+        author = json.loads(output.read_text())['steps'][0]
+        accepted = metrics.d09_owned_metrics(source, author)
+        assert accepted['rtl_requirement_mapping'] == 'PASS'
+        assert accepted['declared_ports_parameters'] == 'PASS'
+        assert len(accepted['source_demands']) == 137
+        for rel in ['plugin_output/declaration.json', 'plugin_output/declaration.provenance.json',
+                    'provenance.jsonl', 'reports/orchestrator/phase1_one_shot.json',
+                    'phase2/stage1/rtl/spm.v']:
+            assert _files(source)[rel] == before[rel], rel
+        assert not (source / 'reports/flow109/default_rows').exists()
+    finally:
+        runner._finalize_rtl_provenance()
+        runner._RTL_SESSION_OWNED = False
+        runner._RTL_SESSION_PROJECT = None
+
+
+
+def test_normal_authored_input_republication_recovers_the_original_owner(source):
+    import fault_scan_chain_insert as scan
+    before_fields = (source / 'plugin_output/declaration.json').read_bytes()
+    before_owner = (source / 'reports/orchestrator/phase1_one_shot.json').read_bytes()
+    producer = PROGRAMS / 'spec_declaration_emit.py'
+    # Reproduce the prior normal generic publication: the carried dft value
+    # survives but its required author input is omitted from the latest claim.
+    generic = subprocess.run([sys.executable, str(producer), str(source),
+        '--supplied-top', 'spm'], capture_output=True, text=True)
+    assert generic.returncode == 0, generic.stdout + generic.stderr
+    assert scan.load_d09_dft_contract(source)[0] is None
+    recovered = subprocess.run([sys.executable, str(producer), str(source),
+        '--from-json', str(source / 'input/feature-decisions.json')], capture_output=True, text=True)
+    assert recovered.returncode == 0, recovered.stdout + recovered.stderr
+    binding, problems = scan.load_d09_dft_contract(source)
+    assert binding and not problems and binding['intent']['requires_scan'] is False
+    assert (source / 'plugin_output/declaration.json').read_bytes() == before_fields
+    assert (source / 'reports/orchestrator/phase1_one_shot.json').read_bytes() == before_owner
+    before = _files(source)
+    assert runner.declaration_before_step4(source)['producer'] == 'D01'
+    assert _files(source) == before

@@ -25150,14 +25150,41 @@ def declaration_before_step4(project: Path) -> Dict[str, Any]:
     agreement check (`declaration_disagreement`)."""
     out_p = Path(project) / DECLARATION_REL
     try:
-        dft_contract, _, _ = _decl.select_contract(project)
-        if dft_contract and any(f.get('name') == 'dft' for f in dft_contract['fields']):
+        authority_project = Path(project)
+        active = _PHASE1_ACTIVE_PROJECT_BINDING
+        source = getattr(active, 'rtl_source_binding', None) if active is not None else None
+        if source is not None:
+            if active.project != Path(project) or not active.isolated_rtl_stage:
+                raise ValueError('DFT source requires the held private workspace')
+            active.require_current()
+            source.require_current()
+            authority_project = source.project
+        dft_contract, _, _ = _decl.select_contract(authority_project)
+        dft_owned = bool(dft_contract) and any(f.get('name') == 'dft' for f in dft_contract['fields'])
+        for rel in ('input/feature-decisions.json', DECLARATION_REL):
+            path = authority_project / rel
+            if path.is_file():
+                body = json.loads(path.read_text())
+                dft_owned = dft_owned or isinstance(body, dict) and 'dft' in body
+        if dft_contract and dft_owned:
             import fault_scan_chain_insert as scan
-            binding, problems = scan.load_d09_dft_contract(project)
+            binding, problems = scan.load_d09_dft_contract(authority_project)
             if binding is None or problems:
                 return {'producer': 'D01', 'emitted': False,
                         'reason': 'D01 DFT intent unavailable: ' + '; '.join(problems)}
-            fields = json.loads((Path(project) / binding['path']).read_text())
+            path = authority_project / binding['path']
+            if authority_project != Path(project):
+                # A private artifact copy is not a new D01 owner. Read the
+                # held original authority and require its copied inputs/outputs.
+                paths = set(binding['sources']) | {binding['path'],
+                    str(path.with_suffix('.provenance.json').relative_to(authority_project)),
+                    str(_pl.report_path(authority_project, 'phase1_one_shot.json').relative_to(authority_project))}
+                if any((Path(project) / rel).read_bytes() != (authority_project / rel).read_bytes()
+                       for rel in paths):
+                    raise ValueError('private DFT declaration authority differs from source')
+                active.require_current()
+                source.require_current()
+            fields = json.loads(path.read_text())
             return {'producer': 'D01', 'emitted': True, 'fields': fields}
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return {'producer': 'D01', 'emitted': False, 'reason': str(exc)}
