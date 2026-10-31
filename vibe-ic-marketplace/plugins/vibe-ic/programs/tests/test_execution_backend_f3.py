@@ -126,13 +126,14 @@ def test_backend_producer_timeout_is_row_owned_and_fixture_parameterized():
         for step in BACKEND_IDS
     }
     # The mapped OpenROAD producer rows are physical native runs and their
-    # policy explicitly grants the measured 30-minute window.
+    # policy grants a two-hour producer window, including native DRC/LVS.
     long_rows = ("15", "15.5ic", "17", "18", "19", "20", "21",
-                 "22", "23", "24", "25", "26", "32", "33", "34", "37")
-    assert all(timeout_by_step[step] == 1800 for step in long_rows)
+                 "22", "23", "24", "25", "26", "31", "32", "33", "34", "37")
+    assert all(timeout_by_step[step] == 7200 for step in long_rows)
     # The registered adapter must carry the same row-owned policy through the
     # catalog, rather than merely passing the helper-level unit assertion.
-    assert registry.adapters("37")[0].components[0].timeout_s == 1800
+    assert registry.adapters("37")[0].components[0].timeout_s == 7200
+    assert registry.adapters("31")[0].components[0].timeout_s == 7200
     assert registry.adapters("37")[0].ram_mb == 4096
     # Rows without a long-runtime policy continue to honour the supplied
     # fixture timeout, keeping unit tests and bounded fixtures fast.
