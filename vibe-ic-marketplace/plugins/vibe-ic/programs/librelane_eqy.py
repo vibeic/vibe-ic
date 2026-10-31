@@ -370,7 +370,7 @@ def d25_run(project: Path, top: str, rtl: list[Path], netlist: Path) -> Path:
     script = directory / 'source-boundary.eqy'
     script.write_text(f'[gold]\nread_rtlil {directory}/gold/after.il\n[gate]\n'
         + f'read_rtlil {directory}/gate/after.il\n[script]\nprep -top {top} -flatten\n'
-        + 'memory -nomap\nasync2sync\nsplitnets\n[collect *]\ngroup *\n'
+        + 'memory -nomap\nasync2sync\nclk2fflogic\nsplitnets\n[collect *]\ngroup *\n'
         + '[partition *]\namend *\n[strategy sat]\nuse sat\ndepth 5\n'
         + '[strategy pdr]\nuse sby\nengine abc pdr -rfi\n')
     cfg, _ = Config.load({'DESIGN_NAME': top, 'PDK': manifest['pdk']['name'],
@@ -383,7 +383,8 @@ def d25_run(project: Path, top: str, rtl: list[Path], netlist: Path) -> Path:
     corner = cfg.get('DEFAULT_CORNER') or ''
     chosen = [str(lib) for pattern, values in libraries.items() if fnmatch.fnmatch(corner, pattern)
               for lib in (values if isinstance(values, list) else [values])]
-    if chosen != [str(prepared['liberty'])]:
+    if (len(chosen) != 1 or Path(chosen[0]).resolve() != prepared['liberty']
+            or digest(Path(chosen[0])) != manifest['liberty']['sha256']):
         raise metrics.MetricRefusal('D25_MODEL_NOT_QUALIFIED', 'native resolved Liberty differs')
     write_json(directory / 'resolved-config.json', json.loads(cfg.dumps()))
     guard()

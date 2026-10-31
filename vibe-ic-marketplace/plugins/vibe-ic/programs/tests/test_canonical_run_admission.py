@@ -817,6 +817,8 @@ def test_flow109_runtime_projection_source_reopens_only_once(tmp_path, monkeypat
      'if not resolved.is_file():'),
     ('flow109_metric_acceptance.py', 'len(proof_libraries) != 1',
      'len(proof_libraries) != 2'),
+    ('librelane_eqy.py', "reset = mode['reset']",
+     "reset = dict(mode['reset'], active_level=0)"),
 ])
 def test_native_handoff_resolver_source_reopens_only_once(
         tmp_path, monkeypatch, source_name, needle, replacement):

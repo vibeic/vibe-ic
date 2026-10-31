@@ -422,6 +422,8 @@ def canonical_program_paths(programs_dir: Path) -> tuple[Path, ...]:
         programs_dir / "synth_handoff_netlist_check.py",
         # Row acceptance consumes this source after native dispatch.
         programs_dir / "flow109_metric_acceptance.py",
+        # The named observed-reset producer owns the executed proof transform.
+        programs_dir / "librelane_eqy.py",
         programs_dir / "librelane_contract.py",
         # The canonical runners delegate Default/Ultra dispatch and frontend
         # worker execution through these modules.  A change there must reopen
