@@ -2409,9 +2409,14 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                                     "feedback": "cf{i}"},
             # devices whose capacitance is a declared multiple of the
             # integrating capacitor, and the constant naming the multiple
-            "follows_integrating": {"cc{i}": "miller_fraction_of_load"},
+            "follows_integrating": {"cc{i}": "miller_fraction_of_load * ota_compensation_scale"},
         },
         "spec_knobs": [
+            {"name": "ota_compensation_scale",
+             "expr": "ota_compensation_scale", "default": 1.0,
+             "rationale": ("ordinary sizing scale for integrator Miller "
+                           "compensation; does not resize sampling, integrating "
+                           "or DAC capacitors or change loop coefficients")},
             {"name": "ota_input_drain_cascodes",
              "expr": "ota_input_drain_cascodes", "default": False,
              "type": "boolean",
@@ -3128,9 +3133,9 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
                                "the integrating capacitor is the sampling "
                                "capacitor divided by it")},
                 {"device": "cc{i}", "param": "l",
-                 "expr": cap_l_expr("miller_fraction_of_load * ("
+                 "expr": cap_l_expr("miller_fraction_of_load * ota_compensation_scale * ("
                                     + SAMPLING_CAP_FF_EXPR + ") / {coeff}"),
-                 "ff_expr": ("miller_fraction_of_load * ("
+                 "ff_expr": ("miller_fraction_of_load * ota_compensation_scale * ("
                              + SAMPLING_CAP_FF_EXPR + ") / {coeff}"),
                  "rationale": ("Miller compensation is a fraction of the "
                                "LOAD it has to dominate, and the load is "
