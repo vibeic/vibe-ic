@@ -2,9 +2,9 @@
 """Flow109 D75 Default package/test interface component.
 
 This is a BLOCKING component check for the inputs it actually consumes.  It
-does not approve a package or a tapeout: packaged SI/PI/thermal co-design and
-all Flow109 metric acceptance remain NOT_MEASURED.  The supported path reuses
-the existing declaration, pad-side, pad/BTerm, bond-opening, PERC and DFT
+does not approve a package or a tapeout. Packaged SI/PI/thermal co-design,
+platform qualification and whole-IC acceptance remain unmeasured. The supported
+path reuses the existing declaration, pad-side, pad/BTerm, bond-opening, PERC and DFT
 consumers.  Missing geometry or authority is named, never read as PASS.
 """
 from __future__ import annotations
@@ -66,6 +66,7 @@ def operation_sources() -> dict[str, str]:
     """Bind the exact adapter and existing consumers loaded for D75."""
     names = (
         "flow109_package_ready.py",
+        "flow109_metric_acceptance.py",
         "flow109_package_electrical.py",
         "submission_template_check.py",
         "tapeout_declaration_check.py",
@@ -828,60 +829,328 @@ def execute(project: Path, context: Mapping) -> dict:
 
 
 def _d75_metric_values(checks):
-    """Harvest existing consumer results, keeping unknowns distinct from zero."""
+    """Harvest observations, never turn passing check counts into coverage."""
     by_name = {}
     for check in checks:
-        by_name.setdefault(check['check'],[]).append(check)
-    failed_checks = sorted({c['check'] for c in checks if c.get('status')=='FAIL'})
-    pads = [c['detail'] for c in by_name.get('pad_bterm_coincidence_check',[]) if isinstance(c.get('detail'),dict)]
-    edges = [c['detail'] for c in by_name.get('provider_bond_pad_edge',[]) if isinstance(c.get('detail'),dict)]
-    return {'status':'FAIL' if failed_checks else 'NOT_MEASURED','failed_checks':failed_checks,
-            'pad_bterm':pads,'bond_pad_edge':edges,'checks':checks,
-            'scope':'existing bare-die pad/bond/PERC/test consumers; full package/reference coverage unmeasured'}
+        name = check['check']
+        if check.get('status') not in ('PASS', 'FAIL', 'NOT_MEASURED', 'NOT_APPLICABLE'):
+            raise ValueError('D75_COMPONENT_STATUS_INVALID: ' + name)
+        if name in by_name:
+            raise ValueError('D75_DUPLICATE_COMPONENT_CHECK: ' + name)
+        by_name[name] = check
+    failed = sorted(name for name, check in by_name.items() if check['status'] == 'FAIL')
+    return {'status': 'FAIL' if failed else _aggregate(checks),
+            'failed_checks': failed, 'checks': checks, 'by_name': by_name,
+            'pad_bterm': [by_name['pad_bterm_coincidence_check']['detail']]
+                         if 'pad_bterm_coincidence_check' in by_name else [],
+            'bond_pad_edge': [by_name['provider_bond_pad_edge']['detail']]
+                            if 'provider_bond_pad_edge' in by_name else [],
+            'scope': 'existing validated pad/bond/PERC/test observations; package co-design unmeasured'}
 
 
 def _d75_metric_observation(project, context, component):
     validate(project, component)
-    saved = _read(project/CONTEXT_REQUESTS/f"{context['context_sha256']}.json")
-    if saved != context:raise ValueError('D75_METRIC_CONTEXT_CHANGED')
+    if component.get('context_sha256') != context['context_sha256']:
+        raise ValueError('D75_METRIC_CONTEXT_CHANGED')
+    saved = _read(project / CONTEXT_REQUESTS / f"{context['context_sha256']}.json")
+    if saved != context:
+        raise ValueError('D75_METRIC_CONTEXT_CHANGED')
     observed = _d75_metric_values(component['checks'])
-    observed.update(inputs=component['inputs'],consumer_load_identity=component['consumer_load_identity'],
+    checks = observed['by_name']
+    if component.get('component_status') != observed['status']:
+        raise ValueError('D75_COMPONENT_STATUS_MISMATCH')
+    required = {'tapeout_declaration_check', 'declared_delivery_form',
+                'pad_side_constraint_check', 'pad_bterm_coincidence_check',
+                'provider_bond_pad_edge', 'perc_signoff_check', 'package_electrical_feedback'}
+    for name, feature in (('perc_signoff_check', 'requires_perc'),
+                          ('package_electrical_feedback', 'package_model_required')):
+        if checks.get(name, {}).get('status') == 'NOT_APPLICABLE' and context['features'][feature]:
+            raise ValueError('D75_COMPONENT_APPLICABILITY_MISMATCH: ' + name)
+    required.add('dft_atpg_coverage_check' if context['features']['requires_dft']
+                 else 'test_access_applicability')
+    if not required.issubset(checks):
+        raise ValueError('D75_COMPONENT_POPULATION_INCOMPLETE: ' + str(sorted(required - checks.keys())))
+    inputs = {item['path']: item['sha256'] for item in component['inputs']}
+
+    def bound(path):
+        rec = _record(project, Path(path))
+        if inputs.get(rec['path']) != rec['sha256']:
+            raise ValueError('D75_OBSERVATION_INPUT_UNBOUND: ' + rec['path'])
+        return rec
+
+    io = _read(project / IO_REPORT)
+    bound(IO_REPORT)
+    if io.get('program') != 'io_pad_chip_top_gen' or io.get('verdict') != 'WROTE':
+        raise ValueError('D75_PAD_INTERFACE_PRODUCER_INVALID')
+    geometry = checks.get('current_native_geometry_authority')
+    def_path = geometry['detail']['def']['path'] if geometry else PAD_DEF
+    bound(def_path)
+    text = (project / def_path).read_text()
+    dfn = _pad_ring.parse_def(text)
+    bterms = pad_bterm_coincidence_check.def_pins(text)
+    masters = set()
+    for lef in _io_lefs(project, io):
+        bound(lef)
+        masters.update(name for name, cls in _pad_ring.parse_lef_macro_classes(lef.read_text()).items()
+                       if cls.split()[0] == 'PAD')
+    pads = [comp.as_dict() for name, comp in sorted(dfn.components.items()) if comp.master in masters]
+    report = checks['pad_bterm_coincidence_check']['detail']
+    rows = report.get('nets')
+    if (report.get('program') != pad_bterm_coincidence_check.PROGRAM
+            or report.get('schema') != pad_bterm_coincidence_check.SCHEMA
+            or report.get('design') != dfn.design or dfn.design != io.get('chip_top_module')
+            or report.get('units') != dfn.units or not isinstance(rows, list)
+            or not rows or len(rows) != report.get('n_ports_on_a_pad')
+            or len({r['pin'] for r in rows}) != len(rows)
+            or {r['pin'] for r in rows} != set(bterms)
+            or not {r['instance'] for r in rows}.issubset({p['instance'] for p in pads})):
+        raise ValueError('D75_PAD_BTERM_POPULATION_INCOMPLETE')
+    for verdict, key in (('CONNECTED', 'connected_nets'), ('NOT_CONNECTED', 'not_connected_nets'),
+                         ('UNDECIDED', 'undecided_nets')):
+        if report.get(key) != sorted(row['net'] for row in rows if row.get('verdict') == verdict):
+            raise ValueError('D75_PAD_BTERM_VERDICT_MISMATCH')
+    if checks['pad_bterm_coincidence_check']['status'] == 'PASS' and any(
+            row.get('verdict') != 'CONNECTED' for row in rows):
+        raise ValueError('D75_PAD_BTERM_VERDICT_MISMATCH')
+    for row in rows:
+        comp = dfn.components.get(row['instance'])
+        if (comp is None or comp.master != row.get('master')
+                or bterms[row['pin']]['net'] != row['net']
+                or bterms[row['pin']]['rect'] != row.get('pin_rect')
+                or bterms[row['pin']]['layer'] != row.get('pin_layer')
+                or (row['instance'], row['terminal']) not in
+                   pad_bterm_coincidence_check.def_net_terminals(text).get(row['net'], [])):
+            raise ValueError('D75_PAD_BTERM_IDENTITY_MISMATCH')
+    layouts = tapeout_readiness_check.discover_layouts(project)
+    if len(layouts) != 1:
+        raise ValueError('D75_FINAL_GEOMETRY_UNBOUND')
+    layout = bound(layouts[0])
+    observed['pad_layout'] = {'top': dfn.design, 'units': dfn.units, 'layout': layout,
+        'bterms': bterms, 'pad_instances': pads,
+        'pad_bterms': [{key: value for key, value in row.items() if key not in ('verdict', 'reason')}
+                       for row in sorted(rows, key=lambda row: row['pin'])]}
+    observed['test_items'] = [{key: row[key] for key in ('pin', 'net', 'instance', 'terminal')}
+                              for row in rows if row.get('verdict') == 'CONNECTED']
+    edge = checks['provider_bond_pad_edge']
+    if edge['status'] != 'NOT_APPLICABLE':
+        detail = edge['detail']
+        if detail.get('top') != dfn.design or _release_records(project, detail.get('input')) != [layout]:
+            raise ValueError('D75_BOND_LAYOUT_IDENTITY_MISMATCH')
+        for field in ('profile', 'master_sources'):
+            for record in _release_records(project, detail.get(field)):
+                bound(record['path'])
+        for record in _release_records(project, detail.get('opening_layer', {}).get('source')):
+            bound(record['path'])
+        if not detail.get('master_sources') or not detail.get('opening_layer', {}).get('source'):
+            raise ValueError('D75_BOND_SOURCE_RULES_UNBOUND')
+    observed.update(inputs=component['inputs'], consumer_load_identity=component['consumer_load_identity'],
                     provider_identity=component.get('provider_identity'))
     return observed
 
 
+def _d75_authority(project, name, *, fields=None, adopted=False):
+    """Use common readers and bind their semantics to independent normal INPUT.
+
+    As with D19/D10, an APPROVED label and a hash of an unrelated document do
+    not authorize a payload. The named member of the input JSON must match.
+    """
+    import flow109_metric_acceptance as metrics
+    relative = ('adopted' if adopted else 'requirements') + '/package_ready/' + name + '.json'
+    if fields is None:
+        authority, body = metrics._approved_document(project, relative,
+            authority='requirements_owner', schema=('vibeic.flow109.adopted-reference.v1'
+                                                    if adopted else metrics.AUTHORITY_SCHEMA))
+    else:
+        authority, body = metrics._approved_authority(project, relative + '#/required_items', fields)
+    source = authority['source']
+    path = metrics._safe_project_file(project, source['path'])
+    if (not source['path'].startswith('input/') or Path(source['path']).is_absolute()
+            or not path.resolve().is_relative_to((project / 'input').resolve())):
+        raise ValueError('D75_INDEPENDENT_INPUT_REQUIRED: ' + name)
+    payload = {key: value for key, value in body.items() if key not in ('schema', 'approval')}
+    if _read(path).get(name) != payload:
+        raise ValueError('D75_APPROVED_FIELDS_DIFFER: ' + name)
+    if fields is not None and not authority['required_items']:
+        absence = body['validated_absence']
+        absence_ref = absence['source_reference']
+        absence_path = metrics._safe_project_file(project, absence_ref['path'])
+        if (not absence_ref['path'].startswith('input/')
+                or not isinstance(absence.get('reason'), str) or not absence['reason'].strip()
+                or _read(absence_path).get('reason') != absence['reason']):
+            raise ValueError('D75_REASONED_ABSENCE_REQUIRED: ' + name)
+    authority['bound_inputs'] = {authority['path']: authority['sha256'], source['path']: source['sha256']}
+    if fields is not None and not authority['required_items']:
+        authority['bound_inputs'][absence_ref['path']] = absence_ref['sha256']
+    return authority, body
+
+
+def _d75_bound_metric(project, context, observed, name):
+    import flow109_metric_acceptance as metrics
+    checks = observed['by_name']
+    fields = {'package_feedback_unresolved': ('check',),
+              'test_access_ready': ('pin', 'net', 'instance', 'terminal'),
+              'package_electrical_feedback_coverage': ('case', 'corner', 'mission_mode', 'metric')}
+    authority, body = _d75_authority(project, name, fields=fields.get(name),
+                                    adopted=name == 'pad_bump_package_layout_agreement')
+    identity = {'producer': observed['consumer_load_identity'],
+        'checker': {'programs/flow109_metric_acceptance.py': _sha(HERE / 'flow109_metric_acceptance.py')},
+        'tool_execution': {'kind': 'validated_existing_D75_component_observations',
+                           'qualification': 'NOT_MEASURED'},
+        'consumed_inputs': {r['path']: r['sha256'] for r in observed['inputs']},
+        'requirements': {key: authority[key] for key in ('path', 'sha256', 'source')},
+        'configuration': {'context_sha256': context['context_sha256']}}
+    measured = {'status': 'MEASURED', 'identity': identity}
+    operator = 'eq' if name == 'package_feedback_unresolved' else 'covers_all'
+    if name == 'pad_bump_package_layout_agreement':
+        reference_identity = body.get('reference_identity')
+        metrics._identity_complete(reference_identity)
+        if reference_identity['consumed_inputs'] != {'layout': observed['pad_layout']['layout']}:
+            raise ValueError('D75_ADOPTED_SUBJECT_MISMATCH')
+        measured['value'] = observed['pad_layout']
+        authority.update(reference=body.get('reference'), reference_identity=reference_identity)
+        operator = 'matches_adopted_reference'
+    elif name == 'escape_bond_feasibility':
+        edge_check = checks['provider_bond_pad_edge']
+        if edge_check['status'] != 'PASS':
+            raise ValueError('D75_SOURCE_BOND_RULES_UNMEASURED')
+        edge = edge_check['detail']
+        target = _read(project / PROVIDER_TARGET)
+        source = _record(project, PROVIDER_TARGET)
+        rule = target.get('bond_pad_edge_distance', {})
+        limit = metrics._finite_number(rule.get('max_distance_um'))
+        sides = {'left', 'bottom', 'right', 'top'}
+        if (body.get('rule_source') != source or body.get('rule_field') != 'bond_pad_edge_distance.max_distance_um'
+                or edge.get('declared_max_distance_um') != limit or limit < 0
+                or set(body.get('limits', {})) != sides or set(body.get('units', {})) != sides
+                or set(edge.get('distances_um', {})) != sides
+                or type(edge.get('opening_count')) is not int or edge['opening_count'] <= 0
+                or type(body.get('required_opening_count')) is not int
+                or body['required_opening_count'] != edge['opening_count']
+                or not isinstance(edge.get('pad_masters'), list) or not edge['pad_masters']
+                or not isinstance(body.get('required_pad_masters'), list) or not body['required_pad_masters']
+                or len(body['required_pad_masters']) != len(set(body['required_pad_masters']))
+                or set(edge['pad_masters']) != set(body['required_pad_masters'])
+                or not set(edge['pad_masters']).issubset(
+                    {p['master'] for p in observed['pad_layout']['pad_instances']})):
+            raise ValueError('D75_BOND_RULE_OR_POPULATION_UNBOUND')
+        rows = []
+        for side in sorted(sides):
+            limits = body['limits'][side]
+            # Zero is the existing provider consumer's outside-frame invariant;
+            # the maximum must be the exact consumed provider rule, never a default.
+            if limits != {'min': 0, 'max': limit} or body['units'][side] != 'um':
+                raise ValueError('D75_BOND_SOURCE_RULE_MISMATCH: ' + side)
+            sample = dict(measured, value=edge['distances_um'][side], unit='um')
+            status, reason = metrics.evaluate_operator('within_declared_bounds', sample,
+                dict(authority, limits=limits, unit=body['units'][side]))
+            rows.append({'side': side, 'status': status, 'measurement': sample, 'reason': reason})
+        return {'status': _aggregate(rows), 'comparisons': rows, 'authority': authority}
+    elif name == 'package_feedback_unresolved':
+        required = [item['check'] for item in authority['required_items']]
+        if len(required) != len(set(required)) or set(required) != set(checks):
+            raise ValueError('D75_REQUIRED_FEEDBACK_POPULATION_MISMATCH')
+        unresolved = [item for item in required if checks[item]['status'] not in ('PASS', 'NOT_APPLICABLE')]
+        measured.update(value=len(unresolved), unit='count', unresolved_required=unresolved)
+        authority.update(value=0, unit='count')
+    elif name == 'test_access_ready':
+        if not authority['required_items']:
+            l20_path = project / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json'
+            if _record(project, l20_path) not in observed['inputs']:
+                raise ValueError('D75_DFT_INTENT_UNBOUND')
+            intent = dft_atpg_coverage_check.l20_dft_applicability(project)
+            if (context['features']['requires_dft'] or context['features']['requires_scan']
+                    or intent.get('asserts_dft') is not False or not intent.get('reason')
+                    or checks.get('test_access_applicability', {}).get('status') != 'NOT_APPLICABLE'
+                    or checks['test_access_applicability']['detail'] != intent):
+                raise ValueError('D75_EMPTY_TEST_ACCESS_INTENT_UNPROVEN')
+            return {'status': 'NOT_APPLICABLE', 'reason': intent['reason'],
+                    'skip_reason': body['validated_absence']['reason'], 'authority': authority,
+                    'measurement': dict(measured, value=[], applicability=intent)}
+        dft = checks.get('dft_atpg_coverage_check')
+        if not dft or dft['status'] != 'PASS' or dft['detail'] != dft_atpg_coverage_check.audit(project):
+            raise ValueError('D75_DFT_COVERAGE_UNMEASURED')
+        measured['value'] = observed['test_items']
+    else:
+        selected = context['features']['package_model_required']
+        if selected is False:
+            if (authority['required_items'] or body.get('when') != {'package_model_required': False}
+                    or checks['package_electrical_feedback']['status'] != 'NOT_APPLICABLE'):
+                raise ValueError('D75_PACKAGE_MODEL_ABSENCE_UNPROVEN')
+            return {'status': 'NOT_APPLICABLE', 'reason': 'package_model_required is false',
+                    'skip_reason': body['validated_absence']['reason'], 'authority': authority}
+        if not authority['required_items']:
+            raise ValueError('D75_REQUIRED_PACKAGE_FEEDBACK_EMPTY')
+        electrical = checks['package_electrical_feedback']
+        if electrical['status'] != 'PASS' or electrical['detail']['subject_join']['status'] != 'PASS':
+            raise ValueError('D75_REQUIRED_PACKAGE_FEEDBACK_UNMEASURED')
+        rows = electrical['detail']['metrics']['package_rc_thermal_validity']['checks']
+        measured['value'] = [{key: row[key] for key in fields[name]} for row in rows if row['status'] == 'PASS']
+    status, reason = metrics.evaluate_operator(operator, measured, authority)
+    return {'status': status, 'reason': reason, 'measurement': measured, 'authority': authority}
+
+
 def _d75_metric_acceptance(project, context, component):
+    """BLOCKING metric comparisons; software controls never qualify a platform."""
     import flow109
-    ids = ['package_ready.pad_bump_package_layout_agreement','package_ready.escape_bond_feasibility',
-           'package_ready.package_feedback_unresolved','package_ready.test_access_ready',
+    ids = ['package_ready.pad_bump_package_layout_agreement', 'package_ready.escape_bond_feasibility',
+           'package_ready.package_feedback_unresolved', 'package_ready.test_access_ready',
            'package_ready.package_electrical_feedback_coverage']
     checks = component.get('checks') or []
-    failed_names = {c.get('check') for c in checks if c.get('status')=='FAIL'}
-    failed = component.get('component_status')=='FAIL' or bool(failed_names)
-    result = {'row_id':'D75','status':'NOT_MEASURED','qualification':'NOT_MEASURED','obligations':[]}
+    failed_names = {c.get('check') for c in checks if c.get('status') == 'FAIL'}
+    failed = component.get('component_status') == 'FAIL' or bool(failed_names)
+    result = {'row_id': 'D75', 'status': 'NOT_MEASURED', 'metric_status': 'NOT_MEASURED',
+              'qualification': 'NOT_MEASURED', 'obligations': []}
+    observed = None
     try:
         current = flow109.validate_execution_context(context)
-        if current['resolved_row']['id']!='D75' or [o['id'] for o in current['resolved_row']['obligations']]!=ids:
+        obligations = current['resolved_row']['obligations']
+        if current['resolved_row']['id'] != 'D75' or [o['id'] for o in obligations] != ids:
             raise ValueError('D75_METRIC_CONTEXT_UNREGISTERED')
         observed = _d75_metric_observation(project, context, component)
         result['native_observation'] = observed
         failed_names.update(observed['failed_checks'])
-        failed = failed or observed['status']=='FAIL'
-    except (OSError,ValueError,KeyError,TypeError,AttributeError) as exc:
+        failed = failed or observed['status'] == 'FAIL'
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         result['reason'] = str(exc)
-    owners = [ {'pad_side_constraint_check','pad_bterm_coincidence_check'},
-               {'provider_bond_pad_edge'}, {'package_electrical_feedback'},
-               {'dft_atpg_coverage_check','test_access_applicability'}, {'package_electrical_feedback'} ]
-    gaps = ['D75_ADOPTED_FINAL_PAD_BUMP_LAYOUT_REFERENCE_UNAVAILABLE',
-            'D75_REQUIRED_BOND_POPULATION_AND_SOURCE_RULE_COVERAGE_UNMEASURED',
-            'D75_COMPLETE_REQUIRED_FEEDBACK_POPULATION_UNBOUND',
-            'D75_INDEPENDENT_REQUIRED_TEST_ACCESS_POPULATION_UNBOUND',
-            'D75_INDEPENDENT_REQUIRED_PACKAGE_ELECTRICAL_POPULATION_UNBOUND']
-    for oid, names, gap in zip(ids,owners,gaps):
+        if getattr(exc, 'failed', False):
+            failed = True
+            if str(getattr(exc, 'code', '')).startswith('D75_D67_'):
+                failed_names.add('package_electrical_feedback')
+    owners = [{'pad_side_constraint_check', 'pad_bterm_coincidence_check'},
+              {'provider_bond_pad_edge'}, set(failed_names),
+              {'dft_atpg_coverage_check', 'test_access_applicability'}, {'package_electrical_feedback'}]
+    for oid, names in zip(ids, owners):
         failures = sorted(failed_names & names)
-        result['obligations'].append({'id':oid,'status':'FAIL' if failures else 'NOT_MEASURED',
-            'failed_checks':failures,'reason':'D75_EXISTING_CONSUMER_FAILURE' if failures else gap})
-    if failed:result['status']='FAIL'
+        item = {'id': oid, 'status': 'NOT_MEASURED', 'failed_checks': failures}
+        if failures:
+            item.update(status='FAIL', reason='D75_EXISTING_CONSUMER_FAILURE')
+        elif observed is None:
+            item['reason'] = result.get('reason', 'D75_CURRENT_OBSERVATION_UNAVAILABLE')
+        else:
+            try:
+                item.update(_d75_bound_metric(project, current, observed, oid.split('.')[-1]))
+            except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+                item.update(reason=getattr(exc, 'code', 'D75_AUTHORITY_OR_OBSERVATION_UNBOUND'), detail=str(exc))
+        result['obligations'].append(item)
+    statuses = [item['status'] for item in result['obligations']]
+    if failed or 'FAIL' in statuses:
+        result['status'] = result['metric_status'] = 'FAIL'
+    elif observed is not None and observed['status'] == 'PASS' and all(
+            status in ('PASS', 'NOT_APPLICABLE') for status in statuses):
+        result['metric_status'] = 'PASS'
+        result['reason'] = 'D75_METRICS_BOUND_PLATFORM_QUALIFICATION_NOT_MEASURED'
+    try:
+        import flow109_metric_acceptance as metrics
+        for item in result['obligations']:
+            for relative, digest in item.get('authority', {}).get('bound_inputs', {}).items():
+                if _sha(metrics._safe_project_file(project, relative)) != digest:
+                    raise ValueError('D75_AUTHORITY_CHANGED_DURING_READ: ' + relative)
+        if observed is not None and _d75_metric_observation(project, context, component) != observed:
+            raise ValueError('D75_OBSERVATION_CHANGED_DURING_READ')
+    except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result.update(status='FAIL' if result['status'] == 'FAIL' else 'NOT_MEASURED',
+                      metric_status='FAIL' if result['metric_status'] == 'FAIL' else 'NOT_MEASURED',
+                      reason=str(exc))
     return result
 
 def consume_default_row_completion(project, context, component):
@@ -894,7 +1163,7 @@ def consume_default_row_completion(project, context, component):
             item.update(status='FAIL', reason='D75_PRIOR_MEASURED_FAILURE')
     if (component.get('default_row_status') == 'FAIL' or component.get('metric_acceptance_status') == 'FAIL'
             or isinstance(prior, dict) and prior.get('status') == 'FAIL' or prior_ids):
-        accepted['status'] = 'FAIL'
+        accepted['status'] = accepted['metric_status'] = 'FAIL'
         accepted['prior_failed_obligation_ids'] = sorted(prior_ids)
     return {**component, 'step_id': 'D75', 'context_sha256': context['context_sha256'],
         'metric_acceptance': accepted, 'metric_acceptance_status': accepted['status'],
