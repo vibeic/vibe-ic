@@ -135,3 +135,107 @@ def test_a04_refuses_wrong_authority_or_stale_upstream_before_false_pass(tmp_pat
     result = _run(tmp_path)
     assert result.returncode == 2, result.stdout + result.stderr
     assert not (tmp_path / analog.FREEZE).exists()
+
+
+def _numeric_spec_input(project, specs):
+    """Parser-only authority fixture; never an IC approval or qualification."""
+    spec = _put(project, 'phase3/analog/neutral_alpha/spec.json', {
+        'block': 'neutral_alpha', 'block_type': 'pull', 'specs': specs})
+    requirements = _put(project, 'input/flow109/numeric-spec-requirements.json', {
+        'schema': analog.SCHEMA,
+        'approval': {'status': 'APPROVED', 'authority': 'analog_design_authority',
+                     'source_reference': 'neutral parser control; not IC authority'},
+        'blocks': [{'block': 'neutral_alpha', 'block_type': 'pull', 'spec': spec,
+                    'selected_topology': a2.LIBRARY['pull']['topology'],
+                    'required_device_roles': ['nmos'],
+                    'topology_constraints': ['neutral parser control only'],
+                    'budgets': {
+                        'gain': {'status': 'BOUND', 'limit': 1.0, 'unit': 'V/V'},
+                        'noise': {'status': 'BOUND', 'limit': 1.0, 'unit': 'mV_rms'},
+                        'power': {'status': 'BOUND', 'limit': 1.0, 'unit': 'mW'}}}]})
+    return {'requirements': requirements}
+
+
+def _numeric_spec_observed(project, manifest):
+    try:
+        analog._approved_requirements(project, manifest)
+    except admission.AdmissionRefusal as exc:
+        return exc.code
+    return 'ACCEPTED'
+
+
+@pytest.mark.parametrize('field', ['target', 'min', 'max', 'typ', 'value'])
+def test_a04_numeric_spec_accepts_normal_a1_bound_without_rewriting(tmp_path, field):
+    import analog_a1_spec_emit as spec_producer
+    import analog_a1_spec_extract_check as spec_reader
+    row = spec_producer._spec_entry('gain', {
+        'bound': field, 'value': 2.0, 'unit': 'V/V', 'raw': {'name': 'gain'}}, {})
+    manifest = _numeric_spec_input(tmp_path, [row])
+    path = tmp_path / 'phase3/analog/neutral_alpha/spec.json'
+    before = path.read_bytes()
+    assert spec_reader._check_block(tmp_path, 'neutral_alpha')[0] == 'PASS'
+    observed = _numeric_spec_observed(tmp_path, manifest)
+    assert observed == 'ACCEPTED'
+    assert path.read_bytes() == before
+    assert (field == 'target') == ('target' in row)
+
+
+def test_a04_numeric_spec_preserves_range_and_units(tmp_path):
+    row = {'name': 'reference', 'min': 0.8, 'max': 1.2, 'unit': 'V'}
+    manifest = _numeric_spec_input(tmp_path, [row])
+    path = tmp_path / 'phase3/analog/neutral_alpha/spec.json'
+    before = path.read_bytes()
+    observed = _numeric_spec_observed(tmp_path, manifest)
+    assert observed == 'ACCEPTED'
+    assert path.read_bytes() == before
+    assert json.loads(before)['specs'] == [row]
+    assert 'target' not in row
+
+
+def test_a04_numeric_spec_consumes_retained_in_repo_spec_shape(tmp_path):
+    from _hostpaths import require_repo
+    path = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+                        'tests', 'fixtures', 'a8_native_rc_wrapper', 'spec.json')
+    specs = json.loads(path.read_text())['specs']
+    assert any('target' not in row and ('min' in row or 'max' in row) for row in specs)
+    manifest = _numeric_spec_input(tmp_path, specs)
+    observed = _numeric_spec_observed(tmp_path, manifest)
+    assert observed == 'ACCEPTED'
+
+
+@pytest.mark.parametrize('row', [
+    {'name': 'gain', 'unit': 'V/V'},
+    {'name': 'gain', 'target': True, 'unit': 'V/V'},
+    {'name': 'gain', 'min': True, 'unit': 'V/V'},
+    {'name': 'gain', 'max': '2.0', 'unit': 'V/V'},
+    {'name': 'gain', 'target': True, 'min': 1.0, 'unit': 'V/V'},
+])
+def test_a04_numeric_spec_rejects_missing_or_invalid_numeric_value(tmp_path, row):
+    observed = _numeric_spec_observed(tmp_path, _numeric_spec_input(tmp_path, [row]))
+    assert observed == 'A04_ANALOG_SPEC_UNBOUND'
+
+
+@pytest.mark.parametrize('damage,expected', [
+    ('approval', 'A04_REQUIREMENTS_NOT_APPROVED'),
+    ('provenance', 'A04_REQUIREMENTS_NOT_APPROVED'),
+    ('budget', 'A04_BUDGET_UNBOUND'),
+    ('stale', 'A04_STALE_OR_MISSING_INPUT'),
+])
+def test_a04_numeric_spec_keeps_authority_budget_and_hash_refusals(tmp_path, damage, expected):
+    manifest = _numeric_spec_input(tmp_path, [{'name': 'gain', 'target': 2.0, 'unit': 'V/V'}])
+    record = manifest['requirements']
+    path = tmp_path / record['path']
+    body = json.loads(path.read_text())
+    if damage == 'approval':
+        body['approval']['status'] = 'PENDING'
+    elif damage == 'provenance':
+        body['approval'].pop('source_reference')
+    elif damage == 'budget':
+        body['blocks'][0]['budgets']['power'] = {'status': 'UNBOUND', 'limit': None, 'unit': None}
+    else:
+        (tmp_path / body['blocks'][0]['spec']['path']).write_text('{}')
+    if damage != 'stale':
+        path.write_text(json.dumps(body))
+        record['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    observed = _numeric_spec_observed(tmp_path, manifest)
+    assert observed == expected

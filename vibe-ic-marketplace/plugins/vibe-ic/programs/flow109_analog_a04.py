@@ -114,6 +114,7 @@ def _approved_requirements(project, manifest):
             or not isinstance(rows, list) or not rows):
         raise AdmissionRefusal('A04_REQUIREMENTS_NOT_APPROVED', str(path))
     names = []
+    numeric_fields = ('min', 'typ', 'max', 'value', 'target')
     for row in rows:
         name = row.get('block') if isinstance(row, dict) else None
         budgets = row.get('budgets') if isinstance(row, dict) else None
@@ -140,8 +141,10 @@ def _approved_requirements(project, manifest):
         values = spec_body.get('specs')
         if (not isinstance(values, list) or not values
                 or any(not isinstance(item, dict)
-                       or not isinstance(item.get('target'), (int, float))
-                       or isinstance(item.get('target'), bool)
+                       or not any(key in item for key in numeric_fields)
+                       or any(not isinstance(item[key], (int, float))
+                              or isinstance(item[key], bool)
+                              for key in numeric_fields if key in item)
                        or not item.get('unit') for item in values)):
             raise AdmissionRefusal('A04_ANALOG_SPEC_UNBOUND', name)
         names.append(name)
