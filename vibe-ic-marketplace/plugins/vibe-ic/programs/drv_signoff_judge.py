@@ -512,6 +512,11 @@ def _annotate_limits(row: dict, kind: str, scene: dict, libs: dict,
     cell, cell_pin = row.get("cell"), row.get("cell_pin")
     is_port = row.get("cell_class") == "port" and not cell and not cell_pin
     is_internal = row.get("cell_class") == "internal" and not row.get("net")
+    physical_proof = (scene.get('_physical_pin_proofs') or {}).get(row['pin'])
+    if (meta.get('cell_class') == 'physical' and physical_proof == meta
+            and meta.get('kind') == 'pin' and not meta.get('driver_pin')
+            and meta.get('net_class') != 'clock'):
+        return False  # The independent LEF/census proves no timing check is owed.
     matched = []
     for linked in scene.get("linked_liberties") or []:
         lib = libs.get(linked.get("name")) if isinstance(linked, dict) else None
@@ -1181,7 +1186,9 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
     rows_by_kind: dict[str, list[dict]] = {k: [] for k in KINDS}
     scene_names = set()
     spef_by_pvt: dict[str, dict[str, str]] = {}
-    for scene in bundle.get("scenes") or []:
+    for captured_scene in bundle.get("scenes") or []:
+        scene = dict(captured_scene)
+        scene.pop('_physical_pin_proofs', None)
         name, mode = scene.get("name"), scene.get("mode")
         scene_pins = scene.get("pins") or pins
         if not name or name in scene_names or name not in required_scenes:
@@ -1416,6 +1423,8 @@ def judge(bundle: dict, *, project: Path | None = None) -> dict:
                             (scene.get("unproven_omitted_pins") or []) != census["unproven"] or
                             scene.get("population") != census["population"]):
                         missing.append(f"{name}: independent OpenSTA pin census differs from bundle")
+                    else:
+                        scene['_physical_pin_proofs'] = census['pins']
                 except (OSError, ValueError, KeyError, TypeError) as exc:
                     missing.append(f"{name}: independent OpenSTA pin census incomplete: {exc}")
             else:
