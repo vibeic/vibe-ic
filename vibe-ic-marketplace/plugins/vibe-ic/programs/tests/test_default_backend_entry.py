@@ -93,6 +93,229 @@ _D20_GOOD_SDC = (
 )
 
 
+@pytest.fixture
+def d20_metric_case(tmp_path, monkeypatch):
+    """SYNTHETIC authorities/platform/dependencies; actual early Python consumers."""
+    import json
+    import hashlib
+    import shutil
+    import flow109
+    import flow109_admission as admission
+    import flow109_metric_acceptance as metrics
+    from test_flow109_selection import profile
+    from test_default_frontend_r2 import put
+    from test_flow109_metric_acceptance import _identity
+    project = _d20_authority_project(tmp_path, monkeypatch)
+    digest = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    def ref(relative):
+        return {'path': relative, 'sha256': digest(project / relative)}
+    put(project / 'reports/phase2/cdc/crossing.json', {'crossings': [], 'clocks_found': ['clk']})
+    put(project / 'input/no-exceptions.json', {'scope': 'SYNTHETIC no timing exceptions required'})
+    population = {'required_items': [], 'validated_absence': {'status': 'VALIDATED',
+        'authority': 'requirements_owner', 'source_reference': ref('input/no-exceptions.json')}}
+    put(project / 'input/requirements-source.json', {'exception_justification': population})
+    put(project / 'requirements/base_10/exception_justification.json', {
+        'schema': metrics.AUTHORITY_SCHEMA, 'approval': {'status': 'APPROVED',
+            'authority': 'requirements_owner', 'source_reference': ref('input/requirements-source.json')},
+        **population})
+    inputs = {r: digest(project / r) for r in ['input/constraints/clock.sdc',
+        'phase1/generated_docs/L8_TIMING_WAVEFORM.json', 'phase1/generated_docs/L9_INTEGRATION_SPEC.json',
+        'reports/phase2/cdc/crossing.json',
+        'phase2/stage1/rtl/top.v']}
+    payload = {'reference': {'exception_commands': [], 'known_async_pairs': [], 'inputs': inputs},
+               'reference_identity': _identity()}
+    put(project / 'input/cdc-reference-source.json', {'cdc_exception_reconciliation': payload})
+    put(project / 'adopted/base_11/cdc_exception_reconciliation.json', {
+        'schema': 'vibeic.flow109.adopted-reference.v1', 'approval': {'status': 'APPROVED',
+            'authority': 'requirements_owner', 'source_reference': ref('input/cdc-reference-source.json')},
+        **payload})
+    for step in ('D12', 'D19'):
+        put(project / f'reports/flow109/default_rows/{step}.json', {
+            'step_id': step, 'default_row_status': 'PASS', 'completed': True,
+            'scope': 'SYNTHETIC source control, not SPM acceptance'})
+    features = profile()
+    plan = flow109.resolve_plan(features)
+    use = (flow109.resolve_step(plan, 'D20')['tool_uses'] or [{
+        'use_id': 'flow109.D20.default.python3', 'tool_id': 'python3', 'purpose': 'D20.default',
+        'native_steps': ['sdc_syntax_check._regex_audit', 'sdc_validator_check.evaluate',
+                         'sdc_exception_correlation_check.audit']}])[0]
+    # The base has no model binding. Keep its fixture constructible so the
+    # real old caller's PASS vs NOT_MEASURED/FAIL remains observable by value.
+    sources = metrics.d20_model_sources() if hasattr(metrics, 'd20_model_sources') else {'base': 'UNIMPLEMENTED'}
+    put(project / 'input/d20-method.json', {'purpose': 'D20.default.constraint_validation',
+        'native_steps': use['native_steps'], 'model_sources': sources})
+    binary = Path(shutil.which('python3')).resolve()
+    na = {'applicable': False, 'reason': 'early pure Python method; no technology or STA'}
+    identity = {'use_id': use['use_id'], 'tool_id': 'python3', 'version': sys.version,
+        'build_sha256': digest(binary), 'executable': {'path': str(binary), 'sha256': digest(binary)},
+        'config': ref('input/d20-method.json'), 'pdk': na, 'deck': na, 'corner': 'not-applicable',
+        'semantics': {'purpose': use['purpose'], 'native_steps': use['native_steps']}}
+    put(project / 'input/source-control-proof.json', {'scope': 'SYNTHETIC, not real platform qualification'})
+    qualified = {'use_id': use['use_id'], 'status': 'QUALIFIED', 'identity': identity,
+                 'reference_evidence': [ref('input/source-control-proof.json')]}
+    put(project / 'qualifications.json', {'schema': 'vibeic.flow109.qualifications.v1', 'uses': [qualified]})
+    context = flow109.execution_context(plan, 'D20', 'D20', qualification_registry='qualifications.json',
+        runtime_tool_uses=[{**identity, 'qualification_sha256': admission.canonical_sha(qualified)}])
+    put(project / 'context.json', context)
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(project / 'context.json'))
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(flow109._new_attempt(project, context)))
+    return project, context
+
+
+def test_d20_metrics_actual_normal_completion(d20_metric_case):
+    import json
+    import vibe_ic_one_shot_runner as owner
+    import flow109
+    import os
+    project, _ = d20_metric_case
+    result = owner._complete_step8_early_preflight(project)
+    assert result['verdict'] == 'PASS', result
+    recorded = json.loads((Path(os.environ[flow109.ATTEMPT_ENV]) / 'result.json').read_text())
+    metric = recorded['components'][0].get('metric_acceptance', {})
+    assert metric.get('status') == 'PASS', recorded
+    assert [o['status'] for o in metric['obligations']] == ['PASS', 'PASS']
+    assert recorded['whole_flow_acceptance'] == 'NOT_MEASURED' and not recorded['delivery_accepted']
+
+
+@pytest.mark.parametrize('kind', ['false_path', 'multicycle'])
+def test_d20_metrics_nonempty_declared_census(d20_metric_case, kind):
+    import json
+    import hashlib
+    import vibe_ic_one_shot_runner as owner
+    from test_default_frontend_r2 import put
+    project, context = d20_metric_case
+    command = ('set_false_path -from [get_clocks clk] -to [get_clocks aux]' if kind == 'false_path'
+               else 'set_multicycle_path 2 -setup -from [get_clocks clk] -to [get_clocks clk]')
+    if kind == 'false_path':
+        put(project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json', {'clock_domains': [
+            {'name': 'clk', 'source_pin': 'clk', 'period_ns': 10},
+            {'name': 'aux', 'source_pin': 'a', 'period_ns': 20}]})
+        put(project / 'reports/phase2/cdc/crossing.json', {
+            'crossings': [{'from_clock': 'clk', 'to_clock': 'aux'}]})
+    with (project / 'input/constraints/clock.sdc').open('a') as stream:
+        if kind == 'false_path':
+            stream.write('create_clock -name aux -period 20 [get_ports a]\n')
+        stream.write(command + '\n')
+    path = project / 'requirements/base_10/exception_justification.json'
+    body = json.loads(path.read_text())
+    item = {'mode': 'functional', 'check': 'setup', 'command': command,
+            'justification': 'SYNTHETIC declared clock relation'}
+    if context['features']['technology_specific']:
+        item['corner'] = 'typ'
+    body['required_items'] = [item]
+    payload = {k: v for k, v in body.items() if k not in ('schema', 'approval')}
+    put(project / 'input/requirements-source.json', {'exception_justification': payload})
+    body['approval']['source_reference']['sha256'] = hashlib.sha256(
+        (project / 'input/requirements-source.json').read_bytes()).hexdigest()
+    put(path, body)
+    path = project / 'adopted/base_11/cdc_exception_reconciliation.json'
+    body = json.loads(path.read_text())
+    body['reference']['exception_commands'] = [command]
+    body['reference']['known_async_pairs'] = [['aux', 'clk']] if kind == 'false_path' else []
+    body['reference']['inputs'] = {r: hashlib.sha256((project / r).read_bytes()).hexdigest()
+                                  for r in body['reference']['inputs']}
+    put(project / 'input/cdc-reference-source.json', {'cdc_exception_reconciliation': {
+        k: v for k, v in body.items() if k not in ('schema', 'approval')}})
+    body['approval']['source_reference']['sha256'] = hashlib.sha256(
+        (project / 'input/cdc-reference-source.json').read_bytes()).hexdigest()
+    put(path, body)
+    result = owner._complete_step8_early_preflight(project)
+    assert result['verdict'] == 'PASS', result
+
+
+def test_d20_metrics_component_only_or_forged_pass_is_not_completion(d20_metric_case):
+    import design_one_shot_runner as design
+    import flow109_metric_acceptance as metrics
+    project, context = d20_metric_case
+    row = design.step_sdc_validation(project)
+    assert row.status == 'PASS', row.detail
+    # The empty producer envelope must not acquire the genuine row's credit.
+    if hasattr(metrics, 'accept_d20'):
+        observed = metrics.accept_d20(project, context, {'early_preflight': True,
+            'sdc_authority': row.extras['sdc_authority'], 'component_status': 'PASS'})
+    else:
+        observed = {'status': row.status, 'scope': 'base has only the actual preflight answer'}
+    assert observed['status'] == 'NOT_MEASURED', observed
+
+
+@pytest.mark.parametrize('damage', ['missing_qualification', 'missing_D12', 'missing_D19',
+    'missing_population', 'missing_cdc', 'missing_reference', 'stale_reference_source',
+    'cdc_mismatch', 'required_exception_missing', 'unsupported_exception', 'invalid_exception',
+    'stale_sdc_reference', 'stale_rtl_reference', 'stale_l9_reference', 'added_header'])
+def test_d20_metrics_actual_normal_refusals(d20_metric_case, damage):
+    import json
+    import hashlib
+    import vibe_ic_one_shot_runner as owner
+    from test_default_frontend_r2 import put
+    project, _ = d20_metric_case
+    if damage.startswith('missing_D'):
+        (project / f'reports/flow109/default_rows/{damage[8:]}.json').unlink()
+    elif damage == 'missing_qualification':
+        (project / 'qualifications.json').unlink()
+    elif damage == 'missing_population':
+        (project / 'requirements/base_10/exception_justification.json').unlink()
+    elif damage == 'missing_cdc':
+        (project / 'reports/phase2/cdc/crossing.json').unlink()
+    elif damage == 'missing_reference':
+        (project / 'adopted/base_11/cdc_exception_reconciliation.json').unlink()
+    elif damage == 'stale_reference_source':
+        with (project / 'input/cdc-reference-source.json').open('a') as stream:
+            stream.write(' ')
+    elif damage == 'required_exception_missing':
+        path = project / 'requirements/base_10/exception_justification.json'
+        body = json.loads(path.read_text())
+        body['required_items'] = [{'mode': 'functional', 'corner': 'typ', 'check': 'setup',
+            'command': 'set_false_path -from [get_clocks clk] -to [get_clocks clk]',
+            'justification': 'SYNTHETIC required census item'}]
+        payload = {k: v for k, v in body.items() if k not in ('schema', 'approval')}
+        put(project / 'input/requirements-source.json', {'exception_justification': payload})
+        body['approval']['source_reference']['sha256'] = hashlib.sha256(
+            (project / 'input/requirements-source.json').read_bytes()).hexdigest()
+        put(path, body)
+    elif damage == 'cdc_mismatch':
+        path = project / 'adopted/base_11/cdc_exception_reconciliation.json'
+        body = json.loads(path.read_text())
+        body['reference']['known_async_pairs'] = [['clk', 'other']]
+        put(project / 'input/cdc-reference-source.json', {'cdc_exception_reconciliation': {
+            k: v for k, v in body.items() if k not in ('schema', 'approval')}})
+        body['approval']['source_reference']['sha256'] = hashlib.sha256(
+            (project / 'input/cdc-reference-source.json').read_bytes()).hexdigest()
+        put(path, body)
+    elif damage == 'stale_sdc_reference':
+        with (project / 'input/constraints/clock.sdc').open('a') as stream:
+            stream.write('# changed SDC identity\n')
+    elif damage == 'stale_l9_reference':
+        path = project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+        body = json.loads(path.read_text())
+        body['source_control_change'] = True
+        put(path, body)
+    elif damage == 'added_header':
+        put(project / 'phase2/stage1/rtl/extra.vh', '// new current source identity\n')
+    elif damage == 'stale_rtl_reference':
+        with (project / 'phase2/stage1/rtl/top.v').open('a') as stream:
+            stream.write('// changed RTL identity\n')
+    else:
+        with (project / 'input/constraints/clock.sdc').open('a') as stream:
+            stream.write('set_clock_groups -asynchronous -group [get_clocks clk]\n'
+                if damage == 'unsupported_exception' else
+                'set_false_path -from [get_clocks clk] -to [get_clocks foreign]\n')
+    result = owner._complete_step8_early_preflight(project)
+    expected = 'FAIL' if damage in ('invalid_exception', 'cdc_mismatch', 'required_exception_missing',
+                                   'stale_sdc_reference', 'stale_rtl_reference', 'stale_l9_reference', 'added_header') else 'NOT_MEASURED'
+    assert result['verdict'] == expected, result
+    reasons = {'missing_qualification': 'QUALIFICATION_INPUT_ABSENT',
+        'missing_D12': 'FLOW109_D12_RESULT_MISSING', 'missing_D19': 'FLOW109_D19_RESULT_MISSING',
+        'missing_population': 'METRIC_AUTHORITY_ABSENT', 'missing_cdc': 'D20_INPUT_OR_METHOD_STALE',
+        'missing_reference': 'METRIC_AUTHORITY_ABSENT', 'stale_reference_source': 'METRIC_AUTHORITY_STALE',
+        'cdc_mismatch': 'D20_CDC_REFERENCE_MISMATCH', 'required_exception_missing': 'D20_INVALID_TIMING_EXCEPTIONS',
+        'unsupported_exception': 'D20_EXCEPTION_METHOD_UNSUPPORTED',
+        'invalid_exception': 'SDC_EARLY_PREFLIGHT_REFUSED',
+        'stale_sdc_reference': 'D20_CDC_REFERENCE_MISMATCH', 'stale_rtl_reference': 'D20_CDC_REFERENCE_MISMATCH',
+        'stale_l9_reference': 'D20_CDC_REFERENCE_MISMATCH', 'added_header': 'D20_CDC_REFERENCE_MISMATCH'}
+    assert reasons[damage] in result['detail'], result
+    assert result['mapped_path_claimed'] is False and result['frontend_dispatched'] is False
+
+
 def _d20_authority_project(tmp_path, monkeypatch, deck=_D20_GOOD_SDC):
     """One caller-owned SDC plus all three real early D20 consumers."""
     import execution_policy as policy

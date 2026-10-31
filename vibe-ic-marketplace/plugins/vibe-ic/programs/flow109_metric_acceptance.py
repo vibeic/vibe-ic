@@ -840,6 +840,183 @@ def accept_d19(project: Path, context: Mapping[str, Any], component: Mapping[str
     return result
 
 
+D20_STEPS = ['sdc_syntax_check._regex_audit', 'sdc_validator_check.evaluate',
+             'sdc_exception_correlation_check.audit']
+D20_REFERENCE = 'adopted/base_11/cdc_exception_reconciliation.json'
+
+
+def d20_model_sources():
+    """Only this Python validation method, never a mapped STA method."""
+    import ast
+    import design_one_shot_runner as owner
+    from execution_provider_catalog import source_closure
+    result = {}
+    for module, names in ((Path(__file__), ('d20_model_sources', 'd20_input_files',
+            '_d20_observe', 'accept_d20', '_d19_exception_commands', '_d19_ref',
+            '_approved_authority', '_approved_document', '_safe_project_file',
+            '_identity_complete', 'evaluate_operator')),
+            (Path(owner.__file__), ('step_sdc_validation', '_complete_d20_validation'))):
+        text = module.read_text()
+        nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
+        for name in names:
+            result[module.name + ':' + name] = _sha(ast.get_source_segment(text, nodes[name]).encode())
+    for path in source_closure({HERE / (name.split('.')[0] + '.py') for name in D20_STEPS}):
+        result[str(path.relative_to(HERE.parent))] = _sha(path.read_bytes())
+    return result
+
+
+def d20_input_files(project, source):
+    import _design_module_set as modules
+    import _path_layout as layout
+    paths = [source, project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json',
+             project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json',
+             project / 'reports/phase2/cdc/crossing.json']
+    # Bind exactly the existing validator's module-set readset. Optional FPGA
+    # or synth outputs are observed only when present, never required here.
+    paths.extend(modules._source_files([layout.rtl_dir(project),
+        layout.fpga_early_dir(project), layout.synth_dir(project)]))
+    return {str(p.relative_to(project)): _sha(p.read_bytes()) if p.is_file() else None for p in paths}
+
+
+def _d20_observe(project, context, component):
+    import sdc_syntax_check as syntax
+    import sdc_validator_check as validator
+    import sdc_exception_correlation_check as correlation
+    evidence = component.get('d20_evidence', {})
+    authority = component.get('sdc_authority', {})
+    source = _d19_ref(project, authority.get('source'), 'original caller SDC')
+    path = _safe_project_file(project, source['path'])
+    if path.parent != project / 'input/constraints':
+        raise MetricRefusal('D20_FOREIGN_SDC', source['path'])
+    inputs = d20_input_files(project, path)
+    if (evidence.get('inputs') != inputs or evidence.get('model_sources') != d20_model_sources()
+            or any(v is None for v in inputs.values())
+            or not any(k.startswith('phase2/stage1/rtl/') for k in inputs)):
+        raise MetricRefusal('D20_INPUT_OR_METHOD_STALE', 'complete SDC/RTL/L8/CDC readset required')
+    for relative, digest in inputs.items():
+        _d19_ref(project, {'path': relative, 'sha256': digest}, relative)
+    reports = evidence.get('reports')
+    expected_reports = ['reports/phase2/sdc_check.json', 'reports/sdc_validator.json',
+                        'reports/phase2/sdc_exception_correlation.json']
+    if not isinstance(reports, dict) or set(reports) != set(expected_reports):
+        raise MetricRefusal('D20_PREFLIGHT_EVIDENCE_ABSENT', 'all three original checker reports required')
+    stored = []
+    for relative in expected_reports:
+        _d19_ref(project, {'path': relative, 'sha256': reports[relative]}, relative)
+        body = json.loads((project / relative).read_text())
+        if body.get('sdc_authority') != authority:
+            raise MetricRefusal('D20_PREFLIGHT_BINDING_MISMATCH', relative)
+        bound = body.get('summary', body)
+        if (bound.get('sdc_sha256_expected') != source['sha256']
+                or bound.get('sdc_sha256_observed') != source['sha256']
+                or bound.get('sdc_files_checked') != [str(path)]):
+            raise MetricRefusal('D20_PREFLIGHT_BINDING_MISMATCH', relative)
+        stored.append(body)
+    commands = _d19_exception_commands(path)
+    # Existing correlation checks model clock-to-clock false/multicycle paths.
+    # Other static exception commands are censused, but not silently validated.
+    for command in commands:
+        clock = r'\[get_clocks\s+(?:\w+|\{\w+\})\]'
+        if not re.fullmatch(r'(?:set_false_path|set_multicycle_path\s+[1-9]\d*(?:\s+-(?:setup|hold))?)'
+                            r'\s+-from\s+' + clock + r'\s+-to\s+' + clock, command):
+            raise MetricRefusal('D20_EXCEPTION_METHOD_UNSUPPORTED', command)
+    fresh_syntax = syntax._regex_audit(str(project), include_phase3=False,
+                                      sdc_path=path, sdc_sha256=source['sha256'])
+    fresh_validator = validator.evaluate(project, project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json',
+                                         sdc_path=path, sdc_sha256=source['sha256'])
+    fresh = correlation.audit(project, sdc_path=path, sdc_sha256=source['sha256'])
+    if (stored[0].get('passed') != fresh_syntax.passed
+            or stored[1].get('verdict') != fresh_validator.report.get('verdict')
+            or any(stored[2].get(k) != fresh.get(k) for k in (
+                'verdict', 'false_paths', 'multicycle_paths', 'known_async_pairs', 'findings'))):
+        raise MetricRefusal('D20_PREFLIGHT_RESULT_CHANGED', 'actual pure Python checker readback differs')
+    fields = ('mode', 'corner', 'check') if context['features']['technology_specific'] else ('mode', 'check')
+    population, body = _approved_authority(project,
+        'requirements/base_10/exception_justification.json#/required_items', fields + ('command', 'justification'))
+    declared = json.loads((project / population['source']['path']).read_text())
+    if declared.get('exception_justification') != {k: v for k, v in body.items() if k not in ('schema', 'approval', 'producer_binding')}:
+        raise MetricRefusal('D20_REQUIRED_POPULATION_UNBOUND', 'existing D19 exception authority differs')
+    required = {' '.join(item['command'].split()) for item in population['required_items']}
+    count = len(set(commands) ^ required) + len(fresh.get('findings', []))
+    known = {frozenset(pair) for pair in fresh['known_async_pairs']}
+    count += sum(frozenset(re.findall(r'\[get_clocks\s+\{?(\w+)\}?\]', command)) not in known
+                 for command in commands if command.startswith('set_false_path '))
+    if not fresh_syntax.passed or fresh_validator.rc != 0:
+        count += 1
+    value = {'exception_commands': commands, 'known_async_pairs': fresh['known_async_pairs'], 'inputs': inputs}
+    consumed = dict(inputs)
+    for ref in ({'path': population['path'], 'sha256': population['sha256']}, population['source'],
+                *([body['validated_absence']['source_reference']] if not population['required_items'] else [])):
+        consumed[ref['path']] = ref['sha256']
+    identity = {'producer': {'name': 'step_sdc_validation', 'source': source},
+        'checker': {'methods': d20_model_sources(), 'reports': reports},
+        'tool_execution': {'context_sha256': context['context_sha256'], 'steps': D20_STEPS},
+        'consumed_inputs': consumed, 'requirements': {k: population[k] for k in ('path', 'sha256', 'source')},
+        'configuration': {'scope': 'original caller SDC; no STA or mapped-netlist obligation'}}
+    return count, value, identity
+
+
+def accept_d20(project, context, component):
+    """Complete only existing invalid-exception and CDC-reference obligations."""
+    import flow109
+    import flow109_admission as admission
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': 'D20', 'status': 'NOT_MEASURED',
+              'qualification': 'NOT_MEASURED', 'delivery_blocked': True, 'obligations': []}
+    try:
+        context = flow109.validate_execution_context(context)
+        specs = {'base_11.invalid_timing_exceptions': {'operator': 'eq', 'value': 0, 'unit': 'count'},
+                 'base_11.cdc_exception_reconciliation': {'operator': 'matches_adopted_reference',
+                                                       'reference_ref': D20_REFERENCE}}
+        obligations = context['resolved_row']['obligations']
+        if (context['resolved_row']['id'] != 'D20' or {o['id'] for o in obligations} != set(specs)
+                or any(any(o['expectation'].get(k) != v for k, v in specs[o['id']].items()) for o in obligations)):
+            raise MetricRefusal('D20_OBLIGATIONS_UNREGISTERED', 'only the two existing operators')
+        count, value, identity = _d20_observe(project, context, component)
+        status, detail = evaluate_operator('eq', {'status': 'MEASURED', 'value': count,
+            'unit': 'count', 'identity': identity}, {'status': 'APPROVED', 'value': 0, 'unit': 'count'})
+        result['obligations'].append({'id': 'base_11.invalid_timing_exceptions', 'status': status,
+                                      'value': count, 'detail': detail})
+        if status == 'FAIL':
+            result.update(status='FAIL', reason='D20_INVALID_TIMING_EXCEPTIONS')
+            return result
+        adopted, body = _approved_document(project, D20_REFERENCE, authority='requirements_owner',
+                                          schema='vibeic.flow109.adopted-reference.v1')
+        declared = json.loads((project / adopted['source']['path']).read_text())
+        if declared.get('cdc_exception_reconciliation') != {k: v for k, v in body.items() if k not in ('schema', 'approval')}:
+            raise MetricRefusal('D20_REFERENCE_SOURCE_UNBOUND', D20_REFERENCE)
+        status, detail = evaluate_operator('matches_adopted_reference',
+            {'status': 'MEASURED', 'value': value, 'identity': identity},
+            {**adopted, 'reference': body.get('reference'), 'reference_identity': body.get('reference_identity')})
+        result['obligations'].append({'id': 'base_11.cdc_exception_reconciliation', 'status': status,
+                                     'value': value, 'authority': adopted, 'detail': detail})
+        if status == 'FAIL':
+            result.update(status='FAIL', reason='D20_CDC_REFERENCE_MISMATCH')
+            return result
+        result['accepted_dependencies'] = {step: flow109._accepted_row(project,
+            Path('reports/flow109/default_rows') / (step + '.json'), step)[1]
+            for step in context['resolved_row']['acceptance_deps']}
+        qualified = admission.require_admission(project, context)
+        uses = context['runtime_tool_uses']
+        expected = {'purpose': 'D20.default.constraint_validation', 'native_steps': D20_STEPS,
+                    'model_sources': d20_model_sources()}
+        if len(uses) != 1 or json.loads((project / uses[0]['config']['path']).read_text()) != expected:
+            raise MetricRefusal('D20_MODEL_QUALIFICATION_STALE', 'only current Python method/readset')
+        refs = {**identity['consumed_inputs'], **component['d20_evidence']['reports'],
+                adopted['path']: adopted['sha256'], adopted['source']['path']: adopted['source']['sha256'],
+                **{ref['path']: ref['sha256'] for ref in result['accepted_dependencies'].values()}}
+        for relative, digest in refs.items():
+            _d19_ref(project, {'path': relative, 'sha256': digest}, 'completion readback')
+        if (d20_model_sources() != component['d20_evidence']['model_sources']
+                or d20_input_files(project, project / component['sdc_authority']['source']['path']) != value['inputs']):
+            raise MetricRefusal('D20_INPUT_OR_METHOD_STALE', 'changed during completion')
+        result.update(status='PASS', qualification=qualified['status'], delivery_blocked=False,
+                      reason='D20_CURRENT_METRICS_DEPENDENCIES_AND_METHOD_PASS')
+    except (MetricRefusal, ValueError, OSError, KeyError, TypeError, AttributeError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D20_EVIDENCE_UNPROVEN'), detail=str(exc))
+    return result
+
+
 D24_BINDINGS = {
     'base_15.scan_preservation_errors': {'operator': 'eq', 'value': 0, 'unit': 'count'},
     'base_15.adopted_post_dft_netlist': {'operator': 'matches_adopted_reference',

@@ -20702,6 +20702,35 @@ def step_qsf_gen(project: Path, top_name: str = "chip_top",
                       f"rc={rc} out={_evidence_tail(out, 500)} err={_evidence_tail(err, 500)}")
 
 
+def _complete_d20_validation(project, row):
+    """Publish this early owner's measured answer without borrowing STA evidence."""
+    import flow109
+    import flow109_metric_acceptance as metrics
+    row.extras.update(default_row_status='NOT_MEASURED', completed=False)
+    raw = os.environ.get(flow109.CONTEXT_ENV)
+    if not raw:
+        return row
+    try:
+        context = flow109.validate_execution_context(json.loads(Path(raw).read_text()))
+        if context.get('resolved_rows'):
+            context = flow109.component_context(context, requested_step='D20')
+        if context['resolved_row']['id'] != 'D20':
+            return row
+        accepted = metrics.accept_d20(project, context, row.extras)
+        row.extras.update(metric_acceptance=accepted, metric_acceptance_status=accepted['status'],
+            default_row_status=accepted['status'], completed=accepted['status'] == 'PASS',
+            context_sha256=context['context_sha256'])
+        row.status = accepted['status']
+        row.detail += '; ' + accepted['reason']
+        if accepted.get('detail'):
+            row.detail += ': ' + accepted['detail']
+        if row.status == 'NOT_MEASURED':
+            row.reason_class = _V.ReasonClass.INPUT_ABSENT
+    except (ValueError, OSError, KeyError, TypeError) as exc:
+        row.status, row.detail = 'NOT_MEASURED', 'D20_CONTEXT_REFUSED: ' + str(exc)
+    return row
+
+
 @_spf.retained_step('8', canonical_acceptance=True)
 def step_sdc_validation(project: Path) -> StepResult:
     import librelane_contract as _llc
@@ -20757,6 +20786,9 @@ def step_sdc_validation(project: Path) -> StepResult:
             'schema': 'vibeic.d20.sdc-authority.v2',
             'source': {'path': source_rel, 'sha256': source_sha},
         }
+        import flow109_metric_acceptance as _metrics
+        evidence = {'inputs': _metrics.d20_input_files(project, resolved),
+                    'model_sources': _metrics.d20_model_sources()}
         syntax = _syntax._regex_audit(
             str(project), include_phase3=False, sdc_path=resolved,
             sdc_sha256=source_sha)
@@ -20830,12 +20862,15 @@ def step_sdc_validation(project: Path) -> StepResult:
                                       'sdc_authority': authority},
                               reason_class=_V.ReasonClass.INPUT_ABSENT)
         extras = {'mode': mode, 'early_preflight': True,
-                  'sdc_authority': authority}
+                  'sdc_authority': authority,
+                  'd20_evidence': {**evidence, 'reports': {
+                      str(path.relative_to(project)): hashlib.sha256(path.read_bytes()).hexdigest()
+                      for path, _ in reports}}}
         if mode in ('librelane', 'dual'):
             extras['deferred_until'] = 'post_prelayout'
-        return StepResult('sdc_validation', 'PASS', 0.0,
+        return _complete_d20_validation(project, StepResult('sdc_validation', 'PASS', 0.0,
                           'SDC_EARLY_PREFLIGHT_PASS: no mapped-path claim', outputs,
-                          extras=extras)
+                          extras=extras))
     if mode in ('librelane', 'dual'):
         # The OpenSTA producer consumes Step 9's mapped netlist.  This site
         # precedes synthesis; a frozen frontend worker cannot produce its
