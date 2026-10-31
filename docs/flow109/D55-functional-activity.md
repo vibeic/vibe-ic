@@ -56,6 +56,28 @@ leave an old current freeze available. Existing attempt receipts are retained.
 This tranche supports only full-window, single-rail, scalar top-port GLS.
 Partial windows, bus/inout handling, mapped RTL VCD/SAIF, analog current traces,
 mission adequacy, qualified upper bounds and actual downstream post-route
-power adoption remain unimplemented/unmeasured. All three complete D55
-metric bindings and `flow109_acceptance` remain **NOT_MEASURED**. A component
-PASS proves this declared native producer/consumer operation, not D55 signoff.
+power adoption remain unimplemented/unmeasured. A component PASS proves this
+declared native producer/consumer operation, not D55 signoff.
+
+## Row acceptance (the three registry obligations)
+
+The sealed Default row (`input/flow109/D55-row.json`) judges each registry
+obligation with its registry operator against an authority the producer does
+not write. The producer's own scenario list and freeze are evidence only.
+
+| Obligation | Operator | Authority | Measured from sealed evidence |
+|---|---|---|---|
+| `functional_mission_modes` | `covers_all` | `requirements/functional_activity/functional_mission_modes.json#/required_items` (`{name}` items, requirements-owner approved, source-bound) | modes whose native GLS, VCD census and VCD-annotated power all passed |
+| `activity_waveform_bound_identity` | `matches_adopted_reference` | `adopted/functional_activity/activity_waveform_bound_identity.json`, sourced from `input/flow109/D55/activity_waveform_bound_identity.json` | per mode: adopted-netlist SHA-256, top, VCD scope, VCD port widths, VCD timescale |
+| `load_rail_mapping` | `matches_adopted_reference` | `adopted/functional_activity/load_rail_mapping.json`, sourced from `input/flow109/D55/load_rail_mapping.json` | `{rails: {r: {voltage_v}}, ports: {p: {rail, capacitance_pf}}}` from SDC `set_load` scaled by the Liberty `capacitive_load_unit`, pad rail connectivity and nominal voltage |
+
+Adopted references use schema `vibeic.flow109.adopted-reference.v1`, carry a
+complete `reference_identity`, and their `input/` source must hold the same
+body. `propose-waveform-reference` writes a waveform-identity proposal from the
+adopted netlist's port declarations (never from a VCD) for every approved
+mission mode; the load mapping comes from the documents and is not proposed by
+code. Absent, unapproved or unbound authority leaves the obligation
+NOT_MEASURED; a missed mode, a waveform bound to another netlist/scope/port set,
+or a differing load or rail is FAIL. The row PASSes only when all three pass
+and every acceptance dependency row is accepted. The container image check
+uses the runtime-resolved EDA image digest; no digest is stored in source.

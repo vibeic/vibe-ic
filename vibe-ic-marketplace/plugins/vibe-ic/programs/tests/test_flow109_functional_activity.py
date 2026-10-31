@@ -446,8 +446,12 @@ def test_pinned_librelane_has_no_native_vcd_configuration_and_component_is_not_f
     assert not any('VCD' in v.name or 'SAIF' in v.name for v in STAPostPNR.get_all_config_variables())
     row = next(r for r in flow109.load_registry()['rows'] if r['id'] == 'D55')
     assert row['when'] == 'physical'
-    assert row['metric_acceptance_status'] == 'UNIMPLEMENTED'
-    assert {o['status'] for o in row['obligations']} == {'UNIMPLEMENTED_METRIC_BINDING'}
+    assert row['metric_acceptance_status'] == 'IMPLEMENTED_SOURCE_BOUND'
+    assert {o['status'] for o in row['obligations']} == {'IMPLEMENTED_SOURCE_BOUND'}
+    assert {o['id']: o['expectation'] for o in row['obligations']} == {
+        oid: {**spec, **({'empty_set_policy': 'requires validated absence/applicability evidence'}
+                         if spec['operator'] == 'covers_all' else {})}
+        for oid, spec in activity.D55_SPECS.items()}
 
 
 def test_native_power_wrong_scope_rejects_nonzero_vectorless_fallback(tmp_path, monkeypatch):
@@ -614,3 +618,199 @@ def test_missing_or_changed_sealed_component_refuses_before_launch(
     result = activity.consume_sealed_default_row(consumer, _row_context())
     assert (result['default_row_status'], result['reason'], result['native_started']) == (
         'NOT_MEASURED', reason, False)
+
+
+# --- D55 registry obligations: judged against approved, independent authorities ---
+
+def _sha_of(path):
+    import hashlib
+    return hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+
+def _identity():
+    return {'producer': {'name': 'p'}, 'checker': {'name': 'c'}, 'tool_execution': {'cid': 'x'},
+            'consumed_inputs': {'n': 'a' * 64}, 'requirements': {'r': 'x'}, 'configuration': {'c': 'x'}}
+
+
+_WAVE = {'netlist_sha256': 'a' * 64, 'top': 'activity_beta', 'scope': 'tb/dut',
+         'ports': {'a': 1, 'y': 1, 'bus': 4}, 'timescale': '1ps'}
+_LOADS = {'rails': {'DVDD': {'voltage_v': 5.0}},
+          'ports': {'y': {'rail': 'DVDD', 'capacitance_pf': 5.0}}}
+
+
+def _approved(project, relative, schema, body, source_relative, source_key=None):
+    source_body = ({source_key: body} if source_key else {'doc': 'L-layer requirement excerpt'})
+    source = _put(project, source_relative, source_body)
+    _put(project, relative, {'schema': schema, 'approval': {
+        'status': 'APPROVED', 'authority': 'requirements_owner',
+        'source_reference': {'path': source['path'], 'sha256': source['sha256']}}, **body})
+
+
+def _authorities(project, modes=('mission',), wave=None, loads=None):
+    import flow109_metric_acceptance as metrics
+    _approved(project, activity.MISSION_MODES, metrics.AUTHORITY_SCHEMA,
+              {'required_items': [{'name': m} for m in modes]}, 'input/docs/L5_modes.json')
+    for relative, source, key, reference in (
+            (activity.WAVEFORM_REFERENCE, activity.WAVEFORM_SOURCE, 'activity_waveform_bound_identity',
+             wave or {m: dict(_WAVE) for m in modes}),
+            (activity.LOAD_REFERENCE, activity.LOAD_SOURCE, 'load_rail_mapping', loads or _LOADS)):
+        _approved(project, relative, activity.ADOPTED_SCHEMA,
+                  {'reference': reference, 'reference_identity': _identity()}, source, key)
+
+
+def _measured(modes=('mission',), wave=None, loads=None):
+    return {'modes': sorted(modes), 'waveforms': wave or {m: dict(_WAVE) for m in modes},
+            'loads': loads or copy.deepcopy(_LOADS)}
+
+
+def _statuses(project, measured):
+    result = activity.accept_d55_obligations(project, _row_context(), measured, _identity())
+    return {item['id'].split('.')[-1]: (item['status'], item.get('reason')) for item in result}, result
+
+
+def test_d55_obligations_pass_only_against_approved_independent_authorities(tmp_path):
+    _authorities(tmp_path)
+    statuses, _ = _statuses(tmp_path, _measured())
+    assert {k: v[0] for k, v in statuses.items()} == {
+        'functional_mission_modes': 'PASS', 'activity_waveform_bound_identity': 'PASS',
+        'load_rail_mapping': 'PASS'}
+
+
+def test_d55_sealed_evidence_without_authorities_is_never_a_pass(tmp_path):
+    # The pre-binding row consumer returned PASS here from the producer's own
+    # scenario list and freeze; no authority means no expectation was checked.
+    statuses, _ = _statuses(tmp_path, _measured())
+    assert statuses == {
+        'functional_mission_modes': ('NOT_MEASURED', 'METRIC_AUTHORITY_ABSENT'),
+        'activity_waveform_bound_identity': ('NOT_MEASURED', 'METRIC_AUTHORITY_ABSENT'),
+        'load_rail_mapping': ('NOT_MEASURED', 'METRIC_AUTHORITY_ABSENT')}
+
+
+def test_d55_unexercised_mission_mode_fails(tmp_path):
+    _authorities(tmp_path, modes=('mission', 'standby'))
+    statuses, result = _statuses(tmp_path, _measured(modes=('mission',),
+        wave={'mission': dict(_WAVE), 'standby': dict(_WAVE)}))
+    assert statuses['functional_mission_modes'][0] == 'FAIL'
+    assert result[0]['missing_modes'] == ['standby']
+
+
+@pytest.mark.parametrize('field, value', [
+    ('netlist_sha256', 'b' * 64),     # activity from a different netlist
+    ('scope', 'tb/other'),            # waveform of another instance
+    ('ports', {'a': 1, 'y': 1}),      # a top port absent from the waveform
+    ('timescale', '1ns'),
+])
+def test_d55_waveform_bound_to_another_identity_fails(tmp_path, field, value):
+    _authorities(tmp_path)
+    wave = {'mission': {**_WAVE, field: value}}
+    statuses, result = _statuses(tmp_path, _measured(wave=wave))
+    assert statuses['activity_waveform_bound_identity'][0] == 'FAIL'
+    assert result[1]['differing_modes'] == ['mission']
+
+
+@pytest.mark.parametrize('loads', [
+    {'rails': {'DVDD': {'voltage_v': 5.0}}, 'ports': {'y': {'rail': 'DVDD', 'capacitance_pf': 0.05}}},
+    {'rails': {'VDD': {'voltage_v': 5.0}}, 'ports': {'y': {'rail': 'VDD', 'capacitance_pf': 5.0}}},
+    {'rails': {'DVDD': {'voltage_v': 3.3}}, 'ports': {'y': {'rail': 'DVDD', 'capacitance_pf': 5.0}}},
+])
+def test_d55_load_or_rail_differing_from_adopted_reference_fails(tmp_path, loads):
+    _authorities(tmp_path)
+    statuses, _ = _statuses(tmp_path, _measured(loads=loads))
+    assert statuses['load_rail_mapping'][0] == 'FAIL'
+
+
+def test_d55_integer_reference_numbers_compare_as_numbers(tmp_path):
+    _authorities(tmp_path, loads={'rails': {'DVDD': {'voltage_v': 5}},
+                                  'ports': {'y': {'rail': 'DVDD', 'capacitance_pf': 5}}})
+    statuses, _ = _statuses(tmp_path, _measured())
+    assert statuses['load_rail_mapping'][0] == 'PASS'
+
+
+def test_d55_reference_not_sourced_from_its_input_is_not_measured(tmp_path):
+    _authorities(tmp_path)
+    source = tmp_path / activity.LOAD_SOURCE
+    body = json.loads(source.read_text())
+    body['load_rail_mapping']['reference']['ports']['y']['capacitance_pf'] = 0.05
+    source.write_text(json.dumps(body))
+    statuses, _ = _statuses(tmp_path, _measured())
+    assert statuses['load_rail_mapping'][0] == 'NOT_MEASURED'
+    # Re-approving the edited source while the published body still differs.
+    reference = json.loads((tmp_path / activity.LOAD_REFERENCE).read_text())
+    reference['approval']['source_reference']['sha256'] = _sha_of(source)
+    (tmp_path / activity.LOAD_REFERENCE).write_text(json.dumps(reference))
+    statuses, _ = _statuses(tmp_path, _measured())
+    assert statuses['load_rail_mapping'] == ('NOT_MEASURED', 'D55_REFERENCE_SOURCE_UNBOUND')
+
+
+def test_d55_unapproved_mission_modes_are_not_measured(tmp_path):
+    _authorities(tmp_path)
+    path = tmp_path / activity.MISSION_MODES
+    body = json.loads(path.read_text())
+    body['approval']['status'] = 'PROPOSED'
+    path.write_text(json.dumps(body))
+    statuses, _ = _statuses(tmp_path, _measured())
+    assert statuses['functional_mission_modes'] == ('NOT_MEASURED', 'METRIC_AUTHORITY_UNAPPROVED')
+
+
+@pytest.mark.parametrize('scale, unit, expected', [
+    (1.0, 'pf', 0.05), (1.0, 'ff', 0.00005), (1000.0, 'ff', 0.05)])
+def test_d55_measured_loads_are_scaled_by_the_liberty_capacitance_unit(scale, unit, expected):
+    authority = {'quotes': {'capacitance_unit': {'scale': scale, 'unit': unit}},
+                 'external_loads': {'rails': {'DVDD': {'voltage_v': 5.0}},
+                                    'ports': {'y': {'rail': 'DVDD', 'capacitance_library_units': 0.05}}}}
+    assert activity.measured_load_rail_mapping(authority)['ports']['y'] == {
+        'rail': 'DVDD', 'capacitance_pf': expected}
+
+
+def test_d55_unknown_capacitance_unit_is_refused():
+    authority = {'quotes': {'capacitance_unit': {'scale': 1.0, 'unit': 'kf'}},
+                 'external_loads': {'rails': {}, 'ports': {}}}
+    with pytest.raises(ValueError, match='D55_LOAD_UNIT_UNSUPPORTED'):
+        activity.measured_load_rail_mapping(authority)
+
+
+def _inspect(tmp_path, image):
+    path = tmp_path / 'inspect.json'
+    path.write_text(json.dumps([{'Id': 'c' * 64, 'Config': {'Image': image},
+        'State': {'ExitCode': 0, 'OOMKilled': False},
+        'HostConfig': {'NetworkMode': 'none', 'NanoCpus': 4_000_000_000,
+                       'Memory': 8 * 1024 ** 3, 'ReadonlyRootfs': True}}]))
+    return path
+
+
+def test_d55_container_image_is_the_runtime_resolved_identity(tmp_path, monkeypatch):
+    import _eda_pin
+    current, older = 'sha256:' + '1' * 64, 'sha256:' + '2' * 64
+    monkeypatch.setattr(_eda_pin, 'resolved_image_digest', lambda *a, **k: current)
+    assert activity._container_identity(_inspect(tmp_path, 'ghcr.io/vibeic/vibeic-eda@' + current))['image'].endswith(current)
+    with pytest.raises(admission.AdmissionRefusal, match='D55_ROW_NATIVE_AUTHORITY_INVALID'):
+        activity._container_identity(_inspect(tmp_path, 'ghcr.io/vibeic/vibeic-eda@' + older))
+
+    def unresolvable(*_a, **_k):
+        raise _eda_pin.ImageNotResolvable(['no image on this host'])
+    monkeypatch.setattr(_eda_pin, 'resolved_image_digest', unresolvable)
+    with pytest.raises(admission.AdmissionRefusal, match='D55_ROW_IMAGE_NOT_RESOLVABLE'):
+        activity._container_identity(_inspect(tmp_path, 'ghcr.io/vibeic/vibeic-eda@' + current))
+
+
+def test_d55_source_stores_no_image_digest():
+    import re as _re
+    text = Path(activity.__file__).read_text()
+    joined = _re.sub(r"'\s*\n\s*'", '', text)
+    assert not _re.search(r'sha256:[0-9a-f]{64}', joined)
+
+
+def test_d55_waveform_proposal_reads_netlist_ports_for_every_approved_mode(tmp_path):
+    _authorities(tmp_path, modes=('mission', 'standby'))
+    for path in (tmp_path / activity.WAVEFORM_SOURCE, tmp_path / activity.WAVEFORM_REFERENCE):
+        path.unlink()
+    netlist = tmp_path / 'adopted.v'
+    netlist.write_text('module activity_beta(a, bus, y);\n  input a;\n  input [3:0] bus;\n'
+                       '  output y;\n  assign y = a;\nendmodule\n')
+    proposed = activity.propose_waveform_reference(tmp_path, netlist, 'activity_beta', 'tb/dut', '1ps')
+    assert proposed['modes'] == ['mission', 'standby']
+    body = json.loads((tmp_path / activity.WAVEFORM_SOURCE).read_text())
+    reference = body['activity_waveform_bound_identity']['reference']
+    assert reference['mission'] == {**_WAVE, 'netlist_sha256': _sha_of(netlist)}
+    with pytest.raises(ValueError, match='D55_WAVEFORM_SOURCE_EXISTS'):
+        activity.propose_waveform_reference(tmp_path, netlist, 'activity_beta', 'tb/dut', '1ps')
