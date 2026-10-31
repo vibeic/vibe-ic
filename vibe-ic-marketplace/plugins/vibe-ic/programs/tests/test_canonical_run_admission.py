@@ -737,13 +737,23 @@ def test_full_stack_oracle_is_not_a_phase3_input(tmp_path):
     assert first.identity_sha256 == second.identity_sha256
 
 
+def _mock_runtime_receipt(tmp_path, condition):
+    """Existing image-condition doubles also carry the output-access readset."""
+    path = tmp_path / "runtime-output-inspection.json"
+    raw = json.dumps({"container_inspect": {
+        "Mounts": [], "HostConfig": {"ReadonlyRootfs": False}}}).encode()
+    path.write_bytes(raw)
+    return {**condition, "attestation_path": str(path),
+            "attestation_sha256": cra._sha256_bytes(raw)}
+
+
 def test_phase2_local_runtime_condition_reopens_once(tmp_path, monkeypatch):
     import librelane_contract
     project = _project(tmp_path / 'proj')
     monkeypatch.setenv(librelane_contract.LOCAL_ATTESTATION_ENV, '/host/receipt')
     condition = {'auto_remove': False, 'network_mode': 'none', 'memory': 1024,
                  'memory_swap': 1024, 'image_id': 'sha256:' + 'a' * 64}
-    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: condition.copy())
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: _mock_runtime_receipt(tmp_path, condition))
     args = (project, 'phase2', PROGRAMS, '')
     config = {'top_name': 'chip_top'}
     first = cra.admit_span(*args, config)
@@ -762,7 +772,7 @@ def test_phase2_attested_image_change_reopens_only_once(tmp_path, monkeypatch):
     monkeypatch.setattr(cra, 'image_identity', lambda _: 'IMAGE_UNAVAILABLE:docker absent')
     attested = {'auto_remove': True, 'network_mode': 'none', 'memory': 1024,
                 'memory_swap': 1024, 'image_id': 'sha256:' + 'a' * 64}
-    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: attested.copy())
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: _mock_runtime_receipt(tmp_path, attested))
     args = (project, 'phase2', PROGRAMS, '', {'top_name': 'chip_top'})
     first = cra.admit_span(*args)
     assert first.admitted
@@ -785,7 +795,7 @@ def test_phase2_local_image_identity_ignores_reference_and_cid_aliases(tmp_path,
     attested = {'auto_remove': True, 'network_mode': 'none', 'memory': 1024,
                 'memory_swap': 1024, 'image_id': 'sha256:' + 'a' * 64,
                 'image': 'registry/tool@sha256:' + 'b' * 64, 'cid': 'c' * 64}
-    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: attested.copy())
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: _mock_runtime_receipt(tmp_path, attested))
     args = (project, 'phase2', PROGRAMS, '', {'top_name': 'chip_top'})
     first = cra.admit_span(*args)
     assert first.identity['container_image'] == attested['image_id']
@@ -803,7 +813,7 @@ def test_phase2_local_image_identity_must_be_attested_content_id(tmp_path, monke
     monkeypatch.setenv(librelane_contract.LOCAL_ATTESTATION_ENV, '/host/receipt')
     attested = {'auto_remove': True, 'network_mode': 'none', 'memory': 1024,
                 'memory_swap': 1024, 'image_id': image_id}
-    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: attested.copy())
+    monkeypatch.setattr(librelane_contract, 'local_image_attestation', lambda: _mock_runtime_receipt(tmp_path, attested))
     result = cra.admit_span(project, 'phase2', PROGRAMS, '', {'top_name': 'chip_top'})
     assert not result.admitted
     assert result.reason == 'LOCAL_RUNTIME_UNATTESTED'

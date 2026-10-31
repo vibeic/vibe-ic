@@ -454,6 +454,64 @@ def image_identity(container: str) -> str:
     return digest or f"IMAGE_UNAVAILABLE:{why_not}"
 
 
+def _selected_output_mount_access(project: Path, config: Dict[str, Any],
+                                  attested: Dict[str, Any]) -> Dict[str, bool]:
+    """Bind only effective access to this site's declared producer targets."""
+    import step_preflight
+    import flow_declared_producer_run
+    import librelane_contract
+
+    plan = step_preflight.runner_plan("design_one_shot_runner")
+    names = [name for name, _ in plan.sites]
+    entry, exit_step = config.get("entry_step"), config.get("exit_step")
+    first = (step_preflight.site_for_step(plan.name, str(entry))
+             if entry is not None else names[0])
+    if entry in names:
+        first = entry
+    pruned = step_preflight.exit_pruned_sites(plan.sites, exit_step) if exit_step else []
+    if first not in names or pruned is None:
+        raise ValueError("selected producer output window is unresolved")
+    selected = {str(sid) for name, span in plan.sites[names.index(first):]
+                if name not in pruned for sid in span}
+    targets = sorted({row["target"] for row in
+        flow_declared_producer_run.declared_producer_clauses()
+        if str(row["step"]) in selected})
+    raw = Path(attested["attestation_path"]).read_bytes()
+    if _sha256_bytes(raw) != attested["attestation_sha256"]:
+        raise ValueError("LOCAL attestation changed while reading output access")
+    inspection = json.loads(raw)["container_inspect"]
+    mounts = inspection["Mounts"]
+    root_readonly = inspection["HostConfig"]["ReadonlyRootfs"]
+    if not isinstance(mounts, list) or type(root_readonly) is not bool:
+        raise ValueError("LOCAL output mount inspection is absent or malformed")
+    by_destination = {}
+    for mount in mounts:
+        destination, writable = mount["Destination"], mount["RW"]
+        if (not isinstance(destination, str) or not destination.startswith("/")
+                or os.path.normpath(destination) != destination
+                or destination in by_destination or type(writable) is not bool):
+            raise ValueError("LOCAL output mount access is malformed or ambiguous")
+        by_destination[destination] = writable
+    access = {}
+    project = project.resolve()
+    for target in targets:
+        path = (project / target).resolve()
+        if not path.is_relative_to(project):
+            raise ValueError("declared producer output escapes project")
+        matches = [dest for dest in by_destination if path.is_relative_to(dest)]
+        writable = (by_destination[max(matches, key=lambda x: len(Path(x).parts))]
+                    if matches else not root_readonly)
+        existing = path
+        while not existing.exists():
+            existing = existing.parent
+        if writable == bool(os.statvfs(existing).f_flag & os.ST_RDONLY):
+            raise ValueError("attested output mount access disagrees with filesystem: " + target)
+        access[target] = writable
+    if librelane_contract.local_image_attestation() != attested:
+        raise ValueError("LOCAL attestation changed while resolving output access")
+    return access
+
+
 def admit_span(project: Path, span: str, programs_dir: Path,
                container: str, config: Dict[str, Any], *,
                writable_outputs: Iterable[Path] = ()) -> Admission:
@@ -473,7 +531,9 @@ def admit_span(project: Path, span: str, programs_dir: Path,
             if not _eda_pin.is_bare_image_id(container_image):
                 raise ValueError("missing attested LOCAL image content identity")
             runtime = {field: attested[field] for field in fields}
-        except (librelane_contract.Refusal, KeyError, ValueError) as exc:
+            runtime["producer_output_access"] = _selected_output_mount_access(
+                project, config, attested)
+        except (librelane_contract.Refusal, OSError, KeyError, ValueError, TypeError) as exc:
             identity = build_identity(project, span, container_image=container_image,
                                       config=config, program_paths=paths,
                                       program_source_sha256=program_digest)
