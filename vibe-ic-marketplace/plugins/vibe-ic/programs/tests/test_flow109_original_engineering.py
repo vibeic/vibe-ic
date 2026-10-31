@@ -138,3 +138,27 @@ def test_real_owner_finalization_preserves_component_row_boundary(tmp_path, monk
     assert finished['default_row_status'] == finished['whole_flow_acceptance'] == 'NOT_MEASURED'
     assert finished['components'][0]['completed'] is False
     assert finished['delivery_accepted'] is False
+
+
+@pytest.mark.parametrize('mutation', ['missing_rc', 'unmeasured_context', 'nonzero_context'])
+def test_rebound_receipt_cannot_replace_native_execution_semantics(tmp_path, monkeypatch, mutation):
+    p = project(tmp_path)
+    rows = run(p, monkeypatch)
+    assert rows[-1].status == 'PASS'
+    if mutation == 'missing_rc':
+        row = rows[0]
+        path = next(Path(f) for f in row.output_files if f.endswith('.json'))
+        payload = json.loads(path.read_bytes()); payload.pop('exit_code')
+        row.extras['exit_code'] = None
+    else:
+        row = next(row for row in rows if row.name == 'rtl_hygiene')
+        path = next(Path(f) for f in row.output_files if f.endswith('context.json'))
+        payload = json.loads(path.read_bytes())
+        if mutation == 'unmeasured_context': payload['status'] = 'NOT_MEASURED'
+        else: payload['native_returncode'] = payload['transport_returncode'] = 1
+        row.extras['native_context'] = payload
+    path.write_text(json.dumps(payload))
+    with layout.rtl_input_view(p, 'original'):
+        rebound = engineering.evidence(p, engineering.subject(p), rows[:-1])
+        with pytest.raises(ValueError, match='EXECUTION_UNPROVEN'):
+            engineering.consume(p, rebound, [asdict(row) for row in rows])

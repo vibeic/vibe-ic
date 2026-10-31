@@ -82,7 +82,9 @@ def consume(project, record, rows):
             if (len(contexts) != 1 or contexts[0] != native.get('native_context')
                     or type(contexts[0].get('native_returncode')) is not int
                     or contexts[0].get('transport_returncode') != contexts[0]['native_returncode']
-                    or not contexts[0].get('files') or not contexts[0].get('input_sha256')):
+                    or not contexts[0].get('files') or not contexts[0].get('input_sha256')
+                    or check['status'] == 'PASS' and (contexts[0].get('status') != 'MEASURED'
+                        or contexts[0]['native_returncode'] != 0)):
                 raise ValueError('ENGINEERING_NATIVE_EXECUTION_UNPROVEN')
             hashes = contexts[0]['input_sha256']
             expected = {str(Path(project) / item['path']): item['sha256']
@@ -108,7 +110,9 @@ def consume(project, record, rows):
                       if Path(item['path']).suffix.lower() in ('.v', '.sv', '.vh', '.svh', '.h')]]}
             if report.get('input_sha256') != expected:
                 raise ValueError('ENGINEERING_NATIVE_INPUT_STALE')
-            if (report.get('verdict') != check['status'] or status != check['status']
+            if (type(report.get('exit_code')) is not int
+                    or report['exit_code'] != native.get('exit_code')
+                    or report.get('verdict') != check['status'] or status != check['status']
                     or report.get('command') != native.get('command')
                     or report.get('input_sha256') != native.get('input_sha256')
                     or not native.get('tool_version')):
