@@ -520,10 +520,21 @@ def phase3_verifying(rep: Optional[Dict[str, Any]],
     markers: Dict[str, str] = {}
     unclassified: Dict[str, str] = {}
     repeats: Dict[str, int] = {}
+    required_site_results = []
+    superseded_site_results = []
     for s in steps:
         name = str(s.get("name"))
         status = str(s.get("status"))
         repeats[name] = repeats.get(name, 0) + 1
+        ownership = (s.get("extras") or {}).get("required_site")
+        if ownership is not None:
+            measured = {"result_name": name, "status": status, "ownership": ownership}
+            if (isinstance(ownership, dict) and ownership.get("rtl_sha256")
+                    and rep.get("required_site_rtl_sha256")
+                    and ownership["rtl_sha256"] != rep["required_site_rtl_sha256"]):
+                superseded_site_results.append(measured)
+            else:
+                required_site_results.append(measured)
         # ASKED FIRST, because a marker's verdict word is `PASS` and the
         # `_STATUS_RAN` test below would claim it.
         if _is_progress_marker(s):
@@ -550,6 +561,10 @@ def phase3_verifying(rep: Optional[Dict[str, Any]],
         "steps_recorded": len(steps),
         "steps_recorded_more_than_once": {k: v for k, v in repeats.items()
                                           if v > 1},
+        **({"required_site_results": required_site_results,
+             "required_site_rtl_sha256": rep.get("required_site_rtl_sha256"),
+             "superseded_required_site_results": superseded_site_results}
+           if required_site_results or superseded_site_results else {}),
     }
 
 

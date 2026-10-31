@@ -368,6 +368,9 @@ def _write_phase2_report(out: Path, summary: Any, project: Path, *,
     """The ONE seam every phase-2 report is written through, so the refusal
     above cannot be bypassed by a second `write_text` added later."""
     _refuse_relocated_copy_in_record(summary, project)
+    if any((row.get("extras") or {}).get("required_site") is not None
+           for row in summary.get("steps", [])):
+        summary["required_site_rtl_sha256"] = _rtl_dir_sha256(project)
     # Only the selected D09 owner emits its two metrics; no downstream refresh.
     if (str(summary.get("declared_window", {}).get("entry_step")) == "1"
             and str(summary.get("declared_window", {}).get("exit_step")) == "1"):
@@ -27886,6 +27889,20 @@ def _audit_after_declared_producers(project: Path, skip_analog: bool) -> StepRes
     return audit
 
 
+def _required_site_row(project: Path, site: str, row: StepResult) -> StepResult:
+    """Bind a required consumer result at its actual dispatch call site.
+
+    Consumers must not infer this ownership from the result's display name.
+    This annotation changes neither applicability nor the measured verdict.
+    """
+    span = dict(_spf.RUNNER_PLANS["design_one_shot_runner"].sites)[site]
+    row.extras["required_site"] = {
+        "runner": "design_one_shot_runner", "site": site,
+        "flow_steps": [str(step) for step in span],
+        "rtl_sha256": _rtl_dir_sha256(project)}
+    return row
+
+
 def _run_refresh_only(project: Path, args) -> int:
     """`--refresh-only`: run EXACTLY the whole-flow refreshes a bounded run
     discloses as skipped, dispatch no step, and record what was rebuilt.
@@ -28530,6 +28547,8 @@ def main() -> int:
         _redispatch[site] = thunk
         rows = thunk()
         rows = list(rows) if isinstance(rows, (list, tuple)) else [rows]
+        if site == "rtl_validate":
+            rows = [_required_site_row(project, site, row) for row in rows]
         plan.extend(rows)
         return rows
 
@@ -28750,7 +28769,7 @@ def main() -> int:
     elif _after_exit("rtl_validate"):
         plan.append(_exit_sentinel("crosslayer_rewrite_fidelity"))
     else:
-        plan.append(step_crosslayer_rewrite_fidelity(project))
+        plan.append(_required_site_row(project, "rtl_validate", step_crosslayer_rewrite_fidelity(project)))
 
     # Fixed Step 2 call: selected_mode owns the production default and opt-out.
     if _before_entry("rtl_validate", _entry_site):
@@ -28762,7 +28781,7 @@ def main() -> int:
             project, pdk_name=args.pdk, bounded_rtl=_bounded_rtl_lint,
             top_name=args.top_name, container=args.container)
         if _tool_lint is not None:
-            plan.append(_tool_lint)
+            plan.append(_required_site_row(project, "rtl_validate", _tool_lint))
 
     # Flow step 2 — pad-budget feasibility. Placed HERE, right after the RTL is
     # stable and long before synthesis/DFT/PnR, because the whole point of the
@@ -29032,7 +29051,7 @@ def main() -> int:
         sr = step_reference_tb(project, args.top_name, ic_class,
                                args.container,
                                rtl_handoff=_rtl_gen_handoff(plan))
-        plan.append(sr)
+        plan.append(_required_site_row(project, "sim", sr))
         # ORGANIC #543 / vibe-ic#1975 — WAIVED or INCOMPLETE means the
         # reference-TB oracle path has no RTL-repairable mismatch (for
         # INCOMPLETE, connectivity ran but functional semantics still belong
@@ -29155,7 +29174,7 @@ def main() -> int:
         _s4 = step_step4_functional_evidence(project, ic_class)
         _s4.extras["declaration_before_step4"] = {
             k: v for k, v in _early_declaration.items() if k != "fields"}
-        plan.append(_s4)
+        plan.append(_required_site_row(project, "sim", _s4))
 
     # Canonical Step 7 (ASIC SDC + PVT matrix) is a Phase-2 producer and must
     # precede Step 8 validation and Step 9 synthesis.  Keeping it here makes
