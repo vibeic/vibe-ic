@@ -24382,9 +24382,11 @@ def gen_l2_frs(project: Path,
             owner, explicit = _issue3234_explicit_parameter_owner({fname: text})
             subjects = _doc_comportable_module_subjects({fname: text})
             header_owner = next((m.group("name") for m in
-                _RE_DOC_TOP_MODULE_REAL_DECL.finditer(text)
+                _RE_DOC_TOP_MODULE_REAL_DECL.finditer(
+                    _ppx.strip_hdl_comments_and_strings(text))
                 if _issue3234_position_is_current(text, m.start())
-                and _ppx.selected_module_header(text, m.group("name"))), None)
+                and _doc_real_module_decl_name({fname: m.group(0)})
+                == m.group("name")), None)
             declared = ((bool(owner) if explicit else len(subjects) == 1)
                         or header_owner is not None)
             body = _v1_6_357_slice_section_body(text, 0, None, max_chars=None)
