@@ -25586,6 +25586,138 @@ def step_arith_declaration_emit(project: Path) -> StepResult:
                       f"written — {reason}", reason_class=_V.ReasonClass.EXECUTION_ERROR)
 
 
+def _phase2_simulation_manifests(project: Path, plan: List[StepResult]) -> List[str]:
+    """Publish the existing simulation manifests from actual same-run evidence."""
+    by_name = {s.name: s for s in plan}
+    written: List[str] = []
+    identity = _design_identity_fields(project)
+
+    def w(rel: str, payload: dict) -> None:
+        payload.setdefault("design_identity", identity)
+        path = project / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n")
+        written.append(rel)
+
+    # Step 4: simulation.
+    # ORGANIC-20260606-verdict-only-pass-artifacts-no-evidence (#433a):
+    # the emitter may only write a PASS that is SUBSTANTIATED — the
+    # reference-TB step must have PASSed AND its real transcript must
+    # exist non-empty on disk (the pre-fix shape hardcoded a broken
+    # `sim/reference_tb/ref_tb.log` pointer that existed in NONE of the
+    # four audited campaign projects, and even a pure-analog project with
+    # no RTL at all received the PASS pair). Without evidence the emitter
+    # writes SKIP naming the missing artifact — never PASS.
+    sim_dir = _pl.sim_dir(project)
+    sim_dir.mkdir(parents=True, exist_ok=True)
+    ref_tb_step = by_name.get("reference_tb")
+    ref_logs = sorted(p for p in sim_dir.rglob("ref_tb.log")
+                      if p.is_file() and p.stat().st_size > 0)
+    orc_ok, orc_log, orc_vp, orc_vt = _oracle_sim_bridge_evidence(
+        project, ref_tb_step)  # #460: genuine oracle PASS bridges this gate
+    if orc_ok:
+        if (sim_dir / "pass.flag").is_file():
+            written.append("sim/pass.flag")
+        w("sim/results.xml", {
+            "verdict": "PASS", "evidence": orc_log,
+            "verification_track": "oracle_tb",
+            "vectors_passed": orc_vp, "vectors_total": orc_vt})
+    elif ref_tb_step is not None and ref_tb_step.status == "PASS" and ref_logs:
+        log_rel = str(ref_logs[0].relative_to(project))
+        _aa.write_text(sim_dir / "pass.flag", "PASS\n")
+        written.append("sim/pass.flag")
+        w("sim/results.xml", {
+            "verdict": "PASS",
+            "evidence": log_rel,
+        })
+        _aa.write_text(sim_dir / "results.xml",
+            "<results><verdict>PASS</verdict>"
+            f"<evidence>{log_rel}</evidence>"
+            "<source>step_reference_tb transcript</source>"
+            "</results>\n")
+    else:
+        _why = ("reference_tb step verdict="
+                f"{ref_tb_step.status if ref_tb_step else 'not-run'}; "
+                f"transcripts found={len(ref_logs)}")
+        w("sim/results.xml", {
+            "verdict": "SKIP",
+            "reason": ("no substantiating reference-TB evidence — "
+                       "refusing a verdict-only PASS (#433): " + _why),
+        })
+    # Coverage manifest (#436): the pre-fix shape hardcoded ANOTHER chip
+    # class's TB path + scenario names (half-duplex GET_ID/GET_STATE/…)
+    # into every project — flagged by four independent audits as the worst
+    # integrity violation. Coverage may only cite the TB that ACTUALLY ran
+    # on THIS project (the transcript is the evidence); otherwise the
+    # manifest honestly reports SKIPPED-CONDITION.
+    if ref_tb_step is not None and ref_tb_step.status == "PASS" and ref_logs:
+        _log_rel = str(ref_logs[0].relative_to(project))
+        _log_txt = ref_logs[0].read_text(errors="replace")
+        _scen = sorted(set(re.findall(
+            r"\b(?:SCENARIO|TEST)[\s:_-]+([A-Za-z0-9_]+)", _log_txt)))[:24]
+        w("reports/phase2/coverage/coverage_actual.json", {
+            "verdict": "PASS",
+            "evidence": _log_rel,
+            "scenarios_covered": _scen,
+            "note": ("scenarios extracted from this project's own "
+                     "reference-TB transcript (#436: never another "
+                     "design's canned list)"),
+        })
+    elif orc_ok:
+        # ORGANIC-20260606 #460 (reopened) — the oracle track never produces
+        # a ref_tb.log (only oracle.log), so the rglob('ref_tb.log') above
+        # always missed it and a genuinely-functional N/N oracle PASS got a
+        # SKIPPED-CONDITION coverage verdict — which the Step-4 evidence-
+        # integrity scan then propagated as the WHOLE step's verdict,
+        # excluding it from executed-PASS. When the SAME genuine-oracle-PASS
+        # conditions that gate the sim bridge hold (functional_verified,
+        # vectors_passed==vectors_total>0, oracle.log present non-empty —
+        # all already vetted by _oracle_sim_bridge_evidence into orc_ok),
+        # extract the scenario/vector evidence FROM oracle.log (the sole
+        # evidence source — no canned content) and emit a coverage PASS that
+        # backlinks to the real transcript. Skeleton-WAIVED / FAILed runs
+        # never reach this branch (orc_ok is False for them).
+        _orc_path = project / orc_log
+        try:
+            _orc_txt = _orc_path.read_text(errors="replace")
+        except OSError:
+            _orc_txt = ""
+        _scen, _olp, _olt = _oracle_coverage_evidence(_orc_txt)
+        w("reports/phase2/coverage/coverage_actual.json", {
+            "verdict": "PASS",
+            "evidence": orc_log,
+            "verification_track": "oracle_tb",
+            "scenarios_covered": _scen,
+            "vectors_passed": (_olp if _olp is not None else orc_vp),
+            "vectors_total": (_olt if _olt is not None else orc_vt),
+            "note": ("scenarios/vector counts extracted from this "
+                     "project's own oracle-TB transcript "
+                     "(oracle.log: ORACLE_VECTOR / VEC <n> <name> PASS / "
+                     "ORACLE_TB_DONE lines; #460/#483: never another "
+                     "design's canned list)"),
+        })
+    else:
+        # ORGANIC #609 — THIRD evidence track: a genuinely-passing AI-authored
+        # functional TB (JUnit sim/results.xml failures=0/errors=0, tests>=1 +
+        # l10_tb_conformance ok==total>0) is a real verified PASS, independent
+        # of the reference_tb / oracle tracks. Recognise it here so it is not
+        # hidden as SKIPPED-CONDITION. (The AI fallback may author the TB AFTER
+        # this producer runs — the idempotent re-emit in phase3
+        # step_canonicalize_artefacts then upgrades a stale stub; #609.)
+        _func_pass = _v1_6_609_functional_tb_pass_payload(project)
+        if _func_pass is not None:
+            w("reports/phase2/coverage/coverage_actual.json", _func_pass)
+        else:
+            w("reports/phase2/coverage/coverage_actual.json", {
+                "verdict": "SKIPPED-CONDITION",
+                "reason": ("no reference-TB transcript for THIS project — a "
+                           "coverage verdict cannot cite scenarios that never "
+                           "ran (#436)"),
+            })
+
+    return written
+
+
 def _phase2_manifest_retained_steps(_project: Path, _plan: List[StepResult],
                                     top_name: Optional[str] = None,
                                     container: str = _pin.default_container_name(),
@@ -25896,121 +26028,7 @@ def step_emit_phase2_manifests(project: Path,
                     "reason": "step 3 selects the netlist front end and the netlist "
                               "was not produced: " + str(_nl_rec.get("reason"))})
 
-    # Step 4: simulation.
-    # ORGANIC-20260606-verdict-only-pass-artifacts-no-evidence (#433a):
-    # the emitter may only write a PASS that is SUBSTANTIATED — the
-    # reference-TB step must have PASSed AND its real transcript must
-    # exist non-empty on disk (the pre-fix shape hardcoded a broken
-    # `sim/reference_tb/ref_tb.log` pointer that existed in NONE of the
-    # four audited campaign projects, and even a pure-analog project with
-    # no RTL at all received the PASS pair). Without evidence the emitter
-    # writes SKIP naming the missing artifact — never PASS.
-    sim_dir = _pl.sim_dir(project)
-    sim_dir.mkdir(parents=True, exist_ok=True)
-    ref_tb_step = by_name.get("reference_tb")
-    ref_logs = sorted(p for p in sim_dir.rglob("ref_tb.log")
-                      if p.is_file() and p.stat().st_size > 0)
-    orc_ok, orc_log, orc_vp, orc_vt = _oracle_sim_bridge_evidence(
-        project, ref_tb_step)  # #460: genuine oracle PASS bridges this gate
-    if orc_ok:
-        if (sim_dir / "pass.flag").is_file():
-            written.append("sim/pass.flag")
-        w("sim/results.xml", {
-            "verdict": "PASS", "evidence": orc_log,
-            "verification_track": "oracle_tb",
-            "vectors_passed": orc_vp, "vectors_total": orc_vt})
-    elif ref_tb_step is not None and ref_tb_step.status == "PASS" and ref_logs:
-        log_rel = str(ref_logs[0].relative_to(project))
-        _aa.write_text(sim_dir / "pass.flag", "PASS\n")
-        written.append("sim/pass.flag")
-        w("sim/results.xml", {
-            "verdict": "PASS",
-            "evidence": log_rel,
-        })
-        _aa.write_text(sim_dir / "results.xml",
-            "<results><verdict>PASS</verdict>"
-            f"<evidence>{log_rel}</evidence>"
-            "<source>step_reference_tb transcript</source>"
-            "</results>\n")
-    else:
-        _why = ("reference_tb step verdict="
-                f"{ref_tb_step.status if ref_tb_step else 'not-run'}; "
-                f"transcripts found={len(ref_logs)}")
-        w("sim/results.xml", {
-            "verdict": "SKIP",
-            "reason": ("no substantiating reference-TB evidence — "
-                       "refusing a verdict-only PASS (#433): " + _why),
-        })
-    # Coverage manifest (#436): the pre-fix shape hardcoded ANOTHER chip
-    # class's TB path + scenario names (half-duplex GET_ID/GET_STATE/…)
-    # into every project — flagged by four independent audits as the worst
-    # integrity violation. Coverage may only cite the TB that ACTUALLY ran
-    # on THIS project (the transcript is the evidence); otherwise the
-    # manifest honestly reports SKIPPED-CONDITION.
-    if ref_tb_step is not None and ref_tb_step.status == "PASS" and ref_logs:
-        _log_rel = str(ref_logs[0].relative_to(project))
-        _log_txt = ref_logs[0].read_text(errors="replace")
-        _scen = sorted(set(re.findall(
-            r"\b(?:SCENARIO|TEST)[\s:_-]+([A-Za-z0-9_]+)", _log_txt)))[:24]
-        w("reports/phase2/coverage/coverage_actual.json", {
-            "verdict": "PASS",
-            "evidence": _log_rel,
-            "scenarios_covered": _scen,
-            "note": ("scenarios extracted from this project's own "
-                     "reference-TB transcript (#436: never another "
-                     "design's canned list)"),
-        })
-    elif orc_ok:
-        # ORGANIC-20260606 #460 (reopened) — the oracle track never produces
-        # a ref_tb.log (only oracle.log), so the rglob('ref_tb.log') above
-        # always missed it and a genuinely-functional N/N oracle PASS got a
-        # SKIPPED-CONDITION coverage verdict — which the Step-4 evidence-
-        # integrity scan then propagated as the WHOLE step's verdict,
-        # excluding it from executed-PASS. When the SAME genuine-oracle-PASS
-        # conditions that gate the sim bridge hold (functional_verified,
-        # vectors_passed==vectors_total>0, oracle.log present non-empty —
-        # all already vetted by _oracle_sim_bridge_evidence into orc_ok),
-        # extract the scenario/vector evidence FROM oracle.log (the sole
-        # evidence source — no canned content) and emit a coverage PASS that
-        # backlinks to the real transcript. Skeleton-WAIVED / FAILed runs
-        # never reach this branch (orc_ok is False for them).
-        _orc_path = project / orc_log
-        try:
-            _orc_txt = _orc_path.read_text(errors="replace")
-        except OSError:
-            _orc_txt = ""
-        _scen, _olp, _olt = _oracle_coverage_evidence(_orc_txt)
-        w("reports/phase2/coverage/coverage_actual.json", {
-            "verdict": "PASS",
-            "evidence": orc_log,
-            "verification_track": "oracle_tb",
-            "scenarios_covered": _scen,
-            "vectors_passed": (_olp if _olp is not None else orc_vp),
-            "vectors_total": (_olt if _olt is not None else orc_vt),
-            "note": ("scenarios/vector counts extracted from this "
-                     "project's own oracle-TB transcript "
-                     "(oracle.log: ORACLE_VECTOR / VEC <n> <name> PASS / "
-                     "ORACLE_TB_DONE lines; #460/#483: never another "
-                     "design's canned list)"),
-        })
-    else:
-        # ORGANIC #609 — THIRD evidence track: a genuinely-passing AI-authored
-        # functional TB (JUnit sim/results.xml failures=0/errors=0, tests>=1 +
-        # l10_tb_conformance ok==total>0) is a real verified PASS, independent
-        # of the reference_tb / oracle tracks. Recognise it here so it is not
-        # hidden as SKIPPED-CONDITION. (The AI fallback may author the TB AFTER
-        # this producer runs — the idempotent re-emit in phase3
-        # step_canonicalize_artefacts then upgrades a stale stub; #609.)
-        _func_pass = _v1_6_609_functional_tb_pass_payload(project)
-        if _func_pass is not None:
-            w("reports/phase2/coverage/coverage_actual.json", _func_pass)
-        else:
-            w("reports/phase2/coverage/coverage_actual.json", {
-                "verdict": "SKIPPED-CONDITION",
-                "reason": ("no reference-TB transcript for THIS project — a "
-                           "coverage verdict cannot cite scenarios that never "
-                           "ran (#436)"),
-            })
+    written.extend(_phase2_simulation_manifests(project, plan))
 
     # Step 5: formal.  A bounded frontend continuation may legitimately select
     # steps 2--3 without selecting Step 5.  Manifest emission still owns the
@@ -26508,16 +26526,31 @@ def step_emit_phase2_manifests(project: Path,
                       written)
 
 
-@_spf.retained_steps(('2', '3', '4'), canonical_acceptance=True)
+def _phase2_frontend_retained_steps(_project: Path, _plan: List[StepResult],
+                                     top_name: Optional[str] = None,
+                                     container: str = _pin.default_container_name(),
+                                     *, emit_formal: bool = True,
+                                     simulation_only: bool = False) -> Tuple[str, ...]:
+    del top_name, container, emit_formal
+    return ('4',) if simulation_only else ('2', '3', '4')
+
+
+@_spf.retained_steps(_phase2_frontend_retained_steps, canonical_acceptance=True)
 def _complete_phase2_frontend(project: Path, plan: List[StepResult],
                               top_name: Optional[str] = None,
                               container: str = _pin.default_container_name(),
-                              *, emit_formal: bool = True) -> StepResult:
+                              *, emit_formal: bool = True,
+                              simulation_only: bool = False) -> StepResult:
     """Complete the real runner's RTL/CDC/simulation outputs after coverage.
 
     Standalone manifest emission remains an existing component operation.
     Only this actual runner seam owns the complete frontend consumers.
     """
+    if simulation_only:
+        started = time.time()
+        written = _phase2_simulation_manifests(project, plan)
+        return StepResult("phase2_manifests", "PASS", time.time() - started,
+                          f"{len(written)} simulation manifest(s) written", written)
     result = step_emit_phase2_manifests(
         project, plan, top_name, container, emit_formal=emit_formal)
     # Step2 also owns producer-written ROM/rewrite/lint evidence. Its full
@@ -29205,7 +29238,10 @@ def main() -> int:
         _reused = _adopted_step4_producer(project, _sim_rows, 'verilator_coverage')
         plan.append(_reused if _reused is not None else
                     step_verilator_coverage(project, args.top_name, args.container))
-    if _bounded and any(_step_requested(s) for s in ("2", "3", "4")):
+    _simulation_only_frontend = (_step_requested("4") and
+                                 not any(_step_requested(s) for s in ("2", "3")))
+    if (_bounded and not _simulation_only_frontend
+            and any(_step_requested(s) for s in ("2", "3", "4"))):
         _disclose_runs_anyway(
             "emit_phase2_manifests",
             "the declared outputs of steps 2, 3 and 6",
@@ -29221,7 +29257,8 @@ def main() -> int:
     if any(_step_requested(s) for s in ("2", "3", "4")):
         plan.append(_complete_phase2_frontend(
             project, plan, args.top_name, args.container,
-            emit_formal=_step_requested("5")))
+            emit_formal=_step_requested("5"),
+            simulation_only=_simulation_only_frontend))
     else:
         plan.append(StepResult(
             "phase2_manifests", "NOT_APPLICABLE", 0.0,
