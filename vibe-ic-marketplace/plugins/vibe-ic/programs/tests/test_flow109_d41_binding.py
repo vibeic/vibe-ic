@@ -150,6 +150,7 @@ END LIBRARY
     registry=closure.load_registry();runs=[]
     for i,cid in enumerate(repair.CONTROLLERS):
         run={'schema':closure.SCHEMA_RUN,'controller':cid,'outcome':'CONVERGED' if i==0 else 'NOT_TRIGGERED',
+            'closed_loop_success':True,'collateral_regressions':[],
             'reason':'SOURCE_ONLY_CONTROLLER_RECORD','registry_digest':registry.digest(),'promoted':1 if i==0 else 0,
             'iterations':[{'index':0,'argv':['SOURCE_ONLY_ACTUATOR_API_DOUBLE']}] if i==0 else []}
         run['digest']=closure.cj.digest_of(run);runs.append(run)

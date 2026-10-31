@@ -8353,9 +8353,13 @@ def _d41_history(basis):
         if len(own) != len(acts):
             raise MetricRefusal('D41_HISTORY_INCOMPLETE', 'actuation/candidate population')
         outcome = run.get('outcome')
-        if outcome in ('PLATEAU','BUDGET_EXHAUSTED','HANDOFF_REQUIRED'):
-            failed.append({'controller':cid,'outcome':outcome,'reason':run.get('reason')})
-        elif outcome not in ('CONVERGED','NOT_TRIGGERED'):
+        if (run.get('schema') != closure.SCHEMA_RUN or type(run.get('closed_loop_success')) is not bool
+                or not isinstance(run.get('collateral_regressions'), list)):
+            raise MetricRefusal('D41_HISTORY_INCOMPLETE', 'original closed-loop result')
+        if (run['collateral_regressions'] or outcome in ('PLATEAU','BUDGET_EXHAUSTED','HANDOFF_REQUIRED')):
+            failed.append({'controller':cid,'outcome':outcome,'reason':run.get('reason'),
+                'collateral_regressions':run['collateral_regressions']})
+        elif outcome not in ('CONVERGED','NOT_TRIGGERED') or not run['closed_loop_success']:
             incomplete.append({'controller':cid,'outcome':outcome,'reason':run.get('reason')})
     if runs and [run['controller'] for run in runs] != list(repair.CONTROLLERS):
         raise MetricRefusal('D41_HISTORY_INCOMPLETE', 'full declared controller population')

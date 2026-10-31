@@ -48,7 +48,7 @@ def test_no_repair_is_measured_zero_with_complete_native_census(case):
 
 @pytest.mark.parametrize('outcome,expected',[('PLATEAU','FAIL'),('BUDGET_EXHAUSTED','FAIL'),('NOT_MEASURED','NOT_MEASURED')])
 def test_original_controller_terminal_outcome_cannot_be_reset(case,outcome,expected):
-    record=case.report['closure'][0];record['outcome']=outcome
+    record=case.report['closure'][0];record['outcome']=outcome;record['closed_loop_success']=False
     record['digest']=closure.cj.digest_of({k:v for k,v in record.items() if k!='digest'})
     case.publish()
     result=case.observe()
@@ -142,3 +142,16 @@ def test_finalizer_requires_original_producer_filler_snapshot(scene):
     result=scene.consume()
     assert result['default_row_status']=='NOT_MEASURED',json.dumps(result,indent=2)
     assert 'FLOW109_D41_READBACK_STALE' in result['components'][0]['reason']
+
+
+@pytest.mark.parametrize('missing',[False,True])
+def test_original_collateral_failure_or_missing_success_is_not_green(case,missing):
+    record=case.report['closure'][0]
+    if missing:record.pop('closed_loop_success')
+    else:
+        record['closed_loop_success']=False
+        record['collateral_regressions']=[{'domain':'timing.hold','before':.4,'after':.2,'scope':'SOURCE_ONLY_CONTROLLER_RECORD'}]
+    record['digest']=closure.cj.digest_of({k:v for k,v in record.items() if k!='digest'})
+    case.publish()
+    result=case.observe()
+    assert result['status']==('NOT_MEASURED' if missing else 'FAIL'),json.dumps(result,indent=2)
