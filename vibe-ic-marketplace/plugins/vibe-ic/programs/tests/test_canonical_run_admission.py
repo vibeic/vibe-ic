@@ -812,13 +812,20 @@ def test_flow109_runtime_projection_source_reopens_only_once(tmp_path, monkeypat
     assert restored.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
 
 
-def test_native_handoff_resolver_source_reopens_only_once(tmp_path, monkeypatch):
+@pytest.mark.parametrize('source_name,needle,replacement', [
+    ('synth_handoff_netlist_check.py', 'if not resolved.is_file() or _sha(resolved) != expected:',
+     'if not resolved.is_file():'),
+    ('flow109_metric_acceptance.py', 'len(proof_libraries) != 1',
+     'len(proof_libraries) != 2'),
+])
+def test_native_handoff_resolver_source_reopens_only_once(
+        tmp_path, monkeypatch, source_name, needle, replacement):
     import shutil
     project = _project(tmp_path / 'project')
     programs = tmp_path / 'plugin/programs'
     # Copy the real existing resolver even on a base whose admission omits it.
     for source in {*cra.canonical_program_paths(PROGRAMS),
-                   PROGRAMS / 'synth_handoff_netlist_check.py'}:
+                   PROGRAMS / source_name}:
         target = programs.parent / source.relative_to(PROGRAMS.parent)
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, target)
@@ -828,11 +835,10 @@ def test_native_handoff_resolver_source_reopens_only_once(tmp_path, monkeypatch)
     first = cra.admit_span(*args)
     assert first.reason == 'ADMITTED'
     assert cra.admit_span(*args).reason == 'DUPLICATE_NO_NEW_EVIDENCE'
-    source = programs / 'synth_handoff_netlist_check.py'
+    source = programs / source_name
     original = source.read_text()
-    needle = 'if not resolved.is_file() or _sha(resolved) != expected:'
     assert needle in original
-    source.write_text(original.replace(needle, 'if not resolved.is_file():', 1))
+    source.write_text(original.replace(needle, replacement, 1))
     changed = cra.admit_span(*args)
     assert changed.reason == 'ADMITTED'
     assert changed.identity['program_source_sha256'] != first.identity['program_source_sha256']
@@ -844,6 +850,6 @@ def test_native_handoff_resolver_source_reopens_only_once(tmp_path, monkeypatch)
     source.unlink()
     missing = cra.admit_span(*args)
     assert missing.reason == 'CANONICAL_PROGRAM_SOURCE_UNAVAILABLE'
-    source.symlink_to(PROGRAMS / 'synth_handoff_netlist_check.py')
+    source.symlink_to(PROGRAMS / source_name)
     foreign = cra.admit_span(*args)
     assert foreign.reason == 'CANONICAL_PROGRAM_SOURCE_UNAVAILABLE'

@@ -420,6 +420,8 @@ def canonical_program_paths(programs_dir: Path) -> tuple[Path, ...]:
         # LEC and backend entry consume the receipt-bound native handoff here.
         # A repaired resolver is new consumed source, even with identical RTL.
         programs_dir / "synth_handoff_netlist_check.py",
+        # Row acceptance consumes this source after native dispatch.
+        programs_dir / "flow109_metric_acceptance.py",
         programs_dir / "librelane_contract.py",
         # The canonical runners delegate Default/Ultra dispatch and frontend
         # worker execution through these modules.  A change there must reopen

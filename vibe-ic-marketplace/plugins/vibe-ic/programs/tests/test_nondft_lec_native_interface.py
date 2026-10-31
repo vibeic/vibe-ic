@@ -185,6 +185,7 @@ def test_consumer_reopens_empty_transport_without_claiming_proof(subject, damage
         put(config, cfg)
     folder = project / 'phase3/librelane/lec_eqy/01-yosys-eqy'
     folder.mkdir(parents=True)
+    put(folder / 'config.json', cfg)
     put(folder / 'state_out.json', json.loads(state.read_text()))
     (folder / 'invocation.log').write_text('SOURCE_FIXTURE transport only; no EQY executed\n')
     mounts = [(Path(LC.pdk_root_resolution(project, 'pdkA')['path']), '/pdk')]
@@ -210,6 +211,62 @@ def test_consumer_reopens_empty_transport_without_claiming_proof(subject, damage
         assert observed['native_consumer']['compared_points'] == 0
     else:
         assert observed['reason'] in ('D25_NATIVE_INPUT_STALE', 'D25_NATIVE_SUBJECT_UNBOUND'), observed
+
+
+
+@pytest.mark.parametrize('schema,relocated,damage', [
+    ('CELL_LIBS', False, None), ('CELL_LIBS', True, None),
+    ('LIB', False, None), ('LIB', True, None),
+    ('LIB', True, 'same_bytes_foreign_asset'), ('LIB', True, 'different_library_bytes'),
+])
+def test_generic_eqy_library_binding_uses_verified_consumed_paths(
+        subject, schema, relocated, damage):
+    """Existing empty transport only; no native PASS or approval is authored."""
+    import flow109_metric_acceptance as metrics
+    test_consumer_reopens_empty_transport_without_claiming_proof(subject, 'none')
+    project, rtl, context, _ = subject
+    root = project / 'phase3/librelane/lec-eqy-config'
+    config = root / 'eqy.resolved.json'
+    cfg = json.loads(config.read_text())
+    selected = next(iter(cfg['CELL_LIBS'].values()))[0]
+    proof = selected
+    host_root = Path(LC.pdk_root_resolution(project, 'pdkA')['path'])
+    if relocated:
+        proof = str(host_root / Path(selected).relative_to('/pdk'))
+    if damage:
+        foreign = project / 'input/foreign.lib'
+        foreign.write_bytes(Path(proof).read_bytes())
+        if damage == 'different_library_bytes':
+            foreign.write_text(foreign.read_text().replace('area : 1', 'area : 2'))
+        proof = str(foreign)
+    cfg.pop('CELL_LIBS')
+    cfg[schema] = {'*': [proof]}
+    Path(cfg['EQY_SCRIPT']).write_text(EQY.eqy_script('top', [rtl],
+        project / 'phase2/stage2/synth/top_synth.v', proof))
+    put(config, cfg)
+    folder = project / 'phase3/librelane/lec_eqy/01-yosys-eqy'
+    receipt_path = folder / 'vibeic_receipt.json'
+    receipt = json.loads(receipt_path.read_text())
+    receipt['input']['config'] = LC.digest(config)
+    receipt['input']['config_files'] = LC.config_file_hashes(cfg, [(host_root, '/pdk')])
+    put(folder / 'config.json', cfg)
+    receipt['sha256']['config.json'] = LC.digest(folder / 'config.json')
+    put(folder / 'input_fingerprint.json', receipt['input'])
+    receipt['sha256']['input_fingerprint.json'] = LC.digest(folder / 'input_fingerprint.json')
+    put(receipt_path, receipt)
+    observed = metrics.accept_d25(project, context)
+    assert observed['status'] == observed['qualification'] == 'NOT_MEASURED', observed
+    if damage:
+        assert observed['reason'] == 'D25_MODEL_NOT_QUALIFIED', observed
+        assert 'library_binding' not in observed
+    else:
+        assert observed['reason'] == 'D25_NATIVE_TOOL_PURPOSE_UNQUALIFIED', observed
+        if schema != 'CELL_LIBS' or relocated:
+            actual = (host_root / Path(proof).relative_to('/pdk')
+                      if proof.startswith('/pdk/') else Path(proof))
+            assert observed['library_binding']['consumed_path'] == str(actual.resolve())
+            assert observed['library_binding']['sha256'] == LC.digest(actual)
+        assert observed['native_consumer']['compared_points'] == 0
 
 
 def test_named_fresh_caller_dispatches_existing_producer(subject, monkeypatch):

@@ -1436,14 +1436,26 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
             if contract.config_file_hashes(cfg, mounts) != fp.get('config_files'):
                 raise MetricRefusal('D25_NATIVE_INPUT_STALE', 'native EQY config files changed')
             synthesis = json.loads((Path(adopted['native']).parent / 'config.json').read_bytes())
-            groups = synthesis.get('CELL_LIBS', synthesis.get('LIB')) or {}
+            groups = synthesis.get('CELL_LIBS') or synthesis.get('LIB') or {}
             selected = {value for group in groups.values() for value in group}
             import fnmatch
-            proof_libraries = {value for pattern, group in (cfg.get('CELL_LIBS') or {}).items()
+            proof_groups = cfg.get('CELL_LIBS') or cfg.get('LIB') or {}
+            proof_libraries = {value for pattern, group in proof_groups.items()
                 if fnmatch.fnmatch(cfg.get('DEFAULT_CORNER', ''), pattern) for value in group}
-            if (len(selected) != 1 or len(proof_libraries) != 1
-                    or {Path(p).resolve() for p in proof_libraries} !=
-                       {Path(p).resolve() for p in selected}):
+            if len(selected) != 1 or len(proof_libraries) != 1:
+                raise MetricRefusal('D25_MODEL_NOT_QUALIFIED', 'EQY and adopted synthesis libraries differ')
+            selected_name, proof_name = next(iter(selected)), next(iter(proof_libraries))
+            selected_binding = (adopted.get('consumed_config_files') or {}).get(selected_name)
+            proof_path = Path(proof_name)
+            for host, guest in sorted(mounts, key=lambda m: len(str(m[1])), reverse=True):
+                if proof_path.is_relative_to(guest):
+                    proof_path = Path(host) / proof_path.relative_to(guest)
+                    break
+            # The handoff verified the original canonical source and every
+            # receipt digest before publishing these actual consumer paths.
+            if (not isinstance(selected_binding, Mapping)
+                    or Path(selected_binding['path']).resolve() != proof_path.resolve()
+                    or selected_binding['sha256'] != contract.digest(proof_path)):
                 raise MetricRefusal('D25_MODEL_NOT_QUALIFIED', 'EQY and adopted synthesis libraries differ')
             script = Path(cfg['EQY_SCRIPT'])
             if script.read_text() != native.eqy_script(
@@ -1461,6 +1473,8 @@ def accept_d25(project: Path, context: Mapping[str, Any]) -> dict:
             component = observed['verdict'] if observed['verdict'] in ('PASS', 'FAIL') else 'NOT_MEASURED'
             result.update(component_status=component, native_tool='Yosys.EQY',
                 native_consumer=observed,
+                library_binding={'synthesis_recorded': selected_name, 'proof_recorded': proof_name,
+                    'consumed_path': str(proof_path.resolve()), 'sha256': selected_binding['sha256']},
                 reason='D25_NATIVE_TOOL_PURPOSE_UNQUALIFIED',
                 qualification_detail='generic EQY inputs are bound; named mode/model authority is still required')
             return result
