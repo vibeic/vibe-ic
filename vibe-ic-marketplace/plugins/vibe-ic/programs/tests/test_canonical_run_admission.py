@@ -810,3 +810,40 @@ def test_flow109_runtime_projection_source_reopens_only_once(tmp_path, monkeypat
     restored = cra.admit_span(*args, config)
     assert restored.identity_sha256 == first.identity_sha256
     assert restored.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+
+
+def test_native_handoff_resolver_source_reopens_only_once(tmp_path, monkeypatch):
+    import shutil
+    project = _project(tmp_path / 'project')
+    programs = tmp_path / 'plugin/programs'
+    # Copy the real existing resolver even on a base whose admission omits it.
+    for source in {*cra.canonical_program_paths(PROGRAMS),
+                   PROGRAMS / 'synth_handoff_netlist_check.py'}:
+        target = programs.parent / source.relative_to(PROGRAMS.parent)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+    monkeypatch.delenv('VIBEIC_LIBRELANE_LOCAL_ATTESTATION', raising=False)
+    monkeypatch.setattr(cra, 'image_identity', lambda _: 'sha256:' + 'a' * 64)
+    args = (project, 'phase2', programs, '', {'entry_step': '11', 'exit_step': '13'})
+    first = cra.admit_span(*args)
+    assert first.reason == 'ADMITTED'
+    assert cra.admit_span(*args).reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    source = programs / 'synth_handoff_netlist_check.py'
+    original = source.read_text()
+    needle = 'if not resolved.is_file() or _sha(resolved) != expected:'
+    assert needle in original
+    source.write_text(original.replace(needle, 'if not resolved.is_file():', 1))
+    changed = cra.admit_span(*args)
+    assert changed.reason == 'ADMITTED'
+    assert changed.identity['program_source_sha256'] != first.identity['program_source_sha256']
+    assert cra.admit_span(*args).reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    source.write_text(original)
+    restored = cra.admit_span(*args)
+    assert restored.identity_sha256 == first.identity_sha256
+    assert restored.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    source.unlink()
+    missing = cra.admit_span(*args)
+    assert missing.reason == 'CANONICAL_PROGRAM_SOURCE_UNAVAILABLE'
+    source.symlink_to(PROGRAMS / 'synth_handoff_netlist_check.py')
+    foreign = cra.admit_span(*args)
+    assert foreign.reason == 'CANONICAL_PROGRAM_SOURCE_UNAVAILABLE'

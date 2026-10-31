@@ -417,6 +417,9 @@ def canonical_program_paths(programs_dir: Path) -> tuple[Path, ...]:
         # repaired LEC consumer is refused as duplicate work under the identity
         # of the broken producer generation.
         programs_dir / "lec_run.py",
+        # LEC and backend entry consume the receipt-bound native handoff here.
+        # A repaired resolver is new consumed source, even with identical RTL.
+        programs_dir / "synth_handoff_netlist_check.py",
         programs_dir / "librelane_contract.py",
         # The canonical runners delegate Default/Ultra dispatch and frontend
         # worker execution through these modules.  A change there must reopen
