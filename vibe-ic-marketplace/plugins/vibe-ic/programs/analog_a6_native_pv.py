@@ -101,6 +101,40 @@ def _find_source_netlist(bdir: Path, block: str) -> Optional[Path]:
     return None
 
 
+def _lvs_reference(project: Path, bdir: Path, block: str,
+                   simulation: Path) -> Tuple[Path, Dict[str, Any]]:
+    source = {"path": str(simulation.relative_to(project)),
+              "sha256": _sha256(simulation)}
+    markers = (bdir / "topology.json", bdir / f"{block}.lvs.cdl",
+               bdir / "lvs_provenance.json")
+    if not any(p.exists() or p.is_symlink() for p in markers):
+        return simulation, {"kind": "legacy_standalone_spice",
+                            "simulation": source, "reference": source}
+    provenance = bdir / "lvs_provenance.json"
+    record = json.loads(provenance.read_text())
+    if not isinstance(record, dict):
+        raise ValueError("A6_LVS_PROVENANCE_INVALID")
+    from analog_a3_netlist_emit import validate_lvs_view
+    view = validate_lvs_view(project, block)
+    if record.get("simulation_sha256") != source["sha256"]:
+        raise ValueError("A6_LVS_SIMULATION_SOURCE_UNBOUND")
+    return view, {"kind": "validated_a3_lvs_cdl", "simulation": source,
+                  "reference": {"path": str(view.relative_to(project)),
+                                "sha256": _sha256(view)},
+                  "provenance": {"path": str(provenance.relative_to(project)),
+                                 "sha256": _sha256(provenance)}}
+
+
+def _lvs_refusal(bdir: Path, block: str, project: Path, rule: str,
+                 detail: str, meta: Dict[str, Any]) -> Dict[str, Any]:
+    _aa.write_json(bdir / "comp.json", {
+        **meta, "block": block, "result": "refused", "executed": False,
+        "rule": rule, "detail": detail}, indent=2, ensure_ascii=True)
+    return {**meta, "executed": False, "verdict": "refused", "rule": rule,
+            "detail": detail, "report": str((bdir / "comp.json").relative_to(project)),
+            }
+
+
 # ── minimal container helpers (self-contained; real-run only) ───────────────
 
 def _docker_exec_raw(container: str, cmd: str, timeout: int = 60
@@ -119,7 +153,9 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 60
     reader. They are now 124 and 127.
     """
     try:
-        r = subprocess.run(_ce.docker_exec_argv(container, "bash", "-lc", cmd),
+        argv = (["bash", "-lc", cmd] if container == "host" else
+                _ce.docker_exec_argv(container, "bash", "-lc", cmd))
+        r = subprocess.run(argv,
                            capture_output=True, text=True, timeout=timeout)
         return r.returncode, r.stdout or "", r.stderr or ""
     except subprocess.TimeoutExpired as exc:
@@ -843,6 +879,8 @@ def _write_lvs_report(bdir: Path, block: str, verdict: str,
            if meta.get("extracted_netlist") else {}),
         **({"layout_netlist_identity": meta["layout_netlist_identity"]}
            if meta.get("layout_netlist_identity") else {}),
+        **({"lvs_reference_binding": meta["lvs_reference_binding"]}
+           if meta.get("lvs_reference_binding") else {}),
         "note": ("device-level LVS (bulk-normalize + pin-fix); numbers only — "
                  "NDA hygiene, no netlist content"),
     }, indent=2) + "\n")
@@ -1354,30 +1392,46 @@ def run_block_pv(project: Path, block: str, res: Dict[str, Any],
                       "rule": "A6_LAYOUT_NOT_OF_THIS_NETLIST", "detail": _why,
                       "report": str((bdir / "comp.json").relative_to(project))}
     else:
-        _kind = lvs_deck_kind(str(lvs_deck))
-        _work = project / "phase3" / "extracted" / "analog" / block
-        if _kind == "klayout":
-            runner = lvs_runner or (
-                lambda g, nl, blk, ctn: _klayout_lvs_runset_runner(
-                    str(lvs_deck), g, nl, blk, ctn, _work))
-        else:
-            runner = lvs_runner or (
-                lambda g, nl, blk, ctn: _default_lvs_runner(
-                    g, nl, blk, ctn, _work, layermap))
-        verdict, meta = runner(str(gds), str(netlist), block, container)
-        _ident, _why = _layout_identity(bdir, netlist)
-        meta = dict(meta or {}, **layout_meta,
-                    layout_netlist_identity={"state": _ident,
-                                             "detail": _why})
-        if verdict is None:
-            reasons.append(f"LVS engine unavailable: {meta.get('reason', '?')}")
-        else:
-            _write_lvs_report(bdir, block, str(verdict), meta or {})
-            ran = True
-            matched = str(verdict).upper() == "MATCH"
-            lvs_result = {"executed": True,
-                          "verdict": "match" if matched else "mismatch",
-                          "report": str((bdir / "comp.json").relative_to(project))}
+        reference_binding = {}
+        try:
+            lvs_reference, reference_binding = _lvs_reference(project, bdir, block, netlist)
+            _kind = lvs_deck_kind(str(lvs_deck))
+            _work = project / "phase3" / "extracted" / "analog" / block
+            if _kind == "klayout":
+                runner = lvs_runner or (
+                    lambda g, nl, blk, ctn: _klayout_lvs_runset_runner(
+                        str(lvs_deck), g, nl, blk, ctn, _work))
+            else:
+                runner = lvs_runner or (
+                    lambda g, nl, blk, ctn: _default_lvs_runner(
+                        g, nl, blk, ctn, _work, layermap))
+            verdict, meta = runner(str(gds), str(lvs_reference), block, container)
+            _ident, _why = _layout_identity(bdir, netlist)
+            meta = dict(meta or {}, **layout_meta,
+                        lvs_reference_binding=reference_binding,
+                        layout_netlist_identity={"state": _ident,
+                                                 "detail": _why})
+            if verdict is None:
+                reasons.append(f"LVS engine unavailable: {meta.get('reason', '?')}")
+                lvs_result = _lvs_refusal(bdir, block, project,
+                    "A6_LVS_ENGINE_NOT_MEASURED", meta.get("reason", "LVS engine unavailable"), meta)
+            else:
+                current_reference, current_binding = _lvs_reference(project, bdir, block, netlist)
+                if current_reference != lvs_reference or current_binding != reference_binding:
+                    raise ValueError("A6_LVS_REFERENCE_CHANGED_DURING_RUN")
+                _write_lvs_report(bdir, block, str(verdict), meta or {})
+                ran = True
+                matched = str(verdict).upper() == "MATCH"
+                lvs_result = {"executed": True,
+                              "verdict": "match" if matched else "mismatch",
+                              "report": str((bdir / "comp.json").relative_to(project)),
+                              "lvs_reference_binding": reference_binding}
+        except (OSError, ValueError, TypeError, KeyError, ImportError) as exc:
+            detail = str(exc)
+            reasons.append("A6_STRUCTURAL_LVS_REFERENCE_REFUSED: " + detail)
+            lvs_result = _lvs_refusal(bdir, block, project,
+                "A6_STRUCTURAL_LVS_REFERENCE_REFUSED", detail,
+                {**layout_meta, "lvs_reference_binding": reference_binding})
 
     return {"ran": ran,
             "reason": ("; ".join(reasons) if not ran

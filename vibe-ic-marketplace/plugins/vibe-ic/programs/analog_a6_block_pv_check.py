@@ -342,6 +342,8 @@ def _lvs_match(bdir: Path) -> Tuple[Optional[bool], str]:
             # Netgen-style: {"result": "match"|"mismatch"} or a count of
             # mismatched elements.
             res = str(data.get("result", "")).lower()
+            if res == "refused" or data.get("executed") is False:
+                return None, comp.name
             if res in ("match", "matched", "pass"):
                 return True, comp.name
             if res in ("mismatch", "fail", "failed"):

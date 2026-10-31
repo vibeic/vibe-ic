@@ -15,6 +15,7 @@ NUMBERS, never real foundry deck content.
 from __future__ import annotations
 
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -25,6 +26,47 @@ import analog_a6_native_pv as PV               # noqa: E402
 import analog_a6_block_pv_check as A6           # noqa: E402
 import _container_exec as _ce                   # noqa: E402 — the guarded argv
 import _eda_pin as _pin                         # noqa: E402 — the ONE pin
+
+
+def test_raw_host_probe_runs_without_entering_a_container(monkeypatch):
+    def no_container(*args):
+        raise AssertionError('explicit host probe entered a container')
+
+    monkeypatch.setattr(_ce, 'docker_exec_argv', no_container)
+    assert PV._docker_exec_raw('host', "printf 'native-host-probe'", 5) == (
+        0, 'native-host-probe', '')
+
+
+def test_raw_named_container_probe_keeps_its_route_and_deadline(monkeypatch):
+    command = ['guarded-container-probe']
+    calls = []
+
+    def guarded(container, *argv):
+        calls.append((container, argv))
+        return command
+
+    def execute(argv, **kwargs):
+        assert argv == command
+        assert kwargs['timeout'] == 7
+        return subprocess.CompletedProcess(argv, 3, 'native output', 'native error')
+
+    monkeypatch.setattr(_ce, 'docker_exec_argv', guarded)
+    monkeypatch.setattr(PV.subprocess, 'run', execute)
+    assert PV._docker_exec_raw('selected-runtime', 'native-command', 7) == (
+        3, 'native output', 'native error')
+    assert calls == [('selected-runtime', ('bash', '-lc', 'native-command'))]
+
+
+def test_raw_host_probe_retains_timeout_status(monkeypatch):
+    def timeout(argv, **kwargs):
+        assert argv == ['bash', '-lc', 'native-command']
+        assert kwargs['timeout'] == 7
+        raise subprocess.TimeoutExpired(argv, 7, output=b'partial output')
+
+    monkeypatch.setattr(PV.subprocess, 'run', timeout)
+    assert PV._docker_exec_raw('host', 'native-command', 7) == (
+        124, 'partial output', 'PROBE TIMEOUT after 7s: ' +
+        "Command '['bash', '-lc', 'native-command']' timed out after 7 seconds")
 
 
 def _mk_project(tmp_path: Path, block: str = "u_ldo",
@@ -194,9 +236,7 @@ def test_no_gds_skips_execution(tmp_path):
 
 
 def test_engine_unavailable_leaves_no_evidence(tmp_path):
-    """A resolved deck but an absent engine (runner returns None) must NOT
-    fabricate evidence — the block dir stays evidence-free so A6 FAILs honestly
-    (rather than a false clean)."""
+    """An absent engine publishes refusal, never a clean comparison."""
     p = _mk_project(tmp_path)
     st = PV.run_block_pv(
         p, "u_ldo", _res(), "c",
@@ -205,7 +245,10 @@ def test_engine_unavailable_leaves_no_evidence(tmp_path):
     assert st["ran"] is False
     bdir = p / "phase3" / "analog" / "u_ldo"
     assert not (bdir / "drc.report").exists()
-    assert not (bdir / "comp.json").exists()
+    doc = json.loads((bdir / "comp.json").read_text())
+    assert doc["result"] == "refused"
+    assert doc["executed"] is False
+    assert _a6_verdict(p, "u_ldo") == "FAIL"
     assert _a6_verdict(p, "u_ldo") == "FAIL"     # no evidence → honest FAIL
 
 
@@ -340,3 +383,132 @@ def test_the_record_says_what_a_zero_from_this_engine_does_not_mean():
     assert got["violations"] == 0
     assert "does not list rules it graded and passed" in got["coverage"]
     assert "NOT evidence" in got["coverage"]
+
+
+def _structural_project(tmp_path):
+    import analog_a3_netlist_emit as producer
+    import _analog_producer_common as identity
+    project = _mk_project(tmp_path)
+    bdir = project / 'phase3/analog/u_ldo'
+    simulation = bdir / 'u_ldo.sp'
+    simulation.write_text('.lib /unread/electrical.lib tt\n'
+        '.subckt u_ldo vdd vss vin vout\n'
+        'xR1 vin vout res_model w=1u l=2u\n.ends u_ldo\n')
+    topology = {'block': 'u_ldo', 'ports': ['vdd', 'vss', 'vin', 'vout'],
+                'devices': [{'name': 'R1', 'role': 'res', 'nets': ['vin', 'vout']}]}
+    (bdir / 'topology.json').write_text(json.dumps(topology))
+    (bdir / 'layout_provenance.json').write_text(json.dumps({
+        'result': 'OK', 'netlist_content_sha256': identity.content_digest(simulation.read_text())}))
+    producer.emit_lvs_view(project, 'u_ldo', expected_simulation_sha256=PV._sha256(simulation))
+    return project, bdir, simulation
+
+
+@pytest.mark.parametrize('deck', ['foundry_lvs.rule', 'foundry.lvs'])
+def test_validated_cdl_reaches_native_runner_with_original_simulation_identity(tmp_path, monkeypatch, deck):
+    project, bdir, simulation = _structural_project(tmp_path)
+    original_sha = PV._sha256(simulation)
+    seen = []
+    def runner(*args):
+        seen.append(args)
+        return 'MATCH', {'source_devices': 1, 'layout_devices': 1}
+    monkeypatch.setattr(PV, '_default_lvs_runner', runner)
+    monkeypatch.setattr(PV, '_klayout_lvs_runset_runner', runner)
+    result = PV.run_block_pv(project, 'u_ldo', _res(drc=None, lvs=deck), container='host')
+    assert result['lvs']['verdict'] == 'match'
+    assert len(seen) == 1
+    assert str(bdir / 'u_ldo.lvs.cdl') in seen[0]
+    assert str(simulation) not in seen[0]
+    doc = json.loads((bdir / 'comp.json').read_text())
+    assert doc['layout_netlist_identity']['state'] == 'MATCH'
+    binding = doc['lvs_reference_binding']
+    assert binding == result['lvs']['lvs_reference_binding']
+    assert binding['kind'] == 'validated_a3_lvs_cdl'
+    assert binding['simulation']['sha256'] == original_sha == PV._sha256(simulation)
+    assert binding['reference']['sha256'] == PV._sha256(bdir / 'u_ldo.lvs.cdl')
+    assert binding['provenance']['sha256'] == PV._sha256(bdir / 'lvs_provenance.json')
+
+
+@pytest.mark.parametrize('missing', [('u_ldo.lvs.cdl',), ('lvs_provenance.json',),
+                                     ('u_ldo.lvs.cdl', 'lvs_provenance.json')])
+def test_missing_structural_artifact_refuses_and_replaces_old_match(tmp_path, missing):
+    project, bdir, simulation = _structural_project(tmp_path)
+    for name in missing:
+        (bdir / name).unlink()
+    (bdir / 'comp.json').write_text(json.dumps({'result': 'match'}))
+    (bdir / 'lvs.report').write_text('Circuits match uniquely.\n')
+    (bdir / 'lvs_match.flag').write_text('Circuits match uniquely.\n')
+    def no_runner(*args):
+        raise AssertionError('unqualified structural source reached LVS')
+    result = PV.run_block_pv(project, 'u_ldo', _res(drc=None), lvs_runner=no_runner)
+    assert result['lvs']['executed'] is False
+    assert result['lvs']['verdict'] == 'refused'
+    assert json.loads((bdir / 'comp.json').read_text())['result'] == 'refused'
+    from analog_a6_block_pv_check import _lvs_match
+    assert _lvs_match(bdir) == (None, 'comp.json')
+
+
+@pytest.mark.parametrize('mutation', ['geometry', 'removed_device'])
+def test_changed_cdl_cannot_requalify_by_rehashing_sidecar(tmp_path, mutation):
+    import _pad_ring as parser
+    project, bdir, simulation = _structural_project(tmp_path)
+    view = bdir / 'u_ldo.lvs.cdl'
+    original_source = simulation.read_bytes()
+    text = view.read_text()
+    text = text.replace('w=1u', 'w=9u') if mutation == 'geometry' else '\n'.join(
+        line for line in text.splitlines() if not line.lower().startswith('rr1 '))
+    view.write_text(text)
+    sidecar = bdir / 'lvs_provenance.json'
+    record = json.loads(sidecar.read_text())
+    record['view_sha256'] = PV._sha256(view)
+    record['subcircuits'] = {name: {'ports': ports, 'body': body}
+        for name, (ports, body) in parser.parse_spice_subckts(text, preserve_parameters=True).items()}
+    sidecar.write_text(json.dumps(record))
+    (bdir / 'comp.json').write_text(json.dumps({'result': 'match'}))
+    def no_runner(*args):
+        raise AssertionError('altered CDL reached LVS')
+    result = PV.run_block_pv(project, 'u_ldo', _res(drc=None), lvs_runner=no_runner)
+    assert result['lvs']['verdict'] == 'refused'
+    assert json.loads((bdir / 'comp.json').read_text())['result'] == 'refused'
+    assert simulation.read_bytes() == original_source
+
+
+def test_lvs_reference_changed_during_run_cannot_publish_match(tmp_path):
+    project, bdir, simulation = _structural_project(tmp_path)
+    def runner(*args):
+        view = bdir / 'u_ldo.lvs.cdl'
+        view.write_text(view.read_text().replace('w=1u', 'w=9u'))
+        return 'MATCH', {'source_devices': 1}
+    result = PV.run_block_pv(project, 'u_ldo', _res(drc=None), lvs_runner=runner)
+    assert result['lvs']['verdict'] == 'refused'
+    assert json.loads((bdir / 'comp.json').read_text())['result'] == 'refused'
+
+
+def test_structural_lvs_engine_unavailable_replaces_old_match(tmp_path):
+    project, bdir, simulation = _structural_project(tmp_path)
+    (bdir / 'comp.json').write_text(json.dumps({'result': 'match'}))
+    result = PV.run_block_pv(project, 'u_ldo', _res(drc=None),
+        lvs_runner=lambda *args: (None, {'reason': 'engine unavailable'}))
+    assert result['lvs']['verdict'] == 'refused'
+    assert result['lvs']['rule'] == 'A6_LVS_ENGINE_NOT_MEASURED'
+    assert json.loads((bdir / 'comp.json').read_text())['result'] == 'refused'
+
+
+def test_malformed_structural_sidecar_refuses_before_runner(tmp_path):
+    project, bdir, simulation = _structural_project(tmp_path)
+    (bdir / 'lvs_provenance.json').write_text('[]')
+    (bdir / 'comp.json').write_text(json.dumps({'result': 'match'}))
+    def no_runner(*args):
+        raise AssertionError('malformed qualification reached LVS')
+    result = PV.run_block_pv(project, 'u_ldo', _res(drc=None), lvs_runner=no_runner)
+    assert result['lvs']['rule'] == 'A6_STRUCTURAL_LVS_REFERENCE_REFUSED'
+    assert json.loads((bdir / 'comp.json').read_text())['result'] == 'refused'
+
+
+def test_simulation_layout_identity_remains_the_stale_source_guard(tmp_path):
+    project, bdir, simulation = _structural_project(tmp_path)
+    simulation.write_text(simulation.read_text().replace('w=1u', 'w=2u'))
+    def no_runner(*args):
+        raise AssertionError('stale A5 source reached native LVS')
+    result = PV.run_block_pv(project, 'u_ldo', _res(drc=None), lvs_runner=no_runner)
+    assert result['lvs']['rule'] == 'A6_LAYOUT_NOT_OF_THIS_NETLIST'
+    assert json.loads((bdir / 'comp.json').read_text())['layout_netlist_identity']['state'] == 'STALE'

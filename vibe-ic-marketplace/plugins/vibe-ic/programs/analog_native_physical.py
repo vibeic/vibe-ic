@@ -187,7 +187,7 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                 "--container", str(options.get("container") or ""),
                 "--family", str(options.get("pdk") or ""), "--json", str(report)]
         for key in ("magicrc", "pdk_root", "gencell_tcl", "drc_tech", "magic_tech",
-                    "tech_lef", "wire_width_um", "via_pad_half_um"):
+                    "tech_lef", "wire_width_um", "via_pad_half_um", "max_row_width_um"):
             if cfg.get(key) is not None:
                 argv += ["--" + key.replace("_", "-"), str(cfg[key])]
         execution = run("analog_a5_layout_emit.py", argv,
@@ -228,7 +228,8 @@ def _pv(project: Path, name: str, container: str, image: str, pdk: str,
     import analog_pdk_availability as availability
 
     bdir, _ = _paths(project, name)
-    resolved = availability.resolve_pdk(pdk or None, project=str(project), container=container)
+    resolved = availability.resolve_pdk(pdk or None, project=str(project),
+                                        container=None if container == "host" else container)
     if not resolved.get("available"):
         return _result("NOT_MEASURED", resolved.get("reason", "native PDK unavailable"))
     if not (bdir / f"{name}.gds").is_file():
@@ -255,6 +256,9 @@ def _pv(project: Path, name: str, container: str, image: str, pdk: str,
     if failures:
         return _result("FAIL", "native block DRC/LVS reported a violation", reports,
                        metrics=record)
+    if lvs.get("verdict") == "refused":
+        return _result("NOT_MEASURED", lvs.get("detail", "native LVS reference refused"),
+                       reports, metrics=record)
     import analog_native_erc as erc
     erc_record = erc.run(project, name, container=container,
                          lvs_deck=erc.select_deck(project, resolved, pdk))

@@ -152,11 +152,13 @@ def test_a_mismatch_is_carried_through_as_a_mismatch(tmp_path: Path):
     assert comp["result"] == "mismatch"
 
 
-def test_an_engine_that_could_not_run_writes_no_verdict(tmp_path: Path):
+def test_an_engine_that_could_not_run_writes_explicit_refusal(tmp_path: Path):
     p = _project(tmp_path, "sg.lvs")
     res = PV.run_block_pv(p, "ldo",
                           {"drc_deck": None,
                            "lvs_deck": str(p / "deck" / "sg.lvs")},
                           lvs_runner=lambda *a: (None, {"reason": "no klayout"}))
-    assert res["lvs"] is None
-    assert not (p / "phase3" / "analog" / "ldo" / "comp.json").exists()
+    assert res["lvs"]["verdict"] == "refused"
+    comp = json.loads((p / "phase3" / "analog" / "ldo" / "comp.json").read_text())
+    assert comp["result"] == "refused"
+    assert comp["executed"] is False

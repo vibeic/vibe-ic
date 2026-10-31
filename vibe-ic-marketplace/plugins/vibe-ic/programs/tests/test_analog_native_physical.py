@@ -85,6 +85,16 @@ def test_native_pv_runs_producer_preserves_counts_and_missing_erc(project, monke
         assert result["metrics"]["erc"]["status"] == "NOT_MEASURED"
 
 
+def test_native_pv_host_resolves_attested_local_pdk_before_gds(project, monkeypatch):
+    import analog_pdk_availability as availability
+    root = project / "installed"
+    (root / "ihp-sg13g2/libs.tech/ngspice").mkdir(parents=True)
+    monkeypatch.setattr(availability, "local_pdks_root", lambda: str(root))
+    result = physical._pv(project, "unit", "host", "image", "ihp-sg13g2", {})
+    assert result["status"] == "NOT_MEASURED"
+    assert result["detail"] == "A11 block GDS is absent"
+
+
 def _extraction_project(project, monkeypatch, parasitic=True):
     import _analog_producer_common as pc
     import librelane_contract as lc
@@ -912,3 +922,32 @@ def test_physical_route_names_are_bound_to_shipped_flow_rows():
     assert named["A13"] == "Analog parasitic extraction"
     assert named["A14"] == "Analog post-layout performance"
     assert named["A15"] == "Analog post-layout statistics"
+
+
+def test_layout_forwards_selected_block_row_width(project):
+    calls = []
+    def run(program, argv, **kwargs):
+        calls.append(argv)
+        return {'returncode': 1}
+    physical.run_step('A11', project, {'name': 'unit'},
+        {'config': {'steps': {'A11': {'blocks': {'unit': {'max_row_width_um': 400}}}}}}, run)
+    argv = calls[0]
+    assert argv[argv.index('--max-row-width-um') + 1] == '400'
+
+
+def test_refused_structural_lvs_does_not_run_erc_or_report_acceptance(project, monkeypatch):
+    import analog_pdk_availability as availability
+    import analog_a6_native_pv as pv
+    import analog_native_erc as erc
+    bdir, _ = physical._paths(project, 'unit')
+    put(bdir / 'unit.gds', 'native fixture')
+    monkeypatch.setattr(availability, 'resolve_pdk', lambda *a, **k: {'available': True})
+    monkeypatch.setattr(pv, 'run_block_pv', lambda *a, **k: {
+        'ran': False, 'drc': None, 'lvs': {'executed': False, 'verdict': 'refused',
+                                         'detail': 'structural source changed'}})
+    def no_erc(*args, **kwargs):
+        raise AssertionError('unqualified LVS advanced to ERC')
+    monkeypatch.setattr(erc, 'run', no_erc)
+    result = physical._pv(project, 'unit', 'host', 'image', 'process', {'drc_engine': 'native'})
+    assert result['status'] == 'NOT_MEASURED'
+    assert result['detail'] == 'structural source changed'
