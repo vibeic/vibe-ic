@@ -2164,6 +2164,171 @@ def finish_native_window(project: Path, report: Mapping, report_path: Path | Non
         if receipt.is_file():
             component["canonical_receipt"] = {
                 "path": str(receipt.relative_to(project)), "sha256": _file_digest(receipt)}
+        if row['id'] in ('D35', 'D37'):
+            # These owners judge native values again. A saved nested PASS is
+            # provenance to bind, never the current metric verdict.
+            import flow109_metric_acceptance as metrics
+            import flow109_admission as admission
+            import execution_backend_producers as producers
+            import step_output_collector as versions
+            import librelane_contract as native_chain
+            current = component_context(context, requested_step=row['id'])
+            accepted = {'row_id': row['id'], 'status': 'NOT_MEASURED',
+                        'metric_status': 'NOT_MEASURED', 'obligations': []}
+            row_status = 'FAIL' if status == 'FAIL' else 'NOT_MEASURED'
+            readset = []
+            component['qualification'] = {'status': 'NOT_MEASURED', 'reason': 'ADMISSION_NOT_REACHED'}
+
+            def _d3537_read(relative):
+                relative = Path(relative)
+                if relative.is_absolute() or '..' in relative.parts:
+                    raise Flow109Error('FLOW109_BACKEND_RECEIPT_UNBOUND', str(relative))
+                body, reference = _bound_project_json(
+                    project, relative, 'FLOW109_BACKEND_RECEIPT_UNBOUND')
+                _current_project_ref(project, reference, 'FLOW109_BACKEND_RECEIPT_UNBOUND')
+                readset.append(reference)
+                return body
+
+            try:
+                chain = _d3537_read('reports/phase3/execution-backend-' + native + '.json')
+                state = Path(chain['states'][0]['state'])
+                state = state if state.is_absolute() else project / state
+                native_path = (state.parent / 'vibeic_receipt.json').relative_to(project)
+                native_ref = {'path': native_path.as_posix(),
+                              'sha256': _file_digest(project / native_path)}
+                _current_project_ref(project, native_ref, 'FLOW109_BACKEND_RECEIPT_UNBOUND')
+                readset.append(native_ref)
+                native_receipt = native_chain.validate_step_receipt(
+                    state.parent, chain['states'][0]['step'])
+                judge = metrics.accept_d35 if row['id'] == 'D35' else metrics.accept_d37
+                observed = judge(project, current, {
+                    'native_image': native_receipt['input']['image'], 'verdict': 'NOT_MEASURED'})
+                if (not isinstance(observed, Mapping) or observed.get('row_id') != row['id']
+                        or observed.get('status') not in ('PASS', 'FAIL', 'NOT_MEASURED')
+                        or observed.get('metric_status') not in ('PASS', 'FAIL', 'NOT_MEASURED')):
+                    raise Flow109Error('FLOW109_BACKEND_METRIC_RESULT_INVALID', row['id'])
+                accepted = dict(observed)
+                if (accepted.get('status') == 'FAIL' or accepted.get('metric_status') == 'FAIL'
+                        or any(o.get('status') == 'FAIL' for o in accepted.get('obligations', []))):
+                    row_status = 'FAIL'
+                body = _d3537_read(receipt.relative_to(project))
+                binding = body.get('binding') or {}
+                if (body.get('schema') != 'vibeic/backend-result/2' or body.get('step_id') != native
+                        or binding.get('step_id') != native or body.get('source_sha') != binding.get('source_sha')
+                        or not isinstance(body.get('source_sha'), str) or not body['source_sha']):
+                    raise Flow109Error('FLOW109_BACKEND_RECEIPT_UNBOUND', native)
+                folder = Path((item.get('extras') or {})['output_version'])
+                root = versions._versions_root(project)
+                relative = (root / folder).relative_to(project)
+                journal = _d3537_read(relative / 'attempt.json')
+                saved = _d3537_read(relative / 'outputs.json')
+                index = _d3537_read(root.relative_to(project) / 'index.json')
+                indexed = [entry for entry in index['steps'] if str(entry.get('id')) == native]
+                keys = ('id', 'name', 'phase', 'stage', 'folder', 'storage_root',
+                        'started_at', 'inputs', 'input_files')
+                if (len(indexed) != 1 or indexed[0].get('folder') != str(folder)
+                        or str(saved.get('id')) != native or saved.get('folder') != str(folder)
+                        or saved.get('result') != body or saved.get('status') != body.get('verdict')
+                        or journal.get('status') != 'RUNNING'
+                        or any(saved.get(key) != journal.get(key) for key in keys)
+                        or saved.get('capture_errors') != [] or journal.get('capture_errors') != []
+                        or not versions._inputs_current(project, saved.get('inputs'))):
+                    raise Flow109Error('FLOW109_BACKEND_RECEIPT_STALE', native)
+                copies = [entry for entry in saved.get('written_files', [])
+                          if entry.get('rel') == str(receipt.relative_to(project))]
+                if len(copies) != 1:
+                    raise Flow109Error('FLOW109_BACKEND_RECEIPT_UNBOUND', 'original backend result copy absent')
+                copy_path = relative / copies[0]['snapshot']
+                if not (project / copy_path).resolve().is_relative_to((project / relative).resolve()):
+                    raise Flow109Error('FLOW109_BACKEND_RECEIPT_UNBOUND', 'foreign result copy')
+                original = _d3537_read(copy_path)
+                if (original != body or copies[0]['sha256'] != _file_digest(receipt)
+                        or copies[0]['size'] != receipt.stat().st_size):
+                    raise Flow109Error('FLOW109_BACKEND_RECEIPT_STALE', 'backend result changed')
+                if (body.get('verdict') == 'FAIL' or body.get('producer_verdict') == 'FAIL'
+                        or any(value == 'FAIL' for value in (body.get('gates') or {}).values())):
+                    row_status = 'FAIL'
+                    component['component_status'] = 'FAIL'
+                allowed, detail, _ = producers._current_step_producer_authority(
+                    body.get('current_step_declared_producers'), project=project)
+                if not allowed:
+                    raise Flow109Error('FLOW109_BACKEND_PRODUCER_UNBOUND', detail)
+                records = body.get('canonical_receipts')
+                if (not isinstance(records, list) or len(records) != 1
+                        or records[0].get('schema') != 'vibeic/backend-producer-receipt/1'
+                        or records[0].get('producer') != 'execution_backend_producers.produce'
+                        or records[0].get('step_id') != native):
+                    raise Flow109Error('FLOW109_BACKEND_PRODUCER_UNBOUND', native)
+                prior = records[0].get('metric_acceptance') or {}
+                if prior.get('row_id') != row['id']:
+                    raise Flow109Error('FLOW109_BACKEND_CONTEXT_MISMATCH', row['id'])
+                prior_measurements = [m for obligation in prior.get('obligations', [])
+                    for m in ([obligation['measurement']] if 'measurement' in obligation
+                              else obligation.get('measurements', []))]
+                if (not prior_measurements or any(
+                        (m.get('measurement', m).get('identity', {}).get('configuration', {})
+                         .get('context_sha256')) != current['context_sha256'] for m in prior_measurements)):
+                    raise Flow109Error('FLOW109_BACKEND_CONTEXT_MISMATCH', row['id'])
+                qualified = admission.require_admission(project, current)
+                component['qualification'] = qualified
+                selected = {entry['id'] for entry in resolve_plan(
+                    current['features'], current['step_profiles'])['rows']}
+                dependencies = {}
+                required = set(row['acceptance_deps']) | {dep['step'] for dep in row['data_deps']}
+                for dependency in sorted(required & selected):
+                    upstream, reference = _accepted_row(project,
+                        Path('reports/flow109/default_rows') / (dependency + '.json'), dependency)
+                    upstream_context = validate_execution_context(_d3537_read(
+                        'reports/flow109/requests/' + str(upstream.get('context_sha256')) + '.json'))
+                    if (upstream_context['requested_step'] != dependency
+                            or upstream_context['features'] != current['features']
+                            or upstream_context['step_profiles'] != current['step_profiles']
+                            or upstream_context.get('rtl_scope') != current.get('rtl_scope')):
+                        raise Flow109Error('FLOW109_BACKEND_DEPENDENCY_STALE', dependency)
+                    if upstream.get('canonical_receipt'):
+                        _current_project_ref(project, upstream['canonical_receipt'],
+                                             'FLOW109_BACKEND_DEPENDENCY_STALE')
+                    readset.append(reference)
+                    dependencies[dependency] = reference
+                component['accepted_dependencies'] = dependencies
+                eligible = (status == 'PASS' and body.get('verdict') == 'PASS'
+                    and body.get('producer_verdict') == 'PASS' and saved.get('canonical_pass') is True
+                    and not body.get('missing_outputs') and not body.get('missing_inputs')
+                    and all(body.get('gates', {}).get(gate) == 'PASS'
+                            for gate in ('backend_canonical', 'backend_native_substance'))
+                    and accepted.get('row_id') == row['id'] and accepted.get('status') == 'PASS'
+                    and accepted.get('metric_status') == 'PASS'
+                    and accepted.get('qualification') == 'PASS'
+                    and {o['id'] for o in accepted.get('obligations', [])} == {o['id'] for o in row['obligations']}
+                    and all(o.get('status') == 'PASS' for o in accepted['obligations']))
+                if row_status != 'FAIL' and eligible:
+                    row_status = 'PASS'
+                for reference in readset:
+                    _current_project_ref(project, reference, 'FLOW109_BACKEND_INPUT_CHANGED')
+                if admission.require_admission(project, current) != qualified:
+                    raise Flow109Error('FLOW109_BACKEND_QUALIFICATION_CHANGED', row['id'])
+                request = project / 'reports/flow109/requests' / (current['context_sha256'] + '.json')
+                if request.is_symlink() or request.parent.resolve() != request.parent:
+                    raise Flow109Error('FLOW109_BACKEND_CONTEXT_MISMATCH', 'linked request path')
+                if request.exists() and _d3537_read(request.relative_to(project)) != current:
+                    raise Flow109Error('FLOW109_BACKEND_CONTEXT_MISMATCH', row['id'])
+                from _atomic_artefact import write_json
+                if not request.exists():
+                    write_json(request, current)
+            except (Flow109Error, admission.AdmissionRefusal, native_chain.Refusal, OSError, ValueError,
+                    KeyError, TypeError, AttributeError) as exc:
+                if row_status != 'FAIL':
+                    row_status = 'NOT_MEASURED'
+                if isinstance(exc, admission.AdmissionRefusal):
+                    component['qualification'] = exc.report
+                component['reason'] = str(exc)
+            component.update(metric_acceptance=accepted,
+                metric_acceptance_status=accepted.get('metric_status', 'NOT_MEASURED'),
+                default_row_status=row_status, flow109_acceptance=row_status,
+                completed=row_status == 'PASS', context_sha256=current['context_sha256'],
+                delivery_accepted=False)
+            from _atomic_artefact import write_json
+            write_json(project / 'reports/flow109/default_rows' / (row['id'] + '.json'), component)
         components.append(component)
         from _atomic_artefact import write_json
         write_json(project / "reports" / "flow109" / "components" / (row["id"] + ".json"), component)
