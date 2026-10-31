@@ -632,14 +632,23 @@ def _python_argv_view(body: str) -> str:
             return strings(node.left, seen) + strings(node.right, seen)
         return []
 
+    rebound_names = {n.id for n in ast.walk(tree)
+                     if isinstance(n, ast.Name) and isinstance(n.ctx, ast.Store)}
+    rebound_attrs = {n.attr for n in ast.walk(tree)
+                     if isinstance(n, ast.Attribute) and isinstance(n.ctx, ast.Store)}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            rebound_names.update(a.asname or a.name for a in node.names)
     views = [body]
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
         function = node.func
-        if ((isinstance(function, ast.Name) and function.id in
+        if ((isinstance(function, ast.Name) and function.id not in rebound_names
+             and function.id in
              {"Path", "print", "str", "len", "list", "dict", "tuple", "set"})
-                or (isinstance(function, ast.Attribute) and function.attr in
+                or (isinstance(function, ast.Attribute) and function.attr not in rebound_attrs
+                    and function.attr in
                     {"write_text", "write_bytes", "read_text", "read_bytes",
                      "items", "keys", "values", "append", "hexdigest",
                      "dumps", "loads", "sha256", "copyfile"})):

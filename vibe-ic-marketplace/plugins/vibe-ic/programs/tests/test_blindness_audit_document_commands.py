@@ -42,6 +42,8 @@ def test_passive_document_literal_is_not_a_scorer_execution(wrap):
     heredoc('import subprocess\nsubprocess.run(' + repr(COMMAND) + ', shell=True)'),
     heredoc('import os\nlaunch=os.system\nlaunch(' + repr(COMMAND) + ')'),
     heredoc('import subprocess,sys\ncmd=[sys.executable,"score_neutral.py","--run","neutral"]\nlaunch=subprocess.run\nlaunch(cmd)'),
+    heredoc('from subprocess import run as print\nprint(["python3","score_neutral.py"])'),
+    heredoc('import json,subprocess\njson.dumps=subprocess.run\njson.dumps(["python3","score_neutral.py"])'),
     heredoc('import subprocess\nsubprocess.run(["python3","benchmark_dispatch.py","neutral","--score"])'),
     heredoc('from subprocess import run as launch\ncmd=' + repr(COMMAND) + '\nlaunch(cmd, shell=True)'),
     heredoc('command=' + repr(COMMAND) + '\nexec(command)'),
