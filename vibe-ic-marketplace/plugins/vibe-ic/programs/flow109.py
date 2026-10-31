@@ -1526,7 +1526,7 @@ _WINDOW_CONTEXT_KEYS = {
 
 
 def execution_context(plan: dict, entry: str, exit_: str, *,
-                      runtime_tool_uses=None, qualification_registry=None) -> dict:
+                      runtime_tool_uses=None, qualification_registry=None, rtl_scope=None) -> dict:
     window = resolve_execution_window(plan, entry, exit_)
     window = copy.deepcopy(window)
     for row in window.get('resolved_rows', [window.get('resolved_row')]):
@@ -1558,6 +1558,8 @@ def execution_context(plan: dict, entry: str, exit_: str, *,
                                              "features", "step_profiles")},
                **window, "runtime_tool_uses": copy.deepcopy(runtime_tool_uses),
                "qualification_registry": qualification_registry}
+    if rtl_scope is not None:
+        context["rtl_scope"] = copy.deepcopy(rtl_scope)
     context["context_sha256"] = digest(context)
     return context
 
@@ -1568,6 +1570,8 @@ def validate_execution_context(context: Mapping) -> dict:
     keys = (_WINDOW_CONTEXT_KEYS
             if context.get("schema") == "vibeic.flow109.execution-window.v1"
             else _CONTEXT_KEYS)
+    if "rtl_scope" in context:
+        keys = keys | {"rtl_scope"}
     if set(context) != keys:
         raise Flow109Error("FLOW109_CONTEXT_INVALID", "unexpected or missing fields")
     if context["schema"] not in ("vibeic.flow109.execution-context.v1",
@@ -1581,7 +1585,8 @@ def validate_execution_context(context: Mapping) -> dict:
     exit_ = context.get("requested_step", context.get("requested_exit"))
     expected = execution_context(current, entry, exit_,
                                  runtime_tool_uses=context["runtime_tool_uses"],
-                                 qualification_registry=context["qualification_registry"])
+                                 qualification_registry=context["qualification_registry"],
+                                 rtl_scope=context.get("rtl_scope"))
     if dict(context) != expected:
         raise Flow109Error("FLOW109_CONTEXT_STALE", "source registry, producer or selection changed")
     return expected
@@ -1610,7 +1615,122 @@ def component_context(context: Mapping, *, native_step_id: str | None = None,
     plan = resolve_plan(context["features"], context["step_profiles"])
     return execution_context(
         plan, row["id"], row["id"], runtime_tool_uses=selected,
-        qualification_registry=context["qualification_registry"])
+        qualification_registry=context["qualification_registry"],
+        rtl_scope=context.get("rtl_scope"))
+
+
+def _rtl_scope_inputs(project: Path) -> list[dict]:
+    """Bind the ordinary original request and supplied RTL without changing it."""
+    from _path_layout import original_input_sources
+    files = set(original_input_sources(project))
+    original_hashes = {_file_digest(path) for path in files}
+    for relative in ("input/docs", "input/rtl", "input/vendor_rtl"):
+        root = project / relative
+        entries = [root, *root.rglob("*")] if root.exists() or root.is_symlink() else []
+        if any(path.is_symlink() for path in entries):
+            raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", "linked supplied source")
+        # The ordinary front door materializes byte-identical prompt/context
+        # copies under input/docs before extraction. Those build copies do not
+        # add source authority; new or changed content still changes this set.
+        files.update(path for path in entries if path.is_file()
+                     and (path in files or _file_digest(path) not in original_hashes))
+    return [{"path": path.relative_to(project).as_posix(), "sha256": _file_digest(path)}
+            for path in sorted(files)]
+
+
+def _rtl_scope_window(context: Mapping) -> None:
+    """RTL applicability never grants physical or generic qualification credit."""
+    features = context["features"]
+    if (features["physical"] or features["technology_specific"]
+            or features["has_analog"] or not features["has_digital"]
+            or context.get("qualification_registry") is not None
+            or context.get("runtime_tool_uses") is not None):
+        raise Flow109Error("FLOW109_RTL_SCOPE_CONFLICT", "physical or qualified request")
+    from task_nature_route import EVIDENCE_EXIT
+    last = int(EVIDENCE_EXIT["proof"]["exit_step"])
+    for row in context.get("resolved_rows") or [context["resolved_row"]]:
+        dispatch = row["profile"].get("dispatch") or {}
+        native = str(dispatch.get("native_step_id"))
+        owner = dispatch.get("owner_runner")
+        if not (dispatch.get("kind") == "canonical_owner_window"
+                and ((native == "D1" and owner == "phase1_one_shot_runner")
+                     or (owner == "design_one_shot_runner"
+                         and (native == "P0" or native.isdigit() and 1 <= int(native) <= last)))):
+            raise Flow109Error("FLOW109_RTL_SCOPE_CONFLICT", "window is outside RTL owners")
+
+
+def _rtl_scope_binding(project: Path, manifest: Path, context: Mapping) -> dict:
+    project = project.resolve()
+    manifest = manifest.absolute()
+    if (manifest.is_symlink() or not manifest.is_file()
+            or not manifest.resolve().is_relative_to(project)):
+        raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", "manifest is not a regular project input")
+    _rtl_scope_window(context)
+    inputs = _rtl_scope_inputs(project)
+    from task_nature_route import prompt_delivery_requirements, resolve_prompt_delivery_target
+    for source in inputs:
+        text = (project / source["path"]).read_text(encoding="utf-8", errors="replace")
+        demand = prompt_delivery_requirements(text)
+        resolved = resolve_prompt_delivery_target(demand, "rtl")
+        if not resolved["ok"] or demand["route_family"] is not None:
+            raise Flow109Error("FLOW109_RTL_SCOPE_CONFLICT",
+                               "original source requests physical delivery: " + source["path"])
+    retained = []
+    for relative in (Path("input/step_0_5ic_answers.json"),
+                     Path("input/submission_template/tapeout_declaration.json")):
+        path = project / relative
+        if path.exists() or path.is_symlink():
+            declaration, reference = _bound_project_json(project, relative, "FLOW109_RTL_SCOPE_INVALID")
+            answers = declaration.get("answers")
+            retained.append({**reference,
+                             "declared_deliverable": (answers.get("deliverable")
+                                                      if isinstance(answers, Mapping) else None),
+                             "scope_authority": False,
+                             "disposition": "retained unchanged; current RTL scope comes from original sources and explicit request"})
+    return {"delivery_target": "rtl", "project": str(project),
+            "manifest": {"path": manifest.relative_to(project).as_posix(),
+                         "sha256": _file_digest(manifest)},
+            "inputs": inputs, "retained_delivery_declarations": retained,
+            "issuer_sources": {name: _file_digest(HERE / name) for name in
+                ("flow109.py", "_delivery_route.py", "vibe_ic_one_shot_runner.py",
+                 "phase1_one_shot_runner.py")}}
+
+
+def active_rtl_scope(project: Path) -> dict | None:
+    """Read the existing source-owned request; stale/foreign scope is BLOCKING.
+
+    This is invocation applicability, never owner physical-delivery authority.
+    Unscoped requests retain the ordinary IC/IP admission contract.
+    """
+    raw = os.environ.get(CONTEXT_ENV)
+    if not raw:
+        return None
+    project = Path(project).resolve()
+    path = Path(raw)
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        if "rtl_scope" not in value:
+            return None
+        if (path.is_symlink() or path.resolve().parent !=
+                (project / "reports/flow109/requests").resolve()):
+            raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", "foreign request path")
+        context = validate_execution_context(value)
+        if path.name != context["context_sha256"] + ".json":
+            raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", "request filename changed")
+        scope = context["rtl_scope"]
+        manifest, _ = _bound_project_json(project, Path(scope["manifest"]["path"]),
+                                        "FLOW109_RTL_SCOPE_INVALID")
+        plan = resolve_plan(manifest.get("features"), manifest.get("step_profiles"))
+        if plan["features"] != context["features"] or plan["step_profiles"] != context["step_profiles"]:
+            raise Flow109Error("FLOW109_RTL_SCOPE_STALE", "manifest selection changed")
+        expected = _rtl_scope_binding(project, project / scope["manifest"]["path"], context)
+        if scope != expected:
+            raise Flow109Error("FLOW109_RTL_SCOPE_STALE", "source, manifest, project or issuer changed")
+        return {**scope, "context_sha256": context["context_sha256"]}
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        if isinstance(exc, Flow109Error):
+            raise
+        raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", str(exc)) from exc
 
 
 def active_native_predecessor(project: Path, native_step_id: str) -> dict | None:
@@ -2069,11 +2189,22 @@ def prepare_front_door(args, project: Path) -> int | None:
     if "tool_uses" in manifest and "runtime_tool_uses" in manifest:
         raise Flow109Error("FLOW109_MANIFEST_INVALID", "duplicate runtime tool identity fields")
     plan = resolve_plan(manifest.get("features"), manifest.get("step_profiles"))
-    from _delivery_route import report_label
-    route = report_label(project).get("delivery_route")
-    expected = "IC" if plan["features"]["ic"] else "IP"
-    if route != expected:
-        raise Flow109Error("FLOW109_ROUTE_CONFLICT", f"manifest endpoint requires {expected}, owner declared {route}")
+    context = execution_context(plan, args.entry_step, args.exit_step,
+                                runtime_tool_uses=manifest.get("runtime_tool_uses", manifest.get("tool_uses")),
+                                qualification_registry=manifest.get("qualification_registry"))
+    if getattr(args, "delivery_target", None) == "rtl":
+        if getattr(args, "route", None) == "ic":
+            raise Flow109Error("FLOW109_RTL_SCOPE_CONFLICT", "RTL request also selected physical IC delivery")
+        context = execution_context(plan, args.entry_step, args.exit_step,
+                                    runtime_tool_uses=context["runtime_tool_uses"],
+                                    qualification_registry=context["qualification_registry"],
+                                    rtl_scope=_rtl_scope_binding(project, Path(args.flow109_manifest), context))
+    else:
+        from _delivery_route import report_label
+        route = report_label(project, allow_rtl_scope=False).get("delivery_route")
+        expected = "IC" if plan["features"]["ic"] else "IP"
+        if route != expected:
+            raise Flow109Error("FLOW109_ROUTE_CONFLICT", f"manifest endpoint requires {expected}, owner declared {route}")
     dft_contract_rows = {"D22", "D23", "D24", "D25", "D26", "D30", "D50", "D51"}
     registry_rows = load_registry()["rows"]
     positions = {row["id"]: row["position"] for row in registry_rows}
@@ -2110,9 +2241,6 @@ def prepare_front_door(args, project: Path) -> int | None:
     print(f"FLOW109 PLAN: {plan['selected_count']} selected; runtime NOT_MEASURED")
     if args.flow109_plan_only:
         return 0
-    context = execution_context(plan, args.entry_step, args.exit_step,
-                                runtime_tool_uses=manifest.get("runtime_tool_uses", manifest.get("tool_uses")),
-                                qualification_registry=manifest.get("qualification_registry"))
     selected_rows = context.get("resolved_rows") or [context.get("resolved_row", {})]
     try:
         dft_preroute = (dft_preroute_admission(project, component_context(

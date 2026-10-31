@@ -4707,6 +4707,8 @@ def _main() -> int:
                         "demonstrated step; this is distinct from an explicit "
                         "--entry-step rerun.")
     p.add_argument("--skip-phase1", action="store_true")
+    p.add_argument("--delivery-target", choices=("rtl",),
+                   help="Explicit bounded RTL scope; requires a source-bound Flow109 manifest/window.")
     p.add_argument("--route", choices=("ic", "ip"),
                    help="Owner-stated delivery route: ic=DIE, ip=HARDMACRO. "
                         "Required unless already owner-declared in this project.")
@@ -4795,10 +4797,16 @@ def _main() -> int:
         diagnostic = flow109_metric_acceptance.dry_run_d10(project, args.only)
         print(json.dumps(diagnostic, sort_keys=True))
         return {'PASS': 0, 'FAIL': 1, 'NOT_MEASURED': 2}[diagnostic['gate_status']]
-    route_refusal = _delivery_route.admit(project, args.route)
-    if route_refusal:
-        print(_delivery_route.refusal_message(route_refusal), file=sys.stderr)
+    if args.delivery_target and (args.flow != "109" or args.execution_mode not in (None, "default")):
+        print("REFUSED: FLOW109_RTL_SCOPE_REQUIRED: explicit RTL scope requires Default Flow109", file=sys.stderr)
         return 2
+    # Flow109 validates the manifest, source and bounded window before creating
+    # its RTL request. Physical admission remains unchanged for unscoped work.
+    if not args.delivery_target:
+        route_refusal = _delivery_route.admit(project, args.route, allow_rtl_scope=False)
+        if route_refusal:
+            print(_delivery_route.refusal_message(route_refusal), file=sys.stderr)
+            return 2
     import flow109
     _resume_plan = None
     if args.resume_request:
