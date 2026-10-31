@@ -558,3 +558,95 @@ def test_existing_invalid_repair_shape_cannot_be_treated_as_absent(tmp_path, mon
     result = d06.execute(tmp_path, _context())
     assert result['component_status'] == 'NOT_MEASURED', result
     assert result['reason'] in {'D06_EVIDENCE_WRONG_SOURCE', 'D06_EVIDENCE_ABSENT_OR_INVALID'}
+
+
+def _native_handoff_fixture(project, *, load=True):
+    """Neutral software publication shape; no native qualification is asserted."""
+    import hashlib
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    ref = lambda p: {'path': str(p.relative_to(project)), 'sha256': sha(p)}
+    state, old = _native_signoff_fixture(project)
+    # Leave an inherited stale post-route reference; it is not the current bundle.
+    old.unlink()
+    config = state.parent / 'config.json'
+    body = json.loads(config.read_text());body['meta']['step'] = 'OpenROAD.STAPrePNR'
+    _write(config, body)
+    values = json.loads(state.read_text())
+    if not load:
+        Path(values['sdc']).write_text('set_output_delay 2 -clock clk [all_outputs]\n# set_load refused\n')
+    fp = {'step': 'OpenROAD.STAPrePNR', 'state_files': {values['nl']: sha(Path(values['nl']))},
+          'config_files': {values['sdc']: sha(Path(values['sdc']))}}
+    for name, value in [('input_fingerprint.json', fp), ('pdk_root.json', {'revision': 'neutral'}),
+                        ('invocation.log', 'actual reference invocation\n')]:
+        _write(state.parent / name, value)
+    names = ['config.json', 'state_out.json', 'input_fingerprint.json', 'pdk_root.json', 'invocation.log', 'chip_top.nl.v']
+    receipt = _write(state.parent / 'vibeic_receipt.json', {
+        'input': fp, 'sha256': {name: sha(state.parent / name) for name in names}})
+    netlist, sdc = Path(values['nl']), Path(values['sdc'])
+    delivered = _write(project / 'reports/handoff/delivered.v', netlist.read_text())
+    handoff = _write(project / 'steps/handoff/outputs.json', {'status': 'PASS', 'canonical_pass': True})
+    timing = {'status': 'MEASURED', 'value': [{'mode': 'functional', 'corner': 'neutral', 'sdc': ref(sdc)}],
+              'consumed_inputs': {str(sdc): sha(sdc), str(netlist): sha(netlist)},
+              'native_records': {'config.json': ref(config), 'state_out.json': ref(state)},
+              'native_receipt': ref(receipt)}
+    delivery = _write(project / 'reports/handoff/delivery.json', {
+        'schema': 'vibeic.flow109.d30-delivery.v1', 'step_id': 'D30', 'context_sha256': 'c' * 64,
+        'handoff_record': ref(handoff), 'source_netlist': ref(netlist),
+        'delivered_netlist': ref(delivered), 'consumed_timing': timing})
+    _write(project / 'reports/flow109/default_rows/D30.json', {
+        'step_id': 'D30', 'default_row_status': 'PASS', 'completed': True, 'context_sha256': 'c' * 64,
+        'metric_acceptance': {'status': 'PASS', 'obligations': [{'status': 'PASS'}]},
+        'd30_delivery_receipt': ref(delivery)})
+    return state, delivery
+
+
+def test_bare_die_load_consumes_current_handoff_before_inherited_sta(tmp_path, monkeypatch):
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    state, _ = _native_handoff_fixture(tmp_path)
+    _write(tmp_path / 'reports/phase3/sta_postpnr_signoff.json', {'judgment': {'verdict': 'FAIL'}})
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] == 'PASS', (result.get('reason'), result.get('detail'))
+    measured = result['metrics']['package_escape_feasibility']
+    assert measured['sta_state']['sha256'] == d06._sha(state)
+    assert measured['capacitance_library_units'] == 0.07
+    assert measured['physical_package_model_consumed'] is False
+    assert any(item['path'] == 'reports/flow109/default_rows/D30.json' for item in result['inputs'])
+    assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('damage', ['changed_sdc', 'changed_netlist', 'changed_native_log',
+                                    'wrong_native_step', 'failed_handoff', 'foreign_source',
+                                    'missing_external_load'])
+def test_current_handoff_load_refuses_changed_or_unmeasured_inputs(tmp_path, monkeypatch, damage):
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    state, delivery_path = _native_handoff_fixture(tmp_path, load=damage != 'missing_external_load')
+    delivery = json.loads(delivery_path.read_text())
+    values = json.loads(state.read_text())
+    if damage == 'changed_sdc':
+        Path(values['sdc']).write_text('set_load 99 [all_outputs]\n')
+    elif damage == 'changed_netlist':
+        Path(values['nl']).write_text('module foreign; endmodule\n')
+    elif damage == 'changed_native_log':
+        (state.parent / 'invocation.log').write_text('changed invocation\n')
+    elif damage == 'wrong_native_step':
+        path = state.parent / 'vibeic_receipt.json';body = json.loads(path.read_text())
+        body['input']['step'] = 'Other.Step';_write(path, body)
+        delivery['consumed_timing']['native_receipt']['sha256'] = d06._sha(path)
+    elif damage == 'failed_handoff':
+        path = tmp_path / 'steps/handoff/outputs.json';_write(path, {'status': 'FAIL', 'canonical_pass': False})
+        delivery['handoff_record']['sha256'] = d06._sha(path)
+    elif damage == 'foreign_source':
+        path = _write(tmp_path.parent / 'foreign.v', Path(values['nl']).read_text())
+        delivery['source_netlist'] = {'path': str(path), 'sha256': d06._sha(path)}
+    _write(delivery_path, delivery)
+    row = tmp_path / 'reports/flow109/default_rows/D30.json';body = json.loads(row.read_text())
+    body['d30_delivery_receipt']['sha256'] = d06._sha(delivery_path);_write(row, body)
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] != 'PASS', result
+    assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
+    if damage == 'missing_external_load':
+        assert result['reason'] == 'D06_BARE_DIE_LOAD_INTERFACE_UNRESOLVED', result
