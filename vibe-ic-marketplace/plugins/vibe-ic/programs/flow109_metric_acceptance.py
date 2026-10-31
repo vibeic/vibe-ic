@@ -7055,6 +7055,61 @@ def _d0102_addresses(expectation: dict) -> set:
     return {(expectation.get('layer'), expectation.get('field_path'))}
 
 
+def _d0102_submission_lineage(project: Path, record: Mapping, reads: dict) -> dict:
+    """Read the original submission producer's preimage and own publication."""
+    import step_output_collector as versions
+    folder = f"{record.get('storage_root', 'steps')}/{record['folder']}"
+    original = _d0102_read(project, folder + '/outputs.json', reads)
+    result = original.get('result') or {}
+    if (original.get('id') != '0.5ic' or original.get('canonical_pass') is not True
+            or original.get('status') != 'PASS' or original.get('capture_errors')
+            or result.get('runner') != 'phase1_one_shot_runner'
+            or result.get('site') != '_run_step_0_5ic'
+            or type(result.get('producer_return')) is not int
+            or result.get('producer_return') != 0
+            or (result.get('canonical_consumer') or {}).get('status') != 'PASS'):
+        raise MetricRefusal('D0102_SUBMISSION_LINEAGE_UNBOUND', folder)
+    changed = []
+    for relative, expected in original.get('inputs', {}).items():
+        current = _sha(_safe_project_file(project, relative).read_bytes())
+        if current != expected:
+            changed.append(relative)
+    answer = 'input/step_0_5ic_answers.json'
+    if changed != [answer]:
+        raise MetricRefusal('D0102_SUBMISSION_INPUT_CHANGED', str(changed))
+    before = next((r for r in original.get('input_files', ()) if r.get('rel') == answer), {})
+    after = next((r for r in original.get('written_files', ()) if r.get('rel') == answer), {})
+    for entry, expected in ((before, original['inputs'][answer]),
+                             (after, _sha(_safe_project_file(project, answer).read_bytes()))):
+        if (entry.get('sha256') != expected or not isinstance(entry.get('snapshot'), str)
+                or _sha(_safe_project_file(project, folder + '/' + entry['snapshot']).read_bytes()) != expected):
+            raise MetricRefusal('D0102_SUBMISSION_PUBLICATION_UNBOUND', answer)
+        reads[folder + '/' + entry['snapshot']] = expected
+    old_answer = _d0102_read(project, folder + '/' + before['snapshot'], reads)
+    new_answer = _d0102_read(project, answer, reads)
+    # Only the existing program-owned area publication may extend this input.
+    # All owner route/operator answers remain exact values, not inferred limits.
+    import copy
+    old, new = copy.deepcopy(old_answer), copy.deepcopy(new_answer)
+    for value in (old, new):
+        value.get('answers', {}).pop('synthesis_area_budget', None)
+        value.get('answer_provenance', {}).pop('synthesis_area_budget', None)
+        value.pop('answer_revisions', None)
+    if old != new:
+        raise MetricRefusal('D0102_SUBMISSION_OWNER_INPUT_CHANGED', answer)
+    import area_budget_basis_gen as area
+    expected = area.rederive(project, new_answer)
+    if (expected.get('answer') != new_answer.get('answers', {}).get(area.KEY)
+            or expected.get('provenance') != new_answer.get('answer_provenance', {}).get(area.KEY)):
+        raise MetricRefusal('D0102_SUBMISSION_AREA_AUTHORITY_STALE', answer)
+    for output in original.get('outputs', ()):
+        current = _sha(_safe_project_file(project, output['rel']).read_bytes())
+        if current != output['sha256']:
+            raise MetricRefusal('D0102_CANONICAL_OUTPUTS_STALE', output['rel'])
+        reads[output['rel']] = current
+    return {'path': folder + '/outputs.json', 'sha256': reads[folder + '/outputs.json']}
+
+
 def _d0102_qualification(project: Path, context: Mapping, step: str, reads: dict) -> dict:
     """Reuse current retained full canonical acceptance, not component PASS."""
     import _flow_yaml
@@ -7080,9 +7135,23 @@ def _d0102_qualification(project: Path, context: Mapping, step: str, reads: dict
         and isinstance(checkpoint, dict)
         and checkpoint.get('producer_started') is False
         and checkpoint.get('producer_reused') is True)
-    if (not (producer_completed or checkpoint_completed)
+    submission_completed = (
+        step == 'D02' and retained.get('runner') == 'phase1_one_shot_runner'
+        and retained.get('site') == 'submission_input_revalidation'
+        and checkpoint.get('producer_started') is False
+        and checkpoint.get('producer_reused') is True)
+    if (not (producer_completed or checkpoint_completed or submission_completed)
             or consumer.get('status') != 'PASS'):
         raise MetricRefusal('D0102_COMPONENT_ONLY', native)
+    if submission_completed:
+        reference = checkpoint.get('prior_record') or {}
+        prior = _d0102_read(project, reference.get('path', ''), reads)
+        if (reads.get(reference.get('path')) != reference.get('sha256')
+                or retained.get('detail')
+                or retained.get('observed_canonical_consumer') != {
+                    k: v for k, v in consumer.items() if k != 'outputs'}
+                or _d0102_submission_lineage(project, prior, reads) != reference):
+            raise MetricRefusal('D0102_SUBMISSION_LINEAGE_UNBOUND', native)
     if checkpoint_completed:
         import _phase1_producer_identity as identity
         # These are the normal revalidator's original identity and observed

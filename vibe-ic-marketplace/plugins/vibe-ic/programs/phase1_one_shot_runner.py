@@ -2045,6 +2045,48 @@ def _as_the_producer(fn):
     return _run
 
 
+def _complete_retained_submission_input(project: Path) -> None:
+    """Consume this producer's named area-input publication, without producers."""
+    import _flow_yaml
+    import flow109_metric_acceptance as metrics
+    import execution_backend_gates as gates
+    import step_output_collector as versions
+    record = versions.latest_pass(project, '0.5ic')
+    if record is None or record.get('current_inputs') is True:
+        return
+    reads = {}
+    reference = metrics._d0102_submission_lineage(project, record, reads)
+    row = next(r for r in _flow_yaml.load()['steps'] if str(r['id']) == '0.5ic')
+    inputs = {path: versions._sha(project / path) for path in record['inputs']}
+    inputs.update(reads)
+    bound = gates.contracts(project, row)
+    prior_folder = project / record.get('storage_root', 'steps') / record['folder']
+    written = (prior_folder / 'written.json').read_bytes()
+    attempt = versions.begin_step(project, '0.5ic', inputs)
+    checkpoint = {'producer_started': False, 'producer_reused': True,
+                  'prior_record': reference, 'written_sha256': hashlib.sha256(written).hexdigest()}
+    with versions.active_steps(project, [attempt]):
+        # Preserve the actual original producer's write attribution exactly.
+        root = versions._versions_root(project) / attempt['folder']
+        (root / 'written.json').write_bytes(written)
+        consumer = gates.evaluate(project, row)
+        observed = consumer
+        status, detail = consumer['status'], ''
+        if status == 'PASS':
+            again = {}
+            if (metrics._d0102_submission_lineage(project, record, again) != reference
+                    or again != reads or gates.contracts(project, row) != bound
+                    or (prior_folder / 'written.json').read_bytes() != written
+                    or any(versions._sha(project / path) != digest for path, digest in inputs.items())):
+                status, detail = 'NOT_MEASURED', 'D0102_SUBMISSION_CHANGED_DURING_CONSUMPTION'
+            else:
+                consumer = {**consumer, 'outputs': bound}
+        versions.finish_step(project, attempt, verdict=status, canonical_pass=status == 'PASS',
+            result={'runner': 'phase1_one_shot_runner', 'site': 'submission_input_revalidation',
+                    'checkpoint': checkpoint, 'detail': detail,
+                    'observed_canonical_consumer': observed, 'canonical_consumer': consumer})
+
+
 def complete_retained_metrics(project: Path) -> dict | None:
     """Publish selected Step 1/2 completion from retained Phase1 evidence.
 
@@ -2066,6 +2108,8 @@ def complete_retained_metrics(project: Path) -> dict | None:
     # refuse a mixed owner window rather than supplying invented later rows.
     if len(selected) != len(context.get('resolved_rows') or [context['resolved_row']]):
         raise flow109.Flow109Error('D0102_WINDOW_DIFFERS', 'Phase1 Step 1/2 only')
+    if any(row['id'] == 'D02' for row in selected):
+        _complete_retained_submission_input(project)
     steps = []
     for row in selected:
         current = flow109.component_context(context, requested_step=row['id'])
