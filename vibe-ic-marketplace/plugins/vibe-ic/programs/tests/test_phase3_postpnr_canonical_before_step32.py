@@ -55,6 +55,8 @@ def _clock_inputs_and_native_model(project, monkeypatch):
         lines = [f"CLOCK_PLAN_PDK {pdk.name}"]
         lines.extend(f"CLOCK_PLAN_NATIVE {c['name']}|{c['period_ns']}|{c['source']}"
                      for c in clocks.values())
+        lines.extend(f"CLOCK_PLAN_SINK_COUNT {name}|0"
+                     for name in dict.fromkeys(c['name'] for c in clocks.values()))
         lines.append("CLOCK_PLAN_DONE")
         Path(log).write_text("\n".join(lines) + "\n")
         return 0, {"rc": 0, "argv": [tool, *args]}

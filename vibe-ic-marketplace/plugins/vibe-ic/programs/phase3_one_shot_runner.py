@@ -60420,8 +60420,11 @@ def emit_clock_plan(project: Path, clock_plan: Path, primary_def: Path,
         try:
             existing = json.loads(clock_plan.read_text(errors="ignore"))
             cl = existing.get("clocks") if isinstance(existing, dict) else None
+            # A plan written before the D34 sink census existed carries no
+            # `sinks`; reusing it would leave D34 with nothing to reconcile.
             needs_refresh = not (isinstance(cl, list) and cl
-                                 and isinstance(existing.get("current"), dict))
+                                 and isinstance(existing.get("current"), dict)
+                                 and isinstance(existing.get("sinks"), dict))
         except Exception:
             existing = None
             needs_refresh = True

@@ -358,6 +358,17 @@ def clock_plan(project, plan, floorplan, sdcs, pdk):
         '  puts "CLOCK_PLAN_NATIVE [get_full_name $c]|[get_property $c period]|$pins"',
         '}',
         'if {[llength [all_clocks]] == 0} {error "CLOCK_PLAN_NO_CLOCKS"}',
+        # D34 clock-sink inventory: the timing graph's own answer to "which
+        # register clock pins does each clock reach". The count line lets the
+        # parser refuse a truncated log instead of reading a short list as data.
+        'foreach c [all_clocks] {',
+        '  set count 0',
+        '  foreach p [all_registers -clock $c -clock_pins] {',
+        '    puts "CLOCK_PLAN_SINK [get_full_name $c]|[get_full_name $p]"',
+        '    incr count',
+        '  }',
+        '  puts "CLOCK_PLAN_SINK_COUNT [get_full_name $c]|$count"',
+        '}',
         'puts "CLOCK_PLAN_DONE"', ""]))
     inputs["recipe"] = entry(project, script)
     native_args = ["-exit", str(script)]
@@ -372,6 +383,7 @@ def clock_plan(project, plan, floorplan, sdcs, pdk):
         clocks.append({"name": name, "period_ns": period, "source": source})
     if rc or not clocks or "CLOCK_PLAN_DONE" not in text or re.search(r"\[ERROR\]|^Error:", text, re.M):
         raise ValueError(f"CLOCK_PLAN_NATIVE_REFUSED: rc={rc}; {text[-500:]}")
+    sinks = clock_plan_sinks(text, [clock["name"] for clock in clocks])
     current_lefs = lef_entries(project, lefs, image=image)
     current_liberties = liberty_entries(project, liberties, image=image)
     for role, row in inputs.items():
@@ -387,8 +399,35 @@ def clock_plan(project, plan, floorplan, sdcs, pdk):
                     inputs, {"log": entry(project, log)}, execution)
     write_json(plan, {"tool": "openroad", "primary_clock": clocks[0]["name"],
                       "clocks": clocks, "current": current,
+                      "sinks": sinks,
+                      "sink_census": {"method": CLOCK_SINK_METHOD,
+                                      "counts": {name: len(pins) for name, pins in sinks.items()}},
                       "derived_from": {str(Path(p).relative_to(project)): digest(p) for p in sdcs}})
     return str(plan)
+
+
+CLOCK_SINK_METHOD = "OpenSTA all_registers -clock <clock> -clock_pins"
+
+
+def clock_plan_sinks(text, clock_names):
+    """Parse the per-clock sink census; refuse a census the log does not close.
+
+    Every clock must report a count line, and the count must equal the pins
+    listed for it. A design whose clock reaches no register reports zero; that
+    is a measurement for the consumer to judge, not a producer refusal.
+    """
+    listed = {name: [] for name in clock_names}
+    for name, pin in re.findall(r"(?m)^CLOCK_PLAN_SINK ([^|\n]+)\|([^\n]+)$", text):
+        if name not in listed or not pin.strip():
+            raise ValueError(f"CLOCK_PLAN_SINK_INVALID: {name}|{pin}")
+        listed[name].append(pin.strip())
+    counted = dict(re.findall(r"(?m)^CLOCK_PLAN_SINK_COUNT ([^|\n]+)\|(\d+)$", text))
+    if set(counted) != set(listed):
+        raise ValueError(f"CLOCK_PLAN_SINK_CENSUS_INCOMPLETE: counted={sorted(counted)} clocks={sorted(listed)}")
+    for name, pins in listed.items():
+        if int(counted[name]) != len(pins) or len(set(pins)) != len(pins):
+            raise ValueError(f"CLOCK_PLAN_SINK_CENSUS_INCOMPLETE: {name}")
+    return {name: sorted(pins) for name, pins in listed.items()}
 
 
 def default_signoff_inputs(project):

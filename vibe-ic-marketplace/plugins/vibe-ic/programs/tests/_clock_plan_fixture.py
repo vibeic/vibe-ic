@@ -60,6 +60,10 @@ def _native_model(monkeypatch, pdk_name: str):
                     f"CLOCK_PLAN_NATIVE {name.group(1)}|{period.group(1)}|"
                     f"{source.group(1)}")
         if not rc:
+            # The native recipe closes every clock's sink census (D34).
+            names = [l.split(" ", 1)[1].split("|", 1)[0] for l in lines
+                     if l.startswith("CLOCK_PLAN_NATIVE ")]
+            lines.extend(f"CLOCK_PLAN_SINK_COUNT {n}|0" for n in dict.fromkeys(names))
             lines.append("CLOCK_PLAN_DONE")
         Path(log).write_text("\n".join(lines) + "\n")
         return rc, {"rc": rc, "argv": [_tool, *args]}

@@ -62,6 +62,9 @@ def test_default_clock_consumer_is_same_invocation_and_reuses_current(
                 if match:
                     lines.append(
                         f"CLOCK_PLAN_NATIVE {match[1]}|{match[2]}|{match[3]}")
+        names = [l.split(" ", 1)[1].split("|", 1)[0] for l in lines
+                 if l.startswith("CLOCK_PLAN_NATIVE ")]
+        lines.extend(f"CLOCK_PLAN_SINK_COUNT {n}|0" for n in dict.fromkeys(names))
         lines.append("CLOCK_PLAN_DONE")
         Path(log).write_text("\n".join(lines) + "\n")
         return 0, {"rc": 0, "argv": [tool, *args]}

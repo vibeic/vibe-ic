@@ -67,7 +67,7 @@ def setup(tmp_path, monkeypatch):
         text = ("[ERROR] unknown library masters: " + str(sorted(missing))
                 if missing else "[ERROR] driver library cell not found: " + str(sorted(missing_drivers))
                 if missing_drivers else f"CLOCK_PLAN_PDK {pdk.name}\n"
-                "CLOCK_PLAN_NATIVE system|12|tick\nCLOCK_PLAN_DONE\n")
+                "CLOCK_PLAN_NATIVE system|12|tick\nCLOCK_PLAN_SINK_COUNT system|0\nCLOCK_PLAN_DONE\n")
         Path(log).write_text(text)
         return rc, {"rc": rc, "argv": [tool, *args]}
 

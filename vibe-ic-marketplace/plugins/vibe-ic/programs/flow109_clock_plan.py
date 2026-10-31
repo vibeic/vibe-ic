@@ -26,6 +26,26 @@ OUTPUT = "phase3/stage3/cts/clock_plan.json"
 NATIVE_STEP = "16"
 STEP17_REUSE_ENV = "VIBEIC_FLOW109_STEP17_REUSE_REQUEST"
 
+# D34 metric binding. The sink inventory is reconciled between two methods that
+# share no code: the timing graph's propagation (OpenSTA, in the native plan)
+# and a structural census (floorplan COMPONENTS x Liberty ff/latch groups),
+# the latter adopted by the requirements owner. Planning targets are only the
+# plan's declared CTS targets checked against requirement bounds; the actual
+# tree's skew and insertion delay are D38's measurement, not this row's.
+SINK_REFERENCE = "adopted/base_22/clock_sink_inventory.json"
+SINK_SOURCE = "input/flow109/D34/clock_sink_inventory.json"
+PLANNING_TARGETS = "input/flow109/D34/clock_planning_targets.json"
+TARGET_BOUNDS = "requirements/base_22/skew_insertion_targets.json"
+TARGET_KEYS = ("clock_skew_ns", "insertion_delay_ns")
+D34_SPECS = {
+    "base_22.clock_sink_inventory": {"operator": "matches_adopted_reference",
+                                     "reference_ref": SINK_REFERENCE},
+    "base_22.skew_insertion_targets": {"operator": "within_declared_bounds",
+                                       "bounds_ref": TARGET_BOUNDS + "#/limits",
+                                       "unit_ref": TARGET_BOUNDS + "#/units"},
+}
+D34_PURPOSE = "D34.default.clock_sink_inventory"
+
 # Only the reviewed 634 -> 805 Flow109 ownership work may differ while a
 # retained Step-17 producer is adopted.  Everything that could have authored
 # the old placement remains byte-identical or reuse refuses.
@@ -258,5 +278,271 @@ def execute(project, context):
                 raise
     except (OSError, ValueError, TypeError, ImportError) as exc:
         record.update(reason=str(exc).split(":", 1)[0], detail=str(exc))
-    write_json(component_attempt / "component.json", record)
-    return record
+    targets = project / PLANNING_TARGETS
+    if targets.is_file() and not targets.is_symlink():
+        # The plan carries the declared CTS targets it hands downstream; D34
+        # judges them against the requirement bounds, D38 judges the tree.
+        record["planning_targets"] = {"path": PLANNING_TARGETS, "sha256": _sha(targets)}
+    component = component_attempt / "component.json"
+    write_json(component, record)
+    return {**record, "component_record": {
+        "path": str(component.relative_to(project)), "sha256": _sha(component)}}
+
+
+def liberty_clock_pins(text: str) -> dict[str, str]:
+    """``cell -> clock pin`` for every Liberty ``ff``/``latch`` group.
+
+    The library's own declaration decides what is sequential, never a cell
+    name. A multi-bit bank or a clock expression that is not a single pin is
+    refused rather than guessed at.
+    """
+    import re
+    starts = [(m.start(), m.group(1)) for m in re.finditer(
+        r'\bcell\s*\(\s*"?([A-Za-z_][\w$]*)"?\s*\)\s*\{', text)]
+    pins = {}
+    for index, (start, name) in enumerate(starts):
+        block = text[start:starts[index + 1][0] if index + 1 < len(starts) else len(text)]
+        if re.search(r"\b(ff_bank|latch_bank)\s*\(", block):
+            raise ValueError("D34_LIBERTY_BANK_UNSUPPORTED: " + name)
+        group = re.search(r"\b(ff|latch)\s*\([^)]*\)\s*\{([^{}]*)\}", block, re.S)
+        if not group:
+            continue
+        key = "clocked_on" if group.group(1) == "ff" else "enable"
+        value = re.search(key + r'\s*:\s*"([^"]*)"', group.group(2))
+        pin = re.sub(r"[!()'\s]", "", value.group(1)) if value else ""
+        if not re.fullmatch(r"[A-Za-z_][\w$]*", pin):
+            raise ValueError(f"D34_LIBERTY_CLOCK_EXPRESSION_UNSUPPORTED: {name}: {value and value.group(1)}")
+        pins[name] = pin
+    return pins
+
+
+def structural_sinks(def_text: str, clock_pins: dict[str, str]) -> list[str]:
+    """Every sequential instance's clock pin, read from the floorplan COMPONENTS.
+
+    DEF escapes are removed so the names compare with the timing graph's full
+    pin names; the divider is the DEF's own ``/``.
+    """
+    import re
+    section = re.search(r"\nCOMPONENTS\s+\d+\s*;(.*?)\nEND COMPONENTS", def_text, re.S)
+    if not section:
+        raise ValueError("D34_DEF_COMPONENTS_ABSENT")
+    sinks = {instance.replace("\\", "") + "/" + clock_pins[master]
+             for instance, master in re.findall(r"-\s+(\S+)\s+(\S+)", section.group(1))
+             if master in clock_pins}
+    return sorted(sinks)
+
+
+def d34_model_sources() -> dict[str, str]:
+    """The exact consumer, census and operator code this row's verdict rests on."""
+    import ast
+    import _physical_current as current
+    import flow109_metric_acceptance as metrics
+    sources = {}
+    for module, names in ((Path(__file__), ("accept_d34", "_d34_observe", "_d34_targets",
+                                            "consume_default_row_completion", "liberty_clock_pins",
+                                            "structural_sinks", "d34_model_sources")),
+                          (Path(current.__file__), ("clock_plan", "clock_plan_sinks")),
+                          (Path(metrics.__file__), ("evaluate_operator", "_approved_document",
+                                                    "_identity_complete"))):
+        text = module.read_text()
+        nodes = {n.name: n for n in ast.parse(text).body if isinstance(n, ast.FunctionDef)}
+        for name in names:
+            sources[module.name + ":" + name] = hashlib.sha256(
+                ast.get_source_segment(text, nodes[name]).encode()).hexdigest()
+    return sources
+
+
+def _d34_observe(project: Path, context: dict, component: dict) -> tuple[dict, dict]:
+    """Reopen the exact native plan this component published and re-derive its census."""
+    import _physical_current as current
+    import flow109_metric_acceptance as metrics
+    record = component.get("component_record")
+    if not isinstance(record, dict):
+        raise metrics.MetricRefusal("D34_COMPONENT_UNBOUND", "component_record required")
+    path = project / str(record.get("path", ""))
+    if (not str(record.get("path", "")).startswith("reports/flow109/D34/") or path.is_symlink()
+            or not path.is_file() or _sha(path) != record.get("sha256")
+            or json.loads(path.read_text()) != {k: v for k, v in component.items() if k != "component_record"}):
+        raise metrics.MetricRefusal("D34_COMPONENT_STALE", str(record.get("path")))
+    if (component.get("step_id") != "D34" or component.get("component_status") != "PASS"
+            or component.get("context_sha256") != context["context_sha256"]):
+        raise metrics.MetricRefusal("D34_COMPONENT_NOT_PASS", str(component.get("reason")))
+    plan_path = project / OUTPUT
+    if not plan_path.is_file() or _sha(plan_path) != (component.get("outputs") or {}).get(OUTPUT):
+        raise metrics.MetricRefusal("D34_PLAN_STALE", OUTPUT)
+    plan = json.loads(plan_path.read_text())
+    subject = plan.get("current")
+    refusal = current.validate(project, subject, step=NATIVE_STEP, stage="stage3",
+                               tools=("openroad",), required_inputs=("floorplan", "recipe", "sdc_0"),
+                               required_outputs=("log",), marker="CLOCK_PLAN_DONE")
+    if refusal:
+        raise metrics.MetricRefusal("D34_NATIVE_SUBJECT_STALE", refusal)
+    if (plan.get("sink_census", {}).get("method") != current.CLOCK_SINK_METHOD
+            or not isinstance(plan.get("sinks"), dict)):
+        raise metrics.MetricRefusal("D34_SINK_CENSUS_ABSENT", OUTPUT)
+    # The JSON is a summary; the native log is the measurement.
+    log = (project / subject["outputs"]["log"]["path"]).read_text()
+    names = [clock["name"] for clock in plan.get("clocks", [])]
+    if current.clock_plan_sinks(log, names) != plan["sinks"]:
+        raise metrics.MetricRefusal("D34_SINK_CENSUS_DIFFERS_FROM_LOG", OUTPUT)
+    identity = {"producer": {"name": "phase3_one_shot_runner.emit_clock_plan",
+                             "method": current.CLOCK_SINK_METHOD},
+                "checker": {"methods": d34_model_sources()},
+                "tool_execution": subject["execution"],
+                "consumed_inputs": {role: row["sha256"] for role, row in subject["inputs"].items()},
+                "requirements": {"registry_sha256": context["registry_sha256"],
+                                 "obligations": sorted(D34_SPECS)},
+                "configuration": {"context_sha256": context["context_sha256"],
+                                  "plan": {"path": OUTPUT, "sha256": _sha(plan_path)}}}
+    return plan, identity
+
+
+def _d34_targets(project: Path, component: dict, identity: dict) -> dict:
+    """Judge each declared planning target against its approved requirement bound."""
+    import flow109_metric_acceptance as metrics
+    declared = component.get("planning_targets")
+    path = project / PLANNING_TARGETS
+    if (not isinstance(declared, dict) or declared.get("path") != PLANNING_TARGETS
+            or path.is_symlink() or not path.is_file() or _sha(path) != declared.get("sha256")):
+        raise metrics.MetricRefusal("D34_PLANNING_TARGETS_UNBOUND", PLANNING_TARGETS)
+    plan = json.loads(path.read_text())
+    authority, bounds = metrics._approved_document(project, TARGET_BOUNDS,
+        authority="requirements_owner", schema=metrics.AUTHORITY_SCHEMA)
+    limits, units = bounds.get("limits"), bounds.get("units")
+    if (not isinstance(limits, dict) or not isinstance(units, dict)
+            or set(limits) != set(TARGET_KEYS) or set(units) != set(TARGET_KEYS)
+            or plan.get("units") != units or set(plan.get("targets") or {}) != set(TARGET_KEYS)):
+        raise metrics.MetricRefusal("D34_TARGET_SHAPE_UNSUPPORTED", TARGET_BOUNDS)
+    checks = {}
+    for key in TARGET_KEYS:
+        checks[key] = metrics.evaluate_operator("within_declared_bounds",
+            {"status": "MEASURED", "value": plan["targets"][key], "unit": units[key], "identity": identity},
+            {"status": "APPROVED", "limits": limits[key], "unit": units[key]})
+    states = {state for state, _ in checks.values()}
+    status = "FAIL" if "FAIL" in states else "PASS" if states == {"PASS"} else "NOT_MEASURED"
+    return {"id": "base_22.skew_insertion_targets", "status": status, "authority": authority,
+            "value": plan["targets"], "checks": {k: {"status": s, "detail": d} for k, (s, d) in checks.items()},
+            "scope": "declared planning targets only; the built tree is D38's measurement"}
+
+
+def accept_d34(project, context, component):
+    """Complete D34's two registered obligations; never claim a clock-tree result."""
+    import flow109
+    import flow109_admission as admission
+    import flow109_metric_acceptance as metrics
+    project = Path(project).resolve()
+    result = {"schema": metrics.SCHEMA, "row_id": "D34", "status": "NOT_MEASURED",
+              "qualification": "NOT_MEASURED", "delivery_blocked": True, "obligations": []}
+    try:
+        context = flow109.validate_execution_context(context)
+        obligations = context["resolved_row"]["obligations"]
+        if (context["resolved_row"]["id"] != "D34" or {o["id"] for o in obligations} != set(D34_SPECS)
+                or any(any(o["expectation"].get(k) != v for k, v in D34_SPECS[o["id"]].items())
+                       for o in obligations)):
+            raise metrics.MetricRefusal("D34_OBLIGATIONS_UNREGISTERED", "the two base_22 operators only")
+        plan, identity = _d34_observe(project, context, component)
+        measured = sorted({pin for pins in plan["sinks"].values() for pin in pins})
+        adopted, body = metrics._approved_document(project, SINK_REFERENCE,
+            authority="requirements_owner", schema="vibeic.flow109.adopted-reference.v1")
+        source = json.loads((project / adopted["source"]["path"]).read_text())
+        if (adopted["source"]["path"] != SINK_SOURCE
+                or source.get("clock_sink_inventory") != {k: v for k, v in body.items()
+                                                          if k not in ("schema", "approval")}):
+            raise metrics.MetricRefusal("D34_SINK_REFERENCE_SOURCE_UNBOUND", SINK_REFERENCE)
+        reference = body.get("reference")
+        status, detail = metrics.evaluate_operator("matches_adopted_reference",
+            {"status": "MEASURED", "value": measured, "identity": identity},
+            {**adopted, "reference": reference, "reference_identity": body.get("reference_identity")})
+        result["obligations"].append({
+            "id": "base_22.clock_sink_inventory", "status": status, "detail": detail,
+            "authority": adopted, "counts": plan["sink_census"]["counts"],
+            "unreached_sinks": sorted(set(reference or []) - set(measured)),
+            "unexpected_sinks": sorted(set(measured) - set(reference or []))})
+        result["obligations"].append(_d34_targets(project, component, identity))
+        if any(item["status"] == "FAIL" for item in result["obligations"]):
+            result.update(status="FAIL", reason="D34_METRIC_FAIL")
+            return result
+        if any(item["status"] != "PASS" for item in result["obligations"]):
+            result["reason"] = "D34_METRIC_NOT_MEASURED"
+            return result
+        result["accepted_dependencies"] = {step: flow109._accepted_row(project,
+            Path("reports/flow109/default_rows") / (step + ".json"), step)[1]
+            for step in context["resolved_row"]["acceptance_deps"]}
+        qualified = admission.require_admission(project, context)
+        expected = {"purpose": D34_PURPOSE, "model_sources": d34_model_sources()}
+        for use in context["runtime_tool_uses"]:
+            if json.loads((project / use["config"]["path"]).read_text()) != expected:
+                raise metrics.MetricRefusal("D34_MODEL_QUALIFICATION_STALE", use["use_id"])
+        if _d34_observe(project, context, component) != (plan, identity):
+            raise metrics.MetricRefusal("D34_INPUT_CHANGED_DURING_READ", OUTPUT)
+        result.update(status="PASS", qualification=qualified["status"], delivery_blocked=False,
+                      reason="D34_SINKS_TARGETS_DEPENDENCIES_AND_METHOD_PASS")
+    except (flow109.Flow109Error, admission.AdmissionRefusal, metrics.MetricRefusal,
+            OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        failed = any(item["status"] == "FAIL" for item in result["obligations"])
+        result.update(status="FAIL" if failed else "NOT_MEASURED", qualification="NOT_MEASURED",
+                      delivery_blocked=True, reason=getattr(exc, "code", "D34_EVIDENCE_NOT_MEASURED"),
+                      detail=str(exc))
+    return result
+
+
+def consume_default_row_completion(project, context, result):
+    """Existing completion ABI: the fresh D34 component plus current metrics.
+
+    Metrics only ever complete a passing component. A component that did not
+    pass, or an owner that already reported FAIL, keeps its own verdict and
+    reason; an absent metric must not soften a FAIL or hide why nothing ran.
+    """
+    answer = {"step_id": "D34", "context_sha256": context["context_sha256"],
+              "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False}
+    if result.get("component_status") != "PASS" or result.get("default_row_status") == "FAIL":
+        status = ("FAIL" if "FAIL" in (result.get("component_status"), result.get("default_row_status"))
+                  else "NOT_MEASURED")
+        return {**answer, "default_row_status": status, "completed": False,
+                "flow109_acceptance": status, "reason": result.get("reason")}
+    accepted = accept_d34(Path(project).resolve(), context, result)
+    return {**answer, "default_row_status": accepted["status"],
+            "completed": accepted["status"] == "PASS", "flow109_acceptance": accepted["status"],
+            "metric_acceptance": accepted, "reason": accepted.get("reason")}
+
+
+def propose_sink_reference(project: Path, liberties: list[Path]) -> dict:
+    """Write the structural census for the requirements owner to adopt.
+
+    This is a proposal, never an approval: the owner adopts it by writing
+    ``SINK_REFERENCE`` with ``approval.source_reference`` naming this file.
+    """
+    project = Path(project).resolve()
+    floorplan = project / "phase3/stage3/pnr/floorplan.def"
+    pins = {}
+    for path in liberties:
+        pins.update(liberty_clock_pins(Path(path).read_text(errors="ignore")))
+    if not pins:
+        raise ValueError("D34_LIBERTY_SEQUENTIAL_CELLS_ABSENT")
+    reference = structural_sinks(floorplan.read_text(), pins)
+    consumed = {"phase3/stage3/pnr/floorplan.def": _sha(floorplan),
+                **{str(Path(p).resolve()): _sha(Path(p)) for p in liberties}}
+    payload = {"reference": reference, "reference_identity": {
+        "producer": {"name": "flow109_clock_plan.structural_sinks",
+                     "method": "floorplan COMPONENTS x Liberty ff/latch clock pins"},
+        "checker": {"methods": d34_model_sources()},
+        "tool_execution": {"program": "flow109_clock_plan.py propose-sink-reference"},
+        "consumed_inputs": consumed,
+        "requirements": {"obligation": "base_22.clock_sink_inventory"},
+        "configuration": {"sequential_cells": len(pins), "sinks": len(reference)}}}
+    target = project / SINK_SOURCE
+    if target.exists():
+        raise ValueError("D34_SINK_SOURCE_EXISTS: " + SINK_SOURCE)
+    write_json(target, {"schema": "vibeic.flow109.d34-sink-reference-source.v1",
+                        "clock_sink_inventory": payload})
+    return {"path": SINK_SOURCE, "sha256": _sha(target), "sinks": len(reference)}
+
+
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="D34 structural sink census proposal")
+    parser.add_argument("command", choices=["propose-sink-reference"])
+    parser.add_argument("project")
+    parser.add_argument("--liberty", action="append", required=True)
+    args = parser.parse_args()
+    print(json.dumps(propose_sink_reference(Path(args.project), [Path(p) for p in args.liberty])))
