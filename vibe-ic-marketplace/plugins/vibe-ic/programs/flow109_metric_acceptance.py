@@ -3487,6 +3487,119 @@ def _d13_retained(project: Path, execution: Mapping, path: Path) -> Path:
     return _d13_file(project, matches[0])
 
 
+def _d13_retained_component_owner(project: Path, reference: Mapping, owner: Mapping) -> None:
+    """Reopen a real interrupted collector, without recasting its parent as PASS.
+
+    Only an independently approved execution reference selects this origin.
+    Functional/coverage verdicts and tool qualification remain the normal D13
+    consumers' responsibility; a collector snapshot alone grants no row credit.
+    """
+    def refuse(detail):
+        raise MetricRefusal('D13_RETAINED_COMPONENT_UNBOUND', detail)
+
+    owner_path = _d13_file(project, reference['original_owner'], external=True)
+    folder = owner.get('folder')
+    if (owner.get('id') != '4' or owner.get('phase') != 'phase2'
+            or owner.get('stage') != 'stage1' or owner.get('storage_root') != 'steps'
+            or owner.get('status') != 'INTERRUPTED' or owner.get('canonical_pass') is not False
+            or owner.get('capture_errors') != [] or not isinstance(folder, str)
+            or reference.get('original_invocation') != folder
+            or owner_path != _safe_project_file(project, 'steps/' + folder + '/outputs.json')):
+        refuse('original interrupted same-project Step4 collector required')
+    attempt_path = _d13_file(project, reference['original_collector_attempt'])
+    attempt = json.loads(attempt_path.read_bytes())
+    if (attempt_path != owner_path.parent / 'attempt.json'
+            or any(attempt.get(k) != owner.get(k) for k in ('id', 'folder', 'inputs', 'started_at'))
+            or not owner.get('inputs')):
+        refuse('original collector attempt/input population required')
+    for rel, digest in owner['inputs'].items():
+        _d13_file(project, {'path': rel, 'sha256': digest})
+    outputs = owner.get('outputs')
+    if (not isinstance(outputs, list) or not outputs
+            or len({row['rel'] for row in outputs}) != len(outputs)):
+        refuse('complete unique collector output population required')
+    by_rel = {row['rel']: row for row in outputs}
+    for row in outputs:
+        current = _d13_file(project, {'path': row['rel'], 'sha256': row['sha256']})
+        snapshot = owner_path.parent / row['snapshot']
+        if not snapshot.is_relative_to(owner_path.parent) or '..' in Path(row['snapshot']).parts:
+            refuse('collector snapshot escaped original folder')
+        _d13_file(project, {'path': str(snapshot.relative_to(project)), 'sha256': row['sha256']})
+        _d13_retained(project, reference, current)
+    launch = json.loads(_d13_file(project, reference['original_launch'], external=True).read_bytes())
+    terminal = json.loads(_d13_file(project, reference['original_terminal'], external=True).read_bytes())
+    invocation = json.loads(_d13_file(project, reference['original_host_invocation'], external=True).read_bytes())
+    source = json.loads(_d13_file(project, reference['original_source_readset'], external=True).read_bytes())
+    container = launch.get('container_inspect') or {}
+    cid = container.get('Id')
+    images = launch.get('image_inspect') or []
+    host = container.get('HostConfig') or {}
+    if (not isinstance(cid, str) or not re.fullmatch(r'[0-9a-f]{64}', cid)
+            or launch.get('cid') != cid or terminal.get('cid') != cid or invocation.get('cid') != cid
+            or len(images) != 1 or container.get('Image') != images[0].get('Id')
+            or not re.fullmatch(r'sha256:[0-9a-f]{64}', str(container.get('Image', '')))
+            or terminal.get('rc') != 1 or terminal.get('daemon_exit') != 1
+            or reference.get('parent_exit_code') != 1
+            or host.get('NetworkMode') != 'none' or host.get('NanoCpus') != 2_000_000_000
+            or host.get('Memory') != 4_294_967_296 or host.get('MemorySwap') != 4_294_967_296):
+        refuse('actual original CID/image/failed terminal/resource capture required')
+    events = [json.loads(line) for line in _d13_file(project,
+        reference['original_host_events'], external=True).read_text().splitlines() if line.strip()]
+    dies = [event for event in events if event.get('Action') == 'die'
+            and event.get('Actor', {}).get('ID') == cid]
+    if (len(dies) != 1 or dies[0]['Actor']['Attributes'].get('exitCode') != '1'
+            or invocation.get('start') != terminal.get('start')
+            or not terminal['start'] < terminal['end']):
+        refuse('original Docker die event/host interval required')
+    argv = invocation.get('native_argv') or []
+    import shlex
+    entry = _d13_file(project, reference['original_entry_script'], external=True)
+    mounts = container.get('Mounts') or []
+    if (container.get('Config', {}).get('Cmd') != ['sh', '/run-evidence/entry.sh']
+            or container.get('Config', {}).get('Entrypoint') is not None
+            or not any(m.get('Type') == 'bind' and m.get('Destination') == '/run-evidence'
+                       and entry == Path(m['Source']) / 'entry.sh' for m in mounts)
+            or entry.read_text().splitlines()[-1:] != ['exec ' + shlex.join(argv)]):
+        refuse('original launched entry script does not bind native argv')
+    producer = _d13_file(project, reference['original_producer'], external=True)
+    if (len(argv) < 4 or argv[3] != str(project)
+            or Path(argv[2]).name != 'phase2_one_shot_runner.py'
+            or producer != Path(argv[2]).with_name('design_one_shot_runner.py')
+            or invocation.get('source') != source.get('head')):
+        refuse('original ordinary producer invocation required')
+    for flag, value in (('--entry-step', '4'), ('--exit-step', '4'), ('--execution-mode', 'default')):
+        if argv.count(flag) != 1 or argv[argv.index(flag) + 1:argv.index(flag) + 2] != [value]:
+            refuse('original simulation-only Default window required')
+    files = source.get('files') or []
+    if (len({row['path'] for row in files}) != len(files)
+            or reference['original_producer'] not in files):
+        refuse('original producer source capture required')
+    captured = {Path(row['path']).name: row for row in files}
+    for name, digest in d13_model_sources().items():
+        row = captured.get(name) or {}
+        if row.get('sha256') != digest:
+            refuse('original/current model differs: ' + name)
+        _d13_file(project, row, external=True)
+    mounts = container.get('Mounts') or []
+    if not any(m.get('Type') == 'bind' and m.get('RW') is False
+               and producer.is_relative_to(Path(m['Destination'])) for m in mounts):
+        refuse('original producer was not read-only mounted')
+    # The attempt's pre-publication stat capture establishes these were written
+    # inside the original host invocation, not borrowed from an earlier run.
+    before = attempt.get('_before') or {}
+    for key in ('scenario_record', 'unit_junit', 'streaming_junit', 'coverage_report'):
+        ref = reference[key]
+        path = _d13_file(project, ref)
+        _d13_retained(project, reference, path)
+        stamp = before.get(ref['path'])
+        if (not isinstance(stamp, list) or len(stamp) != 3
+                or stamp[0] != path.stat().st_size or stamp[1] != path.stat().st_mtime_ns
+                or not terminal['start'] * 1e9 <= stamp[1] <= terminal['end'] * 1e9):
+            refuse('native output not captured in original invocation: ' + key)
+        if key != 'scenario_record' and by_rel.get(ref['path'], {}).get('sha256') != ref['sha256']:
+            refuse('native output differs from original collector: ' + key)
+
+
 def _d13_execution(project: Path, source: Mapping, *, case_name: str | None = None) -> dict:
     """Reopen independently adopted original owner/launch; never restamp old execution."""
     relative = ('adopted/base_07/simulation_execution.json' if case_name is None else
@@ -3514,6 +3627,17 @@ def _d13_execution(project: Path, source: Mapping, *, case_name: str | None = No
         raise MetricRefusal('D13_EXECUTION_POPULATION_INVALID', 'unique project-relative native readset required')
     owner_path = _d13_file(project, reference['original_owner'], external=True)
     owner = json.loads(owner_path.read_bytes())
+    if reference.get('origin') not in (None, 'retained_native_components'):
+        raise MetricRefusal('D13_EXECUTION_ORIGIN_INVALID', str(reference.get('origin')))
+    if reference.get('origin') == 'retained_native_components':
+        if case_name is not None:
+            raise MetricRefusal('D13_RETAINED_COMPONENT_UNBOUND', 'selected-case owner requires its original native invocation')
+        _d13_retained_component_owner(project, reference, owner)
+        for record in source.get('source_refs', []):
+            _d13_file(project, record)
+        if not source.get('source_refs'):
+            raise MetricRefusal('D13_SOURCE_AUTHORITY_ABSENT', 'independent original requirements required')
+        return dict(reference)
     binding = owner.get('runner_binding') or {}
     producer = binding.get('producer')
     if (binding.get('schema') != 'vibeic.runner_report_binding.v1' or binding.get('project') != str(project)

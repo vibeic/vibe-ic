@@ -13,7 +13,7 @@ and the contribution guides for extending it.
 | | |
 |---|---|
 | Plugins in this marketplace | **1** — [`plugins/vibe-ic`](plugins/vibe-ic/) |
-| Plugin version | **1.33.90** |
+| Plugin version | **1.33.91** |
 | Deterministic programs | **1673** top level (`plugins/vibe-ic/programs/*.py`), of which **1506** are catalogued in [`INDEX.md`](plugins/vibe-ic/programs/INDEX.md) |
 | Skills | **60** (`plugins/vibe-ic/skills/*/SKILL.md`, each with a `compliance.yaml`) |
 | Slash commands | **7** (`plugins/vibe-ic/commands/*.md`) |
@@ -546,7 +546,7 @@ vibe-ic-marketplace/
 ├── templates/partner-plugin-skeleton/
 ├── community/backlogs/
 └── plugins/
-    └── vibe-ic/                         ← the single plugin (v1.33.90)
+    └── vibe-ic/                         ← the single plugin (v1.33.91)
         ├── .claude-plugin/plugin.json
         ├── flow/
         │   └── phase1_phase2_phase3.yaml   ← 70-step source of truth
@@ -558,7 +558,7 @@ vibe-ic-marketplace/
         │       ├── ic_expert_L1..L9.md  ← prose lessons per layer
         │       └── manifests/L1_manifest.json  ← 40-fact Q-bank (PoC)
         ├── skills/                      ← 70 skills, each + compliance.yaml
-        ├── programs/                    ← 6540 *.py at any depth (1673 top level)
+        ├── programs/                    ← 6541 *.py at any depth (1673 top level)
         │   ├── flow_compliance_check.py ← final gate
         │   ├── stage{1,2,3,4}_compliance.py
         │   ├── pdk_registry.json, ic_class_registry.json
