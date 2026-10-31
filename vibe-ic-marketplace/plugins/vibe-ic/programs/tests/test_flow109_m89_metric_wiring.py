@@ -377,3 +377,83 @@ def test_canonical_upstream_raw_link_uses_real_owner_reader(monkeypatch, tmp_pat
     record_property('image', image)
     record_property('source_sha256', mixed.operation_sources())
     assert os.environ.get(contract.LOCAL_ATTESTATION_ENV), 'fresh live launch identity is required'
+
+
+@pytest.mark.parametrize('case,expected', [
+    ('noise', 'PASS'), ('noise_limit', 'FAIL'), ('noise_unit', 'NOT_MEASURED'),
+    ('crosstalk', 'PASS'), ('settled_max', 'PASS'),
+    ('missing_interface', 'NOT_MEASURED'), ('foreign_scenario', 'NOT_MEASURED'),
+    ('incomplete_population', 'NOT_MEASURED'), ('unobserved_calibration', 'NOT_MEASURED')])
+def test_final_metrics_consume_current_producer_observations(monkeypatch, tmp_path, record_property, case, expected):
+    """Existing producer parser feeds the final numeric consumer, no row credit.
+
+    The optional observation is a retained real neutral ngspice run. Without it,
+    the existing native-format source fixture exercises the same parser; neither
+    mode asserts real PDK/final-layout or upstream-owner acceptance.
+    """
+    import copy
+    import hashlib
+    import os
+    import _mixed_signal_current as current
+    from test_mixed_signal_current_contract import _current_case, _coupling_observations
+
+    root, component, cosim_path, si_path, bounds_path, _ = setup(monkeypatch, tmp_path, 'M08')
+    observation_path = os.environ.get('M89_NATIVE_OBSERVATION')
+    if observation_path:
+        path = Path(observation_path)
+        record = json.loads(path.read_text())
+        for name, digest in record['files'].items():
+            assert hashlib.sha256((path.parent / name).read_bytes()).hexdigest() == digest
+        measured = current.measure(path.parent, record['inputs'], record['scenario'],
+                                   path.parent / 'source_run/functional', 'source_run')
+        assert measured == record['measured']
+        sample_metrics = record['native_sample_metrics']
+        record_property('observation_sha256', sha(path))
+        record_property('observation_scope', record['scope'])
+    else:
+        source = tmp_path / 'source_observation'
+        source.mkdir()
+        data, row, _drive = _current_case(source)
+        work = source / 'observations'
+        _coupling_observations(work, data, row)
+        measured = current.measure(source, data, row, work, 'source_run')
+        sample_metrics = {'settled_voltage_max_v': 1.0}
+        measured['id'] = 'functional'
+        record_property('observation_scope', 'native-format source fixture only')
+    assert measured['verdict'] == 'PASS'
+    cosim = json.loads(cosim_path.read_text())
+    cosim['scenarios'][0]['metrics'] = sample_metrics
+    interfaces = [copy.deepcopy(measured)]
+    if case == 'missing_interface':
+        interfaces = []
+    elif case == 'foreign_scenario':
+        interfaces[0]['id'] = 'foreign'
+    elif case == 'incomplete_population':
+        extra = copy.deepcopy(cosim['scenarios'][0]); extra['id'] = 'calibration'
+        cosim['scenarios'].append(extra)
+    cosim_path.write_text(json.dumps(cosim))
+    # This is the real physical producer field; legacy receiver_noise is absent.
+    si_path.write_text(json.dumps({'current_interfaces': interfaces}))
+    metric, unit, limit = 'integrated_output_noise_v_rms', 'V_RMS', 1.0
+    if case == 'noise_limit':
+        limit = 0.0
+    elif case == 'noise_unit':
+        unit = 'V'
+    elif case == 'crosstalk':
+        metric, unit, limit = 'peak_crosstalk_v', 'V_PEAK', 2.0
+    elif case == 'settled_max':
+        metric, unit, limit = 'settled_voltage_max_v', 'V', 1.1
+    elif case == 'unobserved_calibration':
+        metric, unit = 'calibration_error', 'V'
+    key = 'functional/' + metric
+    approved(root, str(bounds_path.relative_to(root)), limits={key: {'max': limit}}, units={key: unit})
+    result = mixed.bind_metrics(root, context('M08'), component)
+    record_property('case', case)
+    record_property('consumer_result', result)
+    assert result['status'] == expected, result
+    if expected in ('PASS', 'FAIL'):
+        bound = next(r for r in result['obligations'] if r.get('measurement', {}).get('name') == key)
+        assert bound['measurement']['unit'] == unit
+        if metric == 'integrated_output_noise_v_rms':
+            assert bound['measurement']['value'] == measured['noise']['metrics'][metric]['measured']
+    assert result['whole_ic_acceptance'] == 'NOT_MEASURED'

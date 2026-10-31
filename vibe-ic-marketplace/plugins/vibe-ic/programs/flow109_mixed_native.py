@@ -640,9 +640,29 @@ def bind_metrics(project, context, component):
                     unit = "V" if criterion["native_metric"] in (
                         "settled_voltage_min_v", "settled_voltage_max_v") else "count"
                     values[key] = {"value": criterion["measured"], "unit": unit}
+                for name, value in (row.get("metrics") or {}).items():
+                    if name in native.METRICS:
+                        unit = "V" if name in ("settled_voltage_min_v", "settled_voltage_max_v") else "count"
+                        values[row["id"] + "/" + name] = {"value": value, "unit": unit}
             noise = si.get("receiver_noise") or {}
             for name, measured in (noise.get("metrics") or {}).items():
                 values["receiver_noise/" + name] = {"value": measured["measured"], "unit": measured["units"]}
+            interfaces = si.get("current_interfaces")
+            if interfaces is not None:
+                if (not isinstance(interfaces, list)
+                        or any(not isinstance(item, dict) for item in interfaces)
+                        or [item.get("id") for item in interfaces] != [row["id"] for row in rows]):
+                    raise Refusal("M89_INTERFACE_SCENARIO_POPULATION_MISMATCH", step)
+                for interface in interfaces:
+                    if interface.get("scope") != current.SCOPE or interface.get("verdict") != "PASS":
+                        raise Refusal("M89_CURRENT_INTERFACE_NOT_MEASURED", interface.get("id"),
+                                      status="FAIL" if interface.get("verdict") == "FAIL" else "NOT_MEASURED")
+                    for name, measured in ((interface.get("noise") or {}).get("metrics") or {}).items():
+                        values[interface["id"] + "/" + name] = {
+                            "value": measured["measured"], "unit": measured["units"]}
+                    for criterion in (interface.get("crosstalk") or {}).get("criteria", ()):
+                        values[interface["id"] + "/" + criterion["metric"]] = {
+                            "value": criterion["measured"], "unit": criterion["units"]}
             for key, band in limits.items():
                 if key not in values:
                     raise Refusal("M89_NATIVE_METRIC_ABSENT", key)
