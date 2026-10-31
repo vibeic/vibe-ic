@@ -1419,6 +1419,7 @@ def arithmetic_observation(project: Path, spec: dict, *, top: Optional[str] = No
     and exact wrapper/model binding. No waveform or golden is consulted.
     The direct surface retains its 1 ns observation when no choice is supplied.
     """
+    import hashlib
     selected = top or spec['top']
     l9_path = _pl.generated_docs_dir(project) / 'L9_INTEGRATION_SPEC.json'
     declaration_path = project / 'plugin_output/declaration.json'
@@ -1468,6 +1469,34 @@ def arithmetic_observation(project: Path, spec: dict, *, top: Optional[str] = No
         actual = {str((project / p).resolve()): digest for p, digest in (sources or {}).items()}
     except (TypeError, ValueError):
         return refuse('observation source binding contains an unsupported path')
+    if len(binding) != len(choice.get('binding', {})) or len(actual) != len(sources or {}):
+        return refuse('observation source binding contains duplicate source locators')
+    if selected != spec['top'] and actual and binding != actual:
+        # A retained author map may name the same canonical wrapper in its
+        # previous carrier. Resolve that sole locator in memory; never edit it.
+        pad = _read_json(project / 'reports/phase3/io_pad_chip_top.json') or {}
+        wrapper_rel = Path(str(pad.get('chip_top_verilog', '')))
+        wrapper = (project / wrapper_rel).resolve()
+        stale = [p for p in binding if p not in actual]
+        missing = [p for p in actual if p not in binding]
+        if (pad.get('verdict') == 'WROTE' and pad.get('chip_top_module') == selected
+                and pad.get('core_module') == spec['top']
+                and not wrapper_rel.is_absolute() and '..' not in wrapper_rel.parts
+                and wrapper.is_relative_to(project.resolve()) and wrapper.is_file()
+                and len(stale) == len(missing) == 1 and missing[0] == str(wrapper)
+                and any(Path(p).is_absolute() and str((project / p).resolve()) == stale[0]
+                        for p in choice['binding'])
+                and wrapper_rel.parts and Path(stale[0]).parts[-len(wrapper_rel.parts):] == wrapper_rel.parts
+                and binding[stale[0]] == actual[str(wrapper)]
+                and hashlib.sha256(wrapper.read_bytes()).hexdigest() == actual[str(wrapper)]
+                and {p: d for p, d in binding.items() if p != stale[0]}
+                == {p: d for p, d in actual.items() if p != str(wrapper)}):
+            try:
+                if Path(stale[0]).exists() and hashlib.sha256(Path(stale[0]).read_bytes()).hexdigest() != binding[stale[0]]:
+                    return refuse('declared prior wrapper source bytes changed')
+            except OSError:
+                return refuse('declared prior wrapper source could not be read')
+            binding = dict(actual)
     if selected != spec['top'] and (not actual or binding != actual):
         return refuse('observation binding does not match the selected wrapper and model bytes')
     if binding:

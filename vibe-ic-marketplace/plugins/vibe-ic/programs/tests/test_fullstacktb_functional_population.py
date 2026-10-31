@@ -215,7 +215,7 @@ def _stale_wrapper_observation_project(tmp_path):
     return project, cases, models, calls, transport, stale, wrapper_rel, original
 
 
-def test_stale_carrier_wrapper_locator_rekeys_generated_provenance_only(
+def test_stale_carrier_wrapper_locator_resolves_without_author_writes(
         tmp_path, monkeypatch):
     project, _cases, models, calls, transport, stale, wrapper_rel, original = (
         _stale_wrapper_observation_project(tmp_path))
@@ -229,11 +229,12 @@ def test_stale_carrier_wrapper_locator_rekeys_generated_provenance_only(
 
     assert "observation_provenance_refresh" in result, result
     refresh = result["observation_provenance_refresh"]
-    assert refresh["state"] == "UPDATED" and refresh["provenance"] == "generated"
+    assert refresh["state"] == "RESOLVED" and refresh["provenance"] == "generated"
     assert refresh["previous_wrapper"] == str(stale)
     assert refresh["wrapper"] == str(wrapper_rel)
-    history = project / refresh["previous_declaration"]
-    assert history.read_text() == original
+    assert "previous_declaration" not in refresh
+    assert (project / "plugin_output/declaration.json").read_text() == original
+    assert not (project / 'plugin_output/declaration_history').exists()
     current = json.loads((project / "plugin_output/declaration.json").read_text())
     prior = json.loads(original)
     choice = current["verification_stimuli"]["arithmetic_observation"]["neutral_pad_surface"]
@@ -241,8 +242,9 @@ def test_stale_carrier_wrapper_locator_rekeys_generated_provenance_only(
     assert {key: choice[key] for key in ("clock", "output", "settle_ns", "sample_offset_ns")} == {
         key: prior_choice[key] for key in ("clock", "output", "settle_ns", "sample_offset_ns")}
     assert current["unrelated_owner_choice"] == prior["unrelated_owner_choice"]
-    assert str(stale) not in choice["binding"]
-    assert choice["binding"][str(wrapper_rel)] == fs.sha256_file(project / wrapper_rel)
+    assert str(stale) in choice["binding"]
+    assert str(wrapper_rel) not in choice["binding"]
+    assert refresh["binding"][str(wrapper_rel)] == fs.sha256_file(project / wrapper_rel)
     assert {source: choice["binding"][source] for source in models} == {
         source: hashlib.sha256(text.encode()).hexdigest()
         for source, text in models.items()}
@@ -314,6 +316,182 @@ def test_stale_wrapper_provenance_refuses_ambiguous_or_unproved_inputs(
     elif mutation not in ("non_wrote",):
         refresh = result.get("observation_provenance_refresh") or {}
         assert refresh.get("state") == "REFUSED", (mutation, result)
+
+
+@pytest.fixture
+def recorded_observation_recovery():
+    """The retained readset is mounted as a private copy at its original namespace."""
+    raw = os.environ.get('OBSERVATION_RECOVERY_PROJECT')
+    if not raw:
+        pytest.skip('requires the retained private same-namespace producer readset')
+    project = Path(raw)
+    fs = _fsf()
+    functional = fs.record_path(project)
+    rec = json.loads(functional.read_text())
+    archive = project / rec['observation_provenance_refresh']['previous_declaration']
+    paths = [project / n for n in [
+        'plugin_output/declaration.json', 'plugin_output/declaration.provenance.json',
+        'provenance.jsonl', 'reports/orchestrator/phase1_one_shot.json',
+        'reports/flow109/d26_scan_mode.json', 'reports/phase3/gates/full_stack_functional.json',
+        'reports/phase3/io_pad_chip_top.json', 'input/feature-decisions.json']]
+    paths += [functional, archive, project / rec['full_stack_top']['source']]
+    paths += [project / m['path'] for m in rec['models']]
+    originals = {p: p.read_bytes() for p in paths}
+    report = project / 'reports/phase3/observation_declaration_recovery.json'
+    saved_report = report.read_bytes() if report.exists() else None
+    try:
+        yield project, rec, originals
+    finally:
+        for p, data in originals.items():
+            if p.is_symlink():
+                p.unlink()
+            p.write_bytes(data)
+        if saved_report is None:
+            report.unlink(missing_ok=True)
+        else:
+            report.write_bytes(saved_report)
+
+
+def test_recorded_observation_recovery_restores_exact_publication_and_consumer(
+        recorded_observation_recovery):
+    project, rec, originals = recorded_observation_recovery
+    fs = _fsf()
+    path = project / 'plugin_output/declaration.json'
+    polluted = path.read_bytes()
+    expected = (project / rec['observation_provenance_refresh']['previous_declaration']).read_bytes()
+    assert polluted != expected
+    result = fs.recover_observation_declaration(project)
+    assert result['state'] == 'RECOVERED', result
+    assert path.read_bytes() == expected
+    assert (project / result['polluted_declaration']).read_bytes() == polluted
+    report = project / 'reports/phase3/observation_declaration_recovery.json'
+    receipt = report.read_bytes()
+    assert fs.recover_observation_declaration(project) == result
+    assert report.read_bytes() == receipt
+    top = fs.required_full_stack_top(project)
+    resolution = fs._refresh_stale_observation_binding(project, top, rec['models'], rec['ic_class'])
+    assert resolution['state'] == 'RESOLVED', resolution
+    spec, why = aog.extract_serial_arith_spec(project, rec['ic_class'])
+    assert spec, why
+    sources = {str((project / top['source']).resolve()): top['source_sha256'],
+               **{m['source']: m['sha256'] for m in rec['models']}}
+    observed, why = aog.arithmetic_observation(project, spec, top=top['module'], sources=sources)
+    assert observed, why
+    choice = json.loads(expected)['verification_stimuli']['arithmetic_observation'][top['module']]
+    assert (observed['sample_offset_ns'], observed['settle_ns']) == (
+        choice['sample_offset_ns'], choice['settle_ns'])
+    assert observed['binding'] == {str((project / p).resolve()): d for p, d in sources.items()}
+    assert path.read_bytes() == expected
+    for p, data in originals.items():
+        if p != path:
+            assert p.read_bytes() == data, p
+
+
+def test_recorded_observation_recovery_completes_interrupted_record(recorded_observation_recovery):
+    project, _rec, _originals = recorded_observation_recovery
+    fs = _fsf()
+    result = fs.recover_observation_declaration(project)
+    assert result['state'] == 'RECOVERED', result
+    report = project / 'reports/phase3/observation_declaration_recovery.json'
+    interrupted = dict(result, state='PREPARED')
+    report.write_text(json.dumps(interrupted, indent=2) + '\n')
+    assert fs.recover_observation_declaration(project) == result
+
+
+def test_recorded_observation_recovery_reenters_before_atomic_restore(
+        recorded_observation_recovery, monkeypatch):
+    project, rec, _originals = recorded_observation_recovery
+    fs = _fsf()
+    target = project / 'plugin_output/declaration.json'
+    polluted = target.read_bytes()
+    write = fs._atomic_write_text
+    def interrupted(path, text):
+        if Path(path) == target:
+            raise OSError('controlled interruption before atomic restore')
+        return write(path, text)
+    monkeypatch.setattr(fs, '_atomic_write_text', interrupted)
+    failed = fs.recover_observation_declaration(project)
+    assert failed['state'] == 'REFUSED' and target.read_bytes() == polluted
+    report = project / 'reports/phase3/observation_declaration_recovery.json'
+    prepared = json.loads(report.read_text())
+    assert prepared['state'] == 'PREPARED'
+    monkeypatch.setattr(fs, '_atomic_write_text', write)
+    done = fs.recover_observation_declaration(project)
+    assert done['state'] == 'RECOVERED'
+    assert done['polluted_declaration'] == prepared['polluted_declaration']
+    assert target.read_bytes() == (project / rec['observation_provenance_refresh']['previous_declaration']).read_bytes()
+
+
+def test_recorded_observation_recovery_normal_cli(recorded_observation_recovery, capsys):
+    project, _rec, _originals = recorded_observation_recovery
+    assert _fsf().main([str(project), '--recover-observation-declaration']) == 0
+    assert json.loads(capsys.readouterr().out)['state'] == 'RECOVERED'
+
+
+@pytest.mark.parametrize('damage', [
+    'wrapper_bytes', 'model_bytes', 'missing_model', 'incomplete_models',
+    'author_schedule', 'author_clock', 'author_dft', 'author_other', 'author_source',
+    'missing_archive', 'foreign_archive', 'symlink_archive', 'wrong_archive',
+    'missing_record', 'foreign_record', 'foreign_record_locator',
+    'polluted_extra_newline', 'missing_claim', 'wrong_claim'])
+def test_recorded_observation_recovery_refuses_real_changes(recorded_observation_recovery, damage):
+    project, rec, originals = recorded_observation_recovery
+    fs = _fsf()
+    declaration = project / 'plugin_output/declaration.json'
+    functional = fs.record_path(project)
+    gate_path = project / 'reports/phase3/gates/full_stack_functional.json'
+    archive = project / rec['observation_provenance_refresh']['previous_declaration']
+    def rewrite_record():
+        functional.write_text(json.dumps(rec, indent=2) + '\n')
+        gate = json.loads(gate_path.read_text())
+        gate['post_padring']['functional_record_sha256'] = fs.sha256_file(functional)
+        gate_path.write_text(json.dumps(gate, indent=2) + '\n')
+    if damage == 'wrapper_bytes':
+        p = project / rec['full_stack_top']['source']; p.write_bytes(p.read_bytes() + b'\n// changed\n')
+    elif damage in ('model_bytes', 'missing_model'):
+        p = project / rec['models'][0]['path']
+        if damage == 'model_bytes':
+            p.write_bytes(p.read_bytes() + b'\n// changed\n')
+        else:
+            p.unlink()
+    elif damage == 'incomplete_models':
+        rec['models'].pop(); rewrite_record()
+    elif damage.startswith('author_'):
+        if damage == 'author_source':
+            p = project / 'input/feature-decisions.json'; p.write_bytes(p.read_bytes() + b'\n')
+        else:
+            d = json.loads(declaration.read_text())
+            choice = d['verification_stimuli']['arithmetic_observation'][rec['full_stack_top']['module']]
+            if damage == 'author_schedule': choice['sample_offset_ns'] += 0.5
+            elif damage == 'author_clock': choice['clock'] = 'foreign_clock'
+            elif damage == 'author_dft': d['dft']['requires_scan'] = True
+            else: d['unrelated_choice'] = 'changed'
+            declaration.write_text(json.dumps(d, indent=2) + '\n')
+    elif damage == 'missing_archive': archive.unlink()
+    elif damage == 'foreign_archive':
+        rec['observation_provenance_refresh']['previous_declaration'] = str(archive); rewrite_record()
+    elif damage == 'symlink_archive':
+        other = archive.parent / 'copied.json'; other.write_bytes(archive.read_bytes())
+        archive.unlink(); archive.symlink_to(other)
+    elif damage == 'wrong_archive': archive.write_bytes(archive.read_bytes() + b'\n')
+    elif damage == 'missing_record': functional.unlink()
+    elif damage == 'foreign_record':
+        rec['full_stack_top']['source'] = '/foreign/wrapper.v'; rewrite_record()
+    elif damage == 'foreign_record_locator':
+        gate = json.loads(gate_path.read_text()); gate['functional_record'] = '/foreign/functional_cases.json'
+        gate_path.write_text(json.dumps(gate, indent=2) + '\n')
+    elif damage == 'polluted_extra_newline': declaration.write_bytes(declaration.read_bytes() + b'\n')
+    elif damage in ('missing_claim', 'wrong_claim'):
+        p = project / 'provenance.jsonl'
+        rows = [json.loads(line) for line in p.read_text().splitlines() if line.strip()]
+        claims = [r for r in rows if r.get('tool') == 'spec_declaration_emit']
+        if damage == 'missing_claim': rows = [r for r in rows if r not in claims]
+        else: claims[-1]['outputs']['plugin_output/declaration.json'] = 'sha256:' + '0' * 64
+        p.write_text(''.join(json.dumps(r) + '\n' for r in rows))
+    before = {p: p.read_bytes() for p in originals if p.is_file()}
+    result = fs.recover_observation_declaration(project)
+    assert result['state'] == 'REFUSED' and result['reason'], (damage, result)
+    assert all(p.read_bytes() == data for p, data in before.items()), (damage, result)
 
 
 def test_direct_core_scenario_schedule_and_strict_comparators_stay_unchanged(tmp_path, monkeypatch):
