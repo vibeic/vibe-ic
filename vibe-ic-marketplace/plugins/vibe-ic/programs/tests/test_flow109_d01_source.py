@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import os
 from pathlib import Path
 import sys
 
@@ -29,7 +30,8 @@ def _write(path, value):
     path.write_text(json.dumps(value) + '\n')
 
 
-def _produce(project, monkeypatch, *, route='ic', requires_scan=True, decisions=True):
+def _produce(project, monkeypatch, *, route='ic', requires_scan=True, decisions=True,
+             intent_override=None):
     docs = project / 'input/docs'
     docs.mkdir(parents=True, exist_ok=True)
     (docs / 'L7_verification_plan.md').write_text(
@@ -37,6 +39,8 @@ def _produce(project, monkeypatch, *, route='ic', requires_scan=True, decisions=
         'before authoring:\n\n| Field | Required | Example |\n|---|---|---|\n'
         '| `dft` | Yes | object |\n')
     intent = _intent() if requires_scan else {'requires_scan': False, 'reason': 'neutral source excludes scan'}
+    if intent_override is not None:
+        intent = intent_override
     if decisions:
         _write(project / 'input/feature-decisions.json', {'dft': intent})
     monkeypatch.setattr(execution_policy, '_ordinary_runtime', None)
@@ -72,6 +76,126 @@ def test_actual_d01_owner_output_is_read_on_both_routes(tmp_path, monkeypatch, r
         'sha256': hashlib.sha256(report.read_bytes()).hexdigest()}
     assert body['delivery_route'] == route.upper()
     assert report == tmp_path / 'reports/orchestrator/phase1_one_shot.json'
+
+
+def _l20_canonical_d01_project(project, monkeypatch, *, other_dft=False):
+    reason = 'The author excludes scan; other DFT is independently selected.'
+    decision = project / 'input/design-choice.json'
+    _write(decision, {'dft_selection': reason})
+    intent = {'requires_scan': False, 'reason': reason, 'source_reference': {
+        'path': decision.relative_to(project).as_posix(),
+        'sha256': hashlib.sha256(decision.read_bytes()).hexdigest()}}
+    context, report, body = _produce(project, monkeypatch, requires_scan=False,
+                                     intent_override=intent)
+    context['features']['requires_dft'] = other_dft
+    _write(project / 'input/flow109-manifest.json', context)
+    _write(project / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json', {
+        'doc_id': 'L20', 'applicability': 'APPLICABLE',
+        'extraction_status': 'NOT_YET_EXTRACTED', 'extraction_evidence': {},
+        'fields': {'dft_present': False, 'scan_chains': [], 'bist_mbist': [],
+                   'test_compression': None, 'jtag_tap': None}})
+    return report, body
+
+
+def test_l20_canonical_d01_reasoned_negative_reaches_normal_condition(tmp_path, monkeypatch):
+    import dft_atpg_coverage_check as applicability
+    import flow_compliance_check as compliance
+    import _flow_yaml
+    report, body = _l20_canonical_d01_project(tmp_path, monkeypatch)
+    l20 = tmp_path / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json'
+    retained = {p: p.read_bytes() for p in [report, l20,
+                tmp_path / 'plugin_output/declaration.json',
+                tmp_path / 'plugin_output/declaration.provenance.json',
+                tmp_path / 'provenance.jsonl']}
+    observed = applicability.l20_dft_applicability(tmp_path)
+    assert observed['asserts_dft'] is False, observed
+    assert observed['source_authority']['declaration']['sha256'] == body['dft_intent_output']['sha256']
+    rows = {str(row['id']): row for row in _flow_yaml.load()['steps']}
+    for sid in ['11', '12', 'DT1', 'DT2', 'DT3']:
+        row = rows[sid]
+        assert compliance._check_condition(tmp_path, row['condition']) is False
+        absence = compliance._l_doc_declares_absence(tmp_path, row['condition']['l_doc_declares'])
+        assert absence[0] == 'plugin_output/declaration.json', absence
+        result = compliance.check_step(tmp_path, row, {})
+        assert result.status == 'NOT_APPLICABLE', result
+        assert any('canonical D01' in reason for reason in result.reasons), result
+    assert all(p.read_bytes() == before for p, before in retained.items())
+
+
+def test_l20_canonical_d01_existing_accepted_readset():
+    import dft_atpg_coverage_check as applicability
+    import flow_compliance_check as compliance
+    project = Path(os.environ['L20_CANONICAL_SUBJECT'])
+    binding, problems = scan.load_d09_dft_contract(project)
+    assert binding is not None and problems == [], problems
+    observed = applicability.l20_dft_applicability(project)
+    assert observed['asserts_dft'] is False, observed
+    assert observed['source_authority']['declaration'] == {
+        'path': binding['path'], 'sha256': binding['sha256']}
+    assert compliance._check_condition(project, {'l_doc_declares': {
+        'l_doc': 'L20', 'all_absent': {'scan_chains': []}}}) is False
+
+
+@pytest.mark.parametrize('damage', ['owner_missing', 'owner_source', 'decision_changed',
+                                    'decision_reason', 'declaration_changed', 'input_changed',
+                                    'scan_feature', 'features_missing'])
+def test_l20_canonical_d01_invalid_authority_stays_unknown(tmp_path, monkeypatch, damage):
+    import dft_atpg_coverage_check as applicability
+    import flow_compliance_check as compliance
+    report, body = _l20_canonical_d01_project(tmp_path, monkeypatch)
+    if damage == 'owner_missing':
+        report.unlink()
+    elif damage == 'owner_source':
+        body['dft_intent_output']['producer_source_sha256'] = '0' * 64
+        _write(report, body)
+    elif damage in ['decision_changed', 'decision_reason']:
+        path = tmp_path / 'input/design-choice.json'
+        if damage == 'decision_changed':
+            path.write_text(path.read_text() + '\n')
+        else:
+            _write(path, {'dft_selection': 'different current decision'})
+    elif damage == 'declaration_changed':
+        path = tmp_path / 'plugin_output/declaration.json'
+        path.write_text(path.read_text() + '\n')
+    elif damage == 'input_changed':
+        _write(tmp_path / 'input/feature-decisions.json', {})
+    else:
+        path = tmp_path / 'input/flow109-manifest.json'
+        if damage == 'features_missing':
+            path.unlink()
+        else:
+            data = json.loads(path.read_text())
+            data['features']['requires_scan'] = True
+            data['features']['requires_dft'] = True
+            _write(path, data)
+    observed = applicability.l20_dft_applicability(tmp_path)
+    assert observed['asserts_dft'] is None, observed
+    assert compliance._l_doc_declares_absence(tmp_path, {'l_doc': 'L20',
+        'all_absent': {'scan_chains': []}}) is None
+
+
+@pytest.mark.parametrize('capability', ['scan', 'mbist_feature', 'mbist_topology'])
+def test_l20_canonical_d01_scan_and_mbist_keep_obligations(tmp_path, monkeypatch, capability):
+    import dft_atpg_coverage_check as applicability
+    import flow_compliance_check as compliance
+    if capability == 'scan':
+        context, _, _ = _produce(tmp_path, monkeypatch, requires_scan=True)
+        _write(tmp_path / 'input/flow109-manifest.json', context)
+        from test_dft_floor_unextracted_l20_is_unknown import _skeleton_l20, _write_l20
+        _write_l20(tmp_path, _skeleton_l20())
+    else:
+        _l20_canonical_d01_project(tmp_path, monkeypatch, other_dft=capability == 'mbist_feature')
+        if capability == 'mbist_topology':
+            path = tmp_path / 'phase1/generated_docs/L20_DFT_SCAN_TOPOLOGY.json'
+            data = json.loads(path.read_text())
+            data['fields']['bist_mbist'] = [{'name': 'memory_test', 'kind': 'mbist'}]
+            _write(path, data)
+    observed = applicability.l20_dft_applicability(tmp_path)
+    assert observed['asserts_dft'] is True, observed
+    condition = {'l_doc_declares': {'l_doc': 'L20', 'all_absent': {
+        'dft_present': False, 'scan_chains': [], 'bist_mbist': [], 'jtag_tap': None}}}
+    assert compliance._check_condition(tmp_path, condition) is True
+    assert compliance._l_doc_declares_absence(tmp_path, condition['l_doc_declares']) is None
 
 
 def test_current_decision_reemits_instead_of_retaining_old_schema(tmp_path, monkeypatch):
