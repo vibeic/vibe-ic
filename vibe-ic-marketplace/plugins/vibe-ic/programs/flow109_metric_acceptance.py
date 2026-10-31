@@ -1952,6 +1952,8 @@ def _a01_measurements(project: Path, component: Mapping[str, Any],
     if component.get("component_status") != "PASS":
         missing = {"status": "NOT_MEASURED", "reason": "A01 component is not current PASS"}
         return missing, missing
+    if "native_results" in component:
+        return _a01_native_measurements(project, component, context)
     blocks = component.get("blocks")
     if (not isinstance(blocks, list) or not blocks
             or any(b.get("component_status") != "PASS" or not b.get("current_emission")
@@ -2060,6 +2062,78 @@ def _a01_measurements(project: Path, component: Mapping[str, Any],
     _identity_complete(identity)
     return ({"status": "MEASURED", "value": specs, "identity": identity},
             {"status": "MEASURED", "value": measurements, "identity": identity})
+
+
+def _a01_native_measurements(project, component, context):
+    """Read the normal A01 attempt; specification targets are not performance results."""
+    import analog_native_flow as owner
+    import librelane_contract as launch
+    if not any((project / path).is_file() for path in (
+            'phase3/analog/analog_block_list.json', 'phase1/analog/analog_block_list.json')):
+        raise MetricRefusal('METRIC_INPUT_ABSENT', 'existing analog block declaration required')
+    names = [b.get('name') or b.get('block') for b in owner._declared_blocks(project)]
+    try:
+        image = launch.resolve_image(project, record=False)
+    except launch.Refusal as exc:
+        raise MetricRefusal(exc.code, str(exc)) from exc
+    rows, readset = owner._a18_current_rows(project, component['native_results'], 'A01', names, image)
+    specs, measurements, checks = [], [], []
+    l5 = project / 'phase1/generated_docs/L5_ADI_SPEC.json'
+    for row in rows:
+        name = row['block']
+        gates = [e for e in row.get('executions', [])
+                 if e.get('program') == 'analog_a1_spec_extract_check.py']
+        if len(gates) != 1 or gates[0].get('returncode') != 0:
+            raise MetricRefusal('METRIC_EXECUTION_EVIDENCE_INVALID', name)
+        gate = gates[0]
+        log = _safe_project_file(project, str(Path(gate['log']).relative_to(project)))
+        if _sha(log.read_bytes()) != gate.get('log_sha256'):
+            raise MetricRefusal('METRIC_EXECUTION_EVIDENCE_INVALID', name)
+        if '--json' not in gate.get('args', []):
+            raise MetricRefusal('METRIC_EXECUTION_EVIDENCE_INVALID', name)
+        report = Path(gate['args'][gate['args'].index('--json') + 1])
+        if (gate['args'] != [str(project), '--block', name, '--json', str(report)]
+                or not any(Path(str(arg)).name == 'analog_a1_spec_extract_check.py'
+                           for arg in gate.get('argv', []))
+                or str(report) not in row['output_views']):
+            raise MetricRefusal('METRIC_EVIDENCE_ABSENT', str(report))
+        body = json.loads(report.read_text())
+        if body.get('gate') != 'analog_a1_spec_extract_check' or body.get('verdict') != 'PASS':
+            raise MetricRefusal('METRIC_EVIDENCE_INVALID', str(report))
+        spec = project / 'phase3/analog' / name / 'spec.json'
+        if row['output_views'].get(str(spec)) != _sha(spec.read_bytes()):
+            raise MetricRefusal('METRIC_EVIDENCE_STALE', str(spec))
+        body = json.loads(spec.read_text())
+        provenance = body.get('_provenance', {})
+        if (provenance.get('producer') != 'analog_a1_spec_emit'
+                or provenance.get('defaults_used') is not False
+                or provenance.get('fields_defaulted') != [] or provenance.get('ai_handoff') is not None
+                or provenance.get('input', {}).get('path') != str(l5.relative_to(project))
+                or provenance['input'].get('sha256') != _sha(l5.read_bytes())):
+            raise MetricRefusal('METRIC_EVIDENCE_UNSUPPORTED', 'incomplete/source-unbound ' + name)
+        for entry in body.get('specs', []):
+            metric, unit = entry.get('name'), entry.get('unit')
+            values = [entry[k] for k in ('min', 'typ', 'max', 'value', 'target') if k in entry]
+            if (not isinstance(metric, str) or not _SAFE.fullmatch(metric)
+                    or not isinstance(unit, str) or not unit or not values):
+                raise MetricRefusal('METRIC_EVIDENCE_INVALID', str(spec))
+            for value in values:
+                _finite_number(value)
+            specs.append({'block': name, 'name': metric, 'unit': unit})
+            measurements.append({'block': name, 'name': metric})
+        readset[str(log)] = gate['log_sha256']
+        checks.append({'block': name, 'report': str(report), 'log_sha256': gate['log_sha256']})
+    if not specs:
+        raise MetricRefusal('METRIC_EVIDENCE_ABSENT', 'no source-owned specification targets')
+    identity = {'producer': {'name': 'analog_a1_spec_emit', 'input_sha256': _sha(l5.read_bytes())},
+        'checker': {'name': 'analog_a1_spec_extract_check', 'checks': checks},
+        'tool_execution': {'context_sha256': context['context_sha256'],
+                          'uses': context['runtime_tool_uses']},
+        'consumed_inputs': readset, 'requirements': 'bound-per-obligation',
+        'configuration': {'native_attempt': component['native_results']['attempt']}}
+    _identity_complete(identity)
+    return tuple({'status': 'MEASURED', 'value': values, 'identity': identity}
+                 for values in (specs, measurements))
 
 
 def _d10_blackbox_instances(document: Mapping[str, Any], top: str) -> list[str]:
@@ -4182,6 +4256,10 @@ def accept_a01(project: Path, context: Mapping[str, Any],
         try:
             authority, _ = _approved_authority(project, binding["authority"], binding["item_fields"])
             measured = dict(measured_by_id[oid])
+            if ("native_results" in component and measured.get('status') == 'MEASURED'
+                    and measured['identity']['consumed_inputs'].get(
+                        str(project / authority['source']['path'])) != authority['source']['sha256']):
+                raise MetricRefusal('METRIC_AUTHORITY_FOREIGN_SOURCE', authority['source']['path'])
             if measured.get("status") == "MEASURED":
                 measured["identity"] = dict(measured["identity"])
                 measured["identity"]["requirements"] = {

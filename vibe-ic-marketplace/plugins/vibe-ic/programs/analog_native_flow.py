@@ -831,7 +831,34 @@ def _a18_prerequisites(project, context, blocks, image):
 
 
 def consume_default_row_completion(project, context, component):
-    """Complete A18 only from current native metrics and qualified predecessors."""
+    """Complete existing measured rows from qualified inputs and accepted dependencies."""
+    if context.get('requested_step') == 'A01':
+        import flow109
+        import flow109_admission as admission
+        import flow109_metric_acceptance as metrics
+        project = Path(project).resolve()
+        base = {'step_id': 'A01', 'context_sha256': context.get('context_sha256'),
+                'default_row_status': 'NOT_MEASURED', 'completed': False,
+                'whole_flow_acceptance': 'NOT_MEASURED', 'delivery_accepted': False}
+        if component.get('component_status') == 'FAIL':
+            return {**base, 'default_row_status': 'FAIL', 'reason': component.get('reason')}
+        try:
+            current = flow109.validate_execution_context(context)
+            if component.get('component_status') != 'PASS' or current['native_step_id'] != 'A1':
+                raise ValueError('A01_NATIVE_COMPONENT_NOT_PASS')
+            qualified = admission.require_admission(project, current)
+            accepted = {step: flow109._accepted_row(project,
+                Path('reports/flow109/default_rows') / (step + '.json'), step)[1]
+                for step in current['resolved_row']['acceptance_deps']}
+            measured = metrics.accept_a01(project, current, component)
+            status = measured['status']
+            return {**base, 'default_row_status': status, 'completed': status == 'PASS',
+                    'metric_acceptance': measured, 'metric_acceptance_status': status,
+                    'qualification': qualified['status'], 'accepted_dependencies': accepted,
+                    'reason': measured['reason']}
+        except (ValueError, OSError, TypeError, KeyError, AttributeError) as exc:
+            return {**base, 'reason': getattr(exc, 'code', 'A01_COMPLETION_INPUT_NOT_CURRENT'),
+                    'detail': str(exc)}
     if context.get("requested_step") != "A18":
         return component
     project = Path(project).resolve()

@@ -9,6 +9,97 @@ import pytest
 import analog_native_flow as native
 
 
+@pytest.fixture
+def canonical_a01(tmp_path):
+    """SYNTHETIC qualification/dependencies; real Python producer/checker, no IC proof."""
+    from types import SimpleNamespace
+    from test_flow109_metric_acceptance import _approved_case
+    import flow109
+    import librelane_contract as contract
+    manifest, _ = _approved_case(tmp_path)
+    # Include a neutral DUT identity without running any circuit simulator.
+    dut = tmp_path / 'phase3/analog/regulator_alpha/regulator_alpha.sp'
+    dut.parent.mkdir(parents=True, exist_ok=True)
+    dut.write_text('* synthetic source identity, never simulated\n')
+    for step in ('D01', 'D02'):
+        path = tmp_path / f'reports/flow109/default_rows/{step}.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'step_id': step, 'default_row_status': 'PASS',
+                                    'completed': True, 'scope': 'SYNTHETIC source control'}))
+    report = native.run_window(tmp_path, SimpleNamespace(
+        entry_step='A01', exit_step='A01', container='', transport='HOST',
+        image=contract.resolve_image(tmp_path, record=False)), features=manifest['features'])
+    assert report['window_verdict'] == 'PASS', report
+    context = flow109.execution_context(flow109.resolve_plan(manifest['features']), 'A01', 'A01',
+        runtime_tool_uses=manifest['runtime_tool_uses'], qualification_registry='qualifications.json')
+    assert context['resolved_row']['profile']['dispatch']['adapter'] == 'analog_native_flow'
+    component = {'step_id': 'A01', 'context_sha256': context['context_sha256'],
+                 'component_status': 'PASS', 'native_results': report,
+                 'flow109_acceptance': 'NOT_MEASURED'}
+    return tmp_path, context, component
+
+
+def test_canonical_a01_normal_owner_completes_only_current_declared_metrics(canonical_a01):
+    import flow109
+    project, context, component = canonical_a01
+    row = flow109._selected_step_result(project, context, component, native)
+    assert row['default_row_status'] == 'PASS' and row['completed'] is True, row
+    assert row['whole_flow_acceptance'] == 'NOT_MEASURED' and not row['delivery_accepted']
+    assert [m['status'] for m in row['metric_acceptance']['obligations']] == ['PASS', 'PASS']
+
+
+@pytest.mark.parametrize('damage', ['missing_D01', 'missing_qualification', 'stale_DUT',
+    'missing_block', 'forged_PASS', 'missing_spec_field', 'foreign_authority', 'unattributed_source',
+    'declared_population_gap', 'missing_declaration'])
+def test_canonical_a01_normal_owner_refuses_incomplete_or_foreign_evidence(canonical_a01, damage):
+    import flow109
+    project, context, component = canonical_a01
+    report = component['native_results']
+    if damage == 'missing_D01':
+        (project / 'reports/flow109/default_rows/D01.json').unlink()
+    elif damage == 'missing_qualification':
+        (project / 'qualifications.json').unlink()
+    elif damage == 'stale_DUT':
+        (project / 'phase3/analog/regulator_alpha/regulator_alpha.sp').write_text('* changed source\n')
+    elif damage == 'missing_block':
+        report['steps'] = []
+    elif damage == 'missing_declaration':
+        (project / 'phase3/analog/analog_block_list.json').unlink()
+    elif damage == 'forged_PASS':
+        report['steps'][0]['executions'] = []
+    elif damage in ('missing_spec_field', 'unattributed_source'):
+        path = project / 'phase3/analog/regulator_alpha/spec.json'
+        body = json.loads(path.read_text())
+        if damage == 'missing_spec_field':
+            body['specs'] = []
+        else:
+            body['_provenance']['ai_handoff'] = {'reason': 'unattributed required source fields'}
+        path.write_text(json.dumps(body))
+        report['steps'][0]['output_views'][str(path)] = native._sha(path)
+    elif damage == 'declared_population_gap':
+        path = project / 'requirements/base_A1/required_measurements.json'
+        body = json.loads(path.read_text())
+        body['required_items'].append({'block': 'regulator_alpha', 'name': 'dropout'})
+        path.write_text(json.dumps(body))
+    else:
+        path = project / 'requirements/base_A1/required_measurements.json'
+        body = json.loads(path.read_text())
+        foreign = project / 'unconsumed-foreign-requirements.md'
+        foreign.write_text('foreign source, not consumed by the producer\n')
+        body['approval']['source_reference'] = {'path': foreign.name, 'sha256': native._sha(foreign)}
+        path.write_text(json.dumps(body))
+    # Keep altered synthetic records internally consistent to exercise the
+    # real semantic/readset guards, rather than only a record-copy mismatch.
+    (Path(report['attempt']) / 'result.json').write_text(json.dumps(report))
+    row = flow109._selected_step_result(project, context, component, native)
+    assert row['default_row_status'] in ('FAIL', 'NOT_MEASURED') and not row['completed'], row
+    if damage == 'declared_population_gap':
+        assert row['default_row_status'] == 'FAIL', row
+    if damage == 'missing_declaration':
+        assert not (project / 'phase3/analog/analog_block_list.json').exists(), row
+    assert row['whole_flow_acceptance'] == 'NOT_MEASURED' and not row['delivery_accepted']
+
+
 def _project(tmp_path):
     path = tmp_path / 'phase1/generated_docs/L5_ADI_SPEC.json'
     path.parent.mkdir(parents=True)
