@@ -363,7 +363,8 @@ def _refuse_relocated_copy_in_record(summary: Any, project: Path) -> None:
 
 
 def _write_phase2_report(out: Path, summary: Any, project: Path, *,
-                         invocation_context: Optional[dict] = None) -> None:
+                         invocation_context: Optional[dict] = None,
+                         publish_current: bool = False) -> None:
     """The ONE seam every phase-2 report is written through, so the refusal
     above cannot be bypassed by a second `write_text` added later."""
     _refuse_relocated_copy_in_record(summary, project)
@@ -383,8 +384,50 @@ def _write_phase2_report(out: Path, summary: Any, project: Path, *,
     from benchmark_dispatch import _bind_runner_report
     summary = _bind_runner_report(summary, project, __file__, out.name,
                                   context=invocation_context)
+    current = None
+    if publish_current:
+        # Qualified rows retain their D09 owner report. The ordinary original
+        # engineering continuation instead publishes its current Step-2 owner
+        # at the same path read by collection, attribution and invocation
+        # snapshots. The current publication binds the outer invocation
+        # and points to the child report with its original launch binding.
+        import flow109
+        import flow109_engineering as engineering
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
+        attempt = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+        if (context['resolved_row']['id'] != 'D11'
+                or not engineering.selected_original(project, context)
+                or out != attempt / 'phase2_one_shot.json'
+                or (attempt / 'result.json').exists() or (attempt / 'result.json').is_symlink()):
+            raise ValueError('D11_CURRENT_REPORT_PUBLICATION_UNBOUND')
+        current = _pl.report_path(project, 'phase2_one_shot.json')
+        if (any(p.is_symlink() for p in (current, *current.parents))
+                or not current.resolve().is_relative_to(Path(project).resolve())):
+            raise ValueError('D11_CURRENT_REPORT_PATH_UNBOUND')
+    parent_context = None
+    if current is not None:
+        from benchmark_dispatch import _RUNNER_PARENT_CONTEXT_ENV
+        parent_raw = os.environ.get(_RUNNER_PARENT_CONTEXT_ENV)
+        if parent_raw is not None:
+            parent_context = json.loads(parent_raw)
+            # Validate the inherited parent source before publishing either
+            # role. The child keeps its own actual launch binding.
+            _bind_runner_report({}, project, __file__, out.name, context=parent_context)
+            summary['runner_binding']['parent_invocation'] = parent_context
+    raw = json.dumps(summary, indent=2, ensure_ascii=False) + "\n"
     out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
+    _aa.write_text(out, raw)
+    if current is not None:
+        current_summary = summary
+        if parent_context is not None:
+            current_summary = _bind_runner_report(summary, project, __file__, out.name,
+                                                   context=parent_context)
+            current_summary['runner_binding']['owner_report'] = {
+                'path': str(out.relative_to(project)),
+                'sha256': hashlib.sha256(raw.encode('utf-8')).hexdigest()}
+        current.parent.mkdir(parents=True, exist_ok=True)
+        _aa.write_text(current, json.dumps(current_summary, indent=2, ensure_ascii=False) + "\n")
 
 
 def _runner_invocation_context() -> Optional[dict]:
@@ -28271,7 +28314,8 @@ def main() -> int:
                                        "dispatched_step_ids": ["2"]},
                    "bounded_disclosures": ["native lint only; whole flow not measured"]}
         _write_phase2_report(out, summary, project,
-                            invocation_context=_dispatch_invocation_context)
+                            invocation_context=_dispatch_invocation_context,
+                            publish_current=engineering_selected)
         # D11's front door reopens the actual fresh normal owner report before
         # the sole canonical writer publishes; this child owns no row credit.
         finished = None if d11_selected else flow109.finish_native_window(project, summary, out)
@@ -28282,7 +28326,8 @@ def main() -> int:
         if status != summary["verdict"]:
             summary["verdict"] = status
             _write_phase2_report(out, summary, project,
-                                invocation_context=_dispatch_invocation_context)
+                                invocation_context=_dispatch_invocation_context,
+                                publish_current=engineering_selected)
         print(f"native Step 2: {row.status} — {row.detail}")
         return {"PASS": 0, "FAIL": 1}.get(status, 2)
 

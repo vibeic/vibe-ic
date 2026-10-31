@@ -3070,6 +3070,10 @@ def _run_phase(label: str, runner: Path, args: List[str],
             invocation.clear()
             invocation.update(context)
             child_env = dict(env or os.environ)
+            parent = child_env.get(dispatch._RUNNER_CONTEXT_ENV)
+            child_env.pop(dispatch._RUNNER_PARENT_CONTEXT_ENV, None)
+            if parent is not None:
+                child_env[dispatch._RUNNER_PARENT_CONTEXT_ENV] = parent
             child_env[dispatch._RUNNER_CONTEXT_ENV] = json.dumps(
                 context, sort_keys=True)
         cp = subprocess.run(command, env=child_env,

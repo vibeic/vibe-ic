@@ -189,6 +189,7 @@ class _ProcessOutcome:
 _RUNNER_REPORT_NAMES = ("phase1_one_shot.json", "phase2_one_shot.json",
                         "phase3_one_shot.json", "vibe_ic_one_shot.json")
 _RUNNER_CONTEXT_ENV = "VIBEIC_RUNNER_INVOCATION_CONTEXT"
+_RUNNER_PARENT_CONTEXT_ENV = "VIBEIC_PARENT_RUNNER_INVOCATION_CONTEXT"
 
 
 def _runner_source_snapshot(argv: list[str], *, consumer: str | None = None) -> dict:
@@ -333,6 +334,45 @@ def _runner_fresh_reports(before: dict, after: dict) -> list[str]:
             and record["sha256"] != before.get(name, {}).get("sha256")]
 
 
+def _runner_owner_report_current(project: Path, binding: dict, receipt: dict) -> None:
+    """Reopen the actual child owner behind an outer current publication."""
+    owner = binding.get("owner_report")
+    if owner is None:
+        return
+    relative = owner["path"]
+    path = project / relative
+    if (not isinstance(relative, str) or Path(relative).is_absolute()
+            or ".." in Path(relative).parts
+            or path.parent.parent != project / "reports/flow109/attempts"
+            or path.name != "phase2_one_shot.json"
+            or any(p.is_symlink() for p in (path, *path.parents))):
+        raise ValueError("child owner path is not a current-project attempt")
+    raw = path.read_bytes()
+    child = _strict_json_loads(raw)
+    current = _strict_json_loads((project / "reports/orchestrator/phase2_one_shot.json").read_bytes())
+    owned = child["runner_binding"]
+    expected_parent = {"invocation_id": receipt["invocation_id"], "argv": receipt["argv"],
+                       "project": receipt["project"], "source": receipt["source_before"]}
+    argv = owned["argv"]
+    source = owned["source"]
+    if (hashlib.sha256(raw).hexdigest() != owner["sha256"]
+            or {k:v for k,v in child.items() if k != "runner_binding"}
+                != {k:v for k,v in current.items() if k != "runner_binding"}
+            or owned.get("parent_invocation") != expected_parent
+            or owned.get("schema") != "vibeic.runner_report_binding.v1"
+            or owned.get("project") != str(project)
+            or not owned.get("invocation_id")
+            or owned.get("report_name") != "phase2_one_shot.json"
+            or owned.get("producer") != binding["producer"]
+            or owned.get("material") != receipt["material_after"]
+            or len(argv) < 3 or Path(argv[1]).name != "phase2_one_shot_runner.py"
+            or Path(argv[2]).resolve() != project
+            or argv[argv.index("--entry-step") + 1] != "2"
+            or argv[argv.index("--exit-step") + 1] != "2"
+            or source != _runner_source_snapshot(argv, consumer=source["consumer"]["path"])):
+        raise ValueError("child owner source/generation/material differs")
+
+
 def _runner_report_binding_reason(receipt: dict, *, require_phase2: bool) -> str | None:
     """The same report subject/generation check at collect, freeze and reentry."""
     fresh = _runner_fresh_reports(receipt["reports_before"], receipt["reports_after"])
@@ -357,6 +397,7 @@ def _runner_report_binding_reason(receipt: dict, *, require_phase2: bool) -> str
                     or binding["source"] != receipt["source_before"]
                     or binding["report_name"] != name):
                 raise ValueError("report invocation/source differs")
+            _runner_owner_report_current(Path(receipt["project"]), binding, receipt)
             producer = binding["producer"]
             if hashlib.sha256(Path(producer["path"]).read_bytes()).hexdigest() != producer["sha256"]:
                 raise ValueError("report producer source changed")
@@ -365,7 +406,7 @@ def _runner_report_binding_reason(receipt: dict, *, require_phase2: bool) -> str
             if (name != "phase1_one_shot.json" or not require_phase2):
                 if binding["material"] != receipt["material_after"]:
                     raise ValueError("report input/output material differs")
-        except (OSError, ValueError, KeyError, TypeError):
+        except (OSError, ValueError, KeyError, TypeError, IndexError):
             return "RUNNER_REPORT_UNBOUND: report generation/source/material does not bind this invocation"
     return None
 
