@@ -29,7 +29,7 @@ def sha(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
-def instrument_split_gate_view(original: str, declaration: dict) -> tuple[str, dict]:
+def instrument_split_gate_view(original: str, declaration: dict, source_directory: Path | None = None) -> tuple[str, dict]:
     """Expose declared gate/sum ports without changing delivered device values."""
     digest = hashlib.sha256(original.encode()).hexdigest()
     if declaration.get("kind") != "split_gate" or declaration.get("source_sha256") != digest:
@@ -93,14 +93,17 @@ def instrument_split_gate_view(original: str, declaration: dict) -> tuple[str, d
     mapping = [{"device": name, "original_pins": row[1:model_indices[name]],
                 "view_pins": view_cards[name][1:model_indices[name]],
                 "model_and_parameters": row[model_indices[name]:]} for name, (_, row) in cards.items()]
+    if source_directory is not None:
+        view = contextual_template(view, source_directory)
     return view, {"source_sha256": digest, "view_sha256": hashlib.sha256(view.encode()).hexdigest(),
                   "subcircuit": header[1], "original_ports": header[2:], "ports": ports,
+                  "model_include_base": str(source_directory) if source_directory is not None else None,
                   "changes": changes, "device_count": len(cards), "all_device_mapping": mapping,
                   "reconnection": "EXACT_ALL_DELIVERED_DEVICE_CARDS", "scope": "diagnostic view only"}
 
 
-def validate_split_gate_reconnection(original: str, view: str, declaration: dict) -> dict:
-    expected, audit = instrument_split_gate_view(original, declaration)
+def validate_split_gate_reconnection(original: str, view: str, declaration: dict, source_directory: Path | None = None) -> dict:
+    expected, audit = instrument_split_gate_view(original, declaration, source_directory)
     if view != expected:
         raise ValueError("split-gate view contains wrong or additional changes")
     return audit
@@ -325,8 +328,8 @@ def run_measurements(project: Path, netlist: Path, template: Path, bindings: dic
         try:
             declaration = bindings["instrumentation"]
             original = netlist.read_text()
-            view, instrumentation = instrument_split_gate_view(original, declaration)
-            validate_split_gate_reconnection(original, view, declaration)
+            view, instrumentation = instrument_split_gate_view(original, declaration, netlist.parent)
+            validate_split_gate_reconnection(original, view, declaration, netlist.parent)
             view_path = destination / "split_gate_view.sp"
             view_path.write_text(view)
             text = _split_gate_template(text, netlist, view_path, declaration, instrumentation)

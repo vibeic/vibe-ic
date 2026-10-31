@@ -81,3 +81,14 @@ def test_actual_consumer_refuses_unknown_physical_port_before_native(tmp_path, c
     assert report['status'] == 'NOT_MEASURED'
     assert 'undeclared new physical node' in report['detail']
     assert report['executions'] == []
+
+
+def test_model_includes_resolve_from_original_delivered_directory(tmp_path, circuit):
+    original, declaration = circuit
+    original = '.lib ../../../input/pdk/models/corner.lib tt\n' + original
+    declaration['source_sha256'] = hashlib.sha256(original.encode()).hexdigest()
+    source = tmp_path/'case/phase3/analog/ota'
+    view, audit = bound.instrument_split_gate_view(original, declaration, source)
+    assert str(tmp_path/'case/input/pdk/models/corner.lib') in view
+    assert audit['source_sha256'] == declaration['source_sha256']
+    bound.validate_split_gate_reconnection(original, view, declaration, source)
