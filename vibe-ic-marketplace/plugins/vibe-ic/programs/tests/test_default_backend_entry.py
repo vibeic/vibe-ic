@@ -14,6 +14,91 @@ from _route_fixture import stage_owner_route
 RUNNER = Path(__file__).resolve().parents[1] / "vibe_ic_one_shot_runner.py"
 
 
+@pytest.fixture
+def canonical51_current_state_subject():
+    import os
+    import json
+    import flow109
+    project = Path(os.environ['CANONICAL51_SUBJECT'])
+    context = flow109.validate_execution_context(
+        json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_text()))
+    flow109._bound_attempt(project, context, os.environ[flow109.ATTEMPT_ENV])
+    originals = {}
+
+    def change(relative):
+        path = project / relative
+        originals[path] = path.read_bytes()
+        path.write_bytes(originals[path] + b'\n')
+
+    try:
+        yield project, change
+    finally:
+        for path, content in originals.items():
+            path.write_bytes(content)
+
+
+def test_canonical51_current_state_public_netlist_consumer(canonical51_current_state_subject):
+    import hashlib
+    import phase3_one_shot_runner as phase3
+    import synth_handoff_netlist_check as handoff
+    project, _ = canonical51_current_state_subject
+    try:
+        netlist, note, scan = phase3.pnr_input_netlist(project, 'spm')
+        observed = 'ADOPTED'
+    except ValueError as exc:
+        observed = 'REFUSED: ' + str(exc)
+    assert observed == 'ADOPTED'
+    bound = handoff.bound_handoff(project)
+    assert bound['verdict'] == 'PASS', bound
+    assert netlist == Path(bound['mapped']) and scan is False
+    assert hashlib.sha256(netlist.read_bytes()).hexdigest() == bound['netlist_sha256']
+    state = project / bound['current_state']['path']
+    assert hashlib.sha256(state.read_bytes()).hexdigest() == bound['current_state']['sha256']
+
+
+def test_canonical51_current_state_manifest_selects_real_namespace(canonical51_current_state_subject):
+    import execution_adapters_backend as backend
+    project, _ = canonical51_current_state_subject
+    paths = backend.backend_project_input_contract(project, '15', collect_missing=True,
+                                                   execution_mode='default')
+    current = 'phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr/state_out.json'
+    legacy = 'phase3/librelane/02-yosys-synthesis/'
+    observed = 'CURRENT' if current in paths and not any(
+        isinstance(path, str) and path.startswith(legacy) for path in paths) else 'LEGACY'
+    assert observed == 'CURRENT'
+    assert current.removesuffix('state_out.json') + 'vibeic_receipt.json' in paths
+    assert 'reports/flow109/default_rows/D30.json' in paths
+
+
+@pytest.mark.parametrize('name', ['state_out.json', 'vibeic_receipt.json'])
+def test_canonical51_current_state_changed_native_refuses(
+        canonical51_current_state_subject, name):
+    import execution_adapters_backend as backend
+    import phase3_one_shot_runner as phase3
+    import synth_handoff_netlist_check as handoff
+    project, change = canonical51_current_state_subject
+    change('phase3/librelane/prelayout/design_sdc/02-openroad-staprepnr/' + name)
+    bound = handoff.bound_handoff(project)
+    assert bound['verdict'] == 'FAIL', bound
+    with pytest.raises(ValueError):
+        backend.backend_project_input_contract(project, '15', collect_missing=True,
+                                              execution_mode='default')
+    with pytest.raises(ValueError):
+        phase3.pnr_input_netlist(project, 'spm')
+
+
+def test_canonical51_current_state_legacy_selection_is_preserved(
+        canonical51_current_state_subject, monkeypatch):
+    import flow109
+    import execution_adapters_backend as backend
+    project, _ = canonical51_current_state_subject
+    monkeypatch.delenv(flow109.CONTEXT_ENV)
+    paths = backend.backend_project_input_contract(project, '15', collect_missing=True,
+                                                   execution_mode='default')
+    assert 'phase3/librelane/02-yosys-synthesis/state_out.json' in paths
+    assert 'phase3/librelane/02-yosys-synthesis/vibeic_receipt.json' in paths
+
+
 def observe(project, step, mode="default"):
     stage_owner_route(project, "ic")
     return subprocess.run(

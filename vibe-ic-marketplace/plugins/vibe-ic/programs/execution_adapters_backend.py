@@ -1106,6 +1106,14 @@ def backend_project_input_contract(project: Path, step_id: str, *,
     """
     root = Path(project).resolve(strict=True)
     result: list[object] = []
+    current_handoff = None
+    if step_id == '15' and execution_mode == 'default':
+        import synth_handoff_netlist_check as handoff
+        bound = handoff.bound_handoff(root)
+        if bound is not None and bound.get('canonical_physical'):
+            if bound['verdict'] != 'PASS':
+                raise ValueError('current physical handoff refused: ' + '; '.join(bound['findings']))
+            current_handoff = bound
 
     def carry_checkpoint_file(raw: str, *, allow_directory: bool = False) -> None:
         """Carry one issued checkpoint file after proving its namespace."""
@@ -1147,6 +1155,24 @@ def backend_project_input_contract(project: Path, step_id: str, *,
         if require_nonempty and target.stat().st_size <= 0:
             return
         carry_checkpoint_file(raw)
+
+    if current_handoff is not None:
+        delivery = current_handoff['delivery']
+        refs = [current_handoff['source_handoff'], current_handoff['delivery_receipt'],
+                current_handoff['producer_source'], delivery['handoff_record'],
+                delivery['source_netlist'], delivery['delivered_netlist']]
+        refs.extend(item['original'] for item in current_handoff['source_identity'].values())
+        inputs = dict(delivery['consumed_timing']['consumed_inputs'])
+        inputs.update((ref['path'], ref['sha256']) for ref in refs)
+        for raw, digest in inputs.items():
+            path = Path(raw)
+            if path.is_absolute():
+                if not path.is_relative_to(root):
+                    continue  # Native image/PDK assets are reopened by the existing handoff reader.
+                path = path.relative_to(root)
+            carry_checkpoint_file(path.as_posix())
+            if em.digest(root / path) != digest:
+                raise ValueError('current physical handoff input changed: ' + raw)
 
     # Preserve an existing producer's catalogue record along with the staged
     # source tree; a later declaration consumer must see the same evidence.
@@ -1393,7 +1419,8 @@ def backend_project_input_contract(project: Path, step_id: str, *,
         doc = json.loads(sidecar.read_text())
     except (OSError, ValueError, TypeError):
         doc = {}
-    binding = doc.get("librelane_synthesis") if isinstance(doc, dict) else None
+    binding = (doc.get("librelane_synthesis") if isinstance(doc, dict)
+               and current_handoff is None else None)
     if isinstance(binding, dict):
         folder_path = None
         for key in ("folder", "mapped"):

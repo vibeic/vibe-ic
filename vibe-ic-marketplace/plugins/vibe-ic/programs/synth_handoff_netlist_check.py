@@ -582,8 +582,39 @@ def bound_handoff(project: Path) -> Optional[dict]:
     project never falls back to an older .ys script or generic netlist.
     """
     import librelane_contract as LC
+    canonical_physical = False
     sidecar = project / 'phase2/stage2/synth/synth_inputs.json'
     try:
+        import flow109
+        request = os.environ.get(flow109.CONTEXT_ENV)
+        if request is not None:
+            canonical_physical = True
+            context = flow109.validate_execution_context(json.loads(Path(request).read_text()))
+            rows = context.get('resolved_rows', [context.get('resolved_row')])
+            canonical_physical = any(row and row['id'] == 'D31' for row in rows)
+        if canonical_physical:
+            from vibe_ic_one_shot_runner import _complete_canonical51_constraints
+            accepted = _complete_canonical51_constraints(project, read_only=True)
+            if not accepted or accepted['verdict'] != 'PASS':
+                raise ValueError((accepted or {}).get('detail', 'current canonical handoff absent'))
+            delivery = accepted['delivery']
+            state_ref = delivery['consumed_timing']['native_records']['state_out.json']
+            import flow109_metric_acceptance as metrics
+            state = json.loads(metrics._d30_file(project, state_ref, 'current prelayout State').read_text())
+            mapped = metrics._d30_file(project, delivery['source_netlist'], 'current mapped netlist')
+            native = state.get('nl')
+            if not isinstance(native, str) or Path(native).resolve() != mapped.resolve():
+                raise ValueError('current prelayout State does not consume the adopted mapped netlist')
+            return {'program': 'synth_handoff_netlist_check', 'step': '14',
+                    'verdict': 'PASS', 'findings': [], 'canonical_physical': True,
+                    'mapped': str(mapped), 'native': native,
+                    'netlist_sha256': delivery['source_netlist']['sha256'],
+                    'source_handoff': accepted['handoff'],
+                    'delivery_receipt': accepted['delivery_receipt'],
+                    'producer_source': accepted['producer_source'],
+                    'source_identity': accepted['source_identity'],
+                    'current_state': state_ref, 'delivery': delivery,
+                    'reason_class': 'canonical_handoff_verified'}
         doc = json.loads(sidecar.read_text()) if sidecar.is_file() else {}
         binding = doc.get('librelane_synthesis')
         if LC.selected_mode(project, '9') != 'librelane' and binding is None:
@@ -632,6 +663,7 @@ def bound_handoff(project: Path) -> Optional[dict]:
     except (LC.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return {'program': 'synth_handoff_netlist_check', 'step': '14',
                 'verdict': 'FAIL', 'reason_class': 'tool_handoff_invalid',
+                'canonical_physical': canonical_physical,
                 'findings': [str(exc)]}
 
 

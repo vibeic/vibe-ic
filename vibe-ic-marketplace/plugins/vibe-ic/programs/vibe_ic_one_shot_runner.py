@@ -930,7 +930,7 @@ def _revalidate_step5_checkpoint(project: Path) -> Optional[dict]:
             'producer_reused': True}
 
 
-def _complete_canonical51_constraints(project: Path) -> dict | None:
+def _complete_canonical51_constraints(project: Path, *, read_only: bool = False) -> dict | None:
     """Consume the accepted post-synthesis handoff before selected floorplan.
 
     Stale or missing consumed inputs block this continuation. Legacy entries
@@ -1110,10 +1110,13 @@ def _complete_canonical51_constraints(project: Path) -> dict | None:
         if matrix != expected:
             raise ValueError('current PVT matrix differs from the accepted native corner/library configuration')
         # This existing producer records configuration, never timing PASS.
-        disclosure = phase3.emit_step7_corner_disclosure(project, matrix)
+        disclosure = None if read_only else phase3.emit_step7_corner_disclosure(project, matrix)
         return {'verdict': 'PASS', 'producer_reused': True,
                 'detail': 'current canonical handoff and consumed constraint readset',
                 'handoff': delivery_ref,
+                'delivery': receipt, 'delivery_receipt': receipt_path,
+                'producer_source': {'path': producer_rel,
+                                    'sha256': receipt['producer_source_sha256']},
                 'source_identity': source_identity,
                 'sdc_record': {'path': str(sdc_path.relative_to(project)),
                                'sha256': sdc_ref['sha256'],
@@ -1122,7 +1125,7 @@ def _complete_canonical51_constraints(project: Path) -> dict | None:
                                'library_sha256s': sorted({lib['sha256'] for point in timing['value']
                                                          for lib in point['libraries']}),
                                'source_handoff': delivery_ref},
-                'corner_disclosure': str(disclosure.relative_to(project)),
+                'corner_disclosure': str(disclosure.relative_to(project)) if disclosure else None,
                 'qualification': 'NOT_CLAIMED'}
     except (OSError, ValueError, KeyError, TypeError) as exc:
         return {'verdict': 'NOT_MEASURED', 'producer_reused': True,
