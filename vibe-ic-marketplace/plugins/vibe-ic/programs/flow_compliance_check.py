@@ -16630,6 +16630,21 @@ def _output_not_owed(project: Path, step: Dict[str, Any], spec: Any
     cites an owner-declared die-less delivery with no bound slot. The other
     cites absence of both route markers, where even a DIE or unreadable
     declaration has no producer. A DIE with a live route remains owed."""
+    if str(step.get("id")) == "D1":
+        from phase1_all_l_docs_present_check import fact_graph_layer_contract
+        try:
+            native = fact_graph_layer_contract(project)
+        except (OSError, ValueError, TypeError, KeyError):
+            native = None  # A damaged graph never excuses a missing output.
+        if native is not None:
+            import fnmatch
+            if (str(spec).startswith("phase1/generated_docs/")
+                    and not any(fnmatch.fnmatch(path, pattern.strip())
+                        for path in native["required_outputs"] for pattern in str(spec).split(" OR "))):
+                return f"declared output {spec!r} NOT_APPLICABLE: native FactGraph owns its complete {len(native['required_outputs'])}-layer projection"
+            if str(spec) in {"phase1/extraction_patterns.json", "reports/phase1/extraction_coverage_report.json",
+                             "reports/phase1/extraction_coverage_report.md"}:
+                return f"declared output {spec!r} NOT_APPLICABLE: native source-fact coverage replaces document-pattern extraction"
     conds = step.get("output_conditions")
     if not isinstance(conds, dict):
         return None

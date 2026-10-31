@@ -37,11 +37,27 @@ def _pins(path: Path) -> dict[str, dict]:
     return pins
 
 
-def _nets(path: Path) -> dict[str, dict]:
+def _net_blocks(path: Path):
+    block = []
+    with path.open() as stream:
+        for line in stream:
+            if line.startswith("Net "):
+                if block:
+                    yield "".join(block)
+                block = [line[4:]]
+            elif block:
+                block.append(line)
+    if block:
+        yield "".join(block)
+
+
+def _nets(path: Path, *, selected: set[str] | None = None) -> dict[str, dict]:
     nets = {}
     raw_blocks = {}
-    for block in re.split(r"(?m)^Net ", path.read_text())[1:]:
+    for block in _net_blocks(path):
         name, _, rest = block.partition("\n")
+        if selected is not None and name not in selected:
+            continue
         # OpenSTA enumerates Verilog aliases but report_net prints the same
         # canonical net for each. Only byte-identical repetitions are benign;
         # conflicting or truncated repetitions are refused, never combined.
@@ -83,6 +99,15 @@ def _nets(path: Path) -> dict[str, dict]:
             raise ValueError("OpenSTA net capacitance census is not finite")
         nets[name] = {"cap_pf": cap_pf, "loads": load_names, "drivers": driver_names,
                       "other_pins": other_names}
+        wire = re.search(r"(?m)^ Wire capacitance:\s*(\S+)", rest)
+        if wire is not None:
+            wire_range = re.fullmatch(rf"({_NUM})(?:-({_NUM}))?", wire.group(1))
+            if wire_range is None:
+                raise ValueError("OpenSTA wire capacitance grammar invalid")
+            wire_values = [float(value) for value in wire_range.groups() if value is not None]
+            if any(not math.isfinite(value) or value < 0 for value in wire_values):
+                raise ValueError("OpenSTA wire capacitance is not finite and nonnegative")
+            nets[name]["wire_cap_pf"] = max(wire_values)
         raw_blocks[name] = block.strip()
     return nets
 

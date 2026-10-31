@@ -150,7 +150,13 @@ def contracts(project: Path, row: dict) -> dict:
     """Resolve canonical any-of/glob contracts to substantive exact file hashes."""
     import flow_compliance_check as fcc
     result = {}
-    for spec in row.get('required_outputs', []):
+    outputs = list(row.get('required_outputs', []))
+    if str(row.get('id')) == 'D1':
+        from phase1_all_l_docs_present_check import fact_graph_layer_contract
+        native = fact_graph_layer_contract(project)
+        if native is not None:
+            outputs = list(dict.fromkeys(outputs + native['required_outputs']))
+    for spec in outputs:
         if fcc._output_not_owed(project, row, spec):
             continue
         files = []

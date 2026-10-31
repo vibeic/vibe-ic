@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+import hashlib
+import json
 import sys
 from pathlib import Path
 
@@ -250,6 +252,88 @@ def _zero_segment_proof(net: dict | None, pins: set[str]) -> bool:
         net["endpoints"] == pins)
 
 
+def _port_terminal_proofs(scene_dir, pins, lefs, routed_def, spef, segments,
+                          spef_connections, candidates):
+    """Bind unloaded physical terminals, not missing RC, to native evidence."""
+    if not candidates:
+        return {}
+    try:
+        receipt = json.loads((scene_dir / "spef_extraction_receipt.json").read_text())
+        if (receipt.get("schema") != "vibeic.spef_extraction_receipt.v1"
+                or receipt.get("routed_def_sha256") != hashlib.sha256(routed_def.read_bytes()).hexdigest()
+                or receipt.get("spef_sha256") != hashlib.sha256(spef.read_bytes()).hexdigest()):
+            return {}
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {}
+    body, parasitics = routed_def.read_text(), spef.read_text()
+    design = re.search(r"(?m)^DESIGN\s+(\S+)\s*;", body)
+    source_design = re.search(r'(?m)^\*DESIGN\s+"([^"\n]+)"', parasitics)
+    units = re.search(r"\bUNITS\s+DISTANCE\s+MICRONS\s+([1-9]\d*)\s*;", body)
+    section = re.search(r"(?ms)^PINS\s+(\d+)\s*;\s*(.*?)^END PINS\b", body)
+    if not design or not source_design or design[1] != source_design[1] or not units or not section:
+        return {}
+    names, ports, state = {}, set(), None
+    for line in parasitics.splitlines():
+        words = line.split()
+        if not words:
+            continue
+        if words[0] in ("*NAME_MAP", "*PORTS"):
+            state = words[0]
+        elif state == "*NAME_MAP" and re.fullmatch(r"\*\d+", words[0]) and len(words) == 2:
+            names[words[0]] = words[1]
+        elif state == "*PORTS" and len(words) >= 2 and words[1] in ("I", "O", "B"):
+            port = _unescape(names.get(words[0], words[0]))
+            if port in ports:
+                return {}
+            ports.add(port)
+        elif words[0].startswith("*"):
+            state = None
+    records = list(re.finditer(r"(?ms)^\s*-\s+(\S+)\s+(.*?);", section[2]))
+    if len(records) != int(section[1]) or len({m[1] for m in records}) != len(records):
+        return {}
+    layers = set()
+    for item in lefs:
+        layers.update(re.findall(r"\bLAYER\s+(\S+)\s*;", Path(item["path"]).read_text()))
+    terminals = {}
+    for match in records:
+        name, record = _unescape(match[1]), match[2]
+        if name not in candidates:
+            continue
+        net = re.search(r"\+\s*NET\s+(\S+)", record)
+        shape = re.search(r"\+\s*PORT\s+\+\s*LAYER\s+(\S+)\s+"
+                          r"\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*"
+                          r"\(\s*(-?\d+)\s+(-?\d+)\s*\)", record)
+        placed = re.search(r"\+\s*(?:PLACED|FIXED)\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s+(N|S|E|W|FN|FS|FE|FW)\b", record)
+        if (not net or not shape or not placed or shape[1] not in layers
+                or not re.search(r"\+\s*USE\s+(?:SIGNAL|CLOCK|ANALOG)\b", record)):
+            continue
+        rect = [int(value) for value in shape.groups()[1:]]
+        if rect[0] >= rect[2] or rect[1] >= rect[3]:
+            continue
+        terminals[name] = {"net": _unescape(net[1]), "layer": shape[1], "rect_dbu": rect}
+    # Reuse the independent native net parser; absence is never zero wire C.
+    from drv_signoff_census import _nets
+    try:
+        native = _nets(scene_dir / "net_census.rpt", selected={pins[n]["net"] for n in candidates})
+    except (OSError, ValueError):
+        return {}
+    result = {}
+    for name in candidates:
+        net = pins[name]["net"]
+        target, measured = terminals.get(name), native.get(net)
+        wanted = {name}
+        if (not target or not measured or target["net"] != net or name != net
+                or name not in ports or measured.get("wire_cap_pf") != 0
+                or set(measured["drivers"] + measured["loads"] + measured["other_pins"]) != wanted
+                or not _zero_segment_proof(segments.get(net), wanted)
+                or any(name in endpoints for endpoints in spef_connections.values())):
+            continue
+        result[name] = {"reason": "port_terminal_zero_interconnect", "wire_cap_pf": 0,
+                        "def_terminal": target, "def_endpoints": [name],
+                        "spef_port": name, "same_carrier_design": design[1]}
+    return result
+
+
 def derive(scene_dir: Path, pins: dict, liberties: list[dict], lefs: list[dict],
            routed_def: Path, spef: Path) -> dict:
     """Only LEF PG pins without any linked timing arc leave the population."""
@@ -280,6 +364,12 @@ def derive(scene_dir: Path, pins: dict, liberties: list[dict], lefs: list[dict],
             by_net.setdefault(pin["net"], []).append(name)
     spef_connections = _spef_connections(spef)
     segments = _def_segments(routed_def)
+    candidates = {_unescape(name) for name in names if _unescape(name) in pins
+                  and pins[_unescape(name)].get("kind") == "port"
+                  and pins[_unescape(name)].get("driver_pin") == _unescape(name)
+                  and by_net.get(pins[_unescape(name)]["net"]) == [_unescape(name)]}
+    terminals = _port_terminal_proofs(scene_dir, pins, lefs, routed_def, spef,
+                                     segments, spef_connections, candidates)
     resolved = []
     unresolved = []
     for name in names:
@@ -328,6 +418,8 @@ def derive(scene_dir: Path, pins: dict, liberties: list[dict], lefs: list[dict],
                                             "singleton_driver_zero_routed_segments"),
                                  "def_sections": segments[_unescape(net)]["sections"],
                                  "def_endpoints": sorted(wanted)})
+            elif census_name in terminals:
+                resolved.append({"pin": name, "net": net, **terminals[census_name]})
             else:
                 unresolved.append({"pin": name, "net": net,
                                    "reason": "missing_parasitic_or_geometry_proof"})

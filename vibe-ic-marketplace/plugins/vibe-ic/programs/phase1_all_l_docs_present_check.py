@@ -102,9 +102,93 @@ _REQUIRED_PREFIXES: tuple[str, ...] = (
 )
 
 
+def fact_graph_layer_contract(project: Path):
+    """The native nonphysical publisher's complete source-derived layer contract.
+
+    This is not an absence waiver: every input fact must remain at its owning
+    layer, with complete list populations and 100% applicable required facts.
+    Physical, unknown and raw-document inputs keep their existing contracts.
+    """
+    from _phase1_producer_identity import has_converged_fact_graph
+    if not has_converged_fact_graph(project):
+        return None
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+    from phase1_engine.schema import FactGraph, LAYER_FILE_NAMES
+    from phase1_engine.render import compute_required_facts_coverage
+    import flow109
+    scope = flow109.active_rtl_scope(project)
+    if scope is None:
+        return None
+    current, reference = flow109._bound_project_json(
+        project, Path(scope["manifest"]["path"]), "D01_FACT_GRAPH_SCOPE_UNBOUND")
+    if reference != scope["manifest"]:
+        raise ValueError("D01_FACT_GRAPH_SCOPE_UNBOUND")
+    current_plan = flow109.resolve_plan(current.get("features"), current.get("step_profiles"))
+    source = project / "input/phase1_structured.yaml"
+    if source.is_symlink() or not source.resolve().is_relative_to(project.resolve()):
+        raise ValueError("D01_FACT_GRAPH_SOURCE_UNBOUND")
+    graph = FactGraph.load(source)
+    manifest = graph.metadata.get("flow109_manifest")
+    if manifest is None:
+        return None
+    if not isinstance(manifest, dict):
+        raise ValueError("D01_FACT_GRAPH_SELECTION_INVALID")
+    plan = flow109.resolve_plan(manifest.get("features"), manifest.get("step_profiles"))
+    if any(plan[key] != current_plan[key] for key in ("features", "step_profiles")):
+        return None
+    features = plan["features"]
+    if (features["physical"] or not features["has_digital"]
+            or features["has_analog"] or features["package_interface"]):
+        return None
+    coverage = compute_required_facts_coverage(graph)
+    if not graph.facts or not coverage["total"] or coverage["pct"] != 1.0:
+        raise ValueError("D01_FACT_GRAPH_REQUIRED_FACTS_INCOMPLETE: " + str(coverage))
+    import re
+    import phase1_expert_parse_track as track
+    docs = {}
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("D01_FACT_GRAPH_DUPLICATE_OUTPUT_KEY: " + key)
+            result[key] = value
+        return result
+    def preserves(actual, expected):
+        if type(actual) is not type(expected):
+            return False
+        if isinstance(expected, dict):
+            return all(k in actual and preserves(actual[k], v) for k, v in expected.items())
+        if isinstance(expected, list):
+            return len(actual) == len(expected) and all(preserves(a, b) for a, b in zip(actual, expected))
+        return actual == expected
+    for fact in graph.facts:
+        layer, key = fact.path.split(".", 1)
+        if layer not in fact.views or layer not in LAYER_FILE_NAMES:
+            raise ValueError("D01_FACT_GRAPH_LAYER_UNSUPPORTED: " + fact.path)
+        relative = "phase1/generated_docs/" + LAYER_FILE_NAMES[layer]
+        if relative not in docs:
+            path = project / relative
+            if path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(project.resolve()):
+                raise ValueError("D01_FACT_GRAPH_OUTPUT_MISSING: " + relative)
+            docs[relative] = json.loads(path.read_text(), object_pairs_hook=unique)
+        pointer = "/" + re.sub(r"\[(\d+)\]", r"/\1", key.replace(".", "/"))
+        values = track.subtree_at(docs[relative], pointer, layer)
+        if not isinstance(values, list) or len(values) != 1 or not preserves(values[0], fact.value):
+            raise ValueError("D01_FACT_GRAPH_FACT_NOT_PRESERVED: " + fact.path)
+    return {"required_outputs": sorted(docs), "facts": len(graph.facts),
+            "required_fact_coverage": coverage, "source": "input/phase1_structured.yaml"}
+
+
 def _check(project: Path) -> tuple[int, list[str]]:
     if not project.is_dir():
         return 2, [f"FAIL — project dir not found: {project}"]
+
+    try:
+        native = fact_graph_layer_contract(project)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return 1, ["phase1_all_l_docs_present_check: FAIL — " + str(exc)]
+    if native is not None:
+        return 0, [f"phase1_all_l_docs_present_check: PASS — {len(native['required_outputs'])} native graph layers; {native['facts']} source facts preserved"]
 
     # Wave 30 (v0.119.62) — fail-closed semantic for missing
     # generated_docs/. The previous silent-skip path let fresh-agent

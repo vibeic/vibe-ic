@@ -18,6 +18,30 @@ from test_flow109_d19_metric_acceptance import _case, _write, _ref
 from test_flow109_selection import _public_d09_entry
 
 
+@pytest.mark.parametrize('suffix, expected', [
+    ('', []),
+    ('set_false_path -from [all_inputs] -to [all_outputs]\n',
+     ['set_false_path -from [all_inputs] -to [all_outputs]']),
+    ('if {1} {set_false_path -from [all_inputs] -to [all_outputs]}\n', None),
+])
+def test_static_design_constraints_keep_exception_census_strict(tmp_path, suffix, expected):
+    sdc = tmp_path / 'functional.sdc'
+    sdc.write_text('create_clock -name core_clock -period 24 [get_ports clk]\n'
+                   'set_max_fanout 4 [current_design]\n'
+                   'set_max_transition 3 [current_design]\n'
+                   'set_max_capacitance 0.2 [current_design]\n'
+                   'set_timing_derate -early 0.95\n' + suffix)
+    if expected is None:
+        with pytest.raises(metrics.MetricRefusal, match='D19_EXCEPTION_CENSUS_UNSUPPORTED'):
+            metrics._d19_exception_commands(sdc)
+    else:
+        try:
+            observed = metrics._d19_exception_commands(sdc)
+        except metrics.MetricRefusal as exc:
+            observed = {'refusal': exc.code}
+        assert observed == expected
+
+
 def exception_authority(project, context, fields, *, command=None, validated_absence=True):
     scenarios = fields['scenario_constraints']['required_items']
     items = [{**row, 'command': command, 'justification': 'Declared neutral asynchronous test path'}

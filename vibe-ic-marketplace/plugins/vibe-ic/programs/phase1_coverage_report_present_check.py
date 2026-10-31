@@ -275,6 +275,16 @@ def _check(project: Path) -> tuple[int, str]:
     if not project.is_dir():
         return 2, f"FAIL — project dir not found: {project}"
 
+    from phase1_all_l_docs_present_check import fact_graph_layer_contract
+    try:
+        native = fact_graph_layer_contract(project)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return 1, "phase1_coverage_report_present_check: FAIL — " + str(exc)
+    if native is not None:
+        return 0, ("phase1_coverage_report_present_check: PASS — "
+                   f"{native['facts']}/{native['facts']} native source facts preserved at owning layers; "
+                   "100% applicable required facts; no document-pattern denominator")
+
     # Wave 30 (v0.119.62) — fail-closed when vendor input docs exist
     # but the agent never attempted Phase 1 (doc-extraction). Silent-skip remains only
     # for bare-skeleton projects with no input/docs/ at all.

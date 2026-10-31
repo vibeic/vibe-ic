@@ -644,7 +644,7 @@ def _d19_exception_commands(path: Path) -> list[str]:
                 'set_max_transition', 'set_max_fanout', 'set_max_capacitance', 'set_case_analysis',
                 'set_clock_sense', 'set_timing_derate', 'set_operating_conditions', 'set_wire_load_model'}
     collections = {'get_ports', 'get_pins', 'get_clocks', 'get_cells', 'get_nets',
-                   'all_inputs', 'all_outputs', 'all_clocks', 'all_registers'}
+                   'all_inputs', 'all_outputs', 'all_clocks', 'all_registers', 'current_design'}
     text = re.sub(r'\\\r?\n', ' ', path.read_text())
     found = []
     for line in text.splitlines():
