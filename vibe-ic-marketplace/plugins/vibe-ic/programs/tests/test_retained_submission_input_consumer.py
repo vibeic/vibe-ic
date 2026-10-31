@@ -78,3 +78,51 @@ def test_boolean_return_is_not_original_producer_completion(case):
     path.write_text(json.dumps(body, indent=2) + '\n')
     with pytest.raises(metrics.MetricRefusal, match='D0102_SUBMISSION_LINEAGE_UNBOUND'):
         runner._complete_retained_submission_input(case)
+
+
+def test_actual_control_prose_and_area_refusal_reach_normal_row(case, monkeypatch):
+    """Actual extra control files cannot replace the authored area readset.
+
+    A newly authored area input remains a real changed input. Its exact normal
+    MetricRefusal must reach the existing NOT_MEASURED row and collector.
+    """
+    import sys
+    import area_budget_basis_gen as area
+    import step_output_collector as versions
+    answer = json.loads((case / 'input/step_0_5ic_answers.json').read_text())
+    expected = {'answer': answer['answers'][area.KEY],
+                'provenance': answer['answer_provenance'][area.KEY]}
+    initial_equal = area.rederive(case, answer) == expected
+    prior = versions.latest_pass(case, '0.5ic')
+    original = case / prior.get('storage_root', 'steps') / prior['folder'] / 'outputs.json'
+    original_raw = original.read_bytes()
+    # Preserve the legacy author-input path: this is not Flow109 collateral.
+    (case / 'input/owner-area-requirement.md').write_text(
+        '# Owner area intent\nThe implementation may choose the die size.\n')
+    manifest = json.loads((case / 'input/flow109-manifest.json').read_text())
+    context = flow109.execution_context(flow109.resolve_plan(
+        manifest['features'], manifest.get('step_profiles')), 'D02', 'D02')
+    target = case / 'control-request.json'
+    target.write_text(json.dumps(context))
+    monkeypatch.setenv(flow109.CONTEXT_ENV, str(target))
+    attempt = flow109._new_attempt(case, context)
+    monkeypatch.setenv(flow109.ATTEMPT_ENV, str(attempt))
+    monkeypatch.setattr(sys, 'argv', ['phase1_one_shot_runner.py', str(case),
+        '--complete-retained-metrics', '--route', 'ic', '--ic-name', 'spm'])
+    try:
+        observed = ('returned', runner.main())
+    except metrics.MetricRefusal as exc:
+        observed = ('raised', exc.code)
+    assert observed == ('returned', 1), observed  # BASE raises real AREA_AUTHORITY_STALE.
+    assert initial_equal is True
+    row = json.loads((case / 'reports/flow109/default_rows/D02.json').read_text())
+    assert row['default_row_status'] == 'NOT_MEASURED'
+    assert row['reason'] == 'D0102_SUBMISSION_AREA_AUTHORITY_STALE'
+    assert row['metric_acceptance']['reason'] == row['reason']
+    assert row['metric_acceptance']['detail'].startswith(row['reason'] + ':')
+    assert row['metric_acceptance']['qualification'] == 'NOT_MEASURED'
+    assert row['metric_acceptance']['metric_status'] == 'PASS'
+    finished = json.loads((attempt / 'result.json').read_text())
+    assert finished['components'][0]['reason'] == row['reason']
+    assert finished['default_row_status'] == 'NOT_MEASURED'
+    assert original.read_bytes() == original_raw

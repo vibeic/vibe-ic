@@ -186,12 +186,23 @@ def design_docs(project: Path) -> List[Tuple[str, Path, str]]:
     (which already skips every oracle/reference tree). Operator material under
     the submission-template directories is not the design speaking."""
     out = []
+    authored = None
     for rel, path, text in _one_copy(project, FPC._iter_input_files(project),
                                      lambda it: it[0]):
         if path.suffix.lower() not in _PROSE_SUFFIXES:
             continue
         if rel.startswith("input/submission_template"):
             continue
+        if rel.startswith("input/flow109/"):
+            # Flow109's runtime/control prose is not an additional design
+            # prompt. An explicitly declared authored entry still belongs.
+            if authored is None:
+                import _flow_yaml
+                from execution_backend_worker import _declared_input_files
+                row = next(r for r in _flow_yaml.load()['steps'] if str(r['id']) == 'D1')
+                authored = _declared_input_files(project, row['required_inputs'])
+            if rel not in authored:
+                continue
         out.append((rel, path, text))
     return out
 
