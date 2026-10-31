@@ -1343,6 +1343,13 @@ def _cts_split(project, params, R, ll, pdk, overlay):
     mounts = [(root.resolve(), ll.PDK_GUEST_ROOT)]
     state = (_require(Path(params['state_in'])) if params.get('state_in') else
              _predecessor_state(project, predecessor))
+    if sid == '19' and params.get('flow109_d38_targets') is not None:
+        from flow109_metric_acceptance import MetricRefusal, d38_target_binding
+        try:
+            if d38_target_binding(project) != params['flow109_d38_targets']:
+                raise MetricRefusal('D38_TARGETS_CHANGED_BEFORE_EXECUTION', sid)
+        except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            raise em.Refusal('D38_TARGETS_CHANGED_BEFORE_EXECUTION', str(exc)) from exc
     folders = ll.run_chain(project, image, [(s, cfg, state) for s, cfg in chain],
                           mounts=mounts, lane=lane, pdk_root=ll.PDK_GUEST_ROOT)
     production = folders[len(ids) - 1]
@@ -1359,6 +1366,9 @@ def _cts_split(project, params, R, ll, pdk, overlay):
                'measured_state': str((folders[-1] / 'state_out.json').relative_to(project)),
                'measured_state_sha256': snap.sha(folders[-1] / 'state_out.json'),
                'views': dict(previous.get('views', {}))}
+    if sid == '19' and params.get('flow109_d38_targets') is not None:
+        receipt.update(flow109_d38_targets=params['flow109_d38_targets'],
+                       initial_state=str(state.relative_to(project)), initial_sha256=snap.sha(state))
     for view, info in handoff['views'].items():
         receipt['views']['post_' + ('cts' if sid == '19' else 'hold') + '_' + view] = {
             **info, 'dest': str(Path(info['dest']).relative_to(project))}
@@ -1643,6 +1653,25 @@ def produce_pnr(project, params):
                     result['verdict'] = 'FAIL'
         return result
     elif sid in ('19', '20'):
+        if sid == '19' and os.environ.get('VIBEIC_FLOW109_CONTEXT'):
+            import flow109
+            from flow109_metric_acceptance import MetricRefusal, accept_d38, d38_target_binding
+            try:
+                context = flow109.validate_execution_context(json.loads(
+                    Path(os.environ['VIBEIC_FLOW109_CONTEXT']).read_text()))
+                current = flow109.component_context(context, requested_step='D38')
+                binding = d38_target_binding(project)
+            except (MetricRefusal, flow109.Flow109Error, OSError, ValueError, KeyError, TypeError) as exc:
+                return {'verdict': 'NOT_MEASURED', 'reason': getattr(exc, 'code', 'D38_TARGETS_UNBOUND'),
+                        'detail': str(exc), 'native_started': False}
+            result = _cts_split(project, {**params, 'flow109_d38_targets': binding}, R, ll, pdk, overlay)
+            result.update(native_image=params['image_id'], flow109_d38_targets=binding)
+            result['metric_acceptance'] = accept_d38(project, current, result)
+            result['metric_acceptance_status'] = result['metric_acceptance']['metric_status']
+            result['default_row_status'] = result['metric_acceptance']['status']
+            if result['metric_acceptance_status'] == 'FAIL':
+                result['verdict'] = 'FAIL'
+            return result
         result = _cts_split(project, params, R, ll, pdk, overlay)
         if sid == '20' and os.environ.get('VIBEIC_FLOW109_CONTEXT'):
             import flow109
@@ -2501,7 +2530,7 @@ def produce(project, params):
             current['authority_verdict'] = authority_verdict
             current['authority_detail'] = reason
             result['current_step_declared_producers'] = current
-        if sid in ('17', '18', '20') and 'metric_acceptance' in result:
+        if sid in ('17', '18', '19', '20') and 'metric_acceptance' in result:
             result['canonical_receipts'] = [{
                 'schema': 'vibeic/backend-producer-receipt/1',
                 'producer': 'execution_backend_producers.produce', 'step_id': sid,
@@ -2577,7 +2606,7 @@ def produce(project, params):
         'detail': result.get('detail', ''),
         'current_step_declared_producers': current,
     }]
-    if sid in ('17', '18', '20') and 'metric_acceptance' in result:
+    if sid in ('17', '18', '19', '20') and 'metric_acceptance' in result:
         result['canonical_receipts'][0]['metric_acceptance'] = result['metric_acceptance']
     if result.get('retained_drc_checkpoint'):
         result['canonical_receipts'][0]['retained_drc_checkpoint'] = result['retained_drc_checkpoint']

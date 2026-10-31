@@ -7315,6 +7315,269 @@ def accept_d02(project: Path, context: Mapping[str, Any]) -> dict:
     return _accept_d0102(project, context, 'D02')
 
 
+def d38_target_binding(project: Path) -> dict:
+    """Bind approved planning targets to CTS requirements before execution.
+
+    ABI matches clock-plan PR3762 head9f72f92d: the requirements source is the
+    exact planning-targets file, and its two max limits equal those targets.
+    No CTS PASS or planning-row PASS is required to bind this forward input.
+    """
+    project = Path(project).resolve()
+    source = 'input/flow109/D34/clock_planning_targets.json'
+    relative = 'requirements/base_25/clock_skew_insertion_drv.json'
+    authority, body = _approved_document(project, relative, authority='requirements_owner', schema=AUTHORITY_SCHEMA)
+    target = _safe_project_file(project, source)
+    raw = target.read_bytes()
+    reference = {'path': source, 'sha256': _sha(raw)}
+    requirement = _safe_project_file(project, relative)
+    if authority['source'] != reference or _sha(requirement.read_bytes()) != authority['sha256']:
+        raise MetricRefusal('D38_TARGET_SOURCE_UNBOUND', source)
+    plan = json.loads(raw)
+    keys = {'clock_skew_ns', 'insertion_delay_ns'}
+    drv = {'design__max_slew_violation__count', 'design__max_cap_violation__count',
+           'design__max_fanout_violation__count'}
+    limits, units = body['limits'], body['units']
+    if (not isinstance(plan, dict) or not isinstance(plan.get('targets'), dict)
+            or not isinstance(limits, dict) or not isinstance(units, dict)
+            or set(limits) != set(units) or not keys <= set(limits) <= keys | drv
+            or set(plan.get('targets', {})) != keys or plan.get('units') != {k: 'ns' for k in keys}):
+        raise MetricRefusal('D38_TARGET_SHAPE_UNSUPPORTED', relative)
+    for key in keys:
+        _finite_number(plan['targets'][key])
+        if (not isinstance(limits[key], dict) or not set(limits[key]) <= {'min', 'max'}
+                or limits[key].get('max') != plan['targets'][key] or units[key] != plan['units'][key]):
+            raise MetricRefusal('D38_TARGET_LIMITS_DIFFER', key)
+        for value in limits[key].values():
+            _finite_number(value)
+        if limits[key].get('min', limits[key]['max']) > limits[key]['max']:
+            raise MetricRefusal('D38_TARGET_LIMITS_DIFFER', key)
+    for key in set(limits) & drv:
+        if (not isinstance(limits[key], dict) or not limits[key]
+                or not set(limits[key]) <= {'min', 'max'} or units[key] != 'count'):
+            raise MetricRefusal('D38_DRV_BOUNDS_INVALID', key)
+        for value in limits[key].values():
+            _finite_number(value, count=True)
+        if limits[key].get('min', 0) > limits[key].get('max', limits[key].get('min', 0)):
+            raise MetricRefusal('D38_DRV_BOUNDS_INVALID', key)
+    clock_path = 'phase3/stage3/cts/clock_plan.json'
+    clock_raw = _safe_project_file(project, clock_path).read_bytes()
+    clocks = [entry['name'] for entry in json.loads(clock_raw)['clocks']]
+    if not clocks or len(set(clocks)) != len(clocks) or any(not isinstance(c, str) or not c for c in clocks):
+        raise MetricRefusal('D38_CLOCK_POPULATION_ABSENT', clock_path)
+    return json.loads(json.dumps({'targets': reference, 'requirements': authority,
+        'limits': limits, 'units': units, 'clock_plan': {'path': clock_path, 'sha256': _sha(clock_raw)},
+        'clocks': clocks}))
+
+
+def _d38_clock_network_latency(text: str, required_clocks: list[str]) -> dict:
+    """Read OpenSTA clock.rpt network latency, excluding SDC source latency.
+
+    The native report prints separate source/network/total latency rows. Only
+    the network rows are physical insertion measurements. Missing clocks are
+    retained as missing by the caller, never assigned zero.
+    """
+    blocks = re.split(r'(?m)^Clock:\s*([^\n]+)\s*$', text)
+    result = {}
+    number = r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?'
+    for name, block in zip(blocks[1::2], blocks[2::2]):
+        name = name.strip()
+        if name not in required_clocks or name in result:
+            raise MetricRefusal('D38_CLOCK_REPORT_FOREIGN', name)
+        if 'report_clock_latency' not in block or 'report_clock_min_period' not in block:
+            continue
+        section = block.partition('report_clock_latency')[2].partition('report_clock_min_period')[0]
+        values = [float(v) for v in re.findall(r'^\s*(' + number + r')\s+network latency\s+\S+\s*$', section, re.M)]
+        if values and len(values) % 2 == 0:
+            for value in values:
+                _finite_number(value)
+            result[name] = max(values)
+    return result
+
+
+def accept_d38(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
+    """BLOCKING CTS metric readback against the exact prelaunch authority.
+
+    Counts do not prove complete sink-pin coverage. That separate obligation
+    and runtime qualification remain NOT_MEASURED; planning targets alone
+    never establish actual tree acceptance.
+    """
+    import flow109
+    import inspect
+    import gzip
+    import librelane_contract as ll
+    import _librelane_cts_hold_evidence as reader
+
+    project = Path(project).resolve()
+    result = {'schema': SCHEMA, 'row_id': 'D38', 'status': 'NOT_MEASURED',
+              'metric_status': 'NOT_MEASURED', 'qualification': 'NOT_MEASURED',
+              'delivery_blocked': True, 'obligations': []}
+    reads = {}
+
+    def read(name, digest=None, external=False):
+        path = Path(name)
+        path = path if path.is_absolute() else project / path
+        if path.is_symlink() or not path.is_file() or (not external and not path.resolve().is_relative_to(project)):
+            raise MetricRefusal('D38_INPUT_UNBOUND', str(path))
+        raw = path.read_bytes()
+        actual = _sha(raw)
+        if digest is not None and digest != actual:
+            raise MetricRefusal('D38_INPUT_CHANGED', str(path))
+        key = str(path.relative_to(project)) if path.is_relative_to(project) else str(path)
+        if key in reads and reads[key] != actual:
+            raise MetricRefusal('D38_INPUT_CHANGED_DURING_READ', key)
+        reads[key] = actual
+        return path, raw
+
+    def document(name, digest=None):
+        path, raw = read(name, digest)
+        return path, json.loads(raw)
+
+    try:
+        current = flow109.validate_execution_context(context)
+        row = current['resolved_row']
+        if (row['id'] != 'D38' or [o['metric'] for o in row['obligations']] !=
+                ['clock_tree_sink_coverage', 'clock_skew_insertion_drv']
+                or row['obligations'][0]['expectation'].get('operator') != 'covers_all'
+                or row['obligations'][1]['expectation'] != {
+                    'operator': 'within_declared_bounds',
+                    'bounds_ref': 'requirements/base_25/clock_skew_insertion_drv.json#/limits',
+                    'unit_ref': 'requirements/base_25/clock_skew_insertion_drv.json#/units', 'missing_bounds': 'BLOCKED'}):
+            raise MetricRefusal('D38_CONTRACT_CHANGED', 'CTS obligations')
+        numerical = {'id': row['obligations'][1]['id'], 'status': 'NOT_MEASURED', 'measurements': []}
+        result['obligations'] = [{'id': row['obligations'][0]['id'], 'status': 'NOT_MEASURED',
+            'reason': 'D38_NATIVE_COMPLETE_SINK_PIN_ROSTER_UNAVAILABLE'}, numerical]
+        binding = d38_target_binding(project)
+        if component.get('flow109_d38_targets') != binding:
+            raise MetricRefusal('D38_PRELAUNCH_TARGET_BINDING_ABSENT', 'producer binding')
+        for ref in [binding['targets'], binding['requirements'], binding['clock_plan']]:
+            read(ref['path'], ref['sha256'])
+        _, handoff = document('reports/phase3/librelane_cts_handoff.json')
+        corners = handoff['corners']
+        ids = ['OpenROAD.CTS', 'Vibeic.ClockPathDriveSizing', 'Vibeic.ExternalCaptureLaunchRetap']
+        if (handoff.get('flow109_d38_targets') != binding or handoff['image'] != component.get('native_image')
+                or not component.get('native_image') or not isinstance(corners, list) or not corners
+                or any(not isinstance(c, str) or not c or '/' in c for c in corners)
+                or len(set(corners)) != len(corners) or handoff['steps'] != ids + ['OpenROAD.STAMidPNR'] * len(corners)):
+            raise MetricRefusal('D38_NATIVE_CHAIN_UNBOUND', 'CTS handoff')
+        previous, _ = read(handoff['initial_state'], handoff['initial_sha256'])
+        base = project / 'phase3/librelane/execution-backend-19'
+        states, executions, ns_libraries = [], [], []
+        for index, step in enumerate(handoff['steps'], 1):
+            folder = base / (f'{index:02d}-' + step.lower().replace('.', '-'))
+            receipt = ll.validate_step_receipt(folder, step)
+            read(folder / 'vibeic_receipt.json')
+            for name, digest in receipt['sha256'].items():
+                read(folder / name, digest)
+            fp = receipt['input']
+            if fp['image'] != component['native_image'] or fp['step'] != step:
+                raise MetricRefusal('D38_EXECUTION_CHANGED', step)
+            if step.startswith(ll.PLUGIN_STEP_PREFIX) and fp.get('plugin') != ll._plugin_digests(step):
+                raise MetricRefusal('D38_PRODUCER_SOURCE_CHANGED', step)
+            read(previous, fp['state'])
+            suffix = '@' + corners[index - 4] if index > 3 else ''
+            _, config = document('phase3/librelane/execution-backend-19-config/' + step + suffix + '.json', fp['config'])
+            if (config.get('STA_CORNERS') != corners or (index > 3 and config.get('PNR_CORNERS') != [corners[index - 4]])):
+                raise MetricRefusal('D38_CORNER_POPULATION_CHANGED', step)
+            before = json.loads(previous.read_bytes())
+            inputs = {str(p): _sha(p.read_bytes()) for p in ll._walk_paths({k: v for k, v in before.items() if k != 'metrics'})}
+            if not inputs or inputs != fp['state_files']:
+                raise MetricRefusal('D38_STATE_POPULATION_CHANGED', step)
+            for name, digest in inputs.items():
+                read(name, digest)
+            _, pdk = document(folder / 'pdk_root.json')
+            mounts = pdk['mounts_under_it']
+            if not fp['config_files'] or ll.config_file_hashes(config, mounts) != fp['config_files']:
+                raise MetricRefusal('D38_MODEL_POPULATION_CHANGED', step)
+            for name, digest in fp['config_files'].items():
+                path = Path(name)
+                for host, guest in sorted(mounts, key=lambda m: len(m[1]), reverse=True):
+                    if path.is_relative_to(guest):
+                        path = Path(host) / path.relative_to(guest)
+                        break
+                _, raw = read(path, digest, external=True)
+                if str(path).endswith(('.lib', '.lib.gz')):
+                    text = (gzip.decompress(raw) if str(path).endswith('.gz') else raw).decode()
+                    text = re.sub(r'/\*.*?\*/|//[^\n]*', '', text, flags=re.S)
+                    units = re.findall(r'\btime_unit\s*:\s*"([^"\n]+)"\s*;', text)
+                    ns_libraries.append(bool(units) and all(unit == '1ns' for unit in units))
+            previous, state = document(folder / 'state_out.json', receipt['sha256']['state_out.json'])
+            states.append(state)
+            executions.append({'step': step, 'input': fp,
+                'receipt_sha256': _sha((folder / 'vibeic_receipt.json').read_bytes())})
+        final, _ = read(handoff['measured_state'], handoff['measured_state_sha256'])
+        if final != previous:
+            raise MetricRefusal('D38_HANDOFF_FOREIGN', 'terminal native measurement')
+        for view, name in [('def', 'post_cts.def'), ('odb', 'post_cts.odb')]:
+            ref = handoff['views']['post_cts_' + view]
+            src, _ = read(ref['source'], ref['source_sha256'])
+            dest, _ = read(ref['dest'], ref['dest_sha256'])
+            if (states[2].get(view) != str(src) or any(s.get(view) != str(src) for s in states[3:])
+                    or dest != project / 'phase3/stage3/pnr' / name or ref['source_sha256'] != ref['dest_sha256']):
+                raise MetricRefusal('D38_HANDOFF_FOREIGN', view)
+        identity = {'producer': executions, 'checker': {'program': 'accept_d38',
+            'sha256': _sha(inspect.getsource(accept_d38).encode()),
+            'latency_reader_sha256': _sha(inspect.getsource(_d38_clock_network_latency).encode())},
+            'tool_execution': executions, 'consumed_inputs': dict(reads), 'requirements': binding['requirements'],
+            'configuration': {'context_sha256': current['context_sha256'], 'targets': binding['targets']}}
+
+        def judge(field, values, complete, unit):
+            entry = {'field': field, 'status': 'NOT_MEASURED'}
+            numerical['measurements'].append(entry)
+            if not values or field not in binding['limits']:
+                entry['reason'] = 'D38_NATIVE_VALUE_OR_APPROVED_BOUND_ABSENT'
+                return
+            for value in values:
+                _finite_number(value, count=unit == 'count')
+            measured = {'status': 'MEASURED', 'value': max(values), 'unit': unit, 'identity': identity}
+            status, reason = evaluate_operator('within_declared_bounds', measured,
+                {'status': 'APPROVED', 'limits': binding['limits'][field], 'unit': binding['units'][field]})
+            entry.update(status=status if complete or status == 'FAIL' else 'NOT_MEASURED',
+                         reason=reason, measurement=measured, population_complete=complete)
+
+        skews, latencies = [], []
+        for index, corner in enumerate(corners):
+            ev = {'corners': [corner], 'metrics': states[index + 3].get('metrics', {})}
+            for key in ('clock__skew__worst_setup', 'clock__skew__worst_hold'):
+                value = reader.per_corner(ev, key)[corner]
+                if value is not None:
+                    skews.append(abs(_finite_number(value)))
+        judge('clock_skew_ns', skews, len(skews) == 2 * len(corners), 'ns')
+        for field in ('design__max_slew_violation__count', 'design__max_cap_violation__count', 'design__max_fanout_violation__count'):
+            values = [s.get('metrics', {}).get(field) for s in states[3:]]
+            judge(field, [v for v in values if v is not None], all(v is not None for v in values), 'count')
+        for index, corner in enumerate(corners):
+            folder = base / (f'{index + 4:02d}-openroad-stamidpnr')
+            _, log = read(folder / 'invocation.log')
+            propagation = log.decode().lower()
+            if 'unpropagating all clocks' in propagation or 'propagating all clocks' not in propagation:
+                raise MetricRefusal('D38_PROPAGATED_CLOCK_MEASUREMENT_UNPROVEN', corner)
+            _, raw = read(folder / corner / 'clock.rpt')
+            if not ns_libraries or not all(ns_libraries):
+                raise MetricRefusal('D38_CLOCK_REPORT_TIME_UNIT_UNSUPPORTED', corner)
+            measured = _d38_clock_network_latency(raw.decode(), binding['clocks'])
+            latencies.extend(measured.values())
+        judge('insertion_delay_ns', latencies, len(latencies) == len(corners) * len(binding['clocks']), 'ns')
+        numerical['status'] = ('FAIL' if any(v['status'] == 'FAIL' for v in numerical['measurements']) else
+            'PASS' if all(v['status'] == 'PASS' for v in numerical['measurements']) else 'NOT_MEASURED')
+        if d38_target_binding(project) != binding:
+            raise MetricRefusal('D38_TARGETS_CHANGED_DURING_READ', 'approved targets')
+        for name, digest in reads.items():
+            read(name, digest, external=True)
+        result['readset'] = dict(reads)
+    except (MetricRefusal, flow109.Flow109Error, ll.Refusal, OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
+        result.update(reason=getattr(exc, 'code', 'D38_NATIVE_BINDING_UNPROVEN'), detail=str(exc))
+        for obligation in result['obligations']:
+            if obligation['status'] == 'PASS':
+                obligation.update(status='NOT_MEASURED', reason='D38_BINDING_INCOMPLETE')
+    if component.get('verdict') == 'FAIL' or any(
+            o['status'] == 'FAIL' or any(v['status'] == 'FAIL' for v in o.get('measurements', [])) for o in result['obligations']):
+        result['status'] = result['metric_status'] = 'FAIL'
+        for obligation in result['obligations']:
+            if any(v['status'] == 'FAIL' for v in obligation.get('measurements', [])):
+                obligation['status'] = 'FAIL'
+    return result
+
+
 def accept_d39(project: Path, context: Mapping[str, Any], component: Mapping[str, Any]) -> dict:
     """BLOCKING readback of the existing post-CTS resizer and per-corner STA.
 
