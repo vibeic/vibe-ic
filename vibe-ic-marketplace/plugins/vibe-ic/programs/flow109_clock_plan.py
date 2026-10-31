@@ -30,13 +30,19 @@ STEP17_REUSE_ENV = "VIBEIC_FLOW109_STEP17_REUSE_REQUEST"
 # methods that share no code: the timing graph's propagation (OpenSTA, in the
 # native plan) and a structural trace of the floorplan's NETS from each Liberty
 # ff/latch clock pin back to a declared clock source, the latter adopted by the
-# requirements owner. Planning targets have no supported consumer in the pinned
-# CTS, so they can only FAIL (outside their bound) or stay unmeasured; the
-# built tree's skew and insertion delay are D38's measurement, not this row's.
+# requirements owner. The pinned CTS takes no skew/insertion target, so the
+# planning targets count as consumed only when the CTS row's acceptance
+# authority is sourced from them; the built tree's skew and insertion delay
+# remain D38's measurement, not this row's.
 SINK_REFERENCE = "adopted/base_22/clock_sink_inventory.json"
 SINK_SOURCE = "input/flow109/D34/clock_sink_inventory.json"
 PLANNING_TARGETS = "input/flow109/D34/clock_planning_targets.json"
 TARGET_BOUNDS = "requirements/base_22/skew_insertion_targets.json"
+# Root ruling 2026-11-01 (option a): the planning targets are consumed when the
+# CTS row's own acceptance authority is sourced from this exact targets file
+# and holds its numbers as its limits. That binding, not a D38 PASS, is the
+# consumption evidence; D38 still measures the built tree against it.
+TARGET_CONSUMER = "requirements/base_25/clock_skew_insertion_drv.json"
 TARGET_KEYS = ("clock_skew_ns", "insertion_delay_ns")
 D34_SPECS = {
     "base_22.clock_sink_inventory": {"operator": "matches_adopted_reference",
@@ -497,13 +503,14 @@ def _d34_observe(project: Path, context: dict, component: dict) -> tuple[dict, d
 
 
 def _d34_targets(project: Path, component: dict, identity: dict) -> dict:
-    """A declared target outside its approved bound FAILS; inside it stays unmeasured.
+    """Declared targets must sit inside their bound AND be consumed by the CTS row.
 
-    The pinned LibreLane CTS exposes no skew or insertion-delay target, so no
-    supported tool consumes these planning budgets. Declared numbers within
-    bounds are a design decision, not evidence that a configuration was
-    consumed, and are never a PASS here. A contradiction of the requirement is
-    a real defect whether or not anything consumes it.
+    The pinned LibreLane CTS exposes no skew or insertion-delay target, so the
+    only consumer is the CTS row's acceptance authority (``TARGET_CONSUMER``):
+    it must be approved, sourced from this exact targets file, and hold the
+    same numbers as its limits. Without that binding the targets are a design
+    decision, never a PASS. A target outside its bound, or a consumer holding
+    different numbers than the plan declared, is a real defect and FAILS.
     """
     import flow109_metric_acceptance as metrics
     declared = component.get("planning_targets")
@@ -524,14 +531,25 @@ def _d34_targets(project: Path, component: dict, identity: dict) -> dict:
         checks[key] = metrics.evaluate_operator("within_declared_bounds",
             {"status": "MEASURED", "value": plan["targets"][key], "unit": units[key], "identity": identity},
             {"status": "APPROVED", "limits": limits[key], "unit": units[key]})
-    failed = any(state == "FAIL" for state, _ in checks.values())
-    return {"id": "base_22.skew_insertion_targets", "status": "FAIL" if failed else "NOT_MEASURED",
-            "reason": ("D34_PLANNING_TARGET_EXCEEDS_BOUND" if failed
-                       else "D34_TARGET_CONSUMPTION_UNSUPPORTED"),
-            "authority": authority, "value": plan["targets"],
-            "checks": {k: {"status": s, "detail": d} for k, (s, d) in checks.items()},
-            "scope": "declared planning targets; no supported CTS configuration consumes them, "
-                     "and the built tree is D38's measurement"}
+    result = {"id": "base_22.skew_insertion_targets", "authority": authority, "value": plan["targets"],
+              "checks": {k: {"status": s, "detail": d} for k, (s, d) in checks.items()},
+              "scope": "declared planning targets consumed by the CTS row's acceptance authority; "
+                       "the built tree is D38's measurement"}
+    if any(state == "FAIL" for state, _ in checks.values()):
+        return {**result, "status": "FAIL", "reason": "D34_PLANNING_TARGET_EXCEEDS_BOUND"}
+    if not (project / TARGET_CONSUMER).is_file():
+        return {**result, "status": "NOT_MEASURED", "reason": "D34_TARGET_CONSUMER_ABSENT"}
+    consumer, body = metrics._approved_document(project, TARGET_CONSUMER,
+        authority="requirements_owner", schema=metrics.AUTHORITY_SCHEMA)
+    if consumer["source"] != {"path": PLANNING_TARGETS, "sha256": declared["sha256"]}:
+        return {**result, "status": "NOT_MEASURED", "reason": "D34_TARGET_CONSUMER_UNBOUND",
+                "consumer": consumer}
+    held = {key: ((body.get("limits") or {}).get(key) or {}).get("max") for key in TARGET_KEYS}
+    if held != plan["targets"] or {k: (body.get("units") or {}).get(k) for k in TARGET_KEYS} != units:
+        return {**result, "status": "FAIL", "reason": "D34_TARGET_CONSUMER_DIFFERS",
+                "consumer": consumer, "consumed": held}
+    return {**result, "status": "PASS", "reason": "D34_TARGETS_CONSUMED_BY_CTS_AUTHORITY",
+            "consumer": consumer}
 
 
 def accept_d34(project, context, component):

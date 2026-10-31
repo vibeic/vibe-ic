@@ -118,7 +118,8 @@ def _approved(project, relative, schema, payload, source):
         "source_reference": _rel(project, project / source)}})
 
 
-def _d34_case(tmp_path, monkeypatch, *, measured=DOMAINS, reference=None, skew=2.4, approval=True):
+def _d34_case(tmp_path, monkeypatch, *, measured=DOMAINS, reference=None, skew=2.4, approval=True,
+              consumer=None):
     project = tmp_path
     log = project / "phase3/stage3/cts/clock_plan.log"
     _write(log, _log(measured))
@@ -148,10 +149,26 @@ def _d34_case(tmp_path, monkeypatch, *, measured=DOMAINS, reference=None, skew=2
         "consumed_inputs": {"def": "1" * 64}, "requirements": {"obligation": "base_22.clock_sink_inventory"},
         "configuration": {"clocks": ["clka", "clkb"]}}}
     _write(project / clock.SINK_SOURCE, {"clock_sink_inventory": payload})
+    if consumer:
+        # The CTS row's acceptance authority, sourced from the D34 targets.
+        held = {"clock_skew_ns": {"max": 2.4 if consumer != "differs" else 3.0},
+                "insertion_delay_ns": {"max": 12.0}}
+        source = (clock.PLANNING_TARGETS if consumer != "unbound"
+                  else "input/flow109/D34/requirement_source.json")
+        _approved(project, clock.TARGET_CONSUMER, "vibeic.flow109.requirement-authority.v1",
+                  {"limits": held, "units": {"clock_skew_ns": "ns", "insertion_delay_ns": "ns"}},
+                  source)
     if approval:
         _approved(project, clock.SINK_REFERENCE, "vibeic.flow109.adopted-reference.v1",
                   payload, clock.SINK_SOURCE)
+    for step in ("D20", "D32"):
+        _write(project / f"reports/flow109/default_rows/{step}.json",
+               {"step_id": step, "default_row_status": "PASS", "completed": True})
+    config = project / "reports/flow109/qualification/D34.json"
+    _write(config, {"purpose": clock.D34_PURPOSE, "model_sources": clock.d34_model_sources()})
     context = flow109.execution_context(flow109.resolve_plan(_profile()), "D34", "D34")
+    context = {**context, "runtime_tool_uses": [{"use_id": "flow109.D34.default.openroad",
+                                                 "config": {"path": str(config.relative_to(project))}}]}
     monkeypatch.setattr(flow109, "validate_execution_context", lambda ctx: ctx)
     monkeypatch.setattr(flow109_admission, "require_admission", lambda p, c: {"status": "PASS"})
     monkeypatch.setattr(current, "validate", lambda *a, **k: "")
@@ -205,12 +222,33 @@ def test_structural_trace_refuses_a_path_it_cannot_decide():
         _trace(gated)
 
 
-def test_d34_sinks_reconcile_but_unconsumed_targets_stay_unmeasured(tmp_path, monkeypatch):
+def test_d34_passes_when_sinks_reconcile_and_the_cts_authority_consumes_the_targets(
+        tmp_path, monkeypatch):
+    result, obligations = _complete(tmp_path, monkeypatch, consumer="bound")
+    assert [obligations[k]["status"] for k in sorted(obligations)] == ["PASS", "PASS"]
+    assert obligations["base_22.skew_insertion_targets"]["reason"] == "D34_TARGETS_CONSUMED_BY_CTS_AUTHORITY"
+    assert result["default_row_status"] == "PASS" and result["completed"] is True
+
+
+def test_d34_unconsumed_targets_stay_unmeasured(tmp_path, monkeypatch):
     result, obligations = _complete(tmp_path, monkeypatch)
     assert obligations["base_22.clock_sink_inventory"]["status"] == "PASS"
     targets = obligations["base_22.skew_insertion_targets"]
-    assert targets["status"] == "NOT_MEASURED" and targets["reason"] == "D34_TARGET_CONSUMPTION_UNSUPPORTED"
+    assert targets["status"] == "NOT_MEASURED" and targets["reason"] == "D34_TARGET_CONSUMER_ABSENT"
     assert result["default_row_status"] == "NOT_MEASURED" and result["completed"] is False
+
+
+def test_d34_a_cts_authority_sourced_elsewhere_is_not_consumption(tmp_path, monkeypatch):
+    result, obligations = _complete(tmp_path, monkeypatch, consumer="unbound")
+    assert obligations["base_22.skew_insertion_targets"]["reason"] == "D34_TARGET_CONSUMER_UNBOUND"
+    assert result["default_row_status"] == "NOT_MEASURED"
+
+
+def test_d34_fails_when_the_cts_authority_holds_other_numbers(tmp_path, monkeypatch):
+    result, obligations = _complete(tmp_path, monkeypatch, consumer="differs")
+    targets = obligations["base_22.skew_insertion_targets"]
+    assert targets["status"] == "FAIL" and targets["reason"] == "D34_TARGET_CONSUMER_DIFFERS"
+    assert result["default_row_status"] == "FAIL"
 
 
 def test_d34_fails_when_two_clocks_reach_each_others_sinks(tmp_path, monkeypatch):
