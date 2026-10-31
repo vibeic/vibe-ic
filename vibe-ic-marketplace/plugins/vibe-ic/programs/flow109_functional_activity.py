@@ -5,8 +5,10 @@ pinned LibreLane STAPostPNR has no VCD/SAIF config; its underlying OpenSTA is
 used as a complement, not as the final post-route power/signoff operation.
 Complete vector-power measurement remains limited to full-window, single-rail
 loads.  The source-declared self-checking GLS path inventories scalar and vector
-top ports and consumes existing SDC/Liberty/pad connectivity authority.  All
-three complete D55 obligations stay NOT_MEASURED.
+top ports and consumes existing SDC/Liberty/pad connectivity authority.  The
+sealed row judges the three registry obligations against the requirements
+owner's mission modes and two adopted references; without them it stays
+NOT_MEASURED.
 """
 from __future__ import annotations
 
@@ -41,8 +43,25 @@ REQUIRED_ROW_OBLIGATIONS = (
     'functional_activity.activity_waveform_bound_identity',
     'functional_activity.load_rail_mapping',
 )
-PINNED_IMAGE = ('ghcr.io/vibeic/vibeic-eda@sha256:'
-                '0fc30ecd1307a11bd7757d1c5710127cd88e245059f29eab8b52e38ba4d60406')
+# The three registry obligations are judged against authorities the producer
+# does not write: the requirements owner's mission-mode set and two adopted
+# references, each an approved publication of an ``input/`` source.  The
+# producer's own scenario list and freeze are evidence, never the expectation.
+MISSION_MODES = 'requirements/functional_activity/functional_mission_modes.json'
+WAVEFORM_REFERENCE = 'adopted/functional_activity/activity_waveform_bound_identity.json'
+WAVEFORM_SOURCE = 'input/flow109/D55/activity_waveform_bound_identity.json'
+LOAD_REFERENCE = 'adopted/functional_activity/load_rail_mapping.json'
+LOAD_SOURCE = 'input/flow109/D55/load_rail_mapping.json'
+ADOPTED_SCHEMA = 'vibeic.flow109.adopted-reference.v1'
+D55_SPECS = {
+    REQUIRED_ROW_OBLIGATIONS[0]: {'operator': 'covers_all',
+                                  'required_set_ref': MISSION_MODES + '#/required_items'},
+    REQUIRED_ROW_OBLIGATIONS[1]: {'operator': 'matches_adopted_reference',
+                                  'reference_ref': WAVEFORM_REFERENCE},
+    REQUIRED_ROW_OBLIGATIONS[2]: {'operator': 'matches_adopted_reference',
+                                  'reference_ref': LOAD_REFERENCE},
+}
+_PICOFARADS = {'ff': '0.001', 'pf': '1', 'nf': '1000'}
 
 
 def _sha(path):
@@ -513,6 +532,134 @@ def consume_power(report, spec, loads, done):
             'scope': 'component vector-power only; final post-route power adoption NOT_MEASURED'}
 
 
+def _finite(value, label):
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ValueError(f'D55_LOAD_VALUE_INVALID: {label}')
+    return float(value)
+
+
+def measured_load_rail_mapping(authority):
+    """The implementation's loads in physical units: SDC set_load scaled by the
+    Liberty capacitive_load_unit, and each output's pad rail with its voltage."""
+    from decimal import Decimal
+    unit = (authority.get('quotes') or {}).get('capacitance_unit') or {}
+    factor = _PICOFARADS.get(str(unit.get('unit', '')).lower())
+    if factor is None:
+        raise ValueError('D55_LOAD_UNIT_UNSUPPORTED: ' + str(unit))
+    scale = Decimal(str(_finite(unit.get('scale'), 'capacitance unit scale'))) * Decimal(factor)
+    loads = authority['external_loads']
+    return {'rails': {rail: {'voltage_v': _finite(item['voltage_v'], rail)}
+                      for rail, item in loads['rails'].items()},
+            'ports': {port: {'rail': item['rail'], 'capacitance_pf': float(
+                          Decimal(str(_finite(item['capacitance_library_units'], port))) * scale)}
+                      for port, item in loads['ports'].items()}}
+
+
+def _load_reference(reference):
+    """Same typed shape as the measurement; integers and floats compare as numbers."""
+    if (not isinstance(reference, dict) or set(reference) != {'rails', 'ports'}
+            or not isinstance(reference['rails'], dict) or not isinstance(reference['ports'], dict)
+            or not reference['rails'] or not reference['ports']):
+        raise ValueError('D55_LOAD_REFERENCE_SHAPE: rails and ports required')
+    rails, ports = {}, {}
+    for rail, item in reference['rails'].items():
+        if not isinstance(item, dict) or set(item) != {'voltage_v'}:
+            raise ValueError('D55_LOAD_REFERENCE_SHAPE: ' + str(rail))
+        rails[rail] = {'voltage_v': _finite(item['voltage_v'], rail)}
+    for port, item in reference['ports'].items():
+        if (not isinstance(item, dict) or set(item) != {'rail', 'capacitance_pf'}
+                or item['rail'] not in rails):
+            raise ValueError('D55_LOAD_REFERENCE_SHAPE: ' + str(port))
+        ports[port] = {'rail': item['rail'], 'capacitance_pf': _finite(item['capacitance_pf'], port)}
+    return {'rails': rails, 'ports': ports}
+
+
+def _waveform_reference(reference):
+    if not isinstance(reference, dict) or not reference:
+        raise ValueError('D55_WAVEFORM_REFERENCE_SHAPE: one identity per mission mode required')
+    keys = {'netlist_sha256', 'top', 'scope', 'ports', 'timescale'}
+    for mode, item in reference.items():
+        if (not isinstance(item, dict) or set(item) != keys
+                or not re.fullmatch(r'[0-9a-f]{64}', str(item['netlist_sha256']))
+                or not isinstance(item['ports'], dict) or not item['ports']
+                or any(isinstance(w, bool) or not isinstance(w, int) or w < 1
+                       for w in item['ports'].values())):
+            raise ValueError('D55_WAVEFORM_REFERENCE_SHAPE: ' + str(mode))
+    return reference
+
+
+def _adopted(project, relative, source_relative, key):
+    """An approved adopted reference whose ``input/`` source carries the same body."""
+    import flow109_metric_acceptance as metrics
+    adopted, body = metrics._approved_document(project, relative,
+        authority='requirements_owner', schema=ADOPTED_SCHEMA)
+    source = json.loads((project / adopted['source']['path']).read_text())
+    if (adopted['source']['path'] != source_relative or not isinstance(source, dict)
+            or source.get(key) != {k: v for k, v in body.items() if k not in ('schema', 'approval')}):
+        raise metrics.MetricRefusal('D55_REFERENCE_SOURCE_UNBOUND', relative)
+    return adopted, body
+
+
+def accept_d55_obligations(project, context, measured, identity):
+    """Judge the three registry obligations; absent authority is never a PASS.
+
+    ``measured`` carries what the sealed native evidence shows: the passing
+    mission modes, each mode's waveform identity (adopted netlist, top, VCD
+    scope, VCD port widths, timescale) and the load/rail mapping derived from
+    the consumed SDC, Liberty and pad connectivity.
+    """
+    import flow109_metric_acceptance as metrics
+    obligations = (context.get('resolved_row') or {}).get('obligations') or []
+    if ({o.get('id') for o in obligations} != set(D55_SPECS)
+            or any(any((o.get('expectation') or {}).get(k) != v for k, v in D55_SPECS[o['id']].items())
+                   for o in obligations)):
+        raise metrics.MetricRefusal('D55_OBLIGATIONS_UNREGISTERED', 'the three functional_activity operators only')
+
+    def judge(oid, evaluate):
+        try:
+            status, detail, evidence = evaluate()
+        except (metrics.MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+            return {'id': oid, 'status': 'NOT_MEASURED',
+                    'reason': getattr(exc, 'code', 'D55_METRIC_NOT_MEASURED'), 'detail': str(exc)}
+        return {'id': oid, 'status': status, 'detail': detail, **evidence}
+
+    def modes():
+        authority, _ = metrics._approved_authority(project, MISSION_MODES + '#/required_items', ('name',))
+        value = [{'name': name} for name in sorted(measured['modes'])]
+        status, detail = metrics.evaluate_operator('covers_all',
+            {'status': 'MEASURED', 'value': value, 'identity': identity}, authority)
+        missing = sorted({item['name'] for item in authority['required_items']} - set(measured['modes']))
+        return status, detail, {'authority': {k: authority[k] for k in ('path', 'sha256', 'source')},
+                                'measured_modes': value, 'missing_modes': missing}
+
+    def waveform():
+        adopted, body = _adopted(project, WAVEFORM_REFERENCE, WAVEFORM_SOURCE,
+                                 'activity_waveform_bound_identity')
+        reference = _waveform_reference(body.get('reference'))
+        status, detail = metrics.evaluate_operator('matches_adopted_reference',
+            {'status': 'MEASURED', 'value': measured['waveforms'], 'identity': identity},
+            {**adopted, 'reference': reference, 'reference_identity': body.get('reference_identity')})
+        differs = sorted(mode for mode in set(reference) | set(measured['waveforms'])
+                         if reference.get(mode) != measured['waveforms'].get(mode))
+        return status, detail, {'authority': {k: adopted[k] for k in ('path', 'sha256', 'source')},
+                                'measured': measured['waveforms'], 'differing_modes': differs}
+
+    def loads():
+        adopted, body = _adopted(project, LOAD_REFERENCE, LOAD_SOURCE, 'load_rail_mapping')
+        reference = _load_reference(body.get('reference'))
+        status, detail = metrics.evaluate_operator('matches_adopted_reference',
+            {'status': 'MEASURED', 'value': measured['loads'], 'identity': identity},
+            {**adopted, 'reference': reference, 'reference_identity': body.get('reference_identity')})
+        differs = sorted(port for port in set(reference['ports']) | set(measured['loads']['ports'])
+                         if reference['ports'].get(port) != measured['loads']['ports'].get(port))
+        return status, detail, {'authority': {k: adopted[k] for k in ('path', 'sha256', 'source')},
+                                'measured': measured['loads'], 'differing_ports': differs}
+
+    return [judge(REQUIRED_ROW_OBLIGATIONS[0], modes),
+            judge(REQUIRED_ROW_OBLIGATIONS[1], waveform),
+            judge(REQUIRED_ROW_OBLIGATIONS[2], loads)]
+
+
 def _producer_path(root, name):
     """Resolve paths recorded by the sealed `/work/project` producer."""
     path = Path(name)
@@ -561,13 +708,20 @@ def _container_identity(path):
     if not isinstance(value, dict):
         _fail('D55_ROW_NATIVE_AUTHORITY_INVALID', 'container inspect is not one object')
     state, host, config = value.get('State', {}), value.get('HostConfig', {}), value.get('Config', {})
-    if (config.get('Image') != PINNED_IMAGE or state.get('ExitCode') != 0
+    # The EDA image identity is resolved at run time, never stored here.
+    import _eda_pin
+    image = config.get('Image')
+    try:
+        current = _eda_pin.resolved_image_digest()
+    except _eda_pin.ImageNotResolvable as exc:
+        _fail('D55_ROW_IMAGE_NOT_RESOLVABLE', str(exc))
+    if (_eda_pin.reference_digest(image) != current or state.get('ExitCode') != 0
             or state.get('OOMKilled') is not False or host.get('NetworkMode') != 'none'
             or host.get('NanoCpus') != 4_000_000_000
             or host.get('Memory') != 8 * 1024 ** 3
             or host.get('ReadonlyRootfs') is not True):
-        _fail('D55_ROW_NATIVE_AUTHORITY_INVALID', 'pinned image/confinement/exit mismatch')
-    return {'cid': value.get('Id'), 'image': config['Image'], 'exit_code': state['ExitCode'],
+        _fail('D55_ROW_NATIVE_AUTHORITY_INVALID', 'resolved image/confinement/exit mismatch')
+    return {'cid': value.get('Id'), 'image': image, 'exit_code': state['ExitCode'],
             'oom_killed': state['OOMKilled'], 'network_mode': host['NetworkMode'],
             'nano_cpus': host['NanoCpus'], 'memory_bytes': host['Memory'],
             'readonly_rootfs': host['ReadonlyRootfs'], 'sha256': _sha(path)}
@@ -673,6 +827,7 @@ def consume_sealed_default_row(project, context):
         paths = {key: _producer_bound(root, producer_manifest.get(key), key)
                  for key in ('adopted_netlist', 'scenario_requirements', 'sdc',
                              'liberty', 'pad_liberty', 'io_connectivity')}
+        paths_sha = {key: _sha(path) for key, path in paths.items()}
         requirements = _read(paths['scenario_requirements'])
         declared = {item.get('name'): item for item in requirements.get('test_cases', [])
                     if isinstance(item, dict) and isinstance(item.get('name'), str)}
@@ -697,7 +852,7 @@ def consume_sealed_default_row(project, context):
 
         attempt_name = raw_path.parent.name
         native_ports = _native_port_names(ports)
-        validated_modes = {}
+        validated_modes, waveforms = {}, {}
         for name, evidence in modes.items():
             if evidence.get('requirement') != declared[name]:
                 _fail('D55_ROW_MODE_REQUIREMENT_MISMATCH', name)
@@ -723,6 +878,10 @@ def consume_sealed_default_row(project, context):
                                      'power_report': evidence['power_report'],
                                      'annotated_pin_activities': consumed['activity_provenance']['annotated_pin_activities'],
                                      'total_w': consumed['power']['total_w']}
+            waveforms[name] = {'netlist_sha256': paths_sha['adopted_netlist'],
+                               'top': producer_manifest.get('top'), 'scope': census['scope'],
+                               'ports': {port: item['width'] for port, item in census['ports'].items()},
+                               'timescale': census['window']['timescale']}
 
         source = component.get('operation_sources')
         if not isinstance(source, dict):
@@ -734,18 +893,23 @@ def consume_sealed_default_row(project, context):
             if source.get(relative) != _sha(HERE.parent / relative):
                 _fail('D55_ROW_SOURCE_IDENTITY_STALE', relative)
         container = _container_identity(inspect_path)
-        obligations = [
-            {'id': REQUIRED_ROW_OBLIGATIONS[0], 'status': 'PASS',
-             'evidence': {'declared_modes': sorted(modes), 'native_command_count': len(commands)}},
-            {'id': REQUIRED_ROW_OBLIGATIONS[1], 'status': 'PASS',
-             'evidence': {'modes': validated_modes}},
-            {'id': REQUIRED_ROW_OBLIGATIONS[2], 'status': 'PASS',
-             'evidence': {'authority': authority}},
-        ]
-        return {**base, 'component_status': 'PASS', 'default_row_status': 'PASS',
-                'completed': True, 'reason': 'D55_SUPPORTED_DEFAULT_ROW_COMPLETE',
-                'detail': 'sealed current native component passed all declared D55 row consumers',
-                'producer_context_sha256': component['context_sha256'],
+        import flow109
+        identity = {
+            'producer': {'name': 'flow109_functional_activity.execute',
+                         'adapter_sha256': expected_adapter, 'context_sha256': component['context_sha256']},
+            'checker': {'name': 'flow109_functional_activity.consume_sealed_default_row',
+                        'source_sha256': _sha(__file__)},
+            'tool_execution': {'container': container['cid'], 'image': container['image'],
+                               'native_command_count': len(commands)},
+            'consumed_inputs': inputs,
+            'requirements': {'registry_sha256': context.get('registry_sha256') or 'unbound',
+                             'obligations': sorted(D55_SPECS)},
+            'configuration': {'context_sha256': context.get('context_sha256') or 'unbound',
+                              'producer_manifest_sha256': _sha(d55_inputs[0])}}
+        measured = {'modes': sorted(validated_modes), 'waveforms': waveforms,
+                    'loads': measured_load_rail_mapping(authority)}
+        obligations = accept_d55_obligations(project, context, measured, identity)
+        evidence = {'producer_context_sha256': component['context_sha256'],
                 'producer_source_head': invocation.get('producer_source_head'),
                 'producer_component': {**invocation['component'], 'raw_path': str(raw_path)},
                 'producer_freeze': invocation['freeze'], 'producer_operation_sources': source,
@@ -753,7 +917,27 @@ def consume_sealed_default_row(project, context):
                     'programs/sim_activity_dump.py': _sha(HERE / 'sim_activity_dump.py'),
                     'programs/_ppa/power.py': _sha(HERE / '_ppa/power.py')},
                 'native_authority': container, 'obligations': obligations,
-                'input_sha256': inputs, 'native_command_count': len(commands)}
+                'modes': validated_modes, 'input_sha256': inputs,
+                'native_command_count': len(commands)}
+        if any(item['status'] == 'FAIL' for item in obligations):
+            return {**base, **evidence, 'component_status': 'PASS', 'default_row_status': 'FAIL',
+                    'reason': 'D55_METRIC_FAIL',
+                    'detail': 'native evidence misses an approved mission mode, waveform identity or load mapping'}
+        if any(item['status'] != 'PASS' for item in obligations):
+            return {**base, **evidence, 'component_status': 'PASS', 'reason': 'D55_METRIC_NOT_MEASURED',
+                    'detail': 'sealed native component passed; an obligation authority is absent or unusable'}
+        try:
+            accepted = {step: flow109._accepted_row(project, Path('reports/flow109/default_rows')
+                                                    / (step + '.json'), step)[1]
+                        for step in context['resolved_row']['acceptance_deps']}
+        except flow109.Flow109Error as exc:
+            return {**base, **evidence, 'component_status': 'PASS',
+                    'reason': 'D55_ACCEPTANCE_DEPENDENCY_NOT_ACCEPTED', 'detail': str(exc)}
+        return {**base, **evidence, 'component_status': 'PASS', 'default_row_status': 'PASS',
+                'completed': True, 'reason': 'D55_SUPPORTED_DEFAULT_ROW_COMPLETE',
+                'detail': 'sealed native component met the approved mission modes, waveform identity '
+                          'and load/rail mapping with accepted dependencies',
+                'accepted_dependencies': accepted}
     except AdmissionRefusal as exc:
         return {**base, 'component_status': exc.status, 'default_row_status': exc.status,
                 'reason': exc.code, 'detail': str(exc)}
@@ -862,3 +1046,47 @@ def execute(project, context):
     record['receipt'] = {'path': str((attempt / 'component.json').relative_to(project))}
     write_json(attempt / 'component.json', record)
     return record
+
+
+def propose_waveform_reference(project, netlist, top, scope, timescale):
+    """Write the expected waveform identity for the requirements owner to adopt.
+
+    Derived from the adopted netlist's own port declarations, never from a VCD,
+    for every approved mission mode.  A proposal, never an approval: the owner
+    adopts it by publishing ``WAVEFORM_REFERENCE`` sourced from this file.
+    """
+    import flow109_metric_acceptance as metrics
+    project, netlist = Path(project).resolve(), Path(netlist).resolve()
+    authority, _ = metrics._approved_authority(project, MISSION_MODES + '#/required_items', ('name',))
+    ports = {port['name']: port['width'] for port in dump.module_ports(netlist, top)}
+    identity = {'netlist_sha256': _sha(netlist), 'top': top, 'scope': scope,
+                'ports': ports, 'timescale': timescale}
+    reference = _waveform_reference({item['name']: dict(identity) for item in authority['required_items']})
+    payload = {'reference': reference, 'reference_identity': {
+        'producer': {'name': 'flow109_functional_activity.propose_waveform_reference',
+                     'method': 'adopted-netlist port declarations for each approved mission mode'},
+        'checker': {'name': 'flow109_functional_activity.accept_d55_obligations'},
+        'tool_execution': {'program': 'flow109_functional_activity.py propose-waveform-reference'},
+        'consumed_inputs': {str(netlist): _sha(netlist), authority['path']: authority['sha256']},
+        'requirements': {'obligation': REQUIRED_ROW_OBLIGATIONS[1]},
+        'configuration': {'top': top, 'scope': scope, 'timescale': timescale}}}
+    target = project / WAVEFORM_SOURCE
+    if target.exists():
+        raise ValueError('D55_WAVEFORM_SOURCE_EXISTS: ' + WAVEFORM_SOURCE)
+    write_json(target, {'schema': 'vibeic.flow109.d55-waveform-reference-source.v1',
+                        'activity_waveform_bound_identity': payload})
+    return {'path': WAVEFORM_SOURCE, 'sha256': _sha(target), 'modes': sorted(reference)}
+
+
+if __name__ == '__main__':
+    import argparse
+    parser = argparse.ArgumentParser(description='D55 waveform identity proposal')
+    parser.add_argument('command', choices=['propose-waveform-reference'])
+    parser.add_argument('project')
+    parser.add_argument('--netlist', required=True)
+    parser.add_argument('--top', required=True)
+    parser.add_argument('--scope', required=True)
+    parser.add_argument('--timescale', required=True)
+    args = parser.parse_args()
+    print(json.dumps(propose_waveform_reference(args.project, args.netlist, args.top,
+                                                args.scope, args.timescale), indent=2))

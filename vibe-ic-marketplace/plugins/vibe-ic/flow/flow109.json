@@ -12967,7 +12967,7 @@
             "Source-declared self-checking scenarios may publish a partial adopted-netlist GLS activity freeze while absent rail/load authority keeps the component NOT_MEASURED.",
             "Pinned LibreLane STAPostPNR has no VCD/SAIF configuration; direct OpenSTA is an activity-consumption complement, not final post-route power adoption.",
             "Mapped RTL VCD/SAIF, analog current traces and qualified upper bounds remain UNIMPLEMENTED.",
-            "Complete D55 metric acceptance remains NOT_MEASURED."
+            "The sealed row judges mission modes, waveform identity and load/rail mapping against the requirements owner's approved set and two adopted references; any absent authority keeps the row NOT_MEASURED."
           ]
         }
       ],
@@ -12998,7 +12998,7 @@
             "checker.functional_activity.functional_mission_modes",
             "producer.functional_activity.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_SOURCE_BOUND"
         },
         {
           "id": "functional_activity.activity_waveform_bound_identity",
@@ -13016,7 +13016,7 @@
             "checker.functional_activity.activity_waveform_bound_identity",
             "producer.functional_activity.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_SOURCE_BOUND"
         },
         {
           "id": "functional_activity.load_rail_mapping",
@@ -13034,10 +13034,10 @@
             "checker.functional_activity.load_rail_mapping",
             "producer.functional_activity.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "IMPLEMENTED_SOURCE_BOUND"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "IMPLEMENTED_SOURCE_BOUND",
       "gate_layer_ids": [
         "G1",
         "G2",

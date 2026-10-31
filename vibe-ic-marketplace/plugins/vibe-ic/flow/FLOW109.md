@@ -268,8 +268,10 @@ top ports must be observed and VCD-annotated; nonzero vectorless power does not
 prove annotation. Approved mode/window/load requirements and all consumed
 inputs are bound. Only the self-contained single-rail scalar subset is
 implemented. See `docs/flow109/D55-functional-activity.md` for its inputs and
-retained producer/consumer evidence. This prepares activity evidence without
-claiming final post-route power adoption or all D55 obligations.
+retained producer/consumer evidence. The sealed row judges the three
+obligations against the requirements owner's mission modes and two adopted
+references (waveform identity, load/rail mapping); absent authority stays
+NOT_MEASURED. Final post-route power adoption is not claimed.
 
 ## M05 tool inventory (availability only)
 
