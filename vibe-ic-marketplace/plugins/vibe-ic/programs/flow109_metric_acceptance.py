@@ -7093,8 +7093,10 @@ def _d0102_qualification(project: Path, context: Mapping, step: str, reads: dict
                 or retained.get('observed_canonical_consumer') != consumer
                 or retained.get('detail')):
             raise MetricRefusal('D0102_CHECKPOINT_LINEAGE_STALE', native)
-        current = identity.assess(project, HERE, checkpoint=True)
         prior = checkpoint.get('source_assessment') or {}
+        basis = (prior.get('new') or {}).get('input_basis') if isinstance(prior, dict) else None
+        current = (identity.assess(project, HERE, checkpoint=True, input_basis=basis)
+                   if basis is not None else identity.assess(project, HERE, checkpoint=True))
         if (current.get('state') not in (identity.REUSE, identity.REVALIDATE)
                 or not isinstance(prior, dict)
                 or prior.get('state') != current.get('state')
@@ -7108,6 +7110,34 @@ def _d0102_qualification(project: Path, context: Mapping, step: str, reads: dict
                 if (not _HEX.fullmatch(str(code or ''))
                         or (prior.get(epoch) or {}).get('code') != code):
                     raise MetricRefusal('D0102_CHECKPOINT_TRANSITION_UNVALIDATED', epoch)
+            # Source-only checkpoints keep their established contract. An
+            # input transition additionally discharges these exact input and
+            # normal publication epochs; a code pair cannot stand in for them.
+            if ((current.get('new') or {}).get('input_basis') is not None
+                    or (prior.get('new') or {}).get('input_basis') is not None):
+                for epoch, fields in (('old', ('inputs',)),
+                                      ('new', ('inputs', 'input_basis', 'consumed_inputs', 'intent'))):
+                    for field in fields:
+                        value = (current.get(epoch) or {}).get(field)
+                        if value is None or (prior.get(epoch) or {}).get(field) != value:
+                            raise MetricRefusal('D0102_CHECKPOINT_TRANSITION_UNVALIDATED',
+                                                epoch + '.' + field)
+                for path, digest in current['new']['consumed_inputs'].items():
+                    value = (record.get('inputs') or {}).get(path)
+                    if (value.get('sha256') if isinstance(value, dict) else value) != digest:
+                        raise MetricRefusal('D0102_PRODUCER_SOURCE_UNBOUND', path)
+                    actual = _sha(_safe_project_file(project, path).read_bytes())
+                    if actual != digest:
+                        raise MetricRefusal('D0102_PRODUCER_SOURCE_UNBOUND', path)
+                    reads[path] = actual
+                import ai_signed_judgement as ai
+                judgement = 'reports/audit/ai_judgements/D1.json'
+                value = (record.get('inputs') or {}).get(judgement)
+                expected = value.get('sha256') if isinstance(value, dict) else value
+                actual = _sha(_safe_project_file(project, judgement).read_bytes())
+                if expected != actual or not ai.check(project, 'D1')[0]:
+                    raise MetricRefusal('D0102_PHASE1_QUALIFICATION_PENDING', native)
+                reads[judgement] = actual
         # Preserve all declared checks, including advisory results and genuine
         # conditional non-execution. Required commands alone are only a subset.
         if not isinstance(consumer.get('ledger'), list):
@@ -7144,7 +7174,30 @@ def _d0102_qualification(project: Path, context: Mapping, step: str, reads: dict
         raise MetricRefusal('D0102_PRODUCER_PROJECT_DIFFERS', native)
     if step == 'D01' and (report.get('verdict') not in ('PASS', 'PASS_WITH_WAIVERS')
                            or report.get('ai_judgements')):
-        raise MetricRefusal('D0102_PHASE1_QUALIFICATION_PENDING', native)
+        # A normal input continuation may consume the independently completed
+        # review of this exact historical extraction. Keep its original report
+        # bytes; an old awaiting-review observation is resolved only by the
+        # actual current review consumer and its captured receipt, never by a
+        # flag or by treating a measured extraction FAIL as pending review.
+        import ai_signed_judgement as ai
+        judgement = 'reports/audit/ai_judgements/D1.json'
+        review = (record.get('inputs') or {}).get(judgement)
+        review_sha = review.get('sha256') if isinstance(review, dict) else review
+        resolved_review = (
+            checkpoint_completed and (checkpoint.get('source_assessment', {}).get('new') or {}).get('input_basis')
+            and report.get('verdict') == 'NOT_MEASURED'
+            and report.get('reason_class') == 'awaiting_signed_judgement'
+            and isinstance(report.get('ai_judgements'), dict)
+            and set(report['ai_judgements']) == {'D1'}
+            and report.get('canonical_producer', {}).get('runner') == 'phase1_one_shot_runner'
+            and report.get('canonical_producer', {}).get('site') == 'doc_extract'
+            and report.get('canonical_producer', {}).get('step_id') == 'D1'
+            and report.get('canonical_producer', {}).get('mode') == 'default'
+            and ai.check(project, 'D1')[0]
+            and review_sha == _sha(_safe_project_file(project, judgement).read_bytes()))
+        if not resolved_review:
+            raise MetricRefusal('D0102_PHASE1_QUALIFICATION_PENDING', native)
+        reads[judgement] = review_sha
     if context['resolved_row']['tool_uses']:
         import flow109_admission as admission
         return admission.require_admission(project, context)

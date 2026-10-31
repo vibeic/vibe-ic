@@ -822,13 +822,18 @@ def _checkpoint_recording_complete(recording: Any, code: Any) -> bool:
 
 def assess(project: Path, programs_dir: Path,
            knobs: Optional[Dict[str, Any]] = None, *,
-           checkpoint: bool = False) -> Dict[str, Any]:
+           checkpoint: bool = False,
+           input_basis: Optional[Dict[str, str]] = None) -> Dict[str, Any]:
     """REUSE / REGENERATE / REFUSE, or an explicitly requested REVALIDATE.
 
     `knobs` are the ones THIS run would hand phase 1; None means the caller
     does not know them, and the recorded ones are used (said in the reason).
     `checkpoint` keeps intact historical outputs eligible for current D1
-    consumers after source-only drift. It does not establish equivalence to
+    consumers after source drift or a proved normal input transition. The
+    optional read-only `input_basis` references the existing transport manifest;
+    the initial normal invocation can select it with VIBEIC_PHASE1_INPUT_BASIS.
+    Its old preimage must reproduce the stored digest; intent is validated by
+    its existing normal consumer. It does not establish equivalence to
     the new producer, grant PASS, or update the historical producer identity.
     The default retains the original producer-freshness decision."""
     project = Path(project)
@@ -917,12 +922,228 @@ def assess(project: Path, programs_dir: Path,
             new={"knobs": now_knobs})
     new_inputs = inputs_digest(project, rec.get("input_record"), rec_knobs)
     if not rec.get("inputs") or new_inputs != rec.get("inputs"):
-        return _verdict(
+        changed = _verdict(
             REGENERATE, DESIGN_INPUT_CHANGED,
             f"the design input phase 1 read changed since it wrote these docs: "
             f"inputs {str(rec.get('inputs') or 'unrecorded')[:12]} -> "
             f"{str(new_inputs or 'unreadable')[:12]}",
             old={"inputs": rec.get("inputs")}, new={"inputs": new_inputs})
+        # A historical raw digest cannot be replaced by today's projection.
+        # The normal continuation may supply the retained input evidence; its
+        # reconstructed preimage must prove that exact immutable old digest.
+        # This is an evidence selector, never an approval or a PASS switch.
+        reference = input_basis
+        if reference is None:
+            selected = os.environ.get("VIBEIC_PHASE1_INPUT_BASIS")
+            reference = {"path": selected} if selected else None
+        if checkpoint and reference is None:
+            # Later ordinary entries reopen the reference retained by the
+            # actual checkpoint writer. Reusing this evidence is not reusing
+            # its verdict: current input/intent/source epochs are derived below.
+            import step_output_collector as versions
+            previous = versions.latest_pass(project, "D1") or {}
+            result = previous.get("result") or {}
+            completion = result.get("checkpoint") or {}
+            if (previous.get("canonical_pass") is True
+                    and not previous.get("capture_errors")
+                    and result.get("runner") == "vibe_ic_one_shot_runner"
+                    and result.get("site") == "phase1_checkpoint_revalidation"
+                    and completion.get("producer_identity_sha256") == _sha256(
+                        sidecar_dir(project) / _si.SIDECAR)):
+                reference = ((completion.get("source_assessment") or {}).get("new")
+                             or {}).get("input_basis")
+        if not checkpoint or not isinstance(reference, dict):
+            return changed
+        try:
+            import fnmatch
+            import _flow_yaml
+            import fault_scan_chain_insert as scan
+
+            def read_file(path):
+                path = Path(path)
+                if path.is_symlink() or not path.is_file():
+                    raise ValueError(f"input basis is absent or symlinked: {path}")
+                raw = path.read_bytes()
+                return raw, hashlib.sha256(raw).hexdigest()
+
+            basis_path = Path(reference["path"]).resolve()
+            raw, basis_sha = read_file(basis_path)
+            if reference.get("sha256", basis_sha) != basis_sha:
+                raise ValueError("retained input basis changed")
+            transport = json.loads(raw)
+            parts_path = basis_path.parent / transport["basis"]
+            if not parts_path.resolve().is_relative_to(basis_path.parent):
+                raise ValueError("input parts escape the retained basis")
+            raw, parts_sha = read_file(parts_path)
+            parts = json.loads(raw)
+            ir = rec["input_record"]
+            old_files = parts["old_files"]
+            old_dirs = parts["old_listing_members_reconstructed"]
+            if (list(old_files) != ir["files"]
+                    or list(old_dirs) != ir["listed_dirs"]
+                    or parts["knobs"] != rec_knobs
+                    or parts["knob_order"] != list(KNOB_NAMES)):
+                raise ValueError("historical input parts do not match the producer record")
+            old_parts = [f"f\0{rel}\0{old_files[rel] or 'ABSENT'}"
+                         for rel in ir["files"]]
+            old_parts += [f"d\0{rel}\0{'|'.join(old_dirs[rel])}"
+                          for rel in ir["listed_dirs"]]
+            old_parts += [f"k\0{k}\0{rec_knobs[k]}" for k in KNOB_NAMES]
+            if hashlib.sha256("\n".join(old_parts).encode()).hexdigest() != rec["inputs"]:
+                raise ValueError("historical preimage does not prove the stored input digest")
+            if parts["old_aggregate"] != rec["inputs"]:
+                raise ValueError("historical aggregate differs from the producer identity")
+            captured_files = parts["current_files"]
+            captured_dirs = parts["current_listing_members"]
+            if list(captured_files) != ir["files"] or list(captured_dirs) != ir["listed_dirs"]:
+                raise ValueError("captured current parts do not match the recorded read set")
+            captured_parts = [f"f\0{rel}\0{captured_files[rel] or 'ABSENT'}"
+                              for rel in ir["files"]]
+            captured_parts += [f"d\0{rel}\0{'|'.join(captured_dirs[rel])}"
+                               for rel in ir["listed_dirs"]]
+            captured_parts += [f"k\0{k}\0{rec_knobs[k]}" for k in KNOB_NAMES]
+            if hashlib.sha256("\n".join(captured_parts).encode()).hexdigest() != parts["current_aggregate"]:
+                raise ValueError("captured current input preimage does not match its digest")
+
+            # Resolve the historical opened manifest by its exact raw hash,
+            # not a reserialization or a guessed old set of JSON keys.
+            manifest_rel = "input/flow109-manifest.json"
+            old_manifest_sha = old_files[manifest_rel]
+            candidates = [entry for entry in transport["files"]
+                          if entry.get("sha256") == old_manifest_sha]
+            if len(candidates) != 1:
+                raise ValueError("historical opened manifest is not uniquely retained")
+            old_path = basis_path.parent / candidates[0]["staged"]
+            if not old_path.resolve().is_relative_to(basis_path.parent):
+                raise ValueError("historical manifest escapes the retained basis")
+            old_raw, old_sha = read_file(old_path)
+            if old_sha != old_manifest_sha:
+                raise ValueError("historical manifest bytes changed")
+            old_manifest = json.loads(old_raw)
+            manifest_raw, manifest_sha = read_file(project / manifest_rel)
+            manifest = json.loads(manifest_raw)
+            # These are the separate runtime arguments of prepare_front_door;
+            # all design selectors and all other fields must remain equal.
+            for key in set(old_manifest) | set(manifest):
+                if key not in ("runtime_tool_uses", "tool_uses", "qualification_registry"):
+                    if old_manifest.get(key) != manifest.get(key):
+                        raise ValueError(f"design manifest field changed: {key}")
+
+            consumed = {}
+            for rel, expected in old_files.items():
+                actual = (_fixed_author_input_hash(project, rel)
+                          if rel in FIXED_AUTHOR_INPUTS or rel.startswith(INTERFACE_CONTEXT + "/")
+                          else _sha256(project / rel))
+                if rel != manifest_rel and actual != expected:
+                    raise ValueError(f"recorded design input changed: {rel}")
+                if actual is not None:
+                    consumed[rel] = actual
+
+            # The normal reader checks declaration, source/publication
+            # provenance, current D01 owner and current author decision.
+            binding, problems = scan.load_d09_dft_contract(project)
+            if binding is None or problems:
+                raise ValueError("normal intent consumer refused: " + "; ".join(problems))
+            report_path = _pl.report_path(project, "phase1_one_shot.json")
+            report_raw, report_sha = read_file(report_path)
+            publication = json.loads(report_raw)["dft_intent_output"]
+            for rel, expected in binding["sources"].items():
+                path = project / rel
+                if not path.resolve().is_relative_to(project.resolve()):
+                    raise ValueError("intent source escapes project")
+                _, actual = read_file(path)
+                if expected != "sha256:" + actual:
+                    raise ValueError("intent source changed: " + rel)
+                consumed[rel] = actual
+            decisions_rel = "input/feature-decisions.json"
+            if decisions_rel not in consumed:
+                raise ValueError("new normative intent has no current publication")
+            decisions = json.loads((project / decisions_rel).read_bytes())
+            source_ref = binding["intent"].get("source_reference")
+            if source_ref is not None:
+                path = project / source_ref["path"]
+                if not path.resolve().is_relative_to(project.resolve()):
+                    raise ValueError("intent source reference escapes project")
+                _, actual = read_file(path)
+                if actual != source_ref["sha256"]:
+                    raise ValueError("intent source reference changed")
+                consumed[source_ref["path"]] = actual
+            import spec_declaration_emit as declaration
+            declared = json.loads((project / binding["path"]).read_bytes())
+            if any(key not in declared or not declaration._same_declared_value(value, declared[key])
+                   for key, value in decisions.items()):
+                raise ValueError("author choices differ from the normal declaration")
+
+            # A listed namespace is not itself a document input. Use the
+            # normal D1 intake contract to detect new extractable inputs;
+            # files newly consumed as intent are bound above, never ignored.
+            row = next(r for r in _flow_yaml.load()["steps"] if str(r["id"]) == "D1")
+            patterns = [alt.strip() for item in row["required_inputs"]
+                        for alt in item.get("path", "").split(" OR ") if alt.strip()]
+            fw = set(ir.get("flow_written", ()))
+            for rel, old_members in old_dirs.items():
+                current_members = _listing(project, rel, fw)
+                if current_members == old_members:
+                    continue
+                if rel != "input" or not set(old_members).issubset(current_members):
+                    raise ValueError("a recorded document listing changed: " + rel)
+                for member in set(current_members) - set(old_members):
+                    added = rel + "/" + member.rstrip("/")
+                    if any(fnmatch.fnmatchcase(added, pattern)
+                           or member.endswith("/") and pattern.startswith(added + "/")
+                           for pattern in patterns):
+                        raise ValueError("a normal Phase1 intake was added: " + added)
+                    if not member.endswith("/") and added not in consumed:
+                        raise ValueError("an added input file has no normal consumer: " + added)
+
+            for rel in (binding["path"],
+                        str(Path(binding["path"]).with_suffix(".provenance.json")),
+                        str(report_path.relative_to(project))):
+                _, consumed[rel] = read_file(project / rel)
+            claims = [line for line in (project / "provenance.jsonl").read_bytes().splitlines()
+                      if line.strip()]
+            claims = [(line, json.loads(line)) for line in claims]
+            claims = [(line, claim) for line, claim in claims
+                      if claim.get("tool") == "spec_declaration_emit"
+                      and binding["path"] in claim.get("outputs", {})
+                      and claim.get("exit_code") == 0]
+            claim_line, claim = claims[-1]
+            claim_sha = hashlib.sha256(claim_line).hexdigest()
+            _, declaration_source_sha = read_file(Path(declaration.__file__))
+            if claim["source_sha256"] != "sha256:" + declaration_source_sha:
+                raise ValueError("normal declaration source epoch changed")
+            again, problems = scan.load_d09_dft_contract(project)
+            if (again != binding or problems or read_file(report_path)[1] != report_sha
+                    or inputs_digest(project, ir, rec_knobs) != new_inputs
+                    or any(_sha256(project / rel) != expected
+                           for rel, expected in consumed.items())
+                    or read_file(basis_path)[1] != basis_sha
+                    or read_file(parts_path)[1] != parts_sha):
+                raise ValueError("consumed input or publication changed during assessment")
+            return _verdict(
+                REVALIDATE, DESIGN_INPUT_CHANGED,
+                "a reconstructed preimage verifies the immutable historical raw "
+                "digest, and the unchanged consumed design inputs "
+                "permit normal checkpoint revalidation; the newly normative intent "
+                "is bound by its current normal publication, not ignored",
+                old={"code": old_code, "inputs": rec["inputs"]},
+                new={"code": new_code, "inputs": new_inputs,
+                     "input_basis": {"path": str(basis_path), "sha256": basis_sha,
+                                     "parts_sha256": parts_sha,
+                                     "historical_manifest_sha256": old_sha,
+                                     "captured_current_inputs": parts["current_aggregate"],
+                                     "classification": "RECONSTRUCTED_VERIFIED_PREIMAGE",
+                                     "original_raw_listing_archive": False},
+                     "consumed_inputs": consumed,
+                     "intent": {"publication": publication,
+                                "report_sha256": report_sha,
+                                "manifest_sha256": manifest_sha,
+                                "declaration_source_sha256": declaration_source_sha,
+                                "publication_claim_sha256": claim_sha}})
+        except (OSError, ValueError, KeyError, TypeError, AttributeError,
+                StopIteration, IndexError) as exc:
+            changed["why"] += "; normal input transition refused: " + str(exc)
+            return changed
     if source_drift is not None:
         source_drift["state"] = REVALIDATE
         source_drift["why"] += (

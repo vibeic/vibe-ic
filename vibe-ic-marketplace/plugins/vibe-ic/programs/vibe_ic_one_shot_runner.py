@@ -691,6 +691,7 @@ def _revalidate_phase1_checkpoint(project: Path, knobs: Dict[str, Any]) -> dict:
     project = Path(project).resolve()
     row = next(r for r in _flow_yaml.load()['steps'] if str(r['id']) == 'D1')
     inputs = worker._declared_input_files(project, row.get('required_inputs', ()))
+    declared_inputs = dict(inputs)
     prior = next((r for r in versions._read_index(project)['steps']
                   if str(r.get('id')) == 'D1'), None)
     root = versions._versions_root(project)
@@ -712,9 +713,26 @@ def _revalidate_phase1_checkpoint(project: Path, knobs: Dict[str, Any]) -> dict:
         checkpoint['producer_current'] = freshness['state'] == _p1id.REUSE
         if freshness['state'] not in (_p1id.REUSE, _p1id.REVALIDATE):
             raise ValueError('D1 retained checkpoint is no longer valid')
+        input_transition = (freshness.get('new') or {}).get('consumed_inputs')
+        if input_transition is not None:
+            if not isinstance(input_transition, dict) or not input_transition:
+                raise ValueError('D1 input transition has no consumed input identity')
+            if not ai.check(project, 'D1')[0]:
+                raise ValueError('D1 input transition lacks the current independent judgement')
+            judgement = 'reports/audit/ai_judgements/D1.json'
+            inputs[judgement] = versions._sha(project / judgement)
+            for relative, expected in input_transition.items():
+                path = project / relative
+                if (not path.resolve().is_relative_to(project) or path.is_symlink()
+                        or not path.is_file() or versions._sha(path) != expected):
+                    raise ValueError('D1 consumed transition input changed: ' + relative)
+                inputs[relative] = expected
         if previous is not None and (previous / 'outputs.json').is_file():
             retained = json.loads((previous / 'outputs.json').read_text())
-            if 'inputs' in retained and retained['inputs'] != inputs:
+            prior_inputs = retained.get('inputs')
+            if (prior_inputs is not None and
+                    (any(prior_inputs.get(name) != value for name, value in declared_inputs.items())
+                     if input_transition is not None else prior_inputs != inputs)):
                 raise ValueError('D1 retained checkpoint inputs changed')
             for output in retained.get('outputs', ()):
                 path = project / output['rel']
@@ -740,8 +758,11 @@ def _revalidate_phase1_checkpoint(project: Path, knobs: Dict[str, Any]) -> dict:
                     outputs = gates.contracts(project, row)
                     if (outputs != bound or authority.read_bytes() != identity
                             or worker._declared_input_files(
-                                project, row.get('required_inputs', ())) != inputs
+                                project, row.get('required_inputs', ())) != declared_inputs
                             or _phase1_checkpoint_freshness(project, knobs) != freshness
+                            or any(not (project / name).is_file()
+                                   or versions._sha(project / name) != value
+                                   for name, value in inputs.items())
                             or not ai.check(project, 'D1')[0]):
                         error = 'D1_CHECKPOINT_BINDING_REFUSED: evidence changed during revalidation'
                     else:
