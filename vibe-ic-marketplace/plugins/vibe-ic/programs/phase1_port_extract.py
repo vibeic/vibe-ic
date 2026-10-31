@@ -388,6 +388,85 @@ def _stated_width(cell: str) -> int:
     return WIDTH_UNKNOWN
 
 
+def _recover_debug_mux_output_width(text: str, ports: List[Dict[str, Any]]) -> None:
+    """Recover a buggy implicit scalar only from a source-owned mux contract.
+
+    The header remains evidence of the implementation being repaired. A single
+    explicit W-bit N:1 mux purpose, corroborated by N W-bit data declarations
+    and one selector, supplies its target data width. Other transforms and
+    ambiguous or explicitly preserved interfaces retain their declaration.
+    """
+    clean = strip_hdl_comments_and_strings(text)
+    headers = list(_VERILOG_MODULE_HDR.finditer(clean))
+    if len(headers) != 1 or len(list(_MODULE_SPAN.finditer(clean))) != 1:
+        return
+    owner = re.match(r'module\s+(\w+)', headers[0].group())[1]
+    narrative = list(clean)
+    for start, end in _verilog_region_spans(text):
+        narrative[start:end] = ['\n' if c == '\n' else ' ' for c in text[start:end]]
+    narrative = ''.join(narrative)
+    declared_owners = [name for _, _, name in _prose_module_scopes(narrative) if name]
+    if declared_owners and declared_owners != [owner]:
+        return
+    from task_nature_route import classify_task_nature
+    route = classify_task_nature(narrative, has_context=True)
+    if route['nature'] != 'debug' or route['needs_ai_parse']:
+        return
+    from mux_synth import _has_non_mux_select
+    if _has_non_mux_select(narrative) or re.search(
+            r'\b(?:parity|checksum|reduction|reduce|least[- ]significant\s+bit)\b', narrative, re.I):
+        return
+    if re.search(r'\b(?:preserve|keep|retain)\s+(?:(?:the|existing|original|declared|supplied|current)\s+)*'
+                 r'(?:interface|port\s+widths?|module\s+header)\b|'
+                 r'\bdo\s+not\s+(?:change|modify)\b[^.;\n]*\b(?:interface|port\s+widths?|header)\b',
+                 narrative, re.I):
+        return
+    patterns = (
+        r'\b(?P<width>\d+)\s*[- ]\s*bit(?:\s+wide)?[\s,]+(?P<count>\d+)\s*[-:]\s*(?:to\s*-?\s*)?1\s+(?:multiplexer|mux)\b',
+        r'\b(?P<count>\d+)\s*[-:]\s*(?:to\s*-?\s*)?1[\s,]+(?P<width>\d+)\s*[- ]\s*bit(?:\s+wide)?\s+(?:multiplexer|mux)\b',
+    )
+    from _prose_polarity import sentence_scope
+    intents = []
+    for pattern in patterns:
+        for match in re.finditer(pattern, narrative, re.I):
+            lo, hi = sentence_scope(narrative, *match.span())
+            if not _prose_is_denied(narrative[lo:hi]):
+                intents.append(match)
+    if not intents or len({(m['width'], m['count']) for m in intents}) != 1:
+        return
+    width, count = int(intents[0]['width']), int(intents[0]['count'])
+    if width <= 1 or count < 2:
+        return
+    outputs = [p for p in ports if p['dir'] == 'output']
+    inputs = [p for p in ports if p['dir'] == 'input']
+    if len(outputs) != 1 or len(inputs) != count + 1 or len(ports) != len(inputs) + 1:
+        return
+    target = outputs[0]
+    if (target['width'] != 1 or any(p['source'] != 'verilog_code_region' for p in ports)
+            or '[' in target['source_line']):
+        return
+    name = re.escape(target['name'])
+    if re.search(r'\bscalar\s+(?:output|result)\b|\b(?:output|result)\b[^.;\n]{0,64}\bscalar\b|'
+                 r'\b(?:one|1)[- ]bit\s+(?:output|result)\b|'
+                 r'\b(?:output|result|' + name + r')\b[^.;\n]{0,64}\b(?:one|1)[- ]bit\b',
+                 narrative, re.I):
+        return
+    data = [p for p in inputs if p['width'] == width]
+    selectors = [p for p in inputs if p not in data]
+    select_width = (count - 1).bit_length()
+    if len(data) != count or len(selectors) != 1 or selectors[0]['width'] != select_width:
+        return
+    target.update(width=width, declared_width=1,
+                  width_recovery={
+                      'rule': 'debug_mux_functional_width', 'module': owner,
+                      'functional_intent': text[intents[0].start():intents[0].end()],
+                      'data_ports': [p['name'] for p in data],
+                      'selector': selectors[0]['name'], 'task_nature': 'debug',
+                      'authority': 'explicit functional purpose of the requested repair',
+                  })
+    target['extraction_strategy'] += '+functional_mux_repair_intent'
+
+
 def extract_code_block_ports(text: str) -> List[Dict[str, Any]]:
     """Every port a document DECLARES in a Verilog/SystemVerilog code region or
     in a markdown signal table (or, see `extract_structured_spec_ports`, under
@@ -462,6 +541,7 @@ def extract_code_block_ports(text: str) -> List[Dict[str, Any]]:
         if entry["name"] not in seen:
             seen.add(entry["name"])
             out.append(entry)
+    _recover_debug_mux_output_width(text, out)
     return out
 
 

@@ -52568,7 +52568,7 @@ def gen_l9_integration_spec(project: Path,
             # typed-width fields so the L9↔RTL gate sees doc-declared
             # optionality on L9.top_ports too.
             for _k in ("width", "msb", "lsb", "width_symbolic",
-                       "optional", "type_ref"):
+                       "optional", "type_ref", "declared_width", "width_recovery"):
                 _v = p.get(_k)
                 if _v is not None:
                     entry_l9[_k] = _v
@@ -65110,7 +65110,8 @@ def _promote_l1_pins_to_l9_ports(
         es = p.get("extraction_strategy")
         if es:
             entry["extraction_strategy"] = es
-        for _k in ("width", "msb", "lsb", "width_symbolic", "optional", "type_ref"):
+        for _k in ("width", "msb", "lsb", "width_symbolic", "optional", "type_ref",
+                   "declared_width", "width_recovery"):
             _v = p.get(_k)
             if _v is not None:
                 entry[_k] = _v
