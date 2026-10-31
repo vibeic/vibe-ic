@@ -517,6 +517,17 @@
       "bucket_A_program": "programs/_ppa/timing.py",
       "bucket_B_skill_file": "skills/sta-review/SKILL.md"
     },
+    "benchmark.blindness_audit": {
+      "description": "Transcript envelope inspection and blindness evidence census; capture routing only.",
+      "bucket_A_program": "programs/blindness_audit.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "benchmark.residual_triage": {
+      "description": "Source-bound residual population and shared absorption validation; capture routing only.",
+      "bucket_A_program": "programs/triage_record_check.py",
+      "bucket_A_related": ["programs/benchmark_triage_absorption_audit.py"],
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
     "benchmark.aggregate_verdict": {
       "description": "Aggregating many per-subject exit codes into one verdict for a corpus run",
       "bucket_A_program": "programs/benchmark_run_manifest.py",
