@@ -8150,24 +8150,37 @@ def _digital_def_geometry(text, lefs):
         if classes[comp.master].startswith('BLOCK'):
             macros[name] = box
     parsed_pins = pins.def_pins(text)
-    # The existing pin reader supports one rectangular port per BTerm. More
-    # complex geometry is unmeasured, rather than silently discarded.
-    if len(parsed_pins) != len(pin_records) or any(len(re.findall(r'\+\s*LAYER\b', s)) > 1 or re.search(r'\+\s*(?:POLYGON|VIA)\b', s) for s in pin_records):
+    if len(parsed_pins) != len(pin_records):
         raise MetricRefusal('DIGITAL_PIN_GEOMETRY_UNAVAILABLE', 'rectangular BTerm population')
     for raw in pin_records:
         name = re.match(r'-\s+(\S+)', raw)[1]
         use = re.search(r'\+\s*USE\s+(\w+)', raw)
-        parsed_pins[name]['use'] = use[1] if use else 'SIGNAL'
-    for pin in parsed_pins.values():
-        if pin['rect'] is None:
+        pin = parsed_pins[name]
+        pin['use'] = use[1] if use else 'SIGNAL'
+        rectangles = list(pins._LAYER_RE.finditer(raw))
+        placements = list(pins._PLACE_RE.finditer(raw))
+        # Native PDN BTerms contain many rectangles in one placed port. Keep
+        # every rectangle; signal access still requires its single shape.
+        if (len(rectangles) != len(re.findall(r'\+\s*LAYER\b', raw))
+                or len(placements) != len(re.findall(r'\+\s*(?:PLACED|FIXED|COVER)\b', raw))
+                or len(placements) > 1 or len(re.findall(r'\+\s*PORT\b', raw)) > 1
+                or re.search(r'\+\s*(?:POLYGON|VIA)\b', raw)
+                or len(rectangles) > 1 and pin['use'] not in ('POWER', 'GROUND')):
+            raise MetricRefusal('DIGITAL_PIN_GEOMETRY_UNAVAILABLE', name)
+        pin['rects'] = []
+        if not rectangles or not placements:
             continue
         x, y, orient = pin['placement']
-        relative = (pin['rect'][0]-x, pin['rect'][1]-y, pin['rect'][2]-x, pin['rect'][3]-y)
-        try:
-            a, b, c, e = pr.orient_rect(relative, orient, (0, 0))
-        except KeyError as exc:
-            raise MetricRefusal('DIGITAL_PIN_ORIENTATION_UNAVAILABLE', orient) from exc
-        pin['rect'] = [a+x, b+y, c+x, e+y]
+        for rectangle in rectangles:
+            relative = tuple(int(rectangle.group(k)) for k in ('x1', 'y1', 'x2', 'y2'))
+            if relative[0] >= relative[2] or relative[1] >= relative[3]:
+                raise MetricRefusal('DIGITAL_PIN_GEOMETRY_UNAVAILABLE', name)
+            try:
+                a, b, c, e = pr.orient_rect(relative, orient, (0, 0))
+            except KeyError as exc:
+                raise MetricRefusal('DIGITAL_PIN_ORIENTATION_UNAVAILABLE', orient) from exc
+            pin['rects'].append([a+x, b+y, c+x, e+y])
+        pin['rect'] = pin['rects'][0]
     def overlap(a, b):
         return min(a[2], b[2]) > max(a[0], b[0]) and min(a[3], b[3]) > max(a[1], b[1])
     macro_boxes = list(macros.values())
@@ -8175,7 +8188,7 @@ def _digital_def_geometry(text, lefs):
         'die_height_um': ((die[3] - die[1]) / d.units, 'um'),
         'macro_boundary_errors': (sum(outside(b) for b in macro_boxes), 'count'),
         'unplaced_macros': (unplaced, 'count'),
-        'pin_boundary_errors': (sum(outside(p['rect']) for p in parsed_pins.values() if p['rect'] is not None), 'count'),
+        'pin_boundary_errors': (sum(any(outside(box) for box in p['rects']) for p in parsed_pins.values()), 'count'),
         'unplaced_pins': (sum(p['rect'] is None for p in parsed_pins.values()), 'count'),
         'illegal_macro_overlap': (sum(overlap(a, b) for i, a in enumerate(macro_boxes) for b in macro_boxes[i+1:]), 'count')}
     return d, boxes, parsed_pins, values
