@@ -190,6 +190,8 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                     "tech_lef", "wire_width_um", "via_pad_half_um", "max_row_width_um"):
             if cfg.get(key) is not None:
                 argv += ["--" + key.replace("_", "-"), str(cfg[key])]
+        if cfg.get("shared_capacitor_escapes") is True:
+            argv.append("--shared-capacitor-escapes")
         execution = run("analog_a5_layout_emit.py", argv,
                         outputs=[str(report), str(bdir / "layout.mag"),
                                  str(bdir / f"{name}.gds")])
