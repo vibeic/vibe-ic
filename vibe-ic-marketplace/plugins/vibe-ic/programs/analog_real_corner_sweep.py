@@ -1778,6 +1778,7 @@ _SPEC_NAME_ALIASES = {
 #
 # chip-AGNOSTIC: analog circuit-topology vocabulary; no part number/chip class.
 _TYPE_SPEC_ALIASES = {
+    "capacitor":   {"capacitance": "capacitance"},
     "ldo":         {"ldovoltage": "vout", "ldoout": "vout",
                     "ldooutput": "vout", "regulatedvoltage": "vout"},
     "bandgap":     {"vbg": "vout", "vref": "vout", "bandgapvoltage": "vout",
