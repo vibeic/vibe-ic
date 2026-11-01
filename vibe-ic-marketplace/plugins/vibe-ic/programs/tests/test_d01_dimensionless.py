@@ -96,6 +96,13 @@ def test_generic_scalar_comparison_is_preserved(tmp_path):
     assert unresolved == []
 
 
+@pytest.mark.parametrize('quantity', [{'channels':2.0}, {'description':'2.0'}])
+def test_generic_numeric_object_comparison_is_preserved(tmp_path, quantity):
+    actual, unresolved, _ = compare(tmp_path, quantity, ['2.0'])
+    assert actual == [{'id':'quantity'}]
+    assert unresolved == []
+
+
 def test_withdrawn_numeric_requirement_is_not_revived(tmp_path):
     actual, unresolved, _ = compare(tmp_path, {'target':2, 'unit':''}, ['2.0',''],
                                   withdrawn='Owner withdrew this requirement.')
@@ -105,6 +112,15 @@ def test_withdrawn_numeric_requirement_is_not_revived(tmp_path):
 
 def test_missing_quantity_path_still_refuses(tmp_path):
     actual, unresolved, _ = compare(tmp_path, {'target':2.0,'unit':'—'}, ['2.0','—'], '/absent')
+    assert actual == []
+    assert len(unresolved) == 1
+
+
+@pytest.mark.parametrize('expected_unit', ['—', '-', ''])
+@pytest.mark.parametrize('actual_unit', ['—', 'V'])
+def test_dimensionless_quantity_requires_a_named_route(tmp_path, expected_unit, actual_unit):
+    actual, unresolved, _ = compare(tmp_path, {'target':2.0, 'unit':actual_unit},
+                                    ['2.0',expected_unit], pointer=None)
     assert actual == []
     assert len(unresolved) == 1
 
