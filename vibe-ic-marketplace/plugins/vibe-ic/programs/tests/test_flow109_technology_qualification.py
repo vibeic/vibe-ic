@@ -28,6 +28,9 @@ def _case(tmp_path: Path, monkeypatch):
     config.write_text(json.dumps({"meta": {"version": 2, "flow": "Chip"},
         "DESIGN_NAME": "neutral", "PDK": family.default_variant,
         "VERILOG_FILES": [str(rtl)], "CLOCK_PORT": "clk", "CLOCK_PERIOD": 20}))
+    declared = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+    declared.parent.mkdir(parents=True)
+    declared.write_text(json.dumps({'fields': {'pdk_target': family.default_variant}}))
     monkeypatch.setenv("VIBEIC_EDA_IMAGE", "example.invalid/eda@sha256:" + "e" * 64)
     monkeypatch.setenv("VIBEIC_LIBRELANE_PDK_ROOT", pin.get_dir("/foss/pdks"))
     context = {"requested_step": "D03", "resolved_row": {"id": "D03"},
@@ -119,6 +122,9 @@ def _native_bundle_case(tmp_path, monkeypatch):
     config.write_text(json.dumps({'meta': {'version': 2, 'flow': 'Classic'},
         'DESIGN_NAME': 'neutral', 'PDK': variant, 'VERILOG_FILES': [str(rtl)],
         'CLOCK_PORT': 'clk', 'CLOCK_PERIOD': 20}))
+    declared = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+    declared.parent.mkdir(parents=True)
+    declared.write_text(json.dumps({'fields': {'pdk_target': variant}}))
     monkeypatch.setenv('VIBEIC_LIBRELANE_PDK_ROOT', str(root))
     # Exact image is supplied by the actual host launch, not invented by tests.
     assert '@sha256:' in os.environ['VIBEIC_EDA_IMAGE']
@@ -149,6 +155,40 @@ def test_native_bundle_missing_rtl_preserves_real_sdk_failure(tmp_path, monkeypa
     assert result['component_status'] == 'FAIL', result
     assert result['reason'] == 'D03_NATIVE_RESOLUTION_FAILED'
     assert result['native_started'] and not result['completed']
+
+
+def test_case_declared_pdk_reaches_native_flow_without_config_pdk(tmp_path, monkeypatch):
+    project, context, _ = _native_bundle_case(tmp_path, monkeypatch)
+    path = project / 'phase3/librelane/config.json'
+    config = json.loads(path.read_text())
+    declared = config.pop('PDK')
+    path.write_text(json.dumps(config))
+    result = d03.execute(project, context)
+    assert result['component_status'] == 'PASS', result
+    assert result['metrics']['tool_deck_corner_binding']['pdk']['variant'] == declared
+    inputs = {item['path'] for item in result['inputs']}
+    assert str(project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json') in inputs
+    assert result['metrics']['tool_deck_corner_binding']['resolved_config']['path'].endswith('/D03/resolved.json')
+
+
+def test_missing_case_pdk_refuses_even_with_native_config_pdk(tmp_path, monkeypatch):
+    project, context, _ = _native_bundle_case(tmp_path, monkeypatch)
+    (project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json').unlink()
+    result = d03.execute(project, context)
+    assert result['reason'] == 'D03_PDK_UNDECLARED', result
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert not result['native_started'] and not result['completed']
+
+
+def test_config_pdk_cannot_override_case_declaration(tmp_path, monkeypatch):
+    project, context, _ = _native_bundle_case(tmp_path, monkeypatch)
+    path = project / 'phase3/librelane/config.json'
+    config = json.loads(path.read_text())
+    config['PDK'] = 'other_process'
+    path.write_text(json.dumps(config))
+    result = d03.execute(project, context)
+    assert result['reason'] == 'D03_PDK_DECLARATION_CONFLICT', result
+    assert not result['completed']
 
 
 @pytest.mark.parametrize('damage', ['missing', 'placeholder', 'malformed', 'other_variant', 'conflict'])

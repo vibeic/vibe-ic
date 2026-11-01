@@ -1556,6 +1556,14 @@ def _bound_primary_clocks(project: Path, l9: dict, clocks: list[dict],
 
 def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool = False) -> dict:
     """Emit only declared inputs; unavailable values stay absent, never guessed."""
+    from declared_pdk_is_the_pdk_used_check import declared_distribution, PDKDeclarationError
+    try:
+        declared_pdk, pdk_sources = declared_distribution(project)
+    except PDKDeclarationError as exc:
+        raise Refusal('LL_' + exc.code, exc.detail) from exc
+    if pdk not in (None, 'auto', declared_pdk):
+        raise Refusal('LL_PDK_DECLARATION_CONFLICT', 'requested PDK differs from case declaration')
+    pdk = declared_pdk
     root = project / 'phase1/generated_docs'
     l8, l9, l19 = (_ldoc(root, name) for name in EMIT_CONFIG_LDOCS)
     # The pad producer (step 15.5ic) runs after synthesis and pre-layout STA;
@@ -1564,6 +1572,8 @@ def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool =
     pads = _load(pad_path) if pad_path.is_file() else {}
     result: dict[str, Any] = {}
     sources: dict[str, str] = {}
+    _set(result, sources, 'PDK', pdk,
+         '; '.join(f'{path.relative_to(project)}:{key}' for path, key in pdk_sources))
     # Phase-1's typed clock contract spells a primary source as
     # domain_kind=primary / role=master.  Retain role=primary for older
     # documents, using the same two-field primary semantics as the L8 timing

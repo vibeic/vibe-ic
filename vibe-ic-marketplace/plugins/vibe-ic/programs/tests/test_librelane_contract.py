@@ -470,6 +470,7 @@ def design(tmp_path):
                            'period_ns': 12, 'source_pin': 'clk'}]})
     put(p / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {'top_module': 'block'})
     put(p / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {
+        'pdk_target': 'processA',
         'constraint_declarations': [
             {'token': 'MAX_FANOUT_CONSTRAINT', 'scope': 'processA*', 'value': '4',
              'source': 'input/docs/L9.txt', 'line': 8},
@@ -621,12 +622,62 @@ def test_emit_existing_native_top_fixture_keeps_single_clock_contract(tmp_path):
     project = tmp_path / 'existing'
     shutil.copytree(fixture, project)
     output = project / 'phase3/librelane/config.json'
-    result = contract.emit_config(project, 'processA', output)
+    declared = json.loads((project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json').read_text())['fields']['pdk_target']
+    result = contract.emit_config(project, declared, output)
     assert result['CLOCK_PORT'] == 'A'
     assert result['CLOCK_PERIOD'] == 10
     assert result['PNR_SDC_FILE'] == 'dir::phase3/stage3/pnr/constraint.sdc'
     assert (project / 'phase3/stage3/pnr/constraint.sdc').read_bytes() == (
         fixture / 'phase3/stage3/pnr/constraint.sdc').read_bytes()
+
+
+@pytest.mark.parametrize('provider', ['L1', 'L19', 'manifest'])
+def test_case_declared_pdk_reaches_emitted_config(tmp_path, provider):
+    project = design(tmp_path)
+    root = project / 'phase1/generated_docs'
+    l19 = json.loads((root / 'L19_CONSTRAINTS_PDK.json').read_text())
+    del l19['fields']['pdk_target']
+    if provider == 'L19':
+        l19['fields']['pdk_target'] = 'processA'
+    elif provider == 'L1':
+        put(root / 'L1_DATASHEET.json', {'fields': {'target_pdk': 'processA'}})
+    else:
+        put(project / 'input/flow109-manifest.json', {'target_pdk': 'processA'})
+    put(root / 'L19_CONSTRAINTS_PDK.json', l19)
+    output = project / 'phase3/librelane/config.json'
+    result = contract.emit_config(project, 'processA', output)
+    assert result.get('PDK', 'PDK_OMITTED') == 'processA'
+    provenance = json.loads(output.with_suffix('.provenance.json').read_text())
+    assert provider in provenance['PDK'] or (provider == 'manifest' and 'flow109-manifest' in provenance['PDK'])
+
+
+@pytest.mark.parametrize('damage', ['missing', 'cli_conflict', 'declaration_conflict'])
+def test_case_pdk_cannot_come_from_cli_or_resolved_defaults(tmp_path, damage):
+    project = design(tmp_path)
+    output = project / 'phase3/librelane/config.json'
+    selected = 'processA'
+    if damage == 'missing':
+        path = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+        l19 = json.loads(path.read_text())
+        del l19['fields']['pdk_target']
+        put(path, l19)
+        # These records can originate from CLI/default adoption, not this case's declaration.
+        put(project / 'phase1/pdk_staging_read.json', {'adopted_pdk_target': 'processA'})
+        put(project / 'phase3/librelane_switch.json', {'pdk': 'processA'})
+        put(project / 'phase3/librelane/old/resolved.json', {'PDK': 'processA'})
+        expected = 'LL_PDK_UNDECLARED'
+    elif damage == 'cli_conflict':
+        selected, expected = 'other_process', 'LL_PDK_DECLARATION_CONFLICT'
+    else:
+        put(project / 'phase1/generated_docs/L1_DATASHEET.json', {'target_pdk': 'other_process'})
+        expected = 'LL_PDK_DECLARATION_CONFLICT'
+    try:
+        contract.emit_config(project, selected, output)
+        observed = 'CONFIG_PUBLISHED'
+    except contract.Refusal as exc:
+        observed = exc.code
+    assert observed == expected
+    assert not output.exists()
 
 def test_synthesis_config_uses_selected_sources_and_lec_hooks(tmp_path):
     p = design(tmp_path)
