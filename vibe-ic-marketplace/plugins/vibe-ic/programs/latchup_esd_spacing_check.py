@@ -204,26 +204,13 @@ def _is_tap_tokened(master: str) -> bool:
 _unreadable_recorded_lefs: List[str] = []
 
 
-def _recorded_noncore_masters(def_file: Path, reader=None) -> set[str]:
-    """Reopen this run's declared IO LEFs; never infer class from pad names.
+def _recorded_noncore_masters(def_file: Path, reader=None, *,
+                              roles_out: Optional[Dict[str, str]] = None) -> set[str]:
+    """Reopen recorded native LEFs where this run's tools read them.
 
-    Unreadable metadata grants no exclusions. Conflicting declarations (even
-    within one LEF) cannot remove a master from the conservative core screen.
-
-    W5/28 -- WHERE THOSE LEFS ARE READ. The paths come from this run's own
-    `io_pad_chip_top.json` and they name the PDK as the RUN's tools see it.
-    MEASURED on the two spm runs the W5 report cites: both record 15
-    `io_library_lefs` under `/foss/pdks/ciel/...` and every one of them is
-    host-unreadable, so a host-side read raised on the first and the `except
-    OSError` below returned an EMPTY exclusion set on every run. Every pad was
-    then screened as a core cell.
-
-    The conservative direction is deliberate and is KEPT. What was wrong is that
-    it fired always, and silently: "no exclusions" and "this PDK declares no pad
-    masters" were the same answer. The read now goes through
-    `_pdk_layer_authority._query` -- the container this run published when there
-    is one, the local filesystem when there is not -- and a recorded LEF that
-    cannot be read is NAMED in `_unreadable_recorded_lefs`.
+    Return only declared PAD/ENDCAP exclusions, including every subclass.
+    Optionally publish all unambiguous roles to the spacing consumer. Missing,
+    unreadable or conflicting classes grant no role and must remain undecided.
     """
     from _pad_ring import parse_lef_macro_classes
     # `_pdk_layer_authority._query` IS this tree's environment seam; `_pad_ring`
@@ -264,8 +251,12 @@ def _recorded_noncore_masters(def_file: Path, reader=None) -> set[str]:
             for body in re.split(r"(?m)(?=^\s*MACRO\s+\S+)", text):
                 for master, cls in parse_lef_macro_classes(body).items():
                     classes.setdefault(master, set()).add(cls)
-        return {master for master, values in classes.items()
-                if len(values) == 1 and next(iter(values)).partition(" ")[0] in {"PAD", "ENDCAP"}}
+        resolved = {master: next(iter(values)) for master, values in classes.items()
+                    if len(values) == 1}
+        if roles_out is not None:
+            roles_out.update(resolved)
+        return {master for master, cls in resolved.items()
+                if cls.partition(" ")[0] in {"PAD", "ENDCAP"}}
     except (OSError, ValueError, UnicodeError):
         return set()
 
@@ -512,28 +503,32 @@ def _latchup_tap_spacing_check(def_file: Path,
                        def_rect_um=list(def_die) if def_die else None)
     die = tuple(_die.rect) if _die.rect else None
     geom = _parse_placed_geometry(text)
-    roles = _checked_lef_roles(lef_context, def_file) if lef_context is not None else None
-    noncore = ({m for m, cls in roles.items() if cls.partition(" ")[0] in {"PAD", "ENDCAP"}}
-               if roles is not None else _recorded_noncore_masters(def_file))
+    roles = _checked_lef_roles(lef_context, def_file) if lef_context is not None else {}
+    if lef_context is None:
+        noncore = _recorded_noncore_masters(def_file, roles_out=roles)
+    else:
+        noncore = {m for m, cls in roles.items()
+                   if cls.partition(" ")[0] in {"PAD", "ENDCAP"}}
+    unknown_roles = sorted({m for _i, m, _x, _y in geom
+                            if roles.get(m, "").partition(" ")[0]
+                            not in {"CORE", "PAD", "ENDCAP"}})
     std = [(x / units, y / units) for _i, m, x, y in geom
-           if ((roles[m].partition(" ")[0] == "CORE"
-                and roles[m] not in {"CORE WELLTAP", "CORE SPACER", "CORE ANTENNACELL"})
-               if roles is not None else _is_std_cell(m, noncore))]
+           if (roles.get(m, "").partition(" ")[0] == "CORE"
+               and roles[m] not in {"CORE WELLTAP", "CORE SPACER", "CORE ANTENNACELL"})]
     base["lef_noncore_masters"] = sorted(noncore & {m for _i, m, _x, _y in geom})
     # W5/28: an empty exclusion set has two very different causes and the record
     # now says which. Without this the screen reported a core population that
     # included every pad, and nothing in the report said the PDK had not been read.
-    if roles is None and _unreadable_recorded_lefs:
+    if lef_context is None and _unreadable_recorded_lefs:
         base["lef_noncore_masters_unavailable"] = list(_unreadable_recorded_lefs)
         base["lef_noncore_masters_unavailable_why"] = (
             "this run's recorded IO LEF(s) could not be read where this audit "
-            "ran, so no PAD/ENDCAP exclusion was granted and every placed "
-            "master was screened as a core cell. That is the conservative "
-            "direction, NOT a finding that the PDK declares no pad masters")
+            "ran; unresolved classes leave spacing UNDECIDED. This is "
+            "NOT a finding that the PDK declares no pad masters")
     taps = [(x / units, y / units) for _i, m, x, y in geom
-            if (roles[m] == "CORE WELLTAP" if roles is not None else _is_rated_tap(m, rated_tap_masters))]
+            if roles.get(m) == "CORE WELLTAP"]
     unknown_taps = sorted({m for _i, m, _x, _y in geom
-                           if roles is None and _is_tap_tokened(m)
+                           if lef_context is None and _is_tap_tokened(m)
                            and not _is_rated_tap(m, rated_tap_masters)})
     base.update({"n_std": len(std), "n_tap": len(taps),
                  "unknown_taps": unknown_taps, "units_per_um": units,
@@ -547,6 +542,12 @@ def _latchup_tap_spacing_check(def_file: Path,
         return {**base, "status": "INCOMPLETE", "reason": "NO_PLACED_GEOMETRY",
                 "note": ("DEF has no parseable placed COMPONENTS geometry — cannot "
                          "screen tap spacing (not a placed/routed block).")}
+
+    if unknown_roles:
+        return {**base, "status": "UNDECIDED", "reason": "LEF_CLASS_UNDETERMINED",
+                "unknown_masters": unknown_roles,
+                "note": "Placed master LEF CLASS missing, unreadable, conflicting or unsupported; "
+                        "cannot classify the tap-spacing population."}
 
     # CONCLUSIVE GAP #1: placed logic but ZERO taps. This is the same conclusive
     # signal the shipped presence check finds — restated here in the spacing layer
