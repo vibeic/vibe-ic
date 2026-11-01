@@ -543,7 +543,16 @@ def _latchup_tap_spacing_check(def_file: Path,
                 "note": ("DEF has no parseable placed COMPONENTS geometry — cannot "
                          "screen tap spacing (not a placed/routed block).")}
 
+    # Preserve a measured gap in the classified CORE population even when
+    # another master has no class. Unknown masters never become CORE or taps.
+    # Apply the same population/die guards as the spacing verdict below.
+    known_worst = None
+    if (len(std) >= _MIN_STD_FOR_SPACING and taps and die is not None
+            and min(die[2] - die[0], die[3] - die[1]) >= _MIN_DIE_SIDE_UM):
+        known_worst = _grid_min_dist_exceeds(std, taps, screen_um)
     if unknown_roles:
+        base["unknown_masters"] = unknown_roles
+    if unknown_roles and known_worst is None:
         return {**base, "status": "UNDECIDED", "reason": "LEF_CLASS_UNDETERMINED",
                 "unknown_masters": unknown_roles,
                 "note": "Placed master LEF CLASS missing, unreadable, conflicting or unsupported; "
@@ -625,7 +634,7 @@ def _latchup_tap_spacing_check(def_file: Path,
     # the screen is DELIBERATELY GENEROUS (looser than any real rule), a violation
     # here is conclusive regardless of the unknown foundry pitch: if a cell is
     # >30um from any tap, it is >real_pitch from any tap too.
-    worst = _grid_min_dist_exceeds(std, taps, screen_um)
+    worst = known_worst
     if worst is not None:
         wx, wy, wd = worst
         dstr = "infinitely (no tap in neighbourhood)" if wd == float("inf") else f"{wd:.2f} um"
