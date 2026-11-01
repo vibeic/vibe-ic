@@ -534,3 +534,12 @@ def test_a18_completion_never_accepts_stand_in(completion_case):
     result = case.invoke()
     assert result["default_row_status"] == "NOT_MEASURED", result
     assert result["completed"] is False, result
+
+
+def test_a18_completion_refuses_foreign_python_invocation(completion_case):
+    case = completion_case
+    case.report["steps"][0]["executions"][0]["argv"][0] = "/foreign/python3"
+    put(case.root, str((Path(case.report["attempt"]) / "result.json").relative_to(case.root)), case.report)
+    result = case.invoke()
+    assert result["default_row_status"] == "NOT_MEASURED", result
+    assert result["completed"] is False, result

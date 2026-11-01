@@ -1430,7 +1430,7 @@ def consume_default_row_completion(project, context, component):
             for view in evidence["native_libraries"].values():
                 readset[view["path"]] = view["sha256"]
             argv = execution.get("argv", [])
-            if (len(argv) != 3 or not Path(argv[0]).name.startswith("python")
+            if (len(argv) != 3 or Path(argv[0]).resolve() != Path(evidence["native_tools"]["python3"]["path"]).resolve()
                     or argv[1:] != [str(HERE / "analog_macro_top_run.py"), str(project)]
                     or execution.get("cwd") != str(project)):
                 raise ValueError("A18_QUALIFIED_INVOCATION_MISMATCH")
