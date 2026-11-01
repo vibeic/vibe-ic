@@ -8783,7 +8783,7 @@ def _accept_digital_floorplan(project, context, component, row_id):
                 else:
                     offset = port.get('offset', 0)
                     expected_pins.update(f'{name}[{i}]' for i in range(offset, offset + width))
-            actual_pins = {name for name, pin in pin_records.items() if pin['use'] not in ('POWER', 'GROUND')}
+            actual_pins = set(pin_records)
             observations['pin_population_errors'] = (len(expected_pins ^ actual_pins), 'count')
             numeric(specs[0], observations, set(observations) - {'illegal_macro_overlap'})
         else:

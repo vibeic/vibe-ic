@@ -157,14 +157,15 @@ def digital(tmp_path, monkeypatch):
         'min_pad_spacing_um': {'min': 5}, 'min_pin_access_spacing_um': {'min': 5}, 'pin_access_errors': {'max': 0}},
         'units': {'min_pad_spacing_um': 'um', 'min_pin_access_spacing_um': 'um', 'pin_access_errors': 'count'}})
     # Coherent new native population, distinct from tampering a consumed file.
-    def geometry(**kwargs):
-        c.definition.write_text(neutral_def(**kwargs))
+    def geometry(*, definition=None, **kwargs):
+        c.definition.write_text(neutral_def(**kwargs) if definition is None else definition)
         (project / producer.PNR / 'floorplan.def').write_text(c.definition.read_text())
         c.handoff['views']['def'].update(source_sha256=sha(c.definition), dest_sha256=sha(c.definition))
         c.handoff_path.write_text(json.dumps(c.handoff))
         for rec in c.receipts.values():
-            if str(c.definition) in rec['input']['state_files']:
-                rec['input']['state_files'][str(c.definition)] = sha(c.definition)
+            for path in (c.definition, c.header):
+                if str(path) in rec['input']['state_files']:
+                    rec['input']['state_files'][str(path)] = sha(path)
         c.publish()
     c.geometry = geometry
     def pg(value):
@@ -202,6 +203,9 @@ def test_native_pg_rectangles_are_all_transformed(tmp_path, use, orient):
 
 
 def test_native_pg_rectangles_normal_consumer_and_last_shape_failure(digital):
+    header = json.loads(digital.header.read_text())
+    header['modules']['neutral']['ports']['VDD'] = {'direction': 'inout', 'bits': [3]}
+    digital.header.write_text(json.dumps(header))
     digital.geometry(native_pg=True)
     assert digital.observe()['metric_status'] == 'PASS'
     digital.geometry(native_pg=True, pg_outside=True)
@@ -210,6 +214,76 @@ def test_native_pg_rectangles_normal_consumer_and_last_shape_failure(digital):
     fields = {m['field']: m['measurement']['value'] for o in result['obligations']
               for m in o.get('measurements', []) if 'measurement' in m}
     assert fields['pin_boundary_errors'] == 1
+
+
+@pytest.mark.parametrize('change,errors', [
+    ('complete', 0), ('missing_signal', 1), ('extra_signal', 1),
+    ('missing_power', 1), ('missing_ground', 1), ('extra_power', 1),
+    ('extra_ground', 1), ('replaced_signal', 2), ('undeclared_pg', 2),
+])
+def test_pin_population_compares_complete_header_and_def(digital, change, errors):
+    header = json.loads(digital.header.read_text())
+    ports = header['modules']['neutral']['ports']
+    ports.update(VDD={'direction': 'inout', 'bits': [3]}, VSS={'direction': 'inout', 'bits': [4]})
+    text = neutral_def(native_pg=True)
+    vss = ('- VSS + NET VSS + DIRECTION INOUT + USE GROUND '
+           '+ LAYER M1 ( 0 0 ) ( 1000 1000 ) + FIXED ( 30000 10000 ) N ;\n')
+    text = text.replace('PINS 3 ;', 'PINS 4 ;').replace('END PINS', vss + 'END PINS')
+    if change.startswith('missing_'):
+        name = {'missing_signal': 'y', 'missing_power': 'VDD', 'missing_ground': 'VSS'}[change]
+        import re
+        text = re.sub(r'^- ' + name + r' \+ NET.*?;\n', '', text, flags=re.M | re.S)
+        text = text.replace('PINS 4 ;', 'PINS 3 ;')
+    elif change.startswith('extra_'):
+        use = {'extra_signal': 'SIGNAL', 'extra_power': 'POWER', 'extra_ground': 'GROUND'}[change]
+        extra = (f'- extra + NET extra + DIRECTION INOUT + USE {use} '
+                 '+ LAYER M1 ( 0 0 ) ( 1000 1000 ) + FIXED ( 40000 10000 ) N ;\n')
+        text = text.replace('PINS 4 ;', 'PINS 5 ;').replace('END PINS', extra + 'END PINS')
+    elif change == 'replaced_signal':
+        text = text.replace('- y + NET y + DIRECTION', '- other + NET other + DIRECTION')
+    elif change == 'undeclared_pg':
+        del ports['VDD'], ports['VSS']
+    digital.header.write_text(json.dumps(header))
+    digital.geometry(definition=text)
+    result = digital.observe()
+    field = next(m for o in result['obligations'] for m in o.get('measurements', [])
+                 if m['field'] == 'pin_population_errors')
+    assert field['measurement']['value'] == errors, field
+    assert field['measurement']['unit'] == 'count'
+    assert field['status'] == ('FAIL' if errors else 'PASS'), field
+    assert result['metric_status'] == ('FAIL' if errors else 'PASS'), result
+    assert result['status'] == ('FAIL' if errors else 'NOT_MEASURED'), result
+
+
+def test_pin_population_retained_native_complete_ports():
+    raw = os.environ.get('DIGITAL_NATIVE_PROJECT')
+    if not raw:
+        pytest.skip('requires the retained current native floorplan readset')
+    project = Path(raw)
+    chain = json.loads((project / 'reports/phase3/execution-backend-15.json').read_text())
+    read, reads, states, configs, _execs, lefs = metrics._digital_floorplan_readback(
+        project, {'native_image': chain['image']})
+    terminal = list(states.values())[-1][1]
+    before = {name: sha(project / name) for name in reads if not Path(name).is_absolute()}
+    ports = json.loads(read(terminal['json_h']))['modules'][configs['Yosys.JsonHeader']['DESIGN_NAME']]['ports']
+    assert set(ports) == {'clk', 'rst', 'x', 'y', 'p', 'VDD', 'VSS'}
+    assert len(ports['x']['bits']) == 32
+    assert ports['VDD'] == {'direction': 'inout', 'bits': [38]}
+    assert ports['VSS'] == {'direction': 'inout', 'bits': [39]}
+    _d, _boxes, pins, _values = metrics._digital_def_geometry(read(terminal['def']).decode(), lefs)
+    expected = {'clk', 'rst', 'y', 'p', 'VDD', 'VSS'} | {f'x[{i}]' for i in range(32)}
+    assert set(pins) == expected and len(pins) == 38
+    assert pins['VDD']['use'] == 'POWER' and pins['VSS']['use'] == 'GROUND'
+    context = json.loads((project / 'reports/flow109/requests/f00de96c30cc0eb74d92034df9a7ad9627bb04cf634c4e6715f3e83d3eabe56f.json').read_text())
+    result = metrics.accept_d31_digital(project, context, {'native_image': chain['image'], 'verdict': 'PASS'})
+    destination = os.environ.get('DIGITAL_POPULATION_RESULT')
+    if destination:
+        Path(destination).write_text(json.dumps(result, indent=2) + '\n')
+    field = next(m for o in result['obligations'] for m in o.get('measurements', [])
+                 if m['field'] == 'pin_population_errors')
+    assert field['measurement']['value'] == 0, field
+    assert field['status'] == result['metric_status'] == 'PASS', result
+    assert all(sha(project / name) == digest for name, digest in before.items())
 
 
 @pytest.mark.parametrize('damage', ['signal', 'multiple_ports', 'multiple_placements',
