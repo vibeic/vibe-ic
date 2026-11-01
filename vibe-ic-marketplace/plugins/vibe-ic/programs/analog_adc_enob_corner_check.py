@@ -605,7 +605,8 @@ def sndr_db_incremental(deck_text: str, dump_text: str, column: int = 1
                       "window": window}
     samples, dmeta = _inc.decimate(
         bits, window, order=int(decl["order"]), coeff=float(decl["coeff"]),
-        feedback_delay=int(decl["feedback_delay_clocks"]))
+        feedback_delay=int(decl["feedback_delay_clocks"]),
+        topology=decl.get("loop_topology", "cifb"))
     if samples is None:
         return None, dmeta
 

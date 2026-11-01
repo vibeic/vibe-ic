@@ -477,6 +477,19 @@ def incremental_decode(spec: Any, topology: Any) -> Dict[str, Any]:
         rec["detail"] = "no topology IR beside the block"
         return rec
     consts = topology.get("constants") or {}
+    # Original A2/A3 records describe the CIFB recurrence. New topologies
+    # declare constants.loop_topology; the existing topology prose is also
+    # a declaration (and must not contradict the structured field).
+    named = re.findall(r"\b(CIFF|CIFB)\b", str(topology.get("topology", "")), re.I)
+    kinds = {value.lower() for value in named}
+    if "loop_topology" in consts:
+        kinds.add(str(consts["loop_topology"]).lower())
+    try:
+        kind = _inc.loop_topology(next(iter(kinds)) if len(kinds) == 1 else
+                                  ("cifb" if not kinds else "conflicting_declarations"))
+    except ValueError as exc:
+        rec["reason"] = str(exc)
+        return rec
     window = consts.get("window_clocks")
     if not isinstance(window, (int, float)) or int(window) < 1:
         rec["reason"] = _INC_NO_WINDOW
@@ -498,12 +511,12 @@ def incremental_decode(spec: Any, topology: Any) -> Dict[str, Any]:
         return rec
     coeffs = [c for c in (stage.get("coefficients") or [])
               if isinstance(c, (int, float)) and not isinstance(c, bool)]
-    if len(coeffs) != order:
+    if len(coeffs) != order or any(not math.isfinite(c) or c <= 0 for c in coeffs):
         rec["reason"] = _INC_NO_COEFF
         rec["detail"] = (f"the cascade declares {len(coeffs)} coefficient(s) "
                          f"for {order} stage(s)")
         return rec
-    if any(abs(c - coeffs[0]) > 1e-12 * max(1.0, abs(coeffs[0]))
+    if kind == "cifb" and any(abs(c - coeffs[0]) > 1e-12 * max(1.0, abs(coeffs[0]))
            for c in coeffs):
         # NOT decoded on the first one. The flat DAC term carries `a2` where
         # the triangular term carries `a1*a2`, so unequal coefficients need
@@ -527,9 +540,10 @@ def incremental_decode(spec: Any, topology: Any) -> Dict[str, Any]:
 
     rec.update({"declared": True, "window_clocks": int(window),
                 "order": int(order), "coeff": float(coeffs[0]),
+                "loop_topology": kind,
                 "feedback_delay_clocks": int(delay)})
     rec["stamp"] = _inc.stamp(mode, int(window), int(order), float(coeffs[0]),
-                              int(delay))
+                              int(delay), kind)
     return rec
 
 

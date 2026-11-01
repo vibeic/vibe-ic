@@ -403,7 +403,8 @@ def decode_capture(path: Path, clock: tuple, declaration: dict,
             continue
         output, details = decimator.decimate([sample["decision"] for sample in chosen], sample_count,
             order=int(declaration["order"]), coeff=float(declaration["coeff"]),
-            feedback_delay=int(declaration["feedback_delay_clocks"]))
+            feedback_delay=int(declaration["feedback_delay_clocks"]),
+            topology=declaration.get("loop_topology", "cifb"))
         if not output:
             discarded.append({"release_s": left, "reason": details})
             continue
