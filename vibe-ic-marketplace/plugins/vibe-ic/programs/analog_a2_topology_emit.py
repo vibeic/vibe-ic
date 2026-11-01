@@ -1494,6 +1494,16 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
     #     the SC integrator — which the clock now drives — is what defines
     #     the summing node's DC operating point. See `boundary_notes`.
     "delta_sigma": {
+        "loop_timing": {
+            "0": {"latch_event": "end_of_integration", "strobe_source": "clk",
+                  "comparator_polarity": "swapped", "summer_sample_phase": "nph2",
+                  "summer_reset_phase": "nph2", "summer_return_phase": "nph1",
+                  "dac_sample_phase": "nph1", "dac_transfer_phase": "nph2"},
+            "1": {"latch_event": "legacy_integration_phase", "strobe_source": "nclkb",
+                  "comparator_polarity": "normal", "summer_sample_phase": "nph1",
+                  "summer_reset_phase": "post_latch_nph2", "summer_return_phase": "nph2",
+                  "dac_sample_phase": "nph1", "dac_transfer_phase": "nph2"},
+        },
         "ota1_template_options": {
             "cell_selector": "ota1_folded_cascode", "chopper_selector": "ota1_chopper",
             "default": "two_stage_miller_without_chopper", "geometry": "explicit sizing input only",

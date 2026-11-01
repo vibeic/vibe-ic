@@ -57,12 +57,17 @@ With DC zeros, A is the integrator chain and `k_i=c_i*prod(a1…ai)`.
 Non-DC zeros add signed SC state-feedback capacitors into stage 1.
 These use the same OTA, capacitor and CMOS switch roles as the existing
 library. Only stage 1 samples the one-bit DAC. The passive summer feeds the
-existing comparator through a sampling/holding transmission gate; its
-common positive attenuation does not change the ideal one-bit decision.
-D=0 strobes in the sampling phase. D=1 holds the sum for the transfer-phase
-decision, adds the k0 reference branch, and delays summer reset until after
-the comparator strobe. The hold capacitor is reset each cycle to prevent
-previous-sample charge from contaminating the sum.
+existing comparator. D=0 samples the settled states and resets AZ during
+integration (phi2), then returns the summer bottom plates to VCM in phi1.
+The comparator inputs are exchanged to cancel that summer inversion. Its
+two-inverter strobe source is `clk`, the native rephased arrangement: the
+declared latch event is integration end, before the next sampling phase;
+the latched decision drives DAC acquisition in phi1 and transfer in phi2.
+D=1 retains the native `nclkb` strobe and normal comparator polarity, holds
+the sum for the transfer-phase decision, adds the k0 reference branch, and
+delays summer reset until after the comparator strobe. Its hold capacitor
+is reset each cycle to prevent previous-sample charge from contaminating
+the sum.
 
 A2 emits a flat topology IR and the complete synthesis record under `ciff`.
 A3 uses its existing flat renderer and PDK geometry checks; it has no
@@ -90,6 +95,10 @@ legacy CIFB as well as the new families:
   `delay_clocks=1`; `quantizer_input_net` and `quantizer_strobe_device`
   identify the comparator boundary;
 - `normalization` defines the input/state voltage scale and DAC output levels.
+- `timing` is derived from D and the declared `loop_timing` template table:
+  `latch_event`, `strobe_source`, `comparator_polarity`, summer sample/reset/
+  return phases, DAC sample/transfer phases, `nonoverlap_parameters` and
+  `latch_delay_cap_ff`.
 
 Capacitor base names resolve through the existing
 `_provenance.layout_maxima.capacitor_arrays` if the PDK requires unit arrays.
@@ -148,3 +157,11 @@ GBW/SR and folding bias remain unqualified. CDS is not added in this change.
 explicit geometry devices, and (when enabled) `chopper.{ratio,source_phase,
 polarity,clock_net,positive_phase,negative_phase,switch_geometry_um,
 input_nodes,demodulation_nodes,location,output_interface,second_stage_retained}`.
+
+Non-overlap gate parameters remain selectable through
+`sc_nonoverlap_nmos_w_um`, `sc_nonoverlap_pmos_w_um`, `sc_nonoverlap_l_um`.
+`quantizer_latch_delay_cap_ff` optionally binds the physical strobe-delay
+capacitor. Absent these rows, existing reference geometry/capacitance is
+retained. No ns delay, slack, GBW or slew target is tuned or inferred by the
+template. The phase/polarity contract follows the native rephased bench;
+complete closed-loop native qualification remains separate.

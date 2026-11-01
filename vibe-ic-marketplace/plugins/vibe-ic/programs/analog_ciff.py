@@ -18,7 +18,8 @@ def spec_label(name):
     names = ["ciff", "ntf_hinf", "feedback_delay", "ntf_optimize_zeros",
              "c0", "k0", "ciff_summer_cap_ff", "ciff_dac_ratio",
              "designed_coefficients", "quantizer_levels", "startup_reset",
-             "startup_reset_tau_ns", "startup_reset_cap_ff"]
+             "startup_reset_tau_ns", "startup_reset_cap_ff", "quantizer_latch_delay_cap_ff",
+             "sc_nonoverlap_nmos_w_um", "sc_nonoverlap_pmos_w_um", "sc_nonoverlap_l_um"]
     names += [f"{stem}{i}" for stem in ("a", "b", "c") for i in range(1, 4)]
     names += [f"ntf_{stem}{i}_{part}" for stem in ("zero", "pole")
               for i in range(1, 4) for part in ("real", "imag")]
@@ -254,6 +255,18 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
         raise ValueError("ciff_dac_ratio must be finite and positive")
     rec["dac_ratio"] = dac_ratio
     lib = deepcopy(lib)
+    timing = deepcopy(lib["loop_timing"][str(rec["D"])])
+    rec["timing"] = timing
+    for key, parameter in (("sc_nonoverlap_nmos_w_um", "w_nmos"),
+                           ("sc_nonoverlap_pmos_w_um", "w_pmos"),
+                           ("sc_nonoverlap_l_um", "l")):
+        if key in values:
+            if not math.isfinite(values[key]) or values[key] <= 0:
+                raise ValueError(f"{key} must be finite and positive")
+            lib["clock_phase_generator"][parameter] = values[key]
+    timing["nonoverlap_parameters"] = {k: lib["clock_phase_generator"][k]
+                                       for k in ("w_nmos", "w_pmos", "l")}
+    timing["latch_delay_cap_ff"] = values.get("quantizer_latch_delay_cap_ff")
     lib.pop("coefficient_derivation", None)
     lib.pop("graded_range_choice", None)
     lib.pop("loop_probe", None)  # its distributed-feedback decoder is CIFB
@@ -298,6 +311,13 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
                  for i in range(1, order+1) if rec["b"][i-1] == 0}
     devices = [d for d in devices if d["name"] not in dac_names | {"caz", "mn_azq", "mp_azq"}]
     exprs = [e for e in exprs if e["device"] not in dac_names | {"caz"}]
+    if "quantizer_latch_delay_cap_ff" in values:
+        capacitance = values["quantizer_latch_delay_cap_ff"]
+        if not math.isfinite(capacitance) or capacitance <= 0:
+            raise ValueError("quantizer_latch_delay_cap_ff must be finite and positive")
+        exprs = [e for e in exprs if e["device"] != "c_qdly"]
+        exprs.append({"device": "c_qdly", "param": "l", "expr": cap_length("quantizer_latch_delay_cap_ff"),
+                      "ff_expr": "quantizer_latch_delay_cap_ff", "rationale": "declared latch delay; no timing tuning"})
     for i, gain in enumerate(rec["a"], 1):
         for d in devices:
             if gain < 0 and d["name"] in (f"mn_smp{i}", f"mp_smp{i}"):
@@ -325,9 +345,10 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
     unit = "ciff_summer_cap_ff" if "ciff_summer_cap_ff" in values else f"({sampling_cap_expr})"
     if "ciff_summer_cap_ff" in values and values["ciff_summer_cap_ff"] <= 0:
         raise ValueError("ciff_summer_cap_ff must be positive")
-    # Summer resets in ph2, then its bottom plates step in ph1. Negative
-    # weights exchange source/reference phases. Total capacitance is a common
-    # positive divisor and leaves the one-bit decision unchanged.
+    # D0 follows the native rephased bench: sample fresh states and reset AZ
+    # in integration (ph2), return bottom plates in sampling (ph1), and swap
+    # comparator inputs to cancel the passive summer's inversion. D1 retains
+    # its sampled/held sum and native nclkb strobe.
     terms = [("0", "vin", rec["c0"])] + [(str(i), out, c) for i, (out, c) in enumerate(zip(outputs, rec["c"]), 1)]
     if rec["D"] and abs(rec["k0"]) > 1e-12:
         terms.append(("k0", "ndac", rec["k0"]*dac_ratio))  # ndac encodes -v[n-1]
@@ -341,25 +362,31 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
                                 "role": role, "function": "CIFF post-decision summer reset delay",
                                 "nets": [out, inp, body, body], "w": width, "l": .5})
         reset, resetb = "nsumr", "nsumrb"
-    tg("sum_reset", "nsum", "vcm", reset, resetb)
-    tg("sum_hold_reset", "nqz", "vcm", reset, resetb)
+    sum_node = "nqz" if rec["D"] == 0 else "nsum"
+    tg("sum_reset", sum_node, "vcm", reset, resetb)
+    if rec["D"]:
+        tg("sum_hold_reset", "nqz", "vcm", reset, resetb)
     for suffix, source, weight in terms:
         if abs(weight) < 1e-12:
             continue
         bottom = "nff"+suffix
-        cap("cff"+suffix, "nsum", bottom, f"{abs(weight)!r} * ({unit})")
-        phase = ("nph1", "nph1b") if weight > 0 else ("nph2", "nph2b")
-        reference_phase = ("nph2", "nph2b") if weight > 0 else ("nph1", "nph1b")
+        cap("cff"+suffix, sum_node, bottom, f"{abs(weight)!r} * ({unit})")
+        sample = timing["summer_sample_phase"] if weight > 0 else timing["summer_return_phase"]
+        reference = timing["summer_return_phase"] if weight > 0 else timing["summer_sample_phase"]
+        phase, reference_phase = (sample, sample+"b"), (reference, reference+"b")
         tg("ff"+suffix, bottom, source, *phase)
         tg("ffr"+suffix, bottom, "vcm", *reference_phase)
     # Track during sampling, hold through the transfer-phase decision (D=1).
-    tg("sum_hold", "nsum", "nqz", "nph1", "nph1b")
-    cap("csum_hold", "nqz", "vcm", unit)
+    if rec["D"]:
+        tg("sum_hold", "nsum", "nqz", "nph1", "nph1b")
+        cap("csum_hold", "nqz", "vcm", unit)
     tg("sum_conversion_reset", "nqz", "vcm", "nall", "nrstb")
     # Existing delayed comparator strobe chain is reused on the chosen phase.
     for d in devices:
         if d["name"] in ("mp_qdly1", "mn_qdly1"):
-            d["nets"][1] = "nph1b" if rec["D"] == 0 else "nclkb"
+            d["nets"][1] = timing["strobe_source"]
+        if rec["D"] == 0 and d["name"] in ("mn_qin", "mn_qref"):
+            d["nets"][1] = "vcm" if d["name"] == "mn_qin" else "nqz"
     # General optimized numerator: signed charge injection into the first
     # integrator. No DAC term is introduced in later stages.
     for j, source in enumerate(outputs):
@@ -434,6 +461,8 @@ def declaration(loop, stages):
                                 "dac_output_levels": [-1, 1],
                                 "full_scale_over_reference": loop["dac_ratio"]},
               "coefficient_source": loop["method"], "verification": loop["verification"]}
+    if loop.get("timing"):
+        result["timing"] = loop["timing"]
     return result
 
 
