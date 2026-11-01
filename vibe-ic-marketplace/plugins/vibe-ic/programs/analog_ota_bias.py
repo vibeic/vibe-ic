@@ -190,12 +190,13 @@ def apply(library, values, devices, exprs, nets, constants, env, evaluate, proje
     else:
         reference_current = _number(ref_inputs.get("current_a", rows[0]["reference_current_a"]), "reference.current_a")
         reference_source = "declared_current" if "current_a" in ref_inputs else "first_stage_declared_load"
-        if not ref_inputs and bounds.get("max") is not None:
-            floor_current = headroom*width/(sheet*bounds["max"])
-            if floor_current > reference_current:
-                reference_current = floor_current
-                reference_source = "first_stage_load_and_reference_geometry_bound"
-        length = headroom/reference_current*width/sheet
+        geometry_limit = bounds.get("max") if not ref_inputs else None
+        if geometry_limit is not None and headroom*width/(sheet*geometry_limit) >= reference_current:
+            length = float(geometry_limit)
+            reference_current = headroom*width/(sheet*length)
+            reference_source = "first_stage_load_and_reference_geometry_bound"
+        else:
+            length = headroom/reference_current*width/sheet
     if (bounds.get("min") is not None and length < bounds["min"] or
             bounds.get("max") is not None and length > bounds["max"]):
         raise ValueError("OTA_BIAS_REFERENCE_NOT_REALISABLE: resistor length outside declared bounds")

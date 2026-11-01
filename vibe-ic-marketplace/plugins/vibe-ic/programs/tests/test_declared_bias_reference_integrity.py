@@ -56,3 +56,17 @@ def test_changed_clock_spec_requires_regenerating_static_bias_ratios(tmp_path):
             row["target"] = 2.
     path.write_text(json.dumps(document))
     assert any("OTA_BIAS" in issue for issue in a3._validate_ir(ir, PDK, tmp_path))
+
+
+def test_automatic_reference_uses_exact_existing_geometry_bound(tmp_path):
+    ir, cards, _, _, _ = _emit(tmp_path, order=1,
+        values={"cs1_ff": 4., "ci1_ff": 16., "cf1_ff": 6.}, bias={})
+    assert ir["ota_bias_network"]["reference"]["resistor_length_um"] == 2000.
+    assert "l=2000" in cards["r_ib"]
+
+
+def test_explicit_reference_above_existing_bound_still_refuses(tmp_path):
+    import pytest
+    import analog_a2_topology_emit as a2
+    with pytest.raises(a2.SizingInputsInvalid, match="OTA_BIAS_REFERENCE_NOT_REALISABLE"):
+        _emit(tmp_path, bias={"reference": {"resistor_length_um": 2000.000001}})
