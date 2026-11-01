@@ -107,3 +107,44 @@ and multi-bit quantizers are outside this family.
 
 Method references: [SciPy Butterworth design](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.butter.html),
 [Schreier toolbox Python realization](https://docs.python-deltasigma.io/en/latest/_modules/deltasigma/_realizeNTF.html).
+
+## Declared OTA1 options (no sizing)
+
+`ota1_folded_cascode=1` replaces only OTA1 with the existing folded-current
+cell graph, removes its single-ended second stage, and exposes the folded
+high-gain node. Its input pair is interchanged to preserve negative gain at
+the SC summing node. Cc1 remains parameterized and becomes output-to-VCM
+compensation. The new devices require explicit `w`/`l` entries in
+`sizing_inputs.json.device_parameters`; their names have the `ota1_` prefix
+on the existing folded cell's names. Missing geometry produces a gap, never
+an automatically sized transistor. OTA2/OTA3 retain their existing cells.
+
+`ota1_chopper=1` enables input-gate chopping and differential-current
+demodulation inside OTA1. The folded cell demodulates at the folding cascode
+sources. The two-stage cell retains its single-ended second stage and uses
+common-gate current conveyors, before its existing PMOS mirror, to provide
+low-impedance demodulation nodes. Conveyor geometry starts from the input
+pair's reference geometry; the real bias divider resistors
+`r_ota1_ch_top` / `r_ota1_ch_bottom` require explicit geometry input.
+No differential output or additional common-mode feedback is introduced.
+
+Chopping requires these numeric A1 rows:
+
+- `ota1_chop_ratio`: a power of two from 2 through 65536;
+- `ota1_chop_sc_phase`: 1 (sampling phase) or 2 (transfer phase);
+- `ota1_chop_polarity`: 0 or 1, optional, default 0;
+- `ota1_chop_nmos_w_um`, `ota1_chop_pmos_w_um`, `ota1_chop_l_um`: explicit
+  switch dimensions, with no synthesized defaults.
+
+The divider reuses the existing static TG counter cells, driven from the
+selected non-overlap SC phase. Input and current demodulators share the
+resulting non-overlap positive/negative phases. `ota1_cc_ff` optionally binds
+Cc1; all other Cs/Cf/Ci/summer/Cc expressions are retained. Both topology
+selectors default to zero; with fixed provenance, the default A3 circuit
+deck is byte-identical. Native chopper noise, clock feedthrough, headroom,
+GBW/SR and folding bias remain unqualified. CDS is not added in this change.
+
+`topology.json.ota1_options` records the selected cell, compensation,
+explicit geometry devices, and (when enabled) `chopper.{ratio,source_phase,
+polarity,clock_net,positive_phase,negative_phase,switch_geometry_um,
+input_nodes,demodulation_nodes,location,output_interface,second_stage_retained}`.

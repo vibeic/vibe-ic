@@ -144,6 +144,7 @@ import analog_incremental_resolution as _res  # noqa: E402
 import analog_incremental_decimator as _dec  # noqa: E402
 import analog_resolution_stimulus as _stim  # noqa: E402
 import analog_ciff as _ciff  # noqa: E402
+import analog_ota1_options as _ota1  # noqa: E402
 
 PRODUCER = "analog_a2_topology_emit"
 
@@ -166,7 +167,8 @@ def producer_fingerprint() -> str:
     import hashlib
     try:
         return hashlib.sha256(
-            Path(__file__).read_bytes() + Path(_ciff.__file__).read_bytes()).hexdigest()[:16]
+            Path(__file__).read_bytes() + Path(_ciff.__file__).read_bytes()
+            + Path(_ota1.__file__).read_bytes()).hexdigest()[:16]
     except OSError:                                     # pragma: no cover
         return ""
 PROVENANCE_SCHEMA = 1
@@ -1492,6 +1494,10 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
     #     the SC integrator — which the clock now drives — is what defines
     #     the summing node's DC operating point. See `boundary_notes`.
     "delta_sigma": {
+        "ota1_template_options": {
+            "cell_selector": "ota1_folded_cascode", "chopper_selector": "ota1_chopper",
+            "default": "two_stage_miller_without_chopper", "geometry": "explicit sizing input only",
+        },
         "startup_reset_template": {
             "enable_spec": "startup_reset", "reset_net": "nall",
             "reset_driver_devices": ["mp_rout", "mn_rout"],
@@ -7017,6 +7023,12 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         stage_rec = lib["sc_loop_stages"]
     startup_reset = _ciff.add_startup_reset(lib, spec_values, stage_rec,
         devices, internal_nets, param_exprs, cap_l_expr, SAMPLING_CAP_FF_EXPR)
+    try:
+        ota1_options = _ota1.apply(LIBRARY.get(btype, {}), spec_values,
+            lib.get("sc_loop"), stage_rec, sizing_inputs, devices, internal_nets,
+            param_exprs, non_overlap_phase_devices, cap_l_expr)
+    except ValueError as exc:
+        raise SizingInputsInvalid(str(exc)) from exc
     folded = expand_folded_first_stage(
         lib, spec_values, knobs, devices, internal_nets, sizing_inputs, project)
     cascodes = expand_input_drain_cascodes(
@@ -7338,6 +7350,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         ir["loop_declaration"] = loop_declaration
     if startup_reset:
         ir["startup_reset"] = startup_reset
+    if ota1_options:
+        ir["ota1_options"] = ota1_options
     if cascodes:
         ir["input_drain_cascodes"] = cascodes
     if matched_length:
@@ -7367,7 +7381,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         for _key in ("ports", "rails", "internal_nets", "devices",
                      "constants", "device_param_exprs", "measurements",
                      "testbench", "stimulus", "input_drain_cascodes", "folded_first_stage", "miller_nulling",
-                     "loop_declaration", "startup_reset"):
+                     "loop_declaration", "startup_reset", "ota1_options"):
             if _key in ir:
                 ir[_key] = _rename_nets(ir[_key], _renames)
     ir["port_binding"] = {

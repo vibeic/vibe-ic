@@ -1809,6 +1809,10 @@ def _normalize_spec_name(name, btype=None):
         ciff_key = spec_label(name)
         if ciff_key:
             return ciff_key
+        from analog_ota1_options import spec_label as ota1_spec_label
+        ota1_key = ota1_spec_label(name)
+        if ota1_key:
+            return ota1_key
     for canon, aliases in _SPEC_NAME_ALIASES.items():
         if tok in aliases:
             return canon
