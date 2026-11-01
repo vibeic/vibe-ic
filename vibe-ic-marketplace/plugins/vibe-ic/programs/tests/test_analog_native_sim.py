@@ -437,7 +437,9 @@ def test_selected_container_ngspice_identity_uses_remote_digest_not_host_foss(
 
 def test_running_native_work_is_retained_without_duplicate_launch(project, monkeypatch, tmp_path):
     deck = project / "phase3/analog/stage/tb_stage.sp"
-    executable = Path(sys.executable).resolve()
+    # sys.executable may be a launcher that execs a different ELF after Popen
+    # returns. Bind the actual interpreter, as the live-process guard does.
+    executable = Path("/proc/self/exe").resolve()
     selected = {"scope": "host", "path": str(executable),
                 "sha256": hashlib.sha256(executable.read_bytes()).hexdigest()}
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: selected)
@@ -481,7 +483,7 @@ def test_unrelated_live_pid_cannot_suppress_native_launch(project):
 @pytest.mark.parametrize("mutation", ["starttime", "argv", "log", "selected_tool", "container"])
 def test_active_run_requires_complete_live_transport_identity(project, monkeypatch, tmp_path, mutation):
     deck = project / "phase3/analog/stage/tb_stage.sp"
-    executable = Path(sys.executable).resolve()
+    executable = Path("/proc/self/exe").resolve()
     selected = {"scope": "host", "path": str(executable),
                 "sha256": hashlib.sha256(executable.read_bytes()).hexdigest()}
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: selected)
@@ -547,7 +549,7 @@ def test_copied_python_named_ngspice_is_not_selected_native_tool(project, monkey
 def test_unobservable_selected_tool_protects_plausible_active_job_without_verifying_it(
         project, monkeypatch, tmp_path):
     deck = project / "phase3/analog/stage/tb_stage.sp"
-    executable = Path(sys.executable).resolve()
+    executable = Path("/proc/self/exe").resolve()
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: None)
     log = tmp_path / "unverified.log"
     log.write_text("running\n")
