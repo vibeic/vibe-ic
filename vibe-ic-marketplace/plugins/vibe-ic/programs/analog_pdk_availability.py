@@ -743,9 +743,9 @@ def resolve_pdk(target: Optional[str], project=None,
     # `_rung2_deck_candidates`.
     klayout_present = bool(tech_present.get("klayout"))
     drc_cands = (_rung2_deck_candidates(lister, pdk_root, matched, "drc_deck")
-                 if (available and klayout_present) else [])
+                 if klayout_present else [])
     lvs_cands = (_rung2_deck_candidates(lister, pdk_root, matched, "lvs_deck")
-                 if (available and klayout_present) else [])
+                 if klayout_present else [])
     res = {
         "available": available,
         "probe_ok": probe_ok,

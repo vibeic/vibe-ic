@@ -164,14 +164,16 @@ def test_rung3_no_stage_no_install_is_substitution(tmp_path):
 
 
 @pytest.mark.parametrize("staged_axes", [(), ("drc",), ("lvs",), ("drc", "lvs")])
-def test_staged_models_resolve_each_signoff_deck_independently(tmp_path, staged_axes):
+@pytest.mark.parametrize("installed_models", [True, False])
+def test_staged_models_resolve_each_signoff_deck_independently(tmp_path, staged_axes, installed_models):
     project = tmp_path / "case"
     model = project / "input/pdk/models/native.lib"
     model.parent.mkdir(parents=True)
     model.write_text(".subckt fixture_n d g s b\n.ends\n")
     root = tmp_path / "installed"
     tech = root / "fixture180/libs.tech"
-    (tech / "ngspice/models").mkdir(parents=True)
+    if installed_models:
+        (tech / "ngspice/models").mkdir(parents=True)
     installed = {}
     staged = {}
     for axis in ("drc", "lvs"):
