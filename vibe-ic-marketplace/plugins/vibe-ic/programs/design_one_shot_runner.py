@@ -10399,6 +10399,90 @@ def professional_tb_bundle_accounted(out_dir: Path) -> Tuple[bool, str]:
     return False, "silent"
 
 
+def _professional_reference_inputs(project: Path) -> Optional[Dict[str, str]]:
+    """Read the existing canonical input set, excluding the producer report."""
+    import ai_signed_judgement as judgement
+    try:
+        output = project / "reports/phase2/gates/professional_tb.json"
+        inputs = {}
+        for path in judgement.evidence(project, "4"):
+            if path == output:
+                continue
+            if path.is_symlink() or not path.resolve().is_relative_to(project.resolve()):
+                return None
+            inputs[path.relative_to(project).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return inputs
+    except (OSError, ValueError):
+        return None
+
+
+def _professional_reference_binding(project: Path) -> Optional[Dict[str, Any]]:
+    """Snapshot the existing evidence for this in-process reference consumer.
+
+    Only the executing professional producer attaches this binding to its
+    StepResult. A passing report on disk is never an execution witness.
+    """
+    import ai_signed_judgement as judgement
+    import _sim_results_bridge as bridge
+    try:
+        report_path = project / "reports/phase2/gates/professional_tb.json"
+        report = json.loads(report_path.read_text())
+        if (report.get("status") != "PASS" or report.get("ran_cocotb") is not True
+                or report.get("cocotb_rc") != 0
+                or report.get("functional_mismatch") is not False):
+            return None
+        union = bridge.professional_tb_union(project)
+        if (union["verdict"] != "PASS" or union["not_measured"]
+                or union["skipped"] or not union["passed"]):
+            return None
+        rtl_digest = _rtl_dir_sha256(project)
+        evidence_digest = judgement.evidence_sha256(project, "4")
+        if not rtl_digest or not evidence_digest:
+            return None
+        files = {}
+        for rel in union["rel_paths"]:
+            path = project / rel
+            if path.is_symlink() or not path.resolve().is_relative_to(project.resolve()):
+                return None
+            files[rel] = hashlib.sha256(path.read_bytes()).hexdigest()
+        return {"project": str(project.resolve()),
+                "rtl_sha256": rtl_digest, "evidence_sha256": evidence_digest,
+                "junit": files}
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def _current_professional_reference(project: Path, result: Optional[StepResult],
+                                    started_after: Optional[float]) -> Optional[Dict[str, Any]]:
+    """Credit current unchanged execution plus the existing substance gate."""
+    import math
+    if (not isinstance(result, StepResult) or result.name != "professional_tb_gen"
+            or result.status != "PASS" or isinstance(started_after, bool)
+            or not isinstance(started_after, (int, float))
+            or not math.isfinite(started_after)):
+        return None
+    witness = result.extras.get("reference_execution")
+    if not isinstance(witness, dict):
+        return None
+    began = witness.get("started_at")
+    if (isinstance(began, bool) or not isinstance(began, (int, float))
+            or not math.isfinite(began) or not started_after <= began <= time.time()):
+        return None
+    current = _professional_reference_binding(project)
+    # The producer clears the selected stale JUnit before actual execution.
+    # File mtimes are not execution authority (filesystem clocks may have a
+    # coarser boundary than time.time); the returned witness and exact bytes
+    # establish same-run production and later-consumer freshness.
+    if not current or witness.get("binding") != current:
+        return None
+    import cpu_functional_oracle_waiver_check as functional
+    rc, message = functional._evaluate(project)
+    if rc != 0:
+        return None
+    return {"professional_junit": list(current["junit"]),
+            "functional_gate": message, "professional_binding": current}
+
+
 def step_professional_tb_gen(project: Path, top_name: str = "",
                              container: str = _pin.default_container_name()) -> StepResult:
     """NEW TB PATH (professional_tb_gen, 2026-07-11) wired into Phase-2.
@@ -10426,6 +10510,8 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
     gates_dir = project / "reports" / "phase2" / "gates"
     gates_dir.mkdir(parents=True, exist_ok=True)
     report = gates_dir / "professional_tb.json"
+    reference_rtl_before = _rtl_dir_sha256(project)
+    reference_inputs_before = _professional_reference_inputs(project)
 
     def _write(obj: Dict[str, Any]) -> None:
         # This report is signed at the Step4 expert handoff. Publish the same
@@ -10692,7 +10778,14 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                 "professional_tb_gen", "PASS", time.time() - t0,
                 detail=(f"{dut_kind} cocotb functional PASS over "
                         f"{xml_summary['passed']}/{xml_summary['tests']} "
-                        "test(s) (streaming scoreboard)"))
+                        "test(s) (streaming scoreboard)"),
+                extras={"reference_execution": {
+                    "started_at": t0,
+                    "binding": (_professional_reference_binding(project)
+                                if reference_rtl_before == _rtl_dir_sha256(project)
+                                and reference_inputs_before is not None
+                                and reference_inputs_before == _professional_reference_inputs(project)
+                                else None)}})
         gap = (_unfilled_gap if _hook_unfilled else
                ("cocotb run produced no non-zero self-checking JUnit "
                 "denominator and clean pass marker"))
@@ -15211,7 +15304,9 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                                      t0: float,
                                      container: str = _pin.default_container_name(),
                                      ic_class: Optional[str] = None,
-                                     rtl_handoff: Optional[str] = None
+                                     rtl_handoff: Optional[str] = None,
+                                     professional_result: Optional[StepResult] = None,
+                                     professional_started_after: Optional[float] = None
                                      ) -> StepResult:
     """v1.6.523 — functional gate for generic_full_stack classes.
 
@@ -15461,6 +15556,19 @@ def _reference_tb_generic_full_stack(project: Path, top_name: str,
                     project, transcript, top_name, track_reason)
             except Exception:
                 pass  # bridge failure must not retract the connectivity record
+            professional = _current_professional_reference(
+                project, professional_result, professional_started_after)
+            if professional is not None:
+                return StepResult(
+                    "reference_tb", "PASS", time.time() - t0,
+                    "Connectivity completed; this invocation's unchanged professional "
+                    "oracle and existing functional-substance gate substantiate functional PASS.",
+                    [str(tb_path), str(transcript)] +
+                    [str(project / rel) for rel in professional["professional_junit"]],
+                    extras={"verification_track": "generic_full_stack",
+                            "aid_tb_skipped_reason": track_reason,
+                            "functional_verified": True, "sim_executed": True,
+                            "tb_frontend": tb_frontend, **professional})
             return StepResult(
                 "reference_tb", "NOT_MEASURED",
                 time.time() - t0,
@@ -16292,7 +16400,9 @@ def _rtl_absent_refusal_detail(project: Path,
 def _step_reference_tb_without_pulse_gate(project: Path, top_name: str = "chip_top",
                                            ic_class: Optional[str] = None,
                                            container: str = _pin.default_container_name(),
-                                           rtl_handoff: Optional[str] = None) -> StepResult:
+                                           rtl_handoff: Optional[str] = None,
+                                           professional_result: Optional[StepResult] = None,
+                                           professional_started_after: Optional[float] = None) -> StepResult:
     t0 = time.time()
     rtl_dir = _pl.rtl_dir(project)
     if not rtl_dir.is_dir():
@@ -16341,7 +16451,9 @@ def _step_reference_tb_without_pulse_gate(project: Path, top_name: str = "chip_t
         return _reference_tb_generic_full_stack(project, top_name,
                                                 track_reason, t0,
                                                 container, ic_class,
-                                                rtl_handoff=rtl_handoff)
+                                                rtl_handoff=rtl_handoff,
+                                                professional_result=professional_result,
+                                                professional_started_after=professional_started_after)
 
     if not PROTOCOL_TB.is_file():
         return StepResult("reference_tb", "FAIL",
@@ -16610,7 +16722,9 @@ def _run_pulse_width_rearm_normal_gate(project: Path, top_name: str,
 def step_reference_tb(project: Path, top_name: str = "chip_top",
                       ic_class: Optional[str] = None,
                       container: str = _pin.default_container_name(),
-                      rtl_handoff: Optional[str] = None) -> StepResult:
+                      rtl_handoff: Optional[str] = None,
+                      professional_result: Optional[StepResult] = None,
+                      professional_started_after: Optional[float] = None) -> StepResult:
     """Normal reference-TB consumer with the source-bound pulse gate in front."""
     t0 = time.time()
     try:
@@ -16658,8 +16772,11 @@ def step_reference_tb(project: Path, top_name: str = "chip_top",
             f"pulse-width/rearm normal consumer has no usable native evidence: {reason}",
             [str(pulse_path)], extras={"pulse_width_rearm": pulse_report},
             reason_class=reason_class)
+    professional_kwargs = ({"professional_result": professional_result,
+                            "professional_started_after": professional_started_after}
+                           if professional_result is not None else {})
     result = _step_reference_tb_without_pulse_gate(
-        project, top_name, ic_class, container, rtl_handoff)
+        project, top_name, ic_class, container, rtl_handoff, **professional_kwargs)
     if result.status == "PASS" and not adopt_generation():
         return StepResult(
             "reference_tb", "NOT_MEASURED", time.time() - t0,
@@ -29135,7 +29252,10 @@ def main() -> int:
             break
         sr = step_reference_tb(project, args.top_name, ic_class,
                                args.container,
-                               rtl_handoff=_rtl_gen_handoff(plan))
+                               rtl_handoff=_rtl_gen_handoff(plan),
+                               professional_result=next((row for row in reversed(plan)
+                                   if row.name == "professional_tb_gen"), None),
+                               professional_started_after=_run_started_at)
         plan.append(_required_site_row(project, "sim", sr))
         # ORGANIC #543 / vibe-ic#1975 — WAIVED or INCOMPLETE means the
         # reference-TB oracle path has no RTL-repairable mismatch (for

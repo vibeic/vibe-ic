@@ -1,0 +1,18 @@
+[
+  {
+    "step": "phase2.reference_tb.current_professional",
+    "design": "neutral current functional producer and generic reference consumer",
+    "bucket": "A",
+    "rule_name": "consume_current_professional_execution_in_reference_result",
+    "docstring": "The normal reference result consumes an unchanged current professional execution witness and the existing functional-substance gate; bridge-written alone never grants functional credit.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Attach current source/output binding to the executing professional `StepResult`; thread it through the existing normal reference call chain and validate it with the existing professional union plus functional-substance/per-case gate before reporting functional PASS.",
+    "before_state": "A current successful professional execution substantiates the canonical bridge, but the enclosing reference consumer returns NOT_MEASURED and functional_verified=false.",
+    "after_state": "The same current substantiated producer grants reference PASS with exact evidence; missing, stale, foreign, failed or changed execution and incomplete/vacuous/failing unions stay non-PASS.",
+    "ai_reasoning": "The existing producer already owns actual execution and stale-output invalidation, and existing consumers already judge functional substance. The reference result omitted that current in-process evidence. Reuse those contracts instead of adopting a disk PASS or weakening the aggregate.",
+    "pattern": "A normal result consumer continues to declare a capability gap after the same invocation has measured and substantiated its alternative producer; old files or a bridge-written Boolean cannot establish execution credit.",
+    "generality": "Uses the resolved project, actual current `StepResult`, source/evidence/output digests and the existing functional gate. No design or benchmark identifier selects the behavior.",
+    "evidence": "CAPTURE.md; initial-red.xml/substance and retained independent HIGH; fixed exact78-ID comparison, binding/substance/input-drift production reverses, restored source and paired-fixed.xml in the external packet",
+    "corpus_sweep": "125 bounded existing owning/union/substance tests PASS with no skips under explicitly paired immutable image. Identical78 owning IDs: base2FAIL/candidate0/predecessor reverse2/binding reverse13/substance reverse1/input-drift reverse8/restored0; every failure is an actual consumer returned-value control. Full suite/native continuation and official scoring NOT_RUN."
+  }
+]
