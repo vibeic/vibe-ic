@@ -4333,7 +4333,8 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
         level = spec["level"]
         rx1, ry1, rx2, ry2 = rail_box[net]
         y = (ry1 + ry2) // 2
-        half = max(spec["width_lam"] // 2, geo.wire.get(level, 1) // 2, 1)
+        half = max((spec["width_lam"] + 1) // 2,
+                   (geo.wire.get(level, 1) + 1) // 2, 1)
         cuts = max(1, spec["cuts"])
         if not spec["rail"] and rail_level == level:
             strip = (0, y - half, max(int(math.ceil(geo.area_lam2.get(level, 0) / (2 * half))), pitch), y + half)
