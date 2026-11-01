@@ -1377,7 +1377,8 @@ def _io_pad_record_binding(path: Path) -> str:
 
 def author_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
                     container: str,
-                    supply_ports: Sequence[str] = ()) -> Dict[str, Any]:
+                    supply_ports: Sequence[str] = (),
+                    pad_drive_output: Optional[Path] = None) -> Dict[str, Any]:
     """THE author of the silicon SDC (what `step_pnr` did inline).
 
     Design-staged SDC (`rt._resolve_staged_silicon_sdc`) -> unit rescale, DRV /
@@ -1420,8 +1421,11 @@ def author_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
             getattr(rt, "_to_container_path", None),
             _sdc_env.liberty_time_scale(str(pdk.liberty)), analysis_top=top)
         try:
-            _sdc_env.write_pad_input_drive_record(project, pad_rec)
+            _sdc_env.write_pad_input_drive_record(
+                project, pad_rec, output=pad_drive_output)
         except OSError:
+            if pad_drive_output is not None:
+                raise
             pass    # no record on a DIE top reads NOT_MEASURED downstream
         out["pad_input_drive"] = pad_rec.get("verdict")
     else:
@@ -1433,7 +1437,9 @@ def author_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
             drv_note=str(drv.get("note") or ""),
             liberty_path=str(pdk.liberty), pdk_name=str(pdk.name),
             container=container,
-            supply_ports=supply_ports, drv_block_out=_blk)
+            supply_ports=supply_ports, drv_block_out=_blk,
+            **({"pad_drive_output": pad_drive_output}
+               if pad_drive_output is not None else {}))
         try:
             io_ns, _ = rt._declared_io_delay_ns(project,
                                              rt._resolve_clock_spec(project)[0])
@@ -1652,17 +1658,31 @@ def owned_step7_outputs(rt: Any, project: Path) -> Dict[str, str]:
 
 
 def emit_step7_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
-                        container: str) -> Dict[str, Any]:
+                        container: str, *, output_dir: Optional[Path] = None) -> Dict[str, Any]:
     """STEP 7's producer: author the design-intent SDC and write it to the
-    declared path with its record. Returns the record (with `path`)."""
+    declared path with its record. A fresh project-local ``output_dir``
+    publishes a separate scenario without selecting or replacing the accepted
+    canonical bundle. Returns the record (with `path`)."""
+    scenario = None
+    if output_dir is not None:
+        scenario = Path(output_dir).resolve()
+        if not scenario.is_relative_to(project.resolve()) or scenario == project.resolve():
+            raise ValueError("SDC_SCENARIO_OUTPUT_OUTSIDE_PROJECT")
+        # Reserve a fresh namespace before any author side effect. Existing
+        # accepted decks and records are never scenario publication targets.
+        scenario.mkdir(parents=True, exist_ok=False)
     pdk = _selected_sdc_pdk(rt, project, pdk)
     digest, inputs = asic_sdc_input_digest(rt, project, top, pdk)
-    authored = author_asic_sdc(rt, project, top, pdk, container, supply_ports=())
+    authored = author_asic_sdc(
+        rt, project, top, pdk, container, supply_ports=(),
+        **({"pad_drive_output": scenario / "pad_input_drive.json"}
+           if scenario is not None else {}))
     import reset_sync_structural_exception as _reset_sync
     authored["text"], structural_reset = _reset_sync.apply_current_project(
         project, Path(str(pdk.liberty)), authored["text"])
     authored["structural_reset_exception"] = structural_reset
-    path = step7_asic_sdc_path(rt, project, top, authored["design_staged"])
+    path = (scenario / f"{top}.sdc" if scenario is not None else
+            step7_asic_sdc_path(rt, project, top, authored["design_staged"]))
     staged = rt._resolve_staged_silicon_sdc(project)
     if (staged is not None and staged.is_file()
             and staged.resolve() == path.resolve()):
@@ -1675,7 +1695,7 @@ def emit_step7_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
     # `<top>.sdc` non-resolved.  It is still design input, never our target.
     if path.is_file() and not rt._is_step7_output(project, path):
         path = rt._pl.constraints_dir(project) / f"{top}.asic.sdc"
-    owned = owned_step7_outputs(rt, project)
+    owned = {} if scenario is not None else owned_step7_outputs(rt, project)
     path.parent.mkdir(parents=True, exist_ok=True)
     stamped = rt._stamp_sdc_provenance(authored["text"], pdk.name)
     rt._aa.write_text(path, stamped)

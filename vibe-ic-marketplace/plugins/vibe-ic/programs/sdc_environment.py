@@ -1389,9 +1389,11 @@ def liberty_time_scale(liberty_path: str) -> float:
                                        "ms": 1e6}[m.group(2)])
 
 
-def write_pad_input_drive_record(project: Path, record: Dict[str, object]) -> Path:
+def write_pad_input_drive_record(project: Path, record: Dict[str, object], *,
+                                 output: Optional[Path] = None) -> Path:
     import _atomic_artefact as _aa
-    return _aa.write_json(Path(project) / PAD_INPUT_DRIVE_REPORT, record)
+    return _aa.write_json(output if output is not None else
+                          Path(project) / PAD_INPUT_DRIVE_REPORT, record)
 
 
 def pad_input_drive_not_measured(project: Path) -> Optional[str]:
