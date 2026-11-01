@@ -128,14 +128,17 @@ def _first(project: Path, globs) -> Optional[Path]:
 def _router_report(project: Path, explicit: Optional[str]) -> Path:
     """Read the router producer's selected output, never search for reports.
 
-    The canonical producer's source is its published report. A tool-only
-    router instead records the CheckAntennas State owning reports/antenna.rpt.
+    The canonical producer declares its final report separately from source
+    log provenance. A tool-only router records the CheckAntennas State owning
+    reports/antenna.rpt.
     An explicit CLI path must agree with that declaration, not replace it.
     """
     def refusal(code, detail):
         raise ValueError(f"ANTENNA_ROUTER_REPORT_{code}: {detail}")
 
     def owned(value):
+        if isinstance(value, list):
+            refusal("AMBIGUOUS", "router report is not one output path")
         if not isinstance(value, str) or not value:
             refusal("MISSING", "router output path is not declared")
         path = Path(value)
@@ -155,10 +158,15 @@ def _router_report(project: Path, explicit: Optional[str]) -> Path:
 
     canonical = project / _ROUTER_RECORD
     if canonical.is_file():
-        source = record(canonical).get("source")
-        if isinstance(source, list):
-            refusal("AMBIGUOUS", "router source is not one output path")
-        path = owned(source)
+        producer = record(canonical)
+        if "report" in producer:
+            path = owned(producer["report"])
+        elif producer.get("mode") == "antenna_check_in_session_post_repair":
+            # Legacy in-session records cite the whole PnR log as source;
+            # their result is the co-published antenna.rpt, never that log.
+            path = canonical.with_suffix(".rpt")
+        else:
+            path = owned(producer.get("source"))
     else:
         state_record = project / _ROUTER_STATE_RECORD
         model = record(state_record).get("router") if state_record.is_file() else None
@@ -170,7 +178,11 @@ def _router_report(project: Path, explicit: Optional[str]) -> Path:
         if not state.is_file() or _sha(state) != model.get("state_sha256"):
             refusal("UNBOUND", "selected router State is missing or changed")
         path = state.parent / "reports" / "antenna.rpt"
-    path = owned(str(path))
+        if "report" in model and owned(model["report"]).resolve() != path.resolve():
+            refusal("UNBOUND", "declared report does not belong to selected router State")
+    path = owned(str(path.resolve()))
+    if path.suffix.lower() == ".log":
+        refusal("LOG_ONLY", f"aggregate log is not a final router report: {path}")
     if explicit and owned(explicit).resolve() != path.resolve():
         refusal("AMBIGUOUS", f"--router {explicit} differs from declared output {path}")
     if not path.is_file():
