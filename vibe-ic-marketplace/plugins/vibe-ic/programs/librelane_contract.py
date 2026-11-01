@@ -302,14 +302,39 @@ def _provider_route_mismatch(image: Any, project: Path | None = None, *,
     return None
 
 
+# Docker CLI run-option arity (including short and platform-specific options):
+# https://docs.docker.com/reference/cli/docker/container/run/
+# Execution backends still enforce which options they can actually implement.
+_DOCKER_RUN_VALUE_OPTIONS = frozenset({
+    '-a', '-c', '-e', '-h', '-l', '-m', '-p', '-u', '-v', '-w',
+    '--add-host', '--annotation', '--attach', '--blkio-weight',
+    '--blkio-weight-device', '--cap-add', '--cap-drop', '--cgroup-parent',
+    '--cgroupns', '--cidfile', '--cpu-count', '--cpu-percent', '--cpu-period',
+    '--cpu-quota', '--cpu-rt-period', '--cpu-rt-runtime', '--cpu-shares', '--cpus',
+    '--cpuset-cpus', '--cpuset-mems', '--detach-keys', '--device',
+    '--device-cgroup-rule', '--device-read-bps', '--device-read-iops',
+    '--device-write-bps', '--device-write-iops', '--dns', '--dns-option',
+    '--dns-search', '--domainname', '--entrypoint', '--env', '--env-file',
+    '--expose', '--gpus', '--group-add', '--health-cmd', '--health-interval',
+    '--health-retries', '--health-start-interval', '--health-start-period',
+    '--health-timeout', '--hostname', '--io-maxbandwidth', '--io-maxiops',
+    '--ip', '--ip6', '--ipc', '--isolation', '--label', '--label-file', '--link',
+    '--link-local-ip', '--log-driver', '--log-opt', '--mac-address', '--memory',
+    '--memory-reservation', '--memory-swap', '--memory-swappiness', '--mount',
+    '--name', '--net', '--network', '--network-alias', '--oom-score-adj', '--pid',
+    '--pids-limit', '--platform', '--publish', '--pull', '--restart', '--runtime',
+    '--security-opt', '--shm-size', '--stop-signal', '--stop-timeout',
+    '--storage-opt', '--sysctl', '--tmpfs', '--ulimit', '--user', '--userns',
+    '--uts', '--volume', '--volume-driver', '--volumes-from', '--workdir',
+})
+
+
 def _container_image_arg(argv: list[Any]) -> Any | None:
     """Return the image token after the Docker-run options, if unambiguous."""
     try:
         at = argv.index('run') + 1
     except ValueError:
         return None
-    value_options = {'-v', '-e', '--entrypoint', '--memory', '--memory-swap',
-                     '--network', '--workdir', '--cpus', '--shm-size', '--user', '-u'}
     while at < len(argv):
         token = argv[at]
         if not isinstance(token, str):
@@ -318,7 +343,7 @@ def _container_image_arg(argv: list[Any]) -> Any | None:
             return token
         if token == '--rm':
             at += 1
-        elif token in value_options:
+        elif token in _DOCKER_RUN_VALUE_OPTIONS:
             at += 2
         else:
             return None
