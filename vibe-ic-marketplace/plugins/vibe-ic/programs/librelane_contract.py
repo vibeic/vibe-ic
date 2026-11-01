@@ -465,7 +465,7 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
         value = argv[at + 1]
         if option == '-v':
             host, guest, *mode = value.split(':')
-            if mode not in ([], ['ro']) or not Path(host).exists():
+            if mode not in ([], ['ro'], ['rw']) or not Path(host).exists():
                 raise Refusal('LL_LOCAL_MOUNT_INVALID', value)
             mounts.append((guest, str(Path(host).resolve())))
         elif option == '-e':
