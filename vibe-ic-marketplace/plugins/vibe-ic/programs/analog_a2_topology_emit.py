@@ -145,12 +145,13 @@ import analog_incremental_decimator as _dec  # noqa: E402
 import analog_resolution_stimulus as _stim  # noqa: E402
 import analog_ciff as _ciff  # noqa: E402
 import analog_ota1_options as _ota1  # noqa: E402
+from _analog_producer_fingerprint import producer_fingerprint as _source_fingerprint
 
 PRODUCER = "analog_a2_topology_emit"
 
 
 def producer_fingerprint() -> str:
-    """A digest of THIS producer's own source, stamped into every artefact.
+    """A digest of this producer and its output-shaping source dependencies.
 
     MEASURED (round 23): a topology.json emitted by an older build of this
     file is indistinguishable from a current one — `_provenance` names the
@@ -164,13 +165,7 @@ def producer_fingerprint() -> str:
     mtime (which a copy or a checkout resets) and not from a file name (one
     spelling defines a blind population).
     """
-    import hashlib
-    try:
-        return hashlib.sha256(
-            Path(__file__).read_bytes() + Path(_ciff.__file__).read_bytes()
-            + Path(_ota1.__file__).read_bytes()).hexdigest()[:16]
-    except OSError:                                     # pragma: no cover
-        return ""
+    return _source_fingerprint(Path(__file__))
 PROVENANCE_SCHEMA = 1
 SKILL = "analog-topology-select"
 IR_SCHEMA = 1
@@ -7148,6 +7143,15 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         if lib.get("sc_loop") else _ciff.legacy_declaration(
             stage_rec, devices, param_exprs, split_env, _fb_delay, _safe_eval)
         if btype == "delta_sigma" else None)
+    coefficient_targets = None
+    if lib.get("sc_loop"):
+        try:
+            coefficient_targets = _ciff.realize_coefficient_capacitors(
+                loop_declaration, devices, param_exprs, split_env, _safe_eval,
+                {name for name, row in sizing_inputs.get("device_parameters", {}).items()
+                 if "w" in row}, _minima.min_length_um(role_minima, CAP_ROLE))
+        except ValueError as exc:
+            raise SizingInputsInvalid(str(exc)) from exc
     devices, param_exprs, splits, split_refusals = split_oversize_capacitors(
         devices, param_exprs, split_env, role_maxima, role_minima,
         dict(measured_params or {}))
@@ -7159,6 +7163,13 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     # sizing that produced it.
     if split_refusals:
         raise CapacitorNotRealisable(split_refusals)
+    if coefficient_targets is not None:
+        try:
+            _ciff.validate_coefficient_capacitors(
+                loop_declaration, coefficient_targets, devices, param_exprs,
+                split_env, _safe_eval)
+        except ValueError as exc:
+            raise SizingInputsInvalid(str(exc)) from exc
 
     ir: Dict[str, Any] = {
         "ir_schema": IR_SCHEMA,

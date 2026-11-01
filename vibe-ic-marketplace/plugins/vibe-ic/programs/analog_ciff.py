@@ -327,6 +327,9 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
     lib["stage"][0].pop("feedback_selectors", None)
     lib["stage"][0]["alternates"] = [""]
     devices, nets, exprs, stages = expand(lib, values)
+    for e in exprs:
+        if "ff_expr" in e and "coefficient" in e:
+            e["ff_expr"] = e["ff_expr"].format(coeff=e["coefficient"])
     order = rec["order"]
     outputs = stages["chain"][1:]
     dac_names = {d["name"].format(i=i) for d in lib["stage"][0]["devices"]
@@ -544,6 +547,86 @@ def declaration(loop, stages):
     if loop.get("sharing"):
         result["sharing"] = loop["sharing"]
     return result
+
+
+def realize_coefficient_capacitors(declaration, devices, exprs, env, evaluate,
+                                   selected_widths, minimum_length):
+    """Keep coefficient capacitances at the final selected device widths."""
+    names = {p["capacitor"] for p in declaration["paths"]}
+    names.update(f"ci{i}" for i in range(1, declaration["order"] + 1))
+    by_name = {d["name"]: d for d in devices}
+    by_expr = {(e["device"], e["param"]): e for e in exprs}
+    area = env.get("cap_area_ff_per_um2")
+    fringe = env.get("cap_perim_ff_per_um", 0.)
+    if (not isinstance(area, (int, float)) or not math.isfinite(area) or area <= 0
+            or not math.isfinite(fringe) or fringe < 0):
+        raise ValueError("SC_LOOP_COEFFICIENT_GEOMETRY_INVALID: capacitance model is absent or invalid")
+    targets = {}
+    for name in sorted(names):
+        device = by_name[name]
+        row = by_expr[(name, "l")]
+        ff = row["ff_expr"]
+        target = evaluate(ff, env)
+        width_row = by_expr.get((name, "w"))
+        width = evaluate(width_row["expr"], env) if width_row else device["w"]
+        multiplier_row = by_expr.get((name, "m"))
+        multiplier = (evaluate(multiplier_row["expr"], env) if multiplier_row
+                      else device.get("m", 1.))
+        if any(not math.isfinite(v) or v <= 0 for v in (area, target, width, multiplier)):
+            raise ValueError(f"SC_LOOP_COEFFICIENT_GEOMETRY_INVALID: {name} has invalid capacitance or geometry")
+        length = (target / multiplier - 2 * fringe * width) / (area * width + 2 * fringe)
+        if (not math.isfinite(length) or length <= 0 or
+                (name in selected_widths and minimum_length is not None and length < minimum_length)):
+            raise ValueError(f"SC_LOOP_COEFFICIENT_GEOMETRY_INVALID: {name} cannot realize {target:g}fF at selected width {width:g}um")
+        row["expr"] = (f"((({ff}) / {float(multiplier)!r}) - 2 * cap_perim_ff_per_um * {float(width)!r})"
+                       f" / (cap_area_ff_per_um2 * {float(width)!r} + 2 * cap_perim_ff_per_um)")
+        targets[name] = target
+    return targets
+
+
+def validate_coefficient_capacitors(declaration, targets, devices, exprs, env, evaluate):
+    """Check physical capacitance after PDK unit-array realization."""
+    by_expr = {(e["device"], e["param"]): e for e in exprs}
+    actual = dict.fromkeys(targets, 0.)
+    for device in devices:
+        name = device["name"]
+        base = re.sub(r"_u\d+$", "", name)
+        if base not in targets:
+            continue
+        geometry = {}
+        for parameter, default in (("w", None), ("l", None), ("m", 1.)):
+            row = by_expr.get((name, parameter))
+            geometry[parameter] = (evaluate(row["expr"], env) if row
+                                   else device.get(parameter, default))
+        width, length, multiplier = (geometry[k] for k in ("w", "l", "m"))
+        actual[base] += multiplier * (env["cap_area_ff_per_um2"] * width * length
+                                     + 2 * env.get("cap_perim_ff_per_um", 0.) * (width + length))
+    for name, target in targets.items():
+        if not math.isclose(actual[name], target, rel_tol=1e-7, abs_tol=1e-10):
+            raise ValueError(f"SC_LOOP_COEFFICIENT_GEOMETRY_INVALID: {name} realizes {actual[name]:g}fF, expected {target:g}fF")
+    dac_ratio = declaration["normalization"]["full_scale_over_reference"]
+    for i, gain in enumerate(declaration["a"], 1):
+        ratio = actual[f"cs{i}"] / actual[f"ci{i}"]
+        if not math.isclose(ratio, abs(gain), rel_tol=1e-7):
+            raise ValueError(f"SC_LOOP_COEFFICIENT_GEOMETRY_INVALID: stage {i} input ratio differs from declared a")
+    summer_units = []
+    for path in declaration["paths"]:
+        kind, name = path["kind"], path["capacitor"]
+        if kind in ("dac", "dac_shared"):
+            ratio = actual[name] / actual[f"ci{path['destination_stage']}"] / dac_ratio
+            expected = abs(path["gain"])
+        elif kind == "zero_feedback":
+            ratio, expected = actual[name] / actual["ci1"], abs(path["gain"])
+        elif kind in ("feedforward", "input_feedforward", "k0"):
+            weight = abs(path["gain"]) * (dac_ratio if kind == "k0" else 1.)
+            summer_units.append(actual[name] / weight)
+            continue
+        else:
+            continue
+        if not math.isclose(ratio, expected, rel_tol=1e-7):
+            raise ValueError(f"SC_LOOP_COEFFICIENT_GEOMETRY_INVALID: {name} ratio differs from declared {kind}")
+    if any(not math.isclose(unit, summer_units[0], rel_tol=1e-7) for unit in summer_units):
+        raise ValueError("SC_LOOP_COEFFICIENT_GEOMETRY_INVALID: summer ratios differ from declared c/c0/k0")
 
 
 def legacy_declaration(stages, devices, exprs, env, delay, evaluate):
