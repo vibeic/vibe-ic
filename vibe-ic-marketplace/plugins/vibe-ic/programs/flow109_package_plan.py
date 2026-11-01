@@ -51,8 +51,11 @@ def _sha(path: Path) -> str:
 
 def operation_sources() -> dict[str, str]:
     paths = (Path(__file__), HERE / "pad_assignment_gen.py",
-             HERE / "io_pad_chip_top_gen.py", HERE / "sim_activity_dump.py")
-    return {"programs/" + path.name: _sha(path) for path in paths}
+             HERE / "io_pad_chip_top_gen.py", HERE / "sim_activity_dump.py",
+             HERE / "librelane_contract.py", HERE / "librelane_prelayout.py",
+             HERE / "_ppa/timing.py")
+    return {"programs/" + path.relative_to(HERE).as_posix(): _sha(path)
+            for path in paths}
 
 
 def _read(path: Path) -> dict:
@@ -263,7 +266,83 @@ def _handoff_load_inputs(project: Path) -> tuple[Path, dict, Path, Path, list[di
     return state_path, config, sdcs.pop(), netlist, evidence
 
 
-def _current_bare_die_load(project: Path, io: Mapping) -> tuple[dict, list[dict]]:
+
+def _scenario_load_inputs(project: Path, selection: Mapping, output: Path):
+    """Consume an explicitly selected producer/native scene, without D30 reuse."""
+    import librelane_contract as native
+    import librelane_prelayout as timing_check
+    import phase3_one_shot_runner as phase3
+    import _path_layout as layout
+    from _ppa import timing
+    from types import SimpleNamespace
+
+    if not isinstance(selection, Mapping) or set(selection) != {"sdc_record", "native_state", "native_config"}:
+        raise D06Refusal("D06_LOAD_SCENARIO_SELECTION_INVALID", str(selection))
+    record_path = _project_path(project, selection["sdc_record"], "scenario producer record")
+    state_path = _project_path(project, selection["native_state"], "scenario native state")
+    input_config_path = _project_path(project, selection["native_config"], "scenario native input config")
+    input_config = _read(input_config_path)
+    record = _read(record_path)
+    sdc = _project_path(project, record.get("path"), "scenario SDC")
+    config_path = state_path.parent / "config.json"
+    config = _read(config_path)
+    state = _read(state_path)
+    raw_netlist = state.get("nl")
+    if isinstance(raw_netlist, str) and Path(raw_netlist).is_relative_to(project):
+        raw_netlist = Path(raw_netlist).relative_to(project).as_posix()
+    netlist = _project_path(project, raw_netlist, "scenario netlist")
+    mapped = layout.mapped_synth_netlist(project)
+    try:
+        receipt = native.validate_step_receipt(state_path.parent, "OpenROAD.STAPrePNR")
+        fp = receipt["input"]
+        if (record.get("schema") != "vibe-ic/step7-asic-sdc/1" or record.get("step") != 7
+                or record_path.parent != sdc.parent or record.get("sha256") != _sha(sdc)
+                or record.get("top") != config.get("DESIGN_NAME")
+                or record.get("pdk") != config.get("PDK")
+                or config.get("meta", {}).get("step") != "OpenROAD.STAPrePNR"
+                or Path(str(config.get("PNR_SDC_FILE"))).resolve() != sdc
+                or fp.get("config") != _sha(input_config_path)
+                or input_config.get("meta", {}).get("step") != "OpenROAD.STAPrePNR"
+                or {k: v for k, v in input_config.items() if k != "meta"}
+                   != {k: v for k, v in config.items() if k != "meta"}
+                or receipt["sha256"].get("config.json") != _sha(config_path)
+                or fp.get("state_files", {}).get(str(netlist)) != _sha(netlist)
+                or fp.get("config_files", {}).get(str(sdc)) != _sha(sdc)
+                or mapped is None or _sha(mapped) != _sha(netlist)):
+            raise ValueError("selected producer/native SDC or mapped netlist differs")
+        selected = SimpleNamespace(name=record["pdk"], liberty=record["inputs"]["@liberty"])
+        current_digest, inputs = timing.asic_sdc_input_digest(
+            phase3, project, record["top"], selected)
+        if record.get("input_digest") != current_digest or record.get("inputs") != inputs:
+            raise ValueError("selected scenario producer inputs/source changed")
+        evidence = [_record(project, p) for p in (record_path, sdc, netlist,
+                    state_path, input_config_path, config_path,
+                    state_path.parent / "vibeic_receipt.json")]
+        for raw, expected in {**fp.get("state_files", {}), **fp.get("config_files", {})}.items():
+            path = Path(raw) if Path(raw).is_absolute() else project / raw
+            if not path.is_file() or _sha(path) != expected:
+                raise ValueError("selected native input changed: " + raw)
+            evidence.append({"path": str(path), "sha256": expected})
+        local = fp.get("local_image")
+        if local:
+            attestation = Path(local["attestation_path"])
+            launch = _read(attestation)
+            if (_sha(attestation) != local.get("attestation_sha256")
+                    or launch.get("cid") != local.get("cid")
+                    or launch.get("container_inspect", {}).get("Image") != local.get("image_id")):
+                raise ValueError("selected native launch identity differs")
+            evidence.append({"path": str(attestation), "sha256": _sha(attestation)})
+        sdc_gate = timing_check.judge_sdc(state_path.parent, config, sdc, output / "selected_sdc.json")
+        slack_gate = timing_check.judge_slack(state_path.parent, output / "selected_slack.json")
+        if sdc_gate.get("verdict") != "PASS" or slack_gate.get("verdict") != "PASS":
+            raise ValueError("selected native SDC/slack consumer did not pass")
+    except (native.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
+        raise D06Refusal("D06_LOAD_SCENARIO_STALE_OR_UNMEASURED", str(exc)) from exc
+    return state_path, config, sdc, netlist, evidence
+
+
+def _current_bare_die_load(project: Path, io: Mapping,
+                          output_dir: Path | None = None) -> tuple[dict, list[dict]]:
     """Bind the load scene consumed by the current STA state to current IO pads."""
     if not (project / TAPEOUT_DECLARATION).is_file():
         raise D06Refusal("D06_DELIVERY_SCOPE_OWNER_FACT_MISSING",
@@ -279,7 +358,16 @@ def _current_bare_die_load(project: Path, io: Mapping) -> tuple[dict, list[dict]
         raise D06Refusal("D06_DELIVERY_SCOPE_OWNER_FACT_MISSING",
                          str(TAPEOUT_DECLARATION))
 
-    if (project / CURRENT_REPAIR).exists() or (project / CURRENT_REPAIR).is_symlink():
+    switch_path = Path("phase3/librelane_switch.json")
+    switch, switch_ref = (_bound_json(project, switch_path)
+                          if (project / switch_path).exists() else ({}, None))
+    if "package_load_scenario" in switch:
+        state_path, config, sdc_path, netlist_path, native_refs = _scenario_load_inputs(
+            project, switch["package_load_scenario"],
+            output_dir or project / "reports/flow109/D06" / uuid.uuid4().hex)
+        evidence = [declaration_ref, switch_ref, *native_refs]
+        state_ref = _record(project, state_path)
+    elif (project / CURRENT_REPAIR).exists() or (project / CURRENT_REPAIR).is_symlink():
         repair, repair_ref = _bound_json(project, CURRENT_REPAIR)
         final = repair.get("final")
         if repair.get("verdict") != "PASS" or not isinstance(final, Mapping):
@@ -328,9 +416,23 @@ def _current_bare_die_load(project: Path, io: Mapping) -> tuple[dict, list[dict]
     delays = re.findall(
         r"(?m)^\s*set_output_delay\s+([0-9.eE+-]+)\s+-clock\s+([A-Za-z_][A-Za-z0-9_$]*)\s+\[all_outputs\]\s*$",
         active)
+    explicit = re.findall(
+        r"(?m)^\s*set_load\s+([0-9.eE+-]+)\s+\[get_ports\s+\{([^{}]*)\}\]\s*$", active)
+    if len(re.findall(r"(?m)^\s*set_load\b", active)) != len(loads) + len(explicit):
+        raise D06Refusal("D06_BARE_DIE_LOAD_INTERFACE_UNRESOLVED", "unsupported output load command")
+    per_port = {}
+    for value, names in explicit:
+        for name in names.split():
+            if name in per_port:
+                raise D06Refusal("D06_BARE_DIE_LOAD_INTERFACE_UNRESOLVED", "overlapping output loads")
+            per_port[name] = float(value)
+    if not loads and per_port and sorted(per_port) == outputs and len(set(per_port.values())) == 1:
+        loads = [str(next(iter(per_port.values())))]
+    elif explicit:
+        raise D06Refusal("D06_BARE_DIE_LOAD_INTERFACE_UNRESOLVED", "incomplete, mixed or unequal output loads")
     if len(loads) != 1 or len(delays) != 1:
         raise D06Refusal("D06_BARE_DIE_LOAD_INTERFACE_UNRESOLVED",
-                         "one formal all-output load and delay are required")
+                         "one complete output load and all-output delay are required")
     load, delay = float(loads[0]), float(delays[0][0])
     if not math.isfinite(load) or load <= 0 or not math.isfinite(delay) or delay <= 0:
         raise D06Refusal("D06_BARE_DIE_LOAD_INTERFACE_INVALID", str((load, delay)))
@@ -342,7 +444,8 @@ def _current_bare_die_load(project: Path, io: Mapping) -> tuple[dict, list[dict]
         "sdc": _record(project, sdc_path), "netlist": _record(project, netlist_path),
         "output_ports": outputs, "output_port_count": len(outputs),
         "capacitance_library_units": load, "output_delay_ns": delay,
-        "load_selector": "all_outputs", "physical_package_model_consumed": False,
+        "load_selector": "explicit_output_ports" if per_port else "all_outputs",
+        "physical_package_model_consumed": False,
     }, evidence
 
 
@@ -635,7 +738,7 @@ def execute(project: Path, context: Mapping) -> dict:
         if features.get("package_interface") is not True:
             raise D06Refusal("D06_PACKAGE_INTERFACE_CONTEXT_INVALID", str(features))
         try:
-            load, load_inputs = _current_bare_die_load(project, io)
+            load, load_inputs = _current_bare_die_load(project, io, attempt)
         except D06Refusal as bare_die_error:
             # A selected physical-package route still needs its real owner model;
             # the generic profile flag is deliberately not package-scope authority.
