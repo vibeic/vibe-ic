@@ -36,9 +36,9 @@ def _signature(row):
 def _pin_records(declaration):
     """Bound each quantity to its own pin, and each replacement to its clause."""
     sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", declaration)
-    pin_count = sum(len(list(_PIN.finditer(sentence))) for sentence in sentences)
     for index, sentence in enumerate(sentences):
         matches = list(_PIN.finditer(sentence))
+        pin_names = {m["before"] or m["after"] for m in matches}
         for position, match in enumerate(matches):
             end = matches[position + 1].start() if position + 1 < len(matches) else len(sentence)
             breaks = list(re.finditer(r";\s*", sentence[:match.start()]))
@@ -46,8 +46,10 @@ def _pin_records(declaration):
             clause = sentence[start:end]
             replacement = None
             # An unqualified "this replaces" cannot choose among multiple pins.
-            if pin_count == 1:
+            if position == len(matches) - 1 and len(pin_names) == 1:
                 for following in sentences[index + 1:]:
+                    if _PIN.search(following):
+                        break
                     for candidate in _REPLACE.finditer(following):
                         lo, hi = sentence_scope(following, candidate.start(), candidate.end(),
                                                 before=len(following), after=len(following),

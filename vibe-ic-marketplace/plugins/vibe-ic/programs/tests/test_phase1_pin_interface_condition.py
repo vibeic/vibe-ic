@@ -165,3 +165,15 @@ def test_affirmative_replacement_keeps_shared_polarity_vocabulary(tmp_path, repl
 def test_uncertain_parent_heading_never_lends_current_authority(tmp_path, heading):
     l1, l5 = generate(tmp_path, "# " + heading + "\n## Electrical details\nThe sense_a pin is driven by an external reference, 2.0 V +/- 2%.")
     assert pin_rows(l1) == block_rows(l5) == []
+
+
+
+def test_replacement_attaches_to_the_nearest_declaration_on_the_same_line(tmp_path):
+    text = ("The sense_a pin is driven by an external reference, 2.0 V +/- 5%. "
+            "The sense_a pin is driven by an external reference, 2.0 V +/- 1%. "
+            "This replaces the earlier declaration.")
+    l1, l5 = generate(tmp_path, text)
+    rows = pin_rows(l1)
+    assert [r["min_typ_max"] for r in rows] == [{"typ": 2.0, "min": 1.98, "max": 2.02}]
+    assert rows[0]["replaced_declarations"][0]["tolerance_percent"] == 5.0
+    assert block_rows(l5) == rows
