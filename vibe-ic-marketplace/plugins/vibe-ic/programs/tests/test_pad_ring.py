@@ -101,6 +101,14 @@ END core_site
 MACRO pad_bidir
   CLASS PAD ;
   SIZE {pad_w:.2f} BY 350 ;
+  PIN fixture_bond
+    DIRECTION INOUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER fixture_metal ;
+      RECT {pad_w * 0.1:.3f} 0 {pad_w * 0.9:.3f} 1 ;
+    END
+  END fixture_bond
 END pad_bidir
 MACRO pad_corner
   CLASS PAD ;

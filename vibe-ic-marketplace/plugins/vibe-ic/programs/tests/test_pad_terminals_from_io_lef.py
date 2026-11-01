@@ -1,7 +1,4 @@
-"""Pad-ring BTerms use unique outward LEF geometry when no map is supplied."""
-import json
 import os
-import re
 from pathlib import Path
 
 import pytest

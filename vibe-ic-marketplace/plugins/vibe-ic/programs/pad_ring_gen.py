@@ -212,7 +212,7 @@ import argparse
 import json
 import re
 import sys
-from math import gcd
+from math import gcd, isfinite
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -864,9 +864,77 @@ def pad_terminal_bterms(pads: List[Dict[str, Any]],
     The largest rectangle of the pin is chosen when a pin has several: it is
     the one an access point is most likely to land in, and choosing by file
     order would choose it silently.
+
+    When the whole terminal map is empty, each used master must instead have
+    exactly one LEF pin touching the outward edge in every placement. Only
+    those outward rectangles participate in the largest-rectangle choice.
     """
     moves: List[Dict[str, Any]] = []
     notes: List[Dict[str, str]] = []
+    infer = not terminals
+    outward_rects: Dict[str, List[Any]] = {}
+    if infer:
+        by_master: Dict[str, List[Dict[str, Any]]] = {}
+        for pad in pads:
+            if pad.get("signal"):
+                by_master.setdefault(str(pad["master"]), []).append(pad)
+        inferred: Dict[str, str] = {}
+        for master, placements in by_master.items():
+            size = masters_um.get(master)
+            if (size is None or len(size) != 2
+                    or not all(isfinite(v) and v > 0 for v in size)):
+                notes.append(_finding(
+                    "ERROR", "PAD_TERMINAL_MASTER_SIZE_ABSENT",
+                    f"{master} has no finite positive LEF SIZE for terminal inference"))
+                continue
+            candidates = []
+            for pad in placements:
+                side, orient = pad.get("side"), pad.get("orient")
+                if side not in PR.SIDES:
+                    notes.append(_finding(
+                        "ERROR", "PAD_TERMINAL_PIN_UNDECLARED",
+                        f"{master}/{pad['instance']} has no mapped outward side: {side!r}"))
+                    break
+                try:
+                    frame = PR.orient_rect((0.0, 0.0, *size), str(orient), size)
+                except KeyError:
+                    notes.append(_finding(
+                        "ERROR", "PAD_ORIENTATION_UNMAPPED",
+                        f"{master}/{pad['instance']} has unmapped orientation {orient!r}"))
+                    break
+                qualified: Dict[str, List[Any]] = {}
+                for pin, rects in (pin_ports.get(master) or {}).items():
+                    for layer, rect in rects:
+                        x1, y1, x2, y2 = rect
+                        if (not all(isfinite(v) for v in rect)
+                                or x2 <= x1 or y2 <= y1
+                                or x1 < -1e-6 or y1 < -1e-6
+                                or x2 > size[0] + 1e-6 or y2 > size[1] + 1e-6):
+                            continue
+                        placed = PR.orient_rect(rect, str(orient), size)
+                        edge = {"S": (1, 1), "N": (3, 3),
+                                "W": (0, 0), "E": (2, 2)}[side]
+                        if abs(placed[edge[0]] - frame[edge[1]]) <= 1e-6:
+                            qualified.setdefault(pin, []).append((layer, rect))
+                candidates.append(qualified)
+            else:
+                names = sorted({pin for found in candidates for pin in found})
+                if any(not found for found in candidates):
+                    notes.append(_finding(
+                        "ERROR", "PAD_TERMINAL_PIN_UNDECLARED",
+                        f"{master} has no outward terminal pin in every placement; "
+                        f"LEF pins: {sorted(pin_ports.get(master) or {})}"))
+                elif len(names) != 1:
+                    notes.append(_finding(
+                        "ERROR", "PAD_TERMINAL_PIN_AMBIGUOUS",
+                        f"{master} has inconsistent or multiple outward terminal pins: {names}"))
+                else:
+                    inferred[master] = names[0]
+                    for pad, found in zip(placements, candidates):
+                        outward_rects[pad["instance"]] = found[names[0]]
+        if notes:
+            return moves, notes
+        terminals = inferred
     for pad in pads:
         master = str(pad["master"])
         signal = str(pad.get("signal") or "")
@@ -879,7 +947,8 @@ def pad_terminal_bterms(pads: List[Dict[str, Any]],
                 f"the PDK's PAD_PLACE_IO_TERMINALS does not name a terminal "
                 f"for {master}, so {signal!r} keeps the floorplan's own BTerm"))
             continue
-        rects = (pin_ports.get(master) or {}).get(pin) or []
+        rects = (outward_rects[pad["instance"]] if infer
+                 else (pin_ports.get(master) or {}).get(pin) or [])
         if not rects:
             notes.append(_finding(
                 "WARNING", "PAD_TERMINAL_GEOMETRY_ABSENT",
@@ -916,6 +985,13 @@ def pad_terminal_bterms(pads: List[Dict[str, Any]],
             "rect_dbu": [ox + int(round(x1 * units)), oy + int(round(y1 * units)),
                          ox + int(round(x2 * units)), oy + int(round(y2 * units))],
         })
+        if infer:
+            moves[-1]["terminal_provenance"] = {
+                "basis": "unique_outward_lef_pin", "master": master,
+                "pin": pin, "side": pad["side"], "layer": layer,
+                "rect_um": list(rect),
+                "oriented_rect_um": [x1, y1, x2, y2],
+            }
     return moves, notes
 
 
@@ -1566,21 +1642,60 @@ def main(argv: Optional[List[str]] = None) -> int:
         except OSError:
             return None
 
+    pin_port_sources = [(str(lef), _pin_ports_of(lef)) for lef in lefs]
     pin_ports, _pin_port_conflicts = _srm.merge_source_records(
-        (_pin_ports_of(lef) for lef in lefs), on_conflict="richer")
+        (records for _path, records in pin_port_sources), on_conflict="richer")
     corner_master = decls.values.get("PAD_CORNER")
     prefix = (corner_master.split("__", 1)[0] + "__"
               if isinstance(corner_master, str) and "__" in corner_master
               else None)
+    terminals = PR.io_terminals(PR.discover_io_library_configs(
+        args.pdk_root, args.pdk), prefix)
+    if not terminals:
+        used_masters = {p["master"] for p in pads if p.get("signal")}
+        conflicts = [c["key"] for c in _pin_port_conflicts
+                     if c["key"] in used_masters]
+        if conflicts:
+            evidence = {master: [path for path, records in pin_port_sources
+                                 if (records or {}).get(master)]
+                        for master in conflicts}
+            return _fail(
+                "PAD_TERMINAL_PIN_AMBIGUOUS",
+                f"conflicting LEF pin geometry prevents terminal inference: {evidence}",
+                die=die_rec, config=cfg_rec, pads=pads, corners=corners,
+                fillers=fillers, fillers_placed=len(fillers),
+                abutment=abut, spacing=spacing, bterms=bterms,
+                fillers_declared=cfg["fillers"])
     bterm_moves, bterm_notes = pad_terminal_bterms(
-        pads, pin_ports,
-        PR.io_terminals(PR.discover_io_library_configs(
-            args.pdk_root, args.pdk), prefix),
-        lib.masters, die.units)
+        pads, pin_ports, terminals, lib.masters, die.units)
+    if not terminals:
+        for move in bterm_moves:
+            provenance = move["terminal_provenance"]
+            geometry = (move["layer"], tuple(provenance["rect_um"]))
+            provenance["source_paths"] = sorted({
+                path for path, records in pin_port_sources
+                if geometry in ((records or {}).get(move["master"], {})
+                                .get(move["terminal"], []))})
+        bterms["terminal_moves"] = bterm_moves
     findings.extend(bterm_notes)
     bterms["placed_on_pad_terminal"] = [m["signal"] for m in bterm_moves]
     bterms["kept_at_the_die_edge"] = sorted(
         set(die.pins) - {m["signal"] for m in bterm_moves})
+    errors = [f for f in bterm_notes if f["severity"] == "ERROR"]
+    if errors:
+        rep = _report(
+            "FAIL", f"{errors[0]['rule']}: {errors[0]['message']}",
+            inputs=inputs, io_cell_library=lib.as_dict(),
+            pdk_declarations=decls.as_dict(), die=die_rec,
+            config=cfg_rec, pads=pads, corners=corners, fillers=fillers,
+            abutment=abut, spacing=spacing, bterms=bterms,
+            fillers_declared=cfg["fillers"],
+            fillers_placed=len(fillers), findings=findings)
+        _write(project, args.json, rep)
+        print(f"=== {PROGRAM} ({project.name}) ===\n  verdict: FAIL")
+        for finding in errors:
+            print(f"  {finding['rule']}: {finding['message']}")
+        return 1
 
     dest = project / PR.PADRING_DEF_REL
     dest.parent.mkdir(parents=True, exist_ok=True)
