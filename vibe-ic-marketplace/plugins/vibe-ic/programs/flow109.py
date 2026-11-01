@@ -1701,13 +1701,8 @@ def _rtl_scope_window(context: Mapping) -> None:
             raise Flow109Error("FLOW109_RTL_SCOPE_CONFLICT", "window is outside RTL owners")
 
 
-def _rtl_scope_binding(project: Path, manifest: Path, context: Mapping) -> dict:
-    project = project.resolve()
-    manifest = manifest.absolute()
-    if (manifest.is_symlink() or not manifest.is_file()
-            or not manifest.resolve().is_relative_to(project)):
-        raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", "manifest is not a regular project input")
-    _rtl_scope_window(context)
+def _rtl_source_inputs(project: Path) -> list[dict]:
+    """The existing RTL scope's source-bound delivery check, shared at selection."""
     inputs = _rtl_scope_inputs(project)
     from task_nature_route import prompt_delivery_requirements, resolve_prompt_delivery_target
     for source in inputs:
@@ -1717,6 +1712,98 @@ def _rtl_scope_binding(project: Path, manifest: Path, context: Mapping) -> dict:
         if not resolved["ok"] or demand["route_family"] is not None:
             raise Flow109Error("FLOW109_RTL_SCOPE_CONFLICT",
                                "original source requests physical delivery: " + source["path"])
+    return inputs
+
+
+def resolve_task_manifest(project: Path, entry_step: str | None, exit_step: str | None,
+                          delivery_target: str | None = None,
+                          delivery_route: str | None = None) -> Path | None:
+    """Select the shipped RTL profile for a bounded, source-compatible task.
+
+    This is applicability, not acceptance. Explicit manifests are never changed;
+    unresolved/physical scope retains the normal BLOCKING admission refusal.
+    No feature is guessed from a task name, dataset or absent Boolean.
+    """
+    project = project.resolve()
+    path = project / "input/flow109-manifest.json"
+    if (not entry_step or not exit_step
+            or delivery_target not in (None, "rtl")
+            or delivery_route not in (None, "ip")):
+        return None
+    profiles = [row for row in load_registry()["reference_profiles"]
+                if row["name"] == "RTL-only" and row["endpoint"] == "rtl_only"]
+    if len(profiles) != 1:
+        if path.exists() or path.is_symlink():
+            # Existing explicit input has its own ordinary feature validation;
+            # default availability cannot veto it or cause it to be replaced.
+            return None
+        raise Flow109Error("FLOW109_PROFILE_INVALID", "no unique shipped RTL-only profile")
+    manifest = {"features": dict(profiles[0]["features"])}
+    existing = path.exists() or path.is_symlink()
+    if existing:
+        try:
+            supplied, _ = _bound_project_json(project, Path("input/flow109-manifest.json"),
+                                             "FLOW109_MANIFEST_INVALID")
+        except Flow109Error:
+            return None
+        if supplied != manifest:
+            return None
+    plan = resolve_plan(manifest["features"])
+    from task_nature_route import flow109_product_window, is_rtl_only_evidence
+    try:
+        first, last = flow109_product_window(manifest, entry_step, exit_step, "ip")
+        context = execution_context(plan, first, last)
+        _rtl_scope_window(context)
+        terminal = (context.get("resolved_rows") or [context["resolved_row"]])[-1]
+        native_exit = terminal["profile"]["dispatch"]["native_step_id"]
+        if native_exit == "D1" and delivery_target != "rtl":
+            return None
+        if native_exit != "D1" and not is_rtl_only_evidence(exit_step=native_exit):
+            return None
+        _rtl_source_inputs(project)
+    except ValueError:
+        # Unsupported windows, absent original inputs and physical source
+        # demands cannot create a default; ordinary admission remains blocking.
+        return None
+    if existing:
+        # Recheck current sources/window on every invocation; the same input
+        # bytes carry no prior execution or acceptance authority.
+        return path
+    # Publish complete bytes without replacing a concurrently supplied input.
+    from _atomic_artefact import write_json
+    staged = path.with_name(path.name + ".selection." + uuid.uuid4().hex)
+    try:
+        write_json(staged, manifest)
+        os.link(staged, path)
+    except FileExistsError as exc:
+        raise Flow109Error("FLOW109_MANIFEST_CONFLICT", "input appeared during profile selection") from exc
+    finally:
+        staged.unlink(missing_ok=True)
+    return path
+
+
+def prepare_task_features(args, project: Path) -> None:
+    """Resolve bounded RTL applicability before the general IC/IP question."""
+    if (args.flow != "109" or args.flow109_manifest
+            or args.execution_mode not in (None, "default")
+            or getattr(args, "resume_request", None)):
+        return
+    selected = resolve_task_manifest(project, args.entry_step, args.exit_step,
+                                     getattr(args, "delivery_target", None),
+                                     getattr(args, "route", None))
+    if selected is not None:
+        args.flow109_manifest = selected
+        args.delivery_target = "rtl"
+
+
+def _rtl_scope_binding(project: Path, manifest: Path, context: Mapping) -> dict:
+    project = project.resolve()
+    manifest = manifest.absolute()
+    if (manifest.is_symlink() or not manifest.is_file()
+            or not manifest.resolve().is_relative_to(project)):
+        raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", "manifest is not a regular project input")
+    _rtl_scope_window(context)
+    inputs = _rtl_source_inputs(project)
     retained = []
     for relative in (Path("input/step_0_5ic_answers.json"),
                      Path("input/submission_template/tapeout_declaration.json")):
@@ -2408,6 +2495,7 @@ def prepare_front_door(args, project: Path) -> int | None:
     # it to Default. Preserve that CLI contract rather than demanding a flag.
     if args.execution_mode not in (None, "default"):
         raise Flow109Error("FLOW109_MODE_UNIMPLEMENTED", "109 currently selects Default only")
+    prepare_task_features(args, project)
     if not args.flow109_manifest:
         raise Flow109Error("FLOW109_MANIFEST_REQUIRED", "supply explicit resolved features")
     try:

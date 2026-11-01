@@ -4898,7 +4898,7 @@ def _main() -> int:
                         "using current D01..D81, A01..A19 and M01..M09 row "
                         "IDs from flow/flow109.json.")
     p.add_argument("--flow109-manifest", type=Path,
-                   help="JSON containing explicit Boolean features, step_profiles, runtime_tool_uses and qualification_registry.")
+                   help="JSON containing explicit Boolean features, step_profiles, runtime_tool_uses and qualification_registry; bounded RTL tasks can resolve the shipped RTL-only profile when omitted.")
     p.add_argument("--flow109-plan-only", action="store_true",
                    help="Resolve 109 configuration without starting any native producer; never reports IC PASS.")
     p.add_argument("--top-name", default=_TOP_NAME_DEFAULT)
@@ -5044,6 +5044,12 @@ def _main() -> int:
     if args.delivery_target and (args.flow != "109" or args.execution_mode not in (None, "default")):
         print("REFUSED: FLOW109_RTL_SCOPE_REQUIRED: explicit RTL scope requires Default Flow109", file=sys.stderr)
         return 2
+    import flow109
+    try:
+        flow109.prepare_task_features(args, project)
+    except flow109.Flow109Error as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 2
     # Flow109 validates the manifest, source and bounded window before creating
     # its RTL request. Physical admission remains unchanged for unscoped work.
     if not args.delivery_target:
@@ -5051,7 +5057,6 @@ def _main() -> int:
         if route_refusal:
             print(_delivery_route.refusal_message(route_refusal), file=sys.stderr)
             return 2
-    import flow109
     _resume_plan = None
     if args.resume_request:
         try:

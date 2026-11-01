@@ -28,11 +28,17 @@ older path-ATPG command.
 
 ## Resolve a plan
 
-Pass a JSON manifest containing an explicit `features` object. Every
+For a bounded RTL task, the public runner resolves the registry's standard
+`RTL-only` profile automatically after checking original source delivery and
+the requested evidence window. This also serves the thin evaluation adapter;
+no user feature-file or IC/IP confirmation is needed for that clear scope.
+Physical or unresolved scope keeps the normal admission requirements.
+
+To supply feature choices, pass a JSON manifest containing an explicit `features` object. Every
 non-derived feature must be Boolean; absent or unknown features are refused.
 Derived features are computed from the registry and contradictory declarations
-are refused. The registry includes reference profiles for implementation tests;
-they are not evidence that a project's features have been independently checked.
+are refused. Explicit input bytes are preserved. The shipped reference profile
+is applicability input; it is not independent feature, tool or design verification.
 
 ```
 python3 programs/vibe_ic_one_shot_runner.py PROJECT --route ic \
