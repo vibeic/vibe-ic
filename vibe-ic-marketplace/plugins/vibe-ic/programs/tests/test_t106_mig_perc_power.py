@@ -445,8 +445,14 @@ def _gls_edge(declared, transcripts):
 
 def test_step_29_runs_every_corner_sdf_through_the_custom_step(tmp_path, monkeypatch):
     project, root, declared = _gls_project(tmp_path)
+    original_manifest = sgs.tool_arm_manifest
+    def current_state_manifest(*args, **kwargs):
+        assert kwargs.get('sta_step_dir') == postroute.stapostpnr_state(project)[0]
+        return original_manifest(*args, **kwargs)
+    monkeypatch.setattr(sgs, 'tool_arm_manifest', current_state_manifest)
     fake, calls = _gls_edge(declared, lambda corner: VVP_PASS)
     monkeypatch.setattr(contract.subprocess, 'run', fake)
+    monkeypatch.setattr(contract, 'run_container', fake)
     monkeypatch.setattr(contract, 'image_capability', lambda *_: {})
     monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
     judged = postroute.gate_level_sim(project, 'spm', 'img', root, 'x',
@@ -1498,3 +1504,58 @@ def test_default_gls_observes_the_current_output_deadline(
         manifest['cases'][0].get('observation') if manifest['cases'] else None,
         'original_tb_unchanged': True, 'native_claim': False})
 
+
+
+@pytest.mark.parametrize('case', ['good', 'earliest_corner', 'missing_corner',
+                                      'wrong_output', 'wrong_clock', 'wrong_period',
+                                      'different_views', 'foreign_sdf', 'empty_sdf'])
+def test_native_state_gls_observation_deadline(tmp_path, case):
+    """The normal manifest consumes selected native State without legacy reports."""
+    project, root, model, bench, _ = _declared_observation_gls_project(tmp_path, 'good')
+    folder = _current_output_deadline_fixture(project, root, 18.949999)
+    state = json.loads((folder / 'state_out.json').read_text())
+    netlist, sdc = Path(state['nl']), Path(state['sdc'])
+    sdfs = [Path(f) for f in state['sdf'].values()]
+    # This native continuation has no project legacy record or local receipt.
+    (project / postroute.STEP23_RECORD).unlink()
+    (folder / 'vibeic_receipt.json').unlink()
+    report = folder / CORNERS[-1] / 'max.rpt'
+    if case == 'missing_corner':
+        report.unlink()
+    elif case == 'earliest_corner':
+        report.write_text(report.read_text().replace('18.949999', '17.123999'))
+    elif case == 'wrong_output':
+        report.write_text(report.read_text().replace('chip_result', 'another_output'))
+    elif case == 'wrong_clock':
+        report.write_text(report.read_text().replace('clocked by clk', 'clocked by other'))
+    elif case == 'wrong_period':
+        sdc.write_text(sdc.read_text().replace('-period 24', '-period 25'))
+    elif case == 'different_views':
+        state['nl'] = str(write(folder / 'other.v', netlist.read_text()))
+    elif case == 'foreign_sdf':
+        replacement = write(folder / 'other.sdf', sdfs[0].read_text())
+        state['sdf'][CORNERS[0]] = str(replacement)
+        sdfs[0] = replacement
+    elif case == 'empty_sdf':
+        sdc.write_text('set_units -time ns\n' + sdc.read_text())
+        state['sdf'] = {}
+        sdfs = []
+    put(folder / 'state_out.json', state)
+    original = bench.read_bytes()
+    manifest = sgs.tool_arm_manifest(project, 'public_serial_product', netlist,
+                                     [model], tmp_path / 'manifest', sdc=sdc,
+                                     sdfs=sdfs, sta_step_dir=folder)
+    assert bench.read_bytes() == original
+    if case in ('good', 'earliest_corner'):
+        assert len(manifest['cases']) == manifest['declared'] == 1
+        assert manifest['not_a_subject'] == []
+        observation = manifest['cases'][0]['observation']
+        assert observation['sample_offset_ns'] == (17.123 if case == 'earliest_corner' else 18.949)
+        deadline = observation['postlayout_deadline']
+        assert deadline['output'] == 'chip_result' and deadline['clock'] == 'clk'
+        assert set(deadline['required_time_ns']) == set(CORNERS)
+        assert deadline['basis']['state'] == str(folder / 'state_out.json')
+    else:
+        assert manifest['cases'] == []
+        assert len(manifest['not_a_subject']) == 1
+        assert 'POSTLAYOUT_OBSERVATION_UNMEASURED:' in manifest['not_a_subject'][0]['detail']

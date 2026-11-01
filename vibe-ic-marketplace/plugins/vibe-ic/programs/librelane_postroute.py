@@ -245,6 +245,7 @@ def gate_level_sim(project: Path, top: str, image: str, pdk_root: Path, pdk: str
     manifest = sgs.tool_arm_manifest(project, top, netlist, host_models, gls_dir,
                                      sdc=Path(str(state.get('sdc') or '')),
                                      sdfs=[Path(p) for _, p in sorted(sdfs.items())],
+                                     sta_step_dir=sta_folder,
                                      path_map={} if local else {v: k for k, v in host.items()})
     folder = run_chain(project, image, [(GLS_STEP, configs[GLS_STEP],
                                          sta_folder / 'state_out.json')],
