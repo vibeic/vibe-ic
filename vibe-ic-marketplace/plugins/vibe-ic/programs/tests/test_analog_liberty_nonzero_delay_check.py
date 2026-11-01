@@ -6,6 +6,8 @@ Covers PASS (real non-zero timing), FAIL (area-only stub / all-zero /
 missing / garbage), and the honest SKIP edge (no analog blocks).
 """
 import importlib
+import hashlib
+from pathlib import Path
 import json
 
 import pytest
@@ -34,6 +36,7 @@ LIB_REAL = """library(ldo_lib) {
 LIB_AREA_ONLY = """library(ldo_stub) {
   cell(ldo) {
     area : 10000 ;
+    pin(out) { direction : output; }
   }
 }"""
 
@@ -195,13 +198,14 @@ def test_fail_analog_settling_encoded_as_synchronous_arc(tmp_path):
     }]
 
 
-def test_pass_leakage_and_caps_only_with_settling_kept_out_of_liberty(tmp_path):
+def test_output_without_arcs_still_requires_timing(tmp_path):
     _clock(tmp_path, 1000.0)
     _mk(tmp_path, "controlled_analog", LIB_LEAKAGE_AND_CAPS_ONLY,
         corner={"_provenance": "real_ngspice",
                 "design_content": DESIGN_BOUND})
     res = mod.run_audit(tmp_path)
-    assert res.passed is True
+    assert res.passed is False
+    assert "LIB_NO_TIMING" in {f.rule for f in res.findings}
     assert res.summary["arc_delay_samples_examined"] == 0
     assert res.summary["arc_period_violations"] == []
 
@@ -313,3 +317,151 @@ def test_main_cli_fail_exit_1(tmp_path):
 def test_main_cli_not_a_dir(tmp_path):
     rc = mod.main([str(tmp_path / "nope")])
     assert rc == 2
+
+
+PASSIVE_LIB = Path(__file__).parent / "fixtures/passive_pg_only.lib"
+PASSIVE_LIB_SHA256 = "5e34ac0e49f92e72c1155a527b1985b37c66b3f1106985962d936dd464fa1918"
+
+
+def _native_passive_case(root, roles=("cap",), power=0.0):
+    producer = importlib.import_module("analog_a8_hardmacro_emit")
+    text = PASSIVE_LIB.read_text()
+    block = mod.analyze_liberty(text)[2]
+    _mk(root, block, text, corner={"design_content": DESIGN_BOUND})
+    b = root / "phase3/analog" / block
+    topology = {"ports": ["TOP", "VSS"],
+                "rails": {"vdd": "TOP", "vss": "VSS"}}
+    if roles is not None:
+        topology["devices"] = [{"role": role} for role in roles]
+    (b / "topology.json").write_text(json.dumps(topology))
+    files = {"source_layout": "layout.mag", "source_gds": f"{block}.gds",
+             "source_netlist": "post_layout_extracted.spice", "native_log": "op.log"}
+    contents = {"source_layout": "magic\ntech fixture\n",
+                "source_gds": "fixture layout bytes",
+                "source_netlist": f".subckt {block} TOP VSS\n.ends {block}\n",
+                "native_log": f"ngspice-47\npwr = {power:.12g}\n"}
+    rec = {"schema": producer._A8_MEASUREMENT_SCHEMA,
+           "status": "MEASURED", "block": block, "metric": "cell_leakage_power",
+           "value": power, "unit": "W", "provenance": "real_ngspice",
+           "simulator": "ngspice-47", "image_digest": "sha256:" + "a" * 64,
+           "native_binary": {"path": "/fixture/ngspice", "sha256": "c" * 64,
+                             "selection": "discovered"},
+           "declared_ports": topology["ports"]}
+    for field, name in files.items():
+        path = b / name
+        path.write_text(contents[field])
+        rec[field] = str(path.relative_to(root))
+        rec[field + "_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    (b / "a8_measurement.json").write_text(json.dumps(rec))
+    return b, root / "phase3/analog/hardmacro" / block / f"{block}.lib"
+
+
+def test_r63_p1_retained_passive_native_zero_has_no_delay_defect(tmp_path):
+    assert hashlib.sha256(PASSIVE_LIB.read_bytes()).hexdigest() == PASSIVE_LIB_SHA256
+    _native_passive_case(tmp_path, roles=("cap",) * 56)
+    result = mod.run_audit(tmp_path)
+    assert result.passed, [(f.rule, f.message) for f in result.findings]
+    assert not {"LIB_NO_TIMING", "LIB_ZERO_DELAY"}.intersection(f.rule for f in result.findings)
+    assert result.summary["arc_delay_samples_examined"] == 0
+
+
+@pytest.mark.parametrize("power", [0, 1e-6])
+def test_r63_n1_zero_delay_is_not_hidden_by_leakage(tmp_path, power):
+    _mk(tmp_path, "active", LIB_ALL_ZERO.replace(
+        "cell_leakage_power : 0.0", f"cell_leakage_power : {power}"),
+        corner={"design_content": DESIGN_BOUND})
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_ZERO_DELAY" in {f.rule for f in result.findings}
+
+
+@pytest.mark.parametrize("roles", [("nmos",), ("bjt",), ("cap", "nmos"), (), None],
+                         ids=["active", "bjt", "mixed", "empty", "missing"])
+def test_r63_n2_zero_leakage_keeps_existing_inventory_refusals(tmp_path, roles):
+    _native_passive_case(tmp_path, roles=roles)
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_LEAKAGE_UNMEASURED" in {f.rule for f in result.findings}
+
+
+def test_r63_n3_signal_output_without_arcs_is_not_exempt(tmp_path):
+    _, lib = _native_passive_case(tmp_path)
+    lib.write_text(lib.read_text().replace('    pg_pin (TOP)',
+        '    pin (out) { direction : output; }\n    pg_pin (TOP)'))
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_NO_TIMING" in {f.rule for f in result.findings}
+
+
+def test_r63_n4_missing_leakage_attribute_is_rejected(tmp_path):
+    _, lib = _native_passive_case(tmp_path)
+    lib.write_text(lib.read_text().replace('    cell_leakage_power : 0;\n', ''))
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_LEAKAGE_UNMEASURED" in {f.rule for f in result.findings}
+
+
+@pytest.mark.parametrize("mutation", ["missing_measurement", "failed_measurement", "stale_log", "mismatched_value"])
+def test_r63_no_arc_model_still_requires_bound_native_leakage(tmp_path, mutation):
+    b, lib = _native_passive_case(tmp_path)
+    path = b / "a8_measurement.json"
+    if mutation == "missing_measurement":
+        path.unlink()
+    elif mutation == "failed_measurement":
+        doc = json.loads(path.read_text()); doc["status"] = "FAIL"
+        path.write_text(json.dumps(doc))
+    elif mutation == "stale_log":
+        (b / "op.log").write_text("ngspice-47\npwr = 1\n")
+    else:
+        lib.write_text(lib.read_text().replace("cell_leakage_power : 0;", "cell_leakage_power : 1;"))
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_LEAKAGE_UNMEASURED" in {f.rule for f in result.findings}
+
+
+def test_r63_power_attributes_are_not_delays():
+    text = PASSIVE_LIB.read_text().replace('    cell_leakage_power : 0;',
+        '    cell_leakage_power : 1;\n    leakage_power() { value : 2; }\n'
+        '    internal_power() { rise_power(t) { values("3"); } }')
+    has_timing, values, _ = mod.analyze_liberty(text)
+    assert not has_timing
+    assert values == []
+
+
+@pytest.mark.parametrize("roles", [("nmos",), ("bjt",), ("cap", "nmos"), (), None],
+                         ids=["active", "bjt", "mixed", "empty", "missing"])
+def test_r63_n2_nonzero_arcs_cannot_hide_zero_leakage(tmp_path, roles):
+    _, lib = _native_passive_case(tmp_path, roles=roles)
+    lib.write_text(lib.read_text().replace('    pg_pin (TOP)',
+        '    pin (out) { direction : output; timing() {\n'
+        '      cell_rise(scalar) { values("0.5"); } } }\n    pg_pin (TOP)'))
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_LEAKAGE_UNMEASURED" in {f.rule for f in result.findings}
+
+
+def test_r63_empty_timing_table_is_not_a_power_only_cell(tmp_path):
+    _, lib = _native_passive_case(tmp_path)
+    lib.write_text(lib.read_text().replace('    pg_pin (TOP)',
+        '    pin (out) { direction : output; timing() {\n'
+        '      cell_rise(scalar) { values(""); } } }\n    pg_pin (TOP)'))
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_NO_TIMING" in {f.rule for f in result.findings}
+
+
+def test_r63_characterized_positive_active_power_only_cell(tmp_path):
+    _, lib = _native_passive_case(tmp_path, roles=("nmos",), power=1e-6)
+    lib.write_text(lib.read_text().replace('cell_leakage_power : 0;',
+                                          'cell_leakage_power : 1;'))
+    result = mod.run_audit(tmp_path)
+    assert result.passed, [(f.rule, f.message) for f in result.findings]
+
+
+def test_r63_power_only_cell_cannot_hide_unavailable_inventory(tmp_path):
+    _, lib = _native_passive_case(tmp_path, roles=None, power=1e-6)
+    lib.write_text(lib.read_text().replace('cell_leakage_power : 0;',
+                                          'cell_leakage_power : 1;'))
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_LEAKAGE_UNMEASURED" in {f.rule for f in result.findings}

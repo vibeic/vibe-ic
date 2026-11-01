@@ -1,62 +1,11 @@
 #!/usr/bin/env python3
-"""analog_liberty_nonzero_delay_check.py — deterministic Liberty non-degeneracy gate.
+"""Audit Liberty delays separately from native-characterized leakage power.
 
-Extracted from the `analog-hardmacro-gen` skill "Do not" rule:
-    "Do not generate Liberty with zero delays — use actual SPICE-measured values"
-and the Step-3 worst-case-corner requirement
-    "Derived from SPICE corner results (worst-case SS corner)".
+Signal outputs require timing attributes. All-zero timing remains a defect;
+models without timing or signal outputs instead require the existing A8 native
+leakage contract, including its pure-passive measured-zero inventory rule.
 
-The skill documented these as prose; this program turns the
-non-degeneracy half into a deterministic structural check on the
-emitted Liberty (`hardmacro/<block>/<block>.lib`):
-
-  1. The .lib parses to a `library(...) { cell(<block>) { ... } }` shape.
-  2. The cell carries at least one timing-bearing numeric attribute and
-     ALL such numbers are non-zero — i.e. it is NOT a zero-delay /
-     area-only stub. Timing-bearing attributes checked:
-        cell_rise / cell_fall / rise_transition / fall_transition
-        cell_leakage_power / leakage_power value
-        intrinsic_rise / intrinsic_fall
-        timing() { ... values( ... ) ... }  (NLDM table — any non-zero entry)
-  3. If `analog/<block>/corner_results.json` exists, its provenance is
-     reported (real_ngspice vs stub) so a reviewer can see whether the
-     Liberty was derived from a real corner sweep.
-  4. If the design declares a clock period in its SDC or L8, every Liberty
-     propagation-delay arc must fit within that period. An analog settling
-     time longer than a clock period is an interface contract, not a
-     synchronous cell arc; it belongs in `interface.json` `timing_contract`.
-
-The defect this catches (real): a Liberty that only declares `area`
-(or whose every delay is `0.0`) passes STA vacuously — every path has
-zero delay, so the macro never violates setup/hold and the integration
-STA is meaningless. That is exactly the stub Liberty emitted at the
-A7 stub tier (`library(ldo_stub) { cell(ldo) { area : 10000 ; } }`).
-
-Honesty rules (NO vacuous PASS):
-  * No analog blocks                 -> VACUOUS (rc 2).
-  * .lib missing for a spec'd block  -> FAIL (cannot sign off STA).
-  * .lib present but unparseable     -> FAIL.
-  * .lib has a cell but NO timing-bearing attribute at all -> FAIL
-    (area-only stub, the documented zero-delay defect).
-  * .lib has a timing attribute whose value is 0 / 0.0 -> FAIL.
-  * .lib is non-degenerate, and NOTHING says what circuit those delays
-    model -> FAIL (LIB_SUBJECT_UNDECLARED). Asked LAST, after every rule
-    above. A model that records a library default still signs off, in the
-    PASS_STRUCTURE_ONLY tier; only silence costs.
-
-Usage:
-    python3 analog_liberty_nonzero_delay_check.py <project_dir>
-    python3 analog_liberty_nonzero_delay_check.py <project_dir> --json out.json
-
-Exit codes:
-    0 = PASS: at least one analog block was found and every Liberty is
-        non-degenerate
-    1 = FAIL (>=1 zero-delay / stub / missing Liberty)
-    2 = VACUOUS: nothing was examined — this project declares no analog block,
-        so there is no Liberty to prove non-degenerate. #521: the header
-        already said "Honesty rules (NO vacuous PASS)" and this branch was
-        exactly that, exiting 0 on 197 of the 200 tracked project roots. Also
-        rc 2 for an IO / argument error.
+Usage: analog_liberty_nonzero_delay_check.py <project_dir> [--json out.json]
 """
 from __future__ import annotations
 
@@ -152,7 +101,7 @@ _CONTENT_CHAIN = (_acc.CONTENT_GATE_OF_RECORD_ARTEFACT,)
 # Timing-bearing scalar attributes (single `attr : value ;`).
 _SCALAR_TIMING_ATTRS = (
     "cell_rise", "cell_fall", "rise_transition", "fall_transition",
-    "intrinsic_rise", "intrinsic_fall", "cell_leakage_power",
+    "intrinsic_rise", "intrinsic_fall",
 )
 _SCALAR_RE = {
     a: re.compile(rf"\b{a}\s*:\s*([-+0-9.eE]+)\s*;")
@@ -163,9 +112,6 @@ _SCALAR_RE = {
 # table group. We pull every numeric token out of every values(...) blob.
 _VALUES_RE = re.compile(r"values\s*\(", re.IGNORECASE)
 _NUM_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
-_LEAKAGE_GROUP_RE = re.compile(
-    r"leakage_power\s*\([^)]*\)\s*\{(?P<body>.*?)\}", re.DOTALL | re.IGNORECASE)
-_LEAKAGE_VALUE_RE = re.compile(r"\bvalue\s*:\s*([-+0-9.eE]+)\s*;")
 _CELL_RE = re.compile(r"\bcell\s*\(\s*([^)\s]+)\s*\)\s*\{", re.IGNORECASE)
 
 # A propagation delay is not the same thing as a leakage number or an output
@@ -300,44 +246,56 @@ class Result:
 
 
 def analyze_liberty(text: str) -> Tuple[bool, List[float], str]:
-    """Return (has_timing, numeric_values, cell_name).
-
-    has_timing      — True if >=1 timing-bearing attribute/table found.
-    numeric_values  — every timing-bearing number found (for zero check).
-    cell_name       — first cell(...) name (or "").
-    """
+    """Return whether timing attributes exist, their values, and the cell name."""
+    text = _without_liberty_comments(text)
     cm = _CELL_RE.search(text)
-    cell_name = cm.group(1) if cm else ""
-
     values: List[float] = []
     has_timing = False
-
-    # 1. scalar timing attrs
     for attr, rx in _SCALAR_RE.items():
-        for m in rx.finditer(text):
+        for match in rx.finditer(text):
             has_timing = True
             try:
-                values.append(float(m.group(1)))
+                values.append(float(match.group(1)))
             except ValueError:
                 values.append(float("nan"))
-
-    # 2. NLDM values(...) tables
-    for blob in _extract_values_blocks(text):
-        nums = [float(n) for n in _NUM_RE.findall(blob)]
-        if nums:
+        for match in re.finditer(rf"\b{attr}\s*\([^)]*\)\s*\{{", text):
             has_timing = True
-            values.extend(nums)
+            body = _balanced_group_body(text, match.end() - 1)
+            for blob in _extract_values_blocks(body):
+                values.extend(float(number) for number in _NUM_RE.findall(blob))
+    return has_timing, values, cm.group(1) if cm else ""
 
-    # 3. leakage_power groups with `value : x ;`
-    for lg in _LEAKAGE_GROUP_RE.finditer(text):
-        for vm in _LEAKAGE_VALUE_RE.finditer(lg.group("body")):
-            has_timing = True
-            try:
-                values.append(float(vm.group(1)))
-            except ValueError:
-                values.append(float("nan"))
 
-    return has_timing, values, cell_name
+def _has_signal_output(text: str) -> bool:
+    for match in re.finditer(r"\b(?:pin|bus|bundle)\s*\([^)]*\)\s*\{", text):
+        body = _balanced_group_body(text, match.end() - 1)
+        if re.search(r'\bdirection\s*:\s*"?output"?\s*;', body, re.I):
+            return True
+    return False
+
+
+def _native_leakage_refusal(project: Path, block: str, text: str) -> str:
+    import analog_a8_hardmacro_emit as producer
+
+    bdir = _analog_dir(project) / block
+    try:
+        topology = json.loads((bdir / "topology.json").read_text())
+        if not isinstance(topology, dict) or not isinstance(topology.get("devices"), list):
+            return "declared device inventory is unavailable"
+        measurement, why = producer.load_native_measurement(
+            project, block, bdir / f"{block}.gds", topology)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return f"native leakage evidence is unavailable: {exc}"
+    if measurement is None:
+        return why
+    scalar = re.search(r"\bcell_leakage_power\s*:\s*([-+0-9.eE]+)\s*;", text)
+    unit = re.search(r'\bleakage_power_unit\s*:\s*"([^"\n]+)"\s*;', text)
+    if scalar is None or unit is None:
+        return "Liberty lacks its measured leakage scalar or power unit"
+    if (unit.group(1) != measurement["liberty_power_unit"] or
+            float(scalar.group(1)) != float(f'{measurement["liberty_value"]:.12g}')):
+        return "Liberty leakage differs from the current native A8 measurement"
+    return ""
 
 
 def _discover_blocks(project: Path) -> List[str]:
@@ -405,6 +363,7 @@ def run_audit(project: Path) -> Result:
                 message=f"Block '{block}': {block}.lib unreadable: {exc}"))
             continue
 
+        text = _without_liberty_comments(text)
         has_timing, values, cell_name = analyze_liberty(text)
 
         if not _CELL_RE.search(text):
@@ -415,13 +374,14 @@ def run_audit(project: Path) -> Result:
                 message=f"Block '{block}': Liberty has no cell(...) definition."))
             continue
 
-        if not has_timing:
+        has_arc = has_timing or bool(re.search(r"\btiming\s*\(", text))
+        if (not has_timing or not values) and (has_arc or _has_signal_output(text)):
             res.passed = False
             failed.append(block)
             res.findings.append(Finding(
                 rule="LIB_NO_TIMING", severity="ERROR", block=block,
                 message=(f"Block '{block}': Liberty cell '{cell_name}' has no "
-                         f"timing/leakage attributes (area-only stub). This is "
+                         f"timing attributes for a signal output or timing arc. This is "
                          f"the documented zero-delay defect: STA would pass "
                          f"vacuously.")))
             continue
@@ -437,6 +397,17 @@ def run_audit(project: Path) -> Result:
                          f"is 0 — zero-delay model (forbidden). Use actual "
                          f"SPICE-measured delays.")))
             continue
+
+        leakage = re.search(r"\bcell_leakage_power\s*:\s*([-+0-9.eE]+)\s*;", text)
+        if (not has_arc or leakage is None or float(leakage.group(1)) <= 0):
+            why = _native_leakage_refusal(project, block, text)
+            if why:
+                res.passed = False
+                failed.append(block)
+                res.findings.append(Finding(
+                    rule="LIB_LEAKAGE_UNMEASURED", severity="ERROR", block=block,
+                    message=f"Block '{block}': {why}"))
+                continue
 
         arc_samples, time_unit = liberty_arc_delays_ns(text)
         arc_samples_examined += len(arc_samples)
@@ -511,25 +482,27 @@ def run_audit(project: Path) -> Result:
                          f"nothing would cost less than saying so.")))
             continue
 
+        model_detail = (f"{len(nonzero)} non-zero timing value(s)" if has_arc else
+                        "no signal output or timing arc; native leakage characterized")
         ok_blocks.append(block)
         if content == _acc.CONTENT_STRUCTURE_ONLY:
             structure_only.append(block)
             res.findings.append(Finding(
                 rule="LIB_STRUCTURE_ONLY", severity="WARNING", block=block,
                 message=(f"Block '{block}': Liberty cell '{cell_name}' has "
-                         f"{len(nonzero)} non-zero timing value(s) measured "
+                         f"{model_detail}; characterization "
                          f"OF A LIBRARY TOPOLOGY — `{cited}` records that its "
                          f"circuit came from a topology library and that no "
                          f"bound input reached any device parameter. The "
-                         f"delays are real and they are the default's; STA "
-                         f"closed on them is not closed on a designed "
-                         f"macro. corner provenance={provenance}.")))
+                         f"characterization belongs to that library default, "
+                         f"not a designed macro. corner provenance={provenance}.")))
         else:
             design_bound.append(block)
             res.findings.append(Finding(
-                rule="LIB_NONZERO_OK", severity="INFO", block=block,
+                rule="LIB_NONZERO_OK" if has_arc else "LIB_POWER_ONLY_OK",
+                severity="INFO", block=block,
                 message=(f"Block '{block}': Liberty cell '{cell_name}' has "
-                         f"{len(nonzero)} non-zero timing value(s); corner "
+                         f"{model_detail}; corner "
                          f"provenance={provenance}; design content "
                          f"design-bound per `{cited}`.")))
 
