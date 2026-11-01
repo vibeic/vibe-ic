@@ -758,6 +758,40 @@ def main(argv=None) -> int:
 # D60 uses the same native Magic stream primitive, without A8 macro renaming or
 # LEF-frame adjustment. Its independent D31 input inventory identifies the die's
 # required macro population; no D31 row PASS is synthesized or required here.
+def _d60_foreign_views(views, pdk_root, remember):
+    """Identify adopted copies of shipped PDK GDS by bytes, not cell names.
+
+    Generated hardmacros retain Magic as their producer. Replacing those from
+    an older adopted GDS would conceal a genuine layout change from readback.
+    """
+    import hashlib
+    import os
+    candidates = {}
+    for master, path in views.items():
+        path = Path(path)
+        key = (path.stat().st_size, hashlib.sha256(path.read_bytes()).hexdigest())
+        candidates.setdefault(key, []).append(master)
+    foreign, visited = {}, set()
+    for directory, children, files in os.walk(pdk_root, followlinks=True):
+        real = Path(directory).resolve(strict=True)
+        if real in visited:
+            children[:] = []
+            continue
+        visited.add(real)
+        for name in files:
+            if Path(name).suffix.lower() != '.gds':
+                continue
+            path = real / name
+            size = path.stat().st_size
+            if not any(key[0] == size for key in candidates):
+                continue
+            key = (size, hashlib.sha256(path.read_bytes()).hexdigest())
+            if key in candidates:
+                remember(path)
+                foreign.update({master: views[master] for master in candidates[key]})
+    return foreign
+
+
 def _d60_inputs(project):
     import hashlib
     import analog_pdk_availability as resolver
@@ -855,9 +889,10 @@ def _d60_inputs(project):
             if not child.is_file():
                 raise ValueError('D60_REQUIRED_CHILD_ABSENT: ' + cell)
             pending.append(child)
+    foreign_views = _d60_foreign_views(views, facts['pdk_root'], remember)
     return dict(top=top, tech=tech, pdk_root=str(Path(facts['pdk_root']).parent),
                 rcfile=str(rcfile), cells=cells, hierarchy=hierarchy, views=views,
-                instances=by_instance, inputs=records)
+                foreign_views=foreign_views, instances=by_instance, inputs=records)
 
 
 _D60_READBACK = r'''import json,pathlib,pya,hashlib
@@ -909,6 +944,49 @@ try:
 except Exception as exc:
     answer['reason']=str(exc)
 pathlib.Path(data['answer']).write_text(json.dumps(answer,sort_keys=True,indent=2)+'\n')
+'''
+
+
+# Adopted GDS is the geometry authority for foreign cells. Magic's technology
+# mapping is not a lossless interchange format for those cells. Keep the Magic
+# die geometry and instance placements, replacing only adopted master trees.
+# This producer runs once before readback; metric rechecks use _D60_READBACK
+# alone so they cannot repair a changed stream while checking it.
+_D60_MERGE = r'''import json,pathlib,pya,hashlib
+data=json.loads(pathlib.Path(D60_REQUEST).read_text())
+try:
+    layout=pya.Layout(); layout.read(data['gds'])
+    for master,path in data['foreign_views'].items():
+        source=pya.Layout(); source.read(path)
+        root=source.cell(master)
+        if root is None or root.is_empty() or layout.cell(master) is None:
+            raise ValueError('D60_ADOPTED_MASTER_ABSENT: '+master)
+        if source.dbu != layout.dbu:
+            raise ValueError('D60_ADOPTED_VIEW_DBU_UNSUPPORTED')
+        indexes=[root.cell_index(),*root.called_cells()]
+        mapping={}
+        for index in indexes:
+            cell=source.cell(index)
+            if cell.name == data['top']:
+                raise ValueError('D60_ADOPTED_VIEW_COLLISION')
+            target=layout.cell(cell.name)
+            if target is None:
+                raise ValueError('D60_REQUIRED_CHILD_ABSENT: '+cell.name)
+            mapping[index]=target.cell_index()
+        for index in indexes:
+            cell=source.cell(index); target=layout.cell(mapping[index])
+            target.clear()
+            target.copy_shapes(cell)
+            for inst in cell.each_inst():
+                reference=inst.cell_inst.dup()
+                reference.cell_index=mapping[inst.cell_index]
+                target.insert(reference)
+    if data['foreign_views']:
+        layout.write(data['gds'])
+    print('D60_MERGED_SHA256 '+hashlib.sha256(pathlib.Path(data['gds']).read_bytes()).hexdigest(),flush=True)
+except Exception as exc:
+    pathlib.Path(data['answer']).write_text(json.dumps({'status':'FAIL','reason':str(exc)})+'\n')
+    raise
 '''
 
 
@@ -964,10 +1042,9 @@ def execute(project, context):
                 or not gds.is_file() or _gds_geometry_count(gds.read_bytes()) <= 0):
             record['component_status'] = 'FAIL'
             raise ValueError('D60_NATIVE_STREAM_REJECTED')
-        streamed_sha256 = hashlib.sha256(gds.read_bytes()).hexdigest()
         request = output / 'readback-request.json'; answer = output / 'readback.json'
         request.write_text(json.dumps({**data, 'gds': str(gds), 'answer': str(answer)}))
-        checker = output / 'readback.py'; checker.write_text(_D60_READBACK)
+        checker = output / 'readback.py'; checker.write_text(_D60_MERGE + _D60_READBACK)
         argv = [tools['klayout'], '-b', '-r', str(checker), '-rd', 'D60_REQUEST=' + str(request)]
         done = subprocess.run(argv, capture_output=True, text=True)
         log = output / 'klayout.log'; log.write_text(done.stdout + done.stderr)
@@ -976,7 +1053,9 @@ def execute(project, context):
         if done.returncode or observed.get('status') != 'PASS':
             record['component_status'] = 'FAIL'
             raise ValueError(str(observed.get('reason', 'D60_STREAM_READBACK_REJECTED')))
-        if (observed.get('gds_sha256') != streamed_sha256
+        sealed = re.findall(r'(?m)^D60_MERGED_SHA256 ([0-9a-f]{64})$', done.stdout)
+        streamed_sha256 = sealed[0] if len(sealed) == 1 else None
+        if (streamed_sha256 is None or observed.get('gds_sha256') != streamed_sha256
                 or hashlib.sha256(gds.read_bytes()).hexdigest() != streamed_sha256):
             raise ValueError('D60_STREAM_CHANGED_DURING_READBACK')
         if _d60_inputs(project) != data or launch.local_image_attestation() != record['native_launch']:
@@ -1049,7 +1128,7 @@ def _d60_metric_observation(project, context, component):
         raise ValueError('D60_METRIC_ORIGINAL_COMPONENT_MISMATCH')
     gds = work / 'work' / (data['top'] + '.gds')
     if (set(paths) != {gds, work / 'readback.json', work / 'readback.py', work / 'readback-request.json', work / 'work/stream.tcl'}
-            or (work / 'readback.py').read_text() != _D60_READBACK
+            or (work / 'readback.py').read_text() != _D60_MERGE + _D60_READBACK
             or (work / 'work/stream.tcl').read_text() != build_gds_write_tcl(data['top'], data['top'], data['top'] + '.gds')
             or json.loads((work / 'readback-request.json').read_text()) !=
                {**data, 'gds': str(gds), 'answer': str(work / 'readback.json')}):
