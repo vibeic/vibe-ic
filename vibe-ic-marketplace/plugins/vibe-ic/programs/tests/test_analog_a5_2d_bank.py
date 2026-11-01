@@ -101,3 +101,42 @@ def test_realized_m2_exit_does_not_create_a_phantom_m3_obstacle():
     plan.m3_escape_obstacles = [('foreign', (800, 985, 1200, 1015))]
     a._route_m3_leg(plan, 'own', 1000, 0, 2000, g, sites)
     assert all(s['layer'] == 'metal3' for s in plan.shapes if s['net'] == 'own')
+
+
+def test_moved_island_remains_attached_to_the_existing_route():
+    g = geo()
+    plan = a.Plan()
+    sites = a.Sites([], g)
+    plan.sites = sites
+    plan.paint('own', 'metal2', 400, 985, 1000, 1015)
+    plan.paint('foreign', 'metal3', 985, 985, 1015, 1015)
+    start = len(plan.shapes)
+    a._via_stack(plan, 'own', 1000, 1000, 2, g, top=3, sites=sites, join_levels=(2,))
+    box = next(s['box'] for s in plan.shapes[start:] if s['layer'] == 'metal2')
+    assert box[0] < 1000 and 400 < box[2] and box[1] < 1015 and 985 < box[3]
+    assert not plan.deviations
+
+
+def test_endpoint_detour_uses_a_real_channel_beyond_the_endpoint_interval():
+    g = geo()
+    native = [{'net': '<device opaque>', 'layer': 'metal2',
+               'comp': ('opaque', i), 'lcomp': ('opaque', 'metal2', i), 'box': box}
+              for i,box in enumerate(((16112,10635,16132,11021),
+                                      (16651,10635,16671,10825),
+                                      (16739,10635,16759,10825),
+                                      (16691,10835,16719,10865)))]
+    plan = a.Plan()
+    sites = a.Sites(native,g)
+    plan.sites = sites
+    for net,layer,box in [
+        ('vdd','metal3',(16273,10467,16303,10828)),
+        ('vdd','metal3',(16107,10813,16303,10843)),
+        ('nrm','metal3',(16342,10835,16720,10865)),
+        ('nrmb','metal3',(16411,10713,16676,10743)),
+        ('nrmb','metal4',(15730,10823,17680,10853)),
+        ('vdd','metal2',(16098,10812,16146,10844)),
+        ('vss','metal2',(16725,10712,16773,10744)),
+        ('nrm','metal2',(16694,10816,16716,10884))]:
+        plan.paint(net,layer,*box)
+    assert a._route_m3_leg(plan,'nrmb',16426,10838,10728,g,sites)
+    assert any(s['net']=='nrmb' and s['layer']=='metal2' and s['box'][1]<10635 for s in plan.shapes)

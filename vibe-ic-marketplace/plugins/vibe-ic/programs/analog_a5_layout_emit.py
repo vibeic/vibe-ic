@@ -2208,7 +2208,8 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                compact_terminal: bool = False,
                exit_path: Optional[Tuple[int, int, int]] = None,
                search_lambda: int = ISLAND_SEARCH_LAMBDA,
-               horizontal: bool = False) -> Tuple[int, int]:
+               horizontal: bool = False,
+               join_levels: Sequence[int] = ()) -> Tuple[int, int]:
     """Carry a terminal from the metal the gencell delivered it on to the
     routing layer, and give every cut the metal the deck demands around it.
 
@@ -2303,6 +2304,12 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                         continue
                 if not sites.touches(box, term_layer, friendly):
                     continue
+                if any(not any(r["net"] == net and r["layer"] == f"metal{k}"
+                               and r["box"][0] < box[2] and box[0] < r["box"][2]
+                               and r["box"][1] < box[3] and box[1] < r["box"][3]
+                               for r in sites.near(f"metal{k}", box, 0))
+                       for k in join_levels):
+                    continue
                 if (friendly is not None and area < area_full
                         and sites.merged_area(box, term_layer, friendly)
                         < geo.area_lam2.get(level, 0)):
@@ -2312,8 +2319,9 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
             if placed is not None:
                 break
         if placed is None:
-            if compact_terminal or exit_path is not None:
-                purpose = "compact terminal access" if compact_terminal else "body exit path"
+            if compact_terminal or exit_path is not None or join_levels:
+                purpose = ("routing junction" if join_levels else
+                           "compact terminal access" if compact_terminal else "body exit path")
                 raise Refusal(
                     f"{(dev or {}).get('name', net)}: no source-legal {purpose} exists within "
                     f"{search_lambda} lambda of ({x}, {y}); refusing "
@@ -2609,6 +2617,47 @@ def _route_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
             merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
         else:
             merged.append((a, b))
+    if any(a <= y0 <= b for a, b in merged):
+        landing_xs = {x}
+        for _, box in obstacles:
+            if box[1] - space - geo.long_half[2] <= y0 <= box[3] + space + geo.long_half[2]:
+                landing_xs.update((box[0] - space - geo.long_half[2],
+                                   box[2] + space + geo.long_half[2]))
+        window = 2 * geo.pitch()
+        zone = (min(landing_xs)-window, lo-window, max(landing_xs)+window, hi+window)
+        for row in sites.near("metal2", zone, 0):
+            box = row["box"]
+            if box[1] - space - geo.long_half[2] <= y0 <= box[3] + space + geo.long_half[2]:
+                landing_xs.update((box[0]-space-geo.long_half[2],
+                                   box[2]+space+geo.long_half[2]))
+        for landing in sorted(landing_xs, key=lambda v: abs(v-x)):
+            ys = {y1}
+            zone = (min(x, landing) - window, lo - window,
+                    max(x, landing) + window, hi + window)
+            for row in sites.near("metal2", zone, 0):
+                ys.update((row["box"][1] - geo.long_half[2] - geo.metal_space("metal2"),
+                           row["box"][3] + geo.long_half[2] + geo.metal_space("metal2")))
+            for via_y in sorted((v for v in ys if lo-window <= v <= hi+window),
+                                key=lambda v: abs(v-y1)):
+                probe = Plan()
+                _via_stack(probe, net, x, via_y, 2, geo, top=3)
+                _via_stack(probe, net, landing, y0, 2, geo, top=4, horizontal=True)
+                hw2 = max(geo.wire[2] // 2, 1)
+                if via_y != y1:
+                    probe.paint(net, "metal3", x-half, min(via_y,y1), x+half, max(via_y,y1))
+                probe.paint(net, "metal2", min(x,landing)-hw2, via_y-hw2,
+                            max(x,landing)+hw2, via_y+hw2)
+                probe.paint(net, "metal2", landing-hw2, min(via_y,y0)-hw2,
+                            landing+hw2, max(via_y,y0)+hw2)
+                h4 = max(geo.wire[4] // 2, 1)
+                probe.paint(net, "metal4", min(x,landing)-h4, y0-h4, max(x,landing)+h4, y0+h4)
+                if any(r["box"][0] < 0 or r["box"][1] < 0
+                       or r["box"][2] > getattr(plan, "routing_width_limit", 10**12)
+                       or not sites.clear(r["box"], [r["layer"]], None, net) for r in probe.shapes):
+                    continue
+                for shape in probe.shapes:
+                    plan.paint(net, shape["layer"], *shape["box"])
+                return True
     cursor = lo
     for a, b in merged:
         chosen = None
@@ -3714,11 +3763,19 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             plan.paint(net, esc_layer, min(joint, lane) - esc_half,
                        ey - esc_half, max(joint, lane) + esc_half,
                        ey + esc_half)
+            descent_x, descent_y = lane, ey
             if g["strapped"] or carry_level == 2:
-                _via_stack(plan, net, lane, ey, 2, geo, top=3, sites=sites)
+                descent_x, descent_y = _via_stack(
+                    plan, net, lane, ey, 2, geo, top=3, sites=sites,
+                    join_levels=(2,) if rail_level == 4 else ())
             ry = row_rails[d["row"]][net]
             if rail_level == 4:
-                pending_legs.append((net, lane, ry, ey))
+                if descent_x != lane:
+                    bridge = (min(lane,descent_x)-hw3, ry-hw3, max(lane,descent_x)+hw3, ry+hw3)
+                    if not sites.clear(bridge, ["metal4"], None, net):
+                        raise Refusal(f"moved {net} landing cannot join its source M4 rail")
+                    plan.paint(net, "metal4", *bridge)
+                pending_legs.append((net, descent_x, ry, descent_y))
             else:
                 plan.paint(net, "metal3", lane - hw3, ry, lane + hw3, ey)
                 _via_stack(plan, net, lane, ry, 3, geo, top=rail_level, sites=sites)
@@ -3728,7 +3785,7 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     for net, lane, ry, ey in pending_legs:
         if not _route_m3_leg(plan, net, lane, ry, ey, geo, sites):
             _via_stack(plan, net, lane, ry, 3, geo, top=rail_level,
-                       sites=sites, horizontal=True)
+                       sites=sites, horizontal=True, join_levels=(3,4))
 
     plan.island_patches = commit_metal_patches(plan, patches, sites,
                                                len(per_dev))
@@ -3756,7 +3813,8 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             if net in bus_x:
                 _via_stack(plan, net, bus_x[net], ty, rail_level, geo, top=trunk_level, sites=sites,
                            search_lambda=0 if compact_bus else ISLAND_SEARCH_LAMBDA,
-                           horizontal=rail_level == 4)
+                           horizontal=rail_level == 4,
+                           join_levels=(rail_level,trunk_level) if rail_level == 4 else ())
     for net, bx in bus_x.items():
         if compact_bus:
             continue
