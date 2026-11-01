@@ -191,6 +191,25 @@ def _synth_mux_decomp(prompt: str, top: str, ports, out: str, out_w: int):
         return None
     if sorted(idx) != list(range(out_w)):   # membership, not count
         return None
+    # This branch emits SOP gates, not a mux-only implementation. Decline
+    # explicit supported gate restrictions through the normal backup contract.
+    # A mux mention, a negated restriction or permission to use gates is not
+    # such a directive. A wrapped line is not a new clause, and a permitted
+    # primitive list must not match just its mux prefix. Keep this test local.
+    mux = r"(?:\d+\s*(?:-?\s*to\s*-?|:)\s*\d+\s+)?(?:multiplexers?|mux(?:es)?)"
+    end_clause = r"(?=\s*(?:[.!?;]|$))"
+    gate_clause = r"(?=\s*(?:[.!?;]|$|and\b))"
+    if re.search(
+            r"(?:^|[.!?;]|\n\s*\n)\s*(?:"
+            r"(?:(?:you\s+)?(?:must|may|should|can)\s+)?"
+            r"(?:use\s+only|only\s+use)\s+" + mux + end_clause
+            + r"|(?:implement|build)\s+using\s+only\s+" + mux + end_clause
+            + r"|only\s+" + mux + r"\s+(?:may|can)\s+be\s+used" + end_clause
+            + r"|(?:you\s+are\s+)?not\s+allowed\s+to\s+use\s+(?:any\s+)?"
+            r"other\s+(?:logic\s+)?gates?" + gate_clause
+            + r"|no\s+other\s+(?:logic\s+)?gates?\s+(?:(?:are|is)\s+)?"
+            r"(?:allowed|permitted)" + gate_clause + r")\b", prompt, re.IGNORECASE):
+        return None
     # each data input = the column's own function of the row variables
     terms_by_idx = {}
     for j, ccode in enumerate(col_codes):
