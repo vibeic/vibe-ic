@@ -110,40 +110,48 @@ def parse_streamout_layermap(text: str, prefix: Optional[str] = None
     return out
 
 
+def _lef_tokens(text: str) -> List[str]:
+    return re.findall(r'"(?:\\.|[^"\\])*"|;|[^\s;]+', text)
+
+
 def _lef_layer_blocks(text: str) -> "OrderedDict[str, str]":
-    """Split a (tech) LEF into `LAYER <name> … END <name>` sections, line-by-line so a
-    layer that is not closed with its own name never swallows the rest of the file (a
-    single spanning `LAYER…END \\1` regex does exactly that)."""
+    """Keep the first LAYER definition, excluding semicolon-ended geometry references."""
     blocks: "OrderedDict[str, str]" = OrderedDict()
     cur: Optional[str] = None
     body: List[str] = []
-    for raw in strip_line_comments(text).splitlines():
-        s = raw.strip()
-        m = re.match(r"LAYER\s+(\S+)", s)
-        if m:
-            # keep the FIRST definition of a name: a routing LAYER is defined once up
-            # top, but its NAME recurs as a one-line geometry ref (`LAYER Metal1 ;`)
-            # inside every via/macro — those must not overwrite the real block.
+    tokens = _lef_tokens(strip_line_comments(text))
+    index = 0
+    while index < len(tokens):
+        word = tokens[index].upper()
+        if word == "LAYER" and index + 1 < len(tokens):
             if cur is not None:
-                blocks.setdefault(cur, "\n".join(body))
-            cur, body = m.group(1), []
-            continue
-        e = re.match(r"END\s+(\S+)", s)
-        if e and cur is not None and e.group(1) == cur:
-            blocks.setdefault(cur, "\n".join(body))
+                blocks.setdefault(cur, " ".join(body))
+            name = tokens[index + 1]
+            index += 2
             cur, body = None, []
+            if index < len(tokens) and tokens[index] == ";":
+                index += 1
+            else:
+                cur = name
+            continue
+        if (word == "END" and cur is not None and index + 1 < len(tokens)
+                and tokens[index + 1] == cur):
+            blocks.setdefault(cur, " ".join(body))
+            cur, body = None, []
+            index += 2
             continue
         if cur is not None:
-            body.append(s)
+            body.append(tokens[index])
+        index += 1
     if cur is not None:
-        blocks.setdefault(cur, "\n".join(body))
+        blocks.setdefault(cur, " ".join(body))
     return blocks
 
 
 def _lef_statements(body: str) -> List[Tuple[List[str], bool]]:
     statements = []
     tokens: List[str] = []
-    for token in re.findall(r'"(?:\\.|[^"\\])*"|;|[^\s;]+', body):
+    for token in _lef_tokens(body):
         if token == ";":
             if tokens:
                 statements.append((tokens, True))

@@ -232,6 +232,38 @@ def test_routing_names_need_no_derived_stem():
     assert cfg["layers"][0]["space"] == 0.71
 
 
+@pytest.mark.parametrize("layout", ["header", "compact", "single"])
+def test_routing_inventory_does_not_depend_on_line_breaks(layout):
+    lower = _routing_layer("Metal1", "SPACING 0.3 ;")
+    upper = _routing_layer("Crown", "SPACING 0.6 ;", "WIDTH 0.4 ;")
+    lef = lower + upper.replace("Crown\n TYPE", "Crown TYPE")
+    expected = {"metal1": [71, 0], "crown": [74, 0]}
+    if layout == "compact":
+        lef = " ".join(lef.split())
+    elif layout == "single":
+        lef = " ".join(upper.split())
+        expected = {"crown": [74, 0]}
+    cfg = G.build_metal_fill_config("Metal1 NET 71 0\nCROWN NET 74 0", lef, "")
+    assert {rule["name"]: rule["layer"] for rule in (cfg or {}).get("layers", [])} == expected
+
+
+@pytest.mark.parametrize("missing", ["WIDTH", "SPACING", "mapping"])
+def test_inline_routing_layer_with_missing_input_is_named(missing):
+    width = "" if missing == "WIDTH" else "WIDTH 0.4 ;"
+    spacing = "" if missing == "SPACING" else "SPACING 0.6 ;"
+    upper = _routing_layer("Crown", spacing, width).replace("Crown\n TYPE", "Crown TYPE")
+    lef = _routing_layer("Metal1", "SPACING 0.3 ;") + upper
+    mapping = "Metal1 NET 71 0" + ("" if missing == "mapping" else "\nCROWN NET 74 0")
+    with pytest.raises(ValueError, match=rf"Crown.*{missing}"):
+        G.build_metal_fill_config(mapping, lef, "")
+
+
+def test_routing_inventory_ignores_geometry_references_and_quoted_layer_words():
+    lef = _routing_layer("Metal1", 'SPACING 0.3 ;\n PROPERTY note "LAYER Ghost TYPE ROUTING ;" ;')
+    lef += "MACRO Cell PIN A PORT LAYER Metal1 ; RECT 0 0 1 1 ; END END A END Cell"
+    assert G.parse_techlef_routing(lef, "Metal") == {"metal1": (0.22, 0.3)}
+
+
 def test_arbitrary_routing_name_keeps_deck_declared_regions():
     deck = """crown_drawn = input(74, 0)
 blocked = input(95, 0)
