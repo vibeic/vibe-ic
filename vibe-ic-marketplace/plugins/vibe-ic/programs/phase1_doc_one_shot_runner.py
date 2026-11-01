@@ -23619,6 +23619,9 @@ def gen_l1_datasheet(project: Path,
         pins, extracted, ic_name,
         register_exclusions_out=_v2090_register_exclusions)
 
+    from _pin_interface_conditions import project_pin_conditions
+    project_pin_conditions(pins, extracted, _issue3234_position_is_current)
+
     content = {
         "schema_version": 2,
         "doc_class": "datasheet",
@@ -37467,6 +37470,8 @@ def gen_l5_adi_spec(project: Path,
         bool(blocks)
         and _v1_6_613_input_has_digital_serial_readout(extracted))
     _emit_block_device_class_constraints(blocks, extracted)
+    from _pin_interface_conditions import project_block_conditions
+    project_block_conditions(blocks, extracted, _issue3234_position_is_current)
     content = {
         "schema_version": 2,
         "doc_class": "adi_spec",

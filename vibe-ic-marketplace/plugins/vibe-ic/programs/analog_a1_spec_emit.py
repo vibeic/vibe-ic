@@ -23,6 +23,10 @@ Phase 1 already attributed to that block, and only that:
     phase1/generated_docs/L5_ADI_SPEC.json # analog_blocks[].spec.specs[]
         -> phase3/analog/<block>/spec.json      (layout (a): `specs: [...]`)
 
+Source-declared spec.input_conditions[] is retained separately as
+input_conditions[], including in a spec-gap record. It is an operating
+condition, never an output-performance target.
+
 The binding runs through the consumer's OWN vocabulary —
 `analog_real_corner_sweep.l5_block_specs()` / `normalize_spec_label()`, whose
 docstring says it is "Exported so the Phase-1 PRODUCER can emit spec names in
@@ -598,6 +602,8 @@ def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
                     if isinstance(s, dict) and s.get("name")]
         bdir.mkdir(parents=True, exist_ok=True)
         gap = _gap_body(project, entry, str(name), btype, seen)
+        if isinstance(raw_spec, dict) and raw_spec.get("input_conditions"):
+            gap["input_conditions"] = raw_spec["input_conditions"]
         (bdir / "spec_gap.json").write_text(
             json.dumps(gap, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8")
@@ -631,6 +637,10 @@ def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
         "_provenance": _provenance(project, entry, btype,
                                    [s["name"] for s in specs], match),
     }
+    # Boundary conditions retain their source identity and are not output targets.
+    raw_spec = entry.get("spec")
+    if isinstance(raw_spec, dict) and raw_spec.get("input_conditions"):
+        body["input_conditions"] = raw_spec["input_conditions"]
     iface = _interface(entry)
     if not iface:
         staged = _staged_interface_ports(project, name, btype)
