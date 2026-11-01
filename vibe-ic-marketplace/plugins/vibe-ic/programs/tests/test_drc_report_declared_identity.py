@@ -1,4 +1,3 @@
-"""DRC discovery follows producer declarations before judging report bytes."""
 import hashlib
 import json
 import sys
@@ -27,7 +26,6 @@ def _report(count=0, *, producer="KLayout DRC"):
 
 
 def _declare(project, report, *, log=None):
-    """Use the runner's existing native-report to signoff-copy declaration."""
     source = _write(project, "native/" + report.name, report.read_text())
     digest = "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
     outputs = {str(source.relative_to(project)): digest}
@@ -144,3 +142,97 @@ def test_named_router_iteration_defers_only_to_selected_final(tmp_path, with_fin
     assert result.summary["ignored_intermediate_reports"] == (
         [iteration.name] if with_final else []
     )
+
+
+def test_current_report_roles_exclude_transcript_with_real_report_artifact(tmp_path):
+    from _hostpaths import repo_path
+
+    fixture = repo_path("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+                        "tests", "fixtures", "drc_native_input_binding", "zero.xml")
+    report = _write(tmp_path, "reports/geometry.lyrdb", fixture.read_text())
+    native = _write(tmp_path, "native/geometry.lyrdb", fixture.read_text())
+    log = _converter(tmp_path)
+    _write(tmp_path, "reports/phase3/direct_current_drc.json", json.dumps({
+        "outputs": {role: {"path": str(path.relative_to(tmp_path))}
+                    for role, path in (("report", report), ("native_report", native),
+                                       ("log", log))},
+    }))
+
+    result = audit._check_drc(tmp_path)
+
+    assert result.summary["files_found"] == 1
+    assert result.summary["unreadable_files"] == 0
+    assert result.summary["real_violation_total"] == 0
+    assert result.subject_files == [str(report)]
+
+
+@pytest.mark.parametrize("damaged", [False, True])
+def test_native_pv_uses_existing_producer_report_identity(tmp_path, damaged):
+    from analog_a6_librelane_drc import ENGINES
+
+    step, metric, basename = ENGINES[0]
+    folder = Path("phase3/librelane/31-drc/01-producer")
+    report = _write(tmp_path, str(folder / "reports" / basename),
+                    "<report-database><items>" if damaged else _report())
+    converter = _converter(tmp_path)
+    _write(tmp_path, "reports/phase3/librelane_pv_drc.json", json.dumps({
+        "metrics": {metric: {"step": step, "folder": str(folder)},
+                    "klayout__density_error__count": {
+                        "step": "KLayout.Density", "folder": str(converter.parent)}},
+    }))
+
+    result = audit._check_drc(tmp_path)
+
+    assert result.passed is (not damaged)
+    assert result.summary["files_found"] == 1
+    assert result.summary["unreadable_files"] == int(damaged)
+    assert result.subject_files == [str(report)]
+
+
+@pytest.mark.parametrize("with_final", [True, False])
+def test_recorded_router_iteration_is_a_subject_without_explicit_cli(tmp_path, with_final):
+    iteration = _write(tmp_path, "phase3/stage3/pnr/routed_router.drc.iter1.rpt",
+                       _report(8, producer="OpenROAD detailed_route"))
+    _write(tmp_path, "reports/orchestrator/phase3_one_shot.json", json.dumps({
+        "program": "phase3_one_shot_runner",
+        "steps": [{"name": "pnr", "extras": {"resize_history": [{
+            "router_drc_report": str(iteration), "iteration": 1,
+        }]}}],
+    }))
+    if with_final:
+        from phase3_one_shot_runner import _write_router_drc_receipt
+
+        final = _write(tmp_path, "phase3/stage3/pnr/routed_router.drc.rpt",
+                       _report(producer="OpenROAD detailed_route"))
+        log = ("[INFO DRT-0195] Start detail routing.\n"
+               "[INFO DRT-0199] Number of violations = 0.\n"
+               "[INFO DRT-0198] Complete detail routing.\n")
+        _write(tmp_path, "phase3/stage3/pnr/openroad.log", log)
+        routed = _write(tmp_path, "phase3/stage3/pnr/routed.def",
+                        "VERSION 5.8 ;\nDESIGN widget ;\nEND DESIGN\n")
+        assert _write_router_drc_receipt(final.parent, routed, log)
+
+    result = audit._check_drc(tmp_path)
+
+    assert result.passed is with_final
+    assert result.summary["real_violation_total"] == (0 if with_final else 8)
+    assert result.summary["files_found"] == 1
+    assert result.summary["ignored_intermediate_reports"] == (
+        [str(iteration.relative_to(tmp_path))] if with_final else []
+    )
+
+
+def test_declared_identity_cannot_select_a_parent_directory_report(tmp_path):
+    project = tmp_path / "subject"
+    report = _write(project, "reports/phase3/drc_signoff.rpt", _report())
+    _declare(project, report)
+    _write(tmp_path, "foreign_drc.rpt", _report(7))
+    _write(project, "reports/phase3/direct_current_drc.json", json.dumps({
+        "outputs": {"native_report": {"path": "../foreign_drc.rpt"}},
+    }))
+
+    result = audit._check_drc(project)
+
+    assert result.passed is True
+    assert result.summary["files_found"] == 1
+    assert result.summary["real_violation_total"] == 0

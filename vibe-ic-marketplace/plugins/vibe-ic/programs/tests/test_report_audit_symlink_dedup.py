@@ -76,10 +76,12 @@ def _klayout_drc(n_items: int, top: str = "top") -> str:
 """ % (top, items)
 
 
-def _audit(project: Path, out: Path):
+def _audit(project: Path, out: Path, subjects):
     rc = subprocess.run(
         [sys.executable, str(PROGRAMS / 'drc_report_check.py'), str(project),
-         '--mode', 'drc', '--json', str(out)],
+         '--mode', 'drc', *[arg for path in subjects
+                            for arg in ('--subject', str(path))],
+         '--json', str(out)],
         capture_output=True, text=True,
     )
     import json
@@ -96,7 +98,8 @@ def test_step_symlink_is_not_counted_twice(tmp_path):
     rpt.write_text(_klayout_drc(3))
     (step / 'drc_signoff.rpt').symlink_to(rpt.resolve())   # what the runner publishes
 
-    _, summary = _audit(tmp_path, tmp_path / 'out.json')
+    _, summary = _audit(tmp_path, tmp_path / 'out.json',
+                        [rpt, step / 'drc_signoff.rpt'])
 
     assert summary['files_found'] == 1, (
         "the symlink and its target are one inode; discovering both double-counts "
@@ -121,7 +124,8 @@ def test_genuinely_distinct_reports_are_still_counted_separately(tmp_path):
     (tmp_path / 'reports/phase3/drc_signoff.rpt').write_text(_klayout_drc(3, "top_a"))
     (step / 'drc_signoff.rpt').write_text(_klayout_drc(4, "top_b"))  # real file, not a link
 
-    _, summary = _audit(tmp_path, tmp_path / 'out.json')
+    _, summary = _audit(tmp_path, tmp_path / 'out.json',
+                        [tmp_path / 'reports/phase3/drc_signoff.rpt', step / 'drc_signoff.rpt'])
 
     assert summary['files_found'] == 2, (
         f"two independent reports must both be audited (got {summary['files_found']})"
@@ -173,8 +177,10 @@ def test_an_independent_byte_identical_copy_is_one_measurement(tmp_path):
     (solo / 'reports/phase3').mkdir(parents=True)
     (solo / 'reports/phase3/drc_signoff.rpt').write_text(body)
 
-    _, once = _audit(solo, tmp_path / 'solo.json')
-    _, twice = _audit(tmp_path, tmp_path / 'out.json')
+    _, once = _audit(solo, tmp_path / 'solo.json',
+                       [solo / 'reports/phase3/drc_signoff.rpt'])
+    _, twice = _audit(tmp_path, tmp_path / 'out.json',
+                        [tmp_path / 'reports/phase3/drc_signoff.rpt', tmp_path / 'phase3/stage3/pnr/routed.drc.rpt'])
 
     assert once['files_found'] == 1 and once['real_violation_total'] == 3, (
         f"reference arm is not the expected single measurement: {once}"
@@ -203,7 +209,8 @@ def test_two_empty_reports_are_two_holes_not_one(tmp_path):
     (tmp_path / 'reports/phase3/drc_signoff.rpt').write_text('')
     (tmp_path / 'phase3/stage3/pnr/routed.drc.rpt').write_text('')
 
-    _, summary = _audit(tmp_path, tmp_path / 'out.json')
+    _, summary = _audit(tmp_path, tmp_path / 'out.json',
+                        [tmp_path / 'reports/phase3/drc_signoff.rpt', tmp_path / 'phase3/stage3/pnr/routed.drc.rpt'])
 
     assert summary['files_found'] == 2, (
         "two empty reports must stay two; got "
@@ -231,7 +238,8 @@ def test_same_size_different_bytes_are_still_two(tmp_path):
     (tmp_path / 'reports/phase3/drc_signoff.rpt').write_text(one)
     (tmp_path / 'phase3/stage3/pnr/routed.drc.rpt').write_text(two)
 
-    _, summary = _audit(tmp_path, tmp_path / 'out.json')
+    _, summary = _audit(tmp_path, tmp_path / 'out.json',
+                        [tmp_path / 'reports/phase3/drc_signoff.rpt', tmp_path / 'phase3/stage3/pnr/routed.drc.rpt'])
 
     assert summary['files_found'] == 2, (
         f"equal size is not equal content; got files_found={summary['files_found']}"
@@ -274,7 +282,8 @@ def test_a_hard_link_is_the_same_physical_file_too(tmp_path):
     assert (step / 'drc_signoff.rpt').stat().st_ino == rpt.stat().st_ino
     assert not (step / 'drc_signoff.rpt').is_symlink()
 
-    _, summary = _audit(tmp_path, tmp_path / 'out.json')
+    _, summary = _audit(tmp_path, tmp_path / 'out.json',
+                        [rpt, step / 'drc_signoff.rpt'])
     assert summary['files_found'] == 1, (
         f"a hard link is one inode and one file (got "
         f"files_found={summary['files_found']})")
@@ -351,7 +360,10 @@ def test_symlink_loop_returns_a_verdict_not_a_traceback(tmp_path, extra, label):
     out = tmp_path / 'out.json'
     r = subprocess.run(
         [sys.executable, str(PROGRAMS / 'drc_report_check.py'), '.',
-         '--mode', 'drc', *extra, '--json', str(out)],
+         '--mode', 'drc', *extra,
+         '--subject', 'reports/phase3/drc_signoff.rpt',
+         '--subject', 'reports/phase3/drc_a.rpt',
+         '--subject', 'reports/phase3/drc_b.rpt', '--json', str(out)],
         cwd=str(tmp_path), capture_output=True, text=True,
     )
     assert 'Traceback' not in r.stderr, (
@@ -396,7 +408,8 @@ def test_a_scoped_loop_cannot_buy_a_green(tmp_path):
     r = subprocess.run(
         [sys.executable, str(PROGRAMS / 'drc_report_check.py'), '.',
          '--mode', 'drc', '--under', 'reports/phase3/drc_signoff.rpt',
-         '--json', str(out)],
+         '--subject', 'reports/phase3/drc_signoff.rpt',
+         '--subject', 'reports/phase3/drc_signoff_alt.rpt', '--json', str(out)],
         cwd=str(tmp_path), capture_output=True, text=True,
     )
     assert 'Traceback' not in r.stderr, r.stderr
@@ -478,7 +491,8 @@ def test_filtered_alias_does_not_burn_the_canonical_reports_key(
     # properties of the shipped program, which is what we want from them.
     monkeypatch.setattr(Path, 'rglob', real_rglob)
 
-    _, summary = _audit(tmp_path, tmp_path / 'out.json')
+    _, summary = _audit(tmp_path, tmp_path / 'out.json',
+                        [alias_dir / 'drc_signoff.rpt', rpt])
     assert summary['files_found'] == 1, (
         f"the report exists; a dropped alias must not hide it "
         f"(got files_found={summary['files_found']})")
@@ -506,7 +520,8 @@ def test_backup_alias_is_still_filtered_when_reached_last(tmp_path):
         f"the backup alias must stay filtered (got "
         f"{[str(p.relative_to(tmp_path)) for p in found]})")
 
-    _, summary = _audit(tmp_path, tmp_path / 'out.json')
+    _, summary = _audit(tmp_path, tmp_path / 'out.json',
+                        [rpt, alias_dir / 'drc_signoff.rpt'])
     assert summary['real_violation_total'] == 11, (
         f"the backup alias must not add a second count "
         f"(got {summary['real_violation_total']})")
