@@ -194,7 +194,7 @@ def wide_terminal_inputs():
     cell = {"labels": [{"name": "R1", "layer": "metal1", "level": 1, "x": -200, "y": 0},
                        {"name": "R2", "layer": "metal1", "level": 1, "x": 200, "y": 0}],
             "sections": {"metal1": [(-250, -50, -150, 50), (150, -50, 250, 50)]},
-            "bbox": (-300, -100, 300, 100), "delta": (0, 0), "cell": "passive", "layers": None}
+            "bbox": (-300, -100, 300, 100), "delta": (300, 100), "cell": "passive", "layers": None}
     return device, {a5.config_key(device): cell}, facts, geometry()
 
 
@@ -236,3 +236,88 @@ def test_a_cut_layer_cannot_silently_become_a_metal_shield():
     raw = declared({"kind": "separation", "nets": ["load", "signal"], "shield_net": "return", "layer": "via1"})
     with pytest.raises(a5.Refusal, match="ROUTING_INTENT_SHIELD_LAYER"):
         a5.build_plan(data["devices"], data["ports"], cells, facts, geo, 48, data["pin_spec"], routing_intent=raw)
+
+
+@pytest.mark.parametrize("kind", ["kelvin", "star"])
+def test_terminal_load_join_reaches_actual_native_contact(kind):
+    template, cells, facts, geo = wide_terminal_inputs()
+    devices = [dict(template, name=name, nets=["a", "b"]) for name in ("force", "sense", "load")]
+    constraint = {"kind": kind, "net": "a", "join": terminal("load")}
+    if kind == "kelvin":
+        constraint.update(force=[terminal("force")], sense=terminal("sense"))
+    else:
+        constraint["groups"] = [[terminal("force")], [terminal("sense")]]
+    plan = a5.build_plan(devices, ["a", "b"], cells, facts, geo, 40, routing_intent=declared(constraint))
+    assert plan.routing_intent_evidence["constraints"][0]["outside_join_connected"] is False
+    assert not a5.net_shorts(plan)
+
+
+def test_unlabeled_native_contact_still_belongs_to_its_terminal_net():
+    cell = {"bbox": (0, 0, 30, 130), "sections": {"polycont": [(0, 0, 30, 30), (0, 100, 30, 130)],
+            "poly": [(10, 0, 20, 130)]}, "labels": [{"name": "G", "layer": "polycont", "x": 15, "y": 115, "level": 1}]}
+    device = {"name": "m", "class": "mosfet", "nets": ["d", "g", "s", "b"], "pars": {}}
+    rows = [{"net": "<device m>", "layer": "metal1", "box": box, "comp": ("m", i), "lcomp": ("m", "metal1", i)}
+            for i, box in enumerate(((0, 0, 30, 30), (0, 100, 30, 130)))]
+    plan = a5.Plan();plan.device_shapes = rows
+    plan.shapes = [{"net": "g", "layer": "metal1", "box": (0, 100, 30, 130)},
+                   {"net": "d", "layer": "metal1", "box": (40, 0, 70, 30)}]
+    plan.intent_placed = [{"dev": device, "cell": cell, "origin": (0, 0), "rows": rows}]
+    raw = declared({"kind": "separation", "nets": ["g", "d"], "spacing_um": .5})
+    compiled = ri.compile_branches(ri.parse_intent(raw), [device], ["g", "d"])
+    ri._anchors(plan, compiled, a5)
+    assert ri._canonical(rows[0], compiled, plan) == {"g"}
+    with pytest.raises(ri.IntentRefusal, match="ROUTING_INTENT_SEPARATION"):
+        ri.verify_separation(plan, compiled, geometry(), a5)
+
+
+def test_sense_route_cannot_carry_force_terminal_through_the_load():
+    f, s = ri.Terminal("f", 0), ri.Terminal("s", 0)
+    topology = ri.Topology("kelvin", "p", ((f,), (s,)), ri.Port("p"))
+    compiled = ri.Compiled(ri.RoutingIntent((topology,)), [], [], {"f": "p", "s": "p"}, {f: "f", s: "s"},
+                           {"p": ("f", "s")}, {"p": "f"}, None)
+    plan = a5.Plan()
+    plan.shapes = [{"net": "f", "layer": "metal2", "box": (9, 0, 10, 1)},
+                   {"net": "s", "layer": "metal2", "box": (0, 0, 10, 1)}]
+    plan.device_shapes = [{"net": "<device f>", "layer": "metal2", "box": (0, 0, 1, 1), "comp": ("f", 0)},
+                          {"net": "<device s>", "layer": "metal2", "box": (3, 0, 4, 1), "comp": ("s", 0)}]
+    plan.intent_anchors = {f: [{"layer": "metal2", "box": (0, 0, 1, 1), "comp": ("f", 0)}],
+                           s: [{"layer": "metal2", "box": (3, 0, 4, 1), "comp": ("s", 0)}]}
+    regions = {"p": {"box": (9, -1, 11, 2), "layers": ("metal2",), "load_layer": "metal2", "native_component": None}}
+    with pytest.raises(ri.IntentRefusal, match="ROUTING_INTENT_DISCONNECTED_BRANCH"):
+        ri.verify_topology(plan, compiled, regions, a5._linked)
+
+
+def test_a_remote_via_cannot_turn_an_insulated_crossing_into_a_load_join():
+    f, s = ri.Terminal("f", 0), ri.Terminal("s", 0)
+    topology = ri.Topology("kelvin", "p", ((f,), (s,)), ri.Port("p"))
+    compiled = ri.Compiled(ri.RoutingIntent((topology,)), [], [], {"f": "p", "s": "p"}, {f: "f", s: "s"},
+                           {"p": ("f", "s")}, {"p": "f"}, None)
+    plan = a5.Plan()
+    plan.shapes = [{"net": "f", "layer": "metal3", "box": (0, 0, 1, 1)},
+                   {"net": "f", "layer": "via2", "box": (0, 0, 1, 1)},
+                   {"net": "f", "layer": "metal2", "box": (0, 0, 5, 1)},
+                   {"net": "s", "layer": "metal3", "box": (9, 0, 10, 1)}]
+    plan.device_shapes = [{"net": "<device>", "layer": "metal3", "box": (0, 0, 10, 1)},
+                          {"net": "<device f>", "layer": "metal3", "box": (0, 0, 1, 1), "comp": ("f", 0)},
+                          {"net": "<device s>", "layer": "metal3", "box": (9, 0, 10, 1), "comp": ("s", 0)}]
+    plan.intent_anchors = {f: [{"layer": "metal3", "box": (0, 0, 1, 1), "comp": ("f", 0)}],
+                           s: [{"layer": "metal3", "box": (9, 0, 10, 1), "comp": ("s", 0)}]}
+    regions = {"p": {"box": (4, -1, 6, 2), "layers": ("metal2", "metal3", "via2"), "load_layer": "metal2", "native_component": None}}
+    with pytest.raises(ri.IntentRefusal, match="ROUTING_INTENT_DISCONNECTED_BRANCH"):
+        ri.verify_topology(plan, compiled, regions, a5._linked)
+
+
+def test_upper_plane_wire_keeps_its_larger_pdk_floor():
+    device, cells, facts, _ = wide_terminal_inputs()
+    facts.deck["metal_width_um"][6] = 1.64
+    geo = a5.Geo(facts.deck, .2, 100, .3, .1)
+    cell = cells[a5.config_key(device)]
+    cell["sections"] = {"metal6": [(-300, -100, -100, 100), (100, -100, 300, 100)]}
+    cell["bbox"] = (-350, -150, 350, 150);cell["delta"] = (350, 150)
+    for label in cell["labels"]:
+        label["layer"], label["level"] = "metal6", 6
+    plan = a5.build_plan([device], ["a", "b"], cells, facts, geo, 40,
+                         routing_intent=declared({"kind": "width", "net": "a", "wire_width_um": .6, "via_cuts": 1}))
+    wires = [row["box"] for row in plan.shapes if row["net"] == "a" and row["layer"] == "metal6"
+             and row["box"][2] - row["box"][0] > 200]
+    assert wires and min(box[3] - box[1] for box in wires) >= 164

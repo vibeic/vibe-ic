@@ -279,6 +279,17 @@ def verify_topology(plan, compiled: Compiled, regions, linked):
                      and _overlap(row["box"], junction["box"])]
         if not load_rows or not any(full[index] in roots for index in load_rows):
             refuse("DISCONNECTED_BRANCH", f"{topology.net} does not reach the declared load conductor")
+        local = [dict(row, box=_intersection(row["box"], junction["box"])) for row in rows
+                 if row["layer"] in junction["layers"] and _overlap(row["box"], junction["box"])]
+        local_roots = components(local, linked)
+        load_roots = {root for row, root in zip(local, local_roots)
+                      if row["layer"] == junction["load_layer"]
+                      and (row.get("comp") == junction.get("native_component") if junction.get("native_component") is not None
+                           else row["net"] == compiled.joins[topology.net])}
+        for private in ids:
+            if not any(row["net"] == private and row["_route"] and root in load_roots
+                       for row, root in zip(local, local_roots)):
+                refuse("DISCONNECTED_BRANCH", f"{private} does not contact the load inside its declared junction")
         clipped = [dict(row, box=box) for row in rows
                    for box in (_clip(row["box"], junction["box"])
                                if row["layer"] in junction["layers"] else [row["box"]])]
@@ -463,19 +474,33 @@ def _join_terminal(plan, topology, compiled, geo, a5):
     if not boxes:
         refuse("ENDPOINT", "the load label has no native contact footprint")
     region = min(boxes, key=lambda box: (box[2] - box[0]) * (box[3] - box[1]))
-    level = int(anchor["layer"][5:])
+    level = max(3, int(anchor["layer"][5:]))
     top = max(4, level + 1)
     if top not in geo.rules["metal_width_um"]:
         refuse("NO_LEGAL_ROUTE", "the load terminal has no available upper routing plane")
     count = len(compiled.branches[topology.net]) - 1
-    return region, level, top, [(x, y)] * count, anchor["comp"]
+    _, bars = a5._pin_stack_boxes(0, 0, level, top, geo, geo.intent_cuts.get(compiled.joins[topology.net], 1))
+    half = max(abs(box[index]) for box in bars.values() for index in (1, 3))
+    pitch = 2 * half + max(geo.metal_space(f"metal{level}"), geo.metal_space(f"metal{top}"))
+    height = (count - 1) * pitch + 2 * half
+    if height > region[3] - region[1]:
+        refuse("VIA_SITE", "the declared terminal cannot contain independent branch landings")
+    first_y = y - ((count - 1) * pitch) // 2
+    targets = [(x, first_y + index * pitch) for index in range(count)]
+    owner = compiled.joins[topology.net]
+    column = _wire(level, x, targets[0][1], x, targets[-1][1], geo)
+    if not _inside(column[1], region) or not _safe([column], owner, plan, compiled, geo, a5, region,
+                                               (f"metal{level}",), anchor["comp"]):
+        refuse("NO_LEGAL_ROUTE", "no clear local load-terminal junction exists")
+    plan.paint(owner, column[0], *column[1])
+    return region, level, top, targets, anchor["comp"]
 
 
-def _connect_branch(plan, branch, owner, region, level, top, target, compiled, geo, a5, friendly=None):
+def _connect_branch(plan, branch, owner, region, level, top, target, compiled, geo, a5, friendly=None, junction_layers=None):
     tx, ty = target
     cuts = geo.intent_cuts.get(branch, 1)
-    allowed_layers = tuple([f"metal{k}" for k in range(level, top + 1)]
-                           + [f"via{k}" for k in range(level, top)])
+    allowed_layers = junction_layers or tuple([f"metal{k}" for k in range(level, top + 1)]
+                                              + [f"via{k}" for k in range(level, top)])
     join_paint, bars = a5._pin_stack_boxes(tx, ty, level, top, geo, cuts)
     if not _inside(bars[level], region):
         refuse("VIA_SITE", "the declared load contact cannot enclose the requested cut array")
@@ -685,12 +710,14 @@ def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, 
             band += len(others) + 3
         else:
             region, level, top, targets, friendly = _join_terminal(plan, topology, compiled, net_geo, a5)
-        junction_layers[topology.net] = tuple([f"metal{k}" for k in range(level, top + 1)]
-                                                + [f"via{k}" for k in range(level, top)])
+        load_layer = f"metal{level}" if friendly is None else plan.intent_anchors[topology.join][0]["layer"]
+        lowest = min(level, int(load_layer[5:]))
+        junction_layers[topology.net] = tuple([f"metal{k}" for k in range(lowest, top + 1)]
+                                                + [f"via{k}" for k in range(lowest, top)])
         regions[topology.net] = {"box": region, "layers": junction_layers[topology.net],
-                                 "load_layer": f"metal{level}", "native_component": friendly}
+                                 "load_layer": load_layer, "native_component": friendly}
         for branch, target in zip(others, targets):
-            _connect_branch(plan, branch, owner, region, level, top, target, compiled, geo.for_net(branch), a5, friendly)
+            _connect_branch(plan, branch, owner, region, level, top, target, compiled, geo.for_net(branch), a5, friendly, junction_layers[topology.net])
     shield_evidence = build_shields(plan, compiled, geo, facts, a5)
     evidence = verify_topology(plan, compiled, regions, a5._linked)
     evidence.extend(shield_evidence)
