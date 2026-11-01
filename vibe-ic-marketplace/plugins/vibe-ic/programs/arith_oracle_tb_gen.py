@@ -1721,6 +1721,34 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
     return plan
 
 
+def mapped_reset_state_targets(plan: dict, netlist_text: str, core_instance: str) -> dict:
+    """Resolve only exact retained flattened state names at their required widths."""
+    from _hdl_code_text import strip_hdl_comments_and_strings
+    required = (plan.get('reset_observation') or {}).get('required_observations', [])
+    if not required:
+        return {}
+    code = strip_hdl_comments_and_strings(netlist_text)
+    top = plan['observation']['top']
+    body = re.search(r'\bmodule\s+' + re.escape(top) + r'\b(.*?)\bendmodule\b',
+                     code, re.DOTALL)
+    if body is None:
+        raise ValueError('RESET_STATE_MAPPING_UNMEASURED: selected module absent')
+    targets, gaps = {}, []
+    for row in required:
+        name = core_instance + '/' + row['state']
+        matches = re.findall(r'\b(?:wire|reg|logic)\s+(?:signed\s+)?'
+                             r'(?:\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?'
+                             + re.escape('\\' + name) + r'\s+(?:=[^;]*)?;', body.group(1))
+        widths = [abs(int(a) - int(b)) + 1 if a else 1 for a, b in matches]
+        if widths != [row['width']]:
+            gaps.append(f"{row['state']}: required width {row['width']}, retained {widths}")
+        else:
+            targets[row['state']] = 'dut.\\' + name + ' '
+    if gaps:
+        raise ValueError('RESET_STATE_MAPPING_UNMEASURED: ' + '; '.join(gaps))
+    return targets
+
+
 def emit_arithmetic_scenario_module(module_name: str, plan: dict, *,
                                     dut_module: Optional[str] = None) -> str:
     """One fixed declared window; independent golden for every scenario bit."""
@@ -1905,13 +1933,14 @@ def emit_arithmetic_scenario_module(module_name: str, plan: dict, *,
         for index, required in enumerate(required_reset):
             state, width, expected = (required[k] for k in ('state', 'width', 'expected_value'))
             samples, mismatches = f'reset_samples_{index}', f'reset_mismatches_{index}'
+            target = observation.get('reset_state_targets', {}).get(state, f'dut.{state}')
             declarations.append(f'integer {samples}=0, {mismatches}=0;')
             checks += [f'  {samples}={samples}+1;',
-                       f"  if($bits(dut.{state})!={width} || dut.{state} !== {width}'h{expected:x}) begin",
+                       f"  if($bits({target})!={width} || {target} !== {width}'h{expected:x}) begin",
                        f'   {mismatches}={mismatches}+1; errors=errors+1;',
                        f'   $display("FAIL: reset expected state {state}");', '  end']
             summaries.append(f'$display("ARITH_RESET_OBSERVATION state={state} width={width} expected={expected} samples=%0d mismatches=%0d", {samples},{mismatches});')
-        slot = lines.index('task clear_state(input integer holds); begin')
+        slot = next(i for i, line in enumerate(lines) if line.startswith('task '))
         lines[slot:slot] = declarations
         slot = next(i for i, line in enumerate(lines) if f'held_value={sout}; held_edges=' in line)
         lines[slot:slot] = checks

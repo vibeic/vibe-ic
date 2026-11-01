@@ -1559,3 +1559,69 @@ def test_native_state_gls_observation_deadline(tmp_path, case):
         assert manifest['cases'] == []
         assert len(manifest['not_a_subject']) == 1
         assert 'POSTLAYOUT_OBSERVATION_UNMEASURED:' in manifest['not_a_subject'][0]['detail']
+
+
+@pytest.mark.parametrize('case', ['reference', 'mapped', 'wrong_reset', 'missing_alias', 'wrong_width'])
+def test_reset_monitors_compile_through_normal_mapped_manifest(tmp_path, case):
+    import arith_oracle_tb_gen as arith
+    import subprocess
+    import re
+    project, root, model, bench, _ = _declared_observation_gls_project(tmp_path, 'good')
+    path = project / 'phase1/generated_docs/L10_TEST_CASES.json'
+    rows = json.loads(path.read_text())
+    rows['test_cases'][0]['coverage_scope'] = (
+        'Synchronous reset held, released, and asserted during computation; '
+        'between-edge reset pulses must not reset')
+    put(path, rows)
+    rtl = project / 'phase2/stage1/rtl/public_serial_product.v'
+    required = {'clock': 'i_clk', 'reset': 'i_rst', 'edge': 'rising', 'active_level': 1,
+                'observation': 'After active reset edge updates settle, carry must be zero.',
+                'source_reference': {'path': str(rtl.relative_to(project)), 'sha256': contract.digest(rtl)},
+                'original_requirement_reference': {'path': str(path.relative_to(project)), 'sha256': contract.digest(path)},
+                'required_observations': [{'state': 'carry', 'width': 9, 'expected_value': 0}]}
+    put(project / 'input/flow109/D13/source.json', {'scenario_requirements': {
+        'transaction_sequence': {'reset_observation': required}}})
+    folder = _current_output_deadline_fixture(project, root, 18.949999)
+    state = json.loads((folder / 'state_out.json').read_text())
+    netlist, sdc = Path(state['nl']), Path(state['sdc'])
+    physical = netlist.read_text()
+    if case == 'wrong_reset':
+        physical = physical.replace('carry<=0;', 'carry<=1;')
+    elif case == 'wrong_width':
+        physical = physical.replace('[8:0] carry', '[7:0] carry')
+    # One-to-one lexical rename only, preserving this existing fixture's logic.
+    target = r'\other/carry ' if case == 'missing_alias' else r'\core/carry '
+    physical = re.sub(r'\bcarry\b', lambda _: target, physical)
+    netlist.write_text(physical)
+    manifest = sgs.tool_arm_manifest(project, 'public_serial_product', netlist,
+        [model], tmp_path / 'manifest', sdc=sdc,
+        sdfs=[Path(f) for f in state['sdf'].values()], sta_step_dir=folder)
+    if case in ('missing_alias', 'wrong_width'):
+        assert manifest['cases'] == []
+        assert 'RESET_STATE_MAPPING_UNMEASURED: carry:' in manifest['not_a_subject'][0]['detail']
+        return
+    assert manifest['not_a_subject'] == [] and len(manifest['cases']) == 1
+    prepared = Path(manifest['cases'][0]['testbench'])
+    plan = arith._scenario_header(prepared)
+    assert plan['reset_observation'] == required
+    assert plan['observation']['sample_offset_ns'] == 18.949
+    if case == 'reference':
+        plan['observation'].pop('reset_state_targets')
+        source = write(tmp_path / 'reference_tb.v', arith.emit_arithmetic_scenario_module(
+            'transaction_sequence', plan, dut_module='public_serial_product'))
+        design_files = [rtl]
+    else:
+        source = prepared
+        design_files = [netlist, model]
+    binary = tmp_path / 'reset.vvp'
+    compile_run = subprocess.run(['iverilog', '-g2012', '-gspecify', '-s', 'transaction_sequence',
+        '-o', str(binary), str(source), *map(str, design_files)], capture_output=True, text=True)
+    assert compile_run.returncode == 0, compile_run.stderr
+    run = subprocess.run(['vvp', str(binary)], capture_output=True, text=True)
+    if case == 'wrong_reset':
+        assert run.returncode != 0 and 'FAIL: reset expected state carry' in run.stdout
+        assert re.search(r'ARITH_RESET_OBSERVATION state=carry width=9 expected=0 samples=[1-9]\d* mismatches=[1-9]\d*', run.stdout)
+    else:
+        assert run.returncode == 0, run.stdout + run.stderr
+        assert '[TB transaction_sequence] PASS' in run.stdout
+        assert re.search(r'ARITH_RESET_OBSERVATION state=carry width=9 expected=0 samples=[1-9]\d* mismatches=0', run.stdout)

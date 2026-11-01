@@ -2557,6 +2557,13 @@ def _bound_arithmetic_case(project: Path, case: Dict[str, object], top: str,
     plan['observation'] = {**plan['observation'],
                            'sample_offset_ns': deadline['sample_offset_ns'],
                            'postlayout_deadline': deadline}
+    if plan.get('reset_observation'):
+        cores = [name for name, (master, _) in _instances(strip_comments(wrapper.read_text())).items()
+                 if master == top]
+        if len(cores) != 1:
+            raise ValueError('RESET_STATE_MAPPING_UNMEASURED: core instance is not unique')
+        plan['observation']['reset_state_targets'] = arith.mapped_reset_state_targets(
+            plan, netlist.read_text(), cores[0])
     # Keep the physical subject in the plan; the normal binder below owns
     # changing this logical placeholder and mapping every pad port.
     return (arith.emit_arithmetic_scenario_module(str(case['module']), plan,
