@@ -111,6 +111,14 @@
       "ic_expert_db": "agents/ic_expert_db/ic_expert_db.json",
       "ic_expert_db_note": "A recovery that is generalizable DESIGN-CLASS CRAFT (algorithm correctness / interface convention / latency-reset discipline / a common trap) — but is NOT a deterministic rule a gate can enforce — is distilled as a chip-AGNOSTIC lesson into the IC Expert DB (keyed by ic_class). It ADVISES the general spec-to-rtl author via _lesson_digest (surfaced for any Phase-1 doc, not just benchmarks); it NEVER overrides a gate/program verdict. Enforce with ic_expert_db_consistency_check.py (blindness + no-override). This is the 4th distill target alongside program (Bucket A) / skill (Bucket B) / backlog (Bucket C)."
     },
+    "phase2.rtl_gen.kmap_mux_constraint": {
+      "description": "Decline unsupported SOP emission for an explicit mux-only external K-map decomposition; capture routing only, not a new flow row or gate.",
+      "bucket_A_program": "programs/kmap_grid_synth.py",
+      "bucket_A_related": [
+        "programs/spec_artifact_registry.py"
+      ],
+      "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
+    },
     "phase2.rtl_gen.public_port_order": {
       "description": "Preserve a supplied public module port order by moving the generated declaration clauses at the shared registry producer boundary; routing only, not a new flow step or acceptance gate.",
       "bucket_A_program": "programs/spec_artifact_registry.py",
