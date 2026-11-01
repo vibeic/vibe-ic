@@ -13619,6 +13619,18 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
             except contract.Refusal as exc:
                 raise SystemExit(f"[FAIL] --pdk {name}: {exc}") from exc
             root = str(Path(resolved['path']) / name)
+            views = [Path(root) / part for part in ('libs.ref', 'libs.tech')]
+            if any(view.is_symlink() for view in views):
+                try:
+                    concrete = [view.resolve(strict=True) for view in views]
+                    parents = {view.parent for view in concrete}
+                    if ([view.name for view in concrete] != ['libs.ref', 'libs.tech']
+                            or len(parents) != 1 or concrete[0].parent.name != name):
+                        raise ValueError('installed views do not share the selected PDK root')
+                    root = str(concrete[0].parent)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise SystemExit(f"[FAIL] --pdk {name}: "
+                                     f"LL_IMAGE_PDK_COMPOSITION_INVALID: {exc}") from exc
         else:
             root = _registry_container_root(container, reg) or ""
         if not root:
