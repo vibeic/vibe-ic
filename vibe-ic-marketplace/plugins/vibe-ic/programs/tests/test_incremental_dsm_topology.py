@@ -1,7 +1,9 @@
 """Synthetic idsm-model controls, not design-oracle or native ADC acceptance."""
 import copy
+import hashlib
 import json
 import math
+from pathlib import Path
 
 import pytest
 
@@ -225,12 +227,42 @@ def test_ir_equations_stamp_and_decoder_match_model(record):
     declaration = stimulus.incremental_decode({"converter_type": "incremental"}, ir, decision_encoding=_model_codec(record))
     assert declaration["declared"], declaration
     model = declaration["loop_model"]
-    assert PRODUCER["producer_sha"] == "061758e3e38455fb406ef9cc099b052882b78be7"
+    import analog_ciff
+    assert PRODUCER["producer_source_sha256"] == hashlib.sha256(
+        Path(analog_ciff.__file__).read_bytes()).hexdigest()
     assert model["normalization"]["full_scale_over_reference"] == 1.3
     assert dec.read_stamp(declaration["stamp"])[0]["loop_model"] == model
     bits = [{"-": -1., "0": 0., "+": 1.}[code] for stream in record["decisions"] for code in stream]
     actual, detail = dec.decimate(bits, record["updates"], loop_model=model)
     assert actual == pytest.approx(record["decoded"], abs=2e-12), detail
+
+
+@pytest.mark.parametrize("ratio", [1., 1.4])
+def test_landed_shared_dac_declaration_drives_matched_decode(tmp_path, ratio):
+    from test_analog_ciff import _emit
+    _, ir = _emit(tmp_path, shared_input_dac=1, ciff_dac_ratio=ratio)
+    declared = stimulus.incremental_decode({"converter_type": "incremental"}, ir)
+    assert declared["declared"], declared
+    raw, model = ir["loop_declaration"], declared["loop_model"]
+    assert model["feedback_vector"] == raw["feedback_vector"]
+    assert [p for p in model["state_paths"] if p["kind"] == "dac_shared"]
+    assert dec.read_stamp(declared["stamp"])[0]["loop_model"] == model
+    broken = copy.deepcopy(ir)
+    broken["loop_declaration"]["paths"] = [p for p in raw["paths"] if p["kind"] != "dac_shared"]
+    refused = stimulus.incremental_decode({"converter_type": "incremental"}, broken)
+    assert not refused["declared"] and refused["reason"] == dec.BAD_STATE_EQUATIONS
+
+
+@pytest.mark.parametrize("ciff", [0, 1])
+def test_landed_producer_equations_allow_unequal_stage_gains(tmp_path, ciff):
+    from test_analog_ciff import _emit
+    order = 3 if ciff else 2  # The landed legacy CIFB entry admits orders 1 and 2.
+    gains = {f"a{i}": gain for i, gain in enumerate((.21, .34, .18)[:order], 1)}
+    _, ir = _emit(tmp_path, order, ciff=ciff, **gains)
+    declared = stimulus.incremental_decode({"converter_type": "incremental"}, ir)
+    assert declared["declared"], declared
+    assert declared["loop_model"]["input_vector"] == ir["loop_declaration"]["input_vector"]
+    assert declared["loop_model"]["transition"] == ir["loop_declaration"]["A"]
 
 
 def test_explicit_equations_own_the_weights_even_with_non_cascade_coefficients():

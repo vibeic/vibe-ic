@@ -463,8 +463,8 @@ FEEDBACK_DELAY_CONSTANT = "feedback_delay_clocks"
 def incremental_loop_adapter(topology: Any, *, decision_encoding=None) -> Optional[Dict[str, Any]]:
     """Map loop_declaration schema 1 to the shared decoder/stability model.
 
-    Field names are bound to producer 061758e3e38455fb406ef9cc099b052882b78be7,
-    docs/analog-ciff.md and analog_ciff.declaration(). A/input_vector/
+    Field names follow the landed docs/analog-ciff.md and
+    analog_ciff.declaration(). A/input_vector/
     feedback_vector own the state equations, including optimized-zero paths.
     Schema 1 emits two levels; future multilevel measurement methods must
     supply their explicit output codebook via decision_encoding, not infer
@@ -492,10 +492,14 @@ def incremental_loop_adapter(topology: Any, *, decision_encoding=None) -> Option
         if len(levels) != count or not math.isfinite(scale) or scale <= 0:
             raise ValueError(_inc.BAD_STATE_EQUATIONS)
         paths = raw["paths"]
-        dac_paths = [path for path in paths if path["kind"] == "dac"]
-        if (sorted(path["destination_stage"] for path in dac_paths) != raw["dac_stages"]
+        dac_paths = [path for path in paths if path["kind"] in ("dac", "dac_shared")]
+        gains_by_stage = {}
+        for path in dac_paths:
+            gains_by_stage.setdefault(path["destination_stage"], []).append(path["gain"])
+        if (sorted(gains_by_stage) != raw["dac_stages"]
+                or any(math.fsum(gains) != raw["feedback_vector"][stage-1]
+                       for stage, gains in gains_by_stage.items())
                 or any(path["delay_clocks"] != delay or
-                       path["gain"] != raw["feedback_vector"][path["destination_stage"]-1] or
                        path["destination"] != raw["state_nets"][path["destination_stage"]-1]
                        for path in dac_paths)):
             raise ValueError(_inc.BAD_STATE_EQUATIONS)
@@ -520,7 +524,7 @@ def incremental_loop_adapter(topology: Any, *, decision_encoding=None) -> Option
                  "decision_encoding": encoding, "normalization": normalization,
                  "state_nets": raw["state_nets"],
                  "state_paths": [path for path in paths if path["kind"] in
-                                 ("input", "integrator", "dac", "zero_feedback")],
+                                 ("input", "integrator", "dac", "dac_shared", "zero_feedback")],
                  "producer_schema": raw["schema"], "family": raw["family"]}
         return _inc.validate_loop_model(model)
     except (KeyError, TypeError, IndexError, AttributeError) as exc:
