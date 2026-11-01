@@ -310,6 +310,7 @@ def test_native_clean_rdb_with_unreadable_router_report_cannot_pass(tmp_path,
     report = tmp_path / "reports/phase3/antenna.rpt"
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text("OpenROAD check_antennas: report truncated before tally\n")
+    report.with_suffix('.json').write_text(json.dumps({'source': str(report.relative_to(tmp_path))}))
     monkeypatch.setattr(gate._kl, "find_runner", lambda **kw: NativeRunner())
     result = gate.run(tmp_path, None, None, None, None)
     assert result["cross_check"]["verdict"] == "ERROR", result
@@ -323,6 +324,7 @@ def test_native_clean_rdb_with_cross_check_exception_cannot_pass(tmp_path,
     report = tmp_path / "reports/phase3/antenna.rpt"
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text("Found 0 net violations.\nFound 0 pin violations.\n")
+    report.with_suffix('.json').write_text(json.dumps({'source': str(report.relative_to(tmp_path))}))
     monkeypatch.setattr(gate._kl, "find_runner", lambda **kw: NativeRunner())
     monkeypatch.setattr(gate, "_load_module", lambda *args: 1 / 0)
     result = gate.run(tmp_path, None, None, None, None)
@@ -384,11 +386,74 @@ def test_native_cross_check_reads_real_klayout_rdb_dialect(tmp_path, monkeypatch
     report = tmp_path / "reports/phase3/antenna.rpt"
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_bytes((PROGRAMS / "calibration/native_antenna_clean.lyrdb").read_bytes())
+    report.with_suffix('.json').write_text(json.dumps({'source': str(report.relative_to(tmp_path))}))
     monkeypatch.setattr(gate._kl, "find_runner", lambda **kw: NativeRunner())
     result = gate.run(tmp_path, None, None, None, None)
     assert result["verdict"] == "PASS", result
     assert result["cross_check"]["verdict"] == "AGREE", result
     assert result["cross_check"]["router_violations"] == 0
+
+
+@pytest.mark.parametrize('selection', ['published', 'state', 'missing', 'missing_file',
+                                      'ambiguous', 'changed_state'])
+def test_router_cross_check_uses_only_current_declared_output(tmp_path, selection):
+    from programs.tests._hostpaths import require_repo
+    poison = tmp_path / '.vibeic/runtime-program-trees/plugin/programs/calibration/antenna_fixture.rpt'
+    poison.parent.mkdir(parents=True)
+    poison.write_bytes(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+        'calibration', 'antenna_scoped_drc_clean_negative.rpt').read_bytes())
+    report = tmp_path / 'phase3/librelane/current-router/reports/antenna.rpt'
+    report.parent.mkdir(parents=True)
+    report.write_bytes(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+        'calibration', 'native_antenna_clean.lyrdb').read_bytes())
+    records = tmp_path / 'reports/phase3'
+    records.mkdir(parents=True)
+    explicit = None
+    if selection in ('state', 'changed_state'):
+        state = report.parent.parent / 'state_out.json'
+        state.write_text(json.dumps({'metrics': {'antenna__violating__nets': 0}}))
+        (records / 'antenna_librelane.json').write_text(json.dumps({'router': {
+            'step': 'OpenROAD.CheckAntennas', 'state': str(state.relative_to(tmp_path)),
+            'state_sha256': gate._sha(state)}}))
+        if selection == 'changed_state':
+            state.write_text('{"metrics":{}}')
+    elif selection != 'missing':
+        # The producer may publish a name that matches no antenna*.rpt glob.
+        report = report.rename(report.with_name('router-result.out'))
+        (records / 'antenna.json').write_text(json.dumps({'source': str(report.relative_to(tmp_path))}))
+        if selection == 'missing_file':
+            report.unlink()
+        elif selection == 'ambiguous':
+            explicit = str(poison)
+    raw = tmp_path / 'native-geometry.json'
+    raw.write_text(json.dumps({'violations': 0}))
+    result = gate._native_router_cross_check(tmp_path, explicit, raw,
+        {'verdict': 'PASS', 'violations': 0}, 0)
+    if selection in ('published', 'state'):
+        assert result['cross_check']['verdict'] == 'AGREE', result
+        assert Path(result['cross_check']['router_report']) == report
+        assert result['cross_check']['router_violations'] == 0
+    else:
+        code = {'missing': 'MISSING', 'missing_file': 'MISSING',
+                'ambiguous': 'AMBIGUOUS', 'changed_state': 'UNBOUND'}[selection]
+        assert result['cross_check']['verdict'] == 'NOT_RUN', result
+        assert result['cross_check']['selection'] == 'REFUSED', result
+        assert result['cross_check']['reason'].startswith('ANTENNA_ROUTER_REPORT_'+code), result
+    assert result['verdict'] == 'PASS' and result['violations'] == 0
+
+
+def test_unowned_router_fixture_cannot_overwrite_native_violations(tmp_path):
+    poison = tmp_path / '.vibeic/runtime-program-trees/calibration/antenna_scoped.rpt'
+    poison.parent.mkdir(parents=True)
+    poison.write_text('not a router antenna count\n')
+    raw = tmp_path / 'native-geometry.json'
+    raw.write_text(json.dumps({'violations': 9}))
+    result = gate._native_router_cross_check(tmp_path, None, raw,
+        {'verdict': 'FAIL', 'violations': 9, 'reason': '9 native violations'}, 9)
+    assert result['cross_check']['verdict'] == 'NOT_RUN', result
+    assert result['cross_check']['reason'].startswith('ANTENNA_ROUTER_REPORT_MISSING'), result
+    assert result['verdict'] == 'FAIL' and result['violations'] == 9
+    assert result['reason'] == '9 native violations'
 
 
 def test_host_native_runner_enforces_memory_and_keeps_progressing():

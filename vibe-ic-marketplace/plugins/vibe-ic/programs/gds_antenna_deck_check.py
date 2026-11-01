@@ -106,10 +106,8 @@ _GEOMETRY_CFG_GLOBS = (
 # accidentally borrow an antenna deck from another installed PDK.
 _PDK_ROOT_RECEIPT = "phase3/librelane_pdk_root.provenance.json"
 _CFG_GLOBS = _GEOMETRY_CFG_GLOBS + (_PDK_ROOT_RECEIPT,)
-_ROUTER_GLOBS = (
-    "reports/phase3/antenna.rpt",
-    "**/antenna*.rpt",
-)
+_ROUTER_RECORD = "reports/phase3/antenna.json"
+_ROUTER_STATE_RECORD = "reports/phase3/antenna_librelane.json"
 # See the naming note in run(): these must NOT match `*antenna*.json`.
 #: Where an engine the runner cannot reach is STAGED to, relative to the
 #: GDS directory. Must not contain the substring "antenna" for the same
@@ -125,6 +123,59 @@ def _first(project: Path, globs) -> Optional[Path]:
         if hits:
             return hits[0]
     return None
+
+
+def _router_report(project: Path, explicit: Optional[str]) -> Path:
+    """Read the router producer's selected output, never search for reports.
+
+    The canonical producer's source is its published report. A tool-only
+    router instead records the CheckAntennas State owning reports/antenna.rpt.
+    An explicit CLI path must agree with that declaration, not replace it.
+    """
+    def refusal(code, detail):
+        raise ValueError(f"ANTENNA_ROUTER_REPORT_{code}: {detail}")
+
+    def owned(value):
+        if not isinstance(value, str) or not value:
+            refusal("MISSING", "router output path is not declared")
+        path = Path(value)
+        path = path if path.is_absolute() else project / path
+        if not path.resolve().is_relative_to(project.resolve()):
+            refusal("FOREIGN", str(path))
+        return path
+
+    def record(path):
+        try:
+            body = json.loads(path.read_text())
+        except (OSError, ValueError) as exc:
+            refusal("UNBOUND", f"{path}: {exc}")
+        if not isinstance(body, dict):
+            refusal("UNBOUND", f"{path} is not a producer record")
+        return body
+
+    canonical = project / _ROUTER_RECORD
+    if canonical.is_file():
+        source = record(canonical).get("source")
+        if isinstance(source, list):
+            refusal("AMBIGUOUS", "router source is not one output path")
+        path = owned(source)
+    else:
+        state_record = project / _ROUTER_STATE_RECORD
+        model = record(state_record).get("router") if state_record.is_file() else None
+        if not isinstance(model, dict):
+            refusal("MISSING", "no router producer declares a report")
+        if model.get("step") != "OpenROAD.CheckAntennas":
+            refusal("UNBOUND", "selected State is not a router antenna step")
+        state = owned(model.get("state"))
+        if not state.is_file() or _sha(state) != model.get("state_sha256"):
+            refusal("UNBOUND", "selected router State is missing or changed")
+        path = state.parent / "reports" / "antenna.rpt"
+    path = owned(str(path))
+    if explicit and owned(explicit).resolve() != path.resolve():
+        refusal("AMBIGUOUS", f"--router {explicit} differs from declared output {path}")
+    if not path.is_file():
+        refusal("MISSING", str(path))
+    return path
 
 
 def _resolve_config(project: Path, explicit: Optional[str]) -> tuple:
@@ -761,9 +812,11 @@ def _native_router_cross_check(project: Path, router: Optional[str], raw: Path,
     # Native router reports may be KLayout RDBs.  The plugin's calibrated
     # cross-check reader understands that dialect; an image copy can lag it.
     xtool = Path(__file__).resolve().parent / "gds_antenna" / "xcheck_router.py"
-    rpt = Path(router) if router else _first(project, _ROUTER_GLOBS)
-    if rpt is not None and not rpt.is_absolute():
-        rpt = project / rpt
+    try:
+        rpt = _router_report(project, router)
+    except ValueError as exc:
+        res["cross_check"] = {"verdict": "NOT_RUN", "selection": "REFUSED", "reason": str(exc)}
+        return res
     if xtool is not None and rpt is not None and rpt.is_file():
         try:
             x = _load_module(xtool, "_vibeic_xcheck_router").cross_check(raw, rpt)
@@ -955,9 +1008,11 @@ def run(project: Path, gds: Optional[str], config: Optional[str],
 
     # Independent cross-check against the router's own count.
     xtool = _kl.find_engine("gds_antenna", "xcheck_router.py")
-    rpt = Path(router) if router else _first(project, _ROUTER_GLOBS)
-    if rpt is not None and not rpt.is_absolute():
-        rpt = project / rpt
+    try:
+        rpt = _router_report(project, router)
+    except ValueError as exc:
+        res["cross_check"] = {"verdict": "NOT_RUN", "selection": "REFUSED", "reason": str(exc)}
+        return res
     if xtool is not None and rpt is not None and rpt.is_file():
         try:
             xr = _load_module(xtool, "_vibeic_xcheck_router")
