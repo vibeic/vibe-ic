@@ -123,7 +123,29 @@ def test_report_body_is_the_direct_decks_emitters_on_the_corner_report():
 
 # ------------------------------------------------ run(): the chain edge ---
 
-def _tool_edge(tmp_path, *, rulesets=RULESETS, calls=None):
+IMAGE_INSPECT = ['docker', 'image', 'inspect', 'img', '--format',
+                 '{{json .Config.Entrypoint}}']
+
+
+def _fixture_command(cmd, entrypoint):
+    if cmd[:3] == ['docker', 'image', 'inspect']:
+        assert cmd == IMAGE_INSPECT, f'unexpected image inspection: {cmd}'
+        return None
+    assert cmd[:3] == ['docker', 'run', '--name'], f'unexpected tool call: {cmd}'
+    argv = [*cmd[:2], *cmd[4:]]
+    assert contract._container_image_arg(argv) == 'img', f'unexpected image: {cmd}'
+    at = argv.index('img')
+    assert '--entrypoint' not in argv[:at]
+    command = argv[at + 1:]
+    if entrypoint == ['/dockerstartup/scripts/ui_startup.sh']:
+        assert command[:1] == ['--skip']
+        command = command[1:]
+    else:
+        assert entrypoint in (None, [])
+    return command
+
+
+def _tool_edge(tmp_path, *, rulesets=RULESETS, calls=None, entrypoint=None):
     """SOURCE_FIXTURE producer; no native extraction or PDK accuracy claim.
 
     The real run_chain owns the fingerprint and receipt. This double supplies
@@ -145,10 +167,16 @@ def _tool_edge(tmp_path, *, rulesets=RULESETS, calls=None):
 
     def fake(cmd, **_):
         calls.append(cmd)
-        text = ' '.join(map(str, cmd))
-        if 'librelane.steps run --help' in text or 'bash' in cmd:
+        command = _fixture_command(cmd, entrypoint)
+        if command is None:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(entrypoint), stderr='')
+        if command == ['sh', '-c',
+                       'python3 -m librelane.steps run --help >/dev/null && '
+                       'yosys -Q -T -y /dev/null -p help >/dev/null'] or command == [
+                           'bash', '-c', contract._TCL_PROBE]:
             return SimpleNamespace(returncode=0, stdout='', stderr='')
-        if 'from librelane.flows.chip import Chip' in text:
+        if (command[:2] == ['python3', '-c'] and len(command) == 9
+                and 'from librelane.flows.chip import Chip' in command[2]):
             design, requested, output = Path(cmd[-6]), Path(cmd[-5]), Path(cmd[-4])
             for step in json.loads(requested.read_text()):
                 cfg = {'meta': {'step': step},
@@ -163,12 +191,12 @@ def _tool_edge(tmp_path, *, rulesets=RULESETS, calls=None):
                 outs = ['spef'] if step == 'OpenROAD.RCX' else ['sdf', 'lib']
                 put(output / f'{step}.views.json', {'step': step, 'inputs': ins, 'outputs': outs})
             return SimpleNamespace(returncode=0, stdout='', stderr='')
-        if 'openroad' in cmd and '-exit' in cmd:
+        if command[:2] == ['openroad', '-exit'] and len(command) == 3:
             tcl = Path(cmd[-1])
             odb = tcl.read_text().split('write_db {')[1].split('}')[0]
             write(Path(odb), 'odb')
             return SimpleNamespace(returncode=0, stdout='', stderr='')
-        if '-o' in cmd:
+        if command[:4] == ['python3', '-m', 'librelane.steps', 'run']:
             folder = Path(cmd[cmd.index('-o') + 1])
             input_path = Path(cmd[cmd.index('-i') + 1])
             config_path = Path(cmd[cmd.index('-c', cmd.index('--id')) + 1])
@@ -558,9 +586,13 @@ def test_each_measured_violation_count_fails(metric, tmp_path):
 
 # --------------------------------------------------- the agreement arms ---
 
-def _arm_edge(values, calls):
+def _arm_edge(values, calls, *, entrypoint=None):
     def fake(cmd, **_):
         calls.append(cmd)
+        command = _fixture_command(cmd, entrypoint)
+        if command is None:
+            return SimpleNamespace(returncode=0, stdout=json.dumps(entrypoint), stderr='')
+        assert command[:4] == ['sta', '-no_init', '-no_splash', '-exit'] and len(command) == 5
         corner = next(x.split('=', 1)[1] for x in cmd if str(x).startswith('VIBEIC_ARM_CORNER='))
         row = values(corner)
         return SimpleNamespace(returncode=0, stderr='', stdout=''.join(
@@ -578,9 +610,13 @@ def test_standalone_opensta_agreeing_on_every_corner_is_agree(tmp_path, monkeypa
     calls = []
     monkeypatch.setattr(signoff.subprocess, 'run', _arm_edge(_same, calls))
     doc = signoff.agreement(tmp_path, 'img', folder, [], tmp_path / 'agree.json')
-    assert doc['verdict'] == 'AGREE' and len(calls) == len(CORNERS)
+    assert doc['verdict'] == 'AGREE' and len(calls) == 2 * len(CORNERS)
+    assert calls[::2] == [IMAGE_INSPECT] * len(CORNERS)
     first = next(c for c in calls if f'VIBEIC_ARM_CORNER={CORNERS[0]}' in c)
-    assert first[first.index('--entrypoint') + 1] == 'sta'
+    assert '--entrypoint' not in first[:first.index('img')]
+    assert first[first.index('img') + 1:] == [
+        'sta', '-no_init', '-no_splash', '-exit',
+        str(tmp_path / 'phase3/tool_arms/23/opensta/arm.tcl')]
     assert '--memory' in first   # every docker run carries the ceiling
     # the same inputs the tool read: its corner libraries, SPEF, SDC and extra Tcl
     assert 'VIBEIC_ARM_LIBS=/pdk/x/libs.ref/sc/lib/sc__tt_025C_5v00.lib /pdk/x/libs.ref/io/lib/io__tt_025C_5v00.lib' in first
@@ -593,6 +629,66 @@ def test_a_corner_the_engines_disagree_on_is_a_refusal_not_a_pick(tmp_path, monk
         lambda c: {**_same(c), 'hold_ws': 0.3} if c == CORNERS[2] else _same(c), []))
     doc = signoff.agreement(tmp_path, 'img', folder, [], tmp_path / 'agree.json')
     assert doc['verdict'] == 'DISAGREE' and doc['disagreeing_corners'] == [CORNERS[2]]
+
+
+@pytest.mark.parametrize('edge', ('tool', 'arm'))
+@pytest.mark.parametrize('command', (
+    ['docker', 'image', 'inspect', 'foreign-image', '--format', '{{json .Config.Entrypoint}}'],
+    ['docker', 'run', '--name', 'fixture', '--rm', 'foreign-image', 'bash'],
+    ['docker', 'image', 'inspect', 'img', '--format', '{{json .Config.Cmd}}'],
+    ['docker', 'ps'],
+))
+def test_signoff_fixture_rejects_foreign_image_and_protocol(tmp_path, edge, command):
+    fake = _tool_edge(tmp_path) if edge == 'tool' else _arm_edge(_same, [])
+    with pytest.raises(AssertionError, match='unexpected'):
+        fake(command)
+
+
+@pytest.mark.parametrize('edge', ('tool', 'arm'))
+@pytest.mark.parametrize('entrypoint', (['/unknown-entrypoint'], ['sta']))
+def test_signoff_fixture_unsupported_entrypoint_refuses_before_launch(tmp_path, monkeypatch,
+                                                                    edge, entrypoint):
+    calls = []
+    fake = (_tool_edge(tmp_path, calls=calls, entrypoint=entrypoint) if edge == 'tool'
+            else _arm_edge(_same, calls, entrypoint=entrypoint))
+    monkeypatch.setattr(contract.subprocess, 'run', fake)
+    with pytest.raises(contract.Refusal, match='LL_IMAGE_ENTRYPOINT_UNSUPPORTED'):
+        contract.run_container(['docker', 'run', '--rm', '--entrypoint', 'sta', 'img',
+                                '-no_init', '-no_splash', '-exit', 'arm.tcl'],
+                               probe_deadline_s=3)
+    assert calls == [IMAGE_INSPECT]
+
+
+def test_signoff_foreign_image_inspect_failure_refuses_before_launch(monkeypatch):
+    calls = []
+    def missing_image(cmd, **_):
+        calls.append(cmd)
+        assert cmd == ['docker', 'image', 'inspect', 'foreign-image', '--format',
+                       '{{json .Config.Entrypoint}}']
+        return SimpleNamespace(returncode=1, stdout='', stderr='fixture image absent')
+    monkeypatch.setattr(contract.subprocess, 'run', missing_image)
+    with pytest.raises(contract.Refusal, match='LL_IMAGE_ENTRYPOINT_UNAVAILABLE'):
+        contract.run_container(['docker', 'run', '--rm', '--entrypoint', 'sta',
+                                'foreign-image', '-exit', 'arm.tcl'], probe_deadline_s=3)
+    assert len(calls) == 1
+
+
+@pytest.mark.parametrize('edge', ('tool', 'arm'))
+def test_signoff_fixture_preserves_legacy_image_entrypoint(tmp_path, monkeypatch, edge):
+    entrypoint = ['/dockerstartup/scripts/ui_startup.sh']
+    calls = []
+    fake = (_tool_edge(tmp_path, calls=calls, entrypoint=entrypoint) if edge == 'tool'
+            else _arm_edge(_same, calls, entrypoint=entrypoint))
+    monkeypatch.setattr(contract.subprocess, 'run', fake)
+    command = (['sh', '-c', 'python3 -m librelane.steps run --help >/dev/null && '
+                           'yosys -Q -T -y /dev/null -p help >/dev/null'] if edge == 'tool'
+               else ['sta', '-no_init', '-no_splash', '-exit', 'arm.tcl'])
+    result = contract.run_container([
+        'docker', 'run', '--rm', '-e', f'VIBEIC_ARM_CORNER={CORNERS[0]}',
+        '--entrypoint', command[0], 'img', *command[1:]], probe_deadline_s=3)
+    assert result.returncode == 0 and len(calls) == 2
+    assert calls[0] == IMAGE_INSPECT
+    assert calls[1][calls[1].index('img') + 1:] == ['--skip', *command]
 
 
 OCV = '''=== SETUP corner: process=SS liberty=/foss/pdks/x/libs.ref/sc/lib/sc__ss_125C_4v50.lib, SPEF=spm.max.spef ===
