@@ -110,9 +110,9 @@ _SCALAR_RE = {
 
 # NLDM-style table: values("0.1, 0.2", "0.3, 0.4");  inside a timing()/
 # table group. We pull every numeric token out of every values(...) blob.
-_VALUES_RE = re.compile(r"values\s*\(", re.IGNORECASE)
+_VALUES_RE = re.compile(r"\bvalues\s*\(", re.IGNORECASE)
 _NUM_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
-_CELL_RE = re.compile(r"\bcell\s*\(\s*([^)\s]+)\s*\)\s*\{", re.IGNORECASE)
+_CELL_RE = re.compile(r"\bcell\s*\(([^)]*)\)\s*\{", re.IGNORECASE)
 
 # A propagation delay is not the same thing as a leakage number or an output
 # transition. The comparison below therefore reads only the Liberty groups
@@ -128,11 +128,6 @@ _ARC_GROUP_RE = re.compile(
     r"(?:\([^)]*\))?\s*\{",
     re.IGNORECASE,
 )
-_TIME_UNIT_RE = re.compile(
-    r"\btime_unit\s*:\s*\"?\s*"
-    r"(?P<mult>\d+(?:\.\d+)?)\s*(?P<unit>fs|ps|ns|us|ms|s)\s*\"?\s*;",
-    re.IGNORECASE,
-)
 _TIME_UNIT_TO_NS = {
     "fs": 1e-6,
     "ps": 1e-3,
@@ -143,45 +138,94 @@ _TIME_UNIT_TO_NS = {
 }
 
 
-def _extract_values_blocks(text: str) -> List[str]:
+@dataclass(frozen=True)
+class _LibertySource:
+    code: str
+    syntax: str
+
+    def slice(self, start: int, end: int) -> _LibertySource:
+        return _LibertySource(self.code[start:end], self.syntax[start:end])
+
+
+def _lex_liberty(text: str | _LibertySource) -> _LibertySource:
+    if isinstance(text, _LibertySource):
+        return text
+    code = list(text)
+    syntax = list(text)
+    i = 0
+    while i < len(text):
+        start = i
+        if text[i] == '"':
+            i += 1
+            while i < len(text):
+                if text[i] == "\\":
+                    i += 2
+                elif text[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+            end = min(i, len(text))
+            syntax[start:end] = [" "] * (end - start)
+        elif text.startswith("/*", i) or text.startswith("//", i):
+            if text.startswith("/*", i):
+                close = text.find("*/", i + 2)
+                i = len(text) if close < 0 else close + 2
+            else:
+                close = text.find("\n", i + 2)
+                i = len(text) if close < 0 else close
+            blank = ["\n" if c == "\n" else " " for c in text[start:i]]
+            code[start:i] = blank
+            syntax[start:i] = blank
+        else:
+            i += 1
+    return _LibertySource("".join(code), "".join(syntax))
+
+
+def _attribute(text: _LibertySource, name: str) -> str | None:
+    match = re.search(rf"\b{name}\s*:", text.syntax, re.I)
+    if match is None:
+        return None
+    value = re.match(r'\s*(?:"((?:\\.|[^"\\])*)"|([^;]*))\s*;',
+                     text.code[match.end():])
+    if value is None:
+        return None
+    return (value.group(1) if value.group(1) is not None else value.group(2)).strip()
+
+
+def _extract_values_blocks(text: _LibertySource) -> List[str]:
     """Return the raw content of each values(...) call (balanced-paren scan)."""
     blocks: List[str] = []
-    for m in _VALUES_RE.finditer(text):
+    for m in _VALUES_RE.finditer(text.syntax):
         i = m.end()  # position right after the '('
         depth = 1
         start = i
-        while i < len(text) and depth > 0:
-            c = text[i]
+        while i < len(text.syntax) and depth > 0:
+            c = text.syntax[i]
             if c == "(":
                 depth += 1
             elif c == ")":
                 depth -= 1
             i += 1
-        blocks.append(text[start:i - 1])
+        blocks.append(text.code[start:i - 1])
     return blocks
 
 
-def _balanced_group_body(text: str, open_brace: int) -> str:
+def _balanced_group_body(text: _LibertySource, open_brace: int) -> _LibertySource:
     """Return one Liberty group's body, starting at its opening ``{``."""
     depth = 1
     i = open_brace + 1
     start = i
-    while i < len(text) and depth > 0:
-        if text[i] == "{":
+    while i < len(text.syntax) and depth > 0:
+        if text.syntax[i] == "{":
             depth += 1
-        elif text[i] == "}":
+        elif text.syntax[i] == "}":
             depth -= 1
         i += 1
-    return text[start:i - 1] if depth == 0 else text[start:]
+    return text.slice(start, i - 1 if depth == 0 else len(text.syntax))
 
 
-def _without_liberty_comments(text: str) -> str:
-    """Remove C- and C++-style comments before finding live arc syntax."""
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-    return re.sub(r"//[^\n]*", "", text)
-
-
-def liberty_arc_delays_ns(text: str) -> Tuple[List[dict], str]:
+def liberty_arc_delays_ns(text: str | _LibertySource) -> Tuple[List[dict], str]:
     """Return propagation-delay samples normalised to ns and the time unit.
 
     Only ``cell_rise``, ``cell_fall``, ``intrinsic_rise`` and
@@ -190,8 +234,10 @@ def liberty_arc_delays_ns(text: str) -> Tuple[List[dict], str]:
     An absent/unrecognised ``time_unit`` returns raw samples with
     ``delay_ns=None`` so the caller can refuse an uncheckable comparison.
     """
-    text = _without_liberty_comments(text)
-    tm = _TIME_UNIT_RE.search(text)
+    text = _lex_liberty(text)
+    declared_unit = _attribute(text, "time_unit")
+    tm = re.fullmatch(r"(?P<mult>\d+(?:\.\d+)?)\s*(?P<unit>fs|ps|ns|us|ms|s)",
+                      declared_unit, re.I) if declared_unit is not None else None
     scale = None
     unit = "absent"
     if tm:
@@ -203,7 +249,7 @@ def liberty_arc_delays_ns(text: str) -> Tuple[List[dict], str]:
 
     # Scalar Liberty spelling: ``cell_rise : 0.42 ;``.
     for kind in _ARC_DELAY_ATTRS:
-        for m in _SCALAR_RE[kind].finditer(text):
+        for m in _SCALAR_RE[kind].finditer(text.syntax):
             raw = float(m.group(1))
             samples.append({
                 "kind": kind,
@@ -214,7 +260,7 @@ def liberty_arc_delays_ns(text: str) -> Tuple[List[dict], str]:
     # NLDM spelling: ``cell_rise(template) { values("..."); }``. Restrict
     # values() to the delay group body; a whole-file values() scan would also
     # mistake power tables for timing arcs.
-    for m in _ARC_GROUP_RE.finditer(text):
+    for m in _ARC_GROUP_RE.finditer(text.syntax):
         body = _balanced_group_body(text, m.end() - 1)
         for blob in _extract_values_blocks(body):
             for token in _NUM_RE.findall(blob):
@@ -245,36 +291,38 @@ class Result:
     summary: dict = field(default_factory=dict)
 
 
-def analyze_liberty(text: str) -> Tuple[bool, List[float], str]:
+def analyze_liberty(text: str | _LibertySource) -> Tuple[bool, List[float], str]:
     """Return whether timing attributes exist, their values, and the cell name."""
-    text = _without_liberty_comments(text)
-    cm = _CELL_RE.search(text)
+    text = _lex_liberty(text)
+    cm = _CELL_RE.search(text.syntax)
     values: List[float] = []
     has_timing = False
     for attr, rx in _SCALAR_RE.items():
-        for match in rx.finditer(text):
+        for match in rx.finditer(text.syntax):
             has_timing = True
             try:
                 values.append(float(match.group(1)))
             except ValueError:
                 values.append(float("nan"))
-        for match in re.finditer(rf"\b{attr}\s*\([^)]*\)\s*\{{", text):
+        for match in re.finditer(rf"\b{attr}\s*\([^)]*\)\s*\{{", text.syntax):
             has_timing = True
             body = _balanced_group_body(text, match.end() - 1)
             for blob in _extract_values_blocks(body):
                 values.extend(float(number) for number in _NUM_RE.findall(blob))
-    return has_timing, values, cm.group(1) if cm else ""
+    cell = text.code[cm.start(1):cm.end(1)].strip().strip('"') if cm else ""
+    return has_timing, values, cell
 
 
-def _has_signal_output(text: str) -> bool:
-    for match in re.finditer(r"\b(?:pin|bus|bundle)\s*\([^)]*\)\s*\{", text):
+def _has_signal_output(text: str | _LibertySource) -> bool:
+    text = _lex_liberty(text)
+    for match in re.finditer(r"\b(?:pin|bus|bundle)\s*\([^)]*\)\s*\{", text.syntax):
         body = _balanced_group_body(text, match.end() - 1)
-        if re.search(r'\bdirection\s*:\s*"?output"?\s*;', body, re.I):
+        if (_attribute(body, "direction") or "").lower() == "output":
             return True
     return False
 
 
-def _native_leakage_refusal(project: Path, block: str, text: str) -> str:
+def _native_leakage_refusal(project: Path, block: str, text: str | _LibertySource) -> str:
     import analog_a8_hardmacro_emit as producer
 
     bdir = _analog_dir(project) / block
@@ -288,11 +336,12 @@ def _native_leakage_refusal(project: Path, block: str, text: str) -> str:
         return f"native leakage evidence is unavailable: {exc}"
     if measurement is None:
         return why
-    scalar = re.search(r"\bcell_leakage_power\s*:\s*([-+0-9.eE]+)\s*;", text)
-    unit = re.search(r'\bleakage_power_unit\s*:\s*"([^"\n]+)"\s*;', text)
+    text = _lex_liberty(text)
+    scalar = re.search(r"\bcell_leakage_power\s*:\s*([-+0-9.eE]+)\s*;", text.syntax)
+    unit = _attribute(text, "leakage_power_unit")
     if scalar is None or unit is None:
         return "Liberty lacks its measured leakage scalar or power unit"
-    if (unit.group(1) != measurement["liberty_power_unit"] or
+    if (unit != measurement["liberty_power_unit"] or
             float(scalar.group(1)) != float(f'{measurement["liberty_value"]:.12g}')):
         return "Liberty leakage differs from the current native A8 measurement"
     return ""
@@ -363,10 +412,10 @@ def run_audit(project: Path) -> Result:
                 message=f"Block '{block}': {block}.lib unreadable: {exc}"))
             continue
 
-        text = _without_liberty_comments(text)
+        text = _lex_liberty(text)
         has_timing, values, cell_name = analyze_liberty(text)
 
-        if not _CELL_RE.search(text):
+        if not cell_name:
             res.passed = False
             failed.append(block)
             res.findings.append(Finding(
@@ -374,7 +423,7 @@ def run_audit(project: Path) -> Result:
                 message=f"Block '{block}': Liberty has no cell(...) definition."))
             continue
 
-        has_arc = has_timing or bool(re.search(r"\btiming\s*\(", text))
+        has_arc = has_timing or bool(re.search(r"\btiming\s*\(", text.syntax))
         if (not has_timing or not values) and (has_arc or _has_signal_output(text)):
             res.passed = False
             failed.append(block)
@@ -398,7 +447,7 @@ def run_audit(project: Path) -> Result:
                          f"SPICE-measured delays.")))
             continue
 
-        leakage = re.search(r"\bcell_leakage_power\s*:\s*([-+0-9.eE]+)\s*;", text)
+        leakage = re.search(r"\bcell_leakage_power\s*:\s*([-+0-9.eE]+)\s*;", text.syntax)
         if (not has_arc or leakage is None or float(leakage.group(1)) <= 0):
             why = _native_leakage_refusal(project, block, text)
             if why:

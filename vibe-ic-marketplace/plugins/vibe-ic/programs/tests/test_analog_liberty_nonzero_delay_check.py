@@ -465,3 +465,100 @@ def test_r63_power_only_cell_cannot_hide_unavailable_inventory(tmp_path):
     result = mod.run_audit(tmp_path)
     assert not result.passed
     assert "LIB_LEAKAGE_UNMEASURED" in {f.rule for f in result.findings}
+
+
+@pytest.mark.parametrize("documentation", [
+    'https://example.invalid/interface',
+    'interface /* documentation */ model',
+    r'escaped \"quote\" // still documentation',
+], ids=["url", "block-comment", "escaped-quote"])
+@pytest.mark.parametrize("with_arcs", [True, False], ids=["zero-arcs", "missing-arc"])
+def test_r63_quoted_documentation_cannot_hide_live_signal_output(
+        tmp_path, documentation, with_arcs):
+    _, lib = _native_passive_case(tmp_path)
+    arc = ('timing() { related_pin : "signal_in"; '
+           'cell_rise(scalar) { values("0"); } '
+           'cell_fall(scalar) { values("0"); } }') if with_arcs else ''
+    live = (f'comment : "{documentation}"; '
+            'pin(signal_in) { direction : input; } '
+            f'pin(signal_out) {{ direction : output; {arc} }} ')
+    lib.write_text(lib.read_text().replace('    pg_pin (TOP)', live + 'pg_pin (TOP)'))
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert ("LIB_ZERO_DELAY" if with_arcs else "LIB_NO_TIMING") in {
+        f.rule for f in result.findings}
+
+
+@pytest.mark.parametrize("documentation", [
+    'No timing() arcs are modeled.',
+    'pin(documentation_only) { direction : output; }',
+    'cell_rise(scalar) { values(\\"9000\\"); }',
+    'intrinsic_fall : 8000; cell_leakage_power : 1;',
+    'time_unit : \\"1us\\"; leakage_power_unit : \\"bogus\\";',
+    r'escaped \"quote\" /* { timing() } */ // pin(x) { direction : output; }',
+], ids=["timing", "pin", "table", "scalar", "units", "escaped-quote"])
+def test_r63_quoted_documentation_is_not_liberty_structure(tmp_path, documentation):
+    _, lib = _native_passive_case(tmp_path)
+    lib.write_text(lib.read_text().replace('    pg_pin (TOP)',
+        f'comment : "{documentation}"; pg_pin (TOP)'))
+    result = mod.run_audit(tmp_path)
+    assert result.passed, [(f.rule, f.message) for f in result.findings]
+    assert mod.analyze_liberty(lib.read_text())[:2] == (False, [])
+    assert mod.liberty_arc_delays_ns(lib.read_text()) == ([], "1ns")
+
+
+def test_r63_quoted_cell_example_does_not_declare_a_cell(tmp_path):
+    _mk(tmp_path, "example", 'library(x) { comment : "cell(fake) { }"; }')
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_NO_CELL" in {f.rule for f in result.findings}
+
+
+def test_r63_only_live_attributes_and_groups_supply_delay_samples():
+    text = '''library(x) { time_unit : "1ns";
+      /* cell_rise(t) { values("9000"); } */
+      cell("x") { comment : "} ) // intrinsic_rise : 6000;";
+        pin("out") { direction : "output";
+          timing() { cell_rise("template") {
+            comment : "} ) values(\\"7000\\");"; values("0.42");
+          } intrinsic_fall : 0.51; }
+        }
+      }
+    }'''
+    assert mod.analyze_liberty(text) == (True, [0.42, 0.51], "x")
+    samples, unit = mod.liberty_arc_delays_ns(text)
+    assert unit == "1ns"
+    assert sorted(s["delay_ns"] for s in samples) == [0.42, 0.51]
+
+
+@pytest.mark.parametrize("attribute,spelling", [
+    ("scalar", 'cell_leakage_power : 0;'),
+    ("unit", 'leakage_power_unit : "1uW";'),
+])
+def test_r63_documentation_cannot_supply_missing_leakage(tmp_path, attribute, spelling):
+    _, lib = _native_passive_case(tmp_path)
+    text = lib.read_text().replace(spelling, '')
+    documentation = spelling.replace('"', r'\"')
+    lib.write_text(text.replace('    pg_pin (TOP)',
+        f'comment : "{documentation}"; pg_pin (TOP)'))
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_LEAKAGE_UNMEASURED" in {f.rule for f in result.findings}
+
+
+def test_r63_documentation_cannot_supply_a_clock_unit():
+    text = LIB_SETTLING_AS_ARC.replace('time_unit : "1us";',
+        'comment : "time_unit : \\"1ns\\";";')
+    samples, unit = mod.liberty_arc_delays_ns(text)
+    assert unit == "absent"
+    assert len(samples) == 2
+    assert all(s["delay_ns"] is None for s in samples)
+
+
+@pytest.mark.parametrize("cell", ["", '""'])
+def test_r63_empty_cell_name_is_not_a_definition(tmp_path, cell):
+    _mk(tmp_path, "ldo", LIB_REAL.replace('cell(ldo)', f'cell({cell})'),
+        corner={"design_content": DESIGN_BOUND})
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_NO_CELL" in {f.rule for f in result.findings}
