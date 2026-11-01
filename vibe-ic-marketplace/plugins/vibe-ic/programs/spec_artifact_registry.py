@@ -27,6 +27,7 @@ ambiguity — they inherit each underlying parser's §4.05 conservative envelope
 from __future__ import annotations
 
 import sys
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
@@ -711,6 +712,78 @@ def detect(text: str) -> List[dict]:
     return found
 
 
+def _public_port_order(text: str, top: str, rtl: str) -> Optional[str]:
+    """Move generated ANSI declarations into an unambiguous public order.
+
+    Only order is normalized; generated declaration tokens, parameters and body
+    remain authoritative outputs for the normal validation. Unrelated source
+    leaves producer behavior intact; unsafe matching-header normalization
+    declines through the registry's None contract.
+    """
+    import module_port_audit as audit
+    from rtl_repair_contract import prompt_rtl_source_facts
+
+    facts = prompt_rtl_source_facts(text)
+    if facts["kind"] == "NONE":
+        return rtl
+    if facts["kind"] != "HEADER_ONLY" or facts["module"] != top:
+        return rtl
+
+    def cells(header):
+        mask = audit.lexical_mask(header, attributes=True)
+        opening = mask.find("(")
+        if opening >= 0 and mask[:opening].rstrip().endswith("#"):
+            parameters = audit.extract_balanced(mask, opening)
+            opening = mask.find("(", parameters[1] + 1) if parameters else -1
+        ports = audit.extract_balanced(mask, opening)
+        if ports is None or mask[ports[1] + 1:].strip() != ";":
+            return None
+        parts = audit.split_top_level(ports[0])
+        if not parts or any(not part.strip() for part in parts):
+            return None
+        offset = opening + 1
+        raw = []
+        for part in parts:
+            raw.append(header[offset:offset + len(part)])
+            offset += len(part) + 1
+        return opening, ports[1], parts, raw
+
+    supplied = audit.parse_modules(facts["header"] + "\nendmodule", "supplied")
+    generated = [module for module in audit.parse_modules(rtl, "generated")
+                 if module.name == top]
+    if (len(supplied) != 1 or len(generated) != 1
+            or supplied[0].discovery_issues or generated[0].discovery_issues):
+        return None
+    expected, actual = supplied[0].port_order, generated[0].port_order
+    declared = cells(facts["header"])
+    issues = []
+    regions = [region for region in audit.module_regions(rtl, issues) if region[0] == top]
+    if issues or len(regions) != 1:
+        return None
+    _, start, body, _ = regions[0]
+    emitted = cells(rtl[start:body])
+    if (declared is None or emitted is None or not expected
+            or len(declared[2]) != len(expected) or len(emitted[2]) != len(actual)
+            or len(set(expected)) != len(expected) or set(expected) != set(actual)):
+        return None
+    if expected == actual:
+        return rtl
+    if any(not re.match(r"\s*(?:input|output|inout)\b", part) for part in emitted[2]):
+        # A grouped clause inherits direction/type/width. Moving its bare name
+        # would change those facts rather than restoring only public order.
+        return None
+    declarations = dict(zip(actual, emitted[3]))
+    reordered = (rtl[:start + emitted[0] + 1]
+                 + ",".join(declarations[name] for name in expected)
+                 + rtl[start + emitted[1]:])
+    checked = [module for module in audit.parse_modules(reordered, "reordered")
+               if module.name == top]
+    if (len(checked) != 1 or checked[0].discovery_issues
+            or checked[0].port_order != expected):
+        return None
+    return reordered
+
+
 def generate(text: str, top: str = "TopModule") -> Tuple[Optional[str], Optional[str]]:
     """Deterministic RTL from the first artifact type whose generator fires.
     Returns (artifact_type, rtl) or (None, None). The benchmark §4.2 absorption
@@ -720,6 +793,8 @@ def generate(text: str, top: str = "TopModule") -> Tuple[Optional[str], Optional
             continue
         try:
             rtl = a.generate(text, top)
+            if rtl:
+                rtl = _public_port_order(text, top, rtl)
         except Exception:
             rtl = None
         if rtl:

@@ -1,0 +1,18 @@
+[
+  {
+    "step": "phase2.rtl_gen.public_port_order",
+    "design": "neutral counter and interleaved gate interface contracts",
+    "bucket": "A",
+    "rule_name": "preserve_generated_public_port_order",
+    "docstring": "Restore a supplied public port order by moving independent generated declaration clauses without replacing their direction, width or type tokens.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Normalize only generated declaration order in `spec_artifact_registry.generate`, using the existing header facts and module parser helpers. Preserve generated parameters, body and declaration tokens; non-applicable source preserves existing generator behavior, while unsafe matching-header normalization uses the existing registry decline contract.",
+    "before_state": "Real counter and gate generators compile and pass named consumers but fail positional consumers because the generated formal port order differs from the supplied public header.",
+    "after_state": "Direct registry and normal product-chain outputs preserve the declared order and pass the same named and positional Icarus consumers. Explicit width, direction, type and signedness defects remain visible to existing validation.",
+    "ai_reasoning": "The public interface already declares the formal order. The shared producer must preserve that order while retaining exactly the declarations it generated, rather than transplanting the original header and hiding other defects.",
+    "pattern": "A generator partitions ports by direction or emits semantic controls in a private order, while positional consumers use the explicitly supplied public header order; successful elaboration and named connections conceal the functional mismatch.",
+    "generality": "The correction acts on visible headers and generated declaration clauses for every registry emitter; it has no benchmark, problem-name, vendor or expected-answer branch.",
+    "evidence": "CAPTURE.md; source-only neutral receipt.json; red.xml, verified-base.xml, verified-candidate.xml, verified-order-reverse.xml, verified-applicability-reverse.xml, verified-header-replacement-reverse.xml and verified-restored.xml in the named external packet",
+    "corpus_sweep": "34 matched owning-contract IDs, including a checked-in neutral source artifact and real non-applicable-source preservation: 19 improved, 15 unchanged PASS, zero introduced failures. No external campaign/corpus or full suite was run."
+  }
+]
