@@ -59561,7 +59561,8 @@ def _step_prestream_final_state(project: Path, state_path: Path, top: str,
     for name, reader in (("placement_legality", native.placement),
                          ("route_completion", native.route),
                          ("drv_signoff", native.drv)):
-        doc = reader(project, state_path)
+        doc = (reader(project, state_path, container=container)
+               if name == 'placement_legality' else reader(project, state_path))
         if name == 'route_completion':
             routed = native.path(project, str(native.load(state_path).get('def', '')))
             signal_routed, signal_nets = _def_signal_routing_stats(routed)
@@ -59570,7 +59571,7 @@ def _step_prestream_final_state(project: Path, state_path: Path, top: str,
                 doc['failures'].append(f'{signal_nets} signal nets but no signal wiring')
         rows.append(StepResult(name, doc['verdict'], 0.0,
                     "; ".join(doc['failures'] + doc['not_measured']) or
-                    f"native final-State {name} clean", [str(state_path)],
+                    f"native final-State {name} clean", doc.get('output_files', [str(state_path)]),
                     reason_class=_V.ReasonClass.INPUT_ABSENT if doc["verdict"] == "NOT_MEASURED" else ""))
     for spec in _PRESTREAM_GATES:
         name = spec[0]

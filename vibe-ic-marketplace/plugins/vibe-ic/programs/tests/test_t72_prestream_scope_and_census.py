@@ -1,5 +1,6 @@
 """T72: the streamed layout's own antenna and route evidence."""
 import json
+from pathlib import Path
 import phase3_one_shot_runner as R
 
 
@@ -222,6 +223,15 @@ def final_state_carrier(tmp_path, monkeypatch):
     monkeypatch.setattr(R, 'step_canonicalize_artefacts', lambda *args, **kw: pytest.fail('publisher ran'))
     monkeypatch.setattr(R, '_prestream_route_census', lambda *args, **kw: ({'unrouted_nets': 0}, ''))
     monkeypatch.setattr(R, '_layout_basis', lambda *args: ('fixture-layout', ''))
+    # Ruling #62/R3: measure the current ODB, independent of historical logs.
+    def launch(*args, **kwargs):
+        if launch.error:
+            raise RuntimeError('native launch failed')
+        return launch.rc, ('' if launch.count is None else
+            f'PRESTREAM_CHECK_PLACEMENT_VIOLATIONS {launch.count}\n'), ''
+    launch.count, launch.rc, launch.error = 0, 0, False
+    monkeypatch.setattr(R, '_docker_exec', launch)
+    monkeypatch.setattr(R, '_to_container_path', lambda p, c: p)
     return tmp_path, folder, state_path
 
 
@@ -243,7 +253,7 @@ def test_final_state_each_native_violation_fails(final_state_carrier, gate):
     project, folder, state_path = final_state_carrier
     state = json.loads(state_path.read_text())
     if gate == 'placement_legality':
-        (folder / 'check_placement.rpt').write_text('FINAL_CHECK_PLACEMENT_VIOLATIONS 1\n')
+        R._docker_exec.count = 1
     elif gate == 'route_completion':
         state['metrics']['route__drc_errors_final'] = 1
     elif gate == 'drv_signoff':
@@ -264,7 +274,7 @@ def test_final_state_missing_native_evidence_is_not_measured(final_state_carrier
     project, folder, state_path = final_state_carrier
     state = json.loads(state_path.read_text())
     if gate == 'placement_legality':
-        (folder / 'check_placement.rpt').unlink()
+        R._docker_exec.count = None
     elif gate == 'route_completion':
         del state['metrics']['route__opens']
     elif gate == 'drv_signoff':
@@ -299,7 +309,7 @@ def test_final_state_requires_no_publisher_pointer(final_state_carrier):
 
 def test_final_state_native_violation_outweighs_missing_measurement(final_state_carrier):
     _, folder, state_path = final_state_carrier
-    (folder / 'check_placement.rpt').unlink()
+    R._docker_exec.count = None
     state = json.loads(state_path.read_text())
     state['metrics']['route__opens'] = 1
     state_path.write_text(json.dumps(state))
@@ -352,7 +362,7 @@ def test_final_state_placement_front_door_uses_native_legality(final_state_carri
     import placement_legality_check
     project, folder, _ = final_state_carrier
     assert placement_legality_check.inspect(project)[0] == 'PASS'
-    (folder / 'check_placement.rpt').write_text('FINAL_CHECK_PLACEMENT_VIOLATIONS 1\n')
+    R._docker_exec.count = 1
     assert placement_legality_check.inspect(project)[0] == 'FAIL'
 
 
@@ -397,3 +407,47 @@ def test_final_state_cannot_downgrade_declared_fanout(final_state_carrier):
     result, rows = _final_gate(final_state_carrier)
     assert result.status == 'FAIL'
     assert rows['drv_signoff'] == 'FAIL'
+
+
+@pytest.mark.parametrize('count,rc,error,old_count,expected', [
+    (0, 0, False, 7, 'PASS'),
+    (3, 0, False, 0, 'FAIL'),
+    (0, 1, False, 0, 'NOT_MEASURED'),
+    (None, 0, False, 0, 'NOT_MEASURED'),
+    (0, 0, True, 0, 'NOT_MEASURED'),
+])
+def test_final_odb_native_measurement_ignores_old_log(final_state_carrier, count, rc, error, old_count, expected):
+    import _prestream_native as native
+    project, folder, state_path = final_state_carrier
+    (folder / 'check_placement.rpt').write_text(f'FINAL_CHECK_PLACEMENT_VIOLATIONS {old_count}\n')
+    R._docker_exec.count, R._docker_exec.rc, R._docker_exec.error = count, rc, error
+    doc = native.placement(project, state_path)
+    assert doc['verdict'] == expected, doc
+
+
+def test_final_odb_missing_never_launches(final_state_carrier, monkeypatch):
+    import _prestream_native as native
+    project, _, state_path = final_state_carrier
+    Path(json.loads(state_path.read_text())['odb']).unlink()
+    monkeypatch.setattr(R, '_docker_exec', lambda *a, **kw: pytest.fail('missing ODB launched'))
+    assert native.placement(project, state_path)['verdict'] == 'NOT_MEASURED'
+
+
+def test_final_odb_launch_inputs_and_native_log(final_state_carrier, monkeypatch):
+    import _prestream_native as native
+    project, folder, state_path = final_state_carrier
+    (folder / 'check_placement.rpt').unlink()
+    odb = Path(json.loads(state_path.read_text())['odb'])
+    calls = []
+    def launch(container, command, **kwargs):
+        calls.append((container, command, kwargs))
+        script = Path(kwargs['marker']).read_text()
+        assert f'read_db "{odb}"' in script
+        assert 'check_placement -no_abort' in script
+        assert kwargs['inputs'] == [odb]
+        return 0, 'PRESTREAM_CHECK_PLACEMENT_VIOLATIONS 0\n', ''
+    monkeypatch.setattr(R, '_docker_exec', launch)
+    doc = native.placement(project, state_path)
+    assert doc['verdict'] == 'PASS', doc
+    assert len(calls) == 1
+    assert (project / 'reports/phase3/prestream_placement.log').read_text().strip() == 'PRESTREAM_CHECK_PLACEMENT_VIOLATIONS 0'
