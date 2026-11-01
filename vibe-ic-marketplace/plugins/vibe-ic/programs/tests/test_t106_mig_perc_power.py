@@ -1561,7 +1561,9 @@ def test_native_state_gls_observation_deadline(tmp_path, case):
         assert 'POSTLAYOUT_OBSERVATION_UNMEASURED:' in manifest['not_a_subject'][0]['detail']
 
 
-@pytest.mark.parametrize('case', ['reference', 'mapped', 'wrong_reset', 'missing_alias', 'wrong_width'])
+@pytest.mark.parametrize('case', ['reference', 'mapped', 'wrong_reset', 'missing_alias', 'wrong_width',
+                                 'observation_equivalent', 'wrong_pr_alias',
+                                 'removed_nonconstant', 'wrong_constant'])
 def test_reset_monitors_compile_through_normal_mapped_manifest(tmp_path, case):
     import arith_oracle_tb_gen as arith
     import subprocess
@@ -1574,31 +1576,89 @@ def test_reset_monitors_compile_through_normal_mapped_manifest(tmp_path, case):
         'between-edge reset pulses must not reset')
     put(path, rows)
     rtl = project / 'phase2/stage1/rtl/public_serial_product.v'
+    equivalent = case in ('observation_equivalent', 'wrong_pr_alias',
+                          'removed_nonconstant', 'wrong_constant')
+    if equivalent:
+        source = rtl.read_text().replace('output reg result_bit=0', 'output wire result_bit')
+        source = source.replace('reg [8:0] carry=0;',
+            'reg product_state=0; assign result_bit=product_state;\nreg [8:0] carry=0;')
+        source = re.sub(r'\bresult_bit\s*<=', 'product_state<=', source)
+        if case == 'removed_nonconstant':
+            source = source.replace('carry <= (index==7) ? 0 : (total >> 1);',
+                'carry <= (index==7) ? 0 : (total >> 1); carry[8] <= serial_bit;')
+        rtl.write_text(source)
     required = {'clock': 'i_clk', 'reset': 'i_rst', 'edge': 'rising', 'active_level': 1,
                 'observation': 'After active reset edge updates settle, carry must be zero.',
                 'source_reference': {'path': str(rtl.relative_to(project)), 'sha256': contract.digest(rtl)},
                 'original_requirement_reference': {'path': str(path.relative_to(project)), 'sha256': contract.digest(path)},
                 'required_observations': [{'state': 'carry', 'width': 9, 'expected_value': 0}]}
+    if equivalent:
+        required['required_observations'].append({'state': 'product_state', 'width': 1, 'expected_value': 0})
+        if case == 'wrong_constant':
+            required['required_observations'][0]['expected_value'] = 256
     put(project / 'input/flow109/D13/source.json', {'scenario_requirements': {
         'transaction_sequence': {'reset_observation': required}}})
     folder = _current_output_deadline_fixture(project, root, 18.949999)
     state = json.loads((folder / 'state_out.json').read_text())
     netlist, sdc = Path(state['nl']), Path(state['sdc'])
     physical = netlist.read_text()
+    if equivalent:
+        physical = physical.replace('[8:0] carry', '[7:0] carry')
+        physical = physical.replace('reg result_bit=0;', 'wire result_bit, buffered_result;')
+        physical = physical.replace('result_bit<=0;', '').replace('result_bit <= pipe0;', '')
+        physical = physical.replace('.A(result_bit), .Y(chip_result)', '.A(buffered_result), .Y(chip_result)')
+        q = 'serial_bit' if case == 'wrong_pr_alias' else 'result_bit'
+        physical = physical.replace('endmodule', f'''
+ PUBLIC_FF renamed_output (.D(i_rst ? 1'b0 : pipe0), .CK(i_clk), .Q({q}));
+ PUBLIC_BUF output_buffer (.I(result_bit), .Z(buffered_result));
+endmodule''')
+        model.write_text(model.read_text() + '''
+module PUBLIC_FF(input D, CK, output reg Q=0);
+ always @(posedge CK) Q<=D;
+endmodule
+module PUBLIC_BUF(input I, output Z); buf (Z,I); endmodule
+''')
+        declaration_path = project / 'plugin_output/declaration.json'
+        declaration = json.loads(declaration_path.read_text())
+        declaration['verification_stimuli']['arithmetic_observation']['public_surface']['binding'][str(model.resolve())] = contract.digest(model)
+        put(declaration_path, declaration)
+        library = write(folder / 'cells.lib', '''library(neutral) {
+ cell(PUBLIC_FF) {
+  ff(IQ,IQN) { clocked_on:"CK"; next_state:"D"; }
+  pin(CK) { direction:input; } pin(D) { direction:input; }
+  pin(Q) { direction:output; function:"IQ"; }
+ }
+ cell(PUBLIC_BUF) {
+  pin(I) { direction:input; } pin(Z) { direction:output; function:"I"; }
+ }
+}''')
+        wrapper = project / 'phase3/stage3/pnr/public_surface.v'
+        header = folder / 'selected_header.json'
+        script = (f'read_verilog -lib {model}; read_verilog {rtl} {wrapper}; '
+                  f'hierarchy -top public_surface; proc; flatten; write_json {header}')
+        synthesis_run = subprocess.run(['yosys', '-Q', '-T', '-p', script], capture_output=True, text=True)
+        assert synthesis_run.returncode == 0, synthesis_run.stdout + synthesis_run.stderr
+        state['json_h'] = str(header)
+        put(folder / 'state_out.json', state)
+        config = json.loads((folder / 'config.json').read_text())
+        config['LIB'] = {'typical': [str(library)]}
+        put(folder / 'config.json', config)
     if case == 'wrong_reset':
         physical = physical.replace('carry<=0;', 'carry<=1;')
     elif case == 'wrong_width':
         physical = physical.replace('[8:0] carry', '[7:0] carry')
-    # One-to-one lexical rename only, preserving this existing fixture's logic.
+    # Retained state keeps its exact flattened name in every mapped arm.
     target = r'\other/carry ' if case == 'missing_alias' else r'\core/carry '
     physical = re.sub(r'\bcarry\b', lambda _: target, physical)
     netlist.write_text(physical)
     manifest = sgs.tool_arm_manifest(project, 'public_serial_product', netlist,
         [model], tmp_path / 'manifest', sdc=sdc,
         sdfs=[Path(f) for f in state['sdf'].values()], sta_step_dir=folder)
-    if case in ('missing_alias', 'wrong_width'):
+    if case in ('missing_alias', 'wrong_width', 'wrong_pr_alias', 'removed_nonconstant', 'wrong_constant'):
         assert manifest['cases'] == []
-        assert 'RESET_STATE_MAPPING_UNMEASURED: carry:' in manifest['not_a_subject'][0]['detail']
+        state_name = 'product_state' if case == 'wrong_pr_alias' else 'carry'
+        detail = manifest['not_a_subject'][0]['detail']
+        assert 'RESET_STATE_MAPPING_UNMEASURED:' in detail and f'{state_name}: required width' in detail
         return
     assert manifest['not_a_subject'] == [] and len(manifest['cases']) == 1
     prepared = Path(manifest['cases'][0]['testbench'])
@@ -1625,3 +1685,5 @@ def test_reset_monitors_compile_through_normal_mapped_manifest(tmp_path, case):
         assert run.returncode == 0, run.stdout + run.stderr
         assert '[TB transaction_sequence] PASS' in run.stdout
         assert re.search(r'ARITH_RESET_OBSERVATION state=carry width=9 expected=0 samples=[1-9]\d* mismatches=0', run.stdout)
+        if equivalent:
+            assert re.search(r'ARITH_RESET_OBSERVATION state=product_state width=1 expected=0 samples=[1-9]\d* mismatches=0', run.stdout)

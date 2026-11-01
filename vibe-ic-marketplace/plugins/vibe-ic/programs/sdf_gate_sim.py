@@ -2562,8 +2562,27 @@ def _bound_arithmetic_case(project: Path, case: Dict[str, object], top: str,
                  if master == top]
         if len(cores) != 1:
             raise ValueError('RESET_STATE_MAPPING_UNMEASURED: core instance is not unique')
-        plan['observation']['reset_state_targets'] = arith.mapped_reset_state_targets(
-            plan, netlist.read_text(), cores[0])
+        try:
+            targets = arith.mapped_reset_state_targets(plan, netlist.read_text(), cores[0])
+        except ValueError as mapping_error:
+            # The selected native State already carries its elaborated JsonHeader
+            # and libraries. Missing evidence retains the original refusal.
+            if sta_step_dir is None:
+                raise
+            try:
+                state = json.loads((sta_step_dir / 'state_out.json').read_text())
+                config = json.loads((sta_step_dir / 'config.json').read_text())
+                synthesis = json.loads(Path(state['json_h']).read_text())
+                libraries = [Path(f) for files in config.get('LIB', {}).values() for f in files]
+                liberty = '\n'.join(p.read_text() for p in sorted(set(libraries)))
+            except (OSError, KeyError, ValueError, TypeError) as exc:
+                raise ValueError(f'{mapping_error}; selected synthesis/library evidence unavailable') from exc
+            targets = arith.mapped_reset_state_targets(
+                plan, netlist.read_text(), cores[0], synthesis=synthesis,
+                source_text=(project / plan['reset_observation']['source_reference']['path']).read_text(),
+                liberty_text=liberty, wrapper_text=wrapper.read_text(),
+                pad_instances=record.get('pad_instances'), port_map=declared.get('port_map'))
+        plan['observation']['reset_state_targets'] = targets
     # Keep the physical subject in the plan; the normal binder below owns
     # changing this logical placeholder and mapping every pad port.
     return (arith.emit_arithmetic_scenario_module(str(case['module']), plan,

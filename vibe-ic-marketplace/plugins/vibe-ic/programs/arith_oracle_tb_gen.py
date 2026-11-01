@@ -1721,8 +1721,18 @@ def arithmetic_scenario_plan(project: Path, ic_class: Optional[str], case: dict,
     return plan
 
 
-def mapped_reset_state_targets(plan: dict, netlist_text: str, core_instance: str) -> dict:
-    """Resolve only exact retained flattened state names at their required widths."""
+def mapped_reset_state_targets(plan: dict, netlist_text: str, core_instance: str,
+                               *, synthesis: Optional[dict] = None,
+                               source_text: str = '', liberty_text: str = '',
+                               wrapper_text: str = '', pad_instances: Optional[dict] = None,
+                               port_map: Optional[dict] = None) -> dict:
+    """Bind retained state; refuse unproved constants or output-register aliases.
+
+    A removed bit needs a constant D cone in the selected synthesis record.
+    An output alias needs a direct source assignment and a unique mapped Q
+    path through Liberty identity buffers and the declared output pad.
+    Required widths, expected values and the port comparator remain intact.
+    """
     from _hdl_code_text import strip_hdl_comments_and_strings
     required = (plan.get('reset_observation') or {}).get('required_observations', [])
     if not required:
@@ -1734,16 +1744,129 @@ def mapped_reset_state_targets(plan: dict, netlist_text: str, core_instance: str
     if body is None:
         raise ValueError('RESET_STATE_MAPPING_UNMEASURED: selected module absent')
     targets, gaps = {}, []
+    module = (synthesis or {}).get('modules', {}).get(top, {})
+
+    def constant(bit, seen=(), *, state_output=False):
+        if bit in ('0', '1'):
+            return bit
+        if bit in seen:
+            return None
+        drivers = [(cell, pin, bits.index(bit))
+                   for cell in module.get('cells', {}).values()
+                   for pin, bits in cell.get('connections', {}).items()
+                   if cell.get('port_directions', {}).get(pin) == 'output' and bit in bits]
+        if len(drivers) != 1:
+            return None
+        cell, pin, index = drivers[0]
+        conns = cell['connections']
+        if cell['type'] == '$mux' and pin == 'Y':
+            a, b = (constant(conns[p][index], (*seen, bit)) for p in ('A', 'B'))
+            return a if a == b else None
+        # Unconditional DFF, not an enable, latch or async-control inference.
+        if state_output and cell['type'] == '$dff' and pin == 'Q':
+            return constant(conns['D'][index], (*seen, bit))
+        return None
+
+    def output_register(state):
+        import sdf_gate_sim as sgs
+        from reset_sync_structural_exception import _balanced_block, _output_pins
+        source = strip_hdl_comments_and_strings(source_text)
+        selected = re.search(r'\bmodule\s+' + re.escape(plan['spec']['top'])
+                             + r'\b(.*?)\bendmodule\b', source, re.DOTALL)
+        if selected is None or re.search(r'\breg\s+' + re.escape(state) + r'\b', selected.group(1)) is None:
+            return None
+        source = selected.group(1)
+        aliases = re.findall(r'\bassign\s+([A-Za-z_][\w$]*)\s*=\s*'
+                             + re.escape(state) + r'\s*;', source)
+        outputs = {p['name'] for p in plan['spec']['ports'] if p['dir'] == 'output'}
+        aliases = [p for p in aliases if p in outputs and p in (port_map or {})]
+        if len(aliases) != 1:
+            return None
+        # Read identity functions and driver directions from the actual library.
+        roles, identities = {}, {}
+        for cell in re.finditer(r'\bcell\s*\(\s*"?([A-Za-z_][\w$]*)"?\s*\)\s*\{', liberty_text):
+            block = _balanced_block(liberty_text, cell.end() - 1)
+            pins, funcs = {}, {}
+            for pin in re.finditer(r'\bpin\s*\(\s*"?([A-Za-z_][\w$]*)"?\s*\)\s*\{', block):
+                text = _balanced_block(block, pin.end() - 1)
+                direction = re.search(r'\bdirection\s*:\s*"?(input|output|inout)\b', text)
+                function = re.search(r'\bfunction\s*:\s*"\s*([A-Za-z_][\w$]*)\s*"', text)
+                if direction:
+                    pins[pin.group(1)] = direction.group(1)
+                if function:
+                    funcs[pin.group(1)] = function.group(1)
+            roles[cell.group(1)] = pins
+            if not re.search(r'\b(?:ff|latch|ff_bank|latch_bank)\s*\(', block):
+                identities[cell.group(1)] = {p: f for p, f in funcs.items()
+                    if pins.get(p) == 'output' and pins.get(f) == 'input'
+                    and [n for n, d in pins.items() if d == 'input'] == [f]}
+        q_pins = _output_pins(liberty_text)
+        insts = sgs._instances(body.group(1))
+        wrapper = sgs._instances(strip_hdl_comments_and_strings(wrapper_text))
+        norm = lambda net: re.sub(r'\s+', '', net).lstrip('\\')
+        drivers = {}
+        for name, (master, conns) in insts.items():
+            for pin, net in conns.items():
+                if pin == (pad_instances or {}).get(name, {}).get('core_pin'):
+                    continue  # the declared output pad consumes this core net
+                if master not in roles or roles[master].get(pin) in ('output', 'inout'):
+                    drivers.setdefault(norm(net), []).append((name, master, pin, conns))
+        net = (port_map or {})[aliases[0]]
+        visited, crossed_pad = set(), False
+        while norm(net) not in visited:
+            visited.add(norm(net))
+            if any(norm(lhs) == norm(net) for lhs in re.findall(
+                    r'\bassign\s+([^=;]+)=', body.group(1))):
+                return None
+            # The existing chip-top record declares the IO terminal and core pin.
+            pads = [(n, p) for n, p in (pad_instances or {}).items()
+                    if n in insts and n in wrapper and insts[n][0] == wrapper[n][0]
+                    and norm(insts[n][1].get(p.get('terminal'), '')) == norm(net)]
+            if pads and not crossed_pad and len(pads) == 1:
+                name, pad = pads[0]
+                if any(d[0] != name for d in drivers.get(norm(net), [])):
+                    return None
+                net = insts[name][1].get(pad.get('core_pin'), '')
+                crossed_pad = True
+                continue
+            hits = drivers.get(norm(net), [])
+            if len(hits) != 1:
+                return None
+            _, master, pin, conns = hits[0]
+            if pin in q_pins.get(master, set()):
+                return 'dut.' + net.strip() + ' '
+            input_pin = identities.get(master, {}).get(pin)
+            if input_pin is None:
+                return None
+            net = conns.get(input_pin, '')
+        return None
+
     for row in required:
         name = core_instance + '/' + row['state']
         matches = re.findall(r'\b(?:wire|reg|logic)\s+(?:signed\s+)?'
                              r'(?:\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*)?'
                              + re.escape('\\' + name) + r'\s+(?:=[^;]*)?;', body.group(1))
         widths = [abs(int(a) - int(b)) + 1 if a else 1 for a, b in matches]
-        if widths != [row['width']]:
-            gaps.append(f"{row['state']}: required width {row['width']}, retained {widths}")
-        else:
+        if widths == [row['width']]:
             targets[row['state']] = 'dut.\\' + name + ' '
+            continue
+        bits = module.get('netnames', {}).get(core_instance + '.' + row['state'], {}).get('bits', [])
+        # Only missing high bits of an unambiguously retained [k:0] vector.
+        if (len(matches) == 1 and matches[0][1] == '0' and len(bits) == row['width']
+                and widths[0] < row['width']):
+            removed = [constant(b, state_output=True) for b in bits[widths[0]:]]
+            expected = format(row['expected_value'], f"0{row['width']}b")[:len(removed)]
+            if all(b in ('0', '1') for b in removed) and ''.join(reversed(removed)) == expected:
+                targets[row['state']] = ("{" + f"{len(removed)}'b{expected}, "
+                                          + 'dut.\\' + name + ' }')
+                continue
+        if not widths and row['width'] == 1:
+            alias = output_register(row['state'])
+            if alias is not None:
+                targets[row['state']] = alias
+                continue
+        gaps.append(f"{row['state']}: required width {row['width']}, retained {widths}; "
+                    'constant or unique output-register proof unavailable')
     if gaps:
         raise ValueError('RESET_STATE_MAPPING_UNMEASURED: ' + '; '.join(gaps))
     return targets
