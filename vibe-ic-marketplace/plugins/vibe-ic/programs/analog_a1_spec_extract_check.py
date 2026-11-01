@@ -18,6 +18,8 @@ with substance:
           `iq_ua`, `iout_ma`, ...).
 
 Failure rules:
+  A1_ATTRIBUTION_*       — a present amendment lacks owner/source binding,
+                          or its block/chip output is stale/changed (blocking)
   A1_SPEC_FIELDS_DEFAULTED — `_provenance.fields_defaulted` is non-empty (or
                           `defaults_used` is true): a value no document
                           stated
@@ -133,6 +135,11 @@ def _check_block(project: Path, block: str) -> tuple[Optional[str], List[dict]]:
     """Return (status, findings) where status is one of
     "PASS" | "MISSING" | "FAIL".  MISSING is per-block-only and
     becomes either WAIVED (--block mode) or a FAIL (project mode)."""
+    from analog_a1_spec_emit import approved_electrical_attribution, validate_attribution_output, AttributionRefusal
+    try:
+        approved_electrical_attribution(project)
+    except AttributionRefusal as exc:
+        return "FAIL", [{"block": block, "rule": exc.code, "detail": str(exc)}]
     spec_path, found = resolve_block_artefact(
         project, block, "spec.json", DECLARED_PHASE)
     if not found:
@@ -161,6 +168,10 @@ def _check_block(project: Path, block: str) -> tuple[Optional[str], List[dict]]:
             "rel_path": str(spec_path.relative_to(project)),
             "detail": "spec.json is empty / not a JSON object",
         }]
+    try:
+        validate_attribution_output(project, data, block)
+    except AttributionRefusal as exc:
+        return "FAIL", [{"block": block, "rule": exc.code, "detail": str(exc)}]
     # NO SPEC VALUE WITHOUT A DOCUMENT (T94, A1 harvest #2). A spec value
     # whose provenance is not a document field is a default, and a default
     # graded a bandgap against a 1.205 V no document stated. The producer
@@ -214,6 +225,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if not project.is_dir():
         print(f"error: not a directory: {project}", file=sys.stderr)
         return 2
+
+    from analog_a1_spec_emit import approved_electrical_attribution, AttributionRefusal
+    try:
+        approved_electrical_attribution(project)
+    except AttributionRefusal as exc:
+        return emit_fail(GATE, args, [{"rule": exc.code, "detail": str(exc)}],
+                         {"blocks_checked": 0, "blocks_pass": 0, "blocks_fail": 1})
 
     blocks_all = load_block_list(project)
     if blocks_all is None or (not blocks_all and not args.block):

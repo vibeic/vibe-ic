@@ -2531,6 +2531,24 @@ def _d62_rule_measurements(project: Path, component: Mapping[str, Any],
     return density, keepout
 
 
+def _a01_chip_specs(project, outputs):
+    """Retain chip facts separately from the existing per-block denominator."""
+    import analog_a1_spec_emit as owner
+    amendment = owner.approved_electrical_attribution(project)
+    if not amendment:
+        return [], {}, {}
+    if not any(row['scope'] == 'chip' for row in amendment['rows']):
+        return [], {}, amendment['readset']
+    path = project / owner.CHIP_SPECS_REL
+    digest = _sha(path.read_bytes())
+    if outputs.get(owner.CHIP_SPECS_REL, outputs.get(str(path))) != digest:
+        raise MetricRefusal('METRIC_EVIDENCE_STALE', owner.CHIP_SPECS_REL)
+    body = json.loads(path.read_text())
+    owner.validate_attribution_output(project, body, None)
+    return ([{'scope': 'chip', 'name': entry['name'], 'unit': entry['unit']}
+             for entry in body['specs']], {owner.CHIP_SPECS_REL: digest}, amendment['readset'])
+
+
 def _a01_measurements(project: Path, component: Mapping[str, Any],
                       context: Mapping[str, Any]) -> tuple[dict, dict]:
     if component.get("component_status") == "FAIL":
@@ -2588,6 +2606,8 @@ def _a01_measurements(project: Path, component: Mapping[str, Any],
         if not path.is_file() or not _HEX.fullmatch(str(expected or "")) or _sha(path.read_bytes()) != expected:
             raise MetricRefusal("METRIC_EVIDENCE_STALE", relative)
         body = json.loads(path.read_text())
+        from analog_a1_spec_emit import validate_attribution_output
+        validate_attribution_output(project, body, name)
         provenance = body.get("_provenance") if isinstance(body, dict) else None
         if (not isinstance(provenance, dict) or provenance.get("producer") != "analog_a1_spec_emit"
                 or provenance.get("defaults_used") is not False
@@ -2610,6 +2630,8 @@ def _a01_measurements(project: Path, component: Mapping[str, Any],
         output_identity[relative] = expected
     if not specs:
         raise MetricRefusal("METRIC_EVIDENCE_ABSENT", "no source-owned measured fields")
+    chip_specs, chip_outputs, attribution_inputs = _a01_chip_specs(project, component.get('outputs', {}))
+    output_identity.update(chip_outputs)
     producer_reports = [{"path": path, "sha256": digest}
                         for path, digest in component.get("outputs", {}).items()
                         if path.endswith("/producer.json")]
@@ -2639,7 +2661,7 @@ def _a01_measurements(project: Path, component: Mapping[str, Any],
                            "qualification_sha256": uses[0].get("qualification_sha256"),
                            "executable": uses[0].get("executable")},
         "consumed_inputs": {path: digest for path, digest in component.get("inputs", {}).items()
-                            if digest is not None},
+                            if digest is not None} | attribution_inputs,
         "requirements": "bound-per-obligation",
         "configuration": uses[0].get("config"),
         "models": {"status": "NOT_APPLICABLE_TO_STRUCTURED_SPEC_BINDING"},
@@ -2647,7 +2669,7 @@ def _a01_measurements(project: Path, component: Mapping[str, Any],
         "source": component.get("source_sha256"),
     }
     _identity_complete(identity)
-    return ({"status": "MEASURED", "value": specs, "identity": identity},
+    return ({"status": "MEASURED", "value": specs, "identity": identity, "chip_specs": chip_specs},
             {"status": "MEASURED", "value": measurements, "identity": identity})
 
 
@@ -2691,6 +2713,8 @@ def _a01_native_measurements(project, component, context):
         if row['output_views'].get(str(spec)) != _sha(spec.read_bytes()):
             raise MetricRefusal('METRIC_EVIDENCE_STALE', str(spec))
         body = json.loads(spec.read_text())
+        from analog_a1_spec_emit import validate_attribution_output
+        validate_attribution_output(project, body, name)
         provenance = body.get('_provenance', {})
         if (provenance.get('producer') != 'analog_a1_spec_emit'
                 or provenance.get('defaults_used') is not False
@@ -2712,6 +2736,15 @@ def _a01_native_measurements(project, component, context):
         checks.append({'block': name, 'report': str(report), 'log_sha256': gate['log_sha256']})
     if not specs:
         raise MetricRefusal('METRIC_EVIDENCE_ABSENT', 'no source-owned specification targets')
+    outputs = {key: digest for row in rows for key, digest in row['output_views'].items()}
+    chip_specs, chip_outputs, attribution_inputs = _a01_chip_specs(project, outputs)
+    from analog_a1_spec_emit import ATTRIBUTION_REL
+    if attribution_inputs:
+        expected = attribution_inputs[ATTRIBUTION_REL]
+        if any(row['input_views'].get(str(project / ATTRIBUTION_REL)) != expected for row in rows):
+            raise MetricRefusal('METRIC_INPUT_CHANGED', ATTRIBUTION_REL)
+    readset.update({str(project / key): digest for key, digest in attribution_inputs.items()})
+    readset.update({str(project / key): digest for key, digest in chip_outputs.items()})
     identity = {'producer': {'name': 'analog_a1_spec_emit', 'input_sha256': _sha(l5.read_bytes())},
         'checker': {'name': 'analog_a1_spec_extract_check', 'checks': checks},
         'tool_execution': {'context_sha256': context['context_sha256'],
@@ -2719,8 +2752,8 @@ def _a01_native_measurements(project, component, context):
         'consumed_inputs': readset, 'requirements': 'bound-per-obligation',
         'configuration': {'native_attempt': component['native_results']['attempt']}}
     _identity_complete(identity)
-    return tuple({'status': 'MEASURED', 'value': values, 'identity': identity}
-                 for values in (specs, measurements))
+    return ({'status': 'MEASURED', 'value': specs, 'identity': identity, 'chip_specs': chip_specs},
+            {'status': 'MEASURED', 'value': measurements, 'identity': identity})
 
 
 def _d10_blackbox_instances(document: Mapping[str, Any], top: str) -> list[str]:

@@ -200,3 +200,27 @@ def test_source_whitelist_reverse_guard_keeps_unknown_obligation_unimplemented(t
     assert reversed_result["status"] == "NOT_MEASURED"
     assert any(o["status"] == "UNIMPLEMENTED_METRIC_BINDING"
                for o in reversed_result["obligations"])
+
+
+def test_actual_a01_metrics_bind_approved_rows_and_the_separate_chip_set(tmp_path):
+    from test_analog_a1_spec_emit import attribution_case
+    _approved_case(tmp_path)
+    amendment, _ = attribution_case(tmp_path, existing=True)
+    result = _run(tmp_path)
+    report, context = _report_and_context(tmp_path)
+    assert result.returncode == 2, result.stdout + result.stderr
+    acceptance = report['metric_acceptance']
+    assert acceptance['status'] == 'PASS', acceptance
+    registry = json.loads(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
+                                      'flow', 'flow109.json').read_text())
+    declared = next(row for row in registry['rows'] if row['id'] == 'A01')
+    assert {o['id'] for o in acceptance['obligations']} == {o['id'] for o in declared['obligations']}
+    measured = acceptance['obligations'][0]['measurement']
+    assert {'block': 'regulator_alpha', 'name': 'iload', 'unit': 'mA'} in measured['value']
+    assert measured['chip_specs'] == [{'scope': 'chip', 'name': 'supply', 'unit': 'V'}]
+    assert 'requirements/base_A1/electrical_row_attribution.json' in report['inputs']
+    assert 'phase3/analog/chip_specs.json' in report['outputs']
+    amendment.write_text(amendment.read_text() + '\n')
+    stale = metrics.accept_a01(tmp_path, context, report)
+    assert stale['status'] == 'NOT_MEASURED', stale
+    assert stale['reason'] == 'METRIC_INPUT_CHANGED'
