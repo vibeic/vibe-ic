@@ -1716,7 +1716,6 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
         ],
         "constants": {
             "w_cap": 10.0,
-            "loop_topology": "cifb",
             "w_res": 0.35,
             # `feedback_delay_clocks` is NOT typed here. It is DERIVED from
             # this entry's own feedback branch — see `derived_feedback_delay`

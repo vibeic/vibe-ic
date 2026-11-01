@@ -81,7 +81,8 @@ def declared_dut_consumed(views: dict) -> bool:
         for role, view in views.items() if role.startswith("include:") and isinstance(view, dict)))
 
 
-def _transfer_timing(topology: dict, reset_node: str, node_map: dict | None = None) -> dict:
+def _transfer_timing(topology: dict, reset_node: str, node_map: dict | None = None,
+                     *, loop_model: dict | None = None) -> dict:
     """Locate the actual SC transfer switches, without assuming a clock phase."""
     from analog_a2_topology_emit import sc_branch_polarities
 
@@ -89,22 +90,61 @@ def _transfer_timing(topology: dict, reset_node: str, node_map: dict | None = No
     probe = topology.get("loop_probe") or {}
     names = probe.get("coefficient_devices") or {}
     order = (topology.get("stage_expansion") or {}).get("stages")
+    model = loop_model if loop_model is not None else stimulus.incremental_loop_adapter(topology)
+    if model is not None:
+        declared_order = len(model["input_vector"])
+        if order is not None and order != declared_order:
+            raise ValueError("native stage count differs from declared state equations")
+        order = declared_order
     if not isinstance(order, int) or isinstance(order, bool) or order < 1:
         raise ValueError("native transfer attribution requires the typed SC stage count")
-    if not all(isinstance(names.get(role), str) for role in ("sampling", "feedback", "integrating")):
+    if model is None and not all(isinstance(names.get(role), str) for role in ("sampling", "feedback", "integrating")):
         raise ValueError("native transfer attribution requires typed coefficient_devices")
     prefix = reset_node.rsplit(".", 1)[0] if "." in reset_node else ""
     if not prefix:
         raise ValueError("native transfer attribution requires the DUT instance path")
     branches = sc_branch_polarities(devices)
+    declared_paths = {}
+    if model is not None:
+        arrays = ((topology.get("_provenance") or {}).get("layout_maxima") or {}).get("capacitor_arrays") or []
+        for stage, output in enumerate(model["state_nets"], 1):
+            selected = []
+            for path in model["state_paths"]:
+                if path["destination"] != output or not path["gain"]:
+                    continue
+                base = path["capacitor"]
+                if base in branches:
+                    members = [base]
+                else:
+                    held = [row for row in arrays if row.get("device") == base]
+                    if len(held) != 1 or not isinstance(held[0].get("units"), int) or held[0]["units"] < 1:
+                        raise ValueError("declared state path capacitor is absent: " + base)
+                    members = [f"{base}_u{i}" for i in range(held[0]["units"])]
+                if any(name not in branches for name in members):
+                    raise ValueError("declared state path capacitor array is incomplete: " + base)
+                selected.extend((path["kind"], name) for name in members)
+            if not selected:
+                raise ValueError("declared state has no native transfer path: " + output)
+            declared_paths[stage] = selected
     if node_map is not None and not isinstance(node_map, dict):
         raise ValueError("transfer_gate_nodes must map actual typed switch names to native nodes")
     groups, columns, reset_gates, switches_used = [], [], [], set()
     for stage in range(1, order + 1):
-        integrating = names["integrating"].format(i=stage)
-        stored = [device for device in devices
-                  if device.get("name") == integrating or re.fullmatch(
-                      re.escape(integrating) + r"_u\d+", str(device.get("name", "")))]
+        if model is not None:
+            integrating = model["state_nets"][stage - 1]
+            sums = {branches[name]["summing_node"] for role, name in declared_paths[stage]}
+            if len(sums) != 1:
+                raise ValueError("declared state transfer paths reach different summing nodes")
+            terminals = {integrating, next(iter(sums))}
+            stored = [device for device in devices if device.get("role") in ("cap", "capacitor")
+                      and set(device.get("nets") or []) == terminals]
+            stage_paths = declared_paths[stage]
+        else:
+            integrating = names["integrating"].format(i=stage)
+            stored = [device for device in devices
+                      if device.get("name") == integrating or re.fullmatch(
+                          re.escape(integrating) + r"_u\d+", str(device.get("name", "")))]
+            stage_paths = [(role, names[role].format(i=stage)) for role in ("sampling", "feedback")]
         if (not stored or any(device.get("role") not in ("cap", "capacitor")
                               or len(device.get("nets") or []) != 2 for device in stored)
                 or len({device["name"] for device in stored}) != len(stored)
@@ -120,8 +160,7 @@ def _transfer_timing(topology: dict, reset_node: str, node_map: dict | None = No
         if len(reset_pair) != 1:
             raise ValueError("typed integrating reset switch is absent or ambiguous: " + integrating)
         reset_gates.append(reset_pair[0]["nets"][1])
-        for role in ("sampling", "feedback"):
-            name = names[role].format(i=stage)
+        for role, name in stage_paths:
             branch = branches.get(name)
             if not branch:
                 raise ValueError("native transfer branch is absent or ambiguous: " + name)
@@ -226,7 +265,8 @@ def _extra_node_voltages(netlist: Path | None, source: str, settings: dict,
 
 def sampled_capture(path: Path, first_clock_s: float, period_s: float,
                     high_v: float, sample_fraction: float = 0.9,
-                    timing: dict | None = None, observables: dict | None = None) -> dict:
+                    timing: dict | None = None, observables: dict | None = None,
+                    encoding: dict | None = None) -> dict:
     """Stream time/output/reset/input columns; retain only clock samples."""
     if period_s <= 0 or high_v <= 0 or not 0 < sample_fraction < 1:
         raise ValueError("invalid capture clock or sampling phase")
@@ -234,9 +274,11 @@ def sampled_capture(path: Path, first_clock_s: float, period_s: float,
     columns = (timing or {}).get("columns") or []
     extra_columns = (observables or {}).get("columns") or []
     groups = (timing or {}).get("groups") or []
+    outputs = len(encoding["output_nodes"]) if encoding else 1
+    reset_index, input_index, phase_index = outputs + 1, outputs + 2, outputs + 3
     pulses = [[] for _ in groups]
     opened = [None for _ in groups]
-    indices = [(4 + columns.index(group["n_gate"]), 4 + columns.index(group["p_gate"])) for group in groups]
+    indices = [(phase_index + columns.index(group["n_gate"]), phase_index + columns.index(group["p_gate"])) for group in groups]
     previous = None
     phase_header = False
     next_sample = first_clock_s + sample_fraction * period_s
@@ -252,8 +294,11 @@ def sampled_capture(path: Path, first_clock_s: float, period_s: float,
                     if observables and [field.casefold() for field in fields] != [
                             name.casefold() for name in ["time", *observables["prefix_columns"], *extra_columns]]:
                         raise ValueError("native observable header differs from the declared columns")
-                    if [field.casefold() for field in fields[4:]] != [name.casefold() for name in columns + extra_columns]:
+                    if [field.casefold() for field in fields[phase_index:]] != [name.casefold() for name in columns + extra_columns]:
                         raise ValueError("native transfer phase header differs from the source-derived probes")
+                    if encoding and [field.casefold() for field in fields[1:outputs+1]] != [
+                            f"v({node})".casefold() for node in encoding["output_nodes"]]:
+                        raise ValueError("native decision output header differs from the loop declaration")
                     phase_header = True
                 elif fields:
                     try:
@@ -264,7 +309,7 @@ def sampled_capture(path: Path, first_clock_s: float, period_s: float,
                 continue
             if columns and not phase_header:
                 raise ValueError("native transfer phase header is absent")
-            if len(row) != 4 + len(columns) + len(extra_columns):
+            if len(row) != phase_index + len(columns) + len(extra_columns):
                 if columns and len(row) >= 4:
                     raise ValueError("native capture columns differ from the declared columns")
                 continue
@@ -276,11 +321,11 @@ def sampled_capture(path: Path, first_clock_s: float, period_s: float,
             if previous is not None:
                 if row[0] <= previous[0]:
                     raise ValueError("native capture times are not strictly increasing")
-                if previous[2] <= high_v / 2 < row[2]:
-                    fraction = (high_v / 2 - previous[2]) / (row[2] - previous[2])
+                if previous[reset_index] <= high_v / 2 < row[reset_index]:
+                    fraction = (high_v / 2 - previous[reset_index]) / (row[reset_index] - previous[reset_index])
                     releases.append(previous[0] + fraction * (row[0] - previous[0]))
-                if previous[2] > high_v / 2 >= row[2]:
-                    fraction = (high_v / 2 - previous[2]) / (row[2] - previous[2])
+                if previous[reset_index] > high_v / 2 >= row[reset_index]:
+                    fraction = (high_v / 2 - previous[reset_index]) / (row[reset_index] - previous[reset_index])
                     assertions.append(previous[0] + fraction * (row[0] - previous[0]))
                 threshold = high_v / 2
                 for group, (ni, pi) in enumerate(indices):
@@ -302,9 +347,14 @@ def sampled_capture(path: Path, first_clock_s: float, period_s: float,
                         opened[group] = None
                 while next_sample <= row[0]:
                     value = row if next_sample == row[0] else previous
-                    samples.append({"time_s": next_sample,
-                                    "decision": 1.0 if value[1] > high_v / 2 else -1.0,
-                                    "output_v": value[1], "reset_v": value[2], "input_v": value[3]})
+                    if encoding:
+                        decision, margin = decimator.decision_value(value[1:outputs+1],
+                            [high_v * x for x in encoding["threshold_fractions"]], encoding["codes"])
+                    else:
+                        decision, margin = (1.0 if value[1] > high_v / 2 else -1.0), abs(value[1] - high_v / 2)
+                    samples.append({"time_s": next_sample, "decision": decision,
+                                    "decision_margin_v": margin,
+                                    "output_v": value[1], "reset_v": value[reset_index], "input_v": value[input_index]})
                     next_sample += period_s
             previous = row
     for group, start in enumerate(opened):
@@ -331,7 +381,11 @@ def decode_capture(path: Path, clock: tuple, declaration: dict,
                 or requested["nodes"] != observables.get("nodes")
                 or requested["netlist_sha256"] != (observables.get("netlist") or {}).get("sha256")):
             raise ValueError("native observable declaration differs from executed settings")
-    capture = sampled_capture(path, first, period, high, settings.get("sample_fraction", 0.9), timing, observables)
+    model = declaration.get("loop_model")
+    if model is not None:
+        decimator.validate_loop_model(model)
+    capture = sampled_capture(path, first, period, high, settings.get("sample_fraction", 0.9), timing,
+                              observables, (model or {}).get("decision_encoding"))
     window = int(declaration["window_clocks"])
     samples = capture.pop("samples")
     transfer_pulses = capture.pop("transfer_pulses")
@@ -404,7 +458,7 @@ def decode_capture(path: Path, clock: tuple, declaration: dict,
         output, details = decimator.decimate([sample["decision"] for sample in chosen], sample_count,
             order=int(declaration["order"]), coeff=float(declaration["coeff"]),
             feedback_delay=int(declaration["feedback_delay_clocks"]),
-            topology=declaration.get("loop_topology", "cifb"))
+            topology=declaration.get("loop_topology", "cifb"), loop_model=model)
         if not output:
             discarded.append({"release_s": left, "reason": details})
             continue
@@ -418,7 +472,7 @@ def decode_capture(path: Path, clock: tuple, declaration: dict,
                         "first_sample_s": chosen[0]["time_s"], "last_sample_s": chosen[-1]["time_s"],
                         "ignored_zero_weight_decisions": 0,
                         "decoded": output[0], "input_v": sum(held) / sample_count,
-                        "minimum_decision_margin_v": min(abs(sample["output_v"] - high / 2) for sample in chosen),
+                        "minimum_decision_margin_v": min(sample["decision_margin_v"] for sample in chosen),
                         "decimator": details})
     return {**capture, "conversions": decoded, "discarded_intervals": discarded,
             "alignment": DECODER_REVISION}
@@ -748,8 +802,8 @@ def replay_score(path: Path) -> dict:
 def prepare_deck(template: Path, spec: dict, topology: dict, settings: dict, destination: Path,
                  *, netlist: Path | None = None) -> tuple:
     source = bound.contextual_template(template.read_text(), template.parent)
-    plan = stimulus.plan(source, spec, topology)
-    declaration = stimulus.incremental_decode(spec, topology)
+    plan = stimulus.plan(source, spec, topology, decision_encoding=settings.get("decision_encoding"))
+    declaration = stimulus.incremental_decode(spec, topology, decision_encoding=settings.get("decision_encoding"))
     if not plan.get("applied") or not declaration.get("declared"):
         raise ValueError("incremental stimulus/decode inputs unavailable: " + str(plan.get("reason")))
     clock = enob_check.sample_clock_card(source)
@@ -758,7 +812,8 @@ def prepare_deck(template: Path, spec: dict, topology: dict, settings: dict, des
     reset = settings.get("reset_node")
     if not isinstance(reset, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:#/$-]*", reset):
         raise ValueError("actual active-low reset node must be specified")
-    declaration["native_timing"] = _transfer_timing(topology, reset, settings.get("transfer_gate_nodes"))
+    declaration["native_timing"] = _transfer_timing(topology, reset, settings.get("transfer_gate_nodes"),
+                                                  loop_model=declaration.get("loop_model"))
     value = settings.get("held_input_v")
     if not isinstance(value, (int, float)) or isinstance(value, bool) or not math.isfinite(value):
         raise ValueError("explicit finite held input required")
@@ -794,7 +849,8 @@ def prepare_deck(template: Path, spec: dict, topology: dict, settings: dict, des
             or isinstance(threads, bool) or not isinstance(threads, int) or not 1 <= threads <= 32):
         raise ValueError("invalid native capture settings")
     dump = destination / "conversion.dat"
-    probes = f"v({plan['output_node']}) v({reset}) v({plan['signal_input_port']})"
+    probes = " ".join(f"v({node})" for node in plan.get("output_nodes", [plan["output_node"]]))
+    probes += f" v({reset}) v({plan['signal_input_port']})"
     probes += " " + " ".join(declaration["native_timing"]["columns"])
     observables = _extra_node_voltages(netlist, source, settings, reset, probes.split())
     if observables is not None:

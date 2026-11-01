@@ -582,21 +582,37 @@ def sndr_db_incremental(deck_text: str, dump_text: str, column: int = 1
 
     times: List[float] = []
     vals: List[float] = []
+    model = decl.get("loop_model")
+    encoding = (model or {}).get("decision_encoding")
+    decision_columns = None
     for line in (dump_text or "").splitlines():
         parts = line.split()
         if len(parts) <= column:
             continue
         try:
             t = float(parts[0])
-            v = float(parts[column])
+            if encoding:
+                if decision_columns is None:
+                    return None, {"reason": "incremental_decision_header_absent"}
+                v = [float(parts[index]) for index in decision_columns]
+            else:
+                v = float(parts[column])
         except ValueError:
+            if encoding and parts and parts[0].casefold() == "time":
+                names = [field.casefold() for field in parts]
+                wanted = [f"v({node})".casefold() for node in encoding["output_nodes"]]
+                if any(names.count(name) != 1 for name in wanted):
+                    return None, {"reason": "incremental_decision_header_mismatch"}
+                decision_columns = [names.index(name) for name in wanted]
             continue
+        except IndexError:
+            return None, {"reason": "incremental_decision_columns_incomplete"}
         times.append(t)
         vals.append(v)
     if len(times) < 64:
         return None, {"reason": _UNMEASURABLE_NO_ROWS, "rows": len(times)}
 
-    bits, bmeta = _inc.sample_decisions(times, vals, td, period, v_high / 2.0)
+    bits, bmeta = _inc.sample_decisions(times, vals, td, period, v_high / 2.0, encoding=encoding)
     if not bits:
         return None, bmeta
     window = int(decl["window_clocks"])
@@ -606,7 +622,7 @@ def sndr_db_incremental(deck_text: str, dump_text: str, column: int = 1
     samples, dmeta = _inc.decimate(
         bits, window, order=int(decl["order"]), coeff=float(decl["coeff"]),
         feedback_delay=int(decl["feedback_delay_clocks"]),
-        topology=decl.get("loop_topology", "cifb"))
+        topology=decl.get("loop_topology", "cifb"), loop_model=model)
     if samples is None:
         return None, dmeta
 

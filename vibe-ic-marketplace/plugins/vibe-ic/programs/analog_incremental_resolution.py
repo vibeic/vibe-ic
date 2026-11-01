@@ -302,7 +302,8 @@ def run_loop(window: int, b1: float, a: Sequence[float], c: Sequence[float],
              feedback_delay: int, stimulus, offsets: Sequence[float] = (),
              windows: int = 1, *, feedforward: Sequence[float] = (),
              input_feedforward: float = 0.0, feedback_compensation: float = 0.0,
-             state_limits: Sequence[float] = ()) -> Dict[str, Any]:
+             state_limits: Sequence[float] = (),
+             loop_model: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run the per-stage loop for `windows` conversion windows, each from a
     reset state. `stimulus(n)` is the input at clock n. Returns the per-stage
     peak and the bitstream (so two coefficient sets can be compared for
@@ -313,6 +314,13 @@ def run_loop(window: int, b1: float, a: Sequence[float], c: Sequence[float],
     compensation separately. Empty feedforward keeps the CIFB quantiser.
     Declared physical state limits clip the states and report saturation;
     bounded clipping must never masquerade as loop stability."""
+    if loop_model is not None:
+        model = _dec.validate_loop_model(loop_model)
+        a = [-x for x in model["feedback_vector"]]
+        c = [0.] + [model["transition"][i][i-1] for i in range(1, len(a))]
+        feedback_delay = model["feedback_delay_clocks"]
+        feedforward = model["feedforward_weights"]
+        input_feedforward, feedback_compensation = model["input_feedforward"], model["feedback_compensation"]
     order = len(a)
     if (order < 1 or len(c) != order or feedback_delay < 0
             or (feedforward and len(feedforward) != order)
@@ -322,6 +330,7 @@ def run_loop(window: int, b1: float, a: Sequence[float], c: Sequence[float],
     off = list(offsets) + [0.0] * (order - len(offsets))
     peak = [0.0] * order
     bits: List[int] = []
+    decisions: List[float] = []
     saturated = False
     for win in range(windows):
         st = [0.0] * order
@@ -332,11 +341,24 @@ def run_loop(window: int, b1: float, a: Sequence[float], c: Sequence[float],
             u = stimulus(n)
             y = (input_feedforward * u + sum(g * x for g, x in zip(feedforward, st))
                  - feedback_compensation * previous) if feedforward else st[order - 1]
-            v = 1.0 if y > 0.0 else -1.0
+            if loop_model is None:
+                v = 1.0 if y > 0.0 else -1.0
+            else:
+                levels = model["quantizer_levels"]
+                thresholds = model.get("quantizer_thresholds", [(x + z) / 2 for x,z in zip(levels, levels[1:])])
+                index = sum(y > threshold for threshold in thresholds)
+                v = levels[index]
+                if index < len(thresholds) and y == thresholds[index]:
+                    v = min(levels[index:index+2], key=abs)
             d = v if feedback_delay == 0 else pipe[0]
-            for s in range(order - 1, 0, -1):
-                st[s] += c[s] * st[s - 1] - a[s] * d + off[s]
-            st[0] += b1 * u - a[0] * d + off[0]
+            if loop_model is None:
+                for s in range(order - 1, 0, -1):
+                    st[s] += c[s] * st[s - 1] - a[s] * d + off[s]
+                st[0] += b1 * u - a[0] * d + off[0]
+            else:
+                st = [sum(g*x for g,x in zip(row, st)) + model["input_vector"][i]*u
+                      + model["feedback_vector"][i]*d + off[i]
+                      for i,row in enumerate(model["transition"])]
             if not all(math.isfinite(x) for x in st) or not math.isfinite(y):
                 return {"peak_per_stage": [math.inf] * order, "bits": bits,
                         "saturated": saturated, "unbounded": True}
@@ -350,8 +372,11 @@ def run_loop(window: int, b1: float, a: Sequence[float], c: Sequence[float],
                 pipe = pipe[1:] + [v]
             previous = v
             bits.append(1 if v > 0 else 0)
-    return {"peak_per_stage": peak, "bits": bits, "saturated": saturated,
-            "unbounded": False}
+            decisions.append(v)
+    result = {"peak_per_stage": peak, "bits": bits, "saturated": saturated, "unbounded": False}
+    if loop_model is not None:
+        result["decisions"] = decisions
+    return result
 
 
 def _dc(u: float):
@@ -394,7 +419,8 @@ def stable_input_limit(b1: float, a: Sequence[float], c: Sequence[float],
                        tolerance: float = N_DEPENDENCE_TOLERANCE, *,
                        feedforward: Sequence[float] = (), input_feedforward: float = 0.0,
                        feedback_compensation: float = 0.0,
-                       state_limits: Sequence[float] = ()) -> float:
+                       state_limits: Sequence[float] = (),
+                       loop_model: Optional[Dict[str, Any]] = None) -> float:
     """The largest DC input level (on a `step` grid, in units of the loop's
     own full scale b1 = a1) below which the loop's swing does not grow with
     the window length.
@@ -416,7 +442,10 @@ def stable_input_limit(b1: float, a: Sequence[float], c: Sequence[float],
         raise ValueError(BAD_INPUT)
     long_window = max(4 * window, reference_window or 0)
     options = {"feedforward": feedforward, "input_feedforward": input_feedforward,
-               "feedback_compensation": feedback_compensation, "state_limits": state_limits}
+               "feedback_compensation": feedback_compensation, "state_limits": state_limits,
+               "loop_model": loop_model}
+    if loop_model is not None:
+        a = _dec.validate_loop_model(loop_model)["feedback_vector"]
     env_w = [0.0] * len(a)
     env_r = [0.0] * len(a)
     last = 0.0
@@ -436,6 +465,14 @@ def stable_input_limit(b1: float, a: Sequence[float], c: Sequence[float],
             return last
         last = u
     return last
+
+
+def declared_stable_input_limit(loop_model: Dict[str, Any], window: int, **options) -> float:
+    """Stability consumer of the SAME canonical model used by the decoder."""
+    model = _dec.validate_loop_model(loop_model)
+    order = len(model["input_vector"])
+    return stable_input_limit(0., [0.] * order, [0.] * order,
+        model["feedback_delay_clocks"], window, loop_model=model, **options)
 
 
 def scale_states(b1: float, a: Sequence[float], c: Sequence[float],

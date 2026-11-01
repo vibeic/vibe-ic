@@ -51,6 +51,8 @@ normalised kernel is therefore CoI_L: at L=3 it is
 `(N-1-k)(N-2-k)/2`, with a one-sample decision shift for D=1. The A2/A3
 declaration selects this recurrence; no bitstream statistic selects it.
 Legacy records/stamps retain their original CIFB recurrence.
+An explicit state-equation model supplies both impulse paths directly and
+also supports unequal CIFB gains and any declared finite decision alphabet.
 
 FOR CIFB THE COEFFICIENT DOES APPEAR, and the earlier version of this paragraph said it
 did not. That was true of the INPUT-injected weights, where `a1*a2` is a common
@@ -93,6 +95,8 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 # ---------------------------------------------------------------------------
 
 import math                                                          # noqa: E402
+import base64                                                        # noqa: E402
+import json                                                          # noqa: E402
 import re                                                            # noqa: E402
 from typing import Any, Dict, List, Optional, Sequence, Tuple        # noqa: E402
 
@@ -105,6 +109,99 @@ SHORT_RECORD = "incremental_record_shorter_than_one_window"
 BAD_ORDER = "incremental_unsupported_order"
 BAD_DELAY = "incremental_negative_feedback_delay"
 BAD_TOPOLOGY = "incremental_unsupported_loop_topology"
+BAD_STATE_EQUATIONS = "incremental_invalid_state_equations"
+BAD_DECISION = "incremental_invalid_decision_code"
+
+
+def validate_loop_model(model: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate the decoder's canonical state model, independent of IR names."""
+    try:
+        order = len(model["input_vector"])
+        state_weights(1, model["transition"], model["input_vector"], model["feedback_vector"],
+                      model["feedback_delay_clocks"])
+        levels = model["quantizer_levels"]
+        if (not isinstance(levels, list) or len(levels) < 2
+                or any(isinstance(x, bool) or not isinstance(x, (int, float))
+                       or not math.isfinite(x) for x in levels)
+                or levels != sorted(set(levels))
+                or len(model["feedforward_weights"]) != order
+                or not all(math.isfinite(x) for x in [*model["feedforward_weights"],
+                    model["input_feedforward"], model["feedback_compensation"]])):
+            raise ValueError(BAD_STATE_EQUATIONS)
+        encoding = model.get("decision_encoding")
+        thresholds = model.get("quantizer_thresholds")
+        if thresholds is not None and (len(thresholds) != len(levels)-1
+                or any(not math.isfinite(x) for x in thresholds) or thresholds != sorted(set(thresholds))):
+            raise ValueError(BAD_STATE_EQUATIONS)
+        if encoding is not None:
+            nodes, codes = encoding["output_nodes"], encoding["codes"]
+            if (not isinstance(nodes, list) or not nodes or len(set(nodes)) != len(nodes)
+                    or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:#/$-]*", node) for node in nodes)
+                    or len(encoding["threshold_fractions"]) != len(nodes)
+                    or any(not math.isfinite(x) or not 0 < x < 1 for x in encoding["threshold_fractions"])
+                    or len({tuple(code) for code, value in codes}) != len(codes)
+                    or {value for code, value in codes} != set(levels)
+                    or any(len(code) != len(nodes) or any(bit not in (0, 1) for bit in code)
+                           for code, value in codes)):
+                raise ValueError(BAD_DECISION)
+        elif levels != [-1., 1.]:
+            raise ValueError(BAD_DECISION + ": multilevel outputs require a declared codebook")
+    except (KeyError, TypeError, IndexError, AttributeError) as exc:
+        raise ValueError(BAD_STATE_EQUATIONS) from exc
+    return model
+
+
+def decision_value(voltages: Sequence[float], thresholds: Sequence[float],
+                   codes: Sequence[Tuple[Sequence[int], float]]) -> Tuple[float, float]:
+    """Map declared output codes to DAC decision levels, retaining margin.
+
+    The codebook is supplied by the loop declaration. It may describe any
+    finite level alphabet using one or several comparator/latch outputs.
+    An undeclared or electrically ambiguous code is refused, never sliced
+    down to a fabricated +1/-1 decision.
+    """
+    if (not voltages or len(voltages) != len(thresholds)
+            or not all(math.isfinite(x) for x in [*voltages, *thresholds])):
+        raise ValueError(BAD_DECISION)
+    pattern = tuple(int(v > t) for v, t in zip(voltages, thresholds))
+    margin = min(abs(v - t) for v, t in zip(voltages, thresholds))
+    found = [level for code, level in codes if tuple(code) == pattern]
+    if (margin <= 0 or len(found) != 1 or isinstance(found[0], bool)
+            or not isinstance(found[0], (int, float)) or not math.isfinite(found[0])):
+        raise ValueError(BAD_DECISION)
+    return float(found[0]), margin
+
+
+def state_weights(window: int, transition: Sequence[Sequence[float]],
+                  input_vector: Sequence[float], feedback_vector: Sequence[float],
+                  feedback_delay: int = 0) -> Tuple[List[float], List[float]]:
+    """Terminal-state impulse weights for x_next = A*x + B*u + G*d.
+
+    All rows update from the OLD state, and d[n] = decision[n-D]. The last
+    declared state is the bounded residual. Its input response normalises
+    the decode; minus its decision response weights each decision. No
+    topology, coefficient equality, or quantiser level count is assumed.
+    """
+    size = len(input_vector)
+    vectors = [*transition, input_vector, feedback_vector]
+    if (not isinstance(window, int) or window < 1 or not size
+            or len(transition) != size or len(feedback_vector) != size
+            or not isinstance(feedback_delay, int) or feedback_delay < 0
+            or any(len(row) != size or any(isinstance(x, bool) or
+                not isinstance(x, (int, float)) or not math.isfinite(x) for x in row)
+                for row in vectors)):
+        raise ValueError(BAD_STATE_EQUATIONS)
+    response = [0.] * (size - 1) + [1.]
+    wu, wv = [0.] * window, [0.] * window
+    for k in range(window - 1, -1, -1):
+        wu[k] = sum(x * y for x, y in zip(response, input_vector))
+        if k >= feedback_delay:
+            wv[k - feedback_delay] = -sum(x * y for x, y in zip(response, feedback_vector))
+        response = [sum(response[i] * transition[i][j] for i in range(size))
+                    for j in range(size)]
+    if not all(math.isfinite(x) for x in wu + wv):
+        raise ValueError(BAD_STATE_EQUATIONS)
+    return wu, wv
 
 
 def loop_topology(value: str) -> str:
@@ -251,7 +348,7 @@ def conversion_mode(spec: Any, topology: Any = None) -> str:
 
 def decimate(bits: Sequence[float], window: int, order: int = 2,
              coeff: float = 0.25, feedback_delay: int = 0,
-             topology: str = "cifb"
+             topology: str = "cifb", loop_model: Optional[Dict[str, Any]] = None
              ) -> Tuple[Optional[List[float]], Dict[str, Any]]:
     """One decoded sample per conversion window, or (None, {"reason": ...}).
 
@@ -269,15 +366,24 @@ def decimate(bits: Sequence[float], window: int, order: int = 2,
                       "window": window}
     try:
         topology = loop_topology(topology)
-        w = matched_weights(window, order, coeff, feedback_delay, topology)
-        wn = input_weights(window, order, coeff, topology)
+        if loop_model is not None:
+            model = validate_loop_model(loop_model)
+            wn, w = state_weights(window, model["transition"], model["input_vector"],
+                                  model["feedback_vector"], model["feedback_delay_clocks"])
+            if any(float(value) not in model["quantizer_levels"] for value in bits):
+                return None, {"reason": BAD_DECISION}
+            order = len(model["input_vector"])
+            feedback_delay = model["feedback_delay_clocks"]
+        else:
+            w = matched_weights(window, order, coeff, feedback_delay, topology)
+            wn = input_weights(window, order, coeff, topology)
     except ValueError as exc:
         return None, {"reason": str(exc)}
     # NORMALISE BY THE INPUT's weight sum, not the bits'. The two differ by the
     # flat DAC term, and using the bits' sum for both reintroduces the gain
     # error this correction removes.
     total = float(sum(wn))
-    if total <= 0:
+    if not math.isfinite(total) or total == 0 or (loop_model is None and total < 0):
         return None, {"reason": BAD_ORDER, "weight_sum": total}
     n_win = len(bits) // window
     out = [sum(w[i] * float(bits[s * window + i]) for i in range(window)) / total
@@ -291,9 +397,10 @@ def decimate(bits: Sequence[float], window: int, order: int = 2,
                  # the LSB count the loop can resolve: the input weight sum divided
            # by the per-stage coefficient product, which is what the
            # normalisation leaves. log2 of it is the theoretical ceiling.
-           "quantisation_bits": (math.log2(total / (1.0 if topology == "ciff" else coeff ** order))
-                                 if total > 0 else 0.0),
-                 "rule": "matched_decimation_from_the_loop_recurrence"}
+           "quantisation_bits": (None if loop_model is not None else
+                math.log2(total / (1.0 if topology == "ciff" else coeff ** order))),
+                 "rule": "matched_decimation_from_declared_state_equations" if loop_model is not None
+                         else "matched_decimation_from_the_loop_recurrence"}
 
 
 # ── the DECLARATION that travels on the deck ───────────────────────────────
@@ -325,7 +432,8 @@ BAD_STAMP = "incremental_decode_declaration_incomplete"
 
 
 def stamp(mode: str, window_clocks: int, order: int, coeff: float,
-          feedback_delay_clocks: int, topology: str = "cifb") -> str:
+          feedback_delay_clocks: int, topology: str = "cifb",
+          loop_model: Optional[Dict[str, Any]] = None) -> str:
     """The one line a producer writes into a deck so a consumer can decode it.
 
     A SPICE comment, so it changes nothing the simulator does."""
@@ -333,6 +441,9 @@ def stamp(mode: str, window_clocks: int, order: int, coeff: float,
     # The original stamp format declares the CIFB recurrence. Preserve its
     # bytes for existing decks; CIFF must explicitly travel with the deck.
     suffix = " loop_topology=ciff" if topology == "ciff" else ""
+    if loop_model is not None:
+        payload = json.dumps(validate_loop_model(loop_model), separators=(",", ":"), allow_nan=False)
+        suffix += " loop_model=" + base64.urlsafe_b64encode(payload.encode()).decode()
     return (f"{STAMP_PREFIX} mode={mode} window_clocks={int(window_clocks)} "
             f"order={int(order)} coeff={float(coeff):.6g} "
             f"feedback_delay_clocks={int(feedback_delay_clocks)}{suffix}")
@@ -364,6 +475,15 @@ def read_stamp(deck_text: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]
             out["loop_topology"] = loop_topology(kv["loop_topology"])
         except ValueError as exc:
             return None, {"reason": str(exc)}
+    if "loop_model" in kv:
+        try:
+            out["loop_model"] = validate_loop_model(json.loads(base64.b64decode(
+                kv["loop_model"], altchars=b"-_", validate=True)))
+            if (len(out["loop_model"]["input_vector"]) != out["order"] or
+                    out["loop_model"]["feedback_delay_clocks"] != out["feedback_delay_clocks"]):
+                raise ValueError(BAD_STATE_EQUATIONS + ": inconsistent stamp order/delay")
+        except (ValueError, TypeError, UnicodeError) as exc:
+            return None, {"reason": BAD_STATE_EQUATIONS, "detail": str(exc)}
     return out, {"line": m.group(0).strip()}
 
 
@@ -374,7 +494,8 @@ NO_SAMPLES_IN_RECORD = "record_holds_no_sample_at_the_first_clock_instant"
 
 def sample_decisions(times: Sequence[float], vals: Sequence[float],
                      first_clock_s: float, period_s: float, threshold: float,
-                     settle_fraction: float = 0.9
+                     settle_fraction: float = 0.9,
+                     encoding: Optional[Dict[str, Any]] = None
                      ) -> Tuple[List[float], Dict[str, Any]]:
     """The decision on every clock of the record, as +1 / -1, reset-aligned.
 
@@ -401,7 +522,15 @@ def sample_decisions(times: Sequence[float], vals: Sequence[float],
             break
         while idx + 1 < n_rows and times[idx + 1] <= want:
             idx += 1
-        out.append(1.0 if float(vals[idx]) > threshold else -1.0)
+        if encoding is None:
+            out.append(1.0 if float(vals[idx]) > threshold else -1.0)
+        else:
+            try:
+                value, _margin = decision_value(vals[idx],
+                    [2 * threshold * x for x in encoding["threshold_fractions"]], encoding["codes"])
+            except ValueError as exc:
+                return [], {"reason": str(exc), "clock": n}
+            out.append(value)
         n += 1
     if not out:
         return out, {"reason": NO_SAMPLES_IN_RECORD,
