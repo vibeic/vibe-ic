@@ -5,13 +5,14 @@ Builds a synthetic project (original coupling SPEF + genuine / cheated bounded
 SPEFs + a si_mcf_sta.json report) and asserts:
   * a genuinely-folded bounded SPEF PASSES the gate,
   * a bounded SPEF whose Cc*MCF was silently DROPPED FAILS (false-clean caught),
-  * a report claiming the SI-bounded slack IMPROVED over nominal FAILS
-    (monotonicity — a conservative bound can only degrade slack).
+  * improved SI-bounded slack is diagnostic; native slack decides signoff.
 """
 from __future__ import annotations
 
 import json
 import sys
+
+import pytest
 from pathlib import Path
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
@@ -130,15 +131,62 @@ def test_gate_fails_residual_coupling(tmp_path):
     assert rep["verdict"] == "FAIL"
 
 
-def test_gate_fails_slack_better_than_bound(tmp_path):
-    # genuine fold, but the report claims setup IMPROVED (after > before)
+def test_gate_warns_slack_better_than_bound(tmp_path):
+    # Genuine fold and positive native slack, with a diagnostic improvement.
     s, h = _genuine_bounded()
     proj, rp = _mk_project(tmp_path, setup_bounded_text=s, hold_bounded_text=h,
                            setup_after=7.50)          # 7.50 > 7.37 nominal
     findings, stats = G.audit(proj, rp)
     rep = G.build_report(findings, stats, str(proj))
-    assert rep["verdict"] == "FAIL"
+    assert rep["verdict"] == "PASS"
     assert any(f["category"] == "SLACK_BETTER_THAN_BOUND" for f in rep["findings"])
+    warning = next(f for f in rep["findings"] if f["category"] == "SLACK_BETTER_THAN_BOUND")
+    assert warning["severity"] == "WARNING"
+    assert stats["monotonicity"]["setup"]["shift_ns"] == pytest.approx(0.13)
+    assert stats["monotonicity"]["setup"]["exceeded_5ps"] is True
+
+
+@pytest.mark.parametrize("after", [0.0, -0.01])
+def test_improved_slack_uses_original_threshold(tmp_path, after):
+    s, h = _genuine_bounded()
+    proj, rp = _mk_project(tmp_path, setup_bounded_text=s, hold_bounded_text=h,
+                           hold_after=after)
+    doc = json.loads(rp.read_text())
+    doc["corners"]["hold"]["worst_slack_before_ns"] = after - 0.0165
+    rp.write_text(json.dumps(doc))
+    findings, stats = G.audit(proj, rp)
+    rep = G.build_report(findings, stats, str(proj))
+    assert rep["verdict"] == ("PASS" if after >= 0.0 else "FAIL")
+    assert any(f["severity"] == "WARNING" and f["category"] == "SLACK_BETTER_THAN_BOUND"
+               for f in rep["findings"])
+    assert stats["monotonicity"]["hold"]["shift_ns"] == pytest.approx(0.0165)
+    assert stats["monotonicity"]["hold"]["exceeded_5ps"] is True
+    assert any(f["category"] == "SI_SLACK_BELOW_THRESHOLD" for f in rep["findings"]) == (after < 0.0)
+
+
+def test_improved_slack_does_not_clear_fold_error(tmp_path):
+    cheat, _ = M.rewrite_spef_folded(SPEF, {"*1": 0.0, "*2": 0.0}, "setup")
+    _, h = _genuine_bounded()
+    proj, rp = _mk_project(tmp_path, setup_bounded_text=cheat, hold_bounded_text=h,
+                           setup_after=7.50)
+    findings, stats = G.audit(proj, rp)
+    rep = G.build_report(findings, stats, str(proj))
+    assert rep["verdict"] == "FAIL"
+    assert any(f["category"] == "FOLD_NOT_APPLIED" and f["severity"] == "ERROR"
+               for f in rep["findings"])
+    assert any(f["category"] == "SLACK_BETTER_THAN_BOUND" and f["severity"] == "WARNING"
+               for f in rep["findings"])
+
+
+@pytest.mark.parametrize("after", [None, "0.1", float("nan"), float("inf"), True])
+def test_unavailable_native_slack_cannot_pass(tmp_path, after):
+    s, h = _genuine_bounded()
+    proj, rp = _mk_project(tmp_path, setup_bounded_text=s, hold_bounded_text=h,
+                           setup_after=after)
+    findings, stats = G.audit(proj, rp)
+    rep = G.build_report(findings, stats, str(proj))
+    assert rep["verdict"] == "FAIL"
+    assert any(f["category"] == "SI_SLACK_UNAVAILABLE" for f in rep["findings"])
 
 
 def test_gate_missing_report(tmp_path):

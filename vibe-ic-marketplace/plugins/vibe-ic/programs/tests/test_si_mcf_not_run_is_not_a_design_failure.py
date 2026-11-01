@@ -20,7 +20,7 @@ THE TWO GROUPS OF ERROR ARE NOT ONE KIND OF THING.
     NO_REPORT  BAD_JSON  NO_SPEF  NO_CORNER  NO_BOUNDED_SPEF
         -> the gate never got to look                          (NOT_RUN)
     SPEF_NO_NET_RECORDS  COUPLING_LOST_SINCE_EMIT
-    FOLD_WITHOUT_SOURCE  FOLD_NOT_APPLIED  SLACK_BETTER_THAN_BOUND
+    FOLD_WITHOUT_SOURCE  FOLD_NOT_APPLIED
         -> the gate looked at a real artefact and it was wrong  (FAIL)
 
 WHAT THIS FILE PINS, IN ORDER OF LOAD.
@@ -259,6 +259,14 @@ def _b_slack_better_than_bound(root: Path) -> Path:
     return _project(root, setup_after=7.50)       # 7.50 > 7.37 nominal
 
 
+def _b_si_slack_below_threshold(root: Path) -> Path:
+    return _project(root, setup_after=-0.01)
+
+
+def _b_si_slack_unavailable(root: Path) -> Path:
+    return _project(root, setup_after=None)
+
+
 def _b_dropped_fold_at_a_zero_denominator(root: Path) -> Path:
     """FOLD_NOT_APPLIED **and** `examined == 0` in the same run.
 
@@ -291,15 +299,17 @@ NOT_RUN_CASES = {
 #: category -> builder, for the categories that mean SOMETHING WAS EXAMINED
 #: AND FOUND WRONG. Every one of these is a real verdict about a real
 #: artefact and MUST keep failing exactly as loudly as it does today.
+#: Ruling #61 removes monotonicity from this ERROR table: it is diagnostic.
 EXAMINED_AND_WRONG_CASES = {
     "SPEF_NO_NET_RECORDS": _b_spef_no_net_records,
     "COUPLING_LOST_SINCE_EMIT": _b_coupling_lost_since_emit,
     "FOLD_WITHOUT_SOURCE": _b_fold_without_source,
     "FOLD_NOT_APPLIED": _b_fold_not_applied,
-    "SLACK_BETTER_THAN_BOUND": _b_slack_better_than_bound,
+    "SI_SLACK_BELOW_THRESHOLD": _b_si_slack_below_threshold,
+    "SI_SLACK_UNAVAILABLE": _b_si_slack_unavailable,
 }
 
-#: The same five categories, in the ZERO-DENOMINATOR shapes they are reachable
+#: The fold/artefact categories, in the ZERO-DENOMINATOR shapes they are reachable
 #: in. Kept separate because these are the ones a denominator-driven re-tiering
 #: sweeps into the skip tier, and because `FOLD_NOT_APPLIED` needs a DIFFERENT
 #: fixture to reach `examined == 0` than the one above.
@@ -317,7 +327,7 @@ EXAMINED_AND_WRONG_AT_ZERO_DENOMINATOR = {
 def test_every_examined_and_wrong_category_keeps_rc_1_and_verdict_fail(
         tmp_path):
     """THE GUARD ON THE WHOLE CHANGE. Split the ERROR set the wrong way and
-    one of these five silently becomes a skip the flow credits as a pass.
+    one of these categories silently becomes a skip the flow credits as a pass.
     Asserted per category, on the real CLI, reading rc off the bare call."""
     for cat, build in EXAMINED_AND_WRONG_CASES.items():
         proj = build(tmp_path / f"loud_{cat.lower()}")
@@ -339,10 +349,10 @@ def test_a_dropped_fold_is_still_the_loudest_thing_this_gate_says(tmp_path):
     assert doc["summary"]["vacuous"] is False, doc["summary"]
 
 
-def test_a_dishonest_slack_is_still_a_fail(tmp_path):
+def test_improved_native_slack_is_diagnostic(tmp_path):
     proj = _b_slack_better_than_bound(tmp_path / "slack")
     r, doc = _run(proj)
-    assert (r.returncode, doc["verdict"]) == (G.RC_FAIL, "FAIL")
+    assert (r.returncode, doc["verdict"]) == (G.RC_PASS, "PASS")
     assert "SLACK_BETTER_THAN_BOUND" in _categories(doc)
 
 
