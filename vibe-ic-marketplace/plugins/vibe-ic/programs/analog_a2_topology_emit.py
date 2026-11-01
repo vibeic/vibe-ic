@@ -2431,6 +2431,9 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "follows_integrating": {"cc{i}": "miller_fraction_of_load * ota_compensation_scale"},
         },
         "spec_knobs": [
+            {"name": "slew_design_margin", "expr": "slew_design_margin",
+             "default": 2.0,
+             "rationale": "explicit sizing margin for the existing shared bias resistor derivation"},
             {"name": "second_integrator_state_scale", "expr": "second_integrator_state_scale",
              "default": 1.0, "optional": True,
              "rationale": "positive diagonal scaling of the second state; preserves input gain and ideal quantizer decisions"},
