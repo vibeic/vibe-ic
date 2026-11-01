@@ -1300,3 +1300,61 @@ def test_invalid_row_width_is_refused_before_native_work(tmp_path, monkeypatch, 
     assert error.value.code == 2
     assert 'must be finite and positive' in capsys.readouterr().err
     assert stage.commands == []
+
+
+@pytest.mark.parametrize('obstacle', [None, 'metal2', 'metal6', 'via5'])
+def test_multicut_supply_pin_extends_a_short_rail_only_through_clear_metal(obstacle):
+    """The EM cut count can outgrow a local rail; its checked bridge must connect."""
+    from test_analog_a5_2d_bank import connected
+
+    rules = {
+        'metal_space_um': {n: .21 for n in range(1, 7)},
+        'metal_width_um': {n: .2 for n in range(1, 7)},
+        'metal_area_um2': {2: .144, 3: .144},
+        'via_width_um': {n: .2 for n in range(1, 6)},
+        'via_space_um': {n: .21 for n in range(1, 6)},
+        'via_surround_um': {}, 'via_surround_dir_um': {},
+        'metal_width_spacing_um': {},
+    }
+    rules['metal_width_um'][6] = 1.64
+    rules['metal_space_um'][6] = 1.64
+    geo = A5E.Geo(rules, .21, 100, .3, .15)
+    plan, sites = A5E.Plan(), A5E.Sites([], geo)
+    plan.sites = sites
+    rail = (200, 985, 300, 1015)
+    plan.paint('supply', 'metal2', *rail)
+    plan.paint('extent', 'metal1', 1900, 1900, 2000, 2000)
+    if obstacle == 'metal2':
+        plan.paint('other', obstacle, 322, 985, 2000, 1015)
+    elif obstacle:
+        plan.paint('other', obstacle, 0, 1500, 2000, 1530)
+    before = list(plan.shapes)
+    spec = {'ports': {'supply': {
+        'index': 1, 'rail': True, 'level': 6, 'width_lam': 164,
+        'cuts': 3, 'use': 'power',
+    }}}
+    _, stack = A5E._pin_stack_boxes(0, 1000, 2, 6, geo, 3)
+    assert stack[2][2] - stack[2][0] > rail[2] - rail[0]
+
+    def draw():
+        A5E._draw_pins(plan, ['supply'], {'supply': rail},
+                       spec, geo, sites, 2000, 69)
+
+    if obstacle:
+        with pytest.raises(A5E.Refusal, match='pin_site_clearance'):
+            draw()
+        assert plan.shapes == before and plan.pins == []
+    else:
+        draw()
+        pin = plan.pins[0]
+        assert pin['rail'] and pin['use'] == 'power'
+        assert pin['cuts_per_via'] == 3 and pin['width_lam'] >= 164
+        assert all(sum(r['layer'] == f'via{k}' for r in plan.shapes) == 3
+                   for k in range(2, 6))
+        strip = pin['strip_box']
+        assert connected(plan, 'supply', ('metal2', 250, 1000),
+                         ('metal6', (strip[0] + strip[2]) // 2, 1500))
+        assert not A5E.net_shorts(plan)
+        assert all(0 <= r['box'][0] < r['box'][2] <= 2000
+                   and 0 <= r['box'][1] < r['box'][3] <= 2000
+                   for r in plan.shapes)
