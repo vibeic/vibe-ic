@@ -4338,6 +4338,7 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
                             container: str = "",
                             supply_ports: Optional[Sequence[str]] = None,
                             drv_block_out: Optional[Dict[str, Any]] = None,
+                            pad_drive_output: Optional[Path] = None,
                             ) -> str:
     """Build the minimal silicon-top auto-SDC text emitted by ``step_pnr`` when
     the project stages no ``constraints/*.sdc`` for silicon.
@@ -4554,8 +4555,10 @@ def _build_auto_silicon_sdc(project: Path, top: str = "",
         project, _env, container, _to_container_path, analysis_top=top)
     _pad_drive["sdc_lines"] = _sdc_pad_drive_sdc_lines(_pad_drive, _tu_scale)
     try:
-        _sdc_write_pad_input_drive(project, _pad_drive)
+        _sdc_write_pad_input_drive(project, _pad_drive, output=pad_drive_output)
     except OSError:
+        if pad_drive_output is not None:
+            raise
         # No record on a DIE top reads NOT_MEASURED downstream (fail closed).
         pass
     sdc_text += _sdc_environment_prefix(_env, _env_unread, time_scale=_tu_scale,

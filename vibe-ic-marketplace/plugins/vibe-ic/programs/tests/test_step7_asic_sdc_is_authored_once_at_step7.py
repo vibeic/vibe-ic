@@ -1293,3 +1293,76 @@ def test_step32_resume_uses_real_canonical_author_and_retains_both_sdc_versions(
     assert len(archives) == 2
     assert any(all((folder / rel).is_file() and (folder / rel).read_bytes() == data
                    for rel, data in before.items()) for folder in archives)
+
+
+@pytest.mark.parametrize("staged", [False, True])
+def test_changed_sdc_scenario_preserves_accepted_bundle(tmp_path, monkeypatch, staged):
+    import inspect
+    proj = _project(tmp_path)
+    pdk = _pdk(monkeypatch, drv=_DRV)
+    if staged:
+        source = proj / "input/constraints/functional.sdc"
+        source.parent.mkdir(parents=True)
+        source.write_text("create_clock -name clk -period 25 [get_ports clk]\n"
+                          "set_input_delay 5 -clock clk [all_inputs]\n"
+                          "set_output_delay 5 -clock clk [all_outputs]\n")
+    old = T.emit_step7_asic_sdc(R, proj, TOP, pdk, "some-container")
+    pad = proj / E.PAD_INPUT_DRIVE_REPORT
+    # Both author paths publish the same normal diagnostic record.
+    assert pad.is_file()
+    protected = [proj / old["path"], proj / CONS / T.ASIC_SDC_RECORD, pad]
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in protected}
+    if staged:
+        source.write_text(source.read_text().replace("period 25", "period 40"))
+    else:
+        l8 = proj / "phase1/generated_docs/L8_TIMING_WAVEFORM.json"
+        l8.write_text(l8.read_text().replace("25.0", "40.0"))
+    destination = proj / "reports/phase3/scenarios/changed"
+    # Exercise the old normal publisher on BASE too, observing its overwrite
+    # rather than grading an unsupported-keyword/absence failure.
+    options = {"output_dir": destination} if "output_dir" in inspect.signature(T.emit_step7_asic_sdc).parameters else {}
+    changed = T.emit_step7_asic_sdc(R, proj, TOP, pdk, "some-container", **options)
+    observation = {"protected_unchanged": all(
+        (p.read_bytes(), p.stat().st_mtime_ns) == before[p] for p in protected),
+        "old_period": "-period 25" in (proj / old["path"]).read_text(),
+        "changed_period": "-period 40" in changed["text"],
+        "old_input_digest": old["input_digest"], "new_input_digest": changed["input_digest"]}
+    (tmp_path / "observed.json").write_text(json.dumps(observation, indent=2) + "\n")
+    assert sum((p.read_bytes(), p.stat().st_mtime_ns) != before[p]
+               for p in protected) == 0, observation
+    assert observation["old_period"] and observation["changed_period"], observation
+    assert old["input_digest"] != changed["input_digest"]
+    assert Path(changed["path"]).parent == destination.relative_to(proj)
+    assert changed["inputs"]["@code:timing.py"] == hashlib.sha256(Path(T.__file__).read_bytes()).hexdigest()
+    assert changed["sha256"] == hashlib.sha256((proj / changed["path"]).read_bytes()).hexdigest()
+    assert json.loads((destination / T.ASIC_SDC_RECORD).read_text())["sha256"] == changed["sha256"]
+    assert (destination / "pad_input_drive.json").is_file()
+
+
+@pytest.mark.parametrize("destination_kind", ["existing", "outside", "symlink"])
+def test_sdc_scenario_invalid_destination_preserves_accepted_bundle(
+        tmp_path, monkeypatch, destination_kind):
+    import inspect
+    proj = _project(tmp_path)
+    pdk = _pdk(monkeypatch, drv=_DRV)
+    old = T.emit_step7_asic_sdc(R, proj, TOP, pdk, "some-container")
+    files = [proj / old["path"], proj / CONS / T.ASIC_SDC_RECORD,
+             proj / E.PAD_INPUT_DRIVE_REPORT]
+    before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in files}
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    destination = proj / CONS if destination_kind == "existing" else outside
+    if destination_kind == "symlink":
+        destination = proj / "scenario_link"
+        destination.symlink_to(outside, target_is_directory=True)
+    rejected = False
+    if "output_dir" in inspect.signature(T.emit_step7_asic_sdc).parameters:
+        try:
+            T.emit_step7_asic_sdc(R, proj, TOP, pdk, "some-container", output_dir=destination)
+        except (ValueError, FileExistsError):
+            rejected = True
+    else:
+        T.emit_step7_asic_sdc(R, proj, TOP, pdk, "some-container")
+    assert int(rejected) == 1, {"destination": str(destination), "rejected": rejected}
+    assert all((p.read_bytes(), p.stat().st_mtime_ns) == before[p] for p in files)
+    assert list(outside.iterdir()) == []
