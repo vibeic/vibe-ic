@@ -34,6 +34,7 @@ tests, populated from the ACTUAL `ls` output of the real image, so they run
 with no docker and no PDK installed.
 """
 import fnmatch
+import pytest
 import json
 import shlex
 import sys
@@ -80,22 +81,7 @@ def _unquote(s):
         return s
 
 
-class _FakeContainer:
-    """Same shape as the #211 fake: banner on stdout, then the answer."""
-
-    def __init__(self, existing):
-        self.existing = set(existing)
-
-    def __call__(self, container, cmd, timeout=1800):
-        c = cmd.strip()
-        if c.startswith(("test -d ", "test -e ")):
-            path = _unquote(c[len("test -d "):].strip())
-            return (0 if path in self.existing else 1, _BANNER + "\n", "")
-        if c.startswith("ls -1d "):
-            glob = c[len("ls -1d "):].split(" 2>/dev/null")[0].strip()
-            hits = sorted(p for p in self.existing if fnmatch.fnmatch(p, glob))
-            return (0, _BANNER + "\n" + ("\n".join(hits) + "\n" if hits else ""), "")
-        return (0, _BANNER + "\n", "")
+from test_issue211_registry_driven_pdk_refuse import _FakeContainer
 
 
 def _resolve(monkeypatch, glob):
@@ -109,11 +95,14 @@ def test_content_addressed_root_refuses_ambiguity(monkeypatch):
     one = "/foss/pdks/ciel/gf180mcu/versions/a/gf180mcuD"
     two = "/foss/pdks/ciel/gf180mcu/versions/b/gf180mcuD"
 
+    entry = dict(GF, container_path_glob='ciel/gf180mcu/versions/*/gf180mcuD')
     monkeypatch.setattr(R, "_docker_exec_raw", _FakeContainer([one]))
-    assert R._registry_container_root("c", GF) == one
+    assert R._registry_container_root("c", entry) == one
 
     monkeypatch.setattr(R, "_docker_exec_raw", _FakeContainer([one, two]))
-    assert R._registry_container_root("c", GF) is None
+    with pytest.raises(SystemExit, match='REGISTRY_PDK_ROOT_AMBIGUOUS') as exc:
+        R._registry_container_root("c", entry)
+    assert GF['name'] in str(exc.value) and one in str(exc.value) and two in str(exc.value)
 
 
 # --------------------------------------------------------------- assets ----

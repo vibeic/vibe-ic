@@ -1747,7 +1747,7 @@ def emit_synthesis_config(project: Path, pdk: str, output: Path,
                           rtl_files: list[Path], defines: list[str],
                           use_slang: bool,
                           std_cell_library: str | None = None,
-                          synth_liberty: str | None = None,
+                          synth_liberty: str | list[str] | None = None,
                           top: str | None = None) -> dict:
     """Bind Yosys.Synthesis to the caller's selected design inputs."""
     import sparse_fsm_detect
@@ -1763,7 +1763,8 @@ def emit_synthesis_config(project: Path, pdk: str, output: Path,
         _set(result, sources, 'STD_CELL_LIBRARY', std_cell_library,
              'resolved synthesis liberty library supplied by phase3_one_shot_runner')
     if synth_liberty:
-        _set(result, sources, 'LIB', {'*': [synth_liberty]},
+        _set(result, sources, 'LIB', {'*': (synth_liberty if isinstance(synth_liberty, list)
+                                          else [synth_liberty])},
              'resolved synthesis liberty supplied by phase3_one_shot_runner')
     _set(result, sources, 'VERILOG_FILES',
          [str(path.resolve()) for path in rtl_files],

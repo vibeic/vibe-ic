@@ -183,12 +183,12 @@ def _pdk_dict(pdk: object) -> dict:
     return jsonable(values)
 
 
-def _pdk_liberty(pdk: object) -> Path | None:
+def _pdk_liberties(pdk: object) -> list[Path]:
     value = _pdk_dict(pdk).get("liberty")
     if not value:
-        return None
-    path = Path(str(value))
-    return path if _regular(path) else None
+        return []
+    paths = [Path(path) for path in (value if isinstance(value, list) else [str(value)])]
+    return paths if all(_regular(path) for path in paths) else []
 
 
 def _host_pdk(project: Path, pdk: object, image_id: str) -> dict:
@@ -212,12 +212,16 @@ def _host_pdk(project: Path, pdk: object, image_id: str) -> dict:
         return values
     values["pdk_root_host"] = str(root.resolve())
     guest_prefixes = (f"/foss/pdks/{name}/", f"/pdk/{name}/")
-    for key, value in list(values.items()):
+    def translate(value):
+        if isinstance(value, list):
+            return [translate(item) for item in value]
         if isinstance(value, str):
             for prefix in guest_prefixes:
                 if value.startswith(prefix):
-                    values[key] = str(root / value[len(prefix):])
-                    break
+                    return str(root / value[len(prefix):])
+        return value
+    for key, value in list(values.items()):
+        values[key] = translate(value)
     return values
 
 
@@ -243,10 +247,11 @@ def _canonical_inputs(project: Path, declaration: Path | None, pdk: object) -> d
         raise em.Refusal("PRODUCTION_LDOC_INPUT_MISSING", str(docs_root))
     for path in docs:
         inputs["project/phase1/generated_docs/" + path.relative_to(docs_root).as_posix()] = path
-    liberty = _pdk_liberty(pdk)
-    if liberty is None:
+    liberties = _pdk_liberties(pdk)
+    if not liberties:
         raise em.Refusal("PRODUCTION_PDK_LIBERTY_MISSING", f"_canonical_inputs.pdk.liberty={_pdk_dict(pdk).get('liberty')!r}: no declared regular nonlinked Liberty file available")
-    inputs["pdk/" + liberty.name] = liberty
+    for liberty in liberties:
+        inputs["pdk/" + liberty.name] = liberty
     pdk_values = _pdk_dict(pdk)
     root = Path(str(pdk_values.get("pdk_root_host", "")))
     if not root.is_dir() or root.is_symlink():

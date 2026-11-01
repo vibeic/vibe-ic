@@ -552,7 +552,7 @@ def _retained_synth_census(project, params, R, ll, pdk):
 
     return drv_stages.synth_stage_supervised(
         project, netlist=R._pl.synth_dir(project) / f"{params['top']}_synth.v",
-        top=params['top'], liberties=[str(pdk.liberty)],
+        top=params['top'], liberties=R._liberty_paths(pdk.liberty),
         sdc=project / PNR / 'constraint.sdc', to_container=str,
         execute=execute)
 
@@ -1215,7 +1215,7 @@ def _step17_direct_inputs(project, params, R, ll, pdk):
         derived = root / 'builder-derivation'
         row_inputs = {'floorplan': floorplan, 'sdc': sdc, 'netlist': nl}
         source_paths = [R.__file__, state, prep, floorplan, sdc, nl,
-                        pdk.tech_lef, pdk.cell_lef, pdk.liberty,
+                        pdk.tech_lef, pdk.cell_lef, R._liberty_model_path(pdk.liberty, project=project),
                         ll.views_path(config)]
         import flow_compliance_check as fcc
         source_paths.append(fcc.DEFAULT_FLOW_DEF)
@@ -2291,7 +2291,7 @@ def produce_signoff(project, params):
         else:
             sdc = _current_physical_sdc(project, params)
             mcf_inputs = dict(spef=str(spef), netlist=str(nl), sdc=str(sdc),
-                              liberty=pdk.liberty, top=top, macro_libs=pdk.macro_libs)
+                              liberty=R._liberty_model_path(pdk.liberty, container, project), top=top, macro_libs=pdk.macro_libs)
             import si_signoff_timing_aware as si
             timing = rpt / 'si_timing.json'
             if not R._emit_si_timing_json(project, top, pdk, container, _require(spef), sdc, nl, timing, notes, voltage):

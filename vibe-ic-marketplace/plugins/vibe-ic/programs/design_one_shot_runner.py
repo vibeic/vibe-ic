@@ -21273,8 +21273,7 @@ def _emit_step7_pvt_matrix(project: Path, pdk: object,
     staged = project / "input" / "pdk" / "liberty"
     libs = sorted(staged.glob("*.lib")) if staged.is_dir() else []
     if len(libs) < 2:
-        lib_value = str(getattr(pdk, "liberty", "") or "")
-        lib_dir = str(Path(lib_value).parent) if lib_value else ""
+        lib_dir = _p3._liberty_directory(getattr(pdk, "liberty", "")) or ""
         if lib_dir:
             try:
                 found = _p3._select_signoff_corners(
