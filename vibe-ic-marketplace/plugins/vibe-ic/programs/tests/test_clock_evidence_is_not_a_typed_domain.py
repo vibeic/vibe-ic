@@ -1,4 +1,3 @@
-"""Clock provenance must neither fail nor satisfy the typed-domain gate."""
 import json
 from pathlib import Path
 import subprocess
