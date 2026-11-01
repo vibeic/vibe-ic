@@ -17,7 +17,7 @@ def fixture_devices(caps=7, mos=3):
 
 
 def test_regions_are_left_right_and_cap_row_chunks_keep_local_shared_owners():
-    ds=fixture_devices();before=deepcopy([d['dev'] for d in ds])
+    ds=fixture_devices(caps=13);before=deepcopy([d['dev'] for d in ds])
     rows,rails,bus,desc=a._place_left_right_rows(ds,['top','bottom'],geo(),None,260,())
     assert [d['dev'] for d in ds]==before
     cap=[d for d in ds if d['placement_region']=='cmim'];mos=[d for d in ds if d['placement_region']=='ota']
@@ -32,17 +32,37 @@ def test_regions_are_left_right_and_cap_row_chunks_keep_local_shared_owners():
     assert min(d['box_y'] for d in mos)<max(d['box_y'] for d in cap)
 
 
-def test_cross_region_M2_intervals_keep_pitch_or_join_the_same_net():
+def assert_regional_rails_clear(descriptions, geometry):
+    """Check complete horizontal landing envelopes on their reported plane."""
+    for i, first in enumerate(descriptions):
+        assert first['rail_level'] == 4
+        for second in descriptions[i+1:]:
+            if first['region'] == second['region']:
+                continue
+            assert first['rail_level'] == second['rail_level']
+            level = first['rail_level']
+            layer = f'metal{level}'
+            stack = a.Plan()
+            a._via_stack(stack, '<rail>', 0, 0, level-1, geometry,
+                         top=level+1, horizontal=True)
+            pads = [r['box'] for r in stack.shapes if r['layer'] == layer]
+            hx = max(abs(b[j]) for b in pads for j in (0, 2))
+            hy = max(geometry.wire[level]//2,
+                     max(abs(b[j]) for b in pads for j in (1, 3)))
+            for net, (lo, hi) in first['rail_intervals_lambda'].items():
+                for other, (ol, oh) in second['rail_intervals_lambda'].items():
+                    y, oy = first['rails_lambda'][net], second['rails_lambda'][other]
+                    if net == other and y == oy:
+                        continue
+                    box = (lo-hx, y-hy, hi+hx, y+hy)
+                    other_box = (ol-hx, oy-hy, oh+hx, oy+hy)
+                    assert a.box_separation(box, other_box) >= geometry.metal_space(
+                        layer, box, other_box)
+
+
+def test_cross_region_M4_intervals_keep_pitch_or_join_the_same_net():
     _,_,_,desc=a._place_left_right_rows(fixture_devices(),['top','bottom'],geo(),None,260,())
-    g=geo();clearance=2*max(g.long_half[2],g.wire[2]//2)+g.metal_space('metal2')
-    cap=[r for r in desc if r['region']=='cmim'];mos=[r for r in desc if r['region']=='ota']
-    for left in cap:
-        for right in mos:
-            for n,(lo,hi) in left['rail_intervals_lambda'].items():
-                for other,(ol,oh) in right['rail_intervals_lambda'].items():
-                    y,oy=left['rails_lambda'][n],right['rails_lambda'][other]
-                    if n==other and y==oy:continue
-                    assert max(lo-oh,ol-hi,0)>=clearance or abs(y-oy)>=clearance
+    assert_regional_rails_clear(desc, geo())
 
 
 def test_matching_groups_are_not_split_between_rows_or_regions():

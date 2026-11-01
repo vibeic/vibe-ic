@@ -2,7 +2,7 @@
 from copy import deepcopy
 import _plugin_tree
 import analog_a5_layout_emit as a
-from test_analog_a5_left_right import fixture_devices
+from test_analog_a5_left_right import assert_regional_rails_clear, fixture_devices
 from test_analog_a5_shared_escape import geo
 
 
@@ -31,18 +31,7 @@ def test_freed_bank_width_is_repacked_into_complete_matching_rows():
             for terminal in d['groups']:
                 if 'shared_escape_owner' in terminal:
                     assert terminal['shared_escape_owner'] in names
-    g = geo()
-    clearance = 2 * max(g.long_half[2], g.wire[2] // 2) + g.metal_space('metal2')
-    for i, first in enumerate(desc):
-        for second in desc[i+1:]:
-            if first['region'] == second['region']:
-                continue
-            for net, (lo, hi) in first['rail_intervals_lambda'].items():
-                for other, (ol, oh) in second['rail_intervals_lambda'].items():
-                    y, oy = first['rails_lambda'][net], second['rails_lambda'][other]
-                    if net == other and y == oy:
-                        continue
-                    assert max(lo-oh, ol-hi, 0) >= clearance or abs(y-oy) >= clearance
+    assert_regional_rails_clear(desc, geo())
 
 
 def test_rebudget_favours_the_taller_region_and_reduces_its_rows():

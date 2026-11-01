@@ -84,14 +84,15 @@ def test_loaded_divider_midpoint_keeps_the_identical_series_pair():
 def test_pair_fit_uses_the_final_colored_bank(monkeypatch):
     original = a._m4_trunk_tracks
     calls = []
-    def color(rails, geometry):
-        bus, _ = original(rails, geometry)
-        calls.append(None)
+    def color(rails, geometry, lower=2, upper=4):
+        bus, _ = original(rails, geometry, lower=lower, upper=upper)
+        calls.append((lower, upper))
         return bus, 0 if len(calls) == 1 else 1500
     monkeypatch.setattr(a, '_m4_trunk_tracks', color)
     with pytest.raises(a.Refusal, match=r'required=189.42um available=185um colored_bank=15um'):
         a._place_left_right_rows(parallel_devices(), ['top', 'bottom'],
                                  geo(), None, 200, ())
+    assert calls == [(4, 5), (4, 5)]
 
 
 def test_colored_bank_growth_rebudgets_regions_without_clipping(monkeypatch):
@@ -100,9 +101,9 @@ def test_colored_bank_growth_rebudgets_regions_without_clipping(monkeypatch):
     widths = [d['bbox'][2] - d['bbox'][0] for d in ds]
     original = a._m4_trunk_tracks
     calls = []
-    def color(rails, geometry):
-        bus, _ = original(rails, geometry)
-        calls.append(None)
+    def color(rails, geometry, lower=2, upper=4):
+        bus, _ = original(rails, geometry, lower=lower, upper=upper)
+        calls.append((lower, upper))
         return bus, 0 if len(calls) == 1 else (1500 if len(calls) == 2 else 1000)
     monkeypatch.setattr(a, '_m4_trunk_tracks', color)
     rows, _, _, desc = a._place_left_right_rows(
@@ -119,3 +120,4 @@ def test_colored_bank_growth_rebudgets_regions_without_clipping(monkeypatch):
     assert pair[1]['row'] == pair[0]['row'] + 1
     matching = [d for d in ds if d['dev']['name'] in ('m0', 'm3')]
     assert matching[0]['row'] == matching[1]['row']
+    assert calls and all(planes == (4, 5) for planes in calls)

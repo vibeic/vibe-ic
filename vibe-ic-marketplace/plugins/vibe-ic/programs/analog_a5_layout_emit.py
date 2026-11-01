@@ -3215,7 +3215,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                 intervals[net] = (lo, hi)
             tracks = _interval_tracks(intervals, clearance)
             y = cursors[region]
-            # The same normal M2 rails cross the CMIM region on the way to
+            # The same normal M4 rails cross the CMIM region on the way to
             # the OTA region. Allocate their tracks jointly; native CMIM
             # plates remain on their original high planes.
             while True:
@@ -3257,6 +3257,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                                  "region": region, "base_lambda": base, "nets": ns,
                                  "parallel_pair": list(row[0].get("fullspan_pair", ())),
                                  "rail_tracks": len(set(tracks.values())),
+                                 "rail_level": 4,
                                  "rails_lambda": rails,
                                  "rail_intervals_lambda": intervals,
                                  "column_lambda": [offsets[region],
