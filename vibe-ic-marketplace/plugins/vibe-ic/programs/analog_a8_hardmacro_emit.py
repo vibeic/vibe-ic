@@ -1437,8 +1437,9 @@ def load_native_measurement(project: Path, block: str, gds: Path,
 
 
 def emit_block(project: Path, block: str, container: str, pdk_root: str, *, ngspice_bin: Optional[str] = None,
-               ) -> Dict:
-    native_attempts = []
+               native_attempts=None) -> Dict:
+    """Publish attempts to an optional per-call sink even if later work raises."""
+    native_attempts = native_attempts if native_attempts is not None else []
     try:
         result = _emit_block(project, block, container, pdk_root,
                              ngspice_bin=ngspice_bin, native_attempts=native_attempts)

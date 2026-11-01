@@ -354,18 +354,20 @@ def execute(project: Path, context: Mapping) -> dict:
         for ep in endpoints:
             binding = _analog_binding(project, ep, report["runtime"]) if ep.kind == "analog" else None
             report["producer_invoked"] = True
-            if ep.kind == "digital":
-                rc, produced = digital_export.run(project, root, False, False,
-                    container=container, pdk_name=pdk)
-                producer = {"producer": "digital_hardmacro_gen.run", "rc": rc, "detail": asdict(produced)}
-                attempts = produced.native_attempts
-            else:
-                produced = analog_export.emit_block(project, ep.name, container, root)
-                rc = produced.get("rc", 1)
-                producer = {"producer": "analog_a8_hardmacro_emit.emit_block", "rc": rc, "detail": produced}
-                attempts = produced["native_attempts"]
-            report["native_attempts"].extend(dict(attempt, endpoint=ep.name) for attempt in attempts)
-            report["native_started"] = bool(report["native_attempts"])
+            attempts = []
+            try:
+                if ep.kind == "digital":
+                    rc, produced = digital_export.run(project, root, False, False,
+                        container=container, pdk_name=pdk, native_attempts=attempts)
+                    producer = {"producer": "digital_hardmacro_gen.run", "rc": rc, "detail": asdict(produced)}
+                else:
+                    produced = analog_export.emit_block(project, ep.name, container, root,
+                                                        native_attempts=attempts)
+                    rc = produced.get("rc", 1)
+                    producer = {"producer": "analog_a8_hardmacro_emit.emit_block", "rc": rc, "detail": produced}
+            finally:
+                report["native_attempts"].extend(dict(attempt, endpoint=ep.name) for attempt in attempts)
+                report["native_started"] = bool(report["native_attempts"])
             producer.update(context_sha256=checked["context_sha256"], name=ep.name,
                             runtime=report["runtime"])
             path = Path("reports/flow109/ip_release") / checked["context_sha256"] / (ep.name + ".producer.json")

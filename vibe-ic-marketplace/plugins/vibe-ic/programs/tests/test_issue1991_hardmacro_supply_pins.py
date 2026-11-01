@@ -154,7 +154,7 @@ def _fixture_magic_sidecars(out_lef: Path) -> None:
 
 
 def _fixture_timing(project: Path, design: str, _container: str,
-                    out_dir: Path):
+                    out_dir: Path, extra_liberties=(), *, native_attempts=None):
     """Return a typed, hash-bound interface timing result for these tests."""
     import _physical_current as current
 

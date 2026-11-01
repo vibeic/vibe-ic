@@ -98,7 +98,8 @@ def test_digital_export_is_invoked_then_real_structural_current_and_docs_consume
     result = D79.execute(project, context)
     assert result["component_status"] == "PASS", result
     assert calls == [(project, "/fixture/selected-pdk", False, False,
-                      {"container": "fixture-selected-runtime", "pdk_name": "gf180mcuD"})]
+                      {"container": "fixture-selected-runtime", "pdk_name": "gf180mcuD",
+                       "native_attempts": []})]
     package = result["packages"][0]
     assert set(package["views"]) == {".lef", ".lib", ".gds", ".v"}
     assert package["documentation_check"]["detail"]["pin_count_cross_check"] == "AGREES"
@@ -631,6 +632,55 @@ def test_digital_sta_failed_transport_reports_attempt(tmp_path, monkeypatch):
     assert result["native_attempts"] == [{"tool": "sta", "operation": "write_timing_model"}]
 
 
+@pytest.mark.parametrize("failure", ["transport", "post_transport"])
+def test_digital_sta_exception_retains_attempt_in_sink(tmp_path, monkeypatch, failure):
+    gen = D79.digital_export
+    pnr = tmp_path / "phase3/stage3/pnr"
+    _write(pnr / "block_a_pnr.v", "module block_a; endmodule\n")
+    _write(pnr / "constraint.sdc", "create_clock -period 10 clk\n")
+    _write(tmp_path / "phase3/stage3/extracted/spef_corners/block_a.max.spef", '*SPEF "IEEE 1481-1998"\n')
+    library = tmp_path / "input/pdk/fixture.lib"
+    _write(library, "library (fixture) {}\n")
+    _write(tmp_path / "reports/phase3/sta_mcorner_ocv.rpt",
+           f"=== SETUP corner: process=SS liberty={library}, SPEF=block_a.max.spef ===\n")
+    calls = []
+    def transport(*args, **kwargs):
+        calls.append(args)
+        if failure == "transport":
+            raise RuntimeError("fixture STA failure")
+        return 0, "fixture output", ""
+    write_text = Path.write_text
+    def fail_log(path, *args, **kwargs):
+        if path.name == "timing_native.log":
+            raise RuntimeError("fixture STA failure")
+        return write_text(path, *args, **kwargs)
+    monkeypatch.setattr(gen, "_sh", transport)
+    monkeypatch.setattr(Path, "write_text", fail_log)
+    monkeypatch.setattr(gen.subprocess, "Popen", lambda *a, **k: pytest.fail("unspied native launch"))
+    attempts = []
+    with pytest.raises(RuntimeError, match="fixture STA failure"):
+        gen.characterise_liberty(tmp_path, "block_a", "", tmp_path / "hm", native_attempts=attempts)
+    assert len(calls) == 1
+    assert attempts == [{"tool": "sta", "operation": "write_timing_model"}]
+
+
+def test_producer_attempt_sinks_are_empty_on_preflight_and_per_call(tmp_path, monkeypatch):
+    monkeypatch.setattr(D79.digital_export.subprocess, "Popen",
+                        lambda *a, **k: pytest.fail("preflight launched native work"))
+    digital_attempts = []
+    _, digital = DIGITAL_RUN(tmp_path, "/fixture", False, False, native_attempts=digital_attempts)
+    assert digital.native_attempts is digital_attempts
+    assert digital_attempts == []
+    analog_attempts = []
+    analog = D79.analog_export.emit_block(tmp_path, "absent", "", "/fixture", native_attempts=analog_attempts)
+    assert analog["native_attempts"] is analog_attempts
+    assert analog_attempts == []
+    digital_attempts.append({"tool": "fixture"})
+    _, fresh = DIGITAL_RUN(tmp_path, "/fixture", False, False)
+    assert fresh.native_attempts == []
+    assert D79.analog_export.emit_block(tmp_path, "absent", "", "/fixture")["native_attempts"] == []
+
+
 def test_digital_current_kit_reuse_records_no_native_attempt(tmp_path, monkeypatch):
     project, context, _ = _digital(tmp_path, monkeypatch)
     gen = D79.digital_export
@@ -652,6 +702,59 @@ def test_digital_current_kit_reuse_records_no_native_attempt(tmp_path, monkeypat
     result = D79.execute(project, context)
     assert result["component_status"] == "PASS", result
     assert result["native_attempts"] == [] and result["native_started"] is False
+
+
+def test_real_digital_late_refusal_retains_native_attempt(tmp_path, monkeypatch):
+    project, context, _ = _digital(tmp_path, monkeypatch)
+    gen = D79.digital_export
+    routed = project / "phase3/stage3/pnr/routed.def"
+    routed.write_text("VERSION 5.8 ;\nDESIGN block_a ;\nPINS 5 ;\n" + "\n".join(
+        f"- {name} + NET {name} + DIRECTION {direction} + USE {use} ;"
+        for name, direction, use in [("clk", "INPUT", "SIGNAL"), ("rst_n", "INPUT", "SIGNAL"),
+                                     ("dout", "OUTPUT", "SIGNAL"), ("VPWR", "INOUT", "POWER"),
+                                     ("VGND", "INOUT", "GROUND")]) + "\nEND PINS\nEND DESIGN\n")
+    hm = project / "phase3/stage4/hardmacro"
+    record = json.loads((hm / "current_kit.json").read_text())
+    monkeypatch.setattr(gen, "resolve_pdk_binding", lambda *a, **k: gen.PdkBinding(
+        "gf180mcuD", project / "input/pdk", project / record["inputs"]["pdk_magicrc"]["path"]))
+    monkeypatch.setattr(gen, "run", DIGITAL_RUN)
+    monkeypatch.setattr(gen, "find_magic_site", lambda *a, **k: SimpleNamespace(
+        in_container=False, where="host-fixture", magic_version=lambda: "fixture"))
+    original_lef = (hm / "block_a.lef").read_text()
+    native_calls = []
+    def transport(argv, **kwargs):
+        native_calls.append(argv)
+        (Path(argv[-1]).parent / "block_a.lef").write_text(original_lef)
+        return gen._watchdog.SupervisedResult(
+            rc=0, out="fixture Magic output", err="", outcome="natural", elapsed_s=0)
+    monkeypatch.setattr(gen._watchdog, "run_host_supervised", transport)
+    monkeypatch.setattr(gen.subprocess, "Popen", lambda *a, **k: pytest.fail("unspied native launch"))
+    (project / record["inputs"]["timing_netlist"]["path"]).unlink()
+    result = D79.execute(project, context)
+    assert len(native_calls) == 1
+    assert result["component_status"] == "NOT_MEASURED", result
+    assert "IP_KIT_CURRENT_NETLIST_MISSING" in result["detail"]
+    assert result["native_started"] is True
+    assert result["native_attempts"] == [
+        {"tool": "magic", "operation": "lef_export", "endpoint": "block_a"}]
+    assert result["packages"] == []
+
+
+def test_real_analog_late_exception_retains_native_attempt(tmp_path, monkeypatch):
+    project, context, calls = _analog(tmp_path, monkeypatch)
+    def late_failure(*args, **kwargs):
+        raise RuntimeError("fixture post-transport processing failure")
+    monkeypatch.setattr(D79.analog_export, "annotate_signal_pins", late_failure)
+    monkeypatch.setattr(D79.analog_export.subprocess, "Popen",
+                        lambda *a, **k: pytest.fail("unspied native launch"))
+    result = D79.execute(project, context)
+    assert len(calls) == 1
+    assert result["component_status"] == "NOT_MEASURED", result
+    assert result["detail"] == "fixture post-transport processing failure"
+    assert result["native_started"] is True
+    assert result["native_attempts"] == [
+        {"tool": "magic", "operation": "lef_export", "endpoint": "blk"}]
+    assert result["packages"] == []
 
 
 def test_explicit_analog_docs_reject_supply_misclassification(tmp_path, monkeypatch):

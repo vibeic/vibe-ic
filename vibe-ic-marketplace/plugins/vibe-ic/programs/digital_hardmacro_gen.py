@@ -1860,7 +1860,8 @@ def liberty_with_pg_pins(text: str, design: str, pins: List[Pin]) -> Optional[st
     return out if n == 1 else None
 
 def characterise_liberty(project: Path, design: str, container: str,
-                         out_dir: Path, extra_liberties=()) -> Tuple[Optional[str], Dict[str, Any]]:
+                         out_dir: Path, extra_liberties=(), *,
+                         native_attempts=None) -> Tuple[Optional[str], Dict[str, Any]]:
     """OpenSTA `write_timing_model` over THIS run's post-route netlist, SDC and
     max-corner SPEF, against the SETUP-corner Liberty its own multi-corner STA
     report names. Returns (liberty_text, record); text is None when any input
@@ -1979,6 +1980,8 @@ def characterise_liberty(project: Path, design: str, container: str,
         sta_binary = shutil.which("sta") or "/foss/tools/bin/sta"
         argv = [sta_binary, "-no_splash", "-exit", str(tcl)]
     rec["native_attempts"] = [{"tool": "sta", "operation": "write_timing_model"}]
+    if native_attempts is not None:
+        native_attempts.extend(rec["native_attempts"])
     rc, out, err = _sh(argv)
     text = lib_out.read_text(errors="replace") if lib_out.is_file() else ""
     arcs = len(re.findall(r"\btiming\s*\(", text))
@@ -2020,9 +2023,10 @@ def characterise_liberty(project: Path, design: str, container: str,
 def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool,
         container: str = "", cell_lef: str = "",
         metal_prefix: str = "met", pdk_name: Optional[str] = None,
-        extra_liberties=()
+        extra_liberties=(), *, native_attempts=None
         ) -> Tuple[int, Record]:
-    rec = Record()
+    """Publish attempts to an optional per-call sink even if later work raises."""
+    rec = Record(native_attempts=native_attempts if native_attempts is not None else [])
     rec.lef_policy = {"writer": "magic:lef write",
                       "abstract": not full_lef,
                       "hide": not full_lef, "pinonly": pinonly,
@@ -2355,9 +2359,9 @@ def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool,
         # neither re-characterised nor given a sidecar (the landed contract in
         # test_hardmacro_gen_grades_only_what_it_wrote).
         def _write_lib(q: Path) -> None:
-            char, char_rec = (characterise_liberty(project, design, container, hm, extra_liberties)
-                              if extra_liberties else characterise_liberty(project, design, container, hm))
-            rec.native_attempts.extend(char_rec.get("native_attempts", []))
+            char, char_rec = characterise_liberty(
+                project, design, container, hm, extra_liberties,
+                native_attempts=rec.native_attempts)
             if char:
                 char = liberty_with_pg_pins(char, design, pins)
                 if char is None:
