@@ -11297,11 +11297,13 @@ def _v455_sentence_for_span(line: str, pos: int) -> str:
 
 
 def _v455_logical_declaration_token(line: str, pos: int) -> bool:
-    """A named interface/role slot is not a physical pin declaration."""
+    """A named interface, role or module is not a physical pin declaration."""
     prefix = _v455_clause_for_span(line[:pos], pos)
     return bool(re.search(
         r"\b(?:logical(?:\s+[A-Za-z_][\w-]*)*\s+interface|(?:local\s+)?role)\s*$",
-        prefix, re.IGNORECASE))
+        prefix, re.IGNORECASE) or re.search(
+        r"\bmodule(?:\s+name)?\s*(?:[:=]|is|shall\s+be|must\s+be|will\s+be)?"
+        r"\s*(?:(?:named|called)\s+)?[*\s]*$", prefix, re.IGNORECASE))
 
 
 def _v455_clause_for_span(line: str, pos: int) -> str:
@@ -13441,6 +13443,7 @@ _V1_6_402_RE_QUANT_SIGN_DIGIT = re.compile(
 )
 _V1_6_402_RE_QUANT_DIGIT_SLOT = re.compile(
     r"\b(?P<digit>\d{1,3})\s*-?\s*"
+    r"(?:identical\s+)?"
     r"(?:slot|channel|bank|copy|copies|instance|instances)s?\b",
     re.IGNORECASE,
 )
@@ -13552,6 +13555,38 @@ def _v466_block_multiplicity_own_entry(text: str, kw_pos: int,
         return None
     # Non-table line with no own quantifier → safe to use paragraph.
     return _v1_6_402_extract_block_multiplicity(paragraph)
+
+
+def _block_multiplicity_is_explicit(text: str, pattern: str, count: int) -> bool:
+    """Require a count attached to this block, rather than a nearby number.
+
+    This is confidence in multiplicity alone; confidence in the block's
+    electrical specs does not establish how many instances were declared.
+    """
+    number = r"\d{1,3}|" + "|".join(_V1_6_402_NUMBER_WORDS)
+    before = re.compile(
+        rf"\b(?P<n>{number})\s*(?:[x×]\s*|"
+        r"(?:identical\s+)?(?:copies|instances|channels|banks)\s+of\s+)?"
+        r"(?:(?:the|a|an)\s+)?$",
+        re.IGNORECASE)
+    after = re.compile(r"s?\s*[`*|: ]*\(?\s*[x×]\s*(?P<n>\d{1,3})\b",
+                       re.IGNORECASE)
+    for keyword in re.finditer(pattern, text, re.IGNORECASE):
+        lo, hi = _prose_sentence_scope(text, keyword.start(), keyword.end())
+        sentence = text[lo:hi]
+        if (_prose_is_denied(sentence) is not None or re.search(
+                r"\b(?:may|might|could|perhaps|approximately|estimated|inferred)\b",
+                sentence, re.IGNORECASE)):
+            continue
+        prefix = text[lo:keyword.start()].rstrip("`*")
+        match = before.search(prefix) or after.match(text[keyword.end():hi])
+        if match:
+            token = match.group("n").lower()
+            value = (int(token) if token.isdigit()
+                     else _V1_6_402_NUMBER_WORDS.get(token))
+            if value == count:
+                return True
+    return False
 
 
 # ─── ORGANIC-20260606 #466 R2 (field-agent counter-evidence) ────────
@@ -14151,11 +14186,12 @@ def _v466_has_l5_block_layer_evidence(extracted, cls_pat) -> bool:
     return False
 
 
-def _v466_block_layer_multiplicity(extracted, cls_pat):
+def _v466_block_layer_multiplicity(extracted, cls_pat, *, with_evidence=False):
     """ORGANIC #466 R3 — return the multiplicity declared on the analog
     class's L5 Block-HEADING line (``## Block B — ldo … (×1 …)``) across
     ALL source docs, or None when no block heading for that class carries
-    an explicit ``×N``.
+    an explicit ``×N``. With ``with_evidence``, return the count's source
+    record so the applying pass preserves confidence with the count.
 
     The designable-block count lives on the L5 Block heading. The
     per-doc keyword scan in `gen_l5_adi_spec` anchors a class to the
@@ -14185,6 +14221,13 @@ def _v466_block_layer_multiplicity(extracted, cls_pat):
                 continue
             n = _v1_6_402_extract_block_multiplicity(line)
             if n is not None:
+                if with_evidence:
+                    return {
+                        "count": n, "text": line,
+                        "source": f"input/docs/{_fname}",
+                        "low_confidence": not _block_multiplicity_is_explicit(
+                            line, cls_pat, n),
+                    }
                 return n
     return None
 
@@ -14205,10 +14248,12 @@ def _v466_apply_block_layer_multiplicity(blocks, extracted) -> None:
         cls_pat = _ANALOG_KEYWORDS.get(cls) if isinstance(cls, str) else None
         if not cls_pat:
             continue
-        n = _v466_block_layer_multiplicity(extracted, cls_pat)
-        if n is not None:
-            blk["count"] = n
-            blk["multiplicity"] = n
+        proof = _v466_block_layer_multiplicity(
+            extracted, cls_pat, with_evidence=True)
+        if proof is not None:
+            blk["count"] = proof["count"]
+            blk["multiplicity"] = proof["count"]
+            blk["multiplicity_evidence"] = proof
 
 
 def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
@@ -36719,6 +36764,37 @@ def _v814_evidence_span_of(block) -> str:
     return para if isinstance(para, str) else ""
 
 
+def _emit_block_device_class_constraints(blocks: List[dict], extracted: dict) -> None:
+    """Bind a source-declared device family to the block its scope names."""
+    declaration = re.compile(
+        r"\b(?P<class>[A-Za-z][\w-]*)\s+devices?\s*\(\s*`?(?P<pattern>[A-Za-z_][\w.*-]*)`?\s*\)"
+        r"\s+for\s+(?:the\s+)?(?:(?P<voltage>\d+(?:\.\d+)?)\s*V\s+)?(?P<scope>[^|\n]+)", re.I)
+    for fname, text in (extracted or {}).items():
+        for match in declaration.finditer(text or ""):
+            if not _issue3234_position_is_current(text, match.start()):
+                continue
+            start = text.rfind("\n", 0, match.start()) + 1
+            end = text.find("\n", match.end())
+            line = text[start:end if end >= 0 else len(text)]
+            if _prose_is_denied(line) is not None:
+                continue
+            scope = match.group("scope").strip().rstrip(".")
+            for block in blocks:
+                key = block.get("type") or block.get("name")
+                pattern = _ANALOG_KEYWORDS.get(key, rf"\b{re.escape(str(key))}\b")
+                if not re.search(pattern, scope, re.I):
+                    continue
+                row = {"device_class": match.group("class"), "model_pattern": match.group("pattern"),
+                       "scope": scope, "evidence": {
+                           "doc": str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}",
+                           "line": text.count("\n", 0, start) + 1, "quote": line}}
+                if match.group("voltage"):
+                    row["voltage_v"] = float(match.group("voltage"))
+                target = block.setdefault("device_class_constraints", [])
+                if row not in target:
+                    target.append(row)
+
+
 def gen_l5_adi_spec(project: Path,
                     extracted: Dict[str, str]) -> LDocResult:
     """L5: analog block discovery via Wave-47 keyword scan + chip-AGNOSTIC
@@ -36865,6 +36941,14 @@ def gen_l5_adi_spec(project: Path,
             if _v1_6_402_count is not None:
                 entry["count"] = _v1_6_402_count
                 entry["multiplicity"] = _v1_6_402_count
+                own_entry = _v466_block_own_entry(text, kw_pos)
+                entry["multiplicity_evidence"] = {
+                    "count": _v1_6_402_count,
+                    "text": own_entry,
+                    "source": f"input/docs/{fname}",
+                    "low_confidence": not _block_multiplicity_is_explicit(
+                        own_entry, pat, _v1_6_402_count),
+                }
             blocks.append(entry)
             seen_classes.add(cls)
             if len(ev) < 16:
@@ -37382,6 +37466,7 @@ def gen_l5_adi_spec(project: Path,
     _v613_adi_present = (
         bool(blocks)
         and _v1_6_613_input_has_digital_serial_readout(extracted))
+    _emit_block_device_class_constraints(blocks, extracted)
     content = {
         "schema_version": 2,
         "doc_class": "adi_spec",
@@ -42053,6 +42138,129 @@ def _declared_input_clock_names(project, l9):
     return names
 
 
+def _declared_clock_groups(extracted: Dict[str, str]) -> List[dict]:
+    """Explicit named-clock relationships in prose or a declaration table.
+
+    Separate pins or group memberships alone establish no relationship.
+    This preserves source intent; it does not authorize generated SDC cuts.
+    """
+    groups: List[dict] = []
+    seen = set()
+    ident = r"`?[A-Za-z_][\w]*`?"
+    clock_list = rf"{ident}(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+){ident})+"
+    relationship = r"asynchronous|exclusive|synchronous"
+    declaration = re.compile(
+        r"(?:clock\s+group\s+`?(?P<name>[A-Za-z_][\w]*)`?\s*:\s*)?"
+        rf"(?:(?:the\s+)?clocks\s+)?(?P<clocks>{clock_list})\s+"
+        rf"(?:are|shall\s+be|must\s+be)\s+(?:mutually\s+)?(?P<relationship>{relationship})"
+        r"(?:\s+(?:with|to)\s+(?:each\s+other|one\s+another))?",
+        re.IGNORECASE)
+
+    def append(name, clocks_text, relation, fname, lineno, quote):
+        if (not re.fullmatch(clock_list, clocks_text.strip(), re.IGNORECASE)
+                or relation.lower() not in {"asynchronous", "exclusive", "synchronous"}):
+            return
+        clocks = list(dict.fromkeys(
+            clock.strip("`") for clock in re.findall(ident, clocks_text)
+            if clock.lower() != "and"))
+        if len(set(clocks)) < 2:
+            return
+        key = (name, tuple(clocks), relation.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        groups.append({
+            "name": name or f"clock_group_{len(groups) + 1}",
+            "clocks": clocks, "relationship": relation.lower(),
+            "evidence": {
+                "doc": (str(fname) if str(fname).startswith("input/")
+                        else f"input/docs/{fname}"),
+                "line": lineno, "quote": quote,
+            },
+        })
+
+    for fname, text in (extracted or {}).items():
+        lines = (text or "").splitlines(keepends=True)
+        table_roles = {}
+        offset = 0
+        for index, raw in enumerate(lines):
+            current = _issue3234_position_is_current(text, offset)
+            offset += len(raw)
+            line = raw.strip()
+            if not current:
+                continue
+            if (index + 1 < len(lines) and _v0_3_2_is_pipe_row(line)
+                    and _v0_3_2_is_sep_row(lines[index + 1])):
+                headers = [cell.strip(" *`").lower()
+                           for cell in _v0_3_2_split_pipe_cells(line)]
+                table_roles = {key: i for i, key in enumerate(headers)}
+                continue
+            if _v0_3_2_is_pipe_row(line):
+                if "clocks" in table_roles and "relationship" in table_roles:
+                    cells = _v0_3_2_split_pipe_cells(line)
+                    if len(cells) > max(table_roles.values()):
+                        group_i = table_roles.get("group", table_roles.get("name"))
+                        append(cells[group_i].strip(" *`") if group_i is not None else None,
+                               cells[table_roles["clocks"]].strip(),
+                               cells[table_roles["relationship"]].strip(" *`"),
+                               fname, index + 1, line)
+                continue
+            table_roles = {}
+            for sentence in re.split(r"\.(?:\s+|$)", line.lstrip("-* ")):
+                match = declaration.fullmatch(sentence.strip())
+                if match:
+                    append(match.group("name"), match.group("clocks"),
+                           match.group("relationship"), fname, index + 1, line)
+    return groups
+
+
+def _declared_por_reset_strategy(extracted: Dict[str, str]) -> Optional[dict]:
+    """A stated absence of external reset plus stated POR initialization."""
+    for fname, text in (extracted or {}).items():
+        absent = list(re.finditer(r"\bno\s+external\s+reset(?:\s+(?:pin|port))?\s*[.;]", text or "", re.I))
+        starts = list(re.finditer(r"\b(?:POR|power[- ]on\s+reset)\s+(?:initializes|initialises|starts|resets)\s+(?:the\s+)?([^.;\n]+)", text or "", re.I))
+        for no_reset in absent:
+            if not _issue3234_position_is_current(text, no_reset.start()):
+                continue
+            headings = list(re.finditer(r"(?m)^\s*#{1,6}\s+[^\n]+", text[:no_reset.start()]))
+            section = headings[-1].start() if headings else 0
+            for start in starts:
+                lo, hi = _prose_sentence_scope(
+                    text, start.start(), start.end(), extra_breaks=(";", ".\n"))
+                clause = text[lo:hi]
+                if (_prose_is_denied(clause, ignore_bracketed=False) is not None
+                        or re.search(r"\b(?:may|might|could|perhaps|possibly|if|whether)\b",
+                                     clause, re.I)):
+                    continue
+                prior = list(re.finditer(r"(?m)^\s*#{1,6}\s+[^\n]+", text[:start.start()]))
+                if (prior[-1].start() if prior else 0) != section or not _issue3234_position_is_current(text, start.start()):
+                    continue
+                evidence = []
+                for match in (no_reset, start):
+                    line_start = text.rfind("\n", 0, match.start()) + 1
+                    line_end = text.find("\n", match.end())
+                    row = {"doc": str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}",
+                           "line": text.count("\n", 0, line_start) + 1,
+                           "quote": text[line_start:line_end if line_end >= 0 else len(text)]}
+                    if row not in evidence:
+                        evidence.append(row)
+                return {"external_reset": False, "startup_source": "power_on_reset",
+                        "transport": "por_initialization",
+                        "initializes": [target.strip() for target in re.split(r",|\band\b", start.group(1)) if target.strip()],
+                        "evidence": evidence}
+    return None
+
+
+def _apply_declared_por_reset_strategy(content: dict, extracted: dict) -> None:
+    strategy = _declared_por_reset_strategy(extracted)
+    if strategy:
+        content["reset_strategy"] = strategy
+        for domain in content.get("clock_domains", []):
+            if isinstance(domain, dict) and domain.get("reset_strategy") in (None, "unspecified"):
+                domain["reset_strategy"] = "power_on_reset"
+                domain["reset_strategy_evidence"] = strategy["evidence"]
+
+
 def _propagate_bound_clock_periods(project, clock_domains, bindings, rows):
     rows = [row for row in rows if isinstance(row, dict)
             and bindings.get(row.get("instance")) == row.get("top_clock_pin")]
@@ -42246,6 +42454,12 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     event_sources = {
         (str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}"): text
         for fname, text in _load_extracted_docs_for_post_pass(project).items()}
+    por_strategy = _declared_por_reset_strategy(event_sources)
+    if por_strategy:
+        for domain in clock_domains:
+            if isinstance(domain, dict) and domain.get("reset_strategy") in (None, "unspecified"):
+                domain["reset_strategy"] = "power_on_reset"
+                domain["reset_strategy_evidence"] = por_strategy["evidence"]
     # The prose fmax walker calls an unnamed primary domain "clk". Bind that
     # placeholder only when the design declares exactly one input clock.
     # Never spread one frequency mention over several independent inputs.
@@ -42311,7 +42525,7 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
             "role": "master",
             "source": "synthesised-from-L9.top_ports",
             "evidence": "L9.top_ports",
-            "reset_strategy": "unspecified",
+            "reset_strategy": "power_on_reset" if por_strategy else "unspecified",
             **clock_edge_semantics(pin, event_sources),
         }
         if freq_hz:
@@ -45883,6 +46097,7 @@ def gen_l8_timing_waveform(project: Path,
         "clock_mhz": clock_mhz,
         "no_clock_mhz_in_input": no_clock_mhz_in_input,
         "clock_domains": clock_domains,
+        "clock_groups": _declared_clock_groups(extracted),
         "no_clock_domains_in_input": no_clock_domains_in_input,
         # v1.6.510 — for #352 P3 ORGANIC. Synthesis-Fmax
         # device-fitting benchmark rows are routed here instead of
@@ -45985,6 +46200,7 @@ def gen_l8_timing_waveform(project: Path,
     _v2089_extract_target_recommendations(
         project, extracted, content, evidence)
 
+    _apply_declared_por_reset_strategy(content, extracted)
     return _write_l_doc(project, "L8_RTL_CONSTANTS", content, evidence)
 
 
@@ -47383,6 +47599,7 @@ def gen_l8_timing_waveform_doc(project: Path,
         "doc_class": "timing_waveform",
         "ic_name": ic_name,
         "timing_windows": windows,
+        "clock_groups": _declared_clock_groups(extracted),
         "timing_constants": timing_constants,
         # v1.6.322 — for #221 ORGANIC P3.
         "waveforms": waveforms,
@@ -47394,6 +47611,7 @@ def gen_l8_timing_waveform_doc(project: Path,
         content["timing_groups"] = timing_groups
         if sd is not None:
             content["symbol_directionality"] = sd
+    _apply_declared_por_reset_strategy(content, extracted)
     return _write_l_doc(project, "L8_TIMING_WAVEFORM", content, evidence)
 
 
@@ -52016,7 +52234,8 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
 #     `count` (or fallback `instance_count` / `multiplicity`) is an
 #     integer >= 2, appends an entry to `l9["submodules"]` with
 #     `instance_count = count`, `extraction_strategy =
-#     "analog_block_multiplicity_v1_6_403"`, `low_confidence: True`.
+#     "analog_block_multiplicity_v1_6_403"`. Count confidence stays in
+#     `multiplicity_evidence`; the portless interface remains low confidence.
 #     Idempotent: skips when an entry with the same `(name, strategy)`
 #     pair is already present, so re-running the helper never double-
 #     emits. Stamps `l9["extraction_strategy"]
@@ -52078,11 +52297,16 @@ def _v1_6_403_mirror_analog_multiplicity_to_l9(l5: dict, l9: dict) -> int:
         if (str(block_type),
                 "analog_block_multiplicity_v1_6_403") in existing_pairs:
             continue
+        multiplicity_evidence = entry.get("multiplicity_evidence") or {}
+        if not isinstance(multiplicity_evidence, dict):
+            multiplicity_evidence = {}
         l9.setdefault("submodules", []).append({
             "name": str(block_type),
             "instance_count": count_int,
             "extraction_strategy": "analog_block_multiplicity_v1_6_403",
             "low_confidence": True,
+            **({"multiplicity_evidence": dict(multiplicity_evidence)}
+               if multiplicity_evidence else {}),
         })
         # Track the new pair so a subsequent block of the same type
         # in the same L5 list doesn't double-emit either.
@@ -52664,6 +52888,207 @@ def _admit_qualified_output_input(project: Path, content: dict) -> dict:
         "input_sha256": hashlib.sha256(raw).hexdigest(),
         "decisions": copy.deepcopy(admitted), "review": "PENDING_INDEPENDENT_D1"}
     return result
+
+
+def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
+                                      evidence_out: Optional[dict] = None) -> None:
+    """Project explicit typed instances and two-terminal passive declarations.
+
+    Instances are distinct from module definitions in ``submodules``. Bindings
+    use the existing internal_wires shape and only resolve declared net names.
+    Generic passive terminals and derived instance identities are disclosed;
+    no PDK device or physical terminal mapping is selected here.
+    """
+    aliases: Dict[str, set] = {}
+    for port in l9.get("top_ports", []):
+        if isinstance(port, dict) and port.get("name"):
+            aliases.setdefault(str(port["name"]), set()).add(str(port["name"]))
+    for wire in l9.get("internal_wires", []):
+        if isinstance(wire, dict) and wire.get("name"):
+            aliases.setdefault(str(wire["name"]), set()).add(str(wire["name"]))
+    for pin in (l1 or {}).get("pin_table", []):
+        if not isinstance(pin, dict):
+            continue
+        target = pin.get("rtl_name") or pin.get("name")
+        if target not in aliases:
+            continue
+        for name in (pin.get("name"), pin.get("board_name"), *(pin.get("aliases") or [])):
+            if isinstance(name, str) and name:
+                aliases.setdefault(name, set()).add(str(target))
+    identifier = r"[A-Za-z_][A-Za-z0-9_]*"
+    heading = re.compile(
+        rf"^\s*#{{1,6}}\s+Instance\s+`?({identifier})`?\s*"
+        rf"(?:\(\s*`?({identifier})`?\s*\)|:\s*`?({identifier})`?)\s*$", re.I)
+    capacity = re.compile(r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>fF|pF|nF|uF|µF|μF|mF|F)\b")
+    passive = re.compile(r"\b(?:(MIM|MOM|MOS)\s+)?(?:decap(?:acitor)?s?|capacitors?)\b", re.I)
+    between = re.compile(
+        rf"\bbetween\s+(?:the\s+)?(?:core[-\s]+side\s+)?`?({identifier})`?\s*"
+        rf"(?:\(\s*or\s+`?({identifier})`?\s*\))?\s*(?:nets?\s+)?and\s+`?({identifier})`?\b", re.I)
+    number = r"\d{1,3}|" + "|".join(_V1_6_402_NUMBER_WORDS)
+    count_pattern = re.compile(rf"\b({number})\s+instances?\b", re.I)
+    instances = l9.get("instances") or []
+    existing = {row["name"]: row for row in instances if isinstance(row, dict) and row.get("name")}
+    refusals = []
+
+    def capacitance(match):
+        unit = match.group("unit").replace("µ", "u").replace("μ", "u").lower()
+        return float(match.group("value")) * {"ff": .001, "pf": 1, "nf": 1000,
+                                              "uf": 1e6, "mf": 1e9, "f": 1e12}[unit]
+
+    def emit(name, block_type, ports, parameters, evidence, derived=False):
+        resolved = []
+        for port in ports:
+            net = port.get("net", "")
+            targets = aliases.get(net, set())
+            if len(targets) != 1 or not port.get("name") or not (port.get("type") or port.get("direction")):
+                refusals.append({"name": name, "reason": "L9_DECLARED_INSTANCE_PORT_UNRESOLVED",
+                                 "port": dict(port), "evidence": evidence})
+                return
+            resolved.append({**port, "declared_net": net, "net": next(iter(targets))})
+        if not resolved or len({p["name"] for p in resolved}) != len(resolved):
+            return
+        row = {"name": name, "block_type": block_type, "ports": resolved,
+               "port_map": {p["name"]: p["net"] for p in resolved},
+               "parameters": parameters, "evidence": evidence,
+               "extraction_strategy": "declared_document_instance_v1"}
+        if derived:
+            row["identity_derivation"] = "component type and declared endpoint nets"
+            row["terminal_naming"] = "generic_two_terminal_passive; PDK terminal mapping not declared"
+        if name in existing:
+            prior = existing[name]
+            if any(prior.get(k) != row.get(k) for k in ("block_type", "ports", "parameters")):
+                raise ValueError(f"L9_DECLARED_INSTANCE_CONFLICT: {name}")
+            return
+        instances.append(row)
+        existing[name] = row
+        if evidence_out is not None:
+            evidence_out.setdefault(evidence["doc"], []).append({
+                "literal": evidence["quote"], "label": "declared typed component instance"})
+        for port in resolved:
+            l9.setdefault("internal_wires", []).append({
+                "parent": "<TOP>", "child_module": block_type, "child_inst": name,
+                "child_port": port["name"], "net": port["net"],
+                "declared_net": port["declared_net"], "evidence_file": evidence["doc"],
+                "evidence": port.get("evidence", evidence),
+                "extraction_strategy": "declared_document_instance_v1"})
+
+    for fname, text in (extracted or {}).items():
+        lines = (text or "").splitlines(keepends=True)
+        source = str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}"
+        active = None
+        roles = {}
+        supply_roles = {}
+        offset = 0
+
+        def finish():
+            if active:
+                emit(active["name"], active["type"], active["ports"], active["parameters"], active["evidence"])
+
+        for index, raw in enumerate(lines):
+            line = raw.strip()
+            match = heading.match(line)
+            if re.match(r"^#{1,6}\s", line):
+                finish()
+                active, roles = None, {}
+                supply_roles = {}
+                if match and _issue3234_position_is_current(text, offset):
+                    active = {"name": match.group(1), "type": match.group(2) or match.group(3),
+                              "ports": [], "parameters": {}, "evidence": {
+                                  "doc": source, "line": index + 1, "quote": line}}
+            if not active and _v0_3_2_is_pipe_row(line):
+                cells = _v0_3_2_split_pipe_cells(line)
+                if index + 1 < len(lines) and _v0_3_2_is_sep_row(lines[index + 1]):
+                    header = {cell.strip(" *`").lower(): i for i, cell in enumerate(cells)}
+                    supply_roles = (header if {"instance", "l5 block", "core supply", "ground"} <= set(header) else {})
+                elif (supply_roles and not _v0_3_2_is_sep_row(line)
+                      and len(cells) > max(supply_roles.values())
+                      and _issue3234_position_is_current(text, offset)):
+                    values = {key: cells[i].strip(" *`") for key, i in supply_roles.items()
+                              if key != "clock"}
+                    name, block_type = values["instance"], values["l5 block"]
+                    if re.fullmatch(identifier, name) and re.fullmatch(identifier, block_type):
+                        row = {"name": name, "block_type": block_type,
+                               "power_net": values["core supply"] or None,
+                               "ground_net": values["ground"] or None,
+                               "evidence": {"doc": source, "line": index + 1, "quote": line},
+                               "extraction_strategy": "documented_instance_supply_table_v1"}
+                        if name in existing and any(existing[name].get(k) != row[k]
+                                                    for k in ("block_type", "power_net", "ground_net")):
+                            raise ValueError(f"L9_DECLARED_INSTANCE_SUPPLY_CONFLICT: {name}")
+                        if name not in existing:
+                            instances.append(row)
+                            existing[name] = row
+                            if evidence_out is not None:
+                                evidence_out.setdefault(source, []).append({
+                                    "literal": line, "label": "declared per-instance supply and return"})
+            cap = capacity.search(line)
+            if active:
+                if cap and re.search(r"capacitor|decap", active["type"], re.I):
+                    active["parameters"]["capacitance_pf"] = capacitance(cap)
+                if (index + 1 < len(lines) and _v0_3_2_is_pipe_row(line)
+                        and _v0_3_2_is_sep_row(lines[index + 1])):
+                    roles = {cell.strip(" *`").lower(): i
+                             for i, cell in enumerate(_v0_3_2_split_pipe_cells(line))}
+                elif _v0_3_2_is_pipe_row(line) and not _v0_3_2_is_sep_row(line):
+                    cells = _v0_3_2_split_pipe_cells(line)
+                    if "port" in roles and "net" in roles and len(cells) > max(roles.values()):
+                        values = {key: cells[i].strip(" *`") for key, i in roles.items()}
+                        port = {"name": values["port"], "net": values["net"],
+                                "evidence": {"doc": source, "line": index + 1, "quote": line}}
+                        if values.get("type"):
+                            port["type"] = values["type"]
+                        if values.get("direction"):
+                            port["direction"] = _DIR_ABBR_TO_FULL.get(values["direction"].lower(), "unspecified")
+                        active["ports"].append(port)
+            kind, binding = passive.search(line), between.search(line)
+            if (not active and cap and kind and binding
+                    and _issue3234_position_is_current(text, offset)
+                    and _prose_is_denied(line) is None
+                    and not re.search(r"\b(?:may|might|could|perhaps)\b|\?", line, re.I)):
+                left, alternative, right = binding.groups()
+                each = re.search(r"\bon\s+each\s+of\s+([^:;.]+)", line, re.I)
+                lefts = [left]
+                if each:
+                    stated = [token.strip("`") for token in re.findall(rf"`?{identifier}`?", each.group(1))
+                              if token.lower() not in {"and", "or"}]
+                    lefts = [left] + ([alternative] if alternative else [])
+                    if set(stated) != set(lefts):
+                        refusals.append({"reason": "L9_DECLARED_INSTANCE_EACH_BINDING_UNRESOLVED",
+                                         "evidence": {"doc": source, "line": index + 1, "quote": line}})
+                        offset += len(raw)
+                        continue
+                elif alternative:
+                    offset += len(raw)
+                    continue
+                count_match = count_pattern.search(line)
+                count = None
+                if count_match:
+                    token = count_match.group(1).lower()
+                    count = int(token) if token.isdigit() else _V1_6_402_NUMBER_WORDS[token]
+                if each and count is not None and count != len(lefts):
+                    offset += len(raw)
+                    continue
+                if not each and count is not None:
+                    lefts *= count
+                material = kind.group(1)
+                block_type = ((material.lower() + "_") if material else "") + "capacitor"
+                for copy_index, net in enumerate(lefts):
+                    name = f"{block_type}_{net}_{right}"
+                    if lefts.count(net) > 1:
+                        name += f"_{copy_index + 1}"
+                    emit(name, block_type, [
+                        {"name": "p", "type": "analog", "direction": "inout", "net": net},
+                        {"name": "n", "type": "analog", "direction": "inout", "net": right}],
+                        {"capacitance_pf": capacitance(cap)},
+                        {"doc": source, "line": index + 1, "quote": line}, True)
+            offset += len(raw)
+        finish()
+    if instances:
+        l9["instances"] = instances
+        l9["no_instances_in_input"] = False
+        l9["no_internal_wires_in_input"] = not bool(l9.get("internal_wires"))
+    if refusals:
+        l9["declared_instance_refusals"] = refusals
 
 
 def gen_l9_integration_spec(project: Path,
@@ -54383,6 +54808,8 @@ def gen_l9_integration_spec(project: Path,
     # Phase 2 DTOP wiring generation now has the canonical
     # instantiation template. Chip-AGNOSTIC.
     _v1_6_511_emit_instantiation_template(content, extracted)
+    _emit_declared_document_instances(content, extracted, l1_doc or {}, evidence)
+    _apply_declared_por_reset_strategy(content, extracted)
     # v1.6.463 — for #328 R2 ORGANIC. Cascade L1.pin_table[].description
     # into L9.top_ports[].description by name match. v1.6.456 closed
     # the L1-side gap (RST grid description-column continuation
