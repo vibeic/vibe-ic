@@ -87,3 +87,18 @@ def test_return_column_binds_each_power_domain_ground(tmp_path):
     assert {r["name"]: r["ground_net"] for r in rows} == {
         "power_a": "return_a", "power_b": "return_b"}
     assert all(r["ground_evidence"]["file"].endswith("L9_constraints.md") for r in rows)
+
+
+def test_no_external_reset_and_por_start_are_typed_in_l8_l9(tmp_path):
+    docs = source(tmp_path, "# Current startup\nThere is no external reset. "
+                  "POR initializes the accumulators and tracking latches.\n")
+    outputs = [runner.gen_l8_timing_waveform(tmp_path, docs),
+               runner.gen_l8_timing_waveform_doc(tmp_path, docs),
+               runner.gen_l9_integration_spec(tmp_path, docs, {})]
+    for output in outputs:
+        payload = json.loads(Path(output.path).read_text())
+        strategy = payload.get("reset_strategy", {})
+        assert (strategy.get("external_reset"), strategy.get("startup_source")) == (False, "power_on_reset")
+        assert strategy["initializes"] == ["accumulators", "tracking latches"]
+        assert strategy["evidence"][0]["line"] == 2
+        assert strategy["evidence"][0]["doc"] == "input/docs/L9_constraints.md"

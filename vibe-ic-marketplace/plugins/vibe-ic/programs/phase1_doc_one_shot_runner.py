@@ -42212,6 +42212,46 @@ def _declared_clock_groups(extracted: Dict[str, str]) -> List[dict]:
     return groups
 
 
+def _declared_por_reset_strategy(extracted: Dict[str, str]) -> Optional[dict]:
+    """A stated absence of external reset plus stated POR initialization."""
+    for fname, text in (extracted or {}).items():
+        absent = list(re.finditer(r"\bno\s+external\s+reset(?:\s+(?:pin|port))?\s*[.;]", text or "", re.I))
+        starts = list(re.finditer(r"\b(?:POR|power[- ]on\s+reset)\s+(?:initializes|initialises|starts|resets)\s+(?:the\s+)?([^.;\n]+)", text or "", re.I))
+        for no_reset in absent:
+            if not _issue3234_position_is_current(text, no_reset.start()):
+                continue
+            headings = list(re.finditer(r"(?m)^\s*#{1,6}\s+[^\n]+", text[:no_reset.start()]))
+            section = headings[-1].start() if headings else 0
+            for start in starts:
+                prior = list(re.finditer(r"(?m)^\s*#{1,6}\s+[^\n]+", text[:start.start()]))
+                if (prior[-1].start() if prior else 0) != section or not _issue3234_position_is_current(text, start.start()):
+                    continue
+                evidence = []
+                for match in (no_reset, start):
+                    line_start = text.rfind("\n", 0, match.start()) + 1
+                    line_end = text.find("\n", match.end())
+                    row = {"doc": str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}",
+                           "line": text.count("\n", 0, line_start) + 1,
+                           "quote": text[line_start:line_end if line_end >= 0 else len(text)]}
+                    if row not in evidence:
+                        evidence.append(row)
+                return {"external_reset": False, "startup_source": "power_on_reset",
+                        "transport": "por_initialization",
+                        "initializes": [target.strip() for target in re.split(r",|\band\b", start.group(1)) if target.strip()],
+                        "evidence": evidence}
+    return None
+
+
+def _apply_declared_por_reset_strategy(content: dict, extracted: dict) -> None:
+    strategy = _declared_por_reset_strategy(extracted)
+    if strategy:
+        content["reset_strategy"] = strategy
+        for domain in content.get("clock_domains", []):
+            if isinstance(domain, dict) and domain.get("reset_strategy") in (None, "unspecified"):
+                domain["reset_strategy"] = "power_on_reset"
+                domain["reset_strategy_evidence"] = strategy["evidence"]
+
+
 def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     """v1.6.88 (#20 Bug 4 P0 BLOCKER) — augment each existing
     `clock_domains[]` entry with the typed-shape required by
@@ -42225,6 +42265,12 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     event_sources = {
         (str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}"): text
         for fname, text in _load_extracted_docs_for_post_pass(project).items()}
+    por_strategy = _declared_por_reset_strategy(event_sources)
+    if por_strategy:
+        for domain in clock_domains:
+            if isinstance(domain, dict) and domain.get("reset_strategy") in (None, "unspecified"):
+                domain["reset_strategy"] = "power_on_reset"
+                domain["reset_strategy_evidence"] = por_strategy["evidence"]
     # The prose fmax walker calls an unnamed primary domain "clk". Bind that
     # placeholder only when the design declares exactly one input clock.
     # Never spread one frequency mention over several independent inputs.
@@ -42290,7 +42336,7 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
             "role": "master",
             "source": "synthesised-from-L9.top_ports",
             "evidence": "L9.top_ports",
-            "reset_strategy": "unspecified",
+            "reset_strategy": "power_on_reset" if por_strategy else "unspecified",
             **clock_edge_semantics(pin, event_sources),
         }
         if freq_hz:
@@ -45914,6 +45960,7 @@ def gen_l8_timing_waveform(project: Path,
     _v2089_extract_target_recommendations(
         project, extracted, content, evidence)
 
+    _apply_declared_por_reset_strategy(content, extracted)
     return _write_l_doc(project, "L8_RTL_CONSTANTS", content, evidence)
 
 
@@ -47324,6 +47371,7 @@ def gen_l8_timing_waveform_doc(project: Path,
         content["timing_groups"] = timing_groups
         if sd is not None:
             content["symbol_directionality"] = sd
+    _apply_declared_por_reset_strategy(content, extracted)
     return _write_l_doc(project, "L8_TIMING_WAVEFORM", content, evidence)
 
 
@@ -54519,6 +54567,7 @@ def gen_l9_integration_spec(project: Path,
     # instantiation template. Chip-AGNOSTIC.
     _v1_6_511_emit_instantiation_template(content, extracted)
     _emit_declared_document_instances(content, extracted, l1_doc or {}, evidence)
+    _apply_declared_por_reset_strategy(content, extracted)
     # v1.6.463 — for #328 R2 ORGANIC. Cascade L1.pin_table[].description
     # into L9.top_ports[].description by name match. v1.6.456 closed
     # the L1-side gap (RST grid description-column continuation
