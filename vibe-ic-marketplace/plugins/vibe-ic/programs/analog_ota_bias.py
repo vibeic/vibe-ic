@@ -348,13 +348,16 @@ def _problems(ir, project=None):
     reference_record = record.get("reference", {})
     reference_device = actual.get(reference_record.get("device"), {})
     ref_node = reference_record.get("node")
-    if (reference_device.get("role") != "nmos" or reference_device.get("nets", [])[:2] != [ref_node, ref_node]
+    rename = ir.get("port_binding", {}).get("renamed", {})
+    supply, ground = (rename.get(net, net) for net in ("vdd", "vss"))
+    if (reference_device.get("role") != "nmos" or reference_device.get("nets") != [ref_node, ref_node, ground, ground]
             or ir.get("constants", {}).get("bias_reference_length_um") != reference_record.get("resistor_length_um")):
         findings.append("OTA_BIAS_REFERENCE_INVALID: actual reference differs from the network record")
     rdevice = actual.get(reference_record.get("resistor"), {})
     rrows = [r for r in ir.get("device_param_exprs", [])
              if r.get("device") == reference_record.get("resistor") and r.get("param") == "l"]
-    if (rdevice.get("role") != "res" or rdevice.get("w") != reference_record.get("resistor_width_um")
+    if (rdevice.get("role") != "res" or rdevice.get("nets") != [supply, ref_node, ground]
+            or rdevice.get("w") != reference_record.get("resistor_width_um")
             or len(rrows) != 1 or rrows[0].get("expr") != "bias_reference_length_um"
             or any(reference_device.get(k) != value for k, value in reference_record.get("device_geometry", {}).items())):
         findings.append("OTA_BIAS_REFERENCE_INVALID: reference geometry or rendered resistor expression differs")

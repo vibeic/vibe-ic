@@ -2,9 +2,27 @@
 from copy import deepcopy
 import json
 
+import pytest
+
 import analog_a3_netlist_emit as a3
 from test_declared_load_bias_branches import _emit, PDK
 import test_analog_folded_first_stage_input as folded
+
+
+@pytest.mark.parametrize("device_name,terminal,replacement", [
+    ("r_ib", 0, "vss"),
+    ("r_ib", 1, "vss"),
+    ("mn_bias", 2, "vdd"),
+])
+def test_reference_cards_cannot_disconnect_the_declared_bias_path(
+        tmp_path, device_name, terminal, replacement):
+    ir, _, _, _, _ = _emit(tmp_path)
+    assert a3._validate_ir(ir, PDK) == []
+    changed = deepcopy(ir)
+    device = next(d for d in changed["devices"] if d["name"] == device_name)
+    device["nets"][terminal] = replacement
+    assert any("OTA_BIAS_REFERENCE_INVALID" in issue
+               for issue in a3._validate_ir(changed, PDK))
 
 
 def test_bias_reference_length_expression_cannot_override_its_declaration(tmp_path):
