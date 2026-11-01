@@ -37,3 +37,19 @@ def test_block_device_class_is_typed_and_mirrored_to_l22(tmp_path):
     assert constraints[0]["evidence"]["line"] == 3
     mirrored = next(row for row in plan._plan("ldo", blocks, [])["analog"] if row["block_type"] == "ldo")
     assert mirrored["device_class_constraints"] == constraints
+
+
+def test_pad_order_by_side_retains_source_sequence(tmp_path):
+    source(tmp_path, "# Pad placement\n"
+           "Pads go counterclockwise from the SW corner and face outward. South is W→E; east is S→N.\n"
+           "south: power_a, return_a.\neast: sense_b, sense_a.\n"
+           "north: clock_b, clock_a.\nwest: input_b, input_a.\n")
+    value = carry._l19_contract(tmp_path, carry._source_documents(tmp_path), {})
+    order = value["pad_order_by_side"]
+    assert order.get("south") == ["power_a", "return_a"]
+    assert order["east"] == ["sense_b", "sense_a"]
+    assert order["north"] == ["clock_b", "clock_a"]
+    assert order["west"] == ["input_b", "input_a"]
+    assert (order["traversal"], order["start_corner"], order["facing"]) == ("counterclockwise", "SW", "outward")
+    assert order["side_directions"]["south"] == ["W", "E"]
+    assert len(order["evidence"]) == 5
