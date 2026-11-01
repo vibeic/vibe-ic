@@ -255,3 +255,236 @@ def test_macro_implementation_cannot_claim_row_signoff(tmp_path, component_statu
             "native_evidence": {"producer": "analog_macro_top_run"}}]}})
     assert result["default_row_status"] == expected
     assert result["delivery_accepted"] is False
+
+
+def test_a18_accepts_separate_view_bindings_without_changing_instances(tmp_path):
+    l9 = declaration(tmp_path)
+    catalog = l9.pop("macros")
+    put(tmp_path, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", l9)
+    put(tmp_path, "input/analog_flow.json", {"analog_top": {"macros": catalog}})
+    result, _, _ = dispatch(tmp_path)
+    assert result["status"] == "PASS", result
+    intent = json.loads((tmp_path / "phase3/analog_top/pdn_intent.json").read_text())
+    assert intent["core_instances"] == ["u_core__first", "u_core__second", "u_core__decap_hi", "u_core__decap_lo"]
+    assert [(d["power_net"],d["ground_net"]) for d in intent["domains"]] == [("supply","VSS"),("supply_io","IOVSS")]
+    spice = (tmp_path / "phase3/analog_top/chip_top.spice").read_text()
+    assert "Xu_core__decap_hi" in spice and "Xu_core__decap_lo" in spice
+
+
+def test_a18_reports_all_missing_external_views_by_master(tmp_path):
+    declaration(tmp_path)
+    put(tmp_path, "input/analog_flow.json", {"analog_top": {"macros": {
+        "required_filter": {}, "required_reference": {}}}})
+    result, calls, _ = dispatch(tmp_path)
+    assert result["status"] == "NOT_MEASURED", result
+    assert result["detail"].startswith("A18_MACRO_VIEW_ABSENT:"), result
+    for master in ("required_filter", "required_reference"):
+        for view in ("gds", "lef", "spice"):
+            assert f"{master}: {view}: not declared" in result["detail"]
+    assert calls == []
+
+
+def test_a18_external_views_cannot_supply_missing_l9_instances(tmp_path):
+    l9 = declaration(tmp_path)
+    catalog = l9.pop("macros")
+    del l9["instances"]
+    put(tmp_path, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", l9)
+    put(tmp_path, "input/analog_flow.json", {"analog_top": {"macros": catalog}})
+    result, calls, _ = dispatch(tmp_path)
+    assert result["status"] == "NOT_MEASURED", result
+    assert result["detail"].startswith("A18_INSTANCES_ABSENT:"), result
+    assert calls == []
+
+
+def test_native_final_pdn_failure_is_blocking(tmp_path, monkeypatch):
+    import subprocess
+    import analog_macro_top_pdn as pdn
+    def fail(command, **kwargs):
+        raise subprocess.CalledProcessError(1,command)
+    monkeypatch.setattr(pdn.subprocess,"run",fail)
+    with pytest.raises(subprocess.CalledProcessError):
+        pdn.check(tmp_path / "native.odb",["supply_renamed","return_renamed"],tmp_path,"openroad")
+    script = (tmp_path / "check-final-pdn.tcl").read_text()
+    assert "check_power_grid -net {supply_renamed}" in script
+    assert "check_power_grid -net {return_renamed}" in script
+    assert "exit $failed" in script
+
+
+def test_pad_only_rail_preserves_each_declared_supply_landing(monkeypatch, tmp_path):
+    import sys
+    from types import SimpleNamespace as Object
+    import analog_macro_top_pdn as pdn
+
+    pins = []
+    term = Object(getBPins=lambda: pins)
+    net = Object(getSWires=lambda: [])
+    block = Object(findNet=lambda name: net, findBTerm=lambda name: term,
+                   findInst=lambda name: Object(findITerm=lambda terminal: name))
+    database = Object(getChip=lambda: Object(getBlock=lambda: block))
+
+    def new_pin(term):
+        pin = Object(setPlacementStatus=lambda status: None)
+        pins.append(pin)
+        return pin
+
+    odb = Object(
+        dbDatabase=Object(create=lambda: database),
+        read_db=lambda *args: None, write_db=lambda *args: None, write_def=lambda *args: None,
+        dbSWire=Object(create=lambda *args: object()),
+        dbBPin=Object(create=new_pin, destroy=lambda pin: pins.remove(pin)),
+        dbBox=Object(create=lambda pin, layer, *coords: setattr(pin, "landing", coords)),
+        dbSBox=Object(create=lambda *args: None))
+    monkeypatch.setitem(sys.modules, "odb", odb)
+    monkeypatch.setattr(pdn, "loaded_rails", lambda *args: set())
+    monkeypatch.setattr(pdn, "connect_macro_edges", lambda *args: None)
+    monkeypatch.setattr(pdn, "connect_pad_ties", lambda *args: None)
+    landings = {"pad_supply_a": (0, 0, 2, 2), "pad_supply_b": (10, 0, 12, 2)}
+    monkeypatch.setattr(pdn, "bond_geometry", lambda name, side: ("metal", landings[name]))
+    monkeypatch.setattr(pdn, "box", lambda rect: rect)
+    intent = {"rails": {"supply_io": "POWER"}, "pads": [
+        {"name": name, "port": "supply_io", "terminal": "bond", "side": "south"}
+        for name in landings]}
+    pdn.finish(tmp_path / "native.odb", intent, {}, tmp_path)
+    assert [pin.landing for pin in pins] == list(landings.values())
+
+
+def macro_escape_scene(monkeypatch):
+    import sys
+    from types import SimpleNamespace as Object
+    import analog_macro_top_pdn as pdn
+
+    def rect(a, b, c, d):
+        return Object(xMin=lambda: a, yMin=lambda: b, xMax=lambda: c, yMax=lambda: d)
+
+    def layer(name, level):
+        return Object(getName=lambda: name, getRoutingLevel=lambda: level, getSpacing=lambda: 0, getWidth=lambda: 2)
+
+    metal, mesh = layer("M1", 1), layer("M2", 2)
+    via_boxes = [Object(getTechLayer=lambda l=l: l, **vars(rect(-1,-1,1,1)))
+                 for l in (metal, mesh)]
+    via = Object(getBoxes=lambda: via_boxes)
+    target = Object(isVia=lambda: False, getTechLayer=lambda: mesh, **vars(rect(20,0,22,10)))
+    supply_wire = Object(getWires=lambda: [target])
+    supply = Object(getName=lambda: "supply", getSWires=lambda: [supply_wire])
+    foreign_wire = Object(isVia=lambda: False, getTechLayer=lambda: metal, **vars(rect(14,4,16,6)))
+    foreign = Object(getName=lambda: "neighbor", getSWires=lambda: [Object(getWires=lambda: [foreign_wire])])
+    pin_shapes = [(metal,rect(9,4,10,6))]
+    term = Object(getNet=lambda: supply, getGeometries=lambda: pin_shapes,
+                  getMTerm=lambda: Object(getName=lambda: "VP"))
+    inst = Object(getBBox=lambda: rect(0,0,10,10), getITerms=lambda: [term],
+                  getName=lambda: "macro_a", getMaster=lambda: Object(getObstructions=lambda: []))
+    block = Object(findInst=lambda name: inst, getInsts=lambda: [inst], getVias=lambda: [via],
+                   getNets=lambda: [supply,foreign], getObstructions=lambda: [])
+    db = Object(getChip=lambda: Object(getBlock=lambda: block))
+    created = []
+    def point(x, y):
+        return Object(x=lambda: x, y=lambda: y)
+    monkeypatch.setitem(sys.modules,"odb",Object(Point=point, dbSBox=Object(create=lambda *args: created.append(args))))
+    intent = {"core_instances": ["macro_a"], "rails": {"supply": "POWER"}}
+    config = {"PDN_VERTICAL_LAYER": "M1", "PDN_HORIZONTAL_LAYER": "M2"}
+    return locals()
+
+
+@pytest.mark.parametrize("obstacle", ["wire", "pin", "macro", "obstruction", "via_enclosure"])
+def test_macro_escape_refuses_foreign_net_crossing(monkeypatch, obstacle):
+    from types import SimpleNamespace as Object
+    from librelane_contract import Refusal
+    scene = macro_escape_scene(monkeypatch)
+    block, metal, rect = scene["block"], scene["metal"], scene["rect"]
+    foreign = scene["foreign"]
+    if obstacle != "wire":
+        foreign.getSWires = lambda: []
+    if obstacle in ("pin", "macro", "obstruction"):
+        obstruction = Object(getTechLayer=lambda: metal, **vars(rect(14,4,16,6)))
+        pin = Object(getNet=lambda: foreign, getGeometries=lambda: [(metal,rect(14,4,16,6))])
+        other = Object(getName=lambda: "macro_b", getBBox=lambda: rect(14,0,16,10),
+                       getITerms=lambda: [pin] if obstacle == "pin" else [],
+                       getMaster=lambda: Object(getObstructions=lambda: [obstruction] if obstacle == "obstruction" else []),
+                       getTransform=lambda: Object(apply=lambda shape: None))
+        block.getInsts = lambda: [scene["inst"],other]
+        if obstacle == "macro":
+            scene["intent"]["core_instances"].append("macro_b")
+    if obstacle == "via_enclosure":
+        mesh = scene["mesh"]
+        scene["target"].__dict__.update(vars(rect(18,0,24,10)))
+        scene["via_boxes"][1] = Object(getTechLayer=lambda: mesh, **vars(rect(-2,-2,2,2)))
+        foreign.getSWires = lambda: [Object(getWires=lambda: [Object(
+            isVia=lambda: False, getTechLayer=lambda: mesh, **vars(rect(20,6,22,8)))])]
+    with pytest.raises(Refusal, match="A18_MACRO_PG_ESCAPE_BLOCKED.*macro_a/VP"):
+        scene["pdn"].connect_macro_edges(scene["db"],scene["intent"],scene["config"])
+    assert scene["created"] == []
+
+
+def test_macro_escape_selects_an_unblocked_pin_access(monkeypatch):
+    scene = macro_escape_scene(monkeypatch)
+    scene["pin_shapes"].append((scene["metal"],scene["rect"](9,7,10,9)))
+    scene["pdn"].connect_macro_edges(scene["db"],scene["intent"],scene["config"])
+    assert scene["created"][0][2:6] == (10,7,21,9)
+    assert len(scene["created"]) == 2
+
+
+def test_macro_escape_requires_full_target_via_enclosure(monkeypatch):
+    from librelane_contract import Refusal
+    scene = macro_escape_scene(monkeypatch)
+    # The centre lies on the target, but its M2 enclosure extends outside it.
+    scene["target"].__dict__.update(vars(scene["rect"](20,5,22,10)))
+    with pytest.raises(Refusal, match="A18_MACRO_PG_EDGE_ACCESS_ABSENT"):
+        scene["pdn"].connect_macro_edges(scene["db"],scene["intent"],scene["config"])
+    assert scene["created"] == []
+
+
+
+def test_macro_escape_rotates_obstructions_with_native_points(monkeypatch):
+    import sys
+    from types import SimpleNamespace as Object
+    import analog_macro_top_pdn as pdn
+
+    class Point:
+        def __init__(self, x, y):
+            self.coords = x,y
+        def x(self):
+            return self.coords[0]
+        def y(self):
+            return self.coords[1]
+
+    transformed = []
+    def apply(point):
+        transformed.append(point.coords)
+        point.coords = 100-point.y(), 200+point.x()
+
+    monkeypatch.setitem(sys.modules,"odb",Object(Point=Point))
+    obstruction = Object(xMin=lambda: 1, yMin=lambda: 2, xMax=lambda: 3, yMax=lambda: 4)
+    inst = Object(getTransform=lambda: Object(apply=apply))
+    assert pdn.placed_obstruction(inst,obstruction) == (96,201,98,203)
+    assert set(transformed) == {(1,2),(1,4),(3,2),(3,4)}
+
+
+def test_macro_escape_keeps_pin_width_until_local_via_enclosure(monkeypatch):
+    from types import SimpleNamespace as Object
+    scene = macro_escape_scene(monkeypatch)
+    metal, mesh, rect = scene["metal"], scene["mesh"], scene["rect"]
+    metal.getWidth = lambda: 1640
+    metal.getSpacing = lambda: 1640
+    scene["foreign"].getSWires = lambda: []
+    scene["inst"].getBBox = lambda: rect(0,0,10000,10000)
+    scene["pin_shapes"][:] = [(metal,rect(7340,1000,8980,10000))]
+    obstruction = Object(getTechLayer=lambda: metal, **vars(rect(4500,1000,5700,8490)))
+    scene["inst"].getMaster = lambda: Object(getObstructions=lambda: [obstruction])
+    scene["inst"].getTransform = lambda: Object(apply=lambda point: None)
+    scene["target"].__dict__.update(vars(rect(0,20000,10000,22200)))
+    scene["via_boxes"][:] = [Object(getTechLayer=lambda: metal, **vars(rect(-1100,-950,1100,950))),
+                               Object(getTechLayer=lambda: mesh, **vars(rect(-950,-1100,950,1100)))]
+    scene["pdn"].connect_macro_edges(scene["db"],scene["intent"],scene["config"])
+    assert scene["created"][0][2:6] == (7340,10000,8980,21100)
+    assert scene["created"][1][1] is scene["via"]
+    assert scene["created"][1][2:4] == (8160,21100)
+
+
+def test_macro_escape_refuses_pin_below_native_minimum_width(monkeypatch):
+    from librelane_contract import Refusal
+    scene = macro_escape_scene(monkeypatch)
+    scene["foreign"].getSWires = lambda: []
+    scene["metal"].getWidth = lambda: 3
+    with pytest.raises(Refusal, match="A18_MACRO_PG_PIN_TOO_NARROW.*macro_a/VP"):
+        scene["pdn"].connect_macro_edges(scene["db"],scene["intent"],scene["config"])
+    assert scene["created"] == []

@@ -40,10 +40,26 @@ def require(condition, code, detail):
         raise Refusal(code, detail)
 
 
+def external_macro_views(project, settings):
+    """Views may be bound separately; this never supplies missing L9 instances."""
+    catalog = settings.get("macros", {})
+    require(isinstance(catalog, dict), "A18_MACRO_VIEW_ABSENT", "analog_top.macros must be an object")
+    missing = []
+    for master, views in catalog.items():
+        identifier(master, "analog_top.macros")
+        for view in ("gds", "lef", "spice"):
+            raw = views.get(view) if isinstance(views, dict) else None
+            if not isinstance(raw, str) or not raw or not (project / raw).is_file() or (project / raw).stat().st_size == 0:
+                missing.append(f"{master}: {view}: {raw or 'not declared'}")
+    require(not missing, "A18_MACRO_VIEW_ABSENT", "; ".join(missing))
+    return catalog
+
+
 def generate(project):
     project = Path(project).resolve()
     inputs = {str(path): sha(path) for path in
-              (Path(__file__).resolve(), Path(__file__).with_name("analog_macro_top_run.py").resolve())}
+              (Path(__file__).resolve(), Path(__file__).with_name("analog_macro_top_run.py").resolve(),
+               Path(__file__).with_name("analog_macro_top_pdn.py").resolve())}
 
     def read(path):
         path = Path(path)
@@ -56,6 +72,9 @@ def generate(project):
     docs = project / "phase1/generated_docs"
     l9 = read(docs / "L9_INTEGRATION_SPEC.json")
     l21 = read(docs / "L21_POWER_INTENT.json")
+    settings_path = project / "input/analog_flow.json"
+    settings = read(settings_path).get("analog_top", {}) if settings_path.is_file() else {}
+    catalog = external_macro_views(project, settings)
     declaration = read(project / DECLARATION_REL)
     config, sources = declaration_config(project)
     core = identifier(l9.get("top_module"), "L9.top_module")
@@ -117,7 +136,12 @@ def generate(project):
         require(port_dirs.get(net) == "output" and rails.get(rail) in ("POWER", "GROUND"),
                 "A18_TIE_INVALID", f"{net}: {rail}")
 
-    macro_declarations = l9.get("macros")
+    macro_declarations = l9.get("macros", {})
+    require(isinstance(macro_declarations, dict), "A18_MACRO_VIEW_ABSENT", "L9.macros must be an object")
+    for master, views in catalog.items():
+        require(master not in macro_declarations or macro_declarations[master] == views,
+                "A18_MACRO_VIEW_CONFLICT", master)
+    macro_declarations = {**macro_declarations, **catalog}
     instances = l9.get("instances")
     pads = l9.get("pad_instances")
     require(isinstance(instances, list) and instances and isinstance(pads, list)
@@ -297,17 +321,13 @@ def generate(project):
                           f"    $supply setSigType {kind}", "    $supply setSpecial",
                           f"    [$inst findITerm {{{pin}}}] connect $supply"]
         pdn_lines += ["  }", "}"]
-    pdn_lines += ["global_connect",
-                  "set a18_power_nets $::env(VDD_NETS)", "set a18_ground_nets $::env(GND_NETS)",
-                  # The native recipe iterates both arrays together. Pad with
-                  # their existing primary rail so an unequal domain population
-                  # cannot create an empty net or invent another return.
-                  "while {[llength $::env(VDD_NETS)] < [llength $::env(GND_NETS)]} {",
-                  "  lappend ::env(VDD_NETS) [lindex $a18_power_nets 0]", "}",
-                  "while {[llength $::env(GND_NETS)] < [llength $::env(VDD_NETS)]} {",
-                  "  lappend ::env(GND_NETS) [lindex $a18_ground_nets 0]", "}",
-                  "source $::env(SCRIPTS_DIR)/openroad/common/pdn_cfg.tcl",
-                  "set ::env(VDD_NETS) $a18_power_nets", "set ::env(GND_NETS) $a18_ground_nets"]
+    pdn_lines += ["global_connect"]
+    intent = destination / "pdn_intent.json"
+    write_json(intent, {"rails": rails, "domains": domains,
+                        "core_instances": [r["name"] for r in physical[:len(instances)]],
+                        "pads": [{"name": p["name"], "port": p["port"], "terminal": p["terminal"],
+                                  "side": next(side for side, names in order.items() if p["name"] in names)}
+                                 for p in pad_rows]})
     pdn.write_text("\n".join(pdn_lines) + "\n")
     config.update(DESIGN_NAME="chip_top", MACROS={m: v for m, v in macros.items() if m not in pad_masters},
                   PAD_LEFS=pad_lefs, PAD_GDS=pad_gds,
@@ -320,8 +340,6 @@ def generate(project):
                   PDN_CORE_RING=True, PDN_CORE_RING_CONNECT_TO_PADS=True,
                   PNR_SDC_FILE=str(sdc), SIGNOFF_SDC_FILE=str(sdc))
     # Explicit process/tool selection is execution input, never a circuit guess.
-    settings_path = project / "input/analog_flow.json"
-    settings = read(settings_path).get("analog_top", {}) if settings_path.is_file() else {}
     execution = {k: settings[k] for k in ("pdk", "pdk_root", "scl", "pad") if k in settings}
     cfg_path = destination / "librelane.json"
     write_json(cfg_path, config)
@@ -332,7 +350,7 @@ def generate(project):
     write_json(project / PAD_RECORD, pad_record)
     write_json(project / "phase3/stage3/pnr/pad_assignment.json",
                {**{k: v for k, v in config.items() if k.startswith("PAD_")}, "SIGNAL_MAP": signal_map})
-    outputs = [cfg_path, logical, flat, spice, pdn, sdc, project / PAD_RECORD,
+    outputs = [cfg_path, logical, flat, spice, pdn, sdc, intent, project / PAD_RECORD,
                project / "phase3/stage3/pnr/pad_assignment.json"]
     record = {"producer": "analog_macro_top_gen", "verdict": "WROTE",
               "core_module": core, "chip_top_module": "chip_top", "execution": execution,

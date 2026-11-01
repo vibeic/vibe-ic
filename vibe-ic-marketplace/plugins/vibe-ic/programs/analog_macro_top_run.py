@@ -18,7 +18,7 @@ from librelane_contract import Refusal
 
 STEPS = (
     "OpenROAD.Floorplan", "OpenROAD.PadRing", "Odb.ManualMacroPlacement", "OpenROAD.CutRows",
-    "Odb.AddPDNObstructions", "OpenROAD.GeneratePDN", "Odb.RemovePDNObstructions",
+    "Odb.AddPDNObstructions", "OpenROAD.AnalogMacroPDN", "Odb.RemovePDNObstructions",
     "OpenROAD.GlobalRouting", "OpenROAD.DetailedRouting", "Odb.ReportDisconnectedPins", "KLayout.StreamOut",
 )
 RUN_RECORD = "reports/phase3/analog_macro_top_run.json"
@@ -43,6 +43,35 @@ def execute(project):
         if not isinstance(selection.get(key), str) or not selection[key]:
             raise Refusal("A18_TOOL_SELECTION_ABSENT", key)
 
+    from librelane.steps.openroad import GeneratePDN
+    import analog_macro_top_pdn as pdn
+    intent = json.loads((project / DEST / "pdn_intent.json").read_text())
+
+    @Step.factory.register()
+    class AnalogMacroPDN(GeneratePDN):
+        id = "OpenROAD.AnalogMacroPDN"
+        name = "Generate analog macro PDN"
+
+        def run(self, state_in, **kwargs):
+            recipe = Path(self.step_dir) / "analog-pdn.tcl"
+            pdn.prepare_recipe(state_in[DesignFormat.ODB], self.config, intent,
+                               Path(self.config["PDN_CFG"]).read_text(), recipe)
+            self.config = self.config.copy(PDN_CFG=LanePath(str(recipe)))
+            views, metrics = super().run(state_in, **kwargs)
+            detail = pdn.finish(views[DesignFormat.ODB], intent, self.config, self.step_dir)
+            pdn.check(views[DesignFormat.ODB], intent["rails"], self.step_dir, self.get_openroad_path())
+            # The native checker measures the completed geometry. Preserve the
+            # initial measurement separately so no repair is mistaken for a waiver.
+            write_json(Path(self.step_dir) / "analog-pdn.json", {
+                **detail, "initial_metrics": json.loads(json.dumps(metrics, default=str)), "final_check": "PASS",
+                "rails_checked": list(intent["rails"])})
+            for key in list(metrics):
+                if key.startswith("design__power_grid_violation__count"):
+                    del metrics[key]
+            metrics["design__power_grid_violation__count"] = 0
+            metrics.update({"design__power_grid_violation__count__net:" + rail: 0 for rail in intent["rails"]})
+            return views, metrics
+
     class AnalogMacroTop(SequentialFlow):
         Steps = [Step.factory.get(name) for name in STEPS]
 
@@ -52,6 +81,8 @@ def execute(project):
     run_dir = tempfile.mkdtemp(prefix="run-", dir=project / DEST)
     state = flow.start(with_initial_state=State({DesignFormat.NETLIST: LanePath(generated["netlist"])}),
                        _force_run_dir=run_dir)
+    # Routing can alter contacts; verify the actual final database as well.
+    pdn.check(state[DesignFormat.ODB], intent["rails"], run_dir, AnalogMacroPDN.get_openroad_path())
     pnr = project / "phase3/stage3/pnr"
     pnr.mkdir(parents=True, exist_ok=True)
     outputs = {}
@@ -68,6 +99,9 @@ def execute(project):
             dest = pnr / name
             shutil.copy2(source, dest)
             outputs[str(dest)] = sha(dest)
+    for path in [Path(run_dir) / "check-final-pdn.log", Path(run_dir) / "check-final-pdn.tcl",
+                 *Path(run_dir).glob("*/analog-pdn.json")]:
+        outputs[str(path)] = sha(path)
     final = project / DEST / "final_state.json"
     final.write_text(state.dumps())
     outputs[str(final)] = sha(final)
