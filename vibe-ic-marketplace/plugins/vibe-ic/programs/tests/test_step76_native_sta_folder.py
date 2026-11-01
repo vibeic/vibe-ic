@@ -103,6 +103,42 @@ def test_native_discovery_excludes_input_snapshot_copies(tmp_path, archive):
     assert PST.native_sta_folder(project) == folder
 
 
+@pytest.mark.parametrize('layout', ['managed', 'imported'])
+def test_normal_caller_selects_current_sta_and_preserves_run_chain_attempts(
+        tmp_path, monkeypatch, layout):
+    project, folder, _ = (base.project(tmp_path) if layout == 'managed'
+                           else native_project(tmp_path))
+    base.write(project / 'fixture_pdk/neutral/libs.tech/ngspice/model.sp',
+               '.model neutral nmos level=1\n')
+    archive = folder.parent / 'attempts' / (folder.name + '-0001')
+    shutil.copytree(folder, archive)
+    preserved = {path.relative_to(archive): LC.digest(path)
+                 for path in archive.rglob('*') if path.is_file()}
+    monkeypatch.setattr(LC, 'resolve_image', lambda *_: BF.IMAGE)
+    monkeypatch.setattr(LC, 'pdk_root_resolution', lambda *_a, **_k: {
+        'path': str(project / 'fixture_pdk')})
+    reached = []
+    def stop_before_native(*_args, **kwargs):
+        reached.append(kwargs['sta_step_dir'])
+        raise LC.Refusal('SOURCE_TEST_NATIVE_BOUNDARY', 'no native tools launched')
+    monkeypatch.setattr(PST, 'run_step30', stop_before_native)
+    result = SC.run_installed_pdk_path_correlation(project, '')
+    assert result['reason'] == 'SOURCE_TEST_NATIVE_BOUNDARY: no native tools launched'
+    assert reached == [folder]
+    assert result['measurement'] == 'NOT_MEASURED'
+    assert {path.relative_to(archive): LC.digest(path)
+            for path in archive.rglob('*') if path.is_file()} == preserved
+
+
+def test_native_discovery_does_not_adopt_an_archive_without_a_current_folder(tmp_path):
+    project, folder, _ = native_project(tmp_path)
+    archive = folder.parent / 'attempts' / (folder.name + '-0001')
+    archive.parent.mkdir()
+    folder.rename(archive)
+    with pytest.raises(LC.Refusal, match='LL_STAPOSTPNR_STATE_ABSENT'):
+        PST.native_sta_folder(project)
+
+
 def test_native_input_manifest_excludes_retained_snapshots(tmp_path):
     import execution_policy as policy
     project, folder, _ = native_project(tmp_path)

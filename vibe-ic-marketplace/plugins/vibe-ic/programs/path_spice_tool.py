@@ -1363,8 +1363,9 @@ def native_sta_folder(project: Path, sta_step_dir: Optional[Path] = None) -> Pat
     if sta_step_dir is None:
         candidates = []
         for path in project.rglob('config.json'):
-            if any(path.is_relative_to(root) for root in
-                   (project / 'steps', project / 'reports/step_versions')):
+            if ('attempts' in path.relative_to(project).parts
+                    or any(path.is_relative_to(root) for root in
+                           (project / 'steps', project / 'reports/step_versions'))):
                 continue
             try:
                 config = _load(path)
