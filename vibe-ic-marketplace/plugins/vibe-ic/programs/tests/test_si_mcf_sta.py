@@ -304,6 +304,59 @@ def test_worst_setup_hold_missing():
     assert M.worst_setup_hold("no slack here") == (None, None)
 
 
+@pytest.mark.parametrize("rc", [0, 127])
+def test_failed_sta_does_not_reuse_retained_slacks(tmp_path, monkeypatch, rc):
+    retained = "worst slack max 1.25\nworst slack min 0.25\n"
+    (tmp_path / "si_mcf_sta_nominal.rpt").write_text(retained)
+    monkeypatch.setattr(M, "_to_container_path", lambda p, c: p)
+    monkeypatch.setattr(M, "_docker_exec", lambda *a, **k: (rc, "", "launch failed"))
+    setup, hold, body, actual_rc = M._run_sta_slack(
+        "host", tmp_path, "nominal", "cells.lib", "design.v", "widget",
+        "design.sdc", "design.spef", [])
+    assert actual_rc == rc and body == retained
+    assert (setup, hold) == ((1.25, 0.25) if rc == 0 else (None, None))
+
+
+@pytest.mark.parametrize("rc", [0, 127])
+def test_failed_window_launch_does_not_reuse_retained_windows(tmp_path, monkeypatch, rc):
+    import json
+    retained = {"pins": {"widget/q": {"arr_rise_min": 1.0}}}
+    path = tmp_path / "windows.json"
+    path.write_text(json.dumps(retained))
+    monkeypatch.setattr(M, "_to_container_path", lambda p, c: p)
+    monkeypatch.setattr(M, "_docker_exec", lambda *a, **k: (rc, "", "launch failed"))
+    windows, actual_rc = M._run_windows(
+        "host", tmp_path, "cells.lib", "design.v", "widget", "design.sdc",
+        "design.spef", [], 1.8, path)
+    assert actual_rc == rc
+    assert windows == (retained if rc == 0 else {"pins": {}})
+
+
+@pytest.mark.parametrize("rc,expected", [(0, "PASS"), (127, "ERROR")])
+def test_run_failed_sta_overrides_positive_slacks(tmp_path, monkeypatch, rc, expected):
+    spef = tmp_path / "design.spef"
+    spef.write_text(SPEF)
+    monkeypatch.setattr(M, "_to_container_path", lambda p, c: p)
+    monkeypatch.setattr(M, "_run_windows", lambda *a, **k: ({"pins": {}}, 0))
+    monkeypatch.setattr(M, "_run_sta_slack", lambda *a, **k: (1.25, 0.25, "", rc))
+    report = M.run(tmp_path, container="host", spef=str(spef),
+                   netlist=str(tmp_path / "design.v"), sdc="design.sdc",
+                   liberty="cells.lib", top="widget")
+    assert report["verdict"] == expected
+
+
+@pytest.mark.parametrize("supervised", [False, True])
+def test_local_sta_dispatch_uses_local_route(monkeypatch, supervised):
+    monkeypatch.setattr(M._ce, "no_container_route", lambda: True)
+    command = "printf 'current-local-sta'"
+    if supervised:
+        rc, out, err = M._docker_exec("LOCAL", command, timeout=10)
+    else:
+        rc, out, err = M._docker_exec_raw("LOCAL", command)
+    assert rc == 0, err
+    assert out == "current-local-sta"
+
+
 # ── R-0915-107: the SI STA report is published WITH its basis, or not at all ──
 import _sta_basis  # noqa: E402
 
