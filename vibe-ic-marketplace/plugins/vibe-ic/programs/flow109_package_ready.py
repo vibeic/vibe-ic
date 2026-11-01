@@ -913,14 +913,15 @@ def _d75_metric_observation(project, context, component):
     if checks['pad_bterm_coincidence_check']['status'] == 'PASS' and any(
             row.get('verdict') != 'CONNECTED' for row in rows):
         raise ValueError('D75_PAD_BTERM_VERDICT_MISMATCH')
+    connections = pad_bterm_coincidence_check.def_net_terminals(text)
     for row in rows:
         comp = dfn.components.get(row['instance'])
         if (comp is None or comp.master != row.get('master')
                 or bterms[row['pin']]['net'] != row['net']
                 or bterms[row['pin']]['rect'] != row.get('pin_rect')
                 or bterms[row['pin']]['layer'] != row.get('pin_layer')
-                or (row['instance'], row['terminal']) not in
-                   pad_bterm_coincidence_check.def_net_terminals(text).get(row['net'], [])):
+                or not any(pin == row['terminal'] and inst in (row['instance'], '*')
+                           for inst, pin in connections.get(row['net'], []))):
             raise ValueError('D75_PAD_BTERM_IDENTITY_MISMATCH')
     layouts = tapeout_readiness_check.discover_layouts(project)
     if len(layouts) != 1:

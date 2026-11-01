@@ -13580,24 +13580,59 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
 
     Returns None when the mandatory assets (liberty + both LEFs) cannot be
     resolved, so the caller can refuse rather than substitute. PDK-AGNOSTIC."""
-    container = os.environ.get("EDA_CONTAINER") or _pin.default_container_name()
-    root = _registry_container_root(container, reg) or ""
-    if not root:
-        return None
-    # ONE ROUTE (see `_registry_glob_one`): `_docker_exec_raw` already runs
-    # this probe on THIS filesystem when no route to a container exists, so
-    # the in-image case resolves without a second, container-blind opinion.
-    rc, _o, _e = _docker_exec_raw(
-        container, f"test -d {shlex.quote(root)}", timeout=60)
-    if rc != 0:
-        return None
+    import librelane_contract as contract
 
-    liberty = _registry_glob_one(container, root, reg.get("liberty_glob"))
-    tech_lef = _registry_glob_one(container, root, reg.get("tech_lef_glob"))
-    cell_lef = _registry_glob_one(container, root, reg.get("cell_lef_glob"))
+    container = os.environ.get("EDA_CONTAINER") or _pin.default_container_name()
+    local_route = contract._explicit_local_route(project)
+    if local_route:
+        # Use the same declaration and precedence as the LOCAL provider. A
+        # Docker client on PATH does not change an explicitly selected route.
+        name = str(reg.get("name") or "unknown")
+        declared, _, _ = contract._provider_roots(project, name)
+        parent = Path(declared).expanduser() if declared else None
+        if (parent is None or not parent.is_absolute() or parent.is_symlink()
+                or not parent.is_dir() or not contract._PDK_NAME.fullmatch(name)
+                or not (parent / name).is_dir()):
+            raise SystemExit(f"[FAIL] --pdk {name}: LOCAL declared PDK root "
+                             f"{declared!r} does not contain this PDK; REFUSING "
+                             "to probe a container or substitute another PDK.")
+        root = str(parent / name)
+
+        def asset(pattern):
+            if not pattern:
+                return None
+            pattern = str(pattern).lstrip('/')
+            if not _registry_path_under_root(root + '/', str(Path(root) / pattern)):
+                return None
+            matches = sorted(str(path) for path in Path(root).glob(pattern)
+                             if path.is_file() and _registry_path_under_root(
+                                 root + '/', str(path)))
+            if len(matches) > 1:
+                raise SystemExit(f"[FAIL] --pdk {name}: LOCAL asset {pattern!r} "
+                                 f"is ambiguous: {matches}; REFUSING to choose.")
+            return matches[0] if matches else None
+    else:
+        root = _registry_container_root(container, reg) or ""
+        if not root:
+            return None
+        rc, _o, _e = _docker_exec_raw(
+            container, f"test -d {shlex.quote(root)}", timeout=60)
+        if rc != 0:
+            return None
+
+        def asset(pattern):
+            return _registry_glob_one(container, root, pattern)
+
+    liberty = asset(reg.get("liberty_glob"))
+    tech_lef = asset(reg.get("tech_lef_glob"))
+    cell_lef = asset(reg.get("cell_lef_glob"))
     if not (liberty and tech_lef and cell_lef):
+        if local_route:
+            raise SystemExit(f"[FAIL] --pdk {name}: LOCAL required registry "
+                             f"assets unresolved under {root!r}; REFUSING "
+                             "to substitute another PDK.")
         return None
-    cell_gds = _registry_glob_one(container, root, reg.get("cell_gds_glob"))
+    cell_gds = asset(reg.get("cell_gds_glob"))
 
     # SITE: registry value wins; else read the PDK's own cell LEF.
     site = reg.get("site")
@@ -13617,7 +13652,7 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
         metal_prefix = m.group(1) if m else "met"
 
     def _opt(key: str) -> Optional[str]:
-        return _registry_glob_one(container, root, reg.get(key))
+        return asset(reg.get(key))
 
     _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(
         project, tech_lef, container)
@@ -13633,10 +13668,10 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
         site=site,
         drc_deck=_opt("drc_deck"),
         native_lvs_deck=(_opt("klayout_lvs_deck") if reg.get("native_gds_lvs") else None),
-        native_lvs_library_translator=_registry_glob_one(
-            container, root, reg.get("native_gds_lvs", {}).get("library_translator")),
+        native_lvs_library_translator=asset(
+            reg.get("native_gds_lvs", {}).get("library_translator")),
         native_lvs_cell_libraries=[
-            _registry_glob_one(container, root, pattern) or str(Path(root) / pattern)
+            asset(pattern) or str(Path(root) / pattern)
             for pattern in reg.get("native_gds_lvs", {}).get("cell_libraries", [])],
         native_lvs_parameters=dict(reg.get("native_gds_lvs", {}).get("parameters", {})),
         metal_prefix=metal_prefix,
@@ -78216,7 +78251,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 ("primary + secondary clamp sizing meets the target HBM/CDM "
                  "level per the PDK ESD cell datasheet (TLP/It2)"),
             ],
-            "record_to": "categories[].checklist[].confirmed (this report)",
+            "record_to": "input/perc_manual_review.json (reviews: category, item, verdict, basis [{path, sha256}], reviewer)",
         }
     categories.append(esd_cat)
     categories.append(_perc.io_supply_pad_sufficiency(
@@ -78426,7 +78461,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 ("guard-ring efficacy under the foundry's injected "
                  "substrate-current test condition"),
             ],
-            "record_to": "categories[].checklist[].confirmed (this report)",
+            "record_to": "input/perc_manual_review.json (reviews: category, item, verdict, basis [{path, sha256}], reviewer)",
         },
     })
 
@@ -78466,7 +78501,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 ("isolation clamp value matches the L21 sleep-state "
                  "contract on every power-gating boundary"),
             ],
-            "record_to": "categories[].checklist[].confirmed (this report)",
+            "record_to": "input/perc_manual_review.json (reviews: category, item, verdict, basis [{path, sha256}], reviewer)",
         }
     categories.append(xdomain_cat)
 

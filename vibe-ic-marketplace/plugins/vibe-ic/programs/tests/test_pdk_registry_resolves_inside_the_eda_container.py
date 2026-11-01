@@ -46,6 +46,7 @@ still decides the answer.
 from __future__ import annotations
 
 import importlib.util
+import json
 import shutil
 import sys
 from pathlib import Path
@@ -229,3 +230,123 @@ def test_a_root_that_is_not_on_this_filesystem_resolves_to_none(
     assert m._registry_glob_one(
         _NO_SUCH_CONTAINER, "/foss/pdks/definitely_not_here",
         "libs.ref/x/*.lib") is None
+
+
+@pytest.fixture
+def declared_local_pdk(tmp_path, monkeypatch):
+    """Real registry contract, neutral asset contents, explicit LOCAL route."""
+    from _hostpaths import require_repo
+
+    registry = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic",
+                            "programs", "pdk_registry.json")
+    entry = next(row for row in json.loads(registry.read_text())["pdks"]
+                 if row.get("container_path_glob"))
+    root = tmp_path / "declared-root"
+    pdk = root / entry["name"]
+    for key, text in (("liberty_glob", "library (neutral) {}\n"),
+                      ("tech_lef_glob", "LAYER route1\n TYPE ROUTING ;\n"),
+                      ("cell_lef_glob", "SITE neutral_site\n")):
+        path = pdk / entry[key].replace("*", "neutral")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    project = tmp_path / "project"
+    project.mkdir()
+    monkeypatch.setenv("VIBEIC_LIBRELANE_ROUTE", "LOCAL")
+    monkeypatch.setenv("VIBEIC_LIBRELANE_PDK_ROOT", str(root))
+    calls = []
+
+    def absent_container(container, command, timeout=1800):
+        calls.append(command)
+        return 1, "", "the LOCAL provider has no named Docker container"
+
+    monkeypatch.setattr(_p3(), "_docker_exec_raw", absent_container)
+    return project, root, entry, calls
+
+
+@pytest.mark.parametrize("declaration", ["environment", "switch"])
+def test_declared_local_pdk_resolves_without_a_container(
+        declared_local_pdk, monkeypatch, declaration):
+    project, root, entry, calls = declared_local_pdk
+    if declaration == "switch":
+        switch = project / "phase3/librelane_switch.json"
+        switch.parent.mkdir()
+        switch.write_text(json.dumps({"route": "LOCAL", "pdk_root_host": str(root)}))
+        monkeypatch.setenv("VIBEIC_LIBRELANE_PDK_ROOT", str(root / "wrong-root"))
+    config = _p3()._pdk_config_from_registry(project, entry)
+    assert config is not None, "present declared LOCAL assets must resolve"
+    assert config.name == entry["name"]
+    for field, key in (("liberty", "liberty_glob"), ("tech_lef", "tech_lef_glob"),
+                       ("cell_lef", "cell_lef_glob")):
+        assert getattr(config, field) == str(
+            root / entry["name"] / entry[key].replace("*", "neutral"))
+    assert _p3()._detect_pdk(project, override=entry["name"]) == config
+    assert calls == [], "an explicit LOCAL route must not probe Docker"
+
+
+def test_declared_local_pdk_container_route_keeps_container_authority(
+        declared_local_pdk, monkeypatch):
+    from test_issue211_registry_driven_pdk_refuse import _FakeContainer
+
+    project, root, entry, _ = declared_local_pdk
+    monkeypatch.setenv("VIBEIC_LIBRELANE_ROUTE", "CONTAINER")
+    container_root = entry["container_path_glob"].replace("*", "selected")
+    existing = {container_root}
+    existing.update(str(Path(container_root) / entry[key].replace("*", "neutral")) for key in
+                    ("liberty_glob", "tech_lef_glob", "cell_lef_glob"))
+    fake = _FakeContainer(existing)
+    monkeypatch.setattr(_p3(), "_docker_exec_raw", fake)
+    config = _p3()._pdk_config_from_registry(project, entry)
+    assert config.name == entry["name"]
+    assert config.liberty == str(
+        Path(container_root) / entry["liberty_glob"].replace("*", "neutral"))
+    assert not config.liberty.startswith(str(root))
+    assert fake.calls, "the container route must still ask its container"
+
+
+@pytest.mark.parametrize("missing", ["undeclared", "absent", "wrong-pdk"])
+def test_declared_local_pdk_missing_root_refuses_by_name(
+        declared_local_pdk, monkeypatch, missing):
+    project, root, entry, calls = declared_local_pdk
+    if missing == "undeclared":
+        monkeypatch.delenv("VIBEIC_LIBRELANE_PDK_ROOT")
+    elif missing == "absent":
+        monkeypatch.setenv("VIBEIC_LIBRELANE_PDK_ROOT", str(root / "absent"))
+    else:
+        monkeypatch.setenv("VIBEIC_LIBRELANE_PDK_ROOT", str(root / entry["name"]))
+    with pytest.raises(SystemExit, match=entry["name"]):
+        _p3()._detect_pdk(project, override=entry["name"])
+    assert calls == [], "a missing LOCAL root must not fall back to Docker"
+
+
+def test_declared_local_pdk_missing_asset_refuses_by_name(declared_local_pdk):
+    project, root, entry, calls = declared_local_pdk
+    (root / entry["name"] / entry["liberty_glob"].replace("*", "neutral")).unlink()
+    with pytest.raises(SystemExit, match=entry["name"]):
+        _p3()._detect_pdk(project, override=entry["name"])
+    assert calls == []
+
+
+def test_declared_local_pdk_ambiguous_asset_refuses_by_name(
+        declared_local_pdk, monkeypatch):
+    project, root, entry, calls = declared_local_pdk
+    directory = Path(entry["liberty_glob"]).parent
+    (root / entry["name"] / directory / "another.lib").write_text("library (other) {}\n")
+    entry = dict(entry, liberty_glob=str(directory / "*.lib"))
+    reader = _p3()._pdk_registry_entry
+    reader("")  # Preserve the registry reader and its normal named-PDK census.
+    monkeypatch.setattr(reader, "_cache", {**reader._cache, entry["name"]: entry})
+    with pytest.raises(SystemExit, match=entry["name"] + ".*ambiguous"):
+        _p3()._detect_pdk(project, override=entry["name"])
+    assert calls == []
+
+
+def test_declared_local_pdk_asset_outside_root_is_refused(declared_local_pdk):
+    project, root, entry, calls = declared_local_pdk
+    outside = root / "foreign.lib"
+    outside.write_text("library (foreign) {}\n")
+    asset = root / entry["name"] / entry["liberty_glob"].replace("*", "neutral")
+    asset.unlink()
+    asset.symlink_to(outside)
+    with pytest.raises(SystemExit, match=entry["name"]):
+        _p3()._detect_pdk(project, override=entry["name"])
+    assert calls == []

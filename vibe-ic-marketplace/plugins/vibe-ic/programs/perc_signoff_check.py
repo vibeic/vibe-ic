@@ -73,6 +73,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 
 import argparse
+import hashlib
 import json
 import re
 import sys
@@ -91,6 +92,8 @@ PROJECTIONS: Tuple[Tuple[str, str], ...] = (
     ("reports/phase3/PERC_SIGNOFF_MEMO.md",
      r"^\*\*Overall verdict:\*\*\s*`([^`]+)`"),
 )
+
+MANUAL_REVIEW_INPUT = "input/perc_manual_review.json"
 
 
 def _stated_verdict(text: str, pattern: str) -> Optional[str]:
@@ -150,12 +153,143 @@ def cross_check_projections(project: Path,
     return errors, disclosures
 
 
+def _manual_review(project: Path, categories: list) -> Optional[dict]:
+    """Consume owner reviews without changing any generated measurement.
+
+    The input is {"reviews": [{"category": ..., "item": ..., "verdict":
+    "ACCEPT" or "REJECT", "reviewer": ..., "basis": [{"path": ...,
+    "sha256": ...}]}]}. Every basis file must remain inside this project.
+    A REJECT blocks sign-off; incomplete evidence remains named review work.
+    """
+    path = project / MANUAL_REVIEW_INPUT
+    if not path.exists():
+        return None
+    report = {"source": MANUAL_REVIEW_INPUT, "findings": [], "items": [],
+              "closed_categories": [], "rejected": []}
+
+    def finding(code, message, **identity):
+        report["findings"].append({"code": code, "message": message, **identity})
+
+    try:
+        data = json.loads(path.read_text())
+        if not isinstance(data, dict) or not isinstance(data.get("reviews"), list):
+            raise ValueError("expected an object containing a reviews list")
+    except (OSError, ValueError) as exc:
+        finding("PERC_MANUAL_REVIEW_INPUT_INVALID", str(exc))
+        return report
+
+    by_name = {c.get("category"): c for c in categories
+               if isinstance(c, dict) and isinstance(c.get("category"), str)}
+    accepted = set()
+    for index, entry in enumerate(data["reviews"]):
+        if not isinstance(entry, dict):
+            finding("PERC_MANUAL_REVIEW_ENTRY_INVALID", "entry must be an object", entry=index)
+            continue
+        category, item = entry.get("category"), entry.get("item")
+        identity = {"entry": index, "category": category, "item": item}
+        if entry.get("verdict") == "REJECT":
+            report["rejected"].append(identity)
+        cat = by_name.get(category) if isinstance(category, str) else None
+        if cat is None:
+            finding("PERC_MANUAL_REVIEW_UNKNOWN_CATEGORY", "no exact category match", **identity)
+            continue
+        if cat.get("status") != "MANUAL_REVIEW":
+            finding("PERC_MANUAL_REVIEW_NON_MANUAL_CATEGORY",
+                    "review cannot change a measured category", **identity)
+            continue
+        if cat.get("result") == "INCOMPLETE":
+            finding("PERC_MANUAL_REVIEW_INCOMPLETE_CATEGORY",
+                    "native INCOMPLETE evidence must remain open", **identity)
+            continue
+        checklist = cat.get("checklist") or []
+        names = [row.get("item") for row in checklist if isinstance(row, dict)]
+        if not isinstance(item, str) or item not in names:
+            finding("PERC_MANUAL_REVIEW_UNKNOWN_ITEM", "no exact checklist item match", **identity)
+            continue
+        reason = None
+        reviewer, basis = entry.get("reviewer"), entry.get("basis")
+        if entry.get("verdict") not in ("ACCEPT", "REJECT"):
+            reason = "PERC_MANUAL_REVIEW_VERDICT_INVALID"
+        elif not isinstance(reviewer, str) or not reviewer.strip():
+            reason = "PERC_MANUAL_REVIEW_REVIEWER_EMPTY"
+        elif not isinstance(basis, list) or not basis:
+            reason = "PERC_MANUAL_REVIEW_BASIS_EMPTY"
+        else:
+            for reference in basis:
+                if (not isinstance(reference, dict)
+                        or not isinstance(reference.get("path"), str)
+                        or not reference["path"]
+                        or not isinstance(reference.get("sha256"), str)):
+                    reason = "PERC_MANUAL_REVIEW_BASIS_INVALID"
+                    break
+                relative = Path(reference["path"])
+                try:
+                    source = (project / relative).resolve()
+                except (OSError, RuntimeError, ValueError):
+                    reason = "PERC_MANUAL_REVIEW_BASIS_UNREADABLE"
+                    break
+                if relative.is_absolute() or not source.is_relative_to(project.resolve()):
+                    reason = "PERC_MANUAL_REVIEW_BASIS_OUTSIDE_PROJECT"
+                    break
+                try:
+                    if not source.is_file():
+                        reason = "PERC_MANUAL_REVIEW_BASIS_MISSING"
+                        break
+                    actual = hashlib.sha256(source.read_bytes()).hexdigest()
+                except OSError:
+                    reason = "PERC_MANUAL_REVIEW_BASIS_UNREADABLE"
+                    break
+                if actual != reference["sha256"].lower():
+                    reason = "PERC_MANUAL_REVIEW_BASIS_STALE"
+                    break
+        if reason:
+            finding(reason, "entry cannot accept this checklist item", **identity)
+        elif entry["verdict"] == "ACCEPT":
+            accepted.add((category, item))
+
+    rejected = {(r["category"], r["item"]) for r in report["rejected"]
+                if isinstance(r["category"], str) and isinstance(r["item"], str)}
+    accepted.difference_update(rejected)
+    for cat in categories:
+        if not isinstance(cat, dict) or cat.get("status") != "MANUAL_REVIEW":
+            continue
+        category = cat.get("category")
+        checklist = cat.get("checklist") or []
+        if not checklist:
+            report["items"].append({"category": category, "item": None, "status": "OPEN",
+                                    "reason": "PERC_MANUAL_REVIEW_CHECKLIST_ABSENT"})
+            continue
+        complete = True
+        for row in checklist:
+            item = row.get("item") if isinstance(row, dict) else None
+            closed = (isinstance(category, str) and isinstance(item, str)
+                      and (category, item) in accepted)
+            reasons = [f["code"] for f in report["findings"]
+                       if f.get("category") == category and f.get("item") == item]
+            if isinstance(category, str) and isinstance(item, str) and (category, item) in rejected:
+                reasons.insert(0, "PERC_MANUAL_REVIEW_REJECTED")
+            report["items"].append({"category": category, "item": item,
+                                    "status": "ACCEPTED" if closed else "OPEN",
+                                    "reason": "ACCEPT" if closed else
+                                    "; ".join(reasons or ["PERC_MANUAL_REVIEW_ACCEPT_MISSING"])})
+            complete = complete and closed
+        if complete:
+            report["closed_categories"].append(category)
+    return report
+
+
 def audit(project: Path) -> dict:
     src = project / "reports" / "phase3" / "perc_equivalent.json"
     if not src.is_file():
-        return {"verdict": "SKIP", "rc": 2,
-                "reason": ("reports/phase3/perc_equivalent.json absent — "
-                           "run the phase3 sign-off chain first")}
+        rep = {"verdict": "SKIP", "rc": 2,
+               "reason": ("reports/phase3/perc_equivalent.json absent — "
+                          "run the phase3 sign-off chain first")}
+        review = _manual_review(project, [])
+        if review is not None:
+            rep["manual_review"] = review
+            if review["rejected"]:
+                rep.update(verdict="FAIL", rc=1, reason="conclusive PERC manual review REJECT")
+        return rep
     try:
         data = json.loads(src.read_text(errors="replace"))
     except (OSError, ValueError):
@@ -169,8 +303,14 @@ def audit(project: Path) -> dict:
     incomplete = [c for c in automated if c.get("result") == "INCOMPLETE"]
     manual = [c for c in cats if isinstance(c, dict)
               and c.get("status") == "MANUAL_REVIEW"]
+    review = _manual_review(project, cats)
+    if review is not None:
+        manual = [c for c in manual if c.get("category") not in review["closed_categories"]]
     open_items = ([f"INCOMPLETE: {c.get('category')}" for c in incomplete]
                   + [f"MANUAL_REVIEW: {c.get('category')}" for c in manual])
+    if review is not None:
+        open_items.extend(f"REVIEW_INPUT: {f['code']}: {f['message']}"
+                          for f in review["findings"])
 
     proj_errors, proj_disclosures = cross_check_projections(project, data)
 
@@ -184,6 +324,8 @@ def audit(project: Path) -> dict:
         "projection_contradictions": proj_errors,
         "projection_disclosures": proj_disclosures,
     }
+    if review is not None:
+        rep["manual_review"] = review
     # A conclusive reliability defect is reported FIRST when both are present:
     # a contradicted memo is a bookkeeping failure, a failed ESD / latch-up
     # category is a silicon one. Both appear in the report either way, and
@@ -199,6 +341,10 @@ def audit(project: Path) -> dict:
                        "artefact(s) contradict perc_equivalent.json: "
                        + "; ".join(proj_errors))
         rep.update(verdict="FAIL", rc=1, reason=reason)
+    elif review is not None and review["rejected"]:
+        rep.update(verdict="FAIL", rc=1, reason=(
+            "conclusive PERC manual review REJECT: "
+            + "; ".join(f"{r['category']}: {r['item']}" for r in review["rejected"])))
     elif proj_errors:
         rep.update(verdict="FAIL", rc=1, reason=(
             "no conclusive reliability defect in perc_equivalent.json, but the "
