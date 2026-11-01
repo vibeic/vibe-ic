@@ -1,0 +1,326 @@
+[
+  {
+    "case": "candidate-adversarial/negated-supersession",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 5%.\nThe sense_a pin is driven by an external reference, 2.0 V +/- 1%. This does not replace the earlier declaration."
+    }
+  },
+  {
+    "case": "candidate-adversarial/other-block-heading-mention",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V, supplying a clock to the opamp\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n\n## Block B \u2014 `opamp` : analog operational amplifier\n### opamp ports\n| Pin | Role |\n|---|---|\n| sense_b | input reference |\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "candidate-adversarial/other-pin-tolerance",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V; the sense_b pin is driven by an external reference, 3.0 V +/- 5%."
+    }
+  },
+  {
+    "case": "candidate-adversarial/proposed-heading",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "# Proposed interface condition\nThe sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "candidate-adversarial/spice-continuation",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n.subckt pll sense_b\n+ sense_a\n.ends pll\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "candidate-scoping/parenthetical-negated-replacement",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 5%.\nThe sense_a pin is driven by an external reference, 2.0 V +/- 1%. This statement (does not) replace the earlier declaration."
+    }
+  },
+  {
+    "case": "candidate-scoping/parenthetical-non-declaration",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 2% (not a current declaration)."
+    }
+  },
+  {
+    "case": "candidate-scoping/second-pin-speculation",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V; perhaps the sense_b pin is driven by an external reference, 3.0 V +/- 5%."
+    }
+  },
+  {
+    "case": "candidate-probes/positive",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "candidate-probes/parenthetical-negated-replacement",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 5%.\nThe sense_a pin is driven by an external reference, 2.0 V +/- 1%. Note (this does not replace the earlier declaration)."
+    }
+  },
+  {
+    "case": "candidate-probes/other-pin-receives",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V; the sense_b pin receives an external reference of 3.0 V +/- 5%."
+    }
+  },
+  {
+    "case": "candidate-probes/other-pin-replacement",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 5%.\nThe sense_a pin is driven by an external reference, 2.0 V +/- 1%. The sense_b pin's specification replaces the earlier declaration."
+    }
+  },
+  {
+    "case": "candidate-probes/previous-heading",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "# Previous interface\nThe sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "candidate-probes/prior-heading",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "# Prior design\nThe sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "candidate-probes/mentioned-owner-port-table",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n\n## Block B \u2014 `opamp` : analog operational amplifier\n### opamp ports\n| Pin | Role |\n|---|---|\n| sense_b | input reference |\n\n## Connections to `opamp`: PLL input pins\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "candidate-probes/obsolete-spice-owner",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n\nThis netlist is obsolete and must not be used.\n```spice\n.subckt pll sense_a\n.ends pll\n```\n",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "candidate-probes/comma-denial-scope",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "conditions.md": "The sense_a pin is not driven by an external reference, 2.0 V, whereas the sense_b pin is driven by an external reference, 3.0 V +/- 5%."
+    }
+  },
+  {
+    "case": "order/old-then-new",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "old.md": "Declaration #old: The sense_a pin is driven by an external reference, 2.0 V +/- 5%.",
+      "new.md": "Declaration #new: The sense_a pin is driven by an external reference, 2.0 V +/- 1%. This replaces #old."
+    }
+  },
+  {
+    "case": "order/new-then-old",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n### pll ports\n| Pin | Role |\n|---|---|\n| sense_a | input reference |\n",
+      "new.md": "Declaration #new: The sense_a pin is driven by an external reference, 2.0 V +/- 1%. This replaces #old.",
+      "old.md": "Declaration #old: The sense_a pin is driven by an external reference, 2.0 V +/- 5%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/47",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external precision reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/90",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 5%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/91",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 1%. This replaces the earlier declaration."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/100",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 5%.\nThe sense_a pin is driven by an external reference, 2.0 V +/- 1%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/154",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 5%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/172",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 5%. The sense_a pin is driven by an external reference, 2.0 V +/- 1%. This replaces the earlier declaration."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/76",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is not driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/77",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "Perhaps the sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/78",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "If the sense_a pin is driven by an external reference, 2.0 V +/- 2%, use it."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/79",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "# History\nThe sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/80",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "Historically the sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/106",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_b pin is driven by an external reference, 3.0 V +/- 1%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/112",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The `sense_a` pin is driven by an external reference, 2.0 V \u00b1 0.04 V."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/113",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin interface condition: 2.0 V +/- 0.04 V."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/129",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 1%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/143",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 1%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/155",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 1%. "
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/64",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, nominal 2.0 V (min 1.9 V, max 2.1 V)."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/65",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V (1.9 to 2.1 V)."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/66",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/124",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 1% (1.8 to 2.2 V)."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_condition.py/166",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "\n## Electrical details\nThe sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_adversarial.py/35",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "# Proposed interface condition\nThe sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_adversarial.py/40",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V; the sense_b pin is driven by an external reference, 3.0 V +/- 5%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_adversarial.py/45",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 5%.\nThe sense_a pin is driven by an external reference, 2.0 V +/- 1%. This does not replace the earlier declaration."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_adversarial.py/55",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  },
+  {
+    "case": "test_phase1_pin_interface_adversarial.py/61",
+    "docs": {
+      "interface.md": "",
+      "conditions.md": "The sense_a pin is driven by an external reference, 2.0 V +/- 2%."
+    }
+  }
+]

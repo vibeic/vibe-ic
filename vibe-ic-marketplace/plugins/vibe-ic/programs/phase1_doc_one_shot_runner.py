@@ -22266,6 +22266,9 @@ def _v1_6_582_clean_feature_list(features) -> List[str]:
 def gen_l1_datasheet(project: Path,
                      extracted: Dict[str, str]) -> LDocResult:
     """L1: pin table + electrical specs + package."""
+    from _pin_interface_conditions import without_condition_tables
+    condition_sources = extracted
+    extracted = without_condition_tables(extracted)
     ic_name = _ic_name_from_docs(extracted, project)
     pins: List[Dict[str, Any]] = []
     e_specs: List[Dict[str, Any]] = []
@@ -23620,7 +23623,7 @@ def gen_l1_datasheet(project: Path,
         register_exclusions_out=_v2090_register_exclusions)
 
     from _pin_interface_conditions import project_pin_conditions
-    project_pin_conditions(pins, extracted, _issue3234_position_is_current)
+    project_pin_conditions(pins, condition_sources, _ELECTRICAL_UNITS | _TIMING_UNITS)
 
     content = {
         "schema_version": 2,
@@ -36802,6 +36805,9 @@ def gen_l5_adi_spec(project: Path,
                     extracted: Dict[str, str]) -> LDocResult:
     """L5: analog block discovery via Wave-47 keyword scan + chip-AGNOSTIC
     BOM-component harvest + electrical-spec harvest from datasheet text."""
+    from _pin_interface_conditions import without_condition_tables
+    condition_sources = extracted
+    extracted = without_condition_tables(extracted)
     ic_name = _ic_name_from_docs(extracted, project)
     blocks: List[Dict[str, Any]] = []
     evidence: Dict[str, List[Dict[str, str]]] = {}
@@ -37431,6 +37437,11 @@ def gen_l5_adi_spec(project: Path,
     # L5 is a minimal typed NOT_APPLICABLE skeleton: applicability field +
     # empty typed fields + honest provenance — never populated from the
     # shared literal pool, so the uniqueness gate passes by construction.
+    from _pin_interface_conditions import project_block_conditions
+    project_block_conditions(blocks, condition_sources,
+                             _ELECTRICAL_UNITS | _TIMING_UNITS,
+                             _try_load_l_doc(project, "L1_DATASHEET"))
+
     if _no_analog_flag and not blocks:
         content = {
             "schema_version": 2,
@@ -37470,9 +37481,6 @@ def gen_l5_adi_spec(project: Path,
         bool(blocks)
         and _v1_6_613_input_has_digital_serial_readout(extracted))
     _emit_block_device_class_constraints(blocks, extracted)
-    from _pin_interface_conditions import project_block_conditions
-    project_block_conditions(blocks, extracted, _issue3234_position_is_current,
-                             _v1_6_350_parse_spice_metadata, _RE_BLOCK_SPEC_HEADING)
     content = {
         "schema_version": 2,
         "doc_class": "adi_spec",
