@@ -157,6 +157,48 @@ def test_changed_selected_installed_pdk_refuses_even_on_grid(case, tmp_path):
         a3.resolve_admitted_geometry(ir, ctx, {})
 
 
+@pytest.mark.parametrize("escape", [False, True])
+def test_container_source_reader_checks_raw_bytes_and_containment(case, tmp_path, monkeypatch, escape):
+    import analog_geometry_admission as admission
+
+    ir, ctx, _ = case
+    root, grid = use_installed_grid(ctx, tmp_path)
+    ctx["container"] = "selected-container"
+    if escape:
+        outside = tmp_path / "outside.tlef"
+        grid.rename(outside)
+        grid.symlink_to(outside)
+    entered = []
+
+    def local_container(container, *arguments):
+        entered.append((container, arguments[-2:]))
+        return list(arguments)
+
+    monkeypatch.setattr(admission._ce, "no_container_route", lambda: False)
+    monkeypatch.setattr(admission._ce, "docker_exec_argv", local_container)
+    if escape:
+        with pytest.raises(ValueError, match="SOURCE_CHANGED: pdk:technology/selected.tlef"):
+            a3.resolve_admitted_geometry(ir, ctx, {})
+    else:
+        assert a3.resolve_admitted_geometry(ir, ctx, {})[1]["grid_um"] == 0.005
+    assert entered == [("selected-container", (str(root), "technology/selected.tlef"))]
+
+
+def test_inside_container_reads_selected_pdk_locally(case, tmp_path, monkeypatch):
+    import analog_geometry_admission as admission
+
+    ir, ctx, _ = case
+    use_installed_grid(ctx, tmp_path)
+    ctx["container"] = "runtime-container"
+    monkeypatch.setattr(admission._ce, "no_container_route", lambda: True)
+
+    def no_nested_docker(*args, **kwargs):
+        pytest.fail("no-container route must read selected PDK locally")
+
+    monkeypatch.setattr(admission._ce, "docker_exec_argv", no_nested_docker)
+    assert a3.resolve_admitted_geometry(ir, ctx, {})[1]["status"] == "ADMITTED"
+
+
 @pytest.mark.parametrize("key", ["/absolute/proof.tlef", "case:/absolute", "case:../escape",
                                   "case:input/../proof", "case:./proof", "case:input//proof",
                                   "case:", "case:input/", "other:input/proof", "case:input\\proof",
@@ -267,7 +309,7 @@ def test_cli_migration_preserves_hashes_models_and_metadata(case, tmp_path):
 
 
 @pytest.mark.parametrize("problem", ["changed-case", "changed-pdk", "unmapped", "duplicate-key",
-                                     "duplicate-target", "traversal", "bad-model"])
+                                     "duplicate-target", "traversal", "bad-model", "unknown-version"])
 def test_cli_migration_refuses_before_replacing_destination(case, tmp_path, problem):
     _, ctx, legacy_path, legacy, mappings = legacy_input(case, tmp_path)
     if problem == "changed-case":
@@ -282,8 +324,11 @@ def test_cli_migration_refuses_before_replacing_destination(case, tmp_path, prob
         mappings[1] = mappings[1].split("=", 1)[0] + "=pdk:technology/selected.tlef"
     elif problem == "traversal":
         mappings[1] = mappings[1].split("=", 1)[0] + "=case:../escape"
-    else:
+    elif problem == "bad-model":
         legacy["models"]["selected_poly"]["w"] = True
+        legacy_path.write_text(json.dumps(legacy))
+    else:
+        legacy["version"] = 99
         legacy_path.write_text(json.dumps(legacy))
     destination = tmp_path / "input/analog_geometry_admission.json"
     destination.write_bytes(b"retained evidence\n")
@@ -293,6 +338,16 @@ def test_cli_migration_refuses_before_replacing_destination(case, tmp_path, prob
     if problem.startswith("changed"):
         assert "SOURCE_CHANGED" in result.stdout + result.stderr
     assert destination.read_bytes() == b"retained evidence\n"
+
+
+def test_cli_output_cannot_escape_project(case, tmp_path):
+    _, ctx, legacy_path, _, mappings = legacy_input(case, tmp_path)
+    output = tmp_path.parent / (tmp_path.name + "-outside.json")
+    output.write_bytes(b"retained outside project\n")
+    result = run_migration(tmp_path, ctx["installed_pdk_root"], legacy_path, mappings, output)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "GEOMETRY_ADMISSION_OUTPUT_OUTSIDE_PROJECT" in result.stdout + result.stderr
+    assert output.read_bytes() == b"retained outside project\n"
 
 
 def prepare_emission(case, tmp_path, monkeypatch):
