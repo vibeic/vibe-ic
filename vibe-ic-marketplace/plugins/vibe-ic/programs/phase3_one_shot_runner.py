@@ -13612,7 +13612,15 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
                                  f"is ambiguous: {matches}; REFUSING to choose.")
             return matches[0] if matches else None
     else:
-        root = _registry_container_root(container, reg) or ""
+        if _local_exec_mode() and os.environ.get(contract.LOCAL_ATTESTATION_ENV):
+            name = str(reg.get("name") or "unknown")
+            try:
+                resolved = contract.pdk_root_resolution(project, name, native_handoff=True)
+            except contract.Refusal as exc:
+                raise SystemExit(f"[FAIL] --pdk {name}: {exc}") from exc
+            root = str(Path(resolved['path']) / name)
+        else:
+            root = _registry_container_root(container, reg) or ""
         if not root:
             return None
         rc, _o, _e = _docker_exec_raw(

@@ -1670,6 +1670,7 @@ json.dump({name:{'present':layout.cell(name) is not None,'nonempty':layout.cell(
 
 def _d32_inputs(project):
     import hashlib
+    from _tapeout_declaration import DECLARATION_REL
     from flow109_analog_floorplan import bound_file
     from declared_pdk_is_the_pdk_used_check import declared_target
     import analog_pdk_availability as resolver
@@ -1697,6 +1698,11 @@ def _d32_inputs(project):
     available_gds={p for lef in lefs for p in (lef.parent.parent/'gds').glob('*.gds')}
     techs=set(tree.glob('libs.ref/*/lef/*tech*.lef'))
     records={str(p):digest(p) for p in (config,floor,assignment,logical)}
+    tapeout = project / DECLARATION_REL
+    if tapeout.exists() or tapeout.is_symlink():
+        if any(path.is_symlink() for path in (tapeout, *tapeout.parents)):
+            raise ValueError('D32_DECLARATION_SOURCE_UNBOUND')
+        records[str(tapeout)] = digest(tapeout)
     if not isinstance(target_source, str):raise ValueError('D32_PDK_DECLARATION_SOURCE_ABSENT')
     declaration = Path(target_source.rsplit(':',1)[0])
     declarations = [base / declaration for base in (project,project/'run')
@@ -1735,6 +1741,7 @@ def execute(project,context):
     import hashlib,json,shlex,shutil,uuid
     import librelane_contract as launch
     import pad_ring_check as checker
+    from _tapeout_declaration import DECLARATION_REL
     from analog_hardmacro_gds_emit import Stage
     from flow109_admission import require_launch_admission,AdmissionRefusal
     project=Path(project).resolve(strict=True);work=project/'reports/flow109/D32'/uuid.uuid4().hex;work.mkdir(parents=True)
@@ -1754,6 +1761,16 @@ def execute(project,context):
         result['metric_sources'] = _d32_metric_sources()
         case=work/'case';(case/PR.FLOORPLAN_DEF_REL).parent.mkdir(parents=True)
         shutil.copyfile(data['floorplan'],case/PR.FLOORPLAN_DEF_REL);shutil.copyfile(data['assignment'],case/PR.ASSIGNMENT_REL)
+        declaration = project / DECLARATION_REL
+        if str(declaration) in data['inputs']:
+            if any(path.is_symlink() for path in (declaration, *declaration.parents)):
+                raise ValueError('D32_DECLARATION_SOURCE_UNBOUND')
+            raw = declaration.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != data['inputs'][str(declaration)]:
+                raise ValueError('D32_INPUT_OR_LAUNCH_CHANGED')
+            target = case / DECLARATION_REL
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
         args=[str(case),'--pdk-root',data['pdk_root'],'--pdk',data['pdk']]
         for lef in data['io_lefs']:args+=['--io-lef',lef]
         rc=main(args);report=case/PR.REPORT_REL
