@@ -709,13 +709,13 @@ def test_the_producer_names_no_design():
 # --------------------------------------------------------------------------- #
 def test_the_producer_never_overwrites_an_owner_attested_area_answer(tmp_path):
     """Finding 2: an owner-attested synthesis_area_budget is the owner's
-    field; the producer refuses and writes nothing."""
+    field; a valid explicit answer succeeds without writing anything."""
     doc = _answers()
     doc["answer_provenance"]["synthesis_area_budget"] = {
         "answered_by": "owner", "citation": "owner ruling R-0000-X"}
     proj = _project(tmp_path, answers=doc)
     before = (proj / ANSWERS_REL).read_bytes()
-    assert _gen().main([str(proj)]) == 1
+    assert _gen().main([str(proj)]) == 0
     assert (proj / ANSWERS_REL).read_bytes() == before
 
 
@@ -830,5 +830,5 @@ def test_a_padded_owner_record_is_not_overwritten(tmp_path):
     assert TD.attestation_of(doc, "synthesis_area_budget")["declares"]
     proj = _project(tmp_path, answers=doc)
     before = (proj / ANSWERS_REL).read_bytes()
-    assert _gen().main([str(proj)]) == 1
+    assert _gen().main([str(proj)]) == 0
     assert (proj / ANSWERS_REL).read_bytes() == before
