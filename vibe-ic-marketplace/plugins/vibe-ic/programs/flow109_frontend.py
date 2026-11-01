@@ -383,9 +383,14 @@ def d10_native_qualification(project, context, p0, binding):
                 doc = _read(path)
                 if 'source_before' in doc and 'models' in doc:
                     candidates.append(doc)
-        if len(candidates) != 1:
+        captures = {}
+        for candidate in candidates:
+            reference = candidate['source_before']
+            artifact(reference)
+            captures[(reference['path'], reference['sha256'])] = reference
+        if len(captures) != 1:
             refuse('D10_QUALIFICATION_SOURCE_UNBOUND', 'one reviewed source capture required')
-        capture = _read(artifact(candidates[0]['source_before']))
+        capture = _read(artifact(next(iter(captures.values()))))
         root = Path(capture['runtime_source'])
         hashes = capture['source_sha256']
         relative = 'vibe-ic-marketplace/plugins/vibe-ic/programs/'
