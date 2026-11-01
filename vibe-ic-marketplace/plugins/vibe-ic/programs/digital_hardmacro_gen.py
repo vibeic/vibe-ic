@@ -125,6 +125,7 @@ class Record:
     interface: dict = field(default_factory=dict)
     notes: List[str] = field(default_factory=list)
     current: dict = field(default_factory=dict)
+    native_attempts: List[dict] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -1646,7 +1647,8 @@ def _accept_lef(produced: Path, out_lef: Path, rc: int,
 def _write_lef_here(top: str, gds: Path, def_file: Path, out_lef: Path,
                     pdk_root: str, magicrc: str, full_lef: bool,
                     pinonly: bool, timeout_s: int,
-                    gds_bbox: Optional[Tuple[float, float, float, float]] = None
+                    gds_bbox: Optional[Tuple[float, float, float, float]] = None,
+                    native_attempts=None
                     ) -> Tuple[bool, str]:
     """Magic in THIS process's environment — the path taken inside the image."""
     # Native admission permits dynamic paths only in the frozen project/output
@@ -1689,6 +1691,8 @@ def _write_lef_here(top: str, gds: Path, def_file: Path, out_lef: Path,
             return subprocess.Popen(argv, cwd=str(work), **kwargs)
 
         try:
+            if native_attempts is not None:
+                native_attempts.append({"tool": "magic", "operation": "lef_export"})
             cp = _watchdog.run_host_supervised(
                 cmd, env=env, stall_grace_s=float(timeout_s),
                 popen_factory=_popen)
@@ -1711,7 +1715,8 @@ def _write_lef_in_container(site: "MagicSite", top: str, gds: Path,
                             def_file: Path, out_lef: Path, pdk_root: str,
                             magicrc: str, full_lef: bool, pinonly: bool,
                             timeout_s: int,
-                            gds_bbox: Optional[Tuple[float, float, float, float]] = None
+                            gds_bbox: Optional[Tuple[float, float, float, float]] = None,
+                            native_attempts=None
                             ) -> Tuple[bool, str]:
     """Magic where the runner already dispatches every other EDA tool.
 
@@ -1742,6 +1747,8 @@ def _write_lef_in_container(site: "MagicSite", top: str, gds: Path,
             cmd = (f"cd {shlex.quote(work)} && export {exports} && "
                    f"magic -noconsole -dnull -rcfile {shlex.quote(magicrc)} "
                    f"{shlex.quote(work + '/lef.tcl')}")
+            if native_attempts is not None:
+                native_attempts.append({"tool": "magic", "operation": "lef_export"})
             rc, out, err = site.sh(cmd, timeout=timeout_s)
             # THE ENVIRONMENT REFUSED IS NOT "MAGIC FAILED" (vibe-ic#2173).
             # Without this the fall-through below reported "magic exited 125
@@ -1779,7 +1786,8 @@ def write_lef_with_magic(top: str, gds: Path, def_file: Path, out_lef: Path,
                          timeout_s: int = 900, *, container: str = "",
                          site: Optional["MagicSite"] = None,
                          magicrc: Optional[str] = None,
-                         gds_bbox: Optional[Tuple[float, float, float, float]] = None
+                         gds_bbox: Optional[Tuple[float, float, float, float]] = None,
+                         native_attempts=None
                          ) -> Tuple[bool, str]:
     """(ok, reason). Never raises; a missing capability is a stated reason.
 
@@ -1816,9 +1824,9 @@ def write_lef_with_magic(top: str, gds: Path, def_file: Path, out_lef: Path,
     if site.in_container:
         return _write_lef_in_container(site, top, gds, def_file, out_lef,
                                        pdk_root, magicrc, full_lef, pinonly,
-                                       timeout_s, gds_bbox)
+                                       timeout_s, gds_bbox, native_attempts)
     return _write_lef_here(top, gds, def_file, out_lef, pdk_root, magicrc,
-                           full_lef, pinonly, timeout_s, gds_bbox)
+                           full_lef, pinonly, timeout_s, gds_bbox, native_attempts)
 
 
 # ── the run ───────────────────────────────────────────────────────────────
@@ -1970,6 +1978,7 @@ def characterise_liberty(project: Path, design: str, container: str,
         # make the worker observe bash while the actual STA PID escaped.
         sta_binary = shutil.which("sta") or "/foss/tools/bin/sta"
         argv = [sta_binary, "-no_splash", "-exit", str(tcl)]
+    rec["native_attempts"] = [{"tool": "sta", "operation": "write_timing_model"}]
     rc, out, err = _sh(argv)
     text = lib_out.read_text(errors="replace") if lib_out.is_file() else ""
     arcs = len(re.findall(r"\btiming\s*\(", text))
@@ -2293,7 +2302,7 @@ def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool,
                         pinonly, container=container, site=site,
                         magicrc=(str(pdk_binding.magicrc)
                                  if pdk_binding else None),
-                        gds_bbox=gds_bbox)
+                        gds_bbox=gds_bbox, native_attempts=rec.native_attempts)
                 else:
                     # A private working copy only. The signed-off routed DEF is
                     # immutable and is never rewritten to make a delivery.
@@ -2305,7 +2314,7 @@ def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool,
                             full_lef, pinonly, container=container, site=site,
                             magicrc=(str(pdk_binding.magicrc)
                                      if pdk_binding else None),
-                            gds_bbox=gds_bbox)
+                            gds_bbox=gds_bbox, native_attempts=rec.native_attempts)
         if not ok:
             rec.status, rec.reason = "SKIPPED_NO_CAPABILITY", why
             rec.notes.append(
@@ -2348,6 +2357,7 @@ def run(project: Path, pdk_root: str, full_lef: bool, pinonly: bool,
         def _write_lib(q: Path) -> None:
             char, char_rec = (characterise_liberty(project, design, container, hm, extra_liberties)
                               if extra_liberties else characterise_liberty(project, design, container, hm))
+            rec.native_attempts.extend(char_rec.get("native_attempts", []))
             if char:
                 char = liberty_with_pg_pins(char, design, pins)
                 if char is None:

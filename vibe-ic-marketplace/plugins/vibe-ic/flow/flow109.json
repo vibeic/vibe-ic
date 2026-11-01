@@ -18637,18 +18637,73 @@
         {
           "id": "default",
           "select_when": "otherwise",
-          "provider": "vibeic",
-          "tools": "Python IP views/docs validator + LibreLane view exports",
-          "native_steps": [],
-          "execution_status": "UNIMPLEMENTED"
+          "provider": "other",
+          "tools": "Magic + OpenSTA + A8 ngspice + Python IP release consumers",
+          "native_steps": [
+            "Vibeic.IPReleaseViewsDocs",
+            "Magic.IPReleaseLEF",
+            "OpenSTA.IPReleaseLiberty",
+            "Ngspice.AnalogIPLeakage"
+          ],
+          "execution_status": "SOURCE_ADAPTER_IMPLEMENTED_COMPONENT_ONLY",
+          "dispatch": {
+            "kind": "native_adapter",
+            "adapter": "flow109_ip_release",
+            "native_step_id": "flow109.D79",
+            "producer": "flow109_ip_release.py:execute",
+            "consumer": "existing digital/A8 hardmacro and IP release documentation consumers",
+            "metric_consumer": "flow109_ip_release.py:consume_default_row_completion",
+            "engine_families": [
+              "python3",
+              "magic",
+              "sta",
+              "ngspice"
+            ],
+            "engine_executables": {
+              "python3": "python3",
+              "magic": "magic",
+              "sta": "sta",
+              "ngspice": "ngspice"
+            },
+            "engine_steps": {
+              "python3": [
+                "Vibeic.IPReleaseViewsDocs"
+              ],
+              "magic": [
+                "Magic.IPReleaseLEF"
+              ],
+              "sta": [
+                "OpenSTA.IPReleaseLiberty"
+              ],
+              "ngspice": [
+                "Ngspice.AnalogIPLeakage"
+              ]
+            },
+            "native_required_outputs": [
+              "owner-selected current digital carrier and declared analog blocks",
+              "native four-view exports with current producer provenance",
+              "mutually consistent endpoint views",
+              "package-bound integration documents and approved requirements"
+            ],
+            "admission_policy": "source_owned_existing_native",
+            "acceptance_scope": "existing_native_component_only",
+            "component_scope": "existing_IP_release_views_and_documents_only",
+            "flow109_metrics_status": "IMPLEMENTED_COMPONENT_ONLY"
+          }
         }
       ],
       "complementary_tools": [],
       "capability_status": "SELECTED_NOT_ROUTE_QUALIFIED",
       "availability_status": "NOT_INVENTORIED_THIS_UPDATE",
       "source_components": [
+        "digital_hardmacro_gen",
         "digital_hardmacro_check",
-        "ip_release_docs_gen"
+        "analog_a8_hardmacro_emit",
+        "analog_hardmacro_check",
+        "analog_hardmacro_pinname_consistency_check",
+        "analog_lef_gds_outline_check",
+        "ip_release_docs_gen",
+        "release_docs_check"
       ],
       "obligations": [
         {
@@ -18667,7 +18722,8 @@
             "checker.base_49.ip_endpoint_views",
             "producer.base_49.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "SOURCE_METRIC_CONSUMER_IMPLEMENTED_COMPONENT_ONLY",
+          "metric_consumer": "flow109_ip_release.py:consume_default_row_completion"
         },
         {
           "id": "base_49.ip_integration_limits_documented",
@@ -18685,10 +18741,11 @@
             "checker.base_49.ip_integration_limits_documented",
             "producer.base_49.execution"
           ],
-          "status": "UNIMPLEMENTED_METRIC_BINDING"
+          "status": "SOURCE_METRIC_CONSUMER_IMPLEMENTED_COMPONENT_ONLY",
+          "metric_consumer": "flow109_ip_release.py:consume_default_row_completion"
         }
       ],
-      "metric_acceptance_status": "UNIMPLEMENTED",
+      "metric_acceptance_status": "SOURCE_METRIC_CONSUMER_IMPLEMENTED_COMPONENT_ONLY",
       "gate_layer_ids": [
         "G1",
         "G2",
