@@ -9,7 +9,9 @@ import filecmp
 import fnmatch
 import json
 import math
+import os
 import re
+import shlex
 from pathlib import Path
 
 
@@ -78,29 +80,47 @@ def count(value) -> bool:
     return type(value) in (int, float) and math.isfinite(value) and value >= 0 and int(value) == value
 
 
-def placement(project: Path, state_path: Path) -> dict:
+def placement(project: Path, state_path: Path, *, container: str | None = None) -> dict:
     state = load(state_path)
     odb = path(project, str(state.get('odb', '')))
-    # These are final database check_placement outputs, never placement/CTS probes.
-    reports = {state_path.parent / 'check_placement.rpt',
-               odb.parent / 'check_placement.rpt',
-               path(project, str(state.get('def', ''))).parent / 'check_placement.rpt'}
-    for folder in (state_path.parent, odb.parent,
-                   path(project, str(state.get('def', ''))).parent):
-        reports.add(folder / 'openroad.log')
-        reports.update(folder.glob('*check_placement*.rpt'))
+    import phase3_one_shot_runner as runner
+    import _atomic_artefact as aa
+    log = project / 'reports/phase3/prestream_placement.log'
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.unlink(missing_ok=True)
     counts, failures = [], []
-    for report in sorted(reports):
-        if not report.is_file():
-            continue
-        body = text(report)
-        counts += [int(n) for n in re.findall(
-            r'(?:CHECK_PLACEMENT_VIOLATIONS|PNR_PLACEMENT_VIOLATIONS)[: ]+([0-9]+)', body)]
-        if re.search(r'(?:ERROR\s+DPL-0*33|CHECK_PLACEMENT_(?:RAISED|FAILED)|DPL-\d+[^\n]*check failed \([1-9])', body):
-            failures.append(f'{report}: native check_placement failed')
+    missing = []
+    # Ruling #62: a later writer may replace the routed ODB. Always check
+    # the final State's database through the existing native launch route.
+    if not odb.is_file():
+        missing.append(f'final ODB absent: {odb}')
+        aa.write_text(log, missing[-1] + '\n')
+    else:
+        route = container if container is not None else (
+            os.environ.get('EDA_CONTAINER') or runner._pin.default_container_name())
+        tcl = log.with_suffix('.tcl')
+        odb_c = runner._to_container_path(str(odb), route)
+        # One literal Tcl word, including paths containing whitespace/braces.
+        odb_word = '"' + re.sub(r'([\\"$\[\]])', r'\\\1', odb_c) + '"'
+        aa.write_text(tcl, f'read_db {odb_word}\n'
+                      'set _plv [check_placement -no_abort]\n'
+                      'puts "PRESTREAM_CHECK_PLACEMENT_VIOLATIONS $_plv"\n')
+        tcl_c = runner._to_container_path(str(tcl), route)
+        try:
+            rc, out, err = runner._docker_exec(
+                route, f'openroad -no_init -exit {shlex.quote(tcl_c)}',
+                marker=tcl_c, inputs=[odb], transcript_path=log)
+            body = (out or '') + '\n' + (err or '')
+            aa.write_text(log, body)
+            counts = [int(n) for n in re.findall(
+                r'^PRESTREAM_CHECK_PLACEMENT_VIOLATIONS\s+(\d+)\s*$', body, re.M)]
+            if rc or len(counts) != 1 or re.search(r'^\s*(?:\[ERROR\b|Error:)', body, re.M):
+                missing.append(f'native check_placement incomplete: rc={rc}, counts={counts}; {log}')
+        except Exception as exc:
+            aa.write_text(log, f'native check_placement could not run: {exc}\n')
+            missing.append(f'native check_placement could not run: {exc}; {log}')
     if any(counts):
         failures.append(f'native check_placement violations: {counts}')
-    missing = [] if counts or failures else ['native check_placement on final ODB/DEF absent']
     final_def = path(project, str(state.get('def', '')))
     if not odb.is_file() and not final_def.is_file():
         missing.append('final ODB/DEF absent')
@@ -129,7 +149,9 @@ def placement(project: Path, state_path: Path) -> dict:
         density_source = str(final_def) if density is not None else None
     if density is not None and (density <= 0 or density > 100.0 + 1e-6):
         failures.append(f'native placement density {density}% outside (0, 100]%')
-    return result(failures, missing, violations=counts, declared_components=declared,
+    return result(failures, missing, violations=counts,
+                  native_count=counts[0] if len(counts) == 1 else None,
+                  output_files=[str(log)], declared_components=declared,
                   parsed_components=len(records), unplaced=unplaced,
                   density_pct=density, density_source=density_source)
 
