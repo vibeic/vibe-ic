@@ -3145,7 +3145,8 @@ def _write_declared_correlation_refusal(project: Path, status: str,
 
 def run_installed_pdk_path_correlation(project: Path, liberty_path: str,
                                        container: str = _DEFAULT_CONTAINER,
-                                       max_stages: int = 12, *, paths: int = 1) -> dict:
+                                       max_stages: int = 12, *, paths: int = 1,
+                                       sta_step_dir: Path | None = None) -> dict:
     """Ordinary Step 30 uses the existing extracted OpenSTA path-SPICE route.
 
     No mode flag, staged report or schematic fallback can certify this row.
@@ -3153,7 +3154,6 @@ def run_installed_pdk_path_correlation(project: Path, liberty_path: str,
     """
     import librelane_contract as lc
     import path_spice_tool as pst
-    import librelane_postroute as lp
     project = Path(project)
     # Retire this row's previous publication before resolving native inputs.
     # A refusal before run_current_step30 must not leave an older PASS visible.
@@ -3167,11 +3167,12 @@ def run_installed_pdk_path_correlation(project: Path, liberty_path: str,
         (project / relative).unlink(missing_ok=True)
     try:
         image = lc.resolve_image(project)
-        folder, _ = lp.stapostpnr_state(project)
+        folder = pst.native_sta_folder(project, sta_step_dir)
         config = json.loads((folder / 'config.json').read_text())
         pdk = config['PDK']
         root = lc.pdk_root_resolution(project, pdk, image=image)['path']
-        doc = pst.run_current_step30(project, image, Path(root), pdk, paths=paths)
+        doc = pst.run_current_step30(project, image, Path(root), pdk, paths=paths,
+                                    sta_step_dir=folder)
         return {'status': 'RAN', 'verdict': doc['verdict'], 'report': doc}
     except (lc.Refusal, OSError, ValueError, KeyError, TypeError) as exc:
         reason = str(exc)

@@ -784,7 +784,9 @@ def _wps_edge(calls):
                 write(Path(deck + '_1.sp'), '* Path\n.tran 1e-13 2e-08\n'
                       '.print tran v(u_core\\/_417_/CLK) v(u_core\\/_417_/Q) v(u_core\\/_416_/D)\n'
                       'v2 u_core\\/_417_/VDD 0 4.500\n.end\n')
-            return SimpleNamespace(returncode=0, stdout='VIBEIC_WPS_OK 1\n', stderr='')
+            return SimpleNamespace(returncode=0,
+                                   stdout='VIBEIC_STA_DERATE set_timing_derate -late 1.0\nVIBEIC_WPS_OK 1\n',
+                                   stderr='')
         if argv[0] == 'ngspice':
             run = Path(argv[-1])
             spef_slow = 'mutated' in str(run)
@@ -811,6 +813,11 @@ def _wps_edge(calls):
 def test_step_30_runs_the_tool_deck_and_the_spef_mutation_and_records_every_arm(tmp_path, monkeypatch):
     project = tmp_path / 'design'
     folder, _ = _stapostpnr(project)
+    state = json.loads((folder / 'state_out.json').read_text())
+    state['metrics'].update({f'timing__setup__ws__corner:{corner}':
+                             -1.0 if corner == 'max_ss_125C_4v50' else 1.0
+                             for corner in CORNERS})
+    put(folder / 'state_out.json', state)
     record = json.loads((project / postroute.STEP23_RECORD).read_text())
     record['judgment'] = {'worst_setup': {'corner': 'max_ss_125C_4v50'}}
     put(project / postroute.STEP23_RECORD, record)

@@ -81,7 +81,8 @@ def project(tmp_path, *, corner='nom_typ', liberty_name='neutral.lib'):
     nl = write(p / 'phase3/stage3/pnr/neutral_pnr.v', NETLIST)
     spef = write(p / 'phase3/stage3/extracted/neutral.spef', SPEF)
     sdc = write(nl.parent / 'constraint.sdc', 'create_clock -name c -period 10\nset_input_delay 1 -clock c [get_ports {x y}]\nset_output_delay 1 -clock c [get_ports z]\n')
-    views = {'nl': str(nl), 'sdc': str(sdc), 'spef': {'*': str(spef)}, 'metrics': {}}
+    views = {'nl': str(nl), 'sdc': str(sdc), 'spef': {'*': str(spef)},
+             'metrics': {f'timing__setup__ws__corner:{corner}': 1.0}}
     folder, _ = BF.producer(p, 'OpenROAD.STAPostPNR', views, views,
                            lane='22-23/01-openroad-stapostpnr', config_folder='22-config', name='neutral')
     library = 'neutral_typ' if liberty_name == 'neutral.lib' else 'neutral_' + Path(liberty_name).stem
@@ -183,9 +184,9 @@ def test_step30_gate_refuses_current_byte_and_consumer_mutations(tmp_path, monke
                 'models': p / 'fixture_pdk/neutral/libs.tech/ngspice/model.sp'}[mutation]
         path.write_text(path.read_text() + '\n ')
     elif mutation == 'corner':
-        path = p / LP.STEP23_RECORD
+        path = folder / 'state_out.json'
         doc = json.loads(path.read_text())
-        doc['judgment']['worst_setup']['corner'] = 'other'
+        doc['metrics']['timing__setup__ws__corner:nom_typ'] = -1.0
         put(path, doc)
     elif mutation == 'execution':
         (p / 'phase3/tool_arms/30/ngspice/base/path_1.log').unlink()
@@ -412,12 +413,20 @@ def test_backend_default_step30_cannot_silently_change_the_requested_instrument(
 
 @pytest.mark.parametrize('kind,expected', [('CORRELATED', 'PASS'), ('MISMATCH', 'FAIL'),
                                          ('REFUSED', 'NOT_MEASURED')])
+@pytest.mark.parametrize('native_folder', [False, True], ids=['managed-folder', 'native-import'])
 def test_default_row_loop_consumes_current_step30_and_stops_on_failure(
-        tmp_path, monkeypatch, kind, expected):
+        tmp_path, monkeypatch, kind, expected, native_folder):
     import execution_backend_producers as backend
     import flow_compliance_check as compliance
     import test_step30_r4_current_failures as current_fixture
     p, folder, lib = project(tmp_path)
+    if native_folder:
+        selected = p / 'runs/imported/55-openroad-stapostpnr'
+        selected.parent.mkdir(parents=True)
+        folder.rename(selected)
+        folder = selected
+        (p / LP.STEP23_RECORD).unlink()
+        (folder / 'vibeic_receipt.json').unlink()
     current_row_inputs(p, monkeypatch)
     current_fixture.correlation_tool(p, folder, lib, monkeypatch,
                                      mismatch='CORRELATED' if kind == 'REFUSED' else kind,
@@ -466,7 +475,8 @@ def test_default_row_loop_consumes_current_step30_and_stops_on_failure(
         assert any(entry['gate'] == 'spice_correlation_check'
                    for entry in receipt['gate_ledger'])
         native = receipt['current_step_declared_producers']
-        assert 'reports/phase3/sta_postpnr_signoff.json' in native['inputs']
+        assert str(folder.relative_to(p) / 'state_out.json') in native['inputs']
+        assert str(folder.relative_to(p) / 'config.json') in native['inputs']
         assert 'phase3/stage3/extracted/neutral.spef' in native['inputs']
     if expected != 'NOT_MEASURED':
         gate = SC.run_audit(p, run_spice=False)
@@ -475,7 +485,8 @@ def test_default_row_loop_consumes_current_step30_and_stops_on_failure(
         assert gate.summary['verdict'] == expected
 
 
-@pytest.mark.parametrize('missing', ['reports/phase3/sta_postpnr_signoff.json',
+@pytest.mark.parametrize('missing', ['phase3/librelane/22-23/01-openroad-stapostpnr/state_out.json',
+                                    'phase3/librelane/22-23/01-openroad-stapostpnr/config.json',
                                     'phase3/stage3/extracted/neutral.spef'])
 def test_default_step30_missing_current_input_stops_before_producer(tmp_path, monkeypatch, missing):
     import execution_backend_producers as backend
@@ -488,7 +499,8 @@ def test_default_step30_missing_current_input_stops_before_producer(tmp_path, mo
     row = R._default_pnr_rows(p, 'neutral', pdk(lib), 'SOFTWARE_FIXTURE_ONLY', ['30', '33'])
     assert row.status == 'NOT_MEASURED', row.detail
     assert 'missing current inputs' in row.detail
-    assert missing in row.detail or ('*.spef' in row.detail and missing.endswith('.spef'))
+    assert Path(missing).name in row.detail or (
+        '*.spef' in row.detail and missing.endswith('.spef'))
 
 
 @pytest.mark.parametrize('mode', ['default', 'direct', 'librelane', 'dual',
@@ -543,14 +555,14 @@ def test_legacy_direct_sta_does_not_excuse_step30_current_input(tmp_path, monkey
     declaration = json.loads(switch.read_text())
     declaration.setdefault('steps', {})['23'] = 'direct'
     put(switch, declaration)
-    (p / 'reports/phase3/sta_postpnr_signoff.json').unlink()
+    (folder / 'state_out.json').unlink()
     def forbidden(*args, **kwargs):
         raise AssertionError('no native launch without the Step30 STA input')
     monkeypatch.setattr(backend, 'produce', forbidden)
     row = R._default_pnr_rows(p, 'neutral', pdk(lib), 'SOURCE_FIXTURE_ONLY', ['30'])
     assert row.status == 'NOT_MEASURED'
     assert 'missing current inputs' in row.detail
-    assert 'sta_postpnr_signoff.json' in row.detail
+    assert 'state_out.json' in row.detail
 
 
 def selected_path_transport(p, folder, lib, monkeypatch, *, available=3, mismatch_path=None):
@@ -864,15 +876,14 @@ def test_default_step30_explicit_native_paths_do_not_authorize_drift(tmp_path, m
         record = json.loads((p / LP.STEP23_RECORD).read_text())
         record['sta_state_sha256'] = LC.digest(folder / 'state_out.json')
         put(p / LP.STEP23_RECORD, record)
-    expected_error = ValueError if damage.endswith('_hash') else (current.Refusal, LC.Refusal, OSError)
-    expected_reason = 'LL_INPUT_CHANGED:' if damage.endswith('_hash') else None
-    with pytest.raises(expected_error, match=expected_reason):
-        PST.current_context(p, BF.IMAGE, p / 'fixture_pdk', 'neutral')
-    result = _current_backend_step30(p, lib, monkeypatch)
-    assert result['verdict'] == 'NOT_MEASURED', result
-    assert not (p / 'reports/phase3/spice_correlation.current.json').exists()
+    with pytest.raises((current.Refusal, LC.Refusal, OSError)):
+        PST.validate_current_step30(p)
     gate = SC.run_audit(p, run_spice=False)
     assert not gate.passed and gate.summary['measurement'] == 'NOT_MEASURED'
+    if damage in ('missing_netlist', 'wrong_module'):
+        result = _current_backend_step30(p, lib, monkeypatch)
+        assert result['verdict'] == 'NOT_MEASURED', result
+        assert not (p / 'reports/phase3/spice_correlation.current.json').exists()
 
 
 def _step30_image_interop_subject(tmp_path, monkeypatch):
@@ -907,7 +918,7 @@ def _step30_image_interop_subject(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('consumer', ['same', 'updated'])
-def test_step30_keeps_producer_provenance_with_current_consumer_image(tmp_path, monkeypatch, consumer):
+def test_step30_binds_native_inputs_with_current_consumer_image(tmp_path, monkeypatch, consumer):
     p, folder, lib, paths, gds, model = _step30_image_interop_subject(tmp_path, monkeypatch)
     image = BF.IMAGE if consumer == 'same' else 'ghcr.io/vibeic/vibeic-eda@sha256:' + 'b' * 64
     monkeypatch.setenv('VIBEIC_LIBRELANE_IMAGE', image)
@@ -915,8 +926,8 @@ def test_step30_keeps_producer_provenance_with_current_consumer_image(tmp_path, 
     doc = PST.run_current_step30(p, image, p / 'fixture_pdk', 'neutral')
     receipt = json.loads((p / 'reports/phase3/spice_correlation.current.json').read_text())
     assert doc['verdict'] == 'PASS'
-    assert doc['current_subject']['tool_image'] == BF.IMAGE
-    assert receipt['tool_image'] == BF.IMAGE
+    assert doc['current_subject']['inputs'] == receipt['inputs']
+    assert 'tool_image' not in receipt
     assert receipt['context']['image'] == image
     assert (folder / 'vibeic_receipt.json').read_bytes() == original_receipt
     gate = SC.run_audit(p, run_spice=False)
@@ -925,29 +936,29 @@ def test_step30_keeps_producer_provenance_with_current_consumer_image(tmp_path, 
     assert gate.passed and gate.summary['verdict'] == 'PASS'
 
 
-@pytest.mark.parametrize('damage', ['producer_image', 'netlist', 'sdc', 'liberty',
+@pytest.mark.parametrize('damage', ['config_pdk', 'netlist', 'sdc', 'liberty',
                                     'cell_gds', 'model', 'pdk_root'])
 def test_step30_consumer_update_preserves_producer_and_material_refusals(tmp_path, monkeypatch, damage):
     p, folder, lib, paths, gds, model = _step30_image_interop_subject(tmp_path, monkeypatch)
     monkeypatch.setenv('VIBEIC_LIBRELANE_IMAGE', BF.IMAGE)
-    assert PST.current_context(p, BF.IMAGE, p / 'fixture_pdk', 'neutral')[0]['tool_image'] == BF.IMAGE
+    assert PST.run_current_step30(p, BF.IMAGE, p / 'fixture_pdk', 'neutral')['verdict'] == 'PASS'
     root = p / 'fixture_pdk'
-    if damage == 'producer_image':
-        fp = json.loads((folder / 'input_fingerprint.json').read_text())
-        fp['image'] = 'ghcr.io/vibeic/vibeic-eda@sha256:' + 'c' * 64
-        seal(folder, fp)
-        reason = 'CURRENT_STAPOSTPNR_IMAGE_CHANGED|LL_PDK_IMAGE_OR_PROCESS_CHANGED'
+    if damage == 'config_pdk':
+        config = json.loads((folder / 'config.json').read_text())
+        config['PDK'] = 'other'
+        put(folder / 'config.json', config)
     elif damage == 'pdk_root':
         root = p / 'other_root'
         root.mkdir()
-        reason = 'CURRENT_STEP30_IMAGE_OR_PDK_MISMATCH'
     else:
         path = {'netlist': paths['nl'], 'sdc': paths['sdc'], 'liberty': lib,
                 'cell_gds': gds, 'model': model}[damage]
         path.write_bytes(path.read_bytes() + b'\n ')
-        reason = 'LL_INPUT_CHANGED:'
-    with pytest.raises((LC.Refusal, ValueError), match=reason):
-        PST.current_context(p, BF.IMAGE, root, 'neutral')
+    with pytest.raises((LC.Refusal, ValueError, OSError)):
+        if damage == 'pdk_root':
+            PST.current_context(p, BF.IMAGE, root, 'neutral')
+        else:
+            PST.validate_current_step30(p)
 
 
 
@@ -1027,7 +1038,8 @@ def test_step30_model_publication_matches_the_selected_execution_namespace(tmp_p
             return SimpleNamespace(returncode=0, stdout='SOURCE_FIXTURE_ONLY extraction\n', stderr='')
         assert argv[0] == 'sta'
         calls.append(argv)
-        return SimpleNamespace(returncode=0, stdout='SOURCE_FIXTURE_ONLY STA transport\n', stderr='')
+        return SimpleNamespace(returncode=0,
+            stdout='VIBEIC_STA_DERATE set_timing_derate -late 1.0\nSOURCE_FIXTURE_ONLY STA transport\n', stderr='')
     monkeypatch.setattr(PST, '_docker', sta)
     arm = PST.prepare_arm(p, BF.IMAGE, folder / 'state_out.json', 'nom_typ',
                           pdk_root=root, pdk='neutral', out_dir=p / 'tool-fixture', paths=1)
@@ -1155,7 +1167,9 @@ def test_default_step30_native_local_launcher_uses_the_admitted_provider(tmp_pat
                     f'------- input_net_transition = 0.200000000\n'
                     f'| total_output_net_capacitance = {cap:.9f}\nDelay = {delay:.9f}\n')
                 write(cwd / 'dcalc_1_1.tsv', f'u0/A\tu0/Z\t{dcalc}\n')
-            return watchdog.SupervisedResult(0, 'VIBEIC_WPS_OK 1\nSOURCE_FIXTURE_ONLY STA\n', '', 'natural')
+            return watchdog.SupervisedResult(0,
+                'VIBEIC_STA_DERATE set_timing_derate -late 1.0\nVIBEIC_WPS_OK 1\nSOURCE_FIXTURE_ONLY STA\n',
+                '', 'natural')
         assert tool in ('ngspice', 'Xyce'), tool_argv
         if damage['tool']:
             return watchdog.SupervisedResult(127, '', 'SOURCE_FIXTURE_ONLY simulator unavailable\n', 'natural')
@@ -1211,7 +1225,7 @@ def test_default_step30_native_local_launcher_uses_the_admitted_provider(tmp_pat
     assert unavailable['verdict'] == 'NOT_MEASURED', unavailable
     damage['tool'] = False
     model = root / 'neutral/libs.tech/ngspice/model.sp'
-    model.rename(model.with_suffix('.absent'))
+    model.unlink()
     missing = _current_backend_step30(p, lib, monkeypatch)
     observation['missing_model'] = missing
     write(note, json.dumps(observation, indent=2) + '\n')

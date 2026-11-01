@@ -4464,7 +4464,11 @@ def post_pnr_timing_inputs(project: Path, state_path: Path, corner: str, *,
     exception is inferred here.
     """
     folder = state_path.parent
-    step = _state_step_id(folder)
+    config_path = folder / 'config.json'
+    for path in (config_path, state_path):
+        if not path.resolve().is_relative_to(folder.resolve()):
+            raise Refusal('LL_STATE_OUTSIDE_PROJECT', str(path))
+    step = (_load(config_path).get('meta') or {}).get('step')
     if step != 'OpenROAD.STAPostPNR':
         raise Refusal('LL_NOT_STAPOSTPNR', f'{folder}: written by {step}')
     state = _load(state_path)
@@ -4473,6 +4477,8 @@ def post_pnr_timing_inputs(project: Path, state_path: Path, corner: str, *,
         analysed = sorted(d.name for d in folder.iterdir()
                           if (d / 'sta.log').is_file())
         raise Refusal('LL_CORNER_NOT_ANALYSED', f'{corner}: {analysed}')
+    if not log.resolve().is_relative_to(folder.resolve()):
+        raise Refusal('LL_STATE_OUTSIDE_PROJECT', str(log))
     spefs = state.get('spef') or {}
     if isinstance(spefs, str):
         spefs = {'*': spefs}

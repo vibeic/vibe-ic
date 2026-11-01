@@ -142,11 +142,10 @@ def test_all_fifteen_refusals_return_through_the_helper(tmp_path, monkeypatch):
     each present boundary rather than freezing a count of source statements.
     """
     import test_default_si_spice_power as fixture
-    import librelane_postroute as lp
     import path_spice_tool as pst
     p, folder, lib = fixture.project(tmp_path)
     fixture.spice_produce(p, folder, lib, monkeypatch)
-    boundaries = [(fixture.LC, 'resolve_image'), (lp, 'stapostpnr_state'),
+    boundaries = [(fixture.LC, 'resolve_image'), (pst, 'native_sta_folder'),
                   (fixture.LC, 'pdk_root_resolution'), (pst, 'run_current_step30')]
     for module, name in boundaries:
         reason = 'SOFTWARE_FIXTURE_ONLY refused at ' + name
@@ -183,13 +182,12 @@ def test_a_driver_that_returned_no_reason_still_says_something(tmp_path):
     assert d["reason_class"] == "EXECUTION_ERROR"
 
 
-def test_the_drivers_signature_is_unchanged():
-    """Callers pass `container=`; the runner does. This fix may not move where
-    the simulation runs."""
+def test_the_driver_preserves_existing_arguments_and_accepts_native_selection():
     import inspect
     sig = inspect.signature(S.run_installed_pdk_path_correlation)
-    assert list(sig.parameters) == ["project", "liberty_path", "container",
-                                    "max_stages"], list(sig.parameters)
+    assert list(sig.parameters)[:4] == ["project", "liberty_path", "container", "max_stages"]
+    sig.bind(Path('project'), 'timing.lib', container='selected-tool',
+             paths=1, sta_step_dir=Path('project/runs/sta'))
 
 
 # ── the defect itself, stated so BASE SOURCES can answer ─────────────────

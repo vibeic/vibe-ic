@@ -12,9 +12,8 @@ What stays vibe-ic's (the gate), applied to the tool's result:
 
 * the POST-ROUTE BASIS: the netlist, SDC, SPEF and liberties are exactly the
   ones `OpenROAD.STAPostPNR` timed this corner with
-  (`librelane_contract.post_pnr_timing_inputs`), from the state step 23
-  recorded (`librelane_postroute.stapostpnr_state`), or the arm refuses by
-  name;
+  (`librelane_contract.post_pnr_timing_inputs`), from the native step folder,
+  or the arm refuses by name;
 * the LIBERTY-GRID TOLERANCE: `spice_correlation_check.
   derive_liberty_path_tolerance` over the stages the STA path reports, at the
   slew and load STA used, with no fixed percentage;
@@ -326,6 +325,53 @@ def model_file(tech_dir: Path, guest_dir: str, simulator: str, liberty: str,
             'devices': sorted(devices)}
 
 
+def declared_sta_late_derate(transcript: str) -> float:
+    """Read uniform data-delay derating from evaluated native SDC commands."""
+    factors = {}
+    unbound = False
+    for event in re.findall(r'^VIBEIC_STA_DERATE (.*)$', transcript, re.M):
+        words = event.split()
+        if not words:
+            unbound = True
+            continue
+        command, *args = words
+        if command == 'unset_timing_derate' and not args:
+            factors, unbound = {}, False
+            continue
+        flags = {arg for arg in args if arg.startswith('-')}
+        values = [arg for arg in args if not arg.startswith('-')]
+        if (command != 'set_timing_derate'
+                or not flags <= {'-early', '-late', '-clock', '-data', '-rise', '-fall',
+                                 '-cell_delay', '-net_delay', '-cell_check'}):
+            unbound = True
+            continue
+        if (('-early' in flags and '-late' not in flags)
+                or ('-clock' in flags and '-data' not in flags)):
+            continue
+        kinds = {kind for kind in ('cell_delay', 'net_delay') if '-' + kind in flags}
+        if not kinds:
+            if '-cell_check' in flags:
+                continue
+            kinds = {'cell_delay', 'net_delay'}
+        if len(values) != 1:
+            unbound = True
+            continue
+        edges = {edge for edge in ('rise', 'fall') if '-' + edge in flags} or {'rise', 'fall'}
+        try:
+            factor = float(values[0])
+        except ValueError:
+            unbound = True
+            continue
+        if not math.isfinite(factor) or factor <= 0:
+            unbound = True
+            continue
+        factors.update({(kind, edge): factor for kind in kinds for edge in edges})
+    if unbound or len(factors) != 4 or len(set(factors.values())) != 1:
+        raise Refusal('LL_STA_DERATE_UNDECLARED',
+                      'native SDC declared no readable uniform late data-delay derate')
+    return next(iter(factors.values()))
+
+
 def arm_tcl(inputs: Dict[str, Any], project: Path, top: str, spef: str,
             opcond: Tuple[str, str], path_args: List[str], deck_dir: Path,
             cells: str, models: str, power: str, ground: str, simulator: str) -> str:
@@ -335,7 +381,15 @@ def arm_tcl(inputs: Dict[str, Any], project: Path, top: str, spef: str,
              '-resistance kOhm -distance um']
     lines += [f'read_liberty {lib}' for lib in inputs['liberties']]
     lines += [f'read_verilog {project / inputs["sta_netlist"]}', f'link_design {top}',
+              'proc _vibeic_sta_derate {command op} {',
+              'puts [list VIBEIC_STA_DERATE [namespace tail [lindex $command 0]] {*}[lrange $command 1 end]]',
+              '}',
+              'trace add execution [namespace origin set_timing_derate] enter _vibeic_sta_derate',
+              'trace add execution [namespace origin unset_timing_derate] enter _vibeic_sta_derate',
               f'read_sdc {project / inputs["sdc"]}',
+              'trace remove execution [namespace origin set_timing_derate] enter _vibeic_sta_derate',
+              'trace remove execution [namespace origin unset_timing_derate] enter _vibeic_sta_derate',
+              'rename _vibeic_sta_derate {}',
               f'set_operating_conditions -library {opcond[0]} {opcond[1]}',
               'set_propagated_clock [all_clocks]', f'read_spef {spef}']
     lines += [f'set _cf [open {deck_dir}/reference_clocks.txt w]',
@@ -1079,6 +1133,7 @@ def prepare_arm(project: Path, image: str, state_path: Path, corner: str, *,
                            args, out_dir, cells['path'], models['path'], power, ground, simulator))
     sta = _docker(image, project, mounts, ['sta', '-no_init', '-no_splash', '-exit', str(tcl)], out_dir)
     (out_dir / 'sta.log').write_text(sta.stdout + '\n' + sta.stderr)
+    late_derate = declared_sta_late_derate(sta.stdout)
     failed = re.findall(r'^VIBEIC_WPS_FAIL (\d+) (.*)$', sta.stdout, re.M)
     # Report `path_<i>.rpt` block <n> is the path `write_path_spice` wrote to
     # `path_<i>.sp_<n>.sp` (the same `-path_args`, the same order).
@@ -1099,6 +1154,7 @@ def prepare_arm(project: Path, image: str, state_path: Path, corner: str, *,
                              'deck': deck if deck.is_file() else None,
                              'wps_fail': [f for k, f in failed if int(k) == i]})
     return {'corner': corner, 'simulator': simulator, 'inputs': inputs,
+            'ocv_late_derate': late_derate,
             'spef': str(spef_path), 'spef_sha256': digest(spef_path), 'cells': cells,
             'models': models, 'sta_rc': sta.returncode, 'prepared': prepared,
             'sta_execution': {'tool': 'OpenSTA', 'rc': sta.returncode,
@@ -1127,6 +1183,10 @@ def simulate_arm(arm: Dict[str, Any], *, workers: int = 1) -> Dict[str, Any]:
             row.update(status='NOT_MEASURED', reason='no STA path or no deck',
                        wps_fail=item['wps_fail'])
             return row
+        reference_arm = (arm.get('reference_arms') or {}).get(item.get('arm'), arm)
+        late_derate = reference_arm.get('ocv_late_derate')
+        if type(late_derate) not in (int, float) or not math.isfinite(late_derate) or late_derate <= 0:
+            raise Refusal('LL_STA_DERATE_UNDECLARED', 'prepared STA arm has no declared late derate')
         step, asked = transient_step_s(deck, parsed['rows'])
         sim = _simulate(deck, simulator, arm['image'], arm['project'], arm['mounts'],
                         step_s=step)
@@ -1140,15 +1200,19 @@ def simulate_arm(arm: Dict[str, Any], *, workers: int = 1) -> Dict[str, Any]:
                        'log': str(deck.with_suffix('.log'))})
         if sim.returncode != 0:
             got = {'status': 'NOT_MEASURED', 'reason': 'simulator exited non-zero'}
-        sta_ns = parsed['path_delay_ns']
+        sta_derated_ns = parsed['path_delay_ns']
+        sta_ns = sta_derated_ns / late_derate
         stages = path_stages(parsed['rows'])
         for stage in stages:
             stage['dcalc'] = item.get('dcalc', {}).get(
                 (stage['inst'] + '/' + stage['toggle_pin'], stage['inst'] + '/' + stage['out_pin']))
-        tol = (_scc.derive_liberty_path_tolerance(arm['liberty_text'], stages, sta_ns)
+        tol = (_scc.derive_liberty_path_tolerance(arm['liberty_text'], stages, sta_derated_ns)
                if stages else None)
+        stages = [dict(stage, sta_delay_ns=stage['sta_delay_ns'] / late_derate)
+                  for stage in stages]
         row.update(startpoint=parsed['startpoint'], endpoint=parsed['endpoint'],
-                   sta_ns=sta_ns, stages=len(stages), sim_rc=sim.returncode, **got)
+                   sta_ns=sta_ns, sta_derated_ns=sta_derated_ns, ocv_late_derate=late_derate,
+                   stages=len(stages), sim_rc=sim.returncode, **got)
         if getattr(sim, '_vibeic_lifecycle', None):
             row['lifecycle'] = sim._vibeic_lifecycle
         if got.get('status') == 'MEASURED':
@@ -1158,7 +1222,6 @@ def simulate_arm(arm: Dict[str, Any], *, workers: int = 1) -> Dict[str, Any]:
                        verdict=(_scc.path_correlation_verdict(err, tol['tolerance_pct'])
                                 if tol and err is not None else 'TOLERANCE_UNDERIVABLE'))
             if tol and sta_ns:
-                reference_arm = (arm.get('reference_arms') or {}).get(item.get('arm'), arm)
                 sources = _reference_sources(reference_arm, stages, deck)
                 refs = deck.parent / 'refs' / f"path_{item['path']}"
                 characterisation = _scc.measure_pdk_characterisation(
@@ -1294,20 +1357,108 @@ def step_verdict(judgments: Dict[str, Dict[str, Any]],
                         f"{AGREEMENT_FRACTION * 100:g}%"))
 
 
+def native_sta_folder(project: Path, sta_step_dir: Optional[Path] = None) -> Path:
+    """Select one native STAPostPNR folder by its resolved configuration."""
+    project = Path(project).resolve(strict=True)
+    if sta_step_dir is None:
+        candidates = []
+        for path in project.rglob('config.json'):
+            if ('attempts' in path.relative_to(project).parts
+                    or any(path.is_relative_to(root) for root in
+                           (project / 'steps', project / 'reports/step_versions'))):
+                continue
+            try:
+                config = _load(path)
+            except (OSError, ValueError, Refusal):
+                continue
+            meta = config.get('meta')
+            if isinstance(meta, dict) and meta.get('step') == 'OpenROAD.STAPostPNR':
+                candidates.append(path.parent)
+        if not candidates:
+            raise Refusal('LL_STAPOSTPNR_STATE_ABSENT', str(project))
+        if len(candidates) != 1:
+            raise Refusal('LL_STAPOSTPNR_STATE_AMBIGUOUS', str(candidates))
+        sta_step_dir = candidates[0]
+    folder = Path(sta_step_dir).resolve(strict=True)
+    if not folder.is_relative_to(project):
+        raise Refusal('LL_STATE_OUTSIDE_PROJECT', str(folder))
+    for name in ('config.json', 'state_out.json'):
+        path = folder / name
+        if not path.is_file() or not path.stat().st_size:
+            raise Refusal('LL_STATE_FILE_MISSING', str(path))
+        if not path.resolve().is_relative_to(folder):
+            raise Refusal('LL_STATE_OUTSIDE_PROJECT', str(path))
+    config = _load(folder / 'config.json')
+    meta = config.get('meta')
+    if not isinstance(meta, dict) or meta.get('step') != 'OpenROAD.STAPostPNR':
+        raise Refusal('LL_NOT_STAPOSTPNR', str(folder))
+    return folder
+
+
+def worst_setup_corner(folder: Path) -> str:
+    """Read the worst setup scene from native metrics or the native summary."""
+    folder = Path(folder).resolve(strict=True)
+    config = _load(folder / 'config.json')
+    logs = {path.parent.name: path for path in folder.glob('*/sta.log') if path.is_file()}
+    for path in logs.values():
+        if not path.resolve().is_relative_to(folder):
+            raise Refusal('LL_STATE_OUTSIDE_PROJECT', str(path))
+    declared = config.get('STA_CORNERS')
+    if declared is not None and (
+            not isinstance(declared, list) or not declared
+            or any(not isinstance(c, str) or not c for c in declared)
+            or len(set(declared)) != len(declared) or not set(logs) <= set(declared)):
+        raise Refusal('LL_CORNER_NOT_ANALYSED', str(folder))
+    state = _load(folder / 'state_out.json')
+    metrics = state.get('metrics') or {}
+    if not isinstance(metrics, dict):
+        raise Refusal('LL_STEP30_CORNER_UNDECLARED', str(folder / 'state_out.json'))
+    metrics = dict(metrics)
+    metrics_path = folder / 'metrics.json'
+    if metrics_path.exists():
+        if not metrics_path.resolve().is_relative_to(folder):
+            raise Refusal('LL_STATE_OUTSIDE_PROJECT', str(metrics_path))
+        metrics.update(_load(metrics_path))
+    prefix = 'timing__setup__ws__corner:'
+    setup = {name[len(prefix):]: value for name, value in metrics.items()
+             if name.startswith(prefix)}
+    if not setup:
+        summary = folder / 'summary.rpt'
+        if not summary.is_file():
+            raise Refusal('LL_STEP30_CORNER_UNDECLARED', str(summary))
+        if not summary.resolve().is_relative_to(folder):
+            raise Refusal('LL_STATE_OUTSIDE_PROJECT', str(summary))
+        for line in summary.read_text().splitlines():
+            if not line.strip().startswith('│'):
+                continue
+            cells = [cell.strip() for cell in line.split('│')[1:-1]]
+            if not cells or cells[0] == 'Overall':
+                continue
+            if len(cells) < 7 or cells[0] in setup:
+                raise Refusal('LL_STEP30_CORNER_UNDECLARED', str(summary))
+            try:
+                setup[cells[0]] = float(cells[6])
+            except ValueError as exc:
+                raise Refusal('LL_STEP30_CORNER_UNDECLARED', str(summary)) from exc
+    if (not logs or set(setup) != set(logs)
+            or any(type(value) not in (int, float) or not math.isfinite(value)
+                   for value in setup.values())):
+        raise Refusal('LL_STEP30_CORNER_UNDECLARED', str(folder))
+    return min(setup, key=lambda name: (setup[name], name))
+
+
 def run_step30(project: Path, image: str, pdk_root: Path, pdk: str, *,
                corner: Optional[str] = None, paths: int = 3,
-               simulators: Sequence[str] = SIMULATORS) -> Dict[str, Any]:
-    """Step 30's tool arm on the STAPostPNR state step 23 recorded: each
+               simulators: Sequence[str] = SIMULATORS,
+               sta_step_dir: Optional[Path] = None) -> Dict[str, Any]:
+    """Step 30's tool arm on a native STAPostPNR state: each
     simulator on the base SPEF and on the mutated one, judged, and written to
-    `reports/phase3/spice_path_tool.json`. The corner is the one step 23 named
-    worst for setup unless one is given. A simulator that cannot run this PDK
+    `reports/phase3/spice_path_tool.json`. The corner is the native worst
+    setup corner unless one is given. A simulator that cannot run this PDK
     is recorded by its refusal; nothing falls back."""
-    import librelane_postroute as _lp
-    folder, _state = _lp.stapostpnr_state(project)
-    record = _load(project / _lp.STEP23_RECORD)
-    corner = corner or ((record.get('judgment') or {}).get('worst_setup') or {}).get('corner')
-    if not corner:
-        raise Refusal('LL_STEP30_CORNER_UNDECLARED', 'step 23 named no worst setup corner')
+    project = Path(project).resolve(strict=True)
+    folder = native_sta_folder(project, sta_step_dir)
+    corner = corner or worst_setup_corner(folder)
     state_path = folder / 'state_out.json'
     root = project / 'phase3/tool_arms/30'
     arms: Dict[str, Any] = {}
@@ -1365,44 +1516,36 @@ def run_step30(project: Path, image: str, pdk_root: Path, pdk: str, *,
     return document
 
 
-def current_context(project: Path, image: str, pdk_root: Path, pdk: str):
+def current_context(project: Path, image: str, pdk_root: Path, pdk: str, *,
+                    sta_step_dir: Optional[Path] = None):
     """Current routed subject and the existing tool's extracted corner inputs."""
     import _opensta_current as current
-    import librelane_contract as lc
-    import librelane_postroute as lp
     project = Path(project).resolve(strict=True)
-    folder, _ = lp.stapostpnr_state(project)
-    if not folder.resolve().is_relative_to(project / 'phase3/librelane'):
-        raise Refusal('CURRENT_STEP30_STAGE_MISMATCH', str(folder))
-    lc.validate_step_receipt(folder, 'OpenROAD.STAPostPNR')
-    record = _load(project / lp.STEP23_RECORD)
-    corner = ((record.get('judgment') or {}).get('worst_setup') or {}).get('corner')
-    if not corner:
-        raise Refusal('CURRENT_STEP30_CORNER_MISSING', str(record))
+    folder = native_sta_folder(project, sta_step_dir)
+    corner = worst_setup_corner(folder)
     inputs = post_pnr_timing_inputs(project, folder / 'state_out.json', corner)
     config = _load(folder / 'config.json')
     top = config.get('DESIGN_NAME')
-    host = lambda path: Path(str(path).replace(f'/pdk/{pdk}/', str(pdk_root / pdk) + '/', 1))
-    libs = [host(path) for path in inputs['liberties']]
-    subject, _tool = current.tool_subject(project, top, corner=corner)
+    pdk_root = Path(pdk_root).resolve()
+    pdk_dir = (pdk_root / pdk).resolve()
     guest_pdk = Path(f'/pdk/{pdk}')
-    mapped_pdk = any(guest_pdk.is_relative_to(guest_root)
-                     and (Path(host_root) / guest_pdk.relative_to(guest_root)).resolve()
-                         == (pdk_root / pdk).resolve()
-                     for host_root, guest_root in _tool['mounts'])
-    # The subject retains Stage23's producer image; this context records the
-    # current execution image. A tool update does not change retained bytes.
+    def host(path):
+        path = Path(path)
+        return pdk_dir / path.relative_to(guest_pdk) if path.is_relative_to(guest_pdk) else path
     if (not isinstance(image, str) or not re.search(r'@sha256:[0-9a-f]{64}$', image)
-            or config.get('PDK') != pdk or not mapped_pdk):
+            or config.get('PDK') != pdk or not pdk_dir.is_dir()):
         raise Refusal('CURRENT_STEP30_IMAGE_OR_PDK_MISMATCH', str(pdk_root))
-    roles = {row['role']: row for row in subject['inputs']}
-    for role, key in [('netlist', 'sta_netlist'), ('sdc', 'sdc'), ('spef', 'spef')]:
-        if current.digest(project / inputs[key]) != roles[role]['sha256']:
-            raise Refusal('CURRENT_STEP30_TOOL_SUBJECT_MISMATCH', role)
+    libs = [host(path).resolve(strict=True) for path in inputs['liberties']]
+    if any(not path.is_relative_to(pdk_dir) for path in libs):
+        raise Refusal('CURRENT_STEP30_PDK_PATH_MISMATCH', str(libs))
+    subject = current.basis(project, top, libs, netlist=project / inputs['sta_netlist'],
+                            sdc=project / inputs['sdc'], spef=project / inputs['spef'])
     subject['inputs'] += [current.file_record(path, role, project) for role, path in [
         ('sta_state', folder / 'state_out.json'), ('sta_config', folder / 'config.json'),
-        ('sta_receipt', folder / 'vibeic_receipt.json'), ('step23_record', project / lp.STEP23_RECORD),
-        ('sta_corner_log', folder / corner / 'sta.log')]]
+        *[(f'sta_corner_log:{path.parent.name}', path)
+          for path in sorted(folder.glob('*/sta.log'))],
+        *[(f'sta_selection:{name}', folder / name) for name in ('metrics.json', 'summary.rpt')
+          if (folder / name).is_file()]]]
     sources = {str(path.resolve()): current.digest(path)
                for directory in ('ngspice', 'magic')
                for path in (pdk_root / pdk / 'libs.tech' / directory).rglob('*')
@@ -1417,10 +1560,12 @@ def current_context(project: Path, image: str, pdk_root: Path, pdk: str):
             if not source.is_relative_to((pdk_root / pdk).resolve()):
                 raise Refusal('CURRENT_STEP30_PDK_PATH_MISMATCH', str(source))
             sources[str(source)] = current.digest(source)
+    if any(not Path(path).is_relative_to(pdk_dir) for path in sources):
+        raise Refusal('CURRENT_STEP30_PDK_PATH_MISMATCH', str(pdk_root))
     if not sources:
         raise Refusal('CURRENT_STEP30_MODELS_MISSING', str(pdk_root))
     return subject, {'image': image, 'pdk_root': str(pdk_root), 'pdk': pdk,
-                     'corner': corner, 'sources': sources,
+                     'corner': corner, 'sta_step_dir': str(folder), 'sources': sources,
                      'extraction_corner': extraction_corner(pdk, pdk_root / pdk, inputs['liberties'][0])}
 
 
@@ -1541,7 +1686,8 @@ def _current_companion_errors(project: Path, tool: dict, subject: dict, context:
                   f'; companion execution errors: {errors}')
 
 
-def run_current_step30(project: Path, image: str, pdk_root: Path, pdk: str, *, paths: int = 1):
+def run_current_step30(project: Path, image: str, pdk_root: Path, pdk: str, *, paths: int = 1,
+                       sta_step_dir: Optional[Path] = None):
     """Ordinary Step 30: existing write_path_spice route, one native simulator.
 
     The existing tool owns its decks, local Liberty tolerance and SPEF-response
@@ -1556,9 +1702,11 @@ def run_current_step30(project: Path, image: str, pdk_root: Path, pdk: str, *, p
     for path in (report, receipt_path, canonical_deck, canonical_log,
                  canonical_deck.with_suffix('.json')):
         path.unlink(missing_ok=True)
-    subject, context = current_context(project, image, pdk_root, pdk)
-    tool = run_step30(project, image, pdk_root, pdk, paths=paths, simulators=('ngspice',))
-    if current_context(project, image, pdk_root, pdk) != (subject, context):
+    subject, context = current_context(project, image, pdk_root, pdk, sta_step_dir=sta_step_dir)
+    folder = Path(context['sta_step_dir'])
+    tool = run_step30(project, image, pdk_root, pdk, paths=paths, simulators=('ngspice',),
+                      sta_step_dir=folder)
+    if current_context(project, image, pdk_root, pdk, sta_step_dir=folder) != (subject, context):
         raise Refusal('CURRENT_STEP30_INPUT_CHANGED_DURING_RUN', str(project))
     companion_errors = _current_companion_errors(project, tool, subject, context)
     executions, outputs = _current_executions(tool), []
@@ -1615,7 +1763,8 @@ def validate_current_step30(project: Path):
             or receipt.get('project') != str(project) or receipt.get('stage') != 'post_route_extracted'):
         raise Refusal('CURRENT_STEP30_PROJECT_STAGE_MISMATCH', str(report))
     context = receipt['context']
-    subject, now = current_context(project, context['image'], Path(context['pdk_root']), context['pdk'])
+    subject, now = current_context(project, context['image'], Path(context['pdk_root']), context['pdk'],
+                                    sta_step_dir=Path(context['sta_step_dir']))
     if now != context or any(receipt.get(k) != subject[k] for k in subject):
         raise Refusal('CURRENT_STEP30_INPUT_BYTES_CHANGED', str(report))
     current.check_files(receipt['execution_files'], project)
