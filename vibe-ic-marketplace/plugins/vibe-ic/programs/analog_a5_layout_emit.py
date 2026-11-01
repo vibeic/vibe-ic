@@ -2806,9 +2806,6 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                    "fullspan": margin}
         region_widths = {**widths, "fullspan": width - margin}
         for d in fullspan:
-            required = gap(None, d) + d["bbox"][2] - d["bbox"][0] + gap(d, None)
-            if final and required > region_widths["fullspan"]:
-                raise Refusal("parallel resistor pair access envelope exceeds the full-span width")
             d["placement_region"] = "fullspan"
             d["box_x"] = d["gap_hi"] = margin + gap(None, d)
             d["right_lo"] = d["box_x"] + d["bbox"][2] - d["bbox"][0]
@@ -2885,6 +2882,15 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                                  "column_lambda": [offsets[region],
                                                    offsets[region] + region_widths[region]]})
         bus_x, used_margin = _m4_trunk_tracks(row_rails, geo)
+        if final:
+            for d in fullspan:
+                required = gap(None, d) + d["bbox"][2] - d["bbox"][0] + gap(d, None)
+                if required > width - used_margin:
+                    raise Refusal(
+                        "parallel resistor pair access envelope exceeds the full-span width: "
+                        f"required={required / geo.lam:g}um "
+                        f"available={(width - used_margin) / geo.lam:g}um "
+                        f"colored_bank={used_margin / geo.lam:g}um")
         shift = used_margin - margin
         for d in per_dev:
             for key in ("box_x", "gap_hi", "right_lo"):

@@ -79,3 +79,16 @@ def test_loaded_divider_midpoint_keeps_the_identical_series_pair():
     unequal = {**second, 'pars': {'w': .5, 'l': 180}}
     cells[a.config_key(unequal)] = cells[a.config_key(first)]
     assert a._series_resistor_pair([first, unequal, load], ['hi', 'lo', 'vss'], cells) == []
+
+
+def test_pair_fit_uses_the_final_colored_bank(monkeypatch):
+    original = a._m4_trunk_tracks
+    calls = []
+    def color(rails, geometry):
+        bus, _ = original(rails, geometry)
+        calls.append(None)
+        return bus, 0 if len(calls) == 1 else 1500
+    monkeypatch.setattr(a, '_m4_trunk_tracks', color)
+    with pytest.raises(a.Refusal, match=r'required=189.42um available=185um colored_bank=15um'):
+        a._place_left_right_rows(parallel_devices(), ['top', 'bottom'],
+                                 geo(), None, 200, ())
