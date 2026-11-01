@@ -12267,6 +12267,19 @@ def step_full_stack_tb_gen(project: Path,
                      "`reset_n` below reaches no DUT port.")
         lines.append("    reset_n = 0; #100;")
         lines.append("    reset_n = 1; #100;")
+    # Declaration initializers run before an always @(*) process is waiting.
+    # With no DUT clock, ordinary data inputs otherwise never cause an event.
+    # Schedule a real transition after reset, then restore their initial zero;
+    # the existing run delay settles combinational outputs before their checks.
+    _fs_settle_inputs = ([nm for nm, _w in _fs_inputs
+                          if nm not in (_fs_rst, "clk", "reset_n")]
+                         if not _fs_clk else [])
+    if _fs_settle_inputs:
+        lines.append("    // Post-reset data events for connectivity settling.")
+        for _settle_phase in range(2):
+            lines.append("    #1;")
+            for _nm in _fs_settle_inputs:
+                lines.append(f"    {_nm} = ~{_nm};")
     lines.append("    // v1.6.269 — drive ≥3 distinct opcodes from L3 (chip-AGNOSTIC)")
     for op in opcodes_hex[:5]:
         try:

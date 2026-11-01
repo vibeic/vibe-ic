@@ -191,6 +191,11 @@
       ],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
+    "phase2.full_stack_tb.input_events": {
+      "description": "Positive-time data events in the generic full-stack connectivity skeleton before output-resolvability checks; routing only, not professional functional verification or a new gate.",
+      "bucket_A_program": "programs/design_one_shot_runner.py",
+      "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
+    },
     "phase2.full_stack_tb.closed_form_arithmetic": {
       "description": "Closed-form arithmetic model extraction and test generation; capture routing only, not a new flow step.",
       "bucket_A_program": "programs/arith_oracle_tb_gen.py",

@@ -41,6 +41,10 @@ BIDIRECTIONAL, and each direction is a different way to get this wrong:
 chip-AGNOSTIC: port-name grammar and Verilog edge keywords only.
 """
 import json
+import hashlib
+import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -192,3 +196,79 @@ def test_results_json_records_whether_the_dut_was_clocked(tmp_path):
     sb2 = res2["stimulus_binding"]
     assert sb2["dut_is_clocked_by_this_tb"] is True, sb2
     assert sb2["clock_port"] == "i_clk", sb2
+
+
+def _run_generated_tb(tmp_path, rtl, ports):
+    """Run the actual generated skeleton and its existing connectivity reader."""
+    iverilog, vvp = shutil.which('iverilog'), shutil.which('vvp')
+    if not iverilog or not vvp:
+        pytest.skip('NOT_RUN: Icarus iverilog/vvp are required for the scheduling control')
+    proj = _mk(tmp_path, rtl, ports)
+    dut = proj / 'phase2/stage1/rtl/dut_top.v'
+    before = dut.read_bytes()
+    tb_text = _tb(proj)
+    folder = proj / 'phase2/stage1/sim_full_stack'
+    tb, binary = folder / 'tb_dut_top_full.v', folder / 'generated.vvp'
+    command = [iverilog, '-g2012', '-DSIMULATION', '-s', 'tb_dut_top_full',
+               '-o', str(binary), str(tb), str(dut)]
+    compiled = subprocess.run(command, capture_output=True, text=True, timeout=20)
+    assert compiled.returncode == 0, compiled.stderr
+    run = subprocess.run([vvp, str(binary)], cwd=folder, capture_output=True,
+                         text=True, timeout=20)
+    assert run.returncode == 0, (run.stdout, run.stderr)
+    transcript = folder / 'host_full_stack.log'
+    transcript.write_text(run.stdout + run.stderr)
+    counts = re.search(r'FULL_STACK_TB_CHECKS pass=(\d+) fail=(\d+)', run.stdout)
+    assert counts, run.stdout
+    observed = {
+        'pass': int(counts.group(1)), 'fail': int(counts.group(2)),
+        'bridge': R._emit_connectivity_sim_bridge(
+            proj, transcript, 'dut_top', 'neutral host scheduling control'),
+    }
+    assert dut.read_bytes() == before
+    (folder / 'host_observation.json').write_text(json.dumps({
+        'observed': observed, 'compile_argv': command,
+        'rtl_sha256': hashlib.sha256(before).hexdigest(),
+        'tb_sha256': hashlib.sha256(tb_text.encode()).hexdigest(),
+        'stdout': run.stdout, 'stderr': run.stderr}, indent=2))
+    return observed, run.stdout, tb_text
+
+
+@pytest.mark.parametrize('vector', [False, True], ids=['scalar', 'vector'])
+def test_combinational_always_star_receives_a_real_input_event(tmp_path, vector):
+    if vector:
+        rtl = ('module dut_top(input [3:0] a, input [3:0] b, input choose, '
+               'output reg [3:0] y);\n'
+               'always @(*) if (choose) y=a; else y=b;\nendmodule\n')
+        ports = COMB_PORTS[:2] + [{'name': 'choose', 'direction': 'input'},
+                                {'name': 'y', 'direction': 'output', 'width': 4}]
+    else:
+        rtl = ('module dut_top(input a, input b, output reg y);\n'
+               'always @(*) y=a&b;\nendmodule\n')
+        ports = [{'name': 'a', 'direction': 'input'},
+                 {'name': 'b', 'direction': 'input'},
+                 {'name': 'y', 'direction': 'output'}]
+    observed, output, _ = _run_generated_tb(tmp_path, rtl, ports)
+    assert observed == {'pass': 1, 'fail': 0, 'bridge': True}, output
+
+
+def test_real_input_events_do_not_hide_a_genuinely_undriven_output(tmp_path):
+    rtl = ('module dut_top(input [3:0] a, input [3:0] b, '
+           'output reg [3:0] y, output [3:0] orphan);\n'
+           'always @(*) y=a&b;\nendmodule\n')
+    ports = COMB_PORTS[:2] + [{'name': 'y', 'direction': 'output', 'width': 4},
+                            {'name': 'orphan', 'direction': 'output', 'width': 4}]
+    observed, output, _ = _run_generated_tb(tmp_path, rtl, ports)
+    assert observed == {'pass': 1, 'fail': 1, 'bridge': False}, output
+    assert 'CHECK FAIL post_reset_resolvable orphan' in output
+    assert 'CHECK PASS post_reset_resolvable y' in output
+
+
+@pytest.mark.parametrize('rtl,ports', [(I_CLK_RTL, I_CLK_PORTS),
+                                     (ACTIVE_LOW_RTL, ACTIVE_LOW_PORTS)],
+                         ids=['active_high', 'active_low'])
+def test_existing_clock_and_reset_sequences_still_run(tmp_path, rtl, ports):
+    observed, output, tb = _run_generated_tb(tmp_path, rtl, ports)
+    assert observed == {'pass': 1, 'fail': 0, 'bridge': True}, output
+    clock = 'i_clk' if 'i_clk' in rtl else 'clk_i'
+    assert f'repeat ({R._FS_TB_RUN_CYCLES}) @(posedge {clock});' in tb
