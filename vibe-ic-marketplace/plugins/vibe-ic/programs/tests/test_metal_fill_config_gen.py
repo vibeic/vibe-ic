@@ -232,6 +232,15 @@ def test_routing_names_need_no_derived_stem():
     assert cfg["layers"][0]["space"] == 0.71
 
 
+def test_arbitrary_routing_name_keeps_deck_declared_regions():
+    deck = """crown_drawn = input(74, 0)
+blocked = input(95, 0)
+crown_drawn.separation(blocked, 4.7.um)
+"""
+    cfg = G.build_metal_fill_config("CROWN NET 74 0", _routing_layer("Crown", _PRL), deck)
+    assert cfg["keepout_layers"] == [[95, 0, 4.7]]
+
+
 def test_explicit_prefix_keeps_all_declared_routing_layers():
     lef = _routing_layer("Metal1", _PRL) + _routing_layer("TopMetal1", _INFLUENCE)
     assert G.parse_techlef_routing(lef, "Metal") == {
@@ -262,6 +271,8 @@ def test_nonderivable_routing_layer_is_named_for_parser_and_builder(rules, width
     "SPACINGTABLE PARALLELRUNLENGTH 0 WIDTH 0 -0.2 ;",
     "SPACINGTABLE PARALLELRUNLENGTH 0 WIDTH 0 1e999 ;",
     "SPACINGTABLE PARALLELRUNLENGTH 0 WIDTH 0 0.2",
+    "SPACING 0.27\nSPACINGTABLE PARALLELRUNLENGTH 0 WIDTH 0 0.9 ;",
+    "AREA 0.1\nSPACINGTABLE PARALLELRUNLENGTH 0 WIDTH 0 0.9 ;",
 ])
 def test_malformed_or_unsupported_table_refuses_by_layer_even_with_numeric_spacing(table):
     lef = _routing_layer("Metal1", "SPACING 0.27 ;\n" + table)
