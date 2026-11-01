@@ -177,8 +177,6 @@ def compile_branches(intent: RoutingIntent, devices, ports, pin_spec=None) -> Co
             refuse("ENDPOINT", "separation references an absent net")
         if item.shield_net in item.nets:
             refuse("CONFLICT", "the shield must be a third net")
-        if item.shield_net is not None:
-            refuse("SHIELD_UNROUTABLE", "a connected shield on the declared layer cannot be established by this channel planner")
     for ti, item in enumerate(intent.topology):
         endpoint(item.join, item.net)
         refs = [ref for group in item.groups for ref in group]
@@ -209,6 +207,18 @@ def compile_branches(intent: RoutingIntent, devices, ports, pin_spec=None) -> Co
             compiled_ports[compiled_ports.index(item.net)] = owner
             if compiled_spec:
                 compiled_spec["ports"][owner] = compiled_spec["ports"].pop(item.net)
+    for item in intent.separations:
+        if item.shield_net is None:
+            continue
+        order = []
+        for net in (item.nets[0], item.shield_net, item.nets[1]):
+            private = next((private for private in compiled_ports if canonical[private] == net), None)
+            if private is None:
+                refuse("SHIELD_UNROUTABLE", "the bounded shield channel requires declared pair and shield ports")
+            order.append(private)
+        positions = [compiled_ports.index(private) for private in order]
+        for position, private in zip(sorted(positions), order):
+            compiled_ports[position] = private
     if compiled_spec:
         for private, spec in compiled_spec["ports"].items():
             policy = next((width for width in intent.widths if width.net == canonical[private]), None)
@@ -363,6 +373,17 @@ def _canonical(row, compiled, plan):
 
 
 def _safe(paint, net, plan, compiled, geo, a5, allowed=None, allowed_layers=(), friendly=None):
+    for index, (layer, box) in enumerate(paint):
+        for other_layer, other in paint[:index]:
+            if layer != other_layer or tuple(box) == tuple(other):
+                continue
+            dx = max(box[0] - other[2], other[0] - box[2], 0)
+            dy = max(box[1] - other[3], other[1] - box[3], 0)
+            if not (dx or dy) and not layer.startswith("via"):
+                continue
+            spacing = geo.metal_space(layer, box, other)
+            if dx < spacing and dy < spacing:
+                return False
     for layer, box in paint:
         for row in list(plan.shapes) + list(plan.device_shapes):
             if not a5._linked(layer, row["layer"]):
@@ -370,20 +391,28 @@ def _safe(paint, net, plan, compiled, geo, a5, allowed=None, allowed_layers=(), 
             other = row["box"]
             touching = _overlap(box, other)
             if row["net"] == net:
-                continue
+                if layer == row["layer"] and layer.startswith("via"):
+                    if tuple(box) == tuple(other):
+                        continue
+                elif touching:
+                    continue
             if touching and allowed is not None and layer in allowed_layers and row["layer"] in allowed_layers:
                 same = compiled.canonical.get(row["net"]) == compiled.canonical.get(net)
                 native = friendly is not None and row.get("comp") == friendly
                 if (same or native) and _inside(_intersection(box, other), allowed):
                     continue
+            if layer != row["layer"] and not touching:
+                continue
             spacing = geo.metal_space(layer, box, other)
             for pair in compiled.intent.separations:
-                if compiled.canonical.get(net, net) in pair.nets and any(n in pair.nets and n != compiled.canonical.get(net, net)
+                if pair.spacing_um is not None and compiled.canonical.get(net, net) in pair.nets and any(n in pair.nets and n != compiled.canonical.get(net, net)
                                                                                         for n in _canonical(row, compiled, plan)):
                     spacing = max(spacing, math.ceil(pair.spacing_um * geo.lam - 1e-9))
             dx = max(box[0] - other[2], other[0] - box[2], 0)
             dy = max(box[1] - other[3], other[1] - box[3], 0)
             if dx < spacing and dy < spacing:
+                plan.intent_collision = {"net": net, "candidate": [layer, list(box)],
+                                         "obstacle": {key: row[key] for key in ("net", "layer", "box")}}
                 return False
     return True
 
@@ -413,7 +442,7 @@ def _join_port(plan, owner, count, band, compiled, geo, a5):
     region = (x - bx, low, x + bx, high)
     extension = (pin["layer"], (x - bx, low, x + bx, pin["strip_box"][1] + 1))
     if not _safe([extension], owner, plan, compiled, geo, a5):
-        refuse("NO_LEGAL_ROUTE", f"{compiled.canonical[owner]} has no clear declared pin junction")
+        refuse("NO_LEGAL_ROUTE", f"{compiled.canonical[owner]} has no clear declared pin junction; {getattr(plan, 'intent_collision', {})}")
     plan.paint(owner, extension[0], *extension[1])
     pin["label_box"] = region
     pin["strip_box"] = (min(region[0], pin["strip_box"][0]), low,
@@ -450,6 +479,20 @@ def _connect_branch(plan, branch, owner, region, level, top, target, compiled, g
     join_paint, bars = a5._pin_stack_boxes(tx, ty, level, top, geo, cuts)
     if not _inside(bars[level], region):
         refuse("VIA_SITE", "the declared load contact cannot enclose the requested cut array")
+    sources = [row for row in plan.shapes if row["net"] == branch and row["layer"] == "metal3"]
+    sources.sort(key=lambda row: (row["box"][1], -(row["box"][3] - row["box"][1])))
+    for source in sources:
+        box = source["box"]
+        sx, sy = (box[0] + box[2]) // 2, (box[1] + box[3]) // 2
+        for carry in range(3, top + 1):
+            access = a5._pin_stack_boxes(sx, sy, 3, carry, geo, cuts)[0] if carry > 3 else []
+            elbow, _ = a5._pin_stack_boxes(sx, ty, carry, top, geo, cuts)
+            paint = access + [_wire(carry, sx, sy, sx, ty, geo)] + elbow
+            paint += [_wire(top, sx, ty, tx, ty, geo)] + join_paint
+            if _safe(paint, branch, plan, compiled, geo, a5, region, allowed_layers, friendly):
+                for layer, rectangle in paint:
+                    plan.paint(branch, layer, *rectangle)
+                return
     rows = [row for row in plan.shapes if row["net"] == branch and row["layer"] == f"metal{plan.rail_level}"
             and row["box"][2] - row["box"][0] > row["box"][3] - row["box"][1]]
     rows.sort(key=lambda row: (row["box"][1], -(row["box"][2] - row["box"][0])))
@@ -469,13 +512,15 @@ def _connect_branch(plan, branch, owner, region, level, top, target, compiled, g
             for layer, rectangle in paint:
                 plan.paint(branch, layer, *rectangle)
             return
-    refuse("NO_LEGAL_ROUTE", f"branch {branch} has no clear route to the declared load contact")
+    refuse("NO_LEGAL_ROUTE", f"branch {branch} has no clear route to the declared load contact; {getattr(plan, 'intent_collision', {})}")
 
 
 def verify_separation(plan, compiled, geo, a5):
     rows = list(plan.shapes) + list(plan.device_shapes)
     evidence = []
     for item in compiled.intent.separations:
+        if item.spacing_um is None:
+            continue
         first = [row for row in rows if item.nets[0] in _canonical(row, compiled, plan)]
         second = [row for row in rows if item.nets[1] in _canonical(row, compiled, plan)]
         measured = []
@@ -500,6 +545,70 @@ def verify_separation(plan, compiled, geo, a5):
     return evidence
 
 
+def build_shields(plan, compiled, geo, facts, a5):
+    evidence = []
+    for item in compiled.intent.separations:
+        if item.shield_net is None:
+            continue
+        level = None
+        if facts.layers is not None and facts.layers.knows(item.layer):
+            canonical = facts.layers.canon[item.layer]
+            planes = facts.layers.conductor_planes(item.layer)
+            if canonical in facts.layers.connects or len(planes) != 1:
+                refuse("SHIELD_LAYER", f"{item.layer} is a contact, not a pure routing conductor")
+            level = facts.layers.level(item.layer)
+        elif facts.layers is None and item.layer.startswith("metal") and item.layer[5:].isdigit():
+            level = int(item.layer[5:])
+        if level not in geo.rules["metal_width_um"]:
+            refuse("SHIELD_LAYER", f"{item.layer} is not a declared PDK routing plane")
+        layer = f"metal{level}"
+        if any(row["layer"] == layer and not _canonical(row, compiled, plan) for row in plan.device_shapes):
+            refuse("NATIVE_OWNERSHIP_AMBIGUOUS", f"cannot establish complete shield coverage on {layer}")
+        rows = list(plan.shapes) + list(plan.device_shapes)
+        first = [row for row in rows if row["layer"] == layer and item.nets[0] in _canonical(row, compiled, plan)]
+        second = [row for row in rows if row["layer"] == layer and item.nets[1] in _canonical(row, compiled, plan)]
+        guards = [row for row in plan.shapes if row["layer"] == layer and item.shield_net in _canonical(row, compiled, plan)]
+        if not first or not second or not guards:
+            refuse("SHIELD_UNROUTABLE", f"the declared pair and shield have no connected {layer} channel")
+        def extent(records):
+            return (min(row["box"][0] for row in records), min(row["box"][1] for row in records),
+                    max(row["box"][2] for row in records), max(row["box"][3] for row in records))
+        a, b = extent(first), extent(second)
+        shield_id = compiled.joins.get(item.shield_net, guards[0]["net"])
+        profile = geo.for_net(shield_id)
+        half = math.ceil(profile.wire[level] / 2)
+        candidates = []
+        for axis in (0, 1):
+            low, high = sorted((a, b), key=lambda box: box[axis])
+            other_axis = 1 - axis
+            if max(a[other_axis], b[other_axis]) >= min(a[other_axis + 2], b[other_axis + 2]):
+                continue
+            for guard in guards:
+                center = (guard["box"][axis] + guard["box"][axis + 2]) // 2
+                if center - half <= low[axis + 2] or center + half >= high[axis]:
+                    continue
+                lo = min(a[other_axis], b[other_axis], guard["box"][other_axis])
+                hi = max(a[other_axis + 2], b[other_axis + 2], guard["box"][other_axis + 2])
+                box = (center - half, lo, center + half, hi) if axis == 0 else (lo, center - half, hi, center + half)
+                if _safe([(layer, box)], shield_id, plan, compiled, profile, a5):
+                    candidates.append((box, axis))
+        if not candidates:
+            refuse("SHIELD_UNROUTABLE", f"no PDK-clear connected {layer} shield lies between {item.nets}")
+        box, axis = candidates[0]
+        plan.paint(shield_id, layer, *box)
+        full_rows = list(plan.shapes) + list(plan.device_shapes)
+        roots = components(full_rows, a5._linked)
+        guard_roots = {roots[index] for index, row in enumerate(full_rows)
+                       if index < len(plan.shapes) and item.shield_net in _canonical(row, compiled, plan)
+                       and (row["layer"], tuple(row["box"])) not in plan.patch_of}
+        if len(guard_roots) != 1:
+            refuse("SHIELD_UNCONNECTED", f"{item.shield_net} shield is not one connected routed net")
+        evidence.append({"kind": "separation", "nets": list(item.nets), "shield_net": item.shield_net,
+                         "layer": layer, "shield_box_lambda": list(box), "axis": axis,
+                         "continuous_projection": True, "connected": True})
+    return evidence
+
+
 def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, raw, options):
     import analog_a5_layout_emit as a5
     intent = raw if isinstance(raw, RoutingIntent) else parse_intent(raw)
@@ -516,7 +625,7 @@ def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, 
             refuse("WIDTH_BELOW_PDK_MINIMUM", f"{width.net} width {width.wire_width_um:g}um < {minimum:g}um")
     reserve_width = max([math.ceil(width.wire_width_um * geo.lam - 1e-9) for width in intent.widths] + [0])
     geo.wire = {level: 2 * math.ceil(max(value, reserve_width) / 2) for level, value in geo.wire.items()}
-    reserve_space = max([math.ceil(item.spacing_um * geo.lam - 1e-9) for item in intent.separations] + [0])
+    reserve_space = max([math.ceil(item.spacing_um * geo.lam - 1e-9) for item in intent.separations if item.spacing_um is not None] + [0])
     geo.space = {level: max(value, reserve_space) for level, value in geo.space.items()}
     geo.default_space = max(geo.default_space, reserve_space)
     profiles = {}
@@ -537,7 +646,26 @@ def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, 
         profile.space = dict(geo.space)
         profile.default_space = geo.default_space
         profiles[private] = profile
+    for private, profile in profiles.items():
+        cuts = profile.intent_cuts.get(private, 1)
+        for level in profile.patch:
+            if level not in profile.rules["via_width_um"]:
+                continue
+            _, bars = a5._pin_stack_boxes(0, 0, level, level + 1, profile, cuts)
+            envelope = max(abs(value) for box in bars.values() for value in box)
+            profile.patch[level] = max(profile.patch[level], envelope)
+            geo.patch[level] = max(geo.patch[level], envelope)
     geo.intent_profiles = profiles
+    if compiled.pin_spec:
+        for topology in intent.topology:
+            if not isinstance(topology.join, Port):
+                continue
+            owner = compiled.joins[topology.net]
+            spec = compiled.pin_spec["ports"][owner]
+            profile = profiles[owner]
+            level = spec["level"]
+            _, bars = a5._pin_stack_boxes(0, 0, level, level + 1, profile, profile.intent_cuts.get(owner, 1))
+            spec["width_lam"] = max(spec["width_lam"], 2 * max(abs(bars[level][0]), abs(bars[level][2])))
     try:
         plan = a5._build_plan(compiled.devices, compiled.ports, cells, facts, geo, tap_clear,
                               compiled.pin_spec, **options)
@@ -563,7 +691,9 @@ def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, 
                                  "load_layer": f"metal{level}", "native_component": friendly}
         for branch, target in zip(others, targets):
             _connect_branch(plan, branch, owner, region, level, top, target, compiled, geo.for_net(branch), a5, friendly)
+    shield_evidence = build_shields(plan, compiled, geo, facts, a5)
     evidence = verify_topology(plan, compiled, regions, a5._linked)
+    evidence.extend(shield_evidence)
     evidence.extend(verify_separation(plan, compiled, geo, a5))
     for width in intent.widths:
         selected = [row for row in plan.shapes if compiled.canonical.get(row["net"], row["net"]) == width.net

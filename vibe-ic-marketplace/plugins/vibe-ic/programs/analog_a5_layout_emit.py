@@ -1304,6 +1304,10 @@ def box_separation(a: Tuple[int, int, int, int],
 # ──────────────────────────────────────────────────────────────────────
 # 5b. the routing geometry — every number the deck states, in lambda
 # ──────────────────────────────────────────────────────────────────────
+def _net_geo(geo, net):
+    return getattr(geo, "intent_profiles", {}).get(net, geo)
+
+
 class Geo:
     """Resolve PDK routing rules to lambda; wire/pad style stays explicit.
     Preserve the existing Metal1-spacing fallback when a rule is unstated.
@@ -2126,6 +2130,9 @@ class Sites:
                     # A remote same-net connection does not excuse a local
                     # notch. Only overlap/touch is exempt from spacing.
                     if net is not None and r["net"] == net and not (dx or dy):
+                        if (getattr(self.geo, "intent_strict", False) and _VIA_RE.match(layer)
+                                and tuple(box) != tuple(b)):
+                            return False
                         continue
                     if dx < s and dy < s:
                         if net is not None and r["net"] == net:
@@ -2249,7 +2256,7 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
 
     Returns the centre the stack was actually placed at, so the wire that
     leaves it starts where it is rather than where it was asked for."""
-    geo = geo.for_net(net)
+    geo = _net_geo(geo, net)
     cuts = getattr(geo, "intent_cuts", {}).get(net, 1)
     if cuts > 1:
         return _intent_via_array(plan, net, x, y, level, top, geo, sites,
@@ -2422,7 +2429,7 @@ def _terminal_needs_compact_access(group: dict, groups: Sequence[dict],
         if level > ROUTE_LEVEL:
             continue
         preferred = Plan()
-        _via_stack(preferred, "<preferred access>", 0, 0, level, geo,
+        _via_stack(preferred, group["net"], 0, 0, level, geo,
                    top=ROUTE_LEVEL)
         boxes = [r["box"] for r in preferred.shapes
                  if r["layer"] == "metal3"]
@@ -3621,7 +3628,7 @@ def _build_plan(devs: Sequence[dict], ports: Sequence[str],
 
         dense_collection = _collect_close_plain_rows(groups, cell["bbox"], geo)
         for g in groups:
-            g["access_width"] = _terminal_access_width(g, groups, geo)
+            g["access_width"] = _terminal_access_width(g, groups, _net_geo(geo, g["net"]))
 
         # two groups escaping at one height take opposite sides, so their
         # metal3 runs are on opposite sides of the device and never meet
@@ -3809,13 +3816,13 @@ def _build_plan(devs: Sequence[dict], ports: Sequence[str],
     routing_geo = geo
     if rail_level == 4:
         for net, bx in bus_x.items():
-            geo = routing_geo.for_net(net)
+            geo = _net_geo(routing_geo, net)
             ys = [r[net] for r in row_rails if net in r]
             half = max(geo.wire[5] // 2, 1)
             plan.paint(net, "metal5", bx - half, min(ys), bx + half, max(ys))
         for row, rails in zip(placement_rows, row_rails):
             for net, ty in rails.items():
-                geo = routing_geo.for_net(net)
+                geo = _net_geo(routing_geo, net)
                 xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
                 lo = min(bus_x.get(net, min(xs) - pitch), min(xs) - pitch)
                 hi = max(bus_x.get(net, max(xs) + pitch), max(xs) + pitch)
@@ -3825,6 +3832,7 @@ def _build_plan(devs: Sequence[dict], ports: Sequence[str],
                 plan.paint(net, "metal4", lo, ty-half, hi, ty+half)
         for rails in row_rails:
             for net,ty in rails.items():
+                geo = _net_geo(routing_geo, net)
                 if net in bus_x:
                     _via_stack(plan,net,bus_x[net],ty,4,geo,top=5,sites=sites,
                                search_lambda=0,horizontal=True,join_levels=(4,5))
@@ -3853,7 +3861,7 @@ def _build_plan(devs: Sequence[dict], ports: Sequence[str],
         for g in d["groups"]:
             if not g["strapped"]:
                 continue
-            geo = routing_geo.for_net(g["net"])
+            geo = _net_geo(routing_geo, g["net"])
             hw2, hw3 = max(geo.wire[2] // 2, 1), max(geo.wire[3] // 2, 1)
             endpoints = []
             ey = g["abs_escape_y"]
@@ -3872,7 +3880,7 @@ def _build_plan(devs: Sequence[dict], ports: Sequence[str],
     for d in per_dev:
         for g in d["groups"]:
             net, ey, lane = g["net"], g["abs_escape_y"], g["lane_x"]
-            geo = routing_geo.for_net(net)
+            geo = _net_geo(routing_geo, net)
             hw2, hw3 = max(geo.wire[2] // 2, 1), max(geo.wire[3] // 2, 1)
             carry_level = ROUTE_LEVEL
             tap_contact = g.get("body_tap_contact")
@@ -4048,9 +4056,9 @@ def _build_plan(devs: Sequence[dict], ports: Sequence[str],
     # All actual horizontal terminal escapes are present before a vertical
     # leg is routed. No predicted body plane is inserted as an obstacle.
     unresolved = [(net,lane,ry,ey) for net,lane,ry,ey in pending_legs
-                  if not _straight_m3_leg(plan,net,lane,ry,ey,routing_geo.for_net(net),sites)]
+                  if not _straight_m3_leg(plan,net,lane,ry,ey,_net_geo(routing_geo, net),sites)]
     for net, lane, ry, ey in sorted(unresolved,key=lambda v:abs(v[2]-v[3])):
-        geo = routing_geo.for_net(net)
+        geo = _net_geo(routing_geo, net)
         if not _route_m3_leg(plan, net, lane, ry, ey, geo, sites):
             _via_stack(plan, net, lane, ry, 3, geo, top=rail_level,
                        sites=sites, horizontal=True, join_levels=(3,4))
@@ -4064,13 +4072,13 @@ def _build_plan(devs: Sequence[dict], ports: Sequence[str],
     if compact_bus and rail_level != 4:
         # Fixed-centre via sites must see every trunk before they are drawn.
         for net, bx in bus_x.items():
-            geo = routing_geo.for_net(net)
+            geo = _net_geo(routing_geo, net)
             ys = [r[net] for r in row_rails if net in r]
             half = max(geo.wire[trunk_level] // 2, 1)
             plan.paint(net, f"metal{trunk_level}", bx - half, min(ys), bx + half, max(ys))
     for row, rails in zip(placement_rows, row_rails):
         for net, ty in rails.items():
-            geo = routing_geo.for_net(net)
+            geo = _net_geo(routing_geo, net)
             xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
             lo = min(bus_x.get(net, min(xs) - pitch), min(xs) - pitch)
             hi = max(bus_x.get(net, max(xs) + pitch), max(xs) + pitch)
@@ -4087,7 +4095,7 @@ def _build_plan(devs: Sequence[dict], ports: Sequence[str],
                            horizontal=rail_level == 4,
                            join_levels=(rail_level,trunk_level) if rail_level == 4 else ())
     for net, bx in bus_x.items():
-        geo = routing_geo.for_net(net)
+        geo = _net_geo(routing_geo, net)
         if compact_bus:
             continue
         ys = [r[net] for r in row_rails if net in r]
@@ -4419,7 +4427,7 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
     order = sorted(ports, key=lambda n: (not pin_spec["ports"][n]["rail"],
                                          ports.index(n)))
     for net in order:
-        geo = routing_geo.for_net(net)
+        geo = _net_geo(routing_geo, net)
         spec = pin_spec["ports"][net]
         level = spec["level"]
         rx1, ry1, rx2, ry2 = rail_box[net]

@@ -182,3 +182,57 @@ def test_device_area_repair_cannot_hide_a_premature_join():
     regions = {"p": {"box": (8, 0, 10, 10), "layers": ("metal2",), "load_layer": "metal2", "native_component": None}}
     with pytest.raises(ri.IntentRefusal, match="ROUTING_INTENT_PREMATURE_JOIN"):
         ri.verify_topology(plan, compiled, regions, a5._linked)
+
+
+def wide_terminal_inputs():
+    facts = a5.PdkFacts()
+    facts.layers = None
+    facts.gencells = {"passive": {"namespace": "pdk", "params": {}, "class": "resistor"}}
+    facts.deck = geometry().rules
+    facts.m1_space_um = .2
+    device = {"name": "r", "model": "passive", "class": "resistor", "nets": ["a", "b"], "pars": {}}
+    cell = {"labels": [{"name": "R1", "layer": "metal1", "level": 1, "x": -200, "y": 0},
+                       {"name": "R2", "layer": "metal1", "level": 1, "x": 200, "y": 0}],
+            "sections": {"metal1": [(-250, -50, -150, 50), (150, -50, 250, 50)]},
+            "bbox": (-300, -100, 300, 100), "delta": (0, 0), "cell": "passive", "layers": None}
+    return device, {a5.config_key(device): cell}, facts, geometry()
+
+
+def test_per_net_width_widens_target_wire_and_preserves_control_wire():
+    device, cells, facts, geo = wide_terminal_inputs()
+    plan = a5.build_plan([device], ["a", "b"], cells, facts, geo, 40,
+                         routing_intent=declared({"kind": "width", "net": "a", "wire_width_um": .6, "via_cuts": 2}))
+    rails = {net: [row["box"] for row in plan.shapes if row["net"] == net and row["layer"] == "metal2"
+                   and row["box"][2] - row["box"][0] > row["box"][3] - row["box"][1] + 40] for net in ("a", "b")}
+    assert rails["a"] and rails["b"]
+    assert min(box[3] - box[1] for box in rails["a"]) == 60
+    assert min(box[3] - box[1] for box in rails["b"]) == 30
+    assert all(row["box"][2] - row["box"][0] >= 60 and row["box"][3] - row["box"][1] >= 60
+               for row in plan.shapes if row["net"] == "a" and row["layer"].startswith("metal"))
+
+
+def test_same_net_cut_spacing_is_never_exempted():
+    geo = geometry()
+    plan = a5.Plan();plan.intent_component_nets = {}
+    plan.shapes = [{"net": "p", "layer": "via2", "box": (0, 0, 20, 20)}]
+    compiled = ri.Compiled(ri.RoutingIntent(), [], [], {"p": "p"}, {}, {}, {}, None)
+    assert not ri._safe([("via2", (30, 0, 50, 20))], "p", plan, compiled, geo, a5)
+    assert ri._safe([("via2", (40, 0, 60, 20))], "p", plan, compiled, geo, a5)
+
+
+def test_declared_shield_is_real_connected_metal_between_pair():
+    data, facts, cells, geo = native_plan_inputs()
+    raw = declared({"kind": "separation", "nets": ["load", "signal"], "shield_net": "return", "layer": "metal4"})
+    plan = a5.build_plan(data["devices"], data["ports"], cells, facts, geo, 48, data["pin_spec"], routing_intent=raw)
+    shield = plan.routing_intent_evidence["constraints"][0]
+    assert shield["connected"] and shield["continuous_projection"]
+    assert any(row["net"] == "return" and row["layer"] == "metal4"
+               and tuple(row["box"]) == tuple(shield["shield_box_lambda"]) for row in plan.shapes)
+    assert {pin["net"]: pin["index"] for pin in plan.pins} == {net: spec["index"] for net, spec in data["pin_spec"]["ports"].items()}
+
+
+def test_a_cut_layer_cannot_silently_become_a_metal_shield():
+    data, facts, cells, geo = native_plan_inputs()
+    raw = declared({"kind": "separation", "nets": ["load", "signal"], "shield_net": "return", "layer": "via1"})
+    with pytest.raises(a5.Refusal, match="ROUTING_INTENT_SHIELD_LAYER"):
+        a5.build_plan(data["devices"], data["ports"], cells, facts, geo, 48, data["pin_spec"], routing_intent=raw)
