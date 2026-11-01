@@ -329,9 +329,9 @@ def test_declared_local_pdk_missing_asset_refuses_by_name(declared_local_pdk):
 def test_declared_local_pdk_ambiguous_asset_refuses_by_name(
         declared_local_pdk, monkeypatch):
     project, root, entry, calls = declared_local_pdk
-    directory = Path(entry["liberty_glob"]).parent
-    (root / entry["name"] / directory / "another.lib").write_text("library (other) {}\n")
-    entry = dict(entry, liberty_glob=str(directory / "*.lib"))
+    directory = Path(entry["tech_lef_glob"]).parent
+    (root / entry["name"] / directory / "another.tlef").write_text("LAYER route1\n TYPE ROUTING ;\n")
+    entry = dict(entry, tech_lef_glob=str(directory / "*.tlef"))
     reader = _p3()._pdk_registry_entry
     reader("")  # Preserve the registry reader and its normal named-PDK census.
     monkeypatch.setattr(reader, "_cache", {**reader._cache, entry["name"]: entry})
@@ -350,3 +350,123 @@ def test_declared_local_pdk_asset_outside_root_is_refused(declared_local_pdk):
     with pytest.raises(SystemExit, match=entry["name"]):
         _p3()._detect_pdk(project, override=entry["name"])
     assert calls == []
+
+
+@pytest.mark.parametrize('route', ['LOCAL', 'CONTAINER'])
+@pytest.mark.parametrize('count', [1, 5])
+def test_registry_complete_liberty_roster_on_both_routes(
+        declared_local_pdk, monkeypatch, route, count):
+    from test_issue211_registry_driven_pdk_refuse import _FakeContainer
+    project, parent, entry, _ = declared_local_pdk
+    root = parent / entry['name']
+    directory = root / 'models'
+    directory.mkdir()
+    paths = []
+    for i in reversed(range(count)):
+        path = directory / f'group_{i}_RVT_TT.lib'
+        path.write_text(f'library (group_{i}) {{\n cell (cell_{i}) {{ area : 1; }}\n}}\n')
+        paths.append(str(path))
+    entry = dict(entry, liberty_glob='models/*_RVT_TT.lib')
+    monkeypatch.setenv('VIBEIC_LIBRELANE_ROUTE', route)
+    if route == 'CONTAINER':
+        monkeypatch.setattr(_p3(), '_registry_container_root', lambda *_: str(root))
+        fake = _FakeContainer({str(root)} | {str(p) for p in root.rglob('*')})
+        monkeypatch.setattr(_p3(), '_docker_exec_raw', fake)
+    try:
+        result = _p3()._pdk_config_from_registry(project, entry)
+        observed = result.liberty if result is not None else 'UNRESOLVED'
+    except SystemExit as exc:
+        observed = str(exc)
+    expected = sorted(paths) if count > 1 else paths[0]
+    assert observed == expected
+    # Legacy one-file APIs must see every cell; never a selected group.
+    model = getattr(_p3(), '_liberty_model_path', lambda value, **_: value)(observed, project=project)
+    if count == 1:
+        assert model == expected
+    text = Path(model).read_text()
+    assert all(f'cell_{i}' in text for i in range(count))
+
+
+@pytest.mark.parametrize('route', ['LOCAL', 'CONTAINER'])
+def test_registry_ambiguous_single_asset_names_pdk_key_candidates(
+        declared_local_pdk, monkeypatch, route):
+    from test_issue211_registry_driven_pdk_refuse import _FakeContainer
+    project, parent, entry, _ = declared_local_pdk
+    root = parent / entry['name']
+    directory = root / 'technology'
+    directory.mkdir()
+    candidates = [directory / name for name in ('a.tlef', 'b.tlef')]
+    for path in candidates:
+        path.write_text('LAYER route1\n TYPE ROUTING ;\n')
+    entry = dict(entry, tech_lef_glob='technology/*.tlef')
+    monkeypatch.setenv('VIBEIC_LIBRELANE_ROUTE', route)
+    if route == 'CONTAINER':
+        monkeypatch.setattr(_p3(), '_registry_container_root', lambda *_: str(root))
+        monkeypatch.setattr(_p3(), '_docker_exec_raw', _FakeContainer(
+            {str(root)} | {str(p) for p in root.rglob('*')}))
+    try:
+        _p3()._pdk_config_from_registry(project, entry)
+        observed = 'CONFIG_RESOLVED'
+    except SystemExit as exc:
+        observed = str(exc)
+    assert 'REGISTRY_ASSET_AMBIGUOUS' in observed, observed
+    assert entry['name'] in observed and 'tech_lef_glob' in observed
+    assert all(str(path) in observed for path in candidates)
+
+
+def test_split_liberty_reaches_native_lib_config_and_sta_reader(tmp_path):
+    import inspect
+    import librelane_contract as contract
+    from test_librelane_contract import design
+    project = design(tmp_path)
+    rtl = project / 'phase2/stage1/rtl/neutral.v'
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text('module neutral(input clk, output y); assign y=clk; endmodule\n')
+    paths = [str(project / f'group_{i}.lib') for i in range(5)]
+    for path in paths:
+        Path(path).write_text('library (neutral) {}\n')
+    config = contract.emit_synthesis_config(project, 'processA', project / 'synth.json',
+        [rtl], [], False, synth_liberty=paths)
+    assert config['LIB']['*'] == paths
+    # Drive the existing full PnR Tcl builder, rather than a new helper alone.
+    builder = _p3()._build_pnr_tcl_text
+    values = {name: '' for name, param in inspect.signature(builder).parameters.items()
+              if param.default is inspect.Parameter.empty}
+    values.update(tech_lef_c='technology.lef', cell_lef_c='cells.lef', liberty_c=paths,
+                  top='neutral', metal_prefix='route', die_w=100, die_h=100,
+                  core_pad=10, core_w=80, core_h=80, util=40)
+    text = builder(**values)
+    assert all(f'read_liberty {path}\n' in text for path in paths)
+
+
+@pytest.mark.parametrize('name', ['sky130A', 'gf180mcuD', 'ihp-sg13g2', 'nangate45'])
+def test_single_file_registry_config_bytes(tmp_path, monkeypatch, name):
+    """Real registry data, neutral files; publish exact bytes for arm comparison."""
+    from dataclasses import asdict
+    import os
+    from _hostpaths import require_repo
+    registry = json.loads(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
+                                      'programs', 'pdk_registry.json').read_text())
+    entry = next(row for row in registry['pdks'] if row['name'] == name)
+    parent = tmp_path / 'pdks'
+    root = parent / name
+    for key, text in (('liberty_glob', 'library (neutral) {}\n'),
+                      ('tech_lef_glob', 'LAYER route1\n TYPE ROUTING ;\n'),
+                      ('cell_lef_glob', 'SITE neutral_site\n'),
+                      ('cell_gds_glob', 'neutral test bytes')):
+        path = root / entry[key].replace('*', 'neutral')
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text)
+    project = tmp_path / 'project'
+    project.mkdir()
+    monkeypatch.setenv('VIBEIC_LIBRELANE_ROUTE', 'LOCAL')
+    monkeypatch.setenv('VIBEIC_LIBRELANE_PDK_ROOT', str(parent))
+    config = _p3()._pdk_config_from_registry(project, entry)
+    assert isinstance(config.liberty, str)
+    assert config.liberty == str(root / entry['liberty_glob'].replace('*', 'neutral'))
+    destination = os.environ.get('PDK_CONFIG_SNAPSHOT')
+    if destination:
+        target = Path(destination)
+        records = json.loads(target.read_text()) if target.exists() else {}
+        records[name] = json.dumps(asdict(config), sort_keys=True, separators=(',', ':'))
+        target.write_text(json.dumps(records, sort_keys=True, indent=2) + '\n')
