@@ -12,8 +12,13 @@ that the derivation is purely a function of the PDK-declared TEXT, with no vendo
 PDK literal in the logic. The engine's DRC-clean behaviour on a real streamed GDS is
 proven separately by the flow's own sign-off DRC (this unit test guards the derivation).
 """
+import json
 import sys
 from pathlib import Path
+
+import pytest
+
+from _hostpaths import require_repo
 
 PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROGRAMS))
@@ -159,3 +164,274 @@ def test_no_dummy_datatype_falls_back_to_drawn_disclosed():
 
 def test_no_routing_metal_returns_none():
     assert G.build_metal_fill_config("", "", "", metal_prefix="Metal") is None
+
+
+_PRL = """SPACINGTABLE
+  PARALLELRUNLENGTH 0 1 900
+  WIDTH 0 0.21 0.23 0.25
+  WIDTH 800 0.31
+    0.51 0.71 ;"""
+
+_INFLUENCE = """SPACINGTABLE INFLUENCE
+  WIDTH 0 WITHIN 700 SPACING 0.41
+  WIDTH 800 WITHIN 900 SPACING 0.81 ;"""
+
+
+def _routing_layer(name, rules, width="WIDTH 0.22 ;"):
+    return f"LAYER {name}\n TYPE ROUTING ;\n {width}\n {rules}\nEND {name}\n"
+
+
+@pytest.mark.parametrize("rules, expected", [
+    (_PRL, 0.71),
+    (_INFLUENCE, 0.81),
+    ("SPACING 0.32 ;\n" + _PRL, 0.71),
+    (_PRL + "\nSPACING 0.92 ;", 0.92),
+    (_PRL + "\n" + _INFLUENCE, 0.81),
+    ("SPACINGTABLE PARALLELRUNLENGTH 0 1e3 WIDTH 0 +2.1e-1 .72 ;", 0.72),
+])
+def test_table_spacing_uses_all_cells_but_no_axes(rules, expected):
+    lef = _routing_layer("Metal1", rules)
+    assert G.parse_techlef_routing(lef, "Metal") == {"metal1": (0.22, expected)}
+    cfg = G.build_metal_fill_config("Metal1 NET 71 0", lef, "")
+    assert cfg["layers"][0]["space"] == expected
+    assert cfg["layers"][0]["space_to_metal"] == expected
+
+
+def test_only_standalone_width_and_uncommented_rules_are_used():
+    rules = """MINIMUMCUT 2 WIDTH 0.001 ;
+      # WIDTH 0.0001 ; SPACING 999 ;
+      SPACING 0.27 ;
+    """ + _PRL
+    assert G.parse_techlef_routing(_routing_layer("Metal1", rules), "Metal") == {
+        "metal1": (0.22, 0.71)}
+
+
+@pytest.mark.parametrize("prefix", [None, "Metal"])
+def test_builder_selects_routing_type_then_joins_exact_streamout_names(prefix):
+    lef = "".join(_routing_layer(n, "SPACING 0.37 ;") for n in (
+        "Metal1", "TopMetal1", "TopMetal2", "Crown"))
+    lef += "LAYER Metal9\n TYPE CUT ;\n WIDTH 0.01 ;\n SPACING 0.01 ;\nEND Metal9\n"
+    lm = """metal1 NET 71 0
+TOPMETAL1 PIN 72 10
+TopMetal1 NET 72 0
+topmetal2 NET 73 0
+cRoWn NET 74 0
+Metal9 CUT 79 0
+Other NET 80 0
+"""
+    cfg = G.build_metal_fill_config(lm, lef, "", metal_prefix=prefix)
+    assert {s["name"]: s["layer"] for s in cfg["layers"]} == {
+        "metal1": [71, 0], "topmetal1": [72, 0],
+        "topmetal2": [73, 0], "crown": [74, 0]}
+
+
+def test_routing_names_need_no_derived_stem():
+    lef = _routing_layer("Crown", _PRL)
+    cfg = G.build_metal_fill_config("CROWN NET 74 0", lef, "")
+    assert cfg["layers"][0]["name"] == "crown"
+    assert cfg["layers"][0]["space"] == 0.71
+
+
+def test_explicit_prefix_keeps_all_declared_routing_layers():
+    lef = _routing_layer("Metal1", _PRL) + _routing_layer("TopMetal1", _INFLUENCE)
+    assert G.parse_techlef_routing(lef, "Metal") == {
+        "metal1": (0.22, 0.71), "topmetal1": (0.22, 0.81)}
+
+
+@pytest.mark.parametrize("rules, width, missing", [
+    ("", "WIDTH 0.22 ;", "SPACING"),
+    (_PRL, "MINIMUMCUT 2 WIDTH 0.01 ;", "WIDTH"),
+])
+def test_nonderivable_routing_layer_is_named_for_parser_and_builder(rules, width, missing):
+    lef = _routing_layer("Metal1", "SPACING 0.25 ;")
+    lef += _routing_layer("Metal2", rules, width)
+    with pytest.raises(ValueError, match=rf"Metal2.*{missing}"):
+        G.parse_techlef_routing(lef, "Metal")
+    with pytest.raises(ValueError, match=rf"Metal2.*{missing}"):
+        G.build_metal_fill_config("Metal1 NET 71 0\nMetal2 NET 72 0", lef, "")
+
+
+@pytest.mark.parametrize("table", [
+    "SPACINGTABLE PARALLELRUNLENGTH 0 1 WIDTH 0 0.2 ;",
+    "SPACINGTABLE PARALLELRUNLENGTH 0 1 WIDTH 0 0.2 0.3 0.4 ;",
+    "SPACINGTABLE PARALLELRUNLENGTH 0 1 ;",
+    "SPACINGTABLE INFLUENCE WIDTH 0 WITHIN 0.3 ;",
+    "SPACINGTABLE INFLUENCE WIDTH 0 WITHIN 1 SPACING 0.2 0.3 ;",
+    "SPACINGTABLE TWOWIDTHS WIDTH 0 PRL 0 0.2 ;",
+    "SPACINGTABLE PARALLELRUNLENGTH 0 WIDTH 0 NaN ;",
+    "SPACINGTABLE PARALLELRUNLENGTH 0 WIDTH 0 -0.2 ;",
+    "SPACINGTABLE PARALLELRUNLENGTH 0 WIDTH 0 1e999 ;",
+    "SPACINGTABLE PARALLELRUNLENGTH 0 WIDTH 0 0.2",
+])
+def test_malformed_or_unsupported_table_refuses_by_layer_even_with_numeric_spacing(table):
+    lef = _routing_layer("Metal1", "SPACING 0.27 ;\n" + table)
+    with pytest.raises(ValueError, match="Metal1.*SPACINGTABLE"):
+        G.build_metal_fill_config("Metal1 NET 71 0", lef, "")
+
+
+def test_missing_routing_drawn_mapping_refuses_by_layer():
+    lef = _routing_layer("Metal1", "SPACING 0.25 ;")
+    lef += _routing_layer("Crown", _PRL)
+    with pytest.raises(ValueError, match="Crown.*(?:map|GDS|drawn)"):
+        G.build_metal_fill_config("Metal1 NET 71 0\nCrown PIN 74 10", lef, "")
+
+
+def _cli_args(tmp_path, lef):
+    lm, tl, deck = (tmp_path / name for name in ("layers.map", "tech.lef", "deck.drc"))
+    lm.write_text("Metal1 NET 71 0\nMetal2 NET 72 0")
+    tl.write_text(lef)
+    deck.write_text("")
+    out = tmp_path / "fill.json"
+    return ["--layermap", str(lm), "--techlef", str(tl),
+            "--deck", str(deck), "--out", str(out)], out
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_cli_names_missing_spacing_without_publishing_partial_config(tmp_path, capsys, existing):
+    lef = _routing_layer("Metal1", _PRL) + _routing_layer("Metal2", "")
+    args, out = _cli_args(tmp_path, lef)
+    if existing:
+        out.write_text("previous config")
+    assert G.main(args) == 2
+    captured = capsys.readouterr()
+    assert "Metal2" in captured.err and "SPACING" in captured.err
+    assert captured.out == ""
+    assert out.read_text() == "previous config" if existing else not out.exists()
+
+
+def test_cli_publishes_table_only_config(tmp_path, capsys):
+    args, out = _cli_args(tmp_path, _routing_layer("Metal1", _PRL))
+    assert G.main(args) == 0
+    cfg = json.loads(out.read_text())
+    assert cfg["layers"][0]["space"] == 0.71
+    assert json.loads(capsys.readouterr().out) == cfg
+
+
+@pytest.mark.parametrize("table", [False, True])
+def test_checked_in_density_fill_techlef_remains_supported(table):
+    path = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+                        "tests", "fixtures", "flow109_density_fill", "tech.lef")
+    lef = path.read_text()
+    if table:
+        lef = lef.replace("SPACING 0.2 ;", _PRL)
+    cfg = G.build_metal_fill_config("M1 NET 77 0", lef, "")
+    assert cfg["layers"][0]["layer"] == [77, 0]
+    assert cfg["layers"][0]["space"] == (0.71 if table else 0.2)
+
+
+_NUMERIC_CFG_JSON = {
+    "met": """{
+  "boundary_layer": null,
+  "window_um": null,
+  "keepout_layers": [],
+  "max_passes": 8,
+  "mfg_grid_um": 0.01,
+  "fill_datatype": null,
+  "layers": [
+    {
+      "name": "met1",
+      "layer": [
+        61,
+        0
+      ],
+      "target": 0.35,
+      "max": 0.95,
+      "space": 1.0,
+      "space_to_metal": 2.5,
+      "width": 3.44,
+      "fill_datatype": 7
+    },
+    {
+      "name": "met2",
+      "layer": [
+        62,
+        0
+      ],
+      "target": 0.35,
+      "max": 0.95,
+      "space": 1.0,
+      "space_to_metal": 2.5,
+      "width": 3.44,
+      "fill_datatype": 7
+    }
+  ],
+  "_derivation": {
+    "source": "metal_fill_config_gen (chip-AGNOSTIC; PDK-declared files)",
+    "metal_prefix": "met",
+    "metal_prefix_derived_from_techlef": true,
+    "density_floor_pct": null,
+    "target_density": 0.35,
+    "mfg_grid_um": 0.01,
+    "dummy_space_um": 1.0,
+    "dummy_to_circuit_space_um": 2.5,
+    "layers_derived": 2,
+    "dummy_datatype_found": 2,
+    "keepout_layers_derived": 0,
+    "density_rules_covered": {},
+    "density_rules_without_fill_entry": {},
+    "keepout_layer_names": []
+  }
+}""",
+    "Metal": """{
+  "boundary_layer": null,
+  "window_um": null,
+  "keepout_layers": [],
+  "max_passes": 8,
+  "mfg_grid_um": 0.01,
+  "fill_datatype": null,
+  "layers": [
+    {
+      "name": "metal1",
+      "layer": [
+        61,
+        0
+      ],
+      "target": 0.38,
+      "max": 0.95,
+      "space": 1.0,
+      "space_to_metal": 2.5,
+      "width": 3.7,
+      "fill_datatype": 7
+    },
+    {
+      "name": "metal2",
+      "layer": [
+        62,
+        0
+      ],
+      "target": 0.38,
+      "max": 0.95,
+      "space": 1.0,
+      "space_to_metal": 2.5,
+      "width": 3.7,
+      "fill_datatype": 7
+    }
+  ],
+  "_derivation": {
+    "source": "metal_fill_config_gen (chip-AGNOSTIC; PDK-declared files)",
+    "metal_prefix": "Metal",
+    "metal_prefix_derived_from_techlef": true,
+    "density_floor_pct": 33.0,
+    "target_density": 0.38,
+    "mfg_grid_um": 0.01,
+    "dummy_space_um": 1.0,
+    "dummy_to_circuit_space_um": 2.5,
+    "layers_derived": 2,
+    "dummy_datatype_found": 2,
+    "keepout_layers_derived": 0,
+    "density_rules_covered": {},
+    "density_rules_without_fill_entry": {},
+    "keepout_layer_names": []
+  }
+}""",
+}
+
+
+@pytest.mark.parametrize("stem", ["met", "Metal"])
+def test_numeric_spacing_config_json_is_byte_identical_to_base(stem):
+    deck = _DECK
+    for n in ("1", "2"):
+        deck = deck.replace("metal" + n, stem.lower() + n).replace("Metal" + n, stem + n)
+    cfg = G.build_metal_fill_config(_LAYERMAP.replace("Metal", stem),
+                                    _TECHLEF.replace("Metal", stem), deck)
+    assert json.dumps(cfg, indent=2) == _NUMERIC_CFG_JSON[stem]
