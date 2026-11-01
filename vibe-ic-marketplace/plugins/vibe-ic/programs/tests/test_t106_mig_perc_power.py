@@ -402,7 +402,7 @@ def _gls_project(tmp_path):
 
 
 def _gls_edge(declared, transcripts):
-    """A fake `docker run`: the resolver writes the step config, the custom
+    """A fake `run_container`: the resolver writes the step config, the custom
     step writes its runs and transcripts, as `Vibeic.GateLevelSim` does."""
     calls = []
 
@@ -451,7 +451,6 @@ def test_step_29_runs_every_corner_sdf_through_the_custom_step(tmp_path, monkeyp
         return original_manifest(*args, **kwargs)
     monkeypatch.setattr(sgs, 'tool_arm_manifest', current_state_manifest)
     fake, calls = _gls_edge(declared, lambda corner: VVP_PASS)
-    monkeypatch.setattr(contract.subprocess, 'run', fake)
     monkeypatch.setattr(contract, 'run_container', fake)
     monkeypatch.setattr(contract, 'image_capability', lambda *_: {})
     monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
@@ -481,7 +480,7 @@ def test_step_29_gates_on_delays_applied_sdf_errors_and_every_case(tmp_path, mon
                                                                   transcript, reason):
     project, root, declared = _gls_project(tmp_path)
     fake, _ = _gls_edge(declared, transcript)
-    monkeypatch.setattr(contract.subprocess, 'run', fake)
+    monkeypatch.setattr(contract, 'run_container', fake)
     monkeypatch.setattr(contract, 'image_capability', lambda *_: {})
     monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
     judged = postroute.gate_level_sim(project, 'spm', 'img', root, 'x')
@@ -492,7 +491,7 @@ def test_step_29_gates_on_delays_applied_sdf_errors_and_every_case(tmp_path, mon
 def test_step_29_on_librelane_writes_evidence_the_step_29_gate_fails(tmp_path, monkeypatch):
     project, root, declared = _gls_project(tmp_path)
     fake, _ = _gls_edge(declared, lambda c: VVP_PASS + VVP_SDF_ERROR)
-    monkeypatch.setattr(contract.subprocess, 'run', fake)
+    monkeypatch.setattr(contract, 'run_container', fake)
     monkeypatch.setattr(contract, 'image_capability', lambda *_: {})
     monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
     put(project / 'phase3/librelane_switch.json', {'steps': {'29': 'librelane'},
