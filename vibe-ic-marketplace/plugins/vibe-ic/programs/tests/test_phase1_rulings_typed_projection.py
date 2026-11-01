@@ -1,6 +1,7 @@
 """Neutral input documents exercise explicit cross-layer projections."""
 import json
 from pathlib import Path
+import pytest
 
 import phase1_doc_one_shot_runner as runner
 import l9_l19_contract_carrythrough as carry
@@ -102,3 +103,23 @@ def test_no_external_reset_and_por_start_are_typed_in_l8_l9(tmp_path):
         assert strategy["initializes"] == ["accumulators", "tracking latches"]
         assert strategy["evidence"][0]["line"] == 2
         assert strategy["evidence"][0]["doc"] == "input/docs/L9_constraints.md"
+    content = {"clock_domains": [{"name": "clk_i", "reset_strategy": "unspecified"}]}
+    runner._apply_declared_por_reset_strategy(content, docs)
+    assert content["clock_domains"][0]["reset_strategy"] == "power_on_reset"
+
+
+@pytest.mark.parametrize("claim", [
+    "It is not true that POR initializes the accumulators.",
+    "Perhaps POR initializes the accumulators.",
+    "If POR initializes the accumulators, startup may proceed.",
+])
+def test_denied_or_uncertain_por_does_not_assert_reset_strategy(tmp_path, claim):
+    docs = source(tmp_path, "# Current startup\nThere is no external reset. " + claim + "\n")
+    for output in (runner.gen_l8_timing_waveform(tmp_path, docs),
+                   runner.gen_l8_timing_waveform_doc(tmp_path, docs),
+                   runner.gen_l9_integration_spec(tmp_path, docs, {})):
+        payload = json.loads(Path(output.path).read_text())
+        assert payload.get("reset_strategy") is None
+    content = {"clock_domains": [{"name": "clk_i", "reset_strategy": "unspecified"}]}
+    runner._apply_declared_por_reset_strategy(content, docs)
+    assert content == {"clock_domains": [{"name": "clk_i", "reset_strategy": "unspecified"}]}

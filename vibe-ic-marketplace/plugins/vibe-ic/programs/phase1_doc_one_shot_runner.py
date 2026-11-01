@@ -5531,8 +5531,7 @@ def _v0_3_2_emit_pins_from_gfm_tables(text: str):
                 yield rec
 
 
-# ====================================================================
-
+# ===========================================================================
 # Comportable-style interface harvester (#638)
 # ---------------------------------------------------------------------------
 # The auto-generated "Comportable" register-tool interface convention (used
@@ -5569,8 +5568,7 @@ def _v0_3_2_emit_pins_from_gfm_tables(text: str):
 # Comportable doc-convention vocabulary (Primary/Other Clock(s), Bus
 # Device/Host Interfaces, Peripheral Pins, Interrupts, Act-role keywords); no
 # chip-class / SKU literal participates.
-# ====================================================================
-
+# ===========================================================================
 
 # Comportable intro sentence: `the module `<name>` has the following hardware
 # interface(s)`. The name token (bold-or-plain backticked) is captured so the
@@ -15855,8 +15853,7 @@ _RE_L1_DESC_INTRO_HEADING = re.compile(
 )
 # v1.6.280 — for #141 ORGANIC. RST two-line (setext) intro heading:
 #     Introduction
-#     =====
-
+#     ============
 # Pre-v1.6.280 the single-line anchor regex did not match this
 # canonical sphinx-doc / RST form. Multiline flag is load-bearing —
 # the heading word and the underline marker are on separate lines.
@@ -15864,8 +15861,7 @@ _RE_L1_DESC_INTRO_HEADING = re.compile(
 # v1.6.284 — for #147 ORGANIC. Suffix-tolerant: heading-word group
 # now followed by `\b[^\n]*$` so canonical sphinx-doc titles like
 #     Introduction to MyChip
-#     ===============
-
+#     ======================
 # (the dominant RST form on real-world IC documentation trees) anchor
 # the extractor instead of being rejected for not being the bare
 # vocabulary word. Same relaxation as the ATX / AsciiDoc forms below.
@@ -32774,11 +32770,9 @@ _V1_6_576_ASCIIDOC_TABLE_BLOCK_RE = re.compile(
 # idiomatic AsciiDoc tables. Per AsciiDoc spec the table
 # delimiter is `|=+` of length ≥ 3; many docs frame tables with
 # 19-23 equals for visual clarity:
-#   |================
-
+#   |=======================
 #   | header | row ... |
-#   |================
-
+#   |=======================
 # v1.6.587 widens the block delimiter to `\|={3,}` so any-length
 # equals run is accepted. Chip-AGNOSTIC: pure AsciiDoc grammar.
 _V1_6_587_ASCIIDOC_TABLE_BLOCK_RE = re.compile(
@@ -33881,8 +33875,7 @@ def gen_l4_regmap(project: Path,
     #   .. _mstatus:    ← Sphinx anchor (optional)
     #
     #   mstatus
-    #   
-
+    #   =======
     #
     #   Some prose text here.
     #
@@ -42232,6 +42225,13 @@ def _declared_por_reset_strategy(extracted: Dict[str, str]) -> Optional[dict]:
             headings = list(re.finditer(r"(?m)^\s*#{1,6}\s+[^\n]+", text[:no_reset.start()]))
             section = headings[-1].start() if headings else 0
             for start in starts:
+                lo, hi = _prose_sentence_scope(
+                    text, start.start(), start.end(), extra_breaks=(";", ".\n"))
+                clause = text[lo:hi]
+                if (_prose_is_denied(clause, ignore_bracketed=False) is not None
+                        or re.search(r"\b(?:may|might|could|perhaps|possibly|if|whether)\b",
+                                     clause, re.I)):
+                    continue
                 prior = list(re.finditer(r"(?m)^\s*#{1,6}\s+[^\n]+", text[:start.start()]))
                 if (prior[-1].start() if prior else 0) != section or not _issue3234_position_is_current(text, start.start()):
                     continue
@@ -52234,7 +52234,8 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
 #     `count` (or fallback `instance_count` / `multiplicity`) is an
 #     integer >= 2, appends an entry to `l9["submodules"]` with
 #     `instance_count = count`, `extraction_strategy =
-#     "analog_block_multiplicity_v1_6_403"`, with count-specific confidence.
+#     "analog_block_multiplicity_v1_6_403"`. Count confidence stays in
+#     `multiplicity_evidence`; the portless interface remains low confidence.
 #     Idempotent: skips when an entry with the same `(name, strategy)`
 #     pair is already present, so re-running the helper never double-
 #     emits. Stamps `l9["extraction_strategy"]
@@ -52299,15 +52300,11 @@ def _v1_6_403_mirror_analog_multiplicity_to_l9(l5: dict, l9: dict) -> int:
         multiplicity_evidence = entry.get("multiplicity_evidence") or {}
         if not isinstance(multiplicity_evidence, dict):
             multiplicity_evidence = {}
-        count_is_explicit = (
-            multiplicity_evidence.get("count") == count_int
-            and multiplicity_evidence.get("low_confidence") is False
-            and bool(multiplicity_evidence.get("text")))
         l9.setdefault("submodules", []).append({
             "name": str(block_type),
             "instance_count": count_int,
             "extraction_strategy": "analog_block_multiplicity_v1_6_403",
-            "low_confidence": not count_is_explicit,
+            "low_confidence": True,
             **({"multiplicity_evidence": dict(multiplicity_evidence)}
                if multiplicity_evidence else {}),
         })
@@ -70103,8 +70100,7 @@ def main() -> int:
                 except Exception as _lpddr5_err:
                     print(f"      LPDDR5 synth FAILED (fail-open): {_lpddr5_err}",
                           file=sys.stderr)
-            # ==============================================================
-
+            # =====================================================================
             # v0.1.89 — Tier-C modern-protocol detectors (USB4 / PCIe5 / CXL /
             # UFS / HBM3). All CONTENT-based + canonical-name + version-specific
             # structural tokens; NO filename / folder-name reads (code-review
@@ -70119,8 +70115,7 @@ def main() -> int:
             # Tier-C detectors read an input_doc-AUGMENTED blob (content only, never
             # filenames). _spi_blob is rebound for the Tier-C predicates then
             # RESTORED, so later detectors are unaffected.
-            # ==============================================================
-
+            # =====================================================================
             _tc_blob_saved = _spi_blob
             _tc_aug = _spi_blob
             try:
@@ -70729,8 +70724,7 @@ def main() -> int:
                 except Exception as _t3_err:
                     print(f"      {_t3_name} synth FAILED (fail-open): {_t3_err}",
                           file=sys.stderr)
-            # ==============================================================
-
+            # =====================================================================
             # v0.1.90 — Tier-D advanced interconnects (NVLink / UCIe / Ethernet-800G).
             # _spi_blob is the input_doc-AUGMENTED text here (the Tier-3 loop rebound
             # it). All CONTENT-based, canonical-name tokens; NO filename reads. Each
@@ -70738,8 +70732,7 @@ def main() -> int:
             # 800G) so the sibling synth fires first and the more-specific Tier-D synth
             # force-overrides. Each carries a sibling MUTEX (the version-specific name
             # token is absent from the older protocol's benchmark).
-            # ==============================================================
-
+            # =====================================================================
             # v0.1.90 — Tier-D detection predicates live in tier_d_interconnect_detect
             # (single source of truth, regression-tested in
             # tests/test_tier_d_interconnect_detect.py). The sibling MUTEX rationale is
@@ -70787,8 +70780,7 @@ def main() -> int:
                 except Exception as _ucie_err:
                     print(f"      UCIe synth FAILED (fail-open): {_ucie_err}",
                           file=sys.stderr)
-            # ==============================================================
-
+            # =====================================================================
             # v0.1.92 — Tier-E new protocol classes (FlexRay / DisplayPort /
             # JESD204B-C / SMBus-PMBus). _spi_blob is the input_doc-AUGMENTED text.
             # Each detector is CONTENT-ONLY (no filename reads) and lives in its own
@@ -70800,8 +70792,7 @@ def main() -> int:
             #   JESD204 = own data-converter domain (ILAS + multiframe + subclass)
             #   SMBus/PMBus ⟂ plain-I2C (requires PEC/SMBALERT/ARP/PMBus command
             #     vocabulary; force-assigns all keys, runs last)
-            # ==============================================================
-
+            # =====================================================================
             try:
                 from flexray_protocol_synth import (
                     is_flexray as _det_flexray,
@@ -70854,8 +70845,7 @@ def main() -> int:
             except Exception as _smb_err:
                 print(f"      SMBus/PMBus synth FAILED (fail-open): {_smb_err}",
                       file=sys.stderr)
-            # ==============================================================
-
+            # =====================================================================
             # v0.1.93 — Tier-F new protocol classes (SAS / HyperBus / QSPI-OSPI /
             # MIPI-SPMI+RFFE). _spi_blob is the input_doc-AUGMENTED text. Each
             # detector is CONTENT-ONLY and lives in its own <proto>_protocol_synth
@@ -70866,8 +70856,7 @@ def main() -> int:
             #   QSPI/OSPI ⟂ plain-SPI (is_spi fires → runs after the R55 SPI synth)
             #   HyperBus ⟂ SPI/QSPI (RWDS + 48-bit CA + DDR-8-bit DQ)
             #   MIPI SPMI/RFFE ⟂ I2C/SMBus/SPI (runs after I2C + Tier-E SMBus)
-            # ==============================================================
-
+            # =====================================================================
             try:
                 from sas_protocol_synth import (
                     is_sas as _det_sas, apply_sas_synth as _apply_sas,
@@ -70915,8 +70904,7 @@ def main() -> int:
                     print(f"      → SENT synth applied (is_sent={_is_sent})")
             except Exception as _sent_err:
                 print(f"      SENT synth FAILED (fail-open): {_sent_err}", file=sys.stderr)
-            # ==============================================================
-
+            # =====================================================================
             # v0.1.94 Tier-G Wave 2 — CoreSight / InfiniBand / FibreChannel /
             # PROFIBUS / PROFINET / IO-Link. All CONTENT-ONLY module-level detectors
             # (regression-tested via test_protocol_detector_no_misfire). Each runs
@@ -70926,8 +70914,7 @@ def main() -> int:
             #   PROFINET ⟂ Ethernet/EtherCAT (is_ethernet fires → run after)
             #   InfiniBand ⟂ Ethernet/FibreChannel ; FibreChannel ⟂ SAS/SATA/Ethernet
             #   PROFIBUS ⟂ Modbus/RS-485/EtherCAT
-            # ==============================================================
-
+            # =====================================================================
             try:
                 from coresight_protocol_synth import (
                     is_coresight as _det_cs, apply_coresight_synth as _apply_cs,
@@ -71041,8 +71028,7 @@ def main() -> int:
                     print(f"      → Avalon synth applied (is_avalon={_is_avalon})")
             except Exception as _av_err:
                 print(f"      Avalon synth FAILED (fail-open): {_av_err}", file=sys.stderr)
-            # ==============================================================
-
+            # =====================================================================
             # v0.1.94 Tier-G Wave 3 — CANopen / Zigbee / LoRa / OCP / AXI-Stream /
             # MIPI-CSI2. CONTENT-ONLY module-level detectors. Placed at the end of
             # the serial Tier region so each runs AFTER the sibling whose synth may
@@ -71051,8 +71037,7 @@ def main() -> int:
             #   Zigbee ⟂ BLE/NFC ; LoRa ⟂ BLE/NFC/Zigbee
             #   OCP / AXI-Stream ⟂ AXI-MM/AHB/Wishbone/Avalon (both run after Avalon)
             #   MIPI-CSI2 ⟂ MIPI-DSI/generic-MIPI (mipi+mipi_dsi fire → run after)
-            # ==============================================================
-
+            # =====================================================================
             for _wave3_name, _wave3_ic in (
                 ("canopen", "CANopen (CiA 301)"),
                 ("zigbee", "IEEE 802.15.4 + Zigbee LR-WPAN SoC"),
@@ -71073,8 +71058,7 @@ def main() -> int:
                 except Exception as _w3_err:
                     print(f"      {_wave3_name} synth FAILED (fail-open): {_w3_err}",
                           file=sys.stderr)
-            # ==============================================================
-
+            # =====================================================================
             # v0.1.94 Tier-G Wave 4 — eDP / AFDX / PSI5 / Automotive-Ethernet /
             # A2B / IEEE-1588-PTP. CONTENT-ONLY module-level detectors. Placed at
             # the very end of the serial Tier region so each runs AFTER the sibling
@@ -71083,8 +71067,7 @@ def main() -> int:
             #   AFDX / Automotive-Ethernet / PTP ⟂ Ethernet (is_ethernet fires → after)
             #   A2B ⟂ I2S/SoundWire/SPDIF/I2C (tunnels them → run after)
             #   PSI5 ⟂ SENT/LIN/DALI (automotive sensor)
-            # ==============================================================
-
+            # =====================================================================
             for _wave4_name, _wave4_ic in (
                 ("edp", "Embedded DisplayPort (eDP 1.4b/1.5)"),
                 ("afdx", "AFDX End System / Switch (ARINC 664 Part 7)"),

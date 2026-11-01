@@ -44,7 +44,9 @@ def test_multiplicity_confidence_follows_source(tmp_path, statement, low_confide
     l9 = {}
     runner._v1_6_403_mirror_analog_multiplicity_to_l9(l5, l9)
     row = next(row for row in l9.get("submodules", []) if row["name"] == "pll")
-    assert (row["instance_count"], row["low_confidence"]) == (6, low_confidence)
+    assert row["instance_count"] == 6
+    assert row["multiplicity_evidence"]["low_confidence"] is low_confidence
+    assert row["low_confidence"] is True  # Count evidence supplies no port contract.
 
 
 def test_count_without_evidence_remains_low_confidence():
@@ -61,7 +63,36 @@ def test_authoritative_heading_preserves_count_evidence():
     l9 = {}
     runner._v1_6_403_mirror_analog_multiplicity_to_l9({"analog_blocks": blocks}, l9)
     row = l9["submodules"][0]
-    assert (row["instance_count"], row["low_confidence"]) == (6, False)
+    assert (row["instance_count"], row["low_confidence"]) == (6, True)
+    assert row["multiplicity_evidence"]["low_confidence"] is False
+
+
+def test_count_only_declaration_preserves_interface_audit_warning(tmp_path):
+    import integration_spec_audit as consumer
+    text = ("# Neutral analog unit\n## External Interface\n"
+            "Top module name: `neutral_shell`\n"
+            "| Signal | Direction | Width | Description |\n|---|---|---|---|\n"
+            "| enable_i | input | 1 | digital input |\n"
+            "| result_o | output | 1 | digital output |\n## Analog contract\n"
+            "The analog section contains six copies of the PLL at 1.8 V.\n")
+    source = tmp_path / "input/docs/contract.md"
+    source.parent.mkdir(parents=True)
+    source.write_text(text)
+    docs = {source.name: text}
+    runner.gen_l1_datasheet(tmp_path, docs)
+    l5 = json.loads(Path(runner.gen_l5_adi_spec(tmp_path, docs).path).read_text())
+    result = runner.gen_l9_integration_spec(tmp_path, docs, {})
+    l9 = json.loads(Path(result.path).read_text())
+    runner._v1_6_403_mirror_analog_multiplicity_to_l9(l5, l9)
+    Path(result.path).write_text(json.dumps(l9))
+    row = next(row for row in l9["submodules"] if row["name"] == "pll")
+    assert row["instance_count"] == 6
+    assert row["multiplicity_evidence"]["low_confidence"] is False
+    assert row["low_confidence"] is True
+    assert not row.get("ports")
+    audit = consumer.audit(str(tmp_path))
+    assert audit.passed
+    assert [f.severity for f in audit.findings if f.rule == "INVALID_SUBMODULE"] == ["WARNING"]
 
 
 @pytest.mark.parametrize("emitter", [
