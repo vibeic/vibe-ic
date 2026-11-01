@@ -408,7 +408,8 @@ def _a18_metrics(project, name, settings, evidence, execution, limits_before):
                  "identity": {"producer": "analog_native.A18", "checker": _sha(Path(__file__)),
                               "tool_execution": {"outputs": execution["outputs"],
                                                  "returncode": execution["returncode"]}, "consumed_inputs": inputs,
-                              "requirements": authority, "configuration": settings}},
+                              "requirements": authority, "configuration": {
+                                  "generation_sha256": evidence["generation_sha256"]}}},
                 {"status": "APPROVED", "limits": declared[net], "unit": units[net]})
             if units[net] != "um":
                 raise ValueError("A18_ROUTE_UNIT_UNSUPPORTED: " + net)

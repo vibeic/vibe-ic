@@ -29,7 +29,8 @@ def runtime_libraries():
     import klayout.db  # Load the same database API used by stream_out.py.
     from librelane.common import get_script_dir
     paths = {Path(module.__file__).resolve() for name, module in list(sys.modules.items())
-             if name.startswith(("klayout", "pya")) and getattr(module, "__file__", None)}
+             if (name == "klayout" or name.startswith(("klayout.db", "klayout.tl")))
+             and getattr(module, "__file__", None)}
     paths.add(Path(get_script_dir()) / "klayout/stream_out.py")
     return {str(path): {"path": str(path), "sha256": sha(path)} for path in sorted(paths)}
 

@@ -523,3 +523,14 @@ def test_a18_completion_accepts_existing_window_projection(completion_case):
     path.write_text(json.dumps(body))
     result = case.invoke()
     assert result["default_row_status"] == "PASS", (result.get("reason"), result.get("detail"))
+
+
+def test_a18_completion_never_accepts_stand_in(completion_case):
+    case = completion_case
+    case.evidence["stand_in"] = True
+    replacement = case.generate()
+    case.report.clear()
+    case.report.update(replacement)
+    result = case.invoke()
+    assert result["default_row_status"] == "NOT_MEASURED", result
+    assert result["completed"] is False, result
