@@ -36764,6 +36764,37 @@ def _v814_evidence_span_of(block) -> str:
     return para if isinstance(para, str) else ""
 
 
+def _emit_block_device_class_constraints(blocks: List[dict], extracted: dict) -> None:
+    """Bind a source-declared device family to the block its scope names."""
+    declaration = re.compile(
+        r"\b(?P<class>[A-Za-z][\w-]*)\s+devices?\s*\(\s*`?(?P<pattern>[A-Za-z_][\w.*-]*)`?\s*\)"
+        r"\s+for\s+(?:the\s+)?(?:(?P<voltage>\d+(?:\.\d+)?)\s*V\s+)?(?P<scope>[^|\n]+)", re.I)
+    for fname, text in (extracted or {}).items():
+        for match in declaration.finditer(text or ""):
+            if not _issue3234_position_is_current(text, match.start()):
+                continue
+            start = text.rfind("\n", 0, match.start()) + 1
+            end = text.find("\n", match.end())
+            line = text[start:end if end >= 0 else len(text)]
+            if _prose_is_denied(line) is not None:
+                continue
+            scope = match.group("scope").strip().rstrip(".")
+            for block in blocks:
+                key = block.get("type") or block.get("name")
+                pattern = _ANALOG_KEYWORDS.get(key, rf"\b{re.escape(str(key))}\b")
+                if not re.search(pattern, scope, re.I):
+                    continue
+                row = {"device_class": match.group("class"), "model_pattern": match.group("pattern"),
+                       "scope": scope, "evidence": {
+                           "doc": str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}",
+                           "line": text.count("\n", 0, start) + 1, "quote": line}}
+                if match.group("voltage"):
+                    row["voltage_v"] = float(match.group("voltage"))
+                target = block.setdefault("device_class_constraints", [])
+                if row not in target:
+                    target.append(row)
+
+
 def gen_l5_adi_spec(project: Path,
                     extracted: Dict[str, str]) -> LDocResult:
     """L5: analog block discovery via Wave-47 keyword scan + chip-AGNOSTIC
@@ -37435,6 +37466,7 @@ def gen_l5_adi_spec(project: Path,
     _v613_adi_present = (
         bool(blocks)
         and _v1_6_613_input_has_digital_serial_readout(extracted))
+    _emit_block_device_class_constraints(blocks, extracted)
     content = {
         "schema_version": 2,
         "doc_class": "adi_spec",
