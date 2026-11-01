@@ -4044,3 +4044,53 @@ does not prove a structural restriction. See `skills/synth-doctor/SKILL.md` for
 mapped-graph evidence, and `skills/spec-review/SKILL.md` for conflicting input.
 These judgment steps do not authorize historical-solution lookup or changing a
 current requirement to match a scoring result.
+
+### Skill: Flow109 signoff judgment — applicability, references and fixes the expert owns
+
+**When to apply:** deciding whether an optional Flow109 row applies, choosing the
+reference a native result is compared against, or turning a physical FAIL into a fix.
+The IC expert decides these from the design's own evidence; the owner is asked only
+about spending, external or irreversible actions and host security.
+
+- **Applicability when the documents are silent.** Decide from the design's nature
+  and record the reasoning as the expert's ruling, never as a document citation.
+  A single-die, purely digital benchmark block with one supply needs no functional
+  safety, power intent, multi-die, hard-macro, system-scenario, security,
+  DFT/scan/ATPG or package-model rows. Those rows become applicable only when an
+  input states the feature or the delivery requires it.
+- **Post-layout SPICE correlation.** Compare SPICE against the STA delay with the
+  declared OCV derate removed. The derate is margin, not model error. Keep the
+  tolerance derived from the Liberty NLDM grid around each stage's operating point;
+  never substitute a fixed percentage.
+- **Crosstalk glitch.** Simulate the victim driver held quiet with every coupled
+  aggressor switching. Use transistor-level drivers and receivers at the slow, hot,
+  low-voltage corner with maximum RC. Compare the peak with the receiver's VIL/VIH.
+  A failure is fixed in the design, for example by upsizing the victim driver with
+  an incremental-route ECO; the threshold never moves. An ECO creates a new carrier:
+  re-measure every post-route row on it. Rows whose inputs are unchanged and proven
+  byte-identical may be carried over.
+- **Electromigration.** Use the PDK's native power-grid currents and judge them
+  against the foundry DRM average-current tables. Vias are judged per cut, with the
+  cut count recovered from the branch resistance; metal uses the drawn width. RMS is
+  judged only when the PDK defines an RMS rule.
+- **Latch-up.** When the PDK ships no latch-up deck, measure the DRM latch-up rules
+  geometrically on the GDS: well and substrate tap distance, and IO guard rings
+  around marked diffusion. Pick the device class (low or medium voltage) from the
+  thick-oxide marker. Zero structural findings from a name-based screen is not a
+  latch-up measurement.
+- **Final physical verification.** Run LVS on the extraction of the final post-fill
+  GDS, not the routed DEF. Run every native step the row lists, including ERC.
+- **Final fill-aware extraction.** Supply special nets do not belong in a signal
+  SPEF. Bind them by name or exclude them, as RCX does. Never resolve them by a
+  flood selection through the whole power grid and fill.
+- **Power comparisons.** Compare like with like. A non-pad group sum and a
+  whole-design total that includes the pads are different quantities.
+- **Delta-sigma / oversampled ADC ENOB.**
+  - Separate the three ceilings: distortion (integrator swing driving HD2/HD3),
+    thermal noise (kT/C at the sampling capacitor), and the ideal quantization limit
+    computed at the measured input centre and offset.
+  - Same-input point pairs that decode differently are simulator trajectory
+    divergence. Choose integration settings that make each pair agree within the
+    ideal quantization residual before any 128-point run is trusted.
+  - An input offset consumes full-scale headroom and raises distortion. Fix the
+    offset before resizing for resolution.
