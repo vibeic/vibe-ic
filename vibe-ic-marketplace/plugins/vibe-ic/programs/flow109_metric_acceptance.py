@@ -6941,7 +6941,7 @@ def _d0102_read(project: Path, relative: str, reads: dict) -> dict:
     return value
 
 
-def _d0102_documents(project: Path, reads: dict) -> dict:
+def _d0102_documents(project: Path, reads: dict, *, include_owner_request: bool = False) -> dict:
     """Bind staged originals, not a generated extraction mirror."""
     docs = sorted(p for p in (project / 'input/docs').rglob('*') if p.is_file())
     if not docs:
@@ -6949,6 +6949,9 @@ def _d0102_documents(project: Path, reads: dict) -> dict:
                 'input/phase1_structured.yaml') if (project / name).is_file()]
     if not docs:
         docs = sorted(p for p in (project / 'phase1/input_doc').rglob('*') if p.is_file())
+    owner_request = project / 'input/owner_request.md'
+    if include_owner_request and owner_request.is_file():
+        docs.append(owner_request)
     if not docs:
         raise MetricRefusal('D0102_SOURCE_DOCUMENTS_ABSENT', 'staged originals required')
     result = {p.relative_to(project).as_posix(): _sha(_safe_project_file(
@@ -6972,8 +6975,10 @@ def _d0102_population(project: Path, key: str, metric: str, reads: dict) -> tupl
     payload = _d0102_read(project, source_ref['path'], reads).get(metric)
     if not isinstance(payload, dict) or payload.get('required_items') != body['required_items']:
         raise MetricRefusal('D0102_SOURCE_POPULATION_DIFFERS', reference)
-    documents = _d0102_documents(project, reads)
     refs = payload.get('source_documents')
+    documents = _d0102_documents(project, reads, include_owner_request=(
+        isinstance(refs, list) and any(isinstance(ref, dict)
+            and ref.get('path') == 'input/owner_request.md' for ref in refs)))
     if (not isinstance(refs, list) or not refs
             or any(not isinstance(r, dict) or set(r) != {'path', 'sha256'} for r in refs)
             or len({r['path'] for r in refs}) != len(refs)
