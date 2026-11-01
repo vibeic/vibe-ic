@@ -157,6 +157,23 @@ def test_native_bundle_missing_rtl_preserves_real_sdk_failure(tmp_path, monkeypa
     assert result['native_started'] and not result['completed']
 
 
+def test_native_consumer_resolves_project_relative_sdc_once(tmp_path, monkeypatch):
+    project, context, _ = _native_bundle_case(tmp_path, monkeypatch)
+    sdc = project / 'phase3/stage3/pnr/constraint.sdc'
+    sdc.parent.mkdir(parents=True)
+    sdc.write_text('create_clock -period 20 [get_ports clk]\n')
+    path = project / 'phase3/librelane/config.json'
+    config = json.loads(path.read_text())
+    for key in ('PNR_SDC_FILE', 'SIGNOFF_SDC_FILE'):
+        config[key] = 'dir::' + str(sdc.relative_to(project))
+    path.write_text(json.dumps(config))
+    result = d03.execute(project, context)
+    assert result['component_status'] == 'PASS', result
+    resolved = json.loads((project / 'reports/flow109/D03/resolved.json').read_text())
+    assert resolved['PNR_SDC_FILE'] == resolved['SIGNOFF_SDC_FILE'] == str(sdc)
+    assert sum(item['path'] == str(sdc) for item in result['inputs']) == 1
+
+
 def test_case_declared_pdk_reaches_native_flow_without_config_pdk(tmp_path, monkeypatch):
     project, context, _ = _native_bundle_case(tmp_path, monkeypatch)
     path = project / 'phase3/librelane/config.json'

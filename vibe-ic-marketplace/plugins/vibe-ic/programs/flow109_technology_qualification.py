@@ -73,7 +73,7 @@ def _installed_pin(pdk_root: Path, pdk: str, family: str) -> dict:
             "reader_source": _record(Path(revision.__file__))}
 
 
-def _resolve(config_path: Path, pdk_root: Path, *, pdk: str):
+def _resolve(config_path: Path, pdk_root: Path, *, pdk: str, project: Path):
     import ciel
     from librelane.flows import Flow
 
@@ -89,7 +89,8 @@ def _resolve(config_path: Path, pdk_root: Path, *, pdk: str):
     raw_pdk = json.loads(config_path.read_text()).get("PDK")
     if raw_pdk is not None and raw_pdk != pdk:
         raise D03Refusal("D03_PDK_DECLARATION_CONFLICT", "config PDK differs from case declaration")
-    flow = target(str(config_path), pdk=pdk, pdk_root=str(pdk_root))
+    flow = target(str(config_path), pdk=pdk, pdk_root=str(pdk_root),
+                  design_dir=str(project))
     selected = flow.config
     pdk = selected["PDK"]
     family = next((f for f in ciel.Family.by_name.values() if pdk in f.variants), None)
@@ -120,7 +121,7 @@ def execute(project: Path, context: Mapping) -> dict:
             raise D03Refusal("D03_PDK_ROOT_UNSTATED", "VIBEIC_LIBRELANE_PDK_ROOT")
         root = Path(raw_root).resolve(strict=True)
         native_started = True
-        selected, pin = _resolve(config_path, root, pdk=declared_pdk)
+        selected, pin = _resolve(config_path, root, pdk=declared_pdk, project=project)
         resolved_path = project / "reports/flow109/D03/resolved.json"
         resolved_path.parent.mkdir(parents=True, exist_ok=True)
         resolved_path.write_text(selected.dumps())
