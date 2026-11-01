@@ -650,3 +650,57 @@ def test_current_handoff_load_refuses_changed_or_unmeasured_inputs(tmp_path, mon
     assert result['whole_flow_acceptance'] == 'NOT_MEASURED'
     if damage == 'missing_external_load':
         assert result['reason'] == 'D06_BARE_DIE_LOAD_INTERFACE_UNRESOLVED', result
+
+
+def test_selected_load_scenario_uses_own_native_and_never_old_handoff(tmp_path, monkeypatch):
+    """Software wiring control; native execution is measured on the actual subject."""
+    import librelane_prelayout as checks
+    from _ppa import timing
+    _producer(monkeypatch, 'WROTE', 0)
+    _early_docs(tmp_path)
+    _io(tmp_path)
+    state, old_delivery = _native_handoff_fixture(tmp_path, load=False)
+    old_row = tmp_path / 'reports/flow109/default_rows/D30.json'
+    old_bytes = {p: p.read_bytes() for p in (old_delivery, old_row)}
+    values = json.loads(state.read_text())
+    sdc = tmp_path / 'reports/scenarios/new/neutral.sdc'
+    _write(sdc, 'set_output_delay 2 -clock clk [all_outputs]\nset_load 0.04 [get_ports {obs}]\n')
+    mapped = _write(tmp_path / 'phase2/stage2/synth/chip_top_synth.v', Path(values['nl']).read_text())
+    values['nl'] = str(mapped); values.pop('sdc', None); _write(state, values)
+    config = state.parent / 'config.json'
+    cfg = json.loads(config.read_text()); cfg['PNR_SDC_FILE'] = str(sdc); _write(config, cfg)
+    input_config = state.parent / 'input.config.json'
+    raw = dict(cfg, meta={**cfg['meta'], 'flow': None, 'version': 1})
+    _write(input_config, raw)
+    fp = {'step': 'OpenROAD.STAPrePNR', 'config': d06._sha(input_config),
+          'state_files': {str(mapped): d06._sha(mapped)},
+          'config_files': {str(sdc): d06._sha(sdc)}}
+    _write(state.parent / 'input_fingerprint.json', fp)
+    receipt = state.parent / 'vibeic_receipt.json'
+    body = json.loads(receipt.read_text());body['input'] = fp
+    for name in body['sha256']:
+        body['sha256'][name] = d06._sha(state.parent / name)
+    _write(receipt, body)
+    inputs = {'@liberty': str(tmp_path / 'neutral.lib')}
+    monkeypatch.setattr(timing, 'asic_sdc_input_digest', lambda *args: ('f' * 64, inputs))
+    monkeypatch.setattr(checks, 'judge_sdc', lambda *args: {'verdict': 'PASS'})
+    monkeypatch.setattr(checks, 'judge_slack', lambda *args: {'verdict': 'PASS'})
+    rec = _write(sdc.parent / 'asic_sdc.json', {
+        'schema': 'vibe-ic/step7-asic-sdc/1', 'step': 7, 'top': 'chip_top', 'pdk': 'neutral_pdk',
+        'path': str(sdc.relative_to(tmp_path)), 'sha256': d06._sha(sdc),
+        'input_digest': 'f' * 64, 'inputs': inputs})
+    _write(tmp_path / 'phase3/librelane_switch.json', {'package_load_scenario': {
+        'sdc_record': str(rec.relative_to(tmp_path)), 'native_state': str(state.relative_to(tmp_path)),
+        'native_config': str(input_config.relative_to(tmp_path))}})
+    result = d06.execute(tmp_path, _context())
+    assert result['component_status'] == 'PASS', (result.get('reason'), result.get('detail'))
+    measured = result['metrics']['package_escape_feasibility']
+    assert measured['capacitance_library_units'] == 0.04
+    assert measured['load_selector'] == 'explicit_output_ports'
+    assert not any(row['path'].endswith('/D30.json') for row in result['inputs'])
+    assert all(p.read_bytes() == data for p, data in old_bytes.items())
+    # A selected changed native log is rejected, never replaced by old D30.
+    (state.parent / 'invocation.log').write_text('changed native log\n')
+    refused = d06.execute(tmp_path, _context())
+    assert refused['reason'] == 'D06_LOAD_SCENARIO_STALE_OR_UNMEASURED'
+    assert refused['component_status'] == 'NOT_MEASURED'
