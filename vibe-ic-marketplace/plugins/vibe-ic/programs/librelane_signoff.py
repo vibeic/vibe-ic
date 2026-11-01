@@ -78,7 +78,9 @@ if {[info exists ::env(TIME_DERATING_CONSTRAINT)] && [string is double -strict $
   # Two commands: this OpenSTA rejects -early and -late together (Error 110).
   set_timing_derate -early $_vibeic_early
   set_timing_derate -late $_vibeic_late
-  puts $_vibeic_f "OCV_DERATE_APPLIED early=$_vibeic_early late=$_vibeic_late flat-OCV source=TIME_DERATING_CONSTRAINT=$::env(TIME_DERATING_CONSTRAINT)"
+  # SDC may set tcl_precision; serialize the actual command factors losslessly.
+  puts $_vibeic_f [format {OCV_DERATE_APPLIED early=%.17g late=%.17g flat-OCV source=TIME_DERATING_CONSTRAINT=%s} \
+      $_vibeic_early $_vibeic_late $::env(TIME_DERATING_CONSTRAINT)]
 } else {
   puts $_vibeic_f "OCV_DERATE_NOT_DECLARED: the PDK declares no TIME_DERATING_CONSTRAINT"
 }
@@ -881,6 +883,19 @@ def corner_timing(sta_folder: Path) -> dict:
     """Per corner the step analysed: the TIMING_METRICS, the derate the
     corner applied (from its own report), and whether any clock stayed ideal."""
     state = _load(sta_folder / 'state_out.json')
+    config_path = sta_folder / 'config.json'
+    config = _load(config_path) if config_path.is_file() else None
+    derate_known = config is not None
+    expected_derate = None
+    percent = config.get('TIME_DERATING_CONSTRAINT') if config is not None else None
+    if percent not in (None, ''):
+        try:
+            percent_value = float(percent)
+            derate_known = not isinstance(percent, bool) and math.isfinite(percent_value)
+            delta = percent_value / 100.0
+            expected_derate = (1.0 - delta, 1.0 + delta)
+        except (TypeError, ValueError, OverflowError):
+            derate_known = False
     metrics = dict(state.get('metrics') or {})
     if (sta_folder / 'metrics.json').is_file():
         metrics.update(_load(sta_folder / 'metrics.json'))
@@ -893,9 +908,24 @@ def corner_timing(sta_folder: Path) -> dict:
             row[key] = value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
         report = folder / CORNER_REPORT
         text = report.read_text(errors='replace') if report.is_file() else ''
-        derate = next((line for line in text.splitlines() if line.startswith(DERATE_MARKER)), None)
-        row['derate'] = (derate if derate else
-                         NO_DERATE_MARKER if NO_DERATE_MARKER in text else None)
+        markers = [line.strip() for line in text.splitlines()
+                   if line.strip().startswith('OCV_DERATE_')]
+        row['derate'] = None
+        if derate_known and len(markers) == 1 and text.count('OCV_DERATE_') == 1:
+            marker = markers[0]
+            if expected_derate is None:
+                if re.fullmatch(NO_DERATE_MARKER + r'(?::.*)?', marker):
+                    row['derate'] = NO_DERATE_MARKER
+            else:
+                found = re.fullmatch(DERATE_MARKER + r' early=(\S+) late=(\S+)'
+                                     r'(?: flat-OCV(?: source=TIME_DERATING_CONSTRAINT=\S+)?)?', marker)
+                if found:
+                    try:
+                        factors = tuple(float(value) for value in found.groups())
+                        if all(math.isfinite(value) for value in factors) and factors == expected_derate:
+                            row['derate'] = marker
+                    except ValueError:
+                        pass
         unpropagated = folder / 'unpropagated.rpt'
         row['ideal_clocks'] = ([line.strip() for line in unpropagated.read_text().splitlines()
                                 if line.strip()] if unpropagated.is_file() else None)

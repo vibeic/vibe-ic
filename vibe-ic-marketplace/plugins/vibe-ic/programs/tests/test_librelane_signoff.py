@@ -19,6 +19,7 @@ PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
 contract = importlib.import_module('librelane_contract')
 from _stated_eda_image import stated_image, state_the_image, mock_docker_route  # noqa: E402
+from _hostpaths import require_repo  # noqa: E402
 import _eda_pin  # noqa: E402
 signoff = importlib.import_module('librelane_signoff')
 
@@ -49,14 +50,16 @@ def _fresh(monkeypatch):
 
 # ------------------------------------------------------- the extra Tcl ---
 
-def _tcl_run(tmp_path, extra: Path, env: dict) -> tuple[str, str]:
+def _tcl_run(tmp_path, extra: Path, env: dict, *, precision=0) -> tuple[str, str]:
     """Source the extra corner Tcl in tclsh with OpenSTA's derate command
     recorded, the way LibreLane's corner.tcl sources it."""
     harness = write(tmp_path / 'harness.tcl', (
         'set ::calls {}\n'
-        'proc set_timing_derate {flag value} { lappend ::calls $flag $value }\n'
+        f'set ::tcl_precision {precision}\n'
+        'proc set_timing_derate {flag value} { lappend ::calls $flag [format %.17g $value] }\n'
         'set corner_name max_ss_125C_4v50\n'
         f'source {extra}\n'
+        f'if {{$::tcl_precision != {precision}}} {{error "writer changed tcl_precision"}}\n'
         'puts [join $::calls " "]\n'))
     run_env = {'PATH': '/usr/bin:/bin', '_LIB_SAVE_DIR': str(tmp_path), **env}
     out = subprocess.run(['tclsh', str(harness)], capture_output=True, text=True, env=run_env)
@@ -70,8 +73,12 @@ def test_integer_percent_derates_by_that_percent_not_by_zero(tmp_path):
     computes 1-[expr 5 / 100] = 1 (no derate).  The extra Tcl divides by 100.0."""
     extra = signoff.write_extra_corner_tcl(tmp_path)
     calls, report = _tcl_run(tmp_path, extra, {'TIME_DERATING_CONSTRAINT': '5'})
-    assert calls == '-early 0.95 -late 1.05'
-    assert 'OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV source=TIME_DERATING_CONSTRAINT=5' in report
+    assert calls.split()[::2] == ['-early', '-late']
+    assert tuple(map(float, calls.split()[1::2])) == (0.95, 1.05)
+    marker = report.splitlines()[0].split()
+    assert marker[0] == signoff.DERATE_MARKER
+    assert tuple(float(field.split('=')[1]) for field in marker[1:3]) == (0.95, 1.05)
+    assert marker[3:] == ['flat-OCV', 'source=TIME_DERATING_CONSTRAINT=5']
     assert 'STA_BASIS_CORNER: max_ss_125C_4v50' in report
 
 
@@ -81,6 +88,28 @@ def test_an_undeclared_percent_applies_no_derate_and_says_so(tmp_path):
     calls, report = _tcl_run(tmp_path, extra, {})
     assert calls == ''
     assert signoff.NO_DERATE_MARKER in report and signoff.DERATE_MARKER not in report
+
+
+@pytest.mark.skipif(shutil.which('tclsh') is None, reason='needs tclsh')
+@pytest.mark.parametrize('precision', (0, 6))
+def test_derate_writer_round_trips_factors_independent_of_tcl_precision(tmp_path, precision):
+    percent = 1.23456789
+    extra = signoff.write_extra_corner_tcl(tmp_path)
+    calls, report = _tcl_run(tmp_path, extra, {'TIME_DERATING_CONSTRAINT': str(percent)},
+                             precision=precision)
+    expected = (1.0 - percent / 100.0, 1.0 + percent / 100.0)
+    assert calls.split()[::2] == ['-early', '-late']
+    assert tuple(map(float, calls.split()[1::2])) == expected
+    folder = _sta_folder(tmp_path)
+    config = json.loads((folder / 'config.json').read_text())
+    config['TIME_DERATING_CONSTRAINT'] = percent
+    put(folder / 'config.json', config)
+    for corner in CORNERS:
+        write(folder / corner / signoff.CORNER_REPORT, report)
+    judged = signoff.judge_timing(signoff.corner_timing(folder))
+    assert judged['verdict'] == 'PASS', judged
+    marker = report.splitlines()[0].split()
+    assert tuple(float(field.split('=')[1]) for field in marker[1:3]) == expected
 
 
 def test_report_body_is_the_direct_decks_emitters_on_the_corner_report():
@@ -405,6 +434,99 @@ def test_every_corner_measured_derated_and_propagated_passes(tmp_path):
     judged = signoff.judge_timing(signoff.corner_timing(_sta_folder(tmp_path)))
     assert judged['verdict'] == 'PASS'
     assert judged['worst_setup']['ws'] == 1.0
+
+
+@pytest.mark.parametrize('name', ('setup_ss_125c_4v50.rpt', 'hold_ff_n40c_5v50.rpt'))
+def test_checked_in_derate_reports_preserve_marker_compatibility(tmp_path, name):
+    """Replay real report bytes with fixture metrics; this does not remeasure timing."""
+    report = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+                          'tests', 'fixtures', 'ppa', 'sta', 'known_answer', 'views', name).read_text()
+    marker = next(line for line in report.splitlines() if line.startswith(signoff.DERATE_MARKER))
+    folder = _sta_folder(tmp_path)
+    for corner in CORNERS:
+        write(folder / corner / signoff.CORNER_REPORT, report)
+    assert signoff.judge_timing(signoff.corner_timing(folder))['verdict'] == 'PASS'
+    write(folder / CORNERS[0] / signoff.CORNER_REPORT,
+          report.replace(marker, marker + ' late=1.0'))
+    judged = signoff.judge_timing(signoff.corner_timing(folder))
+    assert judged['verdict'] == 'NOT_MEASURED', judged
+    assert judged['derate_unrecorded'] == [CORNERS[0]]
+
+
+@pytest.mark.parametrize('marker', (
+    'OCV_DERATE_NOT_DECLARED',
+    'OCV_DERATE_APPLIED early=1.0 late=1.0',
+    'OCV_DERATE_APPLIED early=0.95 late=1.0',
+    'OCV_DERATE_APPLIED early=nan late=1.05',
+    'OCV_DERATE_APPLIED early=0.95 late=inf',
+    'OCV_DERATE_APPLIED early=0.95',
+    'OCV_DERATE_APPLIED_BOGUS early=0.95 late=1.05',
+    'OCV_DERATE_APPLIED early=0.95 late=1.05\nOCV_DERATE_NOT_DECLARED',
+    'OCV_DERATE_APPLIED early=0.95 late=1.05\nOCV_DERATE_APPLIED early=1.0 late=1.0',
+    'OCV_DERATE_APPLIED early=0.95 late=1.05 early=1.0 late=1.0',
+    'OCV_DERATE_APPLIED early=0.95 late=1.05 early=0.95',
+    'OCV_DERATE_APPLIED early=0.95 late=1.05 late=1.05',
+    'OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV early=1.0 late=1.0',
+    'OCV_DERATE_APPLIED early=0.95 late=1.05 flat-OCV source=TIME_DERATING_CONSTRAINT=5 early=1.0 late=1.0',
+))
+def test_declared_percent_rejects_inconsistent_derate_marker(tmp_path, marker):
+    folder = _sta_folder(tmp_path)
+    write(folder / CORNERS[0] / signoff.CORNER_REPORT, marker + '\n')
+    judged = signoff.judge_timing(signoff.corner_timing(folder))
+    assert judged['verdict'] != 'PASS', judged
+
+
+@pytest.mark.parametrize(('percent', 'marker'), (
+    (5.0, 'OCV_DERATE_APPLIED early=0.95 late=1.05'),
+    (2.5, 'OCV_DERATE_APPLIED early=0.975 late=1.025'),
+    (100, 'OCV_DERATE_APPLIED early=0.0 late=2.0'),
+    (0, 'OCV_DERATE_APPLIED early=1.0 late=1.0'),
+    ('0', 'OCV_DERATE_APPLIED early=1.0 late=1.0'),
+    (None, 'OCV_DERATE_NOT_DECLARED'),
+    ('', 'OCV_DERATE_NOT_DECLARED'),
+))
+def test_derate_marker_preserves_configured_zero_and_undeclared_cases(tmp_path, percent, marker):
+    folder = _sta_folder(tmp_path)
+    config = json.loads((folder / 'config.json').read_text())
+    config['TIME_DERATING_CONSTRAINT'] = percent
+    put(folder / 'config.json', config)
+    for corner in CORNERS:
+        write(folder / corner / signoff.CORNER_REPORT, marker + '\n')
+    assert signoff.judge_timing(signoff.corner_timing(folder))['verdict'] == 'PASS'
+
+
+def test_absent_derate_setting_requires_undeclared_marker(tmp_path):
+    folder = _sta_folder(tmp_path)
+    config = json.loads((folder / 'config.json').read_text())
+    config.pop('TIME_DERATING_CONSTRAINT')
+    put(folder / 'config.json', config)
+    assert signoff.judge_timing(signoff.corner_timing(folder))['verdict'] != 'PASS'
+    for corner in CORNERS:
+        write(folder / corner / signoff.CORNER_REPORT, 'OCV_DERATE_NOT_DECLARED\n')
+    assert signoff.judge_timing(signoff.corner_timing(folder))['verdict'] == 'PASS'
+
+
+@pytest.mark.parametrize(('percent', 'marker'), (
+    (float('nan'), 'OCV_DERATE_APPLIED early=nan late=nan'),
+    (float('inf'), 'OCV_DERATE_APPLIED early=-inf late=inf'),
+    (True, 'OCV_DERATE_APPLIED early=0.99 late=1.01'),
+))
+def test_invalid_derate_setting_cannot_be_hidden_by_a_marker(tmp_path, percent, marker):
+    folder = _sta_folder(tmp_path)
+    config = json.loads((folder / 'config.json').read_text())
+    config['TIME_DERATING_CONSTRAINT'] = percent
+    put(folder / 'config.json', config)
+    for corner in CORNERS:
+        write(folder / corner / signoff.CORNER_REPORT, marker + '\n')
+    assert signoff.judge_timing(signoff.corner_timing(folder))['verdict'] != 'PASS'
+
+
+def test_missing_config_is_not_evidence_of_undeclared_derate(tmp_path):
+    folder = _sta_folder(tmp_path)
+    (folder / 'config.json').unlink()
+    for corner in CORNERS:
+        write(folder / corner / signoff.CORNER_REPORT, 'OCV_DERATE_NOT_DECLARED\n')
+    assert signoff.judge_timing(signoff.corner_timing(folder))['verdict'] != 'PASS'
 
 
 def test_an_ideal_clock_on_a_post_route_corner_fails(tmp_path):
