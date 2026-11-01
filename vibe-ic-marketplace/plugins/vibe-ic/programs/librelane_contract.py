@@ -441,10 +441,13 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
 
     Reuse the existing mount-path conversion and host process supervision.
     The enclosing fresh image supplies the environment and cgroup memory bound.
+    CPU limits select at most ceil(N) inherited CPUs; process and memory limits
+    become child rlimits, preserving any stricter inherited ceiling.
     Unknown launch options refuse rather than silently discarding their meaning.
     """
     mounts, variables, entrypoint, container_workdir = [], {}, None, None
     network, memory, memory_swap, auto_remove = None, None, None, False
+    cpus, pids_limit = None, None
     at = argv.index('run') + 1
     while at < len(argv) and argv[at].startswith('-'):
         option = argv[at]
@@ -452,10 +455,13 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
             auto_remove = True
             at += 1
             continue
-        if option not in ('-v', '-e', '--entrypoint', '--memory', '--memory-swap', '--network', '--workdir'):
+        if option not in ('-v', '-e', '--entrypoint', '--memory', '--memory-swap',
+                          '--network', '--workdir', '--cpus', '--pids-limit'):
             raise Refusal('LL_LOCAL_LAUNCH_UNSUPPORTED', option)
         if option == '--workdir' and at + 1 >= len(argv):
             raise Refusal('LL_LOCAL_WORKDIR_INVALID', '--workdir requires a path')
+        if option in ('--cpus', '--pids-limit') and at + 1 >= len(argv):
+            raise Refusal('LL_LOCAL_LAUNCH_UNSUPPORTED', f'{option} requires a value')
         value = argv[at + 1]
         if option == '-v':
             host, guest, *mode = value.split(':')
@@ -475,6 +481,20 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
             memory = _local_memory_bytes(value)
         elif option == '--memory-swap':
             memory_swap = _local_memory_bytes(value)
+        elif option in ('--cpus', '--pids-limit'):
+            try:
+                if option == '--cpus':
+                    number = Decimal(value)
+                    if not number.is_finite() or number < 0:
+                        raise ValueError('CPU count must be finite and nonnegative')
+                    cpus = math.ceil(number)
+                else:
+                    pids_limit = int(value)
+                    if pids_limit < -1:
+                        raise ValueError('process limit must be nonnegative or -1')
+            except (ValueError, ArithmeticError) as exc:
+                raise Refusal('LL_LOCAL_LAUNCH_UNSUPPORTED',
+                              f'invalid {option} value {value!r}: {exc}') from None
         at += 2
     child_cwd = None
     if container_workdir is not None:
@@ -597,16 +617,25 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
     if provider is not None and provider.librelane_root:
         environment['PYTHONPATH'] = os.pathsep.join(
             [provider.librelane_root, environment.get('PYTHONPATH', '')]).rstrip(os.pathsep)
-    if provider is not None:
-        # Apply the native address-space ceiling in a separate launcher.  A
+    if provider is not None or any(value is not None for value in (memory, cpus, pids_limit)):
+        # Apply native limits in a separate launcher.  A
         # preexec_fn in a supervised/threaded parent can deadlock after fork;
-        # this launcher sets the limit and immediately execs the bound command.
+        # this launcher sets limits and immediately execs the bound command.
         launcher = (
-            'import os,resource,sys; '
-            'limit=int(sys.argv[1]); '
-            'resource.setrlimit(resource.RLIMIT_AS,(limit,limit)); '
-            'os.execvpe(sys.argv[2],sys.argv[2:],os.environ)')
-        command = [provider.executable, '-c', launcher, str(memory), *command]
+            'import os,resource,sys\n'
+            'memory,cpus,pids=map(int,sys.argv[1:4])\n'
+            'def cap(kind,requested):\n'
+            '    limits=(requested,*resource.getrlimit(kind))\n'
+            '    bound=min(value for value in limits if value!=resource.RLIM_INFINITY)\n'
+            '    resource.setrlimit(kind,(bound,bound))\n'
+            'if memory>0: cap(resource.RLIMIT_AS,memory)\n'
+            'if cpus>0: os.sched_setaffinity(0,sorted(os.sched_getaffinity(0))[:cpus])\n'
+            'if pids>=0: cap(resource.RLIMIT_NPROC,pids)\n'
+            'os.execvpe(sys.argv[4],sys.argv[4:],os.environ)')
+        executable = provider.executable if provider is not None else sys.executable
+        command = [executable, '-c', launcher, str(memory or 0), str(cpus or 0),
+                   str(pids_limit if pids_limit is not None else -1), *command]
+    if provider is not None:
         environment['VIBEIC_LOCAL_MEMORY_LIMIT_BYTES'] = str(memory)
         environment['VIBEIC_LOCAL_NETWORK_MODE'] = provider.network_mode
     _ce.local_exec_mode('librelane_contract')
