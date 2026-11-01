@@ -2426,11 +2426,12 @@ def verilog_model_closure_of_texts(candidates: List[str], texts: Dict[str, str],
 
 
 def _postlayout_output_deadline(project: Path, plan: dict, declared: dict,
-                                netlist: Path, sdc: Path, sdfs: List[Path]) -> dict:
+                                netlist: Path, sdc: Path, sdfs: List[Path],
+                                *, sta_step_dir: Optional[Path] = None) -> dict:
     """The current STA output's required time, not an inferred settling bound.
 
     A common bench observes no later than the earliest declared scene's
-    interface deadline. Native receipts own the reports, timed views and SDFs;
+    interface deadline. The selected STA reports own the timed views and SDFs;
     a missing scene or another output/clock cannot supply this authority.
     """
     from decimal import Decimal, ROUND_FLOOR
@@ -2438,21 +2439,43 @@ def _postlayout_output_deadline(project: Path, plan: dict, declared: dict,
     import librelane_contract as contract
     import sdc_constraints
     try:
-        arm = signoff.step23_tool_arm(project, artefacts=('max.rpt',))
-        if not arm or not arm['corners']:
-            raise ValueError('no current native STA scenes')
-        folder = Path(arm['folder'])
+        if sta_step_dir is None:
+            arm = signoff.step23_tool_arm(project, artefacts=('max.rpt',))
+            if not arm or not arm['corners']:
+                raise ValueError('no current native STA scenes')
+            folder = Path(arm['folder'])
+            corners = arm['corners']
+            basis = signoff.tool_arm_basis(arm)
+        else:
+            # The normal native caller already selected this STAPostPNR State.
+            # Consume its actual scenes; do not synthesize a legacy receipt.
+            folder = Path(sta_step_dir).resolve(strict=True)
         state = json.loads((folder / 'state_out.json').read_text())
-        receipt = json.loads((folder / 'vibeic_receipt.json').read_text())
         if (Path(state['nl']).resolve() != netlist.resolve() or
                 Path(state['sdc']).resolve() != sdc.resolve() or
                 {Path(f).resolve() for f in state['sdf'].values()} !=
                 {f.resolve() for f in sdfs}):
             raise ValueError('GLS and STA do not use the same timed views')
-        for sdf in sdfs:
-            relative = str(sdf.relative_to(folder))
-            if receipt['sha256'].get(relative) != contract.digest(sdf):
-                raise ValueError('SDF differs from the native STA receipt')
+        if sta_step_dir is None:
+            receipt = json.loads((folder / 'vibeic_receipt.json').read_text())
+            for sdf in sdfs:
+                relative = str(sdf.relative_to(folder))
+                if receipt['sha256'].get(relative) != contract.digest(sdf):
+                    raise ValueError('SDF differs from the native STA receipt')
+        else:
+            if not state['sdf']:
+                raise ValueError('no current native STA scenes')
+            corners = {}
+            for name, sdf in state['sdf'].items():
+                scene = folder / name
+                if (scene.parent != folder or Path(sdf).resolve(strict=True).parent != scene):
+                    raise ValueError('SDF is outside its native STA scene')
+                report = scene / 'max.rpt'
+                corners[name] = {'files': {'max.rpt': {'text': report.read_text()}}}
+            basis = {'producer': 'librelane:OpenROAD.STAPostPNR',
+                     'state': str(folder / 'state_out.json'),
+                     'corners': {name: {'max.rpt': str(folder / name / 'max.rpt')}
+                                 for name in corners}}
         clocks = declared_sdc_clocks(sdc, [f.read_text() for f in sdfs])
         port = declared['port_map'][plan['spec']['serial_out']]
         clock_port = declared['port_map'][plan['spec']['clk']]
@@ -2469,8 +2492,8 @@ def _postlayout_output_deadline(project: Path, plan: dict, declared: dict,
         if period != Decimal(str(plan['observation']['clock_period_ns'])):
             raise ValueError('INPUT and current STA clock periods disagree')
         deadlines = {}
-        for name, row in arm['corners'].items():
-            if row['scope_gaps']:
+        for name, row in corners.items():
+            if sta_step_dir is None and row['scope_gaps']:
                 raise ValueError(f'{name}: incomplete native STA scope')
             values = []
             for block in re.split(r'(?m)^Startpoint: ', row['files']['max.rpt']['text'])[1:]:
@@ -2492,14 +2515,15 @@ def _postlayout_output_deadline(project: Path, plan: dict, declared: dict,
         if sample <= 0:
             raise ValueError('no representable positive deadline at 1 ps resolution')
         return {'sample_offset_ns': float(sample), 'output': port, 'clock': clock,
-                'required_time_ns': deadlines, 'basis': signoff.tool_arm_basis(arm)}
+                'required_time_ns': deadlines, 'basis': basis}
     except (OSError, KeyError, TypeError, ValueError, ArithmeticError, contract.Refusal) as exc:
         raise ValueError(f'POSTLAYOUT_OBSERVATION_UNMEASURED: {exc}') from exc
 
 
 def _bound_arithmetic_case(project: Path, case: Dict[str, object], top: str,
                            declared: Dict[str, object], model_files: List[str],
-                           *, netlist: Path, sdc: Path, sdfs: List[Path]
+                           *, netlist: Path, sdc: Path, sdfs: List[Path],
+                           sta_step_dir: Optional[Path] = None
                            ) -> Tuple[str, Optional[Dict[str, object]]]:
     """Prepare a generated arithmetic case for its declared physical surface.
 
@@ -2528,7 +2552,8 @@ def _bound_arithmetic_case(project: Path, case: Dict[str, object], top: str,
     if plan is None:
         raise ValueError('MISSING_OBSERVATION_CONTRACT: ' + '; '.join(
             request.get('unsupported_requirements') or ['unsupported selected observation']))
-    deadline = _postlayout_output_deadline(project, plan, declared, netlist, sdc, sdfs)
+    deadline = _postlayout_output_deadline(project, plan, declared, netlist, sdc, sdfs,
+                                           sta_step_dir=sta_step_dir)
     plan['observation'] = {**plan['observation'],
                            'sample_offset_ns': deadline['sample_offset_ns'],
                            'postlayout_deadline': deadline}
@@ -2542,12 +2567,15 @@ def _bound_arithmetic_case(project: Path, case: Dict[str, object], top: str,
 def tool_arm_manifest(project: Path, top: str, netlist: Path,
                       declared_models: List[Path], out: Path,
                       *, sdc: Path, sdfs: List[Path],
-                      path_map: Optional[Dict[str, str]] = None) -> Dict[str, object]:
+                      path_map: Optional[Dict[str, str]] = None,
+                      sta_step_dir: Optional[Path] = None) -> Dict[str, object]:
     """What `Vibeic.GateLevelSim` runs: the run's executed L10 cases bound to
     the netlist the tool timed (`declared_dut_binding`) and clocked at the
     period of the SDC it timed against (`bind_bench_clock`), with the SDF path
     left as a placeholder, and the model closure. `path_map` rewrites host
     model paths to the paths the image sees (`{host_prefix: container_prefix}`).
+    `sta_step_dir` explicitly supplies an already selected native STAPostPNR
+    State and its corner max.rpt files for the observation deadline.
     A binding or a clock this run does not declare refuses the whole arm."""
     suite = find_l10_executed_cases(project, top)
     if not suite or not suite.get("cases"):
@@ -2571,7 +2599,8 @@ def tool_arm_manifest(project: Path, top: str, netlist: Path,
         try:
             text, observation = _bound_arithmetic_case(project, case, top,
                                                        declared, closure['files'],
-                                                       netlist=netlist, sdc=sdc, sdfs=sdfs)
+                                                       netlist=netlist, sdc=sdc, sdfs=sdfs,
+                                                       sta_step_dir=sta_step_dir)
             text, binding = bind_dut_module(text, top,
                                             str(case["dut_instance"]), ntext,
                                             declared)
