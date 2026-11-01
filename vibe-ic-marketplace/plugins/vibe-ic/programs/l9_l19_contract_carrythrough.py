@@ -497,6 +497,29 @@ def _l19_contract(project: Path, records: List[Dict[str, str]], l19: dict
                 if key in answers and not (
                     isinstance(answers[key], str)
                     and answers[key].strip().upper() == "NOT_DETERMINED")}
+    seal_ring: Dict[str, Any] = {}
+    seal_evidence = []
+    for record in records:
+        historical = False
+        for lineno, line in enumerate(record["text"].splitlines(), 1):
+            if _HEADING_RE.match(line):
+                historical = bool(re.search(r"historical|obsolete|example|comparison", line, re.I))
+            if historical:
+                continue
+            placement = re.search(
+                r"\bseal\s+ring\s+(?:lies|is|shall\s+be)\s+(inside|outside)\s+(?:the|this)\s+die\b", line, re.I)
+            envelope = re.search(
+                r"\bwith\s+seal\s+ring\b[^\n]*?(~)?\s*(\d+(?:\.\d+)?)\s*[×x]\s*(\d+(?:\.\d+)?)\s*(?:µm|μm|um)\b", line, re.I)
+            if placement:
+                seal_ring["placement"] = placement.group(1).lower()
+            if envelope:
+                seal_ring["outer_envelope_um"] = {
+                    "width": float(envelope.group(2)), "height": float(envelope.group(3))}
+                seal_ring["approximate"] = envelope.group(1) == "~"
+            if placement or envelope:
+                seal_evidence.append({"doc": record["source"], "line": lineno, "quote": line})
+    if seal_ring:
+        geometry["seal_ring"] = {**seal_ring, "evidence": seal_evidence}
     unresolved = _not_determined_paths(declaration or {})
 
     operator: Dict[str, Any] = {}
@@ -570,6 +593,11 @@ def run(project: Path, dry_run: bool = False) -> Dict[str, Any]:
     constraints = l19.get("constraints")
     constraints = constraints if isinstance(constraints, dict) else {}
     for key, value in _l19_contract(project, records, l19).items():
+        if (key == "tapeout_geometry" and isinstance(constraints.get(key), dict)
+                and isinstance(value, dict) and value.get("seal_ring")
+                and "seal_ring" not in constraints[key]):
+            constraints[key]["seal_ring"] = value["seal_ring"]
+            emitted.append("L19.constraints.tapeout_geometry.seal_ring")
         _put_if_absent(constraints, key, value, emitted, "L19.constraints")
     if constraints:
         l19["constraints"] = constraints
