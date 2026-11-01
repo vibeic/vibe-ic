@@ -11,10 +11,7 @@ HARDMACRO, that says "declares deliverable=HARDMACRO". The owner changed the
 answer; the text that DEPENDED on it had no producer, so nothing re-derived it
 and it went on asserting the route the owner had overruled.
 
-The owner's answer is authoritative and is never rewritten here. A valid
-explicit budget is preserved as a successful no-op, including NOT_APPLICABLE
-on a design with fixed die geometry. Only an unanswered or producer-owned
-budget is derived. The derived
+The owner's answer is authoritative and is never rewritten here. The derived
 answer is REGENERATED — never hand-edited — from two inputs:
 
   * the design's documents: where they decline a die size, where they say the
@@ -374,22 +371,15 @@ def _operator_die_basis(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def derive(project: Path, doc: Dict[str, Any]) -> Dict[str, Any]:
-    """{status: WRITE|DECLARED|REFUSED|NOT_DETERMINED, budget?, reason?, basis}."""
+    """{status: WRITE|REFUSED|NOT_DETERMINED, budget?, reason?, basis}."""
     # THE OWNER'S FIELD IS NEVER OVERWRITTEN (DELIVC final check, finding 2).
     # Any owner record, cited or not: an uncited one is a defect the owner
     # fixes, never a licence for a program to replace the owner's answer.
     # Decided by the repo's one reader, the same one the gate uses, so a
     # record the gate reads as the owner's (e.g. " owner ") is never
     # overwritten here (DELIVC3 final check).
-    budget_attestation = TD.attestation_of(doc, KEY)
-    if budget_attestation["answered_by"] == TD.ANSWERED_BY_OWNER_VALUE:
-        value = doc.get(KEY, (doc.get("answers") or {}).get(KEY))
-        resolution = TD.area_budget_resolution({KEY: value})
-        if (budget_attestation["declares"]
-                and resolution["status"] in (TD.AREA_BUDGET_LIMIT,
-                                             TD.AREA_BUDGET_NOT_APPLICABLE)):
-            return {"status": "DECLARED", "rc": 0,
-                    "reason": f"explicit owner-declared {KEY} preserved"}
+    if TD.attestation_of(doc, KEY)["answered_by"] == \
+            TD.ANSWERED_BY_OWNER_VALUE:
         return {"status": "REFUSED", "rc": 1,
                 "reason": (f"`{TD.PROVENANCE_KEY}.{KEY}` says the owner "
                            f"answered `{KEY}`; this program never overwrites "
