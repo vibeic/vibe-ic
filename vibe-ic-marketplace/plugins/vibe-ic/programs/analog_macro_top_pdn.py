@@ -170,6 +170,7 @@ def connect_macro_edges(db, intent, config):
     import odb
     block = db.getChip().getBlock()
     layers = {config["PDN_VERTICAL_LAYER"], config["PDN_HORIZONTAL_LAYER"]}
+    available_vias = [*block.getVias(), *db.getTech().getVias()]
     for name in intent["core_instances"]:
         inst = block.findInst(name)
         bounds = box(inst.getBBox())
@@ -184,7 +185,7 @@ def connect_macro_edges(db, intent, config):
                 for axis, sign, edge in ((0,-1,a),(0,1,c),(1,-1,b),(1,1,d)):
                     if edge != bounds[axis+(2 if sign > 0 else 0)]:
                         continue
-                    width = layer.getWidth()
+                    width = layer.getMinWidth()
                     pin_width = d-b if axis == 0 else c-a
                     if pin_width < width:
                         narrow_access = True
@@ -201,7 +202,7 @@ def connect_macro_edges(db, intent, config):
                             end = (coords[axis]+coords[axis+2])//2
                             if sign*(end-edge) <= 0:
                                 continue
-                            vias = [v for v in block.getVias() if {q.getTechLayer().getName() for q in v.getBoxes()
+                            vias = [v for v in available_vias if {q.getTechLayer().getName() for q in v.getBoxes()
                                     if q.getTechLayer().getRoutingLevel()>0} == {layer.getName(),target.getTechLayer().getName()}]
                             for via in vias:
                                 top = [q for q in via.getBoxes() if q.getTechLayer() == target.getTechLayer()]

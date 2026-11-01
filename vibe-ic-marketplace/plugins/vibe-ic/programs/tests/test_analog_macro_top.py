@@ -357,7 +357,7 @@ def macro_escape_scene(monkeypatch):
         return Object(xMin=lambda: a, yMin=lambda: b, xMax=lambda: c, yMax=lambda: d)
 
     def layer(name, level):
-        return Object(getName=lambda: name, getRoutingLevel=lambda: level, getSpacing=lambda: 0, getWidth=lambda: 2)
+        return Object(getName=lambda: name, getRoutingLevel=lambda: level, getSpacing=lambda: 0, getMinWidth=lambda: 2)
 
     metal, mesh = layer("M1", 1), layer("M2", 2)
     via_boxes = [Object(getTechLayer=lambda l=l: l, **vars(rect(-1,-1,1,1)))
@@ -375,7 +375,8 @@ def macro_escape_scene(monkeypatch):
                   getName=lambda: "macro_a", getMaster=lambda: Object(getObstructions=lambda: []))
     block = Object(findInst=lambda name: inst, getInsts=lambda: [inst], getVias=lambda: [via],
                    getNets=lambda: [supply,foreign], getObstructions=lambda: [])
-    db = Object(getChip=lambda: Object(getBlock=lambda: block))
+    db = Object(getChip=lambda: Object(getBlock=lambda: block),
+                getTech=lambda: Object(getVias=lambda: []))
     created = []
     def point(x, y):
         return Object(x=lambda: x, y=lambda: y)
@@ -463,7 +464,7 @@ def test_macro_escape_keeps_pin_width_until_local_via_enclosure(monkeypatch):
     from types import SimpleNamespace as Object
     scene = macro_escape_scene(monkeypatch)
     metal, mesh, rect = scene["metal"], scene["mesh"], scene["rect"]
-    metal.getWidth = lambda: 1640
+    metal.getMinWidth = lambda: 1640
     metal.getSpacing = lambda: 1640
     scene["foreign"].getSWires = lambda: []
     scene["inst"].getBBox = lambda: rect(0,0,10000,10000)
@@ -484,7 +485,126 @@ def test_macro_escape_refuses_pin_below_native_minimum_width(monkeypatch):
     from librelane_contract import Refusal
     scene = macro_escape_scene(monkeypatch)
     scene["foreign"].getSWires = lambda: []
-    scene["metal"].getWidth = lambda: 3
+    scene["metal"].getMinWidth = lambda: 3
     with pytest.raises(Refusal, match="A18_MACRO_PG_PIN_TOO_NARROW.*macro_a/VP"):
         scene["pdn"].connect_macro_edges(scene["db"],scene["intent"],scene["config"])
     assert scene["created"] == []
+
+
+def native_macro_escape_grid(tmp_path, preferred_width=1, pin_width=2, block_via=False):
+    """Build a neutral fixed-via PDK, then let native pdngen create its grid."""
+    import shutil
+    import subprocess
+    import analog_macro_top_pdn as pdn
+    odb = pytest.importorskip("odb")
+    openroad = shutil.which("openroad")
+    if not openroad:
+        pytest.skip("native OpenROAD is required for the PDN access control")
+    lef = tmp_path / "access.lef"
+    lef.write_text(f'''VERSION 5.8 ;
+BUSBITCHARS "[]" ; DIVIDERCHAR "/" ;
+UNITS DATABASE MICRONS 1000 ; END UNITS
+MANUFACTURINGGRID 0.001 ;
+LAYER M1
+ TYPE ROUTING ; DIRECTION HORIZONTAL ; PITCH 2 ; WIDTH {preferred_width} ; MINWIDTH 1 ; SPACING 1 ;
+ RESISTANCE RPERSQ 1 ; CAPACITANCE CPERSQDIST 0.01 ;
+END M1
+LAYER C1
+ TYPE CUT ; SPACING 0.2 ;
+END C1
+LAYER M2
+ TYPE ROUTING ; DIRECTION VERTICAL ; PITCH 2 ; WIDTH 1 ; MINWIDTH 1 ; SPACING 1 ;
+ RESISTANCE RPERSQ 1 ; CAPACITANCE CPERSQDIST 0.01 ;
+END M2
+VIA VIA12 DEFAULT
+ LAYER M1 ; RECT -0.5 -0.5 0.5 0.5 ;
+ LAYER C1 ; RECT -0.1 -0.1 0.1 0.1 ;
+ LAYER M2 ; RECT -0.5 -0.5 0.5 0.5 ;
+END VIA12
+SITE coreSite
+ CLASS CORE ; SIZE 1 BY 1 ; SYMMETRY Y ;
+END coreSite
+MACRO neutral_macro
+ CLASS BLOCK ; ORIGIN 0 0 ; SIZE 10 BY 10 ;
+ PIN VP
+ DIRECTION INOUT ; USE POWER ; PORT LAYER M1 ; RECT 9 {5-pin_width/2} 10 {5+pin_width/2} ; END
+ END VP
+END neutral_macro
+END LIBRARY
+''')
+    db = odb.dbDatabase.create()
+    odb.read_lef(db,str(lef))
+    chip = odb.dbChip.create(db,db.getTech())
+    block = odb.dbBlock.create(chip,"neutral_top")
+    block.setDefUnits(1000)
+    block.setDieArea(odb.Rect(0,0,100000,100000))
+    power = odb.dbNet.create(block,"SUPPLY")
+    power.setSigType("POWER"); power.setSpecial()
+    ground = odb.dbNet.create(block,"RETURN")
+    ground.setSigType("GROUND"); ground.setSpecial()
+    inst = odb.dbInst.create(block,db.findMaster("neutral_macro"),"macro0")
+    inst.setPlacementStatus("FIRM")
+    inst.findITerm("VP").connect(power)
+    initial, generated = tmp_path / "initial.odb", tmp_path / "grid.odb"
+    odb.write_db(db,str(initial))
+    script = tmp_path / "grid.tcl"
+    script.write_text(f'''read_db {{{initial}}}
+initialize_floorplan -die_area {{0 0 100 100}} -core_area {{0 0 100 100}} -site coreSite
+set_voltage_domain -name Core -power SUPPLY -ground RETURN
+define_pdn_grid -name grid -voltage_domains Core
+add_pdn_stripe -grid grid -layer M1 -width 1 -pitch 40 -spacing 18 -offset 20 -nets {{SUPPLY RETURN}}
+add_pdn_stripe -grid grid -layer M2 -width 1 -pitch 40 -spacing 18 -offset 20 -nets {{SUPPLY RETURN}}
+add_pdn_connect -grid grid -layers {{M1 M2}}
+pdngen
+write_db {{{generated}}}
+''')
+    result = subprocess.run([openroad,"-exit",str(script)],capture_output=True,text=True)
+    (tmp_path / "grid.log").write_text(result.stdout+result.stderr)
+    assert result.returncode == 0, result.stdout+result.stderr
+    db = odb.dbDatabase.create()
+    odb.read_db(db,str(generated))
+    block = db.getChip().getBlock()
+    assert not list(block.getVias())
+    assert db.getTech().findVia("VIA12") is not None
+    if block_via:
+        via = odb.dbVia.create(block,"equivalent_block_via")
+        for shape in db.getTech().findVia("VIA12").getBoxes():
+            odb.dbBox.create(via,shape.getTechLayer(),*pdn.box(shape))
+    return db
+
+
+def test_native_macro_escape_accepts_fixed_tech_via(tmp_path):
+    import analog_macro_top_pdn as pdn
+    db = native_macro_escape_grid(tmp_path)
+    power = db.getChip().getBlock().findNet("SUPPLY")
+    before = {s.getId() for w in power.getSWires() for s in w.getWires()}
+    pdn.connect_macro_edges(db,{"rails": {"SUPPLY": "POWER", "RETURN": "GROUND"},
+                               "core_instances": ["macro0"]},
+                            {"PDN_VERTICAL_LAYER": "M2", "PDN_HORIZONTAL_LAYER": "M1"})
+    added = [s for w in power.getSWires() for s in w.getWires() if s.getId() not in before]
+    assert len(added) == 2
+    assert any(s.isVia() and s.getTechVia() is not None for s in added)
+
+
+def test_native_macro_escape_uses_minwidth_instead_of_preferred_width(tmp_path):
+    import analog_macro_top_pdn as pdn
+    db = native_macro_escape_grid(tmp_path,preferred_width=2,pin_width=1,block_via=True)
+    layer = db.getTech().findLayer("M1")
+    assert layer.getWidth() == 2000 and layer.getMinWidth() == 1000
+    pdn.connect_macro_edges(db,{"rails": {"SUPPLY": "POWER", "RETURN": "GROUND"},
+                               "core_instances": ["macro0"]},
+                            {"PDN_VERTICAL_LAYER": "M2", "PDN_HORIZONTAL_LAYER": "M1"})
+    shapes = [s for w in db.getChip().getBlock().findNet("SUPPLY").getSWires() for s in w.getWires()
+              if not s.isVia() and s.getTechLayer() == layer and s.xMin() == 10000]
+    assert shapes and all(s.yMax()-s.yMin() == layer.getMinWidth() for s in shapes)
+
+
+@pytest.mark.parametrize("block_via",[False,True])
+def test_native_macro_escape_still_refuses_pin_below_minwidth(tmp_path,block_via):
+    import analog_macro_top_pdn as pdn
+    from librelane_contract import Refusal
+    db = native_macro_escape_grid(tmp_path,preferred_width=2,pin_width=0.8,block_via=block_via)
+    with pytest.raises(Refusal,match="A18_MACRO_PG_PIN_TOO_NARROW.*macro0/VP"):
+        pdn.connect_macro_edges(db,{"rails": {"SUPPLY": "POWER", "RETURN": "GROUND"},
+                                   "core_instances": ["macro0"]},
+                                {"PDN_VERTICAL_LAYER": "M2", "PDN_HORIZONTAL_LAYER": "M1"})
