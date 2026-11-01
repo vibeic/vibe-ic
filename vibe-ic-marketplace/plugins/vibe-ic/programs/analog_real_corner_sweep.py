@@ -1804,6 +1804,11 @@ def _normalize_spec_name(name, btype=None):
     tok = re.sub(r"[^a-z0-9]", "", str(name or "").lower())
     if not tok:
         return None
+    if btype and canonical_block_type(btype) == "delta_sigma":
+        from analog_ciff import spec_label
+        ciff_key = spec_label(name)
+        if ciff_key:
+            return ciff_key
     for canon, aliases in _SPEC_NAME_ALIASES.items():
         if tok in aliases:
             return canon
