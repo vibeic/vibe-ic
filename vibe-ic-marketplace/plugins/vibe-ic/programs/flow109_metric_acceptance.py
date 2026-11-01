@@ -7020,12 +7020,33 @@ def _d0102_population(project: Path, key: str, metric: str, reads: dict) -> tupl
     return authority, payload
 
 
+def _d0102_dimensionless(project: Path, expectation: dict, reads: dict) -> dict:
+    """Match a unitless numeric record without asking for a punctuation token."""
+    tokens = expectation.get('expected_tokens')
+    if not isinstance(tokens, list) or not any(t in ('—', '-') for t in tokens):
+        return expectation
+    numbers = [t for t in tokens if t not in ('—', '-')]
+    if not numbers or any(not isinstance(t, str) or not re.fullmatch(
+            r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?', t) for t in numbers):
+        return expectation
+    try:
+        values = _d0102_value(project, expectation, reads)
+    except (MetricRefusal, OSError, ValueError, KeyError, TypeError):
+        return expectation
+    if (len(values) != 1 or not isinstance(values[0], dict)
+            or values[0].get('unit') not in (None, '', '—', '-')
+            or not any(type(values[0].get(k)) in (int, float)
+                       for k in ('value', 'target', 'typ', 'min', 'max'))):
+        return expectation
+    return {**expectation, 'expected_tokens': numbers}
+
+
 def _d0102_compare(project: Path, payload: dict, reads: dict) -> tuple:
     import phase1_expert_parse_track as expert
     actual, unresolved, unrouted = [], [], []
     for exp in payload['expectations']:
         # The actual comparator discards submitted met/observed/usable fields.
-        item = expert.converge_ai_expectation(project, exp)
+        item = expert.converge_ai_expectation(project, _d0102_dimensionless(project, exp, reads))
         if (item.get('usable') is not True
                 or item.get('layer_in_taxonomy') is False
                 or item.get('tokens_unaskable')):
