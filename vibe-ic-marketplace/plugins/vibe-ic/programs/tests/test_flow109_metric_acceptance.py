@@ -224,3 +224,64 @@ def test_actual_a01_metrics_bind_approved_rows_and_the_separate_chip_set(tmp_pat
     stale = metrics.accept_a01(tmp_path, context, report)
     assert stale['status'] == 'NOT_MEASURED', stale
     assert stale['reason'] == 'METRIC_INPUT_CHANGED'
+
+
+def _measurement_intent_case(project, damage=None):
+    manifest, registry = _approved_case(project)
+    source = project / 'input/docs/measurement-plan.md'
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text('Measure settling response.\nMeasure ripple response.\n')
+    path = project / 'requirements/base_A1/required_measurements.json'
+    body = json.loads(path.read_text())
+    body['item_review'], body['item_citations'] = [], []
+    for index, name in enumerate(('settling', 'ripple'), 1):
+        item = {'block': 'regulator_alpha', 'name': name}
+        body['required_items'].append(item)
+        body['item_review'].append({'item_index': index, 'item': item,
+                                    'kind': 'explicit_verification_intent'})
+        body['item_citations'].append({'item_index': index, 'item': item, 'citations': [{
+            'path': str(source.relative_to(project)),
+            'sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
+            'line': index, 'literal': source.read_text().splitlines()[index - 1]}]})
+    if damage == 'missing_review':
+        body['item_review'].pop()
+    elif damage == 'missing_citation':
+        body['item_citations'].pop()
+    elif damage == 'empty_citations':
+        body['item_citations'][-1]['citations'] = []
+    elif damage == 'not_intent':
+        body['item_review'][-1]['kind'] = 'numeric_spec_declaration_not_simulation'
+    elif damage == 'stale_source':
+        source.write_text('The measurement plan was withdrawn.\n')
+    elif damage == 'wrong_literal':
+        body['item_citations'][-1]['citations'][0]['literal'] = 'Text absent from source'
+    elif damage == 'wrong_item':
+        body['item_review'][-1]['item'] = {'block': 'regulator_alpha', 'name': 'foreign'}
+    path.write_text(json.dumps(body))
+    return manifest, registry
+
+
+@pytest.mark.parametrize('damage, status, count', [
+    (None, 'PASS', 3), ('missing_review', 'FAIL', 2),
+    ('missing_citation', 'FAIL', 2), ('empty_citations', 'FAIL', 2),
+    ('not_intent', 'FAIL', 2), ('stale_source', 'NOT_MEASURED', None),
+    ('wrong_literal', 'NOT_MEASURED', None), ('wrong_item', 'NOT_MEASURED', None)])
+def test_a01_observes_only_reviewed_source_bound_measurement_intent(tmp_path, damage, status, count):
+    _measurement_intent_case(tmp_path, damage)
+    result = _run(tmp_path)
+    assert result.returncode == 2, result.stdout + result.stderr
+    report, _ = _report_and_context(tmp_path)
+    acceptance = report['metric_acceptance']
+    specs, intent = acceptance['obligations']
+    assert specs['status'] == 'PASS', specs
+    assert intent['status'] == status, intent
+    assert acceptance['status'] == status, acceptance
+    if count is not None:
+        assert len(intent['measurement']['value']) == count
+        assert len(intent['authority']['required_items']) == 3
+        assert intent['operator'] == 'covers_all'
+        assert {'block': 'regulator_alpha', 'name': 'settling'} in intent['measurement']['value']
+        source = 'input/docs/measurement-plan.md'
+        assert intent['measurement']['identity']['consumed_inputs'][source] == hashlib.sha256(
+            (tmp_path / source).read_bytes()).hexdigest()
+    assert report['whole_flow_acceptance'] == 'NOT_MEASURED'
