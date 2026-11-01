@@ -221,7 +221,7 @@ def _project(tmp_path):
     put(p / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json',
         {'clock_domains': [{'role': 'primary', 'period_ns': 24, 'source_pin': 'clk'}]})
     put(p / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {})
-    put(p / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {})
+    put(p / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {'pdk_target': 'gf'}})
     put(p / 'input/submission_template/tapeout_declaration.json', {'answers': {'top_cell': 'spm'}})
     pnr = p / 'phase3/stage3/pnr'
     write(pnr / 'spm.def', 'VERSION 5.8 ;\nDESIGN chip_top ;\nCOMPONENTS 0 ;\n')

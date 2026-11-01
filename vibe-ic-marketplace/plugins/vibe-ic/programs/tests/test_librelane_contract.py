@@ -600,6 +600,7 @@ def design(tmp_path):
                            'period_ns': 12, 'source_pin': 'clk'}]})
     put(p / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {'top_module': 'block'})
     put(p / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {
+        'pdk_target': 'processA',
         'constraint_declarations': [
             {'token': 'MAX_FANOUT_CONSTRAINT', 'scope': 'processA*', 'value': '4',
              'source': 'input/docs/L9.txt', 'line': 8},
@@ -647,6 +648,166 @@ def test_invalid_declared_pad_spacing_is_refused(tmp_path):
     put(pads, doc)
     with pytest.raises(contract.Refusal, match='LL_PAD_SPACING_INVALID'):
         contract.emit_config(p, 'processA', p / 'phase3/librelane/config.json')
+
+
+def multiclock_design(tmp_path, *, aliases=False):
+    project = design(tmp_path)
+    pins = ['clock_a', 'clock_b', 'clock_c']
+    periods = [12, 24, 48]
+    root = project / 'phase1/generated_docs'
+    put(root / 'L8_TIMING_WAVEFORM.json', {'clock_domains': [
+        {'domain_kind': 'primary', 'role': 'master', 'source_pin': pin,
+         'period_ns': period} for pin, period in zip(pins, periods)]})
+    put(root / 'L9_INTEGRATION_SPEC.json', {
+        'top_module': 'block',
+        'top_ports': [{'name': pin, 'direction': 'input'} for pin in pins],
+        'clock_binding': {f'unit_{i}': pin for i, pin in enumerate(pins)}})
+    external = [pin.upper() for pin in pins] if aliases else pins
+    if aliases:
+        put(root / 'L1_DATASHEET.json', {'pin_table': [
+            {'name': name, 'board_name': name, 'rtl_name': pin, 'mode': 'input'}
+            for name, pin in zip(external, pins)]})
+    sdc = project / 'input/constraints/clocks.sdc'
+    sdc.parent.mkdir(parents=True)
+    sdc.write_text(''.join(
+        f'create_clock -name root_{i} -period {period} '
+        f'-waveform {{0 {period / 2:g}}} [get_ports {pin}]\n'
+        for i, (pin, period) in enumerate(zip(external, periods))) +
+        'set_clock_groups -asynchronous -group [get_clocks root_0] '
+        '-group [get_clocks root_1] -group [get_clocks root_2]\n'
+        'set_output_delay 3 -clock root_0 [get_ports data_o]\n')
+    return project, external, sdc
+
+
+@pytest.mark.parametrize('aliases', [False, True])
+def test_emit_three_bound_primary_clocks_preserves_async_sdc(tmp_path, aliases):
+    project, pins, source_sdc = multiclock_design(tmp_path, aliases=aliases)
+    output = project / 'phase3/librelane/config.json'
+    try:
+        result = contract.emit_config(project, 'processA', output)
+        observed = result['CLOCK_PORT']
+    except contract.Refusal as exc:
+        observed = str(exc)
+    assert observed == pins
+    assert result['CLOCK_PERIOD'] == 12
+    assert result['PNR_SDC_FILE'] == result['SIGNOFF_SDC_FILE']
+    emitted = project / result['PNR_SDC_FILE'].removeprefix('dir::')
+    text = emitted.read_text()
+    assert source_sdc.read_text() in text
+    assert text.count('create_clock ') == 3
+    assert text.count('set_clock_groups -asynchronous ') == 1
+    assert all(f'[get_ports {pin}]' in text for pin in pins)
+    assert 'set_output_delay 3 -clock root_0' in text
+    provenance = json.loads(output.with_suffix('.provenance.json').read_text())
+    assert 'clock_binding' in provenance['CLOCK_PORT']
+
+
+@pytest.mark.parametrize('change', ['unbound', 'unbound_extra', 'undeclared', 'no_async',
+                                   'commented_async', 'overlapping_groups',
+                                   'period_conflict', 'duplicate_clock',
+                                   'alias_collision', 'multiple_targets'])
+def test_emit_ambiguous_multiple_clocks_still_refuses(tmp_path, change):
+    project, _pins, sdc = multiclock_design(tmp_path, aliases=change == 'alias_collision')
+    root = project / 'phase1/generated_docs'
+    l9 = json.loads((root / 'L9_INTEGRATION_SPEC.json').read_text())
+    if change == 'unbound':
+        del l9['clock_binding']['unit_2']
+    elif change == 'unbound_extra':
+        l8_path = root / 'L8_TIMING_WAVEFORM.json'
+        l8 = json.loads(l8_path.read_text())
+        l8['clock_domains'].append({'domain_kind': 'primary',
+                                   'source_pin': 'extra_clock', 'period_ns': 96})
+        put(l8_path, l8)
+        l9['top_ports'].append({'name': 'extra_clock', 'direction': 'input'})
+    elif change == 'undeclared':
+        l9['top_ports'].pop()
+    elif change == 'alias_collision':
+        l9['top_ports'].append({'name': 'CLOCK_A', 'direction': 'input'})
+    elif change in ('no_async', 'commented_async'):
+        text = sdc.read_text()
+        lines = text.splitlines(keepends=True)
+        sdc.write_text(''.join((('# ' + line) if change == 'commented_async' else '')
+                              if line.startswith('set_clock_groups') else line
+                              for line in lines))
+    elif change == 'overlapping_groups':
+        sdc.write_text(sdc.read_text().replace('[get_clocks root_2]', '[get_clocks root_1]'))
+    elif change == 'period_conflict':
+        sdc.write_text(sdc.read_text().replace('-period 24', '-period 25'))
+    elif change == 'duplicate_clock':
+        sdc.write_text(sdc.read_text() + sdc.read_text().splitlines()[0] + '\n')
+    elif change == 'multiple_targets':
+        sdc.write_text(sdc.read_text().replace('[get_ports clock_a]',
+                                              '[get_ports {clock_a clock_b}]'))
+    put(root / 'L9_INTEGRATION_SPEC.json', l9)
+    output = project / 'phase3/librelane/config.json'
+    with pytest.raises(contract.Refusal, match='LL_CLOCK_AMBIGUOUS'):
+        contract.emit_config(project, 'processA', output)
+    assert not output.exists()
+    assert not output.with_name('multi_clock.sdc').exists()
+
+
+def test_emit_existing_native_top_fixture_keeps_single_clock_contract(tmp_path):
+    import shutil
+    fixture = PROGRAMS / 'tests/fixtures/m4_native_top'
+    project = tmp_path / 'existing'
+    shutil.copytree(fixture, project)
+    output = project / 'phase3/librelane/config.json'
+    declared = json.loads((project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json').read_text())['fields']['pdk_target']
+    result = contract.emit_config(project, declared, output)
+    assert result['CLOCK_PORT'] == 'A'
+    assert result['CLOCK_PERIOD'] == 10
+    assert result['PNR_SDC_FILE'] == 'dir::phase3/stage3/pnr/constraint.sdc'
+    assert (project / 'phase3/stage3/pnr/constraint.sdc').read_bytes() == (
+        fixture / 'phase3/stage3/pnr/constraint.sdc').read_bytes()
+
+
+@pytest.mark.parametrize('provider', ['L1', 'L19', 'manifest'])
+def test_case_declared_pdk_reaches_emitted_config(tmp_path, provider):
+    project = design(tmp_path)
+    root = project / 'phase1/generated_docs'
+    l19 = json.loads((root / 'L19_CONSTRAINTS_PDK.json').read_text())
+    del l19['fields']['pdk_target']
+    if provider == 'L19':
+        l19['fields']['pdk_target'] = 'processA'
+    elif provider == 'L1':
+        put(root / 'L1_DATASHEET.json', {'fields': {'target_pdk': 'processA'}})
+    else:
+        put(project / 'input/flow109-manifest.json', {'target_pdk': 'processA'})
+    put(root / 'L19_CONSTRAINTS_PDK.json', l19)
+    output = project / 'phase3/librelane/config.json'
+    result = contract.emit_config(project, 'processA', output)
+    assert result.get('PDK', 'PDK_OMITTED') == 'processA'
+    provenance = json.loads(output.with_suffix('.provenance.json').read_text())
+    assert provider in provenance['PDK'] or (provider == 'manifest' and 'flow109-manifest' in provenance['PDK'])
+
+
+@pytest.mark.parametrize('damage', ['missing', 'cli_conflict', 'declaration_conflict'])
+def test_case_pdk_cannot_come_from_cli_or_resolved_defaults(tmp_path, damage):
+    project = design(tmp_path)
+    output = project / 'phase3/librelane/config.json'
+    selected = 'processA'
+    if damage == 'missing':
+        path = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+        l19 = json.loads(path.read_text())
+        del l19['fields']['pdk_target']
+        put(path, l19)
+        # These records can originate from CLI/default adoption, not this case's declaration.
+        put(project / 'phase1/pdk_staging_read.json', {'adopted_pdk_target': 'processA'})
+        put(project / 'phase3/librelane_switch.json', {'pdk': 'processA'})
+        put(project / 'phase3/librelane/old/resolved.json', {'PDK': 'processA'})
+        expected = 'LL_PDK_UNDECLARED'
+    elif damage == 'cli_conflict':
+        selected, expected = 'other_process', 'LL_PDK_DECLARATION_CONFLICT'
+    else:
+        put(project / 'phase1/generated_docs/L1_DATASHEET.json', {'target_pdk': 'other_process'})
+        expected = 'LL_PDK_DECLARATION_CONFLICT'
+    try:
+        contract.emit_config(project, selected, output)
+        observed = 'CONFIG_PUBLISHED'
+    except contract.Refusal as exc:
+        observed = exc.code
+    assert observed == expected
+    assert not output.exists()
 
 def test_synthesis_config_uses_selected_sources_and_lec_hooks(tmp_path):
     p = design(tmp_path)

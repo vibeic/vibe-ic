@@ -643,7 +643,7 @@ def _chip_design(tmp_path, pdk='gf180mcuD', plan=True):
     put(p / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json', {'clock_domains': [
         {'role': 'primary', 'period_ns': 24, 'source_pin': 'clk'}]})
     put(p / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {'top_module': 'core'})
-    put(p / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {}})
+    put(p / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {'pdk_target': pdk}})
     put(p / 'input/submission_template/tapeout_declaration.json', {'answers': {'top_cell': 'chip_top'}})
     put(p / 'phase3/stage3/pnr/pad_assignment.json', {'PAD_SOUTH': ['u_rst']})
     if plan:
@@ -661,7 +661,7 @@ def test_supply_nets_and_pad_connected_ring_are_emitted_only_from_declarations(t
     assert out['PDN_CORE_RING'] is True and out['PDN_CORE_RING_CONNECT_TO_PADS'] is True
     assert src['PDN_CORE_RING'] == 'programs/pdk_registry.json.pdks[name=gf180mcuD].pdn_ring'
     # a PDK whose registry entry declares no ring, and a design with no plan
-    bare = _chip_design(tmp_path / 'b', plan=False)
+    bare = _chip_design(tmp_path / 'b', pdk='sky130A', plan=False)
     out = contract.emit_config(bare, 'sky130A', bare / 'cfg.json')
     assert not {'VDD_NETS', 'GND_NETS', 'PDN_CORE_RING', 'PDN_CORE_RING_CONNECT_TO_PADS'} & set(out)
 
