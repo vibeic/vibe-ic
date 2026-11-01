@@ -435,8 +435,13 @@ def _collaboration_inspection_credit(node) -> bool | None:
     metadata, rather than an opaque filesystem operation.
     """
     name = node.get("name") or node.get("tool_name")
-    if node.get("namespace") != "collaboration":
-        return False if name in {"send_message", "list_agents", "wait_agent"} else None
+    question = name == "request_user_input_async"
+    if question:
+        if node.get("namespace") not in (None, "functions"):
+            return False
+    elif node.get("namespace") != "collaboration":
+        return False if name in {"send_message", "list_agents", "wait_agent",
+                                 "spawn_agent", "followup_task", "interrupt_agent"} else None
     if node.get("type") != "function_call":
         return False
     try:
@@ -445,16 +450,56 @@ def _collaboration_inspection_credit(node) -> bool | None:
         return False
     if not isinstance(payload, dict):
         return False
-    if name == "send_message":
+    if question:
+        questions = payload.get("questions")
+        return (set(payload) == {"questions"} and isinstance(questions, list)
+                and bool(questions) and all(
+                    isinstance(q, dict) and "title" in q
+                    and not set(q) - {"title", "options"}
+                    and isinstance(q["title"], str)
+                    and ("options" not in q or (isinstance(q["options"], list)
+                         and bool(q["options"])
+                         and all(isinstance(o, str) for o in q["options"])))
+                    for q in questions))
+    if name == "interrupt_agent":
+        return (set(payload) == {"target"}
+                and isinstance(payload["target"], str)
+                and bool(payload["target"].strip()))
+    if name in {"send_message", "followup_task"}:
         return set(payload) == {"target", "message"} and all(
             isinstance(payload[key], str) and bool(payload[key].strip())
             for key in ("target", "message"))
+    if name == "spawn_agent":
+        required = {"task_name", "message"}
+        optional = {"agent_type", "fork_turns", "model", "reasoning_effort"}
+        return (required <= set(payload) and not set(payload) - required - optional
+                and all(isinstance(v, str) and bool(v.strip()) for v in payload.values())
+                and re.fullmatch(r"[a-z0-9_]+", payload["task_name"]) is not None
+                and payload.get("fork_turns", "all") in {"all", "none"})
     if name == "wait_agent":
         # Waiting consumes only a bounded duration, never a file or command.
         return (payload == {} or (set(payload) == {"timeout_ms"}
                 and type(payload["timeout_ms"]) is int
                 and 10000 <= payload["timeout_ms"] <= 3600000))
     return name == "list_agents" and payload == {}
+
+
+def _communication_strings(node) -> list[str]:
+    """Read every communication value, including unknown extra text.
+
+    Nested tool frames retain their own declared-payload parsing; their raw
+    serialized arguments must not be counted again as a second command.
+    Schema failure still withholds coverage credit independently of findings.
+    """
+    if isinstance(node, str):
+        return [node] if node.strip() else []
+    if isinstance(node, dict):
+        if _is_call_frame(node) or _is_tool_result(node):
+            return []
+        return [s for value in node.values() for s in _communication_strings(value)]
+    if isinstance(node, list):
+        return [s for value in node for s in _communication_strings(value)]
+    return []
 
 
 def _harvest_frame_strings(node, depth: int = 0) -> list[str]:
@@ -480,15 +525,16 @@ def _harvest_frame_strings(node, depth: int = 0) -> list[str]:
             return [payload] if payload.strip() else []
         if not isinstance(payload, dict):
             return []
-        if node.get("namespace") == "collaboration":
+        if (node.get("namespace") == "collaboration"
+                or (node.get("name") or node.get("tool_name")) in {
+                    "send_message", "list_agents", "wait_agent", "spawn_agent",
+                    "followup_task", "request_user_input_async"}):
             # Scan the complete communication text AND the existing nested
             # command/path vocabulary. Extra executable fields never hide
             # behind a schema error, and never earn inspection credit above.
             out = _harvest_frame_strings(payload, depth + 1)
-            if (node.get("name") or node.get("tool_name")) == "send_message":
-                out.extend(payload[key] for key in ("target", "message")
-                           if isinstance(payload.get(key), str) and payload[key].strip())
-            elif ((node.get("name") or node.get("tool_name")) in {"list_agents", "wait_agent"}
+            out.extend(_communication_strings(payload))
+            if ((node.get("name") or node.get("tool_name")) in {"list_agents", "wait_agent"}
                   and _collaboration_inspection_credit(node)):
                 out.append(node["arguments"])  # the actual decoded empty payload
             return out
@@ -739,7 +785,92 @@ def _python_argv_view(body: str) -> str:
     return "\n".join(views)
 
 
-def _scorer_command_view(fragment: str) -> str:
+def _passive_js_document_view(fragment: str, context: list[str]) -> str:
+    """Recognize one closed immutable-template -> patch-data flow.
+
+    This is deliberately a small grammar, not a JavaScript evaluator. Every
+    unknown statement, sink, interpolation or binding keeps the raw scan.
+    Commands outside the data literal are never removed.
+    """
+    identifier = r"[A-Za-z_]\w*"
+    declaration = re.search(
+        r"\bconst\s+(?P<name>" + identifier +
+        r")\s*=\s*\x60(?P<body>(?:\\[\s\S]|[^\x60\\])*)\x60\s*;", fragment)
+    if not declaration:
+        return fragment
+    name = declaration["name"]
+    # Mask only this literal, then tokenize JSON strings. Single quotes,
+    # another template and comments are outside this closed grammar.
+    marker = "AUDIT_DOCUMENT"
+    if marker in fragment:
+        return fragment
+    masked = fragment[:declaration.start("body") - 1] + marker + fragment[declaration.end("body") + 1:]
+    strings: dict[str, str] = {}
+    prefix = "AUDIT_STRING_"
+    if prefix in fragment:
+        return fragment
+    def literal(match):
+        token = prefix + str(len(strings))
+        strings[token] = json.loads(match.group(0))
+        return token
+    masked = _JSON_STRING_RE.sub(literal, masked)
+    if re.search(r"['\x60\"/]", masked):
+        return fragment
+    string = prefix + r"\d+"
+    atom = r"(?:" + string + "|" + identifier + ")"
+    expression = atom + r"(?:\s*\+\s*" + atom + r")*"
+    before, separator, after = masked.partition("const " + name)
+    if not separator:
+        return fragment
+    loaded: set[str] = set()
+    for statement in filter(str.strip, before.split(";")):
+        match = re.fullmatch(r"\s*const\s+(.+)\s*", statement)
+        if not match:
+            return fragment
+        for binding in match[1].split(","):
+            item = re.fullmatch(r"\s*(" + identifier + r")\s*=\s*load\((" + string + r")\)\s*", binding)
+            if not item or item[1] in loaded | {"tools", "load", "text", name}:
+                return fragment
+            loaded.add(item[1])
+    for interpolation in re.findall(r"\$\{([^}]*)\}", declaration["body"]):
+        if interpolation.strip() not in loaded:
+            return fragment
+    if declaration["body"].count("$" + "{") != len(re.findall(r"\$\{([^}]*)\}", declaration["body"])):
+        return fragment
+    after = re.sub(r"^\s*=\s*" + marker + r"\s*;", "", after, count=1)
+    sink = re.match(
+        r"\s*text\(\s*await\s+tools\.apply_patch\(\s*(?P<path>" + expression + r")\s*\+\s*" +
+        re.escape(name) + r"\.split\((?P<split>" + string + r")\)\.map\((?P<line>" +
+        identifier + r")\s*=>\s*(?P<plus>" + string + r")\s*\+\s*(?P=line)\)"
+        r"\.join\((?P<join>" + string + r")\)\s*\+\s*(?P<end>" + string +
+        r")\s*\)\s*\)\s*;", after)
+    if not sink or any(strings[sink[key]] != value for key, value in
+                       (("split", "\n"), ("plus", "+"), ("join", "\n"), ("end", "\n*** End Patch"))):
+        return fragment
+    def resolve(expr):
+        parts = re.split(r"\s*\+\s*", expr.strip())
+        if any(part not in strings and part not in loaded for part in parts):
+            return None
+        return "".join(strings[part] if part in strings else "OPAQUE" for part in parts)
+    path = resolve(sink["path"])
+    start = "*** Begin Patch\n*** Add File: "
+    if not path or not path.startswith(start) or not path.endswith("\n"):
+        return fragment
+    path = path[len(start):-1]
+    if not path or "\n" in path or "\r" in path:
+        return fragment
+    # No external consumer is proven passive by its name or file argv.
+    # A write-only cell is the complete supported grammar: extra statements,
+    # unknown/dynamic uses, or other harvested corpus context keep raw data.
+    if after[sink.end():].strip():
+        return fragment
+    if any(other != fragment and other.strip() for other in context):
+        return fragment
+    return (fragment[:declaration.start("body")] + "[passive document data]"
+            + fragment[declaration.end("body"):])
+
+
+def _scorer_command_view(fragment: str, context: list[str] | None = None) -> str:
     """Decode tool wrapper strings and inspect supported inline Python.
 
     A heredoc body is executable Python, while a write_text string within it
@@ -747,10 +878,19 @@ def _scorer_command_view(fragment: str) -> str:
     that output, so it prevents suppression. All unsupported contexts retain
     the raw scorer scan (including shellouts/inline code/variable aliases).
     """
+    # Python document literals need the same whole-context proof as JS.
+    # A later arbitrary consumer may execute any written suffix; the script's
+    # own closed call vocabulary cannot establish passivity across frames.
+    write_only = (context is not None
+                  and not any(other != fragment and other.strip() for other in context))
+    if context is not None:
+        fragment = _passive_js_document_view(fragment, context)
+    def python_document(body):
+        return _passive_python_document_view(body) if write_only else body
     def heredoc(match):
         if fragment[match.end():].strip():
             return match.group(0)
-        return (match["header"] + _python_argv_view(_passive_python_document_view(match["body"]))
+        return (match["header"] + _python_argv_view(python_document(match["body"]))
                 + match["close"])
 
     # Quoted -c code is executable too; argv strings must not conceal it.
@@ -773,11 +913,11 @@ def _scorer_command_view(fragment: str) -> str:
         except ValueError:
             return match.group(0)
         if " -c " in value:
-            return json.dumps(_scorer_command_view(value), ensure_ascii=False)
+            return json.dumps(_scorer_command_view(value, context), ensure_ascii=False)
         if "<<" not in value or "\n" not in value:
             return match.group(0)
         cleaned = _PY_HEREDOC_RE.sub(
-            lambda m: (m["header"] + _python_argv_view(_passive_python_document_view(m["body"]))
+            lambda m: (m["header"] + _python_argv_view(python_document(m["body"]))
                        + m["close"]) if not value[m.end():].strip() else m.group(0),
             value)
         # A later tool command may execute a helper just written by this one.
@@ -792,7 +932,7 @@ def _scorer_command_view(fragment: str) -> str:
 
 
 def _scan_fragment(frag: str, ds: str, allowed: list[str], source: str,
-                   ln_no: int) -> list[dict]:
+                   ln_no: int, context: list[str] | None = None) -> list[dict]:
     """Run V1/V2/V3 over one already-isolated fragment (a JSON field value, or
     a whole legacy text line). `frag` is self-terminated, so V1 path
     extraction never bleeds into adjacent JSON (#480). v0.3.8 (#504 R2):
@@ -825,7 +965,7 @@ def _scan_fragment(frag: str, ds: str, allowed: list[str], source: str,
             "evidence": frag.strip()[:300],
         })
     # V2 — agent-side scorer invocation (verdict-level oracle query)
-    if _SCORER_INVOKE_RE.search(_scorer_command_view(frag)):
+    if _SCORER_INVOKE_RE.search(_scorer_command_view(frag, context)):
         findings.append({
             "kind": "scorer-self-run",
             "class": "agent-side host-scorer invocation (oracle query)",
@@ -844,9 +984,23 @@ def _scan_fragment(frag: str, ds: str, allowed: list[str], source: str,
     return findings
 
 
+def _command_context(text: str) -> list[str]:
+    """Ephemeral command views; no transcript frame or identity is removed."""
+    context = []
+    for line in text.splitlines():
+        try:
+            node = json.loads(line)
+        except (ValueError, TypeError):
+            context.append(line)
+        else:
+            context.extend(_harvest_tool_strings(node))
+    return context
+
+
 def audit_text(text: str, dataset: Path, allowed: list[str],
                source: str, uninspected: list[dict] | None = None,
-               coverage: list[dict] | None = None
+               coverage: list[dict] | None = None,
+               command_context: list[str] | None = None
                ) -> list[dict]:
     """Pure scanner: return violation dicts for one transcript text.
 
@@ -862,6 +1016,7 @@ def audit_text(text: str, dataset: Path, allowed: list[str],
     envelope it could not read; the caller must refuse to certify."""
     findings: list[dict] = []
     ds = str(dataset).rstrip("/")
+    context = _command_context(text) if command_context is None else command_context
     for ln_no, line in enumerate(text.splitlines(), 1):
         stripped = line.strip()
         obj = None
@@ -876,14 +1031,14 @@ def audit_text(text: str, dataset: Path, allowed: list[str],
             call_fragments = {f for c in calls for f in c["fragments"]}
             for frag in frags:
                 if frag not in call_fragments:
-                    findings += _scan_fragment(frag, ds, allowed, source, ln_no)
+                    findings += _scan_fragment(frag, ds, allowed, source, ln_no, context)
             for call in calls:
                 fragments = call.pop("fragments")
                 call.update({"transcript": source, "line": ln_no})
                 if coverage is not None:
                     coverage.append(call)
                 for frag in dict.fromkeys(fragments):
-                    for finding in _scan_fragment(frag, ds, allowed, source, ln_no):
+                    for finding in _scan_fragment(frag, ds, allowed, source, ln_no, context):
                         finding.update({"tool_name": call["tool_name"],
                                         "call_id": call["call_id"]})
                         findings.append(finding)
@@ -897,7 +1052,7 @@ def audit_text(text: str, dataset: Path, allowed: list[str],
                                           "evidence": stripped[:300]})
                     uninspected.append(findings_free)
         else:
-            findings += _scan_fragment(line, ds, allowed, source, ln_no)
+            findings += _scan_fragment(line, ds, allowed, source, ln_no, context)
     return findings
 
 
@@ -934,20 +1089,36 @@ def main(argv: list[str] | None = None) -> int:
     findings: list[dict] = []
     uninspected: list[dict] = []
     coverage: list[dict] = []
+    readable = []
+    complete_context = True
     for f in files:
         try:
             text = f.read_text(errors="replace")
         except Exception as exc:  # noqa: BLE001
             print(f"blindness_audit: unreadable transcript {f}: {exc}",
                   file=sys.stderr)
+            complete_context = False
             continue
+        readable.append((f, text))
+    try:
+        context = [fragment for _, text in readable for fragment in _command_context(text)]
+        if not complete_context:
+            # Without the complete corpus, a later document execution cannot
+            # be excluded. Retain the old raw scan rather than suppress data.
+            context.append("eval(UNKNOWN_TRANSCRIPT)")
+    except Exception as exc:  # noqa: BLE001
+        print(f"blindness_audit: AUDIT_ERROR — collecting command context: {exc}",
+              file=sys.stderr)
+        return EXIT_AUDIT_ERROR
+    for f, text in readable:
         # An auditor-internal exception while SCANNING (e.g. a residual OSError
         # from path classification) is a TOOL failure — surface it as a named
         # AUDIT_ERROR with its own exit code; it must NEVER be reported as a
         # blindness violation (#480).
         try:
             findings += audit_text(text, dataset, allowed, str(f),
-                                   uninspected=uninspected, coverage=coverage)
+                                   uninspected=uninspected, coverage=coverage,
+                                   command_context=context)
         except Exception as exc:  # noqa: BLE001
             print(f"blindness_audit: AUDIT_ERROR — internal failure while "
                   f"scanning {f}: {type(exc).__name__}: {exc}", file=sys.stderr)

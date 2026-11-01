@@ -1399,3 +1399,36 @@ def test_multicut_supply_pin_extends_a_short_rail_only_through_clear_metal(obsta
         assert all(0 <= r['box'][0] < r['box'][2] <= 2000
                    and 0 <= r['box'][1] < r['box'][3] <= 2000
                    for r in plan.shapes)
+
+
+@pytest.mark.parametrize("matching", ["absent", "null", "groups"])
+def test_optional_matching_groups_reach_placement(tmp_path, monkeypatch,
+                                                 matching):
+    deck = ".subckt blk d g s b\n" + "".join(
+        f"xm{i} d g s b xx_lv_nmos w=1u l=0.5u\n" for i in range(1, 5)
+    ) + ".ends\n"
+    project = _project(tmp_path, deck)
+    topo = {"folded_first_stage": None}
+    expected = []
+    if matching == "null":
+        topo["ratio_matching_groups"] = None
+    elif matching == "groups":
+        topo["ratio_matching_groups"] = [
+            {"members": [{"instances": ["m1"]}, {"instances": ["m2"]}]}]
+        topo["folded_first_stage"] = {"matched_pairs": [["m3", "m4"]]}
+        expected = [["m3", "m4"], ["m1", "m2"]]
+    (project / "phase3/analog/blk/topology.json").write_text(json.dumps(topo))
+    captured = []
+    original = A5E.build_plan
+
+    def capture(*args, **kwargs):
+        captured.append(kwargs["placement_groups"])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(A5E, "build_plan", capture)
+    rc, doc = _run(monkeypatch, project, FakeStage(),
+                   "--shared-capacitor-escapes", "--left-right-regions")
+    assert captured == [expected]
+    assert rc == A5E.RC_OK, doc
+    assert doc["blocks"]["blk"]["devices"] == 4
+    assert (project / "phase3/analog/blk/layout.mag").is_file()

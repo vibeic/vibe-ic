@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import subprocess
@@ -103,6 +104,28 @@ def _current_a02(project, record):
     return path, receipt, sorted([list(x) for x in qualified])
 
 
+def budget_leaves(budgets, block, path=()):
+    """Read scalar or named sub-circuit/condition allocations; refuse every gap."""
+    label = ':'.join((block, *path))
+    if not isinstance(budgets, dict) or not budgets:
+        raise AdmissionRefusal('A04_BUDGET_UNBOUND', label)
+    if {'status', 'limit', 'unit'} & budgets.keys():
+        value = budgets.get('limit')
+        if (set(budgets) != {'status', 'limit', 'unit'}
+                or budgets.get('status') != 'BOUND'
+                or not isinstance(value, (int, float)) or isinstance(value, bool)
+                or not math.isfinite(value) or value <= 0
+                or not isinstance(budgets.get('unit'), str) or not budgets['unit'].strip()):
+            raise AdmissionRefusal('A04_BUDGET_UNBOUND', label)
+        return [(path, budgets)]
+    leaves = []
+    for key, child in budgets.items():
+        if not isinstance(key, str) or not key.strip():
+            raise AdmissionRefusal('A04_BUDGET_UNBOUND', label)
+        leaves.extend(budget_leaves(child, block, (*path, key)))
+    return leaves
+
+
 def _approved_requirements(project, manifest):
     path = _bound(project, manifest.get('requirements'))
     body = _read(path)
@@ -125,17 +148,9 @@ def _approved_requirements(project, manifest):
                 or not isinstance(row.get('topology_constraints'), list)
                 or not row['topology_constraints']
                 or not isinstance(row.get('required_device_roles'), list)
-                or not row['required_device_roles']
-                or not isinstance(budgets, dict)
-                or set(budgets) != {'gain', 'noise', 'power'}):
+                or not row['required_device_roles']):
             raise AdmissionRefusal('A04_REQUIREMENT_ROW_INVALID', str(name))
-        for kind, budget in budgets.items():
-            if (not isinstance(budget, dict) or budget.get('status') != 'BOUND'
-                    or not isinstance(budget.get('limit'), (int, float))
-                    or isinstance(budget.get('limit'), bool)
-                    or budget['limit'] <= 0 or not isinstance(budget.get('unit'), str)
-                    or not budget['unit'].strip()):
-                raise AdmissionRefusal('A04_BUDGET_UNBOUND', name + ':' + kind)
+        budget_leaves(budgets, name)
         spec = _bound(project, row.get('spec'))
         spec_body = _read(spec)
         values = spec_body.get('specs')

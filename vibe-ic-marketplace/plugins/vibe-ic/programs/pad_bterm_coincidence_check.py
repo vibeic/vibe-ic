@@ -135,8 +135,10 @@ def def_net_terminals(text: str) -> Dict[str, List[Tuple[str, str]]]:
     OpenROAD.PadRing) writes each port net it lands on a pad as a SPECIAL net,
     `- clk ( PIN clk ) ( u_pad_clk PAD ) + USE SIGNAL ;`. MEASURED on the spm
     PadRing DEF: all 36 port nets were there and none in NETS, so reading NETS
-    alone found 0 ports on a pad. A SPECIALNETS routing coordinate `( x y )` or
-    wildcard `( * VDD )` names no placed component and is skipped by the caller.
+    alone found 0 ports on a pad. A wildcard `( * pin )` connects that pin
+    on every component whose master carries it; run() expands it after reading
+    the library pin ports. SUBNET connections also belong to the parent net;
+    routing-attribute coordinates are geometry, not terminal connections.
     """
     out: Dict[str, List[Tuple[str, str]]] = {}
     for section in ("NETS", "SPECIALNETS"):
@@ -145,8 +147,11 @@ def def_net_terminals(text: str) -> Dict[str, List[Tuple[str, str]]]:
             m = _NET_RE.match(entry)
             if not m:
                 continue
+            attributes = re.split(r"\s+\+", m.group("tail"))
+            connections = " ".join([attributes[0]] + [part for part in attributes[1:]
+                                    if re.match(r"\s*SUBNET\b", part)])
             conns = [(c.group("inst"), c.group("pin"))
-                     for c in _CONN_RE.finditer(m.group("tail"))
+                     for c in _CONN_RE.finditer(connections)
                      if c.group("inst") != "PIN"]
             out[m.group("name")] = out.get(m.group("name"), []) + conns
     return out
@@ -213,7 +218,7 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                 out.append(None)
         return out
 
-    # TWO folds, and there used to be a third. `parse_lef_pin_roles` was
+    # The two geometry folds preserve richer records. `parse_lef_pin_roles` was
     # merged into a local `roles` that this function never read -- dead from
     # the commit that introduced it, where it was a `dict.update`, and carried
     # through the rewrite to `merge_source_records` unchanged.
@@ -227,30 +232,19 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
         _parsed(PR.parse_lef_pin_ports), on_conflict="richer")
     sizes, _sz_conf = _srm.merge_source_records(
         _parsed(PR.parse_lef_macros), on_conflict="richer")
+    classes, _cl_conf = _srm.merge_source_records(
+        _parsed(PR.parse_lef_macro_classes), on_conflict="richer")
+    conflicting_classes = {conflict["key"] for conflict in _cl_conf}
 
-    rows: List[Dict[str, Any]] = []
-    for pin_name, rec in sorted(pins.items()):
-        term = None
-        for inst, pin in nets.get(rec["net"], []):
-            comp = dfn.components.get(inst)
-            if comp is None or comp.master not in pin_ports:
-                continue
-            if pin not in (pin_ports.get(comp.master) or {}):
-                continue
-            term = (inst, pin, comp)
-            break
-        if term is None:
-            continue
-        inst, tpin, comp = term
+    def terminal_row(pin_name, rec, inst, tpin, comp):
         rects = pin_ports[comp.master][tpin]
         size = sizes.get(comp.master)
         if size is None or comp.x is None or comp.orient is None:
-            rows.append({"pin": pin_name, "net": rec["net"], "instance": inst,
-                         "terminal": tpin, "verdict": "UNDECIDED",
-                         "reason": "the DEF does not place this pad, or its "
-                                   "master has no LEF SIZE, so the terminal's "
-                                   "absolute position is unknown"})
-            continue
+            return {"pin": pin_name, "net": rec["net"], "instance": inst,
+                    "terminal": tpin, "verdict": "UNDECIDED",
+                    "reason": "the DEF does not place this pad, or its "
+                              "master has no LEF SIZE, so the terminal's "
+                              "absolute position is unknown"}
         best: Tuple[str, str, Optional[List[int]], Optional[List[int]]] = (
             "NOT_CONNECTED", "no rectangle of the terminal matched", None, None)
         for layer, r in rects:
@@ -272,12 +266,44 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                 break
             if best[0] != "UNDECIDED":
                 best = (verdict, reason, ov, abs_rect)
-        rows.append({
+        return {
             "pin": pin_name, "net": rec["net"], "instance": inst,
             "terminal": tpin, "master": comp.master, "orient": comp.orient,
             "pin_layer": rec["layer"], "pin_rect": rec["rect"],
             "terminal_rect": best[3], "overlap": best[2],
-            "verdict": best[0], "reason": best[1]})
+            "verdict": best[0], "reason": best[1]}
+
+    # DEF wildcard connectivity is instance-pin connectivity, independent of
+    # declaration intent. Index only pins actually present in the read LEFs.
+    component_pins: Dict[str, List[Tuple[str, str]]] = {}
+    for inst, comp in dfn.components.items():
+        for pin in pin_ports.get(comp.master, {}):
+            component_pins.setdefault(pin, []).append((inst, pin))
+
+    rows: List[Dict[str, Any]] = []
+    rank = {"NOT_CONNECTED": 0, "UNDECIDED": 1, "CONNECTED": 2}
+    for pin_name, rec in sorted(pins.items()):
+        candidates = []
+        for inst, pin in nets.get(rec["net"], []):
+            candidates.extend(component_pins.get(pin, []) if inst == "*"
+                              else [(inst, pin)])
+        chosen = None
+        for inst, pin in dict.fromkeys(candidates):
+            comp = dfn.components.get(inst)
+            if comp is None or pin not in pin_ports.get(comp.master, {}):
+                continue
+            if (comp.master in conflicting_classes
+                    or classes.get(comp.master, "").partition(" ")[0] != "PAD"):
+                continue
+            row = terminal_row(pin_name, rec, inst, pin, comp)
+            if chosen is None or rank[row["verdict"]] > rank[chosen["verdict"]]:
+                chosen = row
+            # Connectivity only supplies candidates. Coincidence decides which
+            # pad actually carries this BTerm, including shared supply nets.
+            if row["verdict"] == "CONNECTED":
+                break
+        if chosen is not None:
+            rows.append(chosen)
 
     connected = [r["net"] for r in rows if r["verdict"] == "CONNECTED"]
     undecided = [r for r in rows if r["verdict"] == "UNDECIDED"]

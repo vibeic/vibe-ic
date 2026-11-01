@@ -32,6 +32,7 @@ with `fill`, so they are unaffected. A PDK that configures no tapcell_master
 gets no widening at all.
 """
 import importlib
+import json
 import re
 import sys
 from pathlib import Path
@@ -211,8 +212,28 @@ def _write_def(tmp_path, tap_master):
     return p
 
 
+def _record_spacing_lef(project, tap_master):
+    # Declare fixture roles in LEF bytes rather than inferring them from names.
+    lef = project / "geometry.lef"
+    lef.write_text(
+        f"MACRO {GF180}nand2_1\n CLASS CORE ;\nEND {GF180}nand2_1\n"
+        f"MACRO {tap_master}\n CLASS CORE WELLTAP ;\nEND {tap_master}\n")
+    report = project / "reports/phase3/io_pad_chip_top.json"
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({
+        "verdict": "WROTE", "io_library_lefs": [str(lef)]}))
+
+
+def _spacing_project(tmp_path, tap_master):
+    pnr = tmp_path / "phase3/stage3/pnr"
+    pnr.mkdir(parents=True)
+    routed = _write_def(pnr, tap_master)
+    _record_spacing_lef(tmp_path, tap_master)
+    return routed
+
+
 def test_spacing_screen_sees_gf180_taps_when_declared(tmp_path):
-    d = _write_def(tmp_path, GF180_TAP)
+    d = _spacing_project(tmp_path, GF180_TAP)
     rep = lat.run_geometry_layer(str(d), rated_tap_masters=[GF180_TAP])
     assert rep["spacing"]["n_tap"] == 36
     assert rep["spacing"]["status"] != "WELLTAP_SPACING_GAP"
@@ -227,7 +248,7 @@ def test_spacing_screen_blind_to_gf180_taps_without_declaration(tmp_path):
 
 def test_spacing_screen_sky130_unchanged(tmp_path):
     """Blast-radius control: sky130 needs no declaration and is unaffected."""
-    d = _write_def(tmp_path, SKY + "tapvpwrvgnd_1")
+    d = _spacing_project(tmp_path, SKY + "tapvpwrvgnd_1")
     rep = lat.run_geometry_layer(str(d))
     assert rep["spacing"]["n_tap"] == 36
 

@@ -124,7 +124,8 @@ def _empty_l8_sdc_project(tmp_path, prose, sdc):
     generated.mkdir(parents=True)
     (generated / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({
         'top_module': 'neutral_counter', 'top_ports': [], 'ports': []}))
-    (generated / 'L19_CONSTRAINTS_PDK.json').write_text(json.dumps({'fields': {}}))
+    (generated / 'L19_CONSTRAINTS_PDK.json').write_text(
+        json.dumps({'fields': {'pdk_target': 'neutral'}}))
     for name in ('L8_RTL_CONSTANTS', 'L8_TIMING_WAVEFORM'):
         (generated / f'{name}.json').write_text(json.dumps({'clock_domains': []}))
     return generated

@@ -31,7 +31,7 @@ def emit(project: Path, top: str, pdk: R.PdkConfig,
                        for role, path in (("def", R._pl.pnr_dir(project) / f"{top}.def"),
                                           ("pdk_tech_lef", pdk.tech_lef),
                                           ("pdk_cell_lef", pdk.cell_lef),
-                                          ("pdk_liberty", pdk.liberty))}
+                                          ("pdk_liberty", R._liberty_model_path(pdk.liberty, container, project)))}
     except (OSError, ValueError) as exc:
         notes.append(f"ERC NOT_MEASURED: {exc}")
         return False
@@ -42,7 +42,7 @@ def emit(project: Path, top: str, pdk: R.PdkConfig,
     def_c = R._to_container_path(str(def_file), container)
     tech_lef_c = R._to_container_path(str(pdk.tech_lef), container)
     cell_lef_c = R._to_container_path(str(pdk.cell_lef), container)
-    liberty_c = R._to_container_path(str(pdk.liberty), container)
+    liberty_c = R._to_container_path(pdk.liberty, container)
     macro_lefs_tcl = "\n".join(
         f"read_lef {R._to_container_path(str(f), container)}"
         for f in pdk.macro_lefs)
@@ -54,7 +54,7 @@ def emit(project: Path, top: str, pdk: R.PdkConfig,
 read_lef {tech_lef_c}
 read_lef {cell_lef_c}
 {macro_lefs_tcl}
-read_liberty {liberty_c}
+{R._read_liberty_tcl(liberty_c)}
 read_def {def_c}
 puts "=== ERC: floating nets ==="
 # v0.3.16 — ORGANIC #514: -verbose lists the floating net/pin NAMES so the

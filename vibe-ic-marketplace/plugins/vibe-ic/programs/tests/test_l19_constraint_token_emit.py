@@ -175,6 +175,9 @@ def _tokens(doc: dict) -> set:
 
 def _mk_core_util_chain(project: Path, prose_table: str) -> None:
     _mk(project, "# L9 — Constraints & Floorplan\n\n" + prose_table)
+    l19 = _l19(project)
+    l19['fields']['pdk_target'] = 'processA'
+    (project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json').write_text(json.dumps(l19))
     generated = project / "phase1" / "generated_docs"
     (generated / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({
         "clock_domains": [{
@@ -261,6 +264,9 @@ def _run_canonical_phase1(project: Path, monkeypatch) -> int:
 
 def _seed_consumer_support(project: Path) -> None:
     generated = project / "phase1" / "generated_docs"
+    l19 = _l19(project)
+    l19['fields']['pdk_target'] = 'processA'
+    (generated / 'L19_CONSTRAINTS_PDK.json').write_text(json.dumps(l19))
     (generated / "L8_TIMING_WAVEFORM.json").write_text(json.dumps({
         "clock_domains": [{
             "role": "primary", "pdk_scoped_target": "processA",

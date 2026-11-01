@@ -40,7 +40,7 @@ def design(tmp_path, pads=False):
     put(p / "phase1/generated_docs/L8_TIMING_WAVEFORM.json", {
         "clock_domains": [{"role": "primary", "period_ns": 10, "source_pin": "clk"}]})
     put(p / "phase1/generated_docs/L9_INTEGRATION_SPEC.json", {"top_module": "cal_chain"})
-    put(p / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json", {"fields": {}})
+    put(p / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json", {"fields": {"pdk_target": "pdkA"}})
     put(p / "input/submission_template/tapeout_declaration.json", {"answers": {}})
     if pads:
         put(p / "phase3/stage3/pnr/pad_assignment.json", {"PAD_NORTH": ["u_a"]})

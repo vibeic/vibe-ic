@@ -409,7 +409,7 @@
       "process_node_nm": 180,
       "open_source": true,
       "container_path": "/foss/pdks/gf180mcuD",
-      "container_path_glob": "/foss/pdks/ciel/gf180mcu/versions/*/gf180mcuD",
+      "container_path_glob": "gf180mcuD",
       "_asset_glob_comment": "Asset globs VERIFIED against the shipped container image (ghcr.io/vibeic/vibeic-eda:0.2.24). The prior values matched NOTHING: (a) the std-cell liberty ships under `lib/`, not `liberty/` \u2014 `liberty/` does not exist; (b) `techlef/*.tlef` matches three corner variants (__max/__min/__nom) and the deterministic sorted-first pick took `__max`, not the nominal deck; (c) `libs.tech/klayout/drc/gf180mcu.lydrc` does not exist \u2014 the real KLayout sign-off deck is `libs.tech/klayout/tech/drc/gf180mcu.drc`. The liberty corner is PINNED because `lib/*tt*.lib` matches three supply variants (1v80/3v30/5v00) and sorted-first would take 1v80, the wrong rail for this 5V (mcu7t5v0) library; tt_025C_5v00 is its nominal sign-off corner.",
       "liberty_glob": "libs.ref/gf180mcu_fd_sc_mcu7t5v0/lib/*tt_025C_5v00*.lib",
       "tech_lef_glob": "libs.ref/gf180mcu_fd_sc_mcu7t5v0/techlef/*__nom.tlef",

@@ -289,9 +289,10 @@ def clock_plan_liberty_paths(pdk):
     or borrow another library when the caller's resolved timing view is absent.
     """
     primary = getattr(pdk, "liberty", None)
-    if not isinstance(primary, str) or not primary.strip():
+    paths = list(primary) if isinstance(primary, (list, tuple)) else [primary]
+    if not paths or any(not isinstance(path, str) or not path.strip() for path in paths):
         raise ValueError("CLOCK_PLAN_LIBERTY_MISSING")
-    return list(dict.fromkeys([primary, *(str(path) for path in
+    return list(dict.fromkeys([*paths, *(str(path) for path in
                                (getattr(pdk, "macro_libs", []) or []))]))
 
 

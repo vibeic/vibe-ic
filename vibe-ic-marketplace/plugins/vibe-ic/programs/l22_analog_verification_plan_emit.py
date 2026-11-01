@@ -349,6 +349,8 @@ def _plan(ic_class: str, blocks: List[dict], intent: List[dict]) -> dict:
             "source_evidence": _source_evidence(
                 block, index, scoped_intent[index]),
         })
+        if block.get("device_class_constraints"):
+            rows[-1]["device_class_constraints"] = copy.deepcopy(block["device_class_constraints"])
     plan: Dict[str, Any] = {
         "schema_version": 1,
         "track": "analog_mixed_signal",

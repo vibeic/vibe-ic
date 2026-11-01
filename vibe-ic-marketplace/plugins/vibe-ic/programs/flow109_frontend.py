@@ -504,7 +504,8 @@ def prepare(project, context):
         raise AdmissionRefusal('D22_ROUTE_UNSUPPORTED', 'only the existing native LibreLane Default owner is selected')
     import design_one_shot_runner as runner
     pdk = runner._phase2_pdk_config(project, manifest['pdk'])
-    liberty = Path(pdk.liberty).resolve()
+    import phase3_one_shot_runner as backend
+    liberty = Path(backend._liberty_model_path(pdk.liberty, project=project)).resolve()
     for use in (context['runtime_tool_uses'] or []):
         deck = use.get('deck') or {}
         if (not deck.get('path') or (project / deck['path']).resolve() != liberty

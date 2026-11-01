@@ -1390,8 +1390,9 @@ def _bound_drc_scope(project: Path, layout: Optional[Path],
             if (not expected or digest(project / origin) != expected or
                     digest(project / alias) != expected):
                 return [], failure
-        return ([report_rel] if engine == "magic" else
-                [report_rel, log_rel]), ""
+        return list(dict.fromkeys(
+            [source, report_rel] if engine == "magic" else
+            [source, source_log, report_rel, log_rel])), ""
     return [], ""
 
 
@@ -1551,6 +1552,8 @@ def _step_delegate(ev: StepEvidence, step: Step, project: Path,
             return
         for path in scope:
             extra.extend(["--under", path, "--require-report", path])
+        if scope:
+            extra.extend(["--subject", scope[0]])
     cmd = [sys.executable, str(prog), positional, *d.argv_tail, *extra,
            "--json", str(out)]
     rc, stdout, stderr = runner(cmd, timeout)

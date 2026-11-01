@@ -506,18 +506,41 @@ def test_source_probe_argv_and_tcl_read_selected_native_odb(tmp_path, monkeypatc
     def container(argv, **kwargs):
         seen["argv"] = argv
         seen["log"] = kwargs["log"]
+        seen["options"] = kwargs
         return SimpleNamespace(returncode=1, stdout="", stderr="controlled stop")
 
     monkeypatch.setattr(ir, "run_container", container)
-    monkeypatch.setattr(ir, "native_tool_command",
-                        lambda _image, command: ("none", command))
+    def native_command(image, command):
+        seen["native_command"] = (image, command)
+        return "none", command
+
+    monkeypatch.setattr(ir, "native_tool_command", native_command)
     with pytest.raises(Refusal, match="LL_IR_SOURCE_PROBE_UNMEASURED"):
         ir.require_safe_default_sources(project, IMAGE, state, [])
     tcl = state.parent / "psm_source_probe.tcl"
     assert tcl.read_text().splitlines()[0] == f"read_db {{{odb}}}"
-    assert seen["argv"][seen["argv"].index(IMAGE) + 1] == "-c"
-    assert "/foss/tools/openroad/bin/openroad" in seen["argv"][-1]
-    assert seen["argv"][-1].endswith(str(tcl))
+    command = ["env", "LD_LIBRARY_PATH=/opt/or-tools/lib", "openroad",
+               "-no_init", "-no_splash", "-exit", str(tcl)]
+    assert seen["native_command"] == (IMAGE, command)
+    assert seen["argv"] == [
+        "docker", "run", "--rm", "--network", "none",
+        *ir._dmem.docker_memory_flags(),
+        "-v", f"{project.resolve()}:{project.resolve()}",
+        "--entrypoint", "env", IMAGE, *command[1:]]
+    assert seen["log"] == state.parent / "psm_source_probe.log"
+    assert seen["options"] == {"supervised": True, "log": seen["log"]}
+    assert tcl.read_text() == (
+        f"read_db {{{odb}}}\n"
+        + ir._psm_sm.exclude_promoted_pins_tcl()
+        + "set _vibeic_psm_bpins 0\n"
+        + "foreach _n [[ord::get_db_block] getNets] {\n"
+        + "  if {[$_n getSigType] ni {POWER GROUND}} { continue }\n"
+        + "  foreach _t [$_n getBTerms] {\n"
+        + "    if {![$_t isSpecial]} { continue }\n"
+        + "    incr _vibeic_psm_bpins [llength [$_t getBPins]]\n"
+        + "  }\n"
+        + "}\n"
+        + 'puts "PSM_PROMOTED_PIN_PROBE: supply_bpins=$_vibeic_psm_bpins"\nexit\n')
 
 
 def test_current_odb_consumer_keeps_measured_fail_then_refuses_changed_odb(

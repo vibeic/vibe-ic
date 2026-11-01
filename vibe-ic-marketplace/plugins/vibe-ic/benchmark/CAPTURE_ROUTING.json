@@ -136,6 +136,18 @@
       ],
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
+    "phase2.rtl_gen.word_message_framing": {
+      "description": "Capture subtype for source-bound fixed-length word framing; does not add a flow step or acceptance gate.",
+      "bucket_A_program": "programs/serial_protocol_fsm_synth.py",
+      "bucket_A_related": ["programs/spec_artifact_registry.py"],
+      "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
+    },
+    "phase2.sim.multi_output_waveform": {
+      "description": "Capture subtype for source-bound valid-qualified multi-output waveform replay; does not add a flow step or acceptance gate.",
+      "bucket_A_program": "programs/waveform_table_conformance_check.py",
+      "bucket_A_related": ["programs/design_one_shot_runner.py"],
+      "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
+    },
     "phase2.rtl_gen.serial_parallel_multiplier": {
       "description": "Deterministic serial multiplier template; reset mode and polarity must come from the design input before emission.",
       "bucket_A_program": "programs/serial_parallel_mul_synth.py",
@@ -170,6 +182,15 @@
       "description": "Capture subtype for ordinary runner wrapper selection and declared top identity; does not add a flow step.",
       "bucket_A_program": "programs/design_one_shot_runner.py",
       "bucket_B_skill_file": "skills/catalog-glue-author/SKILL.md"
+    },
+    "phase2.reference_tb.current_professional": {
+      "description": "Current professional functional execution proof consumed by the existing normal reference result; capture routing only, not a new flow row or gate.",
+      "bucket_A_program": "programs/design_one_shot_runner.py",
+      "bucket_A_related": [
+        "programs/_sim_results_bridge.py",
+        "programs/cpu_functional_oracle_waiver_check.py"
+      ],
+      "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
     "phase2.reference_tb": {
       "bucket_A_program": "programs/bit_level_full_stack_tb_check.py",

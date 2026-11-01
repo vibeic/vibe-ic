@@ -81,7 +81,7 @@ import time
 from dataclasses import dataclass, field, asdict, replace
 from pathlib import Path, PurePosixPath
 from typing import (Any, Callable, Dict, FrozenSet, Iterable, List, Mapping,
-                    NamedTuple, Optional, Sequence, Set, Tuple)
+                    NamedTuple, Optional, Sequence, Set, Tuple, Union)
 import _audit_scope
 import _path_layout as _pl
 import _gds_admission as _ga
@@ -434,6 +434,8 @@ def _to_container_path(host_path: str, container: str) -> str:
 
     If no mount covers the path, returns the original (caller must accept
     that the operation may fail inside the container)."""
+    if isinstance(host_path, (list, tuple)):
+        return [_to_container_path(path, container) for path in host_path]
     if not host_path:
         return host_path
     p = str(host_path)
@@ -11458,7 +11460,7 @@ def _parse_hardmacro_supply_gc(text: str) -> Optional[Tuple[int, int]]:
 @dataclass
 class PdkConfig:
     name: str
-    liberty: str           # path inside container (or host, if absolute exists)
+    liberty: Union[str, List[str]]  # one logical library, possibly split across files
     tech_lef: str
     cell_lef: str
     cell_gds: Optional[str]
@@ -13187,6 +13189,11 @@ def _read_pdk_text(path: Optional[str],
     container. Chip- and PDK-AGNOSTIC."""
     if not path:
         return None
+    if isinstance(path, (list, tuple)):
+        texts = [_read_pdk_text(item, container) for item in _liberty_paths(path)]
+        if not all(texts):
+            return None
+        return _merge_liberty_texts(texts[0], texts[1:], 'registry_library')
     try:
         return Path(path).read_text(errors="ignore")
     except OSError:
@@ -13237,6 +13244,62 @@ def _merge_liberty_texts(base_text: str, group_texts: List[str],
             seen.add(key)
             out.append(b)
     return header + "\n" + "\n".join(out) + "\n}\n"
+
+
+def _liberty_paths(value) -> List[str]:
+    """The complete logical library; scalar callers retain their literal path."""
+    if not value:
+        return []
+    return sorted(set(map(str, value))) if isinstance(value, (list, tuple)) else [str(value)]
+
+
+def _liberty_directory(value) -> Optional[str]:
+    directories = {str(Path(path).parent) for path in _liberty_paths(value)}
+    return directories.pop() if len(directories) == 1 else None
+
+
+def _liberty_scl(value) -> Optional[str]:
+    paths = _liberty_paths(value)
+    # A native PDK's own default names the SCL for a split library. The
+    # single-file filename convention is preserved byte for byte.
+    if len(paths) != 1:
+        return None
+    stem = Path(paths[0]).stem
+    return stem.split('__', 1)[0] if '__' in stem else None
+
+
+def _read_liberty_tcl(value) -> str:
+    return '\n'.join(f'read_liberty {path}' for path in _liberty_paths(value))
+
+
+def _liberty_model_path(value, container: str = '', project: Optional[Path] = None,
+                        *, corner: str = '') -> str:
+    """Adapt a complete split library for an API that accepts one model file.
+
+    Native list APIs consume the original paths. Legacy single-file tools
+    receive every cell in a content-addressed union, never a selected group.
+    Single-file inputs are returned verbatim, without staging or rewriting.
+    """
+    paths = _liberty_paths(value)
+    if len(paths) < 2:
+        return paths[0] if paths else ''
+    import hashlib
+    import tempfile
+
+    text = _read_pdk_text(paths, container)
+    if text is None:
+        raise ValueError(f'PDK_LIBERTY_UNRESOLVED: {paths}')
+    identity = hashlib.sha256(('\0'.join(paths) + '\0' + text).encode()).hexdigest()
+    directory = (Path(project) / 'phase3/pdk_stage' if project is not None else
+                 Path(tempfile.gettempdir()) / 'vibeic-liberty-bundles')
+    directory.mkdir(parents=True, exist_ok=True)
+    prefix = f'corner_{corner}-' if corner else ''
+    target = directory / f'{prefix}library-{identity}.lib'
+    if not target.is_file():
+        with tempfile.NamedTemporaryFile(mode='w', dir=directory, delete=False) as staged:
+            staged.write(text)
+        os.replace(staged.name, target)
+    return str(target)
 
 
 def _stage_asap7_merged_liberty(project: Path, container: str,
@@ -13398,46 +13461,85 @@ def _netlist_matches_liberty(netlist_path: Path,
 
 
 def _registry_path_under_root(root_prefix: str, cand: str) -> bool:
-    """Is `cand` an acceptable resolution for a registry asset under
-    `root_prefix` (which ends in '/')?
+    """Confinement to the declared root's own resolved tree, on either route.
 
-    BOTH acceptance tests, applied to EVERY candidate on EVERY route.
+    A composed image PDK can own directory links into other store items.
+    Only those root-owned directory trees extend confinement; deeper links
+    cannot enroll another tree. The image's PDK_ROOT establishes the store
+    namespace, and external paths or lexical traversal never gain admission.
+    The function is self-contained so remote probes execute this SAME rule.
+    """
+    import os
 
-    The textual prefix drops the login-shell banner and any other non-path
-    noise line (see `_registry_glob_one`). The `..`-normalisation is the half
-    a textual test cannot make: a registry pattern containing `..` composes a
-    path that still STARTS with the root and names a file outside it. This was
-    first caught by the v1.17.79 no-leak arm against the local resolver, which
-    resolved `/etc/passwd` through the literal branch; the same hole was open
-    on the container route, where the literal branch accepted whatever
-    `test -e` said, so the predicate now lives at the ONE place both routes
-    pass through.
+    def under(path, root):
+        return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
-    Symlinks are resolved when they exist HERE (in-image, the PDK is on this
-    filesystem); when they do not, `os.path.realpath` degrades to a lexical
-    normalisation, which is exactly what is wanted for a path that names a
-    file in a container this process cannot see. PDK/chip-AGNOSTIC."""
-    if not cand.startswith(root_prefix):
+    if not isinstance(cand, str) or not cand.startswith(root_prefix):
+        return False
+    if '..' in cand.split('/') or '..' in root_prefix.split('/'):
         return False
     try:
-        real_root = os.path.realpath(root_prefix.rstrip('/'))
-        real_cand = os.path.realpath(cand)
-        return (real_cand == real_root
-                or real_cand.startswith(real_root + os.sep))
-    except OSError:
+        root = os.path.realpath(root_prefix.rstrip('/'))
+        resolved = os.path.realpath(cand)
+        declared_raw = os.environ.get('PDK_ROOT', '')
+        declared = os.path.realpath(declared_raw) if declared_raw else ''
+        store = os.path.dirname(declared)
+
+        def store_item(path):
+            if not declared or not under(path, store):
+                return False
+            item = os.path.relpath(path, store).split(os.sep)[0]
+            digest, separator, label = item.partition('-')
+            return (bool(separator and label) and len(digest) == 32
+                    and all(ch in '0123456789abcdfghijklmnpqrsvwxyz' for ch in digest)
+                    and os.path.isdir(os.path.join(store, item)))
+
+        image_root = bool(declared_raw and store_item(declared)
+                          and under(os.path.abspath(root_prefix), os.path.abspath(declared_raw)))
+        if image_root and (not store_item(root) or not store_item(resolved)):
+            return False
+        if under(resolved, root):
+            return True
+        if not image_root or not os.path.isdir(root):
+            return False
+        # Enumerate the installed root, not the candidate's symlink chain.
+        # A planted link below one of these anchors cannot widen the closure.
+        with os.scandir(root) as children:
+            trees = [os.path.realpath(child.path) for child in children
+                     if child.is_symlink() and child.is_dir()]
+        return any(store_item(tree) and under(resolved, tree) for tree in trees)
+    except (OSError, ValueError):
         return False
+
+
+def _registry_asset_choice(root: str, candidates: Iterable[str], exists,
+                           *, pdk: str, key: str, multiple: bool = False):
+    """One post-glob contract on both routes; ambiguity is BLOCKING."""
+    prefix = root.rstrip('/') + '/'
+    matches = sorted({path.strip() for path in candidates
+                      if _registry_path_under_root(prefix, path.strip())
+                      and exists(path.strip())})
+    if not matches:
+        return None
+    if multiple:
+        return matches
+    if len(matches) > 1:
+        raise SystemExit(f"[FAIL] --pdk {pdk}: registry {key} ambiguous: {matches}; "
+                         "REGISTRY_ASSET_AMBIGUOUS; REFUSING to choose.")
+    return matches[0]
 
 
 def _registry_glob_one(container: str, root: str, pattern: Optional[str],
+                       *, pdk: str = 'unknown', key: str = 'asset',
+                       multiple: bool = False,
                        ) -> Optional[str]:
     """Resolve ONE registry asset glob to a concrete in-container path.
 
     Registry globs are container-relative (e.g.
     "libs.ref/sg13g2_stdcell/lef/sg13g2_tech.lef", or a wildcard form like
     "libs.ref/<scl>/liberty/*tt*.lib"). Resolution runs INSIDE the container
-    because that is where the PDK lives. Multiple matches are sorted and the
-    FIRST is taken so the choice is deterministic across runs (the caller
-    pins a single corner in the registry when the choice is significant).
+    because that is where the PDK lives. Split-library callers receive every
+    match, sorted; single-asset callers refuse ambiguity by PDK and key.
 
     Returns None when the pattern is unset or matches nothing — the caller
     decides whether that asset is required. PDK-AGNOSTIC.
@@ -13493,71 +13595,66 @@ def _registry_glob_one(container: str, root: str, pattern: Optional[str],
         # declared root is refused without asking anything, on either route.
         if not _registry_path_under_root(root_prefix, full):
             return None
-        rc, _o, _e = _docker_exec_raw(
-            container, f"test -e {shlex.quote(full)}", timeout=60)
-        return full if rc == 0 else None
-    rc, out, _e = _docker_exec_raw(
-        container, f"ls -1d {full} 2>/dev/null | sort", timeout=60)
-    if rc != 0:
-        return None
-    # `ls -1d <glob>` expands to paths that begin with the glob's literal
-    # prefix, i.e. always under `root_prefix`; the login-shell banner and any
-    # other non-path noise do not, so this drops them at zero extra cost. Each
-    # surviving candidate is then confirmed to really exist (belt-and-braces
-    # against a shell that echoes a non-existent token), taking the first that
-    # does — preserving the deterministic sorted-first choice.
-    for ln in out.splitlines():
-        h = ln.strip()
-        if not _registry_path_under_root(root_prefix, h):
-            continue
-        rc2, _o2, _e2 = _docker_exec_raw(
-            container, f"test -e {shlex.quote(h)}", timeout=60)
-        if rc2 == 0:
-            return h
-    return None
+        candidates = [full]
+    else:
+        rc, out, _e = _docker_exec_raw(
+            container, f"ls -1d {full} 2>/dev/null | sort", timeout=60)
+        if rc != 0:
+            return None
+        candidates = out.splitlines()
+    def admitted(path):
+        if _docker_exec_raw(container, f"test -e {shlex.quote(path)}", timeout=60)[0] != 0:
+            return False
+        import inspect
+        rule = inspect.getsource(_registry_path_under_root)
+        code = rule + "\nimport sys\nraise SystemExit(0 if _registry_path_under_root(sys.argv[1], sys.argv[2]) else 1)\n"
+        return _docker_exec_raw(
+            container, f"python3 -c {shlex.quote(code)} {shlex.quote(root_prefix)} {shlex.quote(path)}",
+            timeout=60)[0] == 0
+
+    return _registry_asset_choice(root, candidates, admitted,
+                                  pdk=pdk, key=key, multiple=multiple)
 
 
 def _registry_container_root(container: str, reg: Dict[str, Any]
                              ) -> Optional[str]:
-    """Resolve a registry PDK root, including content-addressed installs.
+    """Bind the named distribution beneath the runtime's declared PDK_ROOT.
 
-    A Ciel-installed PDK is deliberately not exposed as
-    ``/foss/pdks/<name>``.  Its version directory is an image-build input, so
-    baking that directory's hash into a registry entry makes the next image
-    silently look like a missing PDK.  ``container_path_glob`` is the explicit
-    registry declaration for that shape.  It must resolve to *exactly one*
-    directory in the named container; zero and ambiguity both refuse.  The
-    returned concrete root is then used by every subsequent asset probe, so
-    liberty/LEF/DRC cannot accidentally come from a different PDK.
+    Registry root globs are relative to that declaration, never to an image
+    layout literal. They retain the exactly-one-directory contract.
+    Missing declarations, missing distributions and ambiguity are BLOCKING.
     """
-    root_glob = str(reg.get("container_path_glob") or "").strip()
-    if not root_glob:
-        root = str(reg.get("container_path") or "").strip()
-        return root or None
-    if (not root_glob.startswith("/foss/pdks/")
-            or not re.fullmatch(r"/[A-Za-z0-9_./*?\-]+", root_glob)):
-        return None
-    rc, out, _err = _docker_exec_raw(
-        # `*`/`?` must reach the shell as glob syntax.  The strict alphabet
-        # above excludes whitespace, quotes, command substitution and every
-        # shell control character, so this does not turn registry data into a
-        # command-injection surface.
-        container, f"ls -1d {root_glob} 2>/dev/null | sort",
-        timeout=60)
-    if rc != 0:
-        return None
-    roots: List[str] = []
-    prefix = "/foss/pdks/"
-    for raw in out.splitlines():
-        candidate = raw.strip()
-        if not candidate.startswith(prefix):
-            continue
-        rc2, _o2, _e2 = _docker_exec_raw(
-            container, f"test -d {shlex.quote(candidate)}", timeout=60)
-        if rc2 == 0:
-            roots.append(candidate)
-    roots = sorted(set(roots))
-    return roots[0] if len(roots) == 1 else None
+    name = str(reg.get('name') or '')
+
+    def refuse(code, detail):
+        raise SystemExit(f'[FAIL] --pdk {name}: {code}: {detail}; REFUSING to fall back or substitute another PDK.')
+
+    if not name or name in ('.', '..') or not re.fullmatch(r'[A-Za-z0-9_.-]+', name):
+        refuse('REGISTRY_PDK_NAME_INVALID', repr(name))
+    rc, out, _ = _docker_exec_raw(container, 'printenv PDK_ROOT', timeout=60)
+    declared = [line.strip().rstrip('/') for line in out.splitlines()
+                if line.strip().startswith('/')]
+    if rc != 0 or len(declared) != 1:
+        refuse('REGISTRY_PDK_ROOT_UNDECLARED', 'image runtime must declare PDK_ROOT')
+    root = declared[0]
+    if not re.fullmatch(r'/[A-Za-z0-9_./+\-]+', root) or '..' in Path(root).parts:
+        refuse('REGISTRY_PDK_ROOT_INVALID', repr(root))
+    pattern = str(reg.get('container_path_glob') or name).strip()
+    if (not pattern or pattern.startswith('/') or '..' in Path(pattern).parts
+            or not re.fullmatch(r'[A-Za-z0-9_./*?\-]+', pattern)):
+        refuse('REGISTRY_PDK_ROOT_GLOB_INVALID', repr(pattern))
+    rc, out, _ = _docker_exec_raw(
+        container, f'ls -1d {root}/{pattern} 2>/dev/null | sort', timeout=60)
+    roots = sorted({line.strip() for line in out.splitlines()
+                    if _registry_path_under_root(root + '/', line.strip())
+                    and _docker_exec_raw(container, f'test -d {shlex.quote(line.strip())}', timeout=60)[0] == 0}) if rc == 0 else []
+    if not roots:
+        refuse('REGISTRY_PDK_DISTRIBUTION_MISSING', f'{name} under {root}; glob={pattern!r}')
+    if len(roots) > 1:
+        refuse('REGISTRY_PDK_ROOT_AMBIGUOUS', f'key=container_path_glob candidates={roots}')
+    if Path(roots[0]).name != name:
+        refuse('REGISTRY_PDK_DISTRIBUTION_MISMATCH', roots[0])
+    return roots[0]
 
 
 def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
@@ -13598,19 +13695,16 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
                              "to probe a container or substitute another PDK.")
         root = str(parent / name)
 
-        def asset(pattern):
+        def asset(pattern, key='asset'):
             if not pattern:
                 return None
             pattern = str(pattern).lstrip('/')
             if not _registry_path_under_root(root + '/', str(Path(root) / pattern)):
                 return None
-            matches = sorted(str(path) for path in Path(root).glob(pattern)
-                             if path.is_file() and _registry_path_under_root(
-                                 root + '/', str(path)))
-            if len(matches) > 1:
-                raise SystemExit(f"[FAIL] --pdk {name}: LOCAL asset {pattern!r} "
-                                 f"is ambiguous: {matches}; REFUSING to choose.")
-            return matches[0] if matches else None
+            return _registry_asset_choice(
+                root, (str(path) for path in Path(root).glob(pattern)),
+                lambda path: Path(path).exists(), pdk=name, key=key,
+                multiple=key == 'liberty_glob')
     else:
         root = _registry_container_root(container, reg) or ""
         if not root:
@@ -13620,19 +13714,23 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
         if rc != 0:
             return None
 
-        def asset(pattern):
-            return _registry_glob_one(container, root, pattern)
+        def asset(pattern, key='asset'):
+            return _registry_glob_one(container, root, pattern,
+                                      pdk=str(reg.get('name') or 'unknown'), key=key,
+                                      multiple=key == 'liberty_glob')
 
-    liberty = asset(reg.get("liberty_glob"))
-    tech_lef = asset(reg.get("tech_lef_glob"))
-    cell_lef = asset(reg.get("cell_lef_glob"))
+    liberty = asset(reg.get("liberty_glob"), 'liberty_glob')
+    tech_lef = asset(reg.get("tech_lef_glob"), 'tech_lef_glob')
+    cell_lef = asset(reg.get("cell_lef_glob"), 'cell_lef_glob')
     if not (liberty and tech_lef and cell_lef):
         if local_route:
             raise SystemExit(f"[FAIL] --pdk {name}: LOCAL required registry "
                              f"assets unresolved under {root!r}; REFUSING "
                              "to substitute another PDK.")
         return None
-    cell_gds = asset(reg.get("cell_gds_glob"))
+    if len(liberty) == 1:
+        liberty = liberty[0]  # Preserve existing single-file PdkConfig bytes.
+    cell_gds = asset(reg.get("cell_gds_glob"), 'cell_gds_glob')
 
     # SITE: registry value wins; else read the PDK's own cell LEF.
     site = reg.get("site")
@@ -13652,7 +13750,7 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
         metal_prefix = m.group(1) if m else "met"
 
     def _opt(key: str) -> Optional[str]:
-        return asset(reg.get(key))
+        return asset(reg.get(key), key)
 
     _mlibs, _mlefs, _mgds, _mv = _discover_local_macros(
         project, tech_lef, container)
@@ -14457,7 +14555,7 @@ def _v1_6_604_read_text_or_container_cat(
     return text
 
 
-def _v1_6_596_discover_tie_cells(liberty_path: str,
+def _v1_6_596_discover_tie_cells(liberty_path: Union[str, List[str]],
                                  container: str = "") -> dict:
     """v1.6.596 — for #404 P3 ORGANIC. Scan `liberty_path` for tie-hi
     and tie-lo cells. Returns a dict with keys:
@@ -14479,7 +14577,9 @@ def _v1_6_596_discover_tie_cells(liberty_path: str,
     """
     out = {"hi_cell": None, "lo_cell": None,
            "hi_pin": "HI", "lo_pin": "LO"}
-    text = _v1_6_604_read_text_or_container_cat(liberty_path, container)
+    text = (_read_pdk_text(liberty_path, container)
+            if isinstance(liberty_path, (list, tuple)) else
+            _v1_6_604_read_text_or_container_cat(liberty_path, container))
     if text is None:
         return out
     cellnames = _V1_6_596_RE_CELL_DECL.findall(text)
@@ -15085,7 +15185,7 @@ def _v1_6_605_remap_surviving_dlatch(
         return False
     # Build (and force-write) the neg-enable D-latch techmap.
     clause = _build_dlatch_map_clause(
-        str(pdk.liberty), out_dir, out_dir_c, container)
+        _liberty_model_path(pdk.liberty, container), out_dir, out_dir_c, container)
     if not clause:
         return False
     netlist_c = _to_container_path(str(netlist), container)
@@ -17305,7 +17405,7 @@ def _area_receipt_flags(area_receipt: Optional[str],
             "--area-run-manifest", str(area_run_manifest)]
 
 
-def _host_staged_liberty(pdk: PdkConfig, pdk_staging: Dict[str, Any]) -> Path:
+def _host_staged_liberty(pdk: PdkConfig, pdk_staging: Dict[str, Any]) -> Union[Path, List[Path]]:
     """Resolve the selected Liberty through the synthesis PDK staging role.
 
     Backend continuations use the same host asset before the Step7 strict
@@ -17313,40 +17413,43 @@ def _host_staged_liberty(pdk: PdkConfig, pdk_staging: Dict[str, Any]) -> Path:
     substitutes a different library/corner merely because bytes happen to match.
     """
     import librelane_contract as _ll
-    liberty_path = Path(str(pdk.liberty))
-    pdk_root_host = pdk_staging["path"]
-    # Canonical image staging copies the selected named distribution,
-    # whereas the registry can resolve its Ciel version directory.
-    # Preserve the selected distribution and exact intra-PDK asset path.
-    if not liberty_path.is_file() and pdk_root_host:
-        derivation = pdk_staging.get("derivation") or {}
-        image_pdk_root = Path(derivation.get("image_pdk_root") or PDKS_IN_CONTAINER)
-        try:
-            relative_liberty = liberty_path.relative_to(image_pdk_root)
-        except ValueError:
-            relative_liberty = None
-        if relative_liberty is not None:
-            if pdk_staging.get("source") == "resolved":
-                if (derivation.get("pdk") != str(pdk.name) or
-                        Path(derivation.get("host_path") or "") !=
-                        Path(pdk_root_host) / str(pdk.name)):
-                    raise _ll.Refusal("LL_PDK_LIB_CONFLICT",
-                                      "staging metadata disagrees with selected PDK")
-                parts = relative_liberty.parts
-                if (len(parts) >= 6 and parts[0] == "ciel" and
-                        parts[2] == "versions"):
-                    if parts[4] != str(pdk.name):
+    def stage(liberty_path: Path) -> Path:
+        pdk_root_host = pdk_staging["path"]
+        # Canonical image staging copies the selected named distribution,
+        # whereas the registry can resolve its Ciel version directory.
+        # Preserve the selected distribution and exact intra-PDK asset path.
+        if not liberty_path.is_file() and pdk_root_host:
+            derivation = pdk_staging.get("derivation") or {}
+            image_pdk_root = Path(derivation.get("image_pdk_root") or PDKS_IN_CONTAINER)
+            try:
+                relative_liberty = liberty_path.relative_to(image_pdk_root)
+            except ValueError:
+                relative_liberty = None
+            if relative_liberty is not None:
+                if pdk_staging.get("source") == "resolved":
+                    if (derivation.get("pdk") != str(pdk.name) or
+                            Path(derivation.get("host_path") or "") !=
+                            Path(pdk_root_host) / str(pdk.name)):
+                        raise _ll.Refusal("LL_PDK_LIB_CONFLICT",
+                                          "staging metadata disagrees with selected PDK")
+                    parts = relative_liberty.parts
+                    if (len(parts) >= 6 and parts[0] == "ciel" and
+                            parts[2] == "versions"):
+                        if parts[4] != str(pdk.name):
+                            raise _ll.Refusal("LL_PDK_LIB_CONFLICT",
+                                              f"{liberty_path} is outside selected PDK {pdk.name}")
+                        relative_liberty = Path(*parts[4:])
+                    elif not parts or parts[0] != str(pdk.name):
                         raise _ll.Refusal("LL_PDK_LIB_CONFLICT",
                                           f"{liberty_path} is outside selected PDK {pdk.name}")
-                    relative_liberty = Path(*parts[4:])
-                elif not parts or parts[0] != str(pdk.name):
-                    raise _ll.Refusal("LL_PDK_LIB_CONFLICT",
-                                      f"{liberty_path} is outside selected PDK {pdk.name}")
-            liberty_path = Path(pdk_root_host) / relative_liberty
-            if not liberty_path.is_file():
-                raise _ll.Refusal("LL_PDK_LIB_MISSING", str(liberty_path))
-            pdk.liberty = str(liberty_path)
-    return liberty_path
+                liberty_path = Path(pdk_root_host) / relative_liberty
+                if not liberty_path.is_file():
+                    raise _ll.Refusal("LL_PDK_LIB_MISSING", str(liberty_path))
+        return liberty_path
+
+    staged = [stage(Path(path)) for path in _liberty_paths(pdk.liberty)]
+    pdk.liberty = str(staged[0]) if len(staged) == 1 else [str(path) for path in staged]
+    return staged[0] if len(staged) == 1 else staged
 
 
 def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
@@ -17390,20 +17493,19 @@ def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
     config_path = config_dir / "synth_config.json"
     try:
         image = _ll.resolve_image(project)
-        liberty_stem = Path(str(getattr(pdk, "liberty", ""))).stem
-        std_cell_library = liberty_stem.split("__", 1)[0]
-        if not liberty_stem or "__" not in liberty_stem:
-            raise _ll.Refusal("LL_SCL_UNRESOLVED", str(getattr(pdk, "liberty", "")))
-        liberty_path = Path(str(pdk.liberty))
+        original_liberties = _liberty_paths(pdk.liberty)
+        std_cell_library = _liberty_scl(pdk.liberty)
+        if len(original_liberties) == 1 and not std_cell_library:
+            raise _ll.Refusal("LL_SCL_UNRESOLVED", str(pdk.liberty))
         # The host PDK root through the contract's resolver (declared >
         # resolved from the image > refused, naming its cause).
         pdk_staging = _ll.pdk_root_resolution(project, str(pdk.name), image=image)
         pdk_root_host = pdk_staging["path"]
-        liberty_path = _host_staged_liberty(pdk, pdk_staging)
-        if pdk_root_host and liberty_path.is_relative_to(Path(pdk_root_host)):
-            liberty_guest = "/pdk/" + str(liberty_path.relative_to(Path(pdk_root_host)))
-        else:
-            liberty_guest = str(liberty_path)
+        _host_staged_liberty(pdk, pdk_staging)
+        guest_liberties = ["/pdk/" + str(Path(path).relative_to(Path(pdk_root_host)))
+                           if pdk_root_host and Path(path).is_relative_to(Path(pdk_root_host))
+                           else path for path in _liberty_paths(pdk.liberty)]
+        liberty_guest = guest_liberties[0] if len(guest_liberties) == 1 else guest_liberties
         config = _ll.emit_synthesis_config(
             project, str(pdk.name), config_path, rtl, defines, use_slang,
             std_cell_library=std_cell_library, synth_liberty=liberty_guest,
@@ -17488,7 +17590,7 @@ def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
                                 produced_by="LibreLane.Yosys.Synthesis",
                                 tool="yosys", exit_code=0)
         stats = _sas.emit_for_run(project, folder / "reports/stat.rpt", netlist,
-                                  liberty=getattr(pdk, "liberty", None),
+                                  liberty=_liberty_model_path(getattr(pdk, "liberty", None), container, project),
                                   container=None)
         if stats is None:
             raise _ll.Refusal("LL_SYNTH_AREA_UNMEASURED", str(stat))
@@ -17535,14 +17637,14 @@ def _step_synth_librelane(project: Path, top: str, pdk: PdkConfig,
             capture_output=True, text=True)
         if netlist_gate.returncode:
             raise _ll.Refusal("LL_SYNTH_NETLIST_GATE_FAILED", netlist_gate.stdout[-500:])
-        if not Path(str(pdk.liberty)).is_file():
+        if not all(Path(path).is_file() for path in _liberty_paths(pdk.liberty)):
             raise _ll.Refusal("LL_PDK_LIB_MISSING",
                               f"no liberty file at {pdk.liberty}")
         _verify_runtime_command(
             [sys.executable, str(PROGRAMS_DIR / "pdk_consistency_check.py")])
         pdk_gate = subprocess.run(
             [sys.executable, str(PROGRAMS_DIR / "pdk_consistency_check.py"),
-             "--netlist", str(netlist), "--pdk-lib", str(pdk.liberty),
+             "--netlist", str(netlist), "--pdk-lib", _liberty_model_path(pdk.liberty, container, project),
              "--json", str(folder / "pdk_consistency_gate.json")],
             capture_output=True, text=True)
         if pdk_gate.returncode != 0:
@@ -17874,7 +17976,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     #                             AND/oe split. chip-AGNOSTIC.
     pre_synth = (f"hierarchy -check -top {top}; "
                  f"proc; flatten; tribuf -logic; ")
-    liberty_c = _to_container_path(str(pdk.liberty), container)
+    liberty_c = _to_container_path(_liberty_model_path(pdk.liberty, container, project), container)
     # v1.6.596 — for #404 P3 ORGANIC. Discover the PDK's tie cells
     # (sky130_fd_sc_hd__conb_1 / __conp_1 for sky130A; tie_h / tie_l
     # variants for other PDKs) and inject Yosys `hilomap` after abc
@@ -17930,7 +18032,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # inject `techmap -map <file>` after dfflibmap. No datapath change —
     # the latch is realised as a real std-cell instead of behavioral reg.
     dlatch_clause = _build_dlatch_map_clause(
-        pdk.liberty, out_dir, out_dir_c, container)
+        _liberty_model_path(pdk.liberty, container, project), out_dir, out_dir_c, container)
     # ORGANIC #556 — timing-driven ABC mapping: read the project SDC to
     # extract the smallest create_clock period; for timing-critical classes
     # (processor_cpu) pass -D <period_ps> to abc so the delay-aware mapper
@@ -18083,7 +18185,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     # (unread is not empty).
     _fo_cap, _fo_why, _fo_unread = _synth_max_fanout(
         project, str(getattr(pdk, "name", "") or ""),
-        str(getattr(pdk, "liberty", "") or ""), container)
+        _liberty_model_path(getattr(pdk, "liberty", ""), container, project), container)
     # Its OWN channel: this is not a reference-flow knob, and
     # `reference_flow_qor_knobs` means "what the design's staged flow asked
     # for". Mixing them made two existing assertions about an EMPTY knob list
@@ -18151,7 +18253,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
     _fa_clause = ""
     if _active_recipe.startswith("fa_map_"):
         _liberty_text, _liberty_why = read_text_or_container_cat(
-            str(pdk.liberty), container)
+            _liberty_model_path(pdk.liberty, container, project), container)
         _fa_spec = _sfam.discover(_liberty_text or "")
         if _fa_spec is None:
             return StepResult("synth", "FAIL", time.time() - t0,
@@ -18552,7 +18654,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         # actually names; it still tries this filesystem first, so a staged
         # PDK under input/pdk/ costs no container call.
         _area_stats = _sas.emit_for_run(project, log, netlist,
-                                        liberty=getattr(pdk, "liberty", None),
+                                        liberty=_liberty_model_path(getattr(pdk, "liberty", None), container, project),
                                         container=container)
     except Exception:
         _area_stats = None
@@ -18624,7 +18726,7 @@ def step_synth(project: Path, top: str, pdk: PdkConfig,
         try:
             import declared_clock_period as _dcp_area   # noqa: PLC0415
             _area_lib = _dcp_area.library_name_from_liberty(
-                str(getattr(pdk, "liberty", "") or ""))
+                _liberty_model_path(getattr(pdk, "liberty", ""), container, project))
         except Exception:                                # noqa: BLE001
             _area_lib = ""
         _area_pdk = str(getattr(pdk, "name", "") or "")
@@ -25059,15 +25161,18 @@ def _synth_dont_use_cells(pdk: "PdkConfig", container: str) -> List[str]:
     Returns [] (backward-compatible no-op) when the PDK ships no
     ``synth_excluded.cells`` or the container reads fail (NONFATAL)."""
     import fnmatch
-    lib = pdk.liberty or ""
-    parts = lib.split("/")
-    if "libs.ref" not in parts:
+    paths = _liberty_paths(pdk.liberty)
+    libraries = set()
+    for path in paths:
+        parts = path.split('/')
+        if 'libs.ref' not in parts or parts.index('libs.ref') + 1 >= len(parts):
+            return []
+        i = parts.index('libs.ref')
+        libraries.add(('/'.join(parts[:i]), parts[i + 1]))
+    if len(libraries) != 1:
         return []
-    i = parts.index("libs.ref")
-    if i + 1 >= len(parts):
-        return []
-    pdk_root = "/".join(parts[:i])
-    stdcell = parts[i + 1]                       # e.g. sky130_fd_sc_hd
+    pdk_root, stdcell = libraries.pop()
+    lib = ' '.join(shlex.quote(path) for path in paths)
     synthex = f"{pdk_root}/libs.tech/librelane/{stdcell}/synth_excluded.cells"
     try:
         rc, pout, _ = _docker_exec(container, f"cat {synthex} 2>/dev/null")
@@ -28199,7 +28304,7 @@ def _build_postroute_timing_repair_tcl(top: str, tech_lef_c: str, cell_lef_c: st
                       for lbl in _nom_aliases)
         )
     else:
-        liberty_block = f"read_liberty {liberty_c}\n"
+        liberty_block = f"{_read_liberty_tcl(liberty_c)}\n"
         if _labels:
             liberty_block += "".join(
                 f"read_liberty {path}\n"
@@ -32993,7 +33098,7 @@ def _v1_5_37a_multicorner_pnr_block(project: "Path", pdk: "PdkConfig",
 
     Returns a `define_corners ...` + per-corner `read_liberty -corner ...` block,
     or None when the PDK exposes <2 distinct process libs (caller then keeps the
-    byte-identical single `read_liberty {liberty_c}`). chip/PDK-AGNOSTIC — the
+    byte-identical single `{_read_liberty_tcl(liberty_c)}`). chip/PDK-AGNOSTIC — the
     corner libs come from _resolve_signoff_corner_libs (the active PDK's OWN
     librelane STA_CORNERS / staged input/pdk/liberty), never a chip/vendor
     literal. Best-effort: any failure -> None -> unchanged single-corner PnR."""
@@ -33650,7 +33755,7 @@ def _build_pnr_tcl_text(*, tech_lef_c: str, cell_lef_c: str,
     # approach (a) — multi-corner liberty (ss setup / ff hold) or the
     # byte-identical single tt read_liberty when the caller passed none.
     _corner_lib_stanza = (corner_liberty_block if corner_liberty_block
-                          else f"read_liberty {liberty_c}")
+                          else f"{_read_liberty_tcl(liberty_c)}")
     # STA-0103 GUARD — corner-qualify extra/macro libs so a bare
     # read_liberty is never emitted under a multi-scene (multi-corner)
     # define_corners stanza (else OpenSTA aborts pnr.tcl before
@@ -37539,7 +37644,7 @@ def step_io_pad_chip_top_gen(project: Path, container: Optional[str] = None,
     if pdk:
         try:
             _pad_runtime_liberty = _padring_runtime_pdk_file(
-                str(pdk.liberty), str(pdk_root), str(pdk_tree), container)
+                _liberty_model_path(pdk.liberty, container, project), str(pdk_root), str(pdk_tree), container)
         except ValueError as exc:
             return StepResult("io_pad_chip_top_gen", "FAIL",
                               time.time() - t0, str(exc))
@@ -39799,7 +39904,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     import drv_stage_receipts as _drv_stages
     _drv_stages.synth_stage_supervised(
         project, netlist=_pl.synth_dir(project) / f"{top}_synth.v", top=top,
-        liberties=[str(pdk.liberty)], sdc=sdc,
+        liberties=_liberty_paths(pdk.liberty), sdc=sdc,
         to_container=lambda path: _to_container_path(str(path), container),
         execute=lambda cmd, marker, log_path: _docker_exec(
             container, cmd, marker=marker, log_path=log_path))
@@ -39858,7 +39963,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     # the property" shape survived the #561 fix, and together they put the
     # sky130 literal into a SG13G2 run's `clock_tree_synthesis`:
     #
-    #   1. THE LIBERTY WAS NEVER READ. `Path(pdk.liberty).read_text()` is a
+    #   1. THE LIBERTY WAS NEVER READ. `Path(str(pdk.liberty)).read_text()` is a
     #      HOST-side read inside a bare `except Exception: pass`, but
     #      `pdk.liberty` is a CONTAINER-side path for every registry and
     #      project-staged PDK (`/foss/pdks/...`). FileNotFoundError, swallowed,
@@ -39884,7 +39989,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     if clk_buf is None:
         try:
             lib_text = _v1_6_604_read_text_or_container_cat(
-                str(pdk.liberty), container) or ""
+                _liberty_model_path(pdk.liberty, container, project), container) or ""
             # (a) STRUCTURAL — what the cell does, from its own pin model.
             _s_buf, _s_root, _s_how = _i1958_pick_cts_buffers(lib_text)
             if _s_buf:
@@ -39932,7 +40037,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     _clk_buf_list_how = ""
     try:
         _i2172_lib_text = _v1_6_604_read_text_or_container_cat(
-            str(pdk.liberty), container) or ""
+            _liberty_model_path(pdk.liberty, container, project), container) or ""
         clk_buf_list, _clk_buf_list_how = _i2172_cts_buf_family(
             _i2172_lib_text, clk_buf, clk_buf_root)
     except Exception as _i2172_err:      # pragma: no cover - defensive
@@ -39976,7 +40081,7 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     sdc_c = _to_container_path(str(sdc), container)
     tech_lef_c = _to_container_path(str(pdk.tech_lef), container)
     cell_lef_c = _to_container_path(str(pdk.cell_lef), container)
-    liberty_c = _to_container_path(str(pdk.liberty), container)
+    liberty_c = _to_container_path(pdk.liberty, container)
     pnr_tcl_c = _to_container_path(str(pnr_tcl), container)
 
     # v1.6.38 — chip-AGNOSTIC: audit the tech LEF for single-cut via
@@ -40414,8 +40519,9 @@ def step_pnr(project: Path, top: str, pdk: PdkConfig,
     except Exception:  # noqa: BLE001 — a measurement, never a dependency
         _sl_corner_libs = {}
     _sl_paths = sorted({p for p in _sl_corner_libs.values() if p})
-    if pdk.liberty and pdk.liberty not in _sl_paths:
-        _sl_paths.append(pdk.liberty)
+    for path in _liberty_paths(pdk.liberty):
+        if path not in _sl_paths:
+            _sl_paths.append(path)
     _sl_texts = [t for t in (_read_pdk_text(p, container) for p in _sl_paths)
                  if t]
     # MEASURE ONCE. Three consumers need the same number — the preamble, the
@@ -44727,7 +44833,8 @@ def _resolve_magic_gds_tech(pdk: "PdkConfig", container: str) -> Optional[str]:
     container rather than assumed, and an absent one returns None so the caller
     discloses instead of passing a path that is not there.
     """
-    lib = (getattr(pdk, "liberty", "") or "")
+    roots = {path.split("/libs.ref/", 1)[0] for path in _liberty_paths(getattr(pdk, "liberty", "")) if "/libs.ref/" in path}
+    lib = roots.pop() + "/libs.ref/" if len(roots) == 1 else ""
     parts = lib.split("/")
     if "libs.ref" not in parts:
         return None
@@ -53278,7 +53385,9 @@ def _step31_librelane(project: Path, top: str, pdk: PdkConfig, half: str,
                    for row in record["metrics"].values() if row.get("folder")}
         try:
             if half == "drc" and "KLayout.DRC" in folders:
-                lyrdb = folders["KLayout.DRC"] / "reports" / "drc.klayout.lyrdb"
+                report_name = next(name for step, _, name in _pv.DRC_ENGINES
+                                   if step == "KLayout.DRC")
+                lyrdb = folders["KLayout.DRC"] / "reports" / report_name
                 if lyrdb.is_file() and _sdf.classify_file(lyrdb).is_signoff_deck:
                     for dest in (project / "phase3" / "reports" / "drc.rpt",
                                  project / "reports" / "phase3" / "drc_signoff.rpt"):
@@ -61617,8 +61726,7 @@ def _prepare_prelayout_librelane(project: Path, top: str, pdk: PdkConfig,
         if bound.get("verdict") != "PASS" or Path(bound["mapped"]) != netlist:
             raise contract.Refusal("LL_PRELAYOUT_HANDOFF_INVALID", str(bound))
     rtl = sorted(_pl.rtl_dir(project).glob("*.sv")) + sorted(_pl.rtl_dir(project).glob("*.v"))
-    stem = Path(str(getattr(pdk, "liberty", ""))).stem
-    scl = stem.split("__", 1)[0] if "__" in stem else None
+    scl = _liberty_scl(getattr(pdk, "liberty", ""))
     native = prelayout.prepare_prelayout(
         project, image, str(pdk.name), top, netlist, runner_sdc, rtl,
         arm="design_sdc", std_cell_library=scl, mounts=mounts, pdk_root="/pdk")
@@ -61650,8 +61758,7 @@ def _prelayout_librelane(project: Path, top: str, pdk: PdkConfig,
         netlist = _pl.synth_dir(project) / f"{top}_synth.v"
         rtl = sorted(_pl.rtl_dir(project).glob("*.sv")) + \
             sorted(_pl.rtl_dir(project).glob("*.v"))
-        stem = Path(str(getattr(pdk, "liberty", ""))).stem
-        scl = stem.split("__", 1)[0] if "__" in stem else None
+        scl = _liberty_scl(getattr(pdk, "liberty", ""))
     else:
         image, root = prepared["image"], prepared["root"]
         mounts, pdk_root_guest = prepared["mounts"], "/pdk"
@@ -61882,7 +61989,7 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
     staged_libs = (sorted(staged_lib_dir.glob("*.lib"))
                    if staged_lib_dir.is_dir() else [])
     corner_source = "staged input/pdk/liberty"
-    if len(staged_libs) < 2:
+    if len(staged_libs) < 2 or len(_liberty_paths(pdk.liberty)) > 1:
         # ORGANIC #565 — a project that stages no corners of its own is the
         # MAJORITY case, not an exotic one: it uses the container's built-in
         # PDK. `pvt_matrix` and `_corner_libs()` ALREADY fall back to the
@@ -61893,10 +62000,15 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         # VOIDS every step declaring 10 as a dependency). Reuse the SAME
         # discovery, so one PDK cannot answer "which corners do you ship?"
         # two different ways inside one runner.
-        _pdk_lib_dir = str(Path(getattr(pdk, "liberty", "") or "").parent)
-        _found = _select_signoff_corners(
-            _discover_container_corner_libs(container, _pdk_lib_dir),
-            container, _pdk_lib_dir)
+        _pdk_lib_dir = (_liberty_directory(getattr(pdk, "liberty", "")) or "")
+        if len(_liberty_paths(pdk.liberty)) > 1:
+            _found = [{"name": label, "label": label, "liberty": path}
+                      for label, path in _resolve_signoff_corner_libs(
+                          project, pdk, container).items()]
+        else:
+            _found = _select_signoff_corners(
+                _discover_container_corner_libs(container, _pdk_lib_dir),
+                container, _pdk_lib_dir)
         if len(_found) >= 2:
             staged_libs = [Path(c["liberty"]) for c in _found]
             corner_source = (f"container built-in PDK {_pdk_lib_dir} "
@@ -63212,7 +63324,7 @@ def _si_mcf_repair_child_tcl(top: str, *, tech_lef_c: str, cell_lef_c: str,
         f"read_lef {tech_lef_c}\n"
         f"read_lef {cell_lef_c}\n"
         + _extra_lef_read_block(extra_lefs_c) +
-        f"read_liberty {liberty_c}\n"
+        f"{_read_liberty_tcl(liberty_c)}\n"
         + _extra_liberty_read_block(extra_liberties_c, liberty_c) +
         f"read_def {pnr_dir_c}/routed.def\n"
         f"read_sdc {sdc_c}\n"
@@ -63785,7 +63897,7 @@ def _postpnr_extraction_inputs(project: Path, top: str, pdk: PdkConfig,
     if mode == "librelane":
         return {"mode": mode, "pdk_files": {}, "cacheable": False}, ""
     pnr = _pl.pnr_dir(project)
-    paths = [str(pdk.tech_lef), str(pdk.cell_lef), str(pdk.liberty)]
+    paths = [str(pdk.tech_lef), str(pdk.cell_lef), _liberty_model_path(pdk.liberty, container, project)]
     if mode in ("direct", "dual"):
         paths.extend(_def_reopen_extra_lefs_c(pnr / f"{top}.def", pdk,
                                               container))
@@ -64366,7 +64478,11 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         # libs.ref/<lib>/lib/*.lib holding all 13 sky130A corners).
         lib_dir = project / "input" / "pdk" / "liberty"
         corners = []
-        if lib_dir.is_dir() and any(lib_dir.glob("*.lib")):
+        if len(_liberty_paths(pdk.liberty)) > 1:
+            corners = [{"name": label, "label": label, "liberty": path}
+                       for label, path in _resolve_signoff_corner_libs(
+                           project, pdk, container).items()]
+        elif lib_dir.is_dir() and any(lib_dir.glob("*.lib")):
             for lib in sorted(lib_dir.glob("*.lib")):
                 corners.append({
                     "name": lib.stem,
@@ -64374,8 +64490,8 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     "liberty": str(lib.relative_to(project)),
                 })
         else:
-            pdk_lib = Path(getattr(pdk, "liberty", "") or "")
-            pdk_lib_dir = pdk_lib.parent
+            paths = _liberty_paths(getattr(pdk, "liberty", ""))
+            pdk_lib_dir = Path(paths[0]).parent if paths else None
             if pdk_lib_dir and pdk_lib_dir.is_dir():
                 for lib in sorted(pdk_lib_dir.glob("*.lib")):
                     corners.append({
@@ -66030,7 +66146,7 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                 top,
                 _to_container_path(str(pdk.tech_lef), container),
                 _to_container_path(str(pdk.cell_lef), container),
-                _to_container_path(str(pdk.liberty), container),
+                _to_container_path(_liberty_model_path(pdk.liberty, container, project), container),
                 _pnr_dir_c, _postroute_timing_repair_dir_c,
                 pdk.metal_prefix,
                 corner_libs=_repair_corner_libs,
@@ -67172,7 +67288,7 @@ def _sta_extra_liberties(project: Path, pdk: PdkConfig,
     scenes = receipt.get("scenes")
     if not isinstance(scenes, dict) or not scenes:
         raise ValueError("IO_TIMING_SCENE_RECEIPT_EMPTY")
-    reference = str(reference_liberty)
+    reference = _liberty_model_path(reference_liberty, container, project)
     reference_sha = _io_timing_path_sha256(reference, container)
     if reference_sha is None:
         raise ValueError(f"IO_TIMING_CORE_UNREADABLE: {reference}")
@@ -67476,7 +67592,9 @@ def _emit_declared_process_sta(project, top, pdk, container, spef_path,
         return refuse('missing or collapsed process libraries')
     staged = project / 'input/pdk/liberty'
     for c in required:
-        if sum(_classify_corner_from_name(f.name) == c for f in staged.glob('*.lib')) > 1:
+        if (len(_liberty_paths(pdk.liberty)) < 2
+                and sum(_classify_corner_from_name(f.name) == c
+                        for f in staged.glob('*.lib')) > 1):
             return refuse('ambiguous staged core library for ' + c)
     inventory = {}
     for c in required:
@@ -67845,7 +67963,7 @@ def _emit_spef_sta(project: Path, top: str, pdk: PdkConfig, container: str,
             f"close $_ocvf\n"
         )
     tcl = (
-        f"read_liberty {lib_c}\n"
+        f"{_read_liberty_tcl(lib_c)}\n"
         f"{macro_libs_tcl}\n"
         f"read_verilog {netlist_c}\n"
         f"link_design {sta_top}\n"
@@ -68861,7 +68979,7 @@ def _emit_multi_corner_sta(project: Path, top: str, pdk: PdkConfig,
         # multi-corner sign-off claim, so the artifact must carry its own
         # limitation rather than rely on a caller to remember it.
         tcl = (
-            f"read_liberty {lib_c}\n"
+            f"{_read_liberty_tcl(lib_c)}\n"
             f"{macro_libs_tcl}\n"
             f"read_verilog {netlist_c}\n"
             f"link_design {sta_top}\n"
@@ -68999,7 +69117,7 @@ def _emit_spef(project: Path, top: str, pdk: PdkConfig, container: str,
     def_c = _to_container_path(str(def_file), container)
     tech_lef_c = _to_container_path(str(pdk.tech_lef), container)
     cell_lef_c = _to_container_path(str(pdk.cell_lef), container)
-    liberty_c = _to_container_path(str(pdk.liberty), container)
+    liberty_c = _to_container_path(pdk.liberty, container)
     raw_spef = spef_out.parent / "raw" / f"{spef_out.stem}.{time.time_ns()}.spef"
     raw_spef.parent.mkdir(parents=True, exist_ok=True)
     spef_c = _to_container_path(str(raw_spef), container)
@@ -69058,7 +69176,7 @@ def _emit_spef(project: Path, top: str, pdk: PdkConfig, container: str,
 read_lef {tech_lef_c}
 read_lef {cell_lef_c}
 {macro_lefs_tcl}
-read_liberty {liberty_c}
+{_read_liberty_tcl(liberty_c)}
 read_def {def_c}
 # --- Step 22.1: per-layer wire-RC (harmless; required by the estimate fallback) ---
 if {{[catch {{set_wire_rc -signal -layer {mp}1}} _swr_sig]}} {{
@@ -69461,7 +69579,7 @@ def _emit_spef_corners(project: Path, top: str, pdk: PdkConfig, container: str,
     out_dir.mkdir(parents=True, exist_ok=True)
     tech_lef_c = _to_container_path(str(pdk.tech_lef), container)
     cell_lef_c = _to_container_path(str(pdk.cell_lef), container)
-    liberty_c = _to_container_path(str(pdk.liberty), container)
+    liberty_c = _to_container_path(pdk.liberty, container)
     def_c = _to_container_path(str(def_file), container)
     # A routed chip DEF names IO masters as well as standard cells. Reuse
     # the same DEF-driven library resolver as the other reopening consumers.
@@ -69474,7 +69592,7 @@ def _emit_spef_corners(project: Path, top: str, pdk: PdkConfig, container: str,
         f"read_lef {tech_lef_c}",
         f"read_lef {cell_lef_c}",
         macro_lefs_tcl,
-        f"read_liberty {liberty_c}",
+        f"{_read_liberty_tcl(liberty_c)}",
         f"read_def {def_c}",
         f"if {{[catch {{set_wire_rc -signal -layer {mp}1}} _s]}} {{ "
         f"catch {{set_wire_rc -layer {mp}1}} }}",
@@ -70134,8 +70252,6 @@ def _librelane_antenna_router(project: Path, top: str, pdk: PdkConfig, mode: str
         nets = counts.get("antenna__violating__nets")
         pins = counts.get("antenna__violating__pins")
         log = next(iter(sorted(Path(router["state"]).parent.glob("openroad-*.log"))), None)
-        lines = [ln for ln in (log.read_text(errors="replace").splitlines() if log else [])
-                 if "ANT-" in ln]
         subject = _measured_subject(project, top, [routed], tool_log=log)
         clean = nets == 0 and pins == 0
         _aa.write_text(rpt / "antenna.rpt", _measured_subject_lines(subject) + (
@@ -70144,13 +70260,14 @@ def _librelane_antenna_router(project: Path, top: str, pdk: PdkConfig, mode: str
             "# on the tool; phase3_one_shot_runner librelane mode).\n#\n"
             f"antenna check: {nets} net violations, {pins} pin violations\n"
             f"antenna clean: {'YES' if clean else 'NO'}\n"
-            "\n# === check_antennas output (provenance) ===\n"
-            + ("\n".join(lines) or "(no ANT lines captured)") + "\n# end of antenna.rpt\n"))
+            "# The full tool log is retained at tool_log above.\n"
+            "# end of antenna.rpt\n"))
         _aa.write_json(rpt / "antenna.json", {
             "tool": "openroad", "producer": "librelane:OpenROAD.CheckAntennas",
             "mode": "antenna_check_shipped_odb", "net_violations": nets,
             "pin_violations": pins, "clean": clean,
             "source": "reports/phase3/antenna.rpt", "measured_subject": subject,
+            "report": str((rpt / "antenna.rpt").relative_to(project)),
             "tool_state": router["state"], "tool_state_sha256": router["state_sha256"],
             "routing_incomplete": doc["routing_incomplete"],
             "route_modified_after_last_verification":
@@ -70351,7 +70468,7 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
                    else "nom" if "nom" in corner_spefs else None)
     if setup_corner is None and hold_corner is None:
         return _empty
-    lib_c = _to_container_path(str(pdk.liberty), container)
+    lib_c = _to_container_path(pdk.liberty, container)
     # BASIS STAMP — DERIVED from the netlist this call actually linked, never a
     # literal. MEASURED: the SINGLE-corner emitter stamps `STA_BASIS:
     # POST_ROUTE_SPEF` and this one, a MULTI-corner SIGN-OFF report, stamped
@@ -70380,7 +70497,7 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
                         if lbl not in (corner_libs or {})]
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
-        for f in _sta_extra_liberties(project, pdk, pdk.liberty, container))
+        for f in _sta_extra_liberties(project, pdk, _liberty_model_path(pdk.liberty, container, project), container))
     netlist_c = _to_container_path(str(netlist), container)
     sdc_c = _to_container_path(str(sdc), container)
     rpt_out.parent.mkdir(parents=True, exist_ok=True)
@@ -70389,7 +70506,7 @@ def _emit_corner_spef_sta(project: Path, top: str, pdk: PdkConfig,
     def _stanza(corner: str, kind: str, flag: str) -> str:
         spef_c = _to_container_path(str(corner_spefs[corner]), container)
         return (
-            f"read_liberty {lib_c}\n"
+            f"{_read_liberty_tcl(lib_c)}\n"
             f"{macro_libs_tcl}\n"
             f"read_verilog {netlist_c}\n"
             f"link_design {sta_top}\n"
@@ -70515,21 +70632,146 @@ def _resolve_signoff_corner_libs(project: Path, pdk: PdkConfig,
     container's built-in corner libs (the same discovery the pvt_matrix step uses).
     chip/PDK-AGNOSTIC — label heuristics + canonical-name preference, no literal."""
     lib_dir = project / "input" / "pdk" / "liberty"
-    if lib_dir.is_dir() and any(lib_dir.glob("*.lib")):
-        by_label: Dict[str, str] = {}
-        for lib in sorted(lib_dir.glob("*.lib")):
-            lbl = _classify_corner_from_name(lib.name)
-            if lbl in ("SS", "TT", "FF") and lbl not in by_label:
-                by_label[lbl] = _to_container_path(str(lib), container)
-        return by_label
-    out: Dict[str, str] = {}
-    pdk_lib = Path(getattr(pdk, "liberty", "") or "")
-    pdk_lib_dir = pdk_lib.parent
-    if container and str(pdk_lib_dir):
-        clibs = _discover_container_corner_libs(container, str(pdk_lib_dir))
-        for c in _select_signoff_corners(clibs, container, str(pdk_lib_dir)):
-            out[c["label"]] = c["liberty"]
-    return out
+    primary = _liberty_paths(getattr(pdk, "liberty", ""))
+    staged = sorted(lib_dir.glob("*.lib")) if lib_dir.is_dir() else []
+    if staged:
+        libs = [(lib.stem, _to_container_path(str(lib), container)) for lib in staged]
+        if len(primary) < 2:
+            by_label: Dict[str, str] = {}
+            for name, path in libs:
+                label = _classify_corner_from_name(name)
+                if label in ("SS", "TT", "FF") and label not in by_label:
+                    by_label[label] = path
+            return by_label
+        return _complete_split_corner_models(libs, primary, container, project, staged=True)
+    if not primary:
+        return {}
+    if len(primary) == 1:
+        directory = str(Path(primary[0]).parent)
+        return {c["label"]: c["liberty"] for c in _select_signoff_corners(
+            _discover_container_corner_libs(container, directory), container, directory)}
+    libs = []
+    for directory in sorted({str(Path(path).parent) for path in primary}):
+        libs.extend(_discover_container_corner_libs(container, directory))
+    return _complete_split_corner_models(libs, primary, container, project)
+
+
+def _complete_split_corner_models(libs: List[Tuple[str, str]], primary: List[str],
+                                   container: str, project: Path,
+                                   *, staged: bool = False) -> Dict[str, str]:
+    """Resolve each original cell group before adapting a corner to one model.
+
+    Filename corner tokens (including temperature/voltage suffixes) are the
+    existing discovery vocabulary. Keep the remaining group identity; never
+    merge alternative operating conditions or accept a partial cell roster.
+    Unknown or colliding group identities refuse instead of guessing.
+    """
+    from decimal import Decimal
+    import _pad_ring as _PR
+
+    corner_token = re.compile(
+        r"(?i)(?<![a-z0-9])(?:ss|tt|ff|wci|bci|worst|slow|best|fast|"
+        r"typical|typ|nominal)(?![a-z0-9])"
+        r"(?:[_-](?:n?\d+c|\d+v\d+))*")
+
+    def group(name):
+        key, count = corner_token.subn("{corner}", name)
+        return key if count == 1 else None
+
+    def condition(name):
+        token = corner_token.search(name).group(0).lower()
+        temperature = re.search(r"[_-](n?\d+)c(?:$|[_-])", token)
+        voltage = re.search(r"[_-](\d+)v(\d+)(?:$|[_-])", token)
+        return (_classify_corner_from_name(name),
+                Decimal(temperature[1].replace("n", "-")) if temperature else None,
+                Decimal(voltage[1] + "." + voltage[2]) if voltage else None)
+
+    def model_condition(name, path):
+        text = _read_pdk_text(path, container)
+        if text is None:
+            raise ValueError(f"PDK_CORNER_CONDITION_UNRESOLVED: {path}")
+        clean = re.sub(r"/\*.*?\*/|//[^\n]*", " ", text, flags=re.S)
+        cell = re.search(r"\bcell\s*\(", clean)
+        header = clean[:cell.start()] if cell else clean
+        metadata = _PR.parse_liberty_model_metadata(header)
+        selected = metadata["selected_condition"]["name"]
+        if metadata["operating_conditions"] and selected is None:
+            raise ValueError(f"PDK_CORNER_CONDITION_UNRESOLVED: {path}: operating_conditions")
+        body = ""
+        if selected is not None:
+            hit = next(hit for hit in _PR._LIB_MODEL_OC_RE.finditer(header)
+                       if hit.group(1).strip() == selected)
+            body = _PR._liberty_group_body(header, hit.start())
+
+        def number(source, attribute):
+            values = re.findall(r"\b" + attribute + r"\s*:\s*("
+                                + _PR._LIB_MODEL_NUM_RE + r")\s*;", source, re.I)
+            if len(values) > 1:
+                raise ValueError(f"PDK_CORNER_CONDITION_AMBIGUOUS: {path}: {attribute}")
+            return Decimal(values[0]) if values else None
+
+        values = []
+        for attribute in ("process", "temperature", "voltage"):
+            value = number(body, attribute)
+            values.append(value if value is not None else number(header, "nom_" + attribute))
+        label, temperature, voltage = condition(name)
+        for declared, actual in ((temperature, values[1]), (voltage, values[2])):
+            if declared is not None and actual is not None and declared != actual:
+                raise ValueError(f"PDK_CORNER_CONDITION_MISMATCH: {path}: filename/content")
+        return (label, values[0], values[1] if values[1] is not None else temperature,
+                values[2] if values[2] is not None else voltage)
+
+    sources = {}
+    for path in primary:
+        key = group(Path(path).stem)
+        if key is None:
+            raise ValueError(f"PDK_CORNER_GROUP_UNRESOLVED: {path}")
+        if key in sources:
+            raise ValueError(f"PDK_CORNER_GROUP_AMBIGUOUS: {sources[key]}, {path}")
+        sources[key] = path
+    inventories = {}
+    for key in sources:
+        candidates = [(name, path) for name, path in libs if group(name) == key]
+        if staged:
+            for label in ("SS", "TT", "FF"):
+                matches = [path for name, path in candidates
+                           if _classify_corner_from_name(name) == label]
+                if len(matches) > 1:
+                    raise ValueError(f"PDK_CORNER_GROUP_AMBIGUOUS: {label}: {matches}")
+        inventories[key] = candidates
+    # Elect once from the intersection, never fall back independently by group.
+    first = next(iter(sources))
+    planned = {}
+    for label in ("SS", "TT", "FF"):
+        rosters = {key: [(name, path) for name, path in candidates
+                         if _classify_corner_from_name(name) == label]
+                   for key, candidates in inventories.items()}
+        if not any(rosters.values()):
+            continue
+        missing = [key for key, candidates in rosters.items() if not candidates]
+        if missing:
+            raise ValueError(f"PDK_CORNER_GROUP_INCOMPLETE: {label}: {missing}")
+        common = set.intersection(*(set(condition(name) for name, _ in candidates)
+                                    for candidates in rosters.values()))
+        if not common:
+            raise ValueError(f"PDK_CORNER_CONDITION_UNRESOLVED: {label}: no joint condition")
+        choices = [(name, path) for name, path in rosters[first] if condition(name) in common]
+        selected = _select_signoff_corners(choices, container,
+                                           str(Path(sources[first]).parent))[0]
+        chosen = condition(selected["name"])
+        paths, identities = [], set()
+        for key, candidates in rosters.items():
+            matches = [(name, path) for name, path in candidates if condition(name) == chosen]
+            if len(matches) != 1:
+                raise ValueError(f"PDK_CORNER_GROUP_AMBIGUOUS: {label}: {key}: {matches}")
+            name, path = matches[0]
+            identities.add(model_condition(name, path))
+            paths.append(path)
+        if len(identities) != 1:
+            raise ValueError(f"PDK_CORNER_CONDITION_MISMATCH: {label}: {paths}")
+        planned[label] = paths
+    return {label: _liberty_model_path(paths, container, project, corner=label)
+            for label, paths in planned.items()}
 
 
 def _process_lib_resolution(corner_libs: Dict[str, str],
@@ -70683,7 +70925,7 @@ def _emit_mcorner_ocv_sta(project: Path, top: str, pdk: PdkConfig,
         else:
             basis_stamp = "POST_ROUTE_NO_SPEF"
         return (
-            f"read_liberty {lib_c}\n"
+            f"{_read_liberty_tcl(lib_c)}\n"
             f"{macro_libs_tcl}\n"
             f"read_verilog {netlist_c}\n"
             f"link_design {sta_top}\n"
@@ -70987,7 +71229,7 @@ def _synthesize_physical_cell_stubs(pdk: PdkConfig, top: str, gate_v: Path,
     # mux2 — every cell in the design). A stub carries no function, so had those
     # stubs won the module race the equivalence proof would have compared
     # function-less boxes and "proven" anything. Read it the container-aware way.
-    liberty_text = _read_pdk_text(str(pdk.liberty) if pdk.liberty else None,
+    liberty_text = _read_pdk_text(_liberty_model_path(pdk.liberty, container) if pdk.liberty else None,
                                   container)
     if liberty_text is None:
         # Cannot tell which cells the Liberty models -> cannot tell which ones
@@ -71728,11 +71970,11 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
                 "post-layout LEC: restored "
                 f"{gate_power_normalization['connections']} IO control-to-rail "
                 "connections from matching producer + final DEF evidence.")
-    lib_c = _to_container_path(str(pdk.liberty), container)
+    lib_c = _to_container_path(_liberty_model_path(pdk.liberty, container, project), container)
     extra_liberties_host = [
         str(value) for value in _sta_extra_liberties(
-            project, pdk, pdk.liberty, container)
-        if str(value) != str(pdk.liberty)]
+            project, pdk, _liberty_model_path(pdk.liberty, container, project), container)
+        if str(value) != _liberty_model_path(pdk.liberty, container, project)]
     extra_liberties_c: List[str] = []
     for value in extra_liberties_host:
         translated = _to_container_path(value, container)
@@ -71920,7 +72162,7 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
     # Using the undefined name raised NameError which was caught by the
     # caller's broad `except Exception` and silently buried in the JSON
     # detail field — so LEC never ran and the violation was never surfaced.
-    _liberty_host_str = str(pdk.liberty) if getattr(pdk, "liberty", None) else ""
+    _liberty_host_str = _liberty_model_path(pdk.liberty, container, project) if getattr(pdk, "liberty", None) else ""
     try:
         _lib_hosts = ([Path(_liberty_host_str)] if _liberty_host_str else [])
         _lib_hosts.extend(Path(value) for value in extra_liberties_host)
@@ -71991,7 +72233,7 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
             try:
                 _s_names = mod.parse_unproven_points(_s_log)
                 _s_libtext = _v1_6_604_read_text_or_container_cat(
-                    str(pdk.liberty), container) or ""
+                    _liberty_model_path(pdk.liberty, container, project), container) or ""
                 _s_cls = mod.classify_pin_permutation_points(
                     _s_names,
                     gold.read_text(errors="replace") if gold.is_file() else "",
@@ -72056,7 +72298,7 @@ def _emit_lec_post_layout(project: Path, top: str, pdk: PdkConfig,
         try:
             _names = mod.parse_unproven_points(log_text)
             _lib_text = _v1_6_604_read_text_or_container_cat(
-                str(pdk.liberty), container) or ""
+                _liberty_model_path(pdk.liberty, container, project), container) or ""
             _cls = mod.classify_pin_permutation_points(
                 _names,
                 gold.read_text(errors="replace") if gold.is_file() else "",
@@ -72410,7 +72652,7 @@ def _step30_tool_arm(project: Path, pdk: PdkConfig, written: List[str],
     import spice_correlation_check as _scc
     try:
         produced = _scc.run_installed_pdk_path_correlation(
-            project, liberty_path=str(pdk.liberty), container=container, paths=paths)
+            project, liberty_path=_liberty_model_path(pdk.liberty, container, project), container=container, paths=paths)
     except Exception as exc:
         produced = _scc._persist_declared_refusal(project, {
             "status": "ERROR", "measurement": "NOT_MEASURED", "reason": str(exc)})
@@ -72485,7 +72727,7 @@ def _emit_sdf(project: Path, top: str, pdk: PdkConfig, container: str,
     netlist_c = _to_container_path(str(netlist), container)
     def_c = _to_container_path(str(def_file), container)
     sdc_c = _to_container_path(str(sdc_path), container)
-    lib_c = _to_container_path(str(pdk.liberty), container)
+    lib_c = _to_container_path(pdk.liberty, container)
     tech_lef_c = _to_container_path(str(pdk.tech_lef), container)
     cell_lef_c = _to_container_path(str(pdk.cell_lef), container)
     sdf_c = _to_container_path(str(sdf_out), container)
@@ -72512,7 +72754,7 @@ def _emit_sdf(project: Path, top: str, pdk: PdkConfig, container: str,
 read_lef {tech_lef_c}
 read_lef {cell_lef_c}
 {macro_lefs_tcl}
-read_liberty {lib_c}
+{_read_liberty_tcl(lib_c)}
 {macro_libs_tcl}
 read_def {def_c}
 read_sdc {sdc_c}
@@ -72564,7 +72806,7 @@ exit
             f"Inputs:\n"
             f"  def:     {def_file.relative_to(project)}\n"
             f"  netlist: {netlist.relative_to(project)}\n"
-            f"  liberty: {Path(pdk.liberty).name}\n")
+            f"  liberty: {Path(_liberty_model_path(pdk.liberty, container, project)).name}\n")
         notes.append(f"SDF emit failed (rc={rc}); no stub written (#441)")
         return False
     return True
@@ -72682,14 +72924,14 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
     tcl_path = power_rpt.parent / f"power_{top}.tcl"
     netlist_c = _run_root_tcl_path(netlist, project, container, tcl_path)
     sdc_c = _run_root_tcl_path(sdc_path, project, container, tcl_path)
-    lib_c = _to_container_path(str(pdk.liberty), container)
+    lib_c = _to_container_path(pdk.liberty, container)
     rpt_c = _to_container_path(str(power_rpt), container)
     spef_c = (_run_root_tcl_path(spef_path, project, container, tcl_path)
               if spef_path else None)
     spef_disc = spef_path.name if spef_path else "none (netlist-only)"
     macro_libs_tcl = "\n".join(
         f"read_liberty {_to_container_path(str(f), container)}"
-        for f in _sta_extra_liberties(project, pdk, pdk.liberty, container)
+        for f in _sta_extra_liberties(project, pdk, _liberty_model_path(pdk.liberty, container, project), container)
     )
     link_top = _sta_link_top(project, top, netlist,
                              netlist == routed_netlist)
@@ -72720,7 +72962,7 @@ def _emit_power_report(project: Path, top: str, pdk: PdkConfig,
     if netlist == routed_netlist:
         spef_tcl += "set_propagated_clock [all_clocks]\n"
     tcl_path.write_text(f"""{_emitted_script_root_tcl(tcl_path, project)}
-read_liberty {lib_c}
+{_read_liberty_tcl(lib_c)}
 {macro_libs_tcl}
 read_verilog {netlist_c}
 link_design {link_top}
@@ -72809,7 +73051,7 @@ exit
             f"#   netlist: {netlist.relative_to(project)}\n"
             f"#   spef:    {spef_path.relative_to(project) if spef_path else 'none (netlist-only)'}\n"
             f"#   sdc:     {sdc_path.relative_to(project)}\n"
-            f"#   liberty: {Path(pdk.liberty).name}\n"
+            f"#   liberty: {Path(_liberty_model_path(pdk.liberty, container, project)).name}\n"
             f"#   basis:   {basis_stamp}\n"
             f"#   die_um:  see phase3/stage3/pnr/area.rpt\n"
             f"#\n"
@@ -72864,7 +73106,7 @@ exit
             f"POWER_BASIS: {basis_stamp}\n"
             f"netlist: {netlist.relative_to(project)}\n"
             f"spef:    {spef_path.relative_to(project) if spef_path else 'none (netlist-only)'}\n"
-            f"liberty: {Path(pdk.liberty).name}\n"
+            f"liberty: {Path(_liberty_model_path(pdk.liberty, container, project)).name}\n"
             f"sdc:     {sdc_path.relative_to(project)}\n"
             f"\n"
             f"# Tool stderr / stdout snippet (last 1024 bytes):\n"
@@ -73282,9 +73524,9 @@ def _step24_basis_inputs(project: Path, def_file: Path, pdk: PdkConfig,
         spef_reason = "no step-22 SPEF"
     elif def_file.is_file() and spef.stat().st_mtime < def_file.stat().st_mtime:
         spef_reason = "the step-22 SPEF is older than the routed DEF"
-    liberty = str(pdk.liberty) if getattr(pdk, "liberty", None) else None
+    liberty = _liberty_model_path(pdk.liberty, container, project) if getattr(pdk, "liberty", None) else None
     try:
-        extra = (_sta_extra_liberties(project, pdk, pdk.liberty, container)
+        extra = (_sta_extra_liberties(project, pdk, _liberty_model_path(pdk.liberty, container, project), container)
                  if liberty else [])
     except AttributeError:  # a duck-typed PDK stub with no library lists
         extra = []
@@ -73462,7 +73704,7 @@ def _emit_ir_em_reports(project: Path, top: str, pdk: PdkConfig,
                 else Path(pdk.tech_lef))
     tech_lef_c = _to_container_path(str(tech_lef), container)
     cell_lef_c = _to_container_path(str(pdk.cell_lef), container)
-    liberty_c = _to_container_path(str(pdk.liberty), container)
+    liberty_c = _to_container_path(pdk.liberty, container)
     macro_lefs_tcl = "\n".join(
         f"read_lef {_to_container_path(str(f), container)}"
         for f in pdk.macro_lefs)
@@ -73672,7 +73914,7 @@ def _emit_ir_em_reports(project: Path, top: str, pdk: PdkConfig,
 read_lef {tech_lef_c}
 read_lef {cell_lef_c}
 {macro_lefs_tcl}
-read_liberty {liberty_c}
+{_read_liberty_tcl(liberty_c)}
 {_oc_tcl}{_read_layout_tcl}
 {_pb_tcl}{geometry_tcl}
 if {{[catch {{set_wire_rc -signal -layer {mp}1}} _e1]}} {{
@@ -74883,6 +75125,7 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                 _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
                     "tool": "openroad",
                     "mode": "antenna_check_in_session_post_repair",
+                    "report": _rel_to_project(antenna_rpt, project),
                     "net_violations": net_viol if have_counts else None,
                     "pin_violations": pin_viol if have_counts else None,
                     "clean": clean,
@@ -74936,7 +75179,7 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
     def_c = _to_container_path(str(def_file), container)
     tech_lef_c = _to_container_path(str(pdk.tech_lef), container)
     cell_lef_c = _to_container_path(str(pdk.cell_lef), container)
-    liberty_c = _to_container_path(str(pdk.liberty), container)
+    liberty_c = _to_container_path(pdk.liberty, container)
     macro_lefs_tcl = "\n".join(
         f"read_lef {_to_container_path(str(f), container)}"
         for f in pdk.macro_lefs)
@@ -74949,7 +75192,7 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
 read_lef {tech_lef_c}
 read_lef {cell_lef_c}
 {macro_lefs_tcl}
-read_liberty {liberty_c}
+{_read_liberty_tcl(liberty_c)}
 read_def {def_c}
 catch {{set_wire_rc -signal -layer {mp}1}}
 catch {{set_wire_rc -clock -layer {mp}5}}
@@ -74995,9 +75238,7 @@ exit
         "#\n"
         f"antenna check: {net_viol} net violations, {pin_viol} pin violations\n"
         f"antenna clean: {'YES' if total == 0 else 'NO'}\n"
-        "\n# === check_antennas stdout (provenance) ===\n"
-        + ("\n".join(ant_lines) or "(no ANT lines captured)") + "\n"
-        "\n# === full antenna log (last 2 KB) ===\n" + log[-2000:] + "\n"
+        "# The full tool log is retained at tool_log above.\n"
         "# end of antenna.rpt\n")
     antenna_rpt.write_text(body)
     _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
@@ -75007,6 +75248,7 @@ exit
         "pin_violations": pin_viol,
         "clean": total == 0,
         "source": str(antenna_rpt.relative_to(project)),
+        "report": str(antenna_rpt.relative_to(project)),
         "measured_subject": _subject,
         "verdict": "PASS" if total == 0 else "FAIL",
     }, indent=2) + "\n")
@@ -75431,7 +75673,7 @@ def _emit_metal_fill(project: Path, top: str, pdk: PdkConfig,
     def_c = _to_container_path(str(def_file), container)
     tech_lef_c = _to_container_path(str(pdk.tech_lef), container)
     cell_lef_c = _to_container_path(str(pdk.cell_lef), container)
-    liberty_c = _to_container_path(str(pdk.liberty), container)
+    liberty_c = _to_container_path(pdk.liberty, container)
     filled_c = _to_container_path(str(filled_def), container)
     macro_lefs_tcl = "\n".join(
         f"read_lef {_to_container_path(str(f), container)}"
@@ -75463,7 +75705,7 @@ def _emit_metal_fill(project: Path, top: str, pdk: PdkConfig,
 read_lef {tech_lef_c}
 read_lef {cell_lef_c}
 {macro_lefs_tcl}
-read_liberty {liberty_c}
+{_read_liberty_tcl(liberty_c)}
 read_def {def_c}
 {pg_rules_tcl}
 puts "=== DESIGN AREA (pre-fill) ==="
@@ -76611,8 +76853,8 @@ def _emit_aging_sta_report(project: Path, top: str, pdk: PdkConfig,
             lib_c, lib_label = _corner_libs[_lbl], _lbl
             break
     if lib_c is None:
-        lib_c, lib_label = _to_container_path(str(pdk.liberty), container), "PDK_DEFAULT"
-    lib_disc = f"{Path(lib_c).name} ({lib_label})"
+        lib_c, lib_label = _to_container_path(pdk.liberty, container), "PDK_DEFAULT"
+    lib_disc = ', '.join(Path(path).name for path in _liberty_paths(lib_c)) + f" ({lib_label})"
     if lib_label != "SS":
         lib_disc += (" — NO slow-process liberty was resolvable, so this aging "
                      "margin is graded on a FASTER corner than setup sign-off "
@@ -76627,7 +76869,7 @@ def _emit_aging_sta_report(project: Path, top: str, pdk: PdkConfig,
     # beyond fresh OCV — the generic lifetime Vt-drift margin. Applied as an
     # OpenSTA set_timing_derate; the resulting slack is a REAL STA result.
     tcl_path.write_text(f"""
-read_liberty {lib_c}
+{_read_liberty_tcl(lib_c)}
 {macro_libs_tcl}
 read_verilog {netlist_c}
 link_design {top}
@@ -76765,7 +77007,7 @@ def _emit_erc_report(project: Path, top: str, pdk: PdkConfig,
                        for role, path in (("def", _pl.pnr_dir(project) / f"{top}.def"),
                                           ("pdk_tech_lef", pdk.tech_lef),
                                           ("pdk_cell_lef", pdk.cell_lef),
-                                          ("pdk_liberty", pdk.liberty))}
+                                          ("pdk_liberty", _liberty_model_path(pdk.liberty, container, project)))}
     except (OSError, ValueError) as exc:
         notes.append(f"ERC NOT_MEASURED: {exc}")
         return False
@@ -76776,7 +77018,7 @@ def _emit_erc_report(project: Path, top: str, pdk: PdkConfig,
     def_c = _to_container_path(str(def_file), container)
     tech_lef_c = _to_container_path(str(pdk.tech_lef), container)
     cell_lef_c = _to_container_path(str(pdk.cell_lef), container)
-    liberty_c = _to_container_path(str(pdk.liberty), container)
+    liberty_c = _to_container_path(pdk.liberty, container)
     macro_lefs_tcl = "\n".join(
         f"read_lef {_to_container_path(str(f), container)}"
         for f in pdk.macro_lefs)
@@ -76788,7 +77030,7 @@ def _emit_erc_report(project: Path, top: str, pdk: PdkConfig,
 read_lef {tech_lef_c}
 read_lef {cell_lef_c}
 {macro_lefs_tcl}
-read_liberty {liberty_c}
+{_read_liberty_tcl(liberty_c)}
 read_def {def_c}
 puts "=== ERC: floating nets ==="
 # v0.3.16 — ORGANIC #514: -verbose lists the floating net/pin NAMES so the
@@ -78251,7 +78493,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 ("primary + secondary clamp sizing meets the target HBM/CDM "
                  "level per the PDK ESD cell datasheet (TLP/It2)"),
             ],
-            "record_to": "categories[].checklist[].confirmed (this report)",
+            "record_to": "input/perc_manual_review.json (reviews: category, item, verdict, basis [{path, sha256}], reviewer)",
         }
     categories.append(esd_cat)
     categories.append(_perc.io_supply_pad_sufficiency(
@@ -78461,7 +78703,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 ("guard-ring efficacy under the foundry's injected "
                  "substrate-current test condition"),
             ],
-            "record_to": "categories[].checklist[].confirmed (this report)",
+            "record_to": "input/perc_manual_review.json (reviews: category, item, verdict, basis [{path, sha256}], reviewer)",
         },
     })
 
@@ -78501,7 +78743,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 ("isolation clamp value matches the L21 sleep-state "
                  "contract on every power-gating boundary"),
             ],
-            "record_to": "categories[].checklist[].confirmed (this report)",
+            "record_to": "input/perc_manual_review.json (reviews: category, item, verdict, basis [{path, sha256}], reviewer)",
         }
     categories.append(xdomain_cat)
 
@@ -81524,7 +81766,7 @@ def main() -> int:
         # provenance. Sniff-check and re-run synth on mismatch.
         _nl_pdk_ok = (netlist_existing.is_file()
                       and _netlist_matches_liberty(
-                          netlist_existing, str(pdk.liberty)))
+                          netlist_existing, _liberty_model_path(pdk.liberty, args.container, project)))
         if netlist_existing.is_file() and not _nl_pdk_ok:
             print("[synth] cached netlist references cell masters NOT in "
                   "the active PDK liberty — it was mapped to a DIFFERENT "

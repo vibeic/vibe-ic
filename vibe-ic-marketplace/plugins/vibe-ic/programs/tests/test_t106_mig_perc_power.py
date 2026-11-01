@@ -386,7 +386,7 @@ def _gls_project(tmp_path):
     put(project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json',
         {'clock_domains': [{'role': 'primary', 'period_ns': 24, 'source_pin': 'clk'}]})
     put(project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {})
-    put(project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {})
+    put(project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {'pdk_target': 'x'}})
     put(project / 'input/submission_template/tapeout_declaration.json',
         {'answers': {'top_cell': 'chip_top'}})
     _stapostpnr(project)
@@ -1180,7 +1180,7 @@ def _declared_observation_gls_project(tmp_path, mode):
     put(l9, doc)
     put(project / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json',
         {'clock_domains': [{'role': 'primary', 'period_ns': 24, 'source_pin': 'i_clk'}]})
-    put(project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {})
+    put(project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {'pdk_target': 'x'}})
     put(project / 'input/submission_template/tapeout_declaration.json',
         {'answers': {'top_cell': 'public_surface'}})
     put(project / 'input/step_0_5ic_answers.json', {})

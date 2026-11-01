@@ -100,6 +100,8 @@ def _project(tmp_path, *, drc=_CLEAN_DRC, power=False):
     d.mkdir(parents=True, exist_ok=True)
     if drc is not None:
         (d / "drc_signoff.rpt").write_text(drc)
+        from test_drc_report_declared_identity import _declare
+        _declare(tmp_path / "proj", d / "drc_signoff.rpt")
     if power:
         (d / "power_analysis.rpt").write_text(_POWER_RPT)
     return tmp_path / "proj"
@@ -457,6 +459,7 @@ def _plant_signoff_evidence(proj: Path):
     report = proj / "reports" / "phase3" / "drc_signoff.rpt"
     if report.is_file():
         import _physical_current as current
+        import phase3_one_shot_runner as runner
 
         # Current-subject parser fixture, not a native EDA measurement. Keep
         # the real strict reader and wrapper: provide their material readset
@@ -502,6 +505,9 @@ def _plant_signoff_evidence(proj: Path):
                               (report, transcript, native_report, native_log)}}
         with (proj / "provenance.jsonl").open("a") as fh:
             fh.write(json.dumps(record) + "\n")
+        assert runner._declare_immutable_transform(
+            proj, native_report, report, "drc:signoff", "phase3_one_shot_runner",
+            "publish the unchanged native DRC report as canonical signoff")
         inputs = {"gds": current.entry(proj, gds_file),
                   **{role: current.entry(proj, path)
                      for role, (path, _body) in materials.items()}}
@@ -546,7 +552,11 @@ def _plant_in_scope(proj: Path, cmd: str, body: str = None):
             target.write_text(body)
         else:
             target.mkdir(parents=True, exist_ok=True)
-            (target / "routed.drc.rpt").write_text(body)
+            target = target / "routed.drc.rpt"
+            target.write_text(body)
+        if not signoff:
+            from test_drc_report_declared_identity import _declare
+            _declare(proj, target)
     if signoff:
         _plant_signoff_evidence(proj)
     return _under_scopes(cmd)

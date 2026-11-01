@@ -790,7 +790,7 @@ def _docker_exec_raw(container: str, cmd: str, timeout: int = 15
     never for the tool run itself. `_docker_watchdog.run_docker_supervised`
     is the caller; this is its injected `docker_exec_raw`."""
     try:
-        cp = subprocess.run(_ce.docker_exec_argv(container, "bash", "-lc", cmd),
+        cp = subprocess.run(_ce.exec_argv(container, cmd, tag="si_mcf_sta"),
                             capture_output=True, text=True, timeout=timeout)
         return cp.returncode, cp.stdout or "", cp.stderr or ""
     except subprocess.TimeoutExpired:
@@ -836,6 +836,7 @@ def _docker_exec(container: str, cmd: str, timeout: int = 1800,
     poll_s = max(0.25, min(_dw.DEFAULT_POLL_S, grace / 4.0))
     rc, out, err = _dw.run_docker_supervised(
         container, cmd, marker, docker_exec_raw=_docker_exec_raw,
+        exec_argv=lambda c, wrapped: _ce.exec_argv(c, wrapped, tag="si_mcf_sta"),
         stall_grace_s=grace, poll_s=poll_s)
     return rc, out, err
 
@@ -867,7 +868,9 @@ def _run_sta_slack(container: str, work: Path, tag: str, liberty_c: str,
     rc, _out, _err = _docker_exec(container, cmd, timeout=timeout,
                                   marker=tcl.name)
     body = rpt.read_text(errors="replace") if rpt.exists() else ""
-    setup, hold = worst_setup_hold(body)
+    # A failed launcher can leave the preceding invocation's report intact.
+    # Preserve its text for diagnosis, but it supplies no current measurements.
+    setup, hold = worst_setup_hold(body) if rc == 0 else (None, None)
     return setup, hold, body, rc
 
 
@@ -940,7 +943,7 @@ def _run_windows(container: str, work: Path, liberty_c: str, netlist_c: str,
     cmd = f"{_STA_PATH} sta -no_init -exit {tcl_c} > {tcl_c}.log 2>&1"
     rc, _o, _e = _docker_exec(container, cmd, timeout=timeout,
                               marker=tcl_path.name)
-    if out_json_host.exists():
+    if rc == 0 and out_json_host.exists():
         try:
             return json.loads(out_json_host.read_text()), rc
         except (OSError, ValueError):
@@ -1238,9 +1241,8 @@ def run(project: PathLike, *, container: str = _pin.default_container_name(),
     _sta_failed = (nom_rc != 0
                    or corners_out["setup"].get("sta_rc") not in (0, None)
                    or corners_out["hold"].get("sta_rc") not in (0, None))
-    verdict = "PASS" if (_pos(setup_after) and _pos(hold_after)) else (
+    verdict = "ERROR" if _sta_failed else "PASS" if (_pos(setup_after) and _pos(hold_after)) else (
         "FAIL" if (setup_after is not None and hold_after is not None)
-        else "ERROR" if _sta_failed
         else "ADVISORY")
 
     report = {

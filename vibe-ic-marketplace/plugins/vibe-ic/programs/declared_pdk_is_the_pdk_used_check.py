@@ -450,6 +450,64 @@ def declared_target(run: Path) -> Tuple[Optional[str], Optional[str]]:
     return None, None
 
 
+class PDKDeclarationError(ValueError):
+    def __init__(self, code: str, detail: str):
+        self.code, self.detail = code, detail
+        super().__init__(f"{code}: {detail}")
+
+
+def declared_distribution(project: Path) -> Tuple[str, List[Tuple[Path, str]]]:
+    """One executable target from case declarations; BLOCKING if unresolved.
+
+    Unlike the historical post-run audit reader, this input boundary never
+    consumes a CLI selection, staging adoption, switch, resolved config or
+    installed default. L1/L19 and the case manifest must agree when populated.
+    """
+    import pdk_family_identity as identity
+
+    documents = []
+    for layer, keys in (("L1", ("target_pdk",)), ("L19", _L19_KEYS)):
+        path, doc = load_l_doc(project, layer)
+        if path is not None:
+            documents.append((path, doc, keys, True))
+    manifest = project / "input/flow109-manifest.json"
+    if manifest.exists():
+        try:
+            doc = json.loads(manifest.read_text())
+        except (OSError, ValueError) as exc:
+            raise PDKDeclarationError("PDK_DECLARATION_INVALID", str(exc)) from exc
+        documents.append((manifest, doc, ("target_pdk", "pdk_target", "pdk"), False))
+    targets: Set[str] = set()
+    sources: List[Tuple[Path, str]] = []
+    for path, doc, keys, layered in documents:
+        if not isinstance(doc, dict):
+            raise PDKDeclarationError("PDK_DECLARATION_INVALID", str(path))
+        scopes = [("", doc)]
+        if layered and "fields" in doc:
+            if not isinstance(doc["fields"], dict):
+                raise PDKDeclarationError("PDK_DECLARATION_INVALID", str(path))
+            scopes.append(("fields.", doc["fields"]))
+        for prefix, scope in scopes:
+            for key in keys:
+                value = scope.get(key)
+                if value is None or value == "":
+                    continue
+                if isinstance(value, str) and value.strip().lower() in {
+                        "", "auto", "not_determined", "not determined", "tbd", "n/a"}:
+                    continue
+                if not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]*", value.strip()):
+                    raise PDKDeclarationError("PDK_DECLARATION_INVALID", f"{path}:{prefix}{key}")
+                value = value.strip()
+                canonical, _ = identity.canonical_entry(value, exact_distribution=True)
+                targets.add(canonical or value)
+                sources.append((path, prefix + key))
+    if not targets:
+        raise PDKDeclarationError("PDK_UNDECLARED", "declare target PDK in L1, L19 or input/flow109-manifest.json")
+    if len(targets) != 1:
+        raise PDKDeclarationError("PDK_DECLARATION_CONFLICT", "case target PDK declarations disagree")
+    return next(iter(targets)), sources
+
+
 #: The list Phase 1 writes beside `pdk_target` holding the OTHER process names
 #: the design declares ON THE SAME target row. `declared_pdk_target_guard`
 #: already honours it (a design that names two targets may be built on either);

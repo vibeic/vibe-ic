@@ -18,7 +18,7 @@ DERIVATION (all from PDK-declared text)
   * GDS layer numbers  <- the streamout LEF->GDS layermap (`Metal1 <purpose> 34 0`),
     the SAME map the streamout uses, so the fill lands on the exact numbers the deck
     measures.
-  * min width / space  <- the tech LEF routing-layer WIDTH / (max) SPACING.
+  * min width / space  <- routing-layer WIDTH / max SPACING and SPACINGTABLE cell.
   * dummy datatype     <- the DRC deck's own layer table entry named like
     `<metal>_dummy` / `<metal>_fill` on the SAME drawn number. Foundry density =
     drawn UNION dummy datatype, while LVS `connect` uses drawn only, so fill on the
@@ -28,7 +28,8 @@ DERIVATION (all from PDK-declared text)
     else a documented default; the fill target = floor + margin.
 
 Public: build_metal_fill_config(layermap_text, techlef_text, deck_text, metal_prefix)
-        -> dict | None  (None when no routing metal is derivable).
+        -> dict | None (None when no ROUTING layers are declared).
+        Raises ValueError naming routing layers whose required inputs cannot be derived.
 """
 from __future__ import annotations
 
@@ -80,10 +81,11 @@ def _metal_order(name: str) -> int:
     return 9999  # MetalTop / top_metal sits above every numbered layer
 
 
-def parse_streamout_layermap(text: str, prefix: str) -> "OrderedDict[str, Tuple[int, int]]":
+def parse_streamout_layermap(text: str, prefix: Optional[str] = None
+                            ) -> "OrderedDict[str, Tuple[int, int]]":
     """metal base name (lower) -> (gds_number, drawn_datatype). Keeps the DRAWN line
     (datatype 0 / NET purpose), which is what the router streams and the deck measures."""
-    pat = _metal_re(prefix)
+    pat = _metal_re(prefix) if prefix else None
     out: "OrderedDict[str, Tuple[int, int]]" = OrderedDict()
     for raw in text.splitlines():
         line = raw.strip()
@@ -93,7 +95,7 @@ def parse_streamout_layermap(text: str, prefix: str) -> "OrderedDict[str, Tuple[
         if len(toks) < 3:
             continue
         name = toks[0]
-        if not pat.match(name):
+        if pat is not None and not pat.match(name):
             continue
         try:
             num, dt = int(toks[-2]), int(toks[-1])
@@ -108,67 +110,74 @@ def parse_streamout_layermap(text: str, prefix: str) -> "OrderedDict[str, Tuple[
     return out
 
 
+def _lef_tokens(text: str) -> List[str]:
+    return re.findall(r'"(?:\\.|[^"\\])*"|;|[^\s;]+', text)
+
+
 def _lef_layer_blocks(text: str) -> "OrderedDict[str, str]":
-    """Split a (tech) LEF into `LAYER <name> … END <name>` sections, line-by-line so a
-    layer that is not closed with its own name never swallows the rest of the file (a
-    single spanning `LAYER…END \\1` regex does exactly that)."""
+    """Keep the first LAYER definition, excluding semicolon-ended geometry references."""
     blocks: "OrderedDict[str, str]" = OrderedDict()
     cur: Optional[str] = None
     body: List[str] = []
-    for raw in text.splitlines():
-        s = raw.strip()
-        m = re.match(r"LAYER\s+(\S+)", s)
-        if m:
-            # keep the FIRST definition of a name: a routing LAYER is defined once up
-            # top, but its NAME recurs as a one-line geometry ref (`LAYER Metal1 ;`)
-            # inside every via/macro — those must not overwrite the real block.
+    tokens = _lef_tokens(strip_line_comments(text))
+    index = 0
+    while index < len(tokens):
+        word = tokens[index].upper()
+        if word == "LAYER" and index + 1 < len(tokens):
             if cur is not None:
-                blocks.setdefault(cur, "\n".join(body))
-            cur, body = m.group(1), []
-            continue
-        e = re.match(r"END\s+(\S+)", s)
-        if e and cur is not None and e.group(1) == cur:
-            blocks.setdefault(cur, "\n".join(body))
+                blocks.setdefault(cur, " ".join(body))
+            name = tokens[index + 1]
+            index += 2
             cur, body = None, []
+            if index < len(tokens) and tokens[index] == ";":
+                index += 1
+            else:
+                cur = name
+            continue
+        if (word == "END" and cur is not None and index + 1 < len(tokens)
+                and tokens[index + 1] == cur):
+            blocks.setdefault(cur, " ".join(body))
+            cur, body = None, []
+            index += 2
             continue
         if cur is not None:
-            body.append(s)
+            body.append(tokens[index])
+        index += 1
     if cur is not None:
-        blocks.setdefault(cur, "\n".join(body))
+        blocks.setdefault(cur, " ".join(body))
     return blocks
 
 
+def _lef_statements(body: str) -> List[Tuple[List[str], bool]]:
+    statements = []
+    tokens: List[str] = []
+    for token in _lef_tokens(body):
+        if token == ";":
+            if tokens:
+                statements.append((tokens, True))
+                tokens = []
+        else:
+            tokens.append(token)
+    if tokens:
+        statements.append((tokens, False))
+    return statements
+
+
+def _lef_routing_blocks(text: str) -> "OrderedDict[str, str]":
+    return OrderedDict(
+        (name, body) for name, body in _lef_layer_blocks(text).items()
+        if any(ended and [t.upper() for t in tokens] == ["TYPE", "ROUTING"]
+               for tokens, ended in _lef_statements(body)))
+
+
 def derive_metal_prefix(techlef_text: str) -> Optional[str]:
-    """The PDK's OWN routing-metal naming stem, read from its tech LEF.
+    """Derive the legacy metadata stem from the LEF's routing-layer names.
 
-    WHY THIS EXISTS (measured defect, chip-AGNOSTIC).
-    `_metal_re` matches `^<prefix>(\\d+|top)$`, so the prefix must equal the PDK's
-    stem EXACTLY (case-insensitively). There is no literal that works everywhere:
-
-        prefix "metal"  matches Metal1  (gf180mcuD)      -- and NOTHING else
-                        does NOT match met1   (sky130A)
-                        does NOT match MET1   (this campaign's process)
-
-    The caller's fallback default was the literal ``"metal"``, so on ANY PDK whose
-    routing layers are named ``met<n>`` / ``MET<n>`` the layermap and tech-LEF
-    parses both returned {}, ``layers`` came out EMPTY, and the caller treated an
-    empty config as "this PDK declares no fill config" and skipped metal fill
-    silently. The die then FAILs the foundry min-metal-density rule with no
-    diagnostic pointing at a name mismatch. That is a one-word default deciding a
-    sign-off outcome for two of the three PDKs the module's own docstring claims
-    to serve.
-
-    Deriving the stem removes the guess: take every ``TYPE ROUTING`` layer the
-    tech LEF declares, strip a trailing number or ``top``, and return the stem
-    that the most routing layers agree on. Nothing is assumed about spelling or
-    case, and a PDK that names its layers anything self-consistent works.
-    Returns None when the tech LEF declares no usable routing-layer name, so the
-    caller can DISCLOSE that rather than fill on a guess.
+    Strip a trailing number or ``top`` and return the stem most layers agree on.
+    Returns None when names have no such stem; TYPE ROUTING still selects them.
     """
     stems: Dict[str, int] = {}
-    for name, body in _lef_layer_blocks(techlef_text).items():
-        if not re.search(r"TYPE\s+ROUTING", body, re.I):
-            continue
+    for name in _lef_routing_blocks(techlef_text):
         m = re.match(r"^(.*?)(\d+|top)$", name, re.I)
         if not m or not m.group(1):
             continue
@@ -180,23 +189,88 @@ def derive_metal_prefix(techlef_text: str) -> Optional[str]:
     return sorted(stems.items(), key=lambda kv: (-kv[1], -len(kv[0]), kv[0]))[0][0]
 
 
-def parse_techlef_routing(text: str, prefix: str) -> Dict[str, Tuple[float, float]]:
-    """metal base name (lower) -> (min_width_um, max_space_um). max SPACING (incl. the
-    wide-metal RANGE rule) is used as keep-out so fill next to a wide PDN strap is safe."""
-    pat = _metal_re(prefix)
+def _lef_number(token: str, layer: str, field: str) -> float:
+    if not re.fullmatch(r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?", token):
+        raise ValueError(f"routing layer {layer}: invalid {field} value {token!r}")
+    value = float(token)
+    if not math.isfinite(value) or value < 0:
+        raise ValueError(f"routing layer {layer}: invalid {field} value {token!r}")
+    return value
+
+
+def _spacingtable_cells(tokens: List[str], layer: str) -> List[float]:
+    words = [t.upper() for t in tokens]
+    if len(words) < 2:
+        raise ValueError(f"routing layer {layer}: missing SPACINGTABLE kind")
+    if words[1] == "PARALLELRUNLENGTH":
+        rows = [i for i, word in enumerate(words) if word == "WIDTH"]
+        if not rows or rows[0] <= 2:
+            raise ValueError(f"routing layer {layer}: malformed SPACINGTABLE run lengths/rows")
+        columns = rows[0] - 2
+        for token in tokens[2:rows[0]]:
+            _lef_number(token, layer, "SPACINGTABLE")
+        cells = []
+        for start, end in zip(rows, rows[1:] + [len(tokens)]):
+            values = tokens[start + 1:end]
+            if len(values) != columns + 1:
+                raise ValueError(f"routing layer {layer}: malformed SPACINGTABLE WIDTH row")
+            numbers = [_lef_number(t, layer, "SPACINGTABLE") for t in values]
+            cells.extend(numbers[1:])
+        return cells
+    if words[1] == "INFLUENCE":
+        if len(tokens) <= 2 or (len(tokens) - 2) % 6:
+            raise ValueError(f"routing layer {layer}: malformed SPACINGTABLE INFLUENCE row")
+        cells = []
+        for start in range(2, len(tokens), 6):
+            if words[start:start + 6:2] != ["WIDTH", "WITHIN", "SPACING"]:
+                raise ValueError(f"routing layer {layer}: malformed SPACINGTABLE INFLUENCE row")
+            numbers = [_lef_number(t, layer, "SPACINGTABLE")
+                       for t in tokens[start + 1:start + 6:2]]
+            cells.append(numbers[2])
+        return cells
+    raise ValueError(f"routing layer {layer}: unsupported SPACINGTABLE {tokens[1]}")
+
+
+def parse_techlef_routing(text: str, prefix: Optional[str] = None
+                         ) -> Dict[str, Tuple[float, float]]:
+    """Routing name (lower) -> (min_width_um, max_space_um).
+
+    The conservative spacing is the maximum numeric SPACING or SPACINGTABLE cell.
+    Table axes do not supply spacing or standalone WIDTH. The legacy prefix argument
+    is accepted, but TYPE ROUTING determines inclusion regardless of naming stem.
+    """
     out: Dict[str, Tuple[float, float]] = {}
-    for name, body in _lef_layer_blocks(text).items():
-        if not pat.match(name):
-            continue
-        if not re.search(r"TYPE\s+ROUTING", body, re.I):
-            continue
-        # `\bWIDTH` does not match inside `MINWIDTH` (no word boundary), so this is the
-        # standalone routing WIDTH; SPACING picks up both Mn.2a and the wide-metal Mn.2b.
-        widths = [float(x) for x in re.findall(r"\bWIDTH\s+([\d.]+)", body, re.I)]
-        spaces = [float(x) for x in re.findall(r"\bSPACING\s+([\d.]+)", body, re.I)]
-        if not widths or not spaces:
+    missing = []
+    for name, body in _lef_routing_blocks(text).items():
+        widths, spaces = [], []
+        for tokens, ended in _lef_statements(body):
+            field = tokens[0].upper()
+            if field != "SPACINGTABLE" and any(
+                    t.upper() in ("SPACING", "SPACINGTABLE") for t in tokens[1:]):
+                raise ValueError(f"routing layer {name}: missing semicolon before SPACING/SPACINGTABLE")
+            if field not in ("WIDTH", "SPACING", "SPACINGTABLE"):
+                continue
+            if not ended:
+                raise ValueError(f"routing layer {name}: unterminated {field} statement")
+            if field == "SPACINGTABLE":
+                spaces.extend(_spacingtable_cells(tokens, name))
+            else:
+                if len(tokens) < 2 or (field == "WIDTH" and len(tokens) != 2):
+                    raise ValueError(f"routing layer {name}: malformed {field} statement")
+                value = _lef_number(tokens[1], name, field)
+                if field == "WIDTH":
+                    if value == 0:
+                        raise ValueError(f"routing layer {name}: WIDTH must be positive")
+                    widths.append(value)
+                else:
+                    spaces.append(value)
+        absent = ([] if widths else ["WIDTH"]) + ([] if spaces else ["SPACING/SPACINGTABLE"])
+        if absent:
+            missing.append(f"routing layer {name}: missing {' and '.join(absent)}")
             continue
         out[name.lower()] = (min(widths), max(spaces))
+    if missing:
+        raise ValueError("; ".join(missing))
     return out
 
 
@@ -324,7 +398,7 @@ _SEPARATION_RE = re.compile(
     r"([0-9]+(?:\.[0-9]+)?)\s*\.\s*um")
 
 
-def parse_metal_keepout_layers(deck_text: str, metal_prefix: str,
+def parse_metal_keepout_layers(deck_text: str, metal_prefix: Optional[str],
                                routing_layers: Optional[Dict[str, Tuple[int, int]]] = None
                                ) -> List[List[Any]]:
     """``[[gds_layer, datatype, margin_um], ...]`` — the regions THIS DECK says
@@ -364,17 +438,18 @@ def parse_metal_keepout_layers(deck_text: str, metal_prefix: str,
         by_name.setdefault(name, (num, dt))
     pref = (metal_prefix or "").lower()
     routing_ids = {v for v in (routing_layers or {}).values()}
+    for base, (num, _dt) in (routing_layers or {}).items():
+        dummy_dt = dummy_datatype_for(base, num, table)
+        if dummy_dt is not None:
+            routing_ids.add((num, dummy_dt))
     routing_nums = {num for num, _dt in routing_ids}
 
     best: "OrderedDict[Tuple[int, int], float]" = OrderedDict()
     names: Dict[Tuple[int, int], str] = {}
     for m in _SEPARATION_RE.finditer(deck_text):
         left, right, dist = m.group(1).lower(), m.group(2).lower(), float(m.group(3))
-        # LEFT must be metal: either the PDK's own routing-metal stem, or the
-        # generic `metal`/`metal_dummy` variable a deck uses when it writes one
-        # rule for every level. A rule about poly or comp is not ours to apply
-        # to a metal fill.
-        if not (pref and pref in left) and "metal" not in left:
+        if (left not in (routing_layers or {}) and by_name.get(left) not in routing_ids
+                and not (pref and pref in left) and "metal" not in left):
             continue
         ids = by_name.get(right)
         if ids is None:
@@ -507,20 +582,18 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
                             margin: float = _DEFAULT_MARGIN,
                             window_um: Optional[float] = None,
                             max_passes: int = 8) -> Optional[dict]:
-    # `metal_prefix=None` (the new default) means DERIVE IT FROM THE PDK. The old
-    # default was the literal "metal", which matches gf180mcuD's `Metal1` and
-    # neither sky130A's `met1` nor a `MET1`-style process — on those the parses
-    # returned {} and metal fill was skipped with no diagnostic. See
-    # `derive_metal_prefix`. An explicit prefix is still honoured verbatim so a
-    # bridge can override the derivation.
+    ws = parse_techlef_routing(techlef_text)
+    if not ws:
+        return None
     prefix_derived = False
     if not metal_prefix:
         metal_prefix = derive_metal_prefix(techlef_text)
         prefix_derived = True
-        if not metal_prefix:
-            return None
-    gds = parse_streamout_layermap(layermap_text, metal_prefix)
-    ws = parse_techlef_routing(techlef_text, metal_prefix)
+    gds = OrderedDict((name, ids) for name, ids in parse_streamout_layermap(layermap_text).items()
+                      if name in ws)
+    unmapped = [name for name in _lef_routing_blocks(techlef_text) if name.lower() not in gds]
+    if unmapped:
+        raise ValueError(f"routing layer {', '.join(unmapped)}: no drawn GDS mapping")
     table = parse_layer_table(deck_text)
     floor_pct = parse_density_floor_pct(deck_text)
     floor = (floor_pct if floor_pct is not None else _DEFAULT_FLOOR_PCT) / 100.0
@@ -530,8 +603,6 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
 
     layers = []
     for base in sorted(gds.keys(), key=_metal_order):
-        if base not in ws:
-            continue                          # no routing WIDTH/SPACING -> skip
         num, drawn_dt = gds[base]
         min_w, max_s = ws[base]
         fill_dt = dummy_datatype_for(base, num, table)
@@ -560,8 +631,6 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
             spec["fill_on_drawn"] = True      # disclosed: no dummy datatype in the deck
         layers.append(spec)
 
-    if not layers:
-        return None
     _dens_covered, _dens_uncovered = density_rule_coverage(deck_text, layers)
     # The deck's OWN keep-out rules (see `parse_metal_keepout_layers`). Emitted
     # ALWAYS, `[]` included, so "this deck states none" and "this config was
@@ -619,10 +688,8 @@ def main(argv=None) -> int:
     ap.add_argument("--techlef", required=True, help="tech LEF (routing WIDTH/SPACING)")
     ap.add_argument("--deck", required=True,
                     help="DRC deck text (concatenate the deck + its rule modules)")
-    # Default None = derive the stem from the tech LEF. The old default was the
-    # literal "metal", which silently matched no layer on any met<n>/MET<n> process.
     ap.add_argument("--metal-prefix", default=None,
-                    help="routing-metal name stem; omit to derive it from the "
+                    help="legacy metadata name stem; omit to derive it from the "
                          "tech LEF's own TYPE ROUTING layer names")
     ap.add_argument("--window-um", type=float, default=None)
     ap.add_argument("--max-passes", type=int, default=8)
@@ -630,10 +697,14 @@ def main(argv=None) -> int:
     ap.add_argument("--out", default=None)
     ns = ap.parse_args(argv)
 
-    cfg = build_metal_fill_config(
-        _read(ns.layermap), _read(ns.techlef), _read(ns.deck),
-        metal_prefix=ns.metal_prefix, margin=ns.margin,
-        window_um=ns.window_um, max_passes=ns.max_passes)
+    try:
+        cfg = build_metal_fill_config(
+            _read(ns.layermap), _read(ns.techlef), _read(ns.deck),
+            metal_prefix=ns.metal_prefix, margin=ns.margin,
+            window_um=ns.window_um, max_passes=ns.max_passes)
+    except ValueError as exc:
+        sys.stderr.write(f"metal_fill_config_gen: {exc}\n")
+        return 2
     if cfg is None:
         sys.stderr.write("metal_fill_config_gen: no routing metal derivable "
                          "from the supplied PDK files\n")
