@@ -843,7 +843,7 @@ def _step_size(ev: StepEvidence, geom: Optional[Dict[str, Any]],
                deliverable: Any, origin: Any, die_area: Any,
                macro_origin: Any = None, macro_area: Any = None,
                *, chosen_origin=None, chosen_area=None,
-               expected_source: str = '') -> None:
+               expected_source: str = '', finished_frame=None) -> None:
     """THE ORIGIN CHECK, and the declared-size check beside it.
 
     TWO NAMES FOR THE SIZE, AND WHICH ONE APPLIES IS THE DELIVERABLE'S TO SAY
@@ -861,6 +861,9 @@ def _step_size(ev: StepEvidence, geom: Optional[Dict[str, Any]],
         _origin_key, _area_key = "die_origin_um", "die_area_um"
     declared_origin, declared_area = origin, die_area
     origin_authority = area_authority = 'declared'
+    if finished_frame is not None and deliverable == _decl.DELIVERABLE_DIE:
+        origin, die_area = finished_frame[:2], finished_frame
+        origin_authority = area_authority = 'measured outside seal frame'
     if deliverable == _decl.DELIVERABLE_DIE:
         if origin == _decl.NOT_DETERMINED and chosen_origin is not None:
             origin, origin_authority = chosen_origin, 'producer-chosen'
@@ -879,7 +882,7 @@ def _step_size(ev: StepEvidence, geom: Optional[Dict[str, Any]],
                    "bbox_complete": geom.get("bbox_complete"),
                    "bbox_cycles": geom.get("bbox_cycles"),
                    "bbox_missing_cells": geom.get("bbox_missing_cells")}
-    if 'producer-chosen' in (origin_authority, area_authority):
+    if 'producer-chosen' in (origin_authority, area_authority) or finished_frame is not None:
         ev.measured.update(expected_origin_um=origin, expected_area_um=die_area,
                            expected_source=expected_source)
     if bbox is None:
@@ -1822,6 +1825,13 @@ def evaluate(project: Path,
                             chosen_top=expected.get('top_cell'),
                             expected_source=expected.get('source', ''))
         elif step.step_id == "KLayout.CheckSize":
+            import _seal_ring_frame as frames
+            try:
+                outside_box = (frames.completed_frame(project, doc=doc)
+                               if frames.placement(project, doc) == 'outside' else None)
+            except frames.Refusal as exc:
+                ev.evidence = str(exc)
+                continue
             _step_size(ev, geom, deliverable,
                        _decl.answer(doc, "die_origin_um"),
                        _decl.answer(doc, "die_area_um"),
@@ -1829,7 +1839,8 @@ def evaluate(project: Path,
                        _decl.answer(doc, "macro_area_um"),
                        chosen_origin=expected.get('die_origin_um'),
                        chosen_area=expected.get('die_area_um'),
-                       expected_source=expected.get('source', ''))
+                       expected_source=expected.get('source', ''),
+                       **({'finished_frame': outside_box} if outside_box else {}))
         elif step.step_id == "Checker.KLayoutZeroAreaPolygons":
             _step_zero_area(ev, geom)
         elif step.step_id == "General.ForbiddenLayers":

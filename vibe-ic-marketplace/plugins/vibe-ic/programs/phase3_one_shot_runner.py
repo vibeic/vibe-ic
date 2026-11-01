@@ -45109,10 +45109,12 @@ def _die_finishing_native(project: Path, top: str, pdk: PdkConfig,
     # falls back to the layout bbox exactly as before — which is REPORTED here
     # rather than silently assumed to be the die.
     _die_rect, _die_basis = declared_die_rect(project)
-    if _die_rect:
+    import _seal_ring_frame as _seal_frame
+    _outside = _seal_frame.placement(project) == 'outside'
+    if _die_rect and not _outside:
         argv += ["--die-width", str(_die_rect[2] - _die_rect[0]),
                  "--die-height", str(_die_rect[3] - _die_rect[1])]
-    else:
+    elif not _outside:
         print(f"[phase3] seal ring: the die rectangle is NOT_DETERMINED "
               f"({_die_basis}); the generator will fall back to the layout's "
               f"own bounding box, which since CT-03 may be the CORE",
