@@ -899,6 +899,7 @@ def run_antenna_router(project: Path, image: str, pdk_root: Path, pdk: str, *,
     metrics = _metrics(folder)
     return {'model': 'router', 'step': step, 'state': str(folder / 'state_out.json'),
             'state_sha256': digest(folder / 'state_out.json'),
+            'report': str(folder / 'reports' / 'antenna.rpt'),
             'subject': str(routed_def), 'subject_sha256': digest(routed_def),
             'counts': {k: metrics.get(k) for k in ROUTER_METRICS}}
 

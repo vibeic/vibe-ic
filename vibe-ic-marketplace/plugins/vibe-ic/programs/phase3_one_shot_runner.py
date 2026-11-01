@@ -70134,8 +70134,6 @@ def _librelane_antenna_router(project: Path, top: str, pdk: PdkConfig, mode: str
         nets = counts.get("antenna__violating__nets")
         pins = counts.get("antenna__violating__pins")
         log = next(iter(sorted(Path(router["state"]).parent.glob("openroad-*.log"))), None)
-        lines = [ln for ln in (log.read_text(errors="replace").splitlines() if log else [])
-                 if "ANT-" in ln]
         subject = _measured_subject(project, top, [routed], tool_log=log)
         clean = nets == 0 and pins == 0
         _aa.write_text(rpt / "antenna.rpt", _measured_subject_lines(subject) + (
@@ -70144,13 +70142,14 @@ def _librelane_antenna_router(project: Path, top: str, pdk: PdkConfig, mode: str
             "# on the tool; phase3_one_shot_runner librelane mode).\n#\n"
             f"antenna check: {nets} net violations, {pins} pin violations\n"
             f"antenna clean: {'YES' if clean else 'NO'}\n"
-            "\n# === check_antennas output (provenance) ===\n"
-            + ("\n".join(lines) or "(no ANT lines captured)") + "\n# end of antenna.rpt\n"))
+            "# The full tool log is retained at tool_log above.\n"
+            "# end of antenna.rpt\n"))
         _aa.write_json(rpt / "antenna.json", {
             "tool": "openroad", "producer": "librelane:OpenROAD.CheckAntennas",
             "mode": "antenna_check_shipped_odb", "net_violations": nets,
             "pin_violations": pins, "clean": clean,
             "source": "reports/phase3/antenna.rpt", "measured_subject": subject,
+            "report": str((rpt / "antenna.rpt").relative_to(project)),
             "tool_state": router["state"], "tool_state_sha256": router["state_sha256"],
             "routing_incomplete": doc["routing_incomplete"],
             "route_modified_after_last_verification":
@@ -74883,6 +74882,7 @@ def _emit_antenna_report(project: Path, top: str, pdk: PdkConfig,
                 _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
                     "tool": "openroad",
                     "mode": "antenna_check_in_session_post_repair",
+                    "report": _rel_to_project(antenna_rpt, project),
                     "net_violations": net_viol if have_counts else None,
                     "pin_violations": pin_viol if have_counts else None,
                     "clean": clean,
@@ -74995,9 +74995,7 @@ exit
         "#\n"
         f"antenna check: {net_viol} net violations, {pin_viol} pin violations\n"
         f"antenna clean: {'YES' if total == 0 else 'NO'}\n"
-        "\n# === check_antennas stdout (provenance) ===\n"
-        + ("\n".join(ant_lines) or "(no ANT lines captured)") + "\n"
-        "\n# === full antenna log (last 2 KB) ===\n" + log[-2000:] + "\n"
+        "# The full tool log is retained at tool_log above.\n"
         "# end of antenna.rpt\n")
     antenna_rpt.write_text(body)
     _aa.write_text(antenna_rpt.parent / "antenna.json", json.dumps({
@@ -75007,6 +75005,7 @@ exit
         "pin_violations": pin_viol,
         "clean": total == 0,
         "source": str(antenna_rpt.relative_to(project)),
+        "report": str(antenna_rpt.relative_to(project)),
         "measured_subject": _subject,
         "verdict": "PASS" if total == 0 else "FAIL",
     }, indent=2) + "\n")
