@@ -2412,6 +2412,9 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
             "follows_integrating": {"cc{i}": "miller_fraction_of_load * ota_compensation_scale"},
         },
         "spec_knobs": [
+            {"name": "second_integrator_state_scale", "expr": "second_integrator_state_scale",
+             "default": 1.0, "optional": True,
+             "rationale": "positive diagonal scaling of the second state; preserves input gain and ideal quantizer decisions"},
             {"name": "ota_miller_capacitance_ff", "expr": "ota_miller_capacitance_ff",
              "default": None, "optional": True,
              "rationale": "one explicit total capacitance for both series Miller networks"},
@@ -4107,6 +4110,7 @@ def loop_swing_and_sizing(lib: Dict[str, Any],
                           constants: Dict[str, Any],
                           measured_loop: Optional[Dict[str, Any]],
                           structure_sha: str,
+                          second_state_scale: float = 1.0,
                           ) -> Optional[Dict[str, Any]]:
     """The loop's SWING record and the per-stage capacitor multipliers that
     realise it, or None for an entry that declares no `loop_probe`.
@@ -4148,6 +4152,9 @@ def loop_swing_and_sizing(lib: Dict[str, Any],
         return None
     coeffs = [float(x) for x in casc[0].get("coefficients") or []]
     order = len(coeffs)
+    second_state_scale = _positive_sizing_number(second_state_scale, "second_integrator_state_scale")
+    if second_state_scale != 1.0 and order < 2:
+        raise SizingInputsInvalid("second_integrator_state_scale requires a second integrator")
     window = int(constants["window_clocks"])
     delay = int(constants.get(_res_stim_delay_key(), 1))
     cands = [int(r["window_clocks"]) for r in (choice or {}).get(
@@ -4223,6 +4230,28 @@ def loop_swing_and_sizing(lib: Dict[str, Any],
         return rec
     sw = _res.swing_design(window, ref_window, delay, a, c, gain_ratio,
                            offset_u, u_decl, x_lim)
+    if second_state_scale != 1.0 and sw.get("feasible") and sw.get("bitstream_identical"):
+        scl = sw["coefficients_scaled"]
+        diagonal = [1.0] * order
+        diagonal[1] = second_state_scale
+        scaled = _res.scale_states(scl["b1"], scl["a"], scl["c"], diagonal)
+        identical = all(
+            _res.run_loop(window, scl["b1"], scl["a"], scl["c"], delay,
+                          _res._dc(u))["bits"] ==
+            _res.run_loop(window, scaled["b1"], scaled["a"], scaled["c"], delay,
+                          _res._dc(u))["bits"]
+            for u in (u_decl, -u_decl))
+        after = _res.loop_peaks(window, scaled["b1"] / sw["b1_over_a1"],
+                                scaled["a"], scaled["c"], delay, sw["u_eval"])
+        sw.update({
+            "requested_state_diagonal": diagonal,
+            "scale": [old * new for old, new in zip(sw["scale"], diagonal)],
+            "coefficients_scaled": {k: scaled[k] for k in ("b1", "a", "c")},
+            "peaks_after": after["peak_per_stage"],
+            "peak_arms_after": after["arms"],
+            "bitstream_identical": identical,
+            "within_x_lim": all(p <= x_lim + 1e-12 for p in after["peak_per_stage"]),
+        })
     rec.update(sw)
     if not sw.get("feasible") or not sw.get("bitstream_identical"):
         return rec
@@ -7017,7 +7046,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         _struct = loop_structure_fingerprint({"devices": devices})
         loop_swing = loop_swing_and_sizing(
             lib, stage_rec, _choice, declared_spec_values, constants,
-            measured_loop, _struct)
+            measured_loop, _struct, knobs.get("second_integrator_state_scale", 1.0))
         if loop_swing and loop_swing.get("capacitor_multipliers"):
             param_exprs = apply_loop_sizing(param_exprs, _loop_decl,
                                             loop_swing)
