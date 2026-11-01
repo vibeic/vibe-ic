@@ -13272,7 +13272,8 @@ def _read_liberty_tcl(value) -> str:
     return '\n'.join(f'read_liberty {path}' for path in _liberty_paths(value))
 
 
-def _liberty_model_path(value, container: str = '', project: Optional[Path] = None) -> str:
+def _liberty_model_path(value, container: str = '', project: Optional[Path] = None,
+                        *, corner: str = '') -> str:
     """Adapt a complete split library for an API that accepts one model file.
 
     Native list APIs consume the original paths. Legacy single-file tools
@@ -13292,7 +13293,8 @@ def _liberty_model_path(value, container: str = '', project: Optional[Path] = No
     directory = (Path(project) / 'phase3/pdk_stage' if project is not None else
                  Path(tempfile.gettempdir()) / 'vibeic-liberty-bundles')
     directory.mkdir(parents=True, exist_ok=True)
-    target = directory / f'library-{identity}.lib'
+    prefix = f'corner_{corner}-' if corner else ''
+    target = directory / f'{prefix}library-{identity}.lib'
     if not target.is_file():
         with tempfile.NamedTemporaryFile(mode='w', dir=directory, delete=False) as staged:
             staged.write(text)
@@ -14553,7 +14555,7 @@ def _v1_6_604_read_text_or_container_cat(
     return text
 
 
-def _v1_6_596_discover_tie_cells(liberty_path: str,
+def _v1_6_596_discover_tie_cells(liberty_path: Union[str, List[str]],
                                  container: str = "") -> dict:
     """v1.6.596 — for #404 P3 ORGANIC. Scan `liberty_path` for tie-hi
     and tie-lo cells. Returns a dict with keys:
@@ -14575,7 +14577,9 @@ def _v1_6_596_discover_tie_cells(liberty_path: str,
     """
     out = {"hi_cell": None, "lo_cell": None,
            "hi_pin": "HI", "lo_pin": "LO"}
-    text = _v1_6_604_read_text_or_container_cat(liberty_path, container)
+    text = (_read_pdk_text(liberty_path, container)
+            if isinstance(liberty_path, (list, tuple)) else
+            _v1_6_604_read_text_or_container_cat(liberty_path, container))
     if text is None:
         return out
     cellnames = _V1_6_596_RE_CELL_DECL.findall(text)
@@ -61983,7 +61987,7 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
     staged_libs = (sorted(staged_lib_dir.glob("*.lib"))
                    if staged_lib_dir.is_dir() else [])
     corner_source = "staged input/pdk/liberty"
-    if len(staged_libs) < 2:
+    if len(staged_libs) < 2 or len(_liberty_paths(pdk.liberty)) > 1:
         # ORGANIC #565 — a project that stages no corners of its own is the
         # MAJORITY case, not an exotic one: it uses the container's built-in
         # PDK. `pvt_matrix` and `_corner_libs()` ALREADY fall back to the
@@ -61995,9 +61999,14 @@ def step_prelayout_signoff(project: Path, top: str, pdk: PdkConfig,
         # discovery, so one PDK cannot answer "which corners do you ship?"
         # two different ways inside one runner.
         _pdk_lib_dir = (_liberty_directory(getattr(pdk, "liberty", "")) or "")
-        _found = _select_signoff_corners(
-            _discover_container_corner_libs(container, _pdk_lib_dir),
-            container, _pdk_lib_dir)
+        if len(_liberty_paths(pdk.liberty)) > 1:
+            _found = [{"name": label, "label": label, "liberty": path}
+                      for label, path in _resolve_signoff_corner_libs(
+                          project, pdk, container).items()]
+        else:
+            _found = _select_signoff_corners(
+                _discover_container_corner_libs(container, _pdk_lib_dir),
+                container, _pdk_lib_dir)
         if len(_found) >= 2:
             staged_libs = [Path(c["liberty"]) for c in _found]
             corner_source = (f"container built-in PDK {_pdk_lib_dir} "
@@ -64467,7 +64476,11 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
         # libs.ref/<lib>/lib/*.lib holding all 13 sky130A corners).
         lib_dir = project / "input" / "pdk" / "liberty"
         corners = []
-        if lib_dir.is_dir() and any(lib_dir.glob("*.lib")):
+        if len(_liberty_paths(pdk.liberty)) > 1:
+            corners = [{"name": label, "label": label, "liberty": path}
+                       for label, path in _resolve_signoff_corner_libs(
+                           project, pdk, container).items()]
+        elif lib_dir.is_dir() and any(lib_dir.glob("*.lib")):
             for lib in sorted(lib_dir.glob("*.lib")):
                 corners.append({
                     "name": lib.stem,
@@ -64475,8 +64488,8 @@ def step_canonicalize_artefacts(project: Path, top: str, pdk: PdkConfig,
                     "liberty": str(lib.relative_to(project)),
                 })
         else:
-            pdk_lib = Path(_liberty_model_path(getattr(pdk, "liberty", ""), container, project))
-            pdk_lib_dir = pdk_lib.parent
+            paths = _liberty_paths(getattr(pdk, "liberty", ""))
+            pdk_lib_dir = Path(paths[0]).parent if paths else None
             if pdk_lib_dir and pdk_lib_dir.is_dir():
                 for lib in sorted(pdk_lib_dir.glob("*.lib")):
                     corners.append({
@@ -67577,7 +67590,9 @@ def _emit_declared_process_sta(project, top, pdk, container, spef_path,
         return refuse('missing or collapsed process libraries')
     staged = project / 'input/pdk/liberty'
     for c in required:
-        if sum(_classify_corner_from_name(f.name) == c for f in staged.glob('*.lib')) > 1:
+        if (len(_liberty_paths(pdk.liberty)) < 2
+                and sum(_classify_corner_from_name(f.name) == c
+                        for f in staged.glob('*.lib')) > 1):
             return refuse('ambiguous staged core library for ' + c)
     inventory = {}
     for c in required:
@@ -70616,20 +70631,79 @@ def _resolve_signoff_corner_libs(project: Path, pdk: PdkConfig,
     container's built-in corner libs (the same discovery the pvt_matrix step uses).
     chip/PDK-AGNOSTIC — label heuristics + canonical-name preference, no literal."""
     lib_dir = project / "input" / "pdk" / "liberty"
-    if lib_dir.is_dir() and any(lib_dir.glob("*.lib")):
-        by_label: Dict[str, str] = {}
-        for lib in sorted(lib_dir.glob("*.lib")):
-            lbl = _classify_corner_from_name(lib.name)
-            if lbl in ("SS", "TT", "FF") and lbl not in by_label:
-                by_label[lbl] = _to_container_path(str(lib), container)
-        return by_label
-    out: Dict[str, str] = {}
-    pdk_lib = Path(_liberty_model_path(getattr(pdk, "liberty", ""), container, project))
-    pdk_lib_dir = pdk_lib.parent
-    if container and str(pdk_lib_dir):
-        clibs = _discover_container_corner_libs(container, str(pdk_lib_dir))
-        for c in _select_signoff_corners(clibs, container, str(pdk_lib_dir)):
-            out[c["label"]] = c["liberty"]
+    primary = _liberty_paths(getattr(pdk, "liberty", ""))
+    staged = sorted(lib_dir.glob("*.lib")) if lib_dir.is_dir() else []
+    if staged:
+        libs = [(lib.stem, _to_container_path(str(lib), container)) for lib in staged]
+        if len(primary) < 2:
+            by_label: Dict[str, str] = {}
+            for name, path in libs:
+                label = _classify_corner_from_name(name)
+                if label in ("SS", "TT", "FF") and label not in by_label:
+                    by_label[label] = path
+            return by_label
+        return _complete_split_corner_models(libs, primary, container, project, staged=True)
+    if not primary:
+        return {}
+    if len(primary) == 1:
+        directory = str(Path(primary[0]).parent)
+        return {c["label"]: c["liberty"] for c in _select_signoff_corners(
+            _discover_container_corner_libs(container, directory), container, directory)}
+    libs = []
+    for directory in sorted({str(Path(path).parent) for path in primary}):
+        libs.extend(_discover_container_corner_libs(container, directory))
+    return _complete_split_corner_models(libs, primary, container, project)
+
+
+def _complete_split_corner_models(libs: List[Tuple[str, str]], primary: List[str],
+                                   container: str, project: Path,
+                                   *, staged: bool = False) -> Dict[str, str]:
+    """Resolve each original cell group before adapting a corner to one model.
+
+    Filename corner tokens (including temperature/voltage suffixes) are the
+    existing discovery vocabulary. Keep the remaining group identity; never
+    merge alternative operating conditions or accept a partial cell roster.
+    Unknown or colliding group identities refuse instead of guessing.
+    """
+    def group(name):
+        key, count = re.subn(
+            r"(?i)(?<![a-z0-9])(?:ss|tt|ff|wci|bci|worst|slow|best|fast|"
+            r"typical|typ|nominal)(?![a-z0-9])"
+            r"(?:[_-](?:n?\d+c|\d+v\d+))*",
+            "{corner}", name)
+        return key if count == 1 else None
+
+    sources = {}
+    for path in primary:
+        key = group(Path(path).stem)
+        if key is None:
+            raise ValueError(f"PDK_CORNER_GROUP_UNRESOLVED: {path}")
+        if key in sources:
+            raise ValueError(f"PDK_CORNER_GROUP_AMBIGUOUS: {sources[key]}, {path}")
+        sources[key] = path
+    selections = {}
+    for key, source in sources.items():
+        candidates = [(name, path) for name, path in libs
+                      if group(name) == key]
+        if staged:
+            for label in ("SS", "TT", "FF"):
+                matches = [path for name, path in candidates
+                           if _classify_corner_from_name(name) == label]
+                if len(matches) > 1:
+                    raise ValueError(f"PDK_CORNER_GROUP_AMBIGUOUS: {label}: {matches}")
+        selections[key] = {c["label"]: c["liberty"] for c in
+                           _select_signoff_corners(candidates, container,
+                                                   str(Path(source).parent))}
+    out = {}
+    labels = set().union(*(set(corners) for corners in selections.values()))
+    for label in ("SS", "TT", "FF"):
+        if label not in labels:
+            continue
+        missing = [key for key, corners in selections.items() if label not in corners]
+        if missing:
+            raise ValueError(f"PDK_CORNER_GROUP_INCOMPLETE: {label}: {missing}")
+        paths = [corners[label] for corners in selections.values()]
+        out[label] = _liberty_model_path(paths, container, project, corner=label)
     return out
 
 

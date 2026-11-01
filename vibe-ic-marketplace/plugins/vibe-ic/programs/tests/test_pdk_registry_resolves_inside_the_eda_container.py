@@ -577,3 +577,137 @@ def test_real_installed_ihp_tech_lef_resolves_without_alias(in_image):
     assert path.is_file() and (root / 'libs.ref').is_symlink()
     assert _p3()._registry_path_under_root(str(root) + '/', str(path)) is True
     assert _p3()._registry_glob_one(_NO_SUCH_CONTAINER, str(root), entry['tech_lef_glob']) == str(path)
+
+
+@pytest.mark.parametrize('split', [False, True])
+def test_clock_plan_and_ties_consume_complete_timing_view(tmp_path, split):
+    from types import SimpleNamespace
+    import _physical_current as physical
+    paths = []
+    for cell in ('tie_hi', 'tie_lo'):
+        path = tmp_path / f'{cell}_TT.lib'
+        path.write_text(f'library (neutral) {{\n cell ({cell}) {{\n pin (Y) {{ '
+                        'direction : output; } } }\n')
+        paths.append(str(path))
+    selected = paths if split else paths[0]
+    pdk = SimpleNamespace(liberty=selected, macro_libs=[paths[-1]])
+    assert physical.clock_plan_liberty_paths(pdk) == paths
+    ties = _p3()._v1_6_596_discover_tie_cells(selected, '')
+    assert ties['hi_cell'] == 'tie_hi'
+    assert ties['lo_cell'] == ('tie_lo' if split else None)
+    directive = _p3()._v1_6_596_build_hilomap_directive(selected, '')
+    if split:
+        assert 'tie_hi Y' in directive
+        assert 'tie_lo Y' in directive
+    else:
+        assert directive == ''
+
+
+@pytest.mark.parametrize('invalid', [None, [], ['', 'valid.lib'], [42]])
+def test_clock_plan_refuses_invalid_primary_roster(invalid):
+    from types import SimpleNamespace
+    import _physical_current as physical
+    with pytest.raises(ValueError, match='CLOCK_PLAN_LIBERTY_MISSING'):
+        physical.clock_plan_liberty_paths(SimpleNamespace(liberty=invalid))
+
+
+@pytest.mark.parametrize('route', ['local', 'container', 'staged'])
+@pytest.mark.parametrize('split', [False, True])
+@pytest.mark.parametrize('layout', ['shared', 'separate'])
+def test_process_corner_discovery_keeps_original_sources_and_groups(tmp_path, monkeypatch, route, split, layout):
+    from types import SimpleNamespace
+    import glob
+    import shlex
+    runner = _p3()
+    installed = tmp_path / 'installed/libs.ref/scl/lib'
+    installed.mkdir(parents=True)
+    primary = []
+    groups = ('logic', 'ties') if split else ('logic',)
+    for group in groups:
+        directory = installed / group if layout == 'separate' else installed
+        directory.mkdir(exist_ok=True)
+        for label in ('SS', 'TT', 'FF'):
+            path = directory / f'{group}_{label}.lib'
+            path.write_text(f'library (neutral) {{\n cell ({group}_{label}) {{ area : 1; }}\n }}\n')
+            if label == 'TT':
+                primary.append(str(path))
+    if route == 'staged':
+        staged = tmp_path / 'input/pdk/liberty'
+        staged.mkdir(parents=True)
+        for path in installed.rglob('*.lib'):
+            shutil.copyfile(path, staged / path.name)
+    def transport(container, command, **kwargs):
+        if command.startswith('ls '):
+            return 0, '\n'.join(sorted(glob.glob(shlex.split(command)[1]))), ''
+        if command.startswith('cat '):
+            return 1, '', 'neutral fixture has no reference config'
+        raise AssertionError(command)
+    monkeypatch.setattr(runner, '_docker_exec', transport)
+    pdk = SimpleNamespace(liberty=primary if split else primary[0])
+    corners = runner._resolve_signoff_corner_libs(tmp_path, pdk, 'fixture' if route == 'container' else '')
+    assert set(corners) == {'SS', 'TT', 'FF'}
+    for label, model in corners.items():
+        text = Path(model).read_text()
+        assert runner._classify_corner_from_name(Path(model).name) == label
+        assert all(f'cell ({group}_{label})' in text for group in groups)
+        assert all(f'cell ({group}_{other})' not in text
+                   for group in groups for other in ('SS', 'TT', 'FF') if other != label)
+        if not split:
+            assert Path(model).name == f'logic_{label}.lib'
+
+
+def test_split_corner_roster_refuses_partial_process_group(tmp_path):
+    from types import SimpleNamespace
+    paths = []
+    for group in ('logic', 'ties'):
+        path = tmp_path / f'{group}_TT.lib'
+        path.write_text(f'library (n) {{ cell ({group}) {{}} }}\n')
+        paths.append(str(path))
+    (tmp_path / 'logic_SS.lib').write_text('library (n) { cell (slow_logic) {} }\n')
+    with pytest.raises(ValueError, match='PDK_CORNER_GROUP_INCOMPLETE: SS'):
+        _p3()._resolve_signoff_corner_libs(tmp_path, SimpleNamespace(liberty=paths), '')
+
+
+def test_split_ties_preserve_real_checked_in_cell_vocabulary(tmp_path):
+    from _hostpaths import require_repo
+    fixture = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+                           'tests', 'fixtures', 'real_benchmark', 'pdk_liberty_tie_cell_block.lib')
+    extra = tmp_path / 'empty.lib'
+    extra.write_text('library (empty) {}\n')
+    scalar = _p3()._v1_6_596_discover_tie_cells(str(fixture), '')
+    split = _p3()._v1_6_596_discover_tie_cells([str(fixture), str(extra)], '')
+    assert scalar['hi_cell'] or scalar['lo_cell']
+    assert split == scalar
+
+
+def test_split_corners_keep_reference_operating_condition_preference(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    primary = []
+    for group in ('logic', 'ties'):
+        for corner in ('tt_025C_1v80', 'ss_100C_1v40', 'ss_100C_1v60', 'ff_n40C_1v95'):
+            path = tmp_path / f'{group}_{corner}.lib'
+            path.write_text(f'library (neutral) {{\n cell ({group}_{corner}) {{}}\n}}\n')
+            if corner.startswith('tt_'):
+                primary.append(str(path))
+    runner = _p3()
+    monkeypatch.setattr(runner, '_pdk_reference_signoff_corner_stems',
+                        lambda *args: {'ss_100c_1v60', 'tt_025c_1v80', 'ff_n40c_1v95'})
+    corners = runner._resolve_signoff_corner_libs(tmp_path, SimpleNamespace(liberty=primary), '')
+    text = Path(corners['SS']).read_text()
+    assert all(f'cell ({group}_ss_100C_1v60)' in text for group in ('logic', 'ties'))
+    assert '1v40' not in text
+
+
+def test_split_staged_corners_refuse_ambiguous_group(tmp_path):
+    from types import SimpleNamespace
+    staged = tmp_path / 'input/pdk/liberty'
+    staged.mkdir(parents=True)
+    paths = []
+    for group in ('logic', 'ties'):
+        path = staged / f'{group}_tt_025C_1v80.lib'
+        path.write_text('library (neutral) {}\n')
+        paths.append(str(path))
+    for voltage in ('1v40', '1v60'):
+        (staged / f'logic_ss_100C_{voltage}.lib').write_text('library (neutral) {}\n')
+    with pytest.raises(ValueError, match='PDK_CORNER_GROUP_AMBIGUOUS: SS'):
+        _p3()._resolve_signoff_corner_libs(tmp_path, SimpleNamespace(liberty=paths), '')
