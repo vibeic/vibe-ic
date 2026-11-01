@@ -2593,11 +2593,12 @@ def _route_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
     rail_handled = False
     half = max(geo.wire[3] // 2, 1)
     space = geo.metal_space("metal3")
-    obstacles = list(getattr(plan, "m3_escape_obstacles", []))
-    obstacles.extend((s["net"], s["box"]) for s in plan.shapes if s["layer"] == "metal3")
+    obstacles = [(s["net"], s["box"]) for s in plan.shapes if s["layer"] == "metal3"]
     blocked = []
     for other, box in obstacles:
-        if other == net or box[2] + space <= x - half or box[0] - space >= x + half:
+        if box[2] + space <= x - half or box[0] - space >= x + half:
+            continue
+        if other == net and box[0] <= x + half and x - half <= box[2] and box[1] <= hi and lo <= box[3]:
             continue
         a, b = max(lo, box[1] - space - geo.long_half[2]), min(hi, box[3] + space + geo.long_half[2])
         if a < b:
@@ -2614,7 +2615,7 @@ def _route_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
         edge_candidates = [x]
         if a <= y0 <= b:
             for other, box in obstacles:
-                if other != net and box[1] - space <= y0 <= box[3] + space:
+                if box[1] - space <= y0 <= box[3] + space:
                     edge_candidates.extend((box[0] - space - geo.long_half[2],
                                             box[2] + space + geo.long_half[2]))
         for extra in range(3):
@@ -3502,20 +3503,6 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                                for l in g["labels"]]
             g["abs_escape_y"] = oy + g["escape_y"]
 
-    plan.m3_escape_obstacles = []
-    if rail_level == 4:
-        for d in per_dev:
-            for g in d["groups"]:
-                ey, lane = g["abs_escape_y"], g["lane_x"]
-                if g["strapped"] or g["level"] > ROUTE_LEVEL:
-                    box = (lane - geo.long_half[2], ey - geo.long_half[2],
-                           lane + geo.long_half[2], ey + geo.long_half[2])
-                else:
-                    xs = [v[0] for v in g["abs_labels"]] + [lane]
-                    box = (min(xs) - hw3, ey - hw3,
-                           max(xs) + hw3, ey + hw3)
-                plan.m3_escape_obstacles.append((g["net"], box))
-
     # The index is built ONCE, after every device is placed and before a
     # single wire is drawn: the routing runs closest to the devices, and a
     # placer that cannot see them places into them.
@@ -3572,6 +3559,7 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                 endpoints.append((cx, ey))
             g["stub_endpoints"] = endpoints
 
+    pending_legs = []
     for d in per_dev:
         for g in d["groups"]:
             net, ey, lane = g["net"], g["abs_escape_y"], g["lane_x"]
@@ -3729,14 +3717,18 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             if g["strapped"] or carry_level == 2:
                 _via_stack(plan, net, lane, ey, 2, geo, top=3, sites=sites)
             ry = row_rails[d["row"]][net]
-            rail_handled = False
             if rail_level == 4:
-                rail_handled = _route_m3_leg(plan, net, lane, ry, ey, geo, sites)
+                pending_legs.append((net, lane, ry, ey))
             else:
                 plan.paint(net, "metal3", lane - hw3, ry, lane + hw3, ey)
-            if not rail_handled:
-                _via_stack(plan, net, lane, ry, 3, geo, top=rail_level,
-                           sites=sites, horizontal=rail_level == 4)
+                _via_stack(plan, net, lane, ry, 3, geo, top=rail_level, sites=sites)
+
+    # All actual horizontal terminal escapes are present before a vertical
+    # leg is routed. No predicted body plane is inserted as an obstacle.
+    for net, lane, ry, ey in pending_legs:
+        if not _route_m3_leg(plan, net, lane, ry, ey, geo, sites):
+            _via_stack(plan, net, lane, ry, 3, geo, top=rail_level,
+                       sites=sites, horizontal=True)
 
     plan.island_patches = commit_metal_patches(plan, patches, sites,
                                                len(per_dev))

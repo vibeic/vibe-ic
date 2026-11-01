@@ -90,3 +90,14 @@ def test_body_exit_plane_keeps_same_net_notches_illegal():
     a._via_stack(plan, 'vss', 1000, 1000, 1, g, top=2, sites=sites,
                  friendly=('body', 0), exit_path=(400, 1000, 15), search_lambda=0)
     assert not plan.deviations
+
+
+def test_realized_m2_exit_does_not_create_a_phantom_m3_obstacle():
+    g = geo()
+    plan = a.Plan()
+    sites = a.Sites([], g)
+    plan.sites = sites
+    plan.paint('foreign', 'metal2', 800, 900, 1200, 1100)
+    plan.m3_escape_obstacles = [('foreign', (800, 985, 1200, 1015))]
+    a._route_m3_leg(plan, 'own', 1000, 0, 2000, g, sites)
+    assert all(s['layer'] == 'metal3' for s in plan.shapes if s['net'] == 'own')
