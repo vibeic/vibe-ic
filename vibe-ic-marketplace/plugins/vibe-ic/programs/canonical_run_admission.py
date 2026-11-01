@@ -279,6 +279,43 @@ def _phase2_reset_judgement_binding(project: Path) -> Optional[Dict[str, Any]]:
         return None
 
 
+def _phase2_step4_judgement_binding(project: Path) -> Optional[Dict[str, Any]]:
+    """Bind only a current accepted Step-4 evidence digest, not receipt prose.
+
+    The conditional checker also returns True when no hand-off was requested;
+    that case cannot purchase admission. Reviewer/comment-only receipt edits
+    likewise leave this evidence identity unchanged.
+    """
+    import ai_signed_judgement as judgement
+
+    if not judgement._requested(project, "4"):
+        return None
+    path = project / "reports/audit/ai_judgements/4.json"
+    try:
+        if path.is_symlink():
+            return None
+        fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+                     | getattr(os, "O_NONBLOCK", 0))
+        with os.fdopen(fd, "rb") as handle:
+            if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+                return None
+            before = handle.read()
+        receipt = json.loads(before)
+        accepted, _ = judgement.check(project, "4", expected_verdict="PASS")
+        digest = judgement.evidence_sha256(project, "4")
+        if (not accepted or not digest or not judgement._requested(project, "4")
+                or path.is_symlink() or path.read_bytes() != before
+                or not isinstance(receipt, dict)
+                or receipt.get("schema") != judgement.SCHEMA
+                or receipt.get("step_id") != "4"
+                or receipt.get("verdict") != "PASS"
+                or receipt.get("evidence_sha256") != digest):
+            return None
+        return {"evidence_sha256": digest}
+    except (OSError, ValueError, TypeError):
+        return None
+
+
 def _rtl_snapshot_transport_isolatable(project: Path) -> bool:
     """The existing RTL snapshot guard's condition, not report contents.
 
@@ -350,6 +387,10 @@ def build_identity(project: Path, span: str, *, container_image: str,
         if reset_binding is not None:
             identity.setdefault("current_consumer_evidence_bindings", {})[
                 "reset_role_signed_judgement"] = reset_binding
+        step4_binding = _phase2_step4_judgement_binding(project)
+        if step4_binding is not None:
+            identity.setdefault("current_consumer_evidence_bindings", {})[
+                "step4_signed_judgement"] = step4_binding
         # professional_tb_gen reads this persistent authored source beside
         # its regenerated bundle. Hash that exact input name, never the
         # sim_professional subtree (JUnit, waves and generated TBs are outputs).
@@ -625,11 +666,33 @@ def admit(project: Path, span: str, *, container_image: str,
                 return Admission(False, "ADMISSION_LEDGER_CORRUPT",
                                  fingerprint, identity, str(exc))
             for row in prior:
-                if row["identity_sha256"] == fingerprint:
+                duplicate = row["identity_sha256"] == fingerprint
+                detail = ("same canonical source/receipt/program/image/config "
+                          "already admitted")
+                # Losing accepted Step-4 evidence cannot buy another run.
+                # Project ONLY that binding out of a recorded identity; every
+                # other source/program/image/config/consumer field must match.
+                bindings_key = "current_consumer_evidence_bindings"
+                step4_key = "step4_signed_judgement"
+                previous = row.get("identity")
+                if (not duplicate and span == "phase2"
+                        and step4_key not in identity.get(bindings_key, {})
+                        and isinstance(previous, dict)):
+                    bindings = previous.get(bindings_key)
+                    if isinstance(bindings, dict) and step4_key in bindings:
+                        projected = dict(previous)
+                        remaining = {k: v for k, v in bindings.items() if k != step4_key}
+                        if remaining:
+                            projected[bindings_key] = remaining
+                        else:
+                            projected.pop(bindings_key)
+                        duplicate = identity_sha256(projected) == fingerprint
+                        if duplicate:
+                            detail = ("same canonical inputs; loss of accepted "
+                                      "Step-4 evidence is not new evidence")
+                if duplicate:
                     return Admission(False, "DUPLICATE_NO_NEW_EVIDENCE",
-                                     fingerprint, identity,
-                                     "same canonical source/receipt/program/image/config "
-                                     "already admitted")
+                                     fingerprint, identity, detail)
             record = {
                 "schema": SCHEMA,
                 "identity_sha256": fingerprint,

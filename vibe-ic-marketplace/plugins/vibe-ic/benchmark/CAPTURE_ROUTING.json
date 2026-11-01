@@ -64,6 +64,14 @@
       "bucket_A_program": "programs/canonical_run_admission.py",
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
+    "phase2.canonical_admission.step4_judgement": {
+      "description": "Current accepted signed functional evidence (native receipt step_id=4, public Step7 Simulation) in existing Phase 2 admission, including no credit for losing an accepted signature; capture routing only, not a new flow step or gate.",
+      "bucket_A_program": "programs/canonical_run_admission.py",
+      "bucket_A_related": [
+        "programs/ai_signed_judgement.py"
+      ],
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
+    },
     "phase2.required_site_results": {
       "description": "Producer-owned required gate results and current RTL binding; capture routing only, not a new gate.",
       "bucket_A_program": "programs/design_one_shot_runner.py",
