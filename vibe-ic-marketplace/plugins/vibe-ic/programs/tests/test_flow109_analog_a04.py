@@ -239,3 +239,50 @@ def test_a04_numeric_spec_keeps_authority_budget_and_hash_refusals(tmp_path, dam
         record['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
     observed = _numeric_spec_observed(tmp_path, manifest)
     assert observed == expected
+
+
+def _structured_budget_input(project, mutate=None):
+    manifest = _numeric_spec_input(project, [{'name': 'gain', 'min': 2.0, 'unit': 'V/V'}])
+    record = manifest['requirements']
+    path = project / record['path']
+    body = json.loads(path.read_text())
+    body['blocks'][0]['budgets'] = {
+        'gain': {'amplifier_a': {'D=0': {'status': 'BOUND', 'limit': 50.0, 'unit': 'dB'},
+                                'D=1': {'status': 'BOUND', 'limit': 55.0, 'unit': 'dB'}},
+                 'amplifier_b': {'D=0': {'status': 'BOUND', 'limit': 30.0, 'unit': 'dB'}}},
+        'noise': {'warm': {'status': 'BOUND', 'limit': 3.0, 'unit': 'uV_rms'}},
+        'current': {'static': {'status': 'BOUND', 'limit': .75, 'unit': 'mA'}}}
+    if mutate:
+        mutate(body['blocks'][0]['budgets'])
+    path.write_text(json.dumps(body))
+    record['sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return manifest
+
+
+def test_a04_structured_subcircuit_condition_budgets_bind_without_rewriting(tmp_path):
+    manifest = _structured_budget_input(tmp_path)
+    path = tmp_path / manifest['requirements']['path']
+    before = path.read_bytes()
+    assert _numeric_spec_observed(tmp_path, manifest) == 'ACCEPTED'
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('damage', ['unbound', 'empty_group', 'nan', 'infinity', 'boolean', 'no_unit', 'hybrid'])
+def test_a04_structured_budget_gap_is_never_accepted(tmp_path, damage):
+    def corrupt(budgets):
+        leaf = budgets['gain']['amplifier_a']['D=1']
+        if damage == 'unbound':
+            leaf['status'] = 'UNBOUND'
+        elif damage == 'empty_group':
+            budgets['noise']['warm'] = {}
+        elif damage == 'nan':
+            leaf['limit'] = float('nan')
+        elif damage == 'infinity':
+            leaf['limit'] = float('inf')
+        elif damage == 'boolean':
+            leaf['limit'] = True
+        elif damage == 'no_unit':
+            leaf['unit'] = ''
+        else:
+            leaf['hidden_unbound_branch'] = {'status': 'UNBOUND'}
+    assert _numeric_spec_observed(tmp_path, _structured_budget_input(tmp_path, corrupt)) == 'A04_BUDGET_UNBOUND'

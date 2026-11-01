@@ -9837,6 +9837,104 @@ def accept_a05(project: Path, context: Mapping, component: Mapping) -> dict:
     return answer
 
 
+def _a04_topology_facts(name, ir):
+    """Observe explicit IR fields, never topology prose or device/net names.
+
+    The loop_declaration schema-1 contract is documented in
+    docs/flow109/A04-analog-topology.md. Absent or malformed fields produce
+    no corresponding fact; they cannot satisfy a required constraint.
+    """
+    facts = []
+
+    def add(kind, value):
+        facts.append({'block': name, 'kind': kind, 'value': value})
+
+    for kind, value in (("block_type", ir.get("block_type")), ("selected_topology", ir.get("topology"))):
+        if not isinstance(value, str) or not value:
+            raise MetricRefusal("A04_TOPOLOGY_FACT_ABSENT", name + ":" + kind)
+        add(kind, value)
+    for role in sorted({device["role"] for device in ir["devices"]}):
+        add('device_role', role)
+    for port in ir.get('ports', []):
+        add('port', port)
+    loop = ir.get('loop_declaration')
+    if not isinstance(loop, dict) or type(loop.get('schema')) is not int or loop['schema'] != 1:
+        return facts
+    family = loop.get('family')
+    if isinstance(family, str) and family.strip():
+        add('loop_family', family)
+    order = loop.get('order')
+    if type(order) is int and order > 0:
+        add('loop_order', str(order))
+    else:
+        order = None
+    def path_valid(path):
+        if (not isinstance(path, dict)
+                or any(not isinstance(path.get(field), str) or not path[field].strip()
+                       for field in ('kind', 'source', 'destination', 'capacitor'))
+                or isinstance(path.get('gain'), bool)
+                or not isinstance(path.get('gain'), (int, float))
+                or not math.isfinite(path['gain'])):
+            return False
+        if path['kind'] == 'dac':
+            stage, delay = path.get('destination_stage'), path.get('delay_clocks')
+            return (type(stage) is int and stage > 0 and (order is None or stage <= order)
+                    and type(delay) is int and delay >= 0)
+        if path['kind'] == 'k0':
+            return type(path.get('delay_clocks')) is int and path['delay_clocks'] == 1
+        return True
+
+    paths = loop.get('paths')
+    if isinstance(paths, list) and all(path_valid(path) for path in paths):
+        compensation = loop.get('k0_path')
+        if (path_valid(compensation) and compensation['kind'] == 'k0'
+                and compensation not in paths):
+            paths = [*paths, compensation]
+        for key, kind, kinds in [
+                ('feedforward_paths', 'feedforward_path', {'feedforward', 'input_feedforward'}),
+                ('feedback_paths', 'feedback_path', {'dac', 'k0', 'zero_feedback'})]:
+            selected = [path for path in paths if path['kind'] in kinds]
+            serialized = [json.dumps(path, sort_keys=True, separators=(',', ':')) for path in selected]
+            if len(serialized) != len(set(serialized)):
+                continue
+            add(key, json.dumps(selected, sort_keys=True, separators=(',', ':')))
+            for value in serialized:
+                add(kind, value)
+    stages = loop.get('dac_stages')
+    if (order is not None and isinstance(stages, list)
+            and all(type(stage) is int and 1 <= stage <= order for stage in stages)
+            and len(stages) == len(set(stages))):
+        add('dac_injection_stages', json.dumps(sorted(stages), separators=(',', ':')))
+        for stage in sorted(stages):
+            add('dac_injection_stage', str(stage))
+    count = loop.get('quantizer_levels')
+    if type(count) is int and count >= 2:
+        add('quantizer_levels', str(count))
+        if count & (count - 1) == 0:
+            add('quantizer_bits', str(count.bit_length() - 1))
+    delay = loop.get('D')
+    if type(delay) is int and delay >= 0:
+        add('timing_D', str(delay))
+        add('feedback_delay', 'D=' + str(delay))
+    return facts
+
+
+def _a04_budget_bounds(limits, units, name, path=()):
+    """Require identical nested populations for bound limits and their units."""
+    if not isinstance(limits, dict) or not limits:
+        raise MetricRefusal('A04_BUDGET_LIMIT_POPULATION_INVALID', name)
+    if isinstance(units, str):
+        if not units.strip() or not set(limits).issubset({'min', 'max'}):
+            raise MetricRefusal('A04_BUDGET_LIMIT_POPULATION_INVALID', name)
+        return {path: (limits, units)}
+    if not isinstance(units, dict) or set(limits) != set(units):
+        raise MetricRefusal('A04_BUDGET_LIMIT_POPULATION_INVALID', name)
+    leaves = {}
+    for key, child in limits.items():
+        leaves.update(_a04_budget_bounds(child, units[key], name, (*path, key)))
+    return leaves
+
+
 def accept_a04(project: Path, context: Mapping, component: Mapping) -> dict:
     """Compare current topology facts and allocated design budgets with source authority."""
     import analog_native_flow as native
@@ -9864,14 +9962,7 @@ def accept_a04(project: Path, context: Mapping, component: Mapping) -> dict:
                     or (ir.get("_provenance") or {}).get("producer") != "analog_a2_topology_emit"):
                 raise MetricRefusal("A04_TOPOLOGY_POPULATION_INVALID", name)
             irs[name] = ir
-            for kind, value in (("block_type", ir.get("block_type")), ("selected_topology", ir.get("topology"))):
-                if not isinstance(value, str) or not value:
-                    raise MetricRefusal("A04_TOPOLOGY_FACT_ABSENT", name + ":" + kind)
-                facts.append({"block": name, "kind": kind, "value": value})
-            for role in sorted({device["role"] for device in ir["devices"]}):
-                facts.append({"block": name, "kind": "device_role", "value": role})
-            for port in ir.get("ports", []):
-                facts.append({"block": name, "kind": "port", "value": port})
+            facts.extend(_a04_topology_facts(name, ir))
         authority, _ = _approved_authority(project,
             "requirements/base_A3/topology_constraints.json#/required_items", ("block", "kind", "value"))
         required = authority["required_items"]
@@ -9879,7 +9970,9 @@ def accept_a04(project: Path, context: Mapping, component: Mapping) -> dict:
             raise MetricRefusal("A04_REQUIRED_CONSTRAINTS_INVALID", "required_items")
         missing = [item for item in required if item not in facts]
         answer["metrics"]["topology_constraints"] = {
-            "status": "FAIL" if missing else "PASS", "value": facts, "missing": missing, "authority": authority}
+            "status": "FAIL" if missing else "PASS", "value": facts, "missing": missing, "authority": authority,
+            "observations": [{**item, 'status': 'NOT_OBSERVED' if item in missing else 'OBSERVED'}
+                             for item in required]}
         manifest = topology._read(project / topology.INPUT)
         _path, _body, allocations = topology._approved_requirements(project, manifest)
         if set(allocations) != set(names):
@@ -9899,17 +9992,19 @@ def accept_a04(project: Path, context: Mapping, component: Mapping) -> dict:
                     or allocation["block_type"] != ir["block_type"]
                     or sorted(allocation["required_device_roles"]) != roles):
                 answer["metrics"]["topology_constraints"]["status"] = "FAIL"
-            if set(limits[name]) != {"gain", "noise", "power"} or set(units[name]) != set(limits[name]):
+            allocations_by_path = dict(topology.budget_leaves(allocation['budgets'], name))
+            bounds_by_path = _a04_budget_bounds(limits[name], units[name], name)
+            if set(bounds_by_path) != set(allocations_by_path):
                 raise MetricRefusal("A04_BUDGET_LIMIT_POPULATION_INVALID", name)
-            for kind in ("gain", "noise", "power"):
-                budget = allocation["budgets"][kind]
+            for path, budget in allocations_by_path.items():
+                bounds, unit = bounds_by_path[path]
                 identity = {"producer": invocation["sources"], "checker": "flow109_analog_a04._approved_requirements",
                             "tool_execution": invocation["tools"], "consumed_inputs": invocation["inputs"],
                             "requirements": bound_authority, "configuration": {"image": invocation["image"]}}
                 state, reason = evaluate_operator("within_declared_bounds", {
                     "status": "MEASURED", "value": budget["limit"], "unit": budget["unit"], "identity": identity}, {
-                    "status": "APPROVED", "limits": limits[name][kind], "unit": units[name][kind]})
-                measured.append({"block": name, "budget": kind, "value": budget["limit"],
+                    "status": "APPROVED", "limits": bounds, "unit": unit})
+                measured.append({"block": name, "budget": '/'.join(path), 'budget_path': list(path), "value": budget["limit"],
                                  "unit": budget["unit"], "status": state, "reason": reason})
                 answer["metrics"]["allocated_gain_noise_power_budgets"] = {
                     "status": native._aggregate(measured), "allocations": measured}
@@ -9919,6 +10014,9 @@ def accept_a04(project: Path, context: Mapping, component: Mapping) -> dict:
         answer.update(status=native._aggregate(list(answer["metrics"].values())),
                       input_views=readset, reason="A04_SOURCE_ALLOCATIONS_AND_NATIVE_TOPOLOGY_EVALUATED")
     except (OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        if getattr(exc, 'code', None) == 'A04_BUDGET_UNBOUND':
+            answer['metrics']['allocated_gain_noise_power_budgets'] = {
+                'status': 'FAIL', 'reason': 'A04_BUDGET_UNBOUND'}
         answer.update(status="FAIL" if any(row.get("status") == "FAIL" for row in answer["metrics"].values())
                       else "NOT_MEASURED", reason=getattr(exc, "code", "A04_METRIC_INPUT_UNAVAILABLE"), detail=str(exc))
     return answer
