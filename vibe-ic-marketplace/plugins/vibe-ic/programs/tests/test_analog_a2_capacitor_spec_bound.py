@@ -111,3 +111,28 @@ def test_invalid_capacitance_refuses_without_emitting_topology(
     assert not (d / "topology.json").exists()
     assert not (d / "topology.md").exists()
     assert not list(root.rglob("*.sp"))
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
+def test_required_nonfinite_active_spec_is_also_refused(tmp_path, value):
+    name = "converter_alpha"
+    rows = [
+        {"name": "Order", "target": 2.0, "unit": "—"},
+        {"name": "OSR", "target": 256.0, "unit": "—"},
+        {"name": "ENOB", "min": 14.0, "unit": "bit"},
+        {"name": "Vref", "target": value, "unit": "V"},
+        {"name": "Vdd (core)", "target": 1.2, "unit": "V"},
+        {"name": "fclk", "target": 1.0, "min": 0.1, "max": 1.0,
+         "unit": "MHz"},
+    ]
+    root = make_project(tmp_path, [block(name, "delta_sigma", rows)])
+    stage_custom_pdk(root, PDK)
+    assert run_prog(A1, root).returncode == 0
+    result = run_prog(A2, root, "--pdk", PDK)
+    assert result.returncode == 2, (result.stdout, result.stderr)
+    d = bdir(root, name)
+    gap = read_json(d / "topology_gap.json")
+    assert any(r["requirement"] == "spec_finite" and r["field"] == "vref"
+               for r in gap["admission_refusals"]), gap
+    assert not (d / "topology.json").exists()
+    assert not (d / "topology.md").exists()
