@@ -38,7 +38,10 @@ def _shell(command):
 def _seal_technology(pdk):
     deck = pdk / "libs.tech/klayout/drc/rule_decks/6_10_sealring.drc"
     deck.parent.mkdir(parents=True, exist_ok=True)
-    deck.write_text(SEAL_DECK)
+    deck.write_text("require 'json'\n"
+                    "drc_rules = JSON.parse(File.read(File.join(__dir__, "
+                    "'../../tech/neutral_tech_default.json')))['drc_rules']\n"
+                    + SEAL_DECK)
     table = pdk / "libs.tech/klayout/tech/neutral_tech_default.json"
     table.parent.mkdir(parents=True, exist_ok=True)
     table.write_text(json.dumps({"drc_rules": {"Seal_b": 4.9}}, indent=2))
@@ -244,3 +247,29 @@ def test_copied_real_pdk_artifacts_resolve_4_9_um_without_a_named_pdk(tmp_path):
     assert "Seal.b" in basis
     _assert_cited(basis, destination / "6_10_sealring.drc")
     _assert_cited(basis, destination / "sg13g2_tech_default.json")
+
+
+@pytest.mark.parametrize("binding", ["missing", "unsupported", "wrong-table", "reassigned"])
+def test_unbound_rule_table_cannot_borrow_an_unused_json(tmp_path, binding):
+    deck, table = _seal_technology(tmp_path)
+    text = deck.read_text()
+    if binding == "missing":
+        text = SEAL_DECK
+    elif binding == "unsupported":
+        text = text.replace("File.join(__dir__, ", "unknown_path(")
+    elif binding == "wrong-table":
+        text = text.replace(")['drc_rules']", ")['unused_rules']")
+    else:
+        text = text.replace("unless PRECHECK_DRC", "drc_rules = other_table\nunless PRECHECK_DRC")
+    deck.write_text(text)
+    value, basis = margin.guard_ring_clearance_um(str(tmp_path), _shell)
+    assert value is None, basis
+
+
+def test_loaded_table_missing_key_cannot_borrow_nested_or_unused_table(tmp_path):
+    deck, table = _seal_technology(tmp_path)
+    table.write_text(json.dumps({"drc_rules": {"Other": 12},
+                                 "unused": {"drc_rules": {"Seal_b": 4.9}}}))
+    table.with_name("unused.json").write_text(json.dumps({"drc_rules": {"Seal_b": 4.9}}))
+    value, basis = margin.guard_ring_clearance_um(str(tmp_path), _shell)
+    assert value is None, basis

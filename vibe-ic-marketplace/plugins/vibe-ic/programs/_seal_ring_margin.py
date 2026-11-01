@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import json
 import math
+import posixpath
 import re
 import shlex
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -135,47 +136,37 @@ def _clearance_value(expression: str, files: Dict[str, str]) -> Tuple[Optional[f
         return result
 
     for path, text in sorted(files.items()):
-        if not re.search(r'"' + re.escape(table) + r'"\s*:', text):
-            continue
         try:
-            json.loads(text, object_pairs_hook=pairs)
+            payload = json.loads(text, object_pairs_hook=pairs)
         except (ValueError, TypeError) as exc:
             errors.append(f"{path} is not readable JSON for {table}[{key!r}]: {exc}")
             continue
-        decoder = json.JSONDecoder(object_pairs_hook=pairs)
-        for table_match in re.finditer(r'"' + re.escape(table) + r'"\s*:', text):
-            start = table_match.end()
-            while start < len(text) and text[start].isspace():
-                start += 1
-            try:
-                candidate, end = decoder.raw_decode(text, start)
-            except ValueError:
-                continue
-            if not isinstance(candidate, dict):
-                errors.append(f"{path} has no readable {table} rule table")
-                continue
-            if key not in candidate:
-                continue
-            raw = candidate[key]
-            if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
-                errors.append(f"{path} has no numeric {table}[{key!r}]")
-                continue
-            try:
-                value = float(raw)
-            except (ValueError, TypeError, OverflowError):
-                value = math.nan
-            if not math.isfinite(value) or value < 0:
-                errors.append(f"{path} has no finite nonnegative {table}[{key!r}]")
-                continue
-            key_match = next((m for m in re.finditer(
-                r'("(?:\\.|[^"\\])*")\s*:', text[start:end])
-                if json.loads(m.group(1)) == key), None)
-            if key_match is None:
-                errors.append(f"{path} has no source location for {table}[{key!r}]")
-                continue
-            line = text.count("\n", 0, start + key_match.start()) + 1
-            values.setdefault(value, []).append(
-                f"{path}:{line} {table}[{key!r}] = {value} um")
+        candidate = payload.get(table) if isinstance(payload, dict) else None
+        if not isinstance(candidate, dict):
+            errors.append(f"{path} has no readable {table} rule table")
+            continue
+        if key not in candidate:
+            continue
+        raw = candidate[key]
+        if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+            errors.append(f"{path} has no numeric {table}[{key!r}]")
+            continue
+        try:
+            value = float(raw)
+        except (ValueError, TypeError, OverflowError):
+            value = math.nan
+        if not math.isfinite(value) or value < 0:
+            errors.append(f"{path} has no finite nonnegative {table}[{key!r}]")
+            continue
+        key_match = next((m for m in re.finditer(
+            r'("(?:\\.|[^"\\])*")\s*:', text)
+            if json.loads(m.group(1)) == key), None)
+        if key_match is None:
+            errors.append(f"{path} has no source location for {table}[{key!r}]")
+            continue
+        line = text.count("\n", 0, key_match.start()) + 1
+        values.setdefault(value, []).append(
+            f"{path}:{line} {table}[{key!r}] = {value} um")
     if errors:
         return None, "; ".join(errors), (table, key)
     if len(values) != 1:
@@ -186,7 +177,8 @@ def _clearance_value(expression: str, files: Dict[str, str]) -> Tuple[Optional[f
     return value, "; ".join(values[value]), (table, key)
 
 
-def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None,
+                           source_path: str = "") -> List[Dict[str, Any]]:
     body, code = _clearance_code(text or "")
     assignments = list(_RE_CLEAR_ASSIGN.finditer(code))
     out: List[Dict[str, Any]] = []
@@ -235,13 +227,29 @@ def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None)
             if not source:
                 break
             value_expression, before = source
-        value, basis, reference = _clearance_value(value_expression, files or {}) if um else (
+        bound_files = {}
+        loaded_path = None
+        reference_match = _RE_RULE_VALUE.fullmatch(value_expression)
+        if reference_match:
+            table = reference_match.group(1)
+            source = assigned(table, before)
+            if source:
+                binding = re.fullmatch(
+                    r"JSON\.parse\(File\.read\(File\.join\(__dir__,\s*"
+                    r"['\"]([^'\"\\]+)['\"]\)\)\)\[['\"]"
+                    + re.escape(table) + r"['\"]\]", source[0])
+                if binding and source_path:
+                    loaded_path = posixpath.normpath(posixpath.join(
+                        posixpath.dirname(source_path), binding.group(1)))
+                    if loaded_path in (files or {}):
+                        bound_files[loaded_path] = files[loaded_path]
+        value, basis, reference = _clearance_value(value_expression, bound_files) if um else (
             None, f"clearance `{expression}` has no readable um value", None)
         tail = _RE_RULE_ID.search(body, match.start(3), min(len(body), match.start(3) + 400))
         out.append({"prime_layer": match.group(1), "marker": seal, "um": value,
                     "rule": tail.group(1) if tail else None,
                     "line": body.count("\n", 0, match.start()) + 1,
-                    "value_basis": basis, "reference": reference,
+                    "value_basis": basis, "reference": reference, "json_source": loaded_path,
                     "error": basis if value is None else ""})
     return out
 
@@ -340,7 +348,7 @@ def guard_ring_clearance_um(pdk_dir: str,
                       f"could be read under {pdk_dir}: {why}")
     decls: List[Dict[str, Any]] = []
     for path, text in sorted(files.items()):
-        for d in clearance_declarations(text):
+        for d in clearance_declarations(text, source_path=path):
             d["file"] = path
             decls.append(d)
     if not decls:
@@ -349,24 +357,15 @@ def guard_ring_clearance_um(pdk_dir: str,
                       f"no readable marker separation in um")
     references = {d["reference"] for d in decls if d["reference"]}
     if references:
+        paths = sorted({d["json_source"] for d in decls if d["json_source"]})
         json_files, why = _read_files(
-            run_sh, f"find -L {shlex.quote(pdk_dir)} -type f -name '*.json' 2>/dev/null")
+            run_sh, "printf '%s\\n' " + " ".join(shlex.quote(p) for p in paths)) if paths else ({}, "")
         names = ", ".join(f"{table}[{key!r}]" for table, key in sorted(references))
         if why:
             return None, f"the JSON rule table for {names} could not be read: {why}"
-        for text in files.values():
-            for name in re.findall(r"File\.[^\n]*?['\"]([^'\"\n]+\.json)['\"]", text):
-                candidates = [p for p in json_files if p.endswith("/" + name.rsplit("/", 1)[-1])]
-                if not candidates:
-                    return None, f"the deck's JSON input {name} for {names} could not be read"
-                for path in candidates:
-                    try:
-                        json.loads(json_files[path])
-                    except ValueError as exc:
-                        return None, f"the deck's JSON input {path} for {names} is malformed: {exc}"
         decls = []
         for path, text in sorted(files.items()):
-            for d in clearance_declarations(text, files=json_files):
+            for d in clearance_declarations(text, files=json_files, source_path=path):
                 d["file"] = path
                 decls.append(d)
     unread = [f"{d['file']}:{d['line']} "
