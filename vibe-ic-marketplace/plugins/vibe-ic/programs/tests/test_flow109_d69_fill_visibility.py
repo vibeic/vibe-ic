@@ -312,6 +312,89 @@ def test_rcx_shaped_spef_missing_signal_net_is_refused(tmp_path, monkeypatch, co
         'unexpected': [], 'duplicates': []}
 
 
+def _signal_specialnet_def(use='SIGNAL'):
+    intent = '' if use is None else f' + USE {use}'
+    return ('DESIGN neutral ;\nUNITS DISTANCE MICRONS 1000 ;\n'
+            'SPECIALNETS 3 ;\n- VDD ( PIN VDD ) + USE POWER ;\n'
+            '- VSS ( PIN VSS ) + USE GROUND ;\n'
+            f'- B ( PIN B ){intent} ;\nEND SPECIALNETS\n'
+            'NETS 1 ;\n- A ( PIN A ) ;\nEND NETS\nEND DESIGN\n')
+
+
+@pytest.mark.parametrize('use', ['SIGNAL', 'CLOCK', None])
+def test_use_signal_specialnet_and_single_terminal_net_are_accepted(tmp_path, monkeypatch, use):
+    result = _complete_result(tmp_path, monkeypatch, def_text=_signal_specialnet_def(use))
+    assert _observe_population(tmp_path, result) == {
+        'status': 'ACCEPTED', 'counts': {'min': 2, 'nom': 2, 'max': 2}}
+    assert d69.validate_final_parasitics(tmp_path, result['receipt'])['flow109_acceptance'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('corner', ['min', 'nom', 'max'])
+def test_missing_signal_specialnet_is_refused(tmp_path, monkeypatch, corner):
+    result = _complete_result(tmp_path, monkeypatch, def_text=_signal_specialnet_def())
+    _damage_population(tmp_path, result, 'missing_output', corner)
+    observed = _observe_population(tmp_path, result)
+    assert observed['status'] == 'FAIL', observed
+    assert observed['reason'] == 'D69_REQUIRED_NET_CENSUS_FAILED', observed
+    assert json.loads(observed['detail']) == {
+        'corner': corner, 'artifact': 'output_spef', 'missing': ['B'],
+        'unexpected': [], 'duplicates': []}
+
+
+@pytest.mark.parametrize('supplies', [('VDD',), ('VSS',), ('VDD', 'VSS')])
+def test_supply_d_nets_are_refused_as_foreign(tmp_path, monkeypatch, supplies):
+    result = _complete_result(tmp_path, monkeypatch, def_text=_signal_specialnet_def())
+    receipt_path = d69._bound(tmp_path, result['native_receipt'])
+    native = d69._read(receipt_path)
+    row = native['corners']['min']
+    path = Path(row['output_spef'])
+    path.write_text(path.read_text() + ''.join(
+        f'*D_NET {name} 0.1\n*CAP\n1 {name} 0.1\n*END\n' for name in supplies))
+    row['output_spef_sha256'] = d69._sha(path)
+    receipt_path.write_text(json.dumps(native))
+    result['native_receipt'] = d69.files._record(tmp_path, receipt_path)
+    observed = _observe_population(tmp_path, result)
+    assert observed['status'] == 'FAIL', observed
+    assert observed['reason'] == 'D69_REQUIRED_NET_CENSUS_FAILED', observed
+    assert json.loads(observed['detail']) == {
+        'corner': 'min', 'artifact': 'output_spef', 'missing': [],
+        'unexpected': sorted(supplies), 'duplicates': []}
+
+
+def test_supply_use_intent_is_shared_by_name_across_def_sections(tmp_path, monkeypatch):
+    text = _rcx_signal_def().replace('\nNETS 2 ;', '\nNETS 4 ;').replace(
+        'END NETS', '- VDD ( PIN VDD ) ;\n- VSS ( PIN VSS ) ;\nEND NETS')
+    result = _complete_result(tmp_path, monkeypatch, def_text=text)
+    assert _observe_population(tmp_path, result)['counts'] == {'min': 2, 'nom': 2, 'max': 2}
+
+
+def test_quoted_use_property_does_not_change_signal_intent(tmp_path, monkeypatch):
+    text = _signal_specialnet_def().replace(
+        '- B ( PIN B ) + USE SIGNAL ;',
+        '- B ( PIN B ) + PROPERTY note "+ USE POWER" + USE SIGNAL ;')
+    result = _complete_result(tmp_path, monkeypatch, def_text=text)
+    assert _observe_population(tmp_path, result)['status'] == 'ACCEPTED'
+
+
+@pytest.mark.parametrize('uses', ['SIGNAL + USE POWER', 'SIGNAL + USE SIGNAL'])
+def test_ambiguous_def_use_cannot_silently_exclude_signal(tmp_path, monkeypatch, uses):
+    _owner_fixture(tmp_path, monkeypatch, def_text=_signal_specialnet_def(uses))
+    result = d69.execute(tmp_path, {'context_sha256': 'use-intent-control'})
+    assert result['component_status'] == 'NOT_MEASURED', result
+    assert result['reason'] == 'D69_REQUIRED_NET_CONTRACT_UNAVAILABLE'
+    assert result['detail'].endswith('ambiguous DEF net USE: B')
+
+
+def test_conflicting_def_use_cannot_silently_exclude_signal(tmp_path, monkeypatch):
+    text = _rcx_signal_def().replace('SPECIALNETS 2 ;', 'SPECIALNETS 3 ;').replace(
+        'END SPECIALNETS', '- B ( PIN B ) + USE POWER ;\nEND SPECIALNETS')
+    _owner_fixture(tmp_path, monkeypatch, def_text=text)
+    result = d69.execute(tmp_path, {'context_sha256': 'use-intent-control'})
+    assert result['component_status'] == 'NOT_MEASURED', result
+    assert result['reason'] == 'D69_REQUIRED_NET_CONTRACT_UNAVAILABLE'
+    assert result['detail'].endswith('conflicting DEF net USE: B')
+
+
 def test_real_archived_def_prefix_has_insufficient_population_authority(tmp_path, monkeypatch):
     from _hostpaths import require_repo
     path = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs', 'tests',
