@@ -78251,7 +78251,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 ("primary + secondary clamp sizing meets the target HBM/CDM "
                  "level per the PDK ESD cell datasheet (TLP/It2)"),
             ],
-            "record_to": "categories[].checklist[].confirmed (this report)",
+            "record_to": "input/perc_manual_review.json (reviews: category, item, verdict, basis [{path, sha256}], reviewer)",
         }
     categories.append(esd_cat)
     categories.append(_perc.io_supply_pad_sufficiency(
@@ -78461,7 +78461,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 ("guard-ring efficacy under the foundry's injected "
                  "substrate-current test condition"),
             ],
-            "record_to": "categories[].checklist[].confirmed (this report)",
+            "record_to": "input/perc_manual_review.json (reviews: category, item, verdict, basis [{path, sha256}], reviewer)",
         },
     })
 
@@ -78501,7 +78501,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
                 ("isolation clamp value matches the L21 sleep-state "
                  "contract on every power-gating boundary"),
             ],
-            "record_to": "categories[].checklist[].confirmed (this report)",
+            "record_to": "input/perc_manual_review.json (reviews: category, item, verdict, basis [{path, sha256}], reviewer)",
         }
     categories.append(xdomain_cat)
 
