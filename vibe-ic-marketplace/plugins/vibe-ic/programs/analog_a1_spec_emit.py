@@ -180,21 +180,23 @@ def approved_electrical_attribution(project: Path) -> Optional[dict]:
     current = _read_json(current_path)
     source_rows = original.get("electrical_specs") if isinstance(original, dict) else None
     require(isinstance(source_rows, list) and isinstance(current, dict)
-            and current.get("electrical_specs") == source_rows,
-            "current L5 electrical rows differ from the approved source population")
+            and isinstance(current.get("electrical_specs"), list)
+            and len(current["electrical_specs"]) == len(source_rows),
+            "current L5 electrical population differs from the approved source")
     readset[_L5_REL] = _sha256(project / _L5_REL)
     readset[ATTRIBUTION_REL] = _sha256(path)
     entries, _ = block_entries(project)
     names = {e.get("name") or e.get("block") or e.get("type") for e in entries}
     rows = body.get("attributions")
     require(isinstance(rows, list), "attributions must be a list")
-    seen, bound = set(), []
+    seen, bound, assignments = set(), [], {}
     for row in rows:
         require(isinstance(row, dict), "invalid attribution row")
         index = row.get("index")
         require(type(index) is int and 0 <= index < len(source_rows) and index not in seen,
                 "invalid or duplicate electrical row index")
         seen.add(index)
+        assignments[index] = row
         original_row = row.get("original_row")
         require(row.get("source_pointer") == f"/electrical_specs/{index}"
                 and isinstance(original_row, dict) and original_row == source_rows[index],
@@ -225,6 +227,22 @@ def approved_electrical_attribution(project: Path) -> Optional[dict]:
         bound.append({"scope": scope, "block": name, "spec": {
             "name": metric, "value": number, "unit": unit, "source": "L5",
             "source_field": row["source_pointer"], "electrical_row_attribution": [binding]}})
+    for index, (original_row, current_row) in enumerate(zip(source_rows, current["electrical_specs"])):
+        if current_row == original_row:
+            continue
+        row = assignments.get(index)
+        require(row is not None and isinstance(current_row, dict),
+                f"current electrical row {index} differs without approved attribution")
+        # The owner may record the approved judgment in L5 without rewriting
+        # its generator's original values. Accept only this exact projection;
+        # never discard arbitrary metadata or changed source/numeric fields.
+        annotation = {key: row[key] for key in ("scope", "block", "metric")}
+        annotation["source_reference"] = {"path": ATTRIBUTION_REL, "sha256": readset[ATTRIBUTION_REL]}
+        projected = {**original_row, "attribution": annotation}
+        if "block" in current_row and "block" not in original_row:
+            require(row["scope"] == "block", f"chip row {index} acquired a block")
+            projected["block"] = row["block"]
+        require(current_row == projected, f"current electrical row {index} differs from its approved projection")
     return {"path": ATTRIBUTION_REL, "sha256": readset[ATTRIBUTION_REL],
             "readset": readset, "rows": bound}
 

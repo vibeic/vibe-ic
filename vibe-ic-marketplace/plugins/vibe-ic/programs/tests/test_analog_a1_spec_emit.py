@@ -409,3 +409,37 @@ def test_attribution_preserves_a_chip_set_it_did_not_produce(tmp_path, amended, 
     result = run_prog(A1, tmp_path)
     assert result.returncode == (1 if amended else 0), result.stdout + result.stderr
     assert chip.read_bytes() == before
+
+
+@pytest.mark.parametrize('damage', [None, 'value', 'unit', 'block', 'scope', 'reference', 'extra_field'])
+def test_recorded_l5_annotation_must_exactly_project_the_approved_amendment(tmp_path, damage):
+    path, data = attribution_case(tmp_path)
+    reference = {'path': str(path.relative_to(tmp_path)),
+                 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    l5_path = tmp_path / 'phase1/generated_docs/L5_ADI_SPEC.json'
+    l5 = json.loads(l5_path.read_text())
+    for row in data['attributions']:
+        current = l5['electrical_specs'][row['index']]
+        current['attribution'] = {k: row[k] for k in ('scope', 'block', 'metric')}
+        current['attribution']['source_reference'] = reference.copy()
+        if row['scope'] == 'block': current['block'] = row['block']
+    current = l5['electrical_specs'][1]
+    if damage == 'value': current['value'] = '9.9'
+    elif damage == 'unit': current['unit'] = 'mV'
+    elif damage == 'block': current['block'] = 'other_block'
+    elif damage == 'scope': current['attribution']['scope'] = 'chip'
+    elif damage == 'reference': current['attribution']['source_reference']['sha256'] = '0' * 64
+    elif damage == 'extra_field': current['unapproved'] = 'extra'
+    l5['_owner_amendments'] = [reference]
+    l5_path.write_text(json.dumps(l5))
+    result = run_prog(A1, tmp_path)
+    assert result.returncode == (1 if damage else 0), result.stdout + result.stderr
+    if damage:
+        assert 'A1_ATTRIBUTION_UNBOUND' in result.stderr
+        assert not list(tmp_path.rglob('spec.json'))
+    else:
+        body = read_json(bdir(tmp_path, 'regulator_alpha') / 'spec.json')
+        assert body['_provenance']['unattributed_electrical_rows_not_bound'] == 0
+        assert {s['name']: s.get('target', s.get('value')) for s in body['specs']} == {
+            'vout': 1.8, 'iload': .3}
+        assert run_prog(GATE_A1, tmp_path, '--block', 'regulator_alpha').returncode == 0
