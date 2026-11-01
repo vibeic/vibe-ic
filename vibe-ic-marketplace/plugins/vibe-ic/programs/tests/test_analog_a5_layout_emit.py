@@ -744,44 +744,78 @@ def test_arm_c_a_ring_too_small_to_tap_is_refused_by_name(tmp_path,
 
 
 # ══ ARM D (I4) — drawn and RECORDED, never refused and never silent ══
+def _arm_d_min_area_stage(*, blocked):
+    # Reuse the unrouted 28x30-lambda island and 0.144um2 source rule.
+    # The old TIGHT_CHILD cannot route without a colliding compact fallback,
+    # so it exercises a legitimate refusal before any shortfall is reported.
+    from test_analog_a5_pins_and_min_area import FLOATING_CHILD, DRC_TECH as deck
+
+    child = FLOATING_CHILD
+    if blocked:
+        # Native M2 bars leave exactly 21 lambda around the island. Any
+        # growth or bridge must cross another conductor or violate M2.b.
+        child = child.replace(
+            "<< metal2 >>\n",
+            "<< metal2 >>\nrect -110 -256 110 -216\n"
+            "rect -110 -72 110 -32\nrect -110 -216 -70 -72\n"
+            "rect 70 -216 110 -72\n")
+
+    class MinAreaStage(FakeStage):
+        def sh(self, cmd, timeout=900):
+            rc, text, err = super().sh(cmd, timeout)
+            if cmd.startswith("cat ") and cmd.endswith("-drc.tech"):
+                text = deck + (
+                    ' spacing allm2 allm2 210 touching_ok '
+                    '"Metal2 spacing < 0.21um (M2.b)"\n')
+            return rc, text, err
+
+    return MinAreaStage(child=child)
+
+
 def test_arm_d_a_shortfall_is_drawn_and_recorded_as_a_structured_record(
         tmp_path, monkeypatch):
-    """A clearance floor is a PREDICTION. When the best position on the ring
-    is under it the emitter DRAWS and records; round 20 measured both
-    directions of this, 16 deviations -> 68 violations of 628 rules FAIL and
-    no deviations -> 0 violations of 560 rules PASS."""
-    project = _project(tmp_path, LEGAL_NARROW)
-    rc, doc = _run(monkeypatch, project, FakeStage(child=TIGHT_CHILD))
-    rep = doc["blocks"]["blk"]
-    # NEVER REFUSED, which is what this arm is about: a shortfall does not
-    # stop the emitter drawing, and the layout is on disk at the bottom.
-    #
-    # WHY THIS IS NOT `rc == RC_OK` ANY MORE, and why that is not a
-    # weakening. This fixture is a device whose ring is deliberately too
-    # tight, and on a device that small the escape islands of four terminals
-    # genuinely MERGE: the short audit finds it, and a drawn short is now
-    # blocking (`blocking_shorts`). So this fixture measures TWO things at
-    # once and `rc == 0` could no longer tell them apart. The assertion below
-    # says exactly what this arm was written to prove — the shortfall is
-    # RECORDED and NOT refused — and then names the one condition that does
-    # move the exit code here, so a short appearing or disappearing in this
-    # fixture cannot pass unnoticed either way.
-    assert rc != A5E.RC_REFUSED, doc
-    assert rep["result"] != "REFUSED"
-    assert (rc, rep["result"]) == (A5E.RC_FORBIDDEN, "SHORTED"), doc
-    assert A5E.blocking_shorts(rep["deviations"]), rep["deviation_summary"]
-    taps = [d for d in rep["deviations"]
-            if d["quantity"] == "bulk_tap_clearance_lambda"]
-    assert taps, rep["deviation_summary"]
-    rec = taps[0]
-    for field in ("device", "model", "w", "l", "quantity", "required",
-                  "achieved", "shortfall", "adjudicator"):
-        assert field in rec, field
-    assert rec["device"] == "m1" and rec["model"] == "xx_lv_nmos"
-    assert rec["shortfall"] == rec["required"] - rec["achieved"] > 0
-    assert "A6" in rec["adjudicator"]
-    # DRAWN, not refused
-    assert (project / "phase3" / "analog" / "blk" / "layout.mag").is_file()
+    """An unrepairable island is drawn and recorded; a repairable one grows."""
+    from test_analog_a5_pins_and_min_area import (
+        _device_origin, _island_component_area)
+
+    for blocked in (True, False):
+        project = _project(tmp_path / str(blocked), LEGAL_NARROW)
+        stage = _arm_d_min_area_stage(blocked=blocked)
+        rc, doc = _run(monkeypatch, project, stage)
+        rep = doc["blocks"]["blk"]
+        assert rc != A5E.RC_REFUSED, doc
+        assert rep["result"] != "REFUSED"
+        records = [d for d in rep["deviations"]
+                   if d["quantity"] == "device_metal_island_area_lambda2"]
+        census = rep["floating_device_metal"]
+        assert (census["examined"], census["below_min_area"],
+                census["left"], census["grown"]) == (1, 1, int(blocked),
+                                                     int(not blocked))
+        script = stage.scripts["__layout__"]
+        area = _island_component_area(script, _device_origin(script))
+        if blocked:
+            # The native cage also meets the routed bulk conductor: retain
+            # the independent blocking-short assertion, never waive it.
+            assert (rc, rep["result"]) == (A5E.RC_FORBIDDEN, "SHORTED"), doc
+            assert A5E.blocking_shorts(rep["deviations"]), rep["deviation_summary"]
+            assert len(records) == 1, rep["deviation_summary"]
+            rec = records[0]
+            for field in ("device", "model", "w", "l", "quantity", "required",
+                          "achieved", "shortfall", "adjudicator"):
+                assert field in rec, field
+            assert rec["device"] == "m1" and rec["model"] == "xx_lv_nmos"
+            assert (rec["w"], rec["l"]) == (1.0, 0.5)
+            assert (rec["required"], rec["achieved"], rec["shortfall"]) == (1440, 840, 600)
+            assert rec["shortfall"] == rec["required"] - rec["achieved"] > 0
+            assert "A6" in rec["adjudicator"]
+            assert area == rec["achieved"]
+            assert census["patches"] == []
+        else:
+            assert (rc, rep["result"]) == (A5E.RC_OK, "OK"), doc
+            assert not A5E.blocking_shorts(rep["deviations"])
+            assert records == []
+            assert area >= 1440, area
+        assert (project / "phase3" / "analog" / "blk" / "layout.mag").is_file()
 
 
 def test_arm_d_the_emitter_never_prints_a_drc_verdict_of_its_own(tmp_path,
@@ -795,20 +829,27 @@ def test_arm_d_the_emitter_never_prints_a_drc_verdict_of_its_own(tmp_path,
 
 def test_arm_d_the_floor_is_never_lowered_to_make_the_emitter_pass(tmp_path,
                                                                   monkeypatch):
-    """The recorded `required` is the floor the limits program derives from
-    the deck plus this emitter's own declared pad size — not whatever the
-    achieved value happened to be."""
+    """Both the tap floor and the source minimum-area floor stay unchanged."""
     project = _project(tmp_path, LEGAL_NARROW)
-    rc, doc = _run(monkeypatch, project, FakeStage(child=TIGHT_CHILD))
+    rc, doc = _run(monkeypatch, project, _arm_d_min_area_stage(blocked=True))
     rep = doc["blocks"]["blk"]
+    assert (rc, rep["result"]) == (A5E.RC_FORBIDDEN, "SHORTED"), doc
     assert rep["m1_space_um"] == 0.18
     terms = rep["tap_clearance_um"]["terms"]
     assert terms["m1_space_um"] == 0.18
+    assert terms["tap_pad_half_um"] == terms["terminal_pad_half_um"] == 0.15
     want = terms["m1_space_um"] + 2 * terms["tap_pad_half_um"]
     assert rep["tap_clearance_um"]["value"] == pytest.approx(want)
-    taps = [d for d in rep["deviations"]
-            if d["quantity"] == "bulk_tap_clearance_lambda"]
-    assert taps[0]["required"] == round(want * rep["lambda_per_um"])
+    assert want == pytest.approx(0.48)
+    source_area = rep["deck_rules"]["metal_area_um2"]["2"]
+    assert source_area == 0.144
+    records = [d for d in rep["deviations"]
+               if d["quantity"] == "device_metal_island_area_lambda2"]
+    assert len(records) == 1, rep["deviation_summary"]
+    rec = records[0]
+    assert rec["required"] == source_area * rep["lambda_per_um"] ** 2 == 1440
+    assert (rec["achieved"], rec["shortfall"]) == (840, 600)
+    assert rec["required"] > rec["achieved"]
 
 
 def test_arm_d_a_clean_block_records_no_deviation_at_all(tmp_path,
