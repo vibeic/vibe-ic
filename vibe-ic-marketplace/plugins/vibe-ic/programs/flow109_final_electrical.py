@@ -724,6 +724,10 @@ def _metric_analog_authority(project, name, observed):
 def _metric_digital_basis(project, record, *, native_state=None):
     """Bind native functional timing's libraries, RC inputs and configuration."""
     import fnmatch
+    from math import isfinite
+    from _pad_ring import parse_liberty_model_metadata
+    from _ppa.backends.opensta import parse_liberty_pvt
+    from hold_corner_coverage_check import _corners_in
     from librelane_contract import validate_step_receipt
     manifest_path = files._bound(project, record['manifest'])
     if manifest_path != project / INPUT:
@@ -746,14 +750,59 @@ def _metric_digital_basis(project, record, *, native_state=None):
     declared = config.get('CELL_LIBS') or config.get('LIB') or {}
     if not libraries or not isinstance(declared, dict):
         raise AdmissionRefusal('D70_NATIVE_LIBRARIES_ABSENT', 'per-corner native libraries required')
+    core_by_corner = {}
     for corner in record['required_corners']:
         matches = [group for pattern, group in declared.items() if fnmatch.fnmatchcase(corner, pattern)]
         if len(matches) != 1 or not matches[0] or any(path not in libraries for path in matches[0]):
             raise AdmissionRefusal('D70_NATIVE_LIBRARY_CORNER_MISMATCH', corner)
+        core_by_corner[corner] = matches[0]
+    hosts = {}
     for path, expected in {**(inputs.get('config_files') or {}), **libraries}.items():
         host = signoff._liberty_host_path(project, path, inputs.get('image'))
         if host is None or digest(host) != expected:
             raise AdmissionRefusal('D70_NATIVE_LIBRARY_OR_CONFIG_CHANGED', path)
+        hosts[path] = host
+    models = {}
+    # Shared PVT readers consume delimiters; retain one for the next token.
+    delimiters = str.maketrans({symbol: symbol * 2 for symbol in '_.-'})
+    for corner, paths in core_by_corner.items():
+        rc = [signoff.rc_corner(pattern) for pattern in (state.get('spef') or {})
+              if fnmatch.fnmatchcase(corner, pattern)]
+        if len(rc) != 1 or not corner.startswith(rc[0] + '_'):
+            raise AdmissionRefusal('D70_NATIVE_LIBRARY_PVT_MISMATCH', corner + ': RC scene is unresolved')
+        scene_name = corner[len(rc[0]) + 1:].translate(delimiters)
+        scene = parse_liberty_pvt(scene_name)
+        scene_process = set(_corners_in(scene_name))
+        if (len(scene_process) != 1 or scene.voltage_v is None
+                or scene.temperature_c is None):
+            raise AdmissionRefusal('D70_NATIVE_LIBRARY_PVT_MISMATCH', corner + ': scene PVT is unresolved')
+        for path in paths:
+            if path not in models:
+                models[path] = parse_liberty_model_metadata(hosts[path].read_text(errors='replace'))
+            model = models[path]
+            library_name = (model['library'] or '').translate(delimiters)
+            process = set(_corners_in(library_name))
+            selected = model['selected_condition']
+            has_conditions = bool(model['operating_conditions'] or model['default_operating_conditions'])
+            if has_conditions:
+                process = set(_corners_in((selected['name'] or '').translate(delimiters))) or process
+            else:
+                selected = model['nominal_header']
+            values = [selected[key] for key in ('process', 'voltage', 'temperature')]
+            if (not model['library'] or process != scene_process
+                    or (has_conditions and selected['name'] is None)
+                    or any(value is None or not isfinite(value) for value in values)
+                    or selected['voltage'] != scene.voltage_v
+                    or selected['temperature'] != scene.temperature_c):
+                raise AdmissionRefusal('D70_NATIVE_LIBRARY_PVT_MISMATCH', corner + ': ' + path)
+            if not has_conditions:
+                identity = parse_liberty_pvt(library_name)
+                if (any(identity.gaps.get(field, '').startswith('ambiguous:')
+                        for field in ('voltage_v', 'temperature_c'))
+                        or (identity.voltage_v is not None and identity.voltage_v != selected['voltage'])
+                        or (identity.temperature_c is not None
+                            and identity.temperature_c != selected['temperature'])):
+                    raise AdmissionRefusal('D70_NATIVE_LIBRARY_PVT_MISMATCH', corner + ': ' + path)
     return {'manifest': record['manifest'], 'native_receipt': files._record(project, folder / 'vibeic_receipt.json'),
             'state_files': timed, 'liberty_files': libraries, 'configuration': inputs['config']}
 
