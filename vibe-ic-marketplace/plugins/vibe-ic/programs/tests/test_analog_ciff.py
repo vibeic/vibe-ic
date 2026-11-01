@@ -193,7 +193,7 @@ def test_template_emits_passive_summer_and_only_first_stage_dac(tmp_path, order,
         assert any(n == f"cff{i}" or n.startswith(f"cff{i}_u") for n in devices)
     assert "mn_dacs1" in devices
     assert not any(f"mn_dacs{i}" in devices for i in range(2, order+1))
-    assert devices["mn_qdly1"]["nets"][1] == ("nph1b" if delay == 0 else "nph2b")
+    assert devices["mn_qdly1"]["nets"][1] == ("nph1b" if delay == 0 else "nclkb")
     assert any(n.startswith("cffk0") for n in devices) == bool(delay)
     # Every new SC device reaches the actual netlist, not just a sidecar.
     for name in devices:

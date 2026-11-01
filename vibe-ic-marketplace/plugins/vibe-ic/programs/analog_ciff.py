@@ -359,7 +359,7 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
     # Existing delayed comparator strobe chain is reused on the chosen phase.
     for d in devices:
         if d["name"] in ("mp_qdly1", "mn_qdly1"):
-            d["nets"][1] = "nph1b" if rec["D"] == 0 else "nph2b"
+            d["nets"][1] = "nph1b" if rec["D"] == 0 else "nclkb"
     # General optimized numerator: signed charge injection into the first
     # integrator. No DAC term is introduced in later stages.
     for j, source in enumerate(outputs):
