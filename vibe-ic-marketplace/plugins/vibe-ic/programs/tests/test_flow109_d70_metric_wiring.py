@@ -13,7 +13,7 @@ import flow109
 import flow109_final_electrical as final
 import flow109_metric_acceptance as metrics
 from test_flow109_analog_final_mission import case, put
-from test_flow109_scan_timing_modes import software, qualified, ref, put as write
+from test_flow109_scan_timing_modes import CORNER, software, qualified, ref, put as write
 
 
 def context(profile='Analog IC external trim', **changes):
@@ -171,7 +171,7 @@ def test_final_scan_modes_feed_the_canonical_metric_consumer(software, monkeypat
         'adopted_views': {'netlist': ref(project, paths['netlist.v']), 'sdc': ref(project, paths['functional.sdc'])},
         'spefs': {'nom': ref(project, paths['nom.spef'])}, 'final_spefs': {'nom': ref(project, paths['nom.spef'])}}
     d69 = ref(project, write(project / 'input/software-final.json', {'scope': 'SOFTWARE_ONLY_NOT_D69_ACCEPTANCE'}))
-    write(project / final.INPUT, {'schema': final.SCHEMA, 'required_corners': ['nom_tt'],
+    write(project / final.INPUT, {'schema': final.SCHEMA, 'required_corners': [CORNER],
         'final_parasitics_receipt': d69, 'librelane': {**native, 'pdk_root': str(native['pdk_root'])}})
     monkeypatch.setattr(final.extract, 'validate_final_parasitics', lambda *a: parasitics)
     result = final.execute(project, ctx)
