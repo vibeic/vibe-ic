@@ -145,6 +145,7 @@ import analog_incremental_decimator as _dec  # noqa: E402
 import analog_resolution_stimulus as _stim  # noqa: E402
 import analog_ciff as _ciff  # noqa: E402
 import analog_ota1_options as _ota1  # noqa: E402
+import analog_ota_bias as _ota_bias  # noqa: E402
 from _analog_producer_fingerprint import producer_fingerprint as _source_fingerprint
 
 PRODUCER = "analog_a2_topology_emit"
@@ -6635,6 +6636,7 @@ def folded_first_stage_problems(ir: Dict[str, Any], project: Optional[Path]) -> 
         wanted = expand_folded_first_stage(lib, values, ir["knobs"], expected, nets, sizing, Path(project))
         apply_sizing_inputs({"device_parameters": sizing.get("device_parameters", {})},
                             {}, {}, [], expected, exprs, {}, {})
+        _ota_bias.route_existing_consumers(expected, ir.get("ota_bias_network"))
         finish_folded_first_stage(wanted, expected)
         renames = (ir.get("port_binding") or {}).get("renamed") or {}
         wanted = _rename_nets(wanted, renames)
@@ -7008,8 +7010,9 @@ def input_drain_cascode_problems(ir: Dict[str, Any],
 
 
 def ciff_library(lib, spec_values):
-    return _ciff.specialize(lib, spec_values, expand_stages, cap_l_expr,
-                            SAMPLING_CAP_FF_EXPR, _LOAD_OVER_CS_DERIVED_EXPR)
+    specialized = _ciff.specialize(lib, spec_values, expand_stages, cap_l_expr,
+                                  SAMPLING_CAP_FF_EXPR, _LOAD_OVER_CS_DERIVED_EXPR)
+    return _ota_bias.prepare_library(specialized)
 
 
 def build_ir(block: str, btype: str, entry: Dict[str, Any],
@@ -7217,6 +7220,14 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                 {name for name, row in sizing_inputs.get("device_parameters", {}).items()
                  if "w" in row}, _minima.min_length_um(role_minima, CAP_ROLE))
         except ValueError as exc:
+            raise SizingInputsInvalid(str(exc)) from exc
+    ota_bias_network = None
+    if btype == "delta_sigma":
+        try:
+            ota_bias_network = _ota_bias.apply(
+                lib, spec_values, devices, param_exprs, internal_nets,
+                constants, split_env, _safe_eval, project, block, role_minima, role_maxima, spec_path)
+        except (ValueError, KeyError) as exc:
             raise SizingInputsInvalid(str(exc)) from exc
     devices, param_exprs, splits, split_refusals = split_oversize_capacitors(
         devices, param_exprs, split_env, role_maxima, role_minima,
@@ -7439,6 +7450,10 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         ir["startup_reset"] = startup_reset
     if ota1_options:
         ir["ota1_options"] = ota1_options
+    if ota_bias_network:
+        ir["ota_bias_network"] = ota_bias_network
+        if ota_bias_network.get("input"):
+            ir["_provenance"]["inputs"].append(dict(ota_bias_network["input"], role="bias_network"))
     if cascodes:
         ir["input_drain_cascodes"] = cascodes
     if matched_length:
@@ -7468,7 +7483,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         for _key in ("ports", "rails", "internal_nets", "devices",
                      "constants", "device_param_exprs", "measurements",
                      "testbench", "stimulus", "input_drain_cascodes", "folded_first_stage", "miller_nulling",
-                     "loop_declaration", "startup_reset", "ota1_options"):
+                     "loop_declaration", "startup_reset", "ota1_options", "ota_bias_network"):
             if _key in ir:
                 ir[_key] = _rename_nets(ir[_key], _renames)
     ir["port_binding"] = {
@@ -7763,6 +7778,16 @@ def render_md(ir: Dict[str, Any], lib: Dict[str, Any],
         for e in ir.get("device_param_exprs") or []:
             L.append(f"| `{e.get('device')}.{e.get('param')}` | "
                      f"`{e.get('expr')}` | {e.get('rationale', '')} |")
+        L.append("")
+    bias_network = ir.get("ota_bias_network")
+    if bias_network:
+        L.extend(["## Per-OTA declared-load bias", "",
+                  "| OTA | SC load fF | beta | slew current A | settling current A | bias gate |",
+                  "|---|---|---|---|---|---|"])
+        for row in bias_network["stage_table"]:
+            L.append(f"| {row['stage']} | {row['load_ff']:.9g} | {row['beta']:.9g} | {row['I_slew_a']:.9g} | {row['I_settle_a']:.9g} | {row['gate']} |")
+        L.extend(["", "Current-budget model: " + bias_network["budget"]["status"] + "; native current verification is required.", ""])
+        L.extend("WARNING: " + warning for warning in bias_network["warnings"])
         L.append("")
     L.append("## Provenance")
     L.append("")

@@ -162,7 +162,7 @@ PRODUCER = "analog_a3_netlist_emit"
 
 
 def producer_fingerprint() -> str:
-    """A digest of this producer and its geometry resolver, stamped into provenance.
+    """A digest of the producer and its output-shaping dependencies.
 
     MEASURED (round 23): an artefact that names its producer but not WHICH
     producer cannot be told apart from a stale one, so the runner skipped the
@@ -170,12 +170,8 @@ def producer_fingerprint() -> str:
     `analog_a2_topology_emit`. Derived from the producer's own bytes -- not
     mtime, not a file name.
     """
-    import hashlib
-    try:
-        return hashlib.sha256(Path(__file__).read_bytes() + b"\0" +
-            Path(__file__).with_name("analog_mos_geometry.py").read_bytes()).hexdigest()[:16]
-    except OSError:                                     # pragma: no cover
-        return ""
+    from _analog_producer_fingerprint import producer_fingerprint as source_fingerprint
+    return source_fingerprint(Path(__file__))
 PROVENANCE_SCHEMA = 1
 SKILL = "analog-netlist-gen"
 
@@ -1028,7 +1024,11 @@ def _validate_ir(ir: Dict[str, Any], pdkctx: Dict[str, Any],
                  project: Optional[Path] = None) -> List[str]:
     """Structural problems that must stop emission. Every one of these was a
     real failure mode measured on a hand-built fixture."""
-    problems: List[str] = _a2.input_drain_cascode_problems(ir, project)
+    warning = _a2._ota_bias.legacy_shared_warning(ir)
+    if warning:
+        print("WARNING: " + warning, file=sys.stderr)
+    problems: List[str] = _a2._ota_bias.problems(ir, project)
+    problems.extend(_a2.input_drain_cascode_problems(ir, project))
     problems.extend(_a2.matched_gain_length_problems(ir, project))
     problems.extend(_a2.folded_first_stage_problems(ir, project))
     problems.extend(_a2.miller_nulling_problems(ir, project))
