@@ -4384,16 +4384,19 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
             continue
         stepv = max(1, pitch // 4)
         cands = list(range(rx1, rx2 + 1, stepv))
-        if not spec["rail"]:
-            edge = max([rx2] + [r["box"][2] for r in plan.shapes]
-                       + [r["box"][2] for r in plan.device_shapes])
-            cands.extend(range(rx2 + stepv, edge + 1, stepv))
+        # A supply's EM-sized multicut stack can be wider than its local
+        # rail too. Search the existing block extent and check the connecting
+        # rail metal exactly as for a signal pin; every upper plane and cut
+        # still has to clear independently below.
+        edge = max([rx2] + [r["box"][2] for r in plan.shapes]
+                   + [r["box"][2] for r in plan.device_shapes])
+        cands.extend(range(rx2 + stepv, edge + 1, stepv))
         chosen = None
         for x in cands:
             paint, bars = _pin_stack_boxes(x, y, rail_level, level, geo, cuts,
                                            horizontal_lo=rail_level == 4)
             connection = None
-            if not spec["rail"] and bars[rail_level][2] > rx2:
+            if bars[rail_level][2] > rx2:
                 hw2 = max(geo.wire[rail_level] // 2, 1)
                 connection = (rx2 - hw2, y - hw2, bars[rail_level][2], y + hw2)
             # Only metal2 attaches to this rail; upper planes clear independently.
