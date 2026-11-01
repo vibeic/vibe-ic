@@ -2206,7 +2206,8 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                top: int = 3, sites: Optional["Sites"] = None,
                friendly=None, dev: Optional[dict] = None,
                compact_terminal: bool = False,
-               exit_path: Optional[Tuple[int, int, int]] = None) -> Tuple[int, int]:
+               exit_path: Optional[Tuple[int, int, int]] = None,
+               search_lambda: int = ISLAND_SEARCH_LAMBDA) -> Tuple[int, int]:
     """Carry a terminal from the metal the gencell delivered it on to the
     routing layer, and give every cut the metal the deck demands around it.
 
@@ -2283,7 +2284,7 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
     if sites is not None:
         placed = None
         for (ax, ay, p) in shapes:
-            for (dx, dy) in _island_candidates(ISLAND_SEARCH_LAMBDA):
+            for (dx, dy) in _island_candidates(search_lambda):
                 box = (x + dx - ax, y + dy - ay, x + dx + ax, y + dy + ay)
                 if not sites.clear(box, layers, friendly, net):
                     continue
@@ -2312,11 +2313,11 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                 purpose = "compact terminal access" if compact_terminal else "body exit path"
                 raise Refusal(
                     f"no source-legal {purpose} exists within "
-                    f"{ISLAND_SEARCH_LAMBDA} lambda of ({x}, {y}); refusing "
+                    f"{search_lambda} lambda of ({x}, {y}); refusing "
                     f"instead of drawing the colliding fallback island")
             plan.deviate(dev or {}, "via_island_clearance_lambda",
                          geo.metal_space(term_layer), 0,
-                         f"no position within {ISLAND_SEARCH_LAMBDA} lambda "
+                         f"no position within {search_lambda} lambda "
                          f"of ({x}, {y}) hosts any of the "
                          f"{len(shapes)} island shapes this deck permits "
                          f"(smallest {2 * shapes[-1][0]}x{2 * shapes[-1][1]} "
@@ -2513,20 +2514,12 @@ def _access_lanes(devices: Sequence[dict], *, share: bool = False) -> None:
                 g["shared_escape_owner"] = owner["dev"]["name"]
 
 
-def _local_rail_tracks(row: Sequence[dict], bus_x: dict,
-                       geo: Geo) -> Dict[str, int]:
-    pitch = geo.pitch()
-    intervals: Dict[str, List[int]] = {}
-    for d in row:
-        for g in d["groups"]:
-            intervals.setdefault(g["net"], []).append(g["lane_x"])
-    clearance = (2 * max(geo.long_half[2], geo.wire[2] // 2)
-                 + geo.metal_space("metal2"))
+def _interval_tracks(intervals: Dict[str, Tuple[int, int]],
+                     clearance: int) -> Dict[str, int]:
     tracks: List[int] = []
     assigned = {}
-    for net, xs in sorted(intervals.items(), key=lambda item:
-                          (bus_x.get(item[0], min(item[1]) - pitch), item[0])):
-        lo, hi = bus_x.get(net, min(xs) - pitch), max(xs) + pitch
+    for net, (lo, hi) in sorted(intervals.items(),
+                                key=lambda item: (item[1][0], item[0])):
         track = next((i for i, end in enumerate(tracks)
                       if end + clearance <= lo), len(tracks))
         if track == len(tracks):
@@ -2535,6 +2528,59 @@ def _local_rail_tracks(row: Sequence[dict], bus_x: dict,
             tracks[track] = hi
         assigned[net] = track
     return assigned
+
+
+def _local_rail_tracks(row: Sequence[dict], bus_x: dict,
+                       geo: Geo) -> Dict[str, int]:
+    pitch = geo.pitch()
+    terminals: Dict[str, List[int]] = {}
+    for d in row:
+        for g in d["groups"]:
+            terminals.setdefault(g["net"], []).append(g["lane_x"])
+    intervals = {net: (bus_x.get(net, min(xs) - pitch), max(xs) + pitch)
+                 for net, xs in terminals.items()}
+    clearance = (2 * max(geo.long_half[2], geo.wire[2] // 2)
+                 + geo.metal_space("metal2"))
+    return _interval_tracks(intervals, clearance)
+
+
+def _m4_trunk_envelope(geo: Geo) -> Tuple[int, int, int]:
+    """Fixed-centre stack half-extent, edge spacing and track pitch."""
+    prototype = Plan()
+    for compact in (False, True):
+        _via_stack(prototype, "<trunk>", 0, 0, 2, geo, top=4,
+                   compact_terminal=compact)
+    # Either island orientation and pad size is legal at the fixed centre.
+    half = max([max(geo.wire[4] // 2, 1)]
+               + [abs(v) for shape in prototype.shapes for v in shape["box"]])
+    clearance = max(geo.rules_via_space(k) for k in (2, 3))
+    for k in (2, 3, 4):
+        layer = f"metal{k}"
+        narrow = max([geo.wire[k]] + [min(r["box"][2] - r["box"][0],
+                                         r["box"][3] - r["box"][1])
+                                     for r in prototype.shapes if r["layer"] == layer])
+        spacing = geo.metal_space(layer)
+        for rule in geo.rules.get("metal_width_spacing_um", {}).get(k, []):
+            if narrow / geo.lam > rule["width_gt_um"]:
+                spacing = max(spacing, int(math.ceil(rule["spacing_um"] * geo.lam - 1e-9)))
+        clearance = max(clearance, spacing)
+    pitch = max(geo.pitch(), 2 * half + clearance)
+    return half, clearance, pitch
+
+
+def _m4_trunk_tracks(row_rails: Sequence[dict], geo: Geo):
+    """Reuse rail interval coloring for complete M4 trunk/via envelopes."""
+    half, clearance, pitch = _m4_trunk_envelope(geo)
+    ys: Dict[str, List[int]] = {}
+    for rails in row_rails:
+        for net, y in rails.items():
+            ys.setdefault(net, []).append(y)
+    intervals = {net: (min(values) - half, max(values) + half)
+                 for net, values in ys.items() if len(values) > 1}
+    tracks = _interval_tracks(intervals, clearance)
+    bus_x = {net: (track + 1) * pitch for net, track in tracks.items()}
+    margin = (len(set(tracks.values())) + 3) * pitch if tracks else 0
+    return bus_x, margin
 
 
 def _place_shared_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
@@ -2816,6 +2862,18 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                              "rail_intervals_lambda": intervals,
                              "column_lambda": [offsets[region],
                                                offsets[region] + widths[region]]})
+    bus_x, used_margin = _m4_trunk_tracks(row_rails, geo)
+    shift = used_margin - margin
+    for d in per_dev:
+        for key in ("box_x", "gap_hi", "right_lo"):
+            d[key] += shift
+    for row, description in zip(rows, descriptions):
+        _access_lanes(row, share=True)
+        description["column_lambda"] = [x + shift for x in description["column_lambda"]]
+        for net in description["nets"]:
+            xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
+            description["rail_intervals_lambda"][net] = (
+                bus_x.get(net, min(xs) - pitch), max(xs) + pitch)
     return rows, row_rails, bus_x, descriptions
 
 
@@ -3332,6 +3390,13 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
 
     # ── one metal2 rail per net, and a label on each declared port ──────
     rail_box: Dict[str, Tuple[int, int, int, int]] = {}
+    compact_bus = shared_capacitor_escapes and left_right_regions
+    if compact_bus:
+        # Fixed-centre via sites must see every trunk before they are drawn.
+        for net, bx in bus_x.items():
+            ys = [r[net] for r in row_rails if net in r]
+            half = max(geo.wire[4] // 2, 1)
+            plan.paint(net, "metal4", bx - half, min(ys), bx + half, max(ys))
     for row, rails in zip(placement_rows, row_rails):
         for net, ty in rails.items():
             xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
@@ -3339,8 +3404,11 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             plan.paint(net, "metal2", lo, ty - hw2, max(xs) + pitch, ty + hw2)
             rail_box.setdefault(net, (lo, ty - hw2, max(xs) + pitch, ty + hw2))
             if net in bus_x:
-                _via_stack(plan, net, lo, ty, 2, geo, top=4, sites=sites)
+                _via_stack(plan, net, lo, ty, 2, geo, top=4, sites=sites,
+                           search_lambda=0 if compact_bus else ISLAND_SEARCH_LAMBDA)
     for net, bx in bus_x.items():
+        if compact_bus:
+            continue
         ys = [r[net] for r in row_rails if net in r]
         half = max(geo.wire[4] // 2, 1)
         plan.paint(net, "metal4", bx - half, min(ys), bx + half, max(ys))
