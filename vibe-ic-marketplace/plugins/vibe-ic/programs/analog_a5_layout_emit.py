@@ -2312,7 +2312,7 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
             if compact_terminal or exit_path is not None:
                 purpose = "compact terminal access" if compact_terminal else "body exit path"
                 raise Refusal(
-                    f"no source-legal {purpose} exists within "
+                    f"{(dev or {}).get('name', net)}: no source-legal {purpose} exists within "
                     f"{search_lambda} lambda of ({x}, {y}); refusing "
                     f"instead of drawing the colliding fallback island")
             plan.deviate(dev or {}, "via_island_clearance_lambda",
@@ -2584,6 +2584,63 @@ def _m4_trunk_tracks(row_rails: Sequence[dict], geo: Geo,
     return bus_x, margin
 
 
+def _route_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
+                  geo: Geo, sites: "Sites") -> None:
+    lo, hi = sorted((y0, y1))
+    half = max(geo.wire[3] // 2, 1)
+    space = geo.metal_space("metal3")
+    obstacles = list(getattr(plan, "m3_escape_obstacles", []))
+    obstacles.extend((s["net"], s["box"]) for s in plan.shapes if s["layer"] == "metal3")
+    blocked = []
+    for other, box in obstacles:
+        if other == net or box[2] + space <= x - half or box[0] - space >= x + half:
+            continue
+        a, b = max(lo, box[1] - space - geo.long_half[2]), min(hi, box[3] + space + geo.long_half[2])
+        if a < b:
+            blocked.append((a, b))
+    merged = []
+    for a, b in sorted(blocked):
+        if merged and a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
+        else:
+            merged.append((a, b))
+    cursor = lo
+    for a, b in merged:
+        chosen = None
+        for extra in range(3):
+            low, high = max(lo, a - extra * geo.pitch()), min(hi, b + extra * geo.pitch())
+            for dx in (0, -geo.pitch(), geo.pitch(), -2 * geo.pitch(), 2 * geo.pitch()):
+                bx = x + dx
+                probe = Plan()
+                for y in (low, high):
+                    _via_stack(probe, net, x, y, 2, geo, top=3)
+                hw2 = max(geo.wire[2] // 2, 1)
+                probe.paint(net, "metal2", bx - hw2, low - hw2, bx + hw2, high + hw2)
+                for y in (low, high):
+                    probe.paint(net, "metal2", min(x, bx) - hw2, y - hw2,
+                                max(x, bx) + hw2, y + hw2)
+                if any(not sites.clear(s["box"], [s["layer"]], None, net) for s in probe.shapes):
+                    continue
+                if any(s["layer"] == "metal3" and other != net
+                       and box_separation(s["box"], box) < space
+                       for s in probe.shapes for other, box in obstacles):
+                    continue
+                chosen = (low, high, probe.shapes)
+                break
+            if chosen:
+                break
+        if chosen is None:
+            raise Refusal(f"no source-legal M2 overpass for {net} at x={x}, y={a}:{b}")
+        low, high, shapes = chosen
+        if low > cursor:
+            plan.paint(net, "metal3", x - half, cursor, x + half, low)
+        for shape in shapes:
+            plan.paint(net, shape["layer"], *shape["box"])
+        cursor = high
+    if cursor < hi:
+        plan.paint(net, "metal3", x - half, cursor, x + half, hi)
+
+
 def _complementary_groups(devices: Sequence[dict]) -> List[List[str]]:
     """Keep complementary transmission gates and inverter branches local."""
     mos = [d["dev"] for d in devices if d["dev"].get("class") == "mosfet"
@@ -2693,30 +2750,36 @@ def _place_shared_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
     margin = 0
     while True:
         rows: List[List[dict]] = [[]]
-        x = 0
         order = list(units.values())
         if compact_rows:
             order.sort(key=lambda members: (
                 -max(d["bbox"][3] - d["bbox"][1] for d in members),
                 min(d.get("shared_array", -1) for d in members)))
         for members in order:
-            last = rows[-1][-1] if rows[-1] else None
-            required = (gap(last, members[0])
-                        + sum(d["bbox"][2] - d["bbox"][0] for d in members)
-                        + sum(gap(a, b) for a, b in zip(members, members[1:]))
-                        + gap(members[-1], None))
-            if rows[-1] and x + required > width - margin:
-                rows.append([])
-                x = 0
-                required += gap(None, members[0]) - gap(last, members[0])
-            if required > width - margin:
+            body = (sum(d["bbox"][2] - d["bbox"][0] for d in members)
+                    + sum(gap(a, b) for a, b in zip(members, members[1:])))
+            alone = gap(None, members[0]) + body + gap(members[-1], None)
+            if alone > width - margin:
                 raise Refusal("matching group and its access corridors exceed the row width")
+            chosen = None
+            candidates = rows if compact_rows else rows[-1:]
+            for row in candidates:
+                last = row[-1] if row else None
+                x = last["right_lo"] if last is not None else 0
+                required = gap(last, members[0]) + body + gap(members[-1], None)
+                if x + required <= width - margin:
+                    chosen = row
+                    break
+            if chosen is None:
+                chosen = []
+                rows.append(chosen)
+            x = chosen[-1]["right_lo"] if chosen else 0
             for d in members:
-                x += gap(rows[-1][-1] if rows[-1] else None, d)
+                x += gap(chosen[-1] if chosen else None, d)
                 d["box_x"] = d["gap_hi"] = x
                 x += d["bbox"][2] - d["bbox"][0]
                 d["right_lo"] = x
-                rows[-1].append(d)
+                chosen.append(d)
         row_nets = [[net for net in nets
                      if any(g["net"] == net for d in row for g in d["groups"])]
                     for row in rows]
@@ -3409,6 +3472,20 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                                for l in g["labels"]]
             g["abs_escape_y"] = oy + g["escape_y"]
 
+    plan.m3_escape_obstacles = []
+    if rail_level == 4:
+        for d in per_dev:
+            for g in d["groups"]:
+                ey, lane = g["abs_escape_y"], g["lane_x"]
+                if g["strapped"] or g["level"] > ROUTE_LEVEL:
+                    box = (lane - geo.long_half[2], ey - geo.long_half[2],
+                           lane + geo.long_half[2], ey + geo.long_half[2])
+                else:
+                    edge = d["origin"][0] + d["bbox"][0 if g["side"] == "left" else 2]
+                    box = (min(edge, lane) - hw3, ey - hw3,
+                           max(edge, lane) + hw3, ey + hw3)
+                plan.m3_escape_obstacles.append((g["net"], box))
+
     # The index is built ONCE, after every device is placed and before a
     # single wire is drawn: the routing runs closest to the devices, and a
     # placer that cannot see them places into them.
@@ -3609,7 +3686,10 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             if g["strapped"]:
                 _via_stack(plan, net, lane, ey, 2, geo, top=3, sites=sites)
             ry = row_rails[d["row"]][net]
-            plan.paint(net, "metal3", lane - hw3, ry, lane + hw3, ey)
+            if rail_level == 4:
+                _route_m3_leg(plan, net, lane, ry, ey, geo, sites)
+            else:
+                plan.paint(net, "metal3", lane - hw3, ry, lane + hw3, ey)
             _via_stack(plan, net, lane, ry, 3, geo, top=rail_level,
                        sites=sites)
 
