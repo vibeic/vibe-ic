@@ -269,6 +269,7 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                               "absolute position is unknown"}
         best: Tuple[str, str, Optional[List[int]], Optional[List[int]]] = (
             "NOT_CONNECTED", "no rectangle of the terminal matched", None, None)
+        face_overlaps = []
         for layer, r in rects:
             try:
                 x1, y1, x2, y2 = PR.orient_rect(r, comp.orient, size)
@@ -281,18 +282,21 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                         comp.y + int(round(y1 * dfn.units)),
                         comp.x + int(round(x2 * dfn.units)),
                         comp.y + int(round(y2 * dfn.units))]
+            face_overlaps.append(
+                rec.get("rect") is not None and rec["layer"] == layer
+                and _overlap(rec["rect"], abs_rect) is not None)
             verdict, reason, ov = decide(rec, layer, abs_rect,
                                          widths.get(layer))
-            if verdict == "CONNECTED":
-                best = (verdict, reason, ov, abs_rect)
-                break
-            if best[0] != "UNDECIDED":
+            if best[0] == "CONNECTED":
+                continue
+            if verdict == "CONNECTED" or best[0] != "UNDECIDED":
                 best = (verdict, reason, ov, abs_rect)
         return {
             "pin": pin_name, "net": rec["net"], "instance": inst,
             "terminal": tpin, "master": comp.master, "orient": comp.orient,
             "pin_layer": rec["layer"], "pin_rect": rec["rect"],
             "terminal_rect": best[3], "overlap": best[2],
+            "candidate_face_overlaps": face_overlaps,
             "verdict": best[0], "reason": best[1]}
 
     # DEF wildcard connectivity is instance-pin connectivity, independent of
@@ -328,7 +332,15 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                 faces = list(dict.fromkeys((layer, tuple(rect)) for layer, rect in
                              pin_ports[comp.master][pin] if layer == top_layer))
                 row = terminal_row(pin_name, rec, inst, pin, comp, faces or None)
-                if (comp.master in conflicting_roles or terminals != [pin] or len(faces) != 1):
+                # Q1 uses geometric overlap, independently of the minimum-width
+                # verdict: a narrow positive overlap still touches this face.
+                # Unknown geometry cannot establish an all-faces miss.
+                ambiguous = (comp.master in conflicting_roles
+                             or terminals != [pin] or len(faces) != 1)
+                measured_miss = (faces and rec.get("rect") is not None
+                                 and len(row.get("candidate_face_overlaps", [])) == len(faces)
+                                 and not any(row["candidate_face_overlaps"]))
+                if ambiguous and not measured_miss:
                     row.update(verdict='UNDECIDED', reason=
                         'LEF does not unambiguously declare one supply terminal and one '
                         f'PORT rectangle on top routing layer {top_layer!r}: '

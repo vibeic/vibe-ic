@@ -191,7 +191,8 @@ def _def(orient, pin_rect):
             f"END DESIGN\n")
 
 
-def _shared_supply(tmp_path, section, connection, port_x, use='POWER', ambiguous=False):
+def _shared_supply(tmp_path, section, connection, port_x, use='POWER', ambiguous=False,
+                   multiple_pins=False):
     """Two supply pads share a rail; only geometry identifies the BTerm's pad."""
     lef = tmp_path / "rail.lef"
     lef.write_text(_io_macro("rail_bridge", 60.0, 100.0,
@@ -201,6 +202,13 @@ def _shared_supply(tmp_path, section, connection, port_x, use='POWER', ambiguous
                    .replace('RECT 1.000 1.000 3.000 3.000 ;',
                             'RECT 1.000 1.000 3.000 3.000 ;\n RECT 4 4 6 6 ;'
                             if ambiguous else 'RECT 1.000 1.000 3.000 3.000 ;'))
+    if multiple_pins:
+        lef.write_text(lef.read_text().replace(
+            'END rail_bridge',
+            'PIN SECOND\n DIRECTION INOUT ;\n USE ' + use + ' ;\n'
+            ' PORT\n LAYER Metal5 ;\n RECT 10 10 12 12 ;\n END\n'
+            'END SECOND\nEND rail_bridge'))
+        connection += ' ( * SECOND )'
     text = f"""VERSION 5.8 ;
 DESIGN neutral_top ;
 UNITS DISTANCE MICRONS {UNITS} ;
@@ -255,12 +263,23 @@ def test_supply_connectivity_without_a_coincident_pad_still_refuses(
 
 
 @pytest.mark.parametrize('use', ['POWER', 'GROUND'])
-def test_ambiguous_supply_lef_remains_undecided_even_with_coincidence(tmp_path, use):
-    rc, report = _shared_supply(tmp_path, 'SPECIALNETS', '( * RAIL )', 20000,
-                                use, ambiguous=True)
-    assert rc == 1
+@pytest.mark.parametrize('port_x', [20000, 120000, 220000, 23900])
+@pytest.mark.parametrize('multiple_pins', [False, True])
+def test_ambiguous_supply_lef_remains_undecided_even_with_coincidence(
+        tmp_path, use, port_x, multiple_pins):
+    rc, report = _shared_supply(tmp_path, 'SPECIALNETS', '( * RAIL )', port_x,
+                                use, ambiguous=True, multiple_pins=multiple_pins)
     assert report['connected_nets'] == []
-    assert report['undecided_nets'] == ['supply']
+    if port_x == 220000:
+        assert rc == 0
+        assert report['not_connected_nets'] == ['supply']
+        assert report['undecided_nets'] == []
+    else:
+        assert rc == 1
+        assert report['undecided_nets'] == ['supply']
+        assert report['not_connected_nets'] == []
+        assert any(report['nets'][0]['candidate_face_overlaps'])
+        assert not all(report['nets'][0]['candidate_face_overlaps'])
 
 
 @pytest.mark.parametrize('use', ['POWER', 'GROUND'])
@@ -268,6 +287,21 @@ def test_supply_pad_not_on_net_is_not_connected(tmp_path, use):
     rc, report = _shared_supply(tmp_path, 'SPECIALNETS', '', 20000, use)
     assert rc == 0
     assert report['not_connected_nets'] == ['supply']
+
+
+@pytest.mark.parametrize('use', ['POWER', 'GROUND'])
+def test_positive_supply_overlap_below_minimum_width_keeps_existing_rejection(tmp_path, use):
+    # #58 Q1's literal positive-overlap reading conflicts with decide's width
+    # rule here. Preserve the existing rule and report the conflict to the owner.
+    rc, report = _shared_supply(tmp_path, 'SPECIALNETS', '( * RAIL )', 23900, use)
+    assert rc == 0
+    assert report['connected_nets'] == []
+    assert report['not_connected_nets'] == ['supply']
+    assert report['undecided_nets'] == []
+    row = report['nets'][0]
+    assert row['candidate_face_overlaps'] == [True]
+    assert row['overlap'] == [25900, 22000, 26000, 26000]
+    assert 'minimum width' in row['reason']
 
 
 def test_signal_off_pad_still_refuses(tmp_path):
