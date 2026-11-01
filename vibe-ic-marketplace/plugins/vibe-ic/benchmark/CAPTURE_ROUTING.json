@@ -183,6 +183,15 @@
       "bucket_A_program": "programs/design_one_shot_runner.py",
       "bucket_B_skill_file": "skills/catalog-glue-author/SKILL.md"
     },
+    "phase2.reference_tb.current_professional": {
+      "description": "Current professional functional execution proof consumed by the existing normal reference result; capture routing only, not a new flow row or gate.",
+      "bucket_A_program": "programs/design_one_shot_runner.py",
+      "bucket_A_related": [
+        "programs/_sim_results_bridge.py",
+        "programs/cpu_functional_oracle_waiver_check.py"
+      ],
+      "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
+    },
     "phase2.reference_tb": {
       "bucket_A_program": "programs/bit_level_full_stack_tb_check.py",
       "bucket_B_skill_file": "skills/phase2-rtl-verify/SKILL.md"

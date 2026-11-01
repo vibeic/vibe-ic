@@ -25,7 +25,13 @@ All fixtures are synthetic; no chip, PDK or vendor literal decides anything.
 from __future__ import annotations
 
 import sys
+import inspect
+import json
+import time
+import shutil
 from pathlib import Path
+
+import pytest
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -103,6 +109,186 @@ def test_the_canonical_record_reports_the_oracle_this_run_ran(tmp_path):
         "the run closed functional verification with a real cocotb PASS and "
         "the canonical Step-4 record still says functional_verified=false; "
         f"record was: {xml}")
+
+
+def _current_professional_reference(tmp_path, monkeypatch, *, during_run=None,
+                                    during_generate=None):
+    """Real producers/consumers; only simulator transport is a neutral fixture."""
+    import professional_tb_gen as generator
+    project = _project(tmp_path, None)
+    rtl = project / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    (rtl / (TOP + '.v')).write_text(
+        f'module {TOP}(input a, output y); assign y=a; endmodule\n')
+    docs = project / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({
+        'top_module': TOP, 'top_ports': [
+            {'name': 'a', 'direction': 'input'},
+            {'name': 'y', 'direction': 'output'}]}))
+    full = project / 'phase2/stage1/sim_full_stack'
+    (full / f'tb_{TOP}_full.v').write_text(
+        f'module tb; reg a=0; wire y; {TOP} dut(a,y); endmodule\n')
+    bundle = project / 'phase2/stage1/sim_professional' / TOP
+    bundle.mkdir(parents=True)
+    (bundle / 'expert_reference_tb.py').write_text(
+        'def expected(a):\n    return {"y": a}\n')
+    def generated(*_):
+        if during_generate:
+            during_generate(project, bundle)
+        return {'status': 'PASS', 'dut_kind': 'expert_reference', 'out_dir': str(bundle)}
+    monkeypatch.setattr(generator, 'generate', generated)
+    monkeypatch.setattr(DOSR, '_professional_tb_exec_site', lambda *_: 'host')
+    monkeypatch.setattr(DOSR, '_professional_tb_sim_differential', lambda *_: None)
+    def simulated_make(argv, **kwargs):
+        assert argv[:2] == ['bash', '-lc']
+        (bundle / 'results.xml').write_text(_junit(1))
+        if during_run:
+            during_run(project, bundle)
+        return 0, 'PROFESSIONAL_TB PASS\n', ''
+    monkeypatch.setattr(DOSR, '_run', simulated_make)
+    began = time.time()
+    producer = DOSR.step_professional_tb_gen(project, TOP, '')
+    assert producer.status == 'PASS', producer.detail
+    monkeypatch.setattr(DOSR, '_iverilog_available', lambda *_: True)
+    monkeypatch.setattr(DOSR, '_iverilog_compile_with_sv_fallback',
+                        lambda *_args, **_kw: (0, '', '', 'iverilog_g2012'))
+    monkeypatch.setattr(DOSR, '_sim_run_or_reuse', lambda *_args, **_kw: (
+        0, 'FULL_STACK_TB_CHECKS pass=1 fail=0\nFULL_STACK_TB_DONE\n', ''))
+    monkeypatch.setattr(DOSR, '_run_pulse_width_rearm_normal_gate',
+                        lambda *_: (0, {'verdict': 'NOT_APPLICABLE'},
+                                     project / 'absent-pulse-report.json'))
+    return project, producer, began
+
+
+def _reference_current(project, producer, began, *, public):
+    # Overlay the same behavior test on a predecessor that has no optional
+    # producer argument: execute its real consumer rather than fail on an API.
+    consumer = DOSR.step_reference_tb if public else DOSR._reference_tb_generic_full_stack
+    kwargs = {}
+    if 'professional_result' in inspect.signature(consumer).parameters:
+        kwargs.update(professional_result=producer, professional_started_after=began)
+    if public:
+        return consumer(project, TOP, 'processor_cpu', '', **kwargs)
+    return consumer(project, TOP, TRACK_REASON, time.time(), '', 'processor_cpu', **kwargs)
+
+
+@pytest.mark.parametrize('public', [False, True])
+def test_reference_consumer_reports_the_current_professional_oracle(tmp_path, monkeypatch, public):
+    project, producer, began = _current_professional_reference(tmp_path, monkeypatch)
+    result = _reference_current(project, producer, began, public=public)
+    gate_rc, gate_detail = GATE._evaluate(project)
+    observed = {'reference_status': result.status,
+                'functional_verified': result.extras.get('functional_verified'),
+                'gate_rc': gate_rc, 'gate_detail': gate_detail}
+    assert gate_rc == 0, observed
+    assert result.status == 'PASS', observed
+    assert result.extras.get('functional_verified') is True, observed
+
+
+@pytest.mark.parametrize('damage', [
+    'missing_witness', 'foreign_project', 'prior_run', 'future_run',
+    'producer_fail', 'no_sim', 'rtl_changed', 'report_changed',
+    'hook_changed', 'l_doc_changed', 'junit_changed', 'junit_missing',
+    'junit_failed', 'junit_vacuous', 'junit_skipped', 'sibling_failed',
+    'sibling_missing',
+])
+def test_reference_consumer_cannot_adopt_noncurrent_professional_evidence(
+        tmp_path, monkeypatch, damage):
+    project, producer, began = _current_professional_reference(tmp_path, monkeypatch)
+    bundle = project / 'phase2/stage1/sim_professional' / TOP
+    if damage == 'missing_witness':
+        producer = None
+    elif damage == 'foreign_project':
+        copied = tmp_path / 'other_project'
+        shutil.copytree(project, copied)
+        project = copied
+    elif damage == 'prior_run':
+        began = time.time() + 1
+    elif damage == 'future_run':
+        producer.extras.setdefault('reference_execution', {})['started_at'] = time.time() + 10
+    elif damage == 'producer_fail':
+        producer.status = 'FAIL'
+    elif damage == 'no_sim':
+        producer = DOSR.StepResult('professional_tb_gen', 'PASS')
+    elif damage == 'rtl_changed':
+        (project / f'phase2/stage1/rtl/{TOP}.v').write_text(
+            f'module {TOP}(input a, output y); assign y=~a; endmodule\n')
+    elif damage == 'report_changed':
+        report = project / 'reports/phase2/gates/professional_tb.json'
+        value = json.loads(report.read_text()); value['ran_cocotb'] = False
+        report.write_text(json.dumps(value))
+    elif damage == 'hook_changed':
+        (bundle / 'expert_reference_tb.py').write_text(
+            'def expected(a):\n    return {"y": 0}\n')
+    elif damage == 'l_doc_changed':
+        (project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json').write_text('{}')
+    elif damage == 'junit_changed':
+        (bundle / 'results.xml').write_text(_junit(2))
+    elif damage == 'junit_missing':
+        (bundle / 'results.xml').unlink()
+    elif damage == 'junit_failed':
+        (bundle / 'results.xml').write_text(_junit(1, failures=1))
+    elif damage == 'junit_vacuous':
+        (bundle / 'results.xml').write_text(_junit(0))
+    elif damage == 'junit_skipped':
+        (bundle / 'results.xml').write_text(_junit(1, skipped=1))
+    else:
+        other = bundle.parent / 'another_suite'; other.mkdir()
+        if damage == 'sibling_failed':
+            (other / 'results.xml').write_text(_junit(1, failures=1))
+    result = _reference_current(project, producer, began, public=True)
+    assert result.status == 'NOT_MEASURED', {'damage': damage, 'result': result}
+    assert result.extras.get('functional_verified') is not True
+
+
+def test_reference_current_execution_still_requires_existing_substance_gate(tmp_path, monkeypatch):
+    project, producer, began = _current_professional_reference(tmp_path, monkeypatch)
+    # Declare a new, unexecuted oracle case before the current producer runs.
+    # Refreshing that real producer witness cannot replace the gate's missing
+    # per-case execution proof.
+    (project / 'phase1/generated_docs/L10_TEST_CASES.json').write_text(json.dumps({
+        'test_cases': [{'id': 'neutral_case', 'type': 'functional',
+                        'input': {'a': 1}, 'expected': {'y': 1}}]}))
+    producer = DOSR.step_professional_tb_gen(project, TOP, '')
+    result = _reference_current(project, producer, began, public=True)
+    rc, reason = GATE._evaluate(project)
+    assert rc == 1, reason
+    assert result.status == 'NOT_MEASURED', result
+
+
+def test_reference_current_execution_cannot_bypass_pulse_gate(tmp_path, monkeypatch):
+    project, producer, began = _current_professional_reference(tmp_path, monkeypatch)
+    monkeypatch.setattr(DOSR, '_run_pulse_width_rearm_normal_gate', lambda *_: (
+        1, {'verdict': 'FAIL', 'measured': True}, project / 'pulse.json'))
+    result = _reference_current(project, producer, began, public=True)
+    assert result.status == 'FAIL'
+
+
+@pytest.mark.parametrize('change', ['hook', 'l_doc', 'new_hook', 'new_l_doc'])
+@pytest.mark.parametrize('phase', ['generate', 'simulate'])
+def test_reference_execution_cannot_bind_inputs_changed_during_production(
+        tmp_path, monkeypatch, change, phase):
+    def mutate(project, bundle):
+        if change == 'hook':
+            (bundle / 'expert_reference_tb.py').write_text(
+                'def expected(a):\n    return {"y": 0}\n')
+        elif change == 'new_hook':
+            (bundle / 'other').mkdir()
+            (bundle / 'other/expert_reference_tb.py').write_text('def expected(a): return a\n')
+        elif change == 'l_doc':
+            (project / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json').write_text('{}')
+        else:
+            (project / 'phase1/generated_docs/L8_CLOCK_SPEC.json').write_text(
+                '{"sampling": "a changed source definition"}')
+    project, producer, began = _current_professional_reference(
+        tmp_path, monkeypatch,
+        **{'during_generate' if phase == 'generate' else 'during_run': mutate})
+    assert producer.status == 'PASS'  # A real passing transcript is insufficient.
+    result = _reference_current(project, producer, began, public=True)
+    assert result.status == 'NOT_MEASURED', {'phase': phase, 'change': change,
+                                           'result': result,
+                                           'producer': producer.extras}
 
 
 def test_the_record_shows_the_transcript_it_claims(tmp_path):
