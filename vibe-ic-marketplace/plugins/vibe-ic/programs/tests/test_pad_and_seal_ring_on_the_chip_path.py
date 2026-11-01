@@ -93,6 +93,14 @@ END io_corner_site
 MACRO pad_bidir
   CLASS PAD ;
   SIZE 75 BY 350 ;
+  PIN fixture_bond
+    DIRECTION INOUT ;
+    USE SIGNAL ;
+    PORT
+      LAYER met2 ;
+      RECT 7.5 0 67.5 1 ;
+    END
+  END fixture_bond
 END pad_bidir
 MACRO pad_corner
   CLASS PAD ;
