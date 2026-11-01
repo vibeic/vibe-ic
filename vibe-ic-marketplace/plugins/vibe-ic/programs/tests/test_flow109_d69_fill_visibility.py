@@ -47,14 +47,17 @@ def test_consumer_refuses_forged_fill_sensitive_pass():
         d69._component_scope(record, _d62(147))
 
 
-def _owner_fixture(tmp_path, monkeypatch, *, top="neutral", adopted_views=None):
+def _owner_fixture(tmp_path, monkeypatch, *, top="neutral", adopted_views=None,
+                   def_text=None):
     from types import SimpleNamespace
     def record(path):
         return d69.files._record(tmp_path, path)
     paths = {}
     for name, text in {
         'filled.odb': 'unit ODB placeholder', 'final.gds': 'unit GDS placeholder',
-        'filled.def': 'VERSION 5.8 ;\nDESIGN neutral ;\nUNITS DISTANCE MICRONS 1000 ;\n',
+        'filled.def': def_text or ('VERSION 5.8 ;\nDESIGN neutral ;\n'
+            'UNITS DISTANCE MICRONS 1000 ;\nNETS 2 ;\n'
+            '- A ( PIN A ) + USE SIGNAL ;\n- B ( PIN B ) + USE SIGNAL ;\nEND NETS\nEND DESIGN\n'),
         'netlist.v': 'module neutral; endmodule', 'constraint.sdc': '',
         'tech': 'unit extraction-tech placeholder', 'tool': 'unit subprocess double',
     }.items():
@@ -146,3 +149,177 @@ def test_native_receipt_consumer_rejects_wrong_or_incomplete_final_inputs(tmp_pa
     with pytest.raises((AdmissionRefusal, d69.Refusal)):
         d69._native_outputs(tmp_path, d69.files._record(tmp_path, receipt),
                             result['final_gds'], result['final_def'])
+
+
+
+def _observe_population(root, result):
+    try:
+        _, scans = d69._native_outputs(root, result['native_receipt'],
+                                        result['final_gds'], result['final_def'])
+    except AdmissionRefusal as exc:
+        return {'status': exc.status, 'reason': exc.code, 'detail': exc.report['detail']}
+    return {'status': 'ACCEPTED', 'counts': {corner: row['d_nets'] for corner, row in scans.items()}}
+
+
+def _complete_result(root, monkeypatch, **kwargs):
+    _owner_fixture(root, monkeypatch, **kwargs)
+    result = d69.execute(root, {'context_sha256': 'compatibility-control'})
+    assert result['component_status'] == 'PASS', result
+    receipt = d69._read(d69._bound(root, result['native_receipt']))
+    assert 'required_net_contract' not in receipt
+    return result
+
+
+def test_existing_producer_receipt_without_new_metadata_is_accepted(tmp_path, monkeypatch):
+    result = _complete_result(tmp_path, monkeypatch)
+    assert _observe_population(tmp_path, result) == {
+        'status': 'ACCEPTED', 'counts': {'min': 2, 'nom': 2, 'max': 2}}
+    assert result['flow109_acceptance'] == 'NOT_MEASURED'
+
+
+def _damage_population(root, result, damage, corner='min'):
+    receipt_path = d69._bound(root, result['native_receipt'])
+    native = d69._read(receipt_path)
+    rows = list(native['corners'].values()) if 'keep' in damage else [native['corners'][corner]]
+    if 'keep' in damage:
+        keep = Path(rows[0]['keep_nets'])
+        keep.write_text({'missing_keep': 'A\n', 'duplicate_keep': 'A\nB\nB\n',
+                         'unexpected_keep': 'A\nB\nforeign\n', 'shrunk_keep_and_output': 'A\n'}[damage])
+        count = len([line for line in keep.read_text().splitlines() if line.strip()])
+        native['keep_net_count'] = count
+        native['keep_nets_sha256'] = d69._sha(keep)
+        for row in rows:
+            row['keep_nets_sha256'] = native['keep_nets_sha256']
+            row['retained_net_count'] = count
+    if damage in {'missing_output', 'shrunk_keep_and_output', 'duplicate_output', 'unexpected_output', 'renamed_output'}:
+        for row in rows:
+            path = Path(row['output_spef'])
+            text = path.read_text()
+            if damage in {'missing_output', 'shrunk_keep_and_output'}:
+                text = text.split('*D_NET B')[0]
+            elif damage in {'duplicate_output', 'unexpected_output'}:
+                name = 'B' if damage == 'duplicate_output' else 'foreign'
+                text += f'*D_NET {name} 0.1\n*CAP\n1 {name} 0.1\n*END\n'
+            else:
+                text = text.replace('*D_NET B ', '*D_NET foreign ')
+            path.write_text(text)
+            row['output_spef_sha256'] = d69._sha(path)
+    receipt_path.write_text(json.dumps(native))
+    result['native_receipt'] = d69.files._record(root, receipt_path)
+
+
+@pytest.mark.parametrize('corner', ['min', 'nom', 'max'])
+@pytest.mark.parametrize('damage,missing,unexpected,duplicates', [
+    ('missing_output', ['B'], [], []),
+    ('renamed_output', ['B'], ['foreign'], []),
+    ('duplicate_output', [], [], ['B']),
+    ('unexpected_output', [], ['foreign'], []),
+])
+def test_every_corner_rejects_missing_duplicate_or_unexpected_output_names(
+        tmp_path, monkeypatch, corner, damage, missing, unexpected, duplicates):
+    result = _complete_result(tmp_path, monkeypatch)
+    _damage_population(tmp_path, result, damage, corner)
+    observed = _observe_population(tmp_path, result)
+    assert observed['status'] == 'FAIL', observed
+    assert observed['reason'] == 'D69_REQUIRED_NET_CENSUS_FAILED', observed
+    assert json.loads(observed['detail']) == {
+        'corner': corner, 'artifact': 'output_spef', 'missing': missing,
+        'unexpected': unexpected, 'duplicates': duplicates}
+
+
+@pytest.mark.parametrize('damage,missing,unexpected,duplicates', [
+    ('missing_keep', ['B'], [], []),
+    ('shrunk_keep_and_output', ['B'], [], []),
+    ('duplicate_keep', [], [], ['B']),
+    ('unexpected_keep', [], ['foreign'], []),
+])
+def test_required_names_come_from_bound_def_not_self_consistent_keep_counts(
+        tmp_path, monkeypatch, damage, missing, unexpected, duplicates):
+    result = _complete_result(tmp_path, monkeypatch)
+    _damage_population(tmp_path, result, damage)
+    observed = _observe_population(tmp_path, result)
+    assert observed['status'] == 'FAIL', observed
+    assert observed['reason'] == 'D69_REQUIRED_NET_CENSUS_FAILED', observed
+    assert json.loads(observed['detail']) == {
+        'corner': 'min', 'artifact': 'keep_nets', 'missing': missing,
+        'unexpected': unexpected, 'duplicates': duplicates}
+
+
+def test_execute_blocks_fresh_hash_output_omission(tmp_path, monkeypatch):
+    _owner_fixture(tmp_path, monkeypatch)
+    native_run = d69.subprocess.run
+    def invoke(argv, **kwargs):
+        proc = native_run(argv, **kwargs)
+        if '--output-dir' in argv:
+            receipt = Path(argv[argv.index('--output-dir') + 1]) / 'FINAL_FILL_EXTRACTION.json'
+            native = d69._read(receipt)
+            row = native['corners']['max']
+            output = Path(row['output_spef'])
+            output.write_text(output.read_text().split('*D_NET B')[0])
+            row['output_spef_sha256'] = d69._sha(output)
+            receipt.write_text(json.dumps(native))
+        return proc
+    monkeypatch.setattr(d69.subprocess, 'run', invoke)
+    observed = d69.execute(tmp_path, {'context_sha256': 'compatibility-control'})
+    assert observed['component_status'] == 'FAIL', observed
+    assert observed['reason'] == 'D69_REQUIRED_NET_CENSUS_FAILED', observed
+    assert '"missing": ["B"]' in observed['detail']
+    assert observed['flow109_acceptance'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('nets', [
+    'NETS 2 ;\n- A ( PIN A ) ;\nEND NETS\n',
+    'NETS 1 ;\n- A ( PIN A ) ;\n',
+    'SPECIALNETS 1 ;\n- A ( PIN A ) ;\nEND SPECIALNETS\n'
+    'nets 1 ;\n- B ( PIN B ) ;\nend nets\n',
+])
+def test_incomplete_def_cannot_define_a_required_population(tmp_path, monkeypatch, nets):
+    _owner_fixture(tmp_path, monkeypatch,
+        def_text='DESIGN neutral ;\nUNITS DISTANCE MICRONS 1000 ;\n' + nets)
+    result = d69.execute(tmp_path, {'context_sha256': 'compatibility-control'})
+    assert result['component_status'] == 'NOT_MEASURED', result
+    assert result['reason'] == 'D69_REQUIRED_NET_CONTRACT_UNAVAILABLE', result
+
+
+def _rcx_signal_def(supplies_in_nets=False):
+    supplies = '- VDD ( PIN VDD ) + USE POWER ;\n- VSS ( PIN VSS ) + USE GROUND ;\n'
+    return ('DESIGN neutral ;\nUNITS DISTANCE MICRONS 1000 ;\n'
+            'SPECIALNETS 2 ;\n' + supplies + 'END SPECIALNETS\n'
+            f'NETS {4 if supplies_in_nets else 2} ;\n'
+            '- A ( PIN A ) + USE SIGNAL ;\n- B ( PIN B ) + USE SIGNAL ;\n'
+            + (supplies if supplies_in_nets else '') + 'END NETS\nEND DESIGN\n')
+
+
+@pytest.mark.parametrize('supplies_in_nets', [False, True])
+def test_rcx_shaped_signal_spef_omits_supply_d_nets(tmp_path, monkeypatch, supplies_in_nets):
+    result = _complete_result(tmp_path, monkeypatch, def_text=_rcx_signal_def(supplies_in_nets))
+    assert _observe_population(tmp_path, result) == {
+        'status': 'ACCEPTED', 'counts': {'min': 2, 'nom': 2, 'max': 2}}
+    current = d69.validate_final_parasitics(tmp_path, result['receipt'])
+    assert current['final_spefs'] == result['final_spefs']
+    assert current['flow109_acceptance'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('corner', ['min', 'nom', 'max'])
+def test_rcx_shaped_spef_missing_signal_net_is_refused(tmp_path, monkeypatch, corner):
+    result = _complete_result(tmp_path, monkeypatch, def_text=_rcx_signal_def())
+    _damage_population(tmp_path, result, 'missing_output', corner)
+    observed = _observe_population(tmp_path, result)
+    assert observed['status'] == 'FAIL', observed
+    assert observed['reason'] == 'D69_REQUIRED_NET_CENSUS_FAILED', observed
+    assert json.loads(observed['detail']) == {
+        'corner': corner, 'artifact': 'output_spef', 'missing': ['B'],
+        'unexpected': [], 'duplicates': []}
+
+
+def test_real_archived_def_prefix_has_insufficient_population_authority(tmp_path, monkeypatch):
+    from _hostpaths import require_repo
+    path = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs', 'tests',
+                        'fixtures', 'librelane_import', '8HD-9', 'runs', 'cmp3',
+                        '52-openroad-fillinsertion', 'spm.def')
+    top = d69.files.fill_records(path)['top']
+    _owner_fixture(tmp_path, monkeypatch, top=top, def_text=path.read_text())
+    result = d69.execute(tmp_path, {'context_sha256': 'compatibility-control'})
+    assert result['component_status'] == 'NOT_MEASURED', result
+    assert result['reason'] == 'D69_REQUIRED_NET_CONTRACT_UNAVAILABLE', result
+    assert 'complete unambiguous DEF net declarations required' in result['detail']
