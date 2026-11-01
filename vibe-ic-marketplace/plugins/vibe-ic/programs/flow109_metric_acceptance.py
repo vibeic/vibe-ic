@@ -7235,6 +7235,7 @@ def _d0102_submission_lineage(project: Path, record: Mapping, reads: dict) -> di
     old, new = copy.deepcopy(old_answer), copy.deepcopy(new_answer)
     for value in (old, new):
         value.get('answers', {}).pop('synthesis_area_budget', None)
+        value.pop('synthesis_area_budget', None)
         value.get('answer_provenance', {}).pop('synthesis_area_budget', None)
         value.pop('answer_revisions', None)
     if old != new:
@@ -7242,6 +7243,7 @@ def _d0102_submission_lineage(project: Path, record: Mapping, reads: dict) -> di
     import area_budget_basis_gen as area
     expected = area.rederive(project, new_answer)
     if (expected.get('answer') != new_answer.get('answers', {}).get(area.KEY)
+            or (area.KEY in new_answer and expected.get('answer') != new_answer[area.KEY])
             or expected.get('provenance') != new_answer.get('answer_provenance', {}).get(area.KEY)):
         raise MetricRefusal('D0102_SUBMISSION_AREA_AUTHORITY_STALE', answer)
     for output in original.get('outputs', ()):
