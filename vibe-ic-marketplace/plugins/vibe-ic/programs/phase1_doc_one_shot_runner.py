@@ -42053,6 +42053,167 @@ def _declared_input_clock_names(project, l9):
     return names
 
 
+def _propagate_bound_clock_periods(project, clock_domains, bindings, rows):
+    rows = [row for row in rows if isinstance(row, dict)
+            and bindings.get(row.get("instance")) == row.get("top_clock_pin")]
+    block_ports = {row["block_clock_port"] for row in rows}
+    if not block_ports:
+        return
+    identities = block_ports | {row["top_clock_pin"] for row in rows}
+    claims = {name: [] for name in identities}
+    number = r"\d+(?:\.\d+)?"
+    alternatives = rf"(?P<value>{number})(?:\s*(?:-|to|and|–|—)\s*(?P<other>{number}))?"
+    frequency = re.compile(
+        alternatives + r"\s*(?P<unit>GHz|MHz|kHz|Hz|gigahertz|megahertz|kilohertz|hertz)(?!\w)",
+        re.I)
+    period_literal = re.compile(
+        alternatives + r"\s*(?P<unit>ns|ps|us|µs|μs|ms|nanoseconds?|picoseconds?|"
+        r"microseconds?|milliseconds?)(?!\w)", re.I)
+    scales = {"ghz": 1e9, "gigahertz": 1e9, "mhz": 1e6,
+              "megahertz": 1e6, "khz": 1e3, "kilohertz": 1e3,
+              "hz": 1.0, "hertz": 1.0}
+    rate_prefix = re.compile(
+        r"\s*(?:clock\s+)?(?:(?:operates?|operating|runs?|running)\s+(?:at\s+)?|"
+        r"(?:frequency|rate|f_?max)\s*(?:(?:is|of)\s*|[:=]\s*)?|"
+        r"has\s+(?:an?\s+)?(?:operating\s+)?(?:frequency|rate)\s+(?:of\s+)?|"
+        r"(?:is|at)\s+|[:=]\s*)?", re.I)
+    period_prefix = re.compile(
+        r"\s*(?:clock\s+)?period\s*(?:(?:is|of)\s*|[:=]\s*)?", re.I)
+    following = re.compile(r"\s*(?:[,;/]\s*|(?:and|or)\s*|\(\s*)", re.I)
+
+    def declared_periods(fragment):
+        marker = period_prefix.match(fragment)
+        kind = "period" if marker else "frequency"
+        marker = marker or rate_prefix.match(fragment)
+        position = marker.end()
+        values = {"period": [], "frequency": []}
+        while True:
+            literal = (period_literal if kind == "period" else frequency).match(fragment, position)
+            if literal is None:
+                return [] if not any(values.values()) else finish_periods(values)
+            value = float(literal.group("value"))
+            other = literal.group("other")
+            if other is not None and float(other) != value:
+                raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: clock declaration contains a range")
+            if not 0 < value < float("inf"):
+                raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: clock declaration has an invalid value")
+            unit = literal.group("unit").lower()
+            resolved = (value * _STATED_PERIOD_UNIT_NS[unit] if kind == "period"
+                        else 1e9 / (value * scales[unit]))
+            if not 0 < resolved < float("inf"):
+                raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: clock declaration has an invalid period")
+            values[kind].append(resolved)
+            separator = following.match(fragment, literal.end())
+            if separator is None:
+                return finish_periods(values)
+            position = separator.end()
+            marker = period_prefix.match(fragment, position)
+            if marker is not None:
+                kind, position = "period", marker.end()
+                continue
+            marker = rate_prefix.match(fragment, position)
+            if marker is not None and marker.end() > position:
+                if marker.group(0).strip().lower() not in ("is", "at", ":", "="):
+                    kind = "frequency"
+                position = marker.end()
+                continue
+            parenthesized = "(" in separator.group(0)
+            opposite = "period" if kind == "frequency" else "frequency"
+            candidate = (period_literal if opposite == "period" else frequency).match(fragment, position)
+            if parenthesized and candidate is not None and fragment[candidate.end():].lstrip().startswith(")"):
+                kind = opposite
+                continue
+            candidate = (period_literal if kind == "period" else frequency).match(fragment, position)
+            if candidate is None or re.match(r"\s*[A-Za-z_]", fragment[candidate.end():]):
+                return finish_periods(values)
+
+    def finish_periods(values):
+        for periods in values.values():
+            if len({round(value, 6) for value in periods}) > 1:
+                raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: clock declaration contains conflicting values")
+        period = values["period"][0] if values["period"] else None
+        derived = values["frequency"][0] if values["frequency"] else None
+        if period is not None and derived is not None and abs(period - derived) > _STATED_PERIOD_TOL * derived:
+            raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: stated clock period and frequency disagree")
+        return [round(period if period is not None else derived, 6)]
+
+    for fname, text in _load_extracted_docs_for_post_pass(project).items():
+        if _v1_6_345_is_reference_doc_path(fname):
+            continue
+        source = next((project / folder / fname for folder in
+                       ("input/docs", "extracted_docs", "phase1/input_doc")
+                       if (project / folder / fname).is_file()), None)
+        if source is None:
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            for clause in re.split(r"(?<=[.;!?])\s+(?=[A-Za-z`])", line):
+                plain = clause.replace("`", "").replace("*", "")
+                generics = list(re.finditer(r"\bblock\s+clock\b", plain, re.I))
+                anchors = [(m.start(), m.end(), name) for name in identities
+                           for m in re.finditer(r"(?<!\w)" + re.escape(name)
+                                                + r"(?!\w)", plain)
+                           if not any(generic.start() <= m.start() and m.end() <= generic.end()
+                                      for generic in generics)]
+                anchors.extend((generic.start(), generic.end(), None) for generic in generics)
+                anchors.sort(key=lambda anchor: anchor[:2])
+                for index, (_, end, name) in enumerate(anchors):
+                    stop = anchors[index + 1][0] if index + 1 < len(anchors) else len(plain)
+                    periods = declared_periods(plain[end:stop])
+                    if not periods:
+                        continue
+                    if name is None:
+                        choices = block_ports & {"clk", "clock"}
+                        if not choices and len(block_ports) == 1:
+                            choices = block_ports
+                        if len(choices) != 1:
+                            raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: unnamed block clock "
+                                             f"does not identify one of {sorted(block_ports)}")
+                        name = next(iter(choices))
+                    for period in periods:
+                        claims[name].append({"period_ns": period, "evidence": {
+                            "file": source.relative_to(project).as_posix(),
+                            "line": lineno, "matched_substring": line.strip()}})
+    for name, mentions in claims.items():
+        periods = {mention["period_ns"] for mention in mentions}
+        if len(periods) > 1:
+            raise ValueError(f"LL_CLOCK_BINDING_AMBIGUOUS: clock {name!r} declares "
+                             f"conflicting periods {sorted(periods)} ns")
+    by_pin = {}
+    for row in rows:
+        port, pin = row["block_clock_port"], row["top_clock_pin"]
+        by_pin.setdefault(pin, []).extend(claims[port])
+    for pin, mentions in by_pin.items():
+        mentions.extend(claims[pin])
+        by_pin[pin] = list({(mention["period_ns"], mention["evidence"]["file"],
+                             mention["evidence"]["line"], mention["evidence"]["matched_substring"]): mention
+                            for mention in mentions}.values())
+        periods = {mention["period_ns"] for mention in mentions}
+        if len(periods) > 1:
+            raise ValueError(f"LL_CLOCK_BINDING_AMBIGUOUS: top pin {pin!r} binds "
+                             f"conflicting periods {sorted(periods)} ns")
+    for pin, mentions in by_pin.items():
+        if not mentions:
+            continue
+        period = mentions[0]["period_ns"]
+        targets = [domain for domain in clock_domains if isinstance(domain, dict)
+                   and (domain.get("source_pin") or domain.get("name")) == pin]
+        if not targets:
+            targets = [{"name": pin, "source_pin": pin}]
+            clock_domains.extend(targets)
+        for target in targets:
+            current = _cc.entry_period_ns(target)
+            if current is not None and abs(current - period) > 1e-6:
+                raise ValueError(f"LL_CLOCK_BINDING_AMBIGUOUS: top pin {pin!r} already "
+                                 f"declares {current} ns, bound clock declares {period} ns")
+            target.update({"freq_hz": 1e9 / period, "freq_mhz": 1000.0 / period,
+                           "period_ns": period, "role": "master", "domain_kind": "primary",
+                           "evidence": dict(mentions[0]["evidence"]),
+                           "period_evidence": mentions,
+                           "clock_binding_evidence": [dict(row) for row in rows
+                                                      if row["top_clock_pin"] == pin],
+                           "extraction_strategy": "explicit_block_clock_binding"})
+
+
 def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     """v1.6.88 (#20 Bug 4 P0 BLOCKER) — augment each existing
     `clock_domains[]` entry with the typed-shape required by
@@ -42068,14 +42229,14 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     block_ports = {row["block_clock_port"] for row in binding_evidence
                    if isinstance(row, dict) and row.get("block_clock_port")}
     if bindings and set(bindings.values()).issubset(clk_pins):
+        _propagate_bound_clock_periods(project, clock_domains, bindings, binding_evidence)
         retained = []
         for domain in clock_domains:
             if not isinstance(domain, dict):
                 retained.append(domain)
                 continue
             pin = domain.get("source_pin") or domain.get("name")
-            if (domain.get("extraction_strategy") == "clock_domain_doc_prose_fmax"
-                    and pin in block_ports and pin not in clk_pins):
+            if pin in block_ports and pin not in clk_pins:
                 print(f"BLOCK_CLOCK_ALIAS_SCOPED: {pin} uses L9.clock_binding; "
                       "not a top-level primary clock", file=sys.stderr)
                 continue
