@@ -121,6 +121,76 @@ def test_native_pv_explicit_host_root_selects_foundry_not_staged_models(project,
     assert seen[0]["pdk_root"] == str(root / "ihp-sg13g2")
 
 
+@pytest.mark.parametrize("violations,lvs,expected", [(0, "match", "PASS"),
+    (3, "match", "FAIL"), (0, "mismatch", "FAIL")])
+def test_attested_in_image_pv_passes_actual_local_context(project, monkeypatch,
+                                                        violations, lvs, expected):
+    import analog_a6_native_pv as pv
+    import analog_native_erc as erc
+    import analog_pdk_availability as availability
+    import librelane_contract as launch
+    put(project / "phase3/analog/unit/unit.gds", "native fixture")
+    attested = []
+    monkeypatch.setattr(launch, "local_image_attestation", lambda image:
+                        attested.append(image) or {"image": image, "cid": "bound-runtime"})
+    monkeypatch.setattr(availability, "resolve_pdk", lambda *a, **k:
+                        {"available": True, "drc_deck": "native.drc", "lvs_deck": "native.lvs"})
+    contexts = []
+    def verify(*args, **kwargs):
+        contexts.append(("pv", kwargs["container"]))
+        return {"ran": True, "drc": {"verdict": "FAIL" if violations else "PASS", "violations": violations},
+                "lvs": {"verdict": lvs}}
+    def electrical(*args, **kwargs):
+        contexts.append(("erc", kwargs["container"]))
+        return {"status": "PASS", "outputs": []}
+    monkeypatch.setattr(pv, "run_block_pv", verify)
+    monkeypatch.setattr(erc, "run", electrical)
+    result = physical._pv(project, "unit", "", "selected-image", "fixture180", {"drc_engine": "klayout"})
+    assert attested == ["selected-image"]
+    assert contexts == [("pv", "host")] + ([("erc", "host")] if expected == "PASS" else [])
+    assert result["status"] == expected
+    assert result["metrics"]["drc"]["violations"] == violations
+
+
+def test_pv_without_execution_context_refuses_before_native_tools(project, monkeypatch):
+    import analog_a6_native_pv as pv
+    import analog_native_erc as erc
+    import analog_pdk_availability as availability
+    import librelane_contract as launch
+    put(project / "phase3/analog/unit/unit.gds", "native fixture")
+    def absent(image):
+        raise launch.Refusal("LL_LOCAL_IMAGE_UNATTESTED", "no bound runtime")
+    monkeypatch.setattr(launch, "local_image_attestation", absent)
+    monkeypatch.setattr(availability, "resolve_pdk", lambda *a, **k: {"available": True})
+    calls = []
+    monkeypatch.setattr(pv, "run_block_pv", lambda *a, **k: calls.append("pv") or
+                        {"drc": {"verdict": "PASS"}, "lvs": {"verdict": "match"}})
+    monkeypatch.setattr(erc, "run", lambda *a, **k: calls.append("erc") or {"status": "PASS", "outputs": []})
+    result = physical._pv(project, "unit", "", "", "fixture180", {"drc_engine": "klayout"})
+    assert result["status"] == "NOT_MEASURED"
+    assert "LL_LOCAL_IMAGE_UNATTESTED" in result["detail"]
+    assert calls == []
+
+
+def test_named_pv_container_preserves_explicit_execution_context(project, monkeypatch):
+    import analog_a6_native_pv as pv
+    import analog_native_erc as erc
+    import analog_pdk_availability as availability
+    import librelane_contract as launch
+    put(project / "phase3/analog/unit/unit.gds", "native fixture")
+    def unexpected(*args):
+        raise AssertionError("named-container route requested local attestation")
+    monkeypatch.setattr(launch, "local_image_attestation", unexpected)
+    monkeypatch.setattr(availability, "resolve_pdk", lambda *a, **k: {"available": True})
+    contexts = []
+    monkeypatch.setattr(pv, "run_block_pv", lambda *a, **k: contexts.append(k["container"]) or
+                        {"drc": {"verdict": "PASS"}, "lvs": {"verdict": "match"}})
+    monkeypatch.setattr(erc, "run", lambda *a, **k: contexts.append(k["container"]) or
+                        {"status": "PASS", "outputs": []})
+    assert physical._pv(project, "unit", "selected-container", "", "fixture180", {})["status"] == "PASS"
+    assert contexts == ["selected-container", "selected-container"]
+
+
 def _extraction_project(project, monkeypatch, parasitic=True):
     import _analog_producer_common as pc
     import librelane_contract as lc

@@ -10250,11 +10250,19 @@ def _a0708_transcript(project, executions, deck, invocation):
     for execution in executions:
         log = _a0708_file(project, execution['log'], execution['log_sha256'], invocation)
         argv = execution.get('argv')
-        if (not isinstance(argv, list) or len(argv) != 3 or argv[1:] != ['-b', str(deck)]
+        if (not isinstance(argv, list) or len(argv) not in (3, 5) or argv[1:3] != ['-b', str(deck)]
                 or argv[0] not in ('ngspice', invocation['tools']['ngspice']['path'])
                 or execution.get('returncode') != 0 or execution.get('missing_outputs')):
             raise MetricRefusal('A0708_NATIVE_EXECUTION_INCOMPLETE', str(deck))
         texts.append(log.read_text())
+        if len(argv) == 5:
+            # The nominal producer's live native stream is separate from the
+            # executor transcript. Bind both to their recorded output bytes.
+            native_log = execution.get('stdout_path')
+            digest = (execution.get('outputs') or {}).get(native_log)
+            if argv[3] != '-o' or argv[4] != native_log or not digest:
+                raise MetricRefusal('A0708_NATIVE_EXECUTION_INCOMPLETE', str(deck))
+            texts.append(_a0708_file(project, native_log, digest, invocation).read_text())
     text = '\n'.join(texts)
     if any(sweep._scan_analysis_failures(text)):
         raise MetricRefusal('A0708_NATIVE_ANALYSIS_FAILED', str(deck))
