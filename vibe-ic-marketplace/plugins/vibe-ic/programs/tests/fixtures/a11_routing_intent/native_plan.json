@@ -1,0 +1,1989 @@
+{
+  "devices": [
+    {
+      "name": "force",
+      "model": "sg13_lv_nmos",
+      "nets": [
+        "load",
+        "signal",
+        "supply",
+        "return"
+      ],
+      "pars": {
+        "l": 0.5,
+        "w": 1.0
+      },
+      "class": "mosfet"
+    },
+    {
+      "name": "sense",
+      "model": "sg13_lv_nmos",
+      "nets": [
+        "load",
+        "signal",
+        "return",
+        "return"
+      ],
+      "pars": {
+        "l": 0.5,
+        "w": 1.0
+      },
+      "class": "mosfet"
+    },
+    {
+      "name": "aux",
+      "model": "sg13_lv_nmos",
+      "nets": [
+        "load",
+        "signal",
+        "return",
+        "return"
+      ],
+      "pars": {
+        "l": 0.5,
+        "w": 1.0
+      },
+      "class": "mosfet"
+    }
+  ],
+  "ports": [
+    "supply",
+    "signal",
+    "load",
+    "return"
+  ],
+  "lambda": 100,
+  "gencells": {
+    "sg13_lv_nmos": {
+      "namespace": "sg13g2",
+      "source": "/nix/store/6br1cgpzlvbdly0n7n43s4ckw18sq4qz-vibeic-pdks-3c7f9ce1ffb5/ihp-sg13g2/libs.tech/magic/ihp-sg13g2-fet.tcl",
+      "params": [
+        "botc",
+        "ccols",
+        "class",
+        "compatible",
+        "conn_gates",
+        "diffcov",
+        "doports",
+        "doverlap",
+        "full_metal",
+        "gate_ring",
+        "gbc",
+        "glc",
+        "grc",
+        "gtc",
+        "guard",
+        "l",
+        "lmin",
+        "m",
+        "ng",
+        "polycov",
+        "poverlap",
+        "rlcov",
+        "tbcov",
+        "topc",
+        "viadrn",
+        "viagate",
+        "viagb",
+        "viagl",
+        "viagr",
+        "viagt",
+        "viasrc",
+        "w",
+        "wmin"
+      ],
+      "class": "mosfet",
+      "lmin": 0.13,
+      "wmin": 0.15,
+      "lmax": null,
+      "wmax": null
+    }
+  },
+  "deck": {
+    "metal_space_um": [
+      [
+        1,
+        0.18
+      ],
+      [
+        2,
+        0.21
+      ],
+      [
+        3,
+        0.21
+      ],
+      [
+        4,
+        0.21
+      ],
+      [
+        5,
+        0.21
+      ],
+      [
+        6,
+        1.64
+      ],
+      [
+        7,
+        2.0
+      ]
+    ],
+    "metal_width_um": [
+      [
+        1,
+        0.2
+      ],
+      [
+        2,
+        0.24
+      ],
+      [
+        3,
+        0.24
+      ],
+      [
+        4,
+        0.24
+      ],
+      [
+        5,
+        0.24
+      ],
+      [
+        6,
+        1.64
+      ],
+      [
+        7,
+        2.0
+      ]
+    ],
+    "metal_area_um2": [
+      [
+        1,
+        0.09
+      ],
+      [
+        2,
+        0.144
+      ],
+      [
+        3,
+        0.144
+      ],
+      [
+        4,
+        0.144
+      ],
+      [
+        5,
+        0.144
+      ]
+    ],
+    "via_width_um": [
+      [
+        1,
+        0.2
+      ],
+      [
+        2,
+        0.2
+      ],
+      [
+        3,
+        0.2
+      ],
+      [
+        4,
+        0.2
+      ],
+      [
+        5,
+        0.62
+      ],
+      [
+        6,
+        1.9
+      ]
+    ],
+    "via_space_um": [
+      [
+        1,
+        0.21
+      ],
+      [
+        2,
+        0.21
+      ],
+      [
+        3,
+        0.21
+      ],
+      [
+        4,
+        0.21
+      ],
+      [
+        5,
+        0.22
+      ],
+      [
+        6,
+        0.06
+      ]
+    ],
+    "via_surround_um": [
+      [
+        [
+          1,
+          1
+        ],
+        0.005
+      ],
+      [
+        [
+          5,
+          6
+        ],
+        0.32
+      ]
+    ],
+    "via_surround_dir_um": [
+      [
+        [
+          1,
+          1
+        ],
+        0.045
+      ],
+      [
+        [
+          1,
+          2
+        ],
+        0.045
+      ],
+      [
+        [
+          2,
+          2
+        ],
+        0.045
+      ],
+      [
+        [
+          2,
+          3
+        ],
+        0.045
+      ],
+      [
+        [
+          3,
+          3
+        ],
+        0.045
+      ],
+      [
+        [
+          3,
+          4
+        ],
+        0.045
+      ],
+      [
+        [
+          4,
+          4
+        ],
+        0.045
+      ],
+      [
+        [
+          4,
+          5
+        ],
+        0.045
+      ]
+    ],
+    "metal_width_spacing_um": [
+      [
+        2,
+        [
+          {
+            "source_rule": "Mn_e",
+            "spacing_um": 0.24,
+            "width_gt_um": 0.39,
+            "parallel_gt_um": 1.0
+          },
+          {
+            "source_rule": "Mn_f",
+            "spacing_um": 0.6,
+            "width_gt_um": 10.0,
+            "parallel_gt_um": 10.0
+          }
+        ]
+      ],
+      [
+        3,
+        [
+          {
+            "source_rule": "Mn_e",
+            "spacing_um": 0.24,
+            "width_gt_um": 0.39,
+            "parallel_gt_um": 1.0
+          },
+          {
+            "source_rule": "Mn_f",
+            "spacing_um": 0.6,
+            "width_gt_um": 10.0,
+            "parallel_gt_um": 10.0
+          }
+        ]
+      ],
+      [
+        4,
+        [
+          {
+            "source_rule": "Mn_e",
+            "spacing_um": 0.24,
+            "width_gt_um": 0.39,
+            "parallel_gt_um": 1.0
+          },
+          {
+            "source_rule": "Mn_f",
+            "spacing_um": 0.6,
+            "width_gt_um": 10.0,
+            "parallel_gt_um": 10.0
+          }
+        ]
+      ],
+      [
+        5,
+        [
+          {
+            "source_rule": "Mn_e",
+            "spacing_um": 0.24,
+            "width_gt_um": 0.39,
+            "parallel_gt_um": 1.0
+          },
+          {
+            "source_rule": "Mn_f",
+            "spacing_um": 0.6,
+            "width_gt_um": 10.0,
+            "parallel_gt_um": 10.0
+          }
+        ]
+      ]
+    ]
+  },
+  "m1_space_um": 0.18,
+  "layers": {
+    "source": "/nix/store/6br1cgpzlvbdly0n7n43s4ckw18sq4qz-vibeic-pdks-3c7f9ce1ffb5/ihp-sg13g2/libs.tech/magic/ihp-sg13g2.tech",
+    "canon": {
+      "dnwell": "dnwell",
+      "dnw": "dnwell",
+      "digisub": "digisub",
+      "nwell": "nwell",
+      "nw": "nwell",
+      "pwell": "pwell",
+      "pw": "pwell",
+      "pblock": "pblock",
+      "pblk": "pblock",
+      "obswell": "obswell",
+      "pbase": "pbase",
+      "npn": "pbase",
+      "nbase": "nbase",
+      "pnp": "nbase",
+      "isolbox": "isolbox",
+      "nmos": "nmos",
+      "ntransistor": "nmos",
+      "nfet": "nmos",
+      "pmos": "pmos",
+      "ptransistor": "pmos",
+      "pfet": "pmos",
+      "hvnmos": "hvnmos",
+      "hvntransistor": "hvnmos",
+      "hvnfet": "hvnmos",
+      "hvpmos": "hvpmos",
+      "hvptransistor": "hvpmos",
+      "hvpfet": "hvpmos",
+      "hvnmosesd": "hvnmosesd",
+      "hvntransistoresd": "hvnmosesd",
+      "hvnfetesd": "hvnmosesd",
+      "hvpmosesd": "hvpmosesd",
+      "hvptransistoresd": "hvpmosesd",
+      "hvpfetesd": "hvpmosesd",
+      "varactor": "varactor",
+      "varact": "varactor",
+      "var": "varactor",
+      "varcontact": "varcontact",
+      "varc": "varcontact",
+      "pvaractor": "pvaractor",
+      "pvaract": "pvaractor",
+      "pvar": "pvaractor",
+      "sealcont": "sealcont",
+      "sealc": "sealcont",
+      "difffill": "difffill",
+      "ndiff": "ndiff",
+      "ndiffusion": "ndiff",
+      "ndif": "ndiff",
+      "pdiff": "pdiff",
+      "pdiffusion": "pdiff",
+      "pdif": "pdiff",
+      "pbasec": "pbasec",
+      "pbcontact": "pbasec",
+      "pbc": "pbasec",
+      "nemitter": "nemitter",
+      "nemit": "nemitter",
+      "ne": "nemitter",
+      "nemitterc": "nemitterc",
+      "nemitc": "nemitterc",
+      "necontact": "nemitterc",
+      "nec": "nemitterc",
+      "gemitterc": "gemitterc",
+      "gemitc": "gemitterc",
+      "gecontact": "gemitterc",
+      "gec": "gemitterc",
+      "hvnemitter": "hvnemitter",
+      "hvnemit": "hvnemitter",
+      "hvne": "hvnemitter",
+      "hvnemitterc": "hvnemitterc",
+      "hvnemitc": "hvnemitterc",
+      "hvnecontact": "hvnemitterc",
+      "hvnec": "hvnemitterc",
+      "hvndiff": "hvndiff",
+      "hvndiffusion": "hvndiff",
+      "hvndif": "hvndiff",
+      "hvpdiff": "hvpdiff",
+      "hvpdiffusion": "hvpdiff",
+      "hvpdif": "hvpdiff",
+      "ndiffc": "ndiffc",
+      "ndcontact": "ndiffc",
+      "ndc": "ndiffc",
+      "pdiffc": "pdiffc",
+      "pdcontact": "pdiffc",
+      "pdc": "pdiffc",
+      "hvndiffc": "hvndiffc",
+      "hvndcontact": "hvndiffc",
+      "hvndc": "hvndiffc",
+      "hvpdiffc": "hvpdiffc",
+      "hvpdcontact": "hvpdiffc",
+      "hvpdc": "hvpdiffc",
+      "psubdiff": "psubdiff",
+      "psubstratepdiff": "psubdiff",
+      "ppdiff": "psubdiff",
+      "ppd": "psubdiff",
+      "psd": "psubdiff",
+      "nsubdiff": "nsubdiff",
+      "nsubstratendiff": "nsubdiff",
+      "nndiff": "nsubdiff",
+      "nnd": "nsubdiff",
+      "nsd": "nsubdiff",
+      "ptapdiff": "ptapdiff",
+      "ptap": "ptapdiff",
+      "ntapdiff": "ntapdiff",
+      "ntap": "ntapdiff",
+      "hvpsubdiff": "hvpsubdiff",
+      "hvpsubstratepdiff": "hvpsubdiff",
+      "hvppdiff": "hvpsubdiff",
+      "hvppd": "hvpsubdiff",
+      "hvpsd": "hvpsubdiff",
+      "hvnsubdiff": "hvnsubdiff",
+      "hvnsubstratendiff": "hvnsubdiff",
+      "hvnndiff": "hvnsubdiff",
+      "hvnnd": "hvnsubdiff",
+      "hvnsd": "hvnsubdiff",
+      "hvptapdiff": "hvptapdiff",
+      "hvptap": "hvptapdiff",
+      "hvntapdiff": "hvntapdiff",
+      "hvntap": "hvntapdiff",
+      "psubdiffcont": "psubdiffcont",
+      "psubstratepcontact": "psubdiffcont",
+      "psc": "psubdiffcont",
+      "nsubdiffcont": "nsubdiffcont",
+      "nsubstratencontact": "nsubdiffcont",
+      "nsc": "nsubdiffcont",
+      "ptapdiffcont": "ptapdiffcont",
+      "ptapc": "ptapdiffcont",
+      "ntapdiffcont": "ntapdiffcont",
+      "ntapc": "ntapdiffcont",
+      "hvpsubdiffcont": "hvpsubdiffcont",
+      "hvpsubstratepcontact": "hvpsubdiffcont",
+      "hvpsc": "hvpsubdiffcont",
+      "hvnsubdiffcont": "hvnsubdiffcont",
+      "hvnsubstratencontact": "hvnsubdiffcont",
+      "hvnsc": "hvnsubdiffcont",
+      "hvptapdiffcont": "hvptapdiffcont",
+      "hvptapc": "hvptapdiffcont",
+      "hvntapdiffcont": "hvntapdiffcont",
+      "hvntapc": "hvntapdiffcont",
+      "obsactive": "obsactive",
+      "poly": "poly",
+      "p": "poly",
+      "polysilicon": "poly",
+      "polycont": "polycont",
+      "pc": "polycont",
+      "pcontact": "polycont",
+      "polycut": "polycont",
+      "polyc": "polycont",
+      "obspoly": "obspoly",
+      "polyfill": "polyfill",
+      "npolyres": "npolyres",
+      "nres": "npolyres",
+      "rsil": "npolyres",
+      "ppolyres": "ppolyres",
+      "pres": "ppolyres",
+      "rppd": "ppolyres",
+      "xpolyres": "xpolyres",
+      "xres": "xpolyres",
+      "rhigh": "xpolyres",
+      "hvndiffres": "hvndiffres",
+      "hvrnd": "hvndiffres",
+      "hvrndiff": "hvndiffres",
+      "isodiffres": "isodiffres",
+      "risodiff": "isodiffres",
+      "riso": "isodiffres",
+      "hvisodiffres": "hvisodiffres",
+      "hvrisodiff": "hvisodiffres",
+      "hvriso": "hvisodiffres",
+      "pdiode": "pdiode",
+      "pdi": "pdiode",
+      "ndiode": "ndiode",
+      "ndi": "ndiode",
+      "pdiodecont": "pdiodecont",
+      "pdiodec": "pdiodecont",
+      "pdic": "pdiodecont",
+      "ndiodecont": "ndiodecont",
+      "ndiodec": "ndiodecont",
+      "ndic": "ndiodecont",
+      "schottky": "schottky",
+      "sdi": "schottky",
+      "schottkycont": "schottkycont",
+      "schottkyc": "schottkycont",
+      "sdic": "schottkycont",
+      "metal1": "metal1",
+      "m1": "metal1",
+      "met1": "metal1",
+      "rmetal1": "rmetal1",
+      "rm1": "rmetal1",
+      "rmet1": "rmetal1",
+      "via1": "via1",
+      "m2contact": "via1",
+      "m2cut": "via1",
+      "m2c": "via1",
+      "via": "via1",
+      "v": "via1",
+      "v1": "via1",
+      "obsm1": "obsm1",
+      "m1fill": "m1fill",
+      "iprobe": "iprobe",
+      "diffprobe": "diffprobe",
+      "sealvia1": "sealvia1",
+      "sealv1": "sealvia1",
+      "metal2": "metal2",
+      "m2": "metal2",
+      "met2": "metal2",
+      "rmetal2": "rmetal2",
+      "rm2": "rmetal2",
+      "rmet2": "rmetal2",
+      "via2": "via2",
+      "m3contact": "via2",
+      "m3cut": "via2",
+      "m3c": "via2",
+      "v2": "via2",
+      "obsm2": "obsm2",
+      "m2fill": "m2fill",
+      "sealvia2": "sealvia2",
+      "sealv2": "sealvia2",
+      "metal3": "metal3",
+      "m3": "metal3",
+      "met3": "metal3",
+      "rmetal3": "rmetal3",
+      "rm3": "rmetal3",
+      "rmet3": "rmetal3",
+      "obsm3": "obsm3",
+      "via3": "via3",
+      "v3": "via3",
+      "m3fill": "m3fill",
+      "sealvia3": "sealvia3",
+      "sealv3": "sealvia3",
+      "metal4": "metal4",
+      "m4": "metal4",
+      "met4": "metal4",
+      "rmetal4": "rmetal4",
+      "rm4": "rmetal4",
+      "rmet4": "rmetal4",
+      "obsm4": "obsm4",
+      "via4": "via4",
+      "v4": "via4",
+      "m4fill": "m4fill",
+      "sealvia4": "sealvia4",
+      "sealv4": "sealvia4",
+      "metal5": "metal5",
+      "m5": "metal5",
+      "met5": "metal5",
+      "rm5": "rm5",
+      "rmetal5": "rm5",
+      "rmet5": "rm5",
+      "obsm5": "obsm5",
+      "via5": "via5",
+      "v5": "via5",
+      "m5fill": "m5fill",
+      "sealvia5": "sealvia5",
+      "sealv5": "sealvia5",
+      "mimcap": "mimcap",
+      "mim": "mimcap",
+      "capm": "mimcap",
+      "mimcapcontact": "mimcapcontact",
+      "mimcapc": "mimcapcontact",
+      "mimcc": "mimcapcontact",
+      "capmc": "mimcapcontact",
+      "metal6": "metal6",
+      "m6": "metal6",
+      "met6": "metal6",
+      "rm6": "rm6",
+      "rmetal6": "rm6",
+      "rmet6": "rm6",
+      "obsm6": "obsm6",
+      "via6": "via6",
+      "v6": "via6",
+      "m6fill": "m6fill",
+      "sealvia6": "sealvia6",
+      "sealv6": "sealvia6",
+      "metal7": "metal7",
+      "m7": "metal7",
+      "met7": "metal7",
+      "rm7": "rm7",
+      "rmetal7": "rm7",
+      "rmet7": "rm7",
+      "obsm7": "obsm7",
+      "m7fill": "m7fill",
+      "pillar": "pillar",
+      "cu": "pillar",
+      "solder": "solder",
+      "sbump": "solder",
+      "seal": "seal",
+      "glass": "glass",
+      "fillblock": "fillblock",
+      "thruvia": "thruvia",
+      "tsv": "thruvia",
+      "inductor": "inductor",
+      "comment": "comment"
+    },
+    "plane_of": {
+      "dnwell": "dwell",
+      "digisub": "dwell",
+      "nwell": "well",
+      "pwell": "well",
+      "pblock": "well",
+      "obswell": "well",
+      "pbase": "well",
+      "nbase": "well",
+      "isolbox": "well",
+      "nmos": "active",
+      "pmos": "active",
+      "hvnmos": "active",
+      "hvpmos": "active",
+      "hvnmosesd": "active",
+      "hvpmosesd": "active",
+      "varactor": "active",
+      "varcontact": "active",
+      "pvaractor": "active",
+      "sealcont": "active",
+      "difffill": "active",
+      "ndiff": "active",
+      "pdiff": "active",
+      "pbasec": "active",
+      "nemitter": "active",
+      "nemitterc": "active",
+      "gemitterc": "active",
+      "hvnemitter": "active",
+      "hvnemitterc": "active",
+      "hvndiff": "active",
+      "hvpdiff": "active",
+      "ndiffc": "active",
+      "pdiffc": "active",
+      "hvndiffc": "active",
+      "hvpdiffc": "active",
+      "psubdiff": "active",
+      "nsubdiff": "active",
+      "ptapdiff": "active",
+      "ntapdiff": "active",
+      "hvpsubdiff": "active",
+      "hvnsubdiff": "active",
+      "hvptapdiff": "active",
+      "hvntapdiff": "active",
+      "psubdiffcont": "active",
+      "nsubdiffcont": "active",
+      "ptapdiffcont": "active",
+      "ntapdiffcont": "active",
+      "hvpsubdiffcont": "active",
+      "hvnsubdiffcont": "active",
+      "hvptapdiffcont": "active",
+      "hvntapdiffcont": "active",
+      "obsactive": "active",
+      "poly": "active",
+      "polycont": "active",
+      "obspoly": "poly",
+      "polyfill": "poly",
+      "npolyres": "active",
+      "ppolyres": "active",
+      "xpolyres": "active",
+      "hvndiffres": "active",
+      "isodiffres": "active",
+      "hvisodiffres": "active",
+      "pdiode": "active",
+      "ndiode": "active",
+      "pdiodecont": "active",
+      "ndiodecont": "active",
+      "schottky": "active",
+      "schottkycont": "active",
+      "metal1": "metal1",
+      "rmetal1": "metal1",
+      "via1": "metal1",
+      "obsm1": "metal1",
+      "m1fill": "metal1",
+      "iprobe": "metal1",
+      "diffprobe": "metal1",
+      "sealvia1": "metal1",
+      "metal2": "metal2",
+      "rmetal2": "metal2",
+      "via2": "metal2",
+      "obsm2": "metal2",
+      "m2fill": "metal2",
+      "sealvia2": "metal2",
+      "metal3": "metal3",
+      "rmetal3": "metal3",
+      "obsm3": "metal3",
+      "via3": "metal3",
+      "m3fill": "metal3",
+      "sealvia3": "metal3",
+      "metal4": "metal4",
+      "rmetal4": "metal4",
+      "obsm4": "metal4",
+      "via4": "metal4",
+      "m4fill": "metal4",
+      "sealvia4": "metal4",
+      "metal5": "metal5",
+      "rm5": "metal5",
+      "obsm5": "metal5",
+      "via5": "metal5",
+      "m5fill": "metal5",
+      "sealvia5": "metal5",
+      "mimcap": "cap1",
+      "mimcapcontact": "cap1",
+      "metal6": "metal6",
+      "rm6": "metal6",
+      "obsm6": "metal6",
+      "via6": "metal6",
+      "m6fill": "metal6",
+      "sealvia6": "metal6",
+      "metal7": "metal7",
+      "rm7": "metal7",
+      "obsm7": "metal7",
+      "m7fill": "metal7",
+      "pillar": "passiv",
+      "solder": "passiv",
+      "seal": "passiv",
+      "glass": "passiv",
+      "fillblock": "comment",
+      "thruvia": "comment",
+      "inductor": "comment",
+      "comment": "comment"
+    },
+    "connects": {
+      "polycont": [
+        "poly",
+        "metal1"
+      ],
+      "ndiffc": [
+        "ndiff",
+        "metal1"
+      ],
+      "pdiffc": [
+        "pdiff",
+        "metal1"
+      ],
+      "nsubdiffcont": [
+        "nsubdiff",
+        "metal1"
+      ],
+      "psubdiffcont": [
+        "psubdiff",
+        "metal1"
+      ],
+      "ndiodecont": [
+        "ndiode",
+        "metal1"
+      ],
+      "pdiodecont": [
+        "pdiode",
+        "metal1"
+      ],
+      "schottkycont": [
+        "schottky",
+        "metal1"
+      ],
+      "nemitterc": [
+        "nemitter",
+        "metal1"
+      ],
+      "ntapdiffcont": [
+        "ntapdiff",
+        "metal1"
+      ],
+      "ptapdiffcont": [
+        "ptapdiff",
+        "metal1"
+      ],
+      "varcontact": [
+        "varactor",
+        "metal1"
+      ],
+      "hvndiffc": [
+        "hvndiff",
+        "metal1"
+      ],
+      "hvpdiffc": [
+        "hvpdiff",
+        "metal1"
+      ],
+      "hvnsubdiffcont": [
+        "hvnsubdiff",
+        "metal1"
+      ],
+      "hvpsubdiffcont": [
+        "hvpsubdiff",
+        "metal1"
+      ],
+      "hvntapdiffcont": [
+        "hvntapdiff",
+        "metal1"
+      ],
+      "hvptapdiffcont": [
+        "hvptapdiff",
+        "metal1"
+      ],
+      "hvnemitterc": [
+        "hvnemitter",
+        "metal1"
+      ],
+      "via1": [
+        "metal1",
+        "metal2"
+      ],
+      "via2": [
+        "metal2",
+        "metal3"
+      ],
+      "via3": [
+        "metal3",
+        "metal4"
+      ],
+      "via4": [
+        "metal4",
+        "metal5"
+      ],
+      "via5": [
+        "metal5",
+        "metal6"
+      ],
+      "via6": [
+        "metal6",
+        "metal7"
+      ],
+      "mimcapcontact": [
+        "mimcap",
+        "metal6"
+      ]
+    },
+    "conducting": {
+      "dnwell": true,
+      "digisub": true,
+      "nwell": true,
+      "pwell": true,
+      "pblock": true,
+      "obswell": false,
+      "pbase": true,
+      "nbase": true,
+      "isolbox": true,
+      "nmos": true,
+      "pmos": true,
+      "hvnmos": true,
+      "hvpmos": true,
+      "hvnmosesd": false,
+      "hvpmosesd": false,
+      "varactor": true,
+      "varcontact": true,
+      "pvaractor": true,
+      "sealcont": false,
+      "difffill": false,
+      "ndiff": true,
+      "pdiff": true,
+      "pbasec": true,
+      "nemitter": true,
+      "nemitterc": true,
+      "gemitterc": true,
+      "hvnemitter": true,
+      "hvnemitterc": true,
+      "hvndiff": true,
+      "hvpdiff": true,
+      "ndiffc": true,
+      "pdiffc": true,
+      "hvndiffc": true,
+      "hvpdiffc": true,
+      "psubdiff": true,
+      "nsubdiff": true,
+      "ptapdiff": true,
+      "ntapdiff": true,
+      "hvpsubdiff": true,
+      "hvnsubdiff": true,
+      "hvptapdiff": true,
+      "hvntapdiff": true,
+      "psubdiffcont": true,
+      "nsubdiffcont": true,
+      "ptapdiffcont": true,
+      "ntapdiffcont": true,
+      "hvpsubdiffcont": true,
+      "hvnsubdiffcont": true,
+      "hvptapdiffcont": true,
+      "hvntapdiffcont": true,
+      "obsactive": false,
+      "poly": true,
+      "polycont": true,
+      "obspoly": false,
+      "polyfill": false,
+      "npolyres": true,
+      "ppolyres": true,
+      "xpolyres": true,
+      "hvndiffres": true,
+      "isodiffres": true,
+      "hvisodiffres": true,
+      "pdiode": true,
+      "ndiode": true,
+      "pdiodecont": true,
+      "ndiodecont": true,
+      "schottky": true,
+      "schottkycont": true,
+      "metal1": true,
+      "rmetal1": true,
+      "via1": true,
+      "obsm1": false,
+      "m1fill": false,
+      "iprobe": false,
+      "diffprobe": false,
+      "sealvia1": false,
+      "metal2": true,
+      "rmetal2": true,
+      "via2": true,
+      "obsm2": false,
+      "m2fill": false,
+      "sealvia2": false,
+      "metal3": true,
+      "rmetal3": true,
+      "obsm3": false,
+      "via3": true,
+      "m3fill": false,
+      "sealvia3": false,
+      "metal4": true,
+      "rmetal4": true,
+      "obsm4": false,
+      "via4": true,
+      "m4fill": false,
+      "sealvia4": false,
+      "metal5": true,
+      "rm5": true,
+      "obsm5": false,
+      "via5": true,
+      "m5fill": false,
+      "sealvia5": false,
+      "mimcap": true,
+      "mimcapcontact": true,
+      "metal6": true,
+      "rm6": true,
+      "obsm6": false,
+      "via6": true,
+      "m6fill": false,
+      "sealvia6": false,
+      "metal7": true,
+      "rm7": true,
+      "obsm7": false,
+      "m7fill": false,
+      "pillar": false,
+      "solder": false,
+      "seal": false,
+      "glass": true,
+      "fillblock": true,
+      "thruvia": true,
+      "inductor": true,
+      "comment": true
+    },
+    "plane_canon": {
+      "dwell": "dwell",
+      "dw": "dwell",
+      "well": "well",
+      "w": "well",
+      "active": "active",
+      "a": "active",
+      "poly": "poly",
+      "po": "poly",
+      "metal1": "metal1",
+      "m1": "metal1",
+      "metal2": "metal2",
+      "m2": "metal2",
+      "metal3": "metal3",
+      "m3": "metal3",
+      "metal4": "metal4",
+      "m4": "metal4",
+      "metal5": "metal5",
+      "m5": "metal5",
+      "cap1": "cap1",
+      "c1": "cap1",
+      "metal6": "metal6",
+      "m6": "metal6",
+      "metal7": "metal7",
+      "m7": "metal7",
+      "passiv": "passiv",
+      "p": "passiv",
+      "comment": "comment",
+      "c": "comment"
+    },
+    "contact_heads": [
+      [
+        "pc",
+        [
+          "poly",
+          "metal1"
+        ]
+      ],
+      [
+        "ndc",
+        [
+          "ndiff",
+          "metal1"
+        ]
+      ],
+      [
+        "pdc",
+        [
+          "pdiff",
+          "metal1"
+        ]
+      ],
+      [
+        "nsc",
+        [
+          "nsd",
+          "metal1"
+        ]
+      ],
+      [
+        "psc",
+        [
+          "psd",
+          "metal1"
+        ]
+      ],
+      [
+        "ndic",
+        [
+          "ndiode",
+          "metal1"
+        ]
+      ],
+      [
+        "pdic",
+        [
+          "pdiode",
+          "metal1"
+        ]
+      ],
+      [
+        "sdic",
+        [
+          "schottky",
+          "metal1"
+        ]
+      ],
+      [
+        "nec",
+        [
+          "nemitter",
+          "metal1"
+        ]
+      ],
+      [
+        "ntapc",
+        [
+          "ntap",
+          "metal1"
+        ]
+      ],
+      [
+        "ptapc",
+        [
+          "ptap",
+          "metal1"
+        ]
+      ],
+      [
+        "varc",
+        [
+          "varact",
+          "metal1"
+        ]
+      ],
+      [
+        "hvndc",
+        [
+          "hvndiff",
+          "metal1"
+        ]
+      ],
+      [
+        "hvpdc",
+        [
+          "hvpdiff",
+          "metal1"
+        ]
+      ],
+      [
+        "hvnsc",
+        [
+          "hvnsd",
+          "metal1"
+        ]
+      ],
+      [
+        "hvpsc",
+        [
+          "hvpsd",
+          "metal1"
+        ]
+      ],
+      [
+        "hvntapc",
+        [
+          "hvntap",
+          "metal1"
+        ]
+      ],
+      [
+        "hvptapc",
+        [
+          "hvptap",
+          "metal1"
+        ]
+      ],
+      [
+        "hvnec",
+        [
+          "hvnemitter",
+          "metal1"
+        ]
+      ],
+      [
+        "via1",
+        [
+          "metal1",
+          "metal2"
+        ]
+      ],
+      [
+        "via2",
+        [
+          "metal2",
+          "metal3"
+        ]
+      ],
+      [
+        "via3",
+        [
+          "metal3",
+          "metal4"
+        ]
+      ],
+      [
+        "via4",
+        [
+          "metal4",
+          "metal5"
+        ]
+      ],
+      [
+        "via5",
+        [
+          "metal5",
+          "metal6"
+        ]
+      ],
+      [
+        "via6",
+        [
+          "metal6",
+          "metal7"
+        ]
+      ],
+      [
+        "mimcc",
+        [
+          "mimcap",
+          "metal6"
+        ]
+      ]
+    ]
+  },
+  "cells": [
+    [
+      [
+        "sg13_lv_nmos",
+        1.0,
+        0.5,
+        1,
+        1,
+        1
+      ],
+      {
+        "labels": [
+          {
+            "layer": "psubdiffcont",
+            "x": 0,
+            "y": -109,
+            "name": "B",
+            "level": 1
+          },
+          {
+            "layer": "ndiffc",
+            "x": -44,
+            "y": 0,
+            "name": "D",
+            "level": 2
+          },
+          {
+            "layer": "ndiffc",
+            "x": 44,
+            "y": 0,
+            "name": "S",
+            "level": 2
+          },
+          {
+            "layer": "polycont",
+            "x": 0,
+            "y": 72,
+            "name": "G",
+            "level": 2
+          }
+        ],
+        "bbox": [
+          -141,
+          -155,
+          141,
+          155
+        ],
+        "sections": {
+          "pwell": [
+            [
+              -141,
+              -155,
+              141,
+              155
+            ]
+          ],
+          "nmos": [
+            [
+              -25,
+              -50,
+              25,
+              50
+            ]
+          ],
+          "ndiff": [
+            [
+              -59,
+              43,
+              -25,
+              50
+            ],
+            [
+              -59,
+              -43,
+              -52,
+              43
+            ],
+            [
+              -36,
+              -43,
+              -25,
+              43
+            ],
+            [
+              -59,
+              -50,
+              -25,
+              -43
+            ],
+            [
+              25,
+              43,
+              59,
+              50
+            ],
+            [
+              25,
+              -43,
+              36,
+              43
+            ],
+            [
+              52,
+              -43,
+              59,
+              43
+            ],
+            [
+              25,
+              -50,
+              59,
+              -43
+            ]
+          ],
+          "ndiffc": [
+            [
+              -52,
+              -43,
+              -36,
+              43
+            ],
+            [
+              36,
+              -43,
+              52,
+              43
+            ]
+          ],
+          "psubdiff": [
+            [
+              -110,
+              117,
+              110,
+              124
+            ],
+            [
+              -110,
+              101,
+              -64,
+              117
+            ],
+            [
+              64,
+              101,
+              110,
+              117
+            ],
+            [
+              -110,
+              94,
+              110,
+              101
+            ],
+            [
+              -110,
+              78,
+              -80,
+              94
+            ],
+            [
+              -110,
+              -78,
+              -103,
+              78
+            ],
+            [
+              -87,
+              -78,
+              -80,
+              78
+            ],
+            [
+              80,
+              78,
+              110,
+              94
+            ],
+            [
+              -110,
+              -94,
+              -80,
+              -78
+            ],
+            [
+              80,
+              -78,
+              87,
+              78
+            ],
+            [
+              103,
+              -78,
+              110,
+              78
+            ],
+            [
+              80,
+              -94,
+              110,
+              -78
+            ],
+            [
+              -110,
+              -101,
+              110,
+              -94
+            ],
+            [
+              -110,
+              -117,
+              -64,
+              -101
+            ],
+            [
+              64,
+              -117,
+              110,
+              -101
+            ],
+            [
+              -110,
+              -124,
+              110,
+              -117
+            ]
+          ],
+          "psubdiffcont": [
+            [
+              -64,
+              101,
+              64,
+              117
+            ],
+            [
+              -103,
+              -78,
+              -87,
+              78
+            ],
+            [
+              87,
+              -78,
+              103,
+              78
+            ],
+            [
+              -64,
+              -117,
+              64,
+              -101
+            ]
+          ],
+          "poly": [
+            [
+              -25,
+              80,
+              25,
+              87
+            ],
+            [
+              -25,
+              64,
+              -14,
+              80
+            ],
+            [
+              14,
+              64,
+              25,
+              80
+            ],
+            [
+              -25,
+              50,
+              25,
+              64
+            ],
+            [
+              -25,
+              -64,
+              25,
+              -50
+            ],
+            [
+              -25,
+              -80,
+              -14,
+              -64
+            ],
+            [
+              14,
+              -80,
+              25,
+              -64
+            ],
+            [
+              -25,
+              -87,
+              25,
+              -80
+            ]
+          ],
+          "polycont": [
+            [
+              -14,
+              64,
+              14,
+              80
+            ],
+            [
+              -14,
+              -80,
+              14,
+              -64
+            ]
+          ],
+          "metal1": [
+            [
+              -103,
+              101,
+              -64,
+              117
+            ],
+            [
+              64,
+              101,
+              103,
+              117
+            ],
+            [
+              -103,
+              78,
+              -87,
+              101
+            ],
+            [
+              -22,
+              82,
+              22,
+              83
+            ],
+            [
+              -22,
+              62,
+              -14,
+              82
+            ],
+            [
+              14,
+              62,
+              22,
+              82
+            ],
+            [
+              -22,
+              61,
+              22,
+              62
+            ],
+            [
+              87,
+              78,
+              103,
+              101
+            ],
+            [
+              -59,
+              42,
+              -52,
+              43
+            ],
+            [
+              -36,
+              42,
+              -29,
+              43
+            ],
+            [
+              -59,
+              -43,
+              -54,
+              43
+            ],
+            [
+              -34,
+              -43,
+              -29,
+              43
+            ],
+            [
+              -59,
+              -43,
+              -52,
+              -42
+            ],
+            [
+              -36,
+              -43,
+              -29,
+              -42
+            ],
+            [
+              29,
+              42,
+              36,
+              43
+            ],
+            [
+              52,
+              42,
+              59,
+              43
+            ],
+            [
+              29,
+              -43,
+              34,
+              43
+            ],
+            [
+              54,
+              -43,
+              59,
+              43
+            ],
+            [
+              29,
+              -43,
+              36,
+              -42
+            ],
+            [
+              52,
+              -43,
+              59,
+              -42
+            ],
+            [
+              -103,
+              -101,
+              -87,
+              -78
+            ],
+            [
+              -22,
+              -62,
+              22,
+              -61
+            ],
+            [
+              -22,
+              -82,
+              -14,
+              -62
+            ],
+            [
+              14,
+              -82,
+              22,
+              -62
+            ],
+            [
+              -22,
+              -83,
+              22,
+              -82
+            ],
+            [
+              87,
+              -101,
+              103,
+              -78
+            ],
+            [
+              -103,
+              -117,
+              -64,
+              -101
+            ],
+            [
+              64,
+              -117,
+              103,
+              -101
+            ]
+          ],
+          "via1": [
+            [
+              -14,
+              80,
+              14,
+              82
+            ],
+            [
+              -14,
+              64,
+              14,
+              80
+            ],
+            [
+              -14,
+              62,
+              14,
+              64
+            ],
+            [
+              -54,
+              -43,
+              -52,
+              43
+            ],
+            [
+              -52,
+              -43,
+              -36,
+              43
+            ],
+            [
+              -36,
+              -43,
+              -34,
+              43
+            ],
+            [
+              34,
+              -43,
+              36,
+              43
+            ],
+            [
+              36,
+              -43,
+              52,
+              43
+            ],
+            [
+              52,
+              -43,
+              54,
+              43
+            ],
+            [
+              -14,
+              -64,
+              14,
+              -62
+            ],
+            [
+              -14,
+              -80,
+              14,
+              -64
+            ],
+            [
+              -14,
+              -82,
+              14,
+              -80
+            ]
+          ],
+          "metal2": [
+            [
+              -14,
+              82,
+              14,
+              87
+            ],
+            [
+              -14,
+              57,
+              14,
+              62
+            ],
+            [
+              -54,
+              42,
+              -34,
+              47
+            ],
+            [
+              -54,
+              -47,
+              -34,
+              -42
+            ],
+            [
+              34,
+              42,
+              54,
+              47
+            ],
+            [
+              34,
+              -47,
+              54,
+              -42
+            ],
+            [
+              -14,
+              -62,
+              14,
+              -57
+            ],
+            [
+              -14,
+              -87,
+              14,
+              -82
+            ]
+          ]
+        },
+        "cell": "sg13_lv_nmos_9R8NQU",
+        "delta": [
+          95,
+          109
+        ]
+      }
+    ]
+  ],
+  "pin_spec": {
+    "ports": {
+      "supply": {
+        "index": 1,
+        "rail": false,
+        "level": 4,
+        "lef_layer": "Metal4",
+        "lef_type": "ROUTING",
+        "direction": "VERTICAL",
+        "use": "signal",
+        "width_lam": 30,
+        "cuts": 1,
+        "em": {
+          "result": "NOT_MEASURED",
+          "reason": "the block spec declares no current"
+        }
+      },
+      "signal": {
+        "index": 2,
+        "rail": false,
+        "level": 4,
+        "lef_layer": "Metal4",
+        "lef_type": "ROUTING",
+        "direction": "VERTICAL",
+        "use": "signal",
+        "width_lam": 30,
+        "cuts": 1,
+        "em": {
+          "result": "NOT_MEASURED",
+          "reason": "the block spec declares no current"
+        }
+      },
+      "load": {
+        "index": 3,
+        "rail": false,
+        "level": 4,
+        "lef_layer": "Metal4",
+        "lef_type": "ROUTING",
+        "direction": "VERTICAL",
+        "use": "signal",
+        "width_lam": 30,
+        "cuts": 1,
+        "em": {
+          "result": "NOT_MEASURED",
+          "reason": "the block spec declares no current"
+        }
+      },
+      "return": {
+        "index": 4,
+        "rail": false,
+        "level": 4,
+        "lef_layer": "Metal4",
+        "lef_type": "ROUTING",
+        "direction": "VERTICAL",
+        "use": "signal",
+        "width_lam": 30,
+        "cuts": 1,
+        "em": {
+          "result": "NOT_MEASURED",
+          "reason": "the block spec declares no current"
+        }
+      }
+    }
+  },
+  "routing_intent": {
+    "version": 1,
+    "constraints": [
+      {
+        "kind": "kelvin",
+        "net": "load",
+        "force": [
+          {
+            "device": "force",
+            "terminal": 0
+          },
+          {
+            "device": "aux",
+            "terminal": 0
+          }
+        ],
+        "sense": {
+          "device": "sense",
+          "terminal": 0
+        },
+        "join": {
+          "port": "load"
+        }
+      },
+      {
+        "kind": "star",
+        "net": "signal",
+        "groups": [
+          [
+            {
+              "device": "force",
+              "terminal": 1
+            }
+          ],
+          [
+            {
+              "device": "sense",
+              "terminal": 1
+            }
+          ],
+          [
+            {
+              "device": "aux",
+              "terminal": 1
+            }
+          ]
+        ],
+        "join": {
+          "port": "signal"
+        }
+      },
+      {
+        "kind": "width",
+        "net": "load",
+        "wire_width_um": 0.3,
+        "via_cuts": 1
+      },
+      {
+        "kind": "separation",
+        "nets": [
+          "load",
+          "signal"
+        ],
+        "spacing_um": 0.18
+      }
+    ]
+  }
+}

@@ -209,6 +209,11 @@ def compile_branches(intent: RoutingIntent, devices, ports, pin_spec=None) -> Co
             compiled_ports[compiled_ports.index(item.net)] = owner
             if compiled_spec:
                 compiled_spec["ports"][owner] = compiled_spec["ports"].pop(item.net)
+    if compiled_spec:
+        for private, spec in compiled_spec["ports"].items():
+            policy = next((width for width in intent.widths if width.net == canonical[private]), None)
+            if policy:
+                spec["cuts"] = max(spec["cuts"], policy.via_cuts)
     return Compiled(intent, copies, compiled_ports, canonical, endpoints, branches, joins, compiled_spec)
 
 
@@ -245,14 +250,17 @@ def components(rows, linked):
 
 
 def verify_topology(plan, compiled: Compiled, regions, linked):
-    rows = list(plan.shapes) + list(plan.device_shapes)
+    rows = [dict(row, _route=(row["layer"], tuple(row["box"])) not in plan.patch_of)
+            for row in plan.shapes] + [dict(row, _route=False) for row in plan.device_shapes]
     full = components(rows, linked)
     evidence = []
     for topology in compiled.intent.topology:
         ids = set(compiled.branches[topology.net])
-        roots = {full[i] for i, row in enumerate(rows) if row["net"] in ids}
+        roots = {full[i] for i, row in enumerate(rows) if row["net"] in ids and row["_route"]}
         if len(roots) != 1:
-            refuse("DISCONNECTED_BRANCH", f"{topology.net} has {len(roots)} routed components")
+            witness = {root: sorted({row["net"] for i, row in enumerate(rows)
+                                    if row["net"] in ids and row["_route"] and full[i] == root}) for root in roots}
+            refuse("DISCONNECTED_BRANCH", f"{topology.net} has {len(roots)} routed components {witness}")
         junction = regions[topology.net]
         load_rows = [i for i, row in enumerate(rows)
                      if row["layer"] == junction["load_layer"]
@@ -267,21 +275,21 @@ def verify_topology(plan, compiled: Compiled, regions, linked):
         roots = components(clipped, linked)
         members = {}
         for row, root in zip(clipped, roots):
-            if row["net"] in ids:
+            if row["net"] in ids and row["_route"]:
                 members.setdefault(root, set()).add(row["net"])
         if any(len(group) > 1 for group in members.values()):
             refuse("PREMATURE_JOIN", f"{topology.net} branches connect outside its declared load contact")
         for ref, private in compiled.endpoints.items():
-            if private not in ids:
+            if private not in ids or ref == topology.join:
                 continue
             anchors = plan.intent_anchors.get(ref, [])
             if not anchors:
                 refuse("ENDPOINT", f"no physical label for {ref}")
             for anchor in anchors:
-                endpoint_roots = {full[index] for index, row in enumerate(rows)
-                                  if row.get("comp") == anchor["comp"]}
-                reached = bool(endpoint_roots & {full[index] for index, row in enumerate(rows)
-                                                if row["net"] == private})
+                endpoint_roots = {roots[index] for index, row in enumerate(clipped)
+                                  if row.get("comp") == anchor["comp"] and _overlap(row["box"], anchor["box"])}
+                reached = bool(endpoint_roots & {roots[index] for index, row in enumerate(clipped)
+                                                if row["net"] == private and row["_route"]})
                 if not reached:
                     refuse("DISCONNECTED_BRANCH", f"{ref} is not reached by its branch")
         evidence.append({"kind": topology.kind, "net": topology.net, "branches": len(ids),
@@ -307,6 +315,22 @@ def _anchors(plan, compiled, a5):
     component_nets = {}
     for device in plan.intent_placed:
         raw = device["dev"]
+        semantic, _, _ = a5.terminal_map(raw, device["cell"])
+        section_owners = {}
+        for private, labels in semantic.items():
+            for label in labels:
+                section_owners.setdefault(label.get("layer"), set()).add(compiled.canonical[private])
+        ox, oy = device["origin"]
+        for section, boxes in device["cell"]["sections"].items():
+            owners = section_owners.get(section, set())
+            if len(owners) != 1:
+                continue
+            planes = a5.carried_planes(section, device["cell"].get("layers"))
+            for native in device["rows"]:
+                if native["layer"] not in planes:
+                    continue
+                if any(_overlap(native["box"], (ox + box[0], oy + box[1], ox + box[2], oy + box[3])) for box in boxes):
+                    component_nets.setdefault(native["comp"], set()).update(owners)
         marked = dict(raw, nets=[f"__terminal_{index}" for index in range(len(raw["nets"]))])
         mapping, _, _ = a5.terminal_map(marked, device["cell"])
         ox, oy = device["origin"]
@@ -322,6 +346,13 @@ def _anchors(plan, compiled, a5):
                 anchors.append({"layer": layer, "box": (x, y, x, y), "comp": friendly})
                 component_nets.setdefault(friendly, set()).add(compiled.canonical[private])
             plan.intent_anchors[ref] = anchors
+    for patch in plan.shapes:
+        owner = plan.patch_of.get((patch["layer"], tuple(patch["box"])))
+        if owner is None:
+            continue
+        for native in plan.device_shapes:
+            if native.get("comp", (None,))[0] == owner and native["layer"] == patch["layer"] and _overlap(native["box"], patch["box"]):
+                component_nets.setdefault(native["comp"], set()).add(compiled.canonical.get(patch["net"], patch["net"]))
     plan.intent_component_nets = component_nets
 
 
@@ -429,7 +460,7 @@ def _connect_branch(plan, branch, owner, region, level, top, target, compiled, g
         xs = list(range(box[0] + step, box[2] - step + 1, step))
         xs.sort(key=lambda x: abs(x - tx))
         for sx in xs:
-            access, _ = a5._pin_stack_boxes(sx, sy, plan.rail_level, 3, geo, cuts)
+            access, _ = a5._pin_stack_boxes(sx, sy, min(plan.rail_level, 3), max(plan.rail_level, 3), geo, cuts)
             elbow, _ = a5._pin_stack_boxes(sx, ty, 3, top, geo, cuts)
             paint = access + [_wire(3, sx, sy, sx, ty, geo)] + elbow
             paint += [_wire(top, sx, ty, tx, ty, geo)] + join_paint
@@ -448,6 +479,12 @@ def verify_separation(plan, compiled, geo, a5):
         first = [row for row in rows if item.nets[0] in _canonical(row, compiled, plan)]
         second = [row for row in rows if item.nets[1] in _canonical(row, compiled, plan)]
         measured = []
+        for native in plan.device_shapes:
+            if _canonical(native, compiled, plan) or not native["layer"].startswith("metal"):
+                continue
+            if any(row["layer"] == native["layer"] and _gap(row["box"], native["box"]) / geo.lam + 1e-9 < item.spacing_um
+                   for row in first + second):
+                refuse("NATIVE_OWNERSHIP_AMBIGUOUS", f"cannot establish {item.nets} spacing beside {native.get('comp')}")
         for a in first:
             for b in second:
                 if a["layer"] != b["layer"] or not a["layer"].startswith("metal"):
@@ -478,10 +515,29 @@ def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, 
         if width.wire_width_um + 1e-12 < minimum:
             refuse("WIDTH_BELOW_PDK_MINIMUM", f"{width.net} width {width.wire_width_um:g}um < {minimum:g}um")
     reserve_width = max([math.ceil(width.wire_width_um * geo.lam - 1e-9) for width in intent.widths] + [0])
-    geo.wire = {level: max(value, reserve_width) for level, value in geo.wire.items()}
+    geo.wire = {level: 2 * math.ceil(max(value, reserve_width) / 2) for level, value in geo.wire.items()}
     reserve_space = max([math.ceil(item.spacing_um * geo.lam - 1e-9) for item in intent.separations] + [0])
     geo.space = {level: max(value, reserve_space) for level, value in geo.space.items()}
     geo.default_space = max(geo.default_space, reserve_space)
+    profiles = {}
+    for private, net in compiled.canonical.items():
+        profile = copy.deepcopy(base_geo)
+        profile.intent_strict = True
+        profile.intent_cuts = geo.intent_cuts
+        policy = next((width for width in intent.widths if width.net == net), None)
+        requested = math.ceil(policy.wire_width_um * geo.lam - 1e-9) if policy else 0
+        profile.wire = {level: 2 * math.ceil(max(value, requested) / 2) for level, value in profile.wire.items()}
+        if policy:
+            half = math.ceil(requested / 2)
+            for level in profile.short_half:
+                profile.short_half[level] = max(profile.short_half[level], half)
+                profile.long_half[level] = max(profile.long_half[level], profile.short_half[level])
+                profile.enc_half[level] = max(profile.enc_half[level], half)
+                profile.patch[level] = max(profile.patch[level], profile.long_half[level])
+        profile.space = dict(geo.space)
+        profile.default_space = geo.default_space
+        profiles[private] = profile
+    geo.intent_profiles = profiles
     try:
         plan = a5._build_plan(compiled.devices, compiled.ports, cells, facts, geo, tap_clear,
                               compiled.pin_spec, **options)
@@ -493,24 +549,26 @@ def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, 
     junction_layers = {}
     for topology in intent.topology:
         owner = compiled.joins[topology.net]
+        net_geo = geo.for_net(owner)
         others = [branch for branch in compiled.branches[topology.net] if branch != owner]
         friendly = None
         if isinstance(topology.join, Port):
-            region, level, top, targets = _join_port(plan, owner, len(others), band, compiled, geo, a5)
+            region, level, top, targets = _join_port(plan, owner, len(others), band, compiled, net_geo, a5)
             band += len(others) + 3
         else:
-            region, level, top, targets, friendly = _join_terminal(plan, topology, compiled, geo, a5)
+            region, level, top, targets, friendly = _join_terminal(plan, topology, compiled, net_geo, a5)
         junction_layers[topology.net] = tuple([f"metal{k}" for k in range(level, top + 1)]
                                                 + [f"via{k}" for k in range(level, top)])
         regions[topology.net] = {"box": region, "layers": junction_layers[topology.net],
                                  "load_layer": f"metal{level}", "native_component": friendly}
         for branch, target in zip(others, targets):
-            _connect_branch(plan, branch, owner, region, level, top, target, compiled, geo, a5, friendly)
+            _connect_branch(plan, branch, owner, region, level, top, target, compiled, geo.for_net(branch), a5, friendly)
     evidence = verify_topology(plan, compiled, regions, a5._linked)
     evidence.extend(verify_separation(plan, compiled, geo, a5))
     for width in intent.widths:
         selected = [row for row in plan.shapes if compiled.canonical.get(row["net"], row["net"]) == width.net
-                    and row["layer"].startswith("metal")]
+                    and row["layer"].startswith("metal")
+                    and (row["layer"], tuple(row["box"])) not in plan.patch_of]
         actual = min([min(row["box"][2] - row["box"][0], row["box"][3] - row["box"][1]) / geo.lam
                       for row in selected] or [0])
         if actual + 1e-9 < width.wire_width_um:
@@ -527,6 +585,6 @@ def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, 
         row["nets"] = list(dict.fromkeys(compiled.canonical.get(net, net) for net in row["nets"]))
     if a5.net_shorts(plan):
         refuse("CROSS_NET_METAL", "the completed intent layout shorts different schematic nets")
-    plan.routing_intent_evidence = {"version": 1, "constraints": evidence,
-                                    "width_semantics": "minimum; corridors reserve the widest declared style"}
+    plan.routing_intent_evidence = {"version": 1, "declaration": raw if isinstance(raw, dict) else None, "constraints": evidence,
+                                    "width_semantics": "per-net minimum; placement reserves the widest declared corridor"}
     return plan

@@ -124,3 +124,61 @@ def test_normal_A11_forwards_declared_json_and_invalid_is_named(tmp_path, monkey
     assert result["status"] == "FAIL"
     assert "ROUTING_INTENT_SCHEMA" in result["detail"]
     assert len(calls) == 1
+
+
+def native_plan_inputs():
+    import json
+    from pathlib import Path
+    import analog_a5_pdk_device_limits as limits
+    data = json.loads((Path(__file__).parent / "fixtures/a11_routing_intent/native_plan.json").read_text())
+    facts = a5.PdkFacts()
+    facts.gencells = data["gencells"]
+    facts.m1_space_um = data["m1_space_um"]
+    facts.deck = {name: {tuple(key) if isinstance(key, list) else key: value for key, value in entries}
+                  for name, entries in data["deck"].items()}
+    facts.layers = limits.LayerIdentity();facts.layers.__dict__.update(data["layers"])
+    cells = {tuple(key): dict(cell, layers=facts.layers) for key, cell in data["cells"]}
+    geo = a5.Geo(facts.deck, facts.m1_space_um, data["lambda"], .3, .15)
+    return data, facts, cells, geo
+
+
+def test_actual_plan_honours_all_four_declarations_and_preserves_pdk_facts():
+    data, facts, cells, geo = native_plan_inputs()
+    before = copy.deepcopy(facts.deck)
+    plan = a5.build_plan(data["devices"], data["ports"], cells, facts, geo, 48, data["pin_spec"],
+                         routing_intent=data["routing_intent"])
+    evidence = plan.routing_intent_evidence["constraints"]
+    assert {item["kind"] for item in evidence} == {"kelvin", "star", "width", "separation"}
+    assert all(not item["outside_join_connected"] for item in evidence if item["kind"] in ("kelvin", "star"))
+    assert next(item for item in evidence if item["kind"] == "separation")["minimum_um"] >= .18
+    assert {pin["net"] for pin in plan.pins} == set(data["ports"])
+    assert all(not row["net"].startswith("__routing_intent") for row in plan.shapes)
+    assert facts.deck == before
+
+
+def test_native_fixed_terminal_spacing_cannot_be_silently_waived():
+    data, facts, cells, geo = native_plan_inputs()
+    data["routing_intent"]["constraints"][-1]["spacing_um"] = .21
+    with pytest.raises(a5.Refusal, match="ROUTING_INTENT_SEPARATION"):
+        a5.build_plan(data["devices"], data["ports"], cells, facts, geo, 48, data["pin_spec"], routing_intent=data["routing_intent"])
+
+
+def test_minimum_width_refusal_names_pdk_floor_before_routing():
+    data, facts, cells, geo = native_plan_inputs()
+    raw = declared({"kind": "width", "net": "load", "wire_width_um": .001, "via_cuts": 1})
+    with pytest.raises(a5.Refusal, match="ROUTING_INTENT_WIDTH_BELOW_PDK_MINIMUM"):
+        a5.build_plan(data["devices"], data["ports"], cells, facts, geo, 48, data["pin_spec"], routing_intent=raw)
+
+
+def test_device_area_repair_cannot_hide_a_premature_join():
+    topology = ri.Topology("star", "p", ((ri.Terminal("f", 0),), (ri.Terminal("s", 0),)), ri.Port("p"))
+    compiled = ri.Compiled(ri.RoutingIntent((topology,)), [], [], {"f": "p", "s": "p"}, {}, {"p": ("f", "s")}, {"p": "f"}, None)
+    plan = a5.Plan();plan.intent_anchors = {}
+    plan.shapes = [{"net": "f", "layer": "metal2", "box": (0, 0, 10, 2)},
+                   {"net": "s", "layer": "metal2", "box": (0, 8, 10, 10)},
+                   {"net": "f", "layer": "metal2", "box": (8, 0, 10, 10)},
+                   {"net": "f", "layer": "metal2", "box": (0, 0, 2, 10)}]
+    plan.patch_of[("metal2", (0, 0, 2, 10))] = "device"
+    regions = {"p": {"box": (8, 0, 10, 10), "layers": ("metal2",), "load_layer": "metal2", "native_component": None}}
+    with pytest.raises(ri.IntentRefusal, match="ROUTING_INTENT_PREMATURE_JOIN"):
+        ri.verify_topology(plan, compiled, regions, a5._linked)
