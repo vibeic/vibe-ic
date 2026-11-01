@@ -123,14 +123,14 @@ def operation_sources():
 
 
 def _normal_required_nets(routed_def):
-    """Derive RCX signal names from the receipt-bound DEF NETS section."""
+    """Derive both DEF sections' signal names from explicit USE intent."""
     text = routed_def.read_text()
     sections = list(re.finditer(
         r'(?ms)^[ \t]*(NETS|SPECIALNETS)[ \t]+(\d+)[ \t]*;[ \t]*\n'
         r'(.*?)^[ \t]*END[ \t]+\1[ \t]*(?:\n|$)', text))
     headers = re.findall(r'(?mi)^[ \t]*(?:NETS|SPECIALNETS)\b[^\n]*', text)
     ends = re.findall(r'(?mi)^[ \t]*END[ \t]+(?:NETS|SPECIALNETS)\b[^\n]*', text)
-    required = set()
+    uses = {}
     valid = (len(headers) == len(sections) == len(ends)
              and len({s[1] for s in sections}) == len(sections))
     for section in sections:
@@ -143,10 +143,19 @@ def _normal_required_nets(routed_def):
             valid = valid and name is not None and len(re.findall(r'(?m)^[ \t]*-[ \t]+', record)) == 1
             if name is not None:
                 names.append(name[1])
-                if section[1] == 'NETS' and not re.search(r'\+\s+USE\s+(?:POWER|GROUND)\b', record):
-                    required.add(name[1])
+                body = re.sub(r'"(?:\\.|[^"\\])*"', '""', record)
+                declared = re.findall(r'\+\s*USE\s+(\S+)', body)
+                if len(declared) > 1:
+                    raise AdmissionRefusal('D69_REQUIRED_NET_CONTRACT_UNAVAILABLE',
+                                           'ambiguous DEF net USE: ' + name[1])
+                uses.setdefault(name[1], set()).update(declared)
         valid = (valid and not pieces[-1].strip() and len(names) == int(section[2])
                  and len(names) == len(set(names)))
+    for name, values in uses.items():
+        if len(values) > 1:
+            raise AdmissionRefusal('D69_REQUIRED_NET_CONTRACT_UNAVAILABLE',
+                                   'conflicting DEF net USE: ' + name)
+    required = {name for name, values in uses.items() if not values.intersection({'POWER', 'GROUND'})}
     if not valid or not required:
         raise AdmissionRefusal('D69_REQUIRED_NET_CONTRACT_UNAVAILABLE',
                                'complete unambiguous DEF net declarations required')
