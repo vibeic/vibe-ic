@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1508
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1508)
+- **Total programs (excluding helpers / shims):** 1512
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1512)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1499 |
+| `any` | 1503 |
 
 ## Alphabetical listing
 
@@ -77,6 +77,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_block_list_emit_check` | any | — | master block-list schema gate. |
 | `analog_block_type_classify` | any | — | deterministic name→type taxonomy lookup. |
 | `analog_bound_measurements` | any | — | Run explicit source-bound OP/DC/AC/TRAN measurements on a delivered DUT. |
+| `analog_ciff` | any | — | Incremental CIFF synthesis and SC topology specialization for A2/A3. |
 | `analog_content_detected_must_emit_l5_check` | any | Wave 47 | Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when |
 | `analog_converter_density_grade` | any | — | R-0915-45: EVALUATE the density pass condition the analog harness already DECLARES, on the run's own bitstream. |
 | `analog_corner_admission` | any | — | Fail-closed aggregate-RAM admission for independently launched PVT corners. |
@@ -87,6 +88,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_digital_interface_check` | any | — | deterministic gate for digital-analog interface validation |
 | `analog_existing_design_validate` | any | — | Read-validate an existing analog DUT against its current typed design. |
 | `analog_flow_compliance_check` | any | — | analog track compliance gate (A1-A9) |
+| `analog_geometry_admission` | any | — | Portable, byte-bound drawing-grid admission and explicit legacy migration. |
 | `analog_hardmacro_check` | any | — | deterministic gate for analog hardmacro deliverables |
 | `analog_hardmacro_gds_emit` | any | — | the A8 GDS PRODUCER that was missing. |
 | `analog_hardmacro_pinname_consistency_check` | any | — | deterministic 3-way pin-name gate. |
@@ -126,6 +128,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_netlist_pdk_check` | any | — | deterministic gate for SPICE netlist PDK compliance |
 | `analog_one_shot_runner` | any | Wave 90 | A1-A9 analog flow (parallel to Phase 2 digital). |
 | `analog_oracle_compare` | any | — | deterministic analog-benchmark comparator. |
+| `analog_ota1_options` | any | — | Declared OTA1 cell and internal chopper options; no transistor sizing. |
 | `analog_pdk_availability` | any | — | native PDK availability resolver / ladder (headline analog-track honesty fix). |
 | `analog_pdk_deck_context` | any | — | family-agnostic ngspice deck-emission context. |
 | `analog_per_block_pv_completeness_check` | any | Wave 93 | strict per-block deliverable completeness gate for the analog A1-A9 track. |
@@ -514,6 +517,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_final_perc` | any | — | D66 thin binding to the existing Step-28 PERC-equivalent owner. |
 | `flow109_frontend` | any | — | D22 uses the existing Default synthesis owner and its complete consumer. |
 | `flow109_functional_activity` | any | — | D55 component: adopted-netlist GLS activity and a real vector-power consumer. |
+| `flow109_ip_release` | any | — | D79 exports owner-selected IP endpoints and consumes their existing audits. |
 | `flow109_macro_mixed` | any | — | Bounded D08/M03/M04 adapters over the existing macro and mixed owners. |
 | `flow109_metric_acceptance` | any | — | Typed runtime metric acceptance for the 109-flow registry. |
 | `flow109_mixed_m01` | any | — | Flow109 M01 adapter over the inherited source extractors and interface gate. |
@@ -1580,7 +1584,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1499 programs)
+### `any` (1503 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1633,6 +1637,7 @@ _(no programs in this group)_
 - `analog_block_list_emit_check` — master block-list schema gate.
 - `analog_block_type_classify` — deterministic name→type taxonomy lookup.
 - `analog_bound_measurements` — Run explicit source-bound OP/DC/AC/TRAN measurements on a delivered DUT.
+- `analog_ciff` — Incremental CIFF synthesis and SC topology specialization for A2/A3.
 - `analog_content_detected_must_emit_l5_check` — Prevents silent ``L5_ADI_SPEC.json analog_blocks: []`` SKIP when  _[Wave 47]_
 - `analog_converter_density_grade` — R-0915-45: EVALUATE the density pass condition the analog harness already DECLARES, on the run's own bitstream.
 - `analog_corner_admission` — Fail-closed aggregate-RAM admission for independently launched PVT corners.
@@ -1643,6 +1648,7 @@ _(no programs in this group)_
 - `analog_digital_interface_check` — deterministic gate for digital-analog interface validation
 - `analog_existing_design_validate` — Read-validate an existing analog DUT against its current typed design.
 - `analog_flow_compliance_check` — analog track compliance gate (A1-A9)
+- `analog_geometry_admission` — Portable, byte-bound drawing-grid admission and explicit legacy migration.
 - `analog_hardmacro_check` — deterministic gate for analog hardmacro deliverables
 - `analog_hardmacro_gds_emit` — the A8 GDS PRODUCER that was missing.
 - `analog_hardmacro_pinname_consistency_check` — deterministic 3-way pin-name gate.
@@ -1682,6 +1688,7 @@ _(no programs in this group)_
 - `analog_netlist_pdk_check` — deterministic gate for SPICE netlist PDK compliance
 - `analog_one_shot_runner` — A1-A9 analog flow (parallel to Phase 2 digital).  _[Wave 90]_
 - `analog_oracle_compare` — deterministic analog-benchmark comparator.
+- `analog_ota1_options` — Declared OTA1 cell and internal chopper options; no transistor sizing.
 - `analog_pdk_availability` — native PDK availability resolver / ladder (headline analog-track honesty fix).
 - `analog_pdk_deck_context` — family-agnostic ngspice deck-emission context.
 - `analog_per_block_pv_completeness_check` — strict per-block deliverable completeness gate for the analog A1-A9 track.  _[Wave 93]_
@@ -2066,6 +2073,7 @@ _(no programs in this group)_
 - `flow109_final_perc` — D66 thin binding to the existing Step-28 PERC-equivalent owner.
 - `flow109_frontend` — D22 uses the existing Default synthesis owner and its complete consumer.
 - `flow109_functional_activity` — D55 component: adopted-netlist GLS activity and a real vector-power consumer.
+- `flow109_ip_release` — D79 exports owner-selected IP endpoints and consumes their existing audits.
 - `flow109_macro_mixed` — Bounded D08/M03/M04 adapters over the existing macro and mixed owners.
 - `flow109_metric_acceptance` — Typed runtime metric acceptance for the 109-flow registry.
 - `flow109_mixed_m01` — Flow109 M01 adapter over the inherited source extractors and interface gate.

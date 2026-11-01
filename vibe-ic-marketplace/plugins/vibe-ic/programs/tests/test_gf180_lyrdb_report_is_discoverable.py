@@ -84,7 +84,8 @@ def test_the_parser_could_always_read_a_report_database():
 def test_a_klayout_report_database_is_DISCOVERED(tmp_path):
     """THE DEFECT: `.lyrdb` is what KLayout writes, and the glob excluded it."""
     proj = _project(tmp_path, "drc.klayout.lyrdb", _CLEAN_RDB)
-    res = A._check_drc(proj)
+    with A.named_subjects([proj / "reports/phase3/drc.klayout.lyrdb"]):
+        res = A._check_drc(proj)
     found = res.summary.get("files_found") if hasattr(res, "summary") else None
     assert found == 1, (
         "a KLayout report database in the project was not discovered, so a "
@@ -95,7 +96,8 @@ def test_a_klayout_report_database_is_DISCOVERED(tmp_path):
 
 def test_a_discovered_clean_database_reports_zero_violations(tmp_path):
     proj = _project(tmp_path, "drc.klayout.lyrdb", _CLEAN_RDB)
-    res = A._check_drc(proj)
+    with A.named_subjects([proj / "reports/phase3/drc.klayout.lyrdb"]):
+        res = A._check_drc(proj)
     assert res.summary.get("determined_files") == 1, res.summary
     assert res.summary.get("real_violation_total") == 0, res.summary
 
@@ -105,7 +107,8 @@ def test_a_discovered_DIRTY_database_still_refuses(tmp_path):
     gate will look at, so the load-bearing proof is that a report with REAL
     violations, discovered by the SAME widened glob, is still caught."""
     proj = _project(tmp_path, "drc.klayout.lyrdb", _DIRTY_RDB)
-    res = A._check_drc(proj)
+    with A.named_subjects([proj / "reports/phase3/drc.klayout.lyrdb"]):
+        res = A._check_drc(proj)
     assert res.summary.get("files_found") == 1
     assert res.summary.get("real_violation_total") == 2, res.summary
     assert res.passed is False, "a dirty report database was waved through"
@@ -115,7 +118,8 @@ def test_an_unparseable_lyrdb_is_reported_unreadable_not_clean(tmp_path):
     """NEGATIVE NO-LEAK, second direction: a file the parser cannot read must
     not become a zero. UNMEASURED IS NOT ZERO."""
     proj = _project(tmp_path, "drc.klayout.lyrdb", "this is not a report database")
-    res = A._check_drc(proj)
+    with A.named_subjects([proj / "reports/phase3/drc.klayout.lyrdb"]):
+        res = A._check_drc(proj)
     assert res.passed is False
     assert res.summary.get("real_violation_total") != 0 or \
         res.summary.get("unreadable_files", 0) >= 1, res.summary
@@ -132,5 +136,6 @@ def test_antenna_discovery_takes_lyrdb_too(tmp_path):
 def test_the_old_extensions_still_work(tmp_path):
     """CONTROL: widening must not narrow. A .rpt is still found."""
     proj = _project(tmp_path, "drc_signoff.rpt", "total violations: 0\n")
-    res = A._check_drc(proj)
+    with A.named_subjects([proj / "reports/phase3/drc_signoff.rpt"]):
+        res = A._check_drc(proj)
     assert res.summary.get("files_found", 0) >= 1

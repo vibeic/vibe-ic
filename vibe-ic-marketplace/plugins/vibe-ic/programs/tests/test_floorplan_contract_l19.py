@@ -301,6 +301,9 @@ def test_phase1_hook_does_not_clobber_existing_die(tmp_path):
 
 def _seed_librelane_contract_inputs(proj: Path) -> Path:
     l19 = _seed_l19(proj)
+    doc = json.loads(l19.read_text())
+    doc['fields']['pdk_target'] = 'processA'
+    _write(l19, json.dumps(doc))
     _write(proj / "phase1/generated_docs/L8_TIMING_WAVEFORM.json",
            json.dumps({"clock_domains": [{
                "role": "primary", "pdk_scoped_target": "processA",

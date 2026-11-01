@@ -921,3 +921,88 @@ def test_native_lef_failure_preserves_prior_delivery(tmp_path, monkeypatch, nati
     assert result["emitted"] is False and result["rc"] == 2
     assert delivered.read_text() == "prior native delivery\n"
     assert not list(h.glob(".blk-native-lef-*"))
+
+
+@pytest.mark.parametrize("roles,value,accepted", [
+    (["cap"], 0.0, True),
+    (["res"], 0.0, True),
+    (["cap", "res"], 0.0, True),
+    (["cap", "nmos"], 0.0, False),
+    (["pmos"], 0.0, False),
+    (["bjt"], 0.0, False),
+    ([], 0.0, False),
+    (["unknown"], 0.0, False),
+    (["nmos"], 0.5, True),
+    (["cap"], False, False),
+    (["cap"], -0.5, False),
+    (["cap"], float("nan"), False),
+    (["cap"], float("inf"), False),
+])
+def test_characterized_leakage_follows_declared_device_inventory(
+        tmp_path, roles, value, accepted):
+    project, b, topo = _write_native_measurement_fixture(tmp_path, value=value)
+    topo["devices"] = [{"name": f"device_{i}", "role": role}
+                       for i, role in enumerate(roles)]
+    (b / "topology.json").write_text(json.dumps(topo))
+    log = b / "a8_native_measurement.ngspice.log"
+    power_w = value * 1e-3
+    log.write_text(f"ngspice-47\npwr = {power_w}\n")
+    path = b / E._A8_MEASUREMENT
+    rec = json.loads(path.read_text())
+    rec["native_log_sha256"] = E._sha256(log)
+    path.write_text(json.dumps(rec))
+    got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert (got is not None) is accepted, why
+    if accepted:
+        assert got["liberty_value"] == pytest.approx(value * 1000)
+
+
+def test_passive_inventory_still_requires_characterized_leakage(tmp_path):
+    project, b, topo = _write_native_measurement_fixture(tmp_path)
+    topo["devices"] = [{"name": "storage", "role": "cap"}]
+    (b / "topology.json").write_text(json.dumps(topo))
+    path = b / E._A8_MEASUREMENT
+    rec = json.loads(path.read_text())
+    del rec["value"]
+    path.write_text(json.dumps(rec))
+    got, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert got is None and "no numeric measured value" in why
+
+
+@pytest.mark.parametrize("native_power", [1e-30, 0.0005])
+def test_passive_zero_requires_exactly_zero_native_dc_power(tmp_path, native_power):
+    project, b, topo = _write_native_measurement_fixture(tmp_path, value=0.0)
+    topo["devices"] = [{"name": "storage", "role": "cap"}]
+    (b / "topology.json").write_text(json.dumps(topo))
+    log = b / "a8_native_measurement.ngspice.log"
+    log.write_text(f"ngspice-47\npwr = {native_power}\n")
+    path = b / E._A8_MEASUREMENT
+    rec = json.loads(path.read_text())
+    rec["native_log_sha256"] = E._sha256(log)
+    path.write_text(json.dumps(rec))
+    got, _why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+    assert got is None
+
+
+@pytest.mark.parametrize("roles,accepted", [(["cap", "res"], True), (["nmos"], False)])
+def test_native_dc_zero_uses_the_same_inventory_rule(tmp_path, monkeypatch, roles, accepted):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    topo["devices"] = [{"name": f"device_{i}", "role": role}
+                       for i, role in enumerate(roles)]
+    (b / "topology.json").write_text(json.dumps(topo))
+    native = E._docker_exec
+
+    def zero_power(*args, marker=None, **kwargs):
+        result = native(*args, marker=marker, **kwargs)
+        if marker == "a8_native_measurement.sp":
+            (b / "a8_native_ngspice.log").write_text("idd = 0\npwr = 0\n")
+        return result
+
+    monkeypatch.setattr(E, "_docker_exec", zero_power)
+    rec, why = E._native_measurement_produce(
+        project, "blk", "", "/pdk", b / "blk.gds", topo)
+    assert (rec is not None) is accepted, why
+    if accepted:
+        loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
+        assert loaded is not None, why
+        assert loaded["value"] == 0.0

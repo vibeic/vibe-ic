@@ -213,6 +213,163 @@ def test_measured_constraint_failure_survives_missing_budget_authority(topology_
     assert not result['completed']
 
 
+def _nested_allocations(topology_case, fault=None):
+    root, declared, _, authority, _ = topology_case
+    doc = json.loads(declared.read_text())
+    def leaf(value, unit):
+        return {'status': 'BOUND', 'limit': value, 'unit': unit}
+    budgets = {'gain': {'amplifier_a': {'D=0': leaf(50.0, 'dB'), 'D=1': leaf(55.0, 'dB')},
+                        'amplifier_b': {'D=0': leaf(30.0, 'dB')}},
+               'noise': {'warm': leaf(3.0, 'uV_rms')},
+               'current': {'static': leaf(.75, 'mA')}}
+    if fault == 'unbound':
+        budgets['noise']['warm']['status'] = 'UNBOUND'
+    elif fault == 'violation':
+        budgets['current']['static']['limit'] = 2.0
+    doc['blocks'][0]['budgets'] = budgets
+    declared.write_text(json.dumps(doc))
+    put(root, 'input/flow109/A04.json', {'requirements': view(root, declared)})
+    bound = json.loads(authority.read_text())
+    bound['limits']['keeper_alpha'] = {
+        'gain': {'amplifier_a': {'D=0': {'min': 45.0}, 'D=1': {'min': 50.0}},
+                 'amplifier_b': {'D=0': {'min': 25.0}}},
+        'noise': {'warm': {'max': 4.0}}, 'current': {'static': {'max': 1.0}}}
+    bound['units']['keeper_alpha'] = {
+        'gain': {'amplifier_a': {'D=0': 'dB', 'D=1': 'dB'}, 'amplifier_b': {'D=0': 'dB'}},
+        'noise': {'warm': 'uV_rms'}, 'current': {'static': 'mA'}}
+    if fault == 'missing_condition':
+        del bound['limits']['keeper_alpha']['gain']['amplifier_a']['D=1']
+        del bound['units']['keeper_alpha']['gain']['amplifier_a']['D=1']
+    elif fault == 'extra_condition':
+        bound['limits']['keeper_alpha']['gain']['amplifier_a']['D=2'] = {'min': 50.0}
+        bound['units']['keeper_alpha']['gain']['amplifier_a']['D=2'] = 'dB'
+    elif fault == 'wrong_unit':
+        bound['units']['keeper_alpha']['current']['static'] = 'mW'
+    authority.write_text(json.dumps(bound))
+
+
+def test_a04_structured_allocations_are_compared_at_every_condition(topology_case):
+    root, _, _, _, monkeypatch = topology_case
+    _nested_allocations(topology_case)
+    _, result = run_row(root, 'A04', monkeypatch)
+    measured = result['metric_acceptance']
+    assert measured['status'] == 'PASS', measured
+    allocations = measured['metrics']['allocated_gain_noise_power_budgets']['allocations']
+    assert len(allocations) == 5
+    assert {tuple(item['budget_path']) for item in allocations} == {
+        ('gain', 'amplifier_a', 'D=0'), ('gain', 'amplifier_a', 'D=1'),
+        ('gain', 'amplifier_b', 'D=0'), ('noise', 'warm'), ('current', 'static')}
+
+
+@pytest.mark.parametrize('fault,expected', [('unbound', 'FAIL'), ('violation', 'FAIL'),
+    ('missing_condition', 'NOT_MEASURED'), ('extra_condition', 'NOT_MEASURED'), ('wrong_unit', 'NOT_MEASURED')])
+def test_a04_structured_allocations_cannot_hide_unbound_or_uncompared_conditions(topology_case, fault, expected):
+    root, _, _, _, monkeypatch = topology_case
+    _nested_allocations(topology_case, fault)
+    _, result = run_row(root, 'A04', monkeypatch)
+    measured = result['metric_acceptance']
+    assert measured['status'] == expected, measured
+    if fault == 'unbound':
+        assert measured['reason'] == 'A04_BUDGET_UNBOUND'
+
+
+def _loop_ir(topology_case):
+    root, _, authority, _, _ = topology_case
+    path = root / 'phase3/analog/keeper_alpha/topology.json'
+    ir = json.loads(path.read_text())
+    forward = {'kind': 'feedforward', 'source': 'node_u', 'destination': 'node_z',
+               'gain': 1.0, 'capacitor': 'cap_a'}
+    feedback = {'kind': 'dac', 'source': 'node_z', 'destination': 'node_v',
+                'gain': -1.0, 'capacitor': 'cap_b', 'destination_stage': 1, 'delay_clocks': 0}
+    ir['loop_declaration'] = {'schema': 1, 'family': 'CIFF', 'order': 3,
+        'a': [.2, .3, .4], 'b': [.1, 0, 0], 'c': [1., 2., 3.], 'c0': 1.,
+        'paths': [forward, feedback], 'k0': 0., 'k0_path': None,
+        'dac_stages': [1], 'quantizer_levels': 2, 'D': 0}
+    path.write_text(json.dumps(ir))
+    required = [('loop_family', 'CIFF'), ('loop_order', '3'),
+                ('feedforward_path', json.dumps(forward, sort_keys=True, separators=(',', ':'))),
+                ('feedback_path', json.dumps(feedback, sort_keys=True, separators=(',', ':'))),
+                ('dac_injection_stage', '1'), ('dac_injection_stages', '[1]'),
+                ('quantizer_levels', '2'), ('quantizer_bits', '1'), ('timing_D', '0')]
+    doc = json.loads(authority.read_text())
+    doc['required_items'] = [{'block': 'keeper_alpha', 'kind': kind, 'value': value} for kind, value in required]
+    authority.write_text(json.dumps(doc))
+    return path, ir
+
+
+def test_a04_loop_structure_constraints_are_observed_from_explicit_ir(topology_case):
+    root, _, _, _, monkeypatch = topology_case
+    _loop_ir(topology_case)
+    _, result = run_row(root, 'A04', monkeypatch)
+    measured = result['metric_acceptance']
+    assert measured['status'] == 'PASS', measured
+    observed = measured['metrics']['topology_constraints']
+    assert not observed['missing']
+    assert {item['status'] for item in observed['observations']} == {'OBSERVED'}
+
+
+@pytest.mark.parametrize('field,kind', [('order', 'loop_order'), ('feedforward_paths', 'feedforward_path'),
+    ('feedback_paths', 'feedback_path'), ('dac_stages', 'dac_injection_stage'),
+    ('quantizer_levels', 'quantizer_levels'), ('D', 'timing_D')])
+def test_a04_missing_loop_fact_remains_not_observed(topology_case, field, kind):
+    root, _, _, _, monkeypatch = topology_case
+    path, ir = _loop_ir(topology_case)
+    loop = ir['loop_declaration']
+    if field in ('feedforward_paths', 'feedback_paths'):
+        kinds = {'feedforward', 'input_feedforward'} if field == 'feedforward_paths' else {'dac', 'k0', 'zero_feedback'}
+        loop['paths'] = [path for path in loop['paths'] if path['kind'] not in kinds]
+    else:
+        del loop[field]
+    # Deliberately tempting names cannot replace the missing IR declaration.
+    ir['topology'] += ' order=3 feedforward node_u DAC_stage_1 two_levels D=0'
+    path.write_text(json.dumps(ir))
+    _, result = run_row(root, 'A04', monkeypatch)
+    observed = result['metric_acceptance']['metrics']['topology_constraints']
+    assert observed['status'] == 'FAIL', observed
+    assert any(item['kind'] == kind for item in observed['missing'])
+    assert any(item['kind'] == kind and item['status'] == 'NOT_OBSERVED'
+               for item in observed.get('observations', []))
+
+
+@pytest.mark.parametrize('field,value,kind', [('order', True, 'loop_order'),
+    ('dac_stages', [4], 'dac_injection_stage'),
+    ('quantizer_levels', [-1, -1], 'quantizer_levels'),
+    ('D', True, 'timing_D'), ('schema', 2, 'loop_order'),
+    ('paths', [{'kind': 'feedforward', 'source': 'node_u'}], 'feedforward_path')])
+def test_a04_invalid_loop_field_never_becomes_an_observed_fact(topology_case, field, value, kind):
+    root, _, _, _, monkeypatch = topology_case
+    path, ir = _loop_ir(topology_case)
+    ir['loop_declaration'][field] = value
+    path.write_text(json.dumps(ir))
+    _, result = run_row(root, 'A04', monkeypatch)
+    observed = result['metric_acceptance']['metrics']['topology_constraints']
+    assert observed['status'] == 'FAIL', observed
+    assert not any(item['kind'] == kind for item in observed['value'])
+
+
+@pytest.mark.parametrize('declared', [False, True])
+def test_a04_loop_structure_compensation_requires_an_explicit_path(topology_case, declared):
+    root, _, authority, _, monkeypatch = topology_case
+    path, ir = _loop_ir(topology_case)
+    compensation = {'kind': 'k0', 'source': 'node_z', 'destination': 'node_u',
+                    'gain': -.5, 'capacitor': 'cap_c', 'delay_clocks': 1}
+    ir['loop_declaration']['D'] = 1
+    for branch in ir['loop_declaration']['paths']:
+        if branch['kind'] == 'dac':
+            branch['delay_clocks'] = 1
+    ir['loop_declaration']['k0'] = .5
+    ir['loop_declaration']['k0_path'] = compensation if declared else None
+    path.write_text(json.dumps(ir))
+    doc = json.loads(authority.read_text())
+    doc['required_items'] = [{'block': 'keeper_alpha', 'kind': 'feedback_path',
+        'value': json.dumps(compensation, sort_keys=True, separators=(',', ':'))}]
+    authority.write_text(json.dumps(doc))
+    _, result = run_row(root, 'A04', monkeypatch)
+    observed = result['metric_acceptance']['metrics']['topology_constraints']
+    assert observed['status'] == ('PASS' if declared else 'FAIL'), observed
+    assert observed.get('observations', [])[0]['status'] == ('OBSERVED' if declared else 'NOT_OBSERVED')
+
+
 @pytest.mark.parametrize('calibration_case', ['wrong_unit'], indirect=True)
 def test_measured_unit_failure_survives_missing_calibration_authority(calibration_case):
     root, _, authority, _, _, monkeypatch = calibration_case

@@ -1398,13 +1398,13 @@ def author_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
             out["staged_sdc"] = str(staged.relative_to(project))
         except ValueError:
             out["staged_sdc"] = str(staged)
-        txt = rt._scale_sdc_to_liberty_units(staged.read_text(), str(pdk.liberty))
-        txt = rt._reconcile_staged_sdc_drv(txt, pdk.name, str(pdk.liberty),
+        txt = rt._scale_sdc_to_liberty_units(staged.read_text(), rt._liberty_model_path(pdk.liberty, container, project))
+        txt = rt._reconcile_staged_sdc_drv(txt, pdk.name, rt._liberty_model_path(pdk.liberty, container, project),
                                         container)
-        txt = rt._reconcile_staged_sdc_driving_cell(txt, str(pdk.liberty),
+        txt = rt._reconcile_staged_sdc_driving_cell(txt, rt._liberty_model_path(pdk.liberty, container, project),
                                                  container)
         txt, out["drv_parity"] = rt._ensure_staged_sdc_drv(
-            txt, str(pdk.liberty), container, project, pdk_name=str(pdk.name),
+            txt, rt._liberty_model_path(pdk.liberty, container, project), container, project, pdk_name=str(pdk.name),
             supply_ports=supply_ports, drv_block_out=_blk)
         fm = rt._SDC_MAX_FANOUT_RE.search(txt)
         if fm:
@@ -1419,8 +1419,8 @@ def author_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
         txt, pad_rec = _sdc_env.staged_sdc_pad_input_drive(
             project, txt, out["staged_sdc"], container,
             getattr(rt, "_to_container_path", None),
-            _sdc_env.liberty_time_scale(str(pdk.liberty)), analysis_top=top,
-            core_liberty=str(pdk.liberty))
+            _sdc_env.liberty_time_scale(rt._liberty_model_path(pdk.liberty, container, project)), analysis_top=top,
+            core_liberty=rt._liberty_model_path(pdk.liberty, container, project))
         try:
             _sdc_env.write_pad_input_drive_record(
                 project, pad_rec, output=pad_drive_output)
@@ -1430,13 +1430,13 @@ def author_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
             pass    # no record on a DIE top reads NOT_MEASURED downstream
         out["pad_input_drive"] = pad_rec.get("verdict")
     else:
-        drv = rt._liberty_drv_limits(str(pdk.liberty), container)
+        drv = rt._liberty_drv_limits(rt._liberty_model_path(pdk.liberty, container, project), container)
         txt = rt._build_auto_silicon_sdc(
             project, top=top,
             drv_slew_ns=drv.get("max_transition_ns"),
             drv_cap_pf=drv.get("max_capacitance_pf"),
             drv_note=str(drv.get("note") or ""),
-            liberty_path=str(pdk.liberty), pdk_name=str(pdk.name),
+            liberty_path=rt._liberty_model_path(pdk.liberty, container, project), pdk_name=str(pdk.name),
             container=container,
             supply_ports=supply_ports, drv_block_out=_blk,
             **({"pad_drive_output": pad_drive_output}
@@ -1452,7 +1452,7 @@ def author_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
         try:
             out["cts_fanout_target"] = (
                 rt._l9_declared_max_fanout(project, str(pdk.name),
-                                        str(pdk.liberty))
+                                        rt._liberty_model_path(pdk.liberty, container, project))
                 or rt._rtl_replication_fanout_bound(project)
                 or drv.get("max_fanout"))
         except Exception:                                    # noqa: BLE001
@@ -1469,7 +1469,7 @@ def _selected_sdc_pdk(rt: Any, project: Path, pdk: Any) -> Any:
     neither may infer the selected library or corner from an old receipt.
     """
     selected = pdk
-    if not Path(str(getattr(pdk, "liberty", ""))).is_file():
+    if not Path(rt._liberty_model_path(getattr(pdk, "liberty", ""), '', project)).is_file():
         import copy
         import librelane_contract as ll
         selected = copy.copy(pdk)
@@ -1477,7 +1477,7 @@ def _selected_sdc_pdk(rt: Any, project: Path, pdk: Any) -> Any:
             project, str(pdk.name), image=ll.resolve_image(project))
         rt._host_staged_liberty(selected, staging)
     try:
-        with Path(str(getattr(selected, "liberty", ""))).open("rb") as liberty:
+        with Path(rt._liberty_model_path(getattr(selected, 'liberty', ''), '', project)).open("rb") as liberty:
             liberty.read(1)
     except OSError as exc:
         raise ValueError(
@@ -1544,7 +1544,7 @@ def asic_sdc_input_digest(rt: Any, project: Path, top: str, pdk: Any
         # the same pinned image must not invalidate the deck.
         items["@container_image"] = _container_image_binding(image_record)
     items["@pdk"] = str(getattr(pdk, "name", ""))
-    liberty = Path(str(getattr(pdk, "liberty", "")))
+    liberty = Path(rt._liberty_model_path(getattr(pdk, "liberty", ""), '', project))
     items["@liberty"] = str(liberty)
     try:
         # Liberty usually lives outside the project, so `_add` (which uses a
@@ -1680,7 +1680,7 @@ def emit_step7_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
            if scenario is not None else {}))
     import reset_sync_structural_exception as _reset_sync
     authored["text"], structural_reset = _reset_sync.apply_current_project(
-        project, Path(str(pdk.liberty)), authored["text"])
+        project, Path(rt._liberty_model_path(pdk.liberty, container, project)), authored["text"])
     authored["structural_reset_exception"] = structural_reset
     path = (scenario / f"{top}.sdc" if scenario is not None else
             step7_asic_sdc_path(rt, project, top, authored["design_staged"]))
@@ -1732,7 +1732,7 @@ def read_step7_asic_sdc(rt: Any, project: Path, top: str, pdk: Any
         if rec['top'] != top or rec['pdk'] != str(pdk.name):
             return None, 'accepted functional SDC belongs to a different top or PDK'
         selected = _selected_sdc_pdk(rt, project, pdk)
-        if hashlib.sha256(Path(str(selected.liberty)).read_bytes()).hexdigest() not in rec['library_sha256s']:
+        if hashlib.sha256(Path(rt._liberty_model_path(selected.liberty, '', project)).read_bytes()).hexdigest() not in rec['library_sha256s']:
             return None, 'current PDK Liberty differs from the accepted native libraries'
         return rec, ''
     constraints = rt._pl.constraints_dir(project)
@@ -1875,11 +1875,11 @@ def _derive_pnr_pad_input_drive(rt: Any, project: Path, logical_top: str,
         text, pad_record = environment.staged_sdc_pad_input_drive(
             project, text, str(record.get("staged_sdc") or record.get("path") or ""),
             container, getattr(rt, "_to_container_path", None),
-            environment.liberty_time_scale(str(pdk.liberty)),
-            analysis_top=physical_top, core_liberty=str(pdk.liberty))
+            environment.liberty_time_scale(rt._liberty_model_path(pdk.liberty, container, project)),
+            analysis_top=physical_top, core_liberty=rt._liberty_model_path(pdk.liberty, container, project))
     else:
         values, _unread = environment._sdc_environment_values(
-            project, str(pdk.liberty), container, None, None,
+            project, rt._liberty_model_path(pdk.liberty, container, project), container, None, None,
             getattr(rt, "_to_container_path", None))
         resolved, pad_record = environment._pad_input_drive(
             project, values, container, getattr(rt, "_to_container_path", None),
@@ -1896,14 +1896,14 @@ def _derive_pnr_pad_input_drive(rt: Any, project: Path, logical_top: str,
                 kept = [item for item in text.splitlines() if item.strip() != line]
                 text = "\n".join(kept) + ("\n" if text.endswith("\n") else "")
         new_lines = environment.render_pad_input_drive(
-            pad_record, environment.liberty_time_scale(str(pdk.liberty)))
+            pad_record, environment.liberty_time_scale(rt._liberty_model_path(pdk.liberty, container, project)))
         if new_lines and not (pad_record.get("model") == "set_driving_cell"
                               and all(item in text.splitlines()
                                       for item in new_lines if not item.startswith("#"))):
             text = text.rstrip("\n") + "\n" + "\n".join(new_lines) + "\n"
 
     pad_record["sdc_lines"] = environment.pad_drive_sdc_lines(
-        pad_record, environment.liberty_time_scale(str(pdk.liberty)))
+        pad_record, environment.liberty_time_scale(rt._liberty_model_path(pdk.liberty, container, project)))
     pad_report = environment.write_pad_input_drive_record(project, pad_record)
     record["text"] = text
     record["pad_input_drive"] = pad_record.get("verdict")
@@ -1937,7 +1937,7 @@ def asic_sdc_for_pnr(rt: Any, project: Path, top: str, pdk: Any,
     supplies = rt._producer_supply_ports_for_drv(project)
     import sdc_environment as environment
     pad_scene = environment.pad_operating_scene(
-        project, str(pdk.liberty), container, rt._to_container_path)
+        project, rt._liberty_model_path(pdk.liberty, container, project), container, rt._to_container_path)
     if supplies:
         # ONLY the DRV block's SCOPE changes: the block step 7 rendered is
         # re-rendered from the SAME recorded arguments with the proven supply

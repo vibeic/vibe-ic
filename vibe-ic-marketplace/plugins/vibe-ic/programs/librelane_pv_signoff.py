@@ -68,6 +68,8 @@ PRODUCED: dict[str, tuple[str, ...]] = {
 CLEAN = 0
 
 DRC_CHAIN = ('Magic.DRC', 'KLayout.DRC', 'KLayout.Density')
+DRC_ENGINES = (("KLayout.DRC", "klayout__drc_error__count", "drc.klayout.lyrdb"),
+               ("Magic.DRC", "magic__drc_error__count", "drc.magic.lyrdb"))
 LVS_CHAIN = ('Magic.SpiceExtraction', 'Netgen.LVS')
 HALVES = {'drc': DRC_CHAIN, 'lvs': LVS_CHAIN}
 

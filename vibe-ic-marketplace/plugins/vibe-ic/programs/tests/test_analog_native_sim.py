@@ -350,7 +350,9 @@ def test_a07_uses_native_result_and_propagates_failure(project, transcript, retu
     result = sim.run_step("A07", project, {"name": "stage"}, _options(), run)
     assert result["status"] == expected
     assert calls[0][0] == "@ngspice"
-    assert calls[0][1] == ["-b", str(project / "phase3/analog/stage/tb_stage.sp")]
+    log = result["executions"][0]["stdout_path"]
+    assert calls[0][1] == ["-b", str(project / "phase3/analog/stage/tb_stage.sp"), "-o", log]
+    assert calls[0][2]["outputs"] == [log]
     assert len(result["executions"]) == 1
 
 
@@ -371,7 +373,7 @@ def test_a07_rejects_override_input_changed_during_execution(project):
     expected = {role: {"path": str(path), "sha256": hashlib.sha256(path.read_bytes()).hexdigest()}
                 for role, path in (("netlist", netlist), ("testbench", deck), ("spec", spec))}
     def run(program, argv, **kwargs):
-        assert argv == ["-b", str(deck)]
+        assert argv == ["-b", str(deck), "-o", kwargs["outputs"][0]]
         deck.write_text("* changed after native execution started\n")
         return {"returncode": 0, "stdout": "level = 1.0\n"}
     options = _options(config={"blocks": {"stage": {
@@ -437,7 +439,9 @@ def test_selected_container_ngspice_identity_uses_remote_digest_not_host_foss(
 
 def test_running_native_work_is_retained_without_duplicate_launch(project, monkeypatch, tmp_path):
     deck = project / "phase3/analog/stage/tb_stage.sp"
-    executable = Path(sys.executable).resolve()
+    # sys.executable may be a launcher that execs a different ELF after Popen
+    # returns. Bind the actual interpreter, as the live-process guard does.
+    executable = Path("/proc/self/exe").resolve()
     selected = {"scope": "host", "path": str(executable),
                 "sha256": hashlib.sha256(executable.read_bytes()).hexdigest()}
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: selected)
@@ -481,7 +485,7 @@ def test_unrelated_live_pid_cannot_suppress_native_launch(project):
 @pytest.mark.parametrize("mutation", ["starttime", "argv", "log", "selected_tool", "container"])
 def test_active_run_requires_complete_live_transport_identity(project, monkeypatch, tmp_path, mutation):
     deck = project / "phase3/analog/stage/tb_stage.sp"
-    executable = Path(sys.executable).resolve()
+    executable = Path("/proc/self/exe").resolve()
     selected = {"scope": "host", "path": str(executable),
                 "sha256": hashlib.sha256(executable.read_bytes()).hexdigest()}
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: selected)
@@ -547,7 +551,7 @@ def test_copied_python_named_ngspice_is_not_selected_native_tool(project, monkey
 def test_unobservable_selected_tool_protects_plausible_active_job_without_verifying_it(
         project, monkeypatch, tmp_path):
     deck = project / "phase3/analog/stage/tb_stage.sp"
-    executable = Path(sys.executable).resolve()
+    executable = Path("/proc/self/exe").resolve()
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: None)
     log = tmp_path / "unverified.log"
     log.write_text("running\n")
@@ -1035,3 +1039,30 @@ def test_incremental_consumer_distinguishes_method_from_measured_enob_and_ignore
     assert result['metrics'].get('enob') == metrics.get('enob')
     if not metrics:
         assert result['metrics']['source_measurement_coverage']['missing'] == ['enob']
+
+
+@pytest.mark.parametrize("transcript,expected", [
+    ("MEAS level=1.0\n", "PASS"),
+    ("MEAS level=1.5\n", "FAIL"),
+    ("Error: &sensed: no such variable\nMEAS level=0\n", "FAIL"),
+])
+def test_nominal_producer_owns_live_log_and_consumes_native_stream(project, transcript, expected):
+    calls = []
+
+    def native(program, argv, **kwargs):
+        calls.append((program, argv, kwargs))
+        assert program == "@ngspice"
+        assert argv[:2] == ["-b", str(project / "phase3/analog/stage/tb_stage.sp")]
+        assert "-o" in argv, "normal producer must create the live log required by retention"
+        log = Path(argv[argv.index("-o") + 1])
+        assert not log.exists(), "native output must not be prefilled"
+        assert kwargs["outputs"] == [str(log)]
+        log.write_text(transcript)
+        return {"returncode": 0, "stdout": "Batch mode\n", "stderr": ""}
+
+    first = sim.run_step("A07", project, {"name": "stage"}, _options(), native)
+    second = sim.run_step("A07", project, {"name": "stage"}, _options(), native)
+    assert first["status"] == second["status"] == expected
+    assert first["metrics"]["level"] == second["metrics"]["level"]
+    assert first["executions"][0]["stdout_path"] != second["executions"][0]["stdout_path"]
+    assert len(calls) == 2

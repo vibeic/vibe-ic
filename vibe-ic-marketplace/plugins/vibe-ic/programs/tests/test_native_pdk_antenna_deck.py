@@ -310,6 +310,7 @@ def test_native_clean_rdb_with_unreadable_router_report_cannot_pass(tmp_path,
     report = tmp_path / "reports/phase3/antenna.rpt"
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text("OpenROAD check_antennas: report truncated before tally\n")
+    report.with_suffix('.json').write_text(json.dumps({'source': str(report.relative_to(tmp_path))}))
     monkeypatch.setattr(gate._kl, "find_runner", lambda **kw: NativeRunner())
     result = gate.run(tmp_path, None, None, None, None)
     assert result["cross_check"]["verdict"] == "ERROR", result
@@ -323,6 +324,7 @@ def test_native_clean_rdb_with_cross_check_exception_cannot_pass(tmp_path,
     report = tmp_path / "reports/phase3/antenna.rpt"
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text("Found 0 net violations.\nFound 0 pin violations.\n")
+    report.with_suffix('.json').write_text(json.dumps({'source': str(report.relative_to(tmp_path))}))
     monkeypatch.setattr(gate._kl, "find_runner", lambda **kw: NativeRunner())
     monkeypatch.setattr(gate, "_load_module", lambda *args: 1 / 0)
     result = gate.run(tmp_path, None, None, None, None)
@@ -384,11 +386,222 @@ def test_native_cross_check_reads_real_klayout_rdb_dialect(tmp_path, monkeypatch
     report = tmp_path / "reports/phase3/antenna.rpt"
     report.parent.mkdir(parents=True, exist_ok=True)
     report.write_bytes((PROGRAMS / "calibration/native_antenna_clean.lyrdb").read_bytes())
+    report.with_suffix('.json').write_text(json.dumps({'source': str(report.relative_to(tmp_path))}))
     monkeypatch.setattr(gate._kl, "find_runner", lambda **kw: NativeRunner())
     result = gate.run(tmp_path, None, None, None, None)
     assert result["verdict"] == "PASS", result
     assert result["cross_check"]["verdict"] == "AGREE", result
     assert result["cross_check"]["router_violations"] == 0
+
+
+@pytest.mark.parametrize('selection', ['published', 'state', 'missing', 'missing_file',
+                                      'ambiguous', 'changed_state'])
+def test_router_cross_check_uses_only_current_declared_output(tmp_path, selection):
+    from programs.tests._hostpaths import require_repo
+    poison = tmp_path / '.vibeic/runtime-program-trees/plugin/programs/calibration/antenna_fixture.rpt'
+    poison.parent.mkdir(parents=True)
+    poison.write_bytes(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+        'calibration', 'antenna_scoped_drc_clean_negative.rpt').read_bytes())
+    report = tmp_path / 'phase3/librelane/current-router/reports/antenna.rpt'
+    report.parent.mkdir(parents=True)
+    report.write_bytes(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+        'calibration', 'native_antenna_clean.lyrdb').read_bytes())
+    records = tmp_path / 'reports/phase3'
+    records.mkdir(parents=True)
+    explicit = None
+    if selection in ('state', 'changed_state'):
+        state = report.parent.parent / 'state_out.json'
+        state.write_text(json.dumps({'metrics': {'antenna__violating__nets': 0}}))
+        (records / 'antenna_librelane.json').write_text(json.dumps({'router': {
+            'step': 'OpenROAD.CheckAntennas', 'state': str(state.relative_to(tmp_path)),
+            'state_sha256': gate._sha(state)}}))
+        if selection == 'changed_state':
+            state.write_text('{"metrics":{}}')
+    elif selection != 'missing':
+        # The producer may publish a name that matches no antenna*.rpt glob.
+        report = report.rename(report.with_name('router-result.out'))
+        (records / 'antenna.json').write_text(json.dumps({'source': str(report.relative_to(tmp_path))}))
+        if selection == 'missing_file':
+            report.unlink()
+        elif selection == 'ambiguous':
+            explicit = str(poison)
+    raw = tmp_path / 'native-geometry.json'
+    raw.write_text(json.dumps({'violations': 0}))
+    result = gate._native_router_cross_check(tmp_path, explicit, raw,
+        {'verdict': 'PASS', 'violations': 0}, 0)
+    if selection in ('published', 'state'):
+        assert result['cross_check']['verdict'] == 'AGREE', result
+        assert Path(result['cross_check']['router_report']) == report
+        assert result['cross_check']['router_violations'] == 0
+    else:
+        code = {'missing': 'MISSING', 'missing_file': 'MISSING',
+                'ambiguous': 'AMBIGUOUS', 'changed_state': 'UNBOUND'}[selection]
+        assert result['cross_check']['verdict'] == 'NOT_RUN', result
+        assert result['cross_check']['selection'] == 'REFUSED', result
+        assert result['cross_check']['reason'].startswith('ANTENNA_ROUTER_REPORT_'+code), result
+    assert result['verdict'] == 'PASS' and result['violations'] == 0
+
+
+def test_unowned_router_fixture_cannot_overwrite_native_violations(tmp_path):
+    poison = tmp_path / '.vibeic/runtime-program-trees/calibration/antenna_scoped.rpt'
+    poison.parent.mkdir(parents=True)
+    poison.write_text('not a router antenna count\n')
+    raw = tmp_path / 'native-geometry.json'
+    raw.write_text(json.dumps({'violations': 9}))
+    result = gate._native_router_cross_check(tmp_path, None, raw,
+        {'verdict': 'FAIL', 'violations': 9, 'reason': '9 native violations'}, 9)
+    assert result['cross_check']['verdict'] == 'NOT_RUN', result
+    assert result['cross_check']['reason'].startswith('ANTENNA_ROUTER_REPORT_MISSING'), result
+    assert result['verdict'] == 'FAIL' and result['violations'] == 9
+    assert result['reason'] == '9 native violations'
+
+
+def _repair_log(final_nets=0):
+    return ('[INFO ANT-0002] Found 3 net violations.\n'
+            '[INFO ANT-0001] Found 4 pin violations.\n'
+            '[INFO GRT] repair_antennas ...\n'
+            f'[INFO ANT-0002] Found {final_nets} net violations.\n'
+            '[INFO ANT-0001] Found 0 pin violations.\n'
+            'ANTENNA_POSTROUTE_DONE\n')
+
+
+def _final_router_cross_check(project, count=0):
+    raw = project / 'native.json'
+    raw.write_text(json.dumps({'violations': count}))
+    return gate._native_router_cross_check(project, None, raw,
+        {'verdict': 'FAIL' if count else 'PASS', 'violations': count}, count)
+
+
+@pytest.mark.parametrize('declared', [False, True])
+def test_land_l2_in_session_repair_loop_reads_published_final_report(tmp_path, declared):
+    """land-L2 insession_probe: dirty 3+4, final router/deck both clean."""
+    pnr = tmp_path / 'phase3/stage3/pnr'
+    pnr.mkdir(parents=True)
+    log = pnr / 'openroad.log'
+    log.write_text(_repair_log())
+    rpt = tmp_path / 'reports/phase3/antenna.rpt'
+    rpt.parent.mkdir(parents=True)
+    rpt.write_text('# OpenROAD antenna check — IN-SESSION\n'
+                   'antenna check: 0 net violations, 0 pin violations\nantenna clean: YES\n')
+    doc = {'tool': 'openroad', 'mode': 'antenna_check_in_session_post_repair',
+           'net_violations': 0, 'pin_violations': 0, 'clean': True,
+           'source': str(log.relative_to(tmp_path)), 'verdict': 'PASS'}
+    if declared:
+        doc['report'] = str(rpt.relative_to(tmp_path))
+    rpt.with_suffix('.json').write_text(json.dumps(doc))
+    result = _final_router_cross_check(tmp_path)
+    assert result['verdict'] == 'PASS', result
+    assert result['cross_check']['verdict'] == 'AGREE', result
+    assert result['cross_check']['router_violations'] == 0, result
+    assert Path(result['cross_check']['router_report']) == rpt
+    assert log.read_text() == _repair_log()
+
+
+@pytest.mark.parametrize('producer', ['in_session', 'canonical', 'librelane'])
+@pytest.mark.parametrize('final_nets', [0, 2])
+def test_router_producers_publish_only_the_final_tally(tmp_path, monkeypatch, producer, final_nets):
+    """Exercise actual publishers; preserve dirty raw logs and final dirty FAIL."""
+    from types import SimpleNamespace
+    import phase3_one_shot_runner as runner
+    import librelane_ir_antenna as la
+    pnr = tmp_path / 'phase3/stage3/pnr'
+    pnr.mkdir(parents=True)
+    (pnr / 'top.def').write_text('DESIGN top ;\nEND DESIGN\n')
+    rpt = tmp_path / 'reports/phase3/antenna.rpt'
+    rpt.parent.mkdir(parents=True)
+    text = _repair_log(final_nets)
+    if producer == 'librelane':
+        folder = tmp_path / 'phase3/librelane/26/01-openroad-checkantennas'
+        folder.mkdir(parents=True)
+        log = folder / 'openroad-checkantennas.log'
+        log.write_text(text)
+        state = folder / 'state_out.json'
+        state.write_text('{}')
+        monkeypatch.setattr(runner, '_librelane_step_ctx', lambda *a: ('img', tmp_path))
+        monkeypatch.setattr(la, 'run_antenna_router', lambda *a, **k: {
+            'counts': {'antenna__violating__nets': final_nets, 'antenna__violating__pins': 0},
+            'state': str(state), 'state_sha256': gate._sha(state),
+            'report': str(folder / 'reports/antenna.rpt')})
+        runner._librelane_antenna_router(tmp_path, 'top', SimpleNamespace(name='gf'), 'librelane', [])
+    else:
+        if producer == 'in_session':
+            log = pnr / 'openroad.log'
+            log.write_text(text)
+        else:
+            log = rpt.parent / 'antenna.log'
+
+            def tool(*a, **k):
+                log.write_text(text)  # the real command tees this transcript here
+                return 0, text, ''
+
+            monkeypatch.setattr(runner, '_docker_exec', tool)
+            monkeypatch.setattr(runner, '_to_container_path', lambda p, c: str(p))
+        pdk = SimpleNamespace(metal_prefix='Metal', tech_lef=tmp_path / 'tech.lef',
+                              cell_lef=tmp_path / 'cells.lef', liberty=tmp_path / 'cells.lib',
+                              macro_lefs=[])
+        assert runner._emit_antenna_report(tmp_path, 'top', pdk, 'fixture', rpt, [])
+    doc = json.loads(rpt.with_suffix('.json').read_text())
+    assert doc.get('report') == str(rpt.relative_to(tmp_path)), doc
+    assert doc['net_violations'] == final_nets and doc['pin_violations'] == 0
+    assert doc['source'] == str((log if producer == 'in_session' else rpt).relative_to(tmp_path))
+    assert log.read_text() == text
+    assert doc['measured_subject']['tool_log']['sha256'] == gate._sha(log)
+    result = _final_router_cross_check(tmp_path, final_nets)
+    assert result['verdict'] == ('FAIL' if final_nets else 'PASS'), result
+    assert result['cross_check']['verdict'] == 'AGREE', result
+    assert result['cross_check']['router_violations'] == final_nets, result
+    assert Path(result['cross_check']['router_report']) == rpt
+
+
+@pytest.mark.parametrize('declaration,code', [
+    ('source_log', 'LOG_ONLY'), ('report_log', 'LOG_ONLY'),
+    ('missing_final', 'MISSING'), ('multiple_reports', 'AMBIGUOUS')])
+def test_a_log_cannot_substitute_for_the_declared_final_report(tmp_path, declaration, code):
+    reports = tmp_path / 'reports/phase3'
+    reports.mkdir(parents=True)
+    log = reports / 'openroad.log'
+    log.write_text(_repair_log())
+    doc = {'source': str(log.relative_to(tmp_path))}
+    if declaration == 'report_log':
+        doc['report'] = doc['source']
+    elif declaration == 'missing_final':
+        doc['mode'] = 'antenna_check_in_session_post_repair'
+    elif declaration == 'multiple_reports':
+        doc['report'] = ['reports/phase3/a.rpt', 'reports/phase3/b.rpt']
+    (reports / 'antenna.json').write_text(json.dumps(doc))
+    result = _final_router_cross_check(tmp_path)
+    assert result['cross_check']['selection'] == 'REFUSED', result
+    assert result['cross_check']['reason'].startswith('ANTENNA_ROUTER_REPORT_' + code), result
+
+
+def test_librelane_state_declares_its_own_final_report(tmp_path, monkeypatch):
+    import librelane_ir_antenna as la
+    folder = tmp_path / 'phase3/librelane/26/01-openroad-checkantennas'
+    report = folder / 'reports/antenna.rpt'
+    report.parent.mkdir(parents=True)
+    report.write_text('[INFO ANT-0002] Found 0 net violations.\n'
+                      '[INFO ANT-0001] Found 0 pin violations.\n')
+    state = folder / 'state_out.json'
+    state.write_text(json.dumps({'metrics': {'antenna__violating__nets': 0,
+                                          'antenna__violating__pins': 0}}))
+    view = tmp_path / 'routed.def'
+    view.write_text('DESIGN top ;\nEND DESIGN\n')
+    monkeypatch.setattr(la, 'resolve_step_configs', lambda *a, **k: {'OpenROAD.CheckAntennas': {}})
+    monkeypatch.setattr(la, 'state_from_direct', lambda *a, **k: view)
+    monkeypatch.setattr(la, 'run_chain', lambda *a, **k: [folder])
+    model = la.run_antenna_router(tmp_path, 'img', tmp_path, 'fixture',
+                                  routed_def=view, netlist=view, sdc=view)
+    assert model.get('report') == str(report), model
+    records = tmp_path / 'reports/phase3'
+    records.mkdir(parents=True)
+    record = records / 'antenna_librelane.json'
+    record.write_text(json.dumps({'router': model}))
+    assert _final_router_cross_check(tmp_path)['cross_check']['verdict'] == 'AGREE'
+    model['report'] = str(view)
+    record.write_text(json.dumps({'router': model}))
+    result = _final_router_cross_check(tmp_path)
+    assert result['cross_check']['selection'] == 'REFUSED', result
+    assert result['cross_check']['reason'].startswith('ANTENNA_ROUTER_REPORT_UNBOUND'), result
 
 
 def test_host_native_runner_enforces_memory_and_keeps_progressing():

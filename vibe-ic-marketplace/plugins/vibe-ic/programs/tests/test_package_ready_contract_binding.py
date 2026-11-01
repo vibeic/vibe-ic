@@ -220,6 +220,16 @@ def test_positive_bare_die(sample):
     assert completed['whole_flow_acceptance'] == 'NOT_MEASURED'
 
 
+def test_wildcard_connectivity_keeps_the_native_pad_identity(sample):
+    project = sample[0]
+    path = project / d75.PAD_DEF
+    write(path, path.read_text().replace('( pad_signal TERMINAL )', '( * TERMINAL )'))
+    rebind(project, sample[2])
+    result = consume(sample)
+    assert result['metric_status'] == 'PASS'
+    assert item(result, NAMES[0])['status'] == 'PASS'
+
+
 def test_adopted_reference_missing_pad(sample):
     p = sample[0]
     path = p / 'adopted/package_ready' / (NAMES[0] + '.json')

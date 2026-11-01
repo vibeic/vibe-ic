@@ -771,9 +771,9 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
     status = "OK"
     work_items: List[str] = []
     family = pdk
+    res = resolution
     try:
         import analog_pdk_deck_context as _apdc
-        res = resolution
         if res is None:
             try:
                 import analog_pdk_availability as _apa
@@ -914,6 +914,7 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
         "library_family": lib_family,
         "deck_context": ctx_json,
         "container": container,
+        "installed_pdk_root": (res or {}).get("pdk_root") or (res or {}).get("installed_pdk_root"),
     }
 
 
@@ -1208,28 +1209,18 @@ def resolve_admitted_geometry(ir, pdkctx, overrides):
     import copy
     import math
     from decimal import Decimal, ROUND_HALF_UP
-    from analog_lef_gds_outline_check import manufacturing_grid_um
+    from analog_geometry_admission import verify_admission
 
     effective = copy.deepcopy(overrides)
     evidence = pdkctx.get("geometry_admission")
     if evidence is None:
         return effective, {"status": "NOT_MEASURED", "devices": []}
-    sources = evidence["sources"]
-    if not sources:
-        raise ValueError("GEOMETRY_ADMISSION_SOURCE_MISSING")
-    for source, expected in sources.items():
-        if _sha256(Path(source)) != expected:
-            raise ValueError("GEOMETRY_ADMISSION_SOURCE_CHANGED: " + source)
-    grid_file = evidence["grid_source"]
-    if grid_file not in sources:
-        raise ValueError("GEOMETRY_ADMISSION_GRID_UNBOUND")
-    grid = manufacturing_grid_um(Path(grid_file).parent, grid_file)
-    if grid is None or not math.isfinite(grid) or grid <= 0:
-        raise ValueError("GEOMETRY_ADMISSION_GRID_ABSENT")
+    admission = verify_admission(evidence, pdkctx)
+    grid = admission.grid_um
     records = []
     for device in ir["devices"]:
         model = pdkctx["role_models"][device["role"]]
-        multiples = evidence["models"].get(model)
+        multiples = admission.models.get(model)
         if multiples is None:
             raise ValueError("GEOMETRY_ADMISSION_MODEL_UNBOUND: " + model)
         values = effective.get(device["name"], {})
@@ -1259,7 +1250,7 @@ def resolve_admitted_geometry(ir, pdkctx, overrides):
                 record["finger_width_um"] = float(admitted)
         records.append(record)
     return effective, {"status": "ADMITTED", "grid_um": grid,
-                       "sources": dict(sources), "devices": records,
+                       "sources": admission.sources, "devices": records,
                        "rounding": "nearest drawing step, decimal half up; MOS W/ng first"}
 
 
@@ -1290,6 +1281,13 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
                     f"({ir['block_type']} class)",
                     f"* topology: {ir['topology']}"]
     L += [f"* {ln}" for ln in prov_lines]
+    if ir.get("loop_declaration"):
+        loop = ir["loop_declaration"]
+        L += [f"* {loop['family']} D={loop['D']} a={loop['a']} b={loop['b']} c={loop['c']}",
+              f"* c0={loop['c0']} k0={loop['k0']}; DAC stages={loop['dac_stages']}",
+              f"* loop verification: {loop['verification']}"]
+    if ir.get("startup_reset"):
+        L.append(f"* startup reset: RC_Schmitt tau_ns={ir['startup_reset']['tau_ns']}")
     L.append("*")
     if not metric:
         L.append(".option scale=1u")
@@ -2939,9 +2937,12 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
     pdkctx["mos_geometry"] = _mos_context
     pdkctx["mos_fingering"] = _mos_records
     try:
+        from analog_geometry_admission import load_admission
+
+        pdkctx["geometry_admission_project"] = project
         grid_input = project / "input" / "analog_geometry_admission.json"
         if grid_input.is_file():
-            pdkctx["geometry_admission"] = json.loads(grid_input.read_text())
+            pdkctx["geometry_admission"] = load_admission(grid_input)
         overrides, pdkctx["geometry_admission_result"] = resolve_admitted_geometry(ir, pdkctx, overrides)
         # Grid admission cannot move a MOS outside its calibrated source domain.
         if pdkctx["geometry_admission_result"]["status"] == "ADMITTED":
@@ -3112,7 +3113,15 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
     # boast about says nothing when it appears.
     prov_lines.append(f"_provenance: {transient_rail_measurement(ir)[1]}")
 
-    sp_text = render_netlist(ir, pdkctx, prov_lines, overrides, bdir)
+    try:
+        sp_text = render_netlist(ir, pdkctx, prov_lines, overrides, bdir)
+    except (ValueError, OSError) as exc:
+        gap = write_gap(bdir, project, name, btype,
+                        "GEOMETRY_NOT_REPRESENTABLE", str(exc))
+        rec.update(action="refused", emitted=False,
+                   status="GEOMETRY_NOT_REPRESENTABLE",
+                   gap_path=str(gap.relative_to(project)), reason=str(exc))
+        return rec
     tb_text, tb_env, tb_notes = render_testbench(ir, pdkctx, env, prov_lines, spec)
     if tb_text is None and any(note.startswith("CURRENT_LOAD_UNBOUND:") for note in tb_notes):
         gap = write_gap(bdir, project, name, btype, "TESTBENCH_LOAD_UNBOUND", "; ".join(tb_notes))

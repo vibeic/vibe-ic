@@ -108,7 +108,10 @@ def _project(tmp_path: Path, router_report: str | None) -> Path:
 def _run(project: Path, tmp_path: Path, require: bool = True):
     out = tmp_path / "audit.json"
     argv = [sys.executable, str(PROG), str(project), "--mode", "drc",
-            "--under", "phase3/stage3/pnr", "--json", str(out)]
+            "--under", "phase3/stage3/pnr",
+            "--subject", "phase3/stage3/pnr/routed.drc.rpt", "--json", str(out)]
+    if (project / "phase3/stage3/pnr/routed_router.drc.rpt").exists():
+        argv += ["--subject", "phase3/stage3/pnr/routed_router.drc.rpt"]
     if require:
         argv += ["--require-report", "phase3/stage3/pnr/routed_router.drc.rpt"]
     r = subprocess.run(argv, capture_output=True, text=True)

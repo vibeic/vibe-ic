@@ -1521,8 +1521,8 @@ def _complete_step10_prelayout(project: Path, top: str, pdk_name: str,
         mounts = [(pdk_root, '/pdk')]
         rtl = sorted(_pl.rtl_dir(project).glob('*.sv')) + \
             sorted(_pl.rtl_dir(project).glob('*.v'))
-        stem = Path(str(getattr(pdk, 'liberty', ''))).stem
-        scl = stem.split('__', 1)[0] if '__' in stem else None
+        import phase3_one_shot_runner as backend
+        scl = backend._liberty_scl(getattr(pdk, 'liberty', ''))
         import librelane_prelayout as prelayout
         gates_root = project / 'reports/flow109/d26_timing'
 
