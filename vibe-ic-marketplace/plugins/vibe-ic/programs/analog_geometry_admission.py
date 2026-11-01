@@ -21,6 +21,13 @@ _FIELDS = {"version", "grid_source", "sources", "models"} | _METADATA
 _HASH = re.compile(r"[0-9a-f]{64}\Z")
 _CONTAINER_READ = """import pathlib, sys
 root = pathlib.Path(sys.argv[1]).resolve(strict=True)
+technology = root / "libs.tech"
+if technology.is_symlink():
+    canonical = technology.resolve(strict=True)
+    selected = canonical.parent
+    if canonical.name != "libs.tech" or selected.name != root.name or not canonical.is_dir():
+        raise SystemExit(2)
+    root = selected
 source = (root / sys.argv[2]).resolve(strict=True)
 if not root.is_dir() or not source.is_relative_to(root) or not source.is_file():
     raise SystemExit(2)
@@ -108,6 +115,17 @@ def _validate_evidence(evidence, *, legacy=False):
         raise ValueError("GEOMETRY_ADMISSION_INVALID_METADATA")
 
 
+def _selected_pdk_root(root):
+    technology = root / "libs.tech"
+    if technology.is_symlink():
+        canonical = technology.resolve(strict=True)
+        selected = canonical.parent
+        if canonical.name != "libs.tech" or selected.name != root.name or not canonical.is_dir():
+            raise ValueError("GEOMETRY_ADMISSION_SELECTED_ROOT_UNBOUND")
+        return selected
+    return root
+
+
 def read_source(key, runtime):
     namespace, relative = source_parts(key)
     root = runtime.get("geometry_admission_project" if namespace == "case" else "installed_pdk_root")
@@ -123,6 +141,11 @@ def read_source(key, runtime):
                 raise ValueError("GEOMETRY_ADMISSION_SOURCE_CHANGED: " + key)
             return result.stdout
         root = Path(root).resolve(strict=True)
+        if namespace == "pdk":
+            try:
+                root = _selected_pdk_root(root)
+            except ValueError as exc:
+                raise ValueError("GEOMETRY_ADMISSION_SOURCE_CHANGED: " + key) from exc
         source = (root / relative).resolve(strict=True)
         if not root.is_dir() or not source.is_relative_to(root) or not source.is_file():
             raise ValueError("GEOMETRY_ADMISSION_SOURCE_CHANGED: " + key)

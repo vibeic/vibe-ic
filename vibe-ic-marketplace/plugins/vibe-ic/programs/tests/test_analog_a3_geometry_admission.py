@@ -199,6 +199,81 @@ def test_inside_container_reads_selected_pdk_locally(case, tmp_path, monkeypatch
     assert a3.resolve_admitted_geometry(ir, ctx, {})[1]["status"] == "ADMITTED"
 
 
+def use_selected_pdk_wrapper(ctx, tmp_path):
+    selected = tmp_path / "physical/family"
+    grid = selected / "libs.ref/cells/selected.tlef"
+    recipe = selected / "libs.tech/layout/selected.tcl"
+    grid.parent.mkdir(parents=True)
+    recipe.parent.mkdir(parents=True)
+    grid.write_bytes(b"MANUFACTURINGGRID 0.005 ;\r\n# exact bytes \xff\n")
+    recipe.write_bytes(b"selected drawing recipe\n")
+    logical = tmp_path / "installed/family"
+    logical.mkdir(parents=True)
+    for name in ("libs.tech", "libs.ref"):
+        (logical / name).symlink_to(selected / name, target_is_directory=True)
+    evidence = ctx["geometry_admission"]
+    evidence["grid_source"] = "pdk:libs.ref/cells/selected.tlef"
+    evidence["sources"] = {evidence["grid_source"]: digest(grid),
+                           "pdk:libs.tech/layout/selected.tcl": digest(recipe)}
+    ctx["installed_pdk_root"] = str(logical)
+    return logical, selected, grid
+
+
+def selected_reader_route(ctx, monkeypatch, route):
+    import analog_geometry_admission as admission
+
+    ctx["container"] = "selected-container"
+    monkeypatch.setattr(admission._ce, "no_container_route", lambda: route == "local")
+    entered = []
+
+    def local_container(container, *arguments):
+        entered.append(container)
+        return list(arguments)
+
+    monkeypatch.setattr(admission._ce, "docker_exec_argv", local_container)
+    return entered
+
+
+@pytest.mark.parametrize("route", ["local", "container"])
+@pytest.mark.parametrize("root_kind", ["logical", "canonical"])
+def test_selected_pdk_wrapper_admits_same_physical_family(case, tmp_path, monkeypatch, route, root_kind):
+    ir, ctx, _ = case
+    _, selected, _ = use_selected_pdk_wrapper(ctx, tmp_path)
+    if root_kind == "canonical":
+        ctx["installed_pdk_root"] = str(selected)
+    entered = selected_reader_route(ctx, monkeypatch, route)
+    before = copy.deepcopy(ctx)
+    record = admission_result(ir, ctx)
+    assert record.get("status") == "ADMITTED", record
+    assert record["grid_um"] == 0.005
+    assert record["sources"] == ctx["geometry_admission"]["sources"]
+    assert ctx == before
+    assert entered == (["selected-container"] * 2 if route == "container" else [])
+
+
+@pytest.mark.parametrize("route", ["local", "container"])
+@pytest.mark.parametrize("problem", ["changed-bytes", "escaped-source", "wrong-family", "wrong-tech-name"])
+def test_selected_pdk_wrapper_keeps_source_and_root_boundaries(case, tmp_path, monkeypatch, route, problem):
+    ir, ctx, _ = case
+    logical, selected, grid = use_selected_pdk_wrapper(ctx, tmp_path)
+    selected_reader_route(ctx, monkeypatch, route)
+    if problem == "changed-bytes":
+        grid.write_bytes(grid.read_bytes() + b"changed\n")
+    elif problem == "escaped-source":
+        outside = tmp_path / "outside.tlef"
+        grid.rename(outside)
+        grid.symlink_to(outside)
+    else:
+        technology = logical / "libs.tech"
+        technology.unlink()
+        target = (tmp_path / "other/family/technology" if problem == "wrong-tech-name"
+                  else tmp_path / "other/different-family/libs.tech")
+        target.mkdir(parents=True)
+        technology.symlink_to(target, target_is_directory=True)
+    with pytest.raises(ValueError, match="GEOMETRY_ADMISSION_SOURCE_CHANGED: pdk:"):
+        a3.resolve_admitted_geometry(ir, ctx, {})
+
+
 @pytest.mark.parametrize("key", ["/absolute/proof.tlef", "case:/absolute", "case:../escape",
                                   "case:input/../proof", "case:./proof", "case:input//proof",
                                   "case:", "case:input/", "other:input/proof", "case:input\\proof",
