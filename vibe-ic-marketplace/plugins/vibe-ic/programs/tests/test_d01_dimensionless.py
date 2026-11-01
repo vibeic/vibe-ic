@@ -1,4 +1,3 @@
-"""D01 compares source-approved dimensionless quantities without dropping units."""
 from copy import deepcopy
 import json
 

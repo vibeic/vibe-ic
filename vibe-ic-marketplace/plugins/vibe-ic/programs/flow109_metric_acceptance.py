@@ -12,6 +12,7 @@ never an implicit false, zero or empty set.
 from __future__ import annotations
 
 import csv
+from decimal import Decimal
 import hashlib
 import json
 import math
@@ -7020,25 +7021,48 @@ def _d0102_population(project: Path, key: str, metric: str, reads: dict) -> tupl
     return authority, payload
 
 
-def _d0102_dimensionless(project: Path, expectation: dict, reads: dict) -> dict:
-    """Match a unitless numeric record without asking for a punctuation token."""
+def _d0102_dimensionless(project: Path, expectation: dict, reads: dict) -> dict | None:
+    import phase1_expert_parse_track as expert
     tokens = expectation.get('expected_tokens')
-    if not isinstance(tokens, list) or not any(t in ('—', '-') for t in tokens):
-        return expectation
-    numbers = [t for t in tokens if t not in ('—', '-')]
+    if (not isinstance(tokens, list) or expectation.get(expert.SPLIT_KEY) is not None
+            or 'qualified_by' in expectation
+            or str(expectation.get('id', '')).startswith('qualified_by:')):
+        return None
+    numbers = [t for t in tokens if t not in ('', '—', '-')]
     if not numbers or any(not isinstance(t, str) or not re.fullmatch(
             r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?', t) for t in numbers):
-        return expectation
+        return None
+    explicit_unit = any(t in ('', '—', '-') for t in tokens)
+    quantity_fields = ('value', 'target', 'typ', 'min', 'max')
+    item = expert.converge_ai_expectation(project, {**expectation, 'expected_tokens': numbers})
+    if (item.get('usable') is not True or item.get('layer_present') is not True
+            or item.get('layer_in_taxonomy') is False
+            or item.get('field_path_status') != 'DECLARED' or item.get('tokens_unaskable')):
+        if explicit_unit:
+            item.update(usable=False, met=False)
+        return item
     try:
         values = _d0102_value(project, expectation, reads)
-    except (MetricRefusal, OSError, ValueError, KeyError, TypeError):
-        return expectation
+    except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+        item.update(usable=False, met=False, observed=str(exc))
+        return item
+    if not explicit_unit and (len(values) != 1 or not isinstance(values[0], dict)
+                             or values[0].get('unit') not in (None, '', '—', '-')
+                             or not any(key in values[0] for key in quantity_fields)):
+        return None
     if (len(values) != 1 or not isinstance(values[0], dict)
-            or values[0].get('unit') not in (None, '', '—', '-')
-            or not any(type(values[0].get(k)) in (int, float)
-                       for k in ('value', 'target', 'typ', 'min', 'max'))):
-        return expectation
-    return {**expectation, 'expected_tokens': numbers}
+            or values[0].get('unit') not in (None, '', '—', '-')):
+        item.update(usable=False, met=False, observed='Expected a dimensionless quantity record.')
+        return item
+    observed = [Decimal(str(values[0][key])) for key in quantity_fields
+                if type(values[0].get(key)) in (int, float)]
+    if not observed or any(not value.is_finite() for value in observed):
+        item.update(usable=False, met=False, observed='Dimensionless quantity has no finite numeric value.')
+        return item
+    missing = [token for token in numbers if Decimal(token) not in observed]
+    item.update(met=not missing, missing_tokens=missing,
+                observed=f'Dimensionless numeric values {observed} compared with {numbers}.')
+    return item
 
 
 def _d0102_compare(project: Path, payload: dict, reads: dict) -> tuple:
@@ -7046,7 +7070,9 @@ def _d0102_compare(project: Path, payload: dict, reads: dict) -> tuple:
     actual, unresolved, unrouted = [], [], []
     for exp in payload['expectations']:
         # The actual comparator discards submitted met/observed/usable fields.
-        item = expert.converge_ai_expectation(project, _d0102_dimensionless(project, exp, reads))
+        item = _d0102_dimensionless(project, exp, reads)
+        if item is None:
+            item = expert.converge_ai_expectation(project, exp)
         if (item.get('usable') is not True
                 or item.get('layer_in_taxonomy') is False
                 or item.get('tokens_unaskable')):
