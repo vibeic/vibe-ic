@@ -153,3 +153,129 @@ def test_kmap_mux_decomposition_skips_on_width_mismatch():
     that each bit is one selector value does not hold."""
     p = _KMAP_MUX_DECOMP.replace("mux_in (4 bits)", "mux_in (8 bits)")
     assert K.synth(p, "TopModule") is None
+
+
+# Public neutral header + grid: external selectors are absent from the module.
+_MUX_RESTRICTION_PROMPT = """Implement the data inputs of an external 4-to-1 multiplexer from this Karnaugh map.
+{restriction}
+       st
+ uv    00 01 11 10
+ 00 | 0 | 1 | 0 | 1 |
+ 01 | 1 | 0 | 1 | 0 |
+ 11 | 1 | 1 | 0 | 0 |
+ 10 | 0 | 0 | 1 | 1 |
+module ColumnStage (
+ input u,
+ input v,
+ output [3:0] lane_values
+);
+"""
+
+
+@pytest.mark.parametrize('restriction', [
+    'Use only multiplexers; no other logic gates are allowed.',
+    'Use only multiplexers.',
+    'You must use only 2-to-1 multiplexers.',
+    'You may only use muxes.',
+    'Implement using only multiplexers.',
+    'Only multiplexers may be used.',
+    'You are not allowed to use any other logic gate.',
+    'You are not allowed to use any other logic gate and selectors must retain their declared order.',
+    'No other logic gates are permitted.',
+])
+@pytest.mark.parametrize('entry', ['producer', 'registry'])
+def test_explicit_mux_only_decomposition_declines_for_normal_backup(restriction, entry):
+    prompt = _MUX_RESTRICTION_PROMPT.format(restriction=restriction)
+    if entry == 'registry':
+        import spec_artifact_registry as registry
+        kind, rtl = registry.generate(prompt, 'ColumnStage')
+    else:
+        kind, rtl = None, K.synth(prompt, 'ColumnStage')
+    observed = ('DECLINED' if rtl is None else 'FORBIDDEN_SOP'
+                if all(token in rtl for token in ('~', '&', '|')) else 'OTHER_RTL')
+    assert observed == 'DECLINED', {'observed': observed, 'rtl': rtl}
+    assert kind is None
+
+
+@pytest.mark.parametrize('restriction', [
+    '',
+    'Use a multiplexer decomposition.',
+    'The external mux uses only the selector bits shown.',
+    'Use only the data inputs of the external multiplexer.',
+    'You may use multiplexers and other logic gates.',
+    'Sum-of-products with AND, OR and NOT gates is explicitly allowed.',
+    'You are not restricted to multiplexers; other logic gates are allowed.',
+    'Do not use only multiplexers; sum-of-products is allowed.',
+    'The implementation may use gates or multiplexers.',
+])
+def test_nonrestrictive_mux_prose_preserves_exact_sop(restriction):
+    import spec_artifact_registry as registry
+    plain = _MUX_RESTRICTION_PROMPT.format(restriction='')
+    prompt = _MUX_RESTRICTION_PROMPT.format(restriction=restriction)
+    expected = K.synth(plain, 'ColumnStage')
+    rtl = K.synth(prompt, 'ColumnStage')
+    observed = ('DECLINED' if rtl is None else 'SOP'
+                if all(token in rtl for token in ('~', '&', '|')) else 'OTHER_RTL')
+    assert observed == 'SOP', {'observed': observed, 'rtl': rtl}
+    assert rtl == expected
+    assert registry.generate(prompt, 'ColumnStage') == ('karnaugh_map', expected)
+
+
+def test_conflicting_explicit_mux_only_prose_declines_instead_of_guessing():
+    prompt = _MUX_RESTRICTION_PROMPT.format(restriction=(
+        'Use only multiplexers. Other logic gates are also permitted.'))
+    rtl = K.synth(prompt, 'ColumnStage')
+    assert ('DECLINED' if rtl is None else 'EMITTED') == 'DECLINED'
+
+
+def test_mux_constraint_does_not_expand_single_output_or_bad_axis_envelopes():
+    # This repair owns external-mux decomposition only, not all K-map synthesis.
+    assert K.synth(_KMAP_2IN + '\nA multiplexer is an example circuit.', 'TopModule') == K.synth(_KMAP_2IN, 'TopModule')
+    prompt = _MUX_RESTRICTION_PROMPT.format(restriction='Use only multiplexers.')
+    assert K.synth(prompt.replace(' uv    00', ' zz    00'), 'ColumnStage') is None
+    assert K.synth(prompt.replace(' 01 | 1 | 0 | 1 | 0 |', ' 01 | 1 | d | 1 | 0 |'), 'ColumnStage') is None
+
+
+@pytest.mark.parametrize('restriction', [
+    'Use only multiplexers and AND, OR, or NOT gates; sum-of-products is explicitly allowed.',
+    'Do not\nuse only multiplexers; sum-of-products is explicitly allowed.',
+])
+@pytest.mark.parametrize('entry', ['producer', 'registry'])
+def test_allowed_gate_list_and_wrapped_negation_preserve_sop(restriction, entry):
+    prompt = _MUX_RESTRICTION_PROMPT.format(restriction=restriction)
+    expected = K.synth(_MUX_RESTRICTION_PROMPT.format(restriction=''), 'ColumnStage')
+    if entry == 'registry':
+        import spec_artifact_registry as registry
+        kind, rtl = registry.generate(prompt, 'ColumnStage')
+        assert kind in (None, 'karnaugh_map')
+    else:
+        rtl = K.synth(prompt, 'ColumnStage')
+    observed = ('DECLINED' if rtl is None else 'SOP'
+                if all(token in rtl for token in ('~', '&', '|')) else 'OTHER_RTL')
+    assert observed == 'SOP', {'observed': observed, 'rtl': rtl}
+    assert rtl == expected
+
+
+@pytest.mark.parametrize('restriction', [
+    'Only multiplexers may be used alongside AND, OR and NOT gates; sum-of-products is explicitly allowed.',
+    'You are not allowed to use any other logic gate than AND, OR and NOT gates; sum-of-products is explicitly allowed.',
+    'No other logic gates are allowed except AND, OR and NOT gates; sum-of-products is explicitly allowed.',
+])
+@pytest.mark.parametrize('wrap', [False, True])
+@pytest.mark.parametrize('entry', ['producer', 'registry'])
+def test_permitted_gate_exceptions_preserve_sop_across_wrapping(restriction, wrap, entry):
+    if wrap:
+        restriction = restriction.replace(' alongside', '\nalongside').replace(
+            ' than', '\nthan').replace(' except', '\nexcept')
+    prompt = _MUX_RESTRICTION_PROMPT.format(restriction=restriction)
+    expected = K.synth(_MUX_RESTRICTION_PROMPT.format(restriction=''), 'ColumnStage')
+    if entry == 'registry':
+        import spec_artifact_registry as registry
+        kind, rtl = registry.generate(prompt, 'ColumnStage')
+        assert kind in (None, 'karnaugh_map')
+    else:
+        rtl = K.synth(prompt, 'ColumnStage')
+    observed = ('DECLINED' if rtl is None else 'SOP'
+                if all(token in rtl for token in ('~', '&', '|')) else 'OTHER_RTL')
+    assert observed == 'SOP', {'observed': observed, 'rtl': rtl}
+    assert rtl == expected

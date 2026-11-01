@@ -1,0 +1,18 @@
+[
+  {
+    "step": "phase2.rtl_gen.kmap_mux_constraint",
+    "design": "neutral external-mux column decomposition with public header",
+    "bucket": "A",
+    "rule_name": "decline_unsupported_mux_only_sop_decomposition",
+    "docstring": "A sum-of-products generator must decline a supported explicit mux-only implementation restriction. Mentioning a mux or permitting ordinary gates does not impose that restriction.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Augment the existing `kmap_grid_synth._synth_mux_decomp` producer after structural applicability checks and before emitting SOP terms. Recognize bounded complete positive restriction clauses and complete no-other-gates prohibitions, including a conjoined selector obligation. Return the existing `None` fallback contract for unsupported restricted synthesis. Preserve emitted bytes for ordinary and explicitly permitted SOP cases through both the direct producer and `spec_artifact_registry.generate`. Keep permitted gate lists, exception qualifiers and wrapped negations outside restriction applicability.",
+    "before_state": "Actual producer and public registry returned RTL containing NOT/AND/OR operators despite a prompt-only explicit mux-only/no-other-gates restriction. Early guard revisions also falsely declined allowed primitive lists and wrapped negation.",
+    "after_state": "Supported explicit restricted decompositions decline through the normal backup return contract. Plain, permitted, exception-qualified and negated cases preserve the original SOP bytes. Conflict handling declines instead of guessing; existing grid/axis/width/dont-care boundaries remain intact.",
+    "ai_reasoning": "The closed grid determines a function, but not permission to violate a structural implementation constraint. The current producer emits only SOP and cannot satisfy a mux-only restriction. A producer-local decline is sufficient; a new generator, global checker or changed acceptance threshold is unnecessary.",
+    "pattern": "A mathematically correct deterministic implementation can violate an explicit allowed-primitive constraint. Applicability must consider the full supported clause, preserving a permitted gate set and negation across normal line wrapping.",
+    "generality": "All decisions use visible prompt clauses and the existing K-map/header applicability contract. No benchmark name, task identifier, hidden test, prior candidate, scorer, oracle or private design selects the repair.",
+    "evidence": "CAPTURE.md; immutable pre-edit-reproduction.json, red.xml, review-red.xml, exception-review-red.xml plus current base/candidate/reverse/mutation/restored receipts and exact source identities in the named external packet",
+    "corpus_sweep": "57 identical owning-module IDs: 19 improved, 38 unchanged PASS, zero introduced failures. Existing registry module 34 PASS with pinned host Icarus; capture routing 6 PASS. Producer/registry variants, strict continuation, permitted sets, exceptions, line wrapping, contradiction and existing structural refusals covered. No benchmark/campaign corpus, AI backup execution or full suite was run."
+  }
+]
