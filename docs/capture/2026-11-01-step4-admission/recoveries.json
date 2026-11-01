@@ -1,0 +1,18 @@
+[
+  {
+    "step": "phase2.canonical_admission.step4_judgement",
+    "design": "neutral source-only signed functional judgement admission fixture",
+    "bucket": "A",
+    "rule_name": "bind_current_accepted_step4_evidence_once",
+    "docstring": "Native receipt `step_id=4` (public Step7 Simulation): current accepted signed functional evidence changes Phase 2 admission identity once; raw receipt churn, inapplicable signatures and lost acceptance do not buy another run.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Augment `canonical_run_admission.build_identity` through the existing `ai_signed_judgement` request, PASS check, canonical receipt fields and current evidence digest. Bind only the accepted evidence digest. In the existing `admit` comparison, project only a prior accepted signed functional judgement binding away when the new identity lacks it, and refuse if every other identity field matches. Keep ledger records immutable and preserve genuine named-input or new accepted-digest changes.",
+    "before_state": "The actual canonical judgement consumer accepted a new current signed functional judgement signature, but actual Phase 2 admission still returned DUPLICATE_NO_NEW_EVIDENCE. A producer-only binding also incorrectly admitted loss of an initially accepted signature.",
+    "after_state": "A current accepted signed functional judgement digest buys one admission, repeated evidence is duplicate, and absent/FAIL/stale loss is duplicate with unchanged ledger bytes. Unrelated genuine source/program/image/config changes and fresh accepted canonical digests still admit once.",
+    "ai_reasoning": "The canonical evidence consumer already decides applicability, required expert output, valid PASS receipt and freshness. Admission omitted that accepted material. Only the canonical evidence digest belongs in the identity; signature prose does not. Losing acceptance is not new evidence.",
+    "pattern": "A duplicate-admission identity includes some signed consumer results but omits a later applicable accepted result. Adding that result must also prevent its subsequent removal from creating a false new identity.",
+    "generality": "The existing canonical request/receipt/evidence contract supplies all decisions. No benchmark name, private design literal, scorer, prompt, oracle or outcome selects the behavior.",
+    "evidence": "CAPTURE.md; red.xml, loss-red.xml, base.xml, candidate.xml, four production reverse receipts, restored.xml, mutation-identities.json and comparison.json in the external sealed packet",
+    "corpus_sweep": "71 identical whole owning-module IDs at final exact main: 3 improved, 68 unchanged PASS, no introduced failures; existing signed-judgement module 22 PASS and capture-routing module 6 PASS. Focused31 controls include preserved native Step1/reset Step3, Phase3, malformed/stale/FAIL/absent/symlink receipts, no request, missing expert output, repeated evidence, receipt prose churn, signature loss and genuine named-input changes. No campaign, external corpus, full suite or native simulation was run."
+  }
+]

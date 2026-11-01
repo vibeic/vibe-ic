@@ -5531,7 +5531,8 @@ def _v0_3_2_emit_pins_from_gfm_tables(text: str):
                 yield rec
 
 
-# ===========================================================================
+# ====================================================================
+
 # Comportable-style interface harvester (#638)
 # ---------------------------------------------------------------------------
 # The auto-generated "Comportable" register-tool interface convention (used
@@ -5568,7 +5569,8 @@ def _v0_3_2_emit_pins_from_gfm_tables(text: str):
 # Comportable doc-convention vocabulary (Primary/Other Clock(s), Bus
 # Device/Host Interfaces, Peripheral Pins, Interrupts, Act-role keywords); no
 # chip-class / SKU literal participates.
-# ===========================================================================
+# ====================================================================
+
 
 # Comportable intro sentence: `the module `<name>` has the following hardware
 # interface(s)`. The name token (bold-or-plain backticked) is captured so the
@@ -15853,7 +15855,8 @@ _RE_L1_DESC_INTRO_HEADING = re.compile(
 )
 # v1.6.280 — for #141 ORGANIC. RST two-line (setext) intro heading:
 #     Introduction
-#     ============
+#     =====
+
 # Pre-v1.6.280 the single-line anchor regex did not match this
 # canonical sphinx-doc / RST form. Multiline flag is load-bearing —
 # the heading word and the underline marker are on separate lines.
@@ -15861,7 +15864,8 @@ _RE_L1_DESC_INTRO_HEADING = re.compile(
 # v1.6.284 — for #147 ORGANIC. Suffix-tolerant: heading-word group
 # now followed by `\b[^\n]*$` so canonical sphinx-doc titles like
 #     Introduction to MyChip
-#     ======================
+#     ===============
+
 # (the dominant RST form on real-world IC documentation trees) anchor
 # the extractor instead of being rejected for not being the bare
 # vocabulary word. Same relaxation as the ATX / AsciiDoc forms below.
@@ -32770,9 +32774,11 @@ _V1_6_576_ASCIIDOC_TABLE_BLOCK_RE = re.compile(
 # idiomatic AsciiDoc tables. Per AsciiDoc spec the table
 # delimiter is `|=+` of length ≥ 3; many docs frame tables with
 # 19-23 equals for visual clarity:
-#   |=======================
+#   |================
+
 #   | header | row ... |
-#   |=======================
+#   |================
+
 # v1.6.587 widens the block delimiter to `\|={3,}` so any-length
 # equals run is accepted. Chip-AGNOSTIC: pure AsciiDoc grammar.
 _V1_6_587_ASCIIDOC_TABLE_BLOCK_RE = re.compile(
@@ -33875,7 +33881,8 @@ def gen_l4_regmap(project: Path,
     #   .. _mstatus:    ← Sphinx anchor (optional)
     #
     #   mstatus
-    #   =======
+    #   
+
     #
     #   Some prose text here.
     #
@@ -42112,6 +42119,8 @@ def _declared_input_clock_names(project, l9):
     ports = l9.get("top_ports") or l9.get("ports") or []
     extracted = _load_extracted_docs_for_post_pass(project)
     text = "\n".join(extracted.values())
+    bindings = l9.get("clock_binding") or {}
+    bound_inputs = set(bindings.values()) if isinstance(bindings, dict) else set()
     names = []
     for port in ports:
         if not isinstance(port, dict):
@@ -42131,7 +42140,7 @@ def _declared_input_clock_names(project, l9):
             r"^\s*" + re.escape(name) + r"\s*:\s*"
             r"(?:[A-Za-z-]+\s+)?clock(?:\s+(?:signal|input)|[.,]|\s*$)",
             re.IGNORECASE | re.MULTILINE)
-        if conventional or definition.search(text):
+        if conventional or name in bound_inputs or definition.search(text):
             names.append(name)
     return names
 
@@ -42252,6 +42261,167 @@ def _apply_declared_por_reset_strategy(content: dict, extracted: dict) -> None:
                 domain["reset_strategy_evidence"] = strategy["evidence"]
 
 
+def _propagate_bound_clock_periods(project, clock_domains, bindings, rows):
+    rows = [row for row in rows if isinstance(row, dict)
+            and bindings.get(row.get("instance")) == row.get("top_clock_pin")]
+    block_ports = {row["block_clock_port"] for row in rows}
+    if not block_ports:
+        return
+    identities = block_ports | {row["top_clock_pin"] for row in rows}
+    claims = {name: [] for name in identities}
+    number = r"\d+(?:\.\d+)?"
+    alternatives = rf"(?P<value>{number})(?:\s*(?:-|to|and|–|—)\s*(?P<other>{number}))?"
+    frequency = re.compile(
+        alternatives + r"\s*(?P<unit>GHz|MHz|kHz|Hz|gigahertz|megahertz|kilohertz|hertz)(?!\w)",
+        re.I)
+    period_literal = re.compile(
+        alternatives + r"\s*(?P<unit>ns|ps|us|µs|μs|ms|nanoseconds?|picoseconds?|"
+        r"microseconds?|milliseconds?)(?!\w)", re.I)
+    scales = {"ghz": 1e9, "gigahertz": 1e9, "mhz": 1e6,
+              "megahertz": 1e6, "khz": 1e3, "kilohertz": 1e3,
+              "hz": 1.0, "hertz": 1.0}
+    rate_prefix = re.compile(
+        r"\s*(?:clock\s+)?(?:(?:operates?|operating|runs?|running)\s+(?:at\s+)?|"
+        r"(?:frequency|rate|f_?max)\s*(?:(?:is|of)\s*|[:=]\s*)?|"
+        r"has\s+(?:an?\s+)?(?:operating\s+)?(?:frequency|rate)\s+(?:of\s+)?|"
+        r"(?:is|at)\s+|[:=]\s*)?", re.I)
+    period_prefix = re.compile(
+        r"\s*(?:clock\s+)?period\s*(?:(?:is|of)\s*|[:=]\s*)?", re.I)
+    following = re.compile(r"\s*(?:[,;/]\s*|(?:and|or)\s*|\(\s*)", re.I)
+
+    def declared_periods(fragment):
+        marker = period_prefix.match(fragment)
+        kind = "period" if marker else "frequency"
+        marker = marker or rate_prefix.match(fragment)
+        position = marker.end()
+        values = {"period": [], "frequency": []}
+        while True:
+            literal = (period_literal if kind == "period" else frequency).match(fragment, position)
+            if literal is None:
+                return [] if not any(values.values()) else finish_periods(values)
+            value = float(literal.group("value"))
+            other = literal.group("other")
+            if other is not None and float(other) != value:
+                raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: clock declaration contains a range")
+            if not 0 < value < float("inf"):
+                raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: clock declaration has an invalid value")
+            unit = literal.group("unit").lower()
+            resolved = (value * _STATED_PERIOD_UNIT_NS[unit] if kind == "period"
+                        else 1e9 / (value * scales[unit]))
+            if not 0 < resolved < float("inf"):
+                raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: clock declaration has an invalid period")
+            values[kind].append(resolved)
+            separator = following.match(fragment, literal.end())
+            if separator is None:
+                return finish_periods(values)
+            position = separator.end()
+            marker = period_prefix.match(fragment, position)
+            if marker is not None:
+                kind, position = "period", marker.end()
+                continue
+            marker = rate_prefix.match(fragment, position)
+            if marker is not None and marker.end() > position:
+                if marker.group(0).strip().lower() not in ("is", "at", ":", "="):
+                    kind = "frequency"
+                position = marker.end()
+                continue
+            parenthesized = "(" in separator.group(0)
+            opposite = "period" if kind == "frequency" else "frequency"
+            candidate = (period_literal if opposite == "period" else frequency).match(fragment, position)
+            if parenthesized and candidate is not None and fragment[candidate.end():].lstrip().startswith(")"):
+                kind = opposite
+                continue
+            candidate = (period_literal if kind == "period" else frequency).match(fragment, position)
+            if candidate is None or re.match(r"\s*[A-Za-z_]", fragment[candidate.end():]):
+                return finish_periods(values)
+
+    def finish_periods(values):
+        for periods in values.values():
+            if len({round(value, 6) for value in periods}) > 1:
+                raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: clock declaration contains conflicting values")
+        period = values["period"][0] if values["period"] else None
+        derived = values["frequency"][0] if values["frequency"] else None
+        if period is not None and derived is not None and abs(period - derived) > _STATED_PERIOD_TOL * derived:
+            raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: stated clock period and frequency disagree")
+        return [round(period if period is not None else derived, 6)]
+
+    for fname, text in _load_extracted_docs_for_post_pass(project).items():
+        if _v1_6_345_is_reference_doc_path(fname):
+            continue
+        source = next((project / folder / fname for folder in
+                       ("input/docs", "extracted_docs", "phase1/input_doc")
+                       if (project / folder / fname).is_file()), None)
+        if source is None:
+            continue
+        for lineno, line in enumerate(text.splitlines(), 1):
+            for clause in re.split(r"(?<=[.;!?])\s+(?=[A-Za-z`])", line):
+                plain = clause.replace("`", "").replace("*", "")
+                generics = list(re.finditer(r"\bblock\s+clock\b", plain, re.I))
+                anchors = [(m.start(), m.end(), name) for name in identities
+                           for m in re.finditer(r"(?<!\w)" + re.escape(name)
+                                                + r"(?!\w)", plain)
+                           if not any(generic.start() <= m.start() and m.end() <= generic.end()
+                                      for generic in generics)]
+                anchors.extend((generic.start(), generic.end(), None) for generic in generics)
+                anchors.sort(key=lambda anchor: anchor[:2])
+                for index, (_, end, name) in enumerate(anchors):
+                    stop = anchors[index + 1][0] if index + 1 < len(anchors) else len(plain)
+                    periods = declared_periods(plain[end:stop])
+                    if not periods:
+                        continue
+                    if name is None:
+                        choices = block_ports & {"clk", "clock"}
+                        if not choices and len(block_ports) == 1:
+                            choices = block_ports
+                        if len(choices) != 1:
+                            raise ValueError("LL_CLOCK_BINDING_AMBIGUOUS: unnamed block clock "
+                                             f"does not identify one of {sorted(block_ports)}")
+                        name = next(iter(choices))
+                    for period in periods:
+                        claims[name].append({"period_ns": period, "evidence": {
+                            "file": source.relative_to(project).as_posix(),
+                            "line": lineno, "matched_substring": line.strip()}})
+    for name, mentions in claims.items():
+        periods = {mention["period_ns"] for mention in mentions}
+        if len(periods) > 1:
+            raise ValueError(f"LL_CLOCK_BINDING_AMBIGUOUS: clock {name!r} declares "
+                             f"conflicting periods {sorted(periods)} ns")
+    by_pin = {}
+    for row in rows:
+        port, pin = row["block_clock_port"], row["top_clock_pin"]
+        by_pin.setdefault(pin, []).extend(claims[port])
+    for pin, mentions in by_pin.items():
+        mentions.extend(claims[pin])
+        by_pin[pin] = list({(mention["period_ns"], mention["evidence"]["file"],
+                             mention["evidence"]["line"], mention["evidence"]["matched_substring"]): mention
+                            for mention in mentions}.values())
+        periods = {mention["period_ns"] for mention in mentions}
+        if len(periods) > 1:
+            raise ValueError(f"LL_CLOCK_BINDING_AMBIGUOUS: top pin {pin!r} binds "
+                             f"conflicting periods {sorted(periods)} ns")
+    for pin, mentions in by_pin.items():
+        if not mentions:
+            continue
+        period = mentions[0]["period_ns"]
+        targets = [domain for domain in clock_domains if isinstance(domain, dict)
+                   and (domain.get("source_pin") or domain.get("name")) == pin]
+        if not targets:
+            targets = [{"name": pin, "source_pin": pin}]
+            clock_domains.extend(targets)
+        for target in targets:
+            current = _cc.entry_period_ns(target)
+            if current is not None and abs(current - period) > 1e-6:
+                raise ValueError(f"LL_CLOCK_BINDING_AMBIGUOUS: top pin {pin!r} already "
+                                 f"declares {current} ns, bound clock declares {period} ns")
+            target.update({"freq_hz": 1e9 / period, "freq_mhz": 1000.0 / period,
+                           "period_ns": period, "role": "master", "domain_kind": "primary",
+                           "evidence": dict(mentions[0]["evidence"]),
+                           "period_evidence": mentions,
+                           "clock_binding_evidence": [dict(row) for row in rows
+                                                      if row["top_clock_pin"] == pin],
+                           "extraction_strategy": "explicit_block_clock_binding"})
+
+
 def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     """v1.6.88 (#20 Bug 4 P0 BLOCKER) — augment each existing
     `clock_domains[]` entry with the typed-shape required by
@@ -42261,6 +42431,25 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     l9_doc = _try_load_l_doc(project, "L9_INTEGRATION_SPEC")
     clk_pins = (_declared_input_clock_names(project, l9_doc)
                 if isinstance(l9_doc, dict) else [])
+    bindings = (l9_doc or {}).get("clock_binding") or {}
+    binding_evidence = ((l9_doc or {}).get("extraction_evidence") or {}).get(
+        "clock_binding", [])
+    block_ports = {row["block_clock_port"] for row in binding_evidence
+                   if isinstance(row, dict) and row.get("block_clock_port")}
+    if bindings and set(bindings.values()).issubset(clk_pins):
+        _propagate_bound_clock_periods(project, clock_domains, bindings, binding_evidence)
+        retained = []
+        for domain in clock_domains:
+            if not isinstance(domain, dict):
+                retained.append(domain)
+                continue
+            pin = domain.get("source_pin") or domain.get("name")
+            if pin in block_ports and pin not in clk_pins:
+                print(f"BLOCK_CLOCK_ALIAS_SCOPED: {pin} uses L9.clock_binding; "
+                      "not a top-level primary clock", file=sys.stderr)
+                continue
+            retained.append(domain)
+        clock_domains[:] = retained
     from _reset_input_semantics import clock_edge_semantics
     event_sources = {
         (str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}"): text
@@ -43634,6 +43823,57 @@ def _single_declared_input_clock_port(project: Path) -> Optional[str]:
         and _V1_6_574_CLOCK_PORT_RE.match(p["name"])
     }
     return next(iter(names)) if len(names) == 1 else None
+
+
+def _document_clock_bindings(extracted: Dict[str, str], ports: list) -> tuple:
+    """Read explicit instance/clock-port/top-clock-pin connection tables.
+
+    The existing L9 clock_binding consumer needs instance -> top input names.
+    Preserve the block port and source row as extraction evidence. Conflicting
+    connections and undeclared inputs refuse generation instead of guessing.
+    """
+    inputs = {p["name"] for p in ports if isinstance(p, dict)
+              and isinstance(p.get("name"), str)
+              and (p.get("direction") or p.get("mode")) == "input"}
+    bindings, evidence = {}, []
+    for filename, text in extracted.items():
+        columns = None
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if not line.lstrip().startswith("|"):
+                columns = None
+                continue
+            cells = [cell.replace("`", "").replace("*", "").strip()
+                     for cell in _v634_split_pipe_cells(line)]
+            headers = [cell.lower() for cell in cells]
+            required = ("instance", "clock port", "top clock pin")
+            if all(name in headers for name in required):
+                columns = [headers.index(name) for name in required]
+                continue
+            if columns is None or _v634_is_pipe_sep_row(line):
+                continue
+            if len(cells) <= max(columns):
+                raise ValueError(f"invalid clock binding row: {filename}:{lineno}")
+            instance, port, stated_pin = (cells[index] for index in columns)
+            if not all(re.fullmatch(r"[A-Za-z_]\w*", name)
+                       for name in (instance, port, stated_pin)):
+                raise ValueError(f"invalid clock binding identifier: {filename}:{lineno}")
+            candidates = ([stated_pin] if stated_pin in inputs else
+                          [name for name in inputs if name.casefold() == stated_pin.casefold()])
+            if len(candidates) != 1:
+                raise ValueError(f"clock binding names undeclared top input: {stated_pin}")
+            pin = candidates[0]
+            if instance in bindings and bindings[instance] != pin:
+                raise ValueError(f"conflicting clock binding: {instance}")
+            bindings[instance] = pin
+            evidence.append({
+                "file": (filename if filename.startswith("input/") else
+                         "input/docs/" + filename),
+                "line": lineno, "matched_substring": line.strip(),
+                "instance": instance, "block_clock_port": port,
+                "top_clock_pin": pin,
+                "extraction_strategy": "explicit_clock_connection_table",
+            })
+    return bindings, evidence
 
 
 # v1.6.360 — for #255 P2 ORGANIC. Width-role bigram structural anchor.
@@ -54401,9 +54641,14 @@ def gen_l9_integration_spec(project: Path,
                         _p["declared_by_staged_top"] = (
                             str(_p["name"]) in _declared)
 
+    clock_binding, clock_binding_evidence = _document_clock_bindings(
+        extracted, top_module_pins)
+    if clock_binding_evidence:
+        evidence["clock_binding"] = clock_binding_evidence
     content = {
         "schema_version": 2,
         "doc_class": "integration_spec",
+        **({"clock_binding": clock_binding} if clock_binding else {}),
         "ic_name": ic_name,
         # v1.6.79 — null when no top module detected; previously
         # hardcoded "chip_top" on every project.
@@ -69858,7 +70103,8 @@ def main() -> int:
                 except Exception as _lpddr5_err:
                     print(f"      LPDDR5 synth FAILED (fail-open): {_lpddr5_err}",
                           file=sys.stderr)
-            # =====================================================================
+            # ==============================================================
+
             # v0.1.89 — Tier-C modern-protocol detectors (USB4 / PCIe5 / CXL /
             # UFS / HBM3). All CONTENT-based + canonical-name + version-specific
             # structural tokens; NO filename / folder-name reads (code-review
@@ -69873,7 +70119,8 @@ def main() -> int:
             # Tier-C detectors read an input_doc-AUGMENTED blob (content only, never
             # filenames). _spi_blob is rebound for the Tier-C predicates then
             # RESTORED, so later detectors are unaffected.
-            # =====================================================================
+            # ==============================================================
+
             _tc_blob_saved = _spi_blob
             _tc_aug = _spi_blob
             try:
@@ -70482,7 +70729,8 @@ def main() -> int:
                 except Exception as _t3_err:
                     print(f"      {_t3_name} synth FAILED (fail-open): {_t3_err}",
                           file=sys.stderr)
-            # =====================================================================
+            # ==============================================================
+
             # v0.1.90 — Tier-D advanced interconnects (NVLink / UCIe / Ethernet-800G).
             # _spi_blob is the input_doc-AUGMENTED text here (the Tier-3 loop rebound
             # it). All CONTENT-based, canonical-name tokens; NO filename reads. Each
@@ -70490,7 +70738,8 @@ def main() -> int:
             # 800G) so the sibling synth fires first and the more-specific Tier-D synth
             # force-overrides. Each carries a sibling MUTEX (the version-specific name
             # token is absent from the older protocol's benchmark).
-            # =====================================================================
+            # ==============================================================
+
             # v0.1.90 — Tier-D detection predicates live in tier_d_interconnect_detect
             # (single source of truth, regression-tested in
             # tests/test_tier_d_interconnect_detect.py). The sibling MUTEX rationale is
@@ -70538,7 +70787,8 @@ def main() -> int:
                 except Exception as _ucie_err:
                     print(f"      UCIe synth FAILED (fail-open): {_ucie_err}",
                           file=sys.stderr)
-            # =====================================================================
+            # ==============================================================
+
             # v0.1.92 — Tier-E new protocol classes (FlexRay / DisplayPort /
             # JESD204B-C / SMBus-PMBus). _spi_blob is the input_doc-AUGMENTED text.
             # Each detector is CONTENT-ONLY (no filename reads) and lives in its own
@@ -70550,7 +70800,8 @@ def main() -> int:
             #   JESD204 = own data-converter domain (ILAS + multiframe + subclass)
             #   SMBus/PMBus ⟂ plain-I2C (requires PEC/SMBALERT/ARP/PMBus command
             #     vocabulary; force-assigns all keys, runs last)
-            # =====================================================================
+            # ==============================================================
+
             try:
                 from flexray_protocol_synth import (
                     is_flexray as _det_flexray,
@@ -70603,7 +70854,8 @@ def main() -> int:
             except Exception as _smb_err:
                 print(f"      SMBus/PMBus synth FAILED (fail-open): {_smb_err}",
                       file=sys.stderr)
-            # =====================================================================
+            # ==============================================================
+
             # v0.1.93 — Tier-F new protocol classes (SAS / HyperBus / QSPI-OSPI /
             # MIPI-SPMI+RFFE). _spi_blob is the input_doc-AUGMENTED text. Each
             # detector is CONTENT-ONLY and lives in its own <proto>_protocol_synth
@@ -70614,7 +70866,8 @@ def main() -> int:
             #   QSPI/OSPI ⟂ plain-SPI (is_spi fires → runs after the R55 SPI synth)
             #   HyperBus ⟂ SPI/QSPI (RWDS + 48-bit CA + DDR-8-bit DQ)
             #   MIPI SPMI/RFFE ⟂ I2C/SMBus/SPI (runs after I2C + Tier-E SMBus)
-            # =====================================================================
+            # ==============================================================
+
             try:
                 from sas_protocol_synth import (
                     is_sas as _det_sas, apply_sas_synth as _apply_sas,
@@ -70662,7 +70915,8 @@ def main() -> int:
                     print(f"      → SENT synth applied (is_sent={_is_sent})")
             except Exception as _sent_err:
                 print(f"      SENT synth FAILED (fail-open): {_sent_err}", file=sys.stderr)
-            # =====================================================================
+            # ==============================================================
+
             # v0.1.94 Tier-G Wave 2 — CoreSight / InfiniBand / FibreChannel /
             # PROFIBUS / PROFINET / IO-Link. All CONTENT-ONLY module-level detectors
             # (regression-tested via test_protocol_detector_no_misfire). Each runs
@@ -70672,7 +70926,8 @@ def main() -> int:
             #   PROFINET ⟂ Ethernet/EtherCAT (is_ethernet fires → run after)
             #   InfiniBand ⟂ Ethernet/FibreChannel ; FibreChannel ⟂ SAS/SATA/Ethernet
             #   PROFIBUS ⟂ Modbus/RS-485/EtherCAT
-            # =====================================================================
+            # ==============================================================
+
             try:
                 from coresight_protocol_synth import (
                     is_coresight as _det_cs, apply_coresight_synth as _apply_cs,
@@ -70786,7 +71041,8 @@ def main() -> int:
                     print(f"      → Avalon synth applied (is_avalon={_is_avalon})")
             except Exception as _av_err:
                 print(f"      Avalon synth FAILED (fail-open): {_av_err}", file=sys.stderr)
-            # =====================================================================
+            # ==============================================================
+
             # v0.1.94 Tier-G Wave 3 — CANopen / Zigbee / LoRa / OCP / AXI-Stream /
             # MIPI-CSI2. CONTENT-ONLY module-level detectors. Placed at the end of
             # the serial Tier region so each runs AFTER the sibling whose synth may
@@ -70795,7 +71051,8 @@ def main() -> int:
             #   Zigbee ⟂ BLE/NFC ; LoRa ⟂ BLE/NFC/Zigbee
             #   OCP / AXI-Stream ⟂ AXI-MM/AHB/Wishbone/Avalon (both run after Avalon)
             #   MIPI-CSI2 ⟂ MIPI-DSI/generic-MIPI (mipi+mipi_dsi fire → run after)
-            # =====================================================================
+            # ==============================================================
+
             for _wave3_name, _wave3_ic in (
                 ("canopen", "CANopen (CiA 301)"),
                 ("zigbee", "IEEE 802.15.4 + Zigbee LR-WPAN SoC"),
@@ -70816,7 +71073,8 @@ def main() -> int:
                 except Exception as _w3_err:
                     print(f"      {_wave3_name} synth FAILED (fail-open): {_w3_err}",
                           file=sys.stderr)
-            # =====================================================================
+            # ==============================================================
+
             # v0.1.94 Tier-G Wave 4 — eDP / AFDX / PSI5 / Automotive-Ethernet /
             # A2B / IEEE-1588-PTP. CONTENT-ONLY module-level detectors. Placed at
             # the very end of the serial Tier region so each runs AFTER the sibling
@@ -70825,7 +71083,8 @@ def main() -> int:
             #   AFDX / Automotive-Ethernet / PTP ⟂ Ethernet (is_ethernet fires → after)
             #   A2B ⟂ I2S/SoundWire/SPDIF/I2C (tunnels them → run after)
             #   PSI5 ⟂ SENT/LIN/DALI (automotive sensor)
-            # =====================================================================
+            # ==============================================================
+
             for _wave4_name, _wave4_ic in (
                 ("edp", "Embedded DisplayPort (eDP 1.4b/1.5)"),
                 ("afdx", "AFDX End System / Switch (ARINC 664 Part 7)"),

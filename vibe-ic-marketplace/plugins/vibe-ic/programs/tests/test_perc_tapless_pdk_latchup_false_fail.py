@@ -102,6 +102,10 @@ def _mk_project(tmp_path: Path) -> Path:
     rpt3.mkdir(parents=True, exist_ok=True)
     for name in ("antenna", "ir_drop", "em", "erc"):
         (rpt3 / (name + ".json")).write_text(json.dumps({"verdict": "PASS"}) + "\n")
+    lef = tmp_path / "fixture.lef"
+    lef.write_text("MACRO sky130_fd_sc_hd__nor3_1\n CLASS CORE ;\nEND sky130_fd_sc_hd__nor3_1\n")
+    (rpt3 / "io_pad_chip_top.json").write_text(json.dumps(
+        {"verdict": "WROTE", "io_library_lefs": [str(lef)]}))
     return tmp_path
 
 

@@ -245,11 +245,11 @@ def _run_openroad(project: Path, image: str, tcl: Path, log: Path,
     volumes = ['-v', f'{project.resolve()}:{project.resolve()}']
     for host, guest in mounts:
         volumes += ['-v', f'{Path(host).resolve()}:{guest}:ro']
-    extra = f'-metrics {metrics} ' if metrics else ''
+    extra = ['-metrics', str(metrics)] if metrics else []
     log.parent.mkdir(parents=True, exist_ok=True)
-    network, command = native_tool_command(image, ['bash', '-c',
-        'LD_LIBRARY_PATH=/opt/or-tools/lib /foss/tools/openroad/bin/openroad '
-        f'-no_init -no_splash {extra}-exit {tcl}'])
+    network, command = native_tool_command(image, [
+        'env', 'LD_LIBRARY_PATH=/opt/or-tools/lib',
+        'openroad', '-no_init', '-no_splash', *extra, '-exit', str(tcl)])
     completed = run_container(
         ['docker', 'run', '--rm', '--network', network, *_dmem.docker_memory_flags(),
          *volumes, '--entrypoint', command[0], image, *command[1:]],
@@ -899,6 +899,7 @@ def run_antenna_router(project: Path, image: str, pdk_root: Path, pdk: str, *,
     metrics = _metrics(folder)
     return {'model': 'router', 'step': step, 'state': str(folder / 'state_out.json'),
             'state_sha256': digest(folder / 'state_out.json'),
+            'report': str(folder / 'reports' / 'antenna.rpt'),
             'subject': str(routed_def), 'subject_sha256': digest(routed_def),
             'counts': {k: metrics.get(k) for k in ROUTER_METRICS}}
 

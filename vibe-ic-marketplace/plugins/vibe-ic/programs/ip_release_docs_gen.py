@@ -244,6 +244,7 @@ class Kit:
     lef: Dict[str, object]
     lib: Dict[str, object]
     verilog: Dict[str, object]
+    verdict_source: str = ""
 
     def rel(self, ext: str) -> str:
         """The project-relative path of one view, or "" when it is not shipped."""
@@ -921,7 +922,10 @@ def integration_guide(rel: Release) -> Tuple[str, List[Field]]:
 
 
 def _delivered_views_field(rel: Release) -> Field:
-    return measured("Views delivered", len(rel.kit.views), KIT_DIR)
+    parents = {p.parent for p in rel.kit.views.values()}
+    source = (_rel_str(rel.project, next(iter(parents))) if len(parents) == 1
+              else rel.kit.rel(".lef"))
+    return measured("Views delivered", len(rel.kit.views), source)
 
 
 def _kit_verdict_field(rel: Release) -> Field:
@@ -933,7 +937,13 @@ def _kit_verdict_field(rel: Release) -> Field:
     consults `digital_hardmacro_check`, and a document that states a verdict no
     written record carries is a verdict nobody can re-check.
     """
-    rel_path = "reports/phase3/digital_hardmacro.json"
+    analog = any("phase3/analog/hardmacro/" in rel.kit.rel(ext)
+                 for ext in rel.kit.views)
+    rel_path = rel.kit.verdict_source
+    if not rel_path and analog:
+        return unmeasured("Delivered-kit verdict",
+                          "No package-bound analog checker record supplied")
+    rel_path = rel_path or "reports/phase3/digital_hardmacro.json"
     doc = _read_json(rel.project / rel_path)
     tier = (doc or {}).get("verdict_tier") if isinstance(doc, dict) else None
     summary = (doc or {}).get("summary") if isinstance(doc, dict) else None

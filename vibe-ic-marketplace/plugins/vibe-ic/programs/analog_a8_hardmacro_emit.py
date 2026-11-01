@@ -871,7 +871,8 @@ def _bound_models(container: str, lines: List[str], directory: Path) -> List[Dic
 
 def _native_measurement_produce(project: Path, block: str, container: str,
                                 pdk_root: str, gds: Path,
-                                topology: Dict[str, object], *, ngspice_bin: Optional[str] = None
+                                topology: Dict[str, object], *, ngspice_bin: Optional[str] = None,
+                                native_attempts=None
                                 ) -> Tuple[Optional[Dict[str, object]], str]:
     """Ordinary A8 producer path: extract the A5 view, then measure power.
 
@@ -916,6 +917,8 @@ def _native_measurement_produce(project: Path, block: str, container: str,
         magic_cmd = (
             f"cd {shlex.quote(str(stage))} && magic -dnull -noconsole "
             f"-rcfile {shlex.quote(rcfile)} a8_extract.tcl")
+        if native_attempts is not None:
+            native_attempts.append({"tool": "magic", "operation": "post_layout_extract"})
         magic_rc, magic_out, magic_err = _docker_exec(
             container, magic_cmd, marker="a8_extract.tcl")
         extract_log.write_text((magic_out or "") + (magic_err or ""))
@@ -955,6 +958,8 @@ def _native_measurement_produce(project: Path, block: str, container: str,
         if wrapper_path is not None:
             consumed.append(wrapper_path)
         frozen = {p: _sha256(p) for p in consumed}
+        if native_attempts is not None:
+            native_attempts.append({"tool": "ngspice", "operation": "post_layout_op"})
         ngspice_rc, ng_out, ng_err = _docker_exec(
             container,
             f"cd {shlex.quote(str(bdir))} && "
@@ -1432,7 +1437,20 @@ def load_native_measurement(project: Path, block: str, gds: Path,
 
 
 def emit_block(project: Path, block: str, container: str, pdk_root: str, *, ngspice_bin: Optional[str] = None,
-               ) -> Dict:
+               native_attempts=None) -> Dict:
+    """Publish attempts to an optional per-call sink even if later work raises."""
+    native_attempts = native_attempts if native_attempts is not None else []
+    try:
+        result = _emit_block(project, block, container, pdk_root,
+                             ngspice_bin=ngspice_bin, native_attempts=native_attempts)
+    except (OSError, subprocess.SubprocessError) as exc:
+        result = {"block": block, "emitted": False, "rc": 2,
+                  "reason": f"native export transport unavailable: {exc}"}
+    return dict(result, native_attempts=native_attempts)
+
+
+def _emit_block(project: Path, block: str, container: str, pdk_root: str, *,
+                ngspice_bin: Optional[str] = None, native_attempts) -> Dict:
     bdir = project / "phase3" / "analog" / block
     gds = bdir / f"{block}.gds"
     topo = bdir / "topology.json"
@@ -1462,7 +1480,9 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str, *, ngsp
                 "cached native measurement used a different selected binary"
     if measurement is None:
         produced, produce_reason = _native_measurement_produce(
-            project, block, container, pdk_root, gds, topology, **({"ngspice_bin": ngspice_bin} if ngspice_bin is not None else {}))
+            project, block, container, pdk_root, gds, topology,
+            native_attempts=native_attempts,
+            **({"ngspice_bin": ngspice_bin} if ngspice_bin is not None else {}))
         if produced is None:
             return {"block": block, "emitted": False, "rc": 1,
                     "reason": (f"{measurement_reason}; ordinary native "
@@ -1494,6 +1514,7 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str, *, ngsp
         native_lef = Path(staging) / f"{block}.lef"
         native_lef.write_text("")
         tcl.write_text(build_lef_tcl(block, str(gds), str(native_lef)))
+        native_attempts.append({"tool": "magic", "operation": "lef_export"})
         rc, out, err = _docker_exec(
             container,
             f"cd {shlex.quote(str(hdir))} && magic -dnull -noconsole "

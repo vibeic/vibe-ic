@@ -398,6 +398,9 @@ def test_geometry_deck_catches_what_the_router_report_path_misses(runner,
                             met2_len=200.0)
     (proj / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
     (proj / "reports" / "phase3" / "antenna.rpt").write_text(ROUTER_CLEAN_RPT)
+    (proj / "reports" / "phase3" / "antenna.json").write_text(json.dumps({
+        "source": "reports/phase3/antenna.rpt", "tool": "openroad", "mode": "antenna_check",
+        "net_violations": 0, "pin_violations": 0, "clean": True, "verdict": "PASS"}))
 
     # ABSOLUTE, and inside the project under test. `_run` does not set `cwd`,
     # and `eda_report_audit` resolves `--json` against the PROCESS CWD — which
@@ -428,6 +431,9 @@ def test_cross_check_agrees_on_a_genuinely_clean_design(runner, workdir):
     proj = _antenna_project(runner, workdir, "agree", CLEAN_LEN_UM)
     (proj / "reports" / "phase3").mkdir(parents=True, exist_ok=True)
     (proj / "reports" / "phase3" / "antenna.rpt").write_text(ROUTER_CLEAN_RPT)
+    (proj / "reports" / "phase3" / "antenna.json").write_text(json.dumps({
+        "source": "reports/phase3/antenna.rpt", "tool": "openroad", "mode": "antenna_check",
+        "net_violations": 0, "pin_violations": 0, "clean": True, "verdict": "PASS"}))
     cp = _run(ANTENNA_GATE, proj, "--json", "out.json")
     assert cp.returncode == 0
     assert _verdict(proj)["cross_check"]["verdict"] == "AGREE"
