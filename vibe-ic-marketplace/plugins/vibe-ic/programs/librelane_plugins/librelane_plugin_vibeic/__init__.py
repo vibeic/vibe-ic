@@ -62,8 +62,10 @@ import hashlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
+import time
 from decimal import Decimal
 from pathlib import Path as FilePath
 from typing import List, Optional, Tuple
@@ -274,8 +276,37 @@ class GateLevelSim(Step):
 
     @staticmethod
     def _run(argv, log: str, limit: int, cwd=None) -> int:
-        # Reuse complete-stream collection to keep GLS diagnostics source-bound.
-        return TestPatternReplay._run(argv, log, limit, cwd=cwd)
+        # wait4 accounts for this child, even when other GLS cases finish concurrently.
+        started = time.monotonic()
+        with open(log, "w") as stdout, open(log + ".stderr", "w") as stderr:
+            proc = subprocess.Popen(argv, stdout=stdout, stderr=stderr, cwd=cwd)
+            timed_out = False
+            try:
+                while True:
+                    pid, status, usage = os.wait4(proc.pid, os.WNOHANG)
+                    if pid:
+                        proc.returncode = os.waitstatus_to_exitcode(status)
+                        break
+                    remaining = started + limit - time.monotonic()
+                    if remaining <= 0:
+                        timed_out = True
+                        break
+                    time.sleep(min(0.01, remaining))
+            finally:
+                if proc.returncode is None:
+                    os.kill(proc.pid, signal.SIGKILL)
+                    _, status, usage = os.wait4(proc.pid, 0)
+                    proc.returncode = os.waitstatus_to_exitcode(status)
+                rss_kib = usage.ru_maxrss / 1024 if sys.platform == "darwin" else usage.ru_maxrss
+                FilePath(log + ".resources.txt").write_text(
+                    f"max_rss_kib={rss_kib}\nuser_s={usage.ru_utime}\n"
+                    f"system_s={usage.ru_stime}\nelapsed_s={time.monotonic() - started}\n")
+            if timed_out:
+                stdout.write(f"\nVIBEIC_GLS_TIMEOUT after {limit} s\n")
+            rc = 124 if timed_out else proc.returncode
+        with open(log, "a") as sink:
+            sink.write("\n" + FilePath(log + ".stderr").read_text(errors="replace"))
+        return rc
 
 
 @Step.factory.register()
