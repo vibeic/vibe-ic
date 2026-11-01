@@ -278,8 +278,6 @@ def test_ambiguous_supply_lef_remains_undecided_even_with_coincidence(
         assert rc == 1
         assert report['undecided_nets'] == ['supply']
         assert report['not_connected_nets'] == []
-        assert any(report['nets'][0]['candidate_face_overlaps'])
-        assert not all(report['nets'][0]['candidate_face_overlaps'])
 
 
 @pytest.mark.parametrize('use', ['POWER', 'GROUND'])
@@ -299,7 +297,6 @@ def test_positive_supply_overlap_below_minimum_width_keeps_existing_rejection(tm
     assert report['not_connected_nets'] == ['supply']
     assert report['undecided_nets'] == []
     row = report['nets'][0]
-    assert row['candidate_face_overlaps'] == [True]
     assert row['overlap'] == [25900, 22000, 26000, 26000]
     assert 'minimum width' in row['reason']
 

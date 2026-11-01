@@ -347,6 +347,8 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                         f'USE {uses[rec["net"]]} pins={terminals}, top-layer shapes={len(faces)}')
             else:
                 row = terminal_row(pin_name, rec, inst, pin, comp)
+            # Per-face bookkeeping is internal; keep the native report schema.
+            row.pop("candidate_face_overlaps", None)
             if chosen is None or rank[row["verdict"]] > rank[chosen["verdict"]]:
                 chosen = row
             # Connectivity only supplies candidates. Coincidence decides which
