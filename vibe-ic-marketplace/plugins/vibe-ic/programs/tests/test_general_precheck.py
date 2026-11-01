@@ -720,20 +720,20 @@ def test_g8_a_die_retires_only_a_marker_this_flow_itself_wrote(tmp_path):
 
 
 # --------------------------------------------------------------------------- #
-# G9 — the declaration: 20 questions, malformed refused, unanswered passed
+# G9 — the declaration: 21 questions, malformed refused, unanswered passed
 #
 # 18 -> 20 with `macro_area_um` / `macro_origin_um` (vibe-ic#2118): a HARDMACRO
 # states its own bounding box under a name that says so, because the `die_*`
 # pair it used to be handed is `required_for=(DIE,)` and a macro owes no answer
 # about a die. Registered here BY NAME below, not just by count.
 # --------------------------------------------------------------------------- #
-def test_g9_there_are_exactly_twenty_questions_in_three_sections():
-    assert len(TD.QUESTIONS) == 20
+def test_g9_there_are_exactly_twenty_one_questions_in_three_sections():
+    assert len(TD.QUESTIONS) == 21
     assert TD.SECTION_COUNTS == {"2A_die_size": 9, "2B_pad_ring": 8,
-                                 "2C_seal_ring": 3}
+                                 "2C_seal_ring": 4}
     audit = TD.audit(TD.blank_declaration())
-    assert audit["questions_total"] == 20
-    assert audit["answered"] == 0 and audit["unanswered"] == 20
+    assert audit["questions_total"] == 21
+    assert audit["answered"] == 0 and audit["unanswered"] == 21
     assert {"macro_area_um", "macro_origin_um"} <= {q.key for q in TD.QUESTIONS}
 
 

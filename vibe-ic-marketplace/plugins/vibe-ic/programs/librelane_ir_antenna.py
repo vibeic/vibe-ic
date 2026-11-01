@@ -1014,6 +1014,16 @@ def run_sealring(project: Path, image: str, pdk_root: Path, pdk: str, *,
 
     Returns the sealed GDS the tool wrote; it is NOT verified here -- the
     caller hands it to `die_finishing_gen --sealed-by`, which measures it."""
+    import _seal_ring_frame as frames
+    frame = None
+    if frames.placement(project) == 'outside':
+        import die_finishing_gen
+        try:
+            frame = die_finishing_gen.prepare_outside_frame(
+                project, gds_in, str(pdk_root), pdk)
+        except frames.Refusal as exc:
+            raise Refusal('SEAL_RING_FOOTPRINT_NOT_MEASURED', str(exc)) from exc
+        die_rect = frame['grown_frame_um']
     if len(die_rect) != 4 or die_rect[2] <= die_rect[0] or die_rect[3] <= die_rect[1]:
         raise Refusal('LL_SEALRING_DIE_INVALID', str(die_rect))
     if (die_rect[0], die_rect[1]) != (0, 0) and not sealring_spans_capable(image):
@@ -1038,7 +1048,8 @@ def run_sealring(project: Path, image: str, pdk_root: Path, pdk: str, *,
     out = _load(folder / 'state_out.json').get('gds')
     if not out or not Path(out).is_file() or Path(out).resolve() == Path(gds_in).resolve():
         raise Refusal('LL_SEALRING_NO_OUTPUT', f'{folder}: state gds {out!r}')
-    return {'step': 'KLayout.SealRing', 'state': str(folder / 'state_out.json'),
+    return {**({'seal_ring_frame': frame} if frame is not None else {}),
+            'step': 'KLayout.SealRing', 'state': str(folder / 'state_out.json'),
             'state_sha256': digest(folder / 'state_out.json'),
             'gds_in': str(gds_in), 'gds_in_sha256': digest(gds_in),
             'sealed_gds': str(out), 'sealed_sha256': digest(Path(out)),

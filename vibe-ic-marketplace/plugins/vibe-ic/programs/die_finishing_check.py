@@ -172,6 +172,24 @@ def evaluate(project: Path, report: Optional[str] = None) -> Dict[str, Any]:
                 "reason": (f"the report says the seal ring was inserted, but "
                            f"{_DEF_REL} is not on disk — the finished die the "
                            "report describes was not left behind")}
+    import _seal_ring_frame as frames
+    try:
+        outside = seal_state == 'PASS' and frames.placement(project) == 'outside'
+    except frames.Refusal as exc:
+        return {**res, 'verdict': 'FAIL', 'reason': str(exc)}
+    if outside:
+        try:
+            expected = frames.completed_frame(project, run)
+            import re
+            text = fin.read_text()
+            units = re.search(r'UNITS\s+DISTANCE\s+MICRONS\s+(\d+)', text)
+            area = re.search(r'DIEAREA\s*\(\s*(-?\d+)\s+(-?\d+)\s*\)\s*'
+                             r'\(\s*(-?\d+)\s+(-?\d+)\s*\)', text)
+            if units is None or area is None or list(map(int, area.groups())) != [
+                    round(v * int(units[1])) for v in expected]:
+                raise frames.Refusal('SEAL_RING_FINISHED_DEF_FRAME_MISMATCH')
+        except (OSError, ValueError, TypeError) as exc:
+            return {**res, 'verdict': 'FAIL', 'reason': str(exc)}
     # Only a skip that CLAIMS the marker is cross-checked against it. A skip
     # for an absent input ("no streamed GDS", "no KLayout") deliberately writes
     # no marker — the step could not run, which is not the same fact as die

@@ -226,6 +226,12 @@ def main():
     # (the INPUT layout); the scan lines span the SEALED bbox, so a ring drawn
     # OUTSIDE the original die box is measured too.
     die = tin.bbox()
+    # An empty native footprint probe still has a declared frame and centre.
+    if os.environ.get("SEAL_DIE_BOX_UM"):
+        frame = json.loads(os.environ["SEAL_DIE_BOX_UM"])
+        if (len(frame) != 4 or frame[0] >= frame[2] or frame[1] >= frame[3]):
+            return emit("FAIL", "SEAL_DIE_BOX_UM must be a nonempty rectangle")
+        die = pya.Box(*[round(v / lin.dbu) for v in frame])
     span = tout.bbox() + added.bbox()
     cx = (die.left + die.right) // 2
     cy = (die.bottom + die.top) // 2
@@ -244,9 +250,23 @@ def main():
     # both centre lines twice and leave the centre open. Unrelated outliers
     # remain in added_geometry but never become ring extent authority.
     ring_source = marker_delta if marker_delta is not None else added
+    if os.environ.get("SEAL_OUTSIDE_FRAME"):
+        # A PDK may declare the edge box as a solid boundary layer. It is
+        # frame extent authority, not the annulus whose inner edge we measure.
+        ring_source = pya.Region()
+        for delta in layer_deltas.values():
+            for polygon in delta.each():
+                component = pya.Region(polygon)
+                if ((component & hline).merged().count() >= 2
+                        and (component & vline).merged().count() >= 2
+                        and (component & center).count() == 0):
+                    ring_source += component
+        ring_source = ring_source.merged()
     res["ring_extent_source"] = (f"new geometry on marker {marker}"
                                  if marker_delta is not None else
                                  "connected annulus in newly added geometry")
+    if os.environ.get("SEAL_OUTSIDE_FRAME"):
+        res["ring_extent_source"] = "native per-layer annuli; outer frame from added-geometry extent"
     source_horiz = (ring_source & hline).merged().count()
     source_vert = (ring_source & vline).merged().count()
     source_centre = (ring_source & center).count()
@@ -310,6 +330,8 @@ def main():
     gx = _gap(hcut, span.left, span.right, cx, True)
     gy = _gap(vcut, span.bottom, span.top, cy, False)
     ob = ring_geometry.bbox()
+    if os.environ.get("SEAL_OUTSIDE_FRAME"):
+        ob = added.bbox()
     dbu = lout.dbu
 
     def _box(l, b, r, t):

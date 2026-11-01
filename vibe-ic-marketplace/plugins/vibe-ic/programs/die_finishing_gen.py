@@ -161,11 +161,13 @@ try:
     from . import _klayout_launch as _kl                     # type: ignore
     from . import _seal_ring_margin as _srm                  # type: ignore
     from . import _tapeout_declaration as _td                # type: ignore
+    from . import _seal_ring_frame as _frame                 # type: ignore
 except ImportError:                                          # standalone gate
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import _klayout_launch as _kl                            # type: ignore
     import _seal_ring_margin as _srm                         # type: ignore
     import _tapeout_declaration as _td                       # type: ignore
+    import _seal_ring_frame as _frame                        # type: ignore
 
 PASS, FAIL, SKIP = 0, 1, 2
 
@@ -785,7 +787,8 @@ def derive_tech(runner, script: str) -> Tuple[Optional[str], str]:
 
 
 def _emit_argv(form: str, runner, script: str, py: str, tech: Optional[str],
-               gds_c: str, out_c: str, w: float, h: float) -> List[str]:
+               gds_c: str, out_c: str, w: float, h: float,
+               offset: Optional[List[float]] = None) -> List[str]:
     """The PDK generator's command line, in the form LibreLane uses for it.
 
     `pya-cli` mirrors `KLayout.SealRing.run_generic`; `klayout-rd` mirrors
@@ -798,13 +801,91 @@ def _emit_argv(form: str, runner, script: str, py: str, tech: Optional[str],
     for. It is recorded in the report so a PDK integrator can see it.
     """
     if form == "klayout-rd":
-        return [runner.klayout_bin(), "-zz", "-nc", "-n", str(tech),
+        argv = [runner.klayout_bin(), "-zz", "-nc", "-n", str(tech),
                 "-r", script,
                 "-rd", f"width={h:f}", "-rd", f"height={w:f}",
                 "-rd", f"input={gds_c}", "-rd", f"output={out_c}"]
+        if offset is not None:
+            argv += ["-rd", f"offset_x={offset[0]:f}", "-rd", f"offset_y={offset[1]:f}"]
+        return argv
     return [py, script,
             "--input", gds_c, "--output", out_c,
             "--die-width", f"{w:f}", "--die-height", f"{h:f}"]
+
+
+def prepare_outside_frame(project, gds, pdk_root=None, pdk=None, *,
+                          runner=None, script=None, form=None, tech=None,
+                          python="python3", marker=None):
+    """Probe the PDK generator, without promoting geometry or altering the die.
+
+    A missing/invalid measurement is BLOCKING NOT_MEASURED. Both producer arms
+    call this primitive; neither reads a design-specific ring width.
+    """
+    import uuid
+    work = Path(project) / 'reports/phase3/seal_ring_frame' / uuid.uuid4().hex
+    work.mkdir(parents=True)
+    try:
+        die = _frame.declared_die(project)
+        runner = runner or _kl.find_runner()
+        if runner is None:
+            raise ValueError('no native KLayout runner')
+        decl, why = _declaration(Path(project))
+        if why:
+            raise ValueError(why)
+        cfg = _bridge(Path(project))
+        script, _, _ = resolve_script(Path(project), script, pdk_root, pdk, decl)
+        if not script or not runner.exists(script):
+            raise ValueError('PDK seal-ring generator absent')
+        form = form or cfg.get('form') or detect_form(runner, script)[0]
+        if form not in ('klayout-rd', 'pya-cli'):
+            raise ValueError('native footprint probe does not support interface ' + str(form))
+        tech = tech or cfg.get('tech')
+        if form == 'klayout-rd' and not tech:
+            tech, why = derive_tech(runner, script)
+            if not tech:
+                raise ValueError(why)
+        env = {k: str(v) for k, v in [('PDK_ROOT', pdk_root), ('PDK', pdk)] if v}
+        if form == 'klayout-rd':
+            env['KLAYOUT_PATH'] = (f'{pdk_root}/{pdk}/libs.tech/klayout'
+                                   if pdk_root and pdk else str(Path(script).parent.parent.parent))
+        def engine(name):
+            path = _kl.find_engine('sealring', name)
+            if path is None:
+                raise ValueError('native footprint engine absent: ' + name)
+            if not runner.covers(path):
+                local = work / name
+                atomic_write_text(local, Path(path).read_text())
+                path = local
+            return path
+        empty, sealed, measured = (work / n for n in ('empty.gds', 'ring.gds', 'measurement.json'))
+        rc, out, err = runner.run(engine('empty_probe.py'),
+            {'SEAL_PROBE_SOURCE': str(gds), 'SEAL_PROBE_INPUT': str(empty)},
+            path_keys=('SEAL_PROBE_SOURCE', 'SEAL_PROBE_INPUT'))
+        if rc or not empty.is_file():
+            raise ValueError('empty footprint probe failed: ' + out + err)
+        w, h = die[2] - die[0], die[3] - die[1]
+        argv = _emit_argv(form, runner, script, python, tech,
+                          runner.cpath(empty), runner.cpath(sealed), w, h)
+        rc, out, err = runner.run_argv(argv, env, timeout=3600)
+        atomic_write_text(work / 'generator.log', out + err)
+        if rc or not sealed.is_file():
+            raise ValueError('PDK footprint generator failed; see ' + str(work / 'generator.log'))
+        verify_env = {'SEAL_IN': str(empty), 'SEAL_OUT': str(sealed),
+                      'SEAL_REPORT': str(measured), 'SEAL_DIE_BOX_UM': json.dumps([0, 0, w, h]),
+                      'SEAL_OUTSIDE_FRAME': '1'}
+        if marker:
+            verify_env['SEAL_MARKER'] = str(marker)
+        rc, out, err = runner.run(engine('sealring_verify.py'), verify_env,
+            path_keys=('SEAL_IN', 'SEAL_OUT', 'SEAL_REPORT'))
+        observation = json.loads(measured.read_text()) if measured.is_file() else {}
+        if rc or observation.get('verdict') != 'PASS':
+            raise ValueError('PDK footprint measurement failed: ' + str(observation.get('reason', out + err)))
+        basis = {'kind': 'measured_pdk_generator_ring_extent', 'script': str(script),
+                 'measurement': str(measured), 'sha256': _sha256_file(measured),
+                 'probe_input': str(empty), 'argv': argv}
+        return _frame.from_measurement(die, [0, 0, w, h], observation['ring_extent'], basis)
+    except (OSError, KeyError, TypeError, ValueError) as exc:
+        raise _frame.Refusal('SEAL_RING_FOOTPRINT_NOT_MEASURED: ' + str(exc)) from exc
 
 
 # ── the finished-die DEF ────────────────────────────────────────────────────
@@ -1256,6 +1337,10 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
     hardmacro = _hardmacro_skip(decl)
     if hardmacro is not None:
         return done(hardmacro)
+    try:
+        outside = _frame.placement(project) == 'outside'
+    except _frame.Refusal as exc:
+        return done({'state': 'NOT_MEASURED', 'rule': str(exc).split(':')[0], 'reason': str(exc)})
     seal_required = _declared(decl, _DECL_REQUIRED)
     answered_2c = [k for k in (_DECL_REQUIRED, _DECL_SCRIPT, _DECL_MARKER)
                    if _declared(decl, k) is not None]
@@ -1482,6 +1567,21 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
               else str(Path(script).parent.parent.parent))
         env["KLAYOUT_PATH"] = kp
         seal["klayout_path"] = kp
+    frame = None
+    if outside:
+        try:
+            frame = prepare_outside_frame(project, gds_path, _root, _name,
+                runner=runner, script=script, form=form, tech=tech, python=python, marker=marker)
+        except _frame.Refusal as exc:
+            seal.update(state='NOT_MEASURED', rule='SEAL_RING_FOOTPRINT_NOT_MEASURED', reason=str(exc))
+            seal['frame'] = {'placement': 'outside',
+                'declared_die_um': _declared(decl, _DECL_DIE_AREA),
+                'grown_frame_um': None, 'g_um': None,
+                'g_basis': {'kind': 'NOT_MEASURED', 'reason': str(exc)}}
+            return done(seal)
+        seal['frame'] = frame
+        outer = frame['grown_frame_um']
+        w, h = outer[2] - outer[0], outer[3] - outer[1]
     if sealed_by_error and not sealed_by:
         seal["producer"] = "librelane:KLayout.SealRing"
         rc, sout, serr = 1, "", f"the LibreLane producer refused: {sealed_by_error}"
@@ -1539,10 +1639,28 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
                 seal["generator_output"] = ((sout or "") + (serr or ""))[-2000:]
                 return done(seal)
         else:
+            generator_input = (Path(frame['g_basis']['probe_input'])
+                               if outside and form == 'pya-cli' else gds_path)
             argv = _emit_argv(form, runner, script, python, tech,
-                              runner.cpath(gds_path), runner.cpath(staged), w, h)
+                              runner.cpath(generator_input), runner.cpath(staged), w, h,
+                              **({'offset': frame['grown_frame_um'][:2]} if outside else {}))
             seal["argv"] = list(argv)
             rc, sout, serr = runner.run_argv(argv, env, timeout=3600)
+            if outside and form == 'pya-cli' and not rc and staged.is_file():
+                merge = _kl.find_engine('sealring', 'empty_probe.py')
+                if not runner.covers(merge):
+                    local = rep.parent / 'empty_probe.py'
+                    atomic_write_text(local, Path(merge).read_text())
+                    merge = local
+                merged = staged.with_suffix('.merged.gds')
+                rc, mout, merr = runner.run(merge, {
+                    'SEAL_PROBE_SOURCE': str(gds_path), 'SEAL_PROBE_RING': str(staged),
+                    'SEAL_PROBE_INPUT': str(merged),
+                    'SEAL_PROBE_OFFSET': json.dumps(frame['grown_frame_um'][:2])},
+                    path_keys=('SEAL_PROBE_SOURCE', 'SEAL_PROBE_RING', 'SEAL_PROBE_INPUT'))
+                sout, serr = sout + mout, serr + merr
+                if not rc and merged.is_file():
+                    merged.replace(staged)
     seal["generator_rc"] = rc
     tail = ((sout or "") + (serr or "")).strip()
     if tail:
@@ -1580,6 +1698,8 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
     vrep = rep.parent / "sealring_verify.json"
     venv = {"SEAL_IN": str(gds_path), "SEAL_OUT": str(staged),
             "SEAL_REPORT": str(vrep)}
+    if outside:
+        venv.update(SEAL_DIE_BOX_UM=json.dumps(frame['declared_die_um']), SEAL_OUTSIDE_FRAME='1')
     if _clear_um is not None:
         venv["SEAL_CORE_CLEARANCE_UM"] = f"{float(_clear_um):f}"
     if marker:
@@ -1616,7 +1736,14 @@ def run(project: Path, gds: Optional[str], script: Optional[str],
         pass
 
     if ring_check.get("verdict") == "PASS":
-        if form == "magic-positional":
+        if outside:
+            try:
+                _frame.validate(frame, ring_check['ring_extent'], _frame.declared_die(project))
+            except (KeyError, TypeError, _frame.Refusal) as exc:
+                seal.update(state='FAIL', rule=str(exc).split(':')[0], reason=str(exc),
+                            gds_out_unpromoted=str(staged))
+                return done(seal, ring_check)
+        elif form == "magic-positional":
             expected_box, expected_source = built_die_rectangle(project, decl)
             extent = ring_check.get("ring_extent") or {}
             outer = (extent.get("outer") or {}).get("um")
@@ -2054,6 +2181,9 @@ def main(argv=None) -> int:
         return SKIP
     if state == "PASS":
         return PASS
+    if state == "NOT_MEASURED":
+        print("die_finishing_gen: NOT_MEASURED — " + str(res['seal_ring'].get('reason')))
+        return SKIP
     print("die_finishing_gen: FAIL — "
           f"{(res.get('seal_ring') or {}).get('reason')}")
     return FAIL

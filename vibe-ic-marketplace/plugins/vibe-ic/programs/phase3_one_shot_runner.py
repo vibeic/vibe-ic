@@ -13706,7 +13706,27 @@ def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]
                 lambda path: Path(path).exists(), pdk=name, key=key,
                 multiple=key == 'liberty_glob')
     else:
-        root = _registry_container_root(container, reg) or ""
+        if _local_exec_mode() and os.environ.get(contract.LOCAL_ATTESTATION_ENV):
+            name = str(reg.get("name") or "unknown")
+            try:
+                resolved = contract.pdk_root_resolution(project, name, native_handoff=True)
+            except contract.Refusal as exc:
+                raise SystemExit(f"[FAIL] --pdk {name}: {exc}") from exc
+            root = str(Path(resolved['path']) / name)
+            views = [Path(root) / part for part in ('libs.ref', 'libs.tech')]
+            if any(view.is_symlink() for view in views):
+                try:
+                    concrete = [view.resolve(strict=True) for view in views]
+                    parents = {view.parent for view in concrete}
+                    if ([view.name for view in concrete] != ['libs.ref', 'libs.tech']
+                            or len(parents) != 1 or concrete[0].parent.name != name):
+                        raise ValueError('installed views do not share the selected PDK root')
+                    root = str(concrete[0].parent)
+                except (OSError, RuntimeError, ValueError) as exc:
+                    raise SystemExit(f"[FAIL] --pdk {name}: "
+                                     f"LL_IMAGE_PDK_COMPOSITION_INVALID: {exc}") from exc
+        else:
+            root = _registry_container_root(container, reg) or ""
         if not root:
             return None
         rc, _o, _e = _docker_exec_raw(
@@ -45216,10 +45236,12 @@ def _die_finishing_native(project: Path, top: str, pdk: PdkConfig,
     # falls back to the layout bbox exactly as before — which is REPORTED here
     # rather than silently assumed to be the die.
     _die_rect, _die_basis = declared_die_rect(project)
-    if _die_rect:
+    import _seal_ring_frame as _seal_frame
+    _outside = _seal_frame.placement(project) == 'outside'
+    if _die_rect and not _outside:
         argv += ["--die-width", str(_die_rect[2] - _die_rect[0]),
                  "--die-height", str(_die_rect[3] - _die_rect[1])]
-    else:
+    elif not _outside:
         print(f"[phase3] seal ring: the die rectangle is NOT_DETERMINED "
               f"({_die_basis}); the generator will fall back to the layout's "
               f"own bounding box, which since CT-03 may be the CORE",
