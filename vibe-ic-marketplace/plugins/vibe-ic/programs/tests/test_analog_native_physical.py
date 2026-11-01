@@ -95,6 +95,32 @@ def test_native_pv_host_resolves_attested_local_pdk_before_gds(project, monkeypa
     assert result["detail"] == "A11 block GDS is absent"
 
 
+def test_native_pv_host_resolves_explicit_installed_pdk_before_gds(project):
+    root = project / "installed"
+    (root / "ihp-sg13g2/libs.tech/ngspice").mkdir(parents=True)
+    result = physical._pv(project, "unit", "host", "", "ihp-sg13g2",
+                          {"pdk_root": str(root)})
+    assert result["status"] == "NOT_MEASURED"
+    assert result["detail"] == "A11 block GDS is absent"
+
+
+def test_native_pv_explicit_host_root_selects_foundry_not_staged_models(project, monkeypatch):
+    import analog_a6_native_pv as pv
+    import analog_native_erc as erc
+    root = project / "installed"
+    (root / "ihp-sg13g2/libs.tech/ngspice").mkdir(parents=True)
+    put(project / "input/pdk/models/native.lib", ".model native nmos level=1\n")
+    put(project / "phase3/analog/unit/unit.gds", "native tool fixture")
+    seen = []
+    monkeypatch.setattr(pv, "run_block_pv", lambda _p, _b, resolved, **kw:
+                        seen.append(resolved) or {"drc": {}, "lvs": {}})
+    monkeypatch.setattr(erc, "run", lambda *a, **kw:
+                        {"status": "NOT_MEASURED", "outputs": []})
+    physical._pv(project, "unit", "host", "", "ihp-sg13g2", {"pdk_root": str(root)})
+    assert seen[0]["source"] == "container_installed"
+    assert seen[0]["pdk_root"] == str(root / "ihp-sg13g2")
+
+
 def _extraction_project(project, monkeypatch, parasitic=True):
     import _analog_producer_common as pc
     import librelane_contract as lc

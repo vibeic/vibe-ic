@@ -923,3 +923,61 @@ def test_q_compact_reduced_island_must_meet_joined_metal_area(monkeypatch):
                   friendly=("unit", 1))
     assert any(d["quantity"] == "via_island_clearance_lambda"
                for d in plan.deviations)
+
+
+def test_multifinger_singleton_escape_stays_clear_of_collected_drains(monkeypatch):
+    dev = {"name": "unit", "model": "native_mos", "class": "mosfet",
+           "nets": ["drain", "gate", "source", "body"],
+           "pars": {"w": 16, "l": .5, "ng": 2}}
+    cell = A5E.parse_cell("""magic
+magscale 1 1
+<< metal1 >>
+rect -139 -459 139 -439
+rect -139 439 139 459
+rect -139 -439 -119 439
+rect 119 -439 139 439
+<< metal2 >>
+rect -98 -22 -78 22
+rect 78 -22 98 22
+rect -10 -22 10 22
+rect -54 407 -34 437
+rect 34 407 54 437
+<< labels >>
+rlabel metal2 -88 0 -88 0 0 D0
+rlabel metal2 88 0 88 0 0 D1
+rlabel metal2 0 0 0 0 0 S1
+rlabel metal2 -44 422 -44 422 0 G0
+rlabel metal2 44 422 44 422 0 G1
+rlabel metal1 -129 -449 -129 -449 0 B
+<< end >>
+""")
+    cell.update(bbox=(-139, -459, 139, 459), delta=(139, 459))
+    facts = SimpleNamespace(layers=None, gencells={"native_mos": {
+        "namespace": "provider", "params": ["w", "l", "m", "ng", "guard"]}})
+    monkeypatch.setattr(A5E, "ring_layer_of", lambda _cell: "metal1")
+    monkeypatch.setattr(A5E, "body_tap_direct_m1_layer", lambda *_args: "metal1")
+    monkeypatch.setattr(A5E, "choose_tap", lambda *_args: (-129, -449, 100, True))
+    rules = _compact_geo().rules
+    geo = A5E.Geo(rules, .21, 100, .3, .15)
+    plan = A5E.build_plan([dev], dev["nets"],
+                          {A5E.config_key(dev): cell}, facts, geo, 0)
+    assert not A5E.net_shorts(plan)
+
+
+def test_all_collected_multifinger_rows_leave_the_device_outward():
+    rules = _compact_geo().rules
+    rules['metal_width_um'][3] = .24
+    geo = A5E.Geo(rules, .21, 100, .3, .15)
+    bbox = (-229, -505, 229, 505)
+    groups = [
+        {'net': 'drain', 'y': 0, 'escape_y': 574, 'strapped': True,
+         'labels': [{'x': x, 'y': 0, 'level': 2} for x in (-132, 44)]},
+        {'net': 'source', 'y': 0, 'escape_y': -643, 'strapped': True,
+         'labels': [{'x': x, 'y': 0, 'level': 2} for x in (-44, 132)]},
+        {'net': 'gate', 'y': 422, 'escape_y': -574, 'strapped': True,
+         'labels': [{'x': x, 'y': 422, 'level': 2} for x in (-88, 0, 88)]},
+    ]
+    assert A5E._collect_close_plain_rows(groups, bbox, geo)
+    assert groups[2]['escape_y'] > bbox[3]
+    assert all(group['escape_y'] < bbox[1] for group in groups[:2])
+    assert abs(groups[0]['escape_y'] - groups[1]['escape_y']) >= geo.pitch()
