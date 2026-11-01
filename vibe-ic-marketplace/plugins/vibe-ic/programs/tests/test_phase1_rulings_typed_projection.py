@@ -71,3 +71,19 @@ def test_instance_table_projects_supplies_without_clock_binding(tmp_path):
     assert not {"clock", "clock_pin", "clock_binding"} & set(rows[0])
     assert rows[0]["evidence"]["quote"].startswith("| copy_one |")
     assert l9["no_internal_wires_in_input"] is True
+
+
+def test_return_column_binds_each_power_domain_ground(tmp_path):
+    import l21_doc_supply_rail_synth as supplies
+    source(tmp_path, "# Supplies\n| Rail | Level | Return |\n|---|---|---|\n"
+           "| power_a | 1.4 V | return_a |\n| power_b | 1.2 V | return_b |\n")
+    rails = supplies.derive(tmp_path)["rails"]
+    assert {r["rail"]: r.get("ground_net") for r in rails} == {
+        "power_a": "return_a", "power_b": "return_b"}
+    runner._emit_l19_to_l23_skeletons(tmp_path)
+    assert supplies.main([str(tmp_path), "--apply"]) == 0
+    payload = json.loads((tmp_path / "phase1/generated_docs/L21_POWER_INTENT.json").read_text())
+    rows = payload.get("fields", payload)["power_domains"]
+    assert {r["name"]: r["ground_net"] for r in rows} == {
+        "power_a": "return_a", "power_b": "return_b"}
+    assert all(r["ground_evidence"]["file"].endswith("L9_constraints.md") for r in rows)
