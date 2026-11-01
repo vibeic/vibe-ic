@@ -1096,7 +1096,8 @@ def test_mos_override_keeps_native_passive_generators_available():
     assert facts.gencells['xx_lv_nmos']['source'] == '/override/custom-fet.tcl'
 
 
-def test_device_footprint_wraps_without_changing_device_population(tmp_path, monkeypatch):
+@pytest.mark.parametrize('row_limit', [1000, 400])
+def test_device_footprint_wraps_without_changing_device_population(tmp_path, monkeypatch, row_limit):
     deck = '.subckt blk d g s b\n' + ''.join(
         f'xm{i} d g s b xx_lv_nmos w=1u l=0.5u\n' for i in range(240)) + '.ends\n'
     project = _project(tmp_path, deck)
@@ -1107,11 +1108,195 @@ def test_device_footprint_wraps_without_changing_device_population(tmp_path, mon
         captured.append(plan)
         return plan
     monkeypatch.setattr(A5E, 'build_plan', capture)
-    rc, doc = _run(monkeypatch, project, FakeStage())
+    rc, doc = _run(monkeypatch, project, FakeStage(), '--max-row-width-um', str(row_limit))
     plan = captured[0]
     boxes = [s['box'] for s in plan.device_shapes + plan.shapes]
     width = (max(b[2] for b in boxes) - min(b[0] for b in boxes)) / 100
-    assert width <= 1010, f'physical footprint is still one long row: {width} um'
+    assert width <= row_limit + 10, f'physical footprint is still one long row: {width} um'
     assert doc['blocks']['blk']['devices'] == 240
     assert len(plan.placement_rows) > 1
     assert not A5E.net_shorts(plan)
+
+
+def test_first_rail_reserves_the_selected_high_layer_pin_stack(tmp_path):
+    project = _project(tmp_path, LEGAL_NARROW)
+    stage = FakeStage()
+    stage.host_tmp = tmp_path
+    facts, why = A5E.read_pdk(stage, '/pdk', 'x', '/pdk/x-fet.tcl',
+                             '/pdk/x-drc.tech')
+    assert why == ''
+    facts.deck['metal_width_um'][6] = 1.64
+    facts.deck['metal_space_um'][6] = 1.64
+    facts.deck['via_width_um'][5] = 0.62
+    facts.deck['via_surround_um'][(5, 6)] = 0.32
+    _, ports, devices = A5E.parse_netlist(
+        project / 'phase3/analog/blk/blk.sp')
+    lam, cells = A5E.probe(stage, '/pdk/x.magicrc', devices, facts)
+    geo = A5E.Geo(facts.deck, facts.m1_space_um, lam, 0.30, 0.15)
+    spec = {'ports': {net: {
+        'index': index, 'rail': net == 'd',
+        'level': 6 if net == 'd' else 4,
+        'direction': 'VERTICAL', 'width_lam': 164 if net == 'd' else 30,
+        'cuts': 1, 'lef_layer': 'metal6' if net == 'd' else 'metal4',
+        'lef_type': 'ROUTING', 'use': 'power' if net == 'd' else 'signal',
+    } for index, net in enumerate(ports, 1)}}
+    plan = A5E.build_plan(devices, ports, cells, facts, geo, 48, spec)
+    boxes = [shape['box'] for shape in plan.shapes + plan.device_shapes]
+    bottom = min(box[1] for box in boxes)
+    assert bottom >= 0, f'pin stack crosses the die origin by {-bottom / lam} um'
+    assert len(plan.placement_rows[0]['devices']) == len(devices)
+    assert not A5E.net_shorts(plan)
+
+
+def test_declared_fingers_have_distinct_probe_geometry():
+    plain = {'model': 'unit', 'pars': {'w': 512.0, 'l': 0.5}}
+    folded = {'model': 'unit', 'pars': {**plain['pars'], 'ng': 64.0}}
+    assert A5E.config_key(plain) != A5E.config_key(folded)
+
+
+def test_declared_fingers_use_pdk_conversion_with_spice_units():
+    import shutil
+    tclsh = shutil.which('tclsh')
+    if not tclsh:
+        pytest.skip('Tcl interpreter is unavailable')
+    facts = A5E.PdkFacts()
+    facts.gencells['unit'] = {'namespace': 'pdk',
+                              'params': ['w', 'l', 'm', 'ng', 'guard']}
+    dev = {'model': 'unit', 'pars': {'w': 512.0, 'l': 0.5, 'ng': 64.0}}
+    command = A5E.gencell_call(dev, 'd0', facts)
+    assert 'pdk::unit_convert' in command
+    script = '''
+namespace eval pdk {}
+namespace eval magic {}
+proc pdk::unit_convert {parameters} {
+    if {[dict get $parameters w] ne "512u" || [dict get $parameters l] ne "0.5u"} {
+        error "converter did not receive original SPICE units"
+    }
+    dict set parameters w 8
+    dict set parameters l 0.5
+    return $parameters
+}
+proc magic::gencell {model instance args} {
+    puts [list $model $instance [dict get $args w] [dict get $args l] [dict get $args ng]]
+}
+'''
+    run = subprocess.run([tclsh], input=script + command + '\n',
+                         text=True, capture_output=True, check=True)
+    assert run.stdout.strip() == 'pdk::unit d0 8 0.5 64', run.stderr
+    missing = subprocess.run(
+        [tclsh], input='namespace eval magic {}\nnamespace eval pdk {}\n'
+        + 'if {[catch {' + command + '} message]} {puts $message}\n',
+        text=True, capture_output=True, check=True)
+    assert 'PDK conversion is absent for declared fingers' in missing.stdout
+
+
+def test_unsupported_declared_fingers_are_refused():
+    facts = A5E.PdkFacts()
+    facts.gencells['unit'] = {'namespace': 'pdk', 'params': ['w', 'l', 'm']}
+    dev = {'model': 'unit', 'pars': {'w': 4.0, 'l': 0.5, 'nf': 2.0}}
+    with pytest.raises(A5E.Refusal, match='does not declare nf'):
+        A5E.gencell_call(dev, 'd0', facts)
+
+
+def test_power_pin_stack_clears_each_painted_layer_without_colliding_fallback():
+    rules = {
+        'metal_space_um': {n: .21 for n in range(1, 8)},
+        'metal_width_um': {n: .2 for n in range(1, 8)},
+        'metal_area_um2': {2: .144, 3: .144},
+        'via_width_um': {n: .2 for n in range(1, 7)},
+        'via_space_um': {n: .21 for n in range(1, 7)},
+        'via_surround_um': {}, 'via_surround_dir_um': {},
+        'metal_width_spacing_um': {},
+    }
+    rules['metal_width_um'][6] = 1.64
+    rules['metal_space_um'][6] = 1.64
+    geo = A5E.Geo(rules, .21, 100, .3, .15)
+    plan = A5E.Plan()
+    sites = A5E.Sites([], geo)
+    plan.sites = sites
+    plan.paint('vss', 'metal2', 0, 85, 2000, 115)
+    plan.paint('other_rail', 'metal2', 0, 185, 2000, 215)
+    plan.paint('signal', 'metal6', 400, 500, 700, 600)
+    pin_spec = {'ports': {'vss': {
+        'index': 1, 'rail': True, 'level': 6, 'width_lam': 164,
+        'cuts': 1, 'lef_layer': 'metal6', 'lef_type': 'ROUTING', 'use': 'ground',
+    }}}
+    A5E._draw_pins(plan, ['vss'], {'vss': (0, 85, 2000, 115)},
+                   pin_spec, geo, sites, 1000, 69)
+    assert not A5E.net_shorts(plan)
+    assert not any(row['quantity'] == 'pin_site_clearance' for row in plan.deviations)
+    pin = plan.pins[0]
+    assert sites.clear(pin['strip_box'], ['metal6'], None, 'vss')
+
+
+def test_power_pin_without_a_clear_position_is_refused_not_drawn():
+    plan = A5E.Plan()
+
+    class NoClear:
+        def clear(self, *_args):
+            return False
+
+    geo = SimpleNamespace(
+        via_pad={2: 14}, long_half={2: 2}, wire={2: 30, 3: 30},
+        space={2: 4, 3: 4}, default_space=4,
+        rules_via_space=lambda _k: 1,
+    )
+    spec = {'ports': {'vss': {
+        'index': 1, 'rail': True, 'level': 3, 'width_lam': 30,
+        'cuts': 1, 'lef_layer': 'metal3', 'lef_type': 'ROUTING', 'use': 'ground',
+    }}}
+    with pytest.raises(A5E.Refusal, match='pin_site_clearance'):
+        A5E._draw_pins(plan, ['vss'], {'vss': (0, 100, 1000, 130)},
+                       spec, geo, NoClear(), 1000, 69)
+    assert plan.shapes == []
+
+
+@pytest.mark.parametrize('block_extension', [False, True])
+def test_signal_pin_can_extend_its_local_rail_only_through_clear_metal2(block_extension):
+    rules = {
+        'metal_space_um': {n: .21 for n in range(1, 5)},
+        'metal_width_um': {n: .2 for n in range(1, 5)},
+        'metal_area_um2': {2: .144, 3: .144},
+        'via_width_um': {n: .2 for n in range(1, 4)},
+        'via_space_um': {n: .21 for n in range(1, 4)},
+        'via_surround_um': {}, 'via_surround_dir_um': {},
+        'metal_width_spacing_um': {},
+    }
+    geo = A5E.Geo(rules, .21, 100, .3, .15)
+    plan = A5E.Plan()
+    sites = A5E.Sites([], geo)
+    plan.sites = sites
+    plan.paint('vref', 'metal2', 200, 285, 600, 315)
+    plan.paint('power', 'metal4', 0, 0, 1000, 1000)
+    plan.paint('extent', 'metal4', 2900, 800, 3000, 900)
+    if block_extension:
+        plan.paint('other', 'metal2', 620, 285, 3000, 315)
+    spec = {'ports': {'vref': {
+        'index': 1, 'rail': False, 'level': 4, 'width_lam': 30,
+        'cuts': 1, 'use': 'signal',
+    }}}
+    def draw():
+        A5E._draw_pins(plan, ['vref'], {'vref': (200, 285, 600, 315)},
+                       spec, geo, sites, 1000, 69)
+    if block_extension:
+        with pytest.raises(A5E.Refusal, match='pin_site_clearance'):
+            draw()
+        assert plan.pins == []
+    else:
+        draw()
+        assert len(plan.pins) == 1
+        assert plan.pins[0]['strip_box'][0] > 1000
+        assert not A5E.net_shorts(plan)
+        assert any(row['net'] == 'vref' and row['layer'] == 'metal2'
+                   and row['box'][2] > 1000 for row in plan.shapes)
+
+
+@pytest.mark.parametrize('width', ['0', '-1', 'nan', 'inf'])
+def test_invalid_row_width_is_refused_before_native_work(tmp_path, monkeypatch, capsys, width):
+    project = _project(tmp_path, LEGAL_NARROW)
+    stage = FakeStage()
+    with pytest.raises(SystemExit) as error:
+        _run(monkeypatch, project, stage, '--max-row-width-um', width)
+    assert error.value.code == 2
+    assert 'must be finite and positive' in capsys.readouterr().err
+    assert stage.commands == []

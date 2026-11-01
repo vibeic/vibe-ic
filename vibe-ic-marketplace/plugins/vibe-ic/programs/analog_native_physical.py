@@ -228,7 +228,9 @@ def _pv(project: Path, name: str, container: str, image: str, pdk: str,
     import analog_pdk_availability as availability
 
     bdir, _ = _paths(project, name)
-    resolved = availability.resolve_pdk(pdk or None, project=str(project),
+    root = (cfg.get("pdk_root") if container == "host" else None)
+    resolved = availability.resolve_pdk(pdk or None, project=None if root else str(project),
+                                        pdks_root=str(root or availability.DEFAULT_PDKS_ROOT),
                                         container=None if container == "host" else container)
     if not resolved.get("available"):
         return _result("NOT_MEASURED", resolved.get("reason", "native PDK unavailable"))

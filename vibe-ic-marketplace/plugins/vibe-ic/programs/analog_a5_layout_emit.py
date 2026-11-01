@@ -752,7 +752,8 @@ def parse_cell(text: str, layers: Optional["_lim.LayerIdentity"] = None
 
 def config_key(dev: dict) -> tuple:
     p = dev["pars"]
-    return (dev["model"], p.get("w"), p.get("l"), int(p.get("m", 1) or 1))
+    return (dev["model"], p.get("w"), p.get("l"), int(p.get("m", 1) or 1),
+            p.get("ng", 1), p.get("nf", 1))
 
 
 def gencell_call(dev: dict, inst: str, facts: PdkFacts) -> str:
@@ -761,14 +762,32 @@ def gencell_call(dev: dict, inst: str, facts: PdkFacts) -> str:
     own, read from its `_defaults` proc."""
     rec = facts.gencells[dev["model"]]
     accepted = set(rec["params"])
+    fingers = {}
+    for key in ("ng", "nf"):
+        count = dev["pars"].get(key, 1)
+        if not math.isfinite(count) or count < 1 or int(count) != count:
+            raise Refusal(f"{dev['model']}: invalid {key} finger count {count}")
+        if count > 1:
+            if key not in accepted:
+                raise Refusal(f"{dev['model']}: PDK gencell does not declare {key}")
+            fingers[key] = int(count)
     args = []
     for key in ("w", "l"):
         if key in accepted and dev["pars"].get(key) is not None:
-            args += [key, _fmt(dev["pars"][key])]
+            args += [key, _fmt(dev["pars"][key]) + ("u" if fingers else "")]
     if "m" in accepted:
         args += ["m", str(int(dev["pars"].get("m", 1) or 1))]
     if "guard" in accepted:
         args += ["guard", "1"]
+    if fingers:
+        for key, count in fingers.items():
+            args += [key, str(count)]
+        converter = f"{rec['namespace']}::{dev['model']}_convert"
+        # The PDK owns whether source width is total or per finger.
+        return (f"if {{![llength [info procs {converter}]]}} {{error "
+                f"{{PDK conversion is absent for declared fingers: {converter}}}}}\n"
+                f"magic::gencell {rec['namespace']}::{dev['model']} {inst} "
+                f"{{*}}[{converter} [list {' '.join(args)}]]")
     return (f"magic::gencell {rec['namespace']}::{dev['model']} {inst} "
             + " ".join(args))
 
@@ -2369,9 +2388,9 @@ def _terminal_access_width(group: dict, groups: Sequence[dict], geo: Geo) -> int
 
 def _collect_close_plain_rows(groups: List[dict], bbox: Sequence[int],
                               geo: Geo) -> bool:
-    """Move dense singleton terminal rows outside before collecting on M2."""
+    """Collect dense terminal rows outside, away from their contact row."""
     plain = [g for g in groups if not g.get("body_tap")]
-    if not plain or not any(not g["strapped"] for g in plain):
+    if not plain:
         return False
     route_space = geo.metal_space("metal3")
     for rule in geo.rules.get("metal_width_spacing_um", {}).get(3, []):
@@ -2386,7 +2405,7 @@ def _collect_close_plain_rows(groups: List[dict], bbox: Sequence[int],
         for g in plain for other in groups)
     tight_islands = any(_terminal_needs_compact_access(g, plain, geo)
                         for g in plain)
-    if not (close_rows or tight_islands):
+    if not (close_rows or tight_islands or any(g["strapped"] for g in plain)):
         return False
     split = (min(g["y"] for g in plain) + max(g["y"] for g in plain)) / 2
     below = above = 0
@@ -2703,7 +2722,12 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     # row rails cross trunks without contact except at their own via stack.
     bus_x = {net: (i + 1) * pitch for i, net in enumerate(shared)}
     margin = (len(shared) + 3) * pitch if shared else 0
-    y = 0
+    # The complete pin stack can extend below the first low-metal rail.
+    y = max([0] + [-box[1] - pitch
+                  for spec in (pin_spec or {}).get("ports", {}).values()
+                  for _, box in _pin_stack_boxes(
+                      0, 0, 2, spec["level"], geo,
+                      max(1, spec["cuts"]))[0]])
     row_rails = []
     for ri, (row, ns) in enumerate(zip(placement_rows, row_nets)):
         rails = {net: y + pitch * (i + 1) for i, net in enumerate(ns)}
@@ -3314,20 +3338,28 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
                 "width_lam": strip[3] - strip[1],
             })
             continue
-        layers = ([f"metal{k}" for k in range(2, level + 1)]
-                  + [f"via{k}" for k in range(2, level)])
         stepv = max(1, pitch // 4)
         cands = list(range(rx1, rx2 + 1, stepv))
+        if not spec["rail"]:
+            edge = max([rx2] + [r["box"][2] for r in plan.shapes]
+                       + [r["box"][2] for r in plan.device_shapes])
+            cands.extend(range(rx2 + stepv, edge + 1, stepv))
         chosen = None
         for x in cands:
             paint, bars = _pin_stack_boxes(x, y, 2, level, geo, cuts)
-            ext = (min(b[0] for b in bars.values()),
-                   min(b[1] for b in bars.values()),
-                   max(b[2] for b in bars.values()),
-                   max(b[3] for b in bars.values()))
-            if ext[0] < rx1 or ext[2] > rx2:
+            connection = None
+            if not spec["rail"] and bars[2][2] > rx2:
+                hw2 = max(geo.wire[2] // 2, 1)
+                connection = (rx2 - hw2, y - hw2, bars[2][2], y + hw2)
+            # Only metal2 attaches to this rail; upper planes clear independently.
+            if (min(box[0] for _, box in paint) < 0
+                    or bars[2][0] < rx1
+                    or (bars[2][2] > rx2 and connection is None)):
                 continue
-            if not sites.clear(ext, layers, None, net):
+            if connection is not None and not sites.clear(connection, ["metal2"], None, net):
+                continue
+            if any(not sites.clear(box, [layer], None, net)
+                   for layer, box in paint):
                 continue
             top = bars[level]
             if spec["rail"]:
@@ -3339,29 +3371,17 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
                 near = [f"metal{level}"]
             if not sites.clear(strip, near, None, net):
                 continue
-            chosen = (x, paint, bars, strip)
+            chosen = (x, paint, bars, strip, connection)
             break
         if chosen is None:
-            if not spec["rail"]:
-                raise Refusal(
-                    f"pin_site_clearance: no position along the {net} rail "
-                    f"seats its metal{level} pin and via stack clear of "
-                    "every other conductor; refusing to emit a cross-net "
-                    "pin geometry")
-            # A power stripe is intentionally full-height and is allowed to
-            # span its own macro geometry.  Preserve the existing rail
-            # shortfall record; the non-rail fallback above is the unsafe
-            # case that can join a different port's metal2 rail.
-            x = rx1 + (rx2 - rx1) // 4
-            paint, bars = _pin_stack_boxes(x, y, 2, level, geo, cuts)
-            top = bars[level]
-            strip = (x - half, 0, x + half, top_y)
-            chosen = (x, paint, bars, strip)
-            plan.deviate({"name": f"port {net}"}, "pin_site_clearance", 1, 0,
-                         f"no position along the {net} rail seats its "
-                         f"metal{level} pin and via stack clear of every "
-                         "other conductor; power stripe drawn and recorded")
-        x, paint, bars, strip = chosen
+            raise Refusal(
+                f"pin_site_clearance: no position along the {net} rail "
+                f"seats its metal{level} pin and via stack clear of "
+                "every other conductor; refusing to emit a cross-net "
+                "pin geometry")
+        x, paint, bars, strip, connection = chosen
+        if connection is not None:
+            plan.paint(net, "metal2", *connection)
         for layer, b in paint:
             plan.paint(net, layer, *b)
         plan.paint(net, f"metal{level}", *strip)
@@ -3836,7 +3856,9 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
         snapshot = bdir / "a5_stdcell_pg.lef"
         snapshot.write_text(facts.cell_lef_text, encoding="utf-8")
         pins_basis["core_pg"]["snapshot"] = str(snapshot.relative_to(project))
-    plan = build_plan(devs, ports, cells, facts, geo, tap_clear, pin_spec)
+    report["max_row_width_um"] = args.max_row_width_um
+    plan = build_plan(devs, ports, cells, facts, geo, tap_clear, pin_spec,
+                      max_row_width_um=args.max_row_width_um)
     report["placement_rows"] = plan.placement_rows
     clearance_deviations(plan, geo, devs)
     # A GEOMETRY THE PDK'S GENCELL CLAMPED. Recorded like every other
@@ -4164,8 +4186,11 @@ def main(argv: Optional[List[str]] = None) -> int:
                     default=DEFAULT_WIRE_W_UM)
     ap.add_argument("--via-pad-half-um", type=float,
                     default=DEFAULT_VIA_PAD_HALF_UM)
+    ap.add_argument("--max-row-width-um", type=float, default=1000.0)
     ap.add_argument("--json")
     args = ap.parse_args(argv)
+    if not math.isfinite(args.max_row_width_um) or args.max_row_width_um <= 0:
+        ap.error("--max-row-width-um must be finite and positive")
 
     project = args.project_dir.resolve()
     blocks = list(args.block) or list(load_block_list(project) or [])
