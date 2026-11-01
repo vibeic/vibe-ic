@@ -110,65 +110,49 @@ def test_all_nineteen_registry_rows_name_the_actual_native_owner():
         "analog_native_flow"] * 19
 
 
-def _a18_options(root, output, evidence):
-    return {"features": {"digital_physical": False}, "config": {"analog_top": {
-        "implementation_script": str(root / "input/a18.tcl"),
-        "outputs": [str(output), str(evidence)], "evidence": str(evidence)}}}
-
-
 def test_a18_preserves_native_component_fail_and_reason(tmp_path):
-    root = project(tmp_path)
-    script = root / "input/a18.tcl"
-    script.write_text("puts A18\n")
-    output, evidence = root / "top.gds", root / "a18.json"
-    output.write_bytes(b"native-gds")
-    evidence.write_text(json.dumps({"component_status": "FAIL",
-                                    "reason": "native LVS mismatch"}))
-    options = _a18_options(root, output, evidence)
-    run = lambda *a, **kw: {"returncode": 0, "missing_outputs": [], "outputs": {}}
-    result = native._views("A18", root, {"name": "cell_alpha"}, options, run)
+    from test_analog_macro_top import declaration, dispatch
+    declaration(tmp_path)
+    result, _, _ = dispatch(tmp_path, status="FAIL")
     assert result["status"] == "FAIL"
-    assert result["detail"] == "native LVS mismatch"
-    assert result["native_evidence"]["component_status"] == "FAIL"
+    assert result["detail"] == "native test result"
 
 
 def test_a18_accepts_native_component_pass_with_required_outputs(tmp_path):
-    root = project(tmp_path)
-    script = root / "input/a18.tcl"
-    script.write_text("puts A18\n")
-    output, evidence = root / "top.gds", root / "a18.json"
-    output.write_bytes(b"native-gds")
-    evidence.write_text(json.dumps({"component_status": "PASS"}))
-    options = _a18_options(root, output, evidence)
-    run = lambda *a, **kw: {"returncode": 0, "missing_outputs": [], "outputs": {}}
-    result = native._views("A18", root, {"name": "cell_alpha"}, options, run)
+    from test_analog_macro_top import declaration, dispatch
+    declaration(tmp_path)
+    result, _, _ = dispatch(tmp_path)
     assert result["status"] == "PASS", result
+    assert result["metric_acceptance"]["status"] == "NOT_MEASURED"
 
 
-def test_a18_rejects_pass_without_declared_outputs(tmp_path):
-    root = project(tmp_path)
-    script = root / "input/a18.tcl"
-    script.write_text("puts A18\n")
-    evidence = root / "a18.json"
-    evidence.write_text(json.dumps({"component_status": "PASS"}))
-    options = _a18_options(root, root / "top.gds", evidence)
-    options["config"]["analog_top"]["outputs"] = []
-    run = lambda *a, **kw: {"returncode": 0, "missing_outputs": [], "outputs": {}}
-    result = native._views("A18", root, {"name": "cell_alpha"}, options, run)
+def test_a18_rejects_pass_with_changed_declared_outputs(tmp_path):
+    from test_analog_macro_top import declaration, dispatch
+    declaration(tmp_path)
+    result, _, _ = dispatch(tmp_path, tamper=True)
     assert result["status"] == "FAIL"
 
 
 def test_a18_non_object_receipt_is_not_measured(tmp_path):
-    root = project(tmp_path)
-    script = root / "input/a18.tcl"
-    script.write_text("puts A18\n")
-    output, evidence = root / "top.gds", root / "a18.json"
-    output.write_bytes(b"native-gds")
-    evidence.write_text("[]")
-    options = _a18_options(root, output, evidence)
-    run = lambda *a, **kw: {"returncode": 0, "missing_outputs": [], "outputs": {}}
-    result = native._views("A18", root, {"name": "cell_alpha"}, options, run)
+    from test_analog_macro_top import declaration, put
+    declaration(tmp_path)
+    def run(*args, **kwargs):
+        put(tmp_path, "reports/phase3/analog_macro_top_run.json", "[]")
+        return {"returncode": 0, "missing_outputs": [], "outputs": {}}
+    result = native._views("A18", tmp_path, {"name": "neutral"},
+                           {"features": {}, "config": {}}, run)
     assert result["status"] == "NOT_MEASURED"
+
+
+def test_a18_external_magic_script_does_not_replace_missing_declaration(tmp_path):
+    root = project(tmp_path)
+    script = root / "input/legacy.tcl"
+    script.write_text("puts legacy")
+    result = native._views("A18", root, {"name": "cell_alpha"},
+        {"features": {}, "config": {"analog_top": {"implementation_script": str(script)}}},
+        lambda *a, **k: pytest.fail("undeclared top reached native tool"))
+    assert result["status"] == "NOT_MEASURED"
+    assert result["reason"] == "A18_DECLARATION_ABSENT"
 
 
 def test_explicit_mixed_inventory_cannot_omit_selected_analog_use():

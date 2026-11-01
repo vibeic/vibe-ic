@@ -400,51 +400,51 @@ def _views(step, project, block, options, run):
             return {"status": "NOT_APPLICABLE", "detail":
                     "The declared mixed-signal digital top owns pad/power integration.",
                     "outputs": []}
-        settings = options["config"].get("analog_top", {})
-        script = Path(settings.get("implementation_script", "__absent_top_script__"))
-        script = script if script.is_absolute() else project / script
-        if not script.is_file():
-            return {"status": "NOT_MEASURED", "detail":
-                    "Pure-analog top implementation script is absent", "outputs": []}
-        magicrc = settings.get("magicrc")
-        command = ["-dnull", "-noconsole"] + (["-rcfile", str(magicrc)] if magicrc else [])
-        limits_path = project / "requirements/analog_top_route/analog_sensitive_route_constraints.json"
-        limits_before = _sha(limits_path) if limits_path.is_file() else None
-        script_before = _sha(script)
-        result = run("@magic", command, cwd=script.parent,
-                     input_text=script.read_text() + "\nquit -noprompt\n",
-                     outputs=settings.get("outputs", []))
-        receipt = Path(settings.get("evidence", "__absent_a18_evidence__"))
-        receipt = receipt if receipt.is_absolute() else project / receipt
+        import analog_macro_top_gen as top
+        from analog_macro_top_run import RUN_RECORD
+        if "a18_result" in options:
+            # A18 belongs to the chip. Block rows share one native execution.
+            import copy
+            return copy.deepcopy(options["a18_result"])
+        try:
+            generated = top.generate(project)
+        except (OSError, ValueError, TypeError, KeyError, top.Refusal) as exc:
+            result = {"status": "NOT_MEASURED", "detail": str(exc), "outputs": [],
+                      "reason": getattr(exc, "code", "A18_DECLARATION_INVALID")}
+            write_json(project / top.RECORD, {"verdict": "REFUSED", **result})
+            options["a18_result"] = result
+            return result
+        receipt = project / RUN_RECORD
+        receipt.unlink(missing_ok=True)
+        execution = run("analog_macro_top_run.py", [str(project)], outputs=[str(receipt)])
         evidence = _read(receipt, {})
         if not isinstance(evidence, dict):
             evidence = {}
+        outputs = list(generated["outputs"]) + [str(project / top.RECORD), str(receipt)]
+        native_outputs = evidence.get("outputs", {})
+        outputs += list(native_outputs) if isinstance(native_outputs, dict) else []
         status = evidence.get("component_status", "NOT_MEASURED")
         if status not in STATUSES:
             status = "NOT_MEASURED"
-        detail = (evidence.get("reason") or evidence.get("detail") or
-                  f"Native A18 component reported {status}")
-        if status != "FAIL" and result["returncode"] != 0:
+        if execution["returncode"] or execution["missing_outputs"]:
             status = "FAIL"
-            detail = f"Native pure-analog top implementation exited {result['returncode']}"
-        elif status != "FAIL" and not settings.get("outputs"):
+        if any(not Path(path).is_file() or _sha(path) != digest
+               for path, digest in generated["inputs"].items()):
             status = "FAIL"
-            detail = "Native pure-analog top implementation declares no outputs"
-        elif status != "FAIL" and result["missing_outputs"]:
+            evidence["reason"] = "A18_INPUT_CHANGED_DURING_EXECUTION"
+        if status == "PASS" and (not native_outputs or any(
+                not Path(path).is_file() or _sha(path) != digest
+                for path, digest in native_outputs.items())):
             status = "FAIL"
-            detail = "Native pure-analog top implementation omitted declared outputs"
-        acceptance = _a18_metrics(project, name, settings, evidence, result, limits_before)
-        if _sha(script) != script_before:
-            acceptance = {"status": "NOT_MEASURED", "metrics": {}, "input_views": {},
-                          "reason": "A18_PRODUCER_CHANGED_DURING_EXECUTION"}
-        acceptance["input_views"][str(script)] = script_before
-        if acceptance["status"] == "FAIL" and status != "FAIL":
-            status, detail = "FAIL", "A18 native measurement misses declared expectation"
-        return {"status": status, "detail": detail,
-                "outputs": settings.get("outputs", []), "executions": [result],
-                "native_evidence": evidence, "metric_acceptance": acceptance,
-                "native_inputs": {path: {"path": path, "sha256": digest}
-                                  for path, digest in acceptance["input_views"].items()}}
+        result = {"status": status, "detail": evidence.get("detail") or evidence.get("reason")
+                  or "A18 native implementation receipt absent", "outputs": outputs,
+                  "executions": [execution], "native_evidence": evidence,
+                  "metric_acceptance": {"status": "NOT_MEASURED", "metrics": {},
+                      "reason": "A18_MACRO_TOP_SIGNOFF_NOT_MEASURED"},
+                  "native_inputs": {path: {"path": path, "sha256": digest}
+                                    for path, digest in generated["inputs"].items()}}
+        options["a18_result"] = result
+        return result
     if step == "A19":
         prior = options["previous_results"]
         rows = [{"step": sid, **prior.get(sid, {}).get(name, {
@@ -685,10 +685,13 @@ def run_window(project, args, *, features=None):
 
     state_lock = threading.Lock()
 
+    window_steps = list(STEPS[STEPS.index(entry):STEPS.index(exit_) + 1])
+    selected_steps = [s for s in window_steps if s < "A18"] if "A18" in window_steps else window_steps
+
     def execute_block(block):
         # A long simulation in one block does not hold another block's ready
         # layout, extraction or delivery work behind a global step barrier.
-        for step in STEPS[STEPS.index(entry):STEPS.index(exit_) + 1]:
+        for step in selected_steps:
             current = execute_one(step, block)
             with state_lock:
                 rows.append(current)
@@ -701,6 +704,14 @@ def run_window(project, args, *, features=None):
 
     with ThreadPoolExecutor(max_workers=options["workers"]) as pool:
         list(pool.map(execute_block, blocks))
+        if "A18" in window_steps:
+            # Global chip assembly must not race another block's A17 writer.
+            selected_steps = ["A18"]
+            for block in blocks:
+                execute_block(block)
+            if "A19" in window_steps:
+                selected_steps = ["A19"]
+                list(pool.map(execute_block, blocks))
     report["finished_at"] = datetime.now(timezone.utc).isoformat()
     write_json(attempt / "result.json", report)
     write_json(parent / "status.json", report)
@@ -1325,6 +1336,9 @@ def consume_default_row_completion(project, context, component):
             "delivery_accepted": False, "qualification": "NOT_MEASURED"}
     if component.get("component_status") == "FAIL":
         return {**base, "default_row_status": "FAIL", "reason": component.get("reason")}
+    if any(row.get("native_evidence", {}).get("producer") == "analog_macro_top_run"
+           for row in component.get("native_results", {}).get("steps", [])):
+        return {**base, "reason": "A18_MACRO_TOP_SIGNOFF_NOT_MEASURED"}
     try:
         import flow109
         import flow109_admission as admission
