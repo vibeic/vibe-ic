@@ -21,6 +21,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import analog_pdk_availability as APA            # noqa: E402
 import analog_real_corner_sweep as ARS           # noqa: E402
@@ -159,6 +161,66 @@ def test_rung3_no_stage_no_install_is_substitution(tmp_path):
                         lister=_make_lister(_INSTALLED))
     assert r["available"] is False
     assert r["source"] is None
+
+
+@pytest.mark.parametrize("staged_axes", [(), ("drc",), ("lvs",), ("drc", "lvs")])
+def test_staged_models_resolve_each_signoff_deck_independently(tmp_path, staged_axes):
+    project = tmp_path / "case"
+    model = project / "input/pdk/models/native.lib"
+    model.parent.mkdir(parents=True)
+    model.write_text(".subckt fixture_n d g s b\n.ends\n")
+    root = tmp_path / "installed"
+    tech = root / "fixture180/libs.tech"
+    (tech / "ngspice/models").mkdir(parents=True)
+    installed = {}
+    staged = {}
+    for axis in ("drc", "lvs"):
+        installed[axis] = tech / f"klayout/tech/{axis}/fixture180.{axis}"
+        installed[axis].parent.mkdir(parents=True)
+        installed[axis].write_text("* installed signoff fixture\n")
+        if axis in staged_axes:
+            staged[axis] = project / f"input/pdk/klayout/tech/{axis}/case.{axis}"
+            staged[axis].parent.mkdir(parents=True)
+            staged[axis].write_text("* staged signoff fixture\n")
+    result = APA.resolve_pdk("fixture180", project=project, pdks_root=str(root))
+    assert result["spice_libs"] == [str(model)]
+    for axis in ("drc", "lvs"):
+        assert result[axis + "_deck"] == str(staged.get(axis, installed[axis]))
+
+
+def test_staged_deck_without_staged_models_overrides_only_its_asset(tmp_path):
+    project = tmp_path / "case"
+    deck = project / "input/pdk/klayout/case.drc"
+    deck.parent.mkdir(parents=True)
+    deck.write_text("report('fixture')\n")
+    result = APA.resolve_pdk("ihp-sg13g2", project=project, lister=_make_lister(_INSTALLED))
+    assert result["available"]
+    assert result["drc_deck"] == str(deck)
+    assert result["lvs_deck"] is None
+    assert "lvs_deck" in result["missing_assets"]
+    assert "lvs_deck" in result["reason"]
+
+
+def test_staged_models_do_not_invent_truly_absent_signoff_decks(tmp_path):
+    _stage_custom_pdk(tmp_path, with_decks=False)
+    result = APA.resolve_pdk("AbsentFixture180", project=tmp_path, lister=_make_lister({}))
+    assert result["available"]
+    assert result["drc_deck"] is None and result["lvs_deck"] is None
+    assert result["missing_assets"] == ["drc_deck", "lvs_deck"]
+    assert all(axis in result["reason"] for axis in result["missing_assets"])
+
+
+def test_staged_model_keeps_installed_signoff_on_repository_pdk_axis(tmp_path):
+    from _hostpaths import require_repo
+    # Read the actual consumer-owned axis, then use its deepest supported path.
+    source = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+                          "pdk_analog_completeness_check.py")
+    assert "klayout/tech/lvs/*.lvs" in source.read_text()
+    _stage_custom_pdk(tmp_path, with_decks=False)
+    from test_issue2062_the_analog_front_door_tells_the_truth import _TREE
+    result = APA.resolve_pdk("ihp-sg13g2", project=tmp_path, lister=_make_lister(_TREE))
+    assert result["lvs_deck"].endswith("/klayout/tech/lvs/sg13g2.lvs")
+    assert result["asset_sources"]["lvs_deck"] == "container_installed"
 
 
 # ── B. emit-side no-leak (pdk_substitution_header) ─────────────────────────

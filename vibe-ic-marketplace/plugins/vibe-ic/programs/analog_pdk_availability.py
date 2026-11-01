@@ -606,8 +606,39 @@ def resolve_pdk(target: Optional[str], project=None,
     # match against an installed directory.
     if project is not None:
         r1 = _resolve_project_custom_pdk(Path(project), target)
-        if r1["available"]:
+        axes = ("drc_deck", "lvs_deck")
+        if r1["available"] and all(r1.get(axis) for axis in axes):
             return r1
+        # Models and physical signoff decks have independent ownership. A
+        # staged simulation library must not hide the declared family's
+        # installed decks; conversely, a staged deck wins only its own axis.
+        installed = resolve_pdk(target, pdks_root=pdks_root,
+                                container=container, lister=lister)
+        res = dict(installed)
+        sources = {axis: "container_installed" if installed.get(axis) else None
+                   for axis in ("spice_libs", *axes)}
+        if r1["available"]:
+            for key in ("available", "source", "rung", "spice_libs", "spice_lib", "mc_libs"):
+                res[key] = r1[key]
+            res["reason"] = r1["reason"]
+            sources["spice_libs"] = "project_custom_pdk"
+            if not res.get("family"):
+                res["family"] = r1["family"]
+        for axis in axes:
+            res[axis] = r1.get(axis) or installed.get(axis)
+            if r1.get(axis):
+                res[axis + "_candidates"] = [r1[axis]]
+                sources[axis] = "project_custom_pdk"
+        tech = dict(res.get("tech_present") or {})
+        if r1["available"]:
+            tech.update(ngspice=True, mc=bool(r1["mc_libs"]))
+        tech.update(svrf_drc=bool(res.get("drc_deck")), lvs=bool(res.get("lvs_deck")))
+        res["tech_present"] = tech
+        res["asset_sources"] = sources
+        res["missing_assets"] = [axis for axis in axes if not res.get(axis)]
+        if res["missing_assets"]:
+            res["reason"] += "; native signoff assets absent: " + ", ".join(res["missing_assets"])
+        return res
 
     if not tnorm:
         # Nothing staged AND nothing declared. Distinct reason from the
