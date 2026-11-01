@@ -445,8 +445,14 @@ def _gls_edge(declared, transcripts):
 
 def test_step_29_runs_every_corner_sdf_through_the_custom_step(tmp_path, monkeypatch):
     project, root, declared = _gls_project(tmp_path)
+    original_manifest = sgs.tool_arm_manifest
+    def current_state_manifest(*args, **kwargs):
+        assert kwargs.get('sta_step_dir') == postroute.stapostpnr_state(project)[0]
+        return original_manifest(*args, **kwargs)
+    monkeypatch.setattr(sgs, 'tool_arm_manifest', current_state_manifest)
     fake, calls = _gls_edge(declared, lambda corner: VVP_PASS)
     monkeypatch.setattr(contract.subprocess, 'run', fake)
+    monkeypatch.setattr(contract, 'run_container', fake)
     monkeypatch.setattr(contract, 'image_capability', lambda *_: {})
     monkeypatch.setattr(contract._ce, 'no_container_route', lambda: False)
     judged = postroute.gate_level_sim(project, 'spm', 'img', root, 'x',
