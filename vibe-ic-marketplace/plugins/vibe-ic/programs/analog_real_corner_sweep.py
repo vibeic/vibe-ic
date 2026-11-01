@@ -1737,6 +1737,7 @@ _SPEC_NAME_ALIASES = {
     # ── generic analog quantities (every block type, not just regulators) ──
     "vref":    {"vref", "vreference", "referencevoltage"},
     "vdd":     {"vdd", "vddcore", "vcore", "corevoltage", "vcc"},
+    "capacitance": {"capacitance"},
     # ── converter / modulator family ──
     # Every entry below is standard data-converter spec vocabulary; no design
     # name appears. Without these the table's whole vocabulary was regulator-

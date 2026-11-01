@@ -481,6 +481,19 @@ _POWER_TO_UW = {
 _POWER_TO_W = {unit: factor * 1e-6
                for unit, factor in _POWER_TO_UW.items()}
 
+
+def _valid_leakage_power(value: float, topology: Dict) -> bool:
+    """Measured zero requires a nonempty capacitor/resistor-only inventory."""
+    if not math.isfinite(value) or value < 0:
+        return False
+    if value > 0:
+        return True
+    devices = topology.get("devices")
+    return (isinstance(devices, list) and bool(devices)
+            and all(isinstance(device, dict)
+                    and device.get("role") in ("cap", "res")
+                    for device in devices))
+
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$", re.IGNORECASE)
 _MAG_USE_RE = re.compile(r"(?im)^\s*use\s+(\S+)")
 _INVALID_OP_RE = re.compile(r"(?m)^\s*;;RESIDUAL_FAIL\b")
@@ -994,7 +1007,7 @@ def _native_measurement_produce(project: Path, block: str, container: str,
                           f"result; see {ng_log.name}")
         power_w = float(pwr.group(1))
         measured_current = float(idd.group(1)) if idd is not None else None
-        if not math.isfinite(power_w) or power_w <= 0:
+        if not _valid_leakage_power(power_w, topology):
             return None, f"native pwr result is not finite and positive: {power_w!r}"
 
         rec: Dict[str, object] = {
@@ -1242,14 +1255,18 @@ def load_native_measurement(project: Path, block: str, gds: Path,
     if rec.get("measurement_basis") is not None and not source_based:
         return None, "unsupported native measurement basis"
     try:
-        value = float(rec["value"])
+        raw_value = rec["value"]
+        if isinstance(raw_value, bool):
+            raise ValueError("boolean is not a measured power value")
+        value = float(raw_value)
     except (KeyError, TypeError, ValueError):
         return None, f"{_A8_MEASUREMENT} has no numeric measured value"
     unit = str(rec.get("unit") or "").strip().lower()
     if unit not in _POWER_TO_UW:
         return None, f"unsupported measured power unit {rec.get('unit')!r}"
-    if not (value > 0.0) or not math.isfinite(value):
+    if not _valid_leakage_power(value, topology):
         return None, (f"measured cell_leakage_power must be finite and > 0; "
+                      f"zero requires a capacitor/resistor-only inventory; "
                       f"got {rec.get('value')!r} {rec.get('unit')!r}")
 
     required = (
@@ -1397,8 +1414,11 @@ def load_native_measurement(project: Path, block: str, gds: Path,
             return None, ("native pwr and I(VDD) receipts disagree")
         native_power_w = idd_power_w
     record_power_w = value * _POWER_TO_W[unit]
-    if native_power_w is None or not math.isclose(
-            record_power_w, native_power_w, rel_tol=1e-6, abs_tol=1e-18):
+    if (native_power_w is None
+            or not _valid_leakage_power(native_power_w, topology)
+            or ((record_power_w == 0.0) != (native_power_w == 0.0))
+            or not math.isclose(
+                record_power_w, native_power_w, rel_tol=1e-6, abs_tol=1e-18)):
         return None, ("measured value does not match native pwr/ I(VDD) "
                       "receipt")
 

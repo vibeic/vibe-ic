@@ -1050,6 +1050,62 @@ _SETTLING_TC_REQUIRED_EXPR = "(enob + settling_lsb_fraction_bits) * ln2"
 # ═══════════════════════════════════════════════════════════════════════════
 LIBRARY: Dict[str, Dict[str, Any]] = {
 
+    "capacitor": {
+        "topology": "two-terminal parallel MIM capacitor bank",
+        "circuit_class_citation": "parallel capacitors: C_total = sum(C_i)",
+        "ports": ["vdd", "vss"],
+        "rails": {"vdd": "vdd", "vss": "vss"},
+        "internal_nets": [],
+        "constants": {"w_cap": 10.0},
+        "constant_roles": {"w_cap": "cap"},
+        "devices": [
+            {"name": "c_store", "role": "cap", "nets": ["vdd", "vss"],
+             "w": 10.0, "l": 10.0,
+             "function": "declared two-terminal storage capacitance"},
+        ],
+        "spec_knobs": [],
+        "requires_bound": {
+            "capacitance": {"unit": "fF", "why": "sets total capacitance"},
+        },
+        "requires_pdk_measured": ["cap_area_ff_per_um2"],
+        "requires_derived": [
+            {"name": "positive_capacitance", "expr": "1 / capacitance",
+             "min": 0.0, "why": "capacitance must be strictly positive"},
+        ],
+        "device_param_exprs": [
+            {"device": "c_store", "param": "w", "expr": "w_cap",
+             "rationale": "PDK-adjusted capacitor width"},
+            {"device": "c_store", "param": "l",
+             "expr": cap_l_expr("capacitance"), "ff_expr": "capacitance",
+             "rationale": "invert the measured area and perimeter model"},
+        ],
+        "sizing_handoff": (
+            "Capacitance fixes total MIM area. The PDK bounds determine "
+            "legal parallel units; placement and matching remain layout work."),
+        "tradeoffs": [
+            "Parallel MIM capacitors preserve the declared capacitance "
+            "while keeping each unit inside the PDK geometry bounds.",
+            "The disclosed 10 um starting width sets the aspect ratio; "
+            "the measured area and perimeter model fixes the length.",
+        ],
+        "analyses_implied": ["op", "ac"],
+        "testbench": {
+            "supply_exprs": ["0"],
+            "env_exprs": {},
+            "conditions": [
+                "0 V DC bias; 1 V small-signal AC excitation at 1 MHz",
+            ],
+            "stimulus": ["v_vdd vdd 0 DC {supply} AC 1"],
+            "cards": [],
+            "control": [
+                "op", "ac lin 1 1e6 1e6",
+                "let capacitance_ff = -imag(i(v_vdd))/(2*pi*frequency)*1e15",
+                "let c_measured = capacitance_ff[0]",
+                'echo "MEAS capacitance_ff=" $&c_measured',
+            ],
+        },
+    },
+
     "ldo": {
         "topology": ("NMOS-input five-transistor OTA driving a PMOS series "
                      "pass device, closed by a resistive feedback divider, "
@@ -4480,6 +4536,13 @@ def entry_admission(lib: Dict[str, Any], spec_values: Dict[str, float],
                 "why": req.get("why"),
                 "detail": (f"the A1 spec artefact binds no numeric value for "
                            f"`{name}`")})
+            continue
+        value = spec_values[name]
+        if not math.isfinite(value):
+            refusals.append({
+                "requirement": "spec_finite", "field": name,
+                "value": str(value), "why": req.get("why"),
+                "detail": f"`{name}` must bind a finite numeric value"})
             continue
         want = _unit_token(req.get("unit"))
         got = _unit_token(spec_units.get(name))

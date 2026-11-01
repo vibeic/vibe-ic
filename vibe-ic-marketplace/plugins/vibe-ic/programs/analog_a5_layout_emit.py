@@ -4916,7 +4916,7 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
         placement_groups.extend(
             [name for member in group.get("members", [])
              for name in member.get("instances", [])]
-            for group in topo.get("ratio_matching_groups", []))
+            for group in (topo.get("ratio_matching_groups") or []))
     plan = build_plan(devs, ports, cells, facts, geo, tap_clear, pin_spec,
                       max_row_width_um=args.max_row_width_um,
                       shared_capacitor_escapes=args.shared_capacitor_escapes,
