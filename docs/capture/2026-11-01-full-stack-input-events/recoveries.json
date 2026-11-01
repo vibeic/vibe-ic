@@ -1,0 +1,18 @@
+[
+  {
+    "step": "phase2.full_stack_tb.input_events",
+    "design": "neutral scalar and vector combinational modules",
+    "bucket": "A",
+    "rule_name": "schedule_real_connectivity_input_events",
+    "docstring": "A connectivity skeleton must schedule real positive-time DUT input transitions before checking combinational output resolvability; declaration initialization alone may precede an always process waiting for input changes.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Augment `design_one_shot_runner.step_full_stack_tb_gen` at the generating producer. On its no-resolved-DUT-clock path, use the existing input/role lists to complement ordinary data regs after reset and complement again at a later time, restoring zero before the existing run delay and unchanged output checks. Keep clocked/reset and author-TB behavior intact.",
+    "before_state": "Valid unchanged combinational RTL compiled and reached DONE but its generated inputs never changed after time zero; the existing output-resolvability checks failed and the existing connectivity reader refused the run.",
+    "after_state": "The same RTL passes the same connectivity checks after real known-to-different-to-zero input events. A truly undriven output still fails and blocks the reader; clocked TB bytes and all output check sections are preserved.",
+    "ai_reasoning": "This is a scheduling defect at the TB producer, independent of missing professional expert hooks. Real input events activate the valid combinational process; no output expectation or acceptance threshold needs changing.",
+    "pattern": "A generated TB initializes inputs only in declarations, while no clock/reset activity reaches a combinational DUT. A valid sensitivity-list process can therefore remain unexecuted and leave outputs X, causing a false connectivity refusal.",
+    "generality": "Input names, widths and roles come from existing DUT contracts; no benchmark identifier, private design literal, oracle or expected answer selects the behavior.",
+    "evidence": "CAPTURE.md; red.xml, base.xml, candidate.xml, reverse.xml, restored.xml and parity.json in the named external packet",
+    "corpus_sweep": "32 matched owning/nearby tests: 3 improved, 29 unchanged PASS, zero introduced failures; undriven-output, clock/reset, output-direction and author-TB preservation controls retained. No external corpus, benchmark or full suite was run."
+  }
+]
