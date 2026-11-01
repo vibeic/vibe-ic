@@ -4317,8 +4317,11 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
             top = bars[level]
             if spec["rail"]:
                 strip = (x - half, 0, x + half, top_y)
-                near = [f"metal{k}" for k in (level - 1, level, level + 1)
-                        if k in geo.wire]
+                # Crossing another metal plane is insulated. A supply
+                # stripe must clear its own plane and the cuts that actually
+                # connect to it, including native cut-only rectangles.
+                near = [f"metal{level}"] + [f"via{k}" for k in (level-1,level)
+                                             if k in geo.via_pad]
             else:
                 strip = (x - half, 0, x + half, top[3])
                 near = [f"metal{level}"]

@@ -228,3 +228,24 @@ def test_pad_gap_requires_the_entire_hull_to_be_real_same_net_metal():
         if expected:
             plan.paint('foreign','metal4',1040,984,1050,1016)
             assert not sites.clear(candidate,['metal4'],None,'own')
+
+
+def test_supply_stripe_crosses_isolated_adjacent_metal_but_rejects_a_cut():
+    import pytest
+    g = geo()
+    for layer in ('metal5','via5'):
+        plan = a.Plan()
+        sites = a.Sites([],g)
+        plan.sites = sites
+        plan.rail_level = 4
+        plan.paint('vss','metal4',0,984,2000,1016)
+        plan.paint('foreign',layer,0,2200,2000,2230)
+        spec = {'ports': {'vss': {'index':1,'rail':True,'level':6,
+                                  'width_lam':164,'cuts':1,'use':'ground'}}}
+        if layer == 'via5':
+            with pytest.raises(a.Refusal,match='pin_site_clearance'):
+                a._draw_pins(plan,['vss'],{'vss':(0,984,2000,1016)},spec,g,sites,3000,g.pitch())
+        else:
+            a._draw_pins(plan,['vss'],{'vss':(0,984,2000,1016)},spec,g,sites,3000,g.pitch())
+            assert plan.pins[0]['strip_box'][3] == 3000
+            assert not plan.deviations
