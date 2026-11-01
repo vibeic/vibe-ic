@@ -1419,7 +1419,8 @@ def author_asic_sdc(rt: Any, project: Path, top: str, pdk: Any,
         txt, pad_rec = _sdc_env.staged_sdc_pad_input_drive(
             project, txt, out["staged_sdc"], container,
             getattr(rt, "_to_container_path", None),
-            _sdc_env.liberty_time_scale(str(pdk.liberty)), analysis_top=top)
+            _sdc_env.liberty_time_scale(str(pdk.liberty)), analysis_top=top,
+            core_liberty=str(pdk.liberty))
         try:
             _sdc_env.write_pad_input_drive_record(
                 project, pad_rec, output=pad_drive_output)
@@ -1875,7 +1876,7 @@ def _derive_pnr_pad_input_drive(rt: Any, project: Path, logical_top: str,
             project, text, str(record.get("staged_sdc") or record.get("path") or ""),
             container, getattr(rt, "_to_container_path", None),
             environment.liberty_time_scale(str(pdk.liberty)),
-            analysis_top=physical_top)
+            analysis_top=physical_top, core_liberty=str(pdk.liberty))
     else:
         values, _unread = environment._sdc_environment_values(
             project, str(pdk.liberty), container, None, None,

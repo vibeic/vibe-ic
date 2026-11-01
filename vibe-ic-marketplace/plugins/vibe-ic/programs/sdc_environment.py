@@ -1322,7 +1322,7 @@ def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
                                container: str = "",
                                to_container_path: Optional[Callable[[str, str], str]] = None,
                                time_scale: float = 1.0,
-                               analysis_top: str = ""
+                               analysis_top: str = "", core_liberty: str = ""
                                ) -> Tuple[str, Dict[str, object]]:
     """The same ladder for a design-staged SDC on a DIE top.
 
@@ -1344,9 +1344,91 @@ def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
             return _translate_core_pad_boundary(
                 project, text, staged_rel, record, container, to_container_path, time_scale)
         return text, record
+    boundary = record.get("boundary")
+    chip_scope = None
+    if (core_liberty and isinstance(boundary, dict)
+            and boundary.get("classification") == "CHIP"):
+        core_text, _ = _read_pdk_file(core_liberty, container, to_container_path)
+        core_cells = {name for name, _ in _liberty_blocks(core_text or "", "cell")}
+        core_drives = []
+        for line in text.splitlines():
+            cell = re.search(r"^\s*set_driving_cell\b.*?-lib_cell\s+(\S+)", line)
+            if cell and cell.group(1).strip('{}"') in core_cells:
+                core_drives.append(line.strip())
+        if core_drives:
+            # The staged core deck crossed to its recorded physical wrapper.
+            # Use the existing external-edge ladder, never its core drivers.
+            import json
+            pads_record = json.loads((Path(project) / IO_PAD_RECORD).read_text())
+            pads = _signal_pad_instances(pads_record)
+            wrapper_rel = pads_record["chip_top_verilog"]
+            wrapper = (Path(project) / wrapper_rel).read_text()
+            io_cells = {}
+            io_views = pads_record.get("io_library_liberty") or []
+            linked = _native_linked_pad_views(project, io_views)
+            if linked is not None:
+                io_views = list(linked[0])
+            for path in io_views:
+                body, _ = _read_pdk_file(path, container, to_container_path)
+                unit = re.search(r'\btime_unit\s*:\s*"([0-9]+\s*[pnu]s)"', body or "")
+                scale = _LIB_TIME_UNIT_NS.get(unit.group(1).replace(" ", "")) if unit else None
+                for name, cell_body in _liberty_blocks(body or "", "cell"):
+                    io_cells.setdefault(name, (cell_body, scale))
+            limits, kept = {}, []
+            for line in text.splitlines():
+                drv = re.fullmatch(r"\s*(set_max_(?:transition|capacitance|fanout))"
+                                   r"\s+([0-9.eE+-]+)\s+\[current_design\]\s*", line)
+                if drv:
+                    limits[drv.group(1)] = drv.group(2)
+                if drv or line.strip() in core_drives:
+                    kept.append("# CORE-only staged clause: " + line.strip())
+                else:
+                    kept.append(line)
+            input_masters = set()
+            for instance, pad in pads.items():
+                master, terminal = pad["master"], pad["terminal"]
+                cell_body, scale = io_cells.get(master, ("", None))
+                pins = dict(_liberty_blocks(cell_body, "pin"))
+                terminal_attrs = _own_attrs(pins.get(terminal, ""))
+                direction = re.search(r'\bdirection\s*:\s*"?(\w+)', terminal_attrs)
+                placed = re.search(re.escape(master) + r"\s+" + re.escape(instance)
+                                   + r"\s*\((.*?)\);", wrapper, re.S)
+                if not pins or not direction or placed is None:
+                    raise ValueError("CHIP core DRV scope lacks exact IO model/wrapper: " + instance)
+                if direction.group(1) == "input":
+                    native = re.search(r"\bmax_transition\s*:\s*([0-9.eE+-]+)", terminal_attrs)
+                    if ("set_max_transition" in limits and
+                            (not native or scale is None or float(native.group(1)) * scale * time_scale
+                             > float(limits["set_max_transition"]))):
+                        raise ValueError("CHIP core slew ceiling would constrain the PAD: " + instance)
+                    input_masters.add(master)
+                else:
+                    # An output pad's core receiver can share a master with its
+                    # PAD driver. Leaf Pin/Port caps are not checked by OpenSTA;
+                    # never claim coverage by emitting an ineffective constraint.
+                    for pin, pin_body in pins.items():
+                        attrs = _own_attrs(pin_body)
+                        if pin != terminal and re.search(r'\bdirection\s*:\s*"?output', attrs):
+                            connected = re.search(r"\." + re.escape(pin) + r"\s*\(([^()]*)\)", placed.group(1))
+                            if connected and connected.group(1).strip():
+                                raise ValueError("CHIP core output requires unsupported separate IO-pin limit: "
+                                                 + instance + "/" + pin)
+            excluded = sorted(set(io_cells) - input_masters)
+            if not excluded or not limits:
+                raise ValueError("CHIP core DRV scope lacks IO exclusions or original limits")
+            scope = ["# Original core ceilings; external PAD drivers retain native Liberty limits.",
+                     "set _vibeic_external_io_masters [list "
+                     + " ".join("{" + name + "}" for name in excluded) + "]",
+                     "foreach _vibeic_core_libcell [get_lib_cells */*] {",
+                     "  if {[$_vibeic_core_libcell name] ni $_vibeic_external_io_masters} {"]
+            scope += [f"    {command} {value} [$_vibeic_core_libcell cell]"
+                      for command, value in sorted(limits.items())]
+            scope += ["  }", "}"]
+            text = "\n".join(kept + scope) + "\n"
+            chip_scope = {"limits": limits, "input_pad_masters": sorted(input_masters),
+                          "external_io_masters": excluded, "wrapper": wrapper_rel}
     own = [ln.strip() for ln in text.splitlines()
            if re.match(r"\s*(set_input_transition|set_driving_cell)\b", ln)]
-    boundary = record.get("boundary")
     if (isinstance(boundary, dict)
             and boundary.get("classification") in ("UNKNOWN", "UNRECORDED")):
         if own:
@@ -1359,8 +1441,10 @@ def staged_sdc_pad_input_drive(project: Path, text: str, staged_rel: str,
                                         "(stale analysis boundary; staged input "
                                         "drive not admitted)\n") + "\n".join(lines) + "\n"
         return text, record
+    if chip_scope is not None:
+        record["chip_core_drv_scope"] = chip_scope
     if own:
-        identity = {k: record[k] for k in ("analysis_top", "boundary")
+        identity = {k: record[k] for k in ("analysis_top", "boundary", "chip_core_drv_scope")
                     if k in record}
         record = {"schema": PAD_INPUT_DRIVE_SCHEMA, "applies": True,
                   "verdict": "DECLARED", "model": "design-staged SDC",

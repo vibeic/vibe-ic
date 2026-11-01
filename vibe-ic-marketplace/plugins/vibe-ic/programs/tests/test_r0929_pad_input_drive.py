@@ -32,6 +32,70 @@ from pathlib import Path
 
 import pytest
 
+
+@pytest.mark.parametrize("boundary", ["CHIP", "CORE"])
+def test_staged_chip_core_cell_scope_preserves_external_edges(tmp_path, boundary):
+    import inspect
+    import sdc_environment as SE
+    project = _die(tmp_path)
+    core = tmp_path / "core.lib"
+    core.write_text('library(core) { time_unit : "1ns"; cell(core_inv) {} }\n')
+    io = tmp_path / "io.lib"
+    io.write_text('''library(io) {
+      time_unit : "1ns";
+      cell(io_in) {
+        pin(PAD) { direction : input; max_transition : 1; }
+        pin(Y) { direction : output; max_capacitance : 0.5; }
+      }
+      cell(io_out) {
+        pin(PAD) { direction : inout; max_transition : 1; max_capacitance : 50; }
+        pin(A) { direction : input; }
+        pin(Y) { direction : output; max_capacitance : 0.5; }
+      }
+    }''')
+    (project / "wrapper.v").write_text(
+        "module neutral_chip(input a, output y); wire n; "
+        "io_in pad_a(.PAD(a), .Y(n)); io_out pad_y(.PAD(y), .A(n)); endmodule\n")
+    path = project / SE.IO_PAD_RECORD
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"verdict": "WROTE", "core_module": "neutral_core",
+        "chip_top_module": "neutral_chip", "chip_top_verilog": "wrapper.v",
+        "io_library_liberty": [str(io)], "pad_instances": {
+            "pad_a": {"port": "a", "master": "io_in", "terminal": "PAD",
+                      "core_pin": "Y", "direction": "input"},
+            "pad_y": {"port": "y", "master": "io_out", "terminal": "PAD",
+                      "core_pin": "A", "direction": "output"}}}))
+    staged = ("set_max_capacitance 0.2 [current_design]\n"
+              "set_max_transition 3 [current_design]\n"
+              "set_max_fanout 4 [current_design]\n"
+              "set_driving_cell -lib_cell core_inv -pin ZN [all_inputs]\n"
+              "set_input_transition -max 1 [all_inputs]\n"
+              "set_input_transition -min 0.08 [all_inputs]\n"
+              "set_load 0.07291 [all_outputs]\n")
+    top = "neutral_core" if boundary == "CORE" else "neutral_chip"
+    kwargs = {"analysis_top": top}
+    # BASE reaches its real staged consumer and fails on emitted values,
+    # rather than failing because a new keyword is absent from its API.
+    if "core_liberty" in inspect.signature(SE.staged_sdc_pad_input_drive).parameters:
+        kwargs["core_liberty"] = str(core)
+    text, record = SE.staged_sdc_pad_input_drive(
+        project, staged, "input/functional.sdc", **kwargs)
+    if boundary == "CORE":
+        assert (text, record) == SE.staged_sdc_pad_input_drive(
+            project, staged, "input/functional.sdc", analysis_top=top)
+        return
+    active = [line for line in text.splitlines() if not line.lstrip().startswith("#")]
+    assert not any(line.lstrip().startswith("set_driving_cell ") for line in active)
+    assert not any("[current_design]" in line for line in active)
+    assert "set_input_transition -max 1 [all_inputs]" in active
+    assert "set_input_transition -min 0.08 [all_inputs]" in active
+    assert "set_load 0.07291 [all_outputs]" in active
+    assert record["chip_core_drv_scope"]["input_pad_masters"] == ["io_in"]
+    assert record["chip_core_drv_scope"]["external_io_masters"] == ["io_out"]
+    for command, value in (("set_max_capacitance", "0.2"),
+                           ("set_max_transition", "3"), ("set_max_fanout", "4")):
+        assert f"{command} {value} [$_vibeic_core_libcell cell]" in text
+
 PROGRAMS = Path(__file__).resolve().parents[1]
 if str(PROGRAMS) not in sys.path:
     sys.path.insert(0, str(PROGRAMS))
