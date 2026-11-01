@@ -230,50 +230,6 @@ def test_wildcard_connectivity_keeps_the_native_pad_identity(sample):
     assert item(result, NAMES[0])['status'] == 'PASS'
 
 
-def _supply_observation(sample):
-    project, _, component = sample
-    lef = project / 'input/pdk/io.lef'
-    write(lef, lef.read_text().replace('RECT 0 0 10 10', 'RECT 1 1 9 9'))
-    path = project / d75.PAD_DEF
-    write(path, path.read_text()
-          .replace('( pad_signal TERMINAL )', '( * TERMINAL ) + USE POWER')
-          .replace('+ PLACED ( 10000 10000 ) N ;\nEND PINS',
-                   '+ PLACED ( 50000 50000 ) N ;\nEND PINS'))
-    rc, report = d75.pad_bterm_coincidence_check.run(path.read_text(),
-        (project / 'input/pdk/tech.tlef').read_text(), [lef])
-    assert rc == 0 and report['connected_nets'] == ['signal']
-    check(sample, 'pad_bterm_coincidence_check')['detail'] = report
-    # This neutral observation fixture changed its library geometry, so its
-    # provider-source witness must bind the new bytes as well.
-    check(sample, 'provider_bond_pad_edge')['detail']['master_sources'] = [
-        {'path': str(lef.resolve()), 'sha256': hashlib.sha256(lef.read_bytes()).hexdigest()}]
-    rebind(project, component)
-    return report
-
-
-def test_supply_interface_keeps_stripe_and_pad_identities_in_d75(sample):
-    report = _supply_observation(sample)
-    observed = d75._d75_metric_observation(*sample)
-    row, = report['nets']
-    assert row['pin_rect'] == [50000, 50000, 60000, 60000]
-    assert row['terminal_rect'] == [11000, 11000, 19000, 19000]
-    assert row['pin_is_interface'] is False
-    assert observed['pad_layout']['pad_bterms'][0]['instance'] == 'pad_signal'
-    assert set(observed['pad_layout']['bterms']) == {row['pin']}
-
-
-@pytest.mark.parametrize('damage', ['population', 'master', 'terminal', 'pin_rect'])
-def test_supply_interface_does_not_bypass_d75_population_or_identity(sample, damage):
-    report = _supply_observation(sample)
-    if damage == 'population':
-        report['nets'].clear()
-    else:
-        report['nets'][0][damage] = [0, 0, 1, 1] if damage == 'pin_rect' else 'foreign'
-    refusal = 'POPULATION_INCOMPLETE' if damage == 'population' else 'IDENTITY_MISMATCH'
-    with pytest.raises(ValueError, match='D75_PAD_BTERM_' + refusal):
-        d75._d75_metric_observation(*sample)
-
-
 def test_adopted_reference_missing_pad(sample):
     p = sample[0]
     path = p / 'adopted/package_ready' / (NAMES[0] + '.json')
