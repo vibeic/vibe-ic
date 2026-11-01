@@ -11,8 +11,10 @@ import analog_one_shot_runner as runner
 def _emit_topology(project):
     spec = {"order": 2., "osr": 512., "enob": 14., "vref": 1.,
             "vdd": 1.2, "vindiff": 1., "fclk": 1., "fclk_min": 1.,
-            "fclk_max": 1., "ciff": 1., "ntf_hinf": 1.4,
-            "a1": .25, "a2": .25, "cs1_ff": 100., "ci1_ff": 400.,
+            "fclk_max": 1., "ciff": 1., "designed_coefficients": 1.,
+            "a1": .25, "a2": .25, "b1": .25, "b2": 0.,
+            "c0": 1., "c1": 1., "c2": 1., "k0": 0., "feedback_delay": 0.,
+            "cs1_ff": 100., "ci1_ff": 400.,
             "cf1_ff": 100.}
     measured = {"cap_area_ff_per_um2": 1.5, "cap_perim_ff_per_um": 0.,
                 "rsheet_ohm_per_sq": 260., "k_prime_n_ua_per_v2": 328.,
