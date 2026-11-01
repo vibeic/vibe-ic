@@ -282,17 +282,60 @@ def _read_top_ports(project: Path) -> List[Dict[str, object]]:
     return [p for p in ports if isinstance(p, dict)]
 
 
+def _chip_top_input_netlist(project: Path, core: str, *,
+                            refusal_rule: str = "DFT_CONTROL_UNCONNECTED"
+                            ) -> Tuple[Path, str, bool]:
+    from phase3_one_shot_runner import pnr_input_netlist
+    from _path_layout import synth_dir
+    from lec_run import netlist_top_ports
+
+    selected = pnr_input_netlist(project, core)
+    if selected[2]:
+        return selected
+    meta_path = project / "reports/phase2/dft/scan_chain.json"
+    try:
+        meta = json.loads(meta_path.read_text())
+    except FileNotFoundError:
+        return selected
+    except (OSError, ValueError) as exc:
+        detail = LPP.pathless_os_error(exc) if isinstance(exc, OSError) else str(exc)
+        raise Refusal(refusal_rule, f"scan metadata is unreadable: {detail}") from exc
+    if not isinstance(meta, dict):
+        raise Refusal(refusal_rule, "scan metadata must be an object")
+    if meta.get("published") is not True:
+        return selected
+    if (meta.get("chain_length_matches_flop_count") is not True
+            or meta.get("authorized_by_l20_contract") is not True):
+        raise Refusal(refusal_rule, "published scan interface lacks measured L20 authorization")
+    dft_ports = meta.get("dft_ports")
+    if (not isinstance(dft_ports, list) or not dft_ports
+            or any(not isinstance(name, str) or not name for name in dft_ports)):
+        raise Refusal(refusal_rule, "published scan interface has no valid dft_ports")
+    netlist = synth_dir(project) / "post_dft_netlist.v"
+    try:
+        actual = {name for _, _, name in netlist_top_ports(netlist.read_text(), core)}
+    except (OSError, ValueError) as exc:
+        detail = LPP.pathless_os_error(exc) if isinstance(exc, OSError) else str(exc)
+        raise Refusal(refusal_rule, "published scan netlist is unreadable: "
+                      + detail) from exc
+    missing = sorted(set(dft_ports) - actual)
+    if missing:
+        raise Refusal(refusal_rule,
+                      f"published scan netlist does not carry declared DFT ports: {missing}")
+    return (netlist, "published post-DFT interface for chip-top test access only; "
+            "routing selection remains: " + selected[1], True)
+
+
 def _implemented_core_ports(project: Path
                             ) -> Optional[Tuple[Path, List[Dict[str, object]]]]:
     """(selected netlist, its core's ports as {name, direction, width}), or
     None when the netlist cannot be read or declares no port. `width` is None
     when the range is not a literal."""
     try:
-        from phase3_one_shot_runner import pnr_input_netlist
         from lec_run import netlist_top_ports
         spec = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
         core = str(json.loads(spec.read_text()).get("top_module") or "core")
-        netlist, _note, _scan = pnr_input_netlist(project, core)
+        netlist, _note, _scan = _chip_top_input_netlist(project, core)
         header = netlist_top_ports(netlist.read_text(), core)
     except Exception:  # noqa: BLE001 — unreadable: the caller decides
         return None
@@ -360,13 +403,6 @@ def _drop_unimplemented_optional_ports(
 def _check_scan_interface(project: Path,
                           ports: Sequence[Dict[str, object]], *,
                           test_access=None) -> Dict[str, object]:
-    """Do not emit a wrapper with floating controls on the selected scan core.
-
-    Reuse PnR's selector and the scan producer's functional-mode metadata.
-    Proof-only tie values do not authorize permanent physical tie-offs or pads.
-    An explicitly analog-only Flow109 core has no synthesized scan subject;
-    digital and undeclared cores still require the normal synthesis handoff.
-    """
     if test_access is not None and test_access.get("profile") == "default_planned":
         _ports, _sides, current = _default_planned_access(project, ports)
         if current != test_access:
@@ -383,17 +419,21 @@ def _check_scan_interface(project: Path,
         return {"selected_scan_netlist": False,
                 "selection": "declared analog-only core: input/flow109-manifest.json "
                              "features.has_analog=true, features.has_digital=false"}
-    from phase3_one_shot_runner import pnr_input_netlist
     from lec_run import netlist_top_ports, scan_mode_from_meta
 
     spec = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     core = str(json.loads(spec.read_text()).get("top_module") or "core")
-    netlist, note, is_scan = pnr_input_netlist(project, core)
+    refusal_rule = "DFT_TEST_ACCESS_INVALID" if test_access is not None else "DFT_CONTROL_UNCONNECTED"
+    netlist, note, is_scan = _chip_top_input_netlist(
+        project, core, refusal_rule=refusal_rule)
     if not is_scan:
         return {"selected_scan_netlist": False, "selection": note}
     meta_path = project / "reports/phase2/dft/scan_chain.json"
     meta = json.loads(meta_path.read_text())
-    mode = scan_mode_from_meta(meta)
+    try:
+        mode = scan_mode_from_meta(meta)
+    except (ValueError, TypeError) as exc:
+        raise Refusal(refusal_rule, f"scan functional-mode metadata is invalid: {exc}") from exc
     actual = {name: direction for direction, _, name in
               netlist_top_ports(netlist.read_text(), core)}
     declared = {str(p.get("name")): str(p.get("direction") or p.get("mode") or "")
@@ -402,6 +442,7 @@ def _check_scan_interface(project: Path,
     missing = [name for name in controls
                if actual.get(name) != "input" or declared.get(name) != "input"]
     evidence = {"selected_scan_netlist": True, "selection": note,
+                "scan_chain_qualification": "NOT_MEASURED",
                 "netlist": LPP.project_relative(netlist, project),
                 "netlist_sha256": _sha256(netlist),
                 "scan_metadata": LPP.project_relative(meta_path, project),
@@ -413,10 +454,11 @@ def _check_scan_interface(project: Path,
                     [str((mode or {}).get("scan_out_port") or "")]
                     if name and declared.get(name) != "output"],
                 "physical_tieoff_authorized": False}
-    if mode is None or missing or evidence["unconnected_scan_outputs"]:
+    if test_access is None or mode is None or missing or evidence["unconnected_scan_outputs"]:
         raise Refusal(
             "DFT_CONTROL_UNCONNECTED",
-            "selected post-DFT core has no approved chip-top connection for "
+            "selected post-DFT core requires an approved config/dft_test_access.json "
+            "and chip-top connections for "
             f"scan controls {missing} / outputs {evidence['unconnected_scan_outputs']}; "
             "functional-mode proof tie-offs are not "
             "physical interface authority. Declare test access in the approved "
@@ -490,7 +532,6 @@ def _declared_test_access(project: Path, ports: Sequence[Dict[str, object]]):
     path = project / "config/dft_test_access.json"
     if not path.exists():
         return [], {}, None
-    from phase3_one_shot_runner import pnr_input_netlist
     from lec_run import netlist_top_ports, scan_mode_from_meta
 
     def refuse(message):
@@ -511,7 +552,8 @@ def _declared_test_access(project: Path, ports: Sequence[Dict[str, object]]):
         refuse("test access needs an explicit authority and dedicated_pads mapping")
     spec = project / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
     core = str(json.loads(spec.read_text()).get("top_module") or "core")
-    netlist, note, is_scan = pnr_input_netlist(project, core)
+    netlist, note, is_scan = _chip_top_input_netlist(
+        project, core, refusal_rule="DFT_TEST_ACCESS_INVALID")
     meta_path = project / "reports/phase2/dft/scan_chain.json"
     if not is_scan:
         refuse("a test-access plan requires the selected published scan netlist")
