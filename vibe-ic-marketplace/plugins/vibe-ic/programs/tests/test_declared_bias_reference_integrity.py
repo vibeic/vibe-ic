@@ -70,3 +70,10 @@ def test_explicit_reference_above_existing_bound_still_refuses(tmp_path):
     import analog_a2_topology_emit as a2
     with pytest.raises(a2.SizingInputsInvalid, match="OTA_BIAS_REFERENCE_NOT_REALISABLE"):
         _emit(tmp_path, bias={"reference": {"resistor_length_um": 2000.000001}})
+
+
+def test_spec_cannot_shadow_the_internal_reference_geometry(tmp_path):
+    import pytest
+    import analog_a2_topology_emit as a2
+    with pytest.raises(a2.SizingInputsInvalid, match="OTA_BIAS_INPUT_INVALID"):
+        _emit(tmp_path, values={"bias_reference_length_um": 1.})

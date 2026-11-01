@@ -82,6 +82,8 @@ def _wl(device):
 
 def apply(library, values, devices, exprs, nets, constants, env, evaluate, project, block,
           minima=None, maxima=None, spec_path=None):
+    if "bias_reference_length_um" in values:
+        raise ValueError("OTA_BIAS_INPUT_INVALID: bias_reference_length_um is internal; declare reference geometry in bias_network_inputs.json")
     declaration, source = read_inputs(project, block)
     specification = None
     if spec_path is not None:
@@ -340,6 +342,8 @@ def _problems(ir, project=None):
         return ["OTA_BIAS_RECORD_INVALID: missing consumer table"]
     actual = {d.get("name"): d for d in ir.get("devices", [])}
     findings = []
+    if "bias_reference_length_um" in ir.get("design_inputs_bound", []):
+        findings.append("OTA_BIAS_REFERENCE_INVALID: a specification shadows the internal reference geometry")
     first_stage = min((r["stage"] for r in record.get("stage_table", []) if isinstance(r.get("stage"), int)), default=1)
     reference_record = record.get("reference", {})
     reference_device = actual.get(reference_record.get("device"), {})
