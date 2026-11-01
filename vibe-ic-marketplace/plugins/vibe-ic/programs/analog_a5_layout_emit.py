@@ -2544,17 +2544,17 @@ def _local_rail_tracks(row: Sequence[dict], bus_x: dict,
     return _interval_tracks(intervals, clearance)
 
 
-def _m4_trunk_envelope(geo: Geo) -> Tuple[int, int, int]:
+def _m4_trunk_envelope(geo: Geo, lower: int = 2, upper: int = 4) -> Tuple[int, int, int]:
     """Fixed-centre stack half-extent, edge spacing and track pitch."""
     prototype = Plan()
-    for compact in (False, True):
-        _via_stack(prototype, "<trunk>", 0, 0, 2, geo, top=4,
+    for compact in ((False, True) if lower == 2 else (False,)):
+        _via_stack(prototype, "<trunk>", 0, 0, lower, geo, top=upper,
                    compact_terminal=compact)
     # Either island orientation and pad size is legal at the fixed centre.
-    half = max([max(geo.wire[4] // 2, 1)]
+    half = max([max(geo.wire[upper] // 2, 1)]
                + [abs(v) for shape in prototype.shapes for v in shape["box"]])
-    clearance = max(geo.rules_via_space(k) for k in (2, 3))
-    for k in (2, 3, 4):
+    clearance = max(geo.rules_via_space(k) for k in range(lower, upper))
+    for k in range(lower, upper + 1):
         layer = f"metal{k}"
         narrow = max([geo.wire[k]] + [min(r["box"][2] - r["box"][0],
                                          r["box"][3] - r["box"][1])
@@ -2568,9 +2568,10 @@ def _m4_trunk_envelope(geo: Geo) -> Tuple[int, int, int]:
     return half, clearance, pitch
 
 
-def _m4_trunk_tracks(row_rails: Sequence[dict], geo: Geo):
+def _m4_trunk_tracks(row_rails: Sequence[dict], geo: Geo,
+                      lower: int = 2, upper: int = 4):
     """Reuse rail interval coloring for complete M4 trunk/via envelopes."""
-    half, clearance, pitch = _m4_trunk_envelope(geo)
+    half, clearance, pitch = _m4_trunk_envelope(geo, lower, upper)
     ys: Dict[str, List[int]] = {}
     for rails in row_rails:
         for net, y in rails.items():
@@ -2583,10 +2584,55 @@ def _m4_trunk_tracks(row_rails: Sequence[dict], geo: Geo):
     return bus_x, margin
 
 
+def _complementary_groups(devices: Sequence[dict]) -> List[List[str]]:
+    """Keep complementary transmission gates and inverter branches local."""
+    mos = [d["dev"] for d in devices if d["dev"].get("class") == "mosfet"
+           and len(d["dev"]["nets"]) == 4]
+    candidates = []
+    for i, first in enumerate(mos):
+        for j in range(i + 1, len(mos)):
+            second = mos[j]
+            a, b = first["nets"], second["nets"]
+            if a[3] == b[3]:
+                continue
+            transmission = {a[0], a[2]} == {b[0], b[2]}
+            inverter = a[0] == b[0] and a[1] == b[1]
+            if transmission or inverter:
+                candidates.append((not transmission, j - i, i, j))
+    used = set()
+    groups = []
+    for _, _, i, j in sorted(candidates):
+        if i not in used and j not in used:
+            groups.append([mos[i]["name"], mos[j]["name"]])
+            used.update((i, j))
+    return groups
+
+
+def _access_gap(left: Optional[dict], right: Optional[dict], geo: Geo) -> int:
+    """Facing lane offsets plus the painted stack envelopes and deck spacing."""
+    pitch = geo.pitch()
+    need = 0
+    reach = 0
+    for device, side in ((left, "right"), (right, "left")):
+        if device is None:
+            continue
+        need += sum(g["side"] == side for g in device["groups"]) * device["access_pitch"]
+        for group in device["groups"]:
+            level = group["level"] + 1 if group["level"] > ROUTE_LEVEL else ROUTE_LEVEL
+            prototype = Plan()
+            _via_stack(prototype, "<access>", 0, 0, level, geo, top=ROUTE_LEVEL)
+            for shape in prototype.shapes:
+                if shape["layer"].startswith("metal"):
+                    half = max(abs(shape["box"][0]), abs(shape["box"][2]))
+                    reach = max(reach, 2 * half + geo.metal_space(shape["layer"]))
+    return max(4 * pitch, need + max(pitch, reach))
+
+
 def _place_shared_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
                        pin_spec: Optional[dict], width_um: float,
                        placement_groups: Sequence[Sequence[str]], *,
-                       split_arrays: bool = False, reserve_bus: bool = True):
+                       split_arrays: bool = False, reserve_bus: bool = True,
+                       compact_rows: bool = False):
     pitch, width = geo.pitch(), int(width_um * geo.lam)
     high_pitch = (max(list(geo.wire.values())
                       + [2 * v for v in geo.patch.values()])
@@ -2633,6 +2679,8 @@ def _place_shared_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
             # The PCells retain a full high-plane wire-plus-space pitch;
             # only the duplicated private descent corridors are removed.
             return max(4 * pitch, high_pitch)
+        if compact_rows:
+            return _access_gap(left, right, geo)
         lp = left["access_pitch"] if left is not None else pitch
         rp = right["access_pitch"] if right is not None else pitch
         edge = max(lp, rp)
@@ -2646,7 +2694,12 @@ def _place_shared_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
     while True:
         rows: List[List[dict]] = [[]]
         x = 0
-        for members in units.values():
+        order = list(units.values())
+        if compact_rows:
+            order.sort(key=lambda members: (
+                -max(d["bbox"][3] - d["bbox"][1] for d in members),
+                min(d.get("shared_array", -1) for d in members)))
+        for members in order:
             last = rows[-1][-1] if rows[-1] else None
             required = (gap(last, members[0])
                         + sum(d["bbox"][2] - d["bbox"][0] for d in members)
@@ -2715,6 +2768,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                            placement_groups: Sequence[Sequence[str]]):
     fullspan = [d for d in per_dev if d.get("fullspan_pair")]
     ordinary = [d for d in per_dev if not d.get("fullspan_pair")]
+    placement_groups = [*placement_groups, *_complementary_groups(ordinary)]
     columns = {
         "cmim": [d for d in ordinary if d["dev"].get("class") == "capacitor"],
         "ota": [d for d in ordinary if d["dev"].get("class") != "capacitor"],
@@ -2722,6 +2776,8 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
     if not all(columns.values()) and not fullspan:
         return _place_shared_rows(per_dev, nets, geo, pin_spec, width_um,
                                   placement_groups, split_arrays=True)
+    external = {g["net"] for d in columns["cmim"] for g in d["groups"]}
+    external.update((pin_spec or {}).get("ports", {}))
     pitch, width = geo.pitch(), int(width_um * geo.lam)
     high_pitch = (max(list(geo.wire.values())
                       + [2 * v for v in geo.patch.values()])
@@ -2748,14 +2804,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                 and _shared_capacitor_key(left) is not None
                 and _shared_capacitor_key(left) == _shared_capacitor_key(right)):
             return channel
-        lp = left["access_pitch"] if left is not None else pitch
-        rp = right["access_pitch"] if right is not None else pitch
-        edge = max(lp, rp)
-        need = ((sum(g["side"] == "right" for g in left["groups"]) * lp
-                 if left is not None else 0)
-                + (sum(g["side"] == "left" for g in right["groups"]) * rp
-                   if right is not None else 0))
-        return max(4 * pitch, 4 * edge, need + 2 * edge)
+        return _access_gap(left, right, geo)
 
     minimum = {name: 0 for name in columns}
     for members in units.values():
@@ -2786,7 +2835,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                 continue
             rows, _, _, _ = _place_shared_rows(
                 devices, nets, geo, None, widths[name] / geo.lam,
-                placement_groups, split_arrays=True, reserve_bus=False)
+                placement_groups, split_arrays=True, reserve_bus=False, compact_rows=True)
             region_rows[name] = rows
         rows = [[d] for d in fullspan] + [row for name in columns for row in region_rows[name]]
         row_nets = [[net for net in nets
@@ -2801,10 +2850,12 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
     def place_regions(rows, row_nets, shared, widths, margin, *, final=True):
         # All shared rails are booked from the bank's leftmost possible anchor.
         # Their final interval-colored trunk centres only shorten these spans.
-        bus_x = {net: pitch for net in shared}
         offsets = {"cmim": margin, "ota": margin + widths["cmim"] + channel,
                    "fullspan": margin}
         region_widths = {**widths, "fullspan": width - margin}
+        local_origin = offsets["ota"] if columns["ota"] else margin
+        bus_x = {net: pitch if net in external else local_origin + pitch
+                 for net in shared}
         for d in fullspan:
             d["placement_region"] = "fullspan"
             d["box_x"] = d["gap_hi"] = margin + gap(None, d)
@@ -2816,6 +2867,21 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                     d[key] += offsets[name]
         for row in rows:
             _access_lanes(row, share=True)
+        _, _, trunk_pitch = _m4_trunk_envelope(geo, 4, 5)
+        local_width = widths["ota"] if columns["ota"] else width - margin
+        candidates = set(range(local_origin + trunk_pitch,
+                               local_origin + local_width - geo.long_half[4], trunk_pitch))
+        targets = {}
+        for net in shared:
+            if net not in external:
+                xs = sorted(g["lane_x"] for d in per_dev for g in d["groups"] if g["net"] == net)
+                targets[net] = xs[len(xs) // 2]
+        for net in sorted(targets, key=lambda n: (targets[n], n)):
+            if not candidates:
+                raise Refusal("regional M5 trunk columns exceed the available region")
+            x = min(candidates, key=lambda v: (abs(v - targets[net]), v))
+            bus_x[net] = x
+            candidates.remove(x)
 
         initial_y = max([0] + [-box[1] - pitch
                               for spec in (pin_spec or {}).get("ports", {}).values()
@@ -2824,16 +2890,20 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                                   max(1, spec["cuts"]))[0]])
         cursors = {name: initial_y for name in (*columns, "fullspan")}
         rail_half = max(geo.long_half[2], geo.wire[2] // 2)
-        clearance = 2 * rail_half + geo.metal_space("metal2")
+        clearance = 2 * rail_half + geo.metal_space("metal4")
         booked = []
         row_rails, descriptions = [], []
         for ri, (row, ns) in enumerate(zip(rows, row_nets)):
             region = row[0]["placement_region"]
-            tracks = _local_rail_tracks(row, bus_x, geo)
             intervals = {}
             for net in ns:
                 xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
-                intervals[net] = (bus_x.get(net, min(xs) - pitch), max(xs) + pitch)
+                lo = min(bus_x.get(net, min(xs) - pitch), min(xs) - pitch)
+                hi = max(bus_x.get(net, max(xs) + pitch), max(xs) + pitch)
+                if net in (pin_spec or {}).get("ports", {}):
+                    lo = 0
+                intervals[net] = (lo, hi)
+            tracks = _interval_tracks(intervals, clearance)
             y = cursors[region]
             # The same normal M2 rails cross the CMIM region on the way to
             # the OTA region. Allocate their tracks jointly; native CMIM
@@ -2866,10 +2936,10 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                     high.append(d["cell"]["delta"][1] + g["escape_y"] + half)
                     spacing = max(spacing, *[geo.space.get(k, geo.default_space)
                                             for k in range(2, top + 1)])
-            base = max(rails.values()) + rail_half + spacing - min(low)
+            base = cursors[region] - min(low)
             for d in row:
                 d["row"], d["box_y"] = ri, base
-            cursors[region] = base + max(high) + spacing + rail_half
+            cursors[region] = max(base + max(high), max(rails.values()) + rail_half) + spacing + rail_half
             if region == "fullspan":
                 for name in columns:
                     cursors[name] = cursors[region]
@@ -2881,7 +2951,12 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                                  "rail_intervals_lambda": intervals,
                                  "column_lambda": [offsets[region],
                                                    offsets[region] + region_widths[region]]})
-        bus_x, used_margin = _m4_trunk_tracks(row_rails, geo)
+        outer_rails = [{n: y for n, y in rail.items() if n in external}
+                       for rail in row_rails]
+        local_bus = {n: x for n, x in bus_x.items() if n not in external}
+        bus_x, used_margin = _m4_trunk_tracks(outer_rails, geo, lower=4, upper=5)
+        shift = used_margin - margin
+        bus_x.update({n: x + shift for n, x in local_bus.items()})
         if final:
             for d in fullspan:
                 required = gap(None, d) + d["bbox"][2] - d["bbox"][0] + gap(d, None)
@@ -2900,8 +2975,11 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
             description["column_lambda"] = [x + shift for x in description["column_lambda"]]
             for net in description["nets"]:
                 xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
-                description["rail_intervals_lambda"][net] = (
-                    bus_x.get(net, min(xs) - pitch), max(xs) + pitch)
+                lo = min(bus_x.get(net, min(xs) - pitch), min(xs) - pitch)
+                hi = max(bus_x.get(net, max(xs) + pitch), max(xs) + pitch)
+                if net in (pin_spec or {}).get("ports", {}):
+                    lo = 0
+                description["rail_intervals_lambda"][net] = (lo, hi)
         return rows, row_rails, bus_x, descriptions
 
     # The seed determines real y-span concurrency, rather than treating every
@@ -2942,7 +3020,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                 continue
             region_rows[name], _, _, _ = _place_shared_rows(
                 devices, nets, geo, None, widths[name] / geo.lam,
-                placement_groups, split_arrays=True, reserve_bus=False)
+                placement_groups, split_arrays=True, reserve_bus=False, compact_rows=True)
         rows = [[d] for d in fullspan] + [row for name in columns for row in region_rows[name]]
         row_nets = [[net for net in nets
                      if any(g["net"] == net for d in row for g in d["groups"])]
@@ -3000,6 +3078,9 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                left_right_regions: bool = False,
                placement_groups: Sequence[Sequence[str]] = ()) -> Plan:
     plan = Plan()
+    rail_level = 4 if shared_capacitor_escapes and left_right_regions else 2
+    trunk_level = 5 if rail_level == 4 else 4
+    plan.rail_level = rail_level
     body_tap_contact = body_tap_contact_layer(facts.layers)
     body_tap_metal_contact = body_tap_metal_contact_layer(facts.layers)
     body_tap_local = body_tap_local_layer(facts.layers)
@@ -3023,7 +3104,9 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     per_dev: List[dict] = []
     for dev in devs:
         cell = cells[config_key(dev)]
-        if dev["name"] in parallel_pair:
+        if (shared_capacitor_escapes and left_right_regions
+                and dev.get("class") == "resistor"
+                and cell["bbox"][3] - cell["bbox"][1] > cell["bbox"][2] - cell["bbox"][0]):
             cell = _r90_cell(cell)
         tmap, ring, unmapped = terminal_map(dev, cell)
         for term in unmapped:
@@ -3331,6 +3414,21 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     # placer that cannot see them places into them.
     sites = Sites(plan.device_shapes, geo)
     plan.sites = sites
+    if rail_level == 4:
+        for net, bx in bus_x.items():
+            ys = [r[net] for r in row_rails if net in r]
+            half = max(geo.wire[5] // 2, 1)
+            plan.paint(net, "metal5", bx - half, min(ys), bx + half, max(ys))
+        for row, rails in zip(placement_rows, row_rails):
+            for net, ty in rails.items():
+                xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
+                lo = min(bus_x.get(net, min(xs) - pitch), min(xs) - pitch)
+                hi = max(bus_x.get(net, max(xs) + pitch), max(xs) + pitch)
+                if net in ports:
+                    lo = 0
+                half = max(geo.wire[4] // 2, 1)
+                plan.paint(net, "metal4", lo, ty - half, hi, ty + half)
+
     # What the gencells leave unrouted and too small: planned and reserved
     # now, painted after the routing (see `floating_metal_patches`).
     patches = floating_metal_patches(plan, per_dev, geo, sites)
@@ -3512,7 +3610,7 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                 _via_stack(plan, net, lane, ey, 2, geo, top=3, sites=sites)
             ry = row_rails[d["row"]][net]
             plan.paint(net, "metal3", lane - hw3, ry, lane + hw3, ey)
-            _via_stack(plan, net, lane, ry, 2, geo, top=3,
+            _via_stack(plan, net, lane, ry, 3, geo, top=rail_level,
                        sites=sites)
 
     plan.island_patches = commit_metal_patches(plan, patches, sites,
@@ -3521,20 +3619,25 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     # ── one metal2 rail per net, and a label on each declared port ──────
     rail_box: Dict[str, Tuple[int, int, int, int]] = {}
     compact_bus = shared_capacitor_escapes and left_right_regions
-    if compact_bus:
+    if compact_bus and rail_level != 4:
         # Fixed-centre via sites must see every trunk before they are drawn.
         for net, bx in bus_x.items():
             ys = [r[net] for r in row_rails if net in r]
-            half = max(geo.wire[4] // 2, 1)
-            plan.paint(net, "metal4", bx - half, min(ys), bx + half, max(ys))
+            half = max(geo.wire[trunk_level] // 2, 1)
+            plan.paint(net, f"metal{trunk_level}", bx - half, min(ys), bx + half, max(ys))
     for row, rails in zip(placement_rows, row_rails):
         for net, ty in rails.items():
             xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
-            lo = bus_x.get(net, min(xs) - pitch)
-            plan.paint(net, "metal2", lo, ty - hw2, max(xs) + pitch, ty + hw2)
-            rail_box.setdefault(net, (lo, ty - hw2, max(xs) + pitch, ty + hw2))
+            lo = min(bus_x.get(net, min(xs) - pitch), min(xs) - pitch)
+            hi = max(bus_x.get(net, max(xs) + pitch), max(xs) + pitch)
+            if rail_level == 4 and net in ports:
+                lo = 0
+            rail_half = max(geo.wire[rail_level] // 2, 1)
+            if rail_level != 4:
+                plan.paint(net, f"metal{rail_level}", lo, ty - rail_half, hi, ty + rail_half)
+            rail_box.setdefault(net, (lo, ty - rail_half, hi, ty + rail_half))
             if net in bus_x:
-                _via_stack(plan, net, lo, ty, 2, geo, top=4, sites=sites,
+                _via_stack(plan, net, bus_x[net], ty, rail_level, geo, top=trunk_level, sites=sites,
                            search_lambda=0 if compact_bus else ISLAND_SEARCH_LAMBDA)
     for net, bx in bus_x.items():
         if compact_bus:
@@ -3860,6 +3963,7 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
     seat, and every signal stub is then placed clear of it. A port with no
     clear site is a producer refusal: emitting that fallback would make a
     known cross-net short part of the layout."""
+    rail_level = getattr(plan, "rail_level", 2)
     order = sorted(ports, key=lambda n: (not pin_spec["ports"][n]["rail"],
                                          ports.index(n)))
     for net in order:
@@ -3869,6 +3973,17 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
         y = (ry1 + ry2) // 2
         half = max(spec["width_lam"] // 2, geo.wire.get(level, 1) // 2, 1)
         cuts = max(1, spec["cuts"])
+        if not spec["rail"] and rail_level == level:
+            strip = (0, y - half, max(int(math.ceil(geo.area_lam2.get(level, 0) / (2 * half))), pitch), y + half)
+            if not sites.clear(strip, [f"metal{level}"], None, net):
+                raise Refusal(f"pin_site_clearance: no clear rail-edge pin for {net}")
+            plan.paint(net, f"metal{level}", *strip)
+            plan.pins.append({"net": net, "index": spec["index"],
+                              "layer": f"metal{level}", "lef_layer": spec.get("lef_layer"),
+                              "lef_type": spec.get("lef_type"), "use": spec["use"],
+                              "rail": False, "label_box": strip, "strip_box": strip,
+                              "cuts_per_via": 0, "width_lam": 2 * half})
+            continue
         if not spec["rail"] and spec.get("direction") == "HORIZONTAL":
             # Leave on the port's own rail row, below the device routing,
             # then rise at the side margin.  A vertical metal2 pin would
@@ -3876,12 +3991,12 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
             edge = min([0] + [r["box"][0] for r in plan.shapes]
                        + [r["box"][0] for r in plan.device_shapes])
             x = edge + pitch
-            paint, bars = _pin_stack_boxes(x, y, 2, level, geo, cuts)
-            hw2 = max(geo.wire[2] // 2, 1)
+            paint, bars = _pin_stack_boxes(x, y, rail_level, level, geo, cuts)
+            hw2 = max(geo.wire[rail_level] // 2, 1)
             connection = (min(x, rx1) - hw2, y - hw2,
                           max(x, rx1) + hw2, y + hw2)
             strip = (edge, y - half, bars[level][2], y + half)
-            objects = paint + [("metal2", connection),
+            objects = paint + [(f"metal{rail_level}", connection),
                                (f"metal{level}", strip)]
             if any(not sites.clear(box, [layer], None, net)
                    for layer, box in objects):
@@ -3912,17 +4027,17 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
             cands.extend(range(rx2 + stepv, edge + 1, stepv))
         chosen = None
         for x in cands:
-            paint, bars = _pin_stack_boxes(x, y, 2, level, geo, cuts)
+            paint, bars = _pin_stack_boxes(x, y, rail_level, level, geo, cuts)
             connection = None
-            if not spec["rail"] and bars[2][2] > rx2:
-                hw2 = max(geo.wire[2] // 2, 1)
-                connection = (rx2 - hw2, y - hw2, bars[2][2], y + hw2)
+            if not spec["rail"] and bars[rail_level][2] > rx2:
+                hw2 = max(geo.wire[rail_level] // 2, 1)
+                connection = (rx2 - hw2, y - hw2, bars[rail_level][2], y + hw2)
             # Only metal2 attaches to this rail; upper planes clear independently.
             if (min(box[0] for _, box in paint) < 0
-                    or bars[2][0] < rx1
-                    or (bars[2][2] > rx2 and connection is None)):
+                    or bars[rail_level][0] < rx1
+                    or (bars[rail_level][2] > rx2 and connection is None)):
                 continue
-            if connection is not None and not sites.clear(connection, ["metal2"], None, net):
+            if connection is not None and not sites.clear(connection, [f"metal{rail_level}"], None, net):
                 continue
             if any(not sites.clear(box, [layer], None, net)
                    for layer, box in paint):
@@ -3947,7 +4062,7 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
                 "pin geometry")
         x, paint, bars, strip, connection = chosen
         if connection is not None:
-            plan.paint(net, "metal2", *connection)
+            plan.paint(net, f"metal{rail_level}", *connection)
         for layer, b in paint:
             plan.paint(net, layer, *b)
         plan.paint(net, f"metal{level}", *strip)
