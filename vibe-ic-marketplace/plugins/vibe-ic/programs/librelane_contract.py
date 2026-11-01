@@ -1458,6 +1458,102 @@ def _declared_flow_settings(l19: dict, pdk: str) -> tuple[dict, dict]:
     return result, sources
 
 
+def _bound_primary_clocks(project: Path, l9: dict, clocks: list[dict],
+                          sdc: Path) -> tuple[list[str], str, str]:
+    """Bind multiple roots to declared inputs and an explicit asynchronous SDC.
+
+    A binding alone does not license timing cuts. Retain the complete declared
+    deck, including waveforms and I/O constraints; refuse unresolved Tcl clock
+    declarations rather than guessing their targets or relationships.
+    """
+    from l_doc_consumer_contract import l9_top_ports, l9_port_direction
+    import sdc_constraints
+
+    def refuse(detail: str) -> None:
+        raise Refusal('LL_CLOCK_AMBIGUOUS', detail)
+
+    inputs = {p['name'] for p in l9_top_ports(l9)
+              if p.get('name') and l9_port_direction(p) == 'in'
+              and any(p.get(k) for k in ('dir', 'mode', 'direction'))}
+    aliases = {pin: {pin} for pin in inputs}
+    l1 = project / 'phase1/generated_docs/L1_DATASHEET.json'
+    if l1.is_file():
+        for pin in _load(l1).get('pin_table', []):
+            target = pin.get('rtl_name')
+            if target in inputs:
+                for alias in (pin.get('name'), pin.get('board_name'),
+                              *(pin.get('aliases') or [])):
+                    if isinstance(alias, str) and alias:
+                        aliases.setdefault(alias, set()).add(target)
+
+    def resolve(pin: Any) -> str:
+        targets = aliases.get(pin, set()) if isinstance(pin, str) else set()
+        if len(targets) != 1:
+            refuse(f'undeclared or ambiguous top input {pin!r}')
+        return next(iter(targets))
+
+    roots = [resolve(c.get('source_pin')) for c in clocks]
+    bindings = l9.get('clock_binding')
+    if not isinstance(bindings, dict) or not bindings:
+        refuse('multiple primary clocks require explicit L9.clock_binding')
+    bound = {resolve(pin) for pin in bindings.values()}
+    if len(set(roots)) != len(roots) or not set(roots) <= bound:
+        refuse('duplicate or unbound primary clock pins')
+    paths = [sdc] if sdc.is_file() else sdc_constraints.collect_sdc_files(project)
+    texts = [path.read_text() for path in paths]
+    # This boundary supports literal clock objects. Complex Tcl remains an
+    # explicit refusal; no user script is executed during config emission.
+    active = '\n'.join(line.split('#', 1)[0]
+                       for text in texts for line in text.replace('\\\n', ' ').splitlines())
+    commands = [line.strip() for line in re.split(r'[;\n]', active) if line.strip()]
+    clock_commands = [line for line in commands if re.match(r'^create_clock\s', line)]
+    for command in clock_commands:
+        targets = re.findall(
+            r'\[get_ports\s+(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))\]', command)
+        if len(targets) != 1 or len(re.findall(r'\bget_ports\b', command)) != 1:
+            refuse('SDC primary clocks require one literal top input per create_clock')
+    declarations = sdc_constraints.create_clocks_in_text('\n'.join(clock_commands))
+    by_pin: dict[str, dict] = {}
+    for clock in declarations:
+        pin = resolve(clock.get('port_name'))
+        if pin not in roots or pin in by_pin:
+            refuse(f'extra or repeated SDC primary clock {clock.get("port_name")!r}')
+        by_pin[pin] = clock
+    if set(by_pin) != set(roots):
+        refuse('SDC must declare every bound primary clock')
+    for pin, clock in zip(roots, clocks):
+        period = clock.get('period_ns')
+        if (isinstance(period, bool) or not isinstance(period, (int, float))
+                or not math.isfinite(period) or period <= 0
+                or by_pin[pin]['period_ns'] is None
+                or not math.isclose(period, by_pin[pin]['period_ns'], rel_tol=1e-9)):
+            refuse(f'L8/SDC period unresolved or conflicting for {pin}')
+    names = {c['name'] or c['port_name'] for c in declarations}
+    if len(names) != len(roots):
+        refuse('SDC clock names must be distinct')
+    separated: set[frozenset[str]] = set()
+    group_pattern = r'\s*-group\s+\[get_clocks\s+(?:\{([\w\s]+)\}|(\w+))\]'
+    for command in commands:
+        if not re.match(r'^set_clock_groups\s+-asynchronous\b', command):
+            continue
+        body = re.sub(r'^set_clock_groups\s+-asynchronous\b', '', command)
+        if not re.fullmatch(f'(?:{group_pattern})+\\s*', body):
+            refuse('unresolved asynchronous SDC clock groups')
+        groups = [set((a or b).split()) for a, b in re.findall(group_pattern, body)]
+        flat = [name for group in groups for name in group]
+        if len(groups) < 2 or len(flat) != len(set(flat)) or not set(flat) <= names:
+            refuse('unknown or overlapping asynchronous SDC clock groups')
+        for i, group in enumerate(groups):
+            for other in groups[i + 1:]:
+                separated.update(frozenset((a, b)) for a in group for b in other)
+    if any(frozenset((a, b)) not in separated for a in names for b in names if a != b):
+        refuse('primary clock relationships lack explicit asynchronous SDC groups')
+    source = ', '.join(str(path.relative_to(project)) for path in paths)
+    if l1.is_file():
+        source += ' + L1_DATASHEET.pin_table.{rtl_name,board_name,aliases}'
+    return [by_pin[pin]['port_name'] for pin in roots], '\n'.join(texts), source
+
+
 def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool = False) -> dict:
     """Emit only declared inputs; unavailable values stay absent, never guessed."""
     root = project / 'phase1/generated_docs'
@@ -1476,11 +1572,21 @@ def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool =
               if (c.get('domain_kind') == 'primary'
                   or c.get('role') in ('primary', 'master'))
               and c.get('pdk_scoped_target') in (None, pdk)]
-    if len(clocks) != 1:
+    if not clocks:
         raise Refusal('LL_CLOCK_AMBIGUOUS', f'{len(clocks)} primary clocks for {pdk}')
+    sdc = project / 'phase3/stage3/pnr/constraint.sdc'
+    multi_sdc = None
+    clock_port = clocks[0].get('source_pin')
+    clock_source = 'L8_TIMING_WAVEFORM.clock_domains[primary].source_pin'
+    if len(clocks) > 1:
+        clock_port, text, sdc_source = _bound_primary_clocks(project, l9, clocks, sdc)
+        clock_source += ' + L9_INTEGRATION_SPEC.clock_binding + ' + sdc_source
+        if not sdc.is_file():
+            sdc = output.with_name('multi_clock.sdc')
+            multi_sdc = text
     c = clocks[0]
     _set(result, sources, 'CLOCK_PERIOD', c.get('period_ns'), 'L8_TIMING_WAVEFORM.clock_domains[primary].period_ns')
-    _set(result, sources, 'CLOCK_PORT', c.get('source_pin'), 'L8_TIMING_WAVEFORM.clock_domains[primary].source_pin')
+    _set(result, sources, 'CLOCK_PORT', clock_port, clock_source)
     # The design's whole build closure (cmp3 D8): the read phase-3 synthesis
     # and the Step-5 proof take (`_chip_synth_read.chip_rtl_files`), not the
     # one file named after the top -- a multi-file core (subservient) lost
@@ -1493,11 +1599,11 @@ def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool =
              ['dir::' + str(path.relative_to(project)) for path in (*rtl, chip_top)],
              '_chip_synth_read.chip_rtl_files(phase2/stage1/rtl) (the read phase-3 '
              'synthesis and the Step-5 proof take) + phase3/stage3/pnr/chip_top_io.v')
-    sdc = project / 'phase3/stage3/pnr/constraint.sdc'
-    if sdc.is_file():
+    if sdc.is_file() or multi_sdc is not None:
         for key in ('PNR_SDC_FILE', 'SIGNOFF_SDC_FILE'):
             _set(result, sources, key, 'dir::' + str(sdc.relative_to(project)),
-                 'phase3/stage3/pnr/constraint.sdc (L9-derived producer artefact)')
+                 (sdc_source if len(clocks) > 1 else
+                  'phase3/stage3/pnr/constraint.sdc (L9-derived producer artefact)'))
     # Mapped synthesis does not require a die/core/pad placement declaration.
     # A present declaration is still validated; physical callers remain strict.
     declared, declared_sources = (({}, {}) if synthesis_only
@@ -1628,6 +1734,9 @@ def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool =
     pdn, pdn_source = librelane_pdn_config(project)
     for key, value in pdn.items():
         _set(result, sources, key, value, pdn_source)
+    if multi_sdc is not None:
+        sdc.parent.mkdir(parents=True, exist_ok=True)
+        sdc.write_text(multi_sdc)
     write_json(output, result)
     write_json(output.with_suffix('.provenance.json'), sources)
     return result
