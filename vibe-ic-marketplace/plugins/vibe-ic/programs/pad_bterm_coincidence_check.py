@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
-"""pad_bterm_coincidence_check — is a chip-top port's BTerm ACTUALLY on its
-pad's bond terminal? Measured per net, never declared for a class of nets.
+"""pad_bterm_coincidence_check — measure the native pad interface per net.
+
+Signal interfaces require BTerm/bond-terminal coincidence. For a DEF net with
+USE POWER or GROUND, the interface is a DEF-connected supply-pad bond terminal;
+a core-stripe chip PIN is disclosed separately and cannot decide that verdict.
+Bond geometry comes from the PAD master's LEF, never a terminal-name convention
+or declaration map. This check blocks D75 acceptance on a disconnected interface.
 
 WHY THIS PROGRAM EXISTS
 =======================
@@ -19,7 +24,7 @@ itself is what an IO cell is FOR.
 So the connection is real and the router must not be asked to make it. That is
 one step away from switching a check off, and the difference is this program:
 
-  A NET IS EXCLUDED ONLY IF THIS PROGRAM MEASURED THE CONNECTION.
+  A SIGNAL NET IS EXCLUDED ONLY IF THIS PROGRAM MEASURED THE CONNECTION.
   Same layer, and an overlap at least as wide and as tall as that layer's own
   minimum width — a touch of one database unit is not a conductor.
 
@@ -33,9 +38,9 @@ one step away from switching a check off, and the difference is this program:
 
 WHAT A CONSUMER MAY DO WITH IT, AND WHAT IT MAY NOT
 ===================================================
-A consumer may exclude a `CONNECTED` net from signal routing. It may NOT
+A consumer may exclude a `CONNECTED` signal net from signal routing. It may NOT
 exclude a net this program reports `NOT_CONNECTED` or `UNDECIDED`, and it may
-not exclude "the port nets" as a class. A net whose BTerm is moved off its pad
+not exclude "the port nets" as a class. A signal net whose BTerm is moved off its pad
 by one layer or one micron comes back as NOT_CONNECTED and must go back into
 the router — that is the control this program exists to make possible.
 
@@ -157,6 +162,45 @@ def def_net_terminals(text: str) -> Dict[str, List[Tuple[str, str]]]:
     return out
 
 
+def def_net_uses(text: str) -> Dict[str, str]:
+    """Read the net's own USE, independently of chip-PIN names or intent."""
+    out = {}
+    for section in ("NETS", "SPECIALNETS"):
+        for entry in PR._section(text, section).split(";"):
+            m = _NET_RE.match(entry.strip())
+            if m:
+                use = re.search(r"\+\s+USE\s+(\w+)\b", m.group("tail"))
+                if use:
+                    out[m.group("name")] = use.group(1)
+    return out
+
+
+def bond_terminal_ports(ports, size):
+    """Geometrically identifiable bond faces of a PAD macro.
+
+    The largest PORT rectangle must be enclosed by the macro outline. Edge
+    contacts are abutment/ring access, not a bond face. Keep only those largest
+    enclosed faces, even when their electrical pin also has many rail shapes.
+    There is no cell/pin-name list, assumed metal layer, or dimensional cutoff.
+    A rail-only abstract with boundary contacts supplies no bond terminal.
+    """
+    if not size:
+        return {}
+    shapes = [(pin, layer, rect) for pin, rects in ports.items()
+              for layer, rect in rects if rect[2] > rect[0] and rect[3] > rect[1]]
+    if not shapes:
+        return {}
+    area = lambda r: (r[2] - r[0]) * (r[3] - r[1])
+    largest = max(area(rect) for _, _, rect in shapes)
+    w, h = size
+    out = {}
+    for pin, layer, rect in shapes:
+        if (area(rect) == largest and 0 < rect[0] < rect[2] < w
+                and 0 < rect[1] < rect[3] < h):
+            out.setdefault(pin, []).append((layer, rect))
+    return out
+
+
 def _overlap(a: List[int], b: List[int]) -> Optional[List[int]]:
     x1, y1 = max(a[0], b[0]), max(a[1], b[1])
     x2, y2 = min(a[2], b[2]), min(a[3], b[3])
@@ -201,6 +245,7 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
     dfn = PR.parse_def(def_text)
     pins = def_pins(def_text)
     nets = def_net_terminals(def_text)
+    uses = def_net_uses(def_text)
     widths = layer_min_widths(tech_text, dfn.units)
 
     # Grouped, not folded in arrival order. `dict.update` over the discovered
@@ -235,9 +280,12 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
     classes, _cl_conf = _srm.merge_source_records(
         _parsed(PR.parse_lef_macro_classes), on_conflict="richer")
     conflicting_classes = {conflict["key"] for conflict in _cl_conf}
+    bonds = {master: bond_terminal_ports(ports, sizes.get(master))
+             for master, ports in pin_ports.items()}
 
-    def terminal_row(pin_name, rec, inst, tpin, comp):
-        rects = pin_ports[comp.master][tpin]
+    def terminal_row(pin_name, rec, inst, tpin, comp, rects=None):
+        if rects is None:
+            rects = pin_ports[comp.master][tpin]
         size = sizes.get(comp.master)
         if size is None or comp.x is None or comp.orient is None:
             return {"pin": pin_name, "net": rec["net"], "instance": inst,
@@ -288,6 +336,8 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
             candidates.extend(component_pins.get(pin, []) if inst == "*"
                               else [(inst, pin)])
         chosen = None
+        fallback = None
+        supply = uses.get(rec["net"]) in ("POWER", "GROUND")
         for inst, pin in dict.fromkeys(candidates):
             comp = dfn.components.get(inst)
             if comp is None or pin not in pin_ports.get(comp.master, {}):
@@ -295,13 +345,45 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
             if (comp.master in conflicting_classes
                     or classes.get(comp.master, "").partition(" ")[0] != "PAD"):
                 continue
-            row = terminal_row(pin_name, rec, inst, pin, comp)
+            if supply:
+                # A connection to a rail on an IO cell is not a bond-pad
+                # connection, even when the chip PIN overlaps that rail.
+                if pin not in bonds[comp.master]:
+                    if fallback is None:
+                        fallback = terminal_row(pin_name, rec, inst, pin, comp)
+                    continue
+                row = terminal_row(pin_name, rec, inst, pin, comp,
+                                   bonds[comp.master][pin])
+            else:
+                row = terminal_row(pin_name, rec, inst, pin, comp)
             if chosen is None or rank[row["verdict"]] > rank[chosen["verdict"]]:
                 chosen = row
-            # Connectivity only supplies candidates. Coincidence decides which
-            # pad actually carries this BTerm, including shared supply nets.
+            # Prefer a coincident bond when present. Supply connectivity does
+            # not require the chip PIN to be that package interface point.
             if row["verdict"] == "CONNECTED":
                 break
+        if supply:
+            if chosen is not None:
+                chosen.update(net_use=uses[rec["net"]],
+                              interface_kind="supply_pad_terminal",
+                              pin_is_interface=chosen["verdict"] == "CONNECTED",
+                              pin_coincidence_verdict=chosen["verdict"])
+                if chosen.get("terminal_rect") is not None:
+                    chosen.update(verdict="CONNECTED", reason=
+                        "DEF connectivity joins this net to the PAD master's "
+                        "LEF bond terminal; a noncoincident chip PIN is a "
+                        "non-interface PIN and does not decide supply access")
+            else:
+                chosen = fallback or {
+                    "pin": pin_name, "net": rec["net"], "instance": None,
+                    "terminal": None, "master": None,
+                    "pin_layer": rec["layer"], "pin_rect": rec["rect"]}
+                chosen.update(net_use=uses[rec["net"]],
+                              interface_kind="missing_supply_pad_terminal",
+                              pin_is_interface=False, verdict="NOT_CONNECTED",
+                              reason="no DEF-connected PAD bond terminal on "
+                                     "this supply net; rail pins and the chip "
+                                     "PIN cannot supply a package interface")
         if chosen is not None:
             rows.append(chosen)
 
@@ -317,7 +399,12 @@ def run(def_text: str, tech_text: str, io_lefs: List[Path]
                                      if r["verdict"] == "NOT_CONNECTED"),
         "undecided_nets": sorted(r["net"] for r in undecided),
         "nets": rows,
+        "non_interface_pins": [r["pin"] for r in rows
+                               if r.get("pin_is_interface") is False],
         "consumer_contract": (
+            "Supply USE POWER/GROUND requires a DEF-connected LEF bond "
+            "terminal; a non-interface chip PIN neither connects nor fails "
+            "that net. Signal nets require BTerm/bond coincidence. "
             "A consumer may exclude a net from signal routing ONLY if it "
             "appears in `connected_nets`. `not_connected_nets` and "
             "`undecided_nets` must stay in the router, and a consumer that "
@@ -362,7 +449,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     dest.parent.mkdir(parents=True, exist_ok=True)
     atomic_write_json(dest, report)
     print(f"=== {PROGRAM} ({project.name}) ===")
-    print(f"  {report['n_ports_on_a_pad']} port(s) sit on a pad terminal: "
+    print(f"  {report['n_ports_on_a_pad']} port interface(s) evaluated: "
           f"{len(report['connected_nets'])} CONNECTED, "
           f"{len(report['not_connected_nets'])} NOT_CONNECTED, "
           f"{len(report['undecided_nets'])} UNDECIDED")

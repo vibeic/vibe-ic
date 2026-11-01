@@ -191,7 +191,7 @@ def _def(orient, pin_rect):
             f"END DESIGN\n")
 
 
-def _shared_supply(tmp_path, section, connection, port_x):
+def _shared_supply(tmp_path, section, connection, port_x, net_use="POWER"):
     """Two supply pads share a rail; only geometry identifies the BTerm's pad."""
     lef = tmp_path / "rail.lef"
     lef.write_text(_io_macro("rail_bridge", 60.0, 100.0,
@@ -212,7 +212,7 @@ PINS 1 ;
   + PLACED ( {port_x} 20000 ) N ;
 END PINS
 {section} 1 ;
-- supply ( PIN supply_port ) {connection} + USE POWER ;
+- supply ( PIN supply_port ) {connection} + USE {net_use} ;
 END {section}
 END DESIGN
 """
@@ -242,12 +242,93 @@ def test_explicit_supply_joins_choose_the_coincident_pad(tmp_path, section):
 
 @pytest.mark.parametrize("connection", ["( * RAIL )",
                                        "( rail_left RAIL ) ( rail_right RAIL )"])
-def test_supply_connectivity_without_a_coincident_pad_still_refuses(
+def test_signal_connectivity_without_a_coincident_pad_still_refuses(
         tmp_path, connection):
-    rc, report = _shared_supply(tmp_path, "SPECIALNETS", connection, 220000)
+    # USE SIGNAL retains the original coincidence contract, even when the
+    # names, PIN USE and connected library pin all suggest a supply.
+    rc, report = _shared_supply(tmp_path, "SPECIALNETS", connection, 220000,
+                                net_use="SIGNAL")
     assert report["connected_nets"] == []
-    assert rc == 2 or report["not_connected_nets"] == ["supply"]
+    assert rc == 0 and report["not_connected_nets"] == ["supply"]
     assert all(r["verdict"] == "NOT_CONNECTED" for r in report["nets"])
+
+
+def _supply_interface(tmp_path, section, use, connection, *, stripe_on_rail=False,
+                      rail_only=False, port_on_bond=False):
+    # Neutral pin names deliberately include a misleading PAD-labelled rail.
+    # Only the LEF geometry identifies the bond. A bond pin can also carry
+    # ring access rectangles; those must not replace its bond face as witness.
+    pins = [("PAD", [("Metal5", (0, 20, 60, 21))])]
+    if not rail_only:
+        pins += [("external_contact", [("Metal5", (10, 2, 30, 18)),
+                                       ("Metal5", (0, 22, 60, 23))])]
+    lef = tmp_path / "interface.lef"
+    lef.write_text(_io_macro("neutral_io", 60, 100, pins))
+    rect = "0 40000 ) ( 120000 42000" if stripe_on_rail else "200000 0 ) ( 320000 2000"
+    if port_on_bond:
+        rect = "20000 4000 ) ( 60000 36000"
+    text = f"""VERSION 5.8 ;
+DESIGN neutral_top ;
+UNITS DISTANCE MICRONS {UNITS} ;
+DIEAREA ( 0 0 ) ( 500000 500000 ) ;
+COMPONENTS 1 ;
+- io_instance neutral_io + FIXED ( 20000 20000 ) N ;
+END COMPONENTS
+PINS 1 ;
+- chip_port + NET neutral_net + USE SIGNAL
+  + LAYER Metal5 ( {rect} ) + FIXED ( 20000 20000 ) N ;
+END PINS
+{section} 1 ;
+- neutral_net ( PIN chip_port ) {connection} + USE {use} ;
+END {section}
+END DESIGN
+"""
+    return C.run(text, _M5_TECH, [lef])
+
+
+@pytest.mark.parametrize("section", ["NETS", "SPECIALNETS"])
+@pytest.mark.parametrize("use", ["POWER", "GROUND"])
+@pytest.mark.parametrize("connection", ["( * external_contact ) ( * PAD )",
+                                       "( io_instance external_contact )"])
+def test_supply_bond_connectivity_accepts_a_non_interface_stripe(
+        tmp_path, section, use, connection):
+    rc, report = _supply_interface(tmp_path, section, use, connection)
+    assert rc == 0 and report["connected_nets"] == ["neutral_net"]
+    row, = report["nets"]
+    assert row["terminal"] == "external_contact"
+    assert row["terminal_rect"] == [40000, 24000, 80000, 56000]
+    assert row["pin_coincidence_verdict"] == "NOT_CONNECTED"
+    assert row["pin_is_interface"] is False and row["overlap"] is None
+    assert report["non_interface_pins"] == ["chip_port"]
+
+
+@pytest.mark.parametrize("rail_only", [False, True])
+@pytest.mark.parametrize("use", ["POWER", "GROUND"])
+def test_supply_ring_pins_and_a_coincident_stripe_do_not_connect(
+        tmp_path, rail_only, use):
+    rc, report = _supply_interface(tmp_path, "SPECIALNETS", use, "( * PAD )",
+                                  stripe_on_rail=True, rail_only=rail_only)
+    assert rc == 0 and report["not_connected_nets"] == ["neutral_net"]
+    assert report["connected_nets"] == []
+    assert report["non_interface_pins"] == ["chip_port"]
+    assert report["n_ports_on_a_pad"] == 1
+
+
+@pytest.mark.parametrize("use", ["POWER", "GROUND"])
+@pytest.mark.parametrize("port_on_bond", [False, True])
+def test_supply_stripe_alone_never_connects(tmp_path, use, port_on_bond):
+    rc, report = _supply_interface(tmp_path, "NETS", use, "",
+                                  port_on_bond=port_on_bond)
+    assert rc == 0 and report["not_connected_nets"] == ["neutral_net"]
+    assert report["connected_nets"] == []
+    assert report["non_interface_pins"] == ["chip_port"]
+
+
+def test_signal_with_the_same_stripe_and_connected_bond_still_refuses(tmp_path):
+    rc, report = _supply_interface(tmp_path, "NETS", "SIGNAL",
+                                  "( * external_contact )")
+    assert rc == 0 and report["not_connected_nets"] == ["neutral_net"]
+    assert report["connected_nets"] == []
 
 
 def test_a_coincident_endcap_is_not_a_supply_pad(tmp_path):
@@ -285,7 +366,8 @@ END NETS
     assert C.def_net_terminals(text) == {"supply": [("pad", "RAIL")]}
 
 
-def test_wildcard_coincidence_reads_a_checked_in_io_outline(tmp_path):
+@pytest.mark.parametrize("stripe", [False, True])
+def test_wildcard_coincidence_reads_a_checked_in_io_outline(tmp_path, stripe):
     """The stored IO abstracts have sizes/classes, but omit pin ports.
 
     Reuse an actual outline with a synthetic terminal for this geometry control;
@@ -308,6 +390,7 @@ def test_wildcard_coincidence_reads_a_checked_in_io_outline(tmp_path):
     rect = [round(v * UNITS) for v in rectangle]
     step = round((sizes[master][0] + 100) * UNITS)
     point = 20000 + step
+    port_point = point + step if stripe else point
     tech = (f"LAYER {layer}\n TYPE ROUTING ;\n WIDTH "
             f"{min(rectangle[2]-rectangle[0], rectangle[3]-rectangle[1])/2} ;\n"
             f"END {layer}\n")
@@ -321,7 +404,7 @@ COMPONENTS 2 ;
 END COMPONENTS
 PINS 1 ;
 - port + NET rail + LAYER {layer} ( {rect[0]} {rect[1]} ) ( {rect[2]} {rect[3]} )
- + PLACED ( {point} 20000 ) N ;
+ + PLACED ( {port_point} 20000 ) N ;
 END PINS
 SPECIALNETS 1 ;
 - rail ( PIN port ) ( * {terminal} ) + USE POWER ;
@@ -330,7 +413,9 @@ END DESIGN
 """
     rc, report = C.run(native_lef_def, tech, [lef])
     assert rc == 0 and report["connected_nets"] == ["rail"]
-    assert report["nets"][0]["instance"] == "second_pad"
+    assert report["nets"][0]["instance"] == ("first_pad" if stripe else "second_pad")
+    if stripe:
+        assert report["non_interface_pins"] == ["port"]
 
 
 def _both_orders(tmp_path, def_text, lef_a, lef_b):
