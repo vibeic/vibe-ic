@@ -175,8 +175,14 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
         return failed(call(program, args, artefacts=[report]), Path(program).stem)
 
     if step_id == 'A01':
+        from analog_a1_spec_emit import validate_attribution_output, AttributionRefusal, CHIP_SPECS_REL
         path = bdir / 'spec.json'
-        if not path.is_file() or _stale(project, _read(path)):
+        attribution_stale = False
+        try:
+            validate_attribution_output(project, _read(path), name)
+        except AttributionRefusal:
+            attribution_stale = True
+        if not path.is_file() or _stale(project, _read(path)) or attribution_stale:
             result = call('analog_a1_spec_emit.py', [project, '--block', name])
             failure = failed(result, 'A01_SPEC_PRODUCER')
             if failure:
@@ -189,6 +195,8 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
         if failure:
             return failure
         outputs.append(str(path))
+        if (project / CHIP_SPECS_REL).is_file():
+            outputs.append(str(project / CHIP_SPECS_REL))
         return finish('PASS', 'A01_SPEC_CONSUMER_PASS: current attributed specifications checked')
 
     if step_id == 'A02':

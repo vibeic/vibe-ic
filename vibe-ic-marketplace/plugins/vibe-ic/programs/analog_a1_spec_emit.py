@@ -38,7 +38,11 @@ extraction when no extraction happened.
     `L1_DATASHEET.electrical_specs`) carry NO block key. Deciding which row of
     a prose datasheet is *this* block's typ Vout is judgment, and
     `analog-spec-extract/SKILL.md` marks it KEEP-JUDGMENT. This program does
-    not guess: it binds only what Phase 1 already attributed to the block.
+    not guess: an optional approved, source-bound amendment at
+    `requirements/base_A1/electrical_row_attribution.json` can supply that
+    judgment. Its block rows join the block spec, while chip rows remain in
+    `phase3/analog/chip_specs.json`. An absent amendment keeps the old handoff;
+    an unapproved or unbound amendment blocks emission and consumption.
   * A block whose structured spec yields nothing gets **NO spec.json at all**.
     It gets `spec_gap.json` — an artefact whose `status` is
     `NO_SPEC_IN_DOCS`, which names the evidence, says in `ai_handoff` which
@@ -88,6 +92,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
+import re
 import sys
 import time
 from pathlib import Path
@@ -121,6 +127,165 @@ SKILL = "analog-spec-extract"
 _CANONICAL_ANALOG = "phase3/analog"
 _DECLARED_ANALOG = "phase1/analog"
 _L5_REL = "phase1/generated_docs/L5_ADI_SPEC.json"
+ATTRIBUTION_REL = "requirements/base_A1/electrical_row_attribution.json"
+CHIP_SPECS_REL = "phase3/analog/chip_specs.json"
+
+
+class AttributionRefusal(ValueError):
+    """An amendment is optional; a present unapproved/unbound one blocks A1."""
+    def __init__(self, code, detail):
+        self.code = code
+        super().__init__(f"{code}: {detail}")
+
+
+def approved_electrical_attribution(project: Path) -> Optional[dict]:
+    """Read owner judgment, never infer it from an unattributed electrical row.
+
+    Approval, the original L5 row population and each cited source line must
+    remain bound. A partial amendment leaves the remaining rows unresolved.
+    """
+    project = Path(project).resolve()
+    path = project / ATTRIBUTION_REL
+    if not path.exists() and not path.is_symlink():
+        return None
+    readset = {}
+
+    def require(ok, detail, code="A1_ATTRIBUTION_UNBOUND"):
+        if not ok:
+            raise AttributionRefusal(code, detail)
+
+    def reference(ref):
+        require(isinstance(ref, dict) and isinstance(ref.get("path"), str)
+                and not Path(ref["path"]).is_absolute()
+                and re.fullmatch(r"[0-9a-f]{64}", str(ref.get("sha256", ""))), "invalid source reference")
+        source = project / ref["path"]
+        require(not source.is_symlink() and source.resolve().is_relative_to(project)
+                and source.is_file() and _sha256(source) == ref["sha256"], ref["path"])
+        readset[ref["path"]] = ref["sha256"]
+        return source
+
+    require(not path.is_symlink() and path.resolve().is_relative_to(project), ATTRIBUTION_REL)
+    body = _read_json(path)
+    require(isinstance(body, dict), "invalid amendment JSON")
+    approval = body.get("approval")
+    require(body.get("schema") == "vibeic.flow109.requirement-authority-amendment.v1"
+            and isinstance(approval, dict) and approval.get("status") == "APPROVED"
+            and approval.get("authority") == "requirements_owner"
+            and isinstance(approval.get("approver"), str) and approval["approver"].strip(),
+            ATTRIBUTION_REL, "A1_ATTRIBUTION_UNAPPROVED")
+    reference(approval.get("source_reference"))
+    original = _read_json(reference(body.get("source_l5")))
+    current_path = project / _L5_REL
+    require(not current_path.is_symlink() and current_path.resolve().is_relative_to(project), _L5_REL)
+    current = _read_json(current_path)
+    source_rows = original.get("electrical_specs") if isinstance(original, dict) else None
+    require(isinstance(source_rows, list) and isinstance(current, dict)
+            and current.get("electrical_specs") == source_rows,
+            "current L5 electrical rows differ from the approved source population")
+    readset[_L5_REL] = _sha256(project / _L5_REL)
+    readset[ATTRIBUTION_REL] = _sha256(path)
+    entries, _ = block_entries(project)
+    names = {e.get("name") or e.get("block") or e.get("type") for e in entries}
+    rows = body.get("attributions")
+    require(isinstance(rows, list), "attributions must be a list")
+    seen, bound = set(), []
+    for row in rows:
+        require(isinstance(row, dict), "invalid attribution row")
+        index = row.get("index")
+        require(type(index) is int and 0 <= index < len(source_rows) and index not in seen,
+                "invalid or duplicate electrical row index")
+        seen.add(index)
+        original_row = row.get("original_row")
+        require(row.get("source_pointer") == f"/electrical_specs/{index}"
+                and isinstance(original_row, dict) and original_row == source_rows[index],
+                f"electrical row {index} changed or pointer differs")
+        scope, name, metric = row.get("scope"), row.get("block"), row.get("metric")
+        require((scope == "chip" and name is None) or
+                (scope == "block" and isinstance(name, str) and name in names),
+                f"row {index} has no declared scope/block")
+        require(isinstance(metric, str) and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.-]*", metric),
+                f"row {index} has no metric")
+        citation = row.get("citation")
+        cited = reference(citation)
+        lines = cited.read_text(encoding="utf-8").splitlines()
+        line, literal = citation.get("line"), citation.get("literal")
+        require(type(line) is int and 1 <= line <= len(lines)
+                and isinstance(literal, str) and literal and literal in lines[line - 1],
+                f"row {index} citation does not bind its source line")
+        value, unit = original_row.get("value"), original_row.get("unit")
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            number = math.nan
+        require(not isinstance(value, bool) and math.isfinite(number)
+                and isinstance(unit, str) and unit.strip(), f"row {index} value/unit unavailable")
+        binding = {"path": ATTRIBUTION_REL, "sha256": readset[ATTRIBUTION_REL],
+                   "index": index, "source_pointer": row["source_pointer"],
+                   "original_row": original_row, "citation": citation}
+        bound.append({"scope": scope, "block": name, "spec": {
+            "name": metric, "value": number, "unit": unit, "source": "L5",
+            "source_field": row["source_pointer"], "electrical_row_attribution": [binding]}})
+    return {"path": ATTRIBUTION_REL, "sha256": readset[ATTRIBUTION_REL],
+            "readset": readset, "rows": bound}
+
+
+def _attribution_provenance(amendment):
+    return {"path": amendment["path"], "sha256": amendment["sha256"],
+            "inputs": [{"path": p, "sha256": h} for p, h in sorted(amendment["readset"].items())]}
+
+
+def _attributed_specs(project, name, btype, amendment):
+    structured = _bind_l5(project, name, btype) if name is not None else {}
+    specs = {key: _spec_entry(key, value, {}) for key, value in structured.items()}
+    for row in amendment["rows"]:
+        if row["block"] != name:
+            continue
+        addition = row["spec"]
+        key = addition["name"]
+        if key not in specs:
+            specs[key] = dict(addition)
+            continue
+        previous = dict(specs[key])
+        primary = next((k for k in ("target", "typ", "value") if k in previous), None)
+        values = [previous[primary]] if primary else [previous[k] for k in ("min", "max") if k in previous]
+        if previous.get("unit") != addition["unit"] or addition["value"] not in values:
+            raise AttributionRefusal("A1_ATTRIBUTION_CONFLICT", f"{name}/{key} differs from its attributed row")
+        previous["electrical_row_attribution"] = [
+            *previous.get("electrical_row_attribution", []), *addition["electrical_row_attribution"]]
+        specs[key] = previous
+    return [specs[key] for key in sorted(specs)]
+
+
+def _chip_spec_body(project, amendment):
+    return {"scope": "chip", "specs": _attributed_specs(project, None, None, amendment),
+            "_provenance": {"producer": PRODUCER, "defaults_used": False, "fields_defaulted": [],
+                            "electrical_row_attribution": _attribution_provenance(amendment)}}
+
+
+def validate_attribution_output(project, body, name):
+    """Recheck current approval and emitted values at the gate/metric boundary."""
+    amendment = approved_electrical_attribution(project)
+    if not isinstance(body, dict):
+        if amendment:
+            raise AttributionRefusal("A1_ATTRIBUTION_UNBOUND", "spec is not an object")
+        return None
+    provenance = body.get("_provenance", {})
+    retained = provenance.get("electrical_row_attribution") if isinstance(provenance, dict) else None
+    if amendment is None:
+        if retained is not None:
+            raise AttributionRefusal("A1_ATTRIBUTION_STALE", "retained amendment is now absent")
+        return None
+    if retained != _attribution_provenance(amendment):
+        raise AttributionRefusal("A1_ATTRIBUTION_UNBOUND", "spec does not bind the current approved amendment")
+    entries, _ = block_entries(project)
+    btype = next((_canonical_type(e.get("type") or e.get("block_type")) for e in entries
+                  if (e.get("name") or e.get("block") or e.get("type")) == name), None)
+    if body.get("specs") != _attributed_specs(project, name, btype, amendment):
+        raise AttributionRefusal("A1_ATTRIBUTION_OUTPUT_CHANGED", "attributed specification values differ")
+    if any(row["scope"] == "chip" for row in amendment["rows"]):
+        if _read_json(Path(project) / CHIP_SPECS_REL) != _chip_spec_body(project, amendment):
+            raise AttributionRefusal("A1_ATTRIBUTION_OUTPUT_CHANGED", "chip spec set missing/changed")
+    return amendment
 
 
 # ── inputs ────────────────────────────────────────────────────────────────
@@ -283,7 +448,8 @@ def _unattributed_row_count(project: Path) -> int:
         d = _read_json(project / rel)
         if isinstance(d, dict) and isinstance(d.get(key), list):
             n += len(d[key])
-    return n
+    amendment = approved_electrical_attribution(project)
+    return n - len(amendment["rows"]) if amendment else n
 
 
 def _provenance(project: Path, entry: Dict[str, Any], btype: str,
@@ -306,7 +472,7 @@ def _provenance(project: Path, entry: Dict[str, Any], btype: str,
                 f"only the rows Phase 1 had already attributed."),
             "scope": "additional_specs_for_this_block",
         }
-    return {
+    provenance = {
         "schema": PROVENANCE_SCHEMA,
         "producer": PRODUCER,
         "produced_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -334,6 +500,11 @@ def _provenance(project: Path, entry: Dict[str, Any], btype: str,
             "block key; binding a row of those to a block is judgment and is "
             "left to skill `analog-spec-extract`."),
     }
+    amendment = approved_electrical_attribution(project)
+    if amendment:
+        provenance["electrical_row_attribution"] = _attribution_provenance(amendment)
+        provenance["limits"] += " Approved source-bound electrical-row attribution is also consumed."
+    return provenance
 
 
 def _gap_body(project: Path, entry: Dict[str, Any], name: str, btype: str,
@@ -383,6 +554,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
     bdir = project / _CANONICAL_ANALOG / str(name)
     spec_path = bdir / "spec.json"
     rec: Dict[str, Any] = {"block": name, "block_type": btype}
+    amendment = approved_electrical_attribution(project)
 
     existing = _read_json(spec_path) if spec_path.is_file() else None
     if isinstance(existing, dict):
@@ -397,7 +569,9 @@ def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
             return rec
 
     bound = _bind_l5(project, str(name), btype)
-    if not bound:
+    specs = (_attributed_specs(project, str(name), btype, amendment) if amendment else
+             [_spec_entry(canon, value, entry) for canon, value in sorted(bound.items())])
+    if not specs:
         seen = []
         raw_spec = entry.get("spec")
         if isinstance(raw_spec, dict) and isinstance(raw_spec.get("specs"),
@@ -429,15 +603,15 @@ def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
              if isinstance(b, dict)}
     match = "name" if name in names else "type"
 
-    specs = [_spec_entry(canon, b, entry) for canon, b in sorted(bound.items())]
     body: Dict[str, Any] = {
         "block": name,
         "block_type": btype,
         "specs": specs,
-        "extraction_strategy": "l5_structured_bind",
+        "extraction_strategy": ("l5_structured_bind_with_approved_attribution" if amendment
+                                else "l5_structured_bind"),
         "low_confidence": bool(entry.get("low_confidence")),
         "_provenance": _provenance(project, entry, btype,
-                                   sorted(bound.keys()), match),
+                                   [s["name"] for s in specs], match),
     }
     iface = _interface(entry)
     if not iface:
@@ -456,7 +630,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
         gap_path.unlink()          # the gap is resolved; do not leave both
     rec.update(action="emitted", emitted=True,
                spec_path=str(spec_path.relative_to(project)),
-               fields=sorted(bound.keys()))
+               fields=[s["name"] for s in specs])
     return rec
 
 
@@ -479,7 +653,28 @@ def run(project: Path, only: Optional[str] = None) -> Tuple[int, Dict[str, Any]]
                        "reason": f"block `{only}` is not declared in {src}",
                        "records": []}
     try:
+        amendment = approved_electrical_attribution(project)
+        if amendment:
+            # Validate all selected merges before writing any block/chip output.
+            for e in entries:
+                _attributed_specs(project, str(e.get("name") or e.get("block") or e.get("type")),
+                                  _canonical_type(e.get("type") or e.get("block_type")), amendment)
+        # Deterministic, atomic bytes: native A01 may run one producer per block.
+        chip = project / CHIP_SPECS_REL
+        old_chip = _read_json(chip) if chip.is_file() else None
+        owned_chip = (isinstance(old_chip, dict) and isinstance(old_chip.get("_provenance"), dict)
+                      and old_chip["_provenance"].get("producer") == PRODUCER)
+        if amendment and any(row["scope"] == "chip" for row in amendment["rows"]):
+            if chip.exists() and not owned_chip:
+                raise AttributionRefusal("A1_ATTRIBUTION_OUTPUT_OWNERSHIP", "retaining author-owned chip spec set")
+            from _atomic_artefact import write_json
+            write_json(chip, _chip_spec_body(project, amendment))
+        elif owned_chip:
+            chip.unlink()
         records = [emit_for_block(project, e) for e in entries]
+    except AttributionRefusal as exc:
+        return 1, {"producer": PRODUCER, "verdict": "ATTRIBUTION_REFUSED",
+                   "reason": str(exc), "records": []}
     except ImportError as exc:
         return 1, {"producer": PRODUCER, "verdict": "NO_BINDER",
                    "reason": (f"the consumer's spec vocabulary is "

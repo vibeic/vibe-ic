@@ -18,6 +18,7 @@ plus a sidecar a consumer can read unambiguously as "not extracted".
 from __future__ import annotations
 
 import json
+import hashlib
 
 import pytest
 
@@ -239,3 +240,172 @@ def test_no_analog_input_at_all_is_an_input_error_not_a_deferral(tmp_path):
     assert cp.returncode == 1, (
         "an unusable input is rc 1; rc 2 means 'measured, nothing bound' and "
         "must not be reused for 'there was nothing to measure'")
+
+
+def attribution_case(root, *, existing=False):
+    """Neutral source rows, with an independently approved, hash-bound mapping."""
+    if not existing:
+        make_project(root, [block('regulator_alpha', 'ldo',
+            [{'name': 'Vout', 'target': 1.8, 'unit': 'V'}])])
+    def write(rel, data):
+        path = root / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(data) if isinstance(data, dict) else data)
+        return {'path': rel, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+    l5_path = root / 'phase1/generated_docs/L5_ADI_SPEC.json'
+    l5 = json.loads(l5_path.read_text())
+    l5['electrical_specs'] = [
+        {'parameter': 'supply', 'value': '2.4', 'unit': 'V'},
+        {'parameter': 'voltage', 'value': '1.8', 'unit': 'V'},
+        {'parameter': 'current', 'value': '0.3', 'unit': 'mA'}]
+    l5_path.write_text(json.dumps(l5))
+    snapshot = write('input/authority_sources/l5.json', l5)
+    decision = write('input/authority_sources/decision.md', 'Owner approves the row attribution.\n')
+    citation = write('input/docs/limits.md', 'Supply 2.4 V\nOutput 1.8 V\nLoad 0.3 mA\n')
+    data = {'schema': 'vibeic.flow109.requirement-authority-amendment.v1',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+                     'approver': 'owner delegate', 'source_reference': decision},
+        'source_l5': snapshot, 'numeric_values_changed': False, 'attributions': []}
+    for index, (scope, name, metric) in enumerate([
+            ('chip', None, 'supply'), ('block', 'regulator_alpha', 'vout'),
+            ('block', 'regulator_alpha', 'iload')]):
+        data['attributions'].append({'index': index,
+            'source_pointer': f'/electrical_specs/{index}',
+            'original_row': l5['electrical_specs'][index], 'scope': scope,
+            'block': name, 'metric': metric,
+            'citation': {**citation, 'line': index + 1,
+                         'literal': (root / citation['path']).read_text().splitlines()[index]}})
+    path = root / 'requirements/base_A1/electrical_row_attribution.json'
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data))
+    return path, data
+
+
+def test_approved_electrical_rows_join_block_and_chip_specs_without_duplicate_targets(tmp_path):
+    attribution_case(tmp_path)
+    cp = run_prog(A1, tmp_path)
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    body = read_json(bdir(tmp_path, 'regulator_alpha') / 'spec.json')
+    assert {s['name']: s.get('target', s.get('value')) for s in body['specs']} == {
+        'vout': 1.8, 'iload': 0.3}
+    assert all(s['electrical_row_attribution'] for s in body['specs'])
+    assert body['_provenance']['unattributed_electrical_rows_not_bound'] == 0
+    assert body['_provenance']['ai_handoff'] is None
+    chip = read_json(tmp_path / 'phase3/analog/chip_specs.json')
+    assert chip['scope'] == 'chip'
+    assert [(s['name'], s['value'], s['unit']) for s in chip['specs']] == [('supply', 2.4, 'V')]
+    assert run_prog(GATE_A1, tmp_path, '--block', 'regulator_alpha').returncode == 0
+
+
+@pytest.mark.parametrize('damage', ['draft', 'authority', 'approver', 'approval_source',
+    'source_l5', 'citation', 'line', 'row', 'current_row', 'duplicate', 'block', 'scope', 'escape'])
+def test_unapproved_or_unbound_attribution_is_refused_before_any_emission(tmp_path, damage):
+    path, data = attribution_case(tmp_path)
+    row = data['attributions'][1]
+    if damage == 'draft': data['approval']['status'] = 'DRAFT'
+    elif damage == 'authority': data['approval']['authority'] = 'AI'
+    elif damage == 'approver': data['approval']['approver'] = ''
+    elif damage == 'approval_source': data['approval']['source_reference']['sha256'] = '0' * 64
+    elif damage == 'source_l5': data['source_l5']['sha256'] = '0' * 64
+    elif damage == 'citation': row['citation']['sha256'] = '0' * 64
+    elif damage == 'line': row['citation']['line'] = 1
+    elif damage == 'row': row['original_row']['value'] = '9.9'
+    elif damage == 'current_row':
+        source = tmp_path / 'phase1/generated_docs/L5_ADI_SPEC.json'
+        changed = json.loads(source.read_text()); changed['electrical_specs'][1]['value'] = '9.9'
+        source.write_text(json.dumps(changed))
+    elif damage == 'duplicate': data['attributions'].append(row.copy())
+    elif damage == 'block': row['block'] = 'undeclared_block'
+    elif damage == 'scope': row['scope'] = 'unspecified'
+    elif damage == 'escape': row['citation']['path'] = '../foreign.md'
+    path.write_text(json.dumps(data))
+    cp = run_prog(A1, tmp_path)
+    assert cp.returncode == 1, cp.stdout + cp.stderr
+    assert 'A1_ATTRIBUTION_' in cp.stderr
+    assert not list(tmp_path.rglob('spec.json'))
+    assert not (tmp_path / 'phase3/analog/chip_specs.json').exists()
+
+
+def test_absent_amendment_keeps_the_existing_unattributed_handoff(tmp_path):
+    path, _ = attribution_case(tmp_path); path.unlink()
+    assert run_prog(A1, tmp_path).returncode == 0
+    body = read_json(bdir(tmp_path, 'regulator_alpha') / 'spec.json')
+    assert [s['name'] for s in body['specs']] == ['vout']
+    assert body['_provenance']['unattributed_electrical_rows_not_bound'] == 3
+    assert body['_provenance']['ai_handoff']['skill'] == 'analog-spec-extract'
+    assert not (tmp_path / 'phase3/analog/chip_specs.json').exists()
+
+
+@pytest.mark.parametrize('damage', ['draft', 'chip', 'block', 'removed'])
+def test_a1_gate_rechecks_amendment_and_actual_block_and_chip_outputs(tmp_path, damage):
+    path, data = attribution_case(tmp_path)
+    assert run_prog(A1, tmp_path).returncode == 0
+    if damage == 'draft':
+        data['approval']['status'] = 'DRAFT'; path.write_text(json.dumps(data))
+    elif damage == 'removed': path.unlink()
+    else:
+        spec = (tmp_path / 'phase3/analog/chip_specs.json' if damage == 'chip'
+                else bdir(tmp_path, 'regulator_alpha') / 'spec.json')
+        if not spec.exists():
+            spec.write_text('{"specs": [{"name": "supply", "value": 9.9, "unit": "V"}]}')
+        body = read_json(spec); body['specs'][0]['value'] = 9.9
+        spec.write_text(json.dumps(body))
+    result = run_prog(GATE_A1, tmp_path, '--block', 'regulator_alpha')
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert 'A1_ATTRIBUTION_' in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('other_rows', ['partial', 'l1'])
+def test_attribution_does_not_hide_rows_outside_its_approved_population(tmp_path, other_rows):
+    path, data = attribution_case(tmp_path)
+    if other_rows == 'partial':
+        data['attributions'].pop(); path.write_text(json.dumps(data))
+    else:
+        (tmp_path / 'phase1/generated_docs/L1_DATASHEET.json').write_text(json.dumps({
+            'electrical_specs': [{'parameter': 'unresolved', 'value': 3.3, 'unit': 'V'}]}))
+    assert run_prog(A1, tmp_path).returncode == 0
+    body = read_json(bdir(tmp_path, 'regulator_alpha') / 'spec.json')
+    assert body['_provenance']['unattributed_electrical_rows_not_bound'] == 1
+    assert body['_provenance']['ai_handoff']['skill'] == 'analog-spec-extract'
+
+
+@pytest.mark.parametrize('approved', [True, False])
+def test_native_a01_refreshes_a_retained_spec_for_new_attribution_and_blocks_bad_approval(tmp_path, approved):
+    from types import SimpleNamespace
+    import analog_native_flow as native
+    path, data = attribution_case(tmp_path)
+    path.unlink()
+    assert run_prog(A1, tmp_path).returncode == 0
+    if not approved: data['approval']['status'] = 'DRAFT'
+    path.write_text(json.dumps(data))
+    args = SimpleNamespace(entry_step='A01', exit_step='A01', blocks='', container='', pdk='')
+    report = native.run_window(tmp_path, args)
+    row = report['steps'][-1]
+    assert row['status'] == ('PASS' if approved else 'FAIL'), row
+    assert row['executions'][0]['program'] == 'analog_a1_spec_emit.py'
+    if approved:
+        assert row['input_views'][str(path)] == hashlib.sha256(path.read_bytes()).hexdigest()
+        assert str(tmp_path / 'phase3/analog/chip_specs.json') in row['output_views']
+        body = read_json(bdir(tmp_path, 'regulator_alpha') / 'spec.json')
+        assert body['_provenance']['unattributed_electrical_rows_not_bound'] == 0
+        path.unlink()
+        report = native.run_window(tmp_path, args)
+        body = read_json(bdir(tmp_path, 'regulator_alpha') / 'spec.json')
+        assert report['steps'][-1]['status'] == 'PASS'
+        assert body['_provenance']['unattributed_electrical_rows_not_bound'] == 3
+        assert not (tmp_path / 'phase3/analog/chip_specs.json').exists()
+    else:
+        assert 'A1_ATTRIBUTION_UNAPPROVED' in row['detail']
+        assert len(row['executions']) == 1
+
+
+@pytest.mark.parametrize('amended', [True, False])
+@pytest.mark.parametrize('authored', [{'owner': 'human'}, ['unrecognised authored data']])
+def test_attribution_preserves_a_chip_set_it_did_not_produce(tmp_path, amended, authored):
+    path, _ = attribution_case(tmp_path)
+    if not amended: path.unlink()
+    chip = tmp_path / 'phase3/analog/chip_specs.json'
+    chip.write_text(json.dumps(authored)); before = chip.read_bytes()
+    result = run_prog(A1, tmp_path)
+    assert result.returncode == (1 if amended else 0), result.stdout + result.stderr
+    assert chip.read_bytes() == before

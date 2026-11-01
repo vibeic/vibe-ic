@@ -91,6 +91,9 @@ def _adapter_transport(project):
 def _input_views(project, name, step=None):
     paths = list((project / "input").rglob("*"))
     paths += list(layout.generated_docs_dir(project).glob("*.json"))
+    if step == "A01":
+        from analog_a1_spec_emit import ATTRIBUTION_REL
+        paths.append(project / ATTRIBUTION_REL)
     directory = layout.analog_dir(project) / name
     paths += [directory / leaf for leaf in
               ("spec.json", "topology.json", "topology.md", f"{name}.sp", f"tb_{name}.sp")]

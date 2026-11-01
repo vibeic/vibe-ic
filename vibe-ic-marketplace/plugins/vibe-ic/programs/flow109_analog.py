@@ -28,7 +28,8 @@ INPUTS = ('phase3/analog/analog_block_list.json',
           'phase1/analog/analog_block_list.json',
           'phase1/generated_docs/L1_DATASHEET.json',
           'phase1/generated_docs/L5_ADI_SPEC.json',
-          'phase1/generated_docs/L9_INTEGRATION_SPEC.json')
+          'phase1/generated_docs/L9_INTEGRATION_SPEC.json',
+          'requirements/base_A1/electrical_row_attribution.json')
 
 
 def _sha(path):
@@ -177,6 +178,9 @@ def execute(project, context):
     for path in (producer_report, attempt / 'producer.log'):
         if path.is_file():
             record['outputs'][str(path.relative_to(project))] = _sha(path)
+    from analog_a1_spec_emit import CHIP_SPECS_REL
+    if (project / CHIP_SPECS_REL).is_file():
+        record['outputs'][CHIP_SPECS_REL] = _sha(project / CHIP_SPECS_REL)
     # Row-level metric acceptance is separate from G1-G9 and whole-flow
     # acceptance.  The latter deliberately remains NOT_MEASURED here.
     require_launch_admission(project, 'A1', {'flow109_context': context})
