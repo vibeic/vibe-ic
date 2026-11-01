@@ -211,6 +211,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 import argparse
 import json
 import re
+import subprocess
 import sys
 from math import gcd, isfinite
 from pathlib import Path
@@ -222,6 +223,8 @@ from _atomic_artefact import write_text as atomic_write_text
 import _pad_ring as PR
 import _source_record_merge as _srm     # noqa: E402
 import _declared_die as _dd                                    # noqa: E402
+import _seal_ring_margin as _srm_margin
+from _tapeout_declaration import DECLARATION_REL
 
 PROGRAM = "pad_ring_gen"
 
@@ -1330,8 +1333,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     inputs = {"floorplan_def": PR.FLOORPLAN_DEF_REL,
               "pad_assignment": PR.ASSIGNMENT_REL}
+    edge_spacing_seal_keepout = None
 
     def _fail(rule: str, message: str, **kw: Any) -> int:
+        if edge_spacing_seal_keepout is not None:
+            kw["edge_spacing_seal_keepout"] = edge_spacing_seal_keepout
         rep = _report("FAIL", f"{rule}: {message}", inputs=inputs,
                       io_cell_library=lib.as_dict(),
                       pdk_declarations=decls.as_dict(),
@@ -1396,7 +1402,51 @@ def main(argv: Optional[List[str]] = None) -> int:
         # for. A CONTRADICTION raised here is an `AssignmentError` like any
         # other and lands in the same `_fail` below, with its own rule.
         if isinstance(raw_cfg, dict):
-            raw_cfg, adopted_vars = PR.apply_pdk_declarations(raw_cfg, decls)
+            placement = "inside"
+            clearance, clearance_basis = None, ""
+            edge_spacing = raw_cfg.get("PAD_EDGE_SPACING")
+            if ("PAD_EDGE_SPACING" in decls.values
+                    and edge_spacing is not None and edge_spacing != ""
+                    and edge_spacing != []
+                    and not PR._declarations_agree(
+                        "PAD_EDGE_SPACING", edge_spacing,
+                        decls.values["PAD_EDGE_SPACING"])):
+                try:
+                    declaration = json.loads((project / DECLARATION_REL).read_text())
+                except (OSError, ValueError):
+                    declaration = {}
+                answers = (declaration.get("answers")
+                           if isinstance(declaration, dict) else None)
+                if (isinstance(answers, dict)
+                        and answers.get("seal_ring_placement") == "outside"):
+                    placement = "outside"
+
+                    def read_pdk(command):
+                        result = subprocess.run(
+                            ["sh", "-c", command], capture_output=True,
+                            text=True, timeout=60)
+                        return result.returncode, result.stdout
+
+                    try:
+                        trees = PR._pdk_trees(args.pdk_root, args.pdk)
+                    except OSError as exc:
+                        trees = []
+                        clearance_basis = f"PDK deck tree could not be read: {exc}"
+                    if len(trees) == 1:
+                        clearance, clearance_basis = _srm_margin.guard_ring_clearance_um(
+                            str(trees[0]), read_pdk)
+                    elif not clearance_basis:
+                        clearance_basis = (
+                            f"cannot resolve one PDK deck tree from "
+                            f"PDK_ROOT={args.pdk_root!r}, PDK={args.pdk!r}: {trees}")
+            raw_cfg, adopted_vars = PR.apply_pdk_declarations(
+                raw_cfg, decls, seal_ring_placement=placement,
+                seal_clearance_um=clearance,
+                seal_clearance_basis=clearance_basis)
+            if placement == "outside":
+                edge_spacing_seal_keepout = {
+                    "accepted_spacing_um": float(edge_spacing),
+                    "clearance_um": clearance, "basis": clearance_basis}
         else:
             adopted_vars = []
         if (isinstance(raw_cfg, dict)
@@ -1756,6 +1806,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         fillers_declared=cfg["fillers"],
         fillers_placed=len(fillers),
         unperformed=unperformed, bterms=bterms, findings=notes)
+    if edge_spacing_seal_keepout is not None:
+        rep["edge_spacing_seal_keepout"] = edge_spacing_seal_keepout
     skip_marker = project / PR.PADRING_SKIPPED_REL
     try:
         skip_marker.unlink(missing_ok=True)
