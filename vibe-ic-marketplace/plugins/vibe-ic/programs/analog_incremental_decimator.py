@@ -418,7 +418,9 @@ STAMP_PREFIX = f"* {PRODUCER}:"
 
 _STAMP_RE = re.compile(
     r"(?im)^\s*\*\s*" + re.escape(PRODUCER) + r"\s*:\s*(.*)$")
-_KV_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\s]+)")
+# Retain present-empty values so reserved metadata cannot become an absent
+# legacy field before its existing validator sees it.
+_KV_RE = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=\s*([^\s]*)")
 
 #: The stamp's fields, and the type each is read back as. A field missing from
 #: a stamp is a REFUSAL, never a default: a decode that quietly assumed an

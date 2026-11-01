@@ -381,3 +381,39 @@ def test_ciff_transfer_paths_come_from_the_published_contract_without_a_loop_pro
     timing = capture._transfer_timing(topology,"xdut.reset_b")
     assert len(timing["groups"]) == 3 + int(arrays)
     assert second not in {g["capacitor"] for g in timing["groups"]}
+
+
+@pytest.mark.parametrize("payload", ["", "   ", "not-base64"])
+def test_present_invalid_loop_model_refuses_at_parser_and_enob(payload):
+    raw = next(r["declaration"] for r in PRODUCER["records"]
+               if r["kind"] == "ciff" and r["D"] == 0)
+    declared = stimulus.incremental_decode({"converter_type": "incremental"},
+        {"constants": {"window_clocks": 8}, "loop_declaration": raw})
+    assert declared["declared"], declared
+    header = declared["stamp"].split(" loop_model=")[0] + " loop_model=" + payload
+    parsed, detail = dec.read_stamp(header)
+    assert parsed is None
+    assert detail["reason"] == dec.BAD_STATE_EQUATIONS
+    metric, detail = enob.sndr_db_incremental(header, "")
+    assert metric is None
+    assert detail["reason"] == dec.BAD_STATE_EQUATIONS
+
+
+def test_absent_model_preserves_legacy_and_intact_model_matches_n8_probe():
+    raw = next(r["declaration"] for r in PRODUCER["records"]
+               if r["kind"] == "ciff" and r["D"] == 0)
+    declared = stimulus.incremental_decode({"converter_type": "incremental"},
+        {"constants": {"window_clocks": 8}, "loop_declaration": raw})
+    assert declared["declared"], declared
+    bits = [1, -1, 1, -1, 1, -1, 1, -1]
+    intact, detail = dec.read_stamp(declared["stamp"])
+    assert intact is not None, detail
+    decoded, detail = dec.decimate(bits, 8, loop_model=intact["loop_model"])
+    assert decoded == pytest.approx([0.2142857142857143], abs=2e-15), detail
+    legacy_header = declared["stamp"].split(" loop_model=")[0]
+    legacy, detail = dec.read_stamp(legacy_header)
+    assert legacy is not None and "loop_model" not in legacy, detail
+    decoded, detail = dec.decimate(bits, 8, order=legacy["order"],
+        coeff=legacy["coeff"], feedback_delay=legacy["feedback_delay_clocks"],
+        topology=legacy.get("loop_topology", "cifb"))
+    assert decoded == pytest.approx([0.2857142857142857], abs=2e-15), detail
