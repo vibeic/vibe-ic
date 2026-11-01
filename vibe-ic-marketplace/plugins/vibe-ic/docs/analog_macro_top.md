@@ -73,3 +73,13 @@ also refuse by name. Nonzero native routing/PDN/disconnected-pin counts fail the
 implementation receipt, retaining the actual outputs for diagnosis. Row 62
 signoff and Flow109/delivery acceptance remain `NOT_MEASURED`; implementation
 outputs do not replace D59/D64/D65/D66 or their normal prerequisites.
+
+D61 (native `26.5ic`, die finishing) and D65 (native `31`, physical verification)
+both declare `phase3/stage3/pnr/routed.def` in the flow YAML. A18 publishes this
+exact file and its companion `phase3/stage3/pnr/routed.odb` from the native State,
+and binds their hashes in `reports/phase3/analog_macro_top_run.json`. Thus an
+analog-only die supplies the same physical input without running digital PnR.
+The existing issuer/worker input resolvers read the canonical DEF directly;
+`die_finishing_gen` also selects it before its fallback DEF glob. Upstream owner
+declarations and finishing/PV gates continue to apply, including when diagnostic
+DEF/ODB were retained from an A18 run whose PDN measurements failed.
