@@ -53,3 +53,21 @@ def test_pad_order_by_side_retains_source_sequence(tmp_path):
     assert (order["traversal"], order["start_corner"], order["facing"]) == ("counterclockwise", "SW", "outward")
     assert order["side_directions"]["south"] == ["W", "E"]
     assert len(order["evidence"]) == 5
+
+
+def test_instance_table_projects_supplies_without_clock_binding(tmp_path):
+    docs = source(tmp_path, "# Neutral unit\n## External Interface\n"
+                  "| Signal | Direction | Width |\n|---|---|---|\n"
+                  "| rail_a | input | 1 |\n| common | inout | 1 |\n"
+                  "## Instance allocations\n"
+                  "| Instance | L5 block | Core supply | Ground | Clock |\n|---|---|---|---|---|\n"
+                  "| copy_one | pll | rail_a | common | owner_clock |\n")
+    runner.gen_l1_datasheet(tmp_path, docs)
+    result = runner.gen_l9_integration_spec(tmp_path, docs, {})
+    l9 = json.loads(Path(result.path).read_text())
+    rows = l9.get("instances", [])
+    assert [(r["name"], r["block_type"], r["power_net"], r["ground_net"]) for r in rows] == [
+        ("copy_one", "pll", "rail_a", "common")]
+    assert not {"clock", "clock_pin", "clock_binding"} & set(rows[0])
+    assert rows[0]["evidence"]["quote"].startswith("| copy_one |")
+    assert l9["no_internal_wires_in_input"] is True

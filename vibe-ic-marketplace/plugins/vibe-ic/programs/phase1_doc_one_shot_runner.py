@@ -52692,6 +52692,7 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
         source = str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}"
         active = None
         roles = {}
+        supply_roles = {}
         offset = 0
 
         def finish():
@@ -52704,10 +52705,37 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
             if re.match(r"^#{1,6}\s", line):
                 finish()
                 active, roles = None, {}
+                supply_roles = {}
                 if match and _issue3234_position_is_current(text, offset):
                     active = {"name": match.group(1), "type": match.group(2) or match.group(3),
                               "ports": [], "parameters": {}, "evidence": {
                                   "doc": source, "line": index + 1, "quote": line}}
+            if not active and _v0_3_2_is_pipe_row(line):
+                cells = _v0_3_2_split_pipe_cells(line)
+                if index + 1 < len(lines) and _v0_3_2_is_sep_row(lines[index + 1]):
+                    header = {cell.strip(" *`").lower(): i for i, cell in enumerate(cells)}
+                    supply_roles = (header if {"instance", "l5 block", "core supply", "ground"} <= set(header) else {})
+                elif (supply_roles and not _v0_3_2_is_sep_row(line)
+                      and len(cells) > max(supply_roles.values())
+                      and _issue3234_position_is_current(text, offset)):
+                    values = {key: cells[i].strip(" *`") for key, i in supply_roles.items()
+                              if key != "clock"}
+                    name, block_type = values["instance"], values["l5 block"]
+                    if re.fullmatch(identifier, name) and re.fullmatch(identifier, block_type):
+                        row = {"name": name, "block_type": block_type,
+                               "power_net": values["core supply"] or None,
+                               "ground_net": values["ground"] or None,
+                               "evidence": {"doc": source, "line": index + 1, "quote": line},
+                               "extraction_strategy": "documented_instance_supply_table_v1"}
+                        if name in existing and any(existing[name].get(k) != row[k]
+                                                    for k in ("block_type", "power_net", "ground_net")):
+                            raise ValueError(f"L9_DECLARED_INSTANCE_SUPPLY_CONFLICT: {name}")
+                        if name not in existing:
+                            instances.append(row)
+                            existing[name] = row
+                            if evidence_out is not None:
+                                evidence_out.setdefault(source, []).append({
+                                    "literal": line, "label": "declared per-instance supply and return"})
             cap = capacity.search(line)
             if active:
                 if cap and re.search(r"capacitor|decap", active["type"], re.I):
@@ -52773,7 +52801,7 @@ def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
     if instances:
         l9["instances"] = instances
         l9["no_instances_in_input"] = False
-        l9["no_internal_wires_in_input"] = False
+        l9["no_internal_wires_in_input"] = not bool(l9.get("internal_wires"))
     if refusals:
         l9["declared_instance_refusals"] = refusals
 
