@@ -42027,6 +42027,8 @@ def _declared_input_clock_names(project, l9):
     ports = l9.get("top_ports") or l9.get("ports") or []
     extracted = _load_extracted_docs_for_post_pass(project)
     text = "\n".join(extracted.values())
+    bindings = l9.get("clock_binding") or {}
+    bound_inputs = set(bindings.values()) if isinstance(bindings, dict) else set()
     names = []
     for port in ports:
         if not isinstance(port, dict):
@@ -42046,7 +42048,7 @@ def _declared_input_clock_names(project, l9):
             r"^\s*" + re.escape(name) + r"\s*:\s*"
             r"(?:[A-Za-z-]+\s+)?clock(?:\s+(?:signal|input)|[.,]|\s*$)",
             re.IGNORECASE | re.MULTILINE)
-        if conventional or definition.search(text):
+        if conventional or name in bound_inputs or definition.search(text):
             names.append(name)
     return names
 
@@ -42060,6 +42062,25 @@ def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     l9_doc = _try_load_l_doc(project, "L9_INTEGRATION_SPEC")
     clk_pins = (_declared_input_clock_names(project, l9_doc)
                 if isinstance(l9_doc, dict) else [])
+    bindings = (l9_doc or {}).get("clock_binding") or {}
+    binding_evidence = ((l9_doc or {}).get("extraction_evidence") or {}).get(
+        "clock_binding", [])
+    block_ports = {row["block_clock_port"] for row in binding_evidence
+                   if isinstance(row, dict) and row.get("block_clock_port")}
+    if bindings and set(bindings.values()).issubset(clk_pins):
+        retained = []
+        for domain in clock_domains:
+            if not isinstance(domain, dict):
+                retained.append(domain)
+                continue
+            pin = domain.get("source_pin") or domain.get("name")
+            if (domain.get("extraction_strategy") == "clock_domain_doc_prose_fmax"
+                    and pin in block_ports and pin not in clk_pins):
+                print(f"BLOCK_CLOCK_ALIAS_SCOPED: {pin} uses L9.clock_binding; "
+                      "not a top-level primary clock", file=sys.stderr)
+                continue
+            retained.append(domain)
+        clock_domains[:] = retained
     from _reset_input_semantics import clock_edge_semantics
     event_sources = {
         (str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}"): text
@@ -43427,6 +43448,57 @@ def _single_declared_input_clock_port(project: Path) -> Optional[str]:
         and _V1_6_574_CLOCK_PORT_RE.match(p["name"])
     }
     return next(iter(names)) if len(names) == 1 else None
+
+
+def _document_clock_bindings(extracted: Dict[str, str], ports: list) -> tuple:
+    """Read explicit instance/clock-port/top-clock-pin connection tables.
+
+    The existing L9 clock_binding consumer needs instance -> top input names.
+    Preserve the block port and source row as extraction evidence. Conflicting
+    connections and undeclared inputs refuse generation instead of guessing.
+    """
+    inputs = {p["name"] for p in ports if isinstance(p, dict)
+              and isinstance(p.get("name"), str)
+              and (p.get("direction") or p.get("mode")) == "input"}
+    bindings, evidence = {}, []
+    for filename, text in extracted.items():
+        columns = None
+        for lineno, line in enumerate(text.splitlines(), 1):
+            if not line.lstrip().startswith("|"):
+                columns = None
+                continue
+            cells = [cell.replace("`", "").replace("*", "").strip()
+                     for cell in _v634_split_pipe_cells(line)]
+            headers = [cell.lower() for cell in cells]
+            required = ("instance", "clock port", "top clock pin")
+            if all(name in headers for name in required):
+                columns = [headers.index(name) for name in required]
+                continue
+            if columns is None or _v634_is_pipe_sep_row(line):
+                continue
+            if len(cells) <= max(columns):
+                raise ValueError(f"invalid clock binding row: {filename}:{lineno}")
+            instance, port, stated_pin = (cells[index] for index in columns)
+            if not all(re.fullmatch(r"[A-Za-z_]\w*", name)
+                       for name in (instance, port, stated_pin)):
+                raise ValueError(f"invalid clock binding identifier: {filename}:{lineno}")
+            candidates = ([stated_pin] if stated_pin in inputs else
+                          [name for name in inputs if name.casefold() == stated_pin.casefold()])
+            if len(candidates) != 1:
+                raise ValueError(f"clock binding names undeclared top input: {stated_pin}")
+            pin = candidates[0]
+            if instance in bindings and bindings[instance] != pin:
+                raise ValueError(f"conflicting clock binding: {instance}")
+            bindings[instance] = pin
+            evidence.append({
+                "file": (filename if filename.startswith("input/") else
+                         "input/docs/" + filename),
+                "line": lineno, "matched_substring": line.strip(),
+                "instance": instance, "block_clock_port": port,
+                "top_clock_pin": pin,
+                "extraction_strategy": "explicit_clock_connection_table",
+            })
+    return bindings, evidence
 
 
 # v1.6.360 — for #255 P2 ORGANIC. Width-role bigram structural anchor.
@@ -53980,9 +54052,14 @@ def gen_l9_integration_spec(project: Path,
                         _p["declared_by_staged_top"] = (
                             str(_p["name"]) in _declared)
 
+    clock_binding, clock_binding_evidence = _document_clock_bindings(
+        extracted, top_module_pins)
+    if clock_binding_evidence:
+        evidence["clock_binding"] = clock_binding_evidence
     content = {
         "schema_version": 2,
         "doc_class": "integration_spec",
+        **({"clock_binding": clock_binding} if clock_binding else {}),
         "ic_name": ic_name,
         # v1.6.79 — null when no top module detected; previously
         # hardcoded "chip_top" on every project.
