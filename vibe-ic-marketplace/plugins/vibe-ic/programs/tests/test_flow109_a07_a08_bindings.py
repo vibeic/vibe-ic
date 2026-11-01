@@ -272,3 +272,25 @@ def test_source_supply_condition_is_not_an_extra_performance_metric(tmp_path, mo
     result = selected(make_case(tmp_path, monkeypatch))
     assert result['metric_acceptance_status'] == 'PASS', result
     assert result['default_row_status'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('fault', ['path', 'digest', 'argv', 'bytes'])
+def test_nominal_native_log_is_reopened_with_exact_output_identity(case, fault):
+    root, _, component, *_ = case
+    invocation = component['a07_invocation']
+    row = component['native_results']['steps'][0]
+    execution = copy.deepcopy(row['executions'][0])
+    deck = root / 'phase3/analog/unit_alpha/tb_unit_alpha.sp'
+    assert metrics._a0708_transcript(root, [execution], deck, invocation)['vout_dc'] == pytest.approx(.6)
+    log = execution['stdout_path']
+    if fault == 'path':
+        execution['stdout_path'] = str(root / 'unrelated.log')
+    elif fault == 'digest':
+        execution['outputs'][log] = '0' * 64
+    elif fault == 'argv':
+        execution['argv'][-1] = str(root / 'unrelated.log')
+    else:
+        Path(log).write_text('MEAS vout_dc=0.6\n')
+    with pytest.raises(metrics.MetricRefusal) as caught:
+        metrics._a0708_transcript(root, [execution], deck, invocation)
+    assert caught.value.code in ('A0708_NATIVE_EXECUTION_INCOMPLETE', 'A0708_NATIVE_INPUT_CHANGED')
