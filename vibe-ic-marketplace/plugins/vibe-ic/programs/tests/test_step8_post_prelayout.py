@@ -29,7 +29,8 @@ def _prelayout_request_project(root, switch):
     put(root / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json', {
         'clock_domains': [{'role': 'primary', 'source_pin': 'neutral_clk', 'period_ns': 20}]})
     put(root / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {'top_module': 'neutral_core'})
-    put(root / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {})
+    put(root / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json',
+        {'fields': {'pdk_target': 'neutral_pdk'}})
     put(root / 'input/submission_template/tapeout_declaration.json', {})
     (root / 'phase3').mkdir(exist_ok=True)
     if switch is not None:
@@ -1045,7 +1046,8 @@ def _resolved_pvt_compound_fixture(current, monkeypatch, *, refuse=None):
     put(current / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json', {
         'clock_domains': [{'role': 'primary', 'period_ns': 10, 'source_pin': 'clk'}]})
     put(current / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {'top_module': 'widget'})
-    put(current / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {}})
+    put(current / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json',
+        {'fields': {'pdk_target': pdk.name}})
     put(current / 'input/submission_template/tapeout_declaration.json', {'answers': {}})
     mapped = current / 'phase2/stage2/synth/widget_synth.v'
     D.step_yosys_synth(current, 'widget')

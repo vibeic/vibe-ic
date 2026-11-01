@@ -65,10 +65,9 @@ from typing import Dict, List, Optional
 import _a6_drc_authority as _auth
 import _analog_producer_common as _pc
 from _atomic_artefact import write_bytes, write_json
+from librelane_pv_signoff import DRC_ENGINES as ENGINES
 
 PRODUCER = "analog_a6_librelane_drc"
-ENGINES = (("KLayout.DRC", "klayout__drc_error__count", "drc.klayout.lyrdb"),
-           ("Magic.DRC", "magic__drc_error__count", "drc.magic.lyrdb"))
 
 
 def _rule_name(raw: Optional[str]) -> str:

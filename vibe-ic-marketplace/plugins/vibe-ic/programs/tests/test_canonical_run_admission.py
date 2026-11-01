@@ -236,6 +236,216 @@ def test_step1_binding_tracks_variable_complete_subject_population(tmp_path):
     assert expanded_binding["evidence_sha256"] != ordinary_binding["evidence_sha256"]
 
 
+def _step4_review_project(root: Path, *, output=True, requested=True) -> Path:
+    project = _project(root)
+    (project / 'input/spec.md').write_text('The output y equals input a.\n')
+    report = project / 'reports/phase2/gates/professional_tb.json'
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({
+        'dut_kind': 'expert_reference' if requested else 'synthetic_builtin',
+        'scope': 'neutral source-only signed-admission fixture',
+        'rtl_sha256': cra._file_digest(project / 'phase2/stage1/rtl/core.v'),
+    }) + '\n')
+    if output:
+        hook = project / 'phase2/stage1/sim_professional/core/expert_reference_tb.py'
+        hook.parent.mkdir(parents=True)
+        hook.write_text('def expected(a):\n    return {"y": int(a) & 1}\n')
+    return project
+
+
+def _admit_step4(project: Path):
+    return _admit(project, config={'top_name': 'core', 'entry_step': '2', 'exit_step': '4'})
+
+
+def test_current_verified_step4_judgement_reopens_phase2_once(tmp_path):
+    project = _step4_review_project(tmp_path / 'project')
+    first = _admit_step4(project)
+    assert first.reason == 'ADMITTED'
+    assert ai_signed_judgement.check(project, '4')[0] is False
+    _sign_judgement(project, '4')
+    accepted, _ = ai_signed_judgement.check(project, '4')
+    current = _admit_step4(project)
+    observed = {'signature_accepted': accepted, 'before': first.reason,
+                'after': current.reason, 'before_identity': first.identity,
+                'after_identity': current.identity}
+    (tmp_path / 'step4_admission_observation.json').write_text(json.dumps(observed, indent=2))
+    assert accepted
+    assert current.reason == 'ADMITTED', observed
+    assert current.identity_sha256 != first.identity_sha256
+    for field in ('source_input_sha256', 'program_source_sha256', 'container_image', 'dispatch_config'):
+        assert current.identity[field] == first.identity[field]
+    binding = current.identity['current_consumer_evidence_bindings']['step4_signed_judgement']
+    assert binding['evidence_sha256'] == ai_signed_judgement.evidence_sha256(project, '4')
+    repeated = _admit_step4(project)
+    assert repeated.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    assert repeated.identity_sha256 == current.identity_sha256
+
+
+def test_step4_reviewer_text_churn_is_not_new_evidence(tmp_path):
+    project = _step4_review_project(tmp_path / 'project')
+    _sign_judgement(project, '4')
+    first = _admit_step4(project)
+    receipt = project / 'reports/audit/ai_judgements/4.json'
+    value = json.loads(receipt.read_text())
+    value.update(signed_by='another-synthetic-reviewer', judgement='Different review wording.',
+                 comment='An updated comment.', reviewed_at='a later time')
+    receipt.write_text(json.dumps(value, indent=3) + '\n')
+    assert ai_signed_judgement.check(project, '4')[0] is True
+    repeated = _admit_step4(project)
+    assert repeated.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    assert repeated.identity_sha256 == first.identity_sha256
+
+
+@pytest.mark.parametrize('damage', ['absent', 'wrong_digest', 'wrong_step', 'wrong_schema',
+                                  'fail', 'unsigned', 'empty_judgement', 'malformed',
+                                  'non_object', 'stale_report', 'symlink'])
+def test_invalid_step4_receipt_cannot_purchase_admission(tmp_path, damage):
+    project = _step4_review_project(tmp_path / 'project')
+    first = _admit_step4(project)
+    if damage != 'absent':
+        _sign_judgement(project, '4')
+        receipt = project / 'reports/audit/ai_judgements/4.json'
+        value = json.loads(receipt.read_text())
+        updates = {'wrong_digest': {'evidence_sha256': '0' * 64},
+                   'wrong_step': {'step_id': '1'}, 'wrong_schema': {'schema': 'invalid'},
+                   'fail': {'verdict': 'FAIL'}, 'unsigned': {'signed_by': ''},
+                   'empty_judgement': {'judgement': ''}}
+        if damage in updates:
+            value.update(updates[damage]); receipt.write_text(json.dumps(value))
+        elif damage == 'malformed': receipt.write_text('not-json')
+        elif damage == 'non_object': receipt.write_text('[]')
+        elif damage == 'stale_report':
+            report = project / 'reports/phase2/gates/professional_tb.json'
+            report.write_text(report.read_text() + ' \n')
+        elif damage == 'symlink':
+            external = tmp_path / 'external-receipt.json'
+            external.write_bytes(receipt.read_bytes())
+            receipt.unlink(); receipt.symlink_to(external)
+    accepted, _ = ai_signed_judgement.check(project, '4')
+    assert accepted is (damage == 'symlink')
+    if damage == 'fail':
+        assert ai_signed_judgement.check(project, '4', expected_verdict='FAIL')[0]
+    refused = _admit_step4(project)
+    assert refused.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    assert refused.identity_sha256 == first.identity_sha256
+
+
+def test_no_conditional_step4_handoff_cannot_bind_generic_report_or_receipt_churn(tmp_path):
+    project = _step4_review_project(tmp_path / 'project', output=False, requested=False)
+    first = _admit_step4(project)
+    for revision in range(2):
+        report = project / 'reports/phase2/gates/professional_tb.json'
+        value = json.loads(report.read_text()); value['generated_revision'] = revision
+        report.write_text(json.dumps(value) + '\n')
+        _sign_judgement(project, '4')
+        assert ai_signed_judgement._requested(project, '4') is False
+        assert ai_signed_judgement.check(project, '4')[0] is True
+        refused = _admit_step4(project)
+        assert refused.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+        assert refused.identity_sha256 == first.identity_sha256
+
+
+def test_step4_request_without_expert_output_cannot_bind_a_signature(tmp_path):
+    project = _step4_review_project(tmp_path / 'project', output=False)
+    first = _admit_step4(project)
+    _sign_judgement(project, '4')
+    assert ai_signed_judgement._requested(project, '4') is True
+    assert ai_signed_judgement.check(project, '4')[0] is False
+    refused = _admit_step4(project)
+    assert refused.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    assert refused.identity_sha256 == first.identity_sha256
+
+
+def test_new_canonical_step4_digest_requires_a_fresh_accepted_signature(tmp_path):
+    project = _step4_review_project(tmp_path / 'project')
+    unsigned = _admit_step4(project)
+    _sign_judgement(project, '4')
+    first = _admit_step4(project)
+    report = project / 'reports/phase2/gates/professional_tb.json'
+    value = json.loads(report.read_text()); value['fixture_revision'] = 2
+    report.write_text(json.dumps(value) + '\n')
+    assert ai_signed_judgement.check(project, '4')[0] is False
+    stale = _admit_step4(project)
+    assert stale.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    assert stale.identity_sha256 == unsigned.identity_sha256
+    _sign_judgement(project, '4')
+    assert ai_signed_judgement.check(project, '4')[0] is True
+    current = _admit_step4(project)
+    assert current.reason == 'ADMITTED'
+    assert current.identity_sha256 != first.identity_sha256
+    assert _admit_step4(project).reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+
+
+def test_step4_receipts_do_not_change_phase3_admission(tmp_path):
+    project = _step4_review_project(tmp_path / 'project')
+    kwargs = dict(container_image='sha256:' + 'a' * 64, config={'top_name': 'core'},
+                  program_paths=[PROGRAMS / 'design_one_shot_runner.py'])
+    first = cra.admit(project, 'phase3', **kwargs)
+    _sign_judgement(project, '4')
+    assert ai_signed_judgement.check(project, '4')[0] is True
+    repeated = cra.admit(project, 'phase3', **kwargs)
+    assert repeated.reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    assert repeated.identity_sha256 == first.identity_sha256
+
+
+@pytest.mark.parametrize('damage', ['absent', 'fail', 'stale'])
+def test_losing_initially_accepted_step4_is_not_new_evidence(tmp_path, damage):
+    project = _step4_review_project(tmp_path / 'project')
+    _sign_judgement(project, '4')
+    first = _admit_step4(project)
+    assert first.reason == 'ADMITTED'
+    ledger_before = cra.ledger_path(project).read_bytes()
+    receipt = project / 'reports/audit/ai_judgements/4.json'
+    if damage == 'absent': receipt.unlink()
+    elif damage == 'fail':
+        value = json.loads(receipt.read_text()); value['verdict'] = 'FAIL'
+        receipt.write_text(json.dumps(value))
+    else:
+        report = project / 'reports/phase2/gates/professional_tb.json'
+        report.write_text(report.read_text() + ' \n')
+    assert ai_signed_judgement.check(project, '4')[0] is False
+    refused = _admit_step4(project)
+    assert refused.reason == 'DUPLICATE_NO_NEW_EVIDENCE', refused
+    assert cra.ledger_path(project).read_bytes() == ledger_before
+
+
+@pytest.mark.parametrize('changed', ['source', 'program', 'image', 'config'])
+def test_lost_step4_does_not_block_genuinely_changed_named_inputs(tmp_path, changed):
+    project = _step4_review_project(tmp_path / 'project')
+    program = tmp_path / 'neutral_producer.py'
+    program.write_text('def produce():\n    return 1\n')
+    config = {'top_name': 'core', 'entry_step': '2', 'exit_step': '4'}
+    kwargs = dict(programs=[program], config=config, image='sha256:' + 'a' * 64)
+    _sign_judgement(project, '4')
+    assert _admit(project, **kwargs).reason == 'ADMITTED'
+    receipt = project / 'reports/audit/ai_judgements/4.json'
+    value = json.loads(receipt.read_text()); value['verdict'] = 'FAIL'
+    receipt.write_text(json.dumps(value))
+    if changed == 'source':
+        (project / 'input/spec.md').write_text('The output y equals input a; input is sampled continuously.\n')
+    elif changed == 'program': program.write_text('def produce():\n    return 2\n')
+    elif changed == 'image': kwargs['image'] = 'sha256:' + 'b' * 64
+    else: config['util'] = 0.4
+    assert _admit(project, **kwargs).reason == 'ADMITTED'
+    assert _admit(project, **kwargs).reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+
+
+def test_initial_step4_acceptance_can_move_to_a_new_accepted_digest(tmp_path):
+    project = _step4_review_project(tmp_path / 'project')
+    _sign_judgement(project, '4')
+    first = _admit_step4(project)
+    report = project / 'reports/phase2/gates/professional_tb.json'
+    value = json.loads(report.read_text()); value['fixture_revision'] = 2
+    report.write_text(json.dumps(value))
+    assert ai_signed_judgement.check(project, '4')[0] is False
+    assert _admit_step4(project).reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+    _sign_judgement(project, '4')
+    current = _admit_step4(project)
+    assert current.reason == 'ADMITTED'
+    assert current.identity_sha256 != first.identity_sha256
+    assert _admit_step4(project).reason == 'DUPLICATE_NO_NEW_EVIDENCE'
+
+
 def test_same_identity_is_refused_after_persistent_reload(tmp_path):
     project = _project(tmp_path / "proj")
     first = _admit(project)

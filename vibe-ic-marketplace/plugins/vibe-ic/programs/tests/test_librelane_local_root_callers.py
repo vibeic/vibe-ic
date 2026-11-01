@@ -187,9 +187,9 @@ def test_native_finishing_callers_use_the_current_provider(tmp_path, monkeypatch
         if owner == "ir_openroad":
             metrics = folder / "metrics.json"
             assert ir._run_openroad(project, image, script, log, [], metrics=metrics) == 0
-            native_command = ["bash", "-c",
-                "LD_LIBRARY_PATH=/opt/or-tools/lib /foss/tools/openroad/bin/openroad "
-                f"-no_init -no_splash -metrics {metrics} -exit {script}"]
+            native_command = ["env", "LD_LIBRARY_PATH=/opt/or-tools/lib",
+                              "openroad", "-no_init", "-no_splash",
+                              "-metrics", str(metrics), "-exit", str(script)]
         elif owner == "sealring_capability":
             assert ir.sealring_spans_capable(image) is True
             native_command = ["python3", "-c", ir._SEALRING_SPANS_PROBE]

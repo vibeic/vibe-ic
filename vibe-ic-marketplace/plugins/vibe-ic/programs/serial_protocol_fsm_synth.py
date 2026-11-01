@@ -580,7 +580,220 @@ def _try_pattern_delay_timer(prompt, ins, outs, top, clk, rst):
 # --------------------------------------------------------------------------- #
 # Dispatch
 # --------------------------------------------------------------------------- #
+_WORD_NUMBERS = dict(zip(('one', 'two', 'three', 'four', 'five', 'six', 'seven',
+                          'eight', 'nine', 'ten', 'eleven', 'twelve', 'thirteen',
+                          'fourteen', 'fifteen', 'sixteen'), range(1, 17)))
+
+
+def _word_message_trace_matches(contract, table, concurrent):
+    """Check source examples against the parsed word contract, never DUT output."""
+    partial, pending, packet = [], None, None
+    initialized, valid = False, None
+    for index, (_, row) in enumerate(table['rows']):
+        reset = row[contract['reset']] == int(contract['active_high'])
+        if (contract['asynchronous'] and reset) or (index and row[contract['clock']] == contract['edge']):
+            if reset:
+                partial, pending, packet, valid, initialized = [], None, 0, 0, True
+            else:
+                if not initialized:
+                    return False
+                valid = int(pending is not None)
+                if pending is not None:
+                    packet = pending
+                pending = None
+                if concurrent or not valid:
+                    word = row[contract['word']]
+                    if partial or ((word >> contract['marker']) & 1) == contract['marker_level']:
+                        partial.append(word)
+                        if len(partial) == contract['count']:
+                            positions = (range(contract['count']-1, -1, -1)
+                                         if contract['msb_first'] else range(contract['count']))
+                            pending = sum(value << (position * contract['width'])
+                                          for value, position in zip(partial, positions))
+                            partial = []
+        expected = row[contract['valid']]
+        if expected is not None and valid != expected:
+            return False
+        if expected == 1 and packet != row[contract['packet']]:
+            return False
+    return True
+
+
+def _try_word_message(prompt, ins, outs, top, clk, rst):
+    """Closed fixed-length word framing with a one-edge pending report.
+
+    Bind the count, marker, packed order, accepted sampling edge and reset from
+    public prose/header. A source trace can prove concurrent next-frame input;
+    otherwise concurrency must be explicit. Unsupported/conflicting facts return
+    None through the existing Program-first backup contract.
+    """
+    import waveform_table_conformance_check as waveform
+
+    words = [(n, w) for n, w in ins if n not in (clk, rst)]
+    packed = [(n, w) for n, w in outs if w > 1]
+    valids = [n for n, w in outs if w == 1]
+    if len(ins) != 3 or len(outs) != 2 or len(words) != 1 or len(packed) != 1 or len(valids) != 1:
+        return None
+    (word, width), (packet, total), valid = words[0], packed[0], valids[0]
+    if not (2 <= width <= 64 and total % width == 0 and 2 <= total // width <= 16):
+        return None
+    headers = re.findall(r'\bmodule\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*;', prompt, re.S)
+    if len(headers) != 1 or headers[0][0] != top or re.search(r'\binout\b|\bparameter\b', headers[0][1]):
+        return None
+    # The emitter uses numeric word bit positions and descending packed slices.
+    # Width equality alone cannot bind an ascending/nonzero-based declaration.
+    ranges = re.findall(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]', headers[0][1])
+    if any(int(lo) != 0 or int(hi) < int(lo) for hi, lo in ranges):
+        return None
+    flat = re.sub(r'\s+', ' ', prompt)
+    # This grammar implements affirmative framing facts. Do not reinterpret
+    # negated reset/marker/timing facts by matching their positive substrings.
+    bound_fact = r'\b(?:words?|bytes?|messages?|' + '|'.join(re.escape(n) for n, _ in ins + outs) + r')\b'
+    negation = r"\b(?:not|never|cannot|no)\b|\b(?:can|do|does|must|shall|should|may|will)n['’]t\b"
+    for clause in re.split(r'[.;]', flat):
+        if re.search(bound_fact, clause, re.I) and re.search(negation, clause, re.I):
+            return None
+    number = r'(?:\d+|' + '|'.join(_WORD_NUMBERS) + r')'
+    counts = []
+    for pattern in (r'\bmessages?\s+(?:of|are)\s+(' + number + r')\s+(?:words?|bytes?)\b',
+                    r'\ball\s+(' + number + r')\s+(?:words?|bytes?)\b',
+                    r'\b(' + number + r')\s+(?:words?|bytes?)\s+long\b'):
+        for token in re.findall(pattern, flat, re.I):
+            counts.append(int(token) if token.isdigit() else _WORD_NUMBERS[token.lower()])
+    count = total // width
+    if set(counts) != {count}:
+        return None
+    following = [int(token) if token.isdigit() else _WORD_NUMBERS[token.lower()]
+                 for token in re.findall(r'\bnext\s+(' + number + r')\s+(?:words?|bytes?)\b', flat, re.I)]
+    if following and set(following) != {count - 1}:
+        return None
+    if not following and not re.search(r'\bassume\b[^.]{0,80}\b(?:word|byte)\s+1\b'
+                                       r'[^.]{0,40}\bmessage\b', flat, re.I):
+        return None
+    marker_pattern = re.escape(word) + r'\s*\[\s*(\d+)\s*\]\s*=\s*([01])\b'
+    markers = set((int(bit), int(level)) for bit, level in re.findall(marker_pattern, flat))
+    if len(markers) != 1:
+        return None
+    marker, marker_level = next(iter(markers))
+    if marker >= width or not re.search(r'\bdiscard\b[^.]{0,150}\buntil\b[^.]{0,150}' + marker_pattern, flat, re.I):
+        return None
+    if re.search(r'\b(?:variable[-\s]+length|checksum|parity|start\s+bit|stop\s+bit)\b', flat, re.I):
+        return None
+    ordinals = ('first', 'second', 'third', 'fourth', 'fifth', 'sixth', 'seventh',
+                'eighth', 'ninth', 'tenth', 'eleventh', 'twelfth', 'thirteenth',
+                'fourteenth', 'fifteenth', 'sixteenth')
+    positions = {}
+    for hi, lo, ordinal in re.findall(re.escape(packet) + r'\s*\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*'
+                                      r'(?:is|contains|holds)\s+(?:the\s+)?(' + '|'.join(ordinals) + r')\s+(?:word|byte)', flat, re.I):
+        positions.setdefault(ordinal.lower(), set()).add((int(hi), int(lo)))
+    msb = {ordinal: {(total-index*width-1, total-(index+1)*width)}
+           for index, ordinal in enumerate(ordinals[:count])}
+    lsb = {ordinal: {((index+1)*width-1, index*width)}
+           for index, ordinal in enumerate(ordinals[:count])}
+    if not {'first', 'second'} <= positions.keys():
+        return None
+    orders = [expected for expected in (msb, lsb)
+              if all(expected.get(ordinal) == slices for ordinal, slices in positions.items())]
+    if len(orders) != 1:
+        return None
+    msb_first = orders[0] == msb
+    timing = (r'\b' + re.escape(valid) + r'\b[^.]{0,70}(?:\b(?:one|1)\s+clock\s+cycle\s+after\b|'
+              r'\bin\s+the\s+cycle\s+immediately\s+after\b)[^.]{0,30}'
+              r'\b(final|last|' + '|'.join(ordinals[1:]) + r')\s+(?:word|byte)\b')
+    completions = re.findall(timing, flat, re.I)
+    if not completions or any(x.lower() not in ('final', 'last', ordinals[count-1]) for x in completions):
+        return None
+    if re.search(r'\b(?:same\s+(?:clock\s+)?cycle|two\s+clock\s+cycles\s+after)\b', flat, re.I):
+        return None
+    if not re.search(r'\b' + re.escape(packet) + r'\b[^.;]{0,100}\bvalid\b[^.;]{0,40}'
+                     r'\b(?:when|whenever|while)\b[^.;]{0,25}\b' + re.escape(valid)
+                     + r'\b[^.;]{0,30}(?:\basserted\b|(?:=|is)\s*1\b)', flat, re.I):
+        return None
+    rk = _reset_kind(prompt, rst)
+    if rk is None:
+        return None
+    asynchronous, active_high = rk
+    concurrent = False
+    for clause in re.split(r'[.;]', flat):
+        if re.search(r'\breporting\s+cycle\b', clause, re.I):
+            # Recognize a complete affirmative permission, not an "accepted"
+            # substring inside a prohibition, condition or exception. A trace
+            # cannot override contradictory or unsupported source policy.
+            if not re.fullmatch(r'\s*(?:A\s+)?new\s+first\s+(?:word|byte)\s+'
+                                r'(?:may|can|must|shall|will)\s+be\s+accepted\s+'
+                                r'in\s+the\s+reporting\s+cycle\s*', clause, re.I):
+                return None
+            concurrent = True
+    if re.search(r'\b(?:reporting|output)\s+cycle\b[^.]{0,60}\b(?:ignored|discarded)\b', flat, re.I):
+        return None
+    if re.search(r'\b' + re.escape(valid) + r'\b[^.]{0,50}\b(?:held|remain|stays)\b'
+                 r'[^.]{0,50}\b(?:until|high|asserted)\b', flat, re.I):
+        return None
+    edge_set = set()
+    if re.search(r'\b(?:positive|rising)\s+and\s+(?:negative|falling)\s+edge\b|'
+                 r'\b(?:negative|falling)\s+and\s+(?:positive|rising)\s+edge\b', flat, re.I):
+        return None
+    for clause in re.split(r'[.;]', flat):
+        if re.search(r'\b' + re.escape(clk) + r'\b', clause):
+            edge_set.update(1 if e.lower() in ('positive', 'rising') else 0 for e in
+                            re.findall(r'\b(positive|rising|negative|falling)[-\s]+edge\b', clause, re.I))
+    table = None
+    if waveform.parse_table(prompt) is not None:
+        table, _reason = waveform.source_multioutput_contract(prompt, top=top)
+        if table is None:
+            return None
+        edge_set.add(table['active_edge'])
+    if len(edge_set) != 1:
+        return None
+    contract = dict(clock=clk, reset=rst, word=word, width=width, count=count,
+                    packet=packet, valid=valid, marker=marker, marker_level=marker_level,
+                    msb_first=msb_first, edge=next(iter(edge_set)),
+                    asynchronous=asynchronous, active_high=active_high)
+    if table:
+        if not _word_message_trace_matches(contract, table, True):
+            return None
+        if not concurrent and _word_message_trace_matches(contract, table, False):
+            return None  # the source did not resolve reporting-cycle acceptance
+    elif not concurrent:
+        return None
+    elif not re.search(r'\b' + re.escape(valid) + r'\b[^.]{0,45}'
+                       r'\b(?:for\s+(?:exactly\s+)?(?:one|1)\s+(?:clock\s+)?cycle|one[-\s]+cycle\s+pulse)\b', flat, re.I):
+        return None
+    prefix = '__word_frame_'
+    while any(n.startswith(prefix) for n, _ in ins + outs):
+        prefix += '_'
+    name = lambda key: prefix + key
+    count_width = max(1, (count - 1).bit_length())
+    assembled = (f'{{{name("buffer")}[{total-width-1}:0], {word}}}' if msb_first else
+                 f'({name("buffer")} | ({{{total-width}\'d0, {word}}} << ({name("count")}*{width})))')
+    edge = ('posedge' if contract['edge'] else 'negedge') + ' ' + clk
+    if asynchronous:
+        edge += f' or {"posedge" if active_high else "negedge"} {rst}'
+    reset_test = rst if active_high else '!' + rst
+    marker_test = f'{word}[{marker}]' if marker_level else f'!{word}[{marker}]'
+    lines = [f'module {top} ({headers[0][1]});',
+             f'reg [{count_width-1}:0] {name("count")};',
+             f'reg [{total-1}:0] {name("buffer")}, {name("pending_packet")}, {name("packet")};',
+             f'reg {name("pending")}, {name("valid")};',
+             f'assign {valid} = {name("valid")};', f'assign {packet} = {name("packet")};',
+             f'always @({edge}) begin', f'  if ({reset_test}) begin']
+    for key in ('count', 'buffer', 'pending_packet', 'packet', 'pending', 'valid'):
+        lines.append(f'    {name(key)} <= 0;')
+    lines += ['  end else begin', f'    {name("valid")} <= {name("pending")};',
+              f'    if ({name("pending")}) {name("packet")} <= {name("pending_packet")};',
+              f'    {name("pending")} <= 0;', f'    if ({name("count")} == 0) begin',
+              f'      if ({marker_test}) begin {name("buffer")} <= {word}; {name("count")} <= 1; end',
+              '    end else begin', f'      {name("buffer")} <= {assembled};',
+              f'      if ({name("count")} == {count-1}) begin',
+              f'        {name("pending_packet")} <= {assembled};',
+              f'        {name("pending")} <= 1; {name("count")} <= 0;',
+              f'      end else {name("count")} <= {name("count")} + 1\'b1;',
+              '    end', '  end', 'end', 'endmodule', '']
+    return '\n'.join(lines)
+
+
 _METHODS = (
+    _try_word_message,
     _try_2s_complement,
     _try_serial_framing,
     _try_consecutive_run,

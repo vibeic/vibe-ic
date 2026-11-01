@@ -29,19 +29,36 @@ def _def(rows, die="( 0 0 ) ( 250000 250000 )", units=1000, nets=""):
             + "\n".join(rows) + "\nEND COMPONENTS\n" + nets + "END DESIGN\n")
 
 
+_FIXTURE_CLASSES = {}
+
+
 def _std_rows(n, step=4000, master="sky130_fd_sc_hd__nand2_1"):
     """n std cells laid out on a grid (step in DBU)."""
+    _FIXTURE_CLASSES[master] = "CORE"
     return [f"- _{i}_ {master} + PLACED ( {(i % 20) * step} {(i // 20) * step} ) N ;"
             for i in range(n)]
 
 
 def _tap_rows(n, step=4000, x0=0, y0=0, master="sky130_fd_sc_hd__tapvpwrvgnd_1"):
+    _FIXTURE_CLASSES[master] = "CORE WELLTAP"
     return [f"- tap{j} {master} + SOURCE DIST + FIXED ( {x0 + (j % 20) * step} "
             f"{y0 + (j // 20) * step} ) N ;" for j in range(n)]
 
 
 def _write(tmp_path, name, text):
-    p = tmp_path / name
+    if name.endswith(".def"):
+        project = tmp_path / (name + "-project")
+        p = project / "phase3/stage3/pnr" / name
+        p.parent.mkdir(parents=True, exist_ok=True)
+        lef = project / "fixture.lef"
+        lef.write_text("".join(f"MACRO {m}\n CLASS {c} ;\nEND {m}\n"
+                               for m, c in _FIXTURE_CLASSES.items()))
+        reports = project / "reports/phase3"
+        reports.mkdir(parents=True, exist_ok=True)
+        (reports / "io_pad_chip_top.json").write_text(json.dumps(
+            {"verdict": "WROTE", "io_library_lefs": [str(lef)]}))
+    else:
+        p = tmp_path / name
     p.write_text(text)
     return p
 
@@ -109,7 +126,8 @@ def test_unknown_tap_master_not_counted_and_noted(tmp_path):
         "- t0 some_other_lib__tap_filler_1 + PLACED ( 100 100 ) N ;"]
     d = _write(tmp_path, "u.def", _def(rows))
     r = L._latchup_tap_spacing_check(d)
-    assert r["status"] == "WELLTAP_SPACING_GAP"
+    assert r["status"] == "UNDECIDED"
+    assert r["reason"] == "LEF_CLASS_UNDETERMINED"
     assert r["n_tap"] == 0
     assert any("tap" in t for t in r["unknown_taps"])
 
@@ -485,6 +503,8 @@ def test_recorded_lef_class_geometry_consumer(tmp_path, case):
     body = f'MACRO edge_cell\n CLASS {cls} ;\nEND edge_cell\n'
     if case == 'duplicate_conflict':
         body += 'MACRO edge_cell\n CLASS CORE ;\nEND edge_cell\n'
+    body += 'MACRO logic_cell\n CLASS CORE ;\nEND logic_cell\n'
+    body += 'MACRO sky130_fd_sc_hd__tapvpwrvgnd_1\n CLASS CORE WELLTAP ;\nEND sky130_fd_sc_hd__tapvpwrvgnd_1\n'
     lef.write_text(body)
     paths = [str(lef)]
     if case == 'conflict':
@@ -509,6 +529,10 @@ def test_recorded_lef_class_geometry_consumer(tmp_path, case):
         assert spacing['status'] == 'SPACING_OK_NECESSARY_NOT_SUFFICIENT'
         assert spacing['n_std'] == 60
         assert not result['any_conclusive_gap']
+    elif case in ('missing_record', 'bad_record', 'missing_lef', 'conflict', 'duplicate_conflict'):
+        assert spacing['status'] == 'UNDECIDED'
+        assert spacing['reason'] == 'LEF_CLASS_UNDETERMINED'
+        assert not result['any_conclusive_gap']
     else:
         assert spacing['status'] == 'WELLTAP_SPACING_GAP'
         assert spacing['reason'] == ('ZERO_TAPS' if case == 'zero_taps' else 'UNTAPPED_REGION')
@@ -516,7 +540,7 @@ def test_recorded_lef_class_geometry_consumer(tmp_path, case):
         assert result['any_conclusive_gap']
 
 
-def test_empty_lef_class_keeps_untapped_logic_failure(tmp_path):
+def test_empty_lef_class_leaves_untapped_population_undecided(tmp_path):
     route = tmp_path / 'phase3/stage3/pnr'
     route.mkdir(parents=True)
     reports = tmp_path / 'reports/phase3'
@@ -528,6 +552,6 @@ def test_empty_lef_class_keeps_untapped_logic_failure(tmp_path):
     routed = route / 'design.def'
     routed.write_text(_def(_std_rows(60, master='logic_cell')))
     result = L.run_geometry_layer(str(routed))
-    assert result['spacing']['status'] == 'WELLTAP_SPACING_GAP'
-    assert result['spacing']['reason'] == 'ZERO_TAPS'
-    assert result['any_conclusive_gap']
+    assert result['spacing']['status'] == 'UNDECIDED'
+    assert result['spacing']['reason'] == 'LEF_CLASS_UNDETERMINED'
+    assert not result['any_conclusive_gap']

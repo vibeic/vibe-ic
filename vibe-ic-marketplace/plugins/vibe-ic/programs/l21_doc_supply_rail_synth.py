@@ -286,6 +286,8 @@ def _rows_from_table(table: Dict[str, Any], rel: str,
     """
     header = table["header"]
     vcol = _volt_col(header)
+    return_col = next((i for i, cell in enumerate(header)
+                       if re.fullmatch(r"return(?:\s+net)?|ground(?:\s+net)?", _strip_md(cell), re.I)), None)
     cand: List[Dict[str, Any]] = []
     for line_no, cells in table["rows"]:
         if len(cells) < 2:
@@ -322,6 +324,11 @@ def _rows_from_table(table: Dict[str, Any], rel: str,
             "heading": table["heading"],
             "_col": src_col,
         })
+        if return_col is not None and return_col < len(cells):
+            stated_return = _rail_name(cells[return_col])
+            if stated_return:
+                cand[-1]["ground_net"] = stated_return
+                cand[-1]["ground_evidence"] = dict(cand[-1]["evidence"])
 
     n_rows = len([1 for _ln, c in table["rows"] if len(c) >= 2])
     if not cand or not n_rows:
@@ -408,6 +415,11 @@ def derive(proj: Path, doc_globs: Optional[List[str]] = None
         key = f["rail"]
         if key in by_name:
             by_name[key].setdefault("also_stated_in", []).append(f["evidence"])
+            if f.get("ground_net"):
+                if by_name[key].get("ground_net") not in (None, f["ground_net"]):
+                    raise ValueError(f"L21_RETURN_CONFLICT: {key}")
+                by_name[key]["ground_net"] = f["ground_net"]
+                by_name[key]["ground_evidence"] = f["ground_evidence"]
             continue
         by_name[key] = dict(f)
     rails = [by_name[k] for k in sorted(by_name)]
@@ -479,6 +491,18 @@ def main(argv: Optional[List[str]] = None) -> int:
     grounds = [r for r in rails if r["use"] == "GROUND"]
     powers = [r for r in rails if r["use"] == "POWER"]
     ref_gnd = grounds[0]["rail"] if grounds else None
+    updated = 0
+    for r in powers:
+        if not r.get("ground_net"):
+            continue
+        for entry in existing:
+            if (isinstance(entry, dict) and entry.get("derived_by") == PROGRAM
+                    and entry.get(_NAME_KEY) == r["rail"]
+                    and entry.get(_GROUND_KEY) != r["ground_net"]):
+                entry[_GROUND_KEY] = r["ground_net"]
+                entry["ground_evidence"] = r["ground_evidence"]
+                entry["ground_status"] = "stated in source Return column"
+                updated += 1
 
     added: List[Dict[str, Any]] = []
     for r in powers:
@@ -487,7 +511,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         entry: Dict[str, Any] = {
             _NAME_KEY: r["rail"],
             _POWER_KEY: r["rail"],
-            _GROUND_KEY: ref_gnd,
+            _GROUND_KEY: r.get("ground_net") or ref_gnd,
             "derived_by": PROGRAM,
             "derived_from": {
                 "doc_supply_table": r["why_table"],
@@ -499,7 +523,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             "voltage_evidence": {**r["evidence"],
                                  "matched_text": r["voltage_literal"]},
         }
-        if ref_gnd is None:
+        if r.get("ground_net"):
+            entry["ground_evidence"] = r["ground_evidence"]
+            entry["ground_status"] = "stated in source Return column"
+        elif ref_gnd is None:
             entry["ground_status"] = (
                 "no ground rail is stated in the design's own documents; "
                 "not invented here -- the return path must be declared by the "
@@ -529,9 +556,9 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if not rails:
         verdict = "NOT_APPLICABLE"
-    elif not added:
+    elif not added and not updated:
         verdict = "ALREADY_DECLARED"
-    elif ref_gnd is None:
+    elif ref_gnd is None and not any(r.get("ground_net") for r in powers):
         verdict = "DERIVED_NO_GROUND_STATED"
     else:
         verdict = "DERIVED"
@@ -563,7 +590,7 @@ def main(argv: Optional[List[str]] = None) -> int:
             "already_declared": sorted(consumer_visible),
         }, indent=2, ensure_ascii=False) + "\n")
 
-    if args.apply and added:
+    if args.apply and (added or updated):
         container["power_domains"] = list(existing) + added
         ev = doc.get("extraction_evidence")
         if not isinstance(ev, dict):

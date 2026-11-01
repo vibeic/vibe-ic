@@ -631,7 +631,12 @@ def _nominal(project, name, config, options, run, *, step="A07"):
                               metrics={**readiness, **studies["metrics"]}, outputs=studies["outputs"],
                               executions=studies["executions"], native_inputs=studies.get("native_inputs", {}))
             return result("NOT_MEASURED", missing, metrics=readiness)
-    execution = run("@ngspice", ["-b", str(deck)], cwd=deck.parent)
+    # Retention verifies ngspice's own live -o stream. The executor's captured
+    # stdout log is written only after exit and cannot identify running work.
+    native_log = _attempt(project, step, name) / "ngspice.log"
+    execution = run("@ngspice", ["-b", str(deck), "-o", str(native_log)],
+                    cwd=deck.parent, outputs=[str(native_log)])
+    execution = {**execution, "stdout_path": str(native_log)}
     transcript = _log_text(execution)
     metrics = {key.casefold(): value for key, value in sweep.native_meas_rows(transcript).items()}
     for match in sweep._MEAS_LINE_RE.finditer(transcript):

@@ -64,6 +64,14 @@
       "bucket_A_program": "programs/canonical_run_admission.py",
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
     },
+    "phase2.canonical_admission.step4_judgement": {
+      "description": "Current accepted signed functional evidence (native receipt step_id=4, public Step7 Simulation) in existing Phase 2 admission, including no credit for losing an accepted signature; capture routing only, not a new flow step or gate.",
+      "bucket_A_program": "programs/canonical_run_admission.py",
+      "bucket_A_related": [
+        "programs/ai_signed_judgement.py"
+      ],
+      "bucket_B_skill_file": "skills/flow-change-acceptance/SKILL.md"
+    },
     "phase2.required_site_results": {
       "description": "Producer-owned required gate results and current RTL binding; capture routing only, not a new gate.",
       "bucket_A_program": "programs/design_one_shot_runner.py",
@@ -103,6 +111,14 @@
       "ic_expert_db": "agents/ic_expert_db/ic_expert_db.json",
       "ic_expert_db_note": "A recovery that is generalizable DESIGN-CLASS CRAFT (algorithm correctness / interface convention / latency-reset discipline / a common trap) — but is NOT a deterministic rule a gate can enforce — is distilled as a chip-AGNOSTIC lesson into the IC Expert DB (keyed by ic_class). It ADVISES the general spec-to-rtl author via _lesson_digest (surfaced for any Phase-1 doc, not just benchmarks); it NEVER overrides a gate/program verdict. Enforce with ic_expert_db_consistency_check.py (blindness + no-override). This is the 4th distill target alongside program (Bucket A) / skill (Bucket B) / backlog (Bucket C)."
     },
+    "phase2.rtl_gen.kmap_mux_constraint": {
+      "description": "Decline unsupported SOP emission for an explicit mux-only external K-map decomposition; capture routing only, not a new flow row or gate.",
+      "bucket_A_program": "programs/kmap_grid_synth.py",
+      "bucket_A_related": [
+        "programs/spec_artifact_registry.py"
+      ],
+      "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
+    },
     "phase2.rtl_gen.public_port_order": {
       "description": "Preserve a supplied public module port order by moving the generated declaration clauses at the shared registry producer boundary; routing only, not a new flow step or acceptance gate.",
       "bucket_A_program": "programs/spec_artifact_registry.py",
@@ -119,6 +135,18 @@
         "programs/design_one_shot_runner.py"
       ],
       "bucket_B_skill_file": "agents/ic-expert-agent.md"
+    },
+    "phase2.rtl_gen.word_message_framing": {
+      "description": "Capture subtype for source-bound fixed-length word framing; does not add a flow step or acceptance gate.",
+      "bucket_A_program": "programs/serial_protocol_fsm_synth.py",
+      "bucket_A_related": ["programs/spec_artifact_registry.py"],
+      "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
+    },
+    "phase2.sim.multi_output_waveform": {
+      "description": "Capture subtype for source-bound valid-qualified multi-output waveform replay; does not add a flow step or acceptance gate.",
+      "bucket_A_program": "programs/waveform_table_conformance_check.py",
+      "bucket_A_related": ["programs/design_one_shot_runner.py"],
+      "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
     "phase2.rtl_gen.serial_parallel_multiplier": {
       "description": "Deterministic serial multiplier template; reset mode and polarity must come from the design input before emission.",
@@ -154,6 +182,15 @@
       "description": "Capture subtype for ordinary runner wrapper selection and declared top identity; does not add a flow step.",
       "bucket_A_program": "programs/design_one_shot_runner.py",
       "bucket_B_skill_file": "skills/catalog-glue-author/SKILL.md"
+    },
+    "phase2.reference_tb.current_professional": {
+      "description": "Current professional functional execution proof consumed by the existing normal reference result; capture routing only, not a new flow row or gate.",
+      "bucket_A_program": "programs/design_one_shot_runner.py",
+      "bucket_A_related": [
+        "programs/_sim_results_bridge.py",
+        "programs/cpu_functional_oracle_waiver_check.py"
+      ],
+      "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
     "phase2.reference_tb": {
       "bucket_A_program": "programs/bit_level_full_stack_tb_check.py",

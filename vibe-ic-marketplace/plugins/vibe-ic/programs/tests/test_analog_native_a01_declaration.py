@@ -48,6 +48,29 @@ def test_canonical_a01_normal_owner_completes_only_current_declared_metrics(cano
     assert [m['status'] for m in row['metric_acceptance']['obligations']] == ['PASS', 'PASS']
 
 
+@pytest.mark.parametrize('damage, status, count', [(None, 'PASS', 3), ('missing_review', 'FAIL', 2)])
+def test_native_a01_keeps_missing_measurement_intent_in_denominator(tmp_path, damage, status, count):
+    from types import SimpleNamespace
+    import flow109
+    import flow109_metric_acceptance as metrics
+    import librelane_contract as contract
+    from test_flow109_metric_acceptance import _measurement_intent_case
+    manifest, _ = _measurement_intent_case(tmp_path, damage)
+    report = native.run_window(tmp_path, SimpleNamespace(
+        entry_step='A01', exit_step='A01', container='', transport='HOST',
+        image=contract.resolve_image(tmp_path, record=False)), features=manifest['features'])
+    context = flow109.execution_context(flow109.resolve_plan(manifest['features']), 'A01', 'A01',
+        runtime_tool_uses=manifest['runtime_tool_uses'], qualification_registry='qualifications.json')
+    component = {'component_status': 'PASS', 'native_results': report}
+    assert report['window_verdict'] == 'PASS', report
+    result = metrics.accept_a01(tmp_path, context, component)
+    assert result['status'] == status, result
+    intent = result['obligations'][1]
+    assert intent['status'] == status and len(intent['measurement']['value']) == count, intent
+    assert len(intent['authority']['required_items']) == 3
+    assert intent['operator'] == 'covers_all'
+
+
 @pytest.mark.parametrize('damage', ['missing_D01', 'missing_qualification', 'stale_DUT',
     'missing_block', 'forged_PASS', 'missing_spec_field', 'foreign_authority', 'unattributed_source',
     'declared_population_gap', 'missing_declaration'])

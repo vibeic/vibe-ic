@@ -302,14 +302,39 @@ def _provider_route_mismatch(image: Any, project: Path | None = None, *,
     return None
 
 
+# Docker CLI run-option arity (including short and platform-specific options):
+# https://docs.docker.com/reference/cli/docker/container/run/
+# Execution backends still enforce which options they can actually implement.
+_DOCKER_RUN_VALUE_OPTIONS = frozenset({
+    '-a', '-c', '-e', '-h', '-l', '-m', '-p', '-u', '-v', '-w',
+    '--add-host', '--annotation', '--attach', '--blkio-weight',
+    '--blkio-weight-device', '--cap-add', '--cap-drop', '--cgroup-parent',
+    '--cgroupns', '--cidfile', '--cpu-count', '--cpu-percent', '--cpu-period',
+    '--cpu-quota', '--cpu-rt-period', '--cpu-rt-runtime', '--cpu-shares', '--cpus',
+    '--cpuset-cpus', '--cpuset-mems', '--detach-keys', '--device',
+    '--device-cgroup-rule', '--device-read-bps', '--device-read-iops',
+    '--device-write-bps', '--device-write-iops', '--dns', '--dns-option',
+    '--dns-search', '--domainname', '--entrypoint', '--env', '--env-file',
+    '--expose', '--gpus', '--group-add', '--health-cmd', '--health-interval',
+    '--health-retries', '--health-start-interval', '--health-start-period',
+    '--health-timeout', '--hostname', '--io-maxbandwidth', '--io-maxiops',
+    '--ip', '--ip6', '--ipc', '--isolation', '--label', '--label-file', '--link',
+    '--link-local-ip', '--log-driver', '--log-opt', '--mac-address', '--memory',
+    '--memory-reservation', '--memory-swap', '--memory-swappiness', '--mount',
+    '--name', '--net', '--network', '--network-alias', '--oom-score-adj', '--pid',
+    '--pids-limit', '--platform', '--publish', '--pull', '--restart', '--runtime',
+    '--security-opt', '--shm-size', '--stop-signal', '--stop-timeout',
+    '--storage-opt', '--sysctl', '--tmpfs', '--ulimit', '--user', '--userns',
+    '--uts', '--volume', '--volume-driver', '--volumes-from', '--workdir',
+})
+
+
 def _container_image_arg(argv: list[Any]) -> Any | None:
     """Return the image token after the Docker-run options, if unambiguous."""
     try:
         at = argv.index('run') + 1
     except ValueError:
         return None
-    value_options = {'-v', '-e', '--entrypoint', '--memory', '--memory-swap',
-                     '--network', '--workdir', '--cpus', '--shm-size', '--user', '-u'}
     while at < len(argv):
         token = argv[at]
         if not isinstance(token, str):
@@ -318,7 +343,7 @@ def _container_image_arg(argv: list[Any]) -> Any | None:
             return token
         if token == '--rm':
             at += 1
-        elif token in value_options:
+        elif token in _DOCKER_RUN_VALUE_OPTIONS:
             at += 2
         else:
             return None
@@ -416,10 +441,13 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
 
     Reuse the existing mount-path conversion and host process supervision.
     The enclosing fresh image supplies the environment and cgroup memory bound.
+    CPU limits select at most ceil(N) inherited CPUs; memory becomes a child
+    rlimit. Process counts use a transient user scope, never a per-UID rlimit.
     Unknown launch options refuse rather than silently discarding their meaning.
     """
     mounts, variables, entrypoint, container_workdir = [], {}, None, None
     network, memory, memory_swap, auto_remove = None, None, None, False
+    cpus, pids_limit = None, None
     at = argv.index('run') + 1
     while at < len(argv) and argv[at].startswith('-'):
         option = argv[at]
@@ -427,14 +455,17 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
             auto_remove = True
             at += 1
             continue
-        if option not in ('-v', '-e', '--entrypoint', '--memory', '--memory-swap', '--network', '--workdir'):
+        if option not in ('-v', '-e', '--entrypoint', '--memory', '--memory-swap',
+                          '--network', '--workdir', '--cpus', '--pids-limit'):
             raise Refusal('LL_LOCAL_LAUNCH_UNSUPPORTED', option)
         if option == '--workdir' and at + 1 >= len(argv):
             raise Refusal('LL_LOCAL_WORKDIR_INVALID', '--workdir requires a path')
+        if option in ('--cpus', '--pids-limit') and at + 1 >= len(argv):
+            raise Refusal('LL_LOCAL_LAUNCH_UNSUPPORTED', f'{option} requires a value')
         value = argv[at + 1]
         if option == '-v':
             host, guest, *mode = value.split(':')
-            if mode not in ([], ['ro']) or not Path(host).exists():
+            if mode not in ([], ['ro'], ['rw']) or not Path(host).exists():
                 raise Refusal('LL_LOCAL_MOUNT_INVALID', value)
             mounts.append((guest, str(Path(host).resolve())))
         elif option == '-e':
@@ -450,6 +481,20 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
             memory = _local_memory_bytes(value)
         elif option == '--memory-swap':
             memory_swap = _local_memory_bytes(value)
+        elif option in ('--cpus', '--pids-limit'):
+            try:
+                if option == '--cpus':
+                    number = Decimal(value)
+                    if not number.is_finite() or number < 0:
+                        raise ValueError('CPU count must be finite and nonnegative')
+                    cpus = math.ceil(number)
+                else:
+                    pids_limit = int(value)
+                    if pids_limit < -1:
+                        raise ValueError('process limit must be nonnegative or -1')
+            except (ValueError, ArithmeticError) as exc:
+                raise Refusal('LL_LOCAL_LAUNCH_UNSUPPORTED',
+                              f'invalid {option} value {value!r}: {exc}') from None
         at += 2
     child_cwd = None
     if container_workdir is not None:
@@ -572,22 +617,58 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
     if provider is not None and provider.librelane_root:
         environment['PYTHONPATH'] = os.pathsep.join(
             [provider.librelane_root, environment.get('PYTHONPATH', '')]).rstrip(os.pathsep)
-    if provider is not None:
-        # Apply the native address-space ceiling in a separate launcher.  A
+    if provider is not None or any(value is not None for value in (memory, cpus, pids_limit)):
+        # Apply native limits in a separate launcher.  A
         # preexec_fn in a supervised/threaded parent can deadlock after fork;
-        # this launcher sets the limit and immediately execs the bound command.
+        # this launcher sets limits and immediately execs the bound command.
         launcher = (
-            'import os,resource,sys; '
-            'limit=int(sys.argv[1]); '
-            'resource.setrlimit(resource.RLIMIT_AS,(limit,limit)); '
-            'os.execvpe(sys.argv[2],sys.argv[2:],os.environ)')
-        command = [provider.executable, '-c', launcher, str(memory), *command]
+            'import os,resource,sys\n'
+            'memory,cpus=map(int,sys.argv[1:3])\n'
+            'def cap(kind,requested):\n'
+            '    limits=(requested,*resource.getrlimit(kind))\n'
+            '    bound=min(value for value in limits if value!=resource.RLIM_INFINITY)\n'
+            '    resource.setrlimit(kind,(bound,bound))\n'
+            'if memory>0: cap(resource.RLIMIT_AS,memory)\n'
+            'if cpus>0: os.sched_setaffinity(0,sorted(os.sched_getaffinity(0))[:cpus])\n'
+            'os.execvpe(sys.argv[3],sys.argv[3:],os.environ)')
+        executable = provider.executable if provider is not None else sys.executable
+        command = [executable, '-c', launcher, str(memory or 0), str(cpus or 0),
+                   *command]
+    if provider is not None:
         environment['VIBEIC_LOCAL_MEMORY_LIMIT_BYTES'] = str(memory)
         environment['VIBEIC_LOCAL_NETWORK_MODE'] = provider.network_mode
     _ce.local_exec_mode('librelane_contract')
     with _ce.local_engine_cwd() as scratch:
         if child_cwd is None:
             kw.setdefault('cwd', scratch)
+        scope_started = None
+        if pids_limit is not None:
+            scope_runner = shutil.which('systemd-run', path=environment.get('PATH'))
+            if scope_runner is None:
+                raise Refusal('LL_LOCAL_PIDS_LIMIT_UNENFORCEABLE',
+                              'systemd-run is unavailable for the requested TasksMax')
+            # Runtime startup handshake, removed with this invocation's scratch.
+            # A failed scope launch must not be mistaken for the tool's own rc.
+            scope_started = Path(scratch) / 'pids-scope-started'
+            # Keep tool argv literal even on systemd versions which expand $.
+            scope_argv = Path(scratch) / 'pids-scope-argv.json'
+            scope_argv.write_text(json.dumps(command))
+            scoped_launcher = (
+                'import json,os,sys\n'
+                'from pathlib import Path\n'
+                'group=next(line.split(":",2)[2].strip() for line in '
+                'Path("/proc/self/cgroup").read_text().splitlines() if line.startswith("0::"))\n'
+                'actual=(Path("/sys/fs/cgroup")/group.lstrip("/")/"pids.max").read_text().strip()\n'
+                'wanted=int(sys.argv[2])\n'
+                'if wanted>=0 and (actual=="max" or int(actual)>wanted):\n'
+                '    raise SystemExit("requested cgroup pids.max was not applied")\n'
+                'command=json.loads(Path(sys.argv[3]).read_text())\n'
+                'Path(sys.argv[1]).touch()\n'
+                'os.execvpe(command[0],command,os.environ)')
+            tasks_max = 'infinity' if pids_limit == -1 else str(pids_limit)
+            command = [scope_runner, '--user', '--scope', '-q', '-p',
+                       f'TasksMax={tasks_max}', '--', executable, '-c',
+                       scoped_launcher, str(scope_started), str(pids_limit), str(scope_argv)]
         import _watchdog as _wd
         # A LOCAL probe allocation is an observable budget, not permission to
         # kill a progressing native process.  Only measured stillness permits
@@ -600,6 +681,10 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
             hard_ceiling_s=budget,
             ceiling_notice=_ce.default_ceiling_notice(
                 'LOCAL LibreLane', budget), **kw)
+        if scope_started is not None and not scope_started.is_file():
+            raise Refusal('LL_LOCAL_PIDS_LIMIT_UNENFORCEABLE',
+                          f'could not start a user scope with TasksMax={tasks_max}; '
+                          f'{_salvage(watched.out, watched.err, log)}')
         if watched.outcome == 'stalled':
             raise Refusal('LL_TOOL_STALLED',
                           f'LOCAL tool made no progress for {grace:g} s; '
@@ -1458,8 +1543,112 @@ def _declared_flow_settings(l19: dict, pdk: str) -> tuple[dict, dict]:
     return result, sources
 
 
+def _bound_primary_clocks(project: Path, l9: dict, clocks: list[dict],
+                          sdc: Path) -> tuple[list[str], str, str]:
+    """Bind multiple roots to declared inputs and an explicit asynchronous SDC.
+
+    A binding alone does not license timing cuts. Retain the complete declared
+    deck, including waveforms and I/O constraints; refuse unresolved Tcl clock
+    declarations rather than guessing their targets or relationships.
+    """
+    from l_doc_consumer_contract import l9_top_ports, l9_port_direction
+    import sdc_constraints
+
+    def refuse(detail: str) -> None:
+        raise Refusal('LL_CLOCK_AMBIGUOUS', detail)
+
+    inputs = {p['name'] for p in l9_top_ports(l9)
+              if p.get('name') and l9_port_direction(p) == 'in'
+              and any(p.get(k) for k in ('dir', 'mode', 'direction'))}
+    aliases = {pin: {pin} for pin in inputs}
+    l1 = project / 'phase1/generated_docs/L1_DATASHEET.json'
+    if l1.is_file():
+        for pin in _load(l1).get('pin_table', []):
+            target = pin.get('rtl_name')
+            if target in inputs:
+                for alias in (pin.get('name'), pin.get('board_name'),
+                              *(pin.get('aliases') or [])):
+                    if isinstance(alias, str) and alias:
+                        aliases.setdefault(alias, set()).add(target)
+
+    def resolve(pin: Any) -> str:
+        targets = aliases.get(pin, set()) if isinstance(pin, str) else set()
+        if len(targets) != 1:
+            refuse(f'undeclared or ambiguous top input {pin!r}')
+        return next(iter(targets))
+
+    roots = [resolve(c.get('source_pin')) for c in clocks]
+    bindings = l9.get('clock_binding')
+    if not isinstance(bindings, dict) or not bindings:
+        refuse('multiple primary clocks require explicit L9.clock_binding')
+    bound = {resolve(pin) for pin in bindings.values()}
+    if len(set(roots)) != len(roots) or not set(roots) <= bound:
+        refuse('duplicate or unbound primary clock pins')
+    paths = [sdc] if sdc.is_file() else sdc_constraints.collect_sdc_files(project)
+    texts = [path.read_text() for path in paths]
+    # This boundary supports literal clock objects. Complex Tcl remains an
+    # explicit refusal; no user script is executed during config emission.
+    active = '\n'.join(line.split('#', 1)[0]
+                       for text in texts for line in text.replace('\\\n', ' ').splitlines())
+    commands = [line.strip() for line in re.split(r'[;\n]', active) if line.strip()]
+    clock_commands = [line for line in commands if re.match(r'^create_clock\s', line)]
+    for command in clock_commands:
+        targets = re.findall(
+            r'\[get_ports\s+(?:\{([A-Za-z_]\w*)\}|([A-Za-z_]\w*))\]', command)
+        if len(targets) != 1 or len(re.findall(r'\bget_ports\b', command)) != 1:
+            refuse('SDC primary clocks require one literal top input per create_clock')
+    declarations = sdc_constraints.create_clocks_in_text('\n'.join(clock_commands))
+    by_pin: dict[str, dict] = {}
+    for clock in declarations:
+        pin = resolve(clock.get('port_name'))
+        if pin not in roots or pin in by_pin:
+            refuse(f'extra or repeated SDC primary clock {clock.get("port_name")!r}')
+        by_pin[pin] = clock
+    if set(by_pin) != set(roots):
+        refuse('SDC must declare every bound primary clock')
+    for pin, clock in zip(roots, clocks):
+        period = clock.get('period_ns')
+        if (isinstance(period, bool) or not isinstance(period, (int, float))
+                or not math.isfinite(period) or period <= 0
+                or by_pin[pin]['period_ns'] is None
+                or not math.isclose(period, by_pin[pin]['period_ns'], rel_tol=1e-9)):
+            refuse(f'L8/SDC period unresolved or conflicting for {pin}')
+    names = {c['name'] or c['port_name'] for c in declarations}
+    if len(names) != len(roots):
+        refuse('SDC clock names must be distinct')
+    separated: set[frozenset[str]] = set()
+    group_pattern = r'\s*-group\s+\[get_clocks\s+(?:\{([\w\s]+)\}|(\w+))\]'
+    for command in commands:
+        if not re.match(r'^set_clock_groups\s+-asynchronous\b', command):
+            continue
+        body = re.sub(r'^set_clock_groups\s+-asynchronous\b', '', command)
+        if not re.fullmatch(f'(?:{group_pattern})+\\s*', body):
+            refuse('unresolved asynchronous SDC clock groups')
+        groups = [set((a or b).split()) for a, b in re.findall(group_pattern, body)]
+        flat = [name for group in groups for name in group]
+        if len(groups) < 2 or len(flat) != len(set(flat)) or not set(flat) <= names:
+            refuse('unknown or overlapping asynchronous SDC clock groups')
+        for i, group in enumerate(groups):
+            for other in groups[i + 1:]:
+                separated.update(frozenset((a, b)) for a in group for b in other)
+    if any(frozenset((a, b)) not in separated for a in names for b in names if a != b):
+        refuse('primary clock relationships lack explicit asynchronous SDC groups')
+    source = ', '.join(str(path.relative_to(project)) for path in paths)
+    if l1.is_file():
+        source += ' + L1_DATASHEET.pin_table.{rtl_name,board_name,aliases}'
+    return [by_pin[pin]['port_name'] for pin in roots], '\n'.join(texts), source
+
+
 def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool = False) -> dict:
     """Emit only declared inputs; unavailable values stay absent, never guessed."""
+    from declared_pdk_is_the_pdk_used_check import declared_distribution, PDKDeclarationError
+    try:
+        declared_pdk, pdk_sources = declared_distribution(project)
+    except PDKDeclarationError as exc:
+        raise Refusal('LL_' + exc.code, exc.detail) from exc
+    if pdk not in (None, 'auto', declared_pdk):
+        raise Refusal('LL_PDK_DECLARATION_CONFLICT', 'requested PDK differs from case declaration')
+    pdk = declared_pdk
     root = project / 'phase1/generated_docs'
     l8, l9, l19 = (_ldoc(root, name) for name in EMIT_CONFIG_LDOCS)
     # The pad producer (step 15.5ic) runs after synthesis and pre-layout STA;
@@ -1468,6 +1657,8 @@ def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool =
     pads = _load(pad_path) if pad_path.is_file() else {}
     result: dict[str, Any] = {}
     sources: dict[str, str] = {}
+    _set(result, sources, 'PDK', pdk,
+         '; '.join(f'{path.relative_to(project)}:{key}' for path, key in pdk_sources))
     # Phase-1's typed clock contract spells a primary source as
     # domain_kind=primary / role=master.  Retain role=primary for older
     # documents, using the same two-field primary semantics as the L8 timing
@@ -1476,11 +1667,21 @@ def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool =
               if (c.get('domain_kind') == 'primary'
                   or c.get('role') in ('primary', 'master'))
               and c.get('pdk_scoped_target') in (None, pdk)]
-    if len(clocks) != 1:
+    if not clocks:
         raise Refusal('LL_CLOCK_AMBIGUOUS', f'{len(clocks)} primary clocks for {pdk}')
+    sdc = project / 'phase3/stage3/pnr/constraint.sdc'
+    multi_sdc = None
+    clock_port = clocks[0].get('source_pin')
+    clock_source = 'L8_TIMING_WAVEFORM.clock_domains[primary].source_pin'
+    if len(clocks) > 1:
+        clock_port, text, sdc_source = _bound_primary_clocks(project, l9, clocks, sdc)
+        clock_source += ' + L9_INTEGRATION_SPEC.clock_binding + ' + sdc_source
+        if not sdc.is_file():
+            sdc = output.with_name('multi_clock.sdc')
+            multi_sdc = text
     c = clocks[0]
     _set(result, sources, 'CLOCK_PERIOD', c.get('period_ns'), 'L8_TIMING_WAVEFORM.clock_domains[primary].period_ns')
-    _set(result, sources, 'CLOCK_PORT', c.get('source_pin'), 'L8_TIMING_WAVEFORM.clock_domains[primary].source_pin')
+    _set(result, sources, 'CLOCK_PORT', clock_port, clock_source)
     # The design's whole build closure (cmp3 D8): the read phase-3 synthesis
     # and the Step-5 proof take (`_chip_synth_read.chip_rtl_files`), not the
     # one file named after the top -- a multi-file core (subservient) lost
@@ -1493,11 +1694,11 @@ def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool =
              ['dir::' + str(path.relative_to(project)) for path in (*rtl, chip_top)],
              '_chip_synth_read.chip_rtl_files(phase2/stage1/rtl) (the read phase-3 '
              'synthesis and the Step-5 proof take) + phase3/stage3/pnr/chip_top_io.v')
-    sdc = project / 'phase3/stage3/pnr/constraint.sdc'
-    if sdc.is_file():
+    if sdc.is_file() or multi_sdc is not None:
         for key in ('PNR_SDC_FILE', 'SIGNOFF_SDC_FILE'):
             _set(result, sources, key, 'dir::' + str(sdc.relative_to(project)),
-                 'phase3/stage3/pnr/constraint.sdc (L9-derived producer artefact)')
+                 (sdc_source if len(clocks) > 1 else
+                  'phase3/stage3/pnr/constraint.sdc (L9-derived producer artefact)'))
     # Mapped synthesis does not require a die/core/pad placement declaration.
     # A present declaration is still validated; physical callers remain strict.
     declared, declared_sources = (({}, {}) if synthesis_only
@@ -1628,6 +1829,9 @@ def emit_config(project: Path, pdk: str, output: Path, *, synthesis_only: bool =
     pdn, pdn_source = librelane_pdn_config(project)
     for key, value in pdn.items():
         _set(result, sources, key, value, pdn_source)
+    if multi_sdc is not None:
+        sdc.parent.mkdir(parents=True, exist_ok=True)
+        sdc.write_text(multi_sdc)
     write_json(output, result)
     write_json(output.with_suffix('.provenance.json'), sources)
     return result
@@ -1662,7 +1866,7 @@ def emit_synthesis_config(project: Path, pdk: str, output: Path,
                           rtl_files: list[Path], defines: list[str],
                           use_slang: bool,
                           std_cell_library: str | None = None,
-                          synth_liberty: str | None = None,
+                          synth_liberty: str | list[str] | None = None,
                           top: str | None = None) -> dict:
     """Bind Yosys.Synthesis to the caller's selected design inputs."""
     import sparse_fsm_detect
@@ -1678,7 +1882,8 @@ def emit_synthesis_config(project: Path, pdk: str, output: Path,
         _set(result, sources, 'STD_CELL_LIBRARY', std_cell_library,
              'resolved synthesis liberty library supplied by phase3_one_shot_runner')
     if synth_liberty:
-        _set(result, sources, 'LIB', {'*': [synth_liberty]},
+        _set(result, sources, 'LIB', {'*': (synth_liberty if isinstance(synth_liberty, list)
+                                          else [synth_liberty])},
              'resolved synthesis liberty supplied by phase3_one_shot_runner')
     _set(result, sources, 'VERILOG_FILES',
          [str(path.resolve()) for path in rtl_files],

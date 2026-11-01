@@ -715,6 +715,17 @@ def arithmetic_plan_for_top(project: Path, case: dict, ic_class: str,
         observation_top=top['module'], observation_sources=identities)
     if plan is not None:
         plan['binding'].update(compiled)
+        if top['pad_ring'] and plan.get('reset_observation'):
+            spec_top = plan['spec']['top']
+            instance = dut_instance_name(src.read_text(), spec_top)
+            if instance is None:
+                request.update(reason_class=MISSING_OBSERVATION_CONTRACT,
+                               unsupported_requirements=[
+                                   f'reset observation requires one scalar {spec_top} instance in the selected wrapper'])
+                return None
+            plan['observation']['reset_state_targets'] = {
+                row['state']: f"dut.{instance}.{row['state']}"
+                for row in plan['reset_observation']['required_observations']}
     return plan
 
 

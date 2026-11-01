@@ -73,9 +73,9 @@ def _drive_step_pnr(tmp_path, monkeypatch, switch, *, stop_at_builder=True, call
     project.mkdir(parents=True)
     if switch is not None:
         put(project / 'phase3/librelane_switch.json', {'steps': switch})
-    if declared:
-        _l19(project)
     pdk = ring_fixture._pdk(tmp_path, ring=None)
+    if declared:
+        _l19(project, pdk=pdk.name)
     # Complete the unit PDK input instead of staging an image's real Liberty.
     pdk.liberty = str(write(tmp_path / 'neutral.lib',
                             'library(neutral) { time_unit : "1ns"; }\n'))
@@ -253,7 +253,7 @@ def test_the_producer_call_site_takes_the_librelane_split_only_when_selected(tmp
 
 # ------------------------------------------------------ the declared config ---
 
-def _l19(project, max_fanout='4', scope='gf*'):
+def _l19(project, max_fanout='4', scope='gf*', *, pdk='gfX'):
     root = project / 'phase1/generated_docs'
     put(root / 'L8_TIMING_WAVEFORM.json', {'clock_domains': [
         {'role': 'primary', 'period_ns': 24, 'source_pin': 'clk'}]})
@@ -261,7 +261,8 @@ def _l19(project, max_fanout='4', scope='gf*'):
     rows = [] if max_fanout is None else [
         {'token': 'MAX_FANOUT_CONSTRAINT', 'scope': scope, 'value': max_fanout,
          'source': 'L9_constraints.txt', 'line': 53}]
-    put(root / 'L19_CONSTRAINTS_PDK.json', {'fields': {'constraint_declarations': rows}})
+    put(root / 'L19_CONSTRAINTS_PDK.json', {'fields': {
+        'pdk_target': pdk, 'constraint_declarations': rows}})
     put(project / 'input/submission_template/tapeout_declaration.json',
         {'answers': {'top_cell': 'chip_top'}})
 

@@ -1,0 +1,47 @@
+[
+  {
+    "step": "phase2.rtl_gen.word_message_framing",
+    "design": "source-bound-word-message-contract",
+    "bucket": "A",
+    "rule_name": "closed_word_message_framing",
+    "docstring": "Emit fixed-length word framing only when public widths, marker, order, edge, report timing, concurrency and reset are bound.",
+    "expected_signal": "EMIT_OR_DECLINE",
+    "fix_action": "Use the existing serial producer through the normal artifact registry and verify valid-qualified multi-output source observations through the existing waveform checker.",
+    "status": "IMPLEMENTED_LOCAL_REVIEWED_PENDING_COMPOSITION",
+    "bucket_A_program": "programs/serial_protocol_fsm_synth.py",
+    "bucket_A_related": [
+      "programs/spec_artifact_registry.py"
+    ],
+    "automatic_enforcement_points": [
+      "serial_protocol_fsm_synth.synth: source-bound word-message recognition and emission",
+      "spec_artifact_registry.generate: existing serial_protocol_fsm registry consumer"
+    ],
+    "general_core_proof": "Invented complete design documents, including no-waveform input, use the same existing public producer and registry. Width/count/marker/order/edge/reset/port variants are checked in real host simulation.",
+    "unsupported_disposition": "Normal producer None and checker WTC_SKIP; no acceptance or authority shortcut.",
+    "eda_disposition": "Plugin parser/emitter/replay gap; no demonstrated defect in the simulator or synthesis tool.",
+    "benchmark_result_change": "NONE; source-bound local proof only; frozen campaign artifacts remain unchanged.",
+    "pattern": "Complete fixed-length input-word framing and pending output reporting contract"
+  },
+  {
+    "step": "phase2.sim.multi_output_waveform",
+    "design": "valid-qualified-public-word-observations",
+    "bucket": "A",
+    "rule_name": "source_bound_multi_output_waveform",
+    "docstring": "Replay completion and valid packed output values only inside the source-bound multi-output observation envelope.",
+    "expected_signal": "PASS_FAIL_OR_SKIP",
+    "fix_action": "Use the existing serial producer through the normal artifact registry and verify valid-qualified multi-output source observations through the existing waveform checker.",
+    "status": "IMPLEMENTED_LOCAL_REVIEWED_PENDING_COMPOSITION",
+    "bucket_A_program": "programs/waveform_table_conformance_check.py",
+    "bucket_A_related": [
+      "programs/design_one_shot_runner.py"
+    ],
+    "automatic_enforcement_points": [
+      "waveform_table_conformance_check.main: source-bound valid-qualified multi-output replay"
+    ],
+    "general_core_proof": "Invented complete design documents, including no-waveform input, use the same existing public producer and registry. Width/count/marker/order/edge/reset/port variants are checked in real host simulation.",
+    "unsupported_disposition": "Normal producer None and checker WTC_SKIP; no acceptance or authority shortcut.",
+    "eda_disposition": "Plugin parser/emitter/replay gap; no demonstrated defect in the simulator or synthesis tool.",
+    "benchmark_result_change": "NONE; source-bound local proof only; frozen campaign artifacts remain unchanged.",
+    "pattern": "Public clock-reset-word-valid-packet table with source-bound widths radix and stable half-cycles"
+  }
+]

@@ -570,13 +570,11 @@ def run_native_cases(step, state, manifest, *, workers=1, native_run=None):
         started = time.time_ns(); argv_calls = []
         def logged_run(argv, log, limit, cwd=None):
             resources = str(log) + '.resources.txt'
-            # Observe each native invocation; _run owns cwd, timeout, logs and rc.
-            timed = ['/usr/bin/time', '-f', 'max_rss_kib=%M\nuser_s=%U\nsystem_s=%S\nelapsed_s=%e',
-                     '-o', resources, '--', *argv]
-            call = {'argv': list(argv), 'executed_argv': timed, 'log': str(log),
+            # The native runner owns child accounting, cwd, timeout, logs and rc.
+            call = {'argv': list(argv), 'executed_argv': list(argv), 'log': str(log),
                     'cwd': str(cwd) if cwd else None, 'resources': resources}
             argv_calls.append(call)
-            rc = step._run(timed, log, limit, cwd=cwd)
+            rc = step._run(argv, log, limit, cwd=cwd)
             call['returncode'] = rc
             return rc
         child._run = logged_run

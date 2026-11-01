@@ -471,7 +471,7 @@ def test_synthesis_config_without_physical_declaration_keeps_physical_entry_stri
     put(tmp_path,'phase1/generated_docs/L8_TIMING_WAVEFORM.json',
         {'clock_domains':[{'role':'primary','source_pin':'clk','period_ns':20}]})
     put(tmp_path,'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {})
-    put(tmp_path,'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {})
+    put(tmp_path,'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {'pdk_target': 'unit_pdk'}})
     output = tmp_path / 'synth.json'
     result = contract.emit_config(tmp_path, 'unit_pdk', output, synthesis_only=True)
     assert result['CLOCK_PERIOD'] == 20

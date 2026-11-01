@@ -481,6 +481,19 @@ _POWER_TO_UW = {
 _POWER_TO_W = {unit: factor * 1e-6
                for unit, factor in _POWER_TO_UW.items()}
 
+
+def _valid_leakage_power(value: float, topology: Dict) -> bool:
+    """Measured zero requires a nonempty capacitor/resistor-only inventory."""
+    if not math.isfinite(value) or value < 0:
+        return False
+    if value > 0:
+        return True
+    devices = topology.get("devices")
+    return (isinstance(devices, list) and bool(devices)
+            and all(isinstance(device, dict)
+                    and device.get("role") in ("cap", "res")
+                    for device in devices))
+
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$", re.IGNORECASE)
 _MAG_USE_RE = re.compile(r"(?im)^\s*use\s+(\S+)")
 _INVALID_OP_RE = re.compile(r"(?m)^\s*;;RESIDUAL_FAIL\b")
@@ -871,7 +884,8 @@ def _bound_models(container: str, lines: List[str], directory: Path) -> List[Dic
 
 def _native_measurement_produce(project: Path, block: str, container: str,
                                 pdk_root: str, gds: Path,
-                                topology: Dict[str, object], *, ngspice_bin: Optional[str] = None
+                                topology: Dict[str, object], *, ngspice_bin: Optional[str] = None,
+                                native_attempts=None
                                 ) -> Tuple[Optional[Dict[str, object]], str]:
     """Ordinary A8 producer path: extract the A5 view, then measure power.
 
@@ -916,6 +930,8 @@ def _native_measurement_produce(project: Path, block: str, container: str,
         magic_cmd = (
             f"cd {shlex.quote(str(stage))} && magic -dnull -noconsole "
             f"-rcfile {shlex.quote(rcfile)} a8_extract.tcl")
+        if native_attempts is not None:
+            native_attempts.append({"tool": "magic", "operation": "post_layout_extract"})
         magic_rc, magic_out, magic_err = _docker_exec(
             container, magic_cmd, marker="a8_extract.tcl")
         extract_log.write_text((magic_out or "") + (magic_err or ""))
@@ -955,6 +971,8 @@ def _native_measurement_produce(project: Path, block: str, container: str,
         if wrapper_path is not None:
             consumed.append(wrapper_path)
         frozen = {p: _sha256(p) for p in consumed}
+        if native_attempts is not None:
+            native_attempts.append({"tool": "ngspice", "operation": "post_layout_op"})
         ngspice_rc, ng_out, ng_err = _docker_exec(
             container,
             f"cd {shlex.quote(str(bdir))} && "
@@ -989,7 +1007,7 @@ def _native_measurement_produce(project: Path, block: str, container: str,
                           f"result; see {ng_log.name}")
         power_w = float(pwr.group(1))
         measured_current = float(idd.group(1)) if idd is not None else None
-        if not math.isfinite(power_w) or power_w <= 0:
+        if not _valid_leakage_power(power_w, topology):
             return None, f"native pwr result is not finite and positive: {power_w!r}"
 
         rec: Dict[str, object] = {
@@ -1237,14 +1255,18 @@ def load_native_measurement(project: Path, block: str, gds: Path,
     if rec.get("measurement_basis") is not None and not source_based:
         return None, "unsupported native measurement basis"
     try:
-        value = float(rec["value"])
+        raw_value = rec["value"]
+        if isinstance(raw_value, bool):
+            raise ValueError("boolean is not a measured power value")
+        value = float(raw_value)
     except (KeyError, TypeError, ValueError):
         return None, f"{_A8_MEASUREMENT} has no numeric measured value"
     unit = str(rec.get("unit") or "").strip().lower()
     if unit not in _POWER_TO_UW:
         return None, f"unsupported measured power unit {rec.get('unit')!r}"
-    if not (value > 0.0) or not math.isfinite(value):
+    if not _valid_leakage_power(value, topology):
         return None, (f"measured cell_leakage_power must be finite and > 0; "
+                      f"zero requires a capacitor/resistor-only inventory; "
                       f"got {rec.get('value')!r} {rec.get('unit')!r}")
 
     required = (
@@ -1392,8 +1414,11 @@ def load_native_measurement(project: Path, block: str, gds: Path,
             return None, ("native pwr and I(VDD) receipts disagree")
         native_power_w = idd_power_w
     record_power_w = value * _POWER_TO_W[unit]
-    if native_power_w is None or not math.isclose(
-            record_power_w, native_power_w, rel_tol=1e-6, abs_tol=1e-18):
+    if (native_power_w is None
+            or not _valid_leakage_power(native_power_w, topology)
+            or ((record_power_w == 0.0) != (native_power_w == 0.0))
+            or not math.isclose(
+                record_power_w, native_power_w, rel_tol=1e-6, abs_tol=1e-18)):
         return None, ("measured value does not match native pwr/ I(VDD) "
                       "receipt")
 
@@ -1432,7 +1457,20 @@ def load_native_measurement(project: Path, block: str, gds: Path,
 
 
 def emit_block(project: Path, block: str, container: str, pdk_root: str, *, ngspice_bin: Optional[str] = None,
-               ) -> Dict:
+               native_attempts=None) -> Dict:
+    """Publish attempts to an optional per-call sink even if later work raises."""
+    native_attempts = native_attempts if native_attempts is not None else []
+    try:
+        result = _emit_block(project, block, container, pdk_root,
+                             ngspice_bin=ngspice_bin, native_attempts=native_attempts)
+    except (OSError, subprocess.SubprocessError) as exc:
+        result = {"block": block, "emitted": False, "rc": 2,
+                  "reason": f"native export transport unavailable: {exc}"}
+    return dict(result, native_attempts=native_attempts)
+
+
+def _emit_block(project: Path, block: str, container: str, pdk_root: str, *,
+                ngspice_bin: Optional[str] = None, native_attempts) -> Dict:
     bdir = project / "phase3" / "analog" / block
     gds = bdir / f"{block}.gds"
     topo = bdir / "topology.json"
@@ -1462,7 +1500,9 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str, *, ngsp
                 "cached native measurement used a different selected binary"
     if measurement is None:
         produced, produce_reason = _native_measurement_produce(
-            project, block, container, pdk_root, gds, topology, **({"ngspice_bin": ngspice_bin} if ngspice_bin is not None else {}))
+            project, block, container, pdk_root, gds, topology,
+            native_attempts=native_attempts,
+            **({"ngspice_bin": ngspice_bin} if ngspice_bin is not None else {}))
         if produced is None:
             return {"block": block, "emitted": False, "rc": 1,
                     "reason": (f"{measurement_reason}; ordinary native "
@@ -1494,6 +1534,7 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str, *, ngsp
         native_lef = Path(staging) / f"{block}.lef"
         native_lef.write_text("")
         tcl.write_text(build_lef_tcl(block, str(gds), str(native_lef)))
+        native_attempts.append({"tool": "magic", "operation": "lef_export"})
         rc, out, err = _docker_exec(
             container,
             f"cd {shlex.quote(str(hdir))} && magic -dnull -noconsole "

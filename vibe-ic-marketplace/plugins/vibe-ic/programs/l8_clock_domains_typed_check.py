@@ -337,7 +337,7 @@ def _collect_clock_entries(node, out: List[dict]) -> None:
                             entry = dict(cval)
                             entry.setdefault("name", cname)
                             out.append(entry)
-            else:
+            elif k not in {"extraction_evidence", "provenance"}:
                 _collect_clock_entries(v, out)
     elif isinstance(node, list):
         for it in node:

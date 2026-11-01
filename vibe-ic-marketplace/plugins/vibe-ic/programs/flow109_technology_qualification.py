@@ -15,6 +15,8 @@ from pathlib import Path
 import re
 from typing import Mapping
 
+from declared_pdk_is_the_pdk_used_check import declared_distribution, PDKDeclarationError
+
 STEP = "D03"
 NATIVE_STEP = "flow109.D03"
 SCHEMA = "vibeic.flow109.technology-qualification.v1"
@@ -71,7 +73,7 @@ def _installed_pin(pdk_root: Path, pdk: str, family: str) -> dict:
             "reader_source": _record(Path(revision.__file__))}
 
 
-def _resolve(config_path: Path, pdk_root: Path):
+def _resolve(config_path: Path, pdk_root: Path, *, pdk: str, project: Path):
     import ciel
     from librelane.flows import Flow
 
@@ -84,7 +86,11 @@ def _resolve(config_path: Path, pdk_root: Path):
     target = Flow.factory.get(name)
     if meta.get("substituting_steps"):
         target = target.Substitute(meta["substituting_steps"])
-    flow = target(str(config_path), pdk_root=str(pdk_root))
+    raw_pdk = json.loads(config_path.read_text()).get("PDK")
+    if raw_pdk is not None and raw_pdk != pdk:
+        raise D03Refusal("D03_PDK_DECLARATION_CONFLICT", "config PDK differs from case declaration")
+    flow = target(str(config_path), pdk=pdk, pdk_root=str(pdk_root),
+                  design_dir=str(project))
     selected = flow.config
     pdk = selected["PDK"]
     family = next((f for f in ciel.Family.by_name.values() if pdk in f.variants), None)
@@ -108,16 +114,19 @@ def execute(project: Path, context: Mapping) -> dict:
             raise D03Refusal("D03_RUNTIME_IMAGE_UNRESOLVED", "resolve image on launch host")
         config_path = project / "phase3/librelane/config.json"
         inputs.append(_record(config_path))
+        declared_pdk, declaration_sources = declared_distribution(project)
+        inputs.extend(_record(path) for path in sorted({path for path, _ in declaration_sources}))
         raw_root = os.environ.get("VIBEIC_LIBRELANE_PDK_ROOT", "")
         if not raw_root:
             raise D03Refusal("D03_PDK_ROOT_UNSTATED", "VIBEIC_LIBRELANE_PDK_ROOT")
         root = Path(raw_root).resolve(strict=True)
         native_started = True
-        selected, pin = _resolve(config_path, root)
+        selected, pin = _resolve(config_path, root, pdk=declared_pdk, project=project)
         resolved_path = project / "reports/flow109/D03/resolved.json"
         resolved_path.parent.mkdir(parents=True, exist_ok=True)
         resolved_path.write_text(selected.dumps())
-        inputs.append(_record(resolved_path))
+        resolved_input = _record(resolved_path)
+        inputs.append(resolved_input)
         inputs.extend(pin.get("source_files", []))
         if pin.get("reader_source"):
             inputs.append(pin["reader_source"])
@@ -143,14 +152,14 @@ def execute(project: Path, context: Mapping) -> dict:
             "tool_deck_corner_binding": {"image": image, "tools": tools,
                 "pdk": pin, "standard_cell_library": selected["STD_CELL_LIBRARY"],
                 "default_corner": selected["DEFAULT_CORNER"],
-                "resolved_config": inputs[1]}}
+                "resolved_config": resolved_input}}
         checks = [{"check": key, "status": value} for key, value in
                   metrics["required_capability_qualifications"].items()]
         status = "PASS"
         reason = ("D03_NATIVE_CONFIG_AND_CIEL_PIN_PASS" if pin["authority"] == "ciel_installed_pin"
                   else "D03_NATIVE_CONFIG_AND_INSTALLED_PIN_PASS")
-    except D03Refusal as exc:
-        reason = exc.code
+    except (D03Refusal, PDKDeclarationError) as exc:
+        reason = 'D03_' + exc.code if isinstance(exc, PDKDeclarationError) else exc.code
         checks.append({"check": "native_qualification", "status": status, "detail": exc.detail})
     except Exception as exc:
         status = "FAIL" if native_started else "NOT_MEASURED"

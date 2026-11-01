@@ -558,7 +558,9 @@ _LIB_PIN_RE = re.compile(
 #: belongs to is stated NOWHERE ELSE in a Liberty, and a `pg_pin` that omits
 #: it does not say which supply it is.
 _LIB_PG_TYPE_RE = re.compile(
-    r"\bpg_type\s*:\s*([A-Za-z_]+)\s*;", re.IGNORECASE)
+    r'\bpg_type\s*:\s*"?([A-Za-z_]+)"?\s*;', re.IGNORECASE)
+_LIB_DIRECTION_RE = re.compile(
+    r'\bdirection\s*:\s*"?(input|output|inout|internal)"?\s*;', re.IGNORECASE)
 
 
 def parse_liberty(lib_text: str, bus_chars: str = "[]<>") -> Dict[str, object]:
@@ -575,24 +577,58 @@ def parse_liberty(lib_text: str, bus_chars: str = "[]<>") -> Dict[str, object]:
     pg: Set[str] = set()
     pg_type: Dict[str, str] = {}
     pg_name: Dict[str, str] = {}
+    direction: Dict[str, str] = {}
+    pin_direction: Dict[str, str] = {}
+    direction_sets: Dict[str, Set[str]] = {}
+    bus_groups = []
     matches = list(_LIB_PIN_RE.finditer(text))
     for i, m in enumerate(matches):
         b = base_name(m.group("name"), bus_chars)
+        depth, end = 1, m.end()
+        quoted = False
+        escaped = False
+        body = []
+        while end < len(text) and depth:
+            char = text[end]
+            if depth == 1:
+                body.append(char)
+            if char == '"' and not escaped:
+                quoted = not quoted
+            if not quoted:
+                depth += (char == "{") - (char == "}")
+            escaped = char == "\\" and not escaped
+            end += 1
+        own_text = "".join(body)
         if m.group("kind").lower() == "pg_pin":
             pg.add(b)
             pg_name[b] = m.group("name")
             # Scoped to THIS pg_pin's group: from its `{` up to the start of
             # the next pin/bus/pg_pin declaration, so a `pg_type` belonging
             # to the following group is never read as this one's.
-            end = matches[i + 1].start() if i + 1 < len(matches) else len(text)
-            tm = _LIB_PG_TYPE_RE.search(text, m.end(), end)
+            tm = _LIB_PG_TYPE_RE.search(own_text)
             pg_type[b] = tm.group(1).lower() if tm else ""
         else:
             signal.add(b)
+            dm = _LIB_DIRECTION_RE.search(own_text)
+            value = dm.group(1).lower() if dm else ""
+            if not value:
+                for parent, parent_end, inherited in reversed(bus_groups):
+                    if parent.start() < m.start() < parent_end:
+                        value = inherited
+                        break
+            if m.group("kind").lower() == "bus":
+                bus_groups.append((m, end, value))
+            pin_direction[m.group("name")] = value
+            if (value or m.group("kind").lower() != "bus"
+                    or not any(child.start() < end for child in matches[i + 1:])):
+                direction_sets.setdefault(b, set()).add(value)
+    direction = {name: next(iter(values)) if len(values) == 1 else ""
+                 for name, values in direction_sets.items()}
     signal -= pg
     return {"cell": cell_m.group("name") if cell_m else None,
             "signal": signal, "pg": pg, "pg_type": pg_type,
-            "pg_name": pg_name}
+            "pg_name": pg_name, "direction": direction,
+            "pin_direction": pin_direction, "direction_sets": direction_sets}
 
 
 # ── Verilog ───────────────────────────────────────────────────────────────
@@ -646,18 +682,23 @@ def parse_verilog(v_text: str, bus_chars: str = "[]<>") -> Dict[str, object]:
     body = rest[hm.end():] if hm else rest
 
     ports: Set[str] = set()
+    directions: Dict[str, str] = {}
     style = ""
     # ANSI: directions live INSIDE the header parentheses.
     for pm in _V_PORT_DECL_RE.finditer(header):
         style = "ansi"
         for nm in _V_IDENT_RE.finditer(pm.group("names")):
-            ports.add(base_name(nm.group(0), bus_chars))
+            base = base_name(nm.group(0), bus_chars)
+            ports.add(base)
+            directions[base] = pm.group("dir").lower()
     if not ports:
         # non-ANSI: the header is a bare name list and the directions are
         # declared in the body.
         for pm in _V_PORT_DECL_RE.finditer(body):
             for nm in _V_IDENT_RE.finditer(pm.group("names")):
-                ports.add(base_name(nm.group(0), bus_chars))
+                base = base_name(nm.group(0), bus_chars)
+                ports.add(base)
+                directions[base] = pm.group("dir").lower()
         if ports:
             style = "non-ansi"
         elif header.strip():
@@ -667,7 +708,7 @@ def parse_verilog(v_text: str, bus_chars: str = "[]<>") -> Dict[str, object]:
             for nm in _V_IDENT_RE.finditer(header):
                 ports.add(base_name(nm.group(0), bus_chars))
             style = "header-only"
-    return {"module": name, "ports": ports, "style": style}
+    return {"module": name, "ports": ports, "style": style, "direction": directions}
 
 
 # ── GDS ───────────────────────────────────────────────────────────────────
@@ -1060,6 +1101,30 @@ def check_package(name: str, views: Dict[str, Path], project: Path,
                      f"DIFFERENT directions on different bits. A bus whose "
                      f"bits disagree about which way they point is not one "
                      f"port to any consumer that reads it as one.")))
+
+    conflicts = {pin: {"lef": lef["direction"].get(pin),
+                        "liberty": lib.get("direction", {}).get(pin),
+                        "verilog": ver.get("direction", {}).get(pin)}
+                 for pin in sorted(sig_lef & sig_lib & v_ports)
+                 if len({value for value in (lef["direction"].get(pin),
+                         lib.get("direction", {}).get(pin),
+                         ver.get("direction", {}).get(pin)) if value}) > 1}
+    detail["interface"]["direction_conflicts"] = conflicts
+    detail["interface"]["liberty_signal_pin_directions"] = lib["pin_direction"]
+    detail["interface"]["liberty_signal_direction_sets"] = {
+        name: sorted(values) for name, values in lib["direction_sets"].items()}
+    missing_direction = sorted(pin for pin in sig_lef & sig_lib & v_ports
+                               if not lib.get("direction", {}).get(pin)
+                               or not ver.get("direction", {}).get(pin))
+    detail["interface"]["logical_pins_without_direction"] = missing_direction
+    if missing_direction:
+        ok = False
+        F.append(Finding(rule="SIGNAL_DIRECTION_UNDETERMINED", severity="ERROR", macro=name,
+                         message=f"macro '{name}': Liberty/Verilog signal directions absent: {missing_direction}"))
+    if conflicts:
+        ok = False
+        F.append(Finding(rule="SIGNAL_DIRECTION_DISAGREE", severity="ERROR", macro=name,
+                         message=f"macro '{name}': LEF/Liberty/Verilog directions disagree: {conflicts}"))
 
     # ── 6b. WHICH RAIL each supply pin is ─────────────────────────────
     # THE NAME SETS AGREEING IS NOT THE SUPPLIES AGREEING. `PG_PIN_DISAGREE`

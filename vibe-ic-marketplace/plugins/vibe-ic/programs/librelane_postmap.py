@@ -146,8 +146,10 @@ def run_and_publish(project, top, pdk, container, *, parent_folder, image, mount
     root = project / "phase3/librelane/postmap-config"
     root.mkdir(parents=True, exist_ok=True)
     raw = root / "design.json"
+    libraries = runner._liberty_paths(pdk.liberty)
+    scl = Path(libraries[0]).stem.split("__", 1)[0] if len(libraries) == 1 else None
     cfg = prelayout.emit_prelayout_config(project, str(pdk.name), top, sdc, [], raw,
-                                          Path(str(pdk.liberty)).stem.split("__", 1)[0])
+                                          scl)
     cfg["meta"] = {"step": STEP}
     LC.write_json(raw, cfg)
     resolved = LC.resolve_step_config(project, image, raw, root / "resolved.json", mounts=mounts, pdk_root=pdk_root)
@@ -168,7 +170,7 @@ def run_and_publish(project, top, pdk, container, *, parent_folder, image, mount
     netlist = staging / "phase2/stage2/synth" / (top + "_synth.v")
     netlist.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(native, netlist)
-    stats = area.emit_for_run(staging, folder / "reports/stat.rpt", netlist, liberty=pdk.liberty, container=None)
+    stats = area.emit_for_run(staging, folder / "reports/stat.rpt", netlist, liberty=runner._liberty_model_path(pdk.liberty, container, project), container=None)
     if stats is None:
         raise LC.Refusal("LL_POSTMAP_STAT_UNMEASURED", str(folder))
     LC.verify_synthesis_stat(folder / "reports/stat.json", state, Path(stats), top, folder / "postmap-stat-binding.json")
