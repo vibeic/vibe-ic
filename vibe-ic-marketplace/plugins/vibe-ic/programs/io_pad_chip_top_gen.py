@@ -364,6 +364,8 @@ def _check_scan_interface(project: Path,
 
     Reuse PnR's selector and the scan producer's functional-mode metadata.
     Proof-only tie values do not authorize permanent physical tie-offs or pads.
+    An explicitly analog-only Flow109 core has no synthesized scan subject;
+    digital and undeclared cores still require the normal synthesis handoff.
     """
     if test_access is not None and test_access.get("profile") == "default_planned":
         _ports, _sides, current = _default_planned_access(project, ports)
@@ -372,6 +374,15 @@ def _check_scan_interface(project: Path,
         return {"selected_scan_netlist": True, "planned_test_access": current,
                 "physical_tieoff_authorized": False,
                 "scan_chain_qualification": "NOT_MEASURED"}
+    manifest = project / "input/flow109-manifest.json"
+    try:
+        features = json.loads(manifest.read_text()).get("features", {})
+    except FileNotFoundError:
+        features = {}
+    if features.get("has_analog") is True and features.get("has_digital") is False:
+        return {"selected_scan_netlist": False,
+                "selection": "declared analog-only core: input/flow109-manifest.json "
+                             "features.has_analog=true, features.has_digital=false"}
     from phase3_one_shot_runner import pnr_input_netlist
     from lec_run import netlist_top_ports, scan_mode_from_meta
 
