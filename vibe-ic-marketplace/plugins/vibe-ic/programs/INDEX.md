@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1508
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1508)
+- **Total programs (excluding helpers / shims):** 1509
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1509)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1499 |
+| `any` | 1500 |
 
 ## Alphabetical listing
 
@@ -514,6 +514,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_final_perc` | any | — | D66 thin binding to the existing Step-28 PERC-equivalent owner. |
 | `flow109_frontend` | any | — | D22 uses the existing Default synthesis owner and its complete consumer. |
 | `flow109_functional_activity` | any | — | D55 component: adopted-netlist GLS activity and a real vector-power consumer. |
+| `flow109_ip_release` | any | — | D79 exports owner-selected IP endpoints and consumes their existing audits. |
 | `flow109_macro_mixed` | any | — | Bounded D08/M03/M04 adapters over the existing macro and mixed owners. |
 | `flow109_metric_acceptance` | any | — | Typed runtime metric acceptance for the 109-flow registry. |
 | `flow109_mixed_m01` | any | — | Flow109 M01 adapter over the inherited source extractors and interface gate. |
@@ -1580,7 +1581,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1499 programs)
+### `any` (1500 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2066,6 +2067,7 @@ _(no programs in this group)_
 - `flow109_final_perc` — D66 thin binding to the existing Step-28 PERC-equivalent owner.
 - `flow109_frontend` — D22 uses the existing Default synthesis owner and its complete consumer.
 - `flow109_functional_activity` — D55 component: adopted-netlist GLS activity and a real vector-power consumer.
+- `flow109_ip_release` — D79 exports owner-selected IP endpoints and consumes their existing audits.
 - `flow109_macro_mixed` — Bounded D08/M03/M04 adapters over the existing macro and mixed owners.
 - `flow109_metric_acceptance` — Typed runtime metric acceptance for the 109-flow registry.
 - `flow109_mixed_m01` — Flow109 M01 adapter over the inherited source extractors and interface gate.

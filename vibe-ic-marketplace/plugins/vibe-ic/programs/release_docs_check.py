@@ -113,7 +113,7 @@ import re
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple
+from typing import Dict, List, Mapping, Optional, Sequence, Set, Tuple
 
 import _ic_release_artefacts as _art
 import yaml
@@ -704,7 +704,8 @@ def _stated(rows: Sequence[Row], document: str,
 IC_NETLIST_GLOB = "phase3/stage3/pnr/*_pnr.v"
 
 
-def _netlist_signal_ports(project: Path, arm: str, release: str
+def _netlist_signal_ports(project: Path, arm: str, release: str,
+                          ip_views: Optional[Mapping[str, Path]] = None
                           ) -> Optional[Tuple[int, Path, Set[str]]]:
     """The logical pin-bit count a SECOND view declares, re-derived here.
 
@@ -719,7 +720,8 @@ def _netlist_signal_ports(project: Path, arm: str, release: str
     NOT DETERMINED rather than accepted.
     """
     if arm == "ip":
-        views = _hm.discover_packages(_hm.hardmacro_dir(project)).get(release, {})
+        views = (dict(ip_views) if ip_views is not None else
+                 _hm.discover_packages(_hm.hardmacro_dir(project)).get(release, {}))
         v_path = views.get(".v")
         if v_path is None:
             return None
@@ -735,12 +737,38 @@ def _netlist_signal_ports(project: Path, arm: str, release: str
         v_path.read_text(encoding="utf-8", errors="replace"))
     if ports is None:
         return None
+    if arm == "ip" and ip_views is not None:
+        pg = _explicit_ip_supplies(project, release, ip_views)
+        present = {name for name, _direction, _width in ports} & set(pg)
+        if present and present != set(pg):
+            raise ValueError("Verilog declares only part of the independent PG interface")
+        if any(direction != "inout" or width != 1
+               for name, direction, width in ports if name in pg):
+            raise ValueError("Verilog PG terminals must be scalar inout ports")
+        ports = [row for row in ports if row[0] not in pg]
     # The NAMES come back too: whether this netlist declares the pins the DEF
     # marks as supplies is a question about names, and it is the only thing
     # that decides which of the two conventions it follows. Assuming either
     # one was the defect.
     return (sum(width for _name, _direction, width in ports), v_path,
             {str(n) for n, _d, _w in ports})
+
+
+def _explicit_ip_supplies(project: Path, release: str,
+                          views: Mapping[str, Path]) -> Dict[str, str]:
+    import hardmacro_supply_intent as supply
+    for suffix in (".lef", ".lib", ".v"):
+        raw = views.get(suffix)
+        if (raw is None or raw.is_symlink() or not raw.is_file()
+                or not raw.resolve().is_relative_to(project.resolve())):
+            raise ValueError("explicit IP views must be project-contained regular files")
+    lef = {row["pin"]: row["use"] for row in supply.lef_pg_pins(
+        views[".lef"].read_text()) if row["master"] == release}
+    lib = {row["pin"]: row["use"] for row in supply.liberty_pg_pins(
+        views[".lib"].read_text()) if row["cell"] == release}
+    if lef != lib or any(value not in ("POWER", "GROUND") for value in lef.values()):
+        raise ValueError("LEF and Liberty disagree on PG names or polarity")
+    return lef
 
 
 
@@ -803,7 +831,8 @@ def _supplies_are_the_designs(project: Path, arm: str, release: str,
 
 
 def _check_pin_count(project: Path, arm: str, release: str,
-                     rows: Sequence[Row], findings: List[Finding]) -> str:
+                     rows: Sequence[Row], findings: List[Finding],
+                     ip_views: Optional[Mapping[str, Path]] = None) -> str:
     """R3 — the stated pin counts, against the netlist and against themselves.
 
     THE SIGNAL COUNT IS SETTLED BY THE NETLIST. The document derived it from the
@@ -834,7 +863,13 @@ def _check_pin_count(project: Path, arm: str, release: str,
     every document — an early return after one finding would leave the OTHER
     defect unreported in the same run.
     """
-    netlist = _netlist_signal_ports(project, arm, release)
+    try:
+        netlist = _netlist_signal_ports(project, arm, release, ip_views)
+        pg = (_explicit_ip_supplies(project, release, ip_views)
+              if arm == "ip" and ip_views is not None else None)
+    except (OSError, ValueError) as exc:
+        findings.append(Finding("IP_SUPPLY_IDENTITY_MISMATCH", "ERROR", release, str(exc)))
+        return "DISAGREES"
     states: List[str] = []
     for document in sorted({row.document for row in rows}):
         signal = _stated(rows, document, SIGNAL_PIN_LABEL)
@@ -842,6 +877,12 @@ def _check_pin_count(project: Path, arm: str, release: str,
         total = _stated(rows, document, PIN_COUNT_LABEL)
         if signal is None and supply is None and total is None:
             continue
+        if pg is not None and (supply is None or supply[1] != len(pg)
+                or signal is None or total is None
+                or total[1] != signal[1] + len(pg)):
+            findings.append(Finding("IP_SUPPLY_COUNT_MISMATCH", "ERROR", release,
+                                    f"{document} counts disagree with independent PG views"))
+            states.append("DISAGREES")
 
         unreadable = [x for x in (signal, supply, total)
                       if x is not None and x[1] < 0]
@@ -1242,7 +1283,9 @@ def _check_manifest(release_dir: Path, release: str, derived: int, holes: int,
 
 # ── one release ────────────────────────────────────────────────────────────
 def check_release(project: Path, arm: str, release_dir: Path,
-                  release: str) -> Tuple[List[Finding], dict]:
+                  release: str, *,
+                  ip_views: Optional[Mapping[str, Path]] = None,
+                  expected_constraints=None) -> Tuple[List[Finding], dict]:
     findings: List[Finding] = []
     texts: Dict[str, str] = {}
     for spec in arm_docs(arm):
@@ -1291,6 +1334,22 @@ def check_release(project: Path, arm: str, release_dir: Path,
 
     derived, holes = _check_rows(project, rows, release, findings)
     constraints_checked = _check_app_notes(arm, texts, release, findings)
+    observed_constraints = []
+    if expected_constraints is not None:
+        for constraint in expected_constraints:
+            expected = constraint_ids(constraint.line())[constraint.cid]
+            statements = [match.group("text") for name in CONSTRAINT_BEARING[arm]
+                          for line in texts.get(name, "").splitlines()
+                          if (match := MANDATORY_RE.match(line)) and match.group("id") == constraint.cid]
+            if (statements and all(text == expected for text in statements)
+                    and (project / constraint.source).is_file()):
+                observed_constraints.append({"cid": constraint.cid, "text": constraint.text,
+                                             "source": constraint.source})
+            else:
+                findings.append(Finding(
+                    "MANDATORY_CONSTRAINT_ABSENT_OR_CHANGED", "ERROR", release,
+                    f"{constraint.cid} must carry its current text and source "
+                    f"in {list(CONSTRAINT_BEARING[arm])}."))
     source_counts_checked = _check_source_count_consistency(
         texts, rows, release, findings)
     if arm == "ip":
@@ -1298,7 +1357,7 @@ def check_release(project: Path, arm: str, release_dir: Path,
     # BOTH ARMS NOW, and the `arm == "ip"` guard that stood here is the defect
     # it removed: the IC arm carried the same three interface rows and NOTHING
     # re-derived any of them, so a hand-edited chip pin count was believed.
-    pin_state = _check_pin_count(project, arm, release, rows, findings)
+    pin_state = _check_pin_count(project, arm, release, rows, findings, ip_views)
     die_state = (_check_die_area(project, release, rows, findings)
                  if arm == "ic" else "NOT_APPLICABLE")
     substance = (_check_artefact_substance(project, release, findings)
@@ -1320,6 +1379,7 @@ def check_release(project: Path, arm: str, release_dir: Path,
         "not_measured_fields": holes,
         "rows_examined": len(rows),
         "mandatory_constraints_in_app_notes": constraints_checked,
+        "observed_constraints": observed_constraints,
         "same_source_count_comparisons": source_counts_checked,
         "shipped_digests_recomputed": digests,
         "source_digests_recomputed": source_digests,
