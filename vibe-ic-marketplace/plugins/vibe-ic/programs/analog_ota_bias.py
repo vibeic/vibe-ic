@@ -212,6 +212,7 @@ def apply(library, values, devices, exprs, nets, constants, env, evaluate, proje
         row["I_tail_estimate_a"] = actual_reference*row["tail_ratio"]
         row["I_output_estimate_a"] = actual_reference*(row["output_ratio"] or row["tail_ratio"])
         row["settling_time_constants"] = row["I_tail_estimate_a"]*row["beta"]*time/(vov*row["load_ff"]*1e-15)
+        row["settling_time_constants_at_fclk_max"] = row["settling_time_constants"] * values["fclk"] / values.get("fclk_max", values["fclk"])
         row["slew_margin"] = row["I_output_estimate_a"]*time/(row["load_ff"]*1e-15*vref)
         row["status"] = "SIZED" if row["settling_time_constants"] >= required*(1-1e-12) and row["slew_margin"] >= margin*(1-1e-12) else "UNDER_BIASED"
         row["mirror_reference_current_a"] = actual_reference

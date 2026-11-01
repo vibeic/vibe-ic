@@ -7028,6 +7028,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
              maxima_source: Optional[str] = None,
              measured_loop: Optional[Dict[str, Any]] = None,
              ) -> Dict[str, Any]:
+    """Bind loop measurements to the complete emitted network, including bias routing."""
+    original_lib, original_spec_values = lib, dict(spec_values)
     # ── WHAT THE LOOP'S FEEDBACK DELAY IS, DERIVED FROM THE BRANCH ───────
     # It used to be a typed constant, and a typed constant about the emitted
     # circuit is exactly what this file exists to avoid. It is a consequence
@@ -7148,6 +7150,16 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     loop_swing = None
     if isinstance(_loop_decl, dict):
         _struct = loop_structure_fingerprint({"devices": devices})
+        if isinstance(measured_loop, dict):
+            preview = build_ir(
+                block, btype, entry, original_lib, original_spec_values,
+                spec_path, project, pdk_family, pdk_params,
+                role_minima=role_minima, minima_source=minima_source,
+                measured_params=measured_params,
+                measured_provenance=measured_provenance,
+                role_maxima=role_maxima, maxima_source=maxima_source,
+                measured_loop=None)
+            _struct = loop_structure_fingerprint(preview)
         loop_swing = loop_swing_and_sizing(
             lib, stage_rec, _choice, declared_spec_values, constants,
             measured_loop, _struct, knobs.get("second_integrator_state_scale", 1.0))
@@ -7509,6 +7521,23 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                      "analog_a2_topology_emit.rendering_env, in A2's split "
                      "and in A3's _resolve_params alike"),
         }
+    if isinstance(ir.get("loop_swing"), dict) and "structure_sha256" in ir["loop_swing"]:
+        ir["loop_swing"]["structure_sha256"] = loop_structure_fingerprint(ir)
+    if ota_bias_network:
+        rows = ota_bias_network["stage_table"]
+        ceiling = min(row["settling_time_constants_at_fclk_max"] for row in rows)
+        requirement = rows[0]["settling_time_constants_required"]
+        ir["derived_informational"] = [{
+            "field": "settling_time_constants_at_fclk_max",
+            "expr": "min(stage.settling_time_constants * fclk / fclk_max)",
+            "min_expr": "(enob + settling_lsb_fraction_bits) * ln2",
+            "value": ceiling, "requirement": requirement,
+            "state": "MET" if ceiling >= requirement else "NOT_MET",
+            "blocking": False,
+            "per_stage": [{"stage": row["stage"],
+                           "nominal": row["settling_time_constants"],
+                           "value": row["settling_time_constants_at_fclk_max"]}
+                          for row in rows]}]
     return ir
 
 
@@ -8012,6 +8041,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
                     [{"requirement": "capacitor drawable at the library "
                                      "drawn width", "detail": r}
                      for r in exc.refusals], informational)
+    informational = list(informational) + ir.get("derived_informational", [])
     ir["derived_informational"] = list(informational)
     md = render_md(ir, lib, fam, params)
     bdir.mkdir(parents=True, exist_ok=True)

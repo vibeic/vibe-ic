@@ -118,9 +118,18 @@ def test_only_the_output_stage_departs_and_it_says_why():
         "the current this costs is not stated where the size is chosen")
 
 
-def test_the_tail_hangs_off_the_already_derived_bias():
-    assert _dev("mn_cmtail")["nets"][1] == "nbias"
-    assert _dev("mn_cmo")["nets"][1] == "nbias"
+def test_the_tail_hangs_off_its_ratioed_branch_of_the_one_reference(tmp_path):
+    from test_declared_load_bias_branches import _emit
+    ir, _, devices, _, _ = _emit(tmp_path)
+    row = next(r for r in ir["ota_bias_network"]["stage_table"]
+               if r["stage"] == "common_mode")
+    assert devices["mn_cmtail"]["nets"][1] == "nbias_common_mode"
+    assert devices["mn_cmo"]["nets"][1] == "nbias_common_mode"
+    assert len(row["translator_devices"]) == 4
+    assert devices["ota_bias_common_mode_sink"]["nets"][1] == "nbias"
+    assert devices["ota_bias_common_mode_ndiode"]["nets"][:2] == ["nbias_common_mode"] * 2
+    assert devices["mn_bias"]["nets"][:2] == ["nbias"] * 2
+    assert sum(d["name"] == "mn_bias" for d in ir["devices"]) == 1
 
 
 def test_the_compensation_is_derived_not_a_number_that_was_once_right():

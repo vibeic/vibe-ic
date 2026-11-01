@@ -1,4 +1,4 @@
-"""Normal compensation sizing changes only the expression-owned Miller caps."""
+"""Compensation sizing propagates its declared load into the independent bias."""
 import json
 import math
 
@@ -39,12 +39,32 @@ def test_normal_scale_changes_only_two_miller_capacitances(tmp_path):
     candidate = emit(tmp_path / "candidate", {"knobs": {"ota_compensation_scale": 1.5}})
     before, after = dimensions(base), dimensions(candidate)
     assert base["ports"] == candidate["ports"]
-    assert base["devices"] == candidate["devices"]
+    base_devices = {d["name"]: d for d in base["devices"]}
+    candidate_devices = {d["name"]: d for d in candidate["devices"]}
+    assert base_devices.keys() == candidate_devices.keys()
+    for name in base_devices:
+        if name != "ota_bias_2_sink":
+            assert base_devices[name] == candidate_devices[name]
+    sink_before, sink_after = (devices["ota_bias_2_sink"]
+                               for devices in (base_devices, candidate_devices))
+    assert {k: v for k, v in sink_before.items() if k != "w"} == {
+        k: v for k, v in sink_after.items() if k != "w"}
     assert base["loop_swing"] == candidate["loop_swing"]
     changed = {name for name in before if before[name] != after[name]}
-    assert changed == {"cc1", "cc2"}
-    for name in changed:
+    assert changed == {"cc1", "cc2", "ota_bias_2_sink"}
+    for name in ("cc1", "cc2"):
         assert capacitance(after[name]) / capacitance(before[name]) == pytest.approx(1.5)
+    rows_before, rows_after = ({r["stage"]: r for r in ir["ota_bias_network"]["stage_table"]}
+                               for ir in (base, candidate))
+    for stage in (1, 2):
+        cap = "cc" + str(stage)
+        assert rows_after[stage]["output_load_ff"] - rows_before[stage]["output_load_ff"] == pytest.approx(
+            capacitance(after[cap]) - capacitance(before[cap]))
+    master = candidate_devices["mn_bias"]
+    ratio = (sink_after["w"] / sink_after["l"]) / (master["w"] / master["l"])
+    assert ratio == pytest.approx(rows_after[2]["mirror_ratio"])
+    assert rows_after[2]["mirror_reference_current_a"] == pytest.approx(
+        rows_after[2]["reference_current_a"])
     assert candidate["knob_sources"]["ota_compensation_scale"] == "explicit_design_sizing"
 
 
