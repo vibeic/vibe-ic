@@ -192,7 +192,7 @@ import fnmatch
 import glob
 import os
 import re
-from math import gcd
+from math import gcd, isfinite
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -2186,7 +2186,10 @@ def _declarations_agree(var: str, project: object, pdk: object) -> bool:
 
 def apply_pdk_declarations(
         obj: Dict[str, object],
-        decls: "PdkDeclarations") -> Tuple[Dict[str, object], List[str]]:
+        decls: "PdkDeclarations", *,
+        seal_ring_placement: str = "inside",
+        seal_clearance_um: Optional[float] = None,
+        seal_clearance_basis: str = "") -> Tuple[Dict[str, object], List[str]]:
     """Fill the PDK-declared variables the project left out, and REFUSE the
     ones it contradicts. Returns `(merged config, adopted variable names)`.
 
@@ -2200,7 +2203,8 @@ def apply_pdk_declarations(
         it, and NOT counted as adopted. A project is not overwritten by a value
         it already agrees with, and a report that called that an adoption would
         overstate what the PDK supplied.
-      * the project said something ELSE -> `PAD_CONFIG_CONTRADICTS_PDK`.
+      * the project said something ELSE -> `PAD_CONFIG_CONTRADICTS_PDK`,
+        except outside-seal edge spacing that meets the PDK deck clearance.
 
     The third is the one that pays. Before this, `PAD_EDGE_SPACING` was checked
     only for being a non-negative number of microns, so a project could declare
@@ -2226,6 +2230,24 @@ def apply_pdk_declarations(
             adopted.append(var)
             continue
         if not _declarations_agree(var, have, declared):
+            if var == "PAD_EDGE_SPACING" and seal_ring_placement == "outside":
+                if (seal_clearance_um is None
+                        or not isfinite(seal_clearance_um)
+                        or seal_clearance_um < 0):
+                    raise AssignmentError(
+                        "PAD_EDGE_SPACING_SEAL_KEEPOUT_UNREADABLE",
+                        f"cannot check PAD_EDGE_SPACING={have!r} for an outside "
+                        f"seal ring: {seal_clearance_basis or 'PDK seal keep-out was not read'}")
+                try:
+                    spacing = float(have)
+                except (TypeError, ValueError):
+                    spacing = float("nan")
+                if not isfinite(spacing) or spacing < seal_clearance_um:
+                    raise AssignmentError(
+                        "PAD_EDGE_SPACING_VIOLATES_SEAL_KEEPOUT",
+                        f"PAD_EDGE_SPACING={have!r} um is below the PDK seal "
+                        f"keep-out of {seal_clearance_um} um: {seal_clearance_basis}")
+                continue
             raise AssignmentError(
                 "PAD_CONFIG_CONTRADICTS_PDK",
                 f"{var}={have!r} contradicts the PDK's own declaration "

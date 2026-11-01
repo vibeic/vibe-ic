@@ -45,7 +45,10 @@ process.
 """
 from __future__ import annotations
 
+import json
+import math
 import re
+import shlex
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 #: `run_sh(cmd) -> (rc, stdout)`. The PDK lives where the tools live, which on
@@ -89,36 +92,158 @@ def band_declarations(text: str) -> List[Tuple[str, float]]:
     return out
 
 
-#: `comp.separation(guard_ring_mk, 10.um)` — the prime-die layer, the marker it
-#: owes the space to, and the space. The MARKER is matched on what it is (a
-#: guard-ring marker) rather than on any one PDK's spelling of it.
+_IDENT = r"[A-Za-z_][A-Za-z0-9_]*"
 _RE_SEPARATION = re.compile(
-    r"\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*separation\s*\(\s*"
-    r"([A-Za-z_][A-Za-z0-9_]*)\s*,\s*([0-9]+(?:\.[0-9]+)?)\s*\.\s*um\b")
-_RE_GUARD_RING_VAR = re.compile(r"guard[A-Za-z0-9_]*ring|ring[A-Za-z0-9_]*guard",
-                                re.I)
+    rf"\b({_IDENT})\s*\.\s*(?:sep|separation)\s*\(\s*([^,]+)\s*,\s*([^,\n)]*)")
+_RE_GUARD_RING_VAR = re.compile(
+    r"guard[A-Za-z0-9_]*ring|ring[A-Za-z0-9_]*guard", re.I)
+_RE_SEAL_RING_VAR = re.compile(
+    _RE_GUARD_RING_VAR.pattern + r"|"
+    r"edge[A-Za-z0-9_]*seal|seal[A-Za-z0-9_]*ring", re.I)
 _RE_RULE_ID = re.compile(r"\.output\s*\(\s*['\"]([^'\"]+)['\"]")
+_RE_CLEAR_ASSIGN = re.compile(rf"^[ \t]*({_IDENT})[ \t]*=[ \t]*([^\n]*)", re.M)
+_RE_RULE_VALUE = re.compile(
+    rf"({_IDENT})\s*\[\s*['\"]([^'\"]+)['\"]\s*\]\s*\.\s*to_f")
+_RE_NUMBER = re.compile(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
+_RE_DECK_LITERAL = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\#[^\n]*''')
 
 
-def clearance_declarations(text: str) -> List[Dict[str, Any]]:
-    """Every prime-die-to-guard-ring-marker separation the deck states.
+def _clearance_code(text: str) -> Tuple[str, str]:
+    body = _RE_DECK_LITERAL.sub(
+        lambda m: re.sub(r"[^\n]", " ", m.group()) if m.group().startswith("#") else m.group(), text)
+    code = _RE_DECK_LITERAL.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), body)
+    return body, code
 
-    The rule NAME is read from the deck's own `output(...)` immediately after
-    the rule, when it states one — so the refusal downstream can quote the deck
-    rather than a name this program chose.
-    """
-    body = text or ""
-    out: List[Dict[str, Any]] = []
-    for m in _RE_SEPARATION.finditer(body):
-        prime, marker, val = m.group(1), m.group(2), float(m.group(3))
-        if not _RE_GUARD_RING_VAR.search(marker):
+
+def _clearance_value(expression: str, files: Dict[str, str]) -> Tuple[Optional[float], str, Optional[Tuple[str, str]]]:
+    if _RE_NUMBER.fullmatch(expression):
+        value = float(expression)
+        return (value, "", None) if math.isfinite(value) else (None, f"nonfinite clearance {expression}", None)
+    reference = _RE_RULE_VALUE.fullmatch(expression)
+    if not reference:
+        return None, f"clearance expression `{expression}` could not be read", None
+    table, key = reference.groups()
+    values: Dict[float, List[str]] = {}
+    errors: List[str] = []
+
+    def pairs(items):
+        result = {}
+        for name, value in items:
+            if name in result:
+                raise ValueError(f"duplicate JSON key {name}")
+            result[name] = value
+        return result
+
+    for path, text in sorted(files.items()):
+        if not re.search(r'"' + re.escape(table) + r'"\s*:', text):
             continue
-        tail = _RE_RULE_ID.search(body, m.end(), m.end() + 400)
-        out.append({"prime_layer": prime, "marker": marker, "um": val,
-                    "rule": tail.group(1) if tail else None,
-                    "line": body.count("\n", 0, m.start()) + 1})
-    return out
+        try:
+            json.loads(text, object_pairs_hook=pairs)
+        except (ValueError, TypeError) as exc:
+            errors.append(f"{path} is not readable JSON for {table}[{key!r}]: {exc}")
+            continue
+        decoder = json.JSONDecoder(object_pairs_hook=pairs)
+        for table_match in re.finditer(r'"' + re.escape(table) + r'"\s*:', text):
+            start = table_match.end()
+            while start < len(text) and text[start].isspace():
+                start += 1
+            try:
+                candidate, end = decoder.raw_decode(text, start)
+            except ValueError:
+                continue
+            if not isinstance(candidate, dict):
+                errors.append(f"{path} has no readable {table} rule table")
+                continue
+            if key not in candidate:
+                continue
+            raw = candidate[key]
+            if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+                errors.append(f"{path} has no numeric {table}[{key!r}]")
+                continue
+            try:
+                value = float(raw)
+            except (ValueError, TypeError, OverflowError):
+                value = math.nan
+            if not math.isfinite(value) or value < 0:
+                errors.append(f"{path} has no finite nonnegative {table}[{key!r}]")
+                continue
+            key_match = next((m for m in re.finditer(
+                r'("(?:\\.|[^"\\])*")\s*:', text[start:end])
+                if json.loads(m.group(1)) == key), None)
+            if key_match is None:
+                errors.append(f"{path} has no source location for {table}[{key!r}]")
+                continue
+            line = text.count("\n", 0, start + key_match.start()) + 1
+            values.setdefault(value, []).append(
+                f"{path}:{line} {table}[{key!r}] = {value} um")
+    if errors:
+        return None, "; ".join(errors), (table, key)
+    if len(values) != 1:
+        detail = "; ".join(where for places in values.values() for where in places)
+        return None, (f"{table}[{key!r}] is conflicting: {detail}" if values else
+                      f"{table}[{key!r}] was not read from a JSON rule table"), (table, key)
+    value = next(iter(values))
+    return value, "; ".join(values[value]), (table, key)
 
+
+def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None) -> List[Dict[str, Any]]:
+    body, code = _clearance_code(text or "")
+    assignments = list(_RE_CLEAR_ASSIGN.finditer(code))
+    out: List[Dict[str, Any]] = []
+
+    def assigned(name, before):
+        found = [a for a in assignments if a.start() < before and a.group(1) == name]
+        if not found:
+            return None
+        assignment = found[-1]
+        end = assignment.end(2)
+        while (code[assignment.start(2):end].count("(")
+               > code[assignment.start(2):end].count(")") and end < len(code)):
+            next_line = code.find("\n", end + 1)
+            end = len(code) if next_line < 0 else next_line
+        return body[assignment.start(2):end].strip(), assignment.start()
+
+    def marker(expression, before, seen=(), intersected=False):
+        if re.fullmatch(_IDENT, expression):
+            if (_RE_GUARD_RING_VAR.search(expression)
+                    or intersected and _RE_SEAL_RING_VAR.search(expression)):
+                return expression
+            if expression in seen:
+                return None
+            source = assigned(expression, before)
+            if source:
+                return marker(source[0], source[1], (*seen, expression), intersected)
+        qualified = re.fullmatch(
+            rf"({_IDENT})\s*\.\s*and\s*\(\s*({_IDENT})\s*\)", expression)
+        if qualified and any(marker(v, before, seen, True) for v in qualified.groups()):
+            return expression
+        return None
+
+    for match in _RE_SEPARATION.finditer(code):
+        marker_expression = body[match.start(2):match.end(2)].strip()
+        seal = marker(marker_expression, match.start())
+        if not seal:
+            continue
+        expression = body[match.start(3):match.end(3)].strip()
+        um = re.fullmatch(r"(.+?)\s*\.\s*um", expression)
+        value_expression = um.group(1).strip() if um else expression
+        seen = set()
+        before = match.start()
+        while re.fullmatch(_IDENT, value_expression) and value_expression not in seen:
+            seen.add(value_expression)
+            source = assigned(value_expression, before)
+            if not source:
+                break
+            value_expression, before = source
+        value, basis, reference = _clearance_value(value_expression, files or {}) if um else (
+            None, f"clearance `{expression}` has no readable um value", None)
+        tail = _RE_RULE_ID.search(body, match.start(3), min(len(body), match.start(3) + 400))
+        out.append({"prime_layer": match.group(1), "marker": seal, "um": value,
+                    "rule": tail.group(1) if tail else None,
+                    "line": body.count("\n", 0, match.start()) + 1,
+                    "value_basis": basis, "reference": reference,
+                    "error": basis if value is None else ""})
+    return out
 
 # ── the technology reads ────────────────────────────────────────────────────
 
@@ -206,9 +331,9 @@ def guard_ring_clearance_um(pdk_dir: str,
     the widest separation clears every narrower one. Every distinct value is
     named in the basis so a reader can check the choice against the deck.
     """
-    find = (f"grep -RlEi '[.]separation[(][[:space:]]*[A-Za-z0-9_]*guard"
-            f"[A-Za-z0-9_]*ring' {pdk_dir} --include='*.rb' --include='*.drc' "
-            f"--include='*.lydrc' 2>/dev/null")
+    find = (f"grep -RIlEi {shlex.quote(_RE_SEAL_RING_VAR.pattern)} "
+            f"--include='*.rb' --include='*.drc' --include='*.lydrc' "
+            f"-- {shlex.quote(pdk_dir)} 2>/dev/null")
     files, why = _read_files(run_sh, find)
     if why:
         return None, (f"no DRC deck stating a guard-ring-marker separation "
@@ -220,18 +345,44 @@ def guard_ring_clearance_um(pdk_dir: str,
             decls.append(d)
     if not decls:
         return None, (f"the deck files under {pdk_dir} that mention a "
-                      f"guard-ring marker ({', '.join(sorted(files))}) state "
-                      f"no `<layer>.separation(<marker>, N.um)`, so the "
-                      f"clearance the core owes the ring was not read")
+                      f"seal-ring marker ({', '.join(sorted(files))}) state "
+                      f"no readable marker separation in um")
+    references = {d["reference"] for d in decls if d["reference"]}
+    if references:
+        json_files, why = _read_files(
+            run_sh, f"find -L {shlex.quote(pdk_dir)} -type f -name '*.json' 2>/dev/null")
+        names = ", ".join(f"{table}[{key!r}]" for table, key in sorted(references))
+        if why:
+            return None, f"the JSON rule table for {names} could not be read: {why}"
+        for text in files.values():
+            for name in re.findall(r"File\.[^\n]*?['\"]([^'\"\n]+\.json)['\"]", text):
+                candidates = [p for p in json_files if p.endswith("/" + name.rsplit("/", 1)[-1])]
+                if not candidates:
+                    return None, f"the deck's JSON input {name} for {names} could not be read"
+                for path in candidates:
+                    try:
+                        json.loads(json_files[path])
+                    except ValueError as exc:
+                        return None, f"the deck's JSON input {path} for {names} is malformed: {exc}"
+        decls = []
+        for path, text in sorted(files.items()):
+            for d in clearance_declarations(text, files=json_files):
+                d["file"] = path
+                decls.append(d)
+    unread = [f"{d['file']}:{d['line']} "
+              f"{d['rule'] or 'seal clearance'}: {d['error']}"
+              for d in decls if d["um"] is None]
+    if unread:
+        return None, "the seal-ring clearance could not be read: " + "; ".join(unread)
     worst = max(d["um"] for d in decls)
-    rules = sorted({d["rule"] for d in decls if d["rule"]})
-    where = sorted({d["file"] for d in decls})
+    evidence = sorted({f"{d['file']}:{d['line']}"
+                       + (f" rule {d['rule']}" if d["rule"] else "")
+                       + (f"; {d['value_basis']}" if d["value_basis"] else "")
+                       for d in decls})
     values = sorted({d["um"] for d in decls})
     return worst, (
-        f"the PDK's own deck requires {worst} um between the guard-ring "
-        f"marker and the prime die"
-        + (f" (rule {', '.join(rules)})" if rules else "")
-        + f" — {len(decls)} declaration(s) in {', '.join(where)}"
+        f"the PDK's own deck requires {worst} um between the seal-ring "
+        f"marker and the prime die; " + "; ".join(evidence)
         + (f", stating {values} um" if len(values) > 1 else ""))
 
 
