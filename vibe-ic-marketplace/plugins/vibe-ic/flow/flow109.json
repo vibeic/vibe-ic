@@ -4,7 +4,7 @@
   "revision": "109-default-implementation-1",
   "legacy_source_commit": "0c93c821aab6ebebaa1b90324d6c44fb49731b70",
   "legacy_flow_path": "flow/phase1_phase2_phase3.yaml",
-  "legacy_flow_sha256": "6e711268beb56b8a55aac2571227ac1373bb8f494ed9a98b58e32e96474a2f85",
+  "legacy_flow_sha256": "e5811158c4e9d09735d94686e45c73658caef5fe5dd0a920fc24d0668e7f732b",
   "identity_policy": "Stable proposal IDs and unfiltered positions; legacy evidence retains its original namespace. A completed selected native owner/checker verdict propagates through the shared step result. Partial component evidence, whole-flow acceptance and release remain distinct.",
   "phases": [
     {
