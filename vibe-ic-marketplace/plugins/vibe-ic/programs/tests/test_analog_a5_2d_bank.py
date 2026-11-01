@@ -4,6 +4,33 @@ import analog_a5_layout_emit as a
 from test_analog_a5_shared_escape import capacitor, geo
 
 
+def connected(plan, net, start, end):
+    """Flood actual metal/cut overlap, independent of the route's bends."""
+    rows = [r for r in plan.shapes if r['net'] == net]
+    def at(row, point):
+        layer,x,y = point
+        b = row['box']
+        return row['layer'] == layer and b[0] <= x <= b[2] and b[1] <= y <= b[3]
+    def levels(row):
+        layer = row['layer']
+        n = int(layer[5:] if layer.startswith('metal') else layer[3:])
+        return {n} if layer.startswith('metal') else {n,n+1}
+    reached = {i for i,r in enumerate(rows) if at(r,start)}
+    todo = list(reached)
+    while todo:
+        i = todo.pop()
+        if at(rows[i],end):
+            return True
+        b = rows[i]['box']
+        for j,r in enumerate(rows):
+            c = r['box']
+            if j not in reached and levels(rows[i]) & levels(r) and (
+                    b[0] < c[2] and c[0] < b[2] and b[1] < c[3] and c[1] < b[3]):
+                reached.add(j)
+                todo.append(j)
+    return False
+
+
 def test_compact_shelves_backfill_earlier_free_space():
     ds = []
     for name, width, height in [('a', 1200, 1000), ('b', 1200, 1000),
@@ -38,15 +65,15 @@ def test_high_plane_channel_clears_both_actual_stack_envelopes():
     assert gap < 1600
 
 
-def test_local_m3_leg_uses_m2_overpass_at_a_foreign_escape():
+def test_local_m3_leg_connects_around_a_foreign_escape():
     g = geo()
     plan = a.Plan()
     sites = a.Sites([], g)
     plan.sites = sites
     plan.paint('foreign', 'metal3', 800, 985, 1200, 1015)
     plan.m3_escape_obstacles = [('foreign', (800, 985, 1200, 1015))]
-    a._route_m3_leg(plan, 'own', 1000, 0, 2000, g, sites)
-    assert any(s['net'] == 'own' and s['layer'] == 'metal2' and s['box'][1] < 1000 < s['box'][3] for s in plan.shapes)
+    a._route_m3_leg(plan, 'own', 1000, 100, 2000, g, sites)
+    assert connected(plan, 'own', ('metal3', 1000, 2000), ('metal3', 1000, 100))
     for one in plan.shapes:
         for two in plan.shapes:
             if one['net'] != two['net'] and one['layer'] == two['layer']:
@@ -69,7 +96,7 @@ def test_overpass_can_land_on_m4_beyond_a_blocked_m3_rail_endpoint():
     plan.paint('own', 'metal4', 500, 985, 1500, 1015)
     plan.paint('foreign', 'metal3', 800, 985, 1200, 1015)
     plan.m3_escape_obstacles = [('foreign', (800, 985, 1200, 1015))]
-    handled = a._route_m3_leg(plan, 'own', 1000, 1000, 0, g, sites)
+    handled = a._route_m3_leg(plan, 'own', 1000, 1000, 100, g, sites)
     assert handled
     assert any(s['net'] == 'own' and s['layer'] == 'via3' and abs(s['box'][0]-1000) >= 200 for s in plan.shapes)
 
@@ -99,7 +126,7 @@ def test_realized_m2_exit_does_not_create_a_phantom_m3_obstacle():
     plan.sites = sites
     plan.paint('foreign', 'metal2', 800, 900, 1200, 1100)
     plan.m3_escape_obstacles = [('foreign', (800, 985, 1200, 1015))]
-    a._route_m3_leg(plan, 'own', 1000, 0, 2000, g, sites)
+    a._route_m3_leg(plan, 'own', 1000, 100, 2000, g, sites)
     assert all(s['layer'] == 'metal3' for s in plan.shapes if s['net'] == 'own')
 
 
@@ -139,4 +166,65 @@ def test_endpoint_detour_uses_a_real_channel_beyond_the_endpoint_interval():
         ('nrm','metal2',(16694,10816,16716,10884))]:
         plan.paint(net,layer,*box)
     assert a._route_m3_leg(plan,'nrmb',16426,10838,10728,g,sites)
-    assert any(s['net']=='nrmb' and s['layer']=='metal2' and s['box'][1]<10635 for s in plan.shapes)
+    assert connected(plan, 'nrmb', ('metal3',16426,10728), ('metal4',16426,10838))
+    for row in plan.shapes:
+        if row['net'] == 'nrmb':
+            assert a.Sites(native + [r for r in plan.shapes if r['net'] != 'nrmb'], g).clear(
+                row['box'], [row['layer']], None, 'nrmb')
+
+
+def test_straight_leg_checks_the_complete_pad_connection_envelope():
+    g = geo()
+    plan = a.Plan()
+    sites = a.Sites([],g)
+    plan.sites = sites
+    plan.paint('own','metal4',500,985,1500,1015)
+    plan.paint('own','metal3',976,1033,1024,1065)
+    assert a._straight_m3_leg(plan,'own',1000,1000,1049,g,sites)
+    assert connected(plan,'own',('metal3',1000,1049),('metal4',1000,1000))
+    # The full-width bridge fills the pad gap; no separated pad is excused.
+    assert any(r['layer']=='metal3' and r['box'][0]<=976 and r['box'][2]>=1024
+               and r['box'][1]<=984 and r['box'][3]>=1065 for r in plan.shapes)
+
+
+def test_straight_pad_bridge_still_rejects_foreign_metal():
+    g = geo()
+    plan = a.Plan()
+    sites = a.Sites([],g)
+    plan.sites = sites
+    plan.paint('own','metal4',500,985,1500,1015)
+    plan.paint('own','metal3',976,1033,1024,1065)
+    plan.paint('foreign','metal3',1000,1008,1100,1028)
+    before = list(plan.shapes)
+    assert not a._straight_m3_leg(plan,'own',1000,1000,1049,g,sites)
+    assert plan.shapes == before
+
+
+def test_short_colored_rail_can_extend_to_a_clear_landing():
+    g = geo()
+    plan = a.Plan()
+    sites = a.Sites([],g)
+    plan.sites = sites
+    plan.paint('own','metal4',950,985,1050,1015)
+    plan.paint('own','metal3',985,485,1015,515)
+    plan.paint('foreign','metal3',800,985,1200,1015)
+    assert a._route_m3_leg(plan,'own',1000,1000,500,g,sites)
+    assert connected(plan,'own',('metal3',1000,500),('metal4',1000,1000))
+    assert any(r['net']=='own' and r['layer']=='metal4'
+               and (r['box'][0]<800 or r['box'][2]>1200) for r in plan.shapes)
+    assert not plan.deviations
+
+
+def test_pad_gap_requires_the_entire_hull_to_be_real_same_net_metal():
+    g = geo()
+    for half,expected in ((15,False),(16,True)):
+        plan = a.Plan()
+        sites = a.Sites([],g)
+        plan.sites = sites
+        plan.paint('own','metal4',400,1000-half,1200,1000+half)
+        plan.paint('own','metal4',976,984,1024,1016)
+        candidate = (1037,984,1085,1016)
+        assert sites.clear(candidate,['metal4'],None,'own') is expected
+        if expected:
+            plan.paint('foreign','metal4',1040,984,1050,1016)
+            assert not sites.clear(candidate,['metal4'],None,'own')

@@ -2124,6 +2124,21 @@ class Sites:
                     if net is not None and r["net"] == net and not (dx or dy):
                         continue
                     if dx < s and dy < s:
+                        if net is not None and r["net"] == net:
+                            hull = (min(box[0],b[0]),min(box[1],b[1]),
+                                    max(box[2],b[2]),max(box[3],b[3]))
+                            fills = [box] + [
+                                (max(hull[0],q["box"][0]),max(hull[1],q["box"][1]),
+                                 min(hull[2],q["box"][2]),min(hull[3],q["box"][3]))
+                                for q in self.near(layer,hull,0)
+                                if "lcomp" not in q and q["net"] == net
+                                and q["box"][0] < hull[2] and hull[0] < q["box"][2]
+                                and q["box"][1] < hull[3] and hull[1] < q["box"][3]]
+                            # The complete rectangle is real metal. A wire
+                            # narrower than either pad leaves an unfilled
+                            # notch and still fails this exact area check.
+                            if _rectangle_union_area(fills) == (hull[2]-hull[0])*(hull[3]-hull[1]):
+                                continue
                         return False
                     continue
                 if r["lcomp"] in merged:
@@ -2595,124 +2610,193 @@ def _m4_trunk_tracks(row_rails: Sequence[dict], geo: Geo,
     return bus_x, margin
 
 
+def _straight_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
+                     geo: Geo, sites: "Sites") -> bool:
+    """Realize a straight leg and its M4 landing when their union clears."""
+    stack = Plan()
+    _via_stack(stack, net, x, y0, 3, geo, top=4, horizontal=True)
+    pad = next(r["box"] for r in stack.shapes if r["layer"] == "metal3")
+    rail = next(r["box"] for r in stack.shapes if r["layer"] == "metal4")
+    if not any(r["net"] == net and r["layer"] == "metal4"
+               and r["box"][0] < rail[2] and rail[0] < r["box"][2]
+               and r["box"][1] < rail[3] and rail[1] < r["box"][3]
+               for r in sites.near("metal4",rail,0)):
+        return False
+    half = max(geo.wire[3]//2,1)
+    for wide in (False,True):
+        hx = max(half,x-pad[0]) if wide else half
+        hy = max(half,y0-pad[1]) if wide else half
+        rows = [{"net":net,"layer":"metal3",
+                 "box":(x-hx,min(y0,y1)-hy,x+hx,max(y0,y1)+hy)}]
+        rows += [r for r in stack.shapes if not (wide and r["layer"] == "metal3")]
+        if all(r["box"][0] >= 0 and r["box"][1] >= 0
+               and r["box"][2] <= getattr(plan,"routing_width_limit",math.inf)
+               and sites.clear(r["box"],[r["layer"]],None,net) for r in rows):
+            for r in rows:
+                plan.paint(net,r["layer"],*r["box"])
+            return True
+    return False
+
+
 def _route_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
                   geo: Geo, sites: "Sites") -> bool:
-    lo, hi = sorted((y0, y1))
-    rail_handled = False
-    half = max(geo.wire[3] // 2, 1)
-    space = geo.metal_space("metal3")
-    obstacles = [(s["net"], s["box"]) for s in plan.shapes if s["layer"] == "metal3"]
-    blocked = []
-    for other, box in obstacles:
-        if box[2] + space <= x - half or box[0] - space >= x + half:
-            continue
-        if other == net and box[0] <= x + half and x - half <= box[2] and box[1] <= hi and lo <= box[3]:
-            continue
-        a, b = max(lo, box[1] - space - geo.long_half[2]), min(hi, box[3] + space + geo.long_half[2])
-        if a < b:
-            blocked.append((a, b))
-    merged = []
-    for a, b in sorted(blocked):
-        if merged and a <= merged[-1][1]:
-            merged[-1] = (merged[-1][0], max(b, merged[-1][1]))
-        else:
-            merged.append((a, b))
-    if any(a <= y0 <= b for a, b in merged):
-        landing_xs = {x}
-        for _, box in obstacles:
-            if box[1] - space - geo.long_half[2] <= y0 <= box[3] + space + geo.long_half[2]:
-                landing_xs.update((box[0] - space - geo.long_half[2],
-                                   box[2] + space + geo.long_half[2]))
-        window = 2 * geo.pitch()
-        zone = (min(landing_xs)-window, lo-window, max(landing_xs)+window, hi+window)
-        for row in sites.near("metal2", zone, 0):
+    """Join an actual escape to its row using local M2/M3 free space.
+
+    Obstacle edges define the rectilinear coordinates; every wire and via
+    keeps the source deck's spacing. No native cell geometry is changed.
+    """
+    import heapq
+
+    if _straight_m3_leg(plan,net,x,y0,y1,geo,sites):
+        return True
+    rails = [r for r in plan.shapes if r["layer"] == "metal4"
+             and r["net"] == net and r["box"][1] <= y0 <= r["box"][3]]
+    goal_stack = Plan()
+    _via_stack(goal_stack, net, 0, 0, 3, geo, top=4, horizontal=True)
+    crossing = Plan()
+    _via_stack(crossing, net, 0, 0, 2, geo, top=3)
+    prototypes = [crossing.shapes,
+                  [dict(r, box=(-r["box"][3], -r["box"][2],
+                                 -r["box"][1], -r["box"][0]))
+                   for r in crossing.shapes]]
+    reach = max(geo.wire[k] + geo.space.get(k, geo.default_space)
+                for k in geo.wire)
+    pad = max(abs(v) for r in crossing.shapes + goal_stack.shapes
+              for v in r["box"])
+    limit = getattr(plan, "routing_width_limit", x + reach + pad)
+    bounds = (max(pad, x - reach), max(pad, min(y0, y1) - reach),
+              min(limit - pad, x + reach), max(y0, y1) + reach)
+
+    def translate(rows, cx, cy):
+        return [dict(r, box=(r["box"][0]+cx, r["box"][1]+cy,
+                             r["box"][2]+cx, r["box"][3]+cy)) for r in rows]
+
+    def clear(rows):
+        return all(r["box"][0] >= 0 and r["box"][1] >= 0
+                   and r["box"][2] <= limit
+                   and sites.clear(r["box"], [r["layer"]], None, net)
+                   for r in rows)
+
+    def wire(plane, ax, ay, bx, by):
+        half = max(geo.wire[plane]//2,geo.short_half[3],geo.short_half[4]) if plane == 4 else max(geo.wire[plane]//2,1)
+        return {"net": net, "layer": f"metal{plane}",
+                "box": (min(ax,bx)-half, min(ay,by)-half,
+                        max(ax,bx)+half, max(ay,by)+half)}
+
+    def landing(cx):
+        rows = translate(goal_stack.shapes, cx, y0)
+        if not rails:
+            return None
+        anchor = min((max(r["box"][0],min(cx,r["box"][2])) for r in rails),
+                     key=lambda v:abs(v-cx))
+        # A short interval-colored rail may need a legal extension to reach
+        # the free landing beyond a foreign M3 stub. Check and paint it.
+        rows.append(wire(4,anchor,y0,cx,y0))
+        return rows if clear(rows) else None
+
+    direct = wire(3, x, y1, x, y0)
+    end = landing(x) if rails else []
+    if clear([direct]) and end is not None:
+        for row in [direct] + end:
+            plan.paint(net, row["layer"], *row["box"])
+        return bool(rails)
+
+    xs, ys = {x}, {y0, y1}
+    for plane in (2,3):
+        layer = f"metal{plane}"
+        for row in sites.near(layer, bounds, geo.spacing_reach(layer)):
             box = row["box"]
-            if box[1] - space - geo.long_half[2] <= y0 <= box[3] + space + geo.long_half[2]:
-                landing_xs.update((box[0]-space-geo.long_half[2],
-                                   box[2]+space+geo.long_half[2]))
-        for landing in sorted(landing_xs, key=lambda v: abs(v-x)):
-            ys = {y1}
-            zone = (min(x, landing) - window, lo - window,
-                    max(x, landing) + window, hi + window)
-            for row in sites.near("metal2", zone, 0):
-                ys.update((row["box"][1] - geo.long_half[2] - geo.metal_space("metal2"),
-                           row["box"][3] + geo.long_half[2] + geo.metal_space("metal2")))
-            for via_y in sorted((v for v in ys if lo-window <= v <= hi+window),
-                                key=lambda v: abs(v-y1)):
-                probe = Plan()
-                _via_stack(probe, net, x, via_y, 2, geo, top=3)
-                _via_stack(probe, net, landing, y0, 2, geo, top=4, horizontal=True)
-                hw2 = max(geo.wire[2] // 2, 1)
-                if via_y != y1:
-                    probe.paint(net, "metal3", x-half, min(via_y,y1), x+half, max(via_y,y1))
-                probe.paint(net, "metal2", min(x,landing)-hw2, via_y-hw2,
-                            max(x,landing)+hw2, via_y+hw2)
-                probe.paint(net, "metal2", landing-hw2, min(via_y,y0)-hw2,
-                            landing+hw2, max(via_y,y0)+hw2)
-                h4 = max(geo.wire[4] // 2, 1)
-                probe.paint(net, "metal4", min(x,landing)-h4, y0-h4, max(x,landing)+h4, y0+h4)
-                if any(r["box"][0] < 0 or r["box"][1] < 0
-                       or r["box"][2] > getattr(plan, "routing_width_limit", 10**12)
-                       or not sites.clear(r["box"], [r["layer"]], None, net) for r in probe.shapes):
-                    continue
-                for shape in probe.shapes:
-                    plan.paint(net, shape["layer"], *shape["box"])
-                return True
-    cursor = lo
-    for a, b in merged:
-        chosen = None
-        edge_candidates = [x]
-        if a <= y0 <= b:
-            for other, box in obstacles:
-                if box[1] - space <= y0 <= box[3] + space:
-                    edge_candidates.extend((box[0] - space - geo.long_half[2],
-                                            box[2] + space + geo.long_half[2]))
-        for extra in range(3):
-            low, high = max(lo, a - extra * geo.pitch()), min(hi, b + extra * geo.pitch())
-            rail_endpoint = y0 in (low, high)
-            for landing in sorted(set(edge_candidates), key=lambda v: abs(v-x)):
-                for dx in (0, -geo.pitch(), geo.pitch(), -2 * geo.pitch(), 2 * geo.pitch()):
-                    bx = landing + dx
-                    probe = Plan()
-                    ends = [(landing if rail_endpoint and y == y0 else x, y) for y in (low, high)]
-                    for ex, y in ends:
-                        _via_stack(probe, net, ex, y, 2, geo,
-                                   top=4 if rail_endpoint and y == y0 else 3,
-                                   horizontal=rail_endpoint and y == y0)
-                    hw2 = max(geo.wire[2] // 2, 1)
-                    probe.paint(net, "metal2", bx - hw2, low - hw2, bx + hw2, high + hw2)
-                    for ex, y in ends:
-                        probe.paint(net, "metal2", min(ex, bx) - hw2, y - hw2,
-                                    max(ex, bx) + hw2, y + hw2)
-                    if rail_endpoint:
-                        h4 = max(geo.wire[4] // 2, 1)
-                        probe.paint(net, "metal4", min(x, landing) - h4, y0 - h4,
-                                    max(x, landing) + h4, y0 + h4)
-                    if any(s["box"][0] < 0 or s["box"][2] > getattr(plan, "routing_width_limit", 10**12)
-                           or not sites.clear(s["box"], [s["layer"]], None, net) for s in probe.shapes):
-                        continue
-                    if any(s["layer"] == "metal3" and other != net
-                           and box_separation(s["box"], box) < space
-                           for s in probe.shapes for other, box in obstacles):
-                        continue
-                    chosen = (low, high, probe.shapes, rail_endpoint)
-                    break
-                if chosen:
-                    break
-            if chosen:
+            for half in {geo.wire[plane] // 2, geo.short_half[2],
+                         geo.long_half[2], geo.long_half[3]}:
+                gap = half + geo.spacing_reach(layer)
+                xs.update((box[0]-gap, box[2]+gap))
+                ys.update((box[1]-gap, box[3]+gap))
+    xs = sorted(v for v in xs if bounds[0] <= v <= bounds[2])
+    ys = sorted(v for v in ys if bounds[1] <= v <= bounds[3] or v in (y0,y1))
+    x_index = {v:i for i,v in enumerate(xs)}
+    y_index = {v:i for i,v in enumerate(ys)}
+    start = (3, x_index[x], y_index[y1])
+    costs, parents = {start: 0}, {}
+    queue = [(abs(y1-y0), 0, start)]
+    via_cache, goal_cache, edge_cache = {}, {}, {}
+    finish, final_stack = None, None
+    while queue:
+        _, cost, state = heapq.heappop(queue)
+        if cost != costs[state]:
+            continue
+        plane, ix, iy = state
+        cx, cy = xs[ix], ys[iy]
+        if plane == 3 and cy == y0:
+            if not rails and cx == x:
+                finish, final_stack = state, []
                 break
-        if chosen is None:
-            raise Refusal(f"no source-legal M2 overpass for {net} at x={x}, y={a}:{b}")
-        low, high, shapes, rail_endpoint = chosen
-        rail_handled |= rail_endpoint
-        if low > cursor:
-            plan.paint(net, "metal3", x - half, cursor, x + half, low)
-        for shape in shapes:
-            plan.paint(net, shape["layer"], *shape["box"])
-        cursor = high
-    if cursor < hi:
-        plan.paint(net, "metal3", x - half, cursor, x + half, hi)
-    return rail_handled
+            if rails:
+                if ix not in goal_cache:
+                    goal_cache[ix] = landing(cx)
+                if goal_cache[ix] is not None:
+                    finish, final_stack = state, goal_cache[ix]
+                    break
+        neighbors = []
+        # Whole visible segments are needed beside an existing own-net pad:
+        # subdividing its exit makes a temporary gap look like a notch.
+        here = wire(plane,cx,cy,cx,cy)["box"]
+        own = [r for r in sites.near(f"metal{plane}",here,geo.spacing_reach(f"metal{plane}"))
+               if r["net"] == net and "lcomp" not in r
+               and box_separation(here,r["box"]) < geo.spacing_reach(f"metal{plane}")]
+        moves = {(ix-1,iy),(ix+1,iy),(ix,iy-1),(ix,iy+1)}
+        if own:
+            moves.update(((xs.index(x),iy),(ix,ys.index(y0))))
+            for row in own:
+                b = row["box"]
+                for half in {geo.wire[plane]//2,geo.short_half[2],geo.long_half[2],geo.long_half[3]}:
+                    gap = half + geo.spacing_reach(f"metal{plane}")
+                    for vx in (b[0]-gap,b[2]+gap):
+                        if vx in x_index:
+                            moves.add((x_index[vx],iy))
+                    for vy in (b[1]-gap,b[3]+gap):
+                        if vy in y_index:
+                            moves.add((ix,y_index[vy]))
+        moves.discard((ix,iy))
+        for nx, ny in moves:
+            if not (0 <= nx < len(xs) and 0 <= ny < len(ys)):
+                continue
+            other = (plane,nx,ny)
+            key = tuple(sorted((state,other)))
+            if key not in edge_cache:
+                row = wire(plane,cx,cy,xs[nx],ys[ny])
+                edge_cache[key] = [row] if clear([row]) else None
+            if edge_cache[key] is not None:
+                neighbors.append((other, abs(xs[nx]-cx)+abs(ys[ny]-cy),
+                                  edge_cache[key]))
+        key = (ix,iy)
+        if key not in via_cache:
+            via_cache[key] = next((rows for prototype in prototypes
+                                   if clear(rows := translate(prototype,cx,cy))), None)
+        if via_cache[key] is not None:
+            neighbors.append(((5-plane,ix,iy), 2*geo.pitch(), via_cache[key]))
+        for other, distance, rows in neighbors:
+            candidate = cost + distance
+            if candidate >= costs.get(other, math.inf):
+                continue
+            costs[other] = candidate
+            parents[other] = (state,rows)
+            heuristic = abs(ys[other[2]]-y0)
+            if not rails:
+                heuristic += abs(xs[other[1]]-x)
+            heapq.heappush(queue,(candidate+heuristic,candidate,other))
+    if finish is None:
+        raise Refusal(f"no source-legal local M2/M3 path for {net} "
+                      f"from ({x},{y1}) to row {y0} within {bounds}")
+    segments = []
+    while finish != start:
+        finish, rows = parents[finish]
+        segments.append(rows)
+    for rows in reversed(segments):
+        for row in rows:
+            plan.paint(net, row["layer"], *row["box"])
+    for row in final_stack:
+        plan.paint(net, row["layer"], *row["box"])
+    return bool(rails)
 
 
 def _complementary_groups(devices: Sequence[dict]) -> List[List[str]]:
@@ -3569,8 +3653,13 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                 hi = max(bus_x.get(net, max(xs) + pitch), max(xs) + pitch)
                 if net in ports:
                     lo = 0
-                half = max(geo.wire[4] // 2, 1)
-                plan.paint(net, "metal4", lo, ty - half, hi, ty + half)
+                half = max(geo.wire[4]//2,geo.short_half[3],geo.short_half[4])
+                plan.paint(net, "metal4", lo, ty-half, hi, ty+half)
+        for rails in row_rails:
+            for net,ty in rails.items():
+                if net in bus_x:
+                    _via_stack(plan,net,bus_x[net],ty,4,geo,top=5,sites=sites,
+                               search_lambda=0,horizontal=True,join_levels=(4,5))
 
     # What the gencells leave unrouted and too small: planned and reserved
     # now, painted after the routing (see `floating_metal_patches`).
@@ -3782,7 +3871,9 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
 
     # All actual horizontal terminal escapes are present before a vertical
     # leg is routed. No predicted body plane is inserted as an obstacle.
-    for net, lane, ry, ey in pending_legs:
+    unresolved = [(net,lane,ry,ey) for net,lane,ry,ey in pending_legs
+                  if not _straight_m3_leg(plan,net,lane,ry,ey,geo,sites)]
+    for net, lane, ry, ey in sorted(unresolved,key=lambda v:abs(v[2]-v[3])):
         if not _route_m3_leg(plan, net, lane, ry, ey, geo, sites):
             _via_stack(plan, net, lane, ry, 3, geo, top=rail_level,
                        sites=sites, horizontal=True, join_levels=(3,4))
@@ -3806,11 +3897,12 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             hi = max(bus_x.get(net, max(xs) + pitch), max(xs) + pitch)
             if rail_level == 4 and net in ports:
                 lo = 0
-            rail_half = max(geo.wire[rail_level] // 2, 1)
+            rail_half = (max(geo.wire[4]//2,geo.short_half[3],geo.short_half[4])
+                         if rail_level == 4 else max(geo.wire[rail_level]//2,1))
             if rail_level != 4:
                 plan.paint(net, f"metal{rail_level}", lo, ty - rail_half, hi, ty + rail_half)
             rail_box.setdefault(net, (lo, ty - rail_half, hi, ty + rail_half))
-            if net in bus_x:
+            if net in bus_x and rail_level != 4:
                 _via_stack(plan, net, bus_x[net], ty, rail_level, geo, top=trunk_level, sites=sites,
                            search_lambda=0 if compact_bus else ISLAND_SEARCH_LAMBDA,
                            horizontal=rail_level == 4,
