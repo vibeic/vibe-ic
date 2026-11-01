@@ -168,6 +168,15 @@ def _make_def_project(tmp_path: Path, *, attest: bool) -> Path:
     pnr = tmp_path / "phase3" / "stage3" / "pnr"
     pnr.mkdir(parents=True)
     (pnr / "routed.def").write_text(_DEF_STD_NO_TAP)
+    # Supply the declared roles of this neutral, tap-free geometry fixture.
+    lef = tmp_path / "geometry.lef"
+    lef.write_text("".join(
+        f"MACRO {master}\n CLASS CORE ;\nEND {master}\n"
+        for _instance, master in _STD_ONLY))
+    report = tmp_path / "reports/phase3/io_pad_chip_top.json"
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({
+        "verdict": "WROTE", "io_library_lefs": [str(lef)]}))
     if attest:
         r._write_sparse_die_skip_attestation(tmp_path, [_OR_LOG])
     return tmp_path
