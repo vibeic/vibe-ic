@@ -53385,7 +53385,9 @@ def _step31_librelane(project: Path, top: str, pdk: PdkConfig, half: str,
                    for row in record["metrics"].values() if row.get("folder")}
         try:
             if half == "drc" and "KLayout.DRC" in folders:
-                lyrdb = folders["KLayout.DRC"] / "reports" / "drc.klayout.lyrdb"
+                report_name = next(name for step, _, name in _pv.DRC_ENGINES
+                                   if step == "KLayout.DRC")
+                lyrdb = folders["KLayout.DRC"] / "reports" / report_name
                 if lyrdb.is_file() and _sdf.classify_file(lyrdb).is_signoff_deck:
                     for dest in (project / "phase3" / "reports" / "drc.rpt",
                                  project / "reports" / "phase3" / "drc_signoff.rpt"):

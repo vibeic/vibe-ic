@@ -120,7 +120,10 @@ def test_router_iteration_report_does_not_vote_on_final_route(tmp_path):
     out = tmp_path / "broad_audit.json"
     cmd = [sys.executable, str(Path(audit.__file__)), str(tmp_path),
            "--mode", "drc", "--under", "phase3/stage3/pnr",
-           "--under", "reports/phase3/drc_router.rpt", "--json", str(out)]
+           "--under", "reports/phase3/drc_router.rpt",
+           "--subject", REPORT,
+           "--subject", "phase3/stage3/pnr/routed_router.drc.iter0.rpt",
+           "--subject", "reports/phase3/drc_router.rpt", "--json", str(out)]
     run = subprocess.run(cmd, capture_output=True, text=True)
     result = json.loads(out.read_text())
     assert run.returncode == 0, result
@@ -154,7 +157,9 @@ def test_walk_order_cannot_change_which_receipt_certifies_the_route(
     walk = pathlib.Path.rglob
     monkeypatch.setattr(pathlib.Path, "rglob", lambda self, pat: iter(sorted(
         walk(self, pat), key=str, reverse=order == "reverse")))
-    result = audit._check_drc(tmp_path)
+    subjects = sorted([report, alias], key=str, reverse=order == "reverse")
+    with audit.named_subjects(subjects):
+        result = audit._check_drc(tmp_path)
     evidence = result.summary["empty_report_evidence"]
     assert len(evidence) == 1, evidence
     (key, receipts), = evidence.items()
@@ -186,7 +191,11 @@ def test_an_identical_iteration_copy_cannot_evict_the_final_report(
     walk = pathlib.Path.rglob
     monkeypatch.setattr(pathlib.Path, "rglob", lambda self, pat: iter(sorted(
         walk(self, pat), key=str, reverse=order == "reverse")))
-    result = audit._check_drc(tmp_path)
+    subjects = sorted([pnr / "routed_router.drc.rpt",
+                       pnr / "routed_router.drc.iter1.rpt"],
+                      key=str, reverse=order == "reverse")
+    with audit.named_subjects(subjects):
+        result = audit._check_drc(tmp_path)
     assert result.summary["files_found"] == 1
     assert result.subject_files == [str(pnr / "routed_router.drc.rpt")]
     assert result.summary["ignored_intermediate_reports"] == [
@@ -208,7 +217,9 @@ def test_an_iteration_copy_votes_when_the_final_report_is_absent(tmp_path):
     out = tmp_path / "broad_audit.json"
     cmd = [sys.executable, str(Path(audit.__file__)), str(tmp_path),
            "--mode", "drc", "--under", "phase3/stage3/pnr",
-           "--under", "reports/phase3/drc_router.rpt", "--json", str(out)]
+           "--under", "reports/phase3/drc_router.rpt",
+           "--subject", "phase3/stage3/pnr/routed_router.drc.iter0.rpt",
+           "--subject", "reports/phase3/drc_router.rpt", "--json", str(out)]
     run = subprocess.run(cmd, capture_output=True, text=True)
     result = json.loads(out.read_text())
     assert run.returncode == 1, result

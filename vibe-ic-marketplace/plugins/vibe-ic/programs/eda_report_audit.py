@@ -493,7 +493,8 @@ def _discover(project_dir: Path, patterns: List[str],
               exclude_name_tokens: Sequence[str] = (),
               collapse_identical: bool = False,
               defer_to_final: Optional[Tuple[str, str]] = None,
-              deferred: Optional[List[Path]] = None) -> List[Path]:
+              deferred: Optional[List[Path]] = None,
+              candidates: Optional[Sequence[Path]] = None) -> List[Path]:
     """Glob for files matching any of the given patterns recursively,
     skipping hidden / backup-flavored directories (#525), this program's own
     verdict documents, names carrying any of `exclude_name_tokens`, and
@@ -504,11 +505,12 @@ def _discover(project_dir: Path, patterns: List[str],
     subject -- no glob is walked.  The step-23 wrapper names the per-corner
     reports STAPostPNR wrote (sha-verified against the tool's receipt before
     the audit starts), whose names no report glob matches."""
-    if _SUBJECTS is not None:
+    if _SUBJECTS is not None and candidates is None:
         return [p for p in _SUBJECTS if p.is_file() and _in_scope(p)]
-    found: List[Path] = []
-    for pat in patterns:
-        found.extend(project_dir.rglob(pat))
+    found: List[Path] = list(candidates) if candidates is not None else []
+    if candidates is None:
+        for pat in patterns:
+            found.extend(project_dir.rglob(pat))
     # THE KEY IS CLAIMED ONLY BY A PATH THAT SURVIVES EVERY FILTER.
     # The filters key on the LITERAL path while `seen` keys on the physical
     # file, so the two disagree about which alias is which. With `seen.add`
@@ -564,7 +566,10 @@ def _discover(project_dir: Path, patterns: List[str],
             continue
         if defer_to_final and re.fullmatch(defer_to_final[0], p.name, re.I):
             final = p.with_name(defer_to_final[1])
-            if (final.is_file() and not _is_backup_path(final, project_dir)
+            if (final in found and final.is_file()
+                    and not _is_backup_path(final, project_dir)
+                    and not _is_own_verdict_document(final)
+                    and not (tokens and any(t in final.name.lower() for t in tokens))
                     and _in_scope(final)):
                 if deferred is not None and p not in deferred:
                     deferred.append(p)
@@ -1690,45 +1695,21 @@ def _measured_klayout_receipt_files(project_dir: Path,
     for report in files:
         try:
             rel = report.resolve().relative_to(project_dir.resolve()).as_posix()
-        except (OSError, ValueError):
+        except (OSError, ValueError, RuntimeError):
             continue
         report_sha = digest(report)
-        # ONE PATH, USED FOR BOTH HALVES OF THE LOOKUP.
-        #
-        # THE DEFECT, MEASURED (lane icgate1, 2026-09-21) on `spm x gf180mcuD`
-        # run8's own bytes and its own `provenance.jsonl`: the report was
-        # RESOLVED to build `rel` — so the ledger is queried under the
-        # canonical name — while the transcript was taken from the LITERAL path
-        # this loop happened to be handed. Those are two different frames for
-        # one question, and `_discover` decides which by walk order.
-        #
-        # The step-output collector publishes each canonical report a second
-        # time as a SYMLINK under `steps/<phase>/<stage>/<step>/` and publishes
-        # NO `.log` beside it (`ls -la` on that run lists drc_signoff.rpt,
-        # erc.rpt, lvs.json, lvs.rpt, magic_illegal_overlap.json, outputs.json
-        # — no transcript). `_identity` collapses the pair by inode, so exactly
-        # ONE of the two survives discovery and WHICH ONE is decided by
-        # `os.scandir` order — a property of the directory, not of the design.
-        #
-        # SAME tree, SAME ledger, SAME inode, the ONLY variable being which
-        # alias was handed over:
-        #     reports/phase3/drc_signoff.rpt          -> corroborated 1
-        #     steps/.../31_.../drc_signoff.rpt        -> corroborated 0
-        # run8 drew the second, so `receipt_corroborated_files: 0` and
-        # DRC_ZERO_NOT_MEASURED over a real, measured, exit-0, digest-bound
-        # KLayout sign-off whose row the runner had already written
-        # (`phase3_one_shot_runner._rebind_measured_drc_invocation_to_canonical_path`).
-        # A sign-off gate refused a clean layout because of a directory hash.
-        #
-        # NOTHING IS RELAXED. The transcript must still EXIST, its digest must
-        # still equal the digest the ledger declared for it, the report's
-        # digest must still match, and a GDS input must still match on disk.
-        # All this changes is that the file read and the key queried are now
-        # derived from the same `rel` — so an alias cannot answer a question
-        # about a file it is an alias OF.
-        transcript = project_dir / Path(rel).with_suffix(".log")
+        # Native report/log aliases can resolve to different directories.
+        # Step snapshots may publish only the report alias.
+        transcript = report.with_suffix(".log")
+        if not transcript.is_file():
+            transcript = project_dir / Path(rel).with_suffix(".log")
         log_sha = digest(transcript)
         if not report_sha or not log_sha:
+            continue
+        try:
+            source_log_rel = transcript.resolve().relative_to(
+                project_dir.resolve()).as_posix()
+        except (OSError, ValueError, RuntimeError):
             continue
         # The publisher copies the native RDB and transcript, but declares
         # only the RDB's immutable transform.  Follow that single copy; the
@@ -1751,16 +1732,19 @@ def _measured_klayout_receipt_files(project_dir: Path,
                     source_rel = None
                     break
                 name, expected = next(iter(inputs.items()))
-                source = (project_dir / name).resolve()
+                source_path = project_dir / name
+                source = source_path.resolve()
                 source_rel = source.relative_to(project_dir.resolve()).as_posix()
-                source_log = source.with_suffix(".log")
+                source_log = source_path.with_suffix(".log")
+                source_log_rel = source_log.resolve().relative_to(
+                    project_dir.resolve()).as_posix()
                 if (expected != digest(source) or expected != report_sha or
                         source.read_bytes() != report.read_bytes() or
                         digest(source_log) != log_sha or
                         source_log.read_bytes() != transcript.read_bytes()):
                     source_rel = None
                 break
-            except (OSError, ValueError, TypeError, AttributeError):
+            except (OSError, ValueError, TypeError, AttributeError, RuntimeError):
                 source_rel = None
                 break
         if source_rel is None:
@@ -1775,8 +1759,7 @@ def _measured_klayout_receipt_files(project_dir: Path,
                 continue
             if outputs.get(source_rel) != report_sha:
                 continue
-            log_rel = str(Path(source_rel).with_suffix(".log"))
-            if outputs.get(log_rel) != log_sha:
+            if outputs.get(source_log_rel) != log_sha:
                 continue
             has_bound_gds = False
             for input_rel, input_sha in inputs.items():
@@ -1785,7 +1768,7 @@ def _measured_klayout_receipt_files(project_dir: Path,
                 candidate = project_dir / input_rel
                 try:
                     candidate.resolve().relative_to(project_dir.resolve())
-                except (OSError, ValueError):
+                except (OSError, ValueError, RuntimeError):
                     continue
                 if input_sha == digest(candidate):
                     has_bound_gds = True
@@ -1881,27 +1864,92 @@ def _category_absence_message(cat: str, cat_regex: "re.Pattern[str]",
             f"these artefacts")
 
 
+def _declared_drc_reports(project_dir: Path) -> List[Path]:
+    if _SUBJECTS is not None:
+        return list(_SUBJECTS)
+    reports: List[Path] = []
+
+    def add(value, base=project_dir):
+        if isinstance(value, str) and value:
+            path = Path(value)
+            path = path if path.is_absolute() else base / path
+            try:
+                Path(os.path.abspath(path)).relative_to(os.path.abspath(project_dir))
+            except ValueError:
+                return
+            reports.append(path)
+
+    def read(path):
+        try:
+            value = json.loads(path.read_text())
+        except (OSError, ValueError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    for record in _sdf._prov_entries(project_dir):
+        if (record.get("record") == "declared_transform"
+                and record.get("producing_step") == "drc:signoff"):
+            for role in ("outputs", "inputs"):
+                paths = record.get(role)
+                if isinstance(paths, dict):
+                    for path in paths:
+                        add(path)
+
+    current = read(project_dir / "reports/phase3/direct_current_drc.json")
+    outputs = current.get("outputs") or {}
+    if isinstance(outputs, dict):
+        for role in ("report", "native_report"):
+            row = outputs.get(role)
+            if isinstance(row, dict):
+                add(row.get("path"))
+
+    import librelane_pv_signoff as pv
+    native = read(project_dir / pv.RECORD_REL.format(half="drc"))
+    metrics = native.get("metrics") or {}
+    if isinstance(metrics, dict):
+        for step, metric, report in pv.DRC_ENGINES:
+            row = metrics.get(metric)
+            if isinstance(row, dict) and row.get("step") == step:
+                folder = row.get("folder")
+                if isinstance(folder, str) and folder:
+                    add(str(Path(folder) / "reports" / report))
+
+    for receipt in project_dir.rglob("*.receipt.json"):
+        if _is_backup_path(receipt, project_dir):
+            continue
+        record = read(receipt)
+        if (record.get("schema") == "vibeic.router_drc_receipt.v1"
+                and record.get("producer") == "phase3_one_shot_runner.step_pnr"):
+            add(record.get("report"), receipt.parent)
+    for path in project_dir.rglob("phase3_one_shot.json"):
+        if _is_backup_path(path, project_dir):
+            continue
+        record = read(path)
+        if record.get("program") != "phase3_one_shot_runner":
+            continue
+        steps = record.get("steps")
+        if not isinstance(steps, list):
+            continue
+        for step in steps:
+            if not isinstance(step, dict):
+                continue
+            extras = step.get("extras") or {}
+            if not isinstance(extras, dict):
+                continue
+            for history in ("resize_history", "loosen_declines"):
+                rows = extras.get(history)
+                if not isinstance(rows, list):
+                    continue
+                for row in rows:
+                    if isinstance(row, dict):
+                        add(row.get("router_drc_report"))
+    return reports
+
+
 def _check_drc(project_dir: Path) -> AuditResult:
     result = AuditResult(program="eda_report_audit:drc", passed=False)
-    # `.lyrdb` IS THE KLAYOUT REPORT DATABASE, and this audit already knows how
-    # to read one: `_drc_real_violation_count` lists "klayout RDB/.lyrdb XML" as
-    # its first accepted dialect and `_count_rdb_items_streaming` parses it.
-    # Until this line it could not FIND one — the glob accepted only
-    # .rpt/.log/.txt, which is not the extension KLayout writes.
-    # MEASURED (gf180mcuD chip path, 2026-08-21): a chip whose KLayout DRC is
-    # genuinely 0-violation, with `drc.klayout.lyrdb` sitting in the project,
-    # returned "No DRC report found" -> `Checker.KLayoutDRC` FAIL on our own
-    # precheck arm, while the shuttle operator's arm PASSED the same GDS. Step
-    # 37.5ic reads opposite conclusive verdicts from its two arms as a
-    # DISAGREEMENT and refuses — so a discovery gap here manufactures the exact
-    # outcome that step calls its most valuable signal. Selection is by CONTENT
-    # (the parser sniffs `<items>`), so widening the glob cannot mis-parse a
-    # file: an unreadable one still returns None and is reported unreadable.
     intermediate: List[Path] = []
-    files = _discover(project_dir, ["*drc*.rpt", "*drc*.log", "*drc*.txt",
-                                     "*drc*.lyrdb",
-                                     "*DRC*.rpt", "*DRC*.log", "*DRC*.txt",
-                                     "*DRC*.lyrdb"],
+    files = _discover(project_dir, [], candidates=_declared_drc_reports(project_dir),
                       collapse_identical=True,
                       defer_to_final=(r"routed_router\.drc\.iter[0-9]+\.rpt",
                                       "routed_router.drc.rpt"),
@@ -1916,7 +1964,7 @@ def _check_drc(project_dir: Path) -> AuditResult:
     if not files:
         result.findings.append(Finding(
             rule="DRC_REPORT_EXISTS", severity="ERROR",
-            message="No DRC report found (searched *drc*.rpt/log/txt/lyrdb)"))
+            message="No DRC report found (no declared report in the selected scope)"))
         result.summary = {"files_found": 0, "categories_found": [],
                           "ignored_intermediate_reports": ignored_intermediate}
         return result

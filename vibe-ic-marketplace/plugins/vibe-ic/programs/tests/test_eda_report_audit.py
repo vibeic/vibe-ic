@@ -43,7 +43,8 @@ def test_drc_report_pass(tmp_path):
         "via enclosure check: clean\n"
         "0 violations total\n" + _PAD
     )
-    result = era._check_drc(tmp_path)
+    with era.named_subjects([rpt]):
+        result = era._check_drc(tmp_path)
     assert result.passed is True
     assert "spacing" in result.summary["categories_found"]
     assert result.summary["has_count"] is True
@@ -62,7 +63,8 @@ def test_drc_report_with_real_violations_fails(tmp_path):
         "via enclosure error at M2\n"
         "3 violations total\n" + _PAD
     )
-    result = era._check_drc(tmp_path)
+    with era.named_subjects([rpt]):
+        result = era._check_drc(tmp_path)
     assert result.passed is False
     assert result.summary["real_violation_total"] == 3
 
@@ -103,7 +105,8 @@ def test_drc_klayout_real_item_gates_fail(tmp_path):
         _PAD_AS_COMMENT +
         "</report-database>\n"
     )
-    result = era._check_drc(tmp_path)
+    with era.named_subjects([rpt]):
+        result = era._check_drc(tmp_path)
     assert result.passed is False
     assert result.summary["real_violation_total"] == 1
 
@@ -128,7 +131,8 @@ def test_drc_prose_injected_into_a_clean_klayout_report_does_not_flip_pass(tmp_p
         _PAD_AS_COMMENT +
         "</report-database>\n"
     )
-    result = era._check_drc(tmp_path)
+    with era.named_subjects([rpt]):
+        result = era._check_drc(tmp_path)
     assert result.passed is True
     assert result.summary["real_violation_total"] == 0
 
@@ -137,7 +141,8 @@ def test_drc_stub_rejected(tmp_path):
     """Anti-fabrication: hand-typed tiny report without tool sig must FAIL."""
     rpt = tmp_path / "drc.rpt"
     rpt.write_text("spacing: 0\nwidth: 0\ntotal: 0 violations\n")  # 40 B
-    result = era._check_drc(tmp_path)
+    with era.named_subjects([rpt]):
+        result = era._check_drc(tmp_path)
     assert result.passed is False
     assert result.summary.get("tool_authentic") is False
 
