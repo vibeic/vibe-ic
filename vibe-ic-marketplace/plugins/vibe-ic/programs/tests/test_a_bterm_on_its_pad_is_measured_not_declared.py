@@ -28,6 +28,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import pad_bterm_coincidence_check as C
 import phase3_one_shot_runner as R
 
@@ -187,6 +189,148 @@ def _def(orient, pin_rect):
             f"END PINS\n"
             f"NETS 1 ;\n- sig ( PIN sig ) ( u_pad PAD ) ;\nEND NETS\n"
             f"END DESIGN\n")
+
+
+def _shared_supply(tmp_path, section, connection, port_x):
+    """Two supply pads share a rail; only geometry identifies the BTerm's pad."""
+    lef = tmp_path / "rail.lef"
+    lef.write_text(_io_macro("rail_bridge", 60.0, 100.0,
+                            [("RAIL", [("Metal5", (1, 1, 3, 3))])])
+                   .replace("CLASS PAD INOUT", "CLASS PAD POWER")
+                   .replace("USE SIGNAL", "USE POWER"))
+    text = f"""VERSION 5.8 ;
+DESIGN neutral_top ;
+UNITS DISTANCE MICRONS {UNITS} ;
+DIEAREA ( 0 0 ) ( 400000 400000 ) ;
+COMPONENTS 2 ;
+- rail_left rail_bridge + FIXED ( 20000 20000 ) N ;
+- rail_right rail_bridge + FIXED ( 120000 20000 ) N ;
+END COMPONENTS
+PINS 1 ;
+- supply_port + NET supply + USE POWER
+  + LAYER Metal5 ( 2000 2000 ) ( 6000 6000 )
+  + PLACED ( {port_x} 20000 ) N ;
+END PINS
+{section} 1 ;
+- supply ( PIN supply_port ) {connection} + USE POWER ;
+END {section}
+END DESIGN
+"""
+    return C.run(text, _M5_TECH, [lef])
+
+
+@pytest.mark.parametrize("section", ["NETS", "SPECIALNETS"])
+@pytest.mark.parametrize("port_x,instance", [(20000, "rail_left"),
+                                           (120000, "rail_right")])
+def test_wildcard_supply_joins_every_matching_pin_and_measures_the_pad(
+        tmp_path, section, port_x, instance):
+    rc, report = _shared_supply(tmp_path, section, "( * RAIL )", port_x)
+    assert report["n_ports_on_a_pad"] == 1
+    assert rc == 0 and report["connected_nets"] == ["supply"]
+    assert report["nets"][0]["instance"] == instance
+    assert report["nets"][0]["terminal"] == "RAIL"
+
+
+@pytest.mark.parametrize("section", ["NETS", "SPECIALNETS"])
+def test_explicit_supply_joins_choose_the_coincident_pad(tmp_path, section):
+    rc, report = _shared_supply(
+        tmp_path, section, "( rail_left RAIL ) ( rail_right RAIL )", 120000)
+    assert rc == 0 and report["connected_nets"] == ["supply"]
+    assert report["n_ports_on_a_pad"] == 1
+    assert report["nets"][0]["instance"] == "rail_right"
+
+
+@pytest.mark.parametrize("connection", ["( * RAIL )",
+                                       "( rail_left RAIL ) ( rail_right RAIL )"])
+def test_supply_connectivity_without_a_coincident_pad_still_refuses(
+        tmp_path, connection):
+    rc, report = _shared_supply(tmp_path, "SPECIALNETS", connection, 220000)
+    assert report["connected_nets"] == []
+    assert rc == 2 or report["not_connected_nets"] == ["supply"]
+    assert all(r["verdict"] == "NOT_CONNECTED" for r in report["nets"])
+
+
+def test_a_coincident_endcap_is_not_a_supply_pad(tmp_path):
+    lef = tmp_path / "roles.lef"
+    lef.write_text(_io_macro("tl__bi", 60, 100,
+                            [("PAD", [("Metal5", (1, 1, 3, 3))])])
+                   .replace("CLASS PAD INOUT", "CLASS ENDCAP BOTTOMLEFT")
+                   + _io_macro("rail_bridge", 60, 100,
+                               [("PAD", [("Metal5", (1, 1, 3, 3))])]))
+    text = _def("N", (2000, 2000, 6000, 6000))
+    text = text.replace("COMPONENTS 1 ;", "COMPONENTS 2 ;")
+    text = text.replace("END COMPONENTS", "- proper_pad rail_bridge + FIXED "
+                        "( 120000 20000 ) N ;\nEND COMPONENTS")
+    text = text.replace("( u_pad PAD )", "( u_pad PAD ) ( proper_pad PAD )")
+    _rc, report = C.run(text, _M5_TECH, [lef])
+    assert report["connected_nets"] == []
+    assert report["not_connected_nets"] == ["sig"]
+    assert report["nets"][0]["instance"] == "proper_pad"
+
+
+def test_routed_wildcard_coordinate_is_not_a_component_pin():
+    text = """SPECIALNETS 1 ;
+- supply ( * RAIL ) + ROUTED Metal5 100 ( 2000 4000 ) ( * 9000 ) ;
+END SPECIALNETS
+"""
+    assert C.def_net_terminals(text) == {"supply": [("*", "RAIL")]}
+
+
+def test_subnet_terminal_connections_still_belong_to_the_parent_net():
+    text = """NETS 1 ;
+- supply ( PIN port ) + SUBNET branch ( pad RAIL )
+  + ROUTED Metal5 ( 2000 4000 ) ( * 9000 ) ;
+END NETS
+"""
+    assert C.def_net_terminals(text) == {"supply": [("pad", "RAIL")]}
+
+
+def test_wildcard_coincidence_reads_a_checked_in_io_outline(tmp_path):
+    """The stored IO abstracts have sizes/classes, but omit pin ports.
+
+    Reuse an actual outline with a synthetic terminal for this geometry control;
+    this does not claim the synthetic terminal is a native PDK pin.
+    """
+    from programs.tests._hostpaths import require_repo
+    root = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+                        "tests", "fixtures", "u22_perc_sweep_lef_class")
+    source = next(p for p in sorted(root.rglob("*.lef"))
+                  if any(c.split()[0] == "PAD" for c in
+                         C.PR.parse_lef_macro_classes(p.read_text()).values()))
+    text = source.read_text()
+    sizes = C.PR.parse_lef_macros(text)
+    master = next(iter(sizes))
+    terminal, layer, rectangle = "TERMINAL", "Metal5", (1, 1, 3, 3)
+    lef = tmp_path / "outlined-pad.lef"
+    pin = (f"  PIN {terminal}\n    PORT\n      LAYER {layer} ;\n"
+           f"      RECT 1 1 3 3 ;\n    END\n  END {terminal}\n")
+    lef.write_text(text.replace(f"END {master}", pin + f"END {master}"))
+    rect = [round(v * UNITS) for v in rectangle]
+    step = round((sizes[master][0] + 100) * UNITS)
+    point = 20000 + step
+    tech = (f"LAYER {layer}\n TYPE ROUTING ;\n WIDTH "
+            f"{min(rectangle[2]-rectangle[0], rectangle[3]-rectangle[1])/2} ;\n"
+            f"END {layer}\n")
+    native_lef_def = f"""VERSION 5.8 ;
+DESIGN neutral_top ;
+UNITS DISTANCE MICRONS {UNITS} ;
+DIEAREA ( 0 0 ) ( {2*point} {2*point} ) ;
+COMPONENTS 2 ;
+- first_pad {master} + PLACED ( 20000 20000 ) N ;
+- second_pad {master} + PLACED ( {point} 20000 ) N ;
+END COMPONENTS
+PINS 1 ;
+- port + NET rail + LAYER {layer} ( {rect[0]} {rect[1]} ) ( {rect[2]} {rect[3]} )
+ + PLACED ( {point} 20000 ) N ;
+END PINS
+SPECIALNETS 1 ;
+- rail ( PIN port ) ( * {terminal} ) + USE POWER ;
+END SPECIALNETS
+END DESIGN
+"""
+    rc, report = C.run(native_lef_def, tech, [lef])
+    assert rc == 0 and report["connected_nets"] == ["rail"]
+    assert report["nets"][0]["instance"] == "second_pad"
 
 
 def _both_orders(tmp_path, def_text, lef_a, lef_b):
