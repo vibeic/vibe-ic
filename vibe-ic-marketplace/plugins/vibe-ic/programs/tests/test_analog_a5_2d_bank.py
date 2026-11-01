@@ -273,7 +273,8 @@ def test_local_bend_fills_its_own_measured_small_pad_notch():
         if foreign:sites.add({'net':'foreign','layer':'metal3','box':(17638,22123,17639,22126)})
         rows=[{'net':'own','layer':'metal3','box':b} for b in (
             (17634,22093,17763,22123),(17608,22093,17664,22123),
-            (17608,22093,17638,22157),(17591,22126,17639,22158))]
+            (17608,22093,17638,22157),(17600,22127,17638,22157),
+            (17591,22126,17639,22158))]
         if foreign:
             with pytest.raises(a.Refusal,match='notch'):a._route_notch_fills(rows,'own',sites,g)
         else:

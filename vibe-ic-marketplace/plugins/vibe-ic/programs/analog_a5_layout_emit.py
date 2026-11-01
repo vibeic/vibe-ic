@@ -2680,6 +2680,10 @@ def _route_notch_fills(rows: Sequence[dict], net: str, sites: "Sites",
     shadow = Sites([],geo)
     shadow.grid = {key:list(values) for key,values in sites.grid.items()}
     shadow.polygons = sites.polygons
+    foreign = Sites([],geo)
+    foreign.grid = {key:[r for r in values if r["net"] != net or "lcomp" in r]
+                    for key,values in sites.grid.items()}
+    foreign.polygons = sites.polygons
     for row in rows:
         shadow.add(row)
     added,queue,seen = [],list(rows),set()
@@ -2712,7 +2716,11 @@ def _route_notch_fills(rows: Sequence[dict], net: str, sites: "Sites",
                    and r["box"][1]<gap[3] and gap[1]<r["box"][3]]
             if _rectangle_union_area(cover)==(gap[2]-gap[0])*(gap[3]-gap[1]):
                 continue
-            if not shadow.clear(gap,[layer],None,net):
+            # This rectangle is the real metal closing the measured own-net
+            # gap. Check all foreign/native conductors; process its remaining
+            # own-net bays through this same queue, rather than asking the
+            # disconnected-rectangle test to approve a partially filled hull.
+            if not foreign.clear(gap,[layer],None,net):
                 raise Refusal(f"{net}: local bend notch cannot be filled clear of foreign geometry")
             patch={"net":net,"layer":layer,"box":gap}
             shadow.add(patch);added.append(patch);queue.append(patch)
