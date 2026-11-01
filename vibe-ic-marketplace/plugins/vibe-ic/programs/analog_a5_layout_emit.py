@@ -2245,6 +2245,10 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
 
     Returns the centre the stack was actually placed at, so the wire that
     leaves it starts where it is rather than where it was asked for."""
+    cuts = getattr(geo, "intent_cuts", {}).get(net, 1)
+    if cuts > 1:
+        return _intent_via_array(plan, net, x, y, level, top, geo, sites,
+                                 friendly, cuts, search_lambda, join_levels)
     lo, hi = min(level, top), max(level, top)
     if lo == hi:
         return x, y
@@ -2334,7 +2338,7 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
             if placed is not None:
                 break
         if placed is None:
-            if compact_terminal or exit_path is not None or join_levels:
+            if compact_terminal or exit_path is not None or join_levels or getattr(geo, "intent_strict", False):
                 purpose = ("routing junction" if join_levels else
                            "compact terminal access" if compact_terminal else "body exit path")
                 raise Refusal(
@@ -2359,6 +2363,30 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
         plan.paint(net, f"metal{k + 1}", cx - hx, cy - hy, cx + hx, cy + hy)
         plan.paint(net, f"via{k}", cx - ph, cy - ph, cx + ph, cy + ph)
     return cx, cy
+
+
+def _intent_via_array(plan, net, x, y, level, top, geo, sites,
+                      friendly, cuts, search_lambda, join_levels):
+    lo, hi = min(level, top), max(level, top)
+    if lo == hi:
+        return x, y
+    for dx, dy in _island_candidates(search_lambda):
+        cx, cy = x + dx, y + dy
+        paint, bars = _pin_stack_boxes(cx, cy, lo, hi, geo, cuts)
+        if sites is not None:
+            if any(not sites.clear(box, [layer], friendly, net) for layer, box in paint):
+                continue
+            if not sites.touches(bars[level], f"metal{level}", friendly):
+                continue
+            if any(not any(row["net"] == net and row["layer"] == f"metal{k}"
+                           and row["box"][0] < bars[k][2] and bars[k][0] < row["box"][2]
+                           and row["box"][1] < bars[k][3] and bars[k][1] < row["box"][3]
+                           for row in sites.near(f"metal{k}", bars[k], 0)) for k in join_levels):
+                continue
+        for layer, box in paint:
+            plan.paint(net, layer, *box)
+        return cx, cy
+    raise Refusal(f"ROUTING_INTENT_VIA_SITE: {net} cannot host {cuts} cuts at ({x}, {y})")
 
 
 def _terminal_needs_compact_access(group: dict, groups: Sequence[dict],
@@ -3387,6 +3415,28 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                max_row_width_um: float = 1000.0,
                shared_capacitor_escapes: bool = False,
                left_right_regions: bool = False,
+               placement_groups: Sequence[Sequence[str]] = (),
+               routing_intent=None) -> Plan:
+    options = dict(max_row_width_um=max_row_width_um,
+                   shared_capacitor_escapes=shared_capacitor_escapes,
+                   left_right_regions=left_right_regions,
+                   placement_groups=placement_groups)
+    if routing_intent is None:
+        return _build_plan(devs, ports, cells, facts, geo, tap_clear, pin_spec, **options)
+    import analog_routing_intent as intent
+    try:
+        return intent.build_intent_plan(devs, ports, cells, facts, geo,
+                                        tap_clear, pin_spec, routing_intent, options)
+    except intent.IntentRefusal as exc:
+        raise Refusal(str(exc)) from exc
+
+
+def _build_plan(devs: Sequence[dict], ports: Sequence[str],
+               cells: Dict[tuple, dict], facts: PdkFacts, geo: Geo,
+               tap_clear: int, pin_spec: Optional[dict] = None,
+               max_row_width_um: float = 1000.0,
+               shared_capacitor_escapes: bool = False,
+               left_right_regions: bool = False,
                placement_groups: Sequence[Sequence[str]] = ()) -> Plan:
     plan = Plan()
     rail_level = 4 if shared_capacitor_escapes and left_right_regions else 2
@@ -3724,6 +3774,9 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             g["abs_labels"] = [(ox + l["x"], oy + l["y"], l["level"])
                                for l in g["labels"]]
             g["abs_escape_y"] = oy + g["escape_y"]
+
+    if getattr(geo, "intent_strict", False):
+        plan.intent_placed = per_dev
 
     # The index is built ONCE, after every device is placed and before a
     # single wire is drawn: the routing runs closest to the devices, and a
@@ -4921,7 +4974,11 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
                       max_row_width_um=args.max_row_width_um,
                       shared_capacitor_escapes=args.shared_capacitor_escapes,
                       left_right_regions=args.left_right_regions,
-                      placement_groups=placement_groups)
+                      placement_groups=placement_groups,
+                      **({"routing_intent": json.loads(args.routing_intent)}
+                         if getattr(args, "routing_intent", None) is not None else {}))
+    if hasattr(plan, "routing_intent_evidence"):
+        report["routing_intent"] = plan.routing_intent_evidence
     report["shared_capacitor_escapes"] = args.shared_capacitor_escapes
     report["left_right_regions"] = args.left_right_regions
     report["shared_escape_arrays"] = getattr(plan, "shared_escape_arrays", {})
@@ -5257,12 +5314,22 @@ def main(argv: Optional[List[str]] = None) -> int:
                     help="share identical same-net capacitor escapes and allocate local rail tracks")
     ap.add_argument("--left-right-regions", action="store_true",
                     help="place CMIM and OTA rows in left/right regions with shared M2 track allocation")
+    ap.add_argument("--routing-intent", help="versioned declared routing-intent JSON")
     ap.add_argument("--json")
     args = ap.parse_args(argv)
     if args.left_right_regions and not args.shared_capacitor_escapes:
         ap.error("--left-right-regions requires --shared-capacitor-escapes")
     if not math.isfinite(args.max_row_width_um) or args.max_row_width_um <= 0:
         ap.error("--max-row-width-um must be finite and positive")
+
+    if args.routing_intent is not None:
+        try:
+            import analog_routing_intent as intent
+            intent.parse_intent(json.loads(args.routing_intent))
+        except (ValueError, intent.IntentRefusal) as exc:
+            out = {"producer": PRODUCER, "schema": SCHEMA,
+                   "result": "REFUSED", "reason": f"ROUTING_INTENT_SCHEMA: {exc}", "blocks": {}}
+            return _finish(out, args, RC_REFUSED)
 
     project = args.project_dir.resolve()
     blocks = list(args.block) or list(load_block_list(project) or [])

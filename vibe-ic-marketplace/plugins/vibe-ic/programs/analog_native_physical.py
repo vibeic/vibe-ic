@@ -190,6 +190,14 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                     "tech_lef", "wire_width_um", "via_pad_half_um", "max_row_width_um"):
             if cfg.get(key) is not None:
                 argv += ["--" + key.replace("_", "-"), str(cfg[key])]
+        if "routing_intent" in cfg:
+            try:
+                from analog_routing_intent import parse_intent
+                parse_intent(cfg["routing_intent"])
+                encoded_intent = json.dumps(cfg["routing_intent"], separators=(",", ":"), allow_nan=False)
+            except (TypeError, ValueError) as exc:
+                return _result("FAIL", f"ROUTING_INTENT_SCHEMA: {exc}")
+            argv += ["--routing-intent", encoded_intent]
         if cfg.get("shared_capacitor_escapes") is True:
             argv.append("--shared-capacitor-escapes")
         if cfg.get("left_right_regions") is True:
