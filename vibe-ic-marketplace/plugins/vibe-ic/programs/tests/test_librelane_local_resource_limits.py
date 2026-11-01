@@ -3,6 +3,8 @@ import json
 import os
 from pathlib import Path
 import resource
+import shutil
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -12,6 +14,22 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import librelane_contract as contract
 from _hostpaths import require_repo
 from test_librelane_contract import local_image, _host_provider
+
+
+@pytest.fixture(scope='module')
+def systemd_user_manager():
+    reason = 'requires a systemd user manager (host LOCAL route)'
+    runner = shutil.which('systemd-run')
+    if runner is None:
+        pytest.skip(reason)
+    try:
+        result = subprocess.run(
+            [runner, '--user', '--scope', '-q', '--', sys.executable, '-c', 'pass'],
+            capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        pytest.skip(reason)
+    if result.returncode != 0:
+        pytest.skip(reason)
 
 
 @pytest.fixture(params=['attested', 'provider'])
@@ -94,7 +112,7 @@ print(json.dumps(dict(uid=os.getuid(),group=group,maximum=maximum,current=curren
 
 @pytest.mark.parametrize('limit,attempts,saturate', [(512, 3, False), (8, 16, True)])
 def test_pids_scope_allows_nonroot_forks_and_enforces_its_own_limit(
-        target, limit, attempts, saturate):
+        target, limit, attempts, saturate, systemd_user_manager):
     import errno
     before = resource.getrlimit(resource.RLIMIT_NPROC)
     parent_group = Path('/proc/self/cgroup').read_text()
@@ -136,7 +154,7 @@ def test_missing_scope_runner_refuses(target, monkeypatch):
         _launch(target, ['--pids-limit', '512'])
 
 
-def test_tool_failure_inside_a_working_scope_keeps_its_exit_code(target):
+def test_tool_failure_inside_a_working_scope_keeps_its_exit_code(target, systemd_user_manager):
     result = _launch(target, ['--pids-limit', '512'], command=[
         sys.executable, '-c',
         'import sys;print("Failed to connect to bus",file=sys.stderr);sys.exit(7)'])
@@ -144,7 +162,7 @@ def test_tool_failure_inside_a_working_scope_keeps_its_exit_code(target):
     assert 'Failed to connect to bus' in result.stderr
 
 
-def test_scoped_tool_receives_literal_arguments(target):
+def test_scoped_tool_receives_literal_arguments(target, systemd_user_manager):
     literal = '$HOME/${SCOPE_TEST_VALUE}'
     result = _launch(target, ['--pids-limit', '512'], command=[
         sys.executable, '-c', 'import sys;print(sys.argv[1])', literal])
@@ -165,13 +183,13 @@ def test_stricter_inherited_limits_are_preserved(target, monkeypatch):
         return original([sys.executable, '-c', inherit, *command], **kwargs)
 
     monkeypatch.setattr(_watchdog, 'run_host_supervised', inherited_child)
-    measured = _measure(target, ['--cpus', '4', '--pids-limit', '512'])
+    measured = _measure(target, ['--cpus', '4'])
     assert measured['as'] == [256 * 1024**2, 256 * 1024**2]
     assert measured['pids'] == list(resource.getrlimit(resource.RLIMIT_NPROC))
     assert measured['affinity'] == sorted(os.sched_getaffinity(0))[:1]
 
 
-def test_combined_limits_drive_an_existing_neutral_tool(target):
+def test_combined_limits_drive_an_existing_neutral_tool(target, systemd_user_manager):
     tool = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
                         'tests', 'fixtures', 'execution_modes_tool.py')
     inputs, outputs = target.tmp / 'inputs', target.tmp / 'outputs'
