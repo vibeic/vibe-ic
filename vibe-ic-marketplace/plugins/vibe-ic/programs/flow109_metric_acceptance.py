@@ -4839,6 +4839,61 @@ def accept_d13(project: Path, context: Mapping[str, Any]) -> dict:
     return result
 
 
+def _a01_measurement_intents(project, authority, body, measured):
+    """Observe approved, source-bound intent separately from numeric targets.
+
+    Required items alone earn no credit. The existing owner review must call
+    the row an explicit intent and cite text still present in its source.
+    This is A01 declaration coverage, never a circuit measurement result.
+    """
+    reviews = body.get('item_review', [])
+    citations = body.get('item_citations', [])
+    if not isinstance(reviews, list) or not isinstance(citations, list):
+        raise MetricRefusal('METRIC_INTENT_INVALID', 'review/citations must be lists')
+    observations, readset, seen = [], {}, set()
+    blocks = {item['block'] for item in measured['value']}
+    required = authority['required_items']
+    for review in reviews:
+        if not isinstance(review, dict) or review.get('kind') != 'explicit_verification_intent':
+            continue
+        index, item = review.get('item_index'), review.get('item')
+        if (type(index) is not int or not 0 <= index < len(required)
+                or index in seen or item != required[index]):
+            raise MetricRefusal('METRIC_INTENT_INVALID', 'review does not bind a unique required item')
+        seen.add(index)
+        evidence = [row for row in citations if isinstance(row, dict)
+                    and row.get('item_index') == index and row.get('item') == item]
+        if not evidence or item['block'] not in blocks:
+            continue
+        if len(evidence) != 1 or not isinstance(evidence[0].get('citations'), list):
+            raise MetricRefusal('METRIC_INTENT_INVALID', 'intent citations are ambiguous/invalid')
+        sources = evidence[0]['citations']
+        if not sources:
+            continue
+        for citation in sources:
+            if (not isinstance(citation, dict) or not isinstance(citation.get('path'), str)
+                    or Path(citation['path']).is_absolute()
+                    or not _HEX.fullmatch(str(citation.get('sha256', '')))):
+                raise MetricRefusal('METRIC_INTENT_INVALID', 'invalid source reference')
+            path = _safe_project_file(project, citation['path'])
+            if not path.is_file() or _sha(path.read_bytes()) != citation['sha256']:
+                raise MetricRefusal('METRIC_INTENT_SOURCE_STALE', citation['path'])
+            lines = path.read_text(encoding='utf-8').splitlines()
+            line, literal = citation.get('line'), citation.get('literal')
+            if (type(line) is not int or not 1 <= line <= len(lines)
+                    or not isinstance(literal, str) or not literal or literal not in lines[line - 1]):
+                raise MetricRefusal('METRIC_INTENT_SOURCE_UNBOUND', citation['path'])
+            readset[citation['path']] = citation['sha256']
+        observations.append(dict(item))
+    result = dict(measured)
+    result['value'] = measured['value'] + [item for item in observations if item not in measured['value']]
+    result['identity'] = dict(measured['identity'])
+    result['identity']['consumed_inputs'] = {
+        **measured['identity']['consumed_inputs'], **readset,
+        authority['path']: authority['sha256'], authority['source']['path']: authority['source']['sha256']}
+    return result
+
+
 def accept_a01(project: Path, context: Mapping[str, Any],
                component: Mapping[str, Any]) -> dict:
     """Evaluate the complete, and only, currently whitelisted A01 binding."""
@@ -4874,13 +4929,15 @@ def accept_a01(project: Path, context: Mapping[str, Any],
                 "detail": measured_by_id[oid].get("reason") or "measured component failure"})
             continue
         try:
-            authority, _ = _approved_authority(project, binding["authority"], binding["item_fields"])
+            authority, body = _approved_authority(project, binding["authority"], binding["item_fields"])
             measured = dict(measured_by_id[oid])
             if ("native_results" in component and measured.get('status') == 'MEASURED'
                     and measured['identity']['consumed_inputs'].get(
                         str(project / authority['source']['path'])) != authority['source']['sha256']):
                 raise MetricRefusal('METRIC_AUTHORITY_FOREIGN_SOURCE', authority['source']['path'])
             if measured.get("status") == "MEASURED":
+                if oid == 'base_A1.required_measurements':
+                    measured = _a01_measurement_intents(project, authority, body, measured)
                 measured["identity"] = dict(measured["identity"])
                 measured["identity"]["requirements"] = {
                     "path": authority["path"], "sha256": authority["sha256"],
