@@ -102,11 +102,18 @@ def _transfer_timing(topology: dict, reset_node: str, node_map: dict | None = No
     groups, columns, reset_gates, switches_used = [], [], [], set()
     for stage in range(1, order + 1):
         integrating = names["integrating"].format(i=stage)
-        stored = [device for device in devices if device.get("name") == integrating
-                  and len(device.get("nets") or []) == 2]
-        if len(stored) != 1:
+        stored = [device for device in devices
+                  if device.get("name") == integrating or re.fullmatch(
+                      re.escape(integrating) + r"_u\d+", str(device.get("name", "")))]
+        if (not stored or any(device.get("role") not in ("cap", "capacitor")
+                              or len(device.get("nets") or []) != 2 for device in stored)
+                or len({device["name"] for device in stored}) != len(stored)
+                or (len(stored) > 1 and any(device["name"] == integrating for device in stored))
+                or len({frozenset(device["nets"]) for device in stored}) != 1):
             raise ValueError("typed integrating capacitor is absent or ambiguous: " + integrating)
         storage_nodes = set(stored[0]["nets"])
+        if len(storage_nodes) != 2:
+            raise ValueError("typed integrating capacitor is shorted: " + integrating)
         reset_pair = [device for device in devices if device.get("role") == "pmos"
                       and len(device.get("nets") or []) == 4
                       and {device["nets"][0], device["nets"][2]} == storage_nodes]
