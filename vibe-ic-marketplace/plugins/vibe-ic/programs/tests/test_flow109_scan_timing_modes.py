@@ -18,6 +18,9 @@ import execution_backend_gates as gates
 import flow_compliance_check as fcc
 
 
+CORNER = 'nom_tt_025C_1v20'
+
+
 def put(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value) if isinstance(value, (dict, list)) else value)
@@ -61,10 +64,14 @@ def software(tmp_path, monkeypatch):
     p = tmp_path / 'SOFTWARE_ONLY'; p.mkdir()
     paths = {name: put(p / ('input/' + name), 'SOFTWARE_ONLY ' + name) for name in
              ('netlist.v', 'routed.def', 'routed.odb', 'functional.sdc', 'shift.sdc', 'capture.sdc', 'nom.spef', 'cells.lib', 'rc.rules')}
+    put(paths['cells.lib'], 'library (software_only__tt_025C_1v20) {\n'
+        '  nom_process : 1.0;\n  nom_voltage : 1.2;\n  nom_temperature : 25;\n'
+        '  default_operating_conditions : tt;\n'
+        '  operating_conditions (tt) { process : 1; voltage : 1.2; temperature : 25; }\n}\n')
     state = {k: str(paths[v]) for k, v in [('nl','netlist.v'), ('def','routed.def'), ('odb','routed.odb'), ('sdc','functional.sdc')]}
     state['spef'] = {'nom_*': str(paths['nom.spef'])}
-    items = [{'mode': m, 'corner': 'nom_tt', 'check': c} for m in ('shift','capture') for c in ('setup','hold')]
-    scenarios = {'required_modes': ['functional','shift','capture'], 'required_corners': ['nom_tt'],
+    items = [{'mode': m, 'corner': CORNER, 'check': c} for m in ('shift','capture') for c in ('setup','hold')]
+    scenarios = {'required_modes': ['functional','shift','capture'], 'required_corners': [CORNER],
                  'required_checks': ['setup','hold'], 'required_items': items}
     mapping = {'reference': [{**i, 'sdc': ref(p, paths[i['mode'] + '.sdc']),
         'libraries': [ref(p, paths['cells.lib'])], 'rc': {'corner': 'nom', 'model': ref(p, paths['rc.rules'])}} for i in items]}
@@ -85,7 +92,7 @@ def software(tmp_path, monkeypatch):
         configs = {}
         for step in steps:
             cfg = {'meta':{'step':step}, 'RCX_RULESETS':{'nom_*':str(paths['rc.rules'])},
-                   'STA_CORNERS':['nom_tt'], 'CELL_LIBS':{'nom_tt':[str(paths['cells.lib'])]},
+                   'STA_CORNERS':[CORNER], 'CELL_LIBS':{CORNER:[str(paths['cells.lib'])]},
                    'SIGNOFF_SDC_FILE':str(paths['functional.sdc'])}
             for key, (value, _) in overlay.items():
                 cfg[key] = str(p/value[5:]) if isinstance(value,str) and value.startswith('dir::') else value
@@ -156,7 +163,7 @@ def test_actual_candidate_consumer(software, monkeypatch, damage, expected):
     if damage=='forged-state': coverage['modes']['capture'][0]['sta_state']['sha256']='a'*64
     if damage=='unbound-metrics':
         folder=(p/coverage['modes']['capture'][0]['sta_state']['path']).parent
-        put(folder/'metrics.json', {'timing__hold__ws__corner:nom_tt':100})
+        put(folder/'metrics.json', {'timing__hold__ws__corner:' + CORNER:100})
     if damage=='stale-model':
         config=p/ctx['runtime_tool_uses'][0]['config']['path']; config.write_text('{}')
     if damage=='missing-qualification': (p/ctx['qualification_registry']).unlink()
@@ -210,7 +217,7 @@ def test_actual_final_electrical_component_and_reader(software,monkeypatch,damag
         'adopted_views':{'netlist':ref(p,paths['netlist.v']), 'sdc':ref(p,paths['functional.sdc'])},
         'spefs':{'nom':ref(p,paths['nom.spef'])}, 'final_spefs':{'nom':ref(p,paths['nom.spef'])}}
     d69=ref(p,put(p/'input/software-final-geometry.json',{'scope':'SOFTWARE_ONLY_FINAL_GEOMETRY_NOT_MEASURED'}))
-    put(p/final.INPUT,{'schema':final.SCHEMA,'required_corners':['nom_tt'],
+    put(p/final.INPUT,{'schema':final.SCHEMA,'required_corners':[CORNER],
         'final_parasitics_receipt':d69,'librelane':{**native,'pdk_root':str(native['pdk_root'])}})
     # Existing final-geometry acceptance is an explicitly scoped upstream fixture, not product code bypass.
     monkeypatch.setattr(final.extract,'validate_final_parasitics',lambda *_:parasitics)
