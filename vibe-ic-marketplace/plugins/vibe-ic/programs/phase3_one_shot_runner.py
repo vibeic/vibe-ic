@@ -13459,33 +13459,54 @@ def _netlist_matches_liberty(netlist_path: Path,
 
 
 def _registry_path_under_root(root_prefix: str, cand: str) -> bool:
-    """Is `cand` an acceptable resolution for a registry asset under
-    `root_prefix` (which ends in '/')?
+    """Confinement to the declared root's own resolved tree, on either route.
 
-    BOTH acceptance tests, applied to EVERY candidate on EVERY route.
+    A composed image PDK can own directory links into other store items.
+    Only those root-owned directory trees extend confinement; deeper links
+    cannot enroll another tree. The image's PDK_ROOT establishes the store
+    namespace, and external paths or lexical traversal never gain admission.
+    The function is self-contained so remote probes execute this SAME rule.
+    """
+    import os
 
-    The textual prefix drops the login-shell banner and any other non-path
-    noise line (see `_registry_glob_one`). The `..`-normalisation is the half
-    a textual test cannot make: a registry pattern containing `..` composes a
-    path that still STARTS with the root and names a file outside it. This was
-    first caught by the v1.17.79 no-leak arm against the local resolver, which
-    resolved `/etc/passwd` through the literal branch; the same hole was open
-    on the container route, where the literal branch accepted whatever
-    `test -e` said, so the predicate now lives at the ONE place both routes
-    pass through.
+    def under(path, root):
+        return path == root or path.startswith(root.rstrip(os.sep) + os.sep)
 
-    Symlinks are resolved when they exist HERE (in-image, the PDK is on this
-    filesystem); when they do not, `os.path.realpath` degrades to a lexical
-    normalisation, which is exactly what is wanted for a path that names a
-    file in a container this process cannot see. PDK/chip-AGNOSTIC."""
-    if not cand.startswith(root_prefix):
+    if not isinstance(cand, str) or not cand.startswith(root_prefix):
+        return False
+    if '..' in cand.split('/') or '..' in root_prefix.split('/'):
         return False
     try:
-        real_root = os.path.realpath(root_prefix.rstrip('/'))
-        real_cand = os.path.realpath(cand)
-        return (real_cand == real_root
-                or real_cand.startswith(real_root + os.sep))
-    except OSError:
+        root = os.path.realpath(root_prefix.rstrip('/'))
+        resolved = os.path.realpath(cand)
+        declared_raw = os.environ.get('PDK_ROOT', '')
+        declared = os.path.realpath(declared_raw) if declared_raw else ''
+        store = os.path.dirname(declared)
+
+        def store_item(path):
+            if not declared or not under(path, store):
+                return False
+            item = os.path.relpath(path, store).split(os.sep)[0]
+            digest, separator, label = item.partition('-')
+            return (bool(separator and label) and len(digest) == 32
+                    and all(ch in '0123456789abcdfghijklmnpqrsvwxyz' for ch in digest)
+                    and os.path.isdir(os.path.join(store, item)))
+
+        image_root = bool(declared_raw and store_item(declared)
+                          and under(os.path.abspath(root_prefix), os.path.abspath(declared_raw)))
+        if image_root and (not store_item(root) or not store_item(resolved)):
+            return False
+        if under(resolved, root):
+            return True
+        if not image_root or not os.path.isdir(root):
+            return False
+        # Enumerate the installed root, not the candidate's symlink chain.
+        # A planted link below one of these anchors cannot widen the closure.
+        with os.scandir(root) as children:
+            trees = [os.path.realpath(child.path) for child in children
+                     if child.is_symlink() and child.is_dir()]
+        return any(store_item(tree) and under(resolved, tree) for tree in trees)
+    except (OSError, ValueError):
         return False
 
 
@@ -13579,10 +13600,18 @@ def _registry_glob_one(container: str, root: str, pattern: Optional[str],
         if rc != 0:
             return None
         candidates = out.splitlines()
-    return _registry_asset_choice(
-        root, candidates,
-        lambda path: _docker_exec_raw(container, f"test -e {shlex.quote(path)}", timeout=60)[0] == 0,
-        pdk=pdk, key=key, multiple=multiple)
+    def admitted(path):
+        if _docker_exec_raw(container, f"test -e {shlex.quote(path)}", timeout=60)[0] != 0:
+            return False
+        import inspect
+        rule = inspect.getsource(_registry_path_under_root)
+        code = rule + "\nimport sys\nraise SystemExit(0 if _registry_path_under_root(sys.argv[1], sys.argv[2]) else 1)\n"
+        return _docker_exec_raw(
+            container, f"python3 -c {shlex.quote(code)} {shlex.quote(root_prefix)} {shlex.quote(path)}",
+            timeout=60)[0] == 0
+
+    return _registry_asset_choice(root, candidates, admitted,
+                                  pdk=pdk, key=key, multiple=multiple)
 
 
 def _registry_container_root(container: str, reg: Dict[str, Any]

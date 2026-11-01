@@ -72,6 +72,12 @@ class _FakeContainer:
         if c == 'printenv PDK_ROOT':
             return (0 if self.pdk_root else 1,
                     _BANNER + '\n' + (str(self.pdk_root) + '\n' if self.pdk_root else ''), '')
+        if c.startswith('python3 -c '):
+            args = shlex.split(c)
+            if 'def _registry_path_under_root' in args[2]:
+                prefix, candidate = args[-2:]
+                ok = candidate in self.existing and candidate.startswith(prefix) and '..' not in candidate.split('/')
+                return (0 if ok else 1, _BANNER + '\n', '')
         if c.startswith("test -d "):
             path = _unquote(c[len("test -d "):].strip())
             ok = path in self.existing

@@ -510,3 +510,70 @@ def test_container_registry_root_is_bound_to_runtime_declaration(tmp_path, monke
         assert code in observed and name in observed, observed
         if case == 'ambiguous_glob':
             assert all(path in observed for path in existing)
+
+
+@pytest.fixture
+def resolved_store_pdk(tmp_path, monkeypatch):
+    store = tmp_path / 'store'
+    bundle = store / ('0' * 32 + '-bundle')
+    models = store / ('1' * 32 + '-models')
+    foreign = store / ('2' * 32 + '-foreign')
+    root = bundle / 'neutral_pdk'
+    root.mkdir(parents=True)
+    asset = models / 'libs.ref/scl/lef/technology.lef'
+    asset.parent.mkdir(parents=True)
+    asset.write_text('LAYER route1\n TYPE ROUTING ;\n')
+    (root / 'libs.ref').symlink_to(models / 'libs.ref', target_is_directory=True)
+    foreign.mkdir()
+    outside = foreign / 'unowned.lef'
+    outside.write_text('outside declared PDK tree\n')
+    monkeypatch.setenv('PDK_ROOT', str(bundle))
+    return root, asset, outside
+
+
+def test_root_owned_sibling_store_tree_is_admitted(in_image, resolved_store_pdk):
+    root, target, _ = resolved_store_pdk
+    path = root / 'libs.ref/scl/lef/technology.lef'
+    assert path.resolve() == target and path.is_file()
+    assert _p3()._registry_path_under_root(str(root) + '/', str(path)) is True
+    assert _p3()._registry_glob_one(_NO_SUCH_CONTAINER, str(root),
+                                   'libs.ref/scl/lef/technology.lef') == str(path)
+
+
+@pytest.mark.parametrize('escape', ['etc_file', 'etc_directory', 'foreign_store', 'nested_foreign'])
+def test_root_owned_tree_does_not_enroll_planted_symlinks(
+        in_image, resolved_store_pdk, escape):
+    root, target, outside = resolved_store_pdk
+    if escape == 'etc_directory':
+        (root / 'system').symlink_to('/etc', target_is_directory=True)
+        path = root / 'system/passwd'
+    elif escape == 'nested_foreign':
+        path = root / 'libs.ref/scl/lef/planted.lef'
+        path.symlink_to(outside)
+    else:
+        path = root / 'planted.lef'
+        path.symlink_to('/etc/passwd' if escape == 'etc_file' else outside)
+    assert path.is_file(), 'escape must exist, not pass because absent'
+    assert _p3()._registry_path_under_root(str(root) + '/', str(path)) is False
+    assert _p3()._registry_glob_one(_NO_SUCH_CONTAINER, str(root), str(path.relative_to(root))) is None
+
+
+def test_lexical_dotdot_is_refused_even_when_it_normalizes_inside_root(in_image, tmp_path):
+    root = _fake_pdk(tmp_path)
+    (root / 'subdirectory').mkdir()
+    path = str(root) + '/subdirectory/../libs.ref/scl/lib/scl__tt_025C_1v80.lib'
+    assert Path(path).is_file()
+    assert _p3()._registry_path_under_root(str(root) + '/', path) is False
+
+
+def test_real_installed_ihp_tech_lef_resolves_without_alias(in_image):
+    import os
+    from _hostpaths import require_repo
+    registry = json.loads(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
+                                      'programs', 'pdk_registry.json').read_text())
+    entry = next(row for row in registry['pdks'] if row['name'] == 'ihp-sg13g2')
+    root = Path(os.environ['PDK_ROOT']) / entry['name']
+    path = root / entry['tech_lef_glob']
+    assert path.is_file() and (root / 'libs.ref').is_symlink()
+    assert _p3()._registry_path_under_root(str(root) + '/', str(path)) is True
+    assert _p3()._registry_glob_one(_NO_SUCH_CONTAINER, str(root), entry['tech_lef_glob']) == str(path)
