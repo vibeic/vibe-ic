@@ -59149,6 +59149,20 @@ def _upstream_signoff_not_measured(name: str, why: str) -> StepResult:
 def _layout_basis(project: Path, top: str, pdk: PdkConfig,
                   container: str) -> Tuple[str, str]:
     """Content identity of the routed basis, with the shipped GDS when frozen."""
+    import _prestream_native as native
+    state_path = native.final_state(project)
+    if state_path is not None:
+        # Ruling #62: the final State supplies the design formats directly.
+        state = native.load(state_path)
+        paths = [native.path(project, state[k]) for k in ('odb', 'def', 'nl', 'sdc')
+                 if isinstance(state.get(k), str)]
+        if not paths or any(not p.is_file() for p in paths):
+            return "", "final State design-format input absent"
+        try:
+            parts = {str(p): _sha256_file(p) for p in paths}
+        except OSError as exc:
+            return "", f"final State input unreadable: {exc}"
+        return hashlib.sha256(json.dumps(parts, sort_keys=True).encode()).hexdigest(), ""
     import _step_identity as _si
     pnr = _pl.pnr_dir(project)
     try:
@@ -59175,6 +59189,13 @@ def _layout_basis(project: Path, top: str, pdk: PdkConfig,
 
 
 def _layout_basis_paths(project: Path, top: str) -> list[Path]:
+    import _prestream_native as native
+    state_path = native.final_state(project)
+    if state_path is not None:
+        # Ruling #62: downstream readers use the same final State formats.
+        state = native.load(state_path)
+        return [native.path(project, state[k]) for k in ('odb', 'def', 'nl', 'sdc')
+                if isinstance(state.get(k), str)]
     pnr = _pl.pnr_dir(project)
     return [pnr / "routed.def", pnr_input_netlist(project, top)[0],
             pnr / "constraint.sdc"]
@@ -59529,11 +59550,143 @@ def _prestream_status(rows: List[StepResult]) -> Tuple[str, list, list, list]:
     return verdict, failed, unmeasured, waived
 
 
+def _step_prestream_final_state(project: Path, state_path: Path, top: str,
+                                pdk: PdkConfig, container: str) -> StepResult:
+    """BLOCKING final-State gate; native violations FAIL, absence NOT_MEASURED."""
+    import _prestream_native as native
+    t0 = time.time()
+    rows = []
+    # Ruling #62 removes the historical placed.def, stage probes, publisher
+    # and signed-authority requirements from this final-State path.
+    for name, reader in (("placement_legality", native.placement),
+                         ("route_completion", native.route),
+                         ("drv_signoff", native.drv)):
+        doc = reader(project, state_path)
+        if name == 'route_completion':
+            routed = native.path(project, str(native.load(state_path).get('def', '')))
+            signal_routed, signal_nets = _def_signal_routing_stats(routed)
+            if signal_nets and not signal_routed:
+                doc['verdict'] = 'FAIL'
+                doc['failures'].append(f'{signal_nets} signal nets but no signal wiring')
+        rows.append(StepResult(name, doc['verdict'], 0.0,
+                    "; ".join(doc['failures'] + doc['not_measured']) or
+                    f"native final-State {name} clean", [str(state_path)],
+                    reason_class=_V.ReasonClass.INPUT_ABSENT if doc["verdict"] == "NOT_MEASURED" else ""))
+    for spec in _PRESTREAM_GATES:
+        name = spec[0]
+        if name in ('placement_legality', 'drv_signoff', 'si'):
+            continue
+        if name in ('hold_corner', 'sta_corner', 'sta_record'):
+            doc = native.sta(project, state_path, name)
+            status = doc['verdict']
+            if status not in ('PASS', 'FAIL'):
+                status = 'NOT_MEASURED'
+            rows.append(StepResult(name, status, 0.0, json.dumps(doc),
+                        reason_class=_V.ReasonClass.INPUT_ABSENT if status == 'NOT_MEASURED' else ''))
+            continue
+        if name == 'sta_signoff':
+            # Same audit and thresholds, with native corner reports selected
+            # from State instead of the publisher/receipt wrapper (#62).
+            folder = state_path.parent
+            reports = sorted(folder.glob('*/vibeic_signoff.rpt'))
+            if not reports:
+                rows.append(_upstream_signoff_not_measured(name, 'native STA reports absent'))
+            else:
+                args = ('--mode', 'sta', '--under', str(folder))
+                for report in reports:
+                    args += ('--subject', str(report))
+                rows.append(_run_declared_signoff_gate(
+                    project, name, 'eda_report_audit.py', spec[2], args))
+            continue
+        if name == 'si_mcf' and not (project / 'reports/phase3/si_mcf_sta.json').is_file():
+            rows.append(_upstream_signoff_not_measured(name, 'native SI-aware STA absent'))
+        else:
+            rows.append(_run_declared_signoff_gate(project, *spec))
+    # Consume the native SI-aware result; the shared checker above owns fold
+    # validation and ruling #61's monotonicity rule. Keep its existing 0 ns limit.
+    si = native.load(project / 'reports/phase3/si_mcf_sta.json')
+    values = [(si.get('corners', {}).get(c) or {}).get('worst_slack_after_ns')
+              for c in ('setup', 'hold')]
+    import math
+    measured = all(type(v) in (int, float) and math.isfinite(v) for v in values)
+    si_status = ('FAIL' if any(type(v) in (int, float) and v < 0 for v in values)
+                 or si.get('verdict') == 'FAIL' else
+                 'PASS' if measured and si.get('verdict') == 'PASS' else 'NOT_MEASURED')
+    rows.append(StepResult('si', si_status, 0.0,
+                          f"native SI-aware setup/hold slack ns={values}",
+                          reason_class=_V.ReasonClass.INPUT_ABSENT if si_status == "NOT_MEASURED" else ""))
+    import dynamic_ir_drop_check
+    dyn_ir = _pl.reports_phase3_dir(project) / 'dynamic_ir.json'
+    dynamic = dynamic_ir_drop_check.check(dyn_ir, None, 10)
+    dynamic_status = dynamic['verdict']
+    if dynamic_status not in ('PASS', 'FAIL') or 'worst_transient_droop_mv' not in dynamic:
+        dynamic_status = 'NOT_MEASURED'
+    rows.append(StepResult('dynamic_ir', dynamic_status, 0.0, json.dumps(dynamic),
+                          reason_class=_V.ReasonClass.INPUT_ABSENT
+                          if dynamic_status == 'NOT_MEASURED' else ''))
+    # The existing netlist-port gate still examines the State's actual netlist.
+    import _netlist_port_decls as ports
+    state = native.load(state_path)
+    netlist = native.path(project, str(state.get('nl', '')))
+    routed = native.path(project, str(state.get('def', '')))
+    if netlist.is_file() and routed.is_file():
+        try:
+            module = _streamout_top(routed, top)[0] or top
+            parsed, problems = ports.problems(netlist.read_text(errors='replace'), module)
+        except (OSError, ValueError) as exc:
+            parsed, problems = 'UNPARSED', [str(exc)]
+        status = 'NOT_MEASURED' if parsed == 'UNPARSED' else 'FAIL' if problems else 'PASS'
+        rows.append(StepResult('netlist_port_decls', status, 0.0,
+                    '; '.join(problems) or 'native final netlist ports checked',
+                    reason_class=_V.ReasonClass.INCONCLUSIVE if status == 'NOT_MEASURED' else ''))
+    else:
+        rows.append(_upstream_signoff_not_measured('netlist_port_decls', 'final netlist/DEF absent'))
+    for row in rows:
+        for output in row.output_files:
+            gate_doc = native.load(Path(output))
+            tier = gate_doc.get('verdict')
+            summary = gate_doc.get('summary') or {}
+            if tier == 'FAIL':
+                row.status = 'FAIL'
+            if tier in ('WAIVED', 'SKIP', 'VACUOUS_PASS', 'NOT_MEASURED',
+                        'NOT_RUN', 'NOT_CHECKED', 'REFUSED', 'NOT_APPLICABLE',
+                        'PASS_WITH_WAIVERS') or summary.get('files_found') == 0:
+                row.status = 'NOT_MEASURED'
+                row.reason_class = _V.ReasonClass.NO_POPULATION.value
+                row.detail += f'; native gate reported {tier} or no native report'
+        if row.status not in ('PASS', 'FAIL'):
+            row.status = 'NOT_MEASURED'
+            row.reason_class = row.reason_class or _V.ReasonClass.INPUT_ABSENT.value
+    digest, error = _layout_basis(project, top, pdk, container)
+    if error:
+        rows.append(_upstream_signoff_not_measured('route_evidence', error))
+    verdict, failed, unmeasured, _ = _prestream_status(rows)
+    out = _pl.reports_phase3_dir(project) / 'prestream_gate.json'
+    out.parent.mkdir(parents=True, exist_ok=True)
+    doc = {'verdict': verdict, 'layout_digest': digest,
+           'basis': 'LibreLane State and native final reports',
+           'gates': [asdict(r) for r in rows],
+           'failed_gates': [r.name for r in failed],
+           'unmeasured_gates': [r.name for r in unmeasured]}
+    _aa.write_json(out, doc)
+    return StepResult('prestream_gate', verdict, time.time() - t0,
+                      f"native final State; failed={doc['failed_gates']}; "
+                      f"unmeasured={doc['unmeasured_gates']}", [str(out)],
+                      extras={'layout_digest': digest,
+                              'failed_gates': doc['failed_gates'],
+                              'unmeasured_gates': doc['unmeasured_gates']},
+                      reason_class=_V.ReasonClass.PARTIAL_POPULATION if verdict == 'NOT_MEASURED' else '')
+
+
 def step_prestream_gate(project: Path, top: str, pdk: PdkConfig,
                         container: str, *, _si_retry: bool = False,
                         _feedback_retry: bool = False) -> StepResult:
     """Measure the current routed revision before allowing any GDS stream."""
     t0 = time.time()
+    import _prestream_native as native
+    state_path = native.final_state(project)
+    if state_path is not None:
+        return _step_prestream_final_state(project, state_path, top, pdk, container)
     # N9 — the netlist this gate freezes names each port once and declares
     # it once. Runs BEFORE the layout digest so the digest is of the netlist
     # that ships; every promotion below re-enters this gate from the top.

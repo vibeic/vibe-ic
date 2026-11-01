@@ -2,9 +2,9 @@
 
 **A deterministic program layer with AI-backup skills, driving spec → RTL → GDS.**
 
-The plugin is no longer "compliance regexes over agent prose". It is **1681 top-level Python
+The plugin is no longer "compliance regexes over agent prose". It is **1682 top-level Python
 programs** (1512 of them catalogued in [`programs/INDEX.md`](programs/INDEX.md); the other
-169 are helper modules and shims) that run the flow, **70 skills** that back the programs up
+170 are helper modules and shims) that run the flow, **70 skills** that back the programs up
 where judgment is genuinely required, **7 slash commands**, **9 agents**, and
 **4826 test files**. Programs decide; skills only fill the holes the programs
 deliberately leave.
@@ -235,12 +235,12 @@ separate **`VIBEIC_OPENROAD_THREADS`** (`mcp-eda/src/lib/pnr_threads.mjs`,
    metadata fields, tool invocations, hand-off lines) as a regex list.
 2. A shared driver `_shared/skill_compliance_check.py` audits any
    agent-produced output against the YAML.
-3. **1681 top-level deterministic programs** verify actual artifacts on disk — not
+3. **1682 top-level deterministic programs** verify actual artifacts on disk — not
    just what the agent wrote in its report.
 
 ## Layout
 
-At 1681 top-level programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
+At 1682 top-level programs, a hand-maintained per-bucket listing is not meaningful — the catalog is
 generated instead. `programs/INDEX.md` is produced by `tools/gen_programs_index.py`, and a
 CI freshness test diffs the regenerated index against the committed one and FAILs on drift.
 
@@ -257,7 +257,7 @@ plugins/vibe-ic/
 │   ├── bootstrap_compliance.py    — regenerates all compliance.yaml
 │   ├── gen_compliance_tests.py    — regenerates all test_compliance.py
 │   └── add_compliance_gate.py     — adds gate section to SKILL.md files
-├── programs/                      — 1681 top-level *.py (1512 catalogued)
+├── programs/                      — 1682 top-level *.py (1512 catalogued)
 │   ├── INDEX.md                   — AUTO-GENERATED catalog; CI-checked for drift
 │   ├── vibe_ic_one_shot_runner.py — THE front door
 │   ├── phase1_one_shot_runner.py  — and phase1_doc_, phase2_, phase23_,
@@ -372,7 +372,7 @@ architecture (v0.40).
 Everything since has come from the same loop, run continuously: drive real ICs and open
 benchmarks through the flow, find where an AI judgment call rescued a run, and absorb
 that judgment back into a deterministic program with a regression test. That is why the
-program count moved from 41 at v0.40 to 1681 top-level programs today — and why
+program count moved from 41 at v0.40 to 1682 top-level programs today — and why
 the honesty gates exist at all. Each one was written after a real run reported a
 pass it could not back.
 

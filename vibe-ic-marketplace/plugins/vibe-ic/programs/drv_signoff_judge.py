@@ -1688,6 +1688,17 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     source = (args.bundle / "reports/phase3/sta/drv_signoff_bundle.json"
               if args.bundle.is_dir() else args.bundle)
+    if args.bundle.is_dir():
+        import _prestream_native as native
+        state_path = native.final_state(args.bundle)
+        if state_path is not None:
+            # Ruling #62: native final corner censuses replace historical
+            # stage probes and signed threshold authority on this path.
+            result = native.drv(args.bundle, state_path)
+            result['name'] = 'DRV(tran/cap/fanout)'
+            write_text(args.json, json.dumps(result, indent=2) + "\n")
+            print(result['verdict'], result['name'])
+            return 0 if result['verdict'] == 'PASS' else 1
     tool_arm = None
     if args.bundle.is_dir():
         # F15 -- STEP 23 ON THE TOOL. When step 23 runs `librelane` or `dual`

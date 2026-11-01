@@ -530,6 +530,24 @@ def inspect(project: Path):
         "density_source": None,
     }
 
+    import _prestream_native as native
+    state_path = native.final_state(project)
+    if state_path is not None:
+        # Ruling #62: final legality comes from the routed State's native
+        # check_placement report, without a historical placed.def alias.
+        doc = native.placement(project, state_path)
+        summary['placed_def'] = native.load(state_path).get('def')
+        summary['placer_legality_verdict'] = doc['verdict']
+        for key in ('declared_components', 'parsed_components', 'unplaced', 'density_pct', 'density_source'):
+            summary[key] = doc[key]
+        summary['placed'] = doc['parsed_components'] - doc['unplaced']
+        summary['check_placement_violations'] = [n for n in doc['violations'] if n]
+        findings = [{'severity': 'FAIL', 'rule': 'NATIVE_FINAL_PLACEMENT',
+                     'message': message} for message in doc['failures']]
+        findings += [{'severity': 'INFO', 'rule': 'NATIVE_LEGALITY_NOT_MEASURED',
+                      'message': message} for message in doc['not_measured']]
+        return doc['verdict'], 0 if doc['verdict'] == 'PASS' else 1, findings, summary
+
     placed_path = project / _PLACED_DEF_REL
 
     # ---- Honest FAIL on missing / empty artefact ------------------------
@@ -899,7 +917,8 @@ def main(argv=None) -> int:
     # genuinely absent (non-production runs). A present-but-failing DEF is
     # NOT waivable here, so substance is always checked when the file exists.
     placed_path = project / _PLACED_DEF_REL
-    if waiver and not placed_path.is_file():
+    import _prestream_native as native
+    if waiver and not placed_path.is_file() and native.final_state(project) is None:
         findings = [{
             "severity": "WAIVED", "rule": "STEP_WAIVED",
             "message": f"waiver={waiver.get('ticket', '?')}: "
