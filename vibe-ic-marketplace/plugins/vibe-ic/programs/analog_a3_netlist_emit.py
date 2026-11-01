@@ -1281,6 +1281,13 @@ def render_netlist(ir: Dict[str, Any], pdkctx: Dict[str, Any],
                     f"({ir['block_type']} class)",
                     f"* topology: {ir['topology']}"]
     L += [f"* {ln}" for ln in prov_lines]
+    if ir.get("loop_declaration"):
+        loop = ir["loop_declaration"]
+        L += [f"* {loop['family']} D={loop['D']} a={loop['a']} b={loop['b']} c={loop['c']}",
+              f"* c0={loop['c0']} k0={loop['k0']}; DAC stages={loop['dac_stages']}",
+              f"* loop verification: {loop['verification']}"]
+    if ir.get("startup_reset"):
+        L.append(f"* startup reset: RC_Schmitt tau_ns={ir['startup_reset']['tau_ns']}")
     L.append("*")
     if not metric:
         L.append(".option scale=1u")

@@ -143,12 +143,15 @@ import analog_transient_record as _record  # noqa: E402
 import analog_incremental_resolution as _res  # noqa: E402
 import analog_incremental_decimator as _dec  # noqa: E402
 import analog_resolution_stimulus as _stim  # noqa: E402
+import analog_ciff as _ciff  # noqa: E402
+import analog_ota1_options as _ota1  # noqa: E402
+from _analog_producer_fingerprint import producer_fingerprint as _source_fingerprint
 
 PRODUCER = "analog_a2_topology_emit"
 
 
 def producer_fingerprint() -> str:
-    """A digest of THIS producer's own source, stamped into every artefact.
+    """A digest of this producer and its output-shaping source dependencies.
 
     MEASURED (round 23): a topology.json emitted by an older build of this
     file is indistinguishable from a current one — `_provenance` names the
@@ -162,12 +165,7 @@ def producer_fingerprint() -> str:
     mtime (which a copy or a checkout resets) and not from a file name (one
     spelling defines a blind population).
     """
-    import hashlib
-    try:
-        return hashlib.sha256(
-            Path(__file__).read_bytes()).hexdigest()[:16]
-    except OSError:                                     # pragma: no cover
-        return ""
+    return _source_fingerprint(Path(__file__))
 PROVENANCE_SCHEMA = 1
 SKILL = "analog-topology-select"
 IR_SCHEMA = 1
@@ -698,6 +696,8 @@ def declared_averaging_env(lib: Dict[str, Any],
     powers of two reaching the bound count) and the bound `order`; `{}` for
     every other entry, or when the rows are not bound — an ABSENT name, so an
     expression that needs it is reported unresolved rather than defaulted."""
+    if lib.get("sc_loop"):
+        return {N_EFF_CONSTANT: lib["sc_loop"]["n_eff"]}
     spec = _counter_spec_of(lib)
     if not spec:
         return {}
@@ -1489,6 +1489,25 @@ LIBRARY: Dict[str, Dict[str, Any]] = {
     #     the SC integrator — which the clock now drives — is what defines
     #     the summing node's DC operating point. See `boundary_notes`.
     "delta_sigma": {
+        "loop_timing": {
+            "0": {"latch_event": "end_of_integration", "strobe_source": "clk",
+                  "comparator_polarity": "swapped", "summer_sample_phase": "nph2",
+                  "summer_reset_phase": "nph2", "summer_return_phase": "nph1",
+                  "dac_sample_phase": "nph1", "dac_transfer_phase": "nph2"},
+            "1": {"latch_event": "legacy_integration_phase", "strobe_source": "nclkb",
+                  "comparator_polarity": "normal", "summer_sample_phase": "nph1",
+                  "summer_reset_phase": "post_latch_nph2", "summer_return_phase": "nph2",
+                  "dac_sample_phase": "nph1", "dac_transfer_phase": "nph2"},
+        },
+        "ota1_template_options": {
+            "cell_selector": "ota1_folded_cascode", "chopper_selector": "ota1_chopper",
+            "default": "two_stage_miller_without_chopper", "geometry": "explicit sizing input only",
+        },
+        "startup_reset_template": {
+            "enable_spec": "startup_reset", "reset_net": "nall",
+            "reset_driver_devices": ["mp_rout", "mn_rout"],
+            "counter_storage_high": ["nm{i}", "ns{i}"],
+        },
         "topology": ("second-order-capable cascade of {stages} "
                      "auto-zeroed switched-capacitor integrator(s) around "
                      "two-stage Miller NMOS-input OTAs, closed by a clocked "
@@ -6922,6 +6941,11 @@ def input_drain_cascode_problems(ir: Dict[str, Any],
         return ["INPUT_DRAIN_CASCODE_INVALID: " + str(exc)]
 
 
+def ciff_library(lib, spec_values):
+    return _ciff.specialize(lib, spec_values, expand_stages, cap_l_expr,
+                            SAMPLING_CAP_FF_EXPR, _LOAD_OVER_CS_DERIVED_EXPR)
+
+
 def build_ir(block: str, btype: str, entry: Dict[str, Any],
              lib: Dict[str, Any], spec_values: Dict[str, float],
              spec_path: Optional[str], project: Path,
@@ -6947,6 +6971,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     # icadc, F171): `d(vo1) = +0.10781*(vin-vcm) + 0.24553*(ndac[n-1]-vcm)
     # - 0.00005*(ndac[n]-vcm)` — the shipped delaying branch carries
     # `ndac[n-1]`, and nothing on `ndac[n]`.
+    lib = ciff_library(lib, spec_values) if btype == "delta_sigma" else lib
     spec_values = dict(spec_values)
     # The DECLARED values, kept apart from what this emission applies on top
     # of them. Everything this pass derives (knobs, stages, the record) runs
@@ -6999,6 +7024,16 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     # so every pre-existing entry takes the identical path it always did.
     devices, internal_nets, param_exprs, stage_rec = expand_stages(
         lib, spec_values)
+    if lib.get("sc_loop"):
+        stage_rec = lib["sc_loop_stages"]
+    startup_reset = _ciff.add_startup_reset(lib, spec_values, stage_rec,
+        devices, internal_nets, param_exprs, cap_l_expr, SAMPLING_CAP_FF_EXPR)
+    try:
+        ota1_options = _ota1.apply(LIBRARY.get(btype, {}), spec_values,
+            lib.get("sc_loop"), stage_rec, sizing_inputs, devices, internal_nets,
+            param_exprs, non_overlap_phase_devices, cap_l_expr)
+    except ValueError as exc:
+        raise SizingInputsInvalid(str(exc)) from exc
     folded = expand_folded_first_stage(
         lib, spec_values, knobs, devices, internal_nets, sizing_inputs, project)
     cascodes = expand_input_drain_cascodes(
@@ -7025,7 +7060,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     # computed for (q6-a2-cap-osr; see `SAMPLING_CAP_FF_EXPR`). The loop order
     # and coefficient are the cascade's own, so the weights are the ones the
     # decimator uses.
-    if "window_clocks" in constants:
+    if "window_clocks" in constants and not lib.get("sc_loop"):
         _casc = [g for g in ([stage_rec] + list(
             (stage_rec or {}).get("groups") or []) if stage_rec else [])
             if isinstance(g, dict) and g.get("role") == "cascade"]
@@ -7104,6 +7139,19 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     role_maxima = dict(role_maxima or {})
     split_env = rendering_env(measured_params, constants, knobs,
                               declared_spec_values, effective_spec_values)
+    loop_declaration = (_ciff.declaration(lib["sc_loop"], stage_rec)
+        if lib.get("sc_loop") else _ciff.legacy_declaration(
+            stage_rec, devices, param_exprs, split_env, _fb_delay, _safe_eval)
+        if btype == "delta_sigma" else None)
+    coefficient_targets = None
+    if lib.get("sc_loop"):
+        try:
+            coefficient_targets = _ciff.realize_coefficient_capacitors(
+                loop_declaration, devices, param_exprs, split_env, _safe_eval,
+                {name for name, row in sizing_inputs.get("device_parameters", {}).items()
+                 if "w" in row}, _minima.min_length_um(role_minima, CAP_ROLE))
+        except ValueError as exc:
+            raise SizingInputsInvalid(str(exc)) from exc
     devices, param_exprs, splits, split_refusals = split_oversize_capacitors(
         devices, param_exprs, split_env, role_maxima, role_minima,
         dict(measured_params or {}))
@@ -7115,6 +7163,13 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     # sizing that produced it.
     if split_refusals:
         raise CapacitorNotRealisable(split_refusals)
+    if coefficient_targets is not None:
+        try:
+            _ciff.validate_coefficient_capacitors(
+                loop_declaration, coefficient_targets, devices, param_exprs,
+                split_env, _safe_eval)
+        except ValueError as exc:
+            raise SizingInputsInvalid(str(exc)) from exc
 
     ir: Dict[str, Any] = {
         "ir_schema": IR_SCHEMA,
@@ -7309,6 +7364,15 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                 "sizing solution and does not re-solve the block."),
         },
     }
+    if lib.get("sc_loop"):
+        if lib["sc_loop"]["family"] == "CIFF":
+            ir["ciff"] = lib["sc_loop"]
+    if loop_declaration:
+        ir["loop_declaration"] = loop_declaration
+    if startup_reset:
+        ir["startup_reset"] = startup_reset
+    if ota1_options:
+        ir["ota1_options"] = ota1_options
     if cascodes:
         ir["input_drain_cascodes"] = cascodes
     if matched_length:
@@ -7337,7 +7401,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     if _renames:
         for _key in ("ports", "rails", "internal_nets", "devices",
                      "constants", "device_param_exprs", "measurements",
-                     "testbench", "stimulus", "input_drain_cascodes", "folded_first_stage", "miller_nulling"):
+                     "testbench", "stimulus", "input_drain_cascodes", "folded_first_stage", "miller_nulling",
+                     "loop_declaration", "startup_reset", "ota1_options"):
             if _key in ir:
                 ir[_key] = _rename_nets(ir[_key], _renames)
     ir["port_binding"] = {
@@ -7803,6 +7868,12 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
         return _gap("NO_TOPOLOGY_IN_LIBRARY")
 
     spec_values, spec_path = bound_spec_values(project, name)
+    if btype == "delta_sigma":
+        try:
+            lib = ciff_library(lib, spec_values)
+        except (ValueError, KeyError, ImportError) as exc:
+            return _gap("CIFF_SPEC_INVALID", [{"requirement": "CIFF NTF and coefficient specification",
+                                               "detail": str(exc)}])
     fam, params = pdk_device_params(pdk)
     # The SAME selector resolves all THREE records through the one shared
     # matcher, so a family whose Vth is quoted can never be a family whose

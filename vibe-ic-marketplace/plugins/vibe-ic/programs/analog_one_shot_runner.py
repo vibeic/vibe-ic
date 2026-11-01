@@ -895,12 +895,8 @@ _PRODUCER_STAMP: Dict[str, tuple] = {
 
 def _live_producer_fingerprint(program: str) -> str:
     """The digest the producer would stamp right now."""
-    import hashlib
-    p = PROGRAMS_DIR / program
-    try:
-        return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
-    except OSError:
-        return ""
+    from _analog_producer_fingerprint import producer_fingerprint
+    return producer_fingerprint(PROGRAMS_DIR / program)
 
 
 def _artefact_producer_fingerprint(project: Path, block: str,
