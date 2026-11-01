@@ -52573,6 +52573,179 @@ def _admit_qualified_output_input(project: Path, content: dict) -> dict:
     return result
 
 
+def _emit_declared_document_instances(l9: dict, extracted: dict, l1: dict,
+                                      evidence_out: Optional[dict] = None) -> None:
+    """Project explicit typed instances and two-terminal passive declarations.
+
+    Instances are distinct from module definitions in ``submodules``. Bindings
+    use the existing internal_wires shape and only resolve declared net names.
+    Generic passive terminals and derived instance identities are disclosed;
+    no PDK device or physical terminal mapping is selected here.
+    """
+    aliases: Dict[str, set] = {}
+    for port in l9.get("top_ports", []):
+        if isinstance(port, dict) and port.get("name"):
+            aliases.setdefault(str(port["name"]), set()).add(str(port["name"]))
+    for wire in l9.get("internal_wires", []):
+        if isinstance(wire, dict) and wire.get("name"):
+            aliases.setdefault(str(wire["name"]), set()).add(str(wire["name"]))
+    for pin in (l1 or {}).get("pin_table", []):
+        if not isinstance(pin, dict):
+            continue
+        target = pin.get("rtl_name") or pin.get("name")
+        if target not in aliases:
+            continue
+        for name in (pin.get("name"), pin.get("board_name"), *(pin.get("aliases") or [])):
+            if isinstance(name, str) and name:
+                aliases.setdefault(name, set()).add(str(target))
+    identifier = r"[A-Za-z_][A-Za-z0-9_]*"
+    heading = re.compile(
+        rf"^\s*#{{1,6}}\s+Instance\s+`?({identifier})`?\s*"
+        rf"(?:\(\s*`?({identifier})`?\s*\)|:\s*`?({identifier})`?)\s*$", re.I)
+    capacity = re.compile(r"(?P<value>\d+(?:\.\d+)?)\s*(?P<unit>fF|pF|nF|uF|µF|μF|mF|F)\b")
+    passive = re.compile(r"\b(?:(MIM|MOM|MOS)\s+)?(?:decap(?:acitor)?s?|capacitors?)\b", re.I)
+    between = re.compile(
+        rf"\bbetween\s+(?:the\s+)?(?:core[-\s]+side\s+)?`?({identifier})`?\s*"
+        rf"(?:\(\s*or\s+`?({identifier})`?\s*\))?\s*(?:nets?\s+)?and\s+`?({identifier})`?\b", re.I)
+    number = r"\d{1,3}|" + "|".join(_V1_6_402_NUMBER_WORDS)
+    count_pattern = re.compile(rf"\b({number})\s+instances?\b", re.I)
+    instances = l9.get("instances") or []
+    existing = {row["name"]: row for row in instances if isinstance(row, dict) and row.get("name")}
+    refusals = []
+
+    def capacitance(match):
+        unit = match.group("unit").replace("µ", "u").replace("μ", "u").lower()
+        return float(match.group("value")) * {"ff": .001, "pf": 1, "nf": 1000,
+                                              "uf": 1e6, "mf": 1e9, "f": 1e12}[unit]
+
+    def emit(name, block_type, ports, parameters, evidence, derived=False):
+        resolved = []
+        for port in ports:
+            net = port.get("net", "")
+            targets = aliases.get(net, set())
+            if len(targets) != 1 or not port.get("name") or not (port.get("type") or port.get("direction")):
+                refusals.append({"name": name, "reason": "L9_DECLARED_INSTANCE_PORT_UNRESOLVED",
+                                 "port": dict(port), "evidence": evidence})
+                return
+            resolved.append({**port, "declared_net": net, "net": next(iter(targets))})
+        if not resolved or len({p["name"] for p in resolved}) != len(resolved):
+            return
+        row = {"name": name, "block_type": block_type, "ports": resolved,
+               "port_map": {p["name"]: p["net"] for p in resolved},
+               "parameters": parameters, "evidence": evidence,
+               "extraction_strategy": "declared_document_instance_v1"}
+        if derived:
+            row["identity_derivation"] = "component type and declared endpoint nets"
+            row["terminal_naming"] = "generic_two_terminal_passive; PDK terminal mapping not declared"
+        if name in existing:
+            prior = existing[name]
+            if any(prior.get(k) != row.get(k) for k in ("block_type", "ports", "parameters")):
+                raise ValueError(f"L9_DECLARED_INSTANCE_CONFLICT: {name}")
+            return
+        instances.append(row)
+        existing[name] = row
+        if evidence_out is not None:
+            evidence_out.setdefault(evidence["doc"], []).append({
+                "literal": evidence["quote"], "label": "declared typed component instance"})
+        for port in resolved:
+            l9.setdefault("internal_wires", []).append({
+                "parent": "<TOP>", "child_module": block_type, "child_inst": name,
+                "child_port": port["name"], "net": port["net"],
+                "declared_net": port["declared_net"], "evidence_file": evidence["doc"],
+                "evidence": port.get("evidence", evidence),
+                "extraction_strategy": "declared_document_instance_v1"})
+
+    for fname, text in (extracted or {}).items():
+        lines = (text or "").splitlines(keepends=True)
+        source = str(fname) if str(fname).startswith("input/") else f"input/docs/{fname}"
+        active = None
+        roles = {}
+        offset = 0
+
+        def finish():
+            if active:
+                emit(active["name"], active["type"], active["ports"], active["parameters"], active["evidence"])
+
+        for index, raw in enumerate(lines):
+            line = raw.strip()
+            match = heading.match(line)
+            if re.match(r"^#{1,6}\s", line):
+                finish()
+                active, roles = None, {}
+                if match and _issue3234_position_is_current(text, offset):
+                    active = {"name": match.group(1), "type": match.group(2) or match.group(3),
+                              "ports": [], "parameters": {}, "evidence": {
+                                  "doc": source, "line": index + 1, "quote": line}}
+            cap = capacity.search(line)
+            if active:
+                if cap and re.search(r"capacitor|decap", active["type"], re.I):
+                    active["parameters"]["capacitance_pf"] = capacitance(cap)
+                if (index + 1 < len(lines) and _v0_3_2_is_pipe_row(line)
+                        and _v0_3_2_is_sep_row(lines[index + 1])):
+                    roles = {cell.strip(" *`").lower(): i
+                             for i, cell in enumerate(_v0_3_2_split_pipe_cells(line))}
+                elif _v0_3_2_is_pipe_row(line) and not _v0_3_2_is_sep_row(line):
+                    cells = _v0_3_2_split_pipe_cells(line)
+                    if "port" in roles and "net" in roles and len(cells) > max(roles.values()):
+                        values = {key: cells[i].strip(" *`") for key, i in roles.items()}
+                        port = {"name": values["port"], "net": values["net"],
+                                "evidence": {"doc": source, "line": index + 1, "quote": line}}
+                        if values.get("type"):
+                            port["type"] = values["type"]
+                        if values.get("direction"):
+                            port["direction"] = _DIR_ABBR_TO_FULL.get(values["direction"].lower(), "unspecified")
+                        active["ports"].append(port)
+            kind, binding = passive.search(line), between.search(line)
+            if (not active and cap and kind and binding
+                    and _issue3234_position_is_current(text, offset)
+                    and _prose_is_denied(line) is None
+                    and not re.search(r"\b(?:may|might|could|perhaps)\b|\?", line, re.I)):
+                left, alternative, right = binding.groups()
+                each = re.search(r"\bon\s+each\s+of\s+([^:;.]+)", line, re.I)
+                lefts = [left]
+                if each:
+                    stated = [token.strip("`") for token in re.findall(rf"`?{identifier}`?", each.group(1))
+                              if token.lower() not in {"and", "or"}]
+                    lefts = [left] + ([alternative] if alternative else [])
+                    if set(stated) != set(lefts):
+                        refusals.append({"reason": "L9_DECLARED_INSTANCE_EACH_BINDING_UNRESOLVED",
+                                         "evidence": {"doc": source, "line": index + 1, "quote": line}})
+                        offset += len(raw)
+                        continue
+                elif alternative:
+                    offset += len(raw)
+                    continue
+                count_match = count_pattern.search(line)
+                count = None
+                if count_match:
+                    token = count_match.group(1).lower()
+                    count = int(token) if token.isdigit() else _V1_6_402_NUMBER_WORDS[token]
+                if each and count is not None and count != len(lefts):
+                    offset += len(raw)
+                    continue
+                if not each and count is not None:
+                    lefts *= count
+                material = kind.group(1)
+                block_type = ((material.lower() + "_") if material else "") + "capacitor"
+                for copy_index, net in enumerate(lefts):
+                    name = f"{block_type}_{net}_{right}"
+                    if lefts.count(net) > 1:
+                        name += f"_{copy_index + 1}"
+                    emit(name, block_type, [
+                        {"name": "p", "type": "analog", "direction": "inout", "net": net},
+                        {"name": "n", "type": "analog", "direction": "inout", "net": right}],
+                        {"capacitance_pf": capacitance(cap)},
+                        {"doc": source, "line": index + 1, "quote": line}, True)
+            offset += len(raw)
+        finish()
+    if instances:
+        l9["instances"] = instances
+        l9["no_instances_in_input"] = False
+        l9["no_internal_wires_in_input"] = False
+    if refusals:
+        l9["declared_instance_refusals"] = refusals
+
+
 def gen_l9_integration_spec(project: Path,
                             extracted: Dict[str, str],
                             l3: dict) -> LDocResult:
@@ -54285,6 +54458,7 @@ def gen_l9_integration_spec(project: Path,
     # Phase 2 DTOP wiring generation now has the canonical
     # instantiation template. Chip-AGNOSTIC.
     _v1_6_511_emit_instantiation_template(content, extracted)
+    _emit_declared_document_instances(content, extracted, l1_doc or {}, evidence)
     # v1.6.463 — for #328 R2 ORGANIC. Cascade L1.pin_table[].description
     # into L9.top_ports[].description by name match. v1.6.456 closed
     # the L1-side gap (RST grid description-column continuation
