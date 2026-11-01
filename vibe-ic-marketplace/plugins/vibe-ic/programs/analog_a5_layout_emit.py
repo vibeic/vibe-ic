@@ -2485,6 +2485,9 @@ def _shared_capacitor_key(device: dict):
 
 def _access_lanes(devices: Sequence[dict], *, share: bool = False) -> None:
     for d in devices:
+        if share:
+            for group in d["groups"]:
+                group.pop("shared_escape_owner", None)
         for side, base, step in (("right", d["right_lo"], 1),
                                  ("left", d["gap_hi"], -1)):
             groups = sorted((g for g in d["groups"] if g["side"] == side),
@@ -2536,7 +2539,8 @@ def _local_rail_tracks(row: Sequence[dict], bus_x: dict,
 
 def _place_shared_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
                        pin_spec: Optional[dict], width_um: float,
-                       placement_groups: Sequence[Sequence[str]]):
+                       placement_groups: Sequence[Sequence[str]], *,
+                       split_arrays: bool = False, reserve_bus: bool = True):
     pitch, width = geo.pitch(), int(width_um * geo.lam)
     high_pitch = (max(list(geo.wire.values())
                       + [2 * v for v in geo.patch.values()])
@@ -2566,7 +2570,8 @@ def _place_shared_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
     if len(run) > 1:
         arrays.append(run)
     for index, members in enumerate(arrays):
-        join([d["dev"]["name"] for d in members])
+        if not split_arrays:
+            join([d["dev"]["name"] for d in members])
         for d in members:
             d["shared_array"] = index
     for group in placement_groups:
@@ -2617,7 +2622,7 @@ def _place_shared_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
                      if any(g["net"] == net for d in row for g in d["groups"])]
                     for row in rows]
         shared = [net for net in nets if sum(net in ns for ns in row_nets) > 1]
-        need = (len(shared) + 3) * pitch if shared else 0
+        need = (len(shared) + 3) * pitch if shared and reserve_bus else 0
         if need <= margin:
             break
         margin = need
@@ -2659,11 +2664,167 @@ def _place_shared_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
     return rows, row_rails, bus_x, descriptions
 
 
+def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
+                           pin_spec: Optional[dict], width_um: float,
+                           placement_groups: Sequence[Sequence[str]]):
+    columns = {
+        "cmim": [d for d in per_dev if d["dev"].get("class") == "capacitor"],
+        "ota": [d for d in per_dev if d["dev"].get("class") != "capacitor"],
+    }
+    if not all(columns.values()):
+        return _place_shared_rows(per_dev, nets, geo, pin_spec, width_um,
+                                  placement_groups, split_arrays=True)
+    pitch, width = geo.pitch(), int(width_um * geo.lam)
+    high_pitch = (max(list(geo.wire.values())
+                      + [2 * v for v in geo.patch.values()])
+                  + max(list(geo.space.values()) + [geo.default_space]))
+    channel = max(4 * pitch, high_pitch)
+    by_name = {d["dev"]["name"]: d for d in per_dev}
+    parent = {name: name for name in by_name}
+
+    def root(name):
+        while parent[name] != name:
+            name = parent[name]
+        return name
+
+    for group in placement_groups:
+        members = [n for n in group if n in parent]
+        for name in members[1:]:
+            parent[root(name)] = root(members[0])
+    units: Dict[str, List[dict]] = {}
+    for d in per_dev:
+        units.setdefault(root(d["dev"]["name"]), []).append(d)
+
+    def gap(left, right):
+        if (left is not None and right is not None
+                and _shared_capacitor_key(left) is not None
+                and _shared_capacitor_key(left) == _shared_capacitor_key(right)):
+            return channel
+        lp = left["access_pitch"] if left is not None else pitch
+        rp = right["access_pitch"] if right is not None else pitch
+        edge = max(lp, rp)
+        need = ((sum(g["side"] == "right" for g in left["groups"]) * lp
+                 if left is not None else 0)
+                + (sum(g["side"] == "left" for g in right["groups"]) * rp
+                   if right is not None else 0))
+        return max(4 * pitch, 4 * edge, need + 2 * edge)
+
+    minimum = {name: 0 for name in columns}
+    for members in units.values():
+        kinds = {"cmim" if d["dev"].get("class") == "capacitor" else "ota"
+                 for d in members}
+        if len(kinds) != 1:
+            raise Refusal("a matching unit spans the CMIM and OTA placement regions")
+        kind = next(iter(kinds))
+        required = (gap(None, members[0]) + gap(members[-1], None)
+                    + sum(d["bbox"][2] - d["bbox"][0] for d in members)
+                    + sum(gap(a, b) for a, b in zip(members, members[1:])))
+        minimum[kind] = max(minimum[kind], required)
+    margin = 0
+    while True:
+        available = width - margin - channel
+        # Keep indivisible matching units and legal access corridors intact.
+        # An undersized target must still yield the complete routed frame;
+        # its actual extent reports the overflow rather than clipping cells
+        # or stopping before the routing geometry can be measured.
+        available = max(available, sum(minimum.values()))
+        cap_width = max(minimum["cmim"], min(available // 2,
+                                             available - minimum["ota"]))
+        widths = {"cmim": cap_width, "ota": available - cap_width}
+        region_rows = {}
+        for name, devices in columns.items():
+            rows, _, _, _ = _place_shared_rows(
+                devices, nets, geo, None, widths[name] / geo.lam,
+                placement_groups, split_arrays=True, reserve_bus=False)
+            region_rows[name] = rows
+        rows = [row for name in columns for row in region_rows[name]]
+        row_nets = [[net for net in nets
+                     if any(g["net"] == net for d in row for g in d["groups"])]
+                    for row in rows]
+        shared = [net for net in nets if sum(net in ns for ns in row_nets) > 1]
+        need = (len(shared) + 3) * pitch if shared else 0
+        if need <= margin:
+            break
+        margin = need
+    bus_x = {net: (i + 1) * pitch for i, net in enumerate(shared)}
+    offsets = {"cmim": margin, "ota": margin + cap_width + channel}
+    for name, devices in columns.items():
+        for d in devices:
+            d["placement_region"] = name
+            for key in ("box_x", "gap_hi", "right_lo"):
+                d[key] += offsets[name]
+    for row in rows:
+        _access_lanes(row, share=True)
+
+    initial_y = max([0] + [-box[1] - pitch
+                          for spec in (pin_spec or {}).get("ports", {}).values()
+                          for _, box in _pin_stack_boxes(
+                              0, 0, 2, spec["level"], geo,
+                              max(1, spec["cuts"]))[0]])
+    cursors = {name: initial_y for name in columns}
+    rail_half = max(geo.long_half[2], geo.wire[2] // 2)
+    clearance = 2 * rail_half + geo.metal_space("metal2")
+    booked = []
+    row_rails, descriptions = [], []
+    for ri, (row, ns) in enumerate(zip(rows, row_nets)):
+        region = row[0]["placement_region"]
+        tracks = _local_rail_tracks(row, bus_x, geo)
+        intervals = {}
+        for net in ns:
+            xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
+            intervals[net] = (bus_x.get(net, min(xs) - pitch), max(xs) + pitch)
+        y = cursors[region]
+        # The same normal M2 rails cross the CMIM region on the way to
+        # the OTA region. Allocate their tracks jointly; native CMIM
+        # plates remain on their original high planes.
+        while True:
+            after = y
+            for net, (lo, hi) in intervals.items():
+                ty = y + pitch * (tracks[net] + 1)
+                for other, ol, oh, oy in booked:
+                    if net == other and ty == oy:
+                        continue
+                    dx = max(lo - oh, ol - hi, 0)
+                    if dx < clearance and abs(ty - oy) < clearance:
+                        after = max(after, oy + clearance - pitch * (tracks[net] + 1))
+            if after == y:
+                break
+            y = after
+        rails = {net: y + pitch * (tracks[net] + 1) for net in ns}
+        row_rails.append(rails)
+        booked.extend((net, *intervals[net], rails[net]) for net in ns)
+        low, high, spacing = [], [], geo.default_space
+        for d in row:
+            low.append(d["cell"]["delta"][1] + d["bbox"][1])
+            high.append(d["cell"]["delta"][1] + d["bbox"][3])
+            for g in d["groups"]:
+                top = g["level"] + 1 if g["level"] > ROUTE_LEVEL else ROUTE_LEVEL
+                half = max([geo.wire[k] // 2 for k in range(2, top + 1)]
+                           + [geo.long_half[k] for k in range(1, top)])
+                low.append(d["cell"]["delta"][1] + g["escape_y"] - half)
+                high.append(d["cell"]["delta"][1] + g["escape_y"] + half)
+                spacing = max(spacing, *[geo.space.get(k, geo.default_space)
+                                        for k in range(2, top + 1)])
+        base = max(rails.values()) + rail_half + spacing - min(low)
+        for d in row:
+            d["row"], d["box_y"] = ri, base
+        cursors[region] = base + max(high) + spacing + rail_half
+        descriptions.append({"devices": [d["dev"]["name"] for d in row],
+                             "region": region, "base_lambda": base, "nets": ns,
+                             "rail_tracks": len(set(tracks.values())),
+                             "rails_lambda": rails,
+                             "rail_intervals_lambda": intervals,
+                             "column_lambda": [offsets[region],
+                                               offsets[region] + widths[region]]})
+    return rows, row_rails, bus_x, descriptions
+
+
 def build_plan(devs: Sequence[dict], ports: Sequence[str],
                cells: Dict[tuple, dict], facts: PdkFacts, geo: Geo,
                tap_clear: int, pin_spec: Optional[dict] = None,
                max_row_width_um: float = 1000.0,
                shared_capacitor_escapes: bool = False,
+               left_right_regions: bool = False,
                placement_groups: Sequence[Sequence[str]] = ()) -> Plan:
     plan = Plan()
     body_tap_contact = body_tap_contact_layer(facts.layers)
@@ -2886,7 +3047,8 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
         gap_w.append(max(min_gap, 4 * edge_pitch, need + 2 * edge_pitch))
 
     if shared_capacitor_escapes:
-        placement_rows, row_rails, bus_x, plan.placement_rows = _place_shared_rows(
+        placer = _place_left_right_rows if left_right_regions else _place_shared_rows
+        placement_rows, row_rails, bus_x, plan.placement_rows = placer(
             per_dev, nets, geo, pin_spec, max_row_width_um, placement_groups)
         plan.shared_escape_arrays = {}
         for d in per_dev:
@@ -4074,8 +4236,10 @@ def emit_block(project: Path, block: str, stage: Stage, magicrc: str,
     plan = build_plan(devs, ports, cells, facts, geo, tap_clear, pin_spec,
                       max_row_width_um=args.max_row_width_um,
                       shared_capacitor_escapes=args.shared_capacitor_escapes,
+                      left_right_regions=args.left_right_regions,
                       placement_groups=placement_groups)
     report["shared_capacitor_escapes"] = args.shared_capacitor_escapes
+    report["left_right_regions"] = args.left_right_regions
     report["shared_escape_arrays"] = getattr(plan, "shared_escape_arrays", {})
     report["placement_rows"] = plan.placement_rows
     clearance_deviations(plan, geo, devs)
@@ -4407,8 +4571,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("--max-row-width-um", type=float, default=1000.0)
     ap.add_argument("--shared-capacitor-escapes", action="store_true",
                     help="share identical same-net capacitor escapes and allocate local rail tracks")
+    ap.add_argument("--left-right-regions", action="store_true",
+                    help="place CMIM and OTA rows in left/right regions with shared M2 track allocation")
     ap.add_argument("--json")
     args = ap.parse_args(argv)
+    if args.left_right_regions and not args.shared_capacitor_escapes:
+        ap.error("--left-right-regions requires --shared-capacitor-escapes")
     if not math.isfinite(args.max_row_width_um) or args.max_row_width_um <= 0:
         ap.error("--max-row-width-um must be finite and positive")
 
