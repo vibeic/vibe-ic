@@ -1199,3 +1199,118 @@ def test_unselected_supply_views_do_not_block_the_instantiated_input_pad(tmp_pat
     path.write_text(json.dumps(doc))
     bracket, basis = SE._pdk_io_input_transition(project)
     assert bracket is None and 'missing_input_pad' in basis['why']
+
+
+def _native_pad_link_project(tmp_path, monkeypatch):
+    """Neutral immutable-SDK shape; a software fixture, not native qualification."""
+    import hashlib
+    import synth_handoff_netlist_check as handoff
+    project = _core_wrapper_project(tmp_path / 'project')
+    record_path = project / 'reports/phase3/io_pad_chip_top.json'
+    record = json.loads(record_path.read_text())
+    original = Path(record['io_library_liberty'][0])
+    store = tmp_path / 'store';revision = 'a' * 40;pdk = 'neutralPdk'
+    source = store / ('0' * 32 + '-test-pdk-' + pdk + '-' + revision) / pdk
+    suffix = Path('libs.ref/neutral_io/lib/neutral.lib')
+    liberty = source / suffix;liberty.parent.mkdir(parents=True)
+    liberty.write_bytes(original.read_bytes());original.unlink()
+    runtime = tmp_path / 'runtime';runtime.mkdir();(runtime / pdk).symlink_to(source)
+    old = tmp_path / 'old/ciel/neutral/versions' / revision / pdk / suffix
+    record['io_library_liberty'] = [str(old)];record_path.write_text(json.dumps(record))
+    config = project / 'reports/flow109/D03/resolved.json';config.parent.mkdir(parents=True)
+    config.write_text(json.dumps({'PDK': pdk, 'STA_CORNERS': ['nom_tt'],
+                                 'PAD_LIBS': {'*_tt': [str(runtime / pdk / suffix)]}}))
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    row = {'schema': 'vibeic.flow109.technology-qualification.v1', 'step_id': 'D03',
+           'component_status': 'PASS', 'default_row_status': 'PASS', 'completed': True,
+           'metrics': {'tool_deck_corner_binding': {'pdk': {'variant': pdk, 'revision': 'open_pdks:' + revision}}},
+           'inputs': [{'path': str(config), 'sha256': sha(config)},
+                      {'path': str(liberty), 'sha256': sha(liberty)}]}
+    row_path = project / 'reports/flow109/default_rows/D03.json';row_path.parent.mkdir(parents=True)
+    row_path.write_text(json.dumps(row))
+    monkeypatch.setenv('PDK_ROOT', str(runtime));monkeypatch.setattr(handoff, '_NIX_STORE', store)
+    return project, liberty, row_path, config
+
+
+def test_current_native_pad_link_translates_from_bound_runtime_views(tmp_path, monkeypatch):
+    import sdc_environment as SE
+    project, liberty, _row, _config = _native_pad_link_project(tmp_path, monkeypatch)
+    staged = ('set_input_transition -max 25 [all_inputs]\n'
+              'set_input_transition -min 0.01 [all_inputs]\n'
+              'set_load 5 [all_outputs]\n')
+    text, record = SE.staged_sdc_pad_input_drive(project, staged, 'input/external.sdc',
+                                               analysis_top='neutral_core')
+    assert record['verdict'] == 'PAD_TRANSLATED', record.get('reason', record)
+    assert 'set_load 0.04 [get_ports {y}]' in text
+    assert 'set_load 5 [all_outputs]' not in [x for x in text.splitlines() if not x.startswith('#')]
+    basis = record['pad_model_basis']
+    assert basis['views'][0]['sha256'] == __import__('hashlib').sha256(liberty.read_bytes()).hexdigest()
+    assert basis['native_link']['corners'] == ['nom_tt']
+    assert basis['read_view_count'] == 1
+    bracket, drive_basis = SE._pdk_io_input_transition(project)
+    assert bracket['common_min_ns'] == 0.01
+    assert bracket['common_max_ns'] == 25
+    assert drive_basis['native_link'] == basis['native_link']
+
+
+@pytest.mark.parametrize('damage', ['stale_hash', 'foreign_revision', 'missing_view',
+                                    'escaping_symlink', 'missing_selected_arc',
+                                    'missing_core_cap', 'stale_native_config'])
+def test_current_native_pad_link_refuses_bad_model_bindings(tmp_path, monkeypatch, damage):
+    import hashlib
+    import sdc_environment as SE
+    project, liberty, row_path, config = _native_pad_link_project(tmp_path, monkeypatch)
+    row = json.loads(row_path.read_text())
+    if damage == 'stale_hash':
+        liberty.write_text(liberty.read_text() + '\n/* changed native bytes */\n')
+    elif damage == 'foreign_revision':
+        row['metrics']['tool_deck_corner_binding']['pdk']['revision'] = 'open_pdks:' + 'b' * 40
+    elif damage == 'missing_view':
+        liberty.unlink()
+    elif damage == 'escaping_symlink':
+        foreign = tmp_path / 'foreign.lib';foreign.write_bytes(liberty.read_bytes())
+        liberty.unlink();liberty.symlink_to(foreign)
+    elif damage in ('missing_selected_arc', 'missing_core_cap'):
+        text = liberty.read_text()
+        text = text.replace('related_pin : "PAD"', 'related_pin : "WRONG"') if damage == 'missing_selected_arc' else text.replace('capacitance : 0.04;', '')
+        liberty.write_text(text);row['inputs'][1]['sha256'] = hashlib.sha256(liberty.read_bytes()).hexdigest()
+    else:
+        config.write_text(config.read_text() + '\n ')
+    row_path.write_text(json.dumps(row))
+    text, record = SE.staged_sdc_pad_input_drive(project,
+        'set_input_transition -max 25 [all_inputs]\n'
+        'set_input_transition -min 0.01 [all_inputs]\n'
+        'set_load 5 [all_outputs]\n', 'input/external.sdc', analysis_top='neutral_core')
+    assert record['verdict'] == 'NOT_MEASURED', record
+    assert not any(line.startswith('set_load') for line in text.splitlines())
+    assert 'R-0929-CORE-PAD-TRANSLATION REFUSED' in text
+
+
+@pytest.mark.parametrize('time_scale', [1.0, 1000.0])
+def test_current_native_pad_link_uses_existing_io_tier_for_omitted_edges(tmp_path, monkeypatch, time_scale):
+    import sdc_environment as SE
+    project, _liberty, _row, _config = _native_pad_link_project(tmp_path, monkeypatch)
+    text, record = SE.staged_sdc_pad_input_drive(project, 'set_load 5 [all_outputs]\n',
+        'input/external.sdc', analysis_top='neutral_core', time_scale=time_scale)
+    assert record['verdict'] == 'PAD_TRANSLATED', record.get('reason', record)
+    assert record['input_drive_default']['verdict'] == 'PDK_IO_TIER'
+    assert record['input_drive_default']['bracket']['common_min_ns'] == 0.01
+    assert record['input_drive_default']['bracket']['common_max_ns'] == 25
+    assert 'set_load 0.04 [get_ports {y}]' in text
+    assert f'-input_transition_rise {25 * time_scale:g} -input_transition_fall {25 * time_scale:g} -max' in text
+    assert f'-input_transition_rise {0.01 * time_scale:g} -input_transition_fall {0.01 * time_scale:g} -min' in text
+
+
+def test_current_native_pad_link_keeps_unknown_input_edge_unmeasured(tmp_path, monkeypatch):
+    import hashlib
+    import sdc_environment as SE
+    project, liberty, row_path, _config = _native_pad_link_project(tmp_path, monkeypatch)
+    liberty.write_text(liberty.read_text().replace('variable_1 : input_net_transition;',
+                                                  'variable_1 : total_output_net_capacitance;'))
+    row = json.loads(row_path.read_text())
+    row['inputs'][1]['sha256'] = hashlib.sha256(liberty.read_bytes()).hexdigest()
+    row_path.write_text(json.dumps(row))
+    _text, record = SE.staged_sdc_pad_input_drive(project, 'set_load 5 [all_outputs]\n',
+        'input/external.sdc', analysis_top='neutral_core')
+    assert record['verdict'] == 'NOT_MEASURED', record
+    assert 'input_drive_default' not in record
