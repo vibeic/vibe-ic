@@ -168,3 +168,29 @@ def test_real_io_lef_maps_all_signal_and_supply_masters(tmp_path):
             pad["x"] + round(oriented[2] * T.UNITS),
             pad["y"] + round(oriented[3] * T.UNITS),
         ]
+
+
+def test_no_pad_population_is_named_not_applicable(tmp_path):
+    config = T._config(**{T.PR.SIDE_VAR[side]: [] for side in T.PR.SIDES},
+                       SIGNAL_MAP={})
+    root = T._project(tmp_path, config=config,
+                      floorplan=T._floorplan(pins=[], instances=[]))
+    assert T._gen(root) == 0
+    report = T._report(root)
+    assert report["verdict"] == "NOT_APPLICABLE"
+    assert "PAD_RING_NOT_APPLICABLE" in T._rules(root)
+    assert report["pads"] == [] and report["padring_def"] is None
+    assert not T._ring_def(root).exists()
+
+
+@pytest.mark.parametrize("source_pads,source_ports", [(True, False), (False, True)])
+def test_an_incomplete_pad_assignment_is_not_an_empty_design(tmp_path, source_pads, source_ports):
+    config = T._config(**{T.PR.SIDE_VAR[side]: [] for side in T.PR.SIDES},
+                       SIGNAL_MAP={})
+    root = T._project(tmp_path, config=config, floorplan=T._floorplan(
+        pins=T.ALL_SIGNALS if source_ports else [],
+        instances=list(T.PADS.values()) if source_pads else []))
+    assert T._gen(root) == 1
+    assert T._report(root)["verdict"] == "FAIL"
+    assert "PAD_RING_NOT_APPLICABLE" not in T._rules(root)
+    assert not T._ring_def(root).exists()

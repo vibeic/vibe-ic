@@ -105,7 +105,7 @@ MACRO pad_bidir
     DIRECTION INOUT ;
     USE SIGNAL ;
     PORT
-      LAYER fixture_metal ;
+      LAYER met2 ;
       RECT {pad_w * 0.1:.3f} 0 {pad_w * 0.9:.3f} 1 ;
     END
   END fixture_bond

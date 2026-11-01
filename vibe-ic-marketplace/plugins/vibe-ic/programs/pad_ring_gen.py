@@ -1399,6 +1399,21 @@ def main(argv: Optional[List[str]] = None) -> int:
             raw_cfg, adopted_vars = PR.apply_pdk_declarations(raw_cfg, decls)
         else:
             adopted_vars = []
+        if (isinstance(raw_cfg, dict)
+                and all(raw_cfg.get(PR.SIDE_VAR[side]) == [] for side in PR.SIDES)
+                and raw_cfg.get("SIGNAL_MAP") == {} and not die.pins
+                and not any(cell.master in lib.masters
+                            for cell in die.components.values())):
+            reason = ("PAD_RING_NOT_APPLICABLE: no assigned pads, source IO "
+                      "instances or BTerms; no pad ring or terminal placement applies")
+            rep = _report(
+                "NOT_APPLICABLE", reason, inputs=inputs, die=die_rec,
+                io_cell_library=lib.as_dict(), pdk_declarations=decls.as_dict(),
+                config=raw_cfg,
+                findings=[_finding("INFO", "PAD_RING_NOT_APPLICABLE", reason)])
+            _write(project, args.json, rep)
+            print(f"=== {PROGRAM} ({project.name}) ===\n  verdict: NOT_APPLICABLE\n  {reason}")
+            return 0
         cfg = PR.validate_assignment(raw_cfg)
     except PR.AssignmentError as exc:
         return _fail(exc.rule, f"{PR.ASSIGNMENT_REL}: {exc.message}",
