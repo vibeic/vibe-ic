@@ -147,3 +147,21 @@ def test_input_condition_does_not_invent_an_output_target(tmp_path):
     gap = json.loads((tmp_path / rec["gap_path"]).read_text())
     assert gap["input_conditions"] == pin_rows(l1)
     assert not (tmp_path / "phase3/analog/pll/spec.json").exists()
+
+
+@pytest.mark.parametrize("replacement", ["This supersedes the earlier declaration.", "This replaces the previous condition."])
+def test_affirmative_replacement_keeps_shared_polarity_vocabulary(tmp_path, replacement):
+    old = "The sense_a pin is driven by an external reference, 2.0 V +/- 5%."
+    new = "The sense_a pin is driven by an external reference, 2.0 V +/- 1%. " + replacement
+    l1, l5 = generate(tmp_path, old + "\n" + new)
+    rows = pin_rows(l1)
+    assert [r["min_typ_max"] for r in rows] == [{"typ": 2.0, "min": 1.98, "max": 2.02}]
+    assert rows[0]["replaced_declarations"][0]["evidence"]["quote"] == old
+    assert replacement in rows[0]["replacement_evidence"]["quote"]
+    assert block_rows(l5) == rows
+
+
+@pytest.mark.parametrize("heading", ["Proposal", "Draft interface", "Tentative conditions"])
+def test_uncertain_parent_heading_never_lends_current_authority(tmp_path, heading):
+    l1, l5 = generate(tmp_path, "# " + heading + "\n## Electrical details\nThe sense_a pin is driven by an external reference, 2.0 V +/- 2%.")
+    assert pin_rows(l1) == block_rows(l5) == []

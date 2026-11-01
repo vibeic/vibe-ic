@@ -37471,7 +37471,8 @@ def gen_l5_adi_spec(project: Path,
         and _v1_6_613_input_has_digital_serial_readout(extracted))
     _emit_block_device_class_constraints(blocks, extracted)
     from _pin_interface_conditions import project_block_conditions
-    project_block_conditions(blocks, extracted, _issue3234_position_is_current)
+    project_block_conditions(blocks, extracted, _issue3234_position_is_current,
+                             _v1_6_350_parse_spice_metadata, _RE_BLOCK_SPEC_HEADING)
     content = {
         "schema_version": 2,
         "doc_class": "adi_spec",

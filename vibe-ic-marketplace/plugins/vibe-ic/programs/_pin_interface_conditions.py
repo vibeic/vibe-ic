@@ -10,7 +10,7 @@ from decimal import Decimal
 import math
 import re
 
-from _prose_polarity import is_denied
+from _prose_polarity import is_denied, sentence_scope
 
 _NUM = r"[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?"
 _UNIT = r"(?:[munpµμkMG]?V|[munpµμkM]?A|[kMG]?Hz|[munpµμ]?s|[munpµμ]?F|Ohm|Ω|°C)"
@@ -19,7 +19,7 @@ _PIN = re.compile(
     r"|pin\s+`?(?P<after>[A-Za-z_]\w*)\b`?)"
     r"(?=\s+(?:is\b|(?:interface|input|operating)\s+condition\b))", re.I)
 _VALUE = re.compile(rf"(?P<value>{_NUM})\s*(?P<unit>{_UNIT})(?![A-Za-z])")
-_UNCERTAIN = re.compile(r"\b(?:if|perhaps|possibly|might|may|could|should|would|hypothetical|histor\w*|legacy|example|previously|formerly|proposed)\b", re.I)
+_UNCERTAIN = re.compile(r"\b(?:if|perhaps|possibly|might|may|could|should|would|hypothetical|histor\w*|legacy|example|previously|formerly|propos(?:ed|als?)|draft|tentative)\b", re.I)
 _HISTORY = re.compile(r"\b(?:history|histor\w*|legacy|example|hypothetical|alternatives?|options?)\b", re.I)
 _REPLACE = re.compile(r"\b(?:replaces?|supersedes?)\s+(?P<what>[^.!?]+)", re.I)
 
@@ -31,6 +31,34 @@ def _cite(fname, number, line):
 
 def _signature(row):
     return row["unit"], row["min_typ_max"], row["role"].lower()
+
+
+def _pin_records(declaration):
+    """Bound each quantity to its own pin, and each replacement to its clause."""
+    sentences = re.split(r"(?<=[.!?])\s+(?=[A-Z])", declaration)
+    pin_count = sum(len(list(_PIN.finditer(sentence))) for sentence in sentences)
+    for index, sentence in enumerate(sentences):
+        matches = list(_PIN.finditer(sentence))
+        for position, match in enumerate(matches):
+            end = matches[position + 1].start() if position + 1 < len(matches) else len(sentence)
+            breaks = list(re.finditer(r";\s*", sentence[:match.start()]))
+            start = breaks[-1].end() if breaks else 0
+            clause = sentence[start:end]
+            replacement = None
+            # An unqualified "this replaces" cannot choose among multiple pins.
+            if pin_count == 1:
+                for following in sentences[index + 1:]:
+                    for candidate in _REPLACE.finditer(following):
+                        lo, hi = sentence_scope(following, candidate.start(), candidate.end(),
+                                                before=len(following), after=len(following),
+                                                extra_breaks=("; ",))
+                        scope = following[lo:hi].strip()
+                        polarity = re.sub(r"\b(?:replaces?|supersedes?)\b", "", scope, count=1, flags=re.I)
+                        if not is_denied(polarity) and not _UNCERTAIN.search(scope):
+                            replacement = {"what": candidate["what"], "quote": scope}
+            label = re.search(r"#\w+", sentence[start:match.start()])
+            yield (clause, match["before"] or match["after"], sentence[match.end():end],
+                   replacement, label[0] if label else None)
 
 
 def declared_pin_conditions(extracted, is_current=None):
@@ -51,7 +79,7 @@ def declared_pin_conditions(extracted, is_current=None):
                 level = len(heading[1])
                 headings = [(n, t) for n, t in headings if n < level]
                 headings.append((level, heading[2]))
-            current = not any(_HISTORY.search(t) for _, t in headings)
+            current = not any(_HISTORY.search(t) or _UNCERTAIN.search(t) or is_denied(t) for _, t in headings)
             if is_current is not None:
                 current = current and is_current(text, offset)
             offset += len(line) + 1
@@ -59,64 +87,59 @@ def declared_pin_conditions(extracted, is_current=None):
                 continue
             # Split sentences without splitting decimals or numbered bullets.
             declaration = re.sub(r"^\s*(?:\d+[.)]|[-*])\s+", "", line)
-            clause = re.split(r"(?<=[.!?])\s+(?=[A-Z])", declaration, maxsplit=1)[0]
-            match = _PIN.search(clause)
-            if not match or is_denied(clause) or _UNCERTAIN.search(clause):
-                continue
-            pin = match["before"] or match["after"]
-            tail = clause[match.end():]
-            role = re.search(r"\s+is\s+(?:externally\s+)?driven\s+by\s+(?P<role>[^,;]+)[,;]\s*", tail, re.I)
-            if role:
-                quantity = tail[role.end():]
-                role_text = role["role"].strip()
-            else:
-                role = re.match(r"\s*(?:interface|input|operating)\s+condition\s*:\s*", tail, re.I)
-                if not role:
+            for clause, pin, tail, replacement, label in _pin_records(declaration):
+                if is_denied(clause) or _UNCERTAIN.search(clause):
                     continue
-                quantity = tail[role.end():]
-                role_text = "declared interface condition"
-            value = _VALUE.search(quantity)
-            if not value:
-                continue
-            unit = value["unit"]
-            minimum = re.search(rf"\bmin(?:imum)?\s*[:=]?\s*({_NUM})\s*{re.escape(unit)}", quantity, re.I)
-            maximum = re.search(rf"\bmax(?:imum)?\s*[:=]?\s*({_NUM})\s*{re.escape(unit)}", quantity, re.I)
-            interval = re.search(rf"({_NUM})\s*(?:{re.escape(unit)})?\s*(?:to|–|\.\.|-)\s*({_NUM})\s*{re.escape(unit)}", quantity)
-            # A min/max-only declaration has no nominal. Do not turn either
-            # endpoint into one just because it is the first unit-bearing token.
-            endpoint = any(m and m.start() <= value.start() < m.end()
-                           for m in (minimum, maximum, interval))
-            bounds = {} if endpoint else {"typ": float(value["value"])}
-            row = {"pin": pin, "name": pin, "kind": "input_condition", "role": role_text,
-                   "unit": unit, "min_typ_max": bounds, "evidence": _cite(fname, number, line)}
-            tolerance = re.search(rf"(?:\+/-|±)\s*({_NUM})\s*(%|{re.escape(unit)})", quantity[value.end():])
-            if tolerance:
-                if "typ" not in bounds:
-                    raise ValueError(f"PIN_INTERFACE_CONDITION_INVALID: {pin}: tolerance needs a nominal")
-                amount = float(tolerance[1])
-                nominal_decimal = Decimal(value["value"])
-                amount_decimal = Decimal(tolerance[1])
-                delta = abs(nominal_decimal) * amount_decimal / 100 if tolerance[2] == "%" else amount_decimal
-                if amount < 0:
-                    raise ValueError(f"PIN_INTERFACE_CONDITION_INVALID: {pin}: negative tolerance")
-                bounds.update(min=float(nominal_decimal - delta), max=float(nominal_decimal + delta))
-                row["tolerance_percent" if tolerance[2] == "%" else "tolerance_absolute"] = amount
-            explicit = ({"min": float(minimum[1]), "max": float(maximum[1])} if minimum and maximum else
-                        {"min": float(interval[1]), "max": float(interval[2])} if interval else {})
-            if explicit and any(k in bounds and bounds[k] != v for k, v in explicit.items()):
-                raise ValueError(f"PIN_INTERFACE_CONDITION_CONFLICT: {pin}: tolerance and range disagree")
-            bounds.update(explicit)
-            if not bounds:
-                continue
-            if not all(math.isfinite(n) for n in bounds.values()):
-                raise ValueError(f"PIN_INTERFACE_CONDITION_INVALID: {pin}: nonfinite value")
-            if ("min" in bounds and "max" in bounds and bounds["min"] > bounds["max"]) or (
-                "typ" in bounds and (("min" in bounds and bounds["min"] > bounds["typ"])
-                                     or ("max" in bounds and bounds["max"] < bounds["typ"]))):
-                raise ValueError(f"PIN_INTERFACE_CONDITION_INVALID: {pin}: inconsistent bounds")
-            replacement = _REPLACE.search(declaration[len(clause):])
-            label = re.search(r"#\w+", clause[:match.start()])
-            candidates.setdefault(pin, []).append((row, replacement, label[0] if label else None))
+                role = re.search(r"\s+is\s+(?:externally\s+)?driven\s+by\s+(?P<role>[^,;]+)[,;]\s*", tail, re.I)
+                if role:
+                    quantity = tail[role.end():]
+                    role_text = role["role"].strip()
+                else:
+                    role = re.match(r"\s*(?:interface|input|operating)\s+condition\s*:\s*", tail, re.I)
+                    if not role:
+                        continue
+                    quantity = tail[role.end():]
+                    role_text = "declared interface condition"
+                value = _VALUE.search(quantity)
+                if not value:
+                    continue
+                unit = value["unit"]
+                minimum = re.search(rf"\bmin(?:imum)?\s*[:=]?\s*({_NUM})\s*{re.escape(unit)}", quantity, re.I)
+                maximum = re.search(rf"\bmax(?:imum)?\s*[:=]?\s*({_NUM})\s*{re.escape(unit)}", quantity, re.I)
+                interval = re.search(rf"({_NUM})\s*(?:{re.escape(unit)})?\s*(?:to|–|\.\.|-)\s*({_NUM})\s*{re.escape(unit)}", quantity)
+                # A min/max-only declaration has no nominal. Do not turn either
+                # endpoint into one just because it is the first unit-bearing token.
+                endpoint = any(m and m.start() <= value.start() < m.end()
+                               for m in (minimum, maximum, interval))
+                bounds = {} if endpoint else {"typ": float(value["value"])}
+                row = {"pin": pin, "name": pin, "kind": "input_condition", "role": role_text,
+                       "unit": unit, "min_typ_max": bounds, "evidence": _cite(fname, number, line)}
+                tolerance = re.search(rf"(?:\+/-|±)\s*({_NUM})\s*(%|{re.escape(unit)})", quantity[value.end():])
+                if tolerance:
+                    if "typ" not in bounds:
+                        raise ValueError(f"PIN_INTERFACE_CONDITION_INVALID: {pin}: tolerance needs a nominal")
+                    amount = float(tolerance[1])
+                    nominal_decimal = Decimal(value["value"])
+                    amount_decimal = Decimal(tolerance[1])
+                    delta = abs(nominal_decimal) * amount_decimal / 100 if tolerance[2] == "%" else amount_decimal
+                    if amount < 0:
+                        raise ValueError(f"PIN_INTERFACE_CONDITION_INVALID: {pin}: negative tolerance")
+                    bounds.update(min=float(nominal_decimal - delta), max=float(nominal_decimal + delta))
+                    row["tolerance_percent" if tolerance[2] == "%" else "tolerance_absolute"] = amount
+                explicit = ({"min": float(minimum[1]), "max": float(maximum[1])} if minimum and maximum else
+                            {"min": float(interval[1]), "max": float(interval[2])} if interval else {})
+                if explicit and any(k in bounds and bounds[k] != v for k, v in explicit.items()):
+                    raise ValueError(f"PIN_INTERFACE_CONDITION_CONFLICT: {pin}: tolerance and range disagree")
+                bounds.update(explicit)
+                if not bounds:
+                    continue
+                if not all(math.isfinite(n) for n in bounds.values()):
+                    raise ValueError(f"PIN_INTERFACE_CONDITION_INVALID: {pin}: nonfinite value")
+                if ("min" in bounds and "max" in bounds and bounds["min"] > bounds["max"]) or (
+                    "typ" in bounds and (("min" in bounds and bounds["min"] > bounds["typ"])
+                                         or ("max" in bounds and bounds["max"] < bounds["typ"]))):
+                    raise ValueError(f"PIN_INTERFACE_CONDITION_INVALID: {pin}: inconsistent bounds")
+                candidates.setdefault(pin, []).append((row, replacement, label))
     resolved = {}
     for pin, declarations in candidates.items():
         active = []
@@ -131,7 +154,7 @@ def declared_pin_conditions(extracted, is_current=None):
                         replaced.append(old)
                         active.remove((old, old_label))
                 row["replaced_declarations"] = deepcopy(replaced)
-                row["replacement_evidence"] = {**row["evidence"], "quote": replacement[0]}
+                row["replacement_evidence"] = {**row["evidence"], "quote": replacement["quote"]}
             active.append((row, label))
         unique = []
         for row, _ in active:
@@ -145,11 +168,8 @@ def declared_pin_conditions(extracted, is_current=None):
     return resolved
 
 
-def declared_block_ports(extracted, block, is_current=None):
-    """Read explicit block-scoped Pin tables or .subckt declarations.
-
-    A mention of a pin in ordinary block prose is deliberately insufficient.
-    """
+def declared_block_ports(extracted, block, is_current, parse_spice_metadata, block_heading_pattern):
+    """Read declared block owners, Pin tables, and the existing SPICE parser."""
     names = {str(block.get(k) or "").lower() for k in ("name", "type")}
     names.discard("")
     ports = set()
@@ -159,30 +179,33 @@ def declared_block_ports(extracted, block, is_current=None):
         scope_level = 0
         offset = 0
         headings = []
+        current_lines = []
         for line in text.splitlines():
-            section = re.match(r"\s*(#{1,6})\s+(.+)", line)
-            if section:
-                level = len(section[1])
+            heading = re.match(r"\s*(#{1,6})\s+(.+)", line)
+            if heading:
+                level = len(heading[1])
                 headings = [(n, t) for n, t in headings if n < level]
-                headings.append((level, section[2]))
+                headings.append((level, heading[2]))
             current = not any(_HISTORY.search(t) or _UNCERTAIN.search(t) or is_denied(t) for _, t in headings)
             current = current and (is_current is None or is_current(text, offset))
             offset += len(line) + 1
+            current_lines.append(line if current else "")
             if not current:
                 scoped = False
                 table = False
                 continue
-            subckt = re.match(r"\s*\.subckt\s+(\w+)\s+([^*]+)", line, re.I)
-            if subckt and subckt[1].lower() in names:
-                ports.update(p for p in subckt[2].split() if "=" not in p)
-            heading = re.match(r"\s*(#{1,6})\s+(.+)", line)
             if heading:
-                level = len(heading[1])
+                title = heading[2]
+                # The named owner precedes the description. A block mentioned
+                # in that description cannot acquire the owner's port table.
+                owner = block_heading_pattern.match(line)
+                port_heading = re.fullmatch(r"`?([A-Za-z_]\w*)`?\s+(?:ports|pins|supplies|interface)", title, re.I)
+                exact = title.strip().strip("`").lower()
+                declared_owner = owner[1].lower() if owner else port_heading[1].lower() if port_heading else exact if exact in names else None
                 if level <= scope_level:
                     scoped = False
-                title = heading[2].replace("`", "")
-                if any(re.search(rf"\b{re.escape(n)}\b", title, re.I) for n in names):
-                    scoped = True
+                if declared_owner is not None:
+                    scoped = declared_owner in names
                     scope_level = level
                 table = False
             if scoped and line.strip().startswith("|"):
@@ -193,6 +216,10 @@ def declared_block_ports(extracted, block, is_current=None):
                     ports.add(cells[0])
             elif line.strip() and not heading:
                 table = False
+        # Reuse the normal extractor, including continuation and alias handling.
+        for subckt in parse_spice_metadata("\n".join(current_lines))["subckts"]:
+            if subckt["name"].lower() in names:
+                ports.update(subckt["ports"])
     return ports
 
 
@@ -203,10 +230,10 @@ def project_pin_conditions(pins, extracted, is_current=None):
             pin.setdefault("electrical_specs", []).append(deepcopy(rows[pin["name"]]))
 
 
-def project_block_conditions(blocks, extracted, is_current=None):
+def project_block_conditions(blocks, extracted, is_current, parse_spice_metadata, block_heading_pattern):
     rows = declared_pin_conditions(extracted, is_current)
     for block in blocks:
-        selected = [deepcopy(row) for pin, row in rows.items() if pin in declared_block_ports(extracted, block, is_current)]
+        selected = [deepcopy(row) for pin, row in rows.items() if pin in declared_block_ports(extracted, block, is_current, parse_spice_metadata, block_heading_pattern)]
         if selected:
             if not isinstance(block.get("spec"), dict):
                 block["spec"] = {}
