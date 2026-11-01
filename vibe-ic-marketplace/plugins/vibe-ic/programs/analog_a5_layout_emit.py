@@ -2792,89 +2792,125 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
         if need <= margin:
             break
         margin = need
-    bus_x = {net: (i + 1) * pitch for i, net in enumerate(shared)}
-    offsets = {"cmim": margin, "ota": margin + cap_width + channel}
-    for name, devices in columns.items():
-        for d in devices:
-            d["placement_region"] = name
-            for key in ("box_x", "gap_hi", "right_lo"):
-                d[key] += offsets[name]
-    for row in rows:
-        _access_lanes(row, share=True)
 
-    initial_y = max([0] + [-box[1] - pitch
-                          for spec in (pin_spec or {}).get("ports", {}).values()
-                          for _, box in _pin_stack_boxes(
-                              0, 0, 2, spec["level"], geo,
-                              max(1, spec["cuts"]))[0]])
-    cursors = {name: initial_y for name in columns}
-    rail_half = max(geo.long_half[2], geo.wire[2] // 2)
-    clearance = 2 * rail_half + geo.metal_space("metal2")
-    booked = []
-    row_rails, descriptions = [], []
-    for ri, (row, ns) in enumerate(zip(rows, row_nets)):
-        region = row[0]["placement_region"]
-        tracks = _local_rail_tracks(row, bus_x, geo)
-        intervals = {}
-        for net in ns:
-            xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
-            intervals[net] = (bus_x.get(net, min(xs) - pitch), max(xs) + pitch)
-        y = cursors[region]
-        # The same normal M2 rails cross the CMIM region on the way to
-        # the OTA region. Allocate their tracks jointly; native CMIM
-        # plates remain on their original high planes.
-        while True:
-            after = y
-            for net, (lo, hi) in intervals.items():
-                ty = y + pitch * (tracks[net] + 1)
-                for other, ol, oh, oy in booked:
-                    if net == other and ty == oy:
-                        continue
-                    dx = max(lo - oh, ol - hi, 0)
-                    if dx < clearance and abs(ty - oy) < clearance:
-                        after = max(after, oy + clearance - pitch * (tracks[net] + 1))
-            if after == y:
-                break
-            y = after
-        rails = {net: y + pitch * (tracks[net] + 1) for net in ns}
-        row_rails.append(rails)
-        booked.extend((net, *intervals[net], rails[net]) for net in ns)
-        low, high, spacing = [], [], geo.default_space
-        for d in row:
-            low.append(d["cell"]["delta"][1] + d["bbox"][1])
-            high.append(d["cell"]["delta"][1] + d["bbox"][3])
-            for g in d["groups"]:
-                top = g["level"] + 1 if g["level"] > ROUTE_LEVEL else ROUTE_LEVEL
-                half = max([geo.wire[k] // 2 for k in range(2, top + 1)]
-                           + [geo.long_half[k] for k in range(1, top)])
-                low.append(d["cell"]["delta"][1] + g["escape_y"] - half)
-                high.append(d["cell"]["delta"][1] + g["escape_y"] + half)
-                spacing = max(spacing, *[geo.space.get(k, geo.default_space)
-                                        for k in range(2, top + 1)])
-        base = max(rails.values()) + rail_half + spacing - min(low)
-        for d in row:
-            d["row"], d["box_y"] = ri, base
-        cursors[region] = base + max(high) + spacing + rail_half
-        descriptions.append({"devices": [d["dev"]["name"] for d in row],
-                             "region": region, "base_lambda": base, "nets": ns,
-                             "rail_tracks": len(set(tracks.values())),
-                             "rails_lambda": rails,
-                             "rail_intervals_lambda": intervals,
-                             "column_lambda": [offsets[region],
-                                               offsets[region] + widths[region]]})
-    bus_x, used_margin = _m4_trunk_tracks(row_rails, geo)
-    shift = used_margin - margin
-    for d in per_dev:
-        for key in ("box_x", "gap_hi", "right_lo"):
-            d[key] += shift
-    for row, description in zip(rows, descriptions):
-        _access_lanes(row, share=True)
-        description["column_lambda"] = [x + shift for x in description["column_lambda"]]
-        for net in description["nets"]:
-            xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
-            description["rail_intervals_lambda"][net] = (
-                bus_x.get(net, min(xs) - pitch), max(xs) + pitch)
-    return rows, row_rails, bus_x, descriptions
+    def place_regions(rows, row_nets, shared, widths, margin):
+        # All shared rails are booked from the bank's leftmost possible anchor.
+        # Their final interval-colored trunk centres only shorten these spans.
+        bus_x = {net: pitch for net in shared}
+        offsets = {"cmim": margin, "ota": margin + widths["cmim"] + channel}
+        for name, devices in columns.items():
+            for d in devices:
+                d["placement_region"] = name
+                for key in ("box_x", "gap_hi", "right_lo"):
+                    d[key] += offsets[name]
+        for row in rows:
+            _access_lanes(row, share=True)
+
+        initial_y = max([0] + [-box[1] - pitch
+                              for spec in (pin_spec or {}).get("ports", {}).values()
+                              for _, box in _pin_stack_boxes(
+                                  0, 0, 2, spec["level"], geo,
+                                  max(1, spec["cuts"]))[0]])
+        cursors = {name: initial_y for name in columns}
+        rail_half = max(geo.long_half[2], geo.wire[2] // 2)
+        clearance = 2 * rail_half + geo.metal_space("metal2")
+        booked = []
+        row_rails, descriptions = [], []
+        for ri, (row, ns) in enumerate(zip(rows, row_nets)):
+            region = row[0]["placement_region"]
+            tracks = _local_rail_tracks(row, bus_x, geo)
+            intervals = {}
+            for net in ns:
+                xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
+                intervals[net] = (bus_x.get(net, min(xs) - pitch), max(xs) + pitch)
+            y = cursors[region]
+            # The same normal M2 rails cross the CMIM region on the way to
+            # the OTA region. Allocate their tracks jointly; native CMIM
+            # plates remain on their original high planes.
+            while True:
+                after = y
+                for net, (lo, hi) in intervals.items():
+                    ty = y + pitch * (tracks[net] + 1)
+                    for other, ol, oh, oy in booked:
+                        if net == other and ty == oy:
+                            continue
+                        dx = max(lo - oh, ol - hi, 0)
+                        if dx < clearance and abs(ty - oy) < clearance:
+                            after = max(after, oy + clearance - pitch * (tracks[net] + 1))
+                if after == y:
+                    break
+                y = after
+            rails = {net: y + pitch * (tracks[net] + 1) for net in ns}
+            row_rails.append(rails)
+            booked.extend((net, *intervals[net], rails[net]) for net in ns)
+            low, high, spacing = [], [], geo.default_space
+            for d in row:
+                low.append(d["cell"]["delta"][1] + d["bbox"][1])
+                high.append(d["cell"]["delta"][1] + d["bbox"][3])
+                for g in d["groups"]:
+                    top = g["level"] + 1 if g["level"] > ROUTE_LEVEL else ROUTE_LEVEL
+                    half = max([geo.wire[k] // 2 for k in range(2, top + 1)]
+                               + [geo.long_half[k] for k in range(1, top)])
+                    low.append(d["cell"]["delta"][1] + g["escape_y"] - half)
+                    high.append(d["cell"]["delta"][1] + g["escape_y"] + half)
+                    spacing = max(spacing, *[geo.space.get(k, geo.default_space)
+                                            for k in range(2, top + 1)])
+            base = max(rails.values()) + rail_half + spacing - min(low)
+            for d in row:
+                d["row"], d["box_y"] = ri, base
+            cursors[region] = base + max(high) + spacing + rail_half
+            descriptions.append({"devices": [d["dev"]["name"] for d in row],
+                                 "region": region, "base_lambda": base, "nets": ns,
+                                 "rail_tracks": len(set(tracks.values())),
+                                 "rails_lambda": rails,
+                                 "rail_intervals_lambda": intervals,
+                                 "column_lambda": [offsets[region],
+                                                   offsets[region] + widths[region]]})
+        bus_x, used_margin = _m4_trunk_tracks(row_rails, geo)
+        shift = used_margin - margin
+        for d in per_dev:
+            for key in ("box_x", "gap_hi", "right_lo"):
+                d[key] += shift
+        for row, description in zip(rows, descriptions):
+            _access_lanes(row, share=True)
+            description["column_lambda"] = [x + shift for x in description["column_lambda"]]
+            for net in description["nets"]:
+                xs = [g["lane_x"] for d in row for g in d["groups"] if g["net"] == net]
+                description["rail_intervals_lambda"][net] = (
+                    bus_x.get(net, min(xs) - pitch), max(xs) + pitch)
+        return rows, row_rails, bus_x, descriptions
+
+    # The seed determines real y-span concurrency, rather than treating every
+    # cross-row net as a simultaneous full-height trunk. Spend that measured
+    # bank budget once on grouping-aware rows; this is not a width search.
+    rows, row_rails, bus_x, descriptions = place_regions(
+        rows, row_nets, shared, widths, margin)
+    margin = min(r["column_lambda"][0] for r in descriptions)
+    demand = {}
+    for name, devices in columns.items():
+        bottom = min(d["box_y"] + d["cell"]["delta"][1] + d["bbox"][1]
+                     for d in devices)
+        top = max(d["box_y"] + d["cell"]["delta"][1] + d["bbox"][3]
+                  for d in devices)
+        demand[name] = widths[name] * (top - bottom)
+    available = max(width - margin - channel, sum(minimum.values()))
+    total = sum(demand.values())
+    cap_width = (available * demand["cmim"] // total
+                 if total else available // 2)
+    cap_width = max(minimum["cmim"], min(cap_width,
+                                         available - minimum["ota"]))
+    widths = {"cmim": cap_width, "ota": available - cap_width}
+    region_rows = {}
+    for name, devices in columns.items():
+        region_rows[name], _, _, _ = _place_shared_rows(
+            devices, nets, geo, None, widths[name] / geo.lam,
+            placement_groups, split_arrays=True, reserve_bus=False)
+    rows = [row for name in columns for row in region_rows[name]]
+    row_nets = [[net for net in nets
+                 if any(g["net"] == net for d in row for g in d["groups"])]
+                for row in rows]
+    shared = [net for net in nets if sum(net in ns for ns in row_nets) > 1]
+    return place_regions(rows, row_nets, shared, widths, margin)
 
 
 def build_plan(devs: Sequence[dict], ports: Sequence[str],
