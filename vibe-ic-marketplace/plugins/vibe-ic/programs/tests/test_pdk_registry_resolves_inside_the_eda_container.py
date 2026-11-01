@@ -711,3 +711,94 @@ def test_split_staged_corners_refuse_ambiguous_group(tmp_path):
         (staged / f'logic_ss_100C_{voltage}.lib').write_text('library (neutral) {}\n')
     with pytest.raises(ValueError, match='PDK_CORNER_GROUP_AMBIGUOUS: SS'):
         _p3()._resolve_signoff_corner_libs(tmp_path, SimpleNamespace(liberty=paths), '')
+
+
+def _joint_corner_fixture(tmp_path):
+    from types import SimpleNamespace
+    installed = tmp_path / 'installed/libs.ref/scl/lib'
+    installed.mkdir(parents=True)
+    primary = []
+    for group in ('logic', 'ties'):
+        path = installed / f'{group}_tt_025C_1v80.lib'
+        path.write_text(f'library (neutral) {{\n nom_voltage : 1.8;\n'
+                        f' cell ({group}_TT) {{}}\n}}\n')
+        primary.append(str(path))
+    return SimpleNamespace(liberty=primary), installed
+
+
+@pytest.mark.parametrize('mismatch', ['voltage', 'temperature', 'header_voltage',
+                                     'header_temperature', 'process', 'exact_decimal',
+                                     'selected_condition', 'unselected_conditions'])
+def test_joint_corner_refuses_incompatible_group_conditions(tmp_path, monkeypatch, mismatch):
+    pdk, installed = _joint_corner_fixture(tmp_path)
+    runner = _p3()
+    monkeypatch.setattr(runner, '_pdk_reference_signoff_corner_stems',
+                        lambda *args: {'ss_100c_1v60', 'tt_025c_1v80'})
+    for group in ('logic', 'ties'):
+        voltage, temperature = '1v60', '100C'
+        content = 'nom_voltage : 1.6;\n nom_temperature : 100;\n nom_process : 1;'
+        if group == 'ties':
+            if mismatch == 'voltage':
+                voltage, content = '1v40', content.replace('1.6;', '1.4;')
+            elif mismatch == 'temperature':
+                temperature, content = '125C', content.replace('100;', '125;')
+            elif mismatch == 'header_voltage':
+                content = content.replace('1.6;', '1.4;')
+            elif mismatch == 'header_temperature':
+                content = content.replace('100;', '125;')
+            elif mismatch == 'process':
+                content = content.replace('nom_process : 1;', 'nom_process : 2;')
+            elif mismatch == 'exact_decimal':
+                content = content.replace('1.6;', '1.6000000000000001;')
+            elif mismatch == 'selected_condition':
+                content += '\n default_operating_conditions : active;\n operating_conditions(active) { voltage : 1.4; temperature : 100; process : 1; }'
+            else:
+                content += '\n operating_conditions(a) { voltage : 1.6; }\n operating_conditions(b) { voltage : 1.4; }'
+        (installed / f'{group}_ss_{temperature}_{voltage}.lib').write_text(
+            f'library (neutral) {{\n {content}\n cell ({group}_SS_{voltage}) {{}}\n}}\n')
+    with pytest.raises(ValueError, match='PDK_CORNER_CONDITION_'):
+        runner._resolve_signoff_corner_libs(tmp_path, pdk, '')
+    assert not list((tmp_path / 'phase3/pdk_stage').glob('*.lib'))
+
+
+@pytest.mark.parametrize('reference_complete', [False, True])
+def test_joint_corner_selects_one_common_condition_before_merging(tmp_path, monkeypatch, reference_complete):
+    pdk, installed = _joint_corner_fixture(tmp_path)
+    runner = _p3()
+    monkeypatch.setattr(runner, '_pdk_reference_signoff_corner_stems',
+                        lambda *args: {'ss_100c_1v60', 'tt_025c_1v80'})
+    for group in ('logic', 'ties'):
+        for voltage, value in (('1v40', '1.4'), ('1v60', '1.6')):
+            if group == 'ties' and voltage == '1v60' and not reference_complete:
+                continue
+            (installed / f'{group}_ss_100C_{voltage}.lib').write_text(
+                f'library (neutral) {{\n nom_voltage : {value};\n nom_temperature : 100;\n'
+                f' nom_process : 1;\n cell ({group}_SS_{voltage}) {{}}\n}}\n')
+    models = runner._resolve_signoff_corner_libs(tmp_path, pdk, '')
+    expected = '1v60' if reference_complete else '1v40'
+    other = '1v40' if reference_complete else '1v60'
+    text = Path(models['SS']).read_text()
+    assert runner._V1_6_596_RE_CELL_DECL.findall(text) == [f'logic_SS_{expected}', f'ties_SS_{expected}']
+    assert all(f'cell ({group}_SS_{expected})' in text for group in ('logic', 'ties'))
+    assert other not in text
+    assert f'nom_voltage : {"1.6" if reference_complete else "1.4"};' in text
+    pdk.liberty = pdk.liberty[0]
+    scalar = runner._resolve_signoff_corner_libs(tmp_path, pdk, '')
+    assert scalar['SS'] == str(installed / 'logic_ss_100C_1v60.lib')
+
+
+@pytest.mark.parametrize('named_default', [False, True])
+def test_joint_corner_accepts_compatible_effective_operating_conditions(tmp_path, named_default):
+    pdk, installed = _joint_corner_fixture(tmp_path)
+    for group in ('logic', 'ties'):
+        default = 'default_operating_conditions : active;' if named_default else ''
+        other = 'operating_conditions(other) { voltage : 1.8; }' if named_default else ''
+        (installed / f'{group}_ss_100C_1v60.lib').write_text(
+            f'library (neutral) {{\n nom_voltage : 1.8;\n {default}\n'
+            ' operating_conditions(active) { process : 1; temperature : 100; voltage : 1.6; }\n'
+            f' {other}\n cell ({group}_SS) {{}}\n}}\n')
+    models = _p3()._resolve_signoff_corner_libs(tmp_path, pdk, '')
+    text = Path(models['SS']).read_text()
+    assert all(f'cell ({group}_SS)' in text for group in ('logic', 'ties'))
+    assert 'operating_conditions(active)' in text
+    assert 'voltage : 1.6;' in text

@@ -70665,13 +70665,60 @@ def _complete_split_corner_models(libs: List[Tuple[str, str]], primary: List[str
     merge alternative operating conditions or accept a partial cell roster.
     Unknown or colliding group identities refuse instead of guessing.
     """
+    from decimal import Decimal
+    import _pad_ring as _PR
+
+    corner_token = re.compile(
+        r"(?i)(?<![a-z0-9])(?:ss|tt|ff|wci|bci|worst|slow|best|fast|"
+        r"typical|typ|nominal)(?![a-z0-9])"
+        r"(?:[_-](?:n?\d+c|\d+v\d+))*")
+
     def group(name):
-        key, count = re.subn(
-            r"(?i)(?<![a-z0-9])(?:ss|tt|ff|wci|bci|worst|slow|best|fast|"
-            r"typical|typ|nominal)(?![a-z0-9])"
-            r"(?:[_-](?:n?\d+c|\d+v\d+))*",
-            "{corner}", name)
+        key, count = corner_token.subn("{corner}", name)
         return key if count == 1 else None
+
+    def condition(name):
+        token = corner_token.search(name).group(0).lower()
+        temperature = re.search(r"[_-](n?\d+)c(?:$|[_-])", token)
+        voltage = re.search(r"[_-](\d+)v(\d+)(?:$|[_-])", token)
+        return (_classify_corner_from_name(name),
+                Decimal(temperature[1].replace("n", "-")) if temperature else None,
+                Decimal(voltage[1] + "." + voltage[2]) if voltage else None)
+
+    def model_condition(name, path):
+        text = _read_pdk_text(path, container)
+        if text is None:
+            raise ValueError(f"PDK_CORNER_CONDITION_UNRESOLVED: {path}")
+        clean = re.sub(r"/\*.*?\*/|//[^\n]*", " ", text, flags=re.S)
+        cell = re.search(r"\bcell\s*\(", clean)
+        header = clean[:cell.start()] if cell else clean
+        metadata = _PR.parse_liberty_model_metadata(header)
+        selected = metadata["selected_condition"]["name"]
+        if metadata["operating_conditions"] and selected is None:
+            raise ValueError(f"PDK_CORNER_CONDITION_UNRESOLVED: {path}: operating_conditions")
+        body = ""
+        if selected is not None:
+            hit = next(hit for hit in _PR._LIB_MODEL_OC_RE.finditer(header)
+                       if hit.group(1).strip() == selected)
+            body = _PR._liberty_group_body(header, hit.start())
+
+        def number(source, attribute):
+            values = re.findall(r"\b" + attribute + r"\s*:\s*("
+                                + _PR._LIB_MODEL_NUM_RE + r")\s*;", source, re.I)
+            if len(values) > 1:
+                raise ValueError(f"PDK_CORNER_CONDITION_AMBIGUOUS: {path}: {attribute}")
+            return Decimal(values[0]) if values else None
+
+        values = []
+        for attribute in ("process", "temperature", "voltage"):
+            value = number(body, attribute)
+            values.append(value if value is not None else number(header, "nom_" + attribute))
+        label, temperature, voltage = condition(name)
+        for declared, actual in ((temperature, values[1]), (voltage, values[2])):
+            if declared is not None and actual is not None and declared != actual:
+                raise ValueError(f"PDK_CORNER_CONDITION_MISMATCH: {path}: filename/content")
+        return (label, values[0], values[1] if values[1] is not None else temperature,
+                values[2] if values[2] is not None else voltage)
 
     sources = {}
     for path in primary:
@@ -70681,30 +70728,49 @@ def _complete_split_corner_models(libs: List[Tuple[str, str]], primary: List[str
         if key in sources:
             raise ValueError(f"PDK_CORNER_GROUP_AMBIGUOUS: {sources[key]}, {path}")
         sources[key] = path
-    selections = {}
-    for key, source in sources.items():
-        candidates = [(name, path) for name, path in libs
-                      if group(name) == key]
+    inventories = {}
+    for key in sources:
+        candidates = [(name, path) for name, path in libs if group(name) == key]
         if staged:
             for label in ("SS", "TT", "FF"):
                 matches = [path for name, path in candidates
                            if _classify_corner_from_name(name) == label]
                 if len(matches) > 1:
                     raise ValueError(f"PDK_CORNER_GROUP_AMBIGUOUS: {label}: {matches}")
-        selections[key] = {c["label"]: c["liberty"] for c in
-                           _select_signoff_corners(candidates, container,
-                                                   str(Path(source).parent))}
-    out = {}
-    labels = set().union(*(set(corners) for corners in selections.values()))
+        inventories[key] = candidates
+    # Elect once from the intersection, never fall back independently by group.
+    first = next(iter(sources))
+    planned = {}
     for label in ("SS", "TT", "FF"):
-        if label not in labels:
+        rosters = {key: [(name, path) for name, path in candidates
+                         if _classify_corner_from_name(name) == label]
+                   for key, candidates in inventories.items()}
+        if not any(rosters.values()):
             continue
-        missing = [key for key, corners in selections.items() if label not in corners]
+        missing = [key for key, candidates in rosters.items() if not candidates]
         if missing:
             raise ValueError(f"PDK_CORNER_GROUP_INCOMPLETE: {label}: {missing}")
-        paths = [corners[label] for corners in selections.values()]
-        out[label] = _liberty_model_path(paths, container, project, corner=label)
-    return out
+        common = set.intersection(*(set(condition(name) for name, _ in candidates)
+                                    for candidates in rosters.values()))
+        if not common:
+            raise ValueError(f"PDK_CORNER_CONDITION_UNRESOLVED: {label}: no joint condition")
+        choices = [(name, path) for name, path in rosters[first] if condition(name) in common]
+        selected = _select_signoff_corners(choices, container,
+                                           str(Path(sources[first]).parent))[0]
+        chosen = condition(selected["name"])
+        paths, identities = [], set()
+        for key, candidates in rosters.items():
+            matches = [(name, path) for name, path in candidates if condition(name) == chosen]
+            if len(matches) != 1:
+                raise ValueError(f"PDK_CORNER_GROUP_AMBIGUOUS: {label}: {key}: {matches}")
+            name, path = matches[0]
+            identities.add(model_condition(name, path))
+            paths.append(path)
+        if len(identities) != 1:
+            raise ValueError(f"PDK_CORNER_CONDITION_MISMATCH: {label}: {paths}")
+        planned[label] = paths
+    return {label: _liberty_model_path(paths, container, project, corner=label)
+            for label, paths in planned.items()}
 
 
 def _process_lib_resolution(corner_libs: Dict[str, str],
