@@ -210,13 +210,17 @@ def test_issue3054_reversed_declarations_still_refuse_scoped_step1(tmp_path, mut
     doc = _issue3054_step1(tmp_path)
     rows = {str(row["id"]): row for row in doc["steps"]}
     if mutation == "sta_owner":
+        rows["30"]["required_inputs"][0] = {
+            "from": 23, "path": "reports/phase3/sta_postpnr_signoff.json"}
         rows["23"]["required_outputs"].remove("reports/phase3/sta_postpnr_signoff.json")
     elif mutation == "spef_alternative":
-        rows["30"]["required_inputs"][1]["path"] = "phase3/stage3/extracted/*.spef"
+        rows["30"]["required_inputs"][2] = {
+            "from": 22, "path": "phase3/stage3/extracted/*.spef"}
     elif mutation == "unknown_owner":
         rows["30"]["required_inputs"][0]["from"] = "UNKNOWN_PRODUCER"
     else:
-        rows["30"]["required_inputs"][0]["path"] = "reports/phase3/undeclared.json"
+        rows["30"]["required_inputs"][0] = {
+            "from": 23, "path": "reports/phase3/undeclared.json"}
     flow = tmp_path / "reversed.yaml"
     flow.write_text(yaml.safe_dump(doc, sort_keys=False))
     rc, report = _run(tmp_path, flow, "1")

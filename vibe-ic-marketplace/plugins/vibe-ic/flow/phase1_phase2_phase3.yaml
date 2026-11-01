@@ -7206,13 +7206,17 @@ steps:
     stage: stage3
     execution_stage: 5
     required_inputs:
-      # The current SPICE producer consumes the preceding extracted STA
-      # record and SPEF. Declare them in the same list used by preparation,
-      # preflight, and the direct producer receipt; PDK alone is not the input.
-      - from: 23
-        path: "reports/phase3/sta_postpnr_signoff.json"
-      - from: 22
-        path: "phase3/stage3/extracted/parasitic.spef OR phase3/stage3/extracted/*.spef"
+      # The native run roots exclude retained step input snapshots. The producer
+      # resolves STAPostPNR identity and its selected SPEF from these files.
+      - from: external
+        path: "runs/**/state_out.json OR phase3/librelane/**/state_out.json"
+        what: "native LibreLane STAPostPNR state, including imported runs"
+      - from: external
+        path: "runs/**/config.json OR phase3/librelane/**/config.json"
+        what: "native step identity and resolved configuration"
+      - from: external
+        path: "runs/**/*.spef OR phase3/librelane/**/*.spef OR phase3/stage3/extracted/*.spef"
+        what: "native extracted parasitics selected by the STA state"
       - from: external
         check: none
         what: >-

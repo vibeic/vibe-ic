@@ -167,9 +167,11 @@ def test_a_pdk_that_declares_no_layout_or_rcfile_simulates_the_schematic_and_say
 def test_step_30_records_the_cell_view_it_simulated(tmp_path, monkeypatch):
     project = tmp_path / 'design'
     folder, _ = t106._stapostpnr(project)
-    record = json.loads((project / postroute.STEP23_RECORD).read_text())
-    record['judgment'] = {'worst_setup': {'corner': 'max_ss_125C_4v50'}}
-    put(project / postroute.STEP23_RECORD, record)
+    state = json.loads((folder / 'state_out.json').read_text())
+    state['metrics'].update({f'timing__setup__ws__corner:{corner}':
+                             -1.0 if corner == 'max_ss_125C_4v50' else 1.0
+                             for corner in t106.CORNERS})
+    put(folder / 'state_out.json', state)
     root = tmp_path / 'pdkroot'
     write(root / 'x/libs.ref/cells/lib/cells__ss_125C_4v50.lib', t106.LIBERTY)
     write(root / 'x/libs.ref/cells/spice/cells.spice',
@@ -340,9 +342,11 @@ def test_step_30_writes_the_step_verdict_not_a_selection(tmp_path, monkeypatch):
     """The landed T106 fixture: one ngspice arm, Xyce refused by its model tree."""
     project = tmp_path / 'design'
     folder, _ = t106._stapostpnr(project)
-    record = json.loads((project / postroute.STEP23_RECORD).read_text())
-    record['judgment'] = {'worst_setup': {'corner': 'max_ss_125C_4v50'}}
-    put(project / postroute.STEP23_RECORD, record)
+    state = json.loads((folder / 'state_out.json').read_text())
+    state['metrics'].update({f'timing__setup__ws__corner:{corner}':
+                             -1.0 if corner == 'max_ss_125C_4v50' else 1.0
+                             for corner in t106.CORNERS})
+    put(folder / 'state_out.json', state)
     root = tmp_path / 'pdkroot'
     write(root / 'x/libs.ref/cells/lib/cells__ss_125C_4v50.lib', t106.LIBERTY)
     write(root / 'x/libs.ref/cells/spice/cells.spice',
@@ -422,7 +426,8 @@ def _full_rc_arm(tmp_path, monkeypatch, *, style='ngspice(hrhc)',
             write(Path(cwd) / 'cells__dffq_1.res.ext', f'rnode "{contact}" 0 0 0 0 0\n')
         else:
             assert argv[0] == 'sta'
-        return SimpleNamespace(returncode=0, stdout='SOURCE_FIXTURE_ONLY\n', stderr='')
+        return SimpleNamespace(returncode=0,
+            stdout='VIBEIC_STA_DERATE set_timing_derate -late 1.0\nSOURCE_FIXTURE_ONLY\n', stderr='')
     monkeypatch.setattr(pst, '_docker', tool)
     def run():
         arm = pst.prepare_arm(project, 'img', folder / 'state_out.json',
@@ -679,7 +684,7 @@ def _native_reference_transport(tmp_path, monkeypatch, *, damage='', companion=F
             parsed['path_delay_ns'] = cell_delay + wire
             script = write(directory / 'arm.tcl', 'SOFTWARE_FIXTURE_ONLY main STA\nreport_dcalc\n')
             log = write(directory / 'sta.log', 'SOFTWARE_FIXTURE_ONLY main STA\n')
-            arm = dict(corner='nom_typ', simulator='ngspice', inputs=inputs,
+            arm = dict(corner='nom_typ', simulator='ngspice', inputs=inputs, ocv_late_derate=1.0,
                 spef=str(p / inputs['spef']), spef_sha256=inputs['sha256']['spef'],
                 cells={'path': str(cells)}, models={'path': str(models)},
                 sta_rc=0, sta_execution={'tool': 'OpenSTA', 'rc': 0, 'argv': ['sta', str(script)],

@@ -137,3 +137,28 @@ def test_actual_tcl_trace_reads_resolved_sdc_and_stops_after_read(tmp_path):
     run = subprocess.run(['tclsh', str(target)], capture_output=True, text=True, check=True)
     assert PST.declared_sta_late_derate(run.stdout) == 1.05
     assert '1.2' not in run.stdout
+
+
+@pytest.mark.parametrize('unset_first', [False, True])
+def test_actual_tcl_trace_observes_qualified_sta_commands(tmp_path, unset_first):
+    sdc = tmp_path / 'scene.sdc'
+    commands = ['set_timing_derate -late 1.05']
+    if unset_first:
+        commands.append('sta::unset_timing_derate')
+    commands.append('sta::set_timing_derate -late 1.2')
+    sdc.write_text('\n'.join(commands) + '\n')
+    inputs = {'liberties': [], 'sta_netlist': 'unused.v', 'sdc': str(sdc)}
+    script = PST.arm_tcl(inputs, tmp_path, 'neutral', 'unused.spef', ('lib', 'typ'), [],
+                         tmp_path, 'cells.sp', 'models.sp', 'VDD', 'VSS', 'ngspice')
+    prelude = ('proc unknown {args} {return {}}\n'
+               'namespace eval sta {\n'
+               'proc set_timing_derate {args} {set ::applied [lindex $args end]}\n'
+               'proc unset_timing_derate {} {set ::applied 1.0}\n'
+               'namespace export set_timing_derate unset_timing_derate\n}\n'
+               'namespace import sta::*\n'
+               'proc read_sdc {path} {uplevel #0 [list source $path]}\n')
+    target = tmp_path / 'trace.tcl'
+    target.write_text(prelude + script + 'puts "APPLIED $::applied"\n')
+    run = subprocess.run(['tclsh', str(target)], capture_output=True, text=True, check=True)
+    assert 'APPLIED 1.2' in run.stdout
+    assert PST.declared_sta_late_derate(run.stdout) == 1.2

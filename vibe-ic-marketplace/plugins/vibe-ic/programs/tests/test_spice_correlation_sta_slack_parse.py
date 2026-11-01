@@ -341,7 +341,7 @@ def test_current_corner_accepts_bound_libraries_and_refuses_an_unbound_addition(
     fixture.seal(folder, fp)
     result = _consume_current_binding(p)
     _assert_unmeasured_current_refusal(p, result)
-    assert 'CURRENT_STAPOSTPNR_CORNER_LIBRARY_UNBOUND' in result['reason']
+    assert 'unbound.lib' in result['reason']
     assert len(calls) == 1, 'the unbound addition must stop before a second native invocation'
 
 
@@ -353,17 +353,17 @@ def test_writer_binding_refusals(tmp_path, monkeypatch, case):
     p, folder, lib, calls = _current_binding_fixture(tmp_path, monkeypatch)
     stanza = _CORNER_LIBS
     raw = _native_path()
-    record_path = p / fixture.LP.STEP23_RECORD
-    record = json.loads(record_path.read_text())
+    state_path = folder / 'state_out.json'
+    state = json.loads(state_path.read_text())
+    setup_key = 'timing__setup__ws__corner:slow'
     log = folder / 'slow/sta.log'
-    expected = 'CURRENT_STEP30_CORNER_MISSING'
+    expected = 'LL_STEP30_CORNER_UNDECLARED'
     if case == 'missing-corner':
         raw = _native_path('')
-        record['judgment']['worst_setup'].pop('corner')
+        state['metrics'].pop(setup_key)
     elif case == 'unknown-corner':
         raw = _native_path('unloaded')
-        record['judgment']['worst_setup']['corner'] = 'unloaded'
-        expected = 'LL_CORNER_NOT_ANALYSED'
+        state['metrics'] = {'timing__setup__ws__corner:unloaded': 1.0}
     elif case == 'contradictory-corner':
         raw = raw.replace('Corner: slow', 'Corner: slow\nCorner: quick')
         log.write_text(log.read_text().replace("'slow' corner", "'quick' corner"))
@@ -372,31 +372,29 @@ def test_writer_binding_refusals(tmp_path, monkeypatch, case):
         stanza += '\nread_liberty -corner slow /pdk/other.lib'
         with log.open('a') as f:
             f.write("Reading cell library for the 'slow' corner at '/pdk/neutral/other.lib'\n")
-        expected = 'CURRENT_STAPOSTPNR_CORNER_LIBRARY_UNBOUND'
+        expected = 'other.lib'
     elif case == 'multiple-bare-libraries':
         stanza = 'read_liberty /pdk/one.lib\nread_liberty /pdk/two.lib'
         raw = _native_path('')
-        record['judgment']['worst_setup'].pop('corner')
-        record['judgment']['available_libraries'] = ['one.lib', 'two.lib']
+        state['metrics'].pop(setup_key)
     elif case == 'hold-path':
         raw = _native_path('quick', 'min')
-        record['judgment']['worst_hold'] = record['judgment'].pop('worst_setup')
+        state['metrics'] = {'timing__hold__ws__corner:slow': 1.0}
     elif case == 'unreadable-library':
         lib.unlink()
         expected = 'slow.lib'
     elif case == 'first-unbound-later-valid':
         raw = _native_path('') + '\n' + _native_path('slow')
-        record['judgment']['worst_setup'].pop('corner')
-        record['judgment']['later_setup'] = {'corner': 'slow'}
+        state['metrics']['timing__setup__ws__corner:unloaded'] = -1.0
     elif case == 'missing-path-type':
         raw = raw.replace('Path Type: max\n', '')
-        record['judgment']['untyped_path'] = record['judgment'].pop('worst_setup')
+        state['metrics'].pop(setup_key)
     elif case == 'unknown-read-syntax':
         stanza += '\nsource /pdk/extra-libs.tcl'
         log.write_text('SOURCE_FIXTURE_ONLY\nsource /pdk/neutral/extra-libs.tcl\n')
         expected = 'LL_CORNER_LIBRARY_UNREAD'
     rpt = _emit_bound_report(p, raw, stanza)
-    fixture.put(record_path, record)
+    fixture.put(state_path, state)
     # Re-seal only substituted tool output after constructing this scenario.
     # Original input-library hashes remain unchanged, including the unreadable one.
     fixture.seal(folder, json.loads((folder / 'input_fingerprint.json').read_text()))
@@ -418,18 +416,17 @@ def test_the_in_session_report_is_never_picked_and_the_refusal_says_why(
     rpt = _emit_bound_report(p, _native_path('slow'))
     assert 'STA_PARASITICS_PROVENANCE: PNR_SESSION_UNVERIFIED' in rpt.read_text()
     assert SCC._pick_sta_report(p, {'BUF'}) is None
-    record_path = p / fixture.LP.STEP23_RECORD
-    record = json.loads(record_path.read_text())
-    record_path.unlink()
+    state_path = folder / 'state_out.json'
+    state = json.loads(state_path.read_text())
+    state_path.unlink()
     result = _consume_current_binding(p)
     _assert_unmeasured_current_refusal(p, result)
-    assert 'LL_STAPOSTPNR_STATE_ABSENT' in result['reason'], result
-    assert 'PNR_SESSION_UNVERIFIED' in result['reason'], result
-    assert 'phase3/stage3/pnr/sta.rpt' in result['reason'], result
+    assert 'LL_STATE_FILE_MISSING' in result['reason'], result
+    assert 'state_out.json' in result['reason'], result
     assert calls == [] and rpt.is_file()
     # Restoring the actual current declaration reaches the native boundary.
     # Its unrelated transport refusal must not blame the retained PnR report.
-    fixture.put(record_path, record)
+    fixture.put(state_path, state)
     current = _consume_current_binding(p)
     _assert_unmeasured_current_refusal(p, current)
     assert current['reason'].startswith('SOURCE_FIXTURE_ONLY_NATIVE_TRANSPORT_NOT_RUN:')
