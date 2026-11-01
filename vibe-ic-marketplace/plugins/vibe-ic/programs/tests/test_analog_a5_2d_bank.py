@@ -72,3 +72,21 @@ def test_overpass_can_land_on_m4_beyond_a_blocked_m3_rail_endpoint():
     handled = a._route_m3_leg(plan, 'own', 1000, 1000, 0, g, sites)
     assert handled
     assert any(s['net'] == 'own' and s['layer'] == 'via3' and abs(s['box'][0]-1000) >= 200 for s in plan.shapes)
+
+
+def test_body_exit_plane_keeps_same_net_notches_illegal():
+    import pytest
+    g = geo()
+    native = [{'net': '<device body>', 'layer': 'metal1',
+               'comp': ('body', 0), 'lcomp': ('body', 'metal1', 0),
+               'box': (980, 980, 1020, 1020)}]
+    plan = a.Plan()
+    sites = a.Sites(native, g)
+    plan.sites = sites
+    plan.paint('vss', 'metal3', 800, 935, 848, 967)
+    with pytest.raises(a.Refusal, match='body exit path'):
+        a._via_stack(plan, 'vss', 1000, 1000, 1, g, top=3, sites=sites,
+                     friendly=('body', 0), exit_path=(400, 1000, 15), search_lambda=0)
+    a._via_stack(plan, 'vss', 1000, 1000, 1, g, top=2, sites=sites,
+                 friendly=('body', 0), exit_path=(400, 1000, 15), search_lambda=0)
+    assert not plan.deviations

@@ -2298,7 +2298,7 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                            cx0 + half, max(cy0, ey) + half)
                     escape = (min(cx0, lane) - half, ey - half,
                               max(cx0, lane) + half, ey + half)
-                    if not all(sites.clear(path, ["metal3"], friendly, net)
+                    if not all(sites.clear(path, [f"metal{top}"], friendly, net)
                                for path in (jog, escape)):
                         continue
                 if not sites.touches(box, term_layer, friendly):
@@ -3575,6 +3575,7 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     for d in per_dev:
         for g in d["groups"]:
             net, ey, lane = g["net"], g["abs_escape_y"], g["lane_x"]
+            carry_level = ROUTE_LEVEL
             tap_contact = g.get("body_tap_contact")
             tap_metal_contact = g.get("body_tap_metal_contact")
             tap_local = g.get("body_tap_local")
@@ -3690,13 +3691,24 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                 lx, ly, level = g["abs_labels"][0]
                 fr = friendly_conductor(d["rows"], f"metal{level}", lx, ly,
                                         reach=geo.default_space)
-                cx, cy = _via_stack(plan, net, lx, ly, level, geo,
-                                    top=ROUTE_LEVEL,
-                                    sites=sites, friendly=fr, dev=d["dev"],
-                                    exit_path=(lane, ey, hw3)
-                                    if g.get("body_tap") and any(
-                                        p["strapped"] for p in d["groups"]
-                                        if not p.get("body_tap")) else None)
+                if g.get("body_tap") and rail_level == 4:
+                    for carry_level in (2, ROUTE_LEVEL):
+                        try:
+                            cx, cy = _via_stack(
+                                plan, net, lx, ly, level, geo, top=carry_level,
+                                sites=sites, friendly=fr, dev=d["dev"],
+                                exit_path=(lane, ey, hw2 if carry_level == 2 else hw3))
+                            break
+                        except Refusal:
+                            if carry_level == ROUTE_LEVEL:
+                                raise
+                else:
+                    cx, cy = _via_stack(plan, net, lx, ly, level, geo,
+                                        top=ROUTE_LEVEL, sites=sites, friendly=fr, dev=d["dev"],
+                                        exit_path=(lane, ey, hw3)
+                                        if g.get("body_tap") and any(
+                                            p["strapped"] for p in d["groups"]
+                                            if not p.get("body_tap")) else None)
                 joint = cx
                 if cy != ey:
                     # a metal3 jog back to the escape height. Metal3 is the
@@ -3704,16 +3716,17 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                     # jog is free of the geometry the island had to leave —
                     # and keeping the escape at its own height is what stops
                     # one moved island from re-ordering every lane.
-                    plan.paint(net, "metal3", cx - hw3, min(cy, ey) - hw3,
-                               cx + hw3, max(cy, ey) + hw3)
+                    half = hw2 if carry_level == 2 else hw3
+                    plan.paint(net, f"metal{carry_level}", cx - half, min(cy, ey) - half,
+                               cx + half, max(cy, ey) + half)
             # Collections cross neighbouring M3 stubs on M2, then rise at
             # the already allocated lane. Singles retain their M3 escape.
-            esc_layer, esc_half = (("metal2", hw2) if g["strapped"]
+            esc_layer, esc_half = (("metal2", hw2) if g["strapped"] or carry_level == 2
                                    else ("metal3", hw3))
             plan.paint(net, esc_layer, min(joint, lane) - esc_half,
                        ey - esc_half, max(joint, lane) + esc_half,
                        ey + esc_half)
-            if g["strapped"]:
+            if g["strapped"] or carry_level == 2:
                 _via_stack(plan, net, lane, ey, 2, geo, top=3, sites=sites)
             ry = row_rails[d["row"]][net]
             rail_handled = False
