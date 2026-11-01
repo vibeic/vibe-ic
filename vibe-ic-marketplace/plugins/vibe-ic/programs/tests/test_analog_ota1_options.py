@@ -10,9 +10,11 @@ from _analog_producer_fixture import A2, A3, run_prog, bdir, read_json
 from test_analog_ciff import _project, _emit
 
 
-def _case(tmp_path, folded=0, chop=0, phase=1, ratio=4):
+def _case(tmp_path, folded=0, chop=0, phase=1, ratio=4, stages=2, remove_cc=0, polarity=0):
     p = _project(tmp_path, 2, ota1_folded_cascode=folded, ota1_chopper=chop,
         ota1_chop_ratio=ratio, ota1_chop_sc_phase=phase,
+        ota1_chop_stages=stages, ota1_folded_remove_cc=remove_cc,
+        ota1_chop_polarity=polarity,
         ota1_chop_nmos_w_um=2., ota1_chop_pmos_w_um=4., ota1_chop_l_um=.5)
     parameters = {}
     if folded:

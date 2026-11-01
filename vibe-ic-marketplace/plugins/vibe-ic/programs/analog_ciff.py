@@ -19,7 +19,10 @@ def spec_label(name):
              "c0", "k0", "ciff_summer_cap_ff", "ciff_dac_ratio",
              "designed_coefficients", "quantizer_levels", "startup_reset",
              "startup_reset_tau_ns", "startup_reset_cap_ff", "quantizer_latch_delay_cap_ff",
-             "sc_nonoverlap_nmos_w_um", "sc_nonoverlap_pmos_w_um", "sc_nonoverlap_l_um"]
+             "sc_nonoverlap_nmos_w_um", "sc_nonoverlap_pmos_w_um", "sc_nonoverlap_l_um",
+             "shared_input_dac"]
+    names += [f"{stem}{i}_ff" for stem in ("cs", "ci", "cf", "cc") for i in range(1, 4)]
+    names += [f"cff{i}_ff" for i in range(4)] + ["cffk0_ff"]
     names += [f"{stem}{i}" for stem in ("a", "b", "c") for i in range(1, 4)]
     names += [f"ntf_{stem}{i}_{part}" for stem in ("zero", "pole")
               for i in range(1, 4) for part in ("real", "imag")]
@@ -241,6 +244,8 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
         if key in values and (not math.isfinite(values[key]) or values[key] <= 0):
             raise ValueError(f"{key} must be finite and positive")
     manual = _integer(values, "designed_coefficients", 0)
+    if values.get("shared_input_dac", 0) and values.get("ciff", 0) != 1:
+        raise ValueError("shared_input_dac requires the CIFF family")
     if _integer(values, "quantizer_levels", 2) != 2:
         raise ValueError("SC loop template supports quantizer_levels=2 only")
     if values.get("ciff", 0) == 0 and manual == 0:
@@ -254,6 +259,24 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
     if not math.isfinite(dac_ratio) or dac_ratio <= 0:
         raise ValueError("ciff_dac_ratio must be finite and positive")
     rec["dac_ratio"] = dac_ratio
+    shared = _integer(values, "shared_input_dac", 0)
+    if shared not in (0, 1):
+        raise ValueError("shared_input_dac must be 0 or 1")
+    dac_only = list(rec["b"])
+    if shared:
+        total = rec["b"][0]/rec["a"][0]*dac_ratio
+        if rec["family"] != "CIFF" or rec["D"] != 0 or rec["a"][0] <= 0 or total < 1:
+            raise ValueError("shared input/DAC requires positive stage-1 CIFF, D=0 and total DAC/input capacitance >=1")
+        dac_only[0] -= rec["a"][0]/dac_ratio
+        if abs(dac_only[0]) < 1e-12:
+            dac_only[0] = 0.
+        rec["sharing"] = {"enabled": True, "stage": 1, "input_capacitor": "cs1",
+            "dac_only_capacitor": "cf1" if dac_only[0] else None,
+            "total_dac_over_input_cap": total, "dac_only_over_input_cap": total-1,
+            "shared_reference_net": "ndacb", "dac_only_reference_net": "ndac" if dac_only[0] else None,
+            "input_sample_phase": "nph1", "reference_transfer_phase": "nph2",
+            "decision_one_reference": "vrefp", "decision_zero_reference": "vrefn",
+            "shared_feedback_gain": rec["a"][0]/dac_ratio, "dac_only_feedback_gain": dac_only[0]}
     lib = deepcopy(lib)
     timing = deepcopy(lib["loop_timing"][str(rec["D"])])
     rec["timing"] = timing
@@ -308,7 +331,7 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
     outputs = stages["chain"][1:]
     dac_names = {d["name"].format(i=i) for d in lib["stage"][0]["devices"]
                  if any(n in d["nets"] for n in ("ndacs{i}", "ncft{i}"))
-                 for i in range(1, order+1) if rec["b"][i-1] == 0}
+                 for i in range(1, order+1) if dac_only[i-1] == 0}
     devices = [d for d in devices if d["name"] not in dac_names | {"caz", "mn_azq", "mp_azq"}]
     exprs = [e for e in exprs if e["device"] not in dac_names | {"caz"}]
     if "quantizer_latch_delay_cap_ff" in values:
@@ -325,13 +348,51 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
             if gain < 0 and d["name"] in (f"mn_cstc{i}", f"mp_cstc{i}"):
                 d["nets"][2] = stages["chain"][i-1]
             if d["name"] in (f"mn_dacs{i}", f"mp_dacs{i}"):
-                d["nets"][2] = "ndac" if rec["b"][i-1] > 0 else "ndacb"
+                d["nets"][2] = "ndac" if dac_only[i-1] > 0 else "ndacb"
+            if shared and d["name"] in ("mn_smpb1", "mp_smpb1"):
+                # The shared capacitor contributes Cs*(Vin-Vref_selected).
+                # It needs the POSITIVE decision selector, opposite to the
+                # DAC-only branch that samples -Vref and then returns to VCM.
+                d["nets"][1] = "nph2" if d["role"] == "nmos" else "nph2b"
+                d["nets"][2] = "ndacb"
     for e in exprs:
         if e["device"].startswith("cf") and e["device"][2:].isdigit():
             i = int(e["device"][2:])-1
-            ratio = abs(rec["b"][i]/rec["a"][i])*dac_ratio
+            ratio = abs(dac_only[i]/rec["a"][i])*dac_ratio
             e["ff_expr"] = f"{ratio!r} * ({sampling_cap_expr})"
             e["expr"] = cap_length(e["ff_expr"])
+    # Optional absolute capacitances preserve the designed ratios. Binding
+    # Cs alone scales its Ci/Cf/Cc partners; binding an inconsistent complete
+    # set is a named gap rather than silently changing the loop declaration.
+    stage_cs = {i: sampling_cap_expr for i in range(1, order+1)}
+    for i, a in enumerate(rec["a"], 1):
+        keys = {stem: f"{stem}{i}_ff" for stem in ("cs", "ci", "cf", "cc")}
+        bound = {stem: float(values[key]) for stem, key in keys.items() if key in values}
+        if not bound:
+            continue
+        if any(not math.isfinite(v) or v <= 0 for v in bound.values()):
+            raise ValueError("explicit capacitances must be finite and positive")
+        ratio = abs(dac_only[i-1]/a)*dac_ratio
+        base = bound.get("cs")
+        if base is None and "ci" in bound:
+            base = bound["ci"]*abs(a)
+        if base is None and "cf" in bound:
+            if ratio == 0:
+                raise ValueError("explicit Cf names a stage without a DAC-only capacitor")
+            base = bound["cf"]/ratio
+        if base is not None:
+            for stem, expected in (("ci", base/abs(a)), ("cf", base*ratio)):
+                if stem in bound and not math.isclose(bound[stem], expected, rel_tol=1e-7):
+                    raise ValueError(f"{keys[stem]} conflicts with the declared loop coefficient")
+        cs = repr(base) if base is not None else f"({sampling_cap_expr})"
+        stage_cs[i] = cs
+        targets = {"cs": cs, "ci": f"({cs}) / {abs(a)!r}",
+                   "cf": f"({cs}) * {ratio!r}",
+                   "cc": repr(bound["cc"]) if "cc" in bound else f"miller_fraction_of_load * ota_compensation_scale * ({cs}) / {abs(a)!r}"}
+        for e in exprs:
+            for stem, ff in targets.items():
+                if e["device"] == f"{stem}{i}":
+                    e.update(expr=cap_length(ff), ff_expr=ff)
     def tg(name, left, right, phase, complement):
         for role, gate, body, width in (("nmos", phase, "vss", 2.), ("pmos", complement, "vdd", 4.)):
             devices.append({"name": ("mn_" if role == "nmos" else "mp_")+name,
@@ -352,6 +413,18 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
     terms = [("0", "vin", rec["c0"])] + [(str(i), out, c) for i, (out, c) in enumerate(zip(outputs, rec["c"]), 1)]
     if rec["D"] and abs(rec["k0"]) > 1e-12:
         terms.append(("k0", "ndac", rec["k0"]*dac_ratio))  # ndac encodes -v[n-1]
+    explicit_unit = values.get("ciff_summer_cap_ff")
+    for suffix, source, weight in terms:
+        key = "cff"+suffix+"_ff"
+        if key in values:
+            if not math.isfinite(values[key]) or values[key] <= 0 or abs(weight) < 1e-12:
+                raise ValueError(f"{key} needs a positive capacitance and active feed-forward path")
+            candidate = values[key]/abs(weight)
+            if explicit_unit is not None and not math.isclose(explicit_unit, candidate, rel_tol=1e-7):
+                raise ValueError("summer capacitances conflict with declared c_i/c0/k0")
+            explicit_unit = candidate
+    if explicit_unit is not None:
+        unit = repr(float(explicit_unit))
     reset, resetb = "nph2", "nph2b"
     if rec["D"]:
         # Decision first, then reset the summer AND hold capacitor. Otherwise
@@ -396,7 +469,7 @@ def specialize(lib, values, expand, cap_length, sampling_cap_expr, load_expr):
             continue
         suffix = f"zero{j+1}"
         bottom, top = "nb_"+suffix, "nt_"+suffix
-        ff = f"{abs(gain)/rec['a'][0]!r} * ({sampling_cap_expr})"
+        ff = f"{abs(gain)/rec['a'][0]!r} * ({stage_cs[1]})"
         cap("c"+suffix, bottom, top, ff)
         tg(suffix+"bs", bottom, source if gain > 0 else "vcm", "nph1", "nph1b")
         tg(suffix+"br", bottom, "vcm", "nph2", "nph2b")
@@ -434,9 +507,14 @@ def declaration(loop, stages):
     for i, (out, a, b, c) in enumerate(zip(outputs, loop["a"], loop["b"], loop["c"]), 1):
         paths.append(path("input" if i == 1 else "integrator", stages["chain"][i-1], out, a, f"cs{i}"))
         if b:
-            p = path("dac", "bit_out", out, -b, f"cf{i}")
-            p.update(destination_stage=i, delay_clocks=loop["D"])
-            paths.append(p)
+            share = loop.get("sharing") if i == 1 else None
+            contributions = [("dac_shared", share["shared_feedback_gain"], "cs1"),
+                             ("dac", share["dac_only_feedback_gain"], "cf1")] if share else [("dac", b, f"cf{i}")]
+            for kind, gain, capacitor in contributions:
+                if gain:
+                    p = path(kind, "bit_out", out, -gain, capacitor)
+                    p.update(destination_stage=i, delay_clocks=loop["D"])
+                    paths.append(p)
         if c:
             paths.append(path("feedforward", out, "quantizer", c, f"cff{i}"))
     if loop["c0"]:
@@ -463,6 +541,8 @@ def declaration(loop, stages):
               "coefficient_source": loop["method"], "verification": loop["verification"]}
     if loop.get("timing"):
         result["timing"] = loop["timing"]
+    if loop.get("sharing"):
+        result["sharing"] = loop["sharing"]
     return result
 
 

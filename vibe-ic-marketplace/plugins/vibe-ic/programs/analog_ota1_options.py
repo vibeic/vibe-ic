@@ -12,7 +12,8 @@ import re
 
 LABELS = ("ota1_folded_cascode", "ota1_chopper", "ota1_chop_ratio",
           "ota1_chop_sc_phase", "ota1_chop_polarity", "ota1_chop_nmos_w_um",
-          "ota1_chop_pmos_w_um", "ota1_chop_l_um", "ota1_cc_ff")
+          "ota1_chop_pmos_w_um", "ota1_chop_l_um", "ota1_cc_ff",
+          "ota1_chop_stages", "ota1_folded_remove_cc")
 
 
 def spec_label(name):
@@ -37,8 +38,11 @@ def apply(template, values, loop, stages, sizing, devices, nets, exprs,
           phase_devices, cap_length):
     folded = _int(values, "ota1_folded_cascode", 0)
     chop = _int(values, "ota1_chopper", 0)
+    remove_cc = _int(values, "ota1_folded_remove_cc", 0)
     if folded not in (0, 1) or chop not in (0, 1):
         raise ValueError("OTA1 template selectors must be 0 or 1")
+    if remove_cc not in (0, 1) or (remove_cc and not folded):
+        raise ValueError("ota1_folded_remove_cc=1 requires the single-stage folded cell")
     if not folded and not chop and "ota1_cc_ff" not in values:
         return None
     if not loop or loop["family"] != "CIFF":
@@ -96,7 +100,13 @@ def apply(template, values, loop, stages, sizing, devices, nets, exprs,
         record["removed_devices"] = sorted(removed)
         record["input_polarity"] = "swapped_to_preserve_inverting_summing_node"
         record["compensation"] = {"capacitor": "cc1", "connection": [output, "vcm"]}
+        if remove_cc:
+            devices[:] = [d for d in devices if d["name"] not in ("cc1", "rz_cc1")]
+            exprs[:] = [e for e in exprs if e["device"] not in ("cc1", "rz_cc1")]
+            record["compensation"] = {"capacitor": None, "miller_removed": True}
     if "ota1_cc_ff" in values:
+        if remove_cc:
+            raise ValueError("ota1_cc_ff conflicts with removal of OTA1 Cc")
         _positive(values["ota1_cc_ff"], "ota1_cc_ff")
         for e in exprs:
             if e["device"] == "cc1":
@@ -105,25 +115,60 @@ def apply(template, values, loop, stages, sizing, devices, nets, exprs,
     devices.extend(new)
     new_names = [d["name"] for d in new]
     if chop:
-        ratio = _int(values, "ota1_chop_ratio")
-        phase = _int(values, "ota1_chop_sc_phase")
+        locations = _int(values, "ota1_chop_stages", 3 if folded else 2)
+        ratio = _int(values, "ota1_chop_ratio", 2 if locations == 3 else None)
+        phase = _int(values, "ota1_chop_sc_phase", 1 if locations == 3 else None)
         polarity = _int(values, "ota1_chop_polarity", 0)
         if ratio < 2 or ratio > 2**16 or ratio & (ratio-1) or phase not in (1, 2) or polarity not in (0, 1):
             raise ValueError("chop ratio must be a power of two in [2,65536], SC phase 1/2, polarity 0/1")
+        if locations not in (2, 3) or (locations == 3 and (not folded or ratio != 2 or phase != 1)):
+            raise ValueError("three-location chopping requires the folded cell, fs/2 ratio=2 and start-of-phi1 phase=1")
         wn, wp, length = [_positive(values.get(k), k) for k in
                           ("ota1_chop_nmos_w_um", "ota1_chop_pmos_w_um", "ota1_chop_l_um")]
         # Reuse the conversion counter's static TG divider cells, clocked
         # from the DECLARED SC phase rather than a second free-running clock.
         count = ratio.bit_length()-1
         counter = template["stage"][1]
+        divider_source = f"nph{phase}"
+        if locations == 3:
+            divider_source = "ota1_ch_clk"
+            # Conversion-resettable glitch-free clock gate. Release is held
+            # while phi1 is high, so an asynchronous reset release cannot
+            # create a partial chopping edge in phi2.
+            def mos(name, role, drain, gate, source, width):
+                devices.append({"name": name, "role": role, "function": "conversion-synchronous chopper reset",
+                    "nets": [drain, gate, source, "vss" if role == "nmos" else "vdd"], "w": width, "l": length})
+            def inv(name, out, inp):
+                mos("mn_"+name, "nmos", out, inp, "vss", wn)
+                mos("mp_"+name, "pmos", out, inp, "vdd", wp)
+            mos("mn_ota1_ch_run_tg", "nmos", "ota1_ch_run", "nph1b", "nrstb", wn)
+            mos("mp_ota1_ch_run_tg", "pmos", "ota1_ch_run", "nph1", "nrstb", wp)
+            inv("ota1_ch_runb", "ota1_ch_runb", "ota1_ch_run")
+            # Retain a standard divider keeper's reference geometry; no
+            # keeper strength or transistor size is synthesized here.
+            for original in counter["devices"]:
+                if original["name"] not in ("mp_mkp{i}", "mn_mkp{i}"):
+                    continue
+                d = deepcopy(original)
+                d["name"] = "ota1_ch_run_"+original["name"].format(i=1)
+                d["nets"] = ["ota1_ch_run", "ota1_ch_runb", "vdd" if d["role"] == "pmos" else "vss", "vdd" if d["role"] == "pmos" else "vss"]
+                devices.append(d)
+            mos("mn_ota1_ch_run_reset", "nmos", "ota1_ch_run", "nall", "vss", wn)
+            mos("mp_ota1_ch_gate1", "pmos", "ota1_ch_clkb", "nph1", "vdd", wp)
+            mos("mp_ota1_ch_gate2", "pmos", "ota1_ch_clkb", "ota1_ch_run", "vdd", wp)
+            mos("mn_ota1_ch_gate1", "nmos", "ota1_ch_clkb", "nph1", "ota1_ch_gates", wn)
+            mos("mn_ota1_ch_gate2", "nmos", "ota1_ch_gates", "ota1_ch_run", "vss", wn)
+            inv("ota1_ch_clk", "ota1_ch_clk", "ota1_ch_clkb")
         for i in range(1, count+1):
             sub = {"i": i, "i1": i+1,
-                   "in": f"nph{phase}" if i == 1 else f"ota1_ch_q{i-1}",
+                   "in": divider_source if i == 1 else f"ota1_ch_q{i-1}",
                    "out": f"ota1_ch_q{i}"}
             for original in counter["devices"]:
                 # The AND-accumulator belongs to the conversion window, not
                 # to a frequency divider. No unused accumulator is emitted.
                 if any("{in2}" in n or "{out2}" in n for n in original["nets"]) or "nand" in original["name"] or "andinv" in original["name"]:
+                    continue
+                if locations == 3 and original["name"] in ("mp_cki{i}", "mn_cki{i}"):
                     continue
                 d = deepcopy(original)
                 d["name"] = "ota1_ch_"+original["name"].format(**sub)
@@ -133,7 +178,19 @@ def apply(template, values, loop, stages, sizing, devices, nets, exprs,
                 # Internal node templates must receive the same namespace.
                 d["nets"] = ["ota1_ch_"+n if n not in ("vdd", "vss") and
                              not n.startswith(("ota1_ch_", "nph")) else n for n in d["nets"]]
+                if locations == 3:
+                    # A plain clock/complement TG divider can race through
+                    # both latches on an edge. The adopted fs/2 cell uses
+                    # the existing NON-OVERLAPPING SC phases: master in
+                    # phi2, slave at the next gated phi1, held through phi2.
+                    gates = {"mn_mtg{i}": "nph2", "mp_mtg{i}": "nph2b",
+                             "mn_stg{i}": divider_source, "mp_stg{i}": "ota1_ch_clkb"}
+                    if original["name"] in gates:
+                        d["nets"][1] = gates[original["name"]]
                 devices.append(d)
+            if locations == 3:
+                for storage in ("nm", "ns"):
+                    mos(f"mp_ota1_ch_clear_{storage}{i}", "pmos", f"ota1_ch_{storage}{i}", "nrstb", "vdd", wp)
         declaration = deepcopy(template["clock_phase_generator"])
         declaration.update(source=f"ota1_ch_q{count}", complement=f"ota1_ch_nqb{count}",
             phases={"ota1_ch_p": {"complement_net": "ota1_ch_pb"},
@@ -143,6 +200,9 @@ def apply(template, values, loop, stages, sizing, devices, nets, exprs,
         # this second generator a distinct namespace as well as distinct nets.
         for d in generated:
             d["name"] = "ota1_"+d["name"]
+            external = {declaration["source"], declaration["complement"], "vdd", "vss",
+                        "ota1_ch_p", "ota1_ch_pb", "ota1_ch_n", "ota1_ch_nb"}
+            d["nets"] = [n if n in external else "ota1_ch_"+n for n in d["nets"]]
         devices.extend(generated)
         positive = ("ota1_ch_p", "ota1_ch_pb")
         negative = ("ota1_ch_n", "ota1_ch_nb")
@@ -191,13 +251,30 @@ def apply(template, values, loop, stages, sizing, devices, nets, exprs,
         for i in range(2):
             tg(f"out{i+1}p", f"ota1_ch_raw{i+1}", outputs[i], positive)
             tg(f"out{i+1}n", f"ota1_ch_raw{i+1}", outputs[1-i], negative)
+        switch_locations = {"CH1": {"kind": "input_pair", "nodes": original_gates},
+                            "CH2": {"kind": "folding_cascode_sources" if folded else "common_gate_sources_before_mirror", "nodes": outputs}}
+        if locations == 3:
+            mirror_nodes = []
+            for i, suffix in enumerate(("in1", "ref1"), 1):
+                load = by_name["ota1_mn_fc_load_"+suffix]
+                mirror_nodes.append(load["nets"][0])
+                load["nets"][0] = f"ota1_ch_mraw{i}"
+            for i in range(2):
+                tg(f"mirror{i+1}p", f"ota1_ch_mraw{i+1}", mirror_nodes[i], positive)
+                tg(f"mirror{i+1}n", f"ota1_ch_mraw{i+1}", mirror_nodes[1-i], negative)
+            switch_locations["CH3"] = {"kind": "nmos_current_mirror", "nodes": mirror_nodes}
         record["chopper"] = {"enabled": True, "ratio": ratio, "source_phase": f"nph{phase}",
             "polarity": polarity, "clock_net": f"ota1_ch_q{count}",
             "positive_phase": positive[0], "negative_phase": negative[0],
             "switch_geometry_um": {"nmos_w": wn, "pmos_w": wp, "l": length},
             "input_nodes": original_gates, "demodulation_nodes": outputs,
             "location": "folding_cascode_sources" if folded else "common_gate_sources_before_mirror",
-            "output_interface": "single_ended", "second_stage_retained": not bool(folded)}
+            "output_interface": "single_ended", "second_stage_retained": not bool(folded),
+            "switch_locations": switch_locations, "stages": locations}
+        if locations == 3:
+            record["chopper"].update(update_event="start_of_phi1", static_phase="nph2",
+                reset_net="nall", divider_clock_net=divider_source,
+                conversion_start_phase="positive" if polarity == 0 else "negative")
     record["explicit_geometry_devices"] = new_names
     nets[:] = sorted({n for d in devices for n in d["nets"]} - set(template["ports"]))
     return record

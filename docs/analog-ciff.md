@@ -165,3 +165,53 @@ capacitor. Absent these rows, existing reference geometry/capacitance is
 retained. No ns delay, slack, GBW or slew target is tuned or inferred by the
 template. The phase/polarity contract follows the native rephased bench;
 complete closed-loop native qualification remains separate.
+
+## Shared stage-1 input/DAC and three-location chopping
+
+`shared_input_dac=1` selects shared charge transfer for positive stage-1
+CIFF with D=0. In phi1, Cs1 samples Vin. In phi2, its bottom plate connects
+to `ndacb`: decision one selects Vref+, decision zero selects Vref-.
+The DAC-only Cf1 samples the opposite reference at `ndac` in phi1 and
+returns to VCM in phi2. Thus the total feedback capacitance is Cs1+Cf1.
+The existing `ciff_dac_ratio` remains the total DAC/input scale: Cf1 becomes
+`(total_ratio-1)*Cs1`. Total ratio one omits the unnecessary Cf1 branch.
+The normalized a/b/c coefficients and decoder scale remain unchanged.
+The option defaults to zero; D=1 sharing is refused because its reference
+would need an additional hold path. The separate-DAC alternative remains
+available with the existing parameters.
+
+`loop_declaration.sharing` declares enabled/stage/input_capacitor/
+dac_only_capacitor/total_dac_over_input_cap/dac_only_over_input_cap/
+shared_reference_net/dac_only_reference_net/input_sample_phase/
+reference_transfer_phase/decision_one_reference/decision_zero_reference/
+shared_feedback_gain/dac_only_feedback_gain. `paths` splits the logical
+DAC contribution into `dac_shared` (Cs1) and `dac` (Cf1); their signed gains
+sum to the existing feedback vector. `dac_stages` still lists only stage 1.
+
+Absolute capacitor inputs are `cs1_ff`..`csL_ff`, `ci1_ff`..`ciL_ff`,
+`cf1_ff`..`cfL_ff`, `cc1_ff`..`ccL_ff`, `cff0_ff`..`cffL_ff`, `cffk0_ff`.
+Binding Cs scales its Ci/Cf/Cc partners from the declared coefficients.
+Binding a complete inconsistent set fails instead of changing the loop.
+Individual summer values must agree with a common unit and c0/c_i/k0.
+Stages without explicit inputs retain their existing expressions.
+
+For the folded cell, `ota1_chop_stages=3` is the default when chopping is
+enabled: CH1 interchanges the input pair; CH2 commutates currents at the
+folding cascode sources; CH3 interchanges the physical NMOS mirror devices
+at the load-cascode sources. The three-location option requires ratio=2
+and SC phase=1 (also its declared defaults). It presets the divider on
+every conversion reset, updates at the start of phi1 and holds throughout
+phi2. Its master uses phi2 and its slave uses gated phi1, with the existing
+SC non-overlap preventing a transparent path through both latches. The
+chop phase generator's internal nodes are isolated from the SC generator.
+`ota1_chop_polarity` selects the repeatable first valid chop phase.
+Legacy two-location chopping is selectable with `ota1_chop_stages=2`.
+
+`ota1_folded_remove_cc=1` removes OTA1's obsolete Miller Cc/RZ from the
+single-stage cell. It defaults to zero to retain the earlier optional
+output-compensation connection; no capacitor or transistor is sized here.
+`ota1_options.chopper` adds `switch_locations` (CH1/CH2/CH3), `stages`,
+`update_event`, `static_phase`, `reset_net`, `divider_clock_net` and
+`conversion_start_phase`. Generic-MOS transient tests cover the control
+clock frequency and reset phase; the consumer must validate the complete
+analog graph and reference settling with native process models.
