@@ -35,7 +35,7 @@ def design(tmp_path, answers, provenance=None, pads=None):
     put(p / 'phase1/generated_docs/L8_TIMING_WAVEFORM.json', {'clock_domains': [
         {'role': 'primary', 'period_ns': 20, 'source_pin': 'clk'}]})
     put(p / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json', {'top_module': 'core'})
-    put(p / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {}})
+    put(p / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {'pdk_target': 'processA'}})
     doc = {'schema': 'vibe-ic/tapeout_declaration/1', 'answers': answers}
     if provenance:
         doc['answer_provenance'] = provenance
@@ -271,7 +271,7 @@ def test_synth_parameters_pin_a_catalogued_top_only(tmp_path):
     for name in ('L8_TIMING_WAVEFORM.json', 'L19_CONSTRAINTS_PDK.json'):
         put(p / 'phase1/generated_docs' / name,
             {'clock_domains': [{'role': 'primary', 'period_ns': 10, 'source_pin': 'clk'}]}
-            if name.startswith('L8') else {'fields': {}})
+            if name.startswith('L8') else {'fields': {'pdk_target': 'processA'}})
     put(p / DECL, {'answers': {}})
     rtl = sorted((p / 'phase2/stage1/rtl').glob('*.v'))
     top_ip = contract.emit_synthesis_config(p, 'processA', p / 's.json', rtl, [], False,

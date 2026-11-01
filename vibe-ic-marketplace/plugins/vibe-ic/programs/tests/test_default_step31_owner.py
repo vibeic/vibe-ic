@@ -1040,7 +1040,8 @@ def _native31_runtime_fixture(tmp_path, monkeypatch, local_image, case):
         "doc_id": "L8_TIMING_WAVEFORM", "clock_domains": [
             {"role": "primary", "source_pin": "a", "period_ns": 24}]}))
     put(project, "phase1/generated_docs/L19_CONSTRAINTS_PDK.json", json.dumps({
-        "doc_id": "L19_CONSTRAINTS_PDK", "constraint_declarations": []}))
+        "doc_id": "L19_CONSTRAINTS_PDK", "fields": {"pdk_target": pdk.name},
+        "constraint_declarations": []}))
     _native31_synthesis_handoff(project, pdk, selected["netlist"])
     _native31_drv_peripheral(project, pdk, monkeypatch, calls, root=root, master=master)
     monkeypatch.setattr(lc._ce, "no_container_route", lambda: True)

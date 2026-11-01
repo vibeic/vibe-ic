@@ -49,7 +49,7 @@ def _design(tmp_path: Path, chip_top_record: dict | None) -> Path:
         "clock_domains": [{"role": "primary", "pdk_scoped_target": "processA",
                            "period_ns": 12, "source_pin": "clk"}]})
     put(p / "phase1/generated_docs/L9_INTEGRATION_SPEC.json", {"top_module": "block"})
-    put(p / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json", {"fields": {}})
+    put(p / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json", {"fields": {"pdk_target": "processA"}})
     put(p / "input/submission_template/tapeout_declaration.json", {"answers": {
         "top_cell": "chip_top", "die_area_um": [0, 0, 100, 100],
         "core_area_um": [10, 10, 90, 90]}})

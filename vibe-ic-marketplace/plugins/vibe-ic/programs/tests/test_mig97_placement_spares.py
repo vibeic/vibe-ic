@@ -187,6 +187,7 @@ def test_a_density_lever_supersedes_the_declared_fraction(tmp_path, monkeypatch)
     PL_TARGET_DENSITY_PCT together are a conflict; the lever wins, on record."""
     p = bridge._chip_design(tmp_path)
     put(p / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': {
+        'pdk_target': 'gf180mcuD',
         'constraint_declarations': [{'token': 'PL_TARGET_DENSITY', 'value': '0.5',
                                      'scope': 'GF180MCU', 'source': 'L9', 'line': 1}]}})
     pdk_root = tmp_path / 'pdkroot'
