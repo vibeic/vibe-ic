@@ -26,6 +26,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import pytest
 from pathlib import Path
 
 PROG_DIR = Path(__file__).resolve().parents[1]
@@ -350,3 +351,239 @@ def test_recognize_matches_synth():
     no = _HDR + " - input  a\n - output out\n\nImplement a buffer.\n"
     assert SP.recognize(yes) == {"present": True}
     assert SP.recognize(no) is None
+
+
+# Neutral source-bound word-message contract; no external corpus is involved.
+def _word_message_prompt(width=4, count=2, marker=1, *, msb_first=True,
+                         active_high=True, table=True, reset_alias=False, marker_level=1):
+    total = width * count
+    positions = []
+    for index, ordinal in enumerate(('first', 'second', 'third', 'fourth')[:count]):
+        low = (count - 1 - index) * width if msb_first else index * width
+        positions.append(f'packet[{low+width-1}:{low}] is the {ordinal} word')
+    text = (f'Receive messages of {count} words from a continuous input word stream. '
+            f'Discard words until sample_word[{marker}]={marker_level}. That is the first word '
+            f'of a message; receive the next {count-1} words regardless of marker. '
+            f'Assert done one clock cycle after the final word is received. '
+            'done is asserted for exactly one clock cycle. '
+            + ', '.join(positions) + '. '
+            'packet needs to be valid whenever done is asserted; packet may be '
+            'anything at other times. A new first word may be accepted in the '
+            'reporting cycle. Words are sampled on the positive edge of clock. '
+            f'The reset signal is active {"high" if active_high else "low"} synchronous. '
+            'Reset clears any partial message and pending completion. '
+            'All multi-bit waveform values are hexadecimal.\n\n')
+    if table:
+        mask = (1 << width) - 1
+        marker_value = (1 << marker) if marker_level else 0
+        samples = [(0, not active_high), (marker_value, not active_high)]
+        for message in range(5):
+            words = [(marker_value | (message * 3)) & mask]
+            words += [((message * 5 + index * 7) ^ mask) & mask
+                      for index in range(1, count)]
+            samples += [(value, not active_high) for value in words]
+        samples += [(0, not active_high)] * (count + 1)
+        samples += [(marker_value, not active_high), (mask, active_high),
+                    (0, active_high), (0, not active_high)]
+        samples += [(marker_value, not active_high)] + [(mask, not active_high)] * (count - 1)
+        samples += [(0, not active_high)] * 2
+        # Interrupt every partial position, including the pending-report cycle.
+        for accepted in range(count + 1):
+            samples += [(marker_value, not active_high)]
+            samples += [(mask, not active_high)] * max(0, accepted - 1)
+            samples += [(mask, active_high), (0, not active_high)]
+        samples += [(marker_value, not active_high)] + [(mask, not active_high)] * (count - 1)
+        samples += [(0, not active_high)] * 2
+        rst = 'rst' if reset_alias else 'reset'
+        text += f'time clock {rst} sample_word done packet\n'
+        text += f'0ns 0 {int(active_high)} 0 x x\n5ns 1 {int(active_high)} 0 0 x\n10ns 0 {int(active_high)} 0 0 x\n'
+        partial, pending = [], None
+        for index, (value, reset_value) in enumerate(samples):
+            reset_value = int(reset_value)
+            output = pending
+            pending = None
+            if reset_value == int(active_high):
+                partial, output = [], None
+            elif partial or ((value >> marker) & 1) == marker_level:
+                partial.append(value)
+                if len(partial) == count:
+                    shifts = range(count - 1, -1, -1) if msb_first else range(count)
+                    pending = sum(word << (width * shift)
+                                  for word, shift in zip(partial, shifts))
+                    partial = []
+            valid = int(output is not None)
+            result = f'{output:x}' if valid else 'x'
+            rise = 15 + 10 * index
+            text += f'{rise}ns 1 {reset_value} {value:x} {valid} {result}\n'
+            text += f'{rise+5}ns 0 {reset_value} {value:x} {valid} {result}\n'
+        text += '\n'
+    return text + (f'module WordCollector (\n input clock,\n input reset,\n'
+                   f' input [{width-1}:0] sample_word,\n'
+                   f' output [{total-1}:0] packet,\n output done\n);\n')
+
+
+_WORD_MESSAGE_RTL = '''module WordCollector (
+ input clock, input reset, input [3:0] sample_word,
+ output reg [7:0] packet, output reg done
+);
+ reg collecting, pending;
+ reg [3:0] first;
+ reg [7:0] finished;
+ always @(posedge clock) begin
+  if (reset) begin
+   collecting <= 0; pending <= 0; done <= 0;
+   first <= 0; finished <= 0; packet <= 0;
+  end else begin
+   done <= pending;
+   if (pending) packet <= finished;
+   pending <= 0;
+   if (collecting) begin
+    finished <= {first, sample_word};
+    pending <= 1; collecting <= 0;
+   end else if (sample_word[1]) begin
+    first <= sample_word; collecting <= 1;
+   end
+  end
+ end
+endmodule
+'''
+
+
+def test_word_message_producer_and_registry_accept_closed_contract():
+    prompt = _word_message_prompt()
+    rtl = SP.synth(prompt, 'WordCollector')
+    assert ('EMITTED' if rtl else 'DECLINED') == 'EMITTED'
+    kind, registered = REG.generate(prompt, 'WordCollector')
+    assert kind == 'serial_protocol_fsm', {'observed': kind}
+    assert registered is not None
+
+
+def test_word_message_plain_design_document_needs_no_waveform():
+    rtl = SP.synth(_word_message_prompt(table=False), 'WordCollector')
+    assert ('EMITTED' if rtl else 'DECLINED') == 'EMITTED'
+
+
+def _word_message_check(tmp_path, prompt, rtl):
+    source, design = tmp_path/'prompt.txt', tmp_path/'design.sv'
+    source.write_text(prompt); design.write_text(rtl)
+    return subprocess.run([sys.executable, str(PROG_DIR/'waveform_table_conformance_check.py'),
+                           '--prompt', str(source), '--rtl', str(design), '--top',
+                           'WordCollector', '--require-tools'], capture_output=True, text=True)
+
+
+@pytest.mark.parametrize('width,count,marker,msb,high,alias,falling,plain', [
+    (4, 2, 1, True, True, False, False, False),
+    (8, 3, 3, True, True, True, False, False),
+    (12, 4, 0, False, False, False, False, False),
+    (5, 3, 4, False, True, True, True, False),
+    (3, 16, 2, True, False, False, False, False),
+    (64, 2, 63, False, True, False, False, False),
+    (4, 2, 1, True, True, False, False, True),
+])
+@pytest.mark.skipif(not (IVERILOG and VVP), reason='iverilog/vvp required')
+def test_word_message_registry_emission_obeys_temporal_source(tmp_path, width, count, marker,
+                                                            msb, high, alias, falling, plain):
+    source = _word_message_prompt(width, count, marker, msb_first=msb,
+                                  active_high=high, reset_alias=alias)
+    prompt = (_word_message_prompt(width, count, marker, msb_first=msb,
+                                   active_high=high, table=False) if plain else source)
+    if falling:
+        prompt = re.sub(r'^(\d+ns) ([01]) ', lambda m: m[1]+' '+str(1-int(m[2]))+' ', prompt, flags=re.M)
+        prompt = prompt.replace('positive edge', 'negative edge')
+        source = prompt
+    kind, rtl = REG.generate(prompt, 'WordCollector')
+    assert kind == 'serial_protocol_fsm', {'observed_value': kind}
+    assert rtl
+    result = _word_message_check(tmp_path, source, rtl)
+    assert result.returncode == 0 and 'WTC_PASS' in result.stdout, result.stdout+result.stderr
+
+
+@pytest.mark.parametrize('before,after', [
+    ('messages of 2 words', 'messages of 3 words'),
+    ('next 1 words', 'next 2 words'),
+    ('sample_word[1]=1', 'sample_word[4]=1'),
+    ('sample_word[1]=1', 'sample_word[1]=0 and sample_word[1]=1'),
+    ('packet[3:0] is the second word', 'packet[7:4] is the second word'),
+    ('final word', 'third word'),
+    ('one clock cycle after', 'two clock cycles after'),
+    ('A new first word may be accepted in the reporting cycle.',
+     'Words in the reporting cycle are ignored.'),
+    ('active high synchronous', 'active high asynchronous and synchronous'),
+    ('positive edge', 'positive and negative edge'),
+    ('input [3:0] sample_word', 'input [4:1] sample_word'),
+    ('output done', 'output done, output busy'),
+    ('done is asserted for exactly one clock cycle.', 'done is held high until reset.'),
+])
+def test_word_message_conflicts_decline_normally(before, after):
+    prompt = _word_message_prompt(table=False)
+    assert before in prompt
+    rtl = SP.synth(prompt.replace(before, after), 'WordCollector')
+    assert ('EMITTED' if rtl else 'DECLINED') == 'DECLINED'
+
+
+def test_word_message_conflicting_later_packed_slice_declines():
+    prompt = _word_message_prompt(8, 3, 2, table=False)
+    assert SP.synth(prompt, 'WordCollector')
+    prompt = prompt.replace('packet[7:0] is the third word', 'packet[15:8] is the third word')
+    assert ('EMITTED' if SP.synth(prompt, 'WordCollector') else 'DECLINED') == 'DECLINED'
+
+
+def test_word_message_table_contradiction_declines():
+    prompt = _word_message_prompt()
+    # Corrupt an actually valid packet observation, retaining a valid table.
+    prompt = re.sub(r'^(\d+ns [01] [01] [0-9a-f]+ 1) [0-9a-f]+$', r'\1 0', prompt, flags=re.M)
+    assert ('EMITTED' if SP.synth(prompt, 'WordCollector') else 'DECLINED') == 'DECLINED'
+
+
+def test_word_message_public_header_preserved():
+    prompt = _word_message_prompt(table=False)
+    header = prompt[prompt.index('module WordCollector'):]
+    rtl = SP.synth(prompt, 'WordCollector')
+    assert rtl
+    assert re.sub(r'\s+', '', header) in re.sub(r'\s+', '', rtl)
+
+
+@pytest.mark.parametrize('low_marker,renamed,asynchronous', [(True, False, False),
+                                                        (False, True, False),
+                                                        (False, False, True)])
+@pytest.mark.skipif(not (IVERILOG and VVP), reason='iverilog/vvp required')
+def test_word_message_general_role_variants(tmp_path, low_marker, renamed, asynchronous):
+    prompt = _word_message_prompt(marker_level=0 if low_marker else 1)
+    if renamed:
+        for old, new in [('sample_word', 'PayloadIn'), ('packet', 'FrameOut'), ('done', 'Complete')]:
+            prompt = re.sub(r'\b'+old+r'\b', new, prompt)
+    if asynchronous:
+        prompt = prompt.replace('synchronous', 'asynchronous')
+    kind, rtl = REG.generate(prompt, 'WordCollector')
+    assert kind == 'serial_protocol_fsm', {'observed_value': kind}
+    result = _word_message_check(tmp_path, prompt, rtl)
+    assert result.returncode == 0 and 'WTC_PASS' in result.stdout, result.stdout+result.stderr
+
+
+@pytest.mark.parametrize('clause', [
+    'A new first word must not be accepted in the reporting cycle.',
+    'A new first word may not be accepted in the reporting cycle.',
+    'A new first word is never accepted in the reporting cycle.',
+    'A new first word may be accepted in the reporting cycle only when reset is active.',
+    'A new first word may be accepted in the reporting cycle. '
+    'During the reporting cycle, do not accept a new first word.',
+])
+@pytest.mark.parametrize('table', [False, True])
+def test_word_message_negated_or_conditional_concurrency_declines(clause, table):
+    prompt = _word_message_prompt(table=table).replace(
+        'A new first word may be accepted in the reporting cycle.', clause)
+    kind, rtl = REG.generate(prompt, 'WordCollector')
+    assert ('EMITTED' if rtl else 'DECLINED') == 'DECLINED', {'observed_value': kind}
+
+
+@pytest.mark.parametrize('before,after', [
+    ('Discard words until', 'Do not discard words until'),
+    ('Assert done one clock cycle after', 'Never assert done one clock cycle after'),
+    ('Assert done one clock cycle after', 'done must not be asserted one clock cycle after'),
+    ('Reset clears any partial message and pending completion.',
+     'Reset must not clear any partial message or pending completion.'),
+])
+def test_word_message_other_negated_contract_facts_decline(before, after):
+    prompt = _word_message_prompt(table=False).replace(before, after)
+    kind, rtl = REG.generate(prompt, 'WordCollector')
+    assert ('EMITTED' if rtl else 'DECLINED') == 'DECLINED', {'observed_value': kind}
