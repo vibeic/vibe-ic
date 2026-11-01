@@ -1471,6 +1471,10 @@ def run_phase1_second_track(project: Path, rc_in: int) -> int:
     """
     print("[phase1] expert track (second track) ...")
     rc_track = _run_expert_track(project)
+    if not rc_in:
+        from phase1_base_requirements import publish
+        candidates = publish(project)
+        print(f"[phase1] base requirements: {candidates['status']} {candidates['reason']}")
     return max(int(rc_in or 0), rc_track)
 
 
@@ -2178,6 +2182,8 @@ def main() -> int:
                         "read it.")
     p.add_argument('--complete-retained-metrics', action='store_true',
                    help='Complete selected Step 1/2 metrics from retained evidence; no extraction or document writes.')
+    p.add_argument('--publish-base-requirements', action='store_true',
+                   help='Publish source-backed base01/base02 candidates with owner review pending; no extraction.')
     p.add_argument("--publish-dft-intent", action="store_true",
                    help="Initially publish explicit reasoned non-scan intent only; retain existing D01 extraction.")
     p.add_argument("--refresh-dft-intent-from-producer", type=Path,
@@ -2192,6 +2198,19 @@ def main() -> int:
     if not project.is_dir():
         print(f"ERROR: not a directory: {project}", file=sys.stderr)
         return 2
+    if args.publish_base_requirements:
+        if (args.complete_retained_metrics or args.second_track_only or args.publish_dft_intent
+                or args.refresh_dft_intent_from_producer is not None):
+            p.error('base requirements publication is a separate continuation')
+        lock = _runner_lock.acquire_or_reenter(project, 'phase1_one_shot_runner')
+        if lock is None:
+            return 3
+        try:
+            from phase1_base_requirements import publish
+            print(json.dumps(publish(project), indent=2))
+            return 2
+        finally:
+            lock.release()
     if args.complete_retained_metrics:
         if args.second_track_only or args.publish_dft_intent or args.refresh_dft_intent_from_producer is not None:
             p.error('retained metric completion is a separate continuation')
