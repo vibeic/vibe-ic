@@ -1012,6 +1012,31 @@ def _d75_bound_metric(project, context, observed, name):
         operator = 'matches_adopted_reference'
     elif name == 'escape_bond_feasibility':
         edge_check = checks['provider_bond_pad_edge']
+        if edge_check['status'] == 'NOT_APPLICABLE':
+            # The existing provider disposition owns route applicability;
+            # independently approve its reason, never invent provider bounds.
+            authority, body = _d75_authority(project, name, fields=())
+            doc = _read(project / DECLARATION)
+            slots = sorted((project / submission.SLOTS_DIR_REL).glob('*.yaml'))
+            owed, scope = _provider_scope(project, doc, slots)
+            if (owed or edge_check['detail'] != scope
+                    or declaration.answer(doc, 'deliverable') != declaration.DELIVERABLE_DIE
+                    or authority['required_items']
+                    or body.get('when') != {'route': declaration.ROUTE_SELF_TAPEOUT,
+                                            'deliverable': declaration.DELIVERABLE_DIE}):
+                raise ValueError('D75_SELF_TAPEOUT_ABSENCE_UNPROVEN')
+            route_inputs = _tree_records(project, Path('input/submission_template'))
+            route_inputs.append(_record(project, DESIGN_ANSWERS))
+            if (project / CATALOGUE_REPORT).is_file():
+                route_inputs.append(_record(project, CATALOGUE_REPORT))
+            if slots:
+                route_inputs.extend(_tree_records(project, CATALOGUE_SOURCE))
+            inputs = {r['path']: r['sha256'] for r in observed['inputs']}
+            for record in route_inputs:
+                if inputs.get(record['path']) != record['sha256']:
+                    raise ValueError('D75_OBSERVATION_INPUT_UNBOUND: ' + record['path'])
+            return {'status': 'NOT_APPLICABLE', 'reason': 'owner-attested SELF_TAPEOUT DIE',
+                    'skip_reason': body['validated_absence']['reason'], 'authority': authority}
         if edge_check['status'] != 'PASS':
             raise ValueError('D75_SOURCE_BOND_RULES_UNMEASURED')
         edge = edge_check['detail']
