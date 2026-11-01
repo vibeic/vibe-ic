@@ -11297,11 +11297,13 @@ def _v455_sentence_for_span(line: str, pos: int) -> str:
 
 
 def _v455_logical_declaration_token(line: str, pos: int) -> bool:
-    """A named interface/role slot is not a physical pin declaration."""
+    """A named interface, role or module is not a physical pin declaration."""
     prefix = _v455_clause_for_span(line[:pos], pos)
     return bool(re.search(
         r"\b(?:logical(?:\s+[A-Za-z_][\w-]*)*\s+interface|(?:local\s+)?role)\s*$",
-        prefix, re.IGNORECASE))
+        prefix, re.IGNORECASE) or re.search(
+        r"\bmodule(?:\s+name)?\s*(?:[:=]|is|shall\s+be|must\s+be|will\s+be)?"
+        r"\s*(?:(?:named|called)\s+)?[*\s]*$", prefix, re.IGNORECASE))
 
 
 def _v455_clause_for_span(line: str, pos: int) -> str:
@@ -13441,6 +13443,7 @@ _V1_6_402_RE_QUANT_SIGN_DIGIT = re.compile(
 )
 _V1_6_402_RE_QUANT_DIGIT_SLOT = re.compile(
     r"\b(?P<digit>\d{1,3})\s*-?\s*"
+    r"(?:identical\s+)?"
     r"(?:slot|channel|bank|copy|copies|instance|instances)s?\b",
     re.IGNORECASE,
 )
@@ -13552,6 +13555,38 @@ def _v466_block_multiplicity_own_entry(text: str, kw_pos: int,
         return None
     # Non-table line with no own quantifier → safe to use paragraph.
     return _v1_6_402_extract_block_multiplicity(paragraph)
+
+
+def _block_multiplicity_is_explicit(text: str, pattern: str, count: int) -> bool:
+    """Require a count attached to this block, rather than a nearby number.
+
+    This is confidence in multiplicity alone; confidence in the block's
+    electrical specs does not establish how many instances were declared.
+    """
+    number = r"\d{1,3}|" + "|".join(_V1_6_402_NUMBER_WORDS)
+    before = re.compile(
+        rf"\b(?P<n>{number})\s*(?:[x×]\s*|"
+        r"(?:identical\s+)?(?:copies|instances|channels|banks)\s+of\s+)?"
+        r"(?:(?:the|a|an)\s+)?$",
+        re.IGNORECASE)
+    after = re.compile(r"s?\s*[`*|: ]*\(?\s*[x×]\s*(?P<n>\d{1,3})\b",
+                       re.IGNORECASE)
+    for keyword in re.finditer(pattern, text, re.IGNORECASE):
+        lo, hi = _prose_sentence_scope(text, keyword.start(), keyword.end())
+        sentence = text[lo:hi]
+        if (_prose_is_denied(sentence) is not None or re.search(
+                r"\b(?:may|might|could|perhaps|approximately|estimated|inferred)\b",
+                sentence, re.IGNORECASE)):
+            continue
+        prefix = text[lo:keyword.start()].rstrip("`*")
+        match = before.search(prefix) or after.match(text[keyword.end():hi])
+        if match:
+            token = match.group("n").lower()
+            value = (int(token) if token.isdigit()
+                     else _V1_6_402_NUMBER_WORDS.get(token))
+            if value == count:
+                return True
+    return False
 
 
 # ─── ORGANIC-20260606 #466 R2 (field-agent counter-evidence) ────────
@@ -14151,11 +14186,12 @@ def _v466_has_l5_block_layer_evidence(extracted, cls_pat) -> bool:
     return False
 
 
-def _v466_block_layer_multiplicity(extracted, cls_pat):
+def _v466_block_layer_multiplicity(extracted, cls_pat, *, with_evidence=False):
     """ORGANIC #466 R3 — return the multiplicity declared on the analog
     class's L5 Block-HEADING line (``## Block B — ldo … (×1 …)``) across
     ALL source docs, or None when no block heading for that class carries
-    an explicit ``×N``.
+    an explicit ``×N``. With ``with_evidence``, return the count's source
+    record so the applying pass preserves confidence with the count.
 
     The designable-block count lives on the L5 Block heading. The
     per-doc keyword scan in `gen_l5_adi_spec` anchors a class to the
@@ -14185,6 +14221,13 @@ def _v466_block_layer_multiplicity(extracted, cls_pat):
                 continue
             n = _v1_6_402_extract_block_multiplicity(line)
             if n is not None:
+                if with_evidence:
+                    return {
+                        "count": n, "text": line,
+                        "source": f"input/docs/{_fname}",
+                        "low_confidence": not _block_multiplicity_is_explicit(
+                            line, cls_pat, n),
+                    }
                 return n
     return None
 
@@ -14205,10 +14248,12 @@ def _v466_apply_block_layer_multiplicity(blocks, extracted) -> None:
         cls_pat = _ANALOG_KEYWORDS.get(cls) if isinstance(cls, str) else None
         if not cls_pat:
             continue
-        n = _v466_block_layer_multiplicity(extracted, cls_pat)
-        if n is not None:
-            blk["count"] = n
-            blk["multiplicity"] = n
+        proof = _v466_block_layer_multiplicity(
+            extracted, cls_pat, with_evidence=True)
+        if proof is not None:
+            blk["count"] = proof["count"]
+            blk["multiplicity"] = proof["count"]
+            blk["multiplicity_evidence"] = proof
 
 
 def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
@@ -36865,6 +36910,14 @@ def gen_l5_adi_spec(project: Path,
             if _v1_6_402_count is not None:
                 entry["count"] = _v1_6_402_count
                 entry["multiplicity"] = _v1_6_402_count
+                own_entry = _v466_block_own_entry(text, kw_pos)
+                entry["multiplicity_evidence"] = {
+                    "count": _v1_6_402_count,
+                    "text": own_entry,
+                    "source": f"input/docs/{fname}",
+                    "low_confidence": not _block_multiplicity_is_explicit(
+                        own_entry, pat, _v1_6_402_count),
+                }
             blocks.append(entry)
             seen_classes.add(cls)
             if len(ev) < 16:
@@ -42051,6 +42104,82 @@ def _declared_input_clock_names(project, l9):
     return names
 
 
+def _declared_clock_groups(extracted: Dict[str, str]) -> List[dict]:
+    """Explicit named-clock relationships in prose or a declaration table.
+
+    Separate pins or group memberships alone establish no relationship.
+    This preserves source intent; it does not authorize generated SDC cuts.
+    """
+    groups: List[dict] = []
+    seen = set()
+    ident = r"`?[A-Za-z_][\w]*`?"
+    clock_list = rf"{ident}(?:(?:\s*,\s*(?:and\s+)?|\s+and\s+){ident})+"
+    relationship = r"asynchronous|exclusive|synchronous"
+    declaration = re.compile(
+        r"(?:clock\s+group\s+`?(?P<name>[A-Za-z_][\w]*)`?\s*:\s*)?"
+        rf"(?:(?:the\s+)?clocks\s+)?(?P<clocks>{clock_list})\s+"
+        rf"(?:are|shall\s+be|must\s+be)\s+(?:mutually\s+)?(?P<relationship>{relationship})"
+        r"(?:\s+(?:with|to)\s+(?:each\s+other|one\s+another))?",
+        re.IGNORECASE)
+
+    def append(name, clocks_text, relation, fname, lineno, quote):
+        if (not re.fullmatch(clock_list, clocks_text.strip(), re.IGNORECASE)
+                or relation.lower() not in {"asynchronous", "exclusive", "synchronous"}):
+            return
+        clocks = list(dict.fromkeys(
+            clock.strip("`") for clock in re.findall(ident, clocks_text)
+            if clock.lower() != "and"))
+        if len(set(clocks)) < 2:
+            return
+        key = (name, tuple(clocks), relation.lower())
+        if key in seen:
+            return
+        seen.add(key)
+        groups.append({
+            "name": name or f"clock_group_{len(groups) + 1}",
+            "clocks": clocks, "relationship": relation.lower(),
+            "evidence": {
+                "doc": (str(fname) if str(fname).startswith("input/")
+                        else f"input/docs/{fname}"),
+                "line": lineno, "quote": quote,
+            },
+        })
+
+    for fname, text in (extracted or {}).items():
+        lines = (text or "").splitlines(keepends=True)
+        table_roles = {}
+        offset = 0
+        for index, raw in enumerate(lines):
+            current = _issue3234_position_is_current(text, offset)
+            offset += len(raw)
+            line = raw.strip()
+            if not current:
+                continue
+            if (index + 1 < len(lines) and _v0_3_2_is_pipe_row(line)
+                    and _v0_3_2_is_sep_row(lines[index + 1])):
+                headers = [cell.strip(" *`").lower()
+                           for cell in _v0_3_2_split_pipe_cells(line)]
+                table_roles = {key: i for i, key in enumerate(headers)}
+                continue
+            if _v0_3_2_is_pipe_row(line):
+                if "clocks" in table_roles and "relationship" in table_roles:
+                    cells = _v0_3_2_split_pipe_cells(line)
+                    if len(cells) > max(table_roles.values()):
+                        group_i = table_roles.get("group", table_roles.get("name"))
+                        append(cells[group_i].strip(" *`") if group_i is not None else None,
+                               cells[table_roles["clocks"]].strip(),
+                               cells[table_roles["relationship"]].strip(" *`"),
+                               fname, index + 1, line)
+                continue
+            table_roles = {}
+            for sentence in re.split(r"\.(?:\s+|$)", line.lstrip("-* ")):
+                match = declaration.fullmatch(sentence.strip())
+                if match:
+                    append(match.group("name"), match.group("clocks"),
+                           match.group("relationship"), fname, index + 1, line)
+    return groups
+
+
 def _emit_typed_clock_domains(project, clock_domains, timing_constants):
     """v1.6.88 (#20 Bug 4 P0 BLOCKER) — augment each existing
     `clock_domains[]` entry with the typed-shape required by
@@ -45650,6 +45779,7 @@ def gen_l8_timing_waveform(project: Path,
         "clock_mhz": clock_mhz,
         "no_clock_mhz_in_input": no_clock_mhz_in_input,
         "clock_domains": clock_domains,
+        "clock_groups": _declared_clock_groups(extracted),
         "no_clock_domains_in_input": no_clock_domains_in_input,
         # v1.6.510 — for #352 P3 ORGANIC. Synthesis-Fmax
         # device-fitting benchmark rows are routed here instead of
@@ -47150,6 +47280,7 @@ def gen_l8_timing_waveform_doc(project: Path,
         "doc_class": "timing_waveform",
         "ic_name": ic_name,
         "timing_windows": windows,
+        "clock_groups": _declared_clock_groups(extracted),
         "timing_constants": timing_constants,
         # v1.6.322 — for #221 ORGANIC P3.
         "waveforms": waveforms,
@@ -51783,7 +51914,7 @@ def _v1_6_426_emit_memories(l9: dict, extracted: dict, project=None) -> None:
 #     `count` (or fallback `instance_count` / `multiplicity`) is an
 #     integer >= 2, appends an entry to `l9["submodules"]` with
 #     `instance_count = count`, `extraction_strategy =
-#     "analog_block_multiplicity_v1_6_403"`, `low_confidence: True`.
+#     "analog_block_multiplicity_v1_6_403"`, with count-specific confidence.
 #     Idempotent: skips when an entry with the same `(name, strategy)`
 #     pair is already present, so re-running the helper never double-
 #     emits. Stamps `l9["extraction_strategy"]
@@ -51845,11 +51976,20 @@ def _v1_6_403_mirror_analog_multiplicity_to_l9(l5: dict, l9: dict) -> int:
         if (str(block_type),
                 "analog_block_multiplicity_v1_6_403") in existing_pairs:
             continue
+        multiplicity_evidence = entry.get("multiplicity_evidence") or {}
+        if not isinstance(multiplicity_evidence, dict):
+            multiplicity_evidence = {}
+        count_is_explicit = (
+            multiplicity_evidence.get("count") == count_int
+            and multiplicity_evidence.get("low_confidence") is False
+            and bool(multiplicity_evidence.get("text")))
         l9.setdefault("submodules", []).append({
             "name": str(block_type),
             "instance_count": count_int,
             "extraction_strategy": "analog_block_multiplicity_v1_6_403",
-            "low_confidence": True,
+            "low_confidence": not count_is_explicit,
+            **({"multiplicity_evidence": dict(multiplicity_evidence)}
+               if multiplicity_evidence else {}),
         })
         # Track the new pair so a subsequent block of the same type
         # in the same L5 list doesn't double-emit either.
