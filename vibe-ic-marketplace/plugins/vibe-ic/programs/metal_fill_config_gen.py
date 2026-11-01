@@ -237,8 +237,9 @@ def parse_techlef_routing(text: str, prefix: Optional[str] = None
         widths, spaces = [], []
         for tokens, ended in _lef_statements(body):
             field = tokens[0].upper()
-            if field != "SPACINGTABLE" and any(t.upper() == "SPACINGTABLE" for t in tokens[1:]):
-                raise ValueError(f"routing layer {name}: missing semicolon before SPACINGTABLE")
+            if field != "SPACINGTABLE" and any(
+                    t.upper() in ("SPACING", "SPACINGTABLE") for t in tokens[1:]):
+                raise ValueError(f"routing layer {name}: missing semicolon before SPACING/SPACINGTABLE")
             if field not in ("WIDTH", "SPACING", "SPACINGTABLE"):
                 continue
             if not ended:
@@ -429,6 +430,10 @@ def parse_metal_keepout_layers(deck_text: str, metal_prefix: Optional[str],
         by_name.setdefault(name, (num, dt))
     pref = (metal_prefix or "").lower()
     routing_ids = {v for v in (routing_layers or {}).values()}
+    for base, (num, _dt) in (routing_layers or {}).items():
+        dummy_dt = dummy_datatype_for(base, num, table)
+        if dummy_dt is not None:
+            routing_ids.add((num, dummy_dt))
     routing_nums = {num for num, _dt in routing_ids}
 
     best: "OrderedDict[Tuple[int, int], float]" = OrderedDict()

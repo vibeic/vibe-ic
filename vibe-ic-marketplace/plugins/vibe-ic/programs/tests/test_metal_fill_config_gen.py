@@ -241,6 +241,25 @@ crown_drawn.separation(blocked, 4.7.um)
     assert cfg["keepout_layers"] == [[95, 0, 4.7]]
 
 
+@pytest.mark.parametrize("selected", [True, False])
+def test_arbitrary_routing_keepout_follows_selected_dummy_datatype(selected):
+    lef = _routing_layer("Crown", "SPACING 0.3 ;")
+    left = "crown_dummy" if selected else "crown_fill"
+    deck = ("crown_dummy = input(74, 7)\ncrown_fill = input(74, 9)\n"
+            "blocked = input(95, 0)\n"
+            f"{left}.separation(blocked, 4.7.um).output('gap', 'gap')\n")
+    cfg = G.build_metal_fill_config("CROWN NET 74 0", lef, deck)
+    assert cfg["layers"][0]["fill_datatype"] == 7
+    assert cfg["keepout_layers"] == ([[95, 0, 4.7]] if selected else [])
+
+
+@pytest.mark.parametrize("preceding", ["SPACING 0.2", "AREA 0.1"])
+def test_missing_semicolon_cannot_hide_scalar_spacing(preceding):
+    lef = _routing_layer("Metal1", preceding + "\n SPACING 0.9 ;\n SPACING 0.2 ;")
+    with pytest.raises(ValueError, match="Metal1.*SPACING"):
+        G.build_metal_fill_config("Metal1 NET 71 0", lef, "")
+
+
 def test_explicit_prefix_keeps_all_declared_routing_layers():
     lef = _routing_layer("Metal1", _PRL) + _routing_layer("TopMetal1", _INFLUENCE)
     assert G.parse_techlef_routing(lef, "Metal") == {
