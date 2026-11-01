@@ -2798,7 +2798,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
             break
         margin = need
 
-    def place_regions(rows, row_nets, shared, widths, margin):
+    def place_regions(rows, row_nets, shared, widths, margin, *, final=True):
         # All shared rails are booked from the bank's leftmost possible anchor.
         # Their final interval-colored trunk centres only shorten these spans.
         bus_x = {net: pitch for net in shared}
@@ -2807,7 +2807,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
         region_widths = {**widths, "fullspan": width - margin}
         for d in fullspan:
             required = gap(None, d) + d["bbox"][2] - d["bbox"][0] + gap(d, None)
-            if required > region_widths["fullspan"]:
+            if final and required > region_widths["fullspan"]:
                 raise Refusal("parallel resistor pair access envelope exceeds the full-span width")
             d["placement_region"] = "fullspan"
             d["box_x"] = d["gap_hi"] = margin + gap(None, d)
@@ -2901,8 +2901,11 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
     # The seed determines real y-span concurrency, rather than treating every
     # cross-row net as a simultaneous full-height trunk. Spend that measured
     # bank budget once on grouping-aware rows; this is not a width search.
+    # The seed's obsolete one-track-per-net reservation may overflow; it
+    # measures concurrency only. Enforce the full-span bound on the final
+    # placement after that measured bank budget has been reclaimed.
     rows, row_rails, bus_x, descriptions = place_regions(
-        rows, row_nets, shared, widths, margin)
+        rows, row_nets, shared, widths, margin, final=False)
     margin = min(r["column_lambda"][0] for r in descriptions)
     demand = {}
     for name, devices in columns.items():
