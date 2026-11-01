@@ -43,7 +43,9 @@ def test_a1_preserves_the_capacitor_value_unit_range_and_declared_pins(tmp_path)
     result = run_prog(A1, unrelated)
     assert result.returncode == 0, result.stderr
     other = read_json(bdir(unrelated, "amp_alpha") / "spec.json")
-    assert {r["name"] for r in other["specs"]} == {"vout"}
+    assert {r["name"] for r in other["specs"]} == {"vout", "capacitance"}
+    cap = next(r for r in other["specs"] if r["name"] == "capacitance")
+    assert cap["target"] == 25000 and cap["unit"] == "fF"
 
 
 @pytest.mark.parametrize("value", [100.0, 25000.0])
