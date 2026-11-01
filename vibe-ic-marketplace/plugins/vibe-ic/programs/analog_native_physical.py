@@ -192,6 +192,8 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
                 argv += ["--" + key.replace("_", "-"), str(cfg[key])]
         if cfg.get("shared_capacitor_escapes") is True:
             argv.append("--shared-capacitor-escapes")
+        if cfg.get("left_right_regions") is True:
+            argv.append("--left-right-regions")
         execution = run("analog_a5_layout_emit.py", argv,
                         outputs=[str(report), str(bdir / "layout.mag"),
                                  str(bdir / f"{name}.gds")])
