@@ -2610,6 +2610,42 @@ def _m4_trunk_tracks(row_rails: Sequence[dict], geo: Geo,
     return bus_x, margin
 
 
+def _high_plane_descent(plan: Plan, net: str, x: int, y: int, level: int,
+                        geo: Geo, sites: "Sites", dev: dict) -> Tuple[int,int]:
+    """Place a complete high-plane descent in actual free vertical space."""
+    prototype = Plan()
+    _via_stack(prototype,net,0,0,level,geo,top=ROUTE_LEVEL)
+    half = max(abs(v) for r in prototype.shapes for v in r["box"])
+    ceiling = max(r["box"][3] for r in plan.shapes+plan.device_shapes)
+    candidates = {y}
+    for shape in prototype.shapes:
+        layer,b = shape["layer"],shape["box"]
+        zone = (x+b[0],0,x+b[2],ceiling)
+        for row in sites.near(layer,zone,geo.spacing_reach(layer)):
+            q=row["box"]
+            box=(x+b[0],y+b[1],x+b[2],y+b[3])
+            spacing=geo.metal_space(layer,box,q)
+            if max(q[0]-box[2],box[0]-q[2],0) < spacing:
+                candidates.update((q[1]-b[3]-spacing,q[3]-b[1]+spacing))
+    wire_half=max(geo.wire[level]//2,half)
+    for cy in sorted((v for v in candidates if half <= v <= ceiling-half),
+                     key=lambda v:(abs(v-y),v)):
+        rows=[dict(r,box=(x+r["box"][0],cy+r["box"][1],
+                          x+r["box"][2],cy+r["box"][3])) for r in prototype.shapes]
+        # The upper-plane stem physically joins the actual original escape
+        # to the relocated stack; its M3 endpoint is propagated to the router.
+        if cy != y:
+            rows.append({"net":net,"layer":f"metal{level}",
+                         "box":(x-wire_half,min(y,cy)-wire_half,
+                                x+wire_half,max(y,cy)+wire_half)})
+        if all(sites.clear(r["box"],[r["layer"]],None,net) for r in rows):
+            for row in rows:
+                plan.paint(net,row["layer"],*row["box"])
+            return x,cy
+    raise Refusal(f"{dev.get('name')}: no full-envelope high-plane descent "
+                  f"at x={x} within the existing 0:{ceiling} vertical frame")
+
+
 def _straight_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
                      geo: Geo, sites: "Sites") -> bool:
     """Realize a straight leg and its M4 landing when their union clears."""
@@ -2636,6 +2672,51 @@ def _straight_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
                 plan.paint(net,r["layer"],*r["box"])
             return True
     return False
+
+
+def _route_notch_fills(rows: Sequence[dict], net: str, sites: "Sites",
+                       geo: Geo) -> List[dict]:
+    """Close small same-net bays formed by a new path's own bends/pads."""
+    shadow = Sites([],geo)
+    shadow.grid = {key:list(values) for key,values in sites.grid.items()}
+    shadow.polygons = sites.polygons
+    for row in rows:
+        shadow.add(row)
+    added,queue,seen = [],list(rows),set()
+    while queue:
+        row=queue.pop()
+        if row["layer"] not in ("metal2","metal3"):
+            continue
+        layer,b=row["layer"],row["box"]
+        for other in shadow.near(layer,b,geo.spacing_reach(layer)):
+            if other["net"] != net or "lcomp" in other:
+                continue
+            c=other["box"]
+            key=(layer,tuple(sorted((tuple(b),tuple(c)))))
+            if key in seen:
+                continue
+            seen.add(key)
+            dx,dy=max(b[0]-c[2],c[0]-b[2],0),max(b[1]-c[3],c[1]-b[3],0)
+            spacing=geo.metal_space(layer,b,c)
+            if dx and dx < spacing and min(b[3],c[3]) > max(b[1],c[1]):
+                gap=(min(b[2],c[2]),max(b[1],c[1]),max(b[0],c[0]),min(b[3],c[3]))
+            elif dy and dy < spacing and min(b[2],c[2]) > max(b[0],c[0]):
+                gap=(max(b[0],c[0]),min(b[3],c[3]),min(b[2],c[2]),max(b[1],c[1]))
+            else:
+                continue
+            cover=[(max(gap[0],r["box"][0]),max(gap[1],r["box"][1]),
+                    min(gap[2],r["box"][2]),min(gap[3],r["box"][3]))
+                   for r in shadow.near(layer,gap,0)
+                   if r["net"]==net and "lcomp" not in r
+                   and r["box"][0]<gap[2] and gap[0]<r["box"][2]
+                   and r["box"][1]<gap[3] and gap[1]<r["box"][3]]
+            if _rectangle_union_area(cover)==(gap[2]-gap[0])*(gap[3]-gap[1]):
+                continue
+            if not shadow.clear(gap,[layer],None,net):
+                raise Refusal(f"{net}: local bend notch cannot be filled clear of foreign geometry")
+            patch={"net":net,"layer":layer,"box":gap}
+            shadow.add(patch);added.append(patch);queue.append(patch)
+    return added
 
 
 def _route_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
@@ -2791,11 +2872,10 @@ def _route_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
     while finish != start:
         finish, rows = parents[finish]
         segments.append(rows)
-    for rows in reversed(segments):
-        for row in rows:
-            plan.paint(net, row["layer"], *row["box"])
-    for row in final_stack:
-        plan.paint(net, row["layer"], *row["box"])
+    realized = [row for group in reversed(segments) for row in group] + final_stack
+    realized += _route_notch_fills(realized,net,sites,geo)
+    for row in realized:
+        plan.paint(net,row["layer"],*row["box"])
     return bool(rails)
 
 
@@ -3806,13 +3886,16 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                     # The common high-plane bus reaches the edge member's
                     # descent. Keep every PCell and its native plate distinct.
                     continue
-                cx, cy = _via_stack(plan, net, lane, ey0, esc, geo,
-                                    top=ROUTE_LEVEL, sites=sites,
-                                    dev=d["dev"])
+                if rail_level == 4:
+                    cx,cy = _high_plane_descent(plan,net,lane,ey0,esc,geo,sites,d["dev"])
+                    ey = cy
+                else:
+                    cx,cy = _via_stack(plan,net,lane,ey0,esc,geo,
+                                       top=ROUTE_LEVEL,sites=sites,dev=d["dev"])
+                    if cy != ey:
+                        plan.paint(net,"metal3",cx-hw3,min(cy,ey)-hw3,
+                                   cx+hw3,max(cy,ey)+hw3)
                 joint = cx
-                if cy != ey:
-                    plan.paint(net, "metal3", cx - hw3, min(cy, ey) - hw3,
-                               cx + hw3, max(cy, ey) + hw3)
             else:
                 lx, ly, level = g["abs_labels"][0]
                 fr = friendly_conductor(d["rows"], f"metal{level}", lx, ly,

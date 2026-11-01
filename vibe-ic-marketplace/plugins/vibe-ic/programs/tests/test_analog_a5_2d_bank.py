@@ -249,3 +249,48 @@ def test_supply_stripe_crosses_isolated_adjacent_metal_but_rejects_a_cut():
             a._draw_pins(plan,['vss'],{'vss':(0,984,2000,1016)},spec,g,sites,3000,g.pitch())
             assert plan.pins[0]['strip_box'][3] == 3000
             assert not plan.deviations
+
+
+def test_high_descent_uses_actual_free_space_and_connects_its_upper_stem():
+    g=geo()
+    plan=a.Plan()
+    plan.device_shapes=[{'net':'<opaque>','layer':'metal1','box':(3000,0,3100,4000)}]
+    sites=a.Sites(plan.device_shapes,g)
+    plan.sites=sites
+    plan.paint('own','metal7',900,1000,2000,1200)
+    for y in (1000,1053,1106,1159):plan.paint('foreign','metal4',0,y,3000,y+32)
+    x,y=a._high_plane_descent(plan,'own',1000,1100,7,g,sites,{'name':'cap'})
+    assert abs(y-1100)>a.ISLAND_SEARCH_LAMBDA
+    assert connected(plan,'own',('metal7',1000,1100),('metal3',x,y))
+    assert not plan.deviations
+
+
+def test_local_bend_fills_its_own_measured_small_pad_notch():
+    import pytest
+    g=geo()
+    for foreign in (False,True):
+        sites=a.Sites([],g)
+        if foreign:sites.add({'net':'foreign','layer':'metal3','box':(17638,22123,17639,22126)})
+        rows=[{'net':'own','layer':'metal3','box':b} for b in (
+            (17634,22093,17763,22123),(17608,22093,17664,22123),
+            (17608,22093,17638,22157),(17591,22126,17639,22158))]
+        if foreign:
+            with pytest.raises(a.Refusal,match='notch'):a._route_notch_fills(rows,'own',sites,g)
+        else:
+            patches=a._route_notch_fills(rows,'own',sites,g)
+            assert any(p['box']==(17634,22123,17639,22126) for p in patches)
+
+
+def test_high_descent_refuses_a_fully_obstructed_frame_without_a_fallback():
+    import pytest
+    g=geo()
+    plan=a.Plan()
+    sites=a.Sites([],g)
+    plan.sites=sites
+    plan.paint('own','metal7',900,1000,2000,1200)
+    plan.paint('foreign','metal4',0,0,3000,4000)
+    before=list(plan.shapes)
+    with pytest.raises(a.Refusal,match='no full-envelope high-plane descent'):
+        a._high_plane_descent(plan,'own',1000,1100,7,g,sites,{'name':'cap'})
+    assert plan.shapes==before
+    assert not plan.deviations
