@@ -289,7 +289,7 @@ def test_declared_local_pdk_container_route_keeps_container_authority(
 
     project, root, entry, _ = declared_local_pdk
     monkeypatch.setenv("VIBEIC_LIBRELANE_ROUTE", "CONTAINER")
-    container_root = entry["container_path_glob"].replace("*", "selected")
+    container_root = '/foss/pdks/' + entry["container_path_glob"].replace("*", "selected")
     existing = {container_root}
     existing.update(str(Path(container_root) / entry[key].replace("*", "neutral")) for key in
                     ("liberty_glob", "tech_lef_glob", "cell_lef_glob"))
@@ -470,3 +470,43 @@ def test_single_file_registry_config_bytes(tmp_path, monkeypatch, name):
         records = json.loads(target.read_text()) if target.exists() else {}
         records[name] = json.dumps(asdict(config), sort_keys=True, separators=(',', ':'))
         target.write_text(json.dumps(records, sort_keys=True, indent=2) + '\n')
+
+
+@pytest.mark.parametrize('case', ['declared', 'missing_declaration', 'missing_distribution',
+                                 'one_glob', 'ambiguous_glob', 'dotdot'])
+def test_container_registry_root_is_bound_to_runtime_declaration(tmp_path, monkeypatch, case):
+    from test_issue211_registry_driven_pdk_refuse import _FakeContainer
+    parent = str(tmp_path / 'declared')
+    name = 'neutral_pdk'
+    expected = parent + '/' + name
+    existing = {expected}
+    entry = {'name': name, 'container_path': '/legacy/layout/neutral_pdk'}
+    declared = parent
+    if case == 'missing_declaration':
+        declared = None
+    elif case == 'missing_distribution':
+        existing.clear()
+    elif case in ('one_glob', 'ambiguous_glob'):
+        entry['container_path_glob'] = '*/' + name
+        expected = parent + '/selected/' + name
+        existing = {expected}
+        if case == 'ambiguous_glob':
+            existing.add(parent + '/other/' + name)
+    elif case == 'dotdot':
+        entry['container_path_glob'] = '../' + name
+    fake = _FakeContainer(existing, pdk_root=declared)
+    monkeypatch.setattr(_p3(), '_docker_exec_raw', fake)
+    try:
+        observed = _p3()._registry_container_root('container', entry)
+    except SystemExit as exc:
+        observed = str(exc)
+    if case in ('declared', 'one_glob'):
+        assert observed == expected
+    else:
+        code = {'missing_declaration': 'REGISTRY_PDK_ROOT_UNDECLARED',
+                'missing_distribution': 'REGISTRY_PDK_DISTRIBUTION_MISSING',
+                'ambiguous_glob': 'REGISTRY_PDK_ROOT_AMBIGUOUS',
+                'dotdot': 'REGISTRY_PDK_ROOT_GLOB_INVALID'}[case]
+        assert code in observed and name in observed, observed
+        if case == 'ambiguous_glob':
+            assert all(path in observed for path in existing)

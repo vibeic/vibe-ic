@@ -13587,45 +13587,43 @@ def _registry_glob_one(container: str, root: str, pattern: Optional[str],
 
 def _registry_container_root(container: str, reg: Dict[str, Any]
                              ) -> Optional[str]:
-    """Resolve a registry PDK root, including content-addressed installs.
+    """Bind the named distribution beneath the runtime's declared PDK_ROOT.
 
-    A Ciel-installed PDK is deliberately not exposed as
-    ``/foss/pdks/<name>``.  Its version directory is an image-build input, so
-    baking that directory's hash into a registry entry makes the next image
-    silently look like a missing PDK.  ``container_path_glob`` is the explicit
-    registry declaration for that shape.  It must resolve to *exactly one*
-    directory in the named container; zero and ambiguity both refuse.  The
-    returned concrete root is then used by every subsequent asset probe, so
-    liberty/LEF/DRC cannot accidentally come from a different PDK.
+    Registry root globs are relative to that declaration, never to an image
+    layout literal. They retain the exactly-one-directory contract.
+    Missing declarations, missing distributions and ambiguity are BLOCKING.
     """
-    root_glob = str(reg.get("container_path_glob") or "").strip()
-    if not root_glob:
-        root = str(reg.get("container_path") or "").strip()
-        return root or None
-    if (not root_glob.startswith("/foss/pdks/")
-            or not re.fullmatch(r"/[A-Za-z0-9_./*?\-]+", root_glob)):
-        return None
-    rc, out, _err = _docker_exec_raw(
-        # `*`/`?` must reach the shell as glob syntax.  The strict alphabet
-        # above excludes whitespace, quotes, command substitution and every
-        # shell control character, so this does not turn registry data into a
-        # command-injection surface.
-        container, f"ls -1d {root_glob} 2>/dev/null | sort",
-        timeout=60)
-    if rc != 0:
-        return None
-    roots: List[str] = []
-    prefix = "/foss/pdks/"
-    for raw in out.splitlines():
-        candidate = raw.strip()
-        if not candidate.startswith(prefix):
-            continue
-        rc2, _o2, _e2 = _docker_exec_raw(
-            container, f"test -d {shlex.quote(candidate)}", timeout=60)
-        if rc2 == 0:
-            roots.append(candidate)
-    roots = sorted(set(roots))
-    return roots[0] if len(roots) == 1 else None
+    name = str(reg.get('name') or '')
+
+    def refuse(code, detail):
+        raise SystemExit(f'[FAIL] --pdk {name}: {code}: {detail}; REFUSING to fall back or substitute another PDK.')
+
+    if not name or name in ('.', '..') or not re.fullmatch(r'[A-Za-z0-9_.-]+', name):
+        refuse('REGISTRY_PDK_NAME_INVALID', repr(name))
+    rc, out, _ = _docker_exec_raw(container, 'printenv PDK_ROOT', timeout=60)
+    declared = [line.strip().rstrip('/') for line in out.splitlines()
+                if line.strip().startswith('/')]
+    if rc != 0 or len(declared) != 1:
+        refuse('REGISTRY_PDK_ROOT_UNDECLARED', 'image runtime must declare PDK_ROOT')
+    root = declared[0]
+    if not re.fullmatch(r'/[A-Za-z0-9_./+\-]+', root) or '..' in Path(root).parts:
+        refuse('REGISTRY_PDK_ROOT_INVALID', repr(root))
+    pattern = str(reg.get('container_path_glob') or name).strip()
+    if (not pattern or pattern.startswith('/') or '..' in Path(pattern).parts
+            or not re.fullmatch(r'[A-Za-z0-9_./*?\-]+', pattern)):
+        refuse('REGISTRY_PDK_ROOT_GLOB_INVALID', repr(pattern))
+    rc, out, _ = _docker_exec_raw(
+        container, f'ls -1d {root}/{pattern} 2>/dev/null | sort', timeout=60)
+    roots = sorted({line.strip() for line in out.splitlines()
+                    if _registry_path_under_root(root + '/', line.strip())
+                    and _docker_exec_raw(container, f'test -d {shlex.quote(line.strip())}', timeout=60)[0] == 0}) if rc == 0 else []
+    if not roots:
+        refuse('REGISTRY_PDK_DISTRIBUTION_MISSING', f'{name} under {root}; glob={pattern!r}')
+    if len(roots) > 1:
+        refuse('REGISTRY_PDK_ROOT_AMBIGUOUS', f'key=container_path_glob candidates={roots}')
+    if Path(roots[0]).name != name:
+        refuse('REGISTRY_PDK_DISTRIBUTION_MISMATCH', roots[0])
+    return roots[0]
 
 
 def _pdk_config_from_registry(project: Path, reg: Dict[str, Any]

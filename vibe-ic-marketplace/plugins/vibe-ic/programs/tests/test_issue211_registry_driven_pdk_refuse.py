@@ -59,13 +59,19 @@ class _FakeContainer:
     login banner to STDOUT first (exactly as vibeic-eda does), then answers
     `test -d` / `test -e` / `ls -1d <glob> … | sort` from a fixed path set."""
 
-    def __init__(self, existing):
+    def __init__(self, existing, pdk_root='/foss/pdks'):
         self.existing = set(existing)
+        self.pdk_root = pdk_root
+        if pdk_root:
+            self.existing.add(str(pdk_root))
         self.calls = []
 
     def __call__(self, container, cmd, timeout=1800):
         self.calls.append(cmd)
         c = cmd.strip()
+        if c == 'printenv PDK_ROOT':
+            return (0 if self.pdk_root else 1,
+                    _BANNER + '\n' + (str(self.pdk_root) + '\n' if self.pdk_root else ''), '')
         if c.startswith("test -d "):
             path = _unquote(c[len("test -d "):].strip())
             ok = path in self.existing
