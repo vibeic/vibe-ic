@@ -60,12 +60,96 @@ def test_cpu_limit_selects_from_inherited_affinity(target, value, count):
     assert sorted(os.sched_getaffinity(0)) == allowed
 
 
-@pytest.mark.parametrize('limit', [256, 512])
-def test_pids_limit_is_applied_only_to_the_child(target, limit):
+FORK_REPORT = '''
+import errno,json,os,resource,sys
+from pathlib import Path
+group=next(line.split(':',2)[2].strip() for line in Path('/proc/self/cgroup').read_text().splitlines() if line.startswith('0::'))
+folder=Path('/sys/fs/cgroup')/group.lstrip('/')
+maximum=(folder/'pids.max').read_text().strip()
+reader,writer=os.pipe()
+children=[]
+failure=None
+try:
+    for _ in range(int(sys.argv[1])):
+        try:
+            child=os.fork()
+        except OSError as exc:
+            failure=exc.errno
+            break
+        if child==0:
+            os.close(writer)
+            os.read(reader,1)
+            os._exit(0)
+        children.append(child)
+    current=int((folder/'pids.current').read_text())
+finally:
+    os.close(writer)
+    os.close(reader)
+    for child in children:
+        os.waitpid(child,0)
+print(json.dumps(dict(uid=os.getuid(),group=group,maximum=maximum,current=current,
+                     forked=len(children),failure=failure,nproc=resource.getrlimit(resource.RLIMIT_NPROC))))
+'''
+
+
+@pytest.mark.parametrize('limit,attempts,saturate', [(512, 3, False), (8, 16, True)])
+def test_pids_scope_allows_nonroot_forks_and_enforces_its_own_limit(
+        target, limit, attempts, saturate):
+    import errno
     before = resource.getrlimit(resource.RLIMIT_NPROC)
-    measured = _measure(target, ['--pids-limit', str(limit)])
-    assert measured['pids'] == [limit, limit]
+    parent_group = Path('/proc/self/cgroup').read_text()
+    result = _launch(target, ['--pids-limit', str(limit)],
+                     command=[sys.executable, '-c', FORK_REPORT, str(attempts)])
+    assert result.returncode == 0, result.stdout + result.stderr
+    measured = json.loads(result.stdout)
+    print('LOCAL_SCOPE_FORK ' + json.dumps(measured, sort_keys=True))
+    assert measured['uid'] != 0
+    assert measured['forked'] >= 2
+    assert measured['group'].endswith('.scope')
+    assert measured['group'] not in parent_group
+    assert measured['maximum'] == str(limit)
+    assert measured['nproc'] == list(before)
+    if saturate:
+        assert measured['failure'] == errno.EAGAIN
+        assert measured['current'] == limit
+    else:
+        assert measured['forked'] == attempts and measured['failure'] is None
     assert resource.getrlimit(resource.RLIMIT_NPROC) == before
+    assert Path('/proc/self/cgroup').read_text() == parent_group
+
+
+def test_unavailable_user_manager_refuses_without_starting_the_tool(target):
+    marker = target.tmp / 'tool-must-not-run'
+    command = [sys.executable, '-c', f'from pathlib import Path;Path({str(marker)!r}).touch()']
+    with pytest.raises(contract.Refusal, match='LL_LOCAL_PIDS_LIMIT_UNENFORCEABLE'):
+        _launch(target, ['--pids-limit', '512'], command=command,
+                env={**os.environ, 'XDG_RUNTIME_DIR': str(target.tmp),
+                     'DBUS_SESSION_BUS_ADDRESS': f'unix:path={target.tmp}/absent-bus'})
+    assert not marker.exists()
+
+
+def test_missing_scope_runner_refuses(target, monkeypatch):
+    original = contract.shutil.which
+    monkeypatch.setattr(contract.shutil, 'which',
+                        lambda name, **kwargs: None if name == 'systemd-run' else original(name, **kwargs))
+    with pytest.raises(contract.Refusal, match='LL_LOCAL_PIDS_LIMIT_UNENFORCEABLE'):
+        _launch(target, ['--pids-limit', '512'])
+
+
+def test_tool_failure_inside_a_working_scope_keeps_its_exit_code(target):
+    result = _launch(target, ['--pids-limit', '512'], command=[
+        sys.executable, '-c',
+        'import sys;print("Failed to connect to bus",file=sys.stderr);sys.exit(7)'])
+    assert result.returncode == 7
+    assert 'Failed to connect to bus' in result.stderr
+
+
+def test_scoped_tool_receives_literal_arguments(target):
+    literal = '$HOME/${SCOPE_TEST_VALUE}'
+    result = _launch(target, ['--pids-limit', '512'], command=[
+        sys.executable, '-c', 'import sys;print(sys.argv[1])', literal])
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip() == literal
 
 
 def test_stricter_inherited_limits_are_preserved(target, monkeypatch):
@@ -74,7 +158,6 @@ def test_stricter_inherited_limits_are_preserved(target, monkeypatch):
     inherit = (
         'import os,resource,sys; '
         'resource.setrlimit(resource.RLIMIT_AS,(256*1024**2,)*2); '
-        'resource.setrlimit(resource.RLIMIT_NPROC,(128,)*2); '
         'os.sched_setaffinity(0,sorted(os.sched_getaffinity(0))[:1]); '
         'os.execvpe(sys.argv[1],sys.argv[1:],os.environ)')
 
@@ -84,7 +167,7 @@ def test_stricter_inherited_limits_are_preserved(target, monkeypatch):
     monkeypatch.setattr(_watchdog, 'run_host_supervised', inherited_child)
     measured = _measure(target, ['--cpus', '4', '--pids-limit', '512'])
     assert measured['as'] == [256 * 1024**2, 256 * 1024**2]
-    assert measured['pids'] == [128, 128]
+    assert measured['pids'] == list(resource.getrlimit(resource.RLIMIT_NPROC))
     assert measured['affinity'] == sorted(os.sched_getaffinity(0))[:1]
 
 

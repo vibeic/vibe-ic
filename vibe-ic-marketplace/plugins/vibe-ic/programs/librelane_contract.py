@@ -441,8 +441,8 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
 
     Reuse the existing mount-path conversion and host process supervision.
     The enclosing fresh image supplies the environment and cgroup memory bound.
-    CPU limits select at most ceil(N) inherited CPUs; process and memory limits
-    become child rlimits, preserving any stricter inherited ceiling.
+    CPU limits select at most ceil(N) inherited CPUs; memory becomes a child
+    rlimit. Process counts use a transient user scope, never a per-UID rlimit.
     Unknown launch options refuse rather than silently discarding their meaning.
     """
     mounts, variables, entrypoint, container_workdir = [], {}, None, None
@@ -623,18 +623,17 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
         # this launcher sets limits and immediately execs the bound command.
         launcher = (
             'import os,resource,sys\n'
-            'memory,cpus,pids=map(int,sys.argv[1:4])\n'
+            'memory,cpus=map(int,sys.argv[1:3])\n'
             'def cap(kind,requested):\n'
             '    limits=(requested,*resource.getrlimit(kind))\n'
             '    bound=min(value for value in limits if value!=resource.RLIM_INFINITY)\n'
             '    resource.setrlimit(kind,(bound,bound))\n'
             'if memory>0: cap(resource.RLIMIT_AS,memory)\n'
             'if cpus>0: os.sched_setaffinity(0,sorted(os.sched_getaffinity(0))[:cpus])\n'
-            'if pids>=0: cap(resource.RLIMIT_NPROC,pids)\n'
-            'os.execvpe(sys.argv[4],sys.argv[4:],os.environ)')
+            'os.execvpe(sys.argv[3],sys.argv[3:],os.environ)')
         executable = provider.executable if provider is not None else sys.executable
         command = [executable, '-c', launcher, str(memory or 0), str(cpus or 0),
-                   str(pids_limit if pids_limit is not None else -1), *command]
+                   *command]
     if provider is not None:
         environment['VIBEIC_LOCAL_MEMORY_LIMIT_BYTES'] = str(memory)
         environment['VIBEIC_LOCAL_NETWORK_MODE'] = provider.network_mode
@@ -642,6 +641,34 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
     with _ce.local_engine_cwd() as scratch:
         if child_cwd is None:
             kw.setdefault('cwd', scratch)
+        scope_started = None
+        if pids_limit is not None:
+            scope_runner = shutil.which('systemd-run', path=environment.get('PATH'))
+            if scope_runner is None:
+                raise Refusal('LL_LOCAL_PIDS_LIMIT_UNENFORCEABLE',
+                              'systemd-run is unavailable for the requested TasksMax')
+            # Runtime startup handshake, removed with this invocation's scratch.
+            # A failed scope launch must not be mistaken for the tool's own rc.
+            scope_started = Path(scratch) / 'pids-scope-started'
+            # Keep tool argv literal even on systemd versions which expand $.
+            scope_argv = Path(scratch) / 'pids-scope-argv.json'
+            scope_argv.write_text(json.dumps(command))
+            scoped_launcher = (
+                'import json,os,sys\n'
+                'from pathlib import Path\n'
+                'group=next(line.split(":",2)[2].strip() for line in '
+                'Path("/proc/self/cgroup").read_text().splitlines() if line.startswith("0::"))\n'
+                'actual=(Path("/sys/fs/cgroup")/group.lstrip("/")/"pids.max").read_text().strip()\n'
+                'wanted=int(sys.argv[2])\n'
+                'if wanted>=0 and (actual=="max" or int(actual)>wanted):\n'
+                '    raise SystemExit("requested cgroup pids.max was not applied")\n'
+                'command=json.loads(Path(sys.argv[3]).read_text())\n'
+                'Path(sys.argv[1]).touch()\n'
+                'os.execvpe(command[0],command,os.environ)')
+            tasks_max = 'infinity' if pids_limit == -1 else str(pids_limit)
+            command = [scope_runner, '--user', '--scope', '-q', '-p',
+                       f'TasksMax={tasks_max}', '--', executable, '-c',
+                       scoped_launcher, str(scope_started), str(pids_limit), str(scope_argv)]
         import _watchdog as _wd
         # A LOCAL probe allocation is an observable budget, not permission to
         # kill a progressing native process.  Only measured stillness permits
@@ -654,6 +681,10 @@ def _run_local(argv: list[str], *, probe_deadline_s: float | None,
             hard_ceiling_s=budget,
             ceiling_notice=_ce.default_ceiling_notice(
                 'LOCAL LibreLane', budget), **kw)
+        if scope_started is not None and not scope_started.is_file():
+            raise Refusal('LL_LOCAL_PIDS_LIMIT_UNENFORCEABLE',
+                          f'could not start a user scope with TasksMax={tasks_max}; '
+                          f'{_salvage(watched.out, watched.err, log)}')
         if watched.outcome == 'stalled':
             raise Refusal('LL_TOOL_STALLED',
                           f'LOCAL tool made no progress for {grace:g} s; '
