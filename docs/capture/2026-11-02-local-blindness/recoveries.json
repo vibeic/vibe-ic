@@ -1,0 +1,34 @@
+[
+  {
+    "step": "benchmark.blindness_audit",
+    "design": "neutral native communications",
+    "bucket": "A",
+    "rule_name": "inspect_closed_standard_communications",
+    "docstring": "Inspect actual closed native communications and all text without filtering the call census.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Augment existing inspection credit and communication harvesting for `spawn_agent`, `followup_task`, actual `request_user_input_async` and exactly target-only `collaboration.interrupt_agent`. Unknown, malformed and spoofed forms remain uninspected; dangerous text remains visible.",
+    "before_state": "The old archived corpus omits29 standard calls; newly observed interrupt calls also lack schema credit.",
+    "after_state": "Archived1905/1905 calls inspected with unchanged identities; valid interrupt calls inspected and invalid forms conservative. Separate raw document finding remains.",
+    "ai_reasoning": "Actual native contracts decide schema applicability; message text inspection and credit are separate responsibilities.",
+    "pattern": "Recognized communication operations carry actionable strings outside older command/path keys.",
+    "generality": "No dataset/problem identifiers or oracle values select behavior.",
+    "evidence": "CAPTURE.md; initial interrupt RED; matched comparison; archived corpus comparison",
+    "corpus_sweep": "241 owning IDs restored PASS;291 related IDs preserve2 baseline wording failures and0 regressions. Archived220 files retain1905 identities."
+  },
+  {
+    "step": "benchmark.blindness_audit",
+    "design": "neutral JS and Python writers with unknown later consumers",
+    "bucket": "A",
+    "rule_name": "require_complete_context_before_document_elision",
+    "docstring": "Document literal elision requires a closed write-only context; arbitrary later consumers retain raw scanning.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Keep R2's write-only JS proof; gate both direct/JSON-wrapped Python passive literal views on the same complete-context condition and preserve context through recursive decoding. Do not infer passive use from an interpreter, suffix or purported linter.",
+    "before_state": "Earlier JS exemption hides later Node execution; legacy Python writing has the same independently proven false PASS on baseline and R2.",
+    "after_state": "Exact retained legacy2-file CLI counter and8 variants fail closed. Reversing Python context guard produces9 actual wrong-value failures; restoring final source passes241 owning IDs.",
+    "ai_reasoning": "An arbitrary file consumer may execute it, so only complete closed dataflow can justify suppressing scorer-shaped text.",
+    "pattern": "Local passive-write analysis becomes unsafe when it ignores later execution in another collected transcript.",
+    "generality": "Closed syntax and complete corpus context determine behavior; no operation or script-name whitelist.",
+    "evidence": "CAPTURE.md; retained legacy counter receipt; initial-r3-red.xml; exact legacy CLI test; Python-context reverse and restoration",
+    "corpus_sweep": "Same241 IDs: baseline35FAIL, R2reverse11FAIL, Pythonreverse9FAIL, interruptreverse2FAIL, final0FAIL. Full archived audit still retains1 conservative raw finding; no complete blindness PASS."
+  }
+]
