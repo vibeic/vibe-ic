@@ -3193,6 +3193,9 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     per_dev: List[dict] = []
     for dev in devs:
         cell = cells[config_key(dev)]
+        if shared_capacitor_escapes and left_right_regions:
+            cell = {**cell, "delta": (-cell["bbox"][0], -cell["bbox"][1]),
+                    "placement_origin_normalized": True}
         if (shared_capacitor_escapes and left_right_regions
                 and dev.get("class") == "resistor"
                 and cell["bbox"][3] - cell["bbox"][1] > cell["bbox"][2] - cell["bbox"][0]):
@@ -3464,13 +3467,14 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                         f"{d['box_x']} {d['box_y']}")
         d["origin"] = (d["box_x"] + d["cell"]["delta"][0],
                        d["box_y"] + d["cell"]["delta"][1])
-        if d["cell"].get("rotation") == 90:
+        if d["cell"].get("rotation") == 90 or d["cell"].get("placement_origin_normalized"):
             # probe() saved this exact PCell; use Magic's ordinary instance
             # orientation and explicit child-origin placement, not new masks.
             child = d["cell"]["cell"]
             ox, oy = d["origin"]
+            orientation = "270 " if d["cell"].get("rotation") == 90 else ""
             plan.tcl.extend([
-                f"set a5_rotated_instance [getcell {child} 270 child 0 0 parent {ox} {oy}]",
+                f"set a5_rotated_instance [getcell {child} {orientation}child 0 0 parent {ox} {oy}]",
                 "select cell $a5_rotated_instance", f"identify d{i}", "select clear"])
         else:
             plan.tcl.append(gencell_call(d["dev"], f"d{i}", facts))
@@ -3507,9 +3511,9 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                     box = (lane - geo.long_half[2], ey - geo.long_half[2],
                            lane + geo.long_half[2], ey + geo.long_half[2])
                 else:
-                    edge = d["origin"][0] + d["bbox"][0 if g["side"] == "left" else 2]
-                    box = (min(edge, lane) - hw3, ey - hw3,
-                           max(edge, lane) + hw3, ey + hw3)
+                    xs = [v[0] for v in g["abs_labels"]] + [lane]
+                    box = (min(xs) - hw3, ey - hw3,
+                           max(xs) + hw3, ey + hw3)
                 plan.m3_escape_obstacles.append((g["net"], box))
 
     # The index is built ONCE, after every device is placed and before a
