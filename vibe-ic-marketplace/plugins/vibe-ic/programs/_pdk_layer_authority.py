@@ -5,10 +5,11 @@ Two questions the tape-out precheck used to answer from a DECLARATION, and one
 place that answers both from the process itself (vibe-ic#2058, FP-10 and the
 orchestrator's ForbiddenLayers ruling of 2026-09-06):
 
-    layer_table(volume)     the (layer, datatype) pairs the technology's own
-                            KLayout layer table defines. The ALLOWED set —
-                            everything else in a GDS is a layer the process
-                            does not know.
+    layer_table(volume, include_technology=True)
+                            the union of installed KLayout layer properties,
+                            layer maps and explicit Magic calma declarations.
+    library_text_layers(v)  additional TEXT purposes in installed reference GDS;
+                            these never authorize drawing on the same pair.
     seal_ring_facility(v)   whether the volume ships a recognized seal-ring
                             provider. Caller support and actual generation
                             are separate obligations; a Magic provider is
@@ -32,8 +33,9 @@ refused, and says so.
 
 WHAT COUNTS AS THE LAYER TABLE
 ==============================
-The KLayout layer-properties document (`*.lyp`) the technology ships beside its
-`.lyt` — the table the deck and the viewer both read. It is XML with one
+The KLayout layer-properties documents (`*.lyp`) the technology ships beside its
+`.lyt`, together with its layer maps and Magic technology declarations. A `.lyp`
+is XML with one
 `<source>layer/datatype@cv</source>` per entry, optionally prefixed by a name
 (`LVS_RF 100/5@1`), and it is the same shape in every PDK the pinned image
 carries. MEASURED over that image (label 0.3.46), parsing only `<source>`:
@@ -43,6 +45,11 @@ carries. MEASURED over that image (label 0.3.46), parsing only `<source>`:
     ihp-sg13g2  378 pairs   libs.tech/klayout/tech/sg13g2.lyp
     asap7         -         no libs.tech/klayout at all
     nangate45     -         no libs.tech/klayout at all
+
+All readable declarations are combined; one viewer file is not necessarily a
+complete inventory of label purposes. Installed reference-library TEXT is a
+separate text-only authority, queried only for purposes absent from that union.
+The candidate design's GDS is never a source of technology permission.
 
 A volume with no readable table returns None. NOT_DETERMINED is the answer
 then, naming the authority that was missing — never an empty ALLOWED set, which
@@ -79,6 +86,7 @@ import os
 import re
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -89,6 +97,8 @@ _LYP_GLOBS = (
     "libs.tech/klayout/tech/*.lyp",
     "libs.tech/klayout/*.lyp",
 )
+_MAP_GLOBS = ("libs.tech/klayout/tech/*.map", "libs.tech/klayout/*.map")
+_MAGIC_GLOBS = ("libs.tech/magic/*.tech",)
 #: `<source>` payloads are `[<name> ]<layer>/<datatype>[@<cellview>]`. Anchored
 #: to the END of the payload's first `@`-free token group so a name carrying
 #: digits (`met1`, `sg13g2`) cannot be read as a layer number.
@@ -112,6 +122,43 @@ _REALPATH_SCRIPT = (
     "from pathlib import Path; import sys; "
     "print(Path(sys.argv[1]).resolve(strict=True))"
 )
+
+# Keep binary library scans in the selected PDK's filesystem. Only the small
+# purpose inventory and digest cross an image/container boundary, never GDS.
+_GDS_TEXT_LAYERS_SCRIPT = '''import hashlib,json,struct,sys
+from pathlib import Path
+raw=Path(sys.argv[1]).read_bytes()
+if raw[:4] != b'\\x00\\x06\\x00\\x02': raise ValueError('missing GDSII HEADER')
+offset=0; text=False; layer=None; purpose=None; pairs=set(); complete=False
+while offset < len(raw):
+ if len(raw)-offset < 4: raise ValueError('truncated GDSII header')
+ size,record,dtype=struct.unpack_from('>HBB',raw,offset)
+ if size < 4 or size % 2 or offset+size > len(raw): raise ValueError('invalid GDSII record')
+ if record == 0x0c: text=True; layer=None; purpose=None
+ elif text and record in (0x0d,0x16):
+  if size != 6 or dtype != 2: raise ValueError('invalid GDSII text purpose')
+  value=struct.unpack_from('>H',raw,offset+4)[0]
+  if record == 0x0d: layer=value
+  else: purpose=value
+ elif record == 0x11:
+  if text:
+   if layer is None or purpose is None: raise ValueError('incomplete GDSII TEXT')
+   pairs.add((layer,purpose))
+  text=False
+ elif record == 0x04: complete=True; break
+ offset+=size
+if not complete or text: raise ValueError('missing GDSII ENDLIB')
+print(json.dumps({'pairs':sorted(pairs),'sha256':hashlib.sha256(raw).hexdigest()}))
+'''
+
+
+def _text_layers_result(rc, out, path):
+    if rc:
+        raise OSError(f"PDK GDS text scan rc={rc}: {path}")
+    try:
+        return json.loads(out)
+    except ValueError as exc:
+        raise OSError(f"unreadable PDK GDS text inventory: {path}") from exc
 
 
 def _remote_glob_argv(root: str, pattern: str) -> List[str]:
@@ -159,10 +206,13 @@ def _environment_query(path: Path, operation: str, pattern: str = "",
             "else: raise ValueError(op)\n"
             "print(json.dumps(result))\n"
         )
+        argv = [str(path), operation, pattern]
+        if operation == "text_layers":
+            script, argv = _GDS_TEXT_LAYERS_SCRIPT, [str(path)]
         try:
             cp = subprocess.run(
                 cex.docker_exec_argv(container, "python3", "-c", script,
-                                     str(path), operation, pattern),
+                                     *argv),
                 capture_output=True, text=True)
             if cp.returncode:
                 raise OSError(f"rc={cp.returncode}: {cp.stderr.strip()}")
@@ -179,6 +229,10 @@ def _environment_query(path: Path, operation: str, pattern: str = "",
         return path.read_text(encoding="utf-8", errors="replace")
     if operation == "realpath":
         return str(path.resolve(strict=True))
+    if operation == "text_layers":
+        cp = subprocess.run([sys.executable, "-c", _GDS_TEXT_LAYERS_SCRIPT, str(path)],
+                            capture_output=True, text=True)
+        return _text_layers_result(cp.returncode, cp.stdout, path)
     raise ValueError(operation)
 
 
@@ -204,6 +258,9 @@ class LocalReader:
             return _environment_query(Path(path), "read")
         except OSError:
             return None
+
+    def text_layers(self, path: str):
+        return _environment_query(Path(path), "text_layers")
 
 
 def _remote_present(rc: int, reader_name: str, path: str) -> bool:
@@ -277,6 +334,10 @@ class ContainerReader:
     def read_text(self, path: str) -> Optional[str]:
         rc, out = self._run(self.container, ["cat", path])
         return _remote_text(rc, out, self.name, path)
+
+    def text_layers(self, path: str):
+        rc, out = self._run(self.container, ["python3", "-c", _GDS_TEXT_LAYERS_SCRIPT, path])
+        return _text_layers_result(rc, out, path)
 
 
 class ImageReader:
@@ -359,6 +420,10 @@ class ImageReader:
     def read_text(self, path: str) -> Optional[str]:
         rc, out = self._ask("read", "cat", path)
         return _remote_text(rc, out, self.name, path)
+
+    def text_layers(self, path: str):
+        rc, out = self._ask("text_layers", "python3", "-c", _GDS_TEXT_LAYERS_SCRIPT, path)
+        return _text_layers_result(rc, out, path)
 
 
 #: The run's OWN receipt of where its tools ran: the container it used, the image
@@ -528,9 +593,12 @@ def parse_layer_table(text: str) -> Set[LayerKey]:
     return pairs
 
 
-def layer_table(volume: Optional[Path], reader=None
+def layer_table(volume: Optional[Path], reader=None, *, include_technology: bool = False
                 ) -> Tuple[Optional[Set[LayerKey]], Optional[str], List[str]]:
-    """(the allowed pairs, the file that supplied them, every path tried).
+    """Read layer properties, optionally unioning the technology's declarations.
+
+    The default preserves a single layer-properties filename for consumers that
+    open that file. Precheck requests the full technology-purpose inventory.
 
     None means NOT DETERMINED, never "the empty set": a technology whose table
     could not be read has not declared every layer forbidden.
@@ -538,7 +606,12 @@ def layer_table(volume: Optional[Path], reader=None
     tried: List[str] = []
     if volume is None:
         return None, None, tried
-    for glob in _LYP_GLOBS:
+    allowed, sources = set(), []
+    formats = [(pattern, 'lyp') for pattern in _LYP_GLOBS]
+    if include_technology:
+        formats += [(pattern, 'map') for pattern in _MAP_GLOBS]
+        formats += [(pattern, 'magic') for pattern in _MAGIC_GLOBS]
+    for glob, kind in formats:
         tried.append(str(volume / glob))
         try:
             candidates = _query(volume, "glob", glob, reader=reader)
@@ -553,10 +626,60 @@ def layer_table(volume: Optional[Path], reader=None
             except OSError as exc:
                 tried.append(str(exc))
                 continue
-            pairs = parse_layer_table(text)
+            if kind == 'lyp':
+                pairs = parse_layer_table(text)
+            elif kind == 'magic':
+                pairs = {(int(layer), int(purpose)) for layer, purpose in re.findall(
+                    r'^\s*calma\s+(?:\S+\s+)?(\d+)\s+(\d+)\s*(?:#.*)?$', text, re.M)}
+            else:
+                pairs = {(int(layer), int(purpose)) for layer, purpose in re.findall(
+                    r'^\s*\S+\s+\S+\s+(\d+)\s+(\d+)\s*(?:#.*)?$', text, re.M)}
             if pairs:
-                return pairs, str(cand), tried
-    return None, None, tried
+                if not include_technology:
+                    return pairs, str(cand), tried
+                allowed.update(pairs)
+                sources.append(str(cand))
+    return (allowed or None), ('; '.join(sources) or None), tried
+
+
+def library_text_layers(volume: Optional[Path], wanted: Set[LayerKey], reader=None,
+                        *, exclude_layout: Optional[Path] = None):
+    """TEXT purposes in the selected installed PDK's reference-library GDS.
+
+    A library's drawing pairs grant no label permission. Project GDS and
+    design-supplied EXTRA_GDS files are not installation authority. Call only
+    for unmapped text purposes and stop when their inventory is complete.
+    """
+    pairs, sources, problems = set(), [], []
+    if volume is None or not wanted:
+        return pairs, sources, ''
+    try:
+        libraries = _query(volume, 'glob', 'libs.ref/*', reader=reader)
+    except OSError as exc:
+        return pairs, sources, str(exc)
+    for library in libraries:
+        try:
+            candidates = _query(Path(library), 'glob', 'gds/*.gds', reader=reader)
+        except OSError as exc:
+            problems.append(str(exc))
+            continue
+        for path in candidates:
+            try:
+                if exclude_layout is not None and Path(_query(
+                        Path(path), 'realpath', reader=reader)) == exclude_layout.resolve():
+                    continue
+                inventory = _query(Path(path), 'text_layers', reader=reader)
+                text_pairs = {tuple(pair) for pair in inventory['pairs']}
+                matched = wanted & text_pairs
+                if matched:
+                    pairs.update(matched)
+                    sources.append({'path': path, 'sha256': inventory['sha256'],
+                                    'text_pairs': sorted(f'{l}/{d}' for l, d in text_pairs)})
+            except (OSError, ValueError, TypeError, KeyError) as exc:
+                problems.append(f'{path}: {exc}')
+            if wanted <= pairs:
+                return pairs, sources, '; '.join(problems)
+    return pairs, sources, '; '.join(problems)
 
 
 def seal_ring_facility(volume: Optional[Path], reader=None

@@ -15,6 +15,7 @@ import _owner_declared as OD
 import general_precheck as GP
 import librelane_contract as LC
 import librelane_fill_dfm as LF
+import _pdk_layer_authority as PA
 import test_general_precheck as G
 from _default_backend_fixtures import producer, put
 
@@ -209,3 +210,123 @@ def test_missing_foreign_or_stale_library_authority_cannot_grant_text_permission
         assert rc == 1 and row['verdict'] == GP.FAIL, fault
         assert not row['measured'].get('library_text_layers'), fault
         print('TEXT_AUTHORITY_NEGATIVE', fault, row['verdict'])
+
+
+def _installed_technology(tmp_path, monkeypatch, authority):
+    root = tmp_path / 'installed'
+    volume = root / 'neutral_process'
+    tech = volume / 'libs.tech/klayout/tech'
+    tech.mkdir(parents=True)
+    (tech / 'a.lyp').write_text('<layer-properties><properties><source>10/0@1</source>'
+                              '</properties></layer-properties>')
+    if authority in ('magic', 'magic-input'):
+        path = volume / 'libs.tech/magic/process.tech'
+        path.parent.mkdir(parents=True)
+        path.write_text('cifinput\nstyle native\nlayer WELL_LABEL\ncalma 77 9\nend\n'
+                        if authority == 'magic-input' else
+                        'cifoutput\nstyle native\ncalma WELL_LABEL 77 9\nend\n')
+    elif authority == 'map':
+        (tech / 'process.map').write_text('NAME SIGNAL/LABEL 77 9\n')
+    elif authority == 'lyp':
+        (tech / 'b.lyp').write_text('<layer-properties><properties><source>77/9@1</source>'
+                                  '</properties></layer-properties>')
+    elif authority == 'library':
+        _gds(volume / 'libs.ref/neutral_io/gds/cells.gds')
+    monkeypatch.setenv('PDK_ROOT', str(root))
+    monkeypatch.delenv('EDA_CONTAINER', raising=False)
+    monkeypatch.delenv('VIBEIC_EDA_CONTAINER', raising=False)
+    project = G._project(tmp_path, _gds, {
+        'deliverable': 'DIE', 'top_cell': 'chip_top'})
+    return volume, project
+
+
+def _installed_precheck(project):
+    report = GP.evaluate(project, runner=G._NEVER_RAN, pdk='neutral_process')
+    return report, G._step(report, 'General.ForbiddenLayers')
+
+
+@pytest.mark.parametrize('authority', ['magic', 'magic-input', 'map', 'lyp', 'library'])
+def test_installed_pdk_text_purpose_needs_no_design_stream_receipt(tmp_path, monkeypatch, authority):
+    _volume, project = _installed_technology(tmp_path, monkeypatch, authority)
+    assert not (project / LF.DEFAULT_STREAM_REL).exists()
+    _report, row = _installed_precheck(project)
+    assert row.verdict == GP.PASS, row.evidence
+    assert row.measured['unmapped_layers'] == []
+
+
+def test_single_properties_file_consumer_keeps_its_existing_authority(tmp_path, monkeypatch):
+    volume, _project = _installed_technology(tmp_path, monkeypatch, 'magic')
+    pairs, path, _tried = PA.layer_table(volume)
+    assert pairs == {(10, 0)}
+    assert Path(path).is_file() and Path(path).suffix == '.lyp'
+
+
+@pytest.mark.parametrize('fault', ['undeclared', 'design-only', 'design-symlink', 'wrong-purpose',
+                                  'physical', 'declared-forbidden', 'corrupt-library'])
+def test_installed_pdk_text_authority_does_not_forgive_design_layers(tmp_path, monkeypatch, fault):
+    volume, project = _installed_technology(
+        tmp_path, monkeypatch, 'none' if fault in ('undeclared', 'design-only', 'design-symlink') else 'library')
+    candidate = project / 'phase3/stage4/gds/chip_top.gds'
+    if fault == 'design-only':
+        _gds(project / 'design-libraries/cells.gds')
+    elif fault == 'design-symlink':
+        library = volume / 'libs.ref/neutral_io/gds/cells.gds'
+        library.parent.mkdir(parents=True)
+        library.symlink_to(candidate)
+    elif fault == 'wrong-purpose':
+        _gds(candidate, text_type=8)
+    elif fault == 'physical':
+        _gds(candidate, physical=True)
+    elif fault == 'declared-forbidden':
+        path = project / TD.DECLARATION_REL
+        doc = json.loads(path.read_text())
+        doc, ignored = TD.merge_answers(doc, {'forbidden_layers': ['77/9']})
+        assert not ignored
+        path.write_text(json.dumps(doc))
+    elif fault == 'corrupt-library':
+        path = volume / 'libs.ref/neutral_io/gds/cells.gds'
+        path.write_bytes(path.read_bytes()[:-4])
+    report, row = _installed_precheck(project)
+    assert row.verdict == GP.FAIL, row.evidence
+    assert 'General.ForbiddenLayers' in report.failed_steps
+    assert row.measured['unmapped_layers'] or fault == 'declared-forbidden'
+
+
+@pytest.mark.parametrize('reader_type', [PA.ContainerReader, PA.ImageReader])
+@pytest.mark.parametrize('unreachable', [False, True])
+def test_installed_text_is_read_only_in_the_selected_pdk_environment(
+        tmp_path, monkeypatch, reader_type, unreachable):
+    import subprocess
+    _volume, project = _installed_technology(tmp_path, monkeypatch, 'library')
+    scans = []
+    def run(_identity, argv):
+        if argv[:3] == ['python3', '-c', PA._GDS_TEXT_LAYERS_SCRIPT]:
+            scans.append(argv)
+            if unreachable:
+                return 127, ''
+        cp = subprocess.run(argv, capture_output=True, text=True)
+        return cp.returncode, cp.stdout
+    reader = reader_type('selected-runtime', runner=run)
+    monkeypatch.setattr(GP, 'pdk_reader_for', lambda *_: (reader, 'selected test environment'))
+    _report, row = _installed_precheck(project)
+    assert scans
+    assert row.verdict == (GP.FAIL if unreachable else GP.PASS), row.evidence
+
+
+def test_installed_library_drawing_is_not_a_text_declaration(tmp_path, monkeypatch):
+    from _hostpaths import require_repo
+    source = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+                          'tests', 'fixtures', 'density_fill', 'filled.gds')
+    geometry = GEOM.read_layout(source)
+    markers, label_layer, _why, _tried = PA.flow_marker_layers()
+    layer, purpose = next(pair for pair in GEOM.layers_used(geometry)
+                          if pair != (10, 0) and not PA.is_flow_marker(*pair, markers, label_layer))
+    assert not any(el.kind == 'TEXT' and (el.layer, el.datatype) == (layer, purpose)
+                   for cell in geometry.cells.values() for el in cell.elements)
+    volume, project = _installed_technology(tmp_path, monkeypatch, 'none')
+    library = volume / 'libs.ref/neutral_cells/gds/cells.gds'
+    library.parent.mkdir(parents=True)
+    library.write_bytes(source.read_bytes())
+    _gds(project / 'phase3/stage4/gds/chip_top.gds', text_layer=layer, text_type=purpose)
+    _report, row = _installed_precheck(project)
+    assert row.verdict == GP.FAIL, row.evidence

@@ -1100,8 +1100,9 @@ def _step_forbidden_layers(ev: StepEvidence, layers: Optional[Dict[Any, int]],
     """FORBIDDEN IS THE COMPLEMENT OF THE PROCESS, NOT A LIST SOMEBODY TYPED.
 
     Owner ruling, 2026-09-06 (vibe-ic#2058): this rung is DERIVED, never
-    declared. The allowed set is the technology's own KLayout layer table —
-    the same table its deck and its viewer read — and every layer/datatype the
+    declared. The allowed set is the installed technology's own layer tables,
+    maps and Magic declarations, with reference-library TEXT purposes accounted
+    for separately. Every layer/datatype the
     GDS draws on that the table does not define is a layer the process does not
     know.
 
@@ -1217,8 +1218,8 @@ def _step_forbidden_layers(ev: StepEvidence, layers: Optional[Dict[Any, int]],
                           f"declaration ({', '.join(_mine)}), which "
                           f"General.FlowMarkerLayers reports in full"
                           if _mine else "")
-                       + (f" and {len(_library_text)} TEXT purpose(s) by the selected "
-                          "native PDK library views (sources and digests disclosed)"
+                       + (f" and {len(_library_text)} TEXT purpose(s) by installed "
+                          "or producer-bound PDK library views (sources and digests disclosed)"
                           if _library_text else "")
                        + (f". None of the {len(declared)} additionally "
                           f"declared forbidden layer(s) is in use"
@@ -1771,7 +1772,7 @@ def evaluate(project: Path,
     volume, volume_why, _volume_tried = _pdkauth.resolve_volume(
         pdk, reader=_pdk_reader)
     allowed, layer_authority, layer_tried = _pdkauth.layer_table(
-        volume, reader=_pdk_reader)
+        volume, reader=_pdk_reader, include_technology=True)
     seal_facility, seal_path, seal_tried = _pdkauth.seal_ring_facility(
         volume, reader=_pdk_reader)
     seal_invocation_supported = _pdkauth.seal_ring_invocation_supported(
@@ -1780,9 +1781,19 @@ def evaluate(project: Path,
     # own constants, asked once, consumed by two rungs.
     flow_markers = _pdkauth.flow_marker_layers()
     annotation_authority = None
-    if allowed is not None and any(pair not in allowed and not _pdkauth.is_flow_marker(
-            pair[0], pair[1], flow_markers[0], flow_markers[1]) for pair in text_pairs):
-        annotation_authority = _native_library_text_pairs(project, chosen, rep.layout_sha256)
+    unmapped_text = {pair for pair in text_pairs - physical_pairs
+                     if allowed is not None and pair not in allowed and not _pdkauth.is_flow_marker(
+                         pair[0], pair[1], flow_markers[0], flow_markers[1])}
+    if unmapped_text:
+        pairs, sources, why = _pdkauth.library_text_layers(
+            volume, unmapped_text, reader=_pdk_reader, exclude_layout=chosen)
+        if unmapped_text - pairs:
+            native_pairs, native_sources, native_why = _native_library_text_pairs(
+                project, chosen, rep.layout_sha256)
+            pairs.update(native_pairs)
+            sources.extend(native_sources)
+            why = '; '.join(filter(None, (why, native_why)))
+        annotation_authority = pairs, sources, why
     rep.flow_marker_declaration = {
         "basis": flow_markers[2],
         "exact_pairs": sorted(f"{l}/{d}" for l, d in flow_markers[0]),
