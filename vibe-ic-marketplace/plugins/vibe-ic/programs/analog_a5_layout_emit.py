@@ -2713,11 +2713,13 @@ def _place_shared_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
 def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Geo,
                            pin_spec: Optional[dict], width_um: float,
                            placement_groups: Sequence[Sequence[str]]):
+    fullspan = [d for d in per_dev if d.get("fullspan_pair")]
+    ordinary = [d for d in per_dev if not d.get("fullspan_pair")]
     columns = {
-        "cmim": [d for d in per_dev if d["dev"].get("class") == "capacitor"],
-        "ota": [d for d in per_dev if d["dev"].get("class") != "capacitor"],
+        "cmim": [d for d in ordinary if d["dev"].get("class") == "capacitor"],
+        "ota": [d for d in ordinary if d["dev"].get("class") != "capacitor"],
     }
-    if not all(columns.values()):
+    if not all(columns.values()) and not fullspan:
         return _place_shared_rows(per_dev, nets, geo, pin_spec, width_um,
                                   placement_groups, split_arrays=True)
     pitch, width = geo.pitch(), int(width_um * geo.lam)
@@ -2725,7 +2727,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                       + [2 * v for v in geo.patch.values()])
                   + max(list(geo.space.values()) + [geo.default_space]))
     channel = max(4 * pitch, high_pitch)
-    by_name = {d["dev"]["name"]: d for d in per_dev}
+    by_name = {d["dev"]["name"]: d for d in ordinary}
     parent = {name: name for name in by_name}
 
     def root(name):
@@ -2738,7 +2740,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
         for name in members[1:]:
             parent[root(name)] = root(members[0])
     units: Dict[str, List[dict]] = {}
-    for d in per_dev:
+    for d in ordinary:
         units.setdefault(root(d["dev"]["name"]), []).append(d)
 
     def gap(left, right):
@@ -2779,11 +2781,14 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
         widths = {"cmim": cap_width, "ota": available - cap_width}
         region_rows = {}
         for name, devices in columns.items():
+            if not devices:
+                region_rows[name] = []
+                continue
             rows, _, _, _ = _place_shared_rows(
                 devices, nets, geo, None, widths[name] / geo.lam,
                 placement_groups, split_arrays=True, reserve_bus=False)
             region_rows[name] = rows
-        rows = [row for name in columns for row in region_rows[name]]
+        rows = [[d] for d in fullspan] + [row for name in columns for row in region_rows[name]]
         row_nets = [[net for net in nets
                      if any(g["net"] == net for d in row for g in d["groups"])]
                     for row in rows]
@@ -2797,7 +2802,16 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
         # All shared rails are booked from the bank's leftmost possible anchor.
         # Their final interval-colored trunk centres only shorten these spans.
         bus_x = {net: pitch for net in shared}
-        offsets = {"cmim": margin, "ota": margin + widths["cmim"] + channel}
+        offsets = {"cmim": margin, "ota": margin + widths["cmim"] + channel,
+                   "fullspan": margin}
+        region_widths = {**widths, "fullspan": width - margin}
+        for d in fullspan:
+            required = gap(None, d) + d["bbox"][2] - d["bbox"][0] + gap(d, None)
+            if required > region_widths["fullspan"]:
+                raise Refusal("parallel resistor pair access envelope exceeds the full-span width")
+            d["placement_region"] = "fullspan"
+            d["box_x"] = d["gap_hi"] = margin + gap(None, d)
+            d["right_lo"] = d["box_x"] + d["bbox"][2] - d["bbox"][0]
         for name, devices in columns.items():
             for d in devices:
                 d["placement_region"] = name
@@ -2811,7 +2825,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
                               for _, box in _pin_stack_boxes(
                                   0, 0, 2, spec["level"], geo,
                                   max(1, spec["cuts"]))[0]])
-        cursors = {name: initial_y for name in columns}
+        cursors = {name: initial_y for name in (*columns, "fullspan")}
         rail_half = max(geo.long_half[2], geo.wire[2] // 2)
         clearance = 2 * rail_half + geo.metal_space("metal2")
         booked = []
@@ -2859,13 +2873,17 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
             for d in row:
                 d["row"], d["box_y"] = ri, base
             cursors[region] = base + max(high) + spacing + rail_half
+            if region == "fullspan":
+                for name in columns:
+                    cursors[name] = cursors[region]
             descriptions.append({"devices": [d["dev"]["name"] for d in row],
                                  "region": region, "base_lambda": base, "nets": ns,
+                                 "parallel_pair": list(row[0].get("fullspan_pair", ())),
                                  "rail_tracks": len(set(tracks.values())),
                                  "rails_lambda": rails,
                                  "rail_intervals_lambda": intervals,
                                  "column_lambda": [offsets[region],
-                                                   offsets[region] + widths[region]]})
+                                                   offsets[region] + region_widths[region]]})
         bus_x, used_margin = _m4_trunk_tracks(row_rails, geo)
         shift = used_margin - margin
         for d in per_dev:
@@ -2888,6 +2906,9 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
     margin = min(r["column_lambda"][0] for r in descriptions)
     demand = {}
     for name, devices in columns.items():
+        if not devices:
+            demand[name] = 0
+            continue
         bottom = min(d["box_y"] + d["cell"]["delta"][1] + d["bbox"][1]
                      for d in devices)
         top = max(d["box_y"] + d["cell"]["delta"][1] + d["bbox"][3]
@@ -2902,15 +2923,55 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
     widths = {"cmim": cap_width, "ota": available - cap_width}
     region_rows = {}
     for name, devices in columns.items():
+        if not devices:
+            region_rows[name] = []
+            continue
         region_rows[name], _, _, _ = _place_shared_rows(
             devices, nets, geo, None, widths[name] / geo.lam,
             placement_groups, split_arrays=True, reserve_bus=False)
-    rows = [row for name in columns for row in region_rows[name]]
+    rows = [[d] for d in fullspan] + [row for name in columns for row in region_rows[name]]
     row_nets = [[net for net in nets
                  if any(g["net"] == net for d in row for g in d["groups"])]
                 for row in rows]
     shared = [net for net in nets if sum(net in ns for ns in row_nets) > 1]
     return place_regions(rows, row_nets, shared, widths, margin)
+
+
+def _series_resistor_pair(devs: Sequence[dict], ports: Sequence[str],
+                          cells: Dict[tuple, dict]) -> List[str]:
+    """Find the unique identical series divider with an internal midpoint."""
+    pairs = []
+    for first in devs:
+        if first.get("class") != "resistor" or len(first["nets"]) != 3:
+            continue
+        box = cells[config_key(first)]["bbox"]
+        if box[3] - box[1] <= box[2] - box[0]:
+            continue
+        for second in devs:
+            if (second is first or second.get("class") != "resistor"
+                    or len(second["nets"]) != 3
+                    or config_key(first) != config_key(second)):
+                continue
+            a, midpoint, bulk = first["nets"]
+            if (second["nets"][0] == midpoint
+                    and second["nets"][2] == bulk
+                    and second["nets"][1] not in (a, midpoint, bulk)
+                    and midpoint not in ports):
+                pairs.append([first["name"], second["name"]])
+    return pairs[0] if len(pairs) == 1 else []
+
+
+def _r90_cell(cell: dict) -> dict:
+    """Counterclockwise native-instance orientation, with unchanged mask shapes."""
+    def box(b):
+        return (-b[3], b[0], -b[1], b[2])
+    bbox = box(cell["bbox"])
+    return {**cell, "bbox": bbox, "delta": (-bbox[0], -bbox[1]),
+            "rotation": 90,
+            "sections": {layer: [box(b) for b in shapes]
+                         for layer, shapes in cell["sections"].items()},
+            "labels": [{**lab, "x": -lab["y"], "y": lab["x"]}
+                       for lab in cell["labels"]]}
 
 
 def build_plan(devs: Sequence[dict], ports: Sequence[str],
@@ -2939,9 +3000,13 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     row_base = pitch * (len(nets) + 24)
 
     # ── per device: which terminals escape at which height, on which side ──
+    parallel_pair = (_series_resistor_pair(devs, ports, cells)
+                     if shared_capacitor_escapes and left_right_regions else [])
     per_dev: List[dict] = []
     for dev in devs:
         cell = cells[config_key(dev)]
+        if dev["name"] in parallel_pair:
+            cell = _r90_cell(cell)
         tmap, ring, unmapped = terminal_map(dev, cell)
         for term in unmapped:
             plan.deviate(dev, "terminal_mapped", 1, 0,
@@ -3117,7 +3182,9 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
                     g["escape_y"] = prev + esc_pitch
                 prev = g["escape_y"]
         per_dev.append({"dev": dev, "cell": cell, "groups": groups,
-                        "bbox": cell["bbox"]})
+                        "bbox": cell["bbox"],
+                        "fullspan_pair": tuple(parallel_pair)
+                        if dev["name"] in parallel_pair else ()})
 
     # ── corridors wide enough for the lanes they must carry ───────────
     n_left = [sum(1 for g in d["groups"] if g["side"] == "left")
@@ -3205,9 +3272,18 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     for i, d in enumerate(per_dev):
         plan.tcl.append(f"box {d['box_x']} {d['box_y']} "
                         f"{d['box_x']} {d['box_y']}")
-        plan.tcl.append(gencell_call(d["dev"], f"d{i}", facts))
         d["origin"] = (d["box_x"] + d["cell"]["delta"][0],
                        d["box_y"] + d["cell"]["delta"][1])
+        if d["cell"].get("rotation") == 90:
+            # probe() saved this exact PCell; use Magic's ordinary instance
+            # orientation and explicit child-origin placement, not new masks.
+            child = d["cell"]["cell"]
+            ox, oy = d["origin"]
+            plan.tcl.extend([
+                f"set a5_rotated_instance [getcell {child} 270 child 0 0 parent {ox} {oy}]",
+                "select cell $a5_rotated_instance", f"identify d{i}", "select clear"])
+        else:
+            plan.tcl.append(gencell_call(d["dev"], f"d{i}", facts))
 
     comp_cache: Dict[int, Dict[Tuple[str, int], int]] = {}
     for d in per_dev:

@@ -1,0 +1,81 @@
+"""Geometry and selection controls for the full-span parallel divider pair."""
+from copy import deepcopy
+import pytest
+import _plugin_tree
+import analog_a5_layout_emit as a
+from test_analog_a5_left_right import fixture_devices
+from test_analog_a5_shared_escape import capacitor, geo
+
+
+def parallel_devices():
+    pair = [capacitor('ra'), capacitor('rb')]
+    for d in pair:
+        d['dev']['class'] = 'resistor'
+        d['bbox'] = (-9195, -127, 9195, 127)
+        d['cell']['delta'] = (9195, 127)
+        d['access_pitch'] = 69
+        d['fullspan_pair'] = ('ra', 'rb')
+        for g in d['groups']:
+            g['level'] = 2
+    return pair
+
+
+def test_parallel_pair_keeps_same_x_in_adjacent_fullspan_subrows():
+    ds = fixture_devices(7, 4) + parallel_devices()
+    before = deepcopy([d['dev'] for d in ds])
+    rows, _, _, desc = a._place_left_right_rows(
+        ds, ['top', 'bottom'], geo(), None, 260, [('m0', 'm3')])
+    pair = ds[-2:]
+    assert [d['dev'] for d in ds] == before
+    assert pair[0]['box_x'] == pair[1]['box_x']
+    assert pair[1]['row'] == pair[0]['row'] + 1
+    assert all(d['placement_region'] == 'fullspan' for d in pair)
+    assert pair[1]['box_y'] - pair[0]['box_y'] >= 254 + geo().default_space
+    for d in pair:
+        row = desc[d['row']]
+        assert row['parallel_pair'] == ['ra', 'rb']
+        assert row['column_lambda'][0] <= d['box_x'] < d['right_lo'] <= row['column_lambda'][1]
+    assert sum(map(len, rows)) == len(ds)
+    assert min(d['box_y'] for d in ds[:-2]) > pair[1]['box_y']
+    matched = [d for d in ds if d['dev']['name'] in ('m0', 'm3')]
+    assert matched[0]['row'] == matched[1]['row']
+
+
+def test_parallel_access_envelope_refuses_an_actually_narrow_region():
+    with pytest.raises(a.Refusal, match='parallel resistor pair access envelope'):
+        a._place_left_right_rows(parallel_devices(), ['top', 'bottom'],
+                                 geo(), None, 180, ())
+
+
+def test_r90_preserves_native_masks_and_terminal_identity():
+    cell = {'cell': 'native_resistor', 'delta': (81, 9149),
+            'bbox': (-127, -9195, 127, 9195),
+            'sections': {'metal1': [(-20, -9100, 20, 9100)],
+                         'poly': [(-25, -9050, 25, 9050)]},
+            'labels': [{'name': 'R1', 'x': 0, 'y': 9078, 'level': 2},
+                       {'name': 'R2', 'x': 0, 'y': -9078, 'level': 2}]}
+    before = deepcopy(cell)
+    rotated = a._r90_cell(cell)
+    assert cell == before
+    assert rotated['cell'] == cell['cell']
+    assert rotated['bbox'] == (-9195, -127, 9195, 127)
+    assert rotated['delta'] == (9195, 127)
+    assert [(l['name'], l['x'], l['y']) for l in rotated['labels']] == [
+        ('R1', -9078, 0), ('R2', 9078, 0)]
+    restored = rotated
+    for _ in range(3):
+        restored = a._r90_cell(restored)
+    assert restored['sections'] == cell['sections']
+    assert restored['labels'] == cell['labels']
+
+
+def test_loaded_divider_midpoint_keeps_the_identical_series_pair():
+    first = {'name': 'ra', 'class': 'resistor', 'model': 'rppd',
+             'nets': ['hi', 'mid', 'vss'], 'pars': {'w': .5, 'l': 181}}
+    second = {**first, 'name': 'rb', 'nets': ['mid', 'lo', 'vss']}
+    load = {'name': 'load', 'class': 'mosfet', 'nets': ['out', 'mid', 'vss', 'vss']}
+    cells = {a.config_key(first): {'bbox': (-127, -9195, 127, 9195)}}
+    assert a._series_resistor_pair([first, second, load], ['hi', 'lo', 'vss'], cells) == ['ra', 'rb']
+    unequal = {**second, 'pars': {'w': .5, 'l': 180}}
+    cells[a.config_key(unequal)] = cells[a.config_key(first)]
+    assert a._series_resistor_pair([first, unequal, load], ['hi', 'lo', 'vss'], cells) == []
