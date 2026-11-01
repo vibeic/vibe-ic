@@ -2923,27 +2923,36 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
         top = max(d["box_y"] + d["cell"]["delta"][1] + d["bbox"][3]
                   for d in devices)
         demand[name] = widths[name] * (top - bottom)
-    available = max(width - margin - channel, sum(minimum.values()))
-    total = sum(demand.values())
-    cap_width = (available * demand["cmim"] // total
-                 if total else available // 2)
-    cap_width = max(minimum["cmim"], min(cap_width,
-                                         available - minimum["ota"]))
-    widths = {"cmim": cap_width, "ota": available - cap_width}
-    region_rows = {}
-    for name, devices in columns.items():
-        if not devices:
-            region_rows[name] = []
-            continue
-        region_rows[name], _, _, _ = _place_shared_rows(
-            devices, nets, geo, None, widths[name] / geo.lam,
-            placement_groups, split_arrays=True, reserve_bus=False)
-    rows = [[d] for d in fullspan] + [row for name in columns for row in region_rows[name]]
-    row_nets = [[net for net in nets
-                 if any(g["net"] == net for d in row for g in d["groups"])]
-                for row in rows]
-    shared = [net for net in nets if sum(net in ns for ns in row_nets) > 1]
-    return place_regions(rows, row_nets, shared, widths, margin)
+    # Coloring can grow the bank after rows change. Reclaim that measured
+    # overrun from the region budget before returning a complete placement.
+    # The bank reservation only increases, with a finite number of tracks;
+    # the demand ratio and indivisible-unit minima remain fixed.
+    while True:
+        available = max(width - margin - channel, sum(minimum.values()))
+        total = sum(demand.values())
+        cap_width = (available * demand["cmim"] // total
+                     if total else available // 2)
+        cap_width = max(minimum["cmim"], min(cap_width,
+                                             available - minimum["ota"]))
+        widths = {"cmim": cap_width, "ota": available - cap_width}
+        region_rows = {}
+        for name, devices in columns.items():
+            if not devices:
+                region_rows[name] = []
+                continue
+            region_rows[name], _, _, _ = _place_shared_rows(
+                devices, nets, geo, None, widths[name] / geo.lam,
+                placement_groups, split_arrays=True, reserve_bus=False)
+        rows = [[d] for d in fullspan] + [row for name in columns for row in region_rows[name]]
+        row_nets = [[net for net in nets
+                     if any(g["net"] == net for d in row for g in d["groups"])]
+                    for row in rows]
+        shared = [net for net in nets if sum(net in ns for ns in row_nets) > 1]
+        placed = place_regions(rows, row_nets, shared, widths, margin)
+        actual_margin = min(r["column_lambda"][0] for r in placed[3])
+        if actual_margin <= margin:
+            return placed
+        margin = actual_margin
 
 
 def _series_resistor_pair(devs: Sequence[dict], ports: Sequence[str],

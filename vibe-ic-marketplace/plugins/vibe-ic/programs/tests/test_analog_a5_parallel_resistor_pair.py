@@ -92,3 +92,30 @@ def test_pair_fit_uses_the_final_colored_bank(monkeypatch):
     with pytest.raises(a.Refusal, match=r'required=189.42um available=185um colored_bank=15um'):
         a._place_left_right_rows(parallel_devices(), ['top', 'bottom'],
                                  geo(), None, 200, ())
+
+
+def test_colored_bank_growth_rebudgets_regions_without_clipping(monkeypatch):
+    ds = fixture_devices(7, 40) + parallel_devices()
+    before = deepcopy([d['dev'] for d in ds])
+    widths = [d['bbox'][2] - d['bbox'][0] for d in ds]
+    original = a._m4_trunk_tracks
+    calls = []
+    def color(rails, geometry):
+        bus, _ = original(rails, geometry)
+        calls.append(None)
+        return bus, 0 if len(calls) == 1 else (1500 if len(calls) == 2 else 1000)
+    monkeypatch.setattr(a, '_m4_trunk_tracks', color)
+    rows, _, _, desc = a._place_left_right_rows(
+        ds, ['top', 'bottom'], geo(), None, 260, [('m0', 'm3')])
+    assert max(r['column_lambda'][1] for r in desc) <= 26000
+    assert sum(map(len, rows)) == len(ds)
+    assert [d['dev'] for d in ds] == before
+    assert [d['right_lo'] - d['box_x'] for d in ds] == widths
+    for d in ds:
+        column = desc[d['row']]['column_lambda']
+        assert column[0] <= d['box_x'] < d['right_lo'] <= column[1]
+    pair = ds[-2:]
+    assert pair[0]['box_x'] == pair[1]['box_x']
+    assert pair[1]['row'] == pair[0]['row'] + 1
+    matching = [d for d in ds if d['dev']['name'] in ('m0', 'm3')]
+    assert matching[0]['row'] == matching[1]['row']
