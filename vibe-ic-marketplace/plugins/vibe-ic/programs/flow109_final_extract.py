@@ -1,6 +1,7 @@
 """D69 native owner: final GDS/DEF -> released floating-fill Magic SPEF tool."""
 from __future__ import annotations
 
+from collections import Counter
 import hashlib
 import json
 import os
@@ -121,8 +122,49 @@ def operation_sources():
     return {str(path.resolve()): _sha(path) for path in paths}
 
 
+def _normal_required_nets(routed_def):
+    """Derive RCX signal names from the receipt-bound DEF NETS section."""
+    text = routed_def.read_text()
+    sections = list(re.finditer(
+        r'(?ms)^[ \t]*(NETS|SPECIALNETS)[ \t]+(\d+)[ \t]*;[ \t]*\n'
+        r'(.*?)^[ \t]*END[ \t]+\1[ \t]*(?:\n|$)', text))
+    headers = re.findall(r'(?mi)^[ \t]*(?:NETS|SPECIALNETS)\b[^\n]*', text)
+    ends = re.findall(r'(?mi)^[ \t]*END[ \t]+(?:NETS|SPECIALNETS)\b[^\n]*', text)
+    required = set()
+    valid = (len(headers) == len(sections) == len(ends)
+             and len({s[1] for s in sections}) == len(sections))
+    for section in sections:
+        body = re.sub(r'(?m)^[ \t]*#[^\n]*', '', section[3])
+        pieces = body.split(';')
+        records = [piece.strip() for piece in pieces[:-1] if piece.strip()]
+        names = []
+        for record in records:
+            name = re.match(r'-\s+(\S+)(?:\s|$)', record)
+            valid = valid and name is not None and len(re.findall(r'(?m)^[ \t]*-[ \t]+', record)) == 1
+            if name is not None:
+                names.append(name[1])
+                if section[1] == 'NETS' and not re.search(r'\+\s+USE\s+(?:POWER|GROUND)\b', record):
+                    required.add(name[1])
+        valid = (valid and not pieces[-1].strip() and len(names) == int(section[2])
+                 and len(names) == len(set(names)))
+    if not valid or not required:
+        raise AdmissionRefusal('D69_REQUIRED_NET_CONTRACT_UNAVAILABLE',
+                               'complete unambiguous DEF net declarations required')
+    return required
+
+
+def _require_net_population(required, names, corner, artifact):
+    counts = Counter(names)
+    actual = set(counts)
+    duplicates = sorted(name for name, count in counts.items() if count > 1)
+    if actual != required or duplicates:
+        raise AdmissionRefusal('D69_REQUIRED_NET_CENSUS_FAILED', json.dumps({
+            'corner': corner, 'artifact': artifact, 'missing': sorted(required - actual),
+            'unexpected': sorted(actual - required), 'duplicates': duplicates}, sort_keys=True), status='FAIL')
+
+
 def _native_outputs(project, receipt_ref, gds_ref, def_ref):
-    """Consume the released tool's own receipt, not a replacement extractor."""
+    """Block incomplete nets using the normal producer's already bound DEF."""
     native = _read(_bound(project, receipt_ref))
     if (native.get('status') != 'PASS'
             or native.get('geometry') != {'path': str(_bound(project, gds_ref)), 'sha256': gds_ref['sha256']}
@@ -134,6 +176,7 @@ def _native_outputs(project, receipt_ref, gds_ref, def_ref):
             or native.get('grounded_fill_approximation') is not False
             or type(native.get('keep_net_count')) is not int or native['keep_net_count'] <= 0):
         raise AdmissionRefusal('D69_NATIVE_RECEIPT_MISMATCH', str(receipt_ref))
+    required = _normal_required_nets(_bound(project, def_ref))
     _bound(project, native.get('fill_aware_tech'))
     spefs, scans = {}, {}
     for corner, reduction in native['corners'].items():
@@ -146,10 +189,19 @@ def _native_outputs(project, receipt_ref, gds_ref, def_ref):
             raise AdmissionRefusal('D69_NATIVE_CORNER_MISMATCH', corner)
         for key in ('raw_spef', 'keep_nets', 'output_spef'):
             _bound(project, {'path': reduction.get(key), 'sha256': reduction.get(key + '_sha256')})
+        names = [line.strip() for line in Path(reduction['keep_nets']).read_text().splitlines()
+                 if line.strip() and not line.lstrip().startswith('#')]
+        _require_net_population(required, names, corner, 'keep_nets')
         path = Path(reduction['output_spef']); facts = scan_spef(path)
         if (not facts['has_header'] or not facts['has_design'] or not (facts['d_nets'] or facts['r_nets'])
                 or facts['negative_caps'] or facts['negative_net_totals']):
             raise AdmissionRefusal('D69_SPEF_CONSUMER_FAILED', corner, status='FAIL')
+        text = path.read_text()
+        if re.search(r'(?m)^[ \t]*\*NAME_MAP\b', text):
+            raise AdmissionRefusal('D69_REQUIRED_NET_CONTRACT_UNAVAILABLE',
+                                   'normal producer policy requires direct-name SPEF')
+        _require_net_population(required, re.findall(r'(?m)^[ \t]*\*D_NET\s+(\S+)', text),
+                                corner, 'output_spef')
         spefs[corner], scans[corner] = files._record(project, path), facts
     return spefs, scans
 
