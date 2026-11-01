@@ -26,6 +26,7 @@ BLOCKS on any mismatch.
 from __future__ import annotations
 
 import shutil
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -218,3 +219,100 @@ def test_no_table_is_skip(tmp_path):
              _RTL_ONE_STAGE)
     assert r.returncode == 0, r.stdout + r.stderr
     assert "WTC_NO_TABLE" in r.stdout
+
+
+# The existing serial-protocol owning tests supply one shared neutral public fixture.
+def _word_message_fixture():
+    import test_v1_1_76_serial_protocol_fsm as fixtures
+    return fixtures._word_message_prompt(), fixtures._WORD_MESSAGE_RTL
+
+
+def _run_word_message(tmp_path, prompt, rtl):
+    p, r = tmp_path/'word-prompt.txt', tmp_path/'word-rtl.sv'
+    p.write_text(prompt); r.write_text(rtl)
+    return subprocess.run([sys.executable, str(_PROG), '--prompt', str(p),
+                           '--rtl', str(r), '--top', 'WordCollector', '--require-tools'],
+                          capture_output=True, text=True)
+
+
+@pytest.mark.skipif(not _HAVE_IVERILOG, reason='iverilog/vvp required')
+def test_word_message_multioutput_source_waveform_passes(tmp_path):
+    prompt, rtl = _word_message_fixture()
+    result = _run_word_message(tmp_path, prompt, rtl)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert 'WTC_PASS' in result.stdout, result.stdout
+
+
+@pytest.mark.parametrize('before,after', [
+    ('done <= pending;', 'done <= collecting;'),
+    ('packet <= finished;', 'packet <= {sample_word, finished[3:0]};'),
+    ('{first, sample_word}', '{sample_word, first}'),
+    ('if (reset) begin', "if (1'b0) begin"),
+    ('done <= pending;', 'done <= pending | done;'),
+    ('end else if (sample_word[1])', 'end else if (!pending && sample_word[1])'),
+])
+@pytest.mark.skipif(not _HAVE_IVERILOG, reason='iverilog/vvp required')
+def test_word_message_temporal_and_data_defects_block(tmp_path, before, after):
+    prompt, rtl = _word_message_fixture()
+    assert before in rtl
+    result = _run_word_message(tmp_path, prompt, rtl.replace(before, after))
+    assert ('FAIL' if result.returncode == 1 and 'WTC_FAIL' in result.stdout
+            else 'SKIP' if 'WTC_SKIP' in result.stdout else 'OTHER') == 'FAIL', result.stdout + result.stderr
+
+
+@pytest.mark.parametrize('mode', ['hex', 'decimal', 'binary', 'sized', 'prefixed'])
+@pytest.mark.skipif(not _HAVE_IVERILOG, reason='iverilog/vvp required')
+def test_word_message_width_and_radix_are_source_bound(tmp_path, mode):
+    prompt, rtl = _word_message_fixture()
+    lines = []
+    for line in prompt.splitlines():
+        tokens = line.split()
+        if tokens and re.fullmatch(r'\d+ns', tokens[0]):
+            for index, width in ((3, 4), (5, 8)):
+                if tokens[index] != 'x':
+                    value = int(tokens[index], 16)
+                    tokens[index] = (str(value) if mode == 'decimal' else
+                                     format(value, 'b') if mode == 'binary' else
+                                     f"{width}'h{value:x}" if mode == 'sized' else
+                                     f'0x{value:x}' if mode == 'prefixed' else tokens[index])
+            line = ' '.join(tokens)
+        lines.append(line)
+    prompt = '\n'.join(lines)
+    prompt = prompt.replace('values are hexadecimal', 'values are '+mode) if mode in ('decimal', 'binary') else prompt
+    result = _run_word_message(tmp_path, prompt, rtl)
+    assert result.returncode == 0 and 'WTC_PASS' in result.stdout, result.stdout+result.stderr
+
+
+@pytest.mark.parametrize('change', ['radix', 'width', 'unknown_word', 'partial_unknown',
+                                    'qualification', 'clock', 'column', 'unstable'])
+def test_word_message_unsupported_source_is_skip(tmp_path, change):
+    prompt, rtl = _word_message_fixture()
+    if change == 'radix':
+        prompt = prompt.replace('All multi-bit waveform values are hexadecimal.', '')
+        prompt = re.sub(r'^(\d+ns [01] [01]) [0-9a-f]+ ', r'\1 12 ', prompt, flags=re.M)
+    elif change == 'width':
+        prompt = prompt.replace('15ns 1 0 0 ', '15ns 1 0 10 ')
+    elif change == 'unknown_word':
+        prompt = prompt.replace('15ns 1 0 0 ', '15ns 1 0 x ')
+    elif change == 'partial_unknown':
+        prompt = prompt.replace('15ns 1 0 0 ', '15ns 1 0 0x ')
+    elif change == 'qualification':
+        prompt = prompt.replace('packet needs to be valid whenever done is asserted;', 'packet is displayed;')
+    elif change == 'clock':
+        prompt = prompt.replace('positive edge', 'negative edge')
+    elif change == 'column':
+        prompt = prompt.replace('sample_word done packet', 'state done packet')
+    else:
+        prompt = prompt.replace('20ns 0 0 0 ', '20ns 0 0 1 ')
+    result = _run_word_message(tmp_path, prompt, rtl)
+    assert result.returncode == 0 and 'WTC_SKIP_' in result.stdout, result.stdout+result.stderr
+    assert 'WTC_PASS' not in result.stdout
+
+
+@pytest.mark.skipif(not _HAVE_IVERILOG, reason='iverilog/vvp required')
+def test_word_message_invalid_data_is_not_compared(tmp_path):
+    prompt, rtl = _word_message_fixture()
+    # Invalid output data are explicitly unconstrained by the public prompt.
+    prompt = re.sub(r'^(\d+ns [01] [01] [0-9a-f]+ 0) x$', r'\1 ff', prompt, flags=re.M)
+    result = _run_word_message(tmp_path, prompt, rtl)
+    assert result.returncode == 0 and 'WTC_PASS' in result.stdout, result.stdout+result.stderr
