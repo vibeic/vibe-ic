@@ -116,7 +116,41 @@ def _clearance_code(text: str) -> Tuple[str, str]:
     return body, code
 
 
-def _clearance_value(expression: str, files: Dict[str, str]) -> Tuple[Optional[float], str, Optional[Tuple[str, str]]]:
+def _json_member_offset(text: str, key: str, start: int = 0) -> Tuple[int, int]:
+    decoder = json.JSONDecoder()
+    cursor = text.index("{", start) + 1
+    while True:
+        while text[cursor].isspace() or text[cursor] == ",":
+            cursor += 1
+        key_offset = cursor
+        name, cursor = decoder.raw_decode(text, cursor)
+        cursor = text.index(":", cursor) + 1
+        while text[cursor].isspace():
+            cursor += 1
+        value_offset = cursor
+        _, cursor = decoder.raw_decode(text, cursor)
+        if name == key:
+            return value_offset, key_offset
+
+
+def _ruby_scope_depth(code: str, before: int) -> int:
+    depth = 0
+    for line in code[:before].splitlines():
+        stripped = line.strip()
+        if re.match(r"^(?:def|if|unless|begin|case|while|until|for|class|module)\b", stripped):
+            depth += 1
+        if re.search(r"\bdo(?:\s*\|[^|]*\|)?\s*$", stripped):
+            depth += 1
+        if stripped == "end":
+            depth -= 1
+    return depth
+
+
+RuleSource = Tuple[str, str, str, bool]
+
+
+def _clearance_value(expression: str, files: Dict[str, str],
+                     sources: Optional[List[RuleSource]] = None) -> Tuple[Optional[float], str, Optional[Tuple[str, str]]]:
     if _RE_NUMBER.fullmatch(expression):
         value = float(expression)
         return (value, "", None) if math.isfinite(value) else (None, f"nonfinite clearance {expression}", None)
@@ -124,8 +158,10 @@ def _clearance_value(expression: str, files: Dict[str, str]) -> Tuple[Optional[f
     if not reference:
         return None, f"clearance expression `{expression}` could not be read", None
     table, key = reference.groups()
-    values: Dict[float, List[str]] = {}
-    errors: List[str] = []
+    if "#{" in key:
+        return None, "unsupported interpolation in JSON rule key", (table, key)
+    winner = None
+    evidence = []
 
     def pairs(items):
         result = {}
@@ -135,50 +171,204 @@ def _clearance_value(expression: str, files: Dict[str, str]) -> Tuple[Optional[f
             result[name] = value
         return result
 
-    for path, text in sorted(files.items()):
+    for path, json_table, binding_basis, empty_fallback in sources or []:
+        if path not in files:
+            return None, f"required JSON source {path} was not read; {binding_basis}", (table, key)
+        text = files[path]
         try:
             payload = json.loads(text, object_pairs_hook=pairs)
         except (ValueError, TypeError) as exc:
-            errors.append(f"{path} is not readable JSON for {table}[{key!r}]: {exc}")
-            continue
-        candidate = payload.get(table) if isinstance(payload, dict) else None
+            return None, f"{path} is not readable JSON: {exc}", (table, key)
+        if not isinstance(payload, dict):
+            return None, f"{path} has no JSON object to read {json_table} from", (table, key)
+        candidate = payload.get(json_table)
+        if empty_fallback and (candidate is None or candidate is False):
+            candidate = {}
         if not isinstance(candidate, dict):
-            errors.append(f"{path} has no readable {table} rule table")
-            continue
-        if key not in candidate:
-            continue
-        raw = candidate[key]
-        if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
-            errors.append(f"{path} has no numeric {table}[{key!r}]")
-            continue
-        try:
-            value = float(raw)
-        except (ValueError, TypeError, OverflowError):
-            value = math.nan
-        if not math.isfinite(value) or value < 0:
-            errors.append(f"{path} has no finite nonnegative {table}[{key!r}]")
-            continue
-        key_match = next((m for m in re.finditer(
-            r'("(?:\\.|[^"\\])*")\s*:', text)
-            if json.loads(m.group(1)) == key), None)
-        if key_match is None:
-            errors.append(f"{path} has no source location for {table}[{key!r}]")
-            continue
-        line = text.count("\n", 0, key_match.start()) + 1
-        values.setdefault(value, []).append(
-            f"{path}:{line} {table}[{key!r}] = {value} um")
-    if errors:
-        return None, "; ".join(errors), (table, key)
-    if len(values) != 1:
-        detail = "; ".join(where for places in values.values() for where in places)
-        return None, (f"{table}[{key!r}] is conflicting: {detail}" if values else
-                      f"{table}[{key!r}] was not read from a JSON rule table"), (table, key)
-    value = next(iter(values))
-    return value, "; ".join(values[value]), (table, key)
+            return None, f"{path} has no readable {json_table} rule table", (table, key)
+        evidence.append(f"{binding_basis}; loaded {path}[{json_table!r}]")
+        if key in candidate:
+            winner = (path, candidate[key], text, json_table)
+    if winner is None:
+        return None, f"{table}[{key!r}] was not read from a declared JSON rule table", (table, key)
+    path, raw, text, json_table = winner
+    try:
+        value = float(raw) if not isinstance(raw, bool) and isinstance(raw, (int, float, str)) else math.nan
+    except (ValueError, TypeError, OverflowError):
+        value = math.nan
+    if not math.isfinite(value) or value < 0:
+        return None, f"{path} has no finite nonnegative {json_table}[{key!r}]", (table, key)
+    table_offset, _ = _json_member_offset(text, json_table)
+    _, key_offset = _json_member_offset(text, key, table_offset)
+    line = text.count("\n", 0, key_offset) + 1
+    return value, "; ".join(evidence + [f"winner {path}:{line} {json_table}[{key!r}] = {value} um"]), (table, key)
 
+
+_RE_INCLUDE = re.compile(r"^[ \t]*#[ \t]*%include[ \t]+([^\s'\";]+)[ \t]*$", re.M)
+_RUBY_STRING = r"(?:'[^'\\\n]*'|\"[^\"\\\n]*\")"
+
+
+def _deck_includes(text: str):
+    masked = _RE_DECK_LITERAL.sub(
+        lambda match: match.group() if match.group().startswith("#") else
+        re.sub(r"[^\n]", " ", match.group()), text)
+    return _RE_INCLUDE.finditer(masked)
+
+
+def _relative_source(source_path: str, literal: str) -> Optional[str]:
+    if not literal or posixpath.isabs(literal) or "#{" in literal or "\\" in literal:
+        return None
+    return posixpath.normpath(posixpath.join(posixpath.dirname(source_path), literal))
+
+
+def _source_at(offset: int, origins: List[Tuple[int, int, str, int]], fallback: str) -> Tuple[str, int]:
+    for start, end, path, line in origins:
+        if start <= offset < end:
+            return path, line
+    return fallback, 1
+
+
+def _loader_methods(text: str, origins: List[Tuple[int, int, str, int]], source_path: str):
+    """Recognize only the shipped read/parse/table/default.merge(tech) method schema."""
+    body, code = _clearance_code(text)
+    lines = code.splitlines(keepends=True)
+    offsets = []
+    cursor = 0
+    for line in lines:
+        offsets.append(cursor)
+        cursor += len(line)
+    methods = {}
+    ranges = []
+    i = 0
+    while i < len(lines):
+        declaration = re.fullmatch(r"\s*def\s+(" + _IDENT + r")\((" + _IDENT + r")\)\s*", lines[i])
+        if not declaration:
+            i += 1
+            continue
+        start = i
+        depth = 1
+        i += 1
+        while i < len(lines) and depth:
+            stripped = lines[i].strip()
+            if re.match(r"^(?:def|if|unless|begin|case|while|until|for|class|module)\b", stripped):
+                depth += 1
+            if re.search(r"\bdo(?:\s*\|[^|]*\|)?\s*$", stripped):
+                depth += 1
+            if stripped == "end":
+                depth -= 1
+            i += 1
+        if depth:
+            methods[declaration.group(1)] = (None, "unsupported unterminated loader method")
+            continue
+        ranges.append((offsets[start], offsets[i] if i < len(offsets) else len(text)))
+        if _ruby_scope_depth(code, offsets[start]) != 0:
+            methods[declaration.group(1)] = (None, "unsupported conditional loader definition")
+            continue
+        logger = declaration.group(2)
+        raw = body[offsets[start + 1]:offsets[i - 1]]
+        statements = []
+        if any(not re.fullmatch(r"\$?" + _IDENT + r"(?:\.message)?", interpolation)
+               for interpolation in re.findall(r"#\{([^}]*)\}", raw)):
+            methods[declaration.group(1)] = (None, "unsupported interpolation in JSON loader")
+            continue
+        for line in raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if re.fullmatch(re.escape(logger) + r"\.(?:info|warn|error)\(" + _RUBY_STRING + r"\)", line):
+                if any(not re.fullmatch(r"\$?" + _IDENT + r"(?:\.message)?", value)
+                       for value in re.findall(r"#\{([^}]*)\}", line)):
+                    statements.append(line)
+                    continue
+                continue
+            if re.fullmatch(_IDENT + r"\.each \{ \|" + _IDENT + r"\| " + re.escape(logger) + r"\.warn\(" + _RUBY_STRING + r"\) \}", line):
+                continue
+            statements.append(line)
+        normalized = "\n".join(statements)
+        pattern = (
+            rf"(?P<dir>{_IDENT}) = File\.expand_path\(File\.dirname\(__FILE__\)\)\n"
+            rf"(?P<default>\${_IDENT}) = (?P=default) \|\| File\.expand_path\(File\.join\((?P=dir), ['\"](?P<default_path>[^'\"\\]+)['\"]\)\)\n"
+            rf"(?P<tech>\${_IDENT}) = (?P=tech) \|\| File\.expand_path\(File\.join\((?P=dir), ['\"](?P<tech_path>[^'\"\\]+)['\"]\)\)\n"
+            rf"(?P<tech_rules>{_IDENT}) = \{{\}}\n"
+            r"if (?P=tech) && (?P=tech) != (?P=default)\nbegin\n"
+            rf"(?P<tech_content>{_IDENT}) = File\.read\((?P=tech)\)\n"
+            rf"(?P<tech_data>{_IDENT}) = JSON\.parse\((?P=tech_content)\)\n"
+            rf"(?P=tech_rules) = (?P=tech_data)\[['\"](?P<table>[^'\"\\]+)['\"]\] \|\| \{{\}}\n"
+            rf"rescue StandardError => (?P<tech_error>{_IDENT})\nraise {_RUBY_STRING}\nend\nend\nbegin\n"
+            rf"(?P<default_content>{_IDENT}) = File\.read\((?P=default)\)\n"
+            rf"(?P<default_data>{_IDENT}) = JSON\.parse\((?P=default_content)\)\n"
+            r"(?P<default_rules>" + _IDENT + r") = (?P=default_data)\[['\"](?P=table)['\"]\] \|\| \{\}\n"
+            rf"rescue StandardError => (?P<default_error>{_IDENT})\nraise {_RUBY_STRING}\nend\n"
+            rf"(?P<merged>{_IDENT}) = (?P=default_rules)\.merge\((?P=tech_rules)\)\n"
+            rf"(?P<missing>{_IDENT}) = (?P=default_rules)\.keys - (?P=tech_rules)\.keys\nunless (?P=missing)\.empty\?\nend\n(?P=merged)"
+        )
+        match = re.fullmatch(pattern, normalized)
+        if not match:
+            methods[declaration.group(1)] = (None, "unsupported JSON loader structure")
+            continue
+        data = match.groupdict()
+        names = [data[k] for k in ("dir", "tech_rules", "tech_content", "tech_data", "default_content", "default_data", "default_rules", "merged", "missing")]
+        path, _ = _source_at(offsets[start], origins, source_path)
+        default = _relative_source(path, data["default_path"])
+        tech = _relative_source(path, data["tech_path"])
+        if len(set(names)) != len(names) or data["tech"] == data["default"] or not default or not tech:
+            methods[declaration.group(1)] = (None, "unsupported ambiguous JSON loader names or paths")
+            continue
+        globals_used = [data["default"], data["tech"]]
+        outside = code[:offsets[start]] + code[offsets[i] if i < len(offsets) else len(code):]
+        outside_body = body[:offsets[start]] + body[offsets[i] if i < len(offsets) else len(body):]
+        if any(re.search(r"#\{[^}]*" + re.escape(name) + r"\b", outside_body)
+               for name in globals_used):
+            methods[declaration.group(1)] = (None, "unsupported source-global interpolation outside JSON loader")
+            continue
+        if any(re.search(re.escape(name) + r"\s*(?:[|&+*/-]?=|\[|\.)", outside) for name in globals_used):
+            methods[declaration.group(1)] = (None, "unsupported external mutation of source-default JSON path")
+            continue
+        basis = f"{path} loader {declaration.group(1)}; source-default global fallbacks assumed (runtime overrides unavailable); default.merge(TECH), TECH overrides per key"
+        methods[declaration.group(1)] = ([(default, data["table"], basis, True), (tech, data["table"], basis, True)], "")
+    return methods, ranges
+
+
+def _table_sources(table: str, assignment, text: str, source_path: str,
+                   origins: List[Tuple[int, int, str, int]], before: int):
+    if not assignment:
+        return [], f"unsupported JSON authority for {table}: no declared loader binding"
+    expression, offset = assignment
+    methods, ranges = _loader_methods(text, origins, source_path)
+    _, code = _clearance_code(text)
+    depth = _ruby_scope_depth(code, offset)
+    if depth != 0:
+        return [], f"unsupported conditional or ambiguous JSON binding for {table}"
+    if any(start <= offset < end for start, end in ranges):
+        return [], f"unsupported JSON binding inside method for {table}"
+    path, _ = _source_at(offset, origins, source_path)
+    direct = re.fullmatch(r"JSON\.parse\(File\.read\(File\.join\(__dir__,\s*['\"]([^'\"\\]+)['\"]\)\)\)\[['\"]([^'\"\\]+)['\"]\]", expression)
+    if direct:
+        loaded = _relative_source(path, direct.group(1))
+        sources, error = ([(loaded, direct.group(2), f"{path} direct JSON binding for {table}", False)], "") if loaded else ([], "unsupported non-relative JSON path")
+    else:
+        call = re.fullmatch(r"(" + _IDENT + r")\(" + _IDENT + r"\)", expression)
+        sources, error = methods.get(call.group(1), (None, "unsupported JSON loader call")) if call else (None, "unsupported JSON table binding")
+        if call:
+            definitions = list(re.finditer(r"^[ \t]*def\s+" + re.escape(call.group(1)) + r"\b", code, re.M))
+            if len(definitions) != 1 or definitions[0].start() >= offset:
+                return [], "unsupported ambiguous or unavailable JSON loader definition"
+    _, code = _clearance_code(text)
+    if any(re.search(r"\b" + re.escape(table) + r"\b", interpolation)
+           for interpolation in re.findall(r"#\{([^}]*)\}", text[offset:before])):
+        return [], f"unsupported interpolated use of JSON table {table}"
+    tail = code[offset:before]
+    first_line_end = tail.find("\n")
+    tail = tail[first_line_end + 1:] if first_line_end >= 0 else ""
+    for use in re.finditer(r"\b" + re.escape(table) + r"\b", tail):
+        suffix = text[offset + (first_line_end + 1 if first_line_end >= 0 else len(code)):before][use.end():]
+        if not re.match(r"\s*\[\s*['\"][^'\"]+['\"]\s*\]\s*\.\s*to_f\b", suffix):
+            return [], f"unsupported mutation or use of JSON table {table}"
+    return list(sources or []), error
 
 def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None,
-                           source_path: str = "") -> List[Dict[str, Any]]:
+                           source_path: str = "",
+                           origins: Optional[List[Tuple[int, int, str, int]]] = None) -> List[Dict[str, Any]]:
     body, code = _clearance_code(text or "")
     assignments = list(_RE_CLEAR_ASSIGN.finditer(code))
     out: List[Dict[str, Any]] = []
@@ -227,29 +417,28 @@ def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None,
             if not source:
                 break
             value_expression, before = source
-        bound_files = {}
-        loaded_path = None
+        sources = []
+        binding_error = ""
         reference_match = _RE_RULE_VALUE.fullmatch(value_expression)
         if reference_match:
             table = reference_match.group(1)
-            source = assigned(table, before)
-            if source:
-                binding = re.fullmatch(
-                    r"JSON\.parse\(File\.read\(File\.join\(__dir__,\s*"
-                    r"['\"]([^'\"\\]+)['\"]\)\)\)\[['\"]"
-                    + re.escape(table) + r"['\"]\]", source[0])
-                if binding and source_path:
-                    loaded_path = posixpath.normpath(posixpath.join(
-                        posixpath.dirname(source_path), binding.group(1)))
-                    if loaded_path in (files or {}):
-                        bound_files[loaded_path] = files[loaded_path]
-        value, basis, reference = _clearance_value(value_expression, bound_files) if um else (
+            sources, binding_error = _table_sources(table, assigned(table, before), body,
+                                                    source_path, origins or [], before)
+        value, basis, reference = _clearance_value(value_expression, files or {}, sources) if um else (
             None, f"clearance `{expression}` has no readable um value", None)
+        if binding_error:
+            value, basis = None, binding_error
         tail = _RE_RULE_ID.search(body, match.start(3), min(len(body), match.start(3) + 400))
-        out.append({"prime_layer": match.group(1), "marker": seal, "um": value,
+        origin_path, origin_line = _source_at(match.start(), origins or [], source_path)
+        segment = next((start for start, end, path, line in origins or [] if start <= match.start() < end), 0)
+        if origins and origin_path != source_path:
+            basis += f"; declared include ancestry rooted at {source_path}, clearance in {origin_path}"
+        out.append({"file": origin_path, "prime_layer": match.group(1), "marker": seal, "um": value,
                     "rule": tail.group(1) if tail else None,
-                    "line": body.count("\n", 0, match.start()) + 1,
-                    "value_basis": basis, "reference": reference, "json_source": loaded_path,
+                    "line": origin_line + body.count("\n", segment, match.start()),
+                    "value_basis": basis, "reference": reference, "json_source": sources[0][0] if len(sources) == 1 else None,
+                    "json_sources": [source[0] for source in sources],
+                    "json_bindings": [(source[0], source[1]) for source in sources],
                     "error": basis if value is None else ""})
     return out
 
@@ -260,7 +449,7 @@ def _read_files(run_sh: ShellFn, find_cmd: str) -> Tuple[Dict[str, str], str]:
     # `while read` rather than `for f in $(…)`: a path is a path, not a word
     # list. `head -c` caps what a mis-aimed search can drag back.
     cmd = (f"{{ {find_cmd} ; }} | while IFS= read -r f; do "
-           f"echo \"{_SEP}$f\"; cat \"$f\"; done | head -c {_MAX_BYTES}")
+           f"echo \"{_SEP}$f\"; cat \"$f\"; echo; done | head -c {_MAX_BYTES}")
     try:
         rc, out = run_sh(cmd)
     except Exception as exc:                                   # noqa: BLE001
@@ -331,43 +520,126 @@ def ring_band_um(pdk_dir: str, run_sh: ShellFn) -> Tuple[Optional[float], str]:
                  f"{found[val][0]} = {val} um")
 
 
+def _clearance_contexts(files: Dict[str, str]):
+    edges = {}
+    relevant = set()
+    for path, text in files.items():
+        edges[path] = [(m.start(), m.end(), _relative_source(path, m.group(1)))
+                       for m in _deck_includes(text)]
+        if clearance_declarations(text, source_path=path):
+            relevant.add(path)
+    changed = True
+    while changed:
+        changed = False
+        for path, includes in edges.items():
+            if path not in relevant and any(child in relevant for _, _, child in includes):
+                relevant.add(path)
+                changed = True
+    children = {child for path in relevant for _, _, child in edges[path] if child in relevant}
+    roots = sorted(relevant - children)
+    if relevant and not roots:
+        return [], "unsupported include cycle in seal clearance ancestry"
+    contexts = []
+    visited = set()
+
+    def expand(path, stack):
+        if path in stack:
+            raise ValueError(f"unsupported include cycle at {path}")
+        visited.add(path)
+        chunks = []
+        origins = []
+        cursor = 0
+        length = 0
+        text = files[path]
+
+        def append(part, line):
+            nonlocal length
+            chunks.append(part)
+            origins.append((length, length + len(part), path, line))
+            length += len(part)
+            if length >= _MAX_BYTES:
+                raise ValueError("include-expanded clearance context exceeds source read cap")
+
+        for start, end, child in edges[path]:
+            if child not in files:
+                continue
+            append(text[cursor:start], text.count("\n", 0, cursor) + 1)
+            child_text, child_origins = expand(child, (*stack, path))
+            chunks.append(child_text)
+            origins.extend((a + length, b + length, p, line) for a, b, p, line in child_origins)
+            length += len(child_text)
+            append("\n", text.count("\n", 0, start) + 1)
+            cursor = end
+        append(text[cursor:], text.count("\n", 0, cursor) + 1)
+        return "".join(chunks), origins
+
+    try:
+        for path in roots:
+            text, origins = expand(path, ())
+            contexts.append((path, text, origins))
+    except ValueError as exc:
+        return [], str(exc)
+    if not relevant.issubset(visited):
+        return [], "unsupported include cycle in seal clearance ancestry"
+    return contexts, ""
+
+
 def guard_ring_clearance_um(pdk_dir: str,
                             run_sh: ShellFn) -> Tuple[Optional[float], str]:
-    """(the deck's guard-ring-marker clearance in um, the basis) or (None, why).
-
-    The BINDING one, which is the LARGEST the deck states: a core that clears
-    the widest separation clears every narrower one. Every distinct value is
-    named in the basis so a reader can check the choice against the deck.
-    """
-    find = (f"grep -RIlEi {shlex.quote(_RE_SEAL_RING_VAR.pattern)} "
+    """Read clearances in their declared include and ordered JSON loader context."""
+    discovery = _RE_SEAL_RING_VAR.pattern + r"|%include|JSON[.]parse|File[.]read"
+    find = (f"grep -RIlEi {shlex.quote(discovery)} "
             f"--include='*.rb' --include='*.drc' --include='*.lydrc' "
             f"-- {shlex.quote(pdk_dir)} 2>/dev/null")
     files, why = _read_files(run_sh, find)
     if why:
         return None, (f"no DRC deck stating a guard-ring-marker separation "
                       f"could be read under {pdk_dir}: {why}")
-    decls: List[Dict[str, Any]] = []
-    for path, text in sorted(files.items()):
-        for d in clearance_declarations(text, source_path=path):
-            d["file"] = path
-            decls.append(d)
+    pending = {_relative_source(path, m.group(1))
+               for path, text in files.items() for m in _deck_includes(text)}
+    seen = set(files)
+    while pending:
+        path = pending.pop()
+        if path is None or path in seen:
+            continue
+        seen.add(path)
+        quoted = shlex.quote(path)
+        included, why = _read_files(
+            run_sh, f"if [ -f {quoted} ]; then printf '%s\\n' {quoted}; fi")
+        if why:
+            if "nothing was returned" in why:
+                continue
+            return None, why
+        files.update(included)
+        pending.update(_relative_source(path, m.group(1))
+                       for text in included.values() for m in _deck_includes(text))
+    contexts, why = _clearance_contexts(files)
+    if why:
+        return None, why
+
+    def declarations(json_files):
+        return [d for path, text, origins in contexts
+                for d in clearance_declarations(text, files=json_files,
+                                                source_path=path, origins=origins)]
+
+    decls = declarations({})
+    bindings = {}
+    for declaration in decls:
+        identity = (declaration["file"], declaration["line"])
+        bindings.setdefault(identity, set()).add(tuple(declaration["json_bindings"]))
+    if any(len(contexts) > 1 for contexts in bindings.values()):
+        return None, "unsupported ambiguous JSON loader contexts for an included seal rule"
     if not decls:
         return None, (f"the deck files under {pdk_dir} that mention a "
                       f"seal-ring marker ({', '.join(sorted(files))}) state "
                       f"no readable marker separation in um")
-    references = {d["reference"] for d in decls if d["reference"]}
-    if references:
-        paths = sorted({d["json_source"] for d in decls if d["json_source"]})
+    paths = sorted({path for d in decls for path in d["json_sources"]})
+    if paths:
         json_files, why = _read_files(
-            run_sh, "printf '%s\\n' " + " ".join(shlex.quote(p) for p in paths)) if paths else ({}, "")
-        names = ", ".join(f"{table}[{key!r}]" for table, key in sorted(references))
+            run_sh, "printf '%s\\n' " + " ".join(shlex.quote(p) for p in paths))
         if why:
-            return None, f"the JSON rule table for {names} could not be read: {why}"
-        decls = []
-        for path, text in sorted(files.items()):
-            for d in clearance_declarations(text, files=json_files, source_path=path):
-                d["file"] = path
-                decls.append(d)
+            return None, f"the declared JSON rule sources could not be read: {why}"
+        decls = declarations(json_files)
     unread = [f"{d['file']}:{d['line']} "
               f"{d['rule'] or 'seal clearance'}: {d['error']}"
               for d in decls if d["um"] is None]
