@@ -2207,7 +2207,8 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
                friendly=None, dev: Optional[dict] = None,
                compact_terminal: bool = False,
                exit_path: Optional[Tuple[int, int, int]] = None,
-               search_lambda: int = ISLAND_SEARCH_LAMBDA) -> Tuple[int, int]:
+               search_lambda: int = ISLAND_SEARCH_LAMBDA,
+               horizontal: bool = False) -> Tuple[int, int]:
     """Carry a terminal from the metal the gencell delivered it on to the
     routing layer, and give every cut the metal the deck demands around it.
 
@@ -2275,6 +2276,8 @@ def _via_stack(plan: Plan, net: str, x: int, y: int, level: int, geo: Geo,
     for p, area in ladder:
         hs, hl = halves(p, area)
         for ax, ay in ((hl, hs), (hs, hl)):
+            if horizontal and ay > ax:
+                continue
             if (ax, ay, p) not in seen_shapes:
                 seen_shapes.add((ax, ay, p))
                 shapes.append((ax, ay, p))
@@ -2585,8 +2588,9 @@ def _m4_trunk_tracks(row_rails: Sequence[dict], geo: Geo,
 
 
 def _route_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
-                  geo: Geo, sites: "Sites") -> None:
+                  geo: Geo, sites: "Sites") -> bool:
     lo, hi = sorted((y0, y1))
+    rail_handled = False
     half = max(geo.wire[3] // 2, 1)
     space = geo.metal_space("metal3")
     obstacles = list(getattr(plan, "m3_escape_obstacles", []))
@@ -2607,31 +2611,50 @@ def _route_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
     cursor = lo
     for a, b in merged:
         chosen = None
+        edge_candidates = [x]
+        if a <= y0 <= b:
+            for other, box in obstacles:
+                if other != net and box[1] - space <= y0 <= box[3] + space:
+                    edge_candidates.extend((box[0] - space - geo.long_half[2],
+                                            box[2] + space + geo.long_half[2]))
         for extra in range(3):
             low, high = max(lo, a - extra * geo.pitch()), min(hi, b + extra * geo.pitch())
-            for dx in (0, -geo.pitch(), geo.pitch(), -2 * geo.pitch(), 2 * geo.pitch()):
-                bx = x + dx
-                probe = Plan()
-                for y in (low, high):
-                    _via_stack(probe, net, x, y, 2, geo, top=3)
-                hw2 = max(geo.wire[2] // 2, 1)
-                probe.paint(net, "metal2", bx - hw2, low - hw2, bx + hw2, high + hw2)
-                for y in (low, high):
-                    probe.paint(net, "metal2", min(x, bx) - hw2, y - hw2,
-                                max(x, bx) + hw2, y + hw2)
-                if any(not sites.clear(s["box"], [s["layer"]], None, net) for s in probe.shapes):
-                    continue
-                if any(s["layer"] == "metal3" and other != net
-                       and box_separation(s["box"], box) < space
-                       for s in probe.shapes for other, box in obstacles):
-                    continue
-                chosen = (low, high, probe.shapes)
-                break
+            rail_endpoint = y0 in (low, high)
+            for landing in sorted(set(edge_candidates), key=lambda v: abs(v-x)):
+                for dx in (0, -geo.pitch(), geo.pitch(), -2 * geo.pitch(), 2 * geo.pitch()):
+                    bx = landing + dx
+                    probe = Plan()
+                    ends = [(landing if rail_endpoint and y == y0 else x, y) for y in (low, high)]
+                    for ex, y in ends:
+                        _via_stack(probe, net, ex, y, 2, geo,
+                                   top=4 if rail_endpoint and y == y0 else 3,
+                                   horizontal=rail_endpoint and y == y0)
+                    hw2 = max(geo.wire[2] // 2, 1)
+                    probe.paint(net, "metal2", bx - hw2, low - hw2, bx + hw2, high + hw2)
+                    for ex, y in ends:
+                        probe.paint(net, "metal2", min(ex, bx) - hw2, y - hw2,
+                                    max(ex, bx) + hw2, y + hw2)
+                    if rail_endpoint:
+                        h4 = max(geo.wire[4] // 2, 1)
+                        probe.paint(net, "metal4", min(x, landing) - h4, y0 - h4,
+                                    max(x, landing) + h4, y0 + h4)
+                    if any(s["box"][0] < 0 or s["box"][2] > getattr(plan, "routing_width_limit", 10**12)
+                           or not sites.clear(s["box"], [s["layer"]], None, net) for s in probe.shapes):
+                        continue
+                    if any(s["layer"] == "metal3" and other != net
+                           and box_separation(s["box"], box) < space
+                           for s in probe.shapes for other, box in obstacles):
+                        continue
+                    chosen = (low, high, probe.shapes, rail_endpoint)
+                    break
+                if chosen:
+                    break
             if chosen:
                 break
         if chosen is None:
             raise Refusal(f"no source-legal M2 overpass for {net} at x={x}, y={a}:{b}")
-        low, high, shapes = chosen
+        low, high, shapes, rail_endpoint = chosen
+        rail_handled |= rail_endpoint
         if low > cursor:
             plan.paint(net, "metal3", x - half, cursor, x + half, low)
         for shape in shapes:
@@ -2639,6 +2662,7 @@ def _route_m3_leg(plan: Plan, net: str, x: int, y0: int, y1: int,
         cursor = high
     if cursor < hi:
         plan.paint(net, "metal3", x - half, cursor, x + half, hi)
+    return rail_handled
 
 
 def _complementary_groups(devices: Sequence[dict]) -> List[List[str]]:
@@ -2946,14 +2970,15 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
             bus_x[net] = x
             candidates.remove(x)
 
-        initial_y = max([0] + [-box[1] - pitch
+        rail_half = max(geo.short_half[3], geo.short_half[4], geo.wire[4] // 2)
+        rail_pitch = 2 * rail_half + geo.metal_space("metal4")
+        clearance = 2 * max(geo.long_half[3], geo.long_half[4]) + geo.metal_space("metal4")
+        initial_y = max([0] + [-box[1] - rail_pitch
                               for spec in (pin_spec or {}).get("ports", {}).values()
                               for _, box in _pin_stack_boxes(
                                   0, 0, 2, spec["level"], geo,
                                   max(1, spec["cuts"]))[0]])
         cursors = {name: initial_y for name in (*columns, "fullspan")}
-        rail_half = max(geo.long_half[2], geo.wire[2] // 2)
-        clearance = 2 * rail_half + geo.metal_space("metal4")
         booked = []
         row_rails, descriptions = [], []
         for ri, (row, ns) in enumerate(zip(rows, row_nets)):
@@ -2974,17 +2999,17 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
             while True:
                 after = y
                 for net, (lo, hi) in intervals.items():
-                    ty = y + pitch * (tracks[net] + 1)
+                    ty = y + rail_pitch * (tracks[net] + 1)
                     for other, ol, oh, oy in booked:
                         if net == other and ty == oy:
                             continue
                         dx = max(lo - oh, ol - hi, 0)
-                        if dx < clearance and abs(ty - oy) < clearance:
-                            after = max(after, oy + clearance - pitch * (tracks[net] + 1))
+                        if dx < clearance and abs(ty - oy) < rail_pitch:
+                            after = max(after, oy + rail_pitch - rail_pitch * (tracks[net] + 1))
                 if after == y:
                     break
                 y = after
-            rails = {net: y + pitch * (tracks[net] + 1) for net in ns}
+            rails = {net: y + rail_pitch * (tracks[net] + 1) for net in ns}
             row_rails.append(rails)
             booked.extend((net, *intervals[net], rails[net]) for net in ns)
             low, high, spacing = [], [], geo.default_space
@@ -3002,7 +3027,7 @@ def _place_left_right_rows(per_dev: Sequence[dict], nets: Sequence[str], geo: Ge
             base = cursors[region] - min(low)
             for d in row:
                 d["row"], d["box_y"] = ri, base
-            cursors[region] = max(base + max(high), max(rails.values()) + rail_half) + spacing + rail_half
+            cursors[region] = max(base + max(high), max(rails.values()) + rail_half) + spacing
             if region == "fullspan":
                 for name in columns:
                     cursors[name] = cursors[region]
@@ -3144,6 +3169,7 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
     rail_level = 4 if shared_capacitor_escapes and left_right_regions else 2
     trunk_level = 5 if rail_level == 4 else 4
     plan.rail_level = rail_level
+    plan.routing_width_limit = round(max_row_width_um * geo.lam)
     body_tap_contact = body_tap_contact_layer(facts.layers)
     body_tap_metal_contact = body_tap_metal_contact_layer(facts.layers)
     body_tap_local = body_tap_local_layer(facts.layers)
@@ -3686,12 +3712,14 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             if g["strapped"]:
                 _via_stack(plan, net, lane, ey, 2, geo, top=3, sites=sites)
             ry = row_rails[d["row"]][net]
+            rail_handled = False
             if rail_level == 4:
-                _route_m3_leg(plan, net, lane, ry, ey, geo, sites)
+                rail_handled = _route_m3_leg(plan, net, lane, ry, ey, geo, sites)
             else:
                 plan.paint(net, "metal3", lane - hw3, ry, lane + hw3, ey)
-            _via_stack(plan, net, lane, ry, 3, geo, top=rail_level,
-                       sites=sites)
+            if not rail_handled:
+                _via_stack(plan, net, lane, ry, 3, geo, top=rail_level,
+                           sites=sites, horizontal=rail_level == 4)
 
     plan.island_patches = commit_metal_patches(plan, patches, sites,
                                                len(per_dev))
@@ -3718,7 +3746,8 @@ def build_plan(devs: Sequence[dict], ports: Sequence[str],
             rail_box.setdefault(net, (lo, ty - rail_half, hi, ty + rail_half))
             if net in bus_x:
                 _via_stack(plan, net, bus_x[net], ty, rail_level, geo, top=trunk_level, sites=sites,
-                           search_lambda=0 if compact_bus else ISLAND_SEARCH_LAMBDA)
+                           search_lambda=0 if compact_bus else ISLAND_SEARCH_LAMBDA,
+                           horizontal=rail_level == 4)
     for net, bx in bus_x.items():
         if compact_bus:
             continue
@@ -4001,7 +4030,7 @@ def pin_spec_for(ports: Sequence[str], rails: Optional[dict],
 
 
 def _pin_stack_boxes(x: int, y: int, lo: int, hi: int, geo: "Geo",
-                     cuts: int) -> Tuple[List[Tuple[str, Tuple[int, ...]]],
+                     cuts: int, horizontal_lo: bool = False) -> Tuple[List[Tuple[str, Tuple[int, ...]]],
                                          Dict[int, Tuple[int, int, int, int]]]:
     """The rectangles of a via stack from metal `lo` to metal `hi` at (x, y)
     carrying `cuts` cuts per level in a row along x: every via square, and one
@@ -4023,7 +4052,9 @@ def _pin_stack_boxes(x: int, y: int, lo: int, hi: int, geo: "Geo",
         # measured: 4 on ldo before this floor)
         h = max([geo.long_half[k] for k in vias if k in (m - 1, m)]
                 + [(geo.wire.get(m, 1) + 1) // 2])
-        bars[m] = (x + offs[0] - h, y - h, x + offs[-1] + h, y + h)
+        hy = (max(geo.short_half[lo], (geo.wire.get(m, 1) + 1) // 2)
+              if horizontal_lo and m == lo and vias else h)
+        bars[m] = (x + offs[0] - h, y - hy, x + offs[-1] + h, y + hy)
         paint.append((f"metal{m}", bars[m]))
     for k in vias:
         ph = geo.via_pad[k]
@@ -4071,7 +4102,8 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
             edge = min([0] + [r["box"][0] for r in plan.shapes]
                        + [r["box"][0] for r in plan.device_shapes])
             x = edge + pitch
-            paint, bars = _pin_stack_boxes(x, y, rail_level, level, geo, cuts)
+            paint, bars = _pin_stack_boxes(x, y, rail_level, level, geo, cuts,
+                                           horizontal_lo=rail_level == 4)
             hw2 = max(geo.wire[rail_level] // 2, 1)
             connection = (min(x, rx1) - hw2, y - hw2,
                           max(x, rx1) + hw2, y + hw2)
@@ -4107,7 +4139,8 @@ def _draw_pins(plan: "Plan", ports: Sequence[str],
             cands.extend(range(rx2 + stepv, edge + 1, stepv))
         chosen = None
         for x in cands:
-            paint, bars = _pin_stack_boxes(x, y, rail_level, level, geo, cuts)
+            paint, bars = _pin_stack_boxes(x, y, rail_level, level, geo, cuts,
+                                           horizontal_lo=rail_level == 4)
             connection = None
             if not spec["rail"] and bars[rail_level][2] > rx2:
                 hw2 = max(geo.wire[rail_level] // 2, 1)

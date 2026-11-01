@@ -43,9 +43,9 @@ def test_local_m3_leg_uses_m2_overpass_at_a_foreign_escape():
     plan = a.Plan()
     sites = a.Sites([], g)
     plan.sites = sites
-    plan.paint('foreign', 'metal3', -200, 985, 200, 1015)
-    plan.m3_escape_obstacles = [('foreign', (-200, 985, 200, 1015))]
-    a._route_m3_leg(plan, 'own', 0, 0, 2000, g, sites)
+    plan.paint('foreign', 'metal3', 800, 985, 1200, 1015)
+    plan.m3_escape_obstacles = [('foreign', (800, 985, 1200, 1015))]
+    a._route_m3_leg(plan, 'own', 1000, 0, 2000, g, sites)
     assert any(s['net'] == 'own' and s['layer'] == 'metal2' and s['box'][1] < 1000 < s['box'][3] for s in plan.shapes)
     for one in plan.shapes:
         for two in plan.shapes:
@@ -59,3 +59,16 @@ def test_complementary_switches_and_inverters_stay_electrically_local():
     ds = [mos('tn', ['a', 'ck', 'b', 'vss']), mos('tp', ['b', 'ckb', 'a', 'vdd']),
           mos('in', ['out', 'in', 'vss', 'vss']), mos('ip', ['out', 'in', 'vdd', 'vdd'])]
     assert a._complementary_groups(ds) == [['tn', 'tp'], ['in', 'ip']]
+
+
+def test_overpass_can_land_on_m4_beyond_a_blocked_m3_rail_endpoint():
+    g = geo()
+    plan = a.Plan()
+    sites = a.Sites([], g)
+    plan.sites = sites
+    plan.paint('own', 'metal4', 500, 985, 1500, 1015)
+    plan.paint('foreign', 'metal3', 800, 985, 1200, 1015)
+    plan.m3_escape_obstacles = [('foreign', (800, 985, 1200, 1015))]
+    handled = a._route_m3_leg(plan, 'own', 1000, 1000, 0, g, sites)
+    assert handled
+    assert any(s['net'] == 'own' and s['layer'] == 'via3' and abs(s['box'][0]-1000) >= 200 for s in plan.shapes)
