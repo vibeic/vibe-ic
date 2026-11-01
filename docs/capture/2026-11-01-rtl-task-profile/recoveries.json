@@ -1,0 +1,33 @@
+[
+  {
+    "step": "flow.task_features",
+    "design": "neutral bounded RTL task",
+    "bucket": "A",
+    "rule_name": "resolve_standard_rtl_task_profile",
+    "docstring": "A bounded source-compatible RTL evidence request selects the existing shipped RTL-only feature profile without requiring an operator feature file or IC/IP confirmation.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Augment `flow109.resolve_task_manifest` and call it before public delivery admission and through the thin dispatcher's existing forwarding boundary. Reuse the standard registry profile and existing source/window checks; preserve explicit input bytes and strict feature conflicts.",
+    "before_state": "Actual general entry returned DELIVERY_ROUTE_UNDECLARED and actual adapter entry returned FLOW109_MANIFEST_REQUIRED, both rc=2.",
+    "after_state": "Both actual public paths reach design_one_shot_runner with bounded native entry 1 and exit 2, using exactly the shipped RTL-only profile.",
+    "ai_reasoning": "The visible bounded evidence contract already determines RTL applicability. Asking the user for a profile repeats a decision the existing general contract can resolve. This is deterministic applicability, not acceptance or tool qualification.",
+    "pattern": "A shared front door requires a fully explicit configuration even though its existing visible delivery and bounded evidence contract uniquely selects a shipped standard profile, producing an unnecessary user confirmation before any useful work.",
+    "generality": "Normal public projects and thin evaluation adapters use the same resolver; no dataset, problem name, oracle or previous score is an input.",
+    "evidence": "CAPTURE.md; external receipt packet rtl-profile-capture1101/red.xml, latest-base.xml, latest-candidate.xml, latest-selection-mutation.xml, explicit-red.xml, latest-explicit-mutation.xml and latest-restored.xml",
+    "corpus_sweep": "157 matched owning/nearby contract IDs: 7 improved, 9 unchanged base failures, zero introduced failures; full plugin source and public-entry guards PASS. Full release suite NOT_RUN."
+  },
+  {
+    "step": "flow.task_features",
+    "design": "repeat of the same neutral bounded RTL task",
+    "bucket": "A",
+    "rule_name": "revalidate_retained_standard_rtl_profile",
+    "docstring": "A second ordinary invocation can reuse an unchanged standard RTL profile only after current source and bounded-window checks.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "Recognize equality to the shipped profile, preserve existing bytes, and re-run the existing source/window applicability checks before normal Flow109 request binding. Do not persist another profile-state sidecar or reuse acceptance authority.",
+    "before_state": "First actual public invocation reached OWNER_REACHED; the second returned REFUSED with DELIVERY_ROUTE_UNDECLARED.",
+    "after_state": "Both identical public invocations reach the owner; changed physical delivery or explicit optional feature choices refuse automatic reuse without rewriting bytes.",
+    "ai_reasoning": "Existence alone must not suppress deterministic applicability resolution, and an old selection must not authorize a changed source or feature choice.",
+    "pattern": "An automatically materialized input is recognized only during its creation, so the next ordinary invocation loses the same scope and asks the user to restate it.",
+    "generality": "Any normal bounded RTL invocation can repeat; current source and evidence checks continue to own applicability.",
+    "evidence": "repeat-red.xml and repeat-red-substance.log; latest-repeat-mutation.xml; latest-restored.xml"
+  }
+]

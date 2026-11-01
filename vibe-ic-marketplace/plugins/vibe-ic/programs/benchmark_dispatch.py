@@ -6476,11 +6476,15 @@ def _stage_product_manifest(run_p: Path, source: str | Path | None) -> None:
     _write_immutable_bytes(Path(run_p) / "input" / "flow109-manifest.json", raw)
 
 
-def _forward_product_manifest(run_p: Path, project: Path) -> None:
+def _forward_product_manifest(run_p: Path, project: Path, receipt: dict | None = None) -> None:
     source = Path(run_p) / "input" / "flow109-manifest.json"
     if source.is_file():
         _write_immutable_bytes(Path(project) / "input" / "flow109-manifest.json",
                                source.read_bytes())
+    elif receipt is not None:
+        import flow109
+        flow109.resolve_task_manifest(project, receipt.get("entry_step"),
+            receipt.get("verify_through"), receipt.get("delivery_target"))
 
 
 def _rtl_delivery_target(receipt: dict | None) -> str | None:
@@ -6511,6 +6515,11 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
     import task_nature_route as tnr                       # noqa: PLC0415
     if delivery_route not in {"ic", "ip"}:
         raise ValueError(f"invalid delivery runner route: {delivery_route!r}")
+    import flow109
+    selected = flow109.resolve_task_manifest(proj, entry or "D1", exit_step,
+                                             delivery_target, delivery_route)
+    if selected is not None:
+        delivery_target = "rtl"
     argv = [sys.executable, str(runner), str(proj),
             "--route", delivery_route, "--skip-analog", "--skip-hardware",
             "--no-dashboard"]
@@ -8677,7 +8686,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             if (current_route["receipt"].get("receipt_sha256")
                     != route_receipt.get("receipt_sha256")):
                 raise ValueError("ROUTE_RECEIPT_CURRENT_POINTER_MISMATCH")
-            _forward_product_manifest(run_p, proj)
+            _forward_product_manifest(run_p, proj, route_receipt)
             # `entry_step` and `verify_through` are derived by the Program
             # receipt. The semantic reviewer never supplies or overrides them.
             entry = str(route_receipt["entry_step"])
@@ -9337,7 +9346,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         # exit still applies; otherwise resume expands a step-2/4 task into LEC.
         input_contract = str(
             state["route_receipt"].get("input_contract") or "structured")
-        _forward_product_manifest(run_p, proj)
+        _forward_product_manifest(run_p, proj, state["route_receipt"])
         argv = _resume_solver_argv(
             runner, proj, supplied_rtl, state["effective_entry"],
             state["exit_step"], state["delivery_route"],

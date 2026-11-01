@@ -1,6 +1,16 @@
 {
   "_comment": "Maps each Vibe-IC flow step to the right Bucket-A program file + Bucket-B skill file. Used by enhancement_emit.py to route a captured recovery to the correct target. Step IDs match the canonical flow naming.",
   "steps": {
+    "flow.task_features": {
+      "description": "General source/evidence-bound task profile selection before public admission; capture routing only, not a new flow step or acceptance gate.",
+      "bucket_A_program": "programs/flow109.py",
+      "bucket_A_related": [
+        "programs/task_nature_route.py",
+        "programs/vibe_ic_one_shot_runner.py",
+        "programs/benchmark_dispatch.py"
+      ],
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
     "phase1.ingest_render": {
       "description": "Phase 1: NL prompt / docs → L1-L27 JSON",
       "bucket_A_program": "programs/phase1_one_shot_runner.py",

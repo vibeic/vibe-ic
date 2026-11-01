@@ -12,6 +12,7 @@ import benchmark_dispatch as dispatch
 import flow109
 import task_nature_route as routing
 import vibe_ic_one_shot_runner as public
+from _hostpaths import require_repo
 
 
 @pytest.fixture
@@ -91,20 +92,174 @@ def test_dispatcher_reaches_actual_current_product_owner(subject, monkeypatch, c
     assert all(r['position']<30 for r in rows)
 
 
-def test_missing_manifest_still_refuses_before_authoring(subject,monkeypatch,capsys):
+def test_unbounded_manifest_still_refuses_before_authoring(subject,monkeypatch,capsys):
     project,_=subject;(project/'input/flow109-manifest.json').unlink()
-    argv=dispatch._solver_argv(Path(public.__file__),project,'1','2','ip','original')
+    argv=dispatch._solver_argv(Path(public.__file__),project,'1','13','ip','original')
     observed=observe_public(argv,monkeypatch,capsys)
     assert observed['outcome']=='REFUSED' and observed['rc']==2
     assert 'FLOW109_MANIFEST_REQUIRED' in observed['stderr']
     assert not (project/'reports/flow109/owner_route.json').exists()
 
 
-@pytest.mark.parametrize('damage',['non_boolean','unresolved','route_conflict'])
+@pytest.mark.parametrize('front_door', ['general', 'adapter'])
+def test_bounded_rtl_request_resolves_shipped_profile(subject, monkeypatch, capsys, front_door):
+    project, _ = subject
+    (project / 'input/flow109-manifest.json').unlink()
+    (project / 'input/phase1_prompt.md').write_text(
+        'Implement a Verilog module with inputs a and b and output q. '
+        'Set q to the bitwise conjunction of the inputs; validate RTL lint only.')
+    if front_door == 'general':
+        argv = [sys.executable, str(Path(public.__file__)), str(project),
+                '--flow', '109', '--entry-step', 'D09', '--exit-step', 'D11',
+                '--rtl-input', 'original', '--no-dashboard']
+    else:
+        argv = dispatch._solver_argv(Path(public.__file__), project, '1', '2',
+                                     'ip', 'original')
+    observed = observe_public(argv, monkeypatch, capsys)
+    assert observed['outcome'] == 'OWNER_REACHED', observed
+    assert (observed['owner'], observed['entry'], observed['exit']) == (
+        'design_one_shot_runner', '1', '2')
+    manifest = json.loads((project / 'input/flow109-manifest.json').read_text())
+    registry = json.loads(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
+                                      'flow', 'flow109.json').read_text())
+    profiles = [profile for profile in registry['reference_profiles']
+                if profile['name'] == 'RTL-only']
+    assert manifest['features'] == profiles[0]['features']
+    plan = json.loads((project / 'reports/flow109/plan.json').read_text())
+    assert plan['features']['physical'] is False
+    assert plan['features']['rtl_only'] is True
+    assert not (project / 'input/step_0_5ic_answers.json').exists()
+
+
+@pytest.mark.parametrize('obligation', [
+    'Deliver the final chip.',
+    'Deliver GDS for fabrication.',
+    'Deliver a hard macro with LEF and Liberty views.',
+])
+def test_missing_manifest_cannot_default_physical_sources(subject, monkeypatch, capsys, obligation):
+    project, _ = subject
+    path = project / 'input/flow109-manifest.json'
+    path.unlink()
+    (project / 'input/phase1_prompt.md').write_text(
+        'Implement a Verilog module with inputs a and b and output q. ' + obligation)
+    argv = [sys.executable, str(Path(public.__file__)), str(project),
+            '--flow', '109', '--entry-step', 'D09', '--exit-step', 'D11',
+            '--delivery-target', 'rtl', '--rtl-input', 'original', '--no-dashboard']
+    observed = observe_public(argv, monkeypatch, capsys)
+    assert observed['outcome'] == 'REFUSED' and observed['rc'] == 2, observed
+    assert 'FLOW109_MANIFEST_REQUIRED' in observed['stderr']
+    assert not path.exists()
+    assert not (project / 'reports/flow109/owner_route.json').exists()
+
+
+def test_general_unbounded_request_keeps_delivery_clarification(subject, monkeypatch, capsys):
+    project, _ = subject
+    (project / 'input/flow109-manifest.json').unlink()
+    argv = [sys.executable, str(Path(public.__file__)), str(project), '--no-dashboard']
+    observed = observe_public(argv, monkeypatch, capsys)
+    assert observed['outcome'] == 'REFUSED' and observed['rc'] == 2, observed
+    assert 'DELIVERY_ROUTE_UNDECLARED' in observed['stderr']
+    assert not (project / 'input/flow109-manifest.json').exists()
+
+
+@pytest.mark.parametrize('profile_state', ['present', 'missing', 'duplicate'])
+def test_explicit_optional_features_are_preserved_at_the_public_owner(subject, monkeypatch, capsys, profile_state):
+    project, manifest = subject
+    manifest['features']['requires_security'] = True
+    path = project / 'input/flow109-manifest.json'
+    raw = (json.dumps(manifest, indent=3) + '\n').encode()
+    path.write_bytes(raw)
+    registry = flow109.load_registry()
+    profiles = registry['reference_profiles']
+    if profile_state == 'missing':
+        registry['reference_profiles'] = [p for p in profiles if p['name'] != 'RTL-only']
+    elif profile_state == 'duplicate':
+        profiles.append(next(p for p in profiles if p['name'] == 'RTL-only').copy())
+    monkeypatch.setattr(flow109, 'load_registry', lambda: registry)
+    try:
+        argv = dispatch._solver_argv(Path(public.__file__), project, '1', '2', 'ip', 'original')
+    except ValueError as exc:
+        observed = {'outcome': 'REFUSED', 'reason': str(exc)}
+    else:
+        observed = observe_public(argv, monkeypatch, capsys)
+    assert observed['outcome'] == 'OWNER_REACHED', observed
+    assert path.read_bytes() == raw
+    plan = json.loads((project / 'reports/flow109/plan.json').read_text())
+    assert plan['features']['requires_security'] is True
+
+
+def test_confirmed_rtl_receipt_materializes_the_same_general_profile(subject, tmp_path):
+    project, _ = subject
+    (project / 'input/flow109-manifest.json').unlink()
+    prompt = (project / 'input/phase1_prompt.md').read_text()
+    receipt = routing.route_decision_receipt(prompt, nature='spec_generation',
+        requested_evidence='lint_validated', delivery_target='rtl')
+    dispatch._forward_product_manifest(tmp_path / 'run', project, receipt)
+    path = project / 'input/flow109-manifest.json'
+    before = path.read_bytes()
+    dispatch._forward_product_manifest(tmp_path / 'run', project, receipt)
+    assert path.read_bytes() == before
+    assert json.loads(before)['features']['rtl_only'] is True
+
+
+def test_repeated_plain_rtl_invocation_revalidates_the_same_profile(subject, monkeypatch, capsys):
+    project, _ = subject
+    path = project / 'input/flow109-manifest.json'
+    path.unlink()
+    argv = [sys.executable, str(Path(public.__file__)), str(project),
+            '--entry-step', 'D09', '--exit-step', 'D11',
+            '--rtl-input', 'original', '--no-dashboard']
+    first = observe_public(argv, monkeypatch, capsys)
+    before = path.read_bytes()
+    second = observe_public(argv, monkeypatch, capsys)
+    assert [first['outcome'], second['outcome']] == ['OWNER_REACHED', 'OWNER_REACHED'], (first, second)
+    assert path.read_bytes() == before
+
+
+@pytest.mark.parametrize('changed', ['source_delivery', 'explicit_feature'])
+def test_profile_reuse_rechecks_current_sources_and_choices(subject, monkeypatch, capsys, changed):
+    project, _ = subject
+    path = project / 'input/flow109-manifest.json'
+    path.unlink()
+    argv = [sys.executable, str(Path(public.__file__)), str(project),
+            '--entry-step', 'D09', '--exit-step', 'D11',
+            '--rtl-input', 'original', '--no-dashboard']
+    first = observe_public(argv, monkeypatch, capsys)
+    assert first['outcome'] == 'OWNER_REACHED', first
+    if changed == 'source_delivery':
+        (project / 'input/phase1_prompt.md').write_text(
+            'Implement a Verilog module and deliver the final chip.')
+    else:
+        manifest = json.loads(path.read_text())
+        manifest['features']['requires_security'] = True
+        path.write_text(json.dumps(manifest))
+    before = path.read_bytes()
+    second = observe_public(argv, monkeypatch, capsys)
+    assert second['outcome'] == 'REFUSED' and second['rc'] == 2, second
+    assert path.read_bytes() == before
+
+
+def test_missing_standard_profile_is_a_named_refusal(subject, monkeypatch, capsys):
+    project, _ = subject
+    (project / 'input/flow109-manifest.json').unlink()
+    registry = flow109.load_registry()
+    registry['reference_profiles'] = [profile for profile in registry['reference_profiles']
+                                      if profile['name'] != 'RTL-only']
+    monkeypatch.setattr(flow109, 'load_registry', lambda: registry)
+    argv = [sys.executable, str(Path(public.__file__)), str(project),
+            '--entry-step', 'D09', '--exit-step', 'D11', '--no-dashboard']
+    observed = observe_public(argv, monkeypatch, capsys)
+    assert observed['outcome'] == 'REFUSED' and observed['rc'] == 2, observed
+    assert 'FLOW109_PROFILE_INVALID' in observed['stderr']
+    assert not (project / 'input/flow109-manifest.json').exists()
+
+
+@pytest.mark.parametrize('damage',['non_boolean','unresolved','route_conflict','feature_conflict'])
 def test_bad_explicit_features_cannot_reach_authoring(subject,monkeypatch,capsys,damage):
     project,manifest=subject
     if damage=='non_boolean':manifest['features']['has_digital']='yes'
     elif damage=='unresolved':del manifest['features']['has_digital']
+    elif damage=='feature_conflict':manifest['features']['requires_scan']=True
     else:manifest['features'].update(soft_ip=False,rtl_only=False,ic=True)
     (project/'input/flow109-manifest.json').write_text(json.dumps(manifest))
     with pytest.raises(ValueError):

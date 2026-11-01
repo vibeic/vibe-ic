@@ -590,13 +590,22 @@ End with `## Summary` or `## Verdict`, followed by a clear `Next:` statement.
 ### Current common-product feature input
 
 `benchmark_dispatch.py --solve` and `--resume` accept
-`--flow109-manifest <explicit-feature-input.json>`. Supply the ordinary Flow109
-manifest resolved from the visible request and the operator's actual declared
-feature choices. The dispatcher validates the existing registry, retains those
-exact bytes as run input, and forwards them into each routed project's common
-`--flow 109` entry. It never guesses missing feature Booleans from a dataset
-name, problem ID or expected answer. An absent, invalid or conflicting input
-remains a refusal; this option does not approve a route or qualify tools.
+`--flow109-manifest <explicit-feature-input.json>`. An ordinary bounded RTL
+request does not require the user to author that file or answer an IC/IP
+configuration question. `flow109.resolve_task_manifest` selects the shipped
+`RTL-only` profile from the general visible-source delivery and requested-evidence
+contract and retains it in the routed project's ordinary input. The normal
+public runner uses the same resolver. Proceed with this profile when the scope
+is clear; an absent optional manifest is not a reason to ask for confirmation.
+Later invocations revalidate the same profile against current sources and the
+requested window while preserving the retained input bytes.
+
+When the operator supplies a manifest, the dispatcher validates the existing
+registry, retains those exact bytes as run input, and forwards them unchanged.
+It never fills missing feature Booleans or chooses a profile from a dataset
+name, problem ID or expected answer. Physical, unbounded or conflicting scope
+still needs its normal feature/delivery resolution; malformed explicit inputs
+remain refusals. Profile selection does not approve a route or qualify tools.
 
 The confirmed task-nature receipt still controls the native entry and evidence
 exit. The bridge translates that window through current registry owner mappings
@@ -607,12 +616,15 @@ routing, candidate review, challenge and official-score requirements are
 unchanged. Infrastructure controls and reaching an owner boundary are not a
 benchmark score or whole-product PASS.
 
-For example, supply the visible-request feature input once when creating a run:
+For an ordinary RTL evaluation, start without an optional feature file:
 
 ```bash
-python3 programs/benchmark_dispatch.py BENCH --solve --dataset VISIBLE_INPUTS --run FRESH_RUN --flow109-manifest EXPLICIT_FEATURE_INPUT.json
+python3 programs/benchmark_dispatch.py BENCH --solve --dataset VISIBLE_INPUTS --run FRESH_RUN
 python3 programs/benchmark_dispatch.py BENCH --resume --dataset VISIBLE_INPUTS --run FRESH_RUN
 ```
+
+Use `--flow109-manifest EXPLICIT_FEATURE_INPUT.json` when the operator has
+actually supplied feature choices that must be retained.
 
 The same run retains that feature input; `--resume` does not require another
 per-task approval or feature file. Existing input-only AI routing still must be
