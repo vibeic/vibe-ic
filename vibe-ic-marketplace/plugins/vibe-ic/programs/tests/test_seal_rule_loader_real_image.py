@@ -274,3 +274,27 @@ def test_json_binding_keeps_its_receiver_across_a_leading_dot(
         + 'active.separation(guard_ring, spacing.um).output("seal", "space")\n'
     )
     assert_unreadable(tmp_path)
+
+
+@pytest.mark.parametrize("method", ["to_f", "to_f()"])
+@pytest.mark.parametrize("separator", ["\n", "\n# comment\n"])
+@pytest.mark.parametrize("parentheses", ["(rules['clearance'].to_i)", "(\n rules['clearance'].to_i\n)"])
+def test_post_parenthesis_conversion_is_part_of_the_numeric_binding(
+        tmp_path, separator, parentheses, method):
+    (tmp_path / "rules.json").write_text(json.dumps({"rules": {"clearance": 5}}))
+    (tmp_path / "main.drc").write_text(
+        "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\n"
+        + f"number = {parentheses}{separator} .{method}\n"
+        + "spacing = number / 2\n"
+        + 'active.separation(guard_ring, spacing.um).output("seal", "space")\n'
+    )
+    value, basis = read(tmp_path)
+    assert value == 2.5, basis
+    with pytest.raises(pads.AssignmentError) as refusal:
+        pads.apply_pdk_declarations(
+            {"PAD_EDGE_SPACING": 2.25},
+            SimpleNamespace(values={"PAD_EDGE_SPACING": 140}),
+            seal_ring_placement="outside", seal_clearance_um=value,
+            seal_clearance_basis=basis,
+        )
+    assert refusal.value.rule == "PAD_EDGE_SPACING_VIOLATES_SEAL_KEEPOUT"

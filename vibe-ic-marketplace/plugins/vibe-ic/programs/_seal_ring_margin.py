@@ -117,6 +117,38 @@ def _clearance_code(text: str) -> Tuple[str, str]:
     return body, code
 
 
+def _clearance_statements(text, *, receiver=""):
+    """Yield complete receiver statements and their original source bounds."""
+    body, code = _clearance_code(text)
+    significant = []
+    offset = 0
+    for line, masked in zip(body.splitlines(keepends=True), code.splitlines(keepends=True)):
+        end = offset + len(line)
+        if line.strip():
+            significant.append((line, masked, offset, end))
+        offset = end
+    pending = ""
+    depth = 0
+    start = end = 0
+    for index, (line, masked, begin, end) in enumerate(significant):
+        if not pending:
+            start = begin
+        if index == 0 and receiver and masked.lstrip().startswith((".", "&.", "::")):
+            line, masked = receiver + " " + line.lstrip(), receiver + " " + masked.lstrip()
+        pending += line
+        depth += sum(masked.count(c) for c in "([{") - sum(masked.count(c) for c in ")]}")
+        following = significant[index + 1][0].lstrip() if index + 1 < len(significant) else ""
+        if depth > 0 or masked.rstrip().endswith("\\"):
+            continue
+        if following.startswith((".", "&.", "::")):
+            pending = pending.rstrip() + " "
+            continue
+        yield pending.strip(), start, end, True
+        pending = ""
+    if pending:
+        yield pending.strip(), start, end, False
+
+
 def _json_member_offset(text: str, key: str, start: int = 0) -> Tuple[int, int]:
     decoder = json.JSONDecoder()
     cursor = text.index("{", start) + 1
@@ -425,38 +457,12 @@ class _NumericExpression:
 
     def audit(self, text, *, receiver=""):
         """Check related statements, retaining scalar aliases without executing Ruby."""
-        body, code = _clearance_code(text)
-        # The lexer has already blanked comments. Look ahead across those and
-        # empty lines before deciding whether a Ruby receiver is complete.
-        significant = [(line, masked) for line, masked in
-                       zip(body.splitlines(keepends=True), code.splitlines(keepends=True))
-                       if line.strip()]
-        if (receiver and significant
-                and significant[0][1].lstrip().startswith((".", "&.", "::"))):
-            line, masked = significant[0]
-            significant[0] = (receiver + " " + line.lstrip(),
-                              receiver + " " + masked.lstrip())
-        lines = [line for line, _ in significant]
-        code_lines = [masked for _, masked in significant]
-        pending = ""
-        depth = 0
-        for index, line in enumerate(lines):
-            masked = code_lines[index]
-            delta = sum(masked.count(c) for c in "([{") - sum(masked.count(c) for c in ")]}")
-            # Assemble the whole receiver before deciding whether it touches
-            # tracked numbers; unrelated geometry may also continue with a dot.
-            pending += line
-            depth += delta
-            following = lines[index + 1].lstrip() if index + 1 < len(lines) else ""
-            if depth > 0 or masked.rstrip().endswith("\\"):
-                continue
-            if following.startswith((".", "&.", "::")):
-                pending = pending.rstrip() + " "
-                continue
-            statement, pending = pending.strip(), ""
+        for statement, _start, _end, complete in _clearance_statements(text, receiver=receiver):
             if not any(re.search(r"\b" + re.escape(n) + r"\b", statement)
                        for n in self.tables | self.names | self.opaque):
                 continue
+            if not complete:
+                return "unsupported incomplete numeric expression"
             statement = re.sub(r"^(?:if|unless|elsif|while|until|return)\s+", "", statement)
             try:
                 for node in self.parse(statement, "exec"):
@@ -475,9 +481,6 @@ class _NumericExpression:
                         raise ValueError("unsupported numeric write or statement")
             except (SyntaxError, ValueError, RecursionError) as exc:
                 return f"unsupported numeric expression: {exc}"
-        if pending and any(re.search(r"\b" + re.escape(n) + r"\b", pending)
-                           for n in self.tables | self.names | self.opaque):
-            return "unsupported incomplete numeric expression"
         return ""
 
     @classmethod
@@ -599,20 +602,18 @@ def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None,
     assignments = list(_RE_CLEAR_ASSIGN.finditer(code))
     out: List[Dict[str, Any]] = []
 
-    def assignment_end(assignment):
-        end = assignment.end(2)
-        while (code[assignment.start(2):end].count("(")
-               > code[assignment.start(2):end].count(")") and end < len(code)):
-            next_line = code.find("\n", end + 1)
-            end = len(code) if next_line < 0 else next_line
-        return end
+    statements = {start: (statement, end, complete)
+                  for statement, start, end, complete in _clearance_statements(body)}
 
     def assigned(name, before):
         found = [a for a in assignments if a.start() < before and a.group(1) == name]
         if not found:
             return None
         assignment = found[-1]
-        return body[assignment.start(2):assignment_end(assignment)].strip(), assignment.start()
+        logical = statements.get(assignment.start())
+        if logical is None or not logical[2]:
+            return None
+        return logical[0].partition("=")[2].strip(), assignment.start()
 
     def marker(expression, before, seen=(), intersected=False):
         if re.fullmatch(_IDENT, expression):
@@ -653,7 +654,7 @@ def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None,
             # Seed the tail with its actual tracked receiver. A leading-dot
             # continuation belongs to this value only until that statement ends.
             local_error = _NumericExpression(names=(value_expression,)).audit(
-                body[assignment_end(bindings[0]):before], receiver=value_expression)
+                body[statements[bindings[0].start()][1]:before], receiver=value_expression)
             if local_error:
                 break
             value_expression, before = source
