@@ -1289,7 +1289,7 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
                     and dispatch.get("adapter") == "flow109_final_electrical")
     analog_correlation = (row.get("id") == "D54" and profile.get("id") == "analog_die"
                           and isinstance(dispatch, Mapping)
-                          and dispatch.get("adapter") == "spice_correlation_check")
+                          and dispatch.get("adapter") == "analog_native_flow")
     analog_em = (row.get("id") == "D58" and profile.get("id") == "analog_die"
                  and isinstance(dispatch, Mapping)
                  and dispatch.get("adapter") == "em_current_density_check")
@@ -1305,7 +1305,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             or set(dispatch.get("engine_executables", {})) != set(engines))
     adapter = dispatch.get("adapter")
     if dispatch.get("admission_policy") == "source_owned_existing_native":
-        if adapter == "analog_native_flow":
+        if adapter == "analog_native_flow" and analog_correlation:
+            invalid = (common_invalid or native != "flow109.D54"
+                       or dispatch.get("producer") != "analog_native_physical.py:_resim existing A14 results"
+                       or dispatch.get("consumer") != "analog_native_flow.py:_d54_correlation")
+        elif adapter == "analog_native_flow":
             # The registered analog table owns both legacy A1 and stable
             # A01-A19 entries; reuse the same native admission as digital.
             from analog_native_flow import STEPS
@@ -1360,10 +1364,6 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             invalid = (common_invalid or not analog_final or native != "flow109.D70"
                        or dispatch.get("producer") != "analog_bound_measurements.py:explicit final analog mission"
                        or dispatch.get("consumer") != "flow109_final_electrical.py:validate_analog_mission")
-        elif adapter == "spice_correlation_check" and analog_correlation:
-            invalid = (common_invalid or native != "flow109.D54"
-                       or dispatch.get("producer") != "analog_native_physical.py:_resim existing A14 results"
-                       or dispatch.get("consumer") != "spice_correlation_check.py:execute")
         elif adapter == "flow109_frontend":
             identities = {
                 "D15": ("flow109.D15", "xezim --simulate --no-cache --upf",
