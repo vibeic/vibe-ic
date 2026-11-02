@@ -806,7 +806,7 @@ def _delegated_rc_verdict(rc: int) -> str:
     """Map a delegated Phase-1 result without laundering rc=2."""
     if rc == 0:
         return _V.Verdict.PASS.value
-    if rc == 2:
+    if rc in (2, _EXPERT_TRACK_AWAITING_RC):
         return _V.Verdict.NOT_MEASURED.value
     return _V.Verdict.FAIL.value
 
@@ -816,7 +816,8 @@ def _delegated_step_result(name: str, rc: int, duration_s: float,
     """Build a truthful row for the docs delegate and its dependent track."""
     status = _delegated_rc_verdict(rc)
     reason = "upstream_refused" if upstream and rc == 2 else (
-        "no_population" if rc == 2 else "")
+        "no_population" if rc == 2 else
+        "awaiting_agent_pass" if rc == _EXPERT_TRACK_AWAITING_RC else "")
     return StepResult(name, status, duration_s, detail,
                       reason_class=reason)
 
@@ -973,6 +974,12 @@ _EXPERT_PENDING_STATUSES = frozenset({"HANDOFF_EMITTED", "CONSUMED_EMPTY"})
 #: number is pinned by `test_issue2014_d1_expert_handoff_is_a_wait_not_a_fail`
 #: against the track's constant, so the two cannot drift unnoticed.
 _EXPERT_TRACK_AWAITING_RC = 4
+
+
+def _phase1_return_code(primary: int, *others: int) -> int:
+    codes = (primary, *others)
+    failures = [code for code in codes if code not in (0, _EXPERT_TRACK_AWAITING_RC)]
+    return max(failures) if failures else max(codes)
 
 
 def _expert_track_disposition(report: Any) -> Tuple[str, str]:
@@ -1471,11 +1478,16 @@ def run_phase1_second_track(project: Path, rc_in: int) -> int:
     """
     print("[phase1] expert track (second track) ...")
     rc_track = _run_expert_track(project)
+    rc_requirements = 0
     if not rc_in:
         from phase1_base_requirements import publish
         candidates = publish(project)
         print(f"[phase1] base requirements: {candidates['status']} {candidates['reason']}")
-    return max(int(rc_in or 0), rc_track)
+        if candidates['status'] == 'PENDING':
+            print(f"INCOMPLETE: {candidates['reason']}")
+            print(f"Next action: {candidates['next_action']}")
+            rc_requirements = _EXPERT_TRACK_AWAITING_RC
+    return _phase1_return_code(int(rc_in or 0), rc_track, rc_requirements)
 
 
 #: #505's COVERAGE-ONLY SIDECAR, AND WHO IS ENTITLED TO NAME IT. R-0915-160, third cut.
@@ -1691,8 +1703,9 @@ def run_second_pass_only(project: Path, ic_name: str,
     }
     # Only this retry's failure can clear. The CLI and consumer-visible verdict
     # both include the independently retained first-pass failure.
-    rc_out = max(pass1_rc, rc)
-    summary["verdict"] = "FAIL" if rc_out else pass1["verdict"]
+    rc_out = _phase1_return_code(pass1_rc, rc)
+    summary["verdict"] = ("NOT_MEASURED" if rc_out == _EXPERT_TRACK_AWAITING_RC
+                          else "FAIL" if rc_out else pass1["verdict"])
     import ai_signed_judgement as _ai_judgement
     summary["ai_judgements"] = _ai_judgement.pending(project, ("D1",))
     if not summary["ai_judgements"] and rc == 0:
@@ -2113,14 +2126,22 @@ def complete_retained_metrics(project: Path) -> dict | None:
     if len(selected) != len(context.get('resolved_rows') or [context['resolved_row']]):
         raise flow109.Flow109Error('D0102_WINDOW_DIFFERS', 'Phase1 Step 1/2 only')
     submission_refusal = None
-    if any(row['id'] == 'D02' for row in selected):
-        try:
-            _complete_retained_submission_input(project)
-        except metrics.MetricRefusal as exc:
-            submission_refusal = exc
     steps = []
+    stopped = False
     for row in selected:
         current = flow109.component_context(context, requested_step=row['id'])
+        if stopped:
+            steps.append({'status': 'NOT_MEASURED', 'extras': {
+                'step_id': row['profile']['dispatch']['native_step_id'],
+                'context_sha256': current['context_sha256'], 'default_row_status': 'NOT_MEASURED',
+                'completed': False, 'native_started': False,
+                'reason': 'not executed: an earlier row stopped'}})
+            continue
+        if row['id'] == 'D02':
+            try:
+                _complete_retained_submission_input(project)
+            except metrics.MetricRefusal as exc:
+                submission_refusal = exc
         acceptance = (metrics.accept_d01 if row['id'] == 'D01' else metrics.accept_d02)(project, current)
         if row['id'] == 'D02' and submission_refusal is not None:
             # Preserve the actual named refusal in the ordinary row/collector;
@@ -2131,6 +2152,7 @@ def complete_retained_metrics(project: Path) -> dict | None:
                 qualification='NOT_MEASURED', delivery_blocked=True,
                 reason=submission_refusal.code, detail=str(submission_refusal))
         status = acceptance['status']
+        stopped = status != 'PASS'
         steps.append({'status': status, 'extras': {
             'step_id': row['profile']['dispatch']['native_step_id'],
             'context_sha256': current['context_sha256'], 'default_row_status': status,
@@ -2207,7 +2229,12 @@ def main() -> int:
             return 3
         try:
             from phase1_base_requirements import publish
-            print(json.dumps(publish(project), indent=2))
+            candidates = publish(project)
+            print(json.dumps(candidates, indent=2))
+            if candidates['status'] == 'PENDING':
+                print(f"INCOMPLETE: {candidates['reason']}")
+                print(f"Next action: {candidates['next_action']}")
+                return _EXPERT_TRACK_AWAITING_RC
             return 2
         finally:
             lock.release()
@@ -2222,6 +2249,17 @@ def main() -> int:
             if completed is None:
                 print('D0102_CONTEXT_ABSENT: selected existing Flow109 request required', file=sys.stderr)
                 return 2
+            unresolved = [item for item in completed['components']
+                          if item.get('default_row_status') != 'PASS']
+            if (completed['default_row_status'] == 'NOT_MEASURED' and unresolved
+                    and (unresolved[0].get('metric_acceptance') or {}).get('reason')
+                    == 'METRIC_AUTHORITY_UNAPPROVED'):
+                from phase1_base_requirements import pending_review_action
+                action = pending_review_action(project, unresolved[0]['step_id'])
+                if action:
+                    print('INCOMPLETE: D0102_REQUIREMENTS_OWNER_REVIEW_REQUIRED')
+                    print(f'Next action: {action}')
+                    return _EXPERT_TRACK_AWAITING_RC
             return 0 if completed['default_row_status'] == 'PASS' else 1
         finally:
             lock.release()
@@ -2361,7 +2399,7 @@ def main() -> int:
                             "current extraction")
         else:
             rc_track = run_phase1_second_track(project, 0)
-            rc = max(rc_extract, rc_track, rc_route)
+            rc = _phase1_return_code(rc_extract, rc_track, rc_route)
             second_track = _expert_track_summary(project)
         # The dispatcher always emits reports/phase1_one_shot.json so
         # callers / tests see a unified entry point regardless of mode.
@@ -2505,8 +2543,10 @@ def main() -> int:
         # finding about a design nothing had looked at, which is the one thing
         # this ruling exists to stop.
         "verdict": (_V.Verdict.FAIL.value
-                    if (rc_second or pass1_verdict == _V.Verdict.FAIL.value)
-                    else pass1_verdict),
+                    if (rc_second not in (0, _EXPERT_TRACK_AWAITING_RC)
+                        or pass1_verdict == _V.Verdict.FAIL.value)
+                    else _V.Verdict.NOT_MEASURED.value
+                    if rc_second == _EXPERT_TRACK_AWAITING_RC else pass1_verdict),
         "pass1": {"verdict": pass1_verdict, "rc": pass1_rc,
                   "source": "extraction, sufficiency and route without expert track"},
         "second_track": ("not run — D1 was REFUSED" if _refused else
@@ -2568,10 +2608,11 @@ def main() -> int:
     # overwriting NOT_MEASURED into FAIL that included "nothing was measured".
     # `verdict.GREEN` is the two words a run may exit 0 on; everything else is
     # rc 1, whether it failed or was never looked at.
-    return max(0 if summary["verdict"] in (_V.Verdict.PASS.value,
-                                           _V.Verdict.PASS_WITH_WAIVERS.value)
-               else 1,
-               rc_second, rc_route, 1 if _gap else 0)
+    rc_verdict = (0 if summary['verdict'] in (_V.Verdict.PASS.value,
+                                             _V.Verdict.PASS_WITH_WAIVERS.value)
+                  or (rc_second == _EXPERT_TRACK_AWAITING_RC
+                      and summary['verdict'] == _V.Verdict.NOT_MEASURED.value) else 1)
+    return _phase1_return_code(pass1_rc, rc_verdict, rc_second, rc_route, 1 if _gap else 0)
 
 
 if __name__ == "__main__":
