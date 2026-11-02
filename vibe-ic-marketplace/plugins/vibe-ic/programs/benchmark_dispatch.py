@@ -551,6 +551,10 @@ def _stored_duplicate_scene(original: dict, later: dict, wrapper: dict,
             or image.get("require_image") != ref
             or image.get("require_image_id") != image.get("image_id")):
         return None
+    # LOCAL admission records the verified content ID; Docker admission keeps
+    # its registry-portable digest. Compare in the domain that was recorded.
+    admitted_image = (image["image_id"] if image.get("execution_route") == "local"
+                      else ref.rsplit("@", 1)[1])
     producer = original["reports_after"]["phase2_one_shot.json"]["runner_binding"]["producer"]
     programs = Path(producer["path"]).parent
     window = wrapper["declared_window"]
@@ -580,7 +584,7 @@ def _stored_duplicate_scene(original: dict, later: dict, wrapper: dict,
             project, "phase2", container_image=identity["container_image"],
             config=config, program_paths=admission.canonical_program_paths(programs))
         if current == identity:
-            if identity.get("container_image") != ref.rsplit("@", 1)[1]:
+            if identity.get("container_image") != admitted_image:
                 return None
             matches.append(row["identity_sha256"])
     return {"admission_identity_sha256": sorted(set(matches))} if matches else None

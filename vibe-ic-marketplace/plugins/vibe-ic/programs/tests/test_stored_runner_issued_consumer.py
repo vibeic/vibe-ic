@@ -27,6 +27,54 @@ def load_dispatch(path, suffix=""):
     return module
 
 
+@pytest.mark.parametrize("execution_route,admitted_kind,accepted", [
+    ("local", "content", True),
+    ("local", "other", False),
+    ("local", "registry", False),
+    (None, "registry", True),
+], ids=["local-content-id-matches", "different-image-refused",
+        "local-registry-alias-refused", "docker-registry-id-preserved"])
+def test_retained_scene_compares_the_recorded_image_identity(
+        tmp_path, execution_route, admitted_kind, accepted):
+    """Transport metadata fixture, not a fabricated native launch/result."""
+    import canonical_run_admission as admission
+    content_id = "sha256:" + "a" * 64
+    registry_id = "sha256:" + "b" * 64
+    reference = "registry.invalid/neutral@" + registry_id
+    assert content_id != registry_id
+    admitted_image = {"content": content_id, "registry": registry_id,
+                      "other": "sha256:" + "c" * 64}[admitted_kind]
+    programs = Path(current.__file__).parent
+    config = {"entry_step": "2", "exit_step": "2", "rtl_input": "original"}
+    identity = admission.build_identity(
+        tmp_path, "phase2", container_image=admitted_image, config=config,
+        program_paths=admission.canonical_program_paths(programs))
+    digest = admission.identity_sha256(identity)
+    current._write_jsonl(admission.ledger_path(tmp_path), [{
+        "status": "ADMITTED", "admitted_at": "1970-01-01T00:00:02Z",
+        "identity": identity, "identity_sha256": digest}])
+    original = {
+        "started_ns": 1_000_000_000, "finished_ns": 3_000_000_000,
+        "argv": ["python3", "runner.py", str(tmp_path), "--rtl-input", "original"],
+        "reports_after": {"phase2_one_shot.json": {"runner_binding": {
+            "producer": {"path": str(programs / "design_one_shot_runner.py")}}}}}
+    wrapper = {
+        "phases": [{"name": "phase2", "verdict": "REFUSED-CANONICAL-ADMISSION", "rc": 2}],
+        "halted_at": "phase2", "verdict": "NOT_MEASURED",
+        "declared_window": {"entry_step": "2", "exit_step": "2"},
+        "container_image": {"status": "ok", "image_ref": reference,
+            "image_id": content_id, "image_match": True,
+            "require_image": reference, "require_image_id": content_id}}
+    if execution_route is not None:
+        wrapper["container_image"]["execution_route"] = execution_route
+    scene = current._stored_duplicate_scene(
+        original, {"started_ns": 4_000_000_000}, wrapper, tmp_path)
+    if accepted:
+        assert scene == {"admission_identity_sha256": [digest]}
+    else:
+        assert scene is None
+
+
 def measured(tmp_path):
     issuer = load_dispatch(tmp_path / "issued_dispatch.py")
     auditor = load_dispatch(tmp_path / "auditor_dispatch.py", "\n# next neutral audit revision\n")
