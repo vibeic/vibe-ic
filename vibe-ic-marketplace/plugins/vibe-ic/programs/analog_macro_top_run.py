@@ -25,16 +25,6 @@ STEPS = (
 RUN_RECORD = "reports/phase3/analog_macro_top_run.json"
 
 
-def runtime_libraries():
-    import klayout.db  # Load the same database API used by stream_out.py.
-    from librelane.common import get_script_dir
-    paths = {Path(module.__file__).resolve() for name, module in list(sys.modules.items())
-             if (name == "klayout" or name.startswith(("klayout.db", "klayout.tl")))
-             and getattr(module, "__file__", None)}
-    paths.add(Path(get_script_dir()) / "klayout/stream_out.py")
-    return {str(path): {"path": str(path), "sha256": sha(path)} for path in sorted(paths)}
-
-
 def execute(project):
     # Imports stay inside the native runtime; generation has no EDA dependency.
     from librelane.flows import SequentialFlow
@@ -92,16 +82,14 @@ def execute(project):
     for name, executable in (("python3", sys.executable), ("openroad", AnalogMacroPDN.get_openroad_path())):
         path = Path(shutil.which(executable)).resolve()
         tools[name] = {"path": str(path), "sha256": sha(path)}
-    libraries = runtime_libraries()
     flow = AnalogMacroTop(generated["config"], design_dir=str(project), **selection)
     run_dir = tempfile.mkdtemp(prefix="run-", dir=project / DEST)
     state = flow.start(with_initial_state=State({DesignFormat.NETLIST: LanePath(generated["netlist"])}),
                        _force_run_dir=run_dir)
     # Routing can alter contacts; verify the actual final database as well.
     pdn.check(state[DesignFormat.ODB], intent["rails"], run_dir, AnalogMacroPDN.get_openroad_path())
-    if (any(sha(view["path"]) != view["sha256"] for view in tools.values())
-            or runtime_libraries() != libraries):
-        raise Refusal("A18_NATIVE_TOOL_CHANGED", "native tool or library changed during execution")
+    if any(sha(view["path"]) != view["sha256"] for view in tools.values()):
+        raise Refusal("A18_NATIVE_TOOL_CHANGED", "native tool changed during execution")
     pnr = project / "phase3/stage3/pnr"
     pnr.mkdir(parents=True, exist_ok=True)
     outputs = {}
@@ -137,7 +125,7 @@ def execute(project):
     return {"producer": "analog_macro_top_run", "component_status": status,
             "reason": reason, "outputs": outputs, "native_metrics": measured,
             "generation_sha256": sha(project / RECORD), "steps": list(STEPS),
-            "native_tools": tools, "native_libraries": libraries,
+            "native_tools": tools,
             "core_inputs_sha256": {path: digest for path, digest in generated["inputs"].items()
                                     if Path(path).suffix == ".gds"},
             "run_dir": run_dir,

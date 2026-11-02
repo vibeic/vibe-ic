@@ -116,6 +116,7 @@ def test_a18_preserves_native_component_fail_and_reason(tmp_path):
     result, _, _ = dispatch(tmp_path, status="FAIL")
     assert result["status"] == "FAIL"
     assert result["detail"] == "native test result"
+    assert result["native_evidence"]["component_status"] == "FAIL"
 
 
 def test_a18_accepts_native_component_pass_with_required_outputs(tmp_path):

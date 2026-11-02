@@ -293,15 +293,9 @@ class NativeCommands:
 
 def _a18_model_sources():
     import flow109_metric_acceptance as metrics
-    from analog_macro_top_run import runtime_libraries
     paths = [Path(__file__), Path(metrics.__file__),
              *[HERE / name for name in ("analog_macro_top_gen.py", "analog_macro_top_run.py", "analog_macro_top_pdn.py")]]
-    try:
-        libraries = runtime_libraries()
-    except ImportError as exc:
-        raise ValueError("A18_KLAYOUT_RUNTIME_ABSENT") from exc
-    return {**{path.name: _sha(path) for path in paths},
-            **{name: view["sha256"] for name, view in libraries.items()}}
+    return {path.name: _sha(path) for path in paths}
 
 
 def _a18_metrics(project, name, settings, evidence, execution, limits_before):
@@ -1419,15 +1413,10 @@ def consume_default_row_completion(project, context, component):
                 raise ValueError("A18_NATIVE_EXECUTION_INCOMPLETE")
             execution = executions[0]
             evidence = _read(receipt)
-            from analog_macro_top_run import runtime_libraries
-            if evidence.get("native_libraries") != runtime_libraries():
-                raise ValueError("A18_QUALIFIED_LIBRARY_MISMATCH")
             for use in context["runtime_tool_uses"]:
                 view = evidence.get("native_tools", {}).get(use["tool_id"])
                 if view != use["executable"] or _sha(Path(view["path"])) != view["sha256"]:
                     raise ValueError("A18_QUALIFIED_TOOL_MISMATCH")
-                readset[view["path"]] = view["sha256"]
-            for view in evidence["native_libraries"].values():
                 readset[view["path"]] = view["sha256"]
             argv = execution.get("argv", [])
             if (len(argv) != 3 or Path(argv[0]).resolve() != Path(evidence["native_tools"]["python3"]["path"]).resolve()

@@ -67,9 +67,7 @@ def carrier(tmp_path):
             from analog_macro_top_gen import RECORD
             evidence.update(producer="analog_macro_top_run", generation_sha256=digest(root / RECORD))
             import shutil
-            from analog_macro_top_run import runtime_libraries
             evidence["native_tools"] = {name: {"path": str(Path(shutil.which(name)).resolve()), "sha256": digest(Path(shutil.which(name)).resolve())} for name in ("python3", "openroad")}
-            evidence["native_libraries"] = runtime_libraries()
             receipt.write_text(json.dumps(evidence))
             outputs = {str(p): digest(p) for p in (top, extracted, receipt)}
             if after_capture:
