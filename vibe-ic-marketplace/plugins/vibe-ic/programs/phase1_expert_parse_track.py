@@ -1640,7 +1640,8 @@ def _unsupported_numeric_token(token: str) -> bool:
     text = token.strip().replace("\u2212", "-")
     if re.fullmatch(r"0[xX][0-9a-fA-F]+", text):
         return False
-    return bool(re.match(r"(?:[0-9]|\.[0-9])", text.lstrip("+-"))
+    unwrapped = re.sub(r"^[^A-Za-z0-9]+", "", text)
+    return bool(re.match(r"[0-9]", unwrapped)
                 or re.fullmatch(r"[-+]?(?:inf(?:inity)?|nan)", text, re.I))
 
 
@@ -2212,8 +2213,8 @@ def refuse_undeclared_field_path(schema: Dict[str, Any], layer: Any,
             + (" (first 20 of "
                f"{layers[stem]['declared_field_path_count']})"
                if len(declared) > 20 else "")
-            + ". Address a path this layer declares, or omit `field_path` and "
-              "select a declared field; whole-layer fallback is not permitted.")
+            + ". Select a path this layer declares; missing scope is UNSCOPED "
+              "and whole-layer fallback is not permitted.")
 
 
 def taxonomy_layer_stems() -> List[str]:

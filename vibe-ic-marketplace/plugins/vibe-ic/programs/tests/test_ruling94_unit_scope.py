@@ -171,6 +171,27 @@ def test_split_refusal_retains_the_scope_of_each_branch(tmp_path):
     assert [child["scope"] for child in result["sub_results"]] == ["UNSCOPED", "json_pointer"]
 
 
+@pytest.mark.parametrize("token, scalar", [
+    ("(5.5 ns)", "55 ns"), ("{1e+}", "1e"),
+    ("[[−40 °C]]", "40 C"), ("≥ 10", "10"),
+])
+def test_wrapping_punctuation_cannot_hide_numeric_intent(tmp_path, token, scalar):
+    case = project(tmp_path, {"quantity": scalar})
+    result = track.converge_ai_expectation(case, expectation([token]))
+    assert result["met"] is False
+    assert result["tokens_unaskable"]
+    actual, unresolved, _ = metrics._d0102_compare(
+        case, {"expectations": [expectation([token])]}, {})
+    assert actual == [] and len(unresolved) == 1
+
+
+def test_bad_path_authoring_advice_never_recommends_omitting_scope(tmp_path):
+    case = project(tmp_path, {"quantity": 2})
+    reason = track.refuse_undeclared_field_path(
+        track.authoring_schema(case), "L22_VERIFICATION_PLAN", "bad.path")
+    assert reason is not None and "or omit" not in reason
+
+
 def test_expert_handoff_requires_scopes_for_single_and_split_branches(tmp_path):
     case = project(tmp_path, {"quantity": 1})
     handoff = pack.assemble("Review this typed quantity.", None, None, [], [],
