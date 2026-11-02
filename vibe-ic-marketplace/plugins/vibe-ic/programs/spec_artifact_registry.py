@@ -788,6 +788,9 @@ def generate(text: str, top: str = "TopModule") -> Tuple[Optional[str], Optional
     """Deterministic RTL from the first artifact type whose generator fires.
     Returns (artifact_type, rtl) or (None, None). The benchmark §4.2 absorption
     chain and Phase-2 short-circuit both route through here."""
+    from _specrtl_common import declared_logic_obligations
+    if declared_logic_obligations(text, top):
+        return None, None
     for a in REGISTRY:
         if not a.generate:
             continue
@@ -863,6 +866,13 @@ def generate_from_record(record: dict, text_fallthrough=None) -> Optional[str]:
     import copy as _copy
     if not isinstance(record, dict):
         return None
+    from _specrtl_common import declared_logic_obligations
+    from record_prompt_context_bridge import toplevel_name
+    supplied = record.get('input') or {}
+    if isinstance(supplied, dict):
+        prompt = record.get('prompt') or supplied.get('prompt') or ''
+        if isinstance(prompt, str) and declared_logic_obligations(prompt, toplevel_name(record)):
+            return None
     for _solver in _load_record_solvers():
         try:
             _rtl = _solver.solve(_copy.deepcopy(record))

@@ -248,6 +248,21 @@ def try_emit_ex(prompt_text: str, ifc_text: str = "", top: str = "TopModule",
     rejected: List[Tuple[str, List[str]]] = []
     if not (prompt_text or "").strip():
         return None, None, rejected
+    from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
+                                 declared_logic_obligations)
+    source_module = None
+    if ifc_text:
+        import json
+        try:
+            interface = json.loads(ifc_text)
+            if isinstance(interface, dict):
+                source_module = interface.get('top_module') or interface.get('module')
+        except ValueError:
+            pass
+    obligations = declared_logic_obligations(prompt_text, top, source_module=source_module)
+    if obligations:
+        return None, None, [(DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
+                            [f"{o.kind}: {o.clause}" for o in obligations])]
     for name, fn in EMITTERS:
         try:
             kind, rtl = fn(prompt_text, ifc_text, top)

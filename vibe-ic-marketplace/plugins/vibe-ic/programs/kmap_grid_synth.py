@@ -237,6 +237,9 @@ def _synth_mux_decomp(prompt: str, top: str, ports, out: str, out_w: int):
 def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
     if "karnaugh" not in prompt.lower():
         return None
+    from _specrtl_common import declared_logic_obligations
+    if declared_logic_obligations(prompt, top):
+        return None
     ports = parse_ports(prompt)
     if not ports:
         return None

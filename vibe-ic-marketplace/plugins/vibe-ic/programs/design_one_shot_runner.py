@@ -2746,6 +2746,42 @@ def _defer_to_supplied(generator: str, project: Path,
     return True
 
 
+def _declared_logic_author_handoff(project: Path, t0: float,
+                                  text: str) -> Optional[StepResult]:
+    """Read-only author handoff before unsupported deterministic implementation."""
+    if not text.strip() or _design_supplied_build_rtl(project):
+        return None
+    from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
+                                 declared_logic_obligations)
+    source_module = None
+    if _pl.rtl_input(project) != "original":
+        interface_path = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
+        if interface_path.is_file():
+            try:
+                interface = json.loads(interface_path.read_text())
+                if isinstance(interface, dict):
+                    source_module = interface.get('top_module') or interface.get('module')
+            except (OSError, ValueError):
+                pass
+    obligations = declared_logic_obligations(text, source_module=source_module)
+    if not obligations:
+        return None
+    rules = [f"{o.kind}: {o.clause}" for o in obligations]
+    skill_source = SKILLS_DIR / "spec-to-rtl" / "SKILL.md"
+    return StepResult(
+        "rtl_gen", "PASS_WITH_WAIVERS", time.time() - t0,
+        f"{DECLARED_LOGIC_OBLIGATION_UNSUPPORTED}: " + "; ".join(rules)
+        + ". Deterministic producers do not establish this implementation "
+        f"obligation. AI invokes `spec-to-rtl` from {skill_source}; "
+        "no RTL was generated or changed.",
+        extras={"fallback_skill": "spec-to-rtl",
+                "fallback_skill_source": str(skill_source),
+                "fallback_skill_staged": False,
+                "fallback_skill_unstaged_reason": "read-only declared-obligation handoff",
+                "rejected_emitters": [DECLARED_LOGIC_OBLIGATION_UNSUPPORTED],
+                "rejected_rules": rules})
+
+
 def _try_spec_artifact_registry_rtl(
         project: Path, t0: float,
         phase1_plain_text: str = "") -> Optional[StepResult]:
@@ -2768,6 +2804,9 @@ def _try_spec_artifact_registry_rtl(
         return None
     if _defer_to_supplied("spec_artifact_registry", project):
         return None  # D6 — the design's own implementation outranks an emit
+    handoff = _declared_logic_author_handoff(project, t0, text)
+    if handoff is not None:
+        return handoff
     try:
         sys.path.insert(0, str(PROGRAMS_DIR))
         import deterministic_emit_chain as _chain      # noqa: PLC0415
@@ -8770,6 +8809,9 @@ def _step_rtl_gen_bound(
     project_binding.require_current()
     if _phase1_plain.refusal is not None:
         return _phase1_plain_spec_refusal_result(t0, _phase1_plain.refusal)
+    handoff = _declared_logic_author_handoff(project, t0, _phase1_plain.text)
+    if handoff is not None:
+        return handoff
     # The isolated project must not retain a portal back to a mutable external
     # namespace.  Operator-prose links have already received their more precise
     # named refusal above; any remaining symlink could be followed by one of the
@@ -15239,17 +15281,20 @@ def _rtl_gen_handoff(plan: Sequence["StepResult"]) -> Optional[str]:
     """The skill the CURRENT rtl_gen result handed the RTL to, or None.
 
     The latest `rtl_gen` row of THIS run's plan, when it waived authoring to a
-    skill it staged (PASS_WITH_WAIVERS / WAIVED with `fallback_skill` and
-    `fallback_skill_staged` true). Read from the run's own result, never from
-    `phase2/stage1/fallback_skill.md`, which is written by a hand-off and never
-    removed, so it outlives the agent pass that answered it."""
+    staged skill or the readable skill source in this tree. Read from the run's
+    own result, never from `phase2/stage1/fallback_skill.md`, which is written
+    by a hand-off and never removed, so it outlives the agent pass that answered it.
+    """
     for row in reversed(list(plan or ())):
         if getattr(row, "name", None) != "rtl_gen":
             continue
         ex = getattr(row, "extras", None) or {}
+        readable_source = (ex.get("fallback_skill_source")
+                           == str(SKILLS_DIR / str(ex.get("fallback_skill")) / "SKILL.md")
+                           and Path(ex["fallback_skill_source"]).is_file())
         if (row.status in ("PASS_WITH_WAIVERS", "WAIVED", "WAIVED-DEFERRED")
                 and ex.get("fallback_skill")
-                and ex.get("fallback_skill_staged") is True):
+                and (ex.get("fallback_skill_staged") is True or readable_source)):
             return str(ex["fallback_skill"])
         return None
     return None
