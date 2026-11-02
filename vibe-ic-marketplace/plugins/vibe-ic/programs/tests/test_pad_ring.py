@@ -429,16 +429,12 @@ def test_second_generation_retires_a_previous_skip_sidecar(tmp_path):
     assert not marker.exists()
 
 
-def test_the_corner_grid_refusal_names_every_feasible_uniform_pad_count(
-        tmp_path, capsys):
-    """The refusal must answer the arithmetic question it already solved.
+def test_native_feasible_count_population_is_not_refused(tmp_path):
+    """#75b: ruling75/adc-native-counts.log shows native accepts counts 1..11.
 
-    This neutral geometry is the issue's exact discriminating shape: a
-    1_300-unit side, 180-unit corners, 80-unit uniform pads and a 1-unit site.
-    Six pads leave an odd corner remainder, while 4, 5 and 7 are among the
-    feasible positive counts.  Naming only the refusal makes an author rerun
-    the full flow once per guess; publishing the complete set makes the same
-    deterministic arithmetic actionable without weakening the refusal.
+    The former symmetric-only population omitted 6 and 8 incorrectly. Native
+    truncates its corner gap, so the 1_300_000-DBU side is a positive case.
+    The native comparison module verifies every count and every side's DEF.
     """
     count = 6
     signals = {s: [f"{s.lower()}_signal_{i}" for i in range(count)]
@@ -462,19 +458,14 @@ def test_the_corner_grid_refusal_names_every_feasible_uniform_pad_count(
             instances=list(pads.values()), die=1_300_000),
         site_w=1.0, pad_w=80.0, corner_w=180.0)
 
-    assert _gen(root) == 1
-    refusals = [f for f in _report(root)["findings"]
+    lef = root / "pdk/proc/libs.ref/proc_io/lef/io.lef"
+    lef.write_text(lef.read_text().replace("350", "180"))
+    assert _gen(root) == 0
+    expected = list(range(1, 12))
+    assert GEN._feasible_uniform_pad_counts(940_000, 80_000, 1_000) == expected
+    assert GEN._feasible_uniform_pad_counts(929_000, 80_000, 1_000) == expected
+    assert not [f for f in _report(root)["findings"]
                 if f["rule"] == "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE"]
-    assert len(refusals) == 4
-    expected = [1, 2, 3, 4, 5, 7, 9, 10, 11]
-    for finding in refusals:
-        assert f"feasible positive per-side counts are {expected}" in (
-            finding["message"]), finding["message"]
-        assert finding.get("current_pad_count") == 6
-        assert finding.get("declared_uniform_pad_width_dbu") == 80_000
-        assert finding.get("feasible_pad_counts") == expected
-    stdout = capsys.readouterr().out
-    assert f"feasible positive per-side counts are {expected}" in stdout
 
 
 def test_mixed_width_refusal_does_not_invent_a_count_only_answer(tmp_path):

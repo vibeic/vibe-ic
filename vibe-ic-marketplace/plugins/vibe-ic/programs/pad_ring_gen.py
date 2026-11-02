@@ -432,7 +432,7 @@ def _skip_marker(project: Path, reason: str) -> None:
 
 # ── placement: upstream's eight steps, in upstream's order ─────────────────
 def _feasible_uniform_pad_counts(side_available: int, pad_width: int,
-                                 site_width: int) -> List[int]:
+                                 site_width: int, *, units: int = 1000) -> List[int]:
     """Every positive uniform-pad count that passes steps 1-8.
 
     This is the same integer arithmetic `_place` applies below, evaluated for
@@ -445,11 +445,8 @@ def _feasible_uniform_pad_counts(side_available: int, pad_width: int,
         return []
     feasible: List[int] = []
     for count in range(1, side_available // pad_width + 1):
-        space_for_fill = side_available - count * pad_width
-        between = (space_for_fill // (count + 1) // site_width) * site_width
-        rest = space_for_fill - between * (count - 1)
-        to_corner, odd = divmod(rest, 2)
-        if not odd and to_corner % site_width == 0:
+        if PR.side_spacing(count * pad_width, count, side_available,
+                           site_width, units=units) is not None:
             feasible.append(count)
     return feasible
 
@@ -552,30 +549,11 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
             spacing[side] = {"space_for_fill": space_for_fill,
                              "between": 0, "to_corner": space_for_fill}
             continue
-        # 4-5. divide by n+1 and round DOWN to the minimum site width
-        between = (space_for_fill // (n + 1) // site_w) * site_w
-        # 6-7. the remainder, halved, is the pad-to-corner spacing
-        rest = space_for_fill - between * (n - 1)
-        to_corner, odd = divmod(rest, 2)
-        # THE `odd` REFUSAL IS A DELIBERATE DIVERGENCE FROM UPSTREAM. Do not
-        # "fix" it back. `pad_cfg.tcl` computes
-        #     space_side = round((space_for_fill - filler*(n-1)) / 2 * 1000)/1000
-        # in MICRONS, so a remainder that will not halve evenly becomes a
-        # fractional micron. This step works in INTEGER DEF UNITS, where that
-        # value cannot be expressed: an odd remainder has no halving into two
-        # EQUAL gaps, and silently taking the floor would put the ring one DEF
-        # unit off-centre with no record of it. Refusing is stricter than the
-        # tool this step models, and it is the same rule read in a unit system
-        # that cannot round.
-        #
-        # COMPARED STEP BY STEP against pad_cfg.tcl 2026-08-22 in
-        # ghcr.io/vibeic/vibeic-eda:0.3.16: of its eight steps, seven are
-        # identical here -- including step 5-6, where this step floors twice and
-        # upstream once, which is not a difference because
-        # floor(floor(a)/w) == floor(a/w) for integer w. Step 7 is the only
-        # divergence and this comment is it.
-        # 8. refuse a corner spacing that is not a multiple of the site width
-        if PR.side_spacing(total, n, avail, site_w) is None:
+        # Native Tcl quantizes in microns before checking the site grid.
+        native_spacing = PR.side_spacing(total, n, avail, site_w, units=units)
+        if native_spacing is None:
+            between = (space_for_fill // (n + 1) // site_w) * site_w
+            rest = space_for_fill - between * (n - 1)
             widths = sorted(set(along))
             guidance_fields: Dict[str, Any] = {
                 "current_pad_count": n,
@@ -585,7 +563,7 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
             }
             if len(widths) == 1 and widths[0] > 0:
                 feasible = _feasible_uniform_pad_counts(
-                    avail, widths[0], site_w)
+                    avail, widths[0], site_w, units=units)
                 guidance_fields.update({
                     "declared_uniform_pad_width_dbu": widths[0],
                     "feasible_pad_counts": feasible,
@@ -619,8 +597,12 @@ def _place(die: PR.Def, cfg: Dict[str, Any], lib: PR.IoLibrary,
                 f"cells, and a ring that does not abut carries no supply."
                 f"{guidance}", **guidance_fields))
             continue
+        between, to_corner = native_spacing
+        end_corner = space_for_fill - between * (n - 1) - to_corner
         spacing[side] = {"space_for_fill": space_for_fill,
                          "between": between, "to_corner": to_corner}
+        if end_corner != to_corner:
+            spacing[side]["to_corner_end"] = end_corner
 
         cur = (llx if axis == "x" else lly) + to_corner + edge + \
             (corner_sw if axis == "x" else corner_sh)

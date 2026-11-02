@@ -192,7 +192,7 @@ import fnmatch
 import glob
 import os
 import re
-from math import gcd, isfinite
+from math import floor, gcd, isfinite
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -2087,22 +2087,28 @@ class IoLibrary:
 
 # ── abutment ────────────────────────────────────────────────────────────────
 def side_spacing(total_width: int, pad_count: int, available: int,
-                 site_width: int) -> Optional[Tuple[int, int]]:
-    """Return (between, to_corner) under the ring placer's exact DBU rule.
+                 site_width: int, *, units: int = 1000) -> Optional[Tuple[int, int]]:
+    """Return native pad_cfg.tcl's (between, low-coordinate corner gap).
 
-    A missing result is a width or site-grid refusal.  The chip-top supply
-    allocator and pad_ring_gen must use the same rule on every PnR pass.
+    The Tcl rounds to a thousandth of a micron, then divides two integers by
+    1000: both gaps are truncated to whole microns. The far corner may differ.
+    The producer, feasible-count guidance and supply allocator share this rule.
     """
-    if (pad_count <= 0 or site_width <= 0 or total_width > available
-            or total_width < 0):
+    if (pad_count <= 0 or site_width <= 0 or units <= 0
+            or total_width > available or total_width < 0):
         return None
-    free = available - total_width
-    between = (free // (pad_count + 1) // site_width) * site_width
-    rest = free - between * (pad_count - 1)
-    corner, odd = divmod(rest, 2)
-    if odd or corner % site_width:
+    free_um = (available - total_width) / units
+    site_um = site_width / units
+
+    def native_round(value):
+        # Tcl round() on these nonnegative distances, followed by integer /.
+        return floor(value * 1000 + 0.5) // 1000
+
+    between_um = native_round(floor(free_um / (pad_count + 1) / site_um) * site_um)
+    corner_um = native_round((free_um - between_um * (pad_count - 1)) / 2)
+    if corner_um != native_round(floor(corner_um / site_um) * site_um):
         return None
-    return between, corner
+    return round(between_um * units), round(corner_um * units)
 
 
 def gap_is_fillable(gap: int, filler_widths: Sequence[int]) -> bool:

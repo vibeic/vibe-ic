@@ -1,4 +1,8 @@
-"""Ruling #75: the unmodified native symmetric placer owns feasibility."""
+"""Ruling #75b: match unmodified native pad_cfg.tcl, including its asymmetry.
+
+The prior ruling75/adc-native-counts.log measures native rc=0 for 1..11.
+This module replays that evidence and compares every pad, corner and gap.
+"""
 import hashlib
 import importlib.util
 import json
@@ -14,24 +18,22 @@ from not_verified_tier import not_verified_reason
 
 
 FIXTURE = Path(__file__).parent / "fixtures/pad_corner_gap_site_snap"
-FEASIBLE_COUNTS = [1, 2, 3, 4, 5, 7, 9, 10, 11]
+FEASIBLE_COUNTS = list(range(1, 12))
 
 
-@pytest.mark.parametrize("count", [5, 7, 8])
-def test_half_site_corner_remainders_keep_the_native_refusal(count):
-    assert pads.side_spacing(count * 80_000, count, 929_000, 1_000) is None
+@pytest.mark.parametrize("count,between,start,end", [
+    (4, 121_000, 123_000, 123_000),
+    (7, 46_000, 46_000, 47_000),
+    (5, 88_000, 88_000, 89_000),
+    (8, 32_000, 32_000, 33_000),
+])
+def test_corner_gaps_use_the_native_low_end_truncation(count, between, start, end):
+    assert pads.side_spacing(80_000 * count, count, 929_000, 1_000) == (between, start)
+    assert 929_000 - 80_000 * count - between * (count - 1) - start == end
 
 
-def test_six_pad_refusal_cannot_be_fixed_by_postprocessing_the_gaps():
-    assert pads.side_spacing(480_000, 6, 940_000, 1_000) is None
-    # 66/65/65 would close geometrically, but the native input has no knob
-    # selecting 66: it recomputes floor((460 / 7) / 1) * 1 = 65 instead.
-    assert (460_000 // 7 // 1_000) * 1_000 == 65_000
-    assert (460_000 - 5 * 65_000) // 2 == 67_500
-
-
-def test_a_remainder_off_the_site_grid_has_no_placement():
-    assert pads.side_spacing(560_000, 7, 929_001, 1_000) is None
+def test_six_pads_keep_native_65_um_between_and_67_68_um_ends():
+    assert pads.side_spacing(480_000, 6, 940_000, 1_000) == (65_000, 67_000)
 
 
 def test_existing_centred_integer_def_bytes_are_unchanged(tmp_path):
@@ -44,25 +46,6 @@ def test_existing_centred_integer_def_bytes_are_unchanged(tmp_path):
     assert ring._chk(root) == 0
 
 
-
-def test_original_four_side_population_keeps_declared_geometry_and_refuses(tmp_path):
-    counts = {"S": 4, "E": 7, "N": 5, "W": 8}
-    names = {s: [f"pad_{s}_{i}" for i in range(n)] for s, n in counts.items()}
-    signals = {name: name + "_signal" for side in names.values() for name in side}
-    config = ring._config(
-        PAD_EDGE_SPACING=5.5, PAD_FILLERS=["pad_fill1"], SIGNAL_MAP=signals,
-        **{pads.SIDE_VAR[s]: names[s] for s in pads.SIDES})
-    root = ring._project(
-        tmp_path, config=config,
-        floorplan=ring._floorplan(pins=list(signals.values()),
-                                 instances=list(signals), die=1_300_000),
-        site_w=1.0, pad_w=80.0, corner_w=180.0)
-    before = (root / pads.ASSIGNMENT_REL).read_bytes()
-    assert ring._gen(root) == 1
-    assert (root / pads.ASSIGNMENT_REL).read_bytes() == before
-    assert "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE" in ring._rules(root)
-    assert not ring._ring_def(root).exists()
-
 def _native_script():
     package = importlib.util.find_spec("librelane")
     if package is None or not shutil.which("openroad"):
@@ -74,16 +57,16 @@ def _native_script():
     return script
 
 
-def _native_case(tmp_path, count):
+def _native_case(tmp_path, count, *, edge=0, die=1_300_000):
     names = {s: [f"pad_{s}_{i}" for i in range(count)] for s in pads.SIDES}
     signals = {name: name + "_signal" for side in names.values() for name in side}
     config = ring._config(
-        PAD_EDGE_SPACING=0, PAD_FILLERS=["pad_fill1"], SIGNAL_MAP=signals,
+        PAD_EDGE_SPACING=edge, PAD_FILLERS=["pad_fill1"], SIGNAL_MAP=signals,
         **{pads.SIDE_VAR[s]: names[s] for s in pads.SIDES})
     root = ring._project(
         tmp_path, config=config,
         floorplan=ring._floorplan(pins=list(signals.values()),
-                                 instances=list(signals), die=1_300_000),
+                                 instances=list(signals), die=die),
         site_w=1.0, pad_w=80.0, corner_w=180.0)
     # The native row requires the pad height and corner height to agree.
     # This new neutral fixture has the original test's exact along-row widths,
@@ -122,13 +105,15 @@ END LIBRARY
         declarations.append(f"set ::env({key}) {{{raw}}}")
     config_path = root / "native-config.tcl"
     config_path.write_text("\n".join(declarations) + "\n")
+    die = pads.read_def(root / pads.FLOORPLAN_DEF_REL)
+    area = " ".join(f"{v / die.units:g}" for v in die.box)
     wrapper = root / "native-run.tcl"
     wrapper.write_text(f"""read_lef {{{tech}}}
 read_lef {{{lef}}}
 read_def {{{root / pads.FLOORPLAN_DEF_REL}}}
 set ::env(SCRIPTS_DIR) {{{script.parents[2]}}}
 set ::env(PDN_CONNECT_MACROS_TO_GRID) 0
-set ::env(DIE_AREA) {{0 0 1300 1300}}
+set ::env(DIE_AREA) {{{area}}}
 source {{{config_path}}}
 source {{{script}}}
 write_def {{{root / 'native.def'}}}
@@ -145,45 +130,65 @@ write_def {{{root / 'native.def'}}}
     return result
 
 
+def _assert_native_geometry(root, config):
+    native = pads.read_def(root / "native.def")
+    emitted = pads.read_def(ring._ring_def(root))
+    report = ring._report(root)
+    gaps = {}
+    for pad in report["pads"]:
+        expected = native.components[pad["instance"]]
+        actual = emitted.components[pad["instance"]]
+        assert (pad["x"], pad["y"], pad["orient"]) == (expected.x, expected.y, expected.orient)
+        assert (actual.x, actual.y, actual.orient) == (expected.x, expected.y, expected.orient)
+    native_corners = sorted((c.x, c.y, c.orient) for c in native.components.values()
+                            if c.master == config["PAD_CORNER"])
+    assert sorted((c["x"], c["y"], c["orient"]) for c in report["corners"]) == native_corners
+    for side in pads.SIDES:
+        axis = "x" if side in "SN" else "y"
+        placed = sorted((p for p in report["pads"] if p["side"] == side), key=lambda p: p[axis])
+        edge = round(config["PAD_EDGE_SPACING"] * native.units)
+        start = 180_000 + edge
+        end = native.box[2 if axis == "x" else 3] - edge - 180_000
+        measured = [placed[0][axis] - start, end - placed[-1][axis] - 80_000]
+        spacing = report["spacing"][side]
+        assert measured == [spacing["to_corner"], spacing.get("to_corner_end", spacing["to_corner"])]
+        gaps[side] = measured
+    record = json.loads((root / "native-result.json").read_text())
+    record.update(producer_rc=0, native_and_producer_equal=True, corner_gaps_dbu=gaps,
+                  producer_pads=report["pads"], producer_corners=report["corners"])
+    (root / "native-result.json").write_text(json.dumps(record, indent=2))
+    assert report["abutment"]["abuts"]
+    assert ring._chk(root) == 0
+
+
+@pytest.mark.parametrize("edge", [0, 5.5])
 @pytest.mark.parametrize("count", range(1, 13))
-def test_native_symmetric_geometry_preserves_original_feasible_counts(tmp_path, count):
-    script = _native_script()
-    root, config, lef = _native_case(tmp_path, count)
-    result = _run_native(root, config, lef, script)
-    native_rc = 0 if count < 12 else 1
-    producer_rc = 0 if count in FEASIBLE_COUNTS else 1
-    assert result.returncode == native_rc, result.stdout + result.stderr
-    assert ring._gen(root) == producer_rc
-    if native_rc == 0:
-        native = pads.read_def(root / "native.def")
-        xs = sorted(c.x for name, c in native.components.items()
-                    if name.startswith("pad_S_"))
-        gaps = [xs[0] - 180_000, 1_120_000 - xs[-1] - 80_000]
-        record_path = root / "native-result.json"
-        record = json.loads(record_path.read_text())
-        record.update(native_corner_gaps_dbu=gaps, producer_rc=producer_rc)
-        record_path.write_text(json.dumps(record, indent=2))
-        if count in FEASIBLE_COUNTS:
-            assert gaps[0] == gaps[1]
-        else:
-            # Native Tcl integer arithmetic truncates the half-site corner
-            # gap. rc=0 alone must not authorize asymmetric placement (#75).
-            assert gaps == ([67_000, 68_000] if count == 6 else [34_000, 35_000])
-    if producer_rc == 0:
-        assert (root / "native.def").is_file()
-        # The producer's declared symmetric spacing equals the native DB's
-        # placement, not just another implementation of the arithmetic.
-        native = pads.read_def(root / "native.def")
-        report = ring._report(root)
-        for pad in report["pads"]:
-            placed = native.components[pad["instance"]]
-            assert (placed.x, placed.y) == (pad["x"], pad["y"])
+def test_native_accepted_counts_have_identical_producer_geometry(tmp_path, count, edge):
+    root, config, lef = _native_case(tmp_path, count, edge=edge)
+    result = _run_native(root, config, lef, _native_script())
+    expected = 0 if count in FEASIBLE_COUNTS else 1
+    assert result.returncode == expected, result.stdout + result.stderr
+    assert ring._gen(root) == expected
+    if expected == 0:
+        _assert_native_geometry(root, config)
     else:
-        assert (root / "native.def").exists() == (native_rc == 0)
-        rule = ("PAD_RING_DOES_NOT_FIT" if count == 12 else
-                "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE")
-        assert rule in ring._rules(root)
-        if count != 12:
-            refusals = [f for f in ring._report(root)["findings"]
-                        if f["rule"] == rule]
-            assert all(f["feasible_pad_counts"] == FEASIBLE_COUNTS for f in refusals)
+        assert "PAD_RING_DOES_NOT_FIT" in ring._rules(root)
+        assert not ring._ring_def(root).exists()
+
+
+def test_original_four_side_population_matches_native_without_rebalance(tmp_path):
+    root, config, lef = _native_case(tmp_path, 8, edge=5.5)
+    counts = {"S": 4, "E": 7, "N": 5, "W": 8}
+    for side, count in counts.items():
+        config[pads.SIDE_VAR[side]] = config[pads.SIDE_VAR[side]][:count]
+    keep = {n for side in pads.SIDES for n in config[pads.SIDE_VAR[side]]}
+    config["SIGNAL_MAP"] = {n: v for n, v in config["SIGNAL_MAP"].items() if n in keep}
+    (root / pads.ASSIGNMENT_REL).write_text(json.dumps(config, indent=2))
+    (root / pads.FLOORPLAN_DEF_REL).write_text(ring._floorplan(
+        pins=list(config["SIGNAL_MAP"].values()), instances=sorted(keep), die=1_300_000))
+    before = (root / pads.ASSIGNMENT_REL).read_bytes()
+    result = _run_native(root, config, lef, _native_script())
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert ring._gen(root) == 0
+    assert (root / pads.ASSIGNMENT_REL).read_bytes() == before
+    _assert_native_geometry(root, config)
