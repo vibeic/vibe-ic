@@ -1,10 +1,10 @@
 {
   "_comment": "Maps each Vibe-IC flow step to the right Bucket-A program file + Bucket-B skill file. Used by enhancement_emit.py to route a captured recovery to the correct target. Step IDs match the canonical flow naming.",
   "steps": {
-    "benchmark.verification_model_completion": {
-      "description": "Reference-model authoring handoff and attributed completion through ordinary resume, preserving native required gates, unchanged RTL and fresh independent model review.",
-      "bucket_A_program": "programs/benchmark_dispatch.py",
-      "bucket_A_related": ["programs/professional_tb_gen.py", "programs/design_one_shot_runner.py"],
+    "benchmark.reference_model_handoff": {
+      "description": "Producer advisory for the existing persistent reference-model input; ordinary native verification and independent review remain the boundary.",
+      "bucket_A_program": "programs/professional_tb_gen.py",
+      "bucket_A_related": ["programs/design_one_shot_runner.py"],
       "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
     },
     "benchmark.review_correction": {

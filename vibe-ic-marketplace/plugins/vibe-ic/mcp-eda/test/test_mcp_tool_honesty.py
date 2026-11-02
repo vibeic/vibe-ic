@@ -102,6 +102,8 @@ def _invoke_actual_dft_script(tmp_path, *, fail_stage=None, missing=False, missi
     """
     native = tmp_path / "native"
     native.mkdir()
+    tools = tmp_path / "tools"
+    (tools / "bin").mkdir(parents=True)
     for name in ("mkdir", "cat"):
         (native / name).symlink_to(shutil.which(name))
     for name in ("iverilog", "yosys"):
@@ -111,7 +113,7 @@ def _invoke_actual_dft_script(tmp_path, *, fail_stage=None, missing=False, missi
         path.write_text("#!/bin/sh\nexit 0\n")
         path.chmod(0o755)
     if not missing:
-        path = native / "fault"
+        path = tools / "bin/fault"
         path.write_text("#!/bin/sh\nprintf called > '" + str(tmp_path / "fault-called") + "'\n" + """
 test -x "$FAULT_IVERILOG" && test -x "$FAULT_YOSYS" || exit 39
 test "$1" != "$FAIL_STAGE" || { echo 'Error: requested Fault stage failed'; exit 42; }
@@ -151,7 +153,7 @@ console.log(JSON.stringify({metrics:JSON.parse(response.content[0].text),manifes
     values = {
         "HELPER": (INDEX_JS.parent / "lib/tool_path.mjs").as_uri(),
         "SAFETY": (INDEX_JS.parent / "lib/shell_safety.mjs").as_uri(),
-        "TOOLS_ROOT": str(tmp_path / "absent-legacy"),
+        "TOOLS_ROOT": str(tools),
         "BASH": shutil.which("bash"), "NATIVE": str(native),
         "COMBINED_CELLS": str(tmp_path / "combined_cells.v"),
         "FAIL_STAGE": fail_stage or "",

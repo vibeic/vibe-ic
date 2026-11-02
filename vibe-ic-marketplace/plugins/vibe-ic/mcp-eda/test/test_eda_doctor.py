@@ -15,6 +15,8 @@ import shutil
 import subprocess
 from shlex import quote
 
+import pytest
+
 INDEX_JS = Path(__file__).resolve().parent.parent / "src" / "index.js"
 
 
@@ -24,6 +26,9 @@ def _run_version_probe(tmp_path, *, legacy=None, native=True):
     The dockerExec stand-in runs bash locally; it never resolves a tool on the
     host's ordinary PATH. Live immutable-image proof is retained separately.
     """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("MCP_NODE_NOT_MEASURED: Node is required to execute the JavaScript version consumer")
     binary_dir = tmp_path / "native"
     binary_dir.mkdir()
     for utility in ("head", "grep"):
@@ -54,7 +59,7 @@ def _run_version_probe(tmp_path, *, legacy=None, native=True):
         errors, consumer,
         "console.log(JSON.stringify({version:getToolVersion('yosys'),calls}));",
     ])
-    result = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, check=True)
+    result = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True, check=True)
     return json.loads(result.stdout), native_called.exists()
 
 
@@ -171,7 +176,7 @@ def test_magic_probe_uses_version_flag_not_broken_tcl_global():
     returned EMPTY (the global isn't set at that point) and false-FAILed an
     otherwise healthy magic (present at /foss/tools/bin/magic, v8.3.671)."""
     src = INDEX_JS.read_text()
-    assert 'magic: `${containerToolCommand("magic", `${TOOLS}/bin/magic`)} --version' in src, "magic probe must resolve its built-in default and use --version"
+    assert "${TOOLS}/bin/magic --version" in src, "magic probe must use --version"
     # The old broken probe's distinctive executable signature (tech-file /dev/null
     # + heredoc into the tcl interpreter). Only live probe code had this exact
     # token; the fix comment does not.
@@ -181,14 +186,20 @@ def test_magic_probe_uses_version_flag_not_broken_tcl_global():
     )
 
 
-def test_fault_probe_resolves_the_same_legacy_default_as_the_consumer():
-    """Legacy images keep their executable default; native images use their
-    own container PATH. Neither probe may ask the host for the binary."""
+def test_fault_probe_uses_deterministic_foss_bin_path():
+    """Regression (2026-07-11): the vibeic-eda image is self-contained — every
+    tool must resolve at a deterministic /foss/tools/bin path, never via ambient
+    PATH (the docker-exec PATH we don't control). fault ships from the base at
+    /usr/local/bin/fault; the Dockerfile symlinks it into ${TOOLS}/bin/fault, so
+    the probe must hit ${TOOLS}/bin/fault like every other tool."""
     src = INDEX_JS.read_text()
-    command = '${containerToolCommand("fault", `${TOOLS}/bin/fault`)}'
-    assert 'fault: `' + command + ' --version' in src
-    assert command + ' chain ' in src
-    assert "dockerExec(probe" in src
+    assert "fault: `${TOOLS}/bin/fault --version" in src, (
+        "fault probe must use the deterministic ${TOOLS}/bin/fault path"
+    )
+    # Must NOT fall back to bare-PATH `fault` (ambient PATH is uncontrolled).
+    assert "fault: `fault --version" not in src, (
+        "fault probe must not rely on ambient PATH — use ${TOOLS}/bin/fault"
+    )
 
 
 def test_fault_symlinked_into_foss_bin_by_dockerfile():

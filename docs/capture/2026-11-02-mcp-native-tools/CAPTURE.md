@@ -8,6 +8,15 @@ Fresh Codex and Claude MCP clients each connected, exposed 56 tools and returned
 
 The root investigator's NATIVE_PATH_READBACK.json records command -v success for all nine binaries on the selected container PATH (rc=0). The held image is ghcr.io/vibeic/vibeic-eda@sha256:d3159f09be84ee94a315f83523952afe55e93f48d8eec638e48ec265ed3f2508 (release 0.4.67); its config ID is sha256:8434ad1a10e5c296913add246e4b2ab963d0a249739460558dec4a691cd3466a and container ID is ddb4d23683dabee85939b929ce34d6b44a28c28581eed63965df7f07b9c771c5. This is availability readback, not functional tool qualification. The defect is in the adapter's path selection. No forked tool produced an incorrect output, so Bucket T is inapplicable. This capture author did not run native queries.
 
+## PR rework scope
+
+The PR rework restores the existing deterministic Magic and Fault commands and
+all original doctor assertions, including the bare-PATH Fault prohibition.
+Container PATH resolution remains for the other tools. Historical 17/17 doctor
+and source-patch identities below describe the earlier component experiment;
+they do not qualify this reworked tree. New JavaScript controls require Node
+and report `MCP_NODE_NOT_MEASURED` when that prerequisite is absent.
+
 ## Program First
 
 Bucket A, AUGMENT-EXISTING. The existing mcp-eda/src/index.js owns registered MCP consumers. The source author added a shared deterministic resolver in mcp-eda/src/lib/tool_path.mjs: retain a built-in legacy default when executable inside the selected container, otherwise discover its command on that container's PATH. Preserve an explicit operator command unchanged, including failure when that command is unavailable. A genuinely missing default must also remain a failure. The actual DFT consumer preserves shell quotes in its assembled script and propagates dependency or Fault failures before a success marker or PASS manifest can be emitted.

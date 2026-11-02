@@ -170,8 +170,7 @@ def _ordered_parallel_map(items: Iterable[T], worker: Callable[[T], R],
                 on_complete(result)
             ordered[futures[future]] = result
     except BaseException as original:
-        for future in futures:
-            future.cancel()
+        cancelled = {future for future in futures if future.cancel()}
         pool.shutdown(wait=True, cancel_futures=True)
         # Running workers can finish while shutdown waits. Their successful
         # outcomes still belong to the coordinator's transaction callback.
@@ -179,7 +178,7 @@ def _ordered_parallel_map(items: Iterable[T], worker: Callable[[T], R],
         # outcome must never be retried as if it had not seen that outcome.
         drain_error = None
         for future in futures:
-            if future in delivered or future.cancelled():
+            if future in delivered or future in cancelled:
                 continue
             try:
                 result = future.result()
@@ -490,21 +489,6 @@ def _runner_material_snapshot(project: Path) -> dict:
     material["prompt_sha256"] = (_sha256_text(prompt.read_text(errors="replace"))
                                   if prompt.is_file() else None)
     material["output_rtl_sha256"] = _sha256_text(_candidate_text(_rtl_files(project)))
-    models = {}
-    model_root = project / "phase2/stage1/sim_professional"
-    if model_root.is_symlink():
-        raise ValueError("runner reference model root is linked")
-    for path in sorted(model_root.glob("*/expert_reference_tb.py")):
-        if any(p.is_symlink() for p in (path, *path.parents)) or not path.is_file():
-            raise ValueError("runner reference model is not a regular project input")
-        raw = path.read_bytes()
-        models[path.relative_to(project).as_posix()] = {
-            "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
-    if models:  # Old receipts with no authored model retain their exact shape.
-        material["expert_reference_models"] = models
-        support = _verification_model_support(project)
-        if support:
-            material["expert_reference_support"] = support
     return material
 
 
@@ -537,27 +521,6 @@ def _material_matches_repaired_output(expected: dict, current: dict) -> bool:
             and expected.get("output_rtl") != current.get("output_rtl")
             and expected.get("output_rtl_sha256")
             != current.get("output_rtl_sha256"))
-
-
-def _material_matches_verification_model(expected: dict, current: dict,
-                                         model: dict | None) -> bool:
-    """Only an issued completion consumer may admit this one authored input."""
-    if not isinstance(model, dict):
-        return False
-    relative, digest, size = model.get("relative_path"), model.get("sha256"), model.get("bytes")
-    if (not isinstance(relative, str) or Path(relative).is_absolute()
-            or ".." in Path(relative).parts
-            or not re.fullmatch(r"[0-9a-f]{64}", str(digest or ""))
-            or type(size) is not int or size <= 0):
-        return False
-    key = "expert_reference_models"
-    support_key = "expert_reference_support"
-    models = dict(expected.get(key) or {})
-    models[relative] = {"sha256": digest, "size": size}
-    return (current.get(key) == models
-            and current.get(support_key, {}) == model.get("support_inputs", {})
-            and {k:v for k,v in expected.items() if k not in (key, support_key)}
-                == {k:v for k,v in current.items() if k not in (key, support_key)})
 
 
 def _stored_duplicate_scene(original: dict, later: dict, wrapper: dict,
@@ -623,6 +586,7 @@ def _stored_duplicate_scene(original: dict, later: dict, wrapper: dict,
     return {"admission_identity_sha256": sorted(set(matches))} if matches else None
 
 
+
 def _stored_duplicate_observation(original: dict, latest: dict,
                                   project: Path) -> dict | None:
     """A later refusal may retain an earlier measurement, never replace it."""
@@ -659,12 +623,12 @@ def _stored_duplicate_observation(original: dict, latest: dict,
             **scene}
 
 
+
 def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
                         project: Path, *, require_phase2: bool = True,
                         historical: bool = False,
                         allow_repaired_output: bool = False,
-                        repaired_output_sha256: str | None = None,
-                        verification_model: dict | None = None) -> dict | None:
+                        repaired_output_sha256: str | None = None) -> dict | None:
     """Disclose pre-gate refusals without interpreting rc as a gate verdict.
 
     BLOCKING only for unbound/stale evidence or a named refusal before ANY
@@ -713,9 +677,7 @@ def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
         if (receipt["material_after"] != current_material
                 and not (repaired_output_bound
                          and _material_matches_repaired_output(
-                             receipt["material_after"], current_material))
-                and not _material_matches_verification_model(
-                    receipt["material_after"], current_material, verification_model)):
+                             receipt["material_after"], current_material))):
             return {**diagnostic, "status": "MATERIAL_MISMATCH",
                     "reason_class": "RUNNER_MATERIAL_UNBOUND",
                     "reason": "RUNNER_MATERIAL_UNBOUND: input or output file population/content changed after invocation"}
@@ -811,18 +773,6 @@ def _runner_reentry_reason(task: dict, result: dict, *,
     A receipt from a refused/failed invocation is never a gate measurement.
     """
     verification = task.get("program_verification") or {}
-    invocation = verification.get("runner_invocation") if isinstance(verification, dict) else None
-    model_operation = invocation.get("verification_model_completion") if isinstance(invocation, dict) else None
-    if (model_operation is not None or task.get("verification_model_provenance") is not None
-            or task.get("verification_model_input") is not None):
-        try:
-            if (not isinstance(model_operation, dict)
-                    or not isinstance(task.get("verification_model_provenance"), dict)
-                    or not isinstance(task.get("verification_model_input"), dict)):
-                raise ValueError("native model completion requires model lineage and review input")
-            _validate_verification_model_provenance(task)
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            return f"VERIFICATION_MODEL_PROVENANCE_UNBOUND: {exc}"
     if not isinstance(verification, dict):
         return "Program verification record is malformed"
     invocation = verification.get("runner_invocation")
@@ -879,8 +829,7 @@ def _runner_reentry_reason(task: dict, result: dict, *,
 
 def _stored_runner_diagnostics(invocation: dict, *,
                                allow_repaired_output: bool = False,
-                               repaired_output_sha256: str | None = None,
-                               verification_model: dict | None = None) -> dict | None:
+                               repaired_output_sha256: str | None = None) -> dict | None:
     """Re-use the live collection contract for a frozen invocation record."""
     path = Path(invocation["record_path"])
     raw = path.read_bytes()
@@ -895,8 +844,7 @@ def _stored_runner_diagnostics(invocation: dict, *,
         process, invocation["argv"], Path(invocation["project"]),
         historical=True,
         allow_repaired_output=allow_repaired_output,
-        repaired_output_sha256=repaired_output_sha256,
-        verification_model=verification_model)
+        repaired_output_sha256=repaired_output_sha256)
     if process.error:
         raise ValueError(process.error)
     return diagnostic
@@ -1073,8 +1021,7 @@ class _RunnerBudget:
                 self._env[name] = str(threads)
 
     def run(self, argv: list[str], *,
-            expected_repaired_output_sha256: str | None = None,
-            verification_model_completion: dict | None = None) -> _ProcessOutcome:
+            expected_repaired_output_sha256: str | None = None) -> _ProcessOutcome:
         """Run ONE runner invocation in its own SESSION.
 
         `start_new_session` is what lets the coordinator take the whole pool
@@ -1193,8 +1140,6 @@ class _RunnerBudget:
                 "status": ("REFUSED" if error and "RUNNER_INVOCATION_REFUSED" in error
                            else "WORKER_ERROR" if error else "COMPLETED"),
             }
-            if verification_model_completion is not None:
-                receipt["verification_model_completion"] = dict(verification_model_completion)
             try:
                 for stream, value in (("stdout", stdout), ("stderr", stderr)):
                     stream_path = path.with_suffix(f".{stream}.txt")
@@ -5011,12 +4956,6 @@ def _validate_ai_review(task: dict, *,
         except (OSError, ValueError, KeyError, TypeError) as exc:
             reasons.append(f"AI_BACKUP_PROVENANCE_INVALID: {exc}")
 
-    model_input = task.get("verification_model_input")
-    if isinstance(model_input, dict):
-        if review.get("verification_model_input_sha256") != model_input.get("sha256"):
-            reasons.append("fresh model review must bind verification_model_input_sha256")
-        if review.get("verification_native_invocation_id") != model_input.get("native_invocation_id"):
-            reasons.append("fresh model review must bind verification_native_invocation_id")
     reviewer = review.get("reviewer") or {}
     if reviewer.get("kind") != "AI":
         reasons.append("reviewer.kind must be AI")
@@ -7469,8 +7408,7 @@ def _validate_live_d1_for_launch(project: Path, route_receipt: dict,
 def _run_from_d1_snapshot(budget, argv: list, snapshot: _D1EvidenceSnapshot,
                           receipt: dict, activation: dict, task_sha: str,
                           *, authority_project: Path | None = None,
-                          expected_repaired_output_sha256: str | None = None,
-                          verification_model_completion: dict | None = None):
+                          expected_repaired_output_sha256: str | None = None):
     """Validate one captured generation and bind that generation to submission."""
     if receipt.get("input_contract") == "original":
         # Original-source requests use the same runner/material binding. They
@@ -7486,9 +7424,7 @@ def _run_from_d1_snapshot(budget, argv: list, snapshot: _D1EvidenceSnapshot,
                 raise ValueError("RUNNER_RTL_INPUT_INVALID")
             process = budget.run(
                 argv, **({"expected_repaired_output_sha256": expected_repaired_output_sha256}
-                         if expected_repaired_output_sha256 is not None else {}),
-                **({"verification_model_completion": verification_model_completion}
-                   if verification_model_completion is not None else {}))
+                         if expected_repaired_output_sha256 is not None else {}))
             _require_route_admission(run_p, task, receipt, require_d1=False)
             return process
         except (OSError, ValueError, TypeError) as exc:
@@ -7516,9 +7452,7 @@ def _run_from_d1_snapshot(budget, argv: list, snapshot: _D1EvidenceSnapshot,
             argv,
             **({"expected_repaired_output_sha256":
                 expected_repaired_output_sha256}
-               if expected_repaired_output_sha256 is not None else {}),
-            **({"verification_model_completion": verification_model_completion}
-               if verification_model_completion is not None else {}))
+               if expected_repaired_output_sha256 is not None else {}))
     except (OSError, ValueError, TypeError) as exc:
         return _ProcessOutcome(rc=None, error=f"D1_SNAPSHOT_LAUNCH_REFUSED: {exc}")
     finally:
@@ -8361,355 +8295,6 @@ def _backup_output_manifest(project: Path) -> list[dict]:
     return files
 
 
-def _verification_model_support(project: Path) -> dict:
-    """Python siblings are authored inputs; generated canonical TBs are outputs."""
-    root = project / "phase2/stage1/sim_professional"
-    records = {}
-    for path in sorted(root.glob("**/*")):
-        if path.is_symlink():
-            raise ValueError("VERIFICATION_MODEL_SUPPORT_LINKED")
-        if not path.is_file() or path.suffix != ".py":
-            continue
-        if path.name in ("expert_reference_tb.py", f"tb_{path.parent.name}.py"):
-            continue
-        _correction_path(path, project)
-        raw = path.read_bytes()
-        records[path.relative_to(project).as_posix()] = {
-            "sha256": hashlib.sha256(raw).hexdigest(), "size": len(raw)}
-    return records
-
-
-def _verification_model_inputs(project: Path) -> dict:
-    """Freeze the existing model consumer's documents/config, not run outputs."""
-    import professional_tb_gen as professional
-    paths = list((project / "phase1/generated_docs").rglob("*"))
-    paths += [project / name for name in ("phase3/librelane_switch.json", "SOURCE_MANIFEST.md", "ic_class.json")]
-    records = {}
-    for path in paths:
-        if path.is_symlink():
-            raise ValueError("VERIFICATION_MODEL_CONSUMER_INPUT_LINKED")
-        if path.is_file():
-            _correction_path(path, project)
-            records[path.relative_to(project).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return {"files": records, "ic_class": professional._detect_ic_class(project),
-            "support_inputs": _verification_model_support(project)}
-
-
-def _verification_model_self_contained(path: Path) -> None:
-    """Validate a narrow model input syntax, not an arbitrary Python sandbox."""
-    import ast
-    try:
-        tree = ast.parse(path.read_text())
-    except SyntaxError as exc:
-        raise ValueError("VERIFICATION_MODEL_SOURCE_INVALID") from exc
-    parents = {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
-    builtins = {"abs", "all", "any", "bool", "dict", "enumerate", "float", "hex", "int", "len",
-                "list", "max", "min", "range", "reversed", "round", "set", "sorted", "str",
-                "sum", "tuple", "zip", "AssertionError", "ValueError"}
-    functions = {node.name for node in ast.walk(tree) if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-    locals_ = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store)}
-    locals_.update(node.arg for node in ast.walk(tree) if isinstance(node, ast.arg))
-    reserved = builtins | {"cocotb", "Timer"} | functions
-    forbidden = {"open", "__import__", "eval", "exec", "compile", "globals", "locals", "vars",
-                 "getattr", "setattr", "delattr", "dir", "type", "object", "super", "input",
-                 "help", "breakpoint", "exit", "quit"}
-    for node in ast.walk(tree):
-        if isinstance(node, (ast.Import, ast.ImportFrom)):
-            if (any(alias.asname for alias in node.names)
-                    or not ((isinstance(node, ast.Import) and [a.name for a in node.names] == ["cocotb"])
-                        or (isinstance(node, ast.ImportFrom) and not node.level
-                            and node.module == "cocotb.triggers" and [a.name for a in node.names] == ["Timer"]))):
-                raise ValueError("VERIFICATION_MODEL_EXTERNAL_IMPORT_UNSUPPORTED")
-        if isinstance(node, (ast.ClassDef, ast.Lambda, ast.Global, ast.Nonlocal)):
-            raise ValueError("VERIFICATION_MODEL_INDIRECTION_UNSUPPORTED")
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.decorator_list:
-            if (not isinstance(node, ast.AsyncFunctionDef) or len(node.decorator_list) != 1
-                    or not isinstance(node.decorator_list[0], ast.Call)
-                    or ast.unparse(node.decorator_list[0].func) != "cocotb.test"):
-                raise ValueError("VERIFICATION_MODEL_TEST_DECORATOR_UNSUPPORTED")
-        identifier = (node.id if isinstance(node, ast.Name) else node.arg if isinstance(node, ast.arg)
-                      else node.name if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) else None)
-        if identifier is not None:
-            if identifier.startswith("_") or identifier in forbidden:
-                raise ValueError("VERIFICATION_MODEL_EXTERNAL_INPUT_UNSUPPORTED")
-            if (isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
-                    and identifier not in locals_ | reserved):
-                raise ValueError("VERIFICATION_MODEL_UNDECLARED_NAME_UNSUPPORTED")
-            if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store) and identifier in reserved:
-                raise ValueError("VERIFICATION_MODEL_API_ALIAS_UNSUPPORTED")
-            if isinstance(node, ast.Name) and identifier in {"Timer", "cocotb"}:
-                parent = parents[node]
-                direct = (isinstance(parent, ast.Call) and parent.func is node if identifier == "Timer"
-                          else isinstance(parent, ast.Attribute) and parent.value is node and parent.attr == "test")
-                if not direct:
-                    raise ValueError("VERIFICATION_MODEL_API_ALIAS_UNSUPPORTED")
-        if isinstance(node, ast.Attribute):
-            parts, root = [], node
-            while isinstance(root, ast.Attribute):
-                parts.insert(0, root.attr); root = root.value
-            base = root.id if isinstance(root, ast.Name) else None
-            direct_call = isinstance(parents.get(node), ast.Call) and parents[node].func is node
-            permitted = (base == "cocotb" and parts == ["test"] and direct_call)
-            if base == "dut":
-                permitted |= (parts == ["_log"] or parts == ["_log", "info"] and direct_call
-                              or bool(parts) and not parts[0].startswith("_")
-                              and (len(parts) == 1 or parts[1:] in (["value"], ["value", "is_resolvable"])))
-            if not permitted:
-                raise ValueError("VERIFICATION_MODEL_ATTRIBUTE_OR_ALIAS_UNSUPPORTED")
-        if isinstance(node, ast.Call):
-            if isinstance(node.func, ast.Attribute) and ast.unparse(node.func) == "cocotb.test":
-                owner = parents.get(node)
-                if (node.args or node.keywords or not isinstance(owner, ast.AsyncFunctionDef)
-                        or owner.decorator_list != [node]):
-                    raise ValueError("VERIFICATION_MODEL_TEST_DECORATOR_UNSUPPORTED")
-            if (not isinstance(node.func, (ast.Name, ast.Attribute))
-                    or isinstance(node.func, ast.Name) and node.func.id not in builtins | functions | {"Timer"}
-                    or isinstance(node.func, ast.Attribute)
-                    and ast.unparse(node.func) not in {"cocotb.test", "dut._log.info"}):
-                raise ValueError("VERIFICATION_MODEL_CALL_INDIRECTION_UNSUPPORTED")
-
-
-def _verification_model_gap(project: Path, invocation: dict) -> dict | None:
-    """A native authoring fallback permits a model, never RTL repair or PASS.
-
-    Older producers bind the fallback in Phase 2 but do not bind separate
-    diagnostic report generations. Those hashes are observations in the new
-    handoff; the subsequent native invocation remains the proof authority.
-    """
-    import professional_tb_gen as professional
-    import _sim_results_bridge as bridge
-    project = project.resolve()
-    try:
-        phase2_path = _correction_path(project / "reports/orchestrator/phase2_one_shot.json", project)
-        phase2 = _read_json_regular(phase2_path)
-    except (OSError, ValueError):
-        # Without a declared native fallback, the ordinary receipt handler owns
-        # missing or malformed evidence. It cannot authorize model authoring.
-        return None
-    rows = [row for row in phase2.get("steps") or [] if row.get("name") == "professional_tb_gen"]
-    if len(rows) != 1:
-        return None
-    row = rows[0]
-    extras = row.get("extras") or {}
-    if (row.get("status") != "NOT_MEASURED"
-            or extras.get("fallback_skill") != "testbench-gen"
-            or extras.get("program_first") != "professional_tb_gen"):
-        return None
-    if any(st.get("status") == "FAIL" and st.get("name") != "step4_functional_evidence"
-           for st in phase2.get("steps") or []):
-        return None
-    diagnostic = _stored_runner_diagnostics(invocation)
-    if (not diagnostic or diagnostic.get("reason") or diagnostic.get("retained_after_duplicate")
-            or phase2.get("runner_binding", {}).get("invocation_id") != invocation.get("invocation_id")):
-        raise ValueError("VERIFICATION_MODEL_PARENT_UNBOUND")
-    report_path = _correction_path(project / "reports/phase2/gates/professional_tb.json", project)
-    report = _read_json_regular(report_path)
-    if (report.get("status") != "INCOMPLETE"
-            or report.get("reference_model_tier") != "hook_unfilled"
-            or report.get("ran_cocotb") is not True
-            or report.get("functional_mismatch") is not False):
-        return None
-    shape, _ = professional.classify_dut(project, professional._detect_ic_class(project))
-    if shape is None:
-        return None
-    out = project / "phase2/stage1/sim_professional" / str(shape["top"])
-    _correction_path(out / "verification_plan.json", project)
-    if out.parent != project / "phase2/stage1/sim_professional" or report.get("out_dir") != str(out):
-        raise ValueError("VERIFICATION_MODEL_TARGET_MISMATCH")
-    plan = _read_json_regular(out / "verification_plan.json")
-    if plan.get("top") != shape["top"] or plan.get("reference_model_tier") != "hook_unfilled":
-        raise ValueError("VERIFICATION_MODEL_PLAN_MISMATCH")
-    handoff = professional.reference_model_handoff(out)
-    model_path = _correction_path(handoff["artifact_path"], project, exists=False)
-    if professional._load_expert_reference_tb(out) is not None:
-        return None
-    inputs = _verification_model_inputs(project)
-    if any(Path(name).parent == out.relative_to(project)
-           for name in inputs["support_inputs"]):
-        raise ValueError("VERIFICATION_MODEL_EXTERNAL_HELPERS_UNSUPPORTED")
-    junit = _correction_path(out / "results.xml", project)
-    counts = bridge.parse_junit(junit)
-    if (not counts or counts.get("tests", 0) <= 0 or counts.get("passed") != 0
-            or counts.get("failures") != 0 or counts.get("errors") != 0
-            or counts.get("skipped") != counts.get("tests")
-            or report.get("cocotb_test_denominator") != {
-                key: counts[key] for key in ("tests", "failures", "errors", "skipped", "passed")}):
-        return None
-    gate_path = project / "reports/phase2/gates/cpu_functional_oracle_waiver.json"
-    observed_paths = [report_path, out / "verification_plan.json", junit]
-    if gate_path.exists() or gate_path.is_symlink():
-        _correction_path(gate_path, project)
-        gate = _read_json_regular(gate_path)
-        denominator = gate.get("functional_test_denominator") or {}
-        if (gate.get("verdict") != "INCOMPLETE" or denominator.get("tests_passed") != 0
-                or denominator.get("tests_failed") != 0
-                or denominator.get("tests_skipped") != counts["skipped"]):
-            return None
-        observed_paths.append(gate_path)
-    observed = {str(path): hashlib.sha256(path.read_bytes()).hexdigest()
-                for path in observed_paths}
-    declared = extras.get("reference_model_handoff")
-    if declared is not None and (declared.get("artifact_path") != str(model_path)
-            or declared.get("report_path") != str(report_path)
-            or declared.get("report_sha256") != observed[str(report_path)]):
-        raise ValueError("VERIFICATION_MODEL_DECLARATION_MISMATCH")
-    return {**handoff, "relative_path": model_path.relative_to(project).as_posix(),
-            "consumer_inputs": inputs,
-            "observed_diagnostics_sha256": observed,
-            "diagnostics_authority": ("NATIVE_DECLARATION_BOUND" if declared else
-                "OBSERVED_ONLY; native Phase-2 fallback authorizes authoring, not proof")}
-
-
-def _backup_artifact_manifest(item: dict) -> list[dict]:
-    if item.get("artifact_kind") != "verification_model":
-        return _backup_output_manifest(Path(item["project"]))
-    project = Path(item["project"]).resolve()
-    model = item["verification_model"]
-    path = _correction_path(model["artifact_path"], project, exists=False)
-    import professional_tb_gen as professional
-    if (path.parent.parent != project / "phase2/stage1/sim_professional"
-            or professional.reference_model_handoff(path.parent)["artifact_path"] != str(path)
-            or model.get("relative_path") != path.relative_to(project).as_posix()):
-        raise ValueError("VERIFICATION_MODEL_TARGET_MISMATCH")
-    if not path.exists():
-        return []
-    raw = path.read_bytes()
-    return [{"relative_path": path.name, "sha256": hashlib.sha256(raw).hexdigest(), "bytes": len(raw)}]
-
-
-def _verification_model_parent(item: dict, model_record: dict | None = None) -> None:
-    """Recheck frozen parent evidence while permitting only the signed model delta."""
-    parent = item["parent_review_task"]
-    project = Path(item["project"])
-    if (_review_task_digest(parent) != item["parent_task_sha256"]
-            or _validate_candidate_snapshot(parent["candidate_snapshot"], item["id"])
-            or _program_source_identity() != item["program_identity"]):
-        raise ValueError("VERIFICATION_MODEL_PARENT_OR_SOURCE_CHANGED")
-    import emit_attestation
-    if emit_attestation.input_provenance(project, _task_rtl_input(parent)) != parent.get("phase1_provenance"):
-        raise ValueError("VERIFICATION_MODEL_PHASE1_INPUT_CHANGED")
-    if _verification_model_inputs(project) != item["verification_model"]["consumer_inputs"]:
-        raise ValueError("VERIFICATION_MODEL_CONSUMER_INPUT_CHANGED")
-    rtl_author = project / "phase2/stage1/ai_backup_author.json"
-    if ((hashlib.sha256(rtl_author.read_bytes()).hexdigest() if rtl_author.exists() else None)
-            != item["rtl_backup_author_sha256"]):
-        raise ValueError("VERIFICATION_MODEL_RTL_AUTHOR_CHANGED")
-    invocation = parent["program_verification"]["runner_invocation"]
-    receipt = Path(invocation["record_path"])
-    if hashlib.sha256(receipt.read_bytes()).hexdigest() != item["parent_runner_receipt_sha256"]:
-        raise ValueError("VERIFICATION_MODEL_PARENT_RECEIPT_CHANGED")
-    model = ({"relative_path": item["verification_model"]["relative_path"],
-              "sha256": model_record["sha256"], "bytes": model_record["bytes"],
-              "support_inputs": item["verification_model"]["consumer_inputs"]["support_inputs"]}
-             if model_record else None)
-    diagnostic = _stored_runner_diagnostics(invocation, verification_model=model)
-    if not diagnostic or diagnostic.get("reason") or diagnostic.get("retained_after_duplicate"):
-        raise ValueError("VERIFICATION_MODEL_PARENT_UNBOUND: " + str((diagnostic or {}).get("reason")))
-    for name, digest in item["verification_model"]["observed_diagnostics_sha256"].items():
-        path = _correction_path(name, project)
-        if hashlib.sha256(path.read_bytes()).hexdigest() != digest:
-            raise ValueError("VERIFICATION_MODEL_DIAGNOSTIC_CHANGED")
-    review = Path(parent["review_path"])
-    current = hashlib.sha256(review.read_bytes()).hexdigest() if review.exists() else None
-    if current != item["parent_review_sha256"]:
-        raise ValueError("VERIFICATION_MODEL_PRIOR_REVIEW_CHANGED")
-    for challenge in item["verification_challenges"]:
-        path = _correction_path(challenge["path"], Path(project).parent.parent)
-        if _sha256_text(path.read_text()) != challenge["sha256"]:
-            raise ValueError("VERIFICATION_MODEL_PRIOR_CHALLENGE_CHANGED")
-
-
-def _validate_verification_model_provenance(task: dict) -> None:
-    """Review/export consume immutable author/model lineage, not old gate verdicts."""
-    project = Path(task["project"]).resolve()
-    run_p = project.parent.parent
-    provenance = task["verification_model_provenance"]
-    task_hash, record_hash = provenance["task_sha256"], provenance["record_sha256"]
-    issued = _read_json_regular(_correction_path(run_p / "ai_backup_tasks" / f"{task_hash}.json", run_p))
-    body = {k:v for k,v in issued.items() if k != "task_sha256"}
-    if (_sha256_text(json.dumps(body, sort_keys=True)) != task_hash
-            or issued.get("artifact_kind") != "verification_model"
-            or issued.get("project") != str(project) or issued.get("id") != task["id"]
-            or issued.get("candidate_origin") != task["candidate_origin"]
-            or issued.get("rtl_sha256") != task["rtl_sha256"]
-            or issued.get("prompt_sha256") != task["prompt_sha256"]):
-        raise ValueError("model handoff identity changed")
-    archive = run_p / "ai_backup_completions" / task_hash / record_hash
-    record_path = _correction_path(archive / "author_record.json", run_p)
-    if provenance.get("author_record_path") != str(record_path) or provenance.get("input_root") != str(archive / "files"):
-        raise ValueError("model archive target changed")
-    if (hashlib.sha256(record_path.read_bytes()).hexdigest() != provenance.get("author_record_archive_sha256")
-            or provenance.get("parent_runner_receipt_sha256") != issued["parent_runner_receipt_sha256"]):
-        raise ValueError("model archive or parent identity changed")
-    record = _read_json_regular(record_path)
-    expected = {"schema": "vibeic.benchmark.ai_backup_record.v1", "id": task["id"],
-                "task_sha256": task_hash, "prompt_sha256": task["prompt_sha256"],
-                "rtl_sha256": task["rtl_sha256"],
-                "source_sha256": issued["public_original_input"]["source_sha256"]}
-    if any(record.get(key) != value for key, value in expected.items()):
-        raise ValueError("model author bindings changed")
-    raw_path = _correction_path(issued["completion_record_path"], run_p)
-    raw = raw_path.read_bytes()
-    if (hashlib.sha256(raw).hexdigest() != record_hash
-            or _strict_json_loads(raw) != {k:v for k,v in record.items() if k not in ("path", "record_sha256")}
-            or record.get("record_sha256") != record_hash or record.get("task_sha256") != task_hash
-            or record.get("artifact_kind") != "verification_model"
-            or record.get("parent_runner_receipt_sha256") != issued["parent_runner_receipt_sha256"]
-            or record.get("parent_native_invocation_id") != issued["parent_native_invocation_id"]
-            or record.get("parent_task_sha256") != issued["parent_task_sha256"]
-            or record.get("route_receipt_sha256") != issued["verification_model"]["route_receipt_sha256"]
-            or record.get("program_source_sha256") != issued["program_identity"]["source_sha256"]):
-        raise ValueError("model author record changed")
-    parent = issued["parent_review_task"]
-    old_invocation = parent["program_verification"]["runner_invocation"]
-    old_path = _correction_path(old_invocation["record_path"], run_p)
-    if (_review_task_digest(parent) != issued["parent_task_sha256"]
-            or _validate_candidate_snapshot(parent["candidate_snapshot"], task["id"])
-            or hashlib.sha256(old_path.read_bytes()).hexdigest() != issued["parent_runner_receipt_sha256"]
-            or _read_json_regular(old_path) != old_invocation
-            or not _historical_runner_sources_match(old_invocation)):
-        raise ValueError("model parent measurement changed")
-    old_review = _correction_path(parent["review_path"], run_p, exists=False)
-    if ((hashlib.sha256(old_review.read_bytes()).hexdigest() if old_review.exists() else None)
-            != issued["parent_review_sha256"]):
-        raise ValueError("prior review evidence changed")
-    for challenge in issued["verification_challenges"]:
-        if _sha256_text(_correction_path(challenge["path"], run_p).read_text()) != challenge["sha256"]:
-            raise ValueError("prior challenge evidence changed")
-    _runner_receipt_paths(project, old_invocation)
-    outputs = record.get("output_manifest")
-    if not isinstance(outputs, list) or len(outputs) != 1:
-        raise ValueError("model archive is not singleton")
-    row = outputs[0]
-    frozen = _correction_path(archive / "files" / row["relative_path"], run_p)
-    model_input = task.get("verification_model_input") or {}
-    current_invocation = task["program_verification"]["runner_invocation"]
-    if (current_invocation.get("verification_model_completion") != {
-                "task_sha256": task_hash, "record_sha256": record_hash, "model_sha256": row["sha256"]}
-            or frozen.name != Path(issued["verification_model"]["artifact_path"]).name
-            or model_input.get("path") != str(frozen)
-            or hashlib.sha256(frozen.read_bytes()).hexdigest() != row.get("sha256")
-            or len(frozen.read_bytes()) != row.get("bytes")
-            or record.get("model_sha256") != row["sha256"]
-            or model_input.get("sha256") != row["sha256"]
-            or model_input.get("native_invocation_id") != current_invocation["invocation_id"]
-            or current_invocation["invocation_id"] == old_invocation["invocation_id"]
-            or current_invocation["argv"][2:] != old_invocation["argv"][2:]):
-        raise ValueError("model/native input lineage changed")
-    allowed = {**row, "relative_path": issued["verification_model"]["relative_path"],
-               "support_inputs": issued["verification_model"]["consumer_inputs"]["support_inputs"]}
-    if (not all(_material_matches_verification_model(old_invocation["material_after"],
-                    current_invocation[key], allowed) for key in ("material_before", "material_after"))
-            or _verification_model_inputs(project) != issued["verification_model"]["consumer_inputs"]):
-        raise ValueError("model consumer material changed")
-    rtl_author = project / "phase2/stage1/ai_backup_author.json"
-    if rtl_author.exists() or rtl_author.is_symlink():
-        _correction_path(rtl_author, run_p)
-    if ((hashlib.sha256(rtl_author.read_bytes()).hexdigest() if rtl_author.exists() else None)
-            != issued["rtl_backup_author_sha256"]):
-        raise ValueError("original RTL author changed")
-
-
 def _validate_backup_completion(item: dict, run_p: Path) -> tuple[dict | None, list[str]]:
     """BLOCKING: file presence is not an author's completed handoff.
 
@@ -8732,16 +8317,12 @@ def _validate_backup_completion(item: dict, run_p: Path) -> tuple[dict | None, l
         prompt_text = (project / "input" / "phase1_prompt.md").read_text()
         if _sha256_text(prompt_text) != item["prompt_sha256"]:
             raise ValueError("prompt changed before backup worker entry")
-        model_completion = item.get("artifact_kind") == "verification_model"
-        path = (Path(item["verification_model"]["artifact_path"]).with_name("ai_backup_model_author.json")
-                if model_completion else project / "phase2/stage1/ai_backup_author.json")
-        if model_completion and item.get("completion_record_path") != str(path):
-            raise ValueError("verification model author record target changed")
+        path = project / "phase2" / "stage1" / "ai_backup_author.json"
         if path.is_symlink() or any(p.is_symlink() for p in path.parents):
             raise ValueError("author completion record path is linked")
         raw_record = path.read_bytes()
         record = _strict_json_loads(raw_record)
-        outputs = _backup_artifact_manifest(item)
+        outputs = _backup_output_manifest(project)
         rtl = _rtl_files(project)
         if not rtl or any(not p.read_bytes().strip() for p in rtl):
             raise ValueError("author RTL output is empty or incomplete")
@@ -8751,21 +8332,6 @@ def _validate_backup_completion(item: dict, run_p: Path) -> tuple[dict | None, l
                     "source_sha256": item["public_original_input"].get("source_sha256"),
                     "output_manifest": outputs,
                     "rtl_sha256": _sha256_text(_candidate_text(rtl))}
-        if model_completion:
-            import professional_tb_gen as professional
-            if (len(outputs) != 1 or outputs[0]["bytes"] <= 0
-                    or professional._load_expert_reference_tb(path.parent) is None):
-                raise ValueError("verification model is missing or not a completed self-checking input")
-            _verification_model_self_contained(Path(item["verification_model"]["artifact_path"]))
-            _verification_model_parent(item, outputs[0])
-            if expected["rtl_sha256"] != item["rtl_sha256"]:
-                raise ValueError("verification model completion changed RTL")
-            expected.update(artifact_kind="verification_model", model_sha256=outputs[0]["sha256"],
-                parent_task_sha256=item["parent_task_sha256"],
-                parent_runner_receipt_sha256=item["parent_runner_receipt_sha256"],
-                parent_native_invocation_id=item["parent_native_invocation_id"],
-                program_source_sha256=item["program_identity"]["source_sha256"],
-                route_receipt_sha256=item["verification_model"]["route_receipt_sha256"])
         if not isinstance(record, dict):
             raise ValueError("author completion record must be an object")
         for key, value in expected.items():
@@ -8782,7 +8348,7 @@ def _validate_backup_completion(item: dict, run_p: Path) -> tuple[dict | None, l
         unchanged = outputs == item.get("initial_output_manifest")
         if record.get("disposition") != ("NO_CHANGE" if unchanged else "CHANGED"):
             reasons.append("AI_BACKUP_COMPLETION_INVALID: disposition differs from output")
-        if (unchanged or model_completion) and not _verified_prompt_evidence(
+        if unchanged and not _verified_prompt_evidence(
                 record.get("prompt_evidence"), prompt_text):
             reasons.append("AI_BACKUP_COMPLETION_INVALID: no-change needs prompt-bound evidence")
         if reasons:
@@ -8801,10 +8367,7 @@ def _archive_backup_completion(item: dict, record: dict, run_p: Path) -> dict:
     import benchmark_io_adapter as bio                  # noqa: PLC0415
     for row in record["output_manifest"]:
         relative = bio._public_relative(row["relative_path"])
-        base = (Path(item["verification_model"]["artifact_path"]).parent
-                if item.get("artifact_kind") == "verification_model"
-                else project / "phase2/stage1/rtl")
-        data = (base / relative).read_bytes()
+        data = (project / "phase2" / "stage1" / "rtl" / relative).read_bytes()
         if hashlib.sha256(data).hexdigest() != row["sha256"]:
             raise ValueError("AI_BACKUP_COMPLETION_PENDING: output changed before regating")
         bio._public_write_once(root / "files" / relative, data)
@@ -8817,9 +8380,7 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
                          source: str, detail: str, bench: str,
                          dataset: Path, run_p: Path,
                          required_top: str | None = None,
-                         expected_public_input: dict | None = None, *,
-                         verification_model: dict | None = None,
-                         parent_review_task: dict | None = None) -> dict:
+                         expected_public_input: dict | None = None) -> dict:
     """Build one prompt-bound handoff into the runner-owned RTL directory.
 
     `required_top` carries the module name the benchmark's SCORER will
@@ -8834,12 +8395,6 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
     project = Path(project).resolve()
     dataset = Path(dataset).resolve()
     run_p = Path(run_p).resolve()
-    if verification_model is not None:
-        expected = run_p / "projects" / _safe_problem_id(str(problem_id))
-        if (not isinstance(parent_review_task, dict) or project != expected
-                or parent_review_task.get("project") != str(expected)):
-            raise ValueError("VERIFICATION_MODEL_PROJECT_MISMATCH")
-        _correction_path(expected / "input/phase1_prompt.md", run_p)
     prompt = project / "input" / "phase1_prompt.md"
     prompt_text = prompt.read_text(errors="replace")
     import benchmark_io_adapter as bio                  # noqa: PLC0415
@@ -8898,48 +8453,6 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
     task["public_original_input_paths"] = [
         str(project / "input" / "public_original" / "files" / row["relative_path"])
         for row in task["public_original_input"]["files"]]
-    if verification_model is not None:
-        parent = (json.loads(json.dumps(parent_review_task))
-                  if isinstance(parent_review_task, dict) else None)
-        if not isinstance(parent, dict) or parent.get("id") != str(problem_id):
-            raise ValueError("VERIFICATION_MODEL_PARENT_TASK_MISSING")
-        parent_invocation = parent["program_verification"]["runner_invocation"]
-        review_path = _correction_path(parent["review_path"], run_p, exists=False)
-        inherited = list(parent.get("verification_challenges") or [])
-        if review_path.exists():
-            prior_review = _read_json_regular(review_path)
-            if prior_review.get("verification_test") is not None:
-                challenge, errors = _challenge_from_review(parent, prior_review, prompt_text)
-                if errors or challenge is None:
-                    raise ValueError("VERIFICATION_MODEL_PRIOR_CHALLENGE_INVALID: " + "; ".join(errors))
-                if not any(c.get("sha256") == challenge["sha256"] for c in inherited):
-                    inherited.append(challenge)
-        task.update(artifact_kind="verification_model", verification_model=verification_model,
-            parent_review_task=parent, parent_task_sha256=_review_task_digest(parent),
-            parent_review_sha256=(hashlib.sha256(review_path.read_bytes()).hexdigest()
-                                  if review_path.exists() else None),
-            parent_runner_receipt_sha256=hashlib.sha256(Path(parent_invocation["record_path"]).read_bytes()).hexdigest(),
-            parent_native_invocation_id=parent_invocation["invocation_id"],
-            program_identity=_program_source_identity(), verification_challenges=inherited,
-            candidate_origin=parent["candidate_origin"], rtl_sha256=parent["rtl_sha256"],
-            write_model_to=verification_model["artifact_path"],
-            completion_record_path=str(Path(verification_model["artifact_path"]).with_name("ai_backup_model_author.json")))
-        rtl_author = project / "phase2/stage1/ai_backup_author.json"
-        task["rtl_backup_author_sha256"] = (hashlib.sha256(rtl_author.read_bytes()).hexdigest()
-                                             if rtl_author.exists() else None)
-        task.pop("write_rtl_to")
-        task["initial_output_manifest"] = _backup_artifact_manifest(task)
-        task["completion_record_contract"]["required_bindings"] += [
-            "artifact_kind", "model_sha256", "parent_task_sha256",
-            "parent_runner_receipt_sha256", "parent_native_invocation_id", "program_source_sha256", "route_receipt_sha256"]
-        task["completion_record_contract"]["output_manifest"] = "singleton relative model filename/sha256/bytes under write_model_to parent"
-        task["completion_record_contract"]["prompt_evidence"] = "required exact prompt excerpt/supports; model completion never authorizes RTL edits"
-        task["completion_record_contract"]["model_source_contract"] = (
-            "Narrow self-contained Python: unaliased import cocotb and from cocotb.triggers import Timer; "
-            "plain zero-argument @cocotb.test() decorators, direct Timer calls, local arithmetic/helpers, dut signal/value/is_resolvable access "
-            "and direct dut._log.info. No private/introspection access, capability references, API aliases, "
-            "project helpers or external inputs. Other source shapes are unsupported; this is not a sandbox.")
-        _verification_model_parent(task)
     task["task_sha256"] = _sha256_text(json.dumps(task, sort_keys=True))
     _write_immutable_json(run_p / "ai_backup_tasks" /
                           f"{task['task_sha256']}.json", task)
@@ -9038,6 +8551,7 @@ def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
     for key in ("worker_status", "worker_error", "worker_retryable"):
         result.pop(key, None)
     return review, backup
+
 
 
 def _prepare_general_solve_run(bench: str, dataset: Path, run_p: Path,
@@ -10031,8 +9545,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     def _run_and_collect(job) -> _ResumeRunnerOutcome:
         pid, proj, supplied_rtl, entry, exit_step, *extra = job
         collect_kwargs = extra.pop() if extra and isinstance(extra[-1], dict) else {}
-        model_parent_argv = collect_kwargs.pop("verification_model_parent_argv", None)
-        model_completion = collect_kwargs.pop("verification_model_completion", None)
         expected_repaired_output_sha256 = collect_kwargs.pop(
             "expected_repaired_output_sha256", None)
         delivery_route = extra[0] if extra else "ip"
@@ -10105,28 +9617,20 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         # exit still applies; otherwise resume expands a step-2/4 task into LEC.
         input_contract = str(
             state["route_receipt"].get("input_contract") or "structured")
-        if model_parent_argv is None:
-            _forward_product_manifest(run_p, proj, state["route_receipt"])
+        _forward_product_manifest(run_p, proj, state["route_receipt"])
         argv = _resume_solver_argv(
             runner, proj, supplied_rtl, state["effective_entry"],
             state["exit_step"], state["delivery_route"],
-            input_contract, _rtl_delivery_target(state["route_receipt"]),
-            resolve_manifest=model_parent_argv is None)
-        if model_parent_argv is not None and argv[2:] != model_parent_argv[2:]:
-            return _ResumeRunnerOutcome(problem_id=pid, rc=None, collected_json=None,
-                                        error="VERIFICATION_MODEL_REPLAY_WINDOW_MISMATCH")
+            input_contract, _rtl_delivery_target(state["route_receipt"]))
         if state["activation"] is None:
             _require_route_admission(run_p, state["task"], state["route_receipt"],
                                      require_d1=False)
-            process = runner_budget.run(argv, **({"verification_model_completion": model_completion}
-                                                 if model_completion is not None else {}))
+            process = runner_budget.run(argv)
         else:
             process = _run_from_d1_snapshot(
                 runner_budget, argv, d1_snapshot, state["route_receipt"],
                 state["activation"], state["task"]["task_sha256"],
-                expected_repaired_output_sha256=expected_repaired_output_sha256,
-                **({"verification_model_completion": model_completion}
-                   if model_completion is not None else {}))
+                expected_repaired_output_sha256=expected_repaired_output_sha256)
         diagnostic = _runner_diagnostics(process, argv, proj)
         diagnostics_json = json.dumps(diagnostic) if diagnostic else None
         if process.error is not None:
@@ -10298,67 +9802,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     # The coordinator validates every handoff first, workers run only unique
     # projects, and the coordinator applies their immutable outcomes in the
     # original worklist order.
-    model_pending_ids = {str(item.get("id")) for item in backup
-                         if item.get("artifact_kind") == "verification_model"}
-    queued_backup_ids = {str(item.get("id")) for item in backup}
-    for result in results:
-        pid = str(result.get("id"))
-        parent = task_by_id.get(pid)
-        if (pid in queued_backup_ids or result.get("accepted") is not False
-                or not isinstance(parent, dict)
-                or parent.get("candidate_origin") not in ("PROGRAM", "AI_BACKUP")):
-            continue
-        try:
-            if Path(parent["response_path"]).exists():
-                continue
-            expected = run_p / "projects" / _safe_problem_id(pid)
-            invocation = (parent.get("program_verification") or {}).get("runner_invocation")
-            if not isinstance(invocation, dict):
-                continue
-            if parent.get("project") != str(expected):
-                raise ValueError("VERIFICATION_MODEL_PROJECT_OR_ROUTE_MISMATCH")
-            _correction_path(expected / "input/phase1_prompt.md", run_p)
-            if _sha256_text(_candidate_text(_rtl_files(expected))) != parent.get("rtl_sha256"):
-                continue  # Existing attributed RTL repair remains its own operation.
-            gap = _verification_model_gap(Path(parent["project"]), invocation)
-            if gap is None:
-                continue
-            state = _route_reentry_state(pid, result, allow_d1_only=False)
-            if state.get("status") != "ACTIVE" or state.get("project") != expected:
-                raise ValueError("VERIFICATION_MODEL_PROJECT_OR_ROUTE_MISMATCH")
-            reason = _runner_reentry_reason(parent, result)
-            if reason:
-                raise ValueError(reason)
-            # Use the existing verification reentry. An authoring parent is
-            # unsupported unless its complete semantic argv already matches;
-            # never silently drop an earlier generation step.
-            supplied = True
-            replay = _resume_solver_argv(runner, expected, supplied, state["effective_entry"],
-                state["exit_step"], state["delivery_route"],
-                str(state["route_receipt"].get("input_contract") or "structured"),
-                _rtl_delivery_target(state["route_receipt"]), resolve_manifest=False)
-            if replay[2:] != invocation["argv"][2:]:
-                raise ValueError("VERIFICATION_MODEL_REPLAY_WINDOW_MISMATCH")
-            gap.update(supplied_rtl=supplied, replay_argv=replay,
-                       route_receipt_sha256=state["route_receipt"]["receipt_sha256"])
-            item = _make_ai_backup_task(
-                pid, Path(parent["project"]), ["testbench-gen"], "verification_model_missing",
-                "Native professional producer declares an unfilled model; effective executed-test denominator is zero.",
-                bench, Path(dataset), run_p, expected_public_input=parent["public_original_input"],
-                verification_model=gap, parent_review_task=parent)
-            backup.append(item)
-            model_pending_ids.add(pid)
-            result.update(accepted=False, awaiting_ai_backup=True, awaiting_ai_review=False,
-                          awaiting_ai=True, ai_repair_required=False,
-                          verification_model_completion={"status": "PENDING", "measurement": "NOT_MEASURED",
-                            "task_sha256": item["task_sha256"],
-                            "parent_native_invocation_id": invocation["invocation_id"]})
-            print(f"  {pid}: verification model NOT_MEASURED; testbench-gen input handoff issued")
-        except (OSError, ValueError, KeyError, TypeError) as exc:
-            model_pending_ids.add(pid)
-            result["verification_model_completion"] = {"status": "BLOCKED", "reason": str(exc)}
-            repairs.append({"id": pid, "status": "VERIFICATION_MODEL_HANDOFF_BLOCKED", "reasons": [str(exc)]})
-
     backup_plans: list[dict] = []
     for item in backup:
         pid = str(item.get("id"))
@@ -10416,10 +9859,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                                  "result": result, "reasons": [str(exc)]})
             continue
         reentry_state = _route_reentry_state(pid, result, allow_d1_only=False)
-        if (item.get("artifact_kind") == "verification_model"
-                and (reentry_state.get("route_receipt") or {}).get("receipt_sha256")
-                    != item["verification_model"]["route_receipt_sha256"]):
-            reentry_state = {"status": "REFUSED", "reason": "VERIFICATION_MODEL_ROUTE_CHANGED"}
         if reentry_state.get("status") != "ACTIVE":
             backup_plans.append({
                 "kind": "route_blocked", "item": item, "id": pid,
@@ -10447,51 +9886,11 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             return _ResumeRunnerOutcome(problem_id=pid, rc=None,
                 collected_json=None, error="; ".join(reasons) or
                 "AI_BACKUP_COMPLETION_PENDING: author input changed before worker entry")
-        outcome = _run_and_collect(job)
-        if plan["item"].get("artifact_kind") == "verification_model" and outcome.error is None:
-            item = plan["item"]
-            model = completion["output_manifest"][0]
-            permitted = {**model, "relative_path": item["verification_model"]["relative_path"],
-                         "support_inputs": item["verification_model"]["consumer_inputs"]["support_inputs"]}
-            original = item["parent_review_task"]["program_verification"]["runner_invocation"]["material_after"]
-            invocation = outcome.invocation or {}
-            rtl_author = plan["project"] / "phase2/stage1/ai_backup_author.json"
-            model_author = Path(item["completion_record_path"])
-            try:
-                _correction_path(model_author, run_p)
-                if rtl_author.exists() or rtl_author.is_symlink():
-                    _correction_path(rtl_author, run_p)
-                intact = (
-                    (hashlib.sha256(rtl_author.read_bytes()).hexdigest() if rtl_author.exists() else None)
-                        == item["rtl_backup_author_sha256"]
-                    and hashlib.sha256(model_author.read_bytes()).hexdigest() == completion["record_sha256"]
-                    and _verification_model_inputs(plan["project"]) == item["verification_model"]["consumer_inputs"]
-                    and emit_attestation.input_provenance(plan["project"], _task_rtl_input(item["parent_review_task"]))
-                        == item["parent_review_task"].get("phase1_provenance"))
-            except (OSError, ValueError):
-                intact = False
-            if (not intact
-                    or invocation.get("verification_model_completion") != {
-                        "task_sha256": item["task_sha256"],
-                        "record_sha256": completion["record_sha256"], "model_sha256": completion["model_sha256"]}
-                    or invocation.get("argv", [])[2:] != item["parent_review_task"]["program_verification"]["runner_invocation"]["argv"][2:]
-                    or not all(_material_matches_verification_model(original, invocation.get(key) or {}, permitted)
-                        for key in ("material_before", "material_after"))
-                    or _program_source_identity() != item["program_identity"]):
-                return _ResumeRunnerOutcome(problem_id=pid, rc=outcome.rc, collected_json=None,
-                    error="VERIFICATION_MODEL_MATERIAL_CHANGED_DURING_PROGRAM", invocation=outcome.invocation)
-        return outcome
+        return _run_and_collect(job)
 
     backup_outcomes = iter(_ordered_parallel_map(
-        [(p["id"], p["project"],
-          p["item"]["verification_model"]["supplied_rtl"] if p["item"].get("artifact_kind") == "verification_model" else True,
-          None, p["result"].get("exit"), p["result"].get("delivery_route", "ip"),
-          *([{"verification_model_parent_argv": p["item"]["parent_review_task"]["program_verification"]["runner_invocation"]["argv"],
-              "verification_model_completion": {
-                  "task_sha256": p["item"]["task_sha256"],
-                  "record_sha256": p["provenance"]["author_record"]["record_sha256"],
-                  "model_sha256": p["provenance"]["author_record"]["model_sha256"]}}]
-            if p["item"].get("artifact_kind") == "verification_model" else []))
+        [(p["id"], p["project"], True, None, p["result"].get("exit"),
+          p["result"].get("delivery_route", "ip"))
          for p in backup_run_plans],
         _run_completed_backup, jobs))
     for plan in backup_plans:
@@ -10559,55 +9958,23 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         _refresh_result(result, proj, rc, got)
         result["runner_invocation"] = outcome.invocation
         if got.get("ok"):
-            model_completion = item.get("artifact_kind") == "verification_model"
-            parent = item.get("parent_review_task") or {}
-            origin = item["candidate_origin"] if model_completion else "AI_BACKUP"
             task = _make_ai_review_task(
                 pid, proj, got, result.get("routing_verdict") or {}, rc,
-                run_p, origin, program_phases=result.get("phases"),
-                verification_challenges=(item["verification_challenges"] if model_completion else None),
-                program_candidate=(parent.get("program_candidate") if model_completion else None),
+                run_p, "AI_BACKUP", program_phases=result.get("phases"),
                 runner_invocation=outcome.invocation,
                 expected_public_input=item["public_original_input"])
-            provenance = {
+            task["backup_provenance"] = {
+                **plan["provenance"], "gated_rtl_sha256": task["rtl_sha256"]}
+            result["ai_backup_completion"] = {
                 "status": "CONSUMED", "task_sha256": item["task_sha256"],
                 "record_sha256": plan["provenance"]["author_record"]["record_sha256"]}
-            if model_completion:
-                if "backup_provenance" in parent:
-                    task["backup_provenance"] = parent["backup_provenance"]
-                model_record = plan["provenance"]["author_record"]
-                archive = Path(plan["provenance"]["input_root"])
-                task["verification_model_provenance"] = {
-                    **provenance, "input_root": str(archive),
-                    "author_record_path": str(archive.parent / "author_record.json"),
-                    "author_record_archive_sha256": hashlib.sha256((archive.parent / "author_record.json").read_bytes()).hexdigest(),
-                    "parent_runner_receipt_sha256": item["parent_runner_receipt_sha256"]}
-                task["verification_model_input"] = {
-                    "path": str(archive / model_record["output_manifest"][0]["relative_path"]),
-                    "sha256": model_record["model_sha256"],
-                    "native_invocation_id": outcome.invocation["invocation_id"],
-                    "required_review_bindings": ["verification_model_input_sha256", "verification_native_invocation_id"],
-                    "review_scope": "Review this named verification input against the prompt independently; author rationale is not review evidence."}
-                result["verification_model_completion"] = provenance
-                result["program_first_ai_review"] = {"status": "PENDING"}
-                model_pending_ids.discard(pid)
-            else:
-                task["backup_provenance"] = {
-                    **plan["provenance"], "gated_rtl_sha256": task["rtl_sha256"]}
-                result["ai_backup_completion"] = provenance
             task_by_id[pid] = task
             result["review_task"] = task["review_path"]
-            result["candidate_origin"] = origin
+            result["candidate_origin"] = "AI_BACKUP"
             result["ai_repair_required"] = False
             refreshed.add(pid)
             print(f"  {pid:44s} AI backup re-gated; fresh AI review required")
         else:
-            if item.get("artifact_kind") == "verification_model":
-                result["verification_model_completion"] = {"status": "PROGRAM_GATES_REJECTED",
-                    "parent_native_invocation_id": item["parent_native_invocation_id"]}
-                repairs.append({"id": pid, "status": "PROGRAM_GATES_REJECTED_VERIFICATION_MODEL",
-                                "reasons": [str(got.get("reason") or "Program verification refused")]})
-                continue
             # Keep the original backup handoff live: after the AI repairs the
             # rejected files, the next --resume must know to re-run the gates.
             remaining_backup.append(item)
@@ -10631,7 +9998,7 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     # only the independent project runner calls fan out.
     repair_plans: list[dict] = []
     for pid, task in list(task_by_id.items()):
-        if pid in refreshed or pid in model_pending_ids:
+        if pid in refreshed:
             repair_plans.append({"kind": "noop", "id": pid})
             continue
         result = result_by_id.get(pid)
@@ -11028,18 +10395,6 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     clarifications: list[dict] = []
     for pid, result in result_by_id.items():
         result["awaiting_spec_clarification"] = False
-        if pid in model_pending_ids:
-            pending = any(str(item.get("id")) == pid for item in remaining_backup)
-            result.update(accepted=False, awaiting_ai_backup=pending,
-                          awaiting_ai_review=False, awaiting_ai=pending, ai_repair_required=False,
-                          program_first_ai_review={"status": "PENDING" if pending else "NOT_MEASURED",
-                                                   "reason": "VERIFICATION_MODEL_REQUIRED"})
-            record = {"id": pid, "status": "NOT_MEASURED", "required_gate": "sim",
-                      "reason": "VERIFICATION_MODEL_REQUIRED",
-                      "model_completion": result.get("verification_model_completion")}
-            not_measured.append(record)
-            review_outcomes.append(record)
-            continue
         task = task_by_id.get(pid)
         if task is None:
             result["accepted"] = False

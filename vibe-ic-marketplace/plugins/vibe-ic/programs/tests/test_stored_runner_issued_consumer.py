@@ -182,7 +182,21 @@ def restore_bytes(paths):
 
 
 @pytest.fixture(scope="module")
-def retained_orphan(tmp_path_factory):
+def retained_runtime():
+    """Bind the real enclosing image before the child records its admission.
+
+    An in-image panel supplies its host-inspected CID/image through the existing
+    local attestation protocol. No native result or image identity is mocked.
+    """
+    from librelane_contract import local_image_attestation
+    identity = local_image_attestation()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("VIBEIC_EDA_IMAGE", identity["image"])
+        yield identity
+
+
+@pytest.fixture(scope="module")
+def retained_orphan(tmp_path_factory, retained_runtime):
     import benchmark_io_adapter as bio
     import test_benchmark_program_first_ai_review as envelope
     root = tmp_path_factory.mktemp("retained_orphan")

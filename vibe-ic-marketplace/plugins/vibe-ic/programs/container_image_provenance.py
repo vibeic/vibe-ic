@@ -190,7 +190,8 @@ def verify(container: str, require_image: Optional[str] = None) -> Dict[str, obj
                    reason="resolved current LOCAL container %s -> %s (%s)" % (
                        identity["cid"], identity["image"], identity["image_id"][:19]))
         if require_image:
-            rec.update(require_image=require_image, image_match=True)
+            rec.update(require_image=require_image,
+                       require_image_id=identity["image_id"], image_match=True)
         return rec
 
     if rec["status"] == "not_found":

@@ -1239,12 +1239,12 @@ function getToolVersion(name) {
     // to stdout and exits 0 on the vibeic/magic build. The older `-dnull -noconsole
     // <<< 'puts $::magic_version'` tcl probe returned EMPTY (the global isn't set at
     // that point), false-FAILing an otherwise healthy magic — see 2026-07-11 fix.
-    magic: `${containerToolCommand("magic", `${TOOLS}/bin/magic`)} --version 2>&1 | grep -E '^[0-9]+\\.' | head -1`,
+    magic: `${TOOLS}/bin/magic --version 2>&1 | grep -E '^[0-9]+\\.' | head -1`,
     netgen: `${containerToolCommand("netgen", `${TOOLS}/bin/netgen`)} -batch source /dev/null 2>&1 | head -2 | tail -1`,
     ngspice: `${containerToolCommand("ngspice", `${TOOLS}/bin/ngspice`)} --version 2>&1 | head -1`,
     // Fault may print environment warnings before its bare version line.
     // Resolve the same built-in default used by the DFT consumer below.
-    fault: `${containerToolCommand("fault", `${TOOLS}/bin/fault`)} --version 2>&1 | grep -E '^[0-9]+\\.' | head -1`,
+    fault: `${TOOLS}/bin/fault --version 2>&1 | grep -E '^[0-9]+\\.' | head -1`,
   };
   const probe = probes[name];
   if (!probe) { _versionCache.set(name, "unknown"); return "unknown"; }
@@ -4568,16 +4568,16 @@ mkdir -p ${output_dir}
 
 # Scan chain
 # Probe and workload resolve the same built-in defaults inside the container.
-${containerToolCommand("fault", `${TOOLS}/bin/fault`)} chain --liberty ${lib} --clock ${clock} --reset ${reset} ${resetFlag} --dff '${dffNames}' --output ${output_dir}/scanchained.v ${netlist} 2>&1
+${TOOLS}/bin/fault chain --liberty ${lib} --clock ${clock} --reset ${reset} ${resetFlag} --dff '${dffNames}' --output ${output_dir}/scanchained.v ${netlist} 2>&1
 echo CHAIN_DONE
 
 # Cut + ATPG
-${containerToolCommand("fault", `${TOOLS}/bin/fault`)} cut --clock ${clock} --reset ${reset} ${resetFlag} --dff '${dffNames}' --output ${output_dir}/cut.v ${netlist} 2>&1
+${TOOLS}/bin/fault cut --clock ${clock} --reset ${reset} ${resetFlag} --dff '${dffNames}' --output ${output_dir}/cut.v ${netlist} 2>&1
 cat ${primsFile} ${cellFile} > /tmp/combined_cells.v 2>/dev/null
-${containerToolCommand("fault", `${TOOLS}/bin/fault`)} atpg --cell-model /tmp/combined_cells.v --clock ${clock} --reset ${reset} ${resetFlag} --tv-count ${tv_count} --output ${output_dir}/atpg.tv.json --output-coverage-metadata ${output_dir}/coverage.yml ${output_dir}/cut.v 2>&1
+${TOOLS}/bin/fault atpg --cell-model /tmp/combined_cells.v --clock ${clock} --reset ${reset} ${resetFlag} --tv-count ${tv_count} --output ${output_dir}/atpg.tv.json --output-coverage-metadata ${output_dir}/coverage.yml ${output_dir}/cut.v 2>&1
 echo ATPG_DONE
 
-${add_jtag ? `${containerToolCommand("fault", `${TOOLS}/bin/fault`)} tap --liberty ${lib} --clock ${clock} --reset ${reset} ${resetFlag} --output ${output_dir}/jtag.v ${output_dir}/scanchained.v 2>&1
+${add_jtag ? `${TOOLS}/bin/fault tap --liberty ${lib} --clock ${clock} --reset ${reset} ${resetFlag} --output ${output_dir}/jtag.v ${output_dir}/scanchained.v 2>&1
 echo JTAG_DONE` : "echo JTAG_SKIPPED"}
 `;
 
