@@ -360,3 +360,145 @@ def test_intent_cut_width_rounds_up_without_changing_legacy_geometry():
     assert len(cuts) == 2
     assert min(min(box[2] - box[0], box[3] - box[1]) / geo.lam for box in cuts) >= .045
     assert rules["via_width_um"][2] == .045
+
+
+def current_budget(net="load", device="load_device", mv=1.0):
+    return {"kind": "current_budget", "net": net, "device": device, "ir_drop_mv": mv}
+
+
+def path(**changes):
+    values = dict(current_ma=1.0, budget_mv=10.0, cut_ohms=(20.0, 20.0), sheet_ohm=0.1, pin_sheet_ohm=0.1,
+                  pin_run=1000, source=0, sinks=(1000, 2000), leg_ohms=(4.0, 4.0))
+    return ri.CurrentPath(**{**values, **changes})
+
+
+@pytest.mark.parametrize("field,value", [("ir_drop_mv", 0), ("ir_drop_mv", float("nan")), ("device", "")])
+def test_current_budget_contract_is_named(field, value):
+    with pytest.raises(ri.IntentRefusal, match="ROUTING_INTENT_SCHEMA"):
+        ri.parse_intent(declared({**current_budget(), field: value}))
+
+
+def test_a_net_cannot_declare_both_a_width_and_a_current_budget():
+    with pytest.raises(ri.IntentRefusal, match="ROUTING_INTENT_CONFLICT"):
+        ri.parse_intent(declared(current_budget(), {"kind": "width", "net": "load", "wire_width_um": 1, "via_cuts": 1}))
+
+
+def test_rail_resistance_follows_the_current_each_segment_carries():
+    # both legs on one side: all the current for 1000, half for the next 1000
+    assert path().rail_ohm(100) == pytest.approx(0.1 * (1000 + 0.25 * 1000) / 100)
+    # one leg each side: each segment carries half
+    assert path(sinks=(1000, -1000)).rail_ohm(100) == pytest.approx(0.1 * (0.25 * 1000 + 0.25 * 1000) / 100)
+
+
+def test_derived_size_scales_with_the_declared_current_and_meets_the_budget():
+    small, large = path().size(), path(current_ma=4.0).size()
+    assert large.rail_lam > small.rail_lam and large.cuts > small.cuts
+    for candidate in (path(), path(current_ma=4.0)):
+        assert candidate.total_ohm(candidate.size()) <= candidate.budget_ohm
+
+
+def test_budget_the_terminal_legs_already_exceed_is_refused_with_numbers():
+    with pytest.raises(ri.IntentRefusal, match="ROUTING_INTENT_IR_BUDGET_UNACHIEVABLE.*2.000 ohm of parallel"):
+        path(budget_mv=1.0).size()
+
+
+def test_resize_keeps_the_seated_stack_and_absorbs_a_longer_rail():
+    first = path().size()
+    longer = path(source=-20000)
+    assert longer.total_ohm(first) > longer.budget_ohm
+    resized = longer.resize(first)
+    assert resized.cuts == first.cuts and resized.rail_lam > first.rail_lam
+    assert longer.total_ohm(resized) <= longer.budget_ohm
+
+
+def test_tech_lef_resistances_are_read_per_layer():
+    layers = a5.tech_lef_layers("""
+LAYER Metal2
+  TYPE ROUTING ;
+  RESISTANCE RPERSQ 0.103 ;
+END Metal2
+LAYER Via2
+  TYPE CUT ;
+  RESISTANCE 20 ;
+END Via2
+""")
+    assert [(row["name"], row["resistance"]) for row in layers] == [("Metal2", 0.103), ("Via2", 20.0)]
+
+
+def test_only_a_wide_rail_moves_row_tracks_and_it_clears_its_neighbours():
+    geo = geometry()
+    assert a5._row_rail_centres(["a", "b"], 0, 100, geo) == ({"a": 100, "b": 200}, 0)
+    wide = copy.copy(geo);wide.rail_wire = 300
+    geo.intent_profiles = {"a": wide}
+    centres, extra = a5._row_rail_centres(["a", "b"], 0, 100, geo)
+    assert centres["a"] - 150 >= 0 and extra > 0
+    assert centres["b"] - centres["a"] >= 150 + geo.wire[2] // 2 + geo.metal_space("metal2")
+
+
+def budgeted_inputs(device="force", mv=32.0, current=1.0):
+    data, facts, cells, geo = native_plan_inputs()
+    data["pin_spec"]["resistance_ohm"] = {"metal_per_square": {k: 0.1 for k in range(1, 8)},
+                                          "cut": {k: 20.0 for k in range(1, 7)}}
+    if current:
+        data["pin_spec"]["ports"]["load"]["em"] = {"result": "SIZED", "current_mA": current}
+    constraints = [item for item in data["routing_intent"]["constraints"] if item["kind"] != "width"]
+    data["routing_intent"]["constraints"] = constraints + [current_budget("load", device, mv)]
+    return data, facts, cells, geo
+
+
+def plan_for(data, facts, cells, geo):
+    return a5.build_plan(data["devices"], data["ports"], cells, facts, geo, 48, data["pin_spec"],
+                         routing_intent=data["routing_intent"])
+
+
+def test_real_plan_widens_only_the_current_rail_and_adds_cuts_only_to_its_pin_stack():
+    budgeted = plan_for(*budgeted_inputs())
+    record = next(item for item in budgeted.routing_intent_evidence["constraints"] if item["kind"] == "current_budget")
+    assert record["current_mA"] == 1.0
+    assert record["modelled_ohm"]["total"] <= 32.0
+    assert record["rail_width_um"] > 0.3 and record["cuts_per_via"] > 1
+
+    data, facts, cells, geo = budgeted_inputs()
+    data["routing_intent"]["constraints"].pop()
+    control = plan_for(data, facts, cells, geo)
+    assert not any(item["kind"] == "current_budget" for item in control.routing_intent_evidence["constraints"])
+
+    def narrowest(plan, net, layer="metal3"):
+        return min(min(row["box"][2] - row["box"][0], row["box"][3] - row["box"][1])
+                   for row in plan.shapes if row["net"] == net and row["layer"] == layer)
+
+    def rail_heights(plan, net):
+        return sorted(row["box"][3] - row["box"][1] for row in plan.shapes if row["net"] == net
+                      and row["layer"] == "metal2" and row["box"][2] - row["box"][0] > 2 * (row["box"][3] - row["box"][1]))
+
+    assert max(rail_heights(budgeted, "load")) == round(record["rail_width_um"] * 100)
+    assert max(rail_heights(control, "load")) < max(rail_heights(budgeted, "load"))
+    assert max(rail_heights(budgeted, "signal")) == max(rail_heights(control, "signal"))
+    # Terminal legs carry a share of the current and keep their width.
+    assert narrowest(budgeted, "load") == narrowest(control, "load")
+    count = lambda plan: sum(row["net"] == "load" and row["layer"] == "via2" for row in plan.shapes)
+    assert count(budgeted) >= count(control) + record["cuts_per_via"] - 1
+    assert not a5.net_shorts(budgeted)
+
+
+def test_tighter_budget_draws_a_lower_resistance_path():
+    loose, tight = (next(item for item in plan_for(*budgeted_inputs(mv=mv)).routing_intent_evidence["constraints"]
+                         if item["kind"] == "current_budget") for mv in (120.0, 32.0))
+    assert tight["modelled_ohm"]["total"] < loose["modelled_ohm"]["total"]
+    assert tight["rail_width_um"] > loose["rail_width_um"]
+
+
+@pytest.mark.parametrize("changes,code", [({"current": None}, "ROUTING_INTENT_CURRENT_UNDECLARED"),
+                                          ({"device": "sense"}, "ROUTING_INTENT_CURRENT_PATH_UNSUPPORTED"),
+                                          ({"device": "absent"}, "ROUTING_INTENT_ENDPOINT"),
+                                          ({"mv": 0.001}, "ROUTING_INTENT_IR_BUDGET_UNACHIEVABLE")])
+def test_current_budget_refuses_what_it_cannot_establish(changes, code):
+    with pytest.raises(a5.Refusal, match=code):
+        plan_for(*budgeted_inputs(**changes))
+
+
+def test_missing_lef_resistance_is_refused_not_assumed():
+    data, facts, cells, geo = budgeted_inputs()
+    data["pin_spec"].pop("resistance_ohm")
+    with pytest.raises(a5.Refusal, match="ROUTING_INTENT_RESISTANCE_UNDECLARED"):
+        plan_for(data, facts, cells, geo)
