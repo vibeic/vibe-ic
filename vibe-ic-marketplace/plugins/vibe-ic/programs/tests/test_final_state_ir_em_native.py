@@ -5,7 +5,6 @@ from pathlib import Path
 
 import pytest
 
-import _prestream_native as native
 import em_current_density_check as density
 import em_peak_current_authority_check as authority
 import ir_drop_report_check as ir_gate
@@ -20,6 +19,7 @@ def _sha(path):
 
 
 def _final(project, odb, final_def):
+    import _prestream_native as native
     (project / 'state_out.json').write_text(json.dumps({
         'odb': str(odb), 'def': str(final_def), 'metrics': {'route__drc_errors_final': 0}}))
     assert native.final_state(project) is not None
