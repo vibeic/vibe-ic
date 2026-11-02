@@ -4,7 +4,9 @@ A noise budget may size a sampling capacitor, but it is not an OTA load.
 The realized Cs/Cf/Ci network owns feedback and settling. A declared
 reference geometry can preserve a characterized OTA operating point while
 independent mirror translators supply the other consumers. Current totals
-remain estimates until native operating-point evidence is supplied.
+remain estimates until native operating-point evidence is supplied. Nominal
+settling retains the library admission bound; evaluating its current ratio
+avoids cancellation when a branch is sized exactly at that bound.
 """
 from copy import deepcopy
 import hashlib
@@ -21,6 +23,9 @@ _OLD_REQUIREMENTS = {"slew_margin", "bias_resistor_l_um", "settling_time_constan
 def prepare_library(library):
     lib = deepcopy(library)
     requirements = lib.get("requires_derived", [])
+    nominal = next((r for r in requirements if r.get("name") == "settling_time_constants"), None)
+    if nominal is not None:
+        lib["ota_bias_nominal_settling_requirement"] = deepcopy(nominal)
     bound = next((r for r in requirements if r.get("name") == "bias_resistor_l_um"), {})
     lib["ota_bias_reference_bounds"] = lib.get("ota_bias_reference_bounds", {k: bound[k] for k in ("min", "max") if k in bound})
     lib["requires_derived"] = [r for r in requirements if r.get("name") not in _OLD_REQUIREMENTS]
@@ -211,7 +216,7 @@ def apply(library, values, devices, exprs, nets, constants, env, evaluate, proje
         actual_reference = reference_current if row is rows[0] else need
         row["I_tail_estimate_a"] = actual_reference*row["tail_ratio"]
         row["I_output_estimate_a"] = actual_reference*(row["output_ratio"] or row["tail_ratio"])
-        row["settling_time_constants"] = row["I_tail_estimate_a"]*row["beta"]*time/(vov*row["load_ff"]*1e-15)
+        row["settling_time_constants"] = actual_reference/(row["I_settle_a"]/row["tail_ratio"])*required
         row["settling_time_constants_at_fclk_max"] = row["settling_time_constants"] * values["fclk"] / values.get("fclk_max", values["fclk"])
         row["slew_margin"] = row["I_output_estimate_a"]*time/(row["load_ff"]*1e-15*vref)
         row["status"] = "SIZED" if row["settling_time_constants"] >= required*(1-1e-12) and row["slew_margin"] >= margin*(1-1e-12) else "UNDER_BIASED"

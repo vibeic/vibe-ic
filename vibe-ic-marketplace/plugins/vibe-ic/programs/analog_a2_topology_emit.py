@@ -8043,6 +8043,17 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
                      for r in exc.refusals], informational)
     informational = list(informational) + ir.get("derived_informational", [])
     ir["derived_informational"] = list(informational)
+    nominal = lib.get("ota_bias_nominal_settling_requirement")
+    if nominal and ir.get("ota_bias_network"):
+        refusals = []
+        for row in ir["ota_bias_network"]["stage_table"]:
+            requirement = dict(nominal, expr=repr(row["settling_time_constants"]))
+            stage_refusals = entry_admission(
+                {"constants": ir["constants"], REQUIRES_DERIVED_KEY: [requirement]},
+                spec_values, {}, measured)
+            refusals.extend(dict(refusal, stage=row["stage"]) for refusal in stage_refusals)
+        if refusals:
+            return _gap("ENTRY_REQUIREMENTS_NOT_MET", refusals, informational)
     md = render_md(ir, lib, fam, params)
     bdir.mkdir(parents=True, exist_ok=True)
     md_path.write_text(md, encoding="utf-8")
