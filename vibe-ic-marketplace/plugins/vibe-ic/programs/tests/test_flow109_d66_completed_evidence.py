@@ -137,12 +137,16 @@ def test_existing_supply_producer_completed_category_is_consumed(tmp_path, monke
     classes = {'sig': 'PAD INPUT', 'hi': 'PAD POWER', 'lo': 'PAD POWER'}
     components = [(f's{i}', 'sig') for i in range(signals)] + [('hp', 'hi'), ('lp', 'lo')]
     roles = {m: {'H': ('INOUT', 'POWER'), 'L': ('INOUT', 'GROUND')} for m in classes}
-    declaration = {'domains': [{'power_net': 'upper', 'ground_net': 'lower',
-                               'max_signal_pads_per_power_pad': 1,
-                               'max_signal_pads_per_ground_pad': 1}]}
-    limit = _put(tmp_path, 'test-inputs/supply-limits.json', declaration)
+    # #71: preserve this adapter's PASS/FAIL controls using current authority,
+    # instead of making a signal-pad count stand in for measured current.
+    limit = _put(tmp_path, 'test-inputs/io-library-current.json', {'rated_current_A': 0.01})
+    current = 0.002 if signals == 1 else 0.02
+    (tmp_path / 'reports/phase3/ir_drop.rpt').write_text(
+        f'Net : upper\nTotal power : {current} W\nSupply voltage : 1 V\n')
     library = {'classes': classes, 'pin_roles': roles, 'bond_pins': {'hi': ['H'], 'lo': ['L']},
-               'limits': [{'declaration': declaration, 'source': limit}], 'errors': []}
+               'project': str(tmp_path), 'rated_currents': {
+                   'hi': {'H': [{'limit_A': 0.01, 'source': limit}]},
+                   'lo': {'L': [{'limit_A': 0.01, 'source': limit}]}}, 'errors': []}
     text = ('SPECIALNETS 2 ;\n- upper ' + ' '.join(f'( {i} H )' for i, _ in components) +
             ' ;\n- lower ' + ' '.join(f'( {i} L )' for i, _ in components) + ' ;\nEND SPECIALNETS\n')
     produced = supply.io_supply_pad_sufficiency(components, text, library)

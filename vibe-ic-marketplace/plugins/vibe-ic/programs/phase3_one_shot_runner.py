@@ -79082,7 +79082,7 @@ def _emit_perc_equivalent(project: Path, top: str, pdk: PdkConfig,
     # --- Overall verdict (HONEST) -----------------------------------------
     automated = [c for c in categories if c["status"] == "AUTOMATED"]
     automated_failed = [c for c in automated if c["result"] == "FAIL"]
-    automated_incomplete = [c for c in automated if c["result"] == "INCOMPLETE"]
+    automated_incomplete = [c for c in automated if c["result"] in ("INCOMPLETE", "NOT_MEASURED")]
     manual_pending = [c for c in categories
                       if c["status"] == "MANUAL_REVIEW"]
     # PERC_EQUIV_PASS only when no AUTOMATED category FAILED, none are
@@ -79198,16 +79198,22 @@ def _emit_perc_signoff_memo(project: Path, top: str,
     lines.append("")
     for c in categories:
         if c['category'] == 'io_supply_pad_sufficiency':
-            lines.append('## IO supply pad counts and declared limits')
+            lines.append('## IO supply pad measured current and native limits')
             lines.append('')
             lines.append(c['note'])
             for domain in c['domains']:
                 for comparison in domain['comparisons']:
-                    lines.append(f"- {domain['power_net']}/{domain['ground_net']}: "
-                                 f"{comparison['limit']} = {comparison['value']}; "
-                                 f"{comparison['result']}; authority "
-                                 f"{comparison['source']['path']} "
-                                 f"(sha256 {comparison['source']['sha256']})")
+                    lines.append(f"- {domain['power_net']}/{domain['ground_net']} "
+                                 f"{comparison['instance']}: {comparison['result']}; "
+                                 f"current={comparison.get('per_pad_current_A')} A; "
+                                 f"limit={comparison.get('limit_A')} A; "
+                                 f"margin={comparison.get('margin')}; "
+                                 f"reason={comparison.get('reason', '')}")
+                    for basis in ('jmax', 'terminal'):
+                        authority = comparison.get(basis, {}).get('source')
+                        if authority:
+                            lines.append(f"  {basis}: {authority['path']}:"
+                                         f"{authority['line']} (sha256 {authority['sha256']})")
             lines.append('')
     # Manual checklist appendix — pending items spelled out, NOT pre-checked.
     manual = [c for c in categories if c["status"] == "MANUAL_REVIEW"]

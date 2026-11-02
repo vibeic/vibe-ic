@@ -1672,8 +1672,9 @@ class TestPercPaddedChipEndToEnd:
         assert lu["status"] == "MANUAL_REVIEW"
         # 3 supply domains → cross-voltage-domain MANUAL, NOT auto-N/A.
         assert cats["Cross-voltage-domain"]["status"] == "MANUAL_REVIEW"
-        # overall: no AUTOMATED failed, manual items pending → PASS.
-        assert j["verdict"] == "PERC_EQUIV_PASS"
+        # #71: the padded fixture supplies no native current/EM authority.
+        assert cats["io_supply_pad_sufficiency"]["result"] == "NOT_MEASURED"
+        assert j["verdict"] == "PERC_EQUIV_INCOMPLETE"
 
     def test_padded_chip_open_loop_fails_overall(self, tmp_path):
         # drop the vssa return clamp → ESD topology GAP → PERC_EQUIV_FAIL even
