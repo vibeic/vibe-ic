@@ -340,14 +340,23 @@ def without_switch(project, monkeypatch):
 @pytest.mark.parametrize('switch_present', [True, False])
 def test_ordinary_primary_and_gate_invoke_existing_per_layer_consumer(
         tmp_path, monkeypatch, switch_present):
-    p, record, _ = subject(tmp_path)
+    p, record, arm = subject(tmp_path)
     if not switch_present:
         without_switch(p, monkeypatch)
     monkeypatch.setattr(R, '_layout_basis', lambda *a: ('current', None))
     monkeypatch.setattr(R._ga, 'stream_refusal', lambda *a: None)
     monkeypatch.setattr(R, '_vacuous_on_unrouted', lambda *a: None)
-    # The retained current result must be adopted without another producer.
-    monkeypatch.setattr(LF, 'run_chain', lambda *a, **k: pytest.fail('duplicate producer'))
+    # Ruling #101: every D60 invocation streams anew. Real native StreamOut is
+    # covered by test_default_stream_epoch_order; this row owns the consumer.
+    streams = []
+
+    def fresh_stream(project, top, pdk, container):
+        streams.append(top)
+        prior = LF.validate_default_stream(project)
+        assert LF.current_metal_density(project, arm, prior)['verdict'] == 'PASS'
+        return dict(prior, receipt=str(project / LF.DEFAULT_STREAM_REL))
+
+    monkeypatch.setattr(LF, 'default_stream', fresh_stream)
     calls, original = [], MLD.check
     def observed(*args, **kwargs):
         result = original(*args, **kwargs)
@@ -356,6 +365,7 @@ def test_ordinary_primary_and_gate_invoke_existing_per_layer_consumer(
     monkeypatch.setattr(MLD, 'check', observed)
     result = R.step_gds(p, 'top', R.PdkConfig('neutral', '', '', '', None, '', None), '')
     assert result.status == 'PASS', result.detail
+    assert streams == ['top']
     assert MFD.main([str(p), '--json', str(p / 'step34.json')]) == 0
     report = json.loads((p / 'step34.json').read_text())
     assert report['summary']['per_layer_density_verified'] is True
