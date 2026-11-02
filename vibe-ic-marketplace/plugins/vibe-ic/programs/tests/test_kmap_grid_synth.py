@@ -188,6 +188,40 @@ def test_closed_world_port_prefix_does_not_account_for_unparsed_tail():
     assert 'SPEC_SENTENCES_UNACCOUNTED' in str(rejected)
 
 
+@pytest.mark.parametrize('entry', ['ordinary', 'structured_dispatch'])
+@pytest.mark.parametrize('declaration', ['description', 'logic_obligations'])
+def test_closed_world_structured_spec_cannot_bypass_source_accounting(tmp_path, entry, declaration):
+    import json
+    import time
+    import design_one_shot_runner as runner
+
+    spec = {'module': 'top', 'inputs': [{'name': 'a'}], 'outputs': [{'name': 'y'}],
+            'rows': [{'in': '0', 'out': '0'}, {'in': '1', 'out': '1'}]}
+    if declaration == 'description':
+        spec[declaration] = 'Use NAND gates alone.'
+    else:
+        sentence = 'Build it from NANDs only.'
+        spec[declaration] = [{'kind': 'logic_basis', 'family': ['nand'],
+                             'source_span': [0, len(sentence)], 'source_sentence': sentence}]
+    source = tmp_path / 'input/rtl_spec.json'
+    source.parent.mkdir(parents=True)
+    source.write_text(json.dumps(spec))
+    before = {p.relative_to(tmp_path): p.read_bytes()
+              for p in tmp_path.rglob('*') if p.is_file()}
+    if entry == 'ordinary':
+        result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
+    else:
+        result = runner._try_deterministic_rtl_dispatch(tmp_path, time.time())
+    assert result.status == 'PASS_WITH_WAIVERS', result
+    assert result.extras['fallback_skill'] == 'spec-to-rtl'
+    assert result.extras['spec_source'] == 'input/rtl_spec.json'
+    assert result.extras['unaccounted_source_spans']
+    if declaration == 'logic_obligations':
+        assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
+    assert {p.relative_to(tmp_path): p.read_bytes()
+            for p in tmp_path.rglob('*') if p.is_file()} == before
+
+
 @pytest.mark.parametrize('sentence', _BASIS_PARAPHRASES + _MINIMIZATION_PARAPHRASES)
 @pytest.mark.parametrize('entry', ['chain', 'ordinary', 'late'])
 def test_sentence_family_obligations_precede_all_author_paths(tmp_path, sentence, entry):
