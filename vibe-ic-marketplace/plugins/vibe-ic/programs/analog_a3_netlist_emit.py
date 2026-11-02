@@ -914,6 +914,17 @@ def resolve_pdk_context(project: Path, pdk: str, container: str,
     }
 
 
+def _admission_installed_root(project: Path, pdk: str, container: str) -> Optional[str]:
+    """Installed root for ``pdk:`` admission sources when staged assets won the context.
+
+    A project-staged PDK owns the simulation context, but a ``pdk:`` key names the
+    installed family; its SHA is verified against that tree, not the staged copy.
+    """
+    import analog_pdk_availability as _apa
+    installed = _apa.resolve_pdk(_declared_pdk_target(project) or pdk, container=container)
+    return installed.get("installed_pdk_root") or installed.get("pdk_root")
+
+
 def _declared_pdk_target(project: Path) -> Optional[str]:
     d = _read_json(project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json")
     if isinstance(d, dict):
@@ -2943,6 +2954,8 @@ def _emit_for_block(project: Path, entry: Dict[str, Any], pdk: str,
         grid_input = project / "input" / "analog_geometry_admission.json"
         if grid_input.is_file():
             pdkctx["geometry_admission"] = load_admission(grid_input)
+            if not pdkctx.get("installed_pdk_root"):
+                pdkctx["installed_pdk_root"] = _admission_installed_root(project, pdk, container)
         overrides, pdkctx["geometry_admission_result"] = resolve_admitted_geometry(ir, pdkctx, overrides)
         # Grid admission cannot move a MOS outside its calibrated source domain.
         if pdkctx["geometry_admission_result"]["status"] == "ADMITTED":

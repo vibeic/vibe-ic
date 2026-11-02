@@ -1843,7 +1843,10 @@ def _d32_inputs(project):
     config=project/'input/flow109/D32.json'
     if any(p.is_symlink() for p in (config,*config.parents)):
         raise ValueError('D32_INPUT_SYMLINK')
-    data=json.loads(config.read_text());top=data.get('top')
+    data=json.loads(config.read_text())
+    if not isinstance(data,dict):
+        raise ValueError('D32_INPUT_INVALID: object required')
+    top=data.get('top')
     if not isinstance(top,str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_.]*',top):
         raise ValueError('D32_TOP_INVALID')
     floor=bound_file(project,data.get('floorplan_def'));assignment=bound_file(project,data.get('pad_assignment'));logical=bound_file(project,data.get('logical_netlist'))
