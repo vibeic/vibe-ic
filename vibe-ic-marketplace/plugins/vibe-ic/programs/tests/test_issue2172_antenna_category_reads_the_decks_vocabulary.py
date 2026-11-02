@@ -148,7 +148,8 @@ def test_the_category_never_decides_the_verdict(tmp_path):
             "\n  <description>M3.1: min width</description>"
             "\n  <description>via enclosure density</description>"
             "\ntotal: 0 violations\n</report>\n", encoding="utf-8")
-        res = A._check_drc(proj)
+        with A.named_subjects([rpt / "drc_signoff.rpt"]):
+            res = A._check_drc(proj)
         return set(res.summary.get("categories_found", [])), res.passed
 
     cats_with, passed_with = _run(_GF180_RDB)

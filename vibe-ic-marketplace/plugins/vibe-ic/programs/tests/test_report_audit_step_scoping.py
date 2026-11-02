@@ -80,6 +80,14 @@ _SIGNOFF_DRC = (
 
 
 def _run(*args):
+    # Name every fixture report; --under still determines which may vote.
+    project = Path(args[0])
+    reports = ("phase3/stage3/pnr/routed.drc.rpt",
+               "steps/31_physical_verification_drc_lvs_erc_density/drc_signoff.rpt",
+               "reports/phase3/drc_router.rpt", "reports/phase3/drc_signoff.rpt")
+    subjects = [arg for rel in reports if (project / rel).is_file()
+                for arg in ("--subject", rel)]
+    args = (*args, *subjects)
     r = _pr.run(
         [sys.executable, str(_PROGRAMS / "drc_report_check.py"), *args],
         capture_output=True, text=True)

@@ -408,7 +408,7 @@ def _audit(proj):
     cp = subprocess.run(
         [sys.executable, str(prog), ".", "--mode", "drc", "--signoff",
          "--under", R._MAGIC_SIGNOFF_DRC_REL,
-         "--json", R._MAGIC_SIGNOFF_DRC_JSON_REL],
+         "--subject", R._MAGIC_SIGNOFF_DRC_REL, "--json", R._MAGIC_SIGNOFF_DRC_JSON_REL],
         cwd=str(proj), capture_output=True, text=True)
     return cp, json.loads((proj / R._MAGIC_SIGNOFF_DRC_JSON_REL).read_text())
 

@@ -204,8 +204,15 @@ def _step31_control(tmp_path, monkeypatch, control):
         row = {"record": "invocation", "tool": tool, "measured": True,
                "exit_code": 0, "command": cmd, "scope": "SOURCE_CONTROL",
                "inputs": {str(gds.relative_to(project)): digest(gds)}, "outputs": outputs}
+        # Preserve the native producer input before publishing its report identity.
+        native = report.with_name("source_" + report.name)
+        native.write_bytes(report.read_bytes())
+        row["outputs"][str(native.relative_to(project))] = digest(native)
         with (project / "provenance.jsonl").open("a") as stream:
             stream.write(json.dumps(row) + "\n")
+        runner._declare_immutable_transform(
+            project, native, report, "drc:signoff", "phase3_one_shot_runner",
+            "SOURCE_CONTROL publish the producer report")
         return 0, "SOURCE_CONTROL completed", ""
     monkeypatch.setattr(runner, "_docker_exec", transport)
     if control == "missing_context":

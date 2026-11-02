@@ -106,7 +106,9 @@ def _run_wrapper(tmp_path, auditor, mode, report_name, body):
     (proj / "reports" / "phase3" / report_name).write_text(body)
     out = tmp_path / "audit.json"
     subprocess.run([sys.executable, str(_PROGRAMS / f"{auditor}.py"),
-                    str(proj), "--mode", mode, "--json", str(out)],
+                    str(proj), "--mode", mode,
+                    *(["--subject", "reports/phase3/" + report_name] if mode == "drc" else []),
+                    "--json", str(out)],
                    capture_output=True, text=True)
     assert out.is_file(), f"{auditor} wrote no --json"
     return proj, out, json.loads(out.read_text())

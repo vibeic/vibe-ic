@@ -326,7 +326,8 @@ def _drc_audit(project: Path):
     out = project / "audit.json"
     r = subprocess.run([sys.executable, str(PROG / "drc_report_check.py"),
                         str(project), "--mode", "drc", "--under",
-                        "phase3/stage3/pnr", "--json", str(out)],
+                        "phase3/stage3/pnr", "--subject",
+                        "phase3/stage3/pnr/routed_router.drc.rpt", "--json", str(out)],
                        capture_output=True, text=True)
     return r.returncode, json.loads(out.read_text())
 
