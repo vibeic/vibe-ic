@@ -1574,6 +1574,12 @@ def _emit_block(project: Path, block: str, container: str, pdk_root: str, *,
     if not (rails + signals):
         return {"block": block, "emitted": False, "rc": 1,
                 "reason": "topology.json declares no ports"}
+    if not pdk_root:
+        rc, root, _err = _docker_exec(container, 'printf "%s" "${PDK_ROOT:-}"')
+        pdk_root = root.strip() if rc == 0 else ""
+        if not pdk_root:
+            return {"block": block, "emitted": False, "rc": 2,
+                    "reason": "selected runtime declares no PDK_ROOT"}
     topology = json.loads(topo.read_text())
     measurement, measurement_reason = load_native_measurement(
         project, block, gds, topology)
@@ -1750,7 +1756,8 @@ def main(argv: Optional[List[str]] = None) -> int:
     ap.add_argument("project")
     ap.add_argument("--block", action="append")
     ap.add_argument("--container", default=_pin.default_container_name())
-    ap.add_argument("--pdk-root", default="/foss/pdks")
+    ap.add_argument("--pdk-root", default="",
+                    help="PDK root in the selected runtime (default: its PDK_ROOT)")
     ap.add_argument("--ngspice-bin", default=None, help="Absolute ngspice executable path in the selected execution environment")
     ap.add_argument("--json")
     a = ap.parse_args(argv)
