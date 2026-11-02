@@ -300,7 +300,7 @@ def audit(project: Path) -> dict:
     automated = [c for c in cats if isinstance(c, dict)
                  and c.get("status") == "AUTOMATED"]
     failed = [c for c in automated if c.get("result") == "FAIL"]
-    incomplete = [c for c in automated if c.get("result") == "INCOMPLETE"]
+    incomplete = [c for c in automated if c.get("result") in ("INCOMPLETE", "NOT_MEASURED")]
     manual = [c for c in cats if isinstance(c, dict)
               and c.get("status") == "MANUAL_REVIEW"]
     review = _manual_review(project, cats)

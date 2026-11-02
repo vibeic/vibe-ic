@@ -211,11 +211,11 @@ def test_phase3_missing_library_is_unknown_not_missing(tmp_path):
 
 
 @pytest.mark.parametrize('limit,result', [
-    (None, 'MANUAL_REVIEW'),
-    ({'max_signal_pads_per_power_pad': 1, 'max_signal_pads_per_ground_pad': 1}, 'FAIL'),
-    ({'max_signal_pads_per_power_pad': 2, 'max_signal_pads_per_ground_pad': 2}, 'PASS'),
+    (None, 'NOT_MEASURED'),
+    ({'max_signal_pads_per_power_pad': 1, 'max_signal_pads_per_ground_pad': 1}, 'NOT_MEASURED'),
+    ({'max_signal_pads_per_power_pad': 2, 'max_signal_pads_per_ground_pad': 2}, 'NOT_MEASURED'),
 ])
-def test_phase3_supply_counts_compare_only_declared_limits(tmp_path, limit, result):
+def test_phase3_count_ratios_are_not_current_authority(tmp_path, limit, result):
     project, pdk = _perc_project(tmp_path, limit=limit)
     doc = _memo(project, pdk)
     c = _category(doc, 'io_supply_pad_sufficiency')
@@ -227,16 +227,15 @@ def test_phase3_supply_counts_compare_only_declared_limits(tmp_path, limit, resu
     memo = (P._pl.reports_phase3_dir(project) / 'PERC_SIGNOFF_MEMO.md').read_text()
     assert 'io_supply_pad_sufficiency' in memo
     assert '2 signal' in memo
-    if result == 'FAIL':
-        assert doc['verdict'] == 'PERC_EQUIV_FAIL'
-        assert c['authority']
+    # Ruling #71: a count contract cannot replace missing current/EM evidence.
+    assert doc['verdict'] == 'PERC_EQUIV_INCOMPLETE'
 
 
-def test_phase3_supply_missing_domain_remains_manual(tmp_path):
+def test_phase3_supply_missing_domain_is_not_measured(tmp_path):
     project, pdk = _perc_project(tmp_path, connections=False, limit={
         'max_signal_pads_per_power_pad': 1, 'max_signal_pads_per_ground_pad': 1})
     c = _category(_memo(project, pdk), 'io_supply_pad_sufficiency')
-    assert c['result'] == 'MANUAL_REVIEW'
+    assert c['result'] == 'NOT_MEASURED'
     assert len(c['unknown_domain_instances']) == 4
 
 
@@ -281,8 +280,8 @@ def test_limits_do_not_cross_io_domains(tmp_path):
     doc = P._pl.generated_docs_dir(project) / 'L19_CONSTRAINTS_PDK.json'
     doc.write_text(doc.read_text().replace('upper', 'unrelated'))
     c = _category(_memo(project, pdk), 'io_supply_pad_sufficiency')
-    assert c['result'] == 'MANUAL_REVIEW'
-    assert c['domains'][0]['comparisons'] == []
+    assert c['result'] == 'NOT_MEASURED'
+    assert all(v['result'] == 'NOT_MEASURED' for v in c['domains'][0]['comparisons'])
 
 
 def test_each_domain_compares_its_own_instance_population(tmp_path):
@@ -298,15 +297,15 @@ def test_each_domain_compares_its_own_instance_population(tmp_path):
     assert domains['upper', 'lower']['signal_pads'] == 1
     assert domains['upper2', 'lower2']['signal_pads'] == 1
     assert domains['upper2', 'lower2']['power_pads'] == 0
-    assert domains['upper', 'lower']['comparisons'][0]['result'] == 'PASS'
-    assert c['result'] == 'MANUAL_REVIEW'  # second domain has no declared limit
+    assert domains['upper', 'lower']['comparisons'][0]['result'] == 'NOT_MEASURED'
+    assert c['result'] == 'NOT_MEASURED'  # #71: neither domain has measured current authority
 
 
 @pytest.mark.parametrize('value', [0, -1, True, 'many'])
 def test_invalid_declared_ratio_never_becomes_a_pass(tmp_path, value):
     project, pdk = _perc_project(tmp_path, limit={
         'max_signal_pads_per_power_pad': value, 'max_signal_pads_per_ground_pad': value})
-    assert _category(_memo(project, pdk), 'io_supply_pad_sufficiency')['result'] == 'MANUAL_REVIEW'
+    assert _category(_memo(project, pdk), 'io_supply_pad_sufficiency')['result'] == 'NOT_MEASURED'
 
 
 def test_unknown_supply_bond_cannot_prove_a_shortage(tmp_path):
@@ -315,9 +314,9 @@ def test_unknown_supply_bond_cannot_prove_a_shortage(tmp_path):
     lib = project / 'input/pdk/libs.ref/neutral_io/lib/io.lib'
     lib.write_text(lib.read_text().replace('is_pad : true;', 'is_pad : false;'))
     c = _category(_memo(project, pdk), 'io_supply_pad_sufficiency')
-    assert c['result'] == 'MANUAL_REVIEW'
+    assert c['result'] == 'NOT_MEASURED'
     assert c['unknown_domain_instances'] == ['h', 'l']
-    assert all(v['result'] == 'NOT_DETERMINED' for v in c['domains'][0]['comparisons'])
+    assert c['domains'][0]['comparisons'] == []  # no classified supply bond
 
 
 def _domain_failure_with_unknown_supply(known_pair):
@@ -340,18 +339,18 @@ def _domain_failure_with_unknown_supply(known_pair):
     return control, S.io_supply_pad_sufficiency(components + [('extra', 'unknown_hi')], extra, library)
 
 
-def test_known_other_supply_domain_cannot_mask_declared_failure():
+def test_known_other_supply_domain_cannot_turn_legacy_ratio_into_current_failure():
     control, mixed = _domain_failure_with_unknown_supply(known_pair=True)
-    assert control['result'] == 'FAIL'
-    assert mixed['result'] == 'FAIL'
+    assert control['result'] == 'NOT_MEASURED'
+    assert mixed['result'] == 'NOT_MEASURED'
     assert mixed['status'] == 'AUTOMATED'
-    assert [v['result'] for v in mixed['domains'][0]['comparisons']] == ['FAIL', 'FAIL']
+    assert [v['result'] for v in mixed['domains'][0]['comparisons']] == ['NOT_MEASURED', 'NOT_MEASURED']
     assert mixed['unknown_domain_instances'] == ['extra']
 
 
-def test_unknown_supply_rail_pair_keeps_candidate_domain_undetermined():
+def test_unknown_supply_rail_pair_keeps_current_comparison_not_measured():
     control, mixed = _domain_failure_with_unknown_supply(known_pair=False)
-    assert control['result'] == 'FAIL'
-    assert mixed['result'] == 'MANUAL_REVIEW'
-    assert [v['result'] for v in mixed['domains'][0]['comparisons']] == ['NOT_DETERMINED'] * 2
+    assert control['result'] == 'NOT_MEASURED'
+    assert mixed['result'] == 'NOT_MEASURED'
+    assert [v['result'] for v in mixed['domains'][0]['comparisons']] == ['NOT_MEASURED'] * 2
     assert mixed['unknown_domain_instances'] == ['extra']

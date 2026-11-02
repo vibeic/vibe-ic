@@ -248,15 +248,18 @@ def read_peaks(project: Path) -> List[Dict[str, Any]]:
     return out
 
 
-def read_supply_authority(project: Path) -> List[Dict[str, Any]]:
+def read_supply_authority(project: Path, report_paths: Optional[List[Path]] = None
+                          ) -> List[Dict[str, Any]]:
     """``I_net = Total power / Supply voltage`` for every net the report states.
 
+    Explicit report_paths reuses this reader for the PERC IR/PSM report;
+    omitted paths preserve the existing EM-report discovery.
     Parsed per ``Net :`` block so a multi-net report does not pair one net's
     power with another's supply. A block missing either figure yields nothing —
     an unstated authority is absent, never assumed.
     """
     out: List[Dict[str, Any]] = []
-    for fp in discover(project, _RPT_GLOBS):
+    for fp in (discover(project, _RPT_GLOBS) if report_paths is None else report_paths):
         try:
             text = fp.read_text(errors="replace")
         except OSError:

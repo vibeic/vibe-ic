@@ -231,7 +231,7 @@ def perc_io_evidence(design_dir: Path, pdk_dir: Optional[str]) -> Dict[str, Any]
     phys = physical_classes(str(design_dir))
     classes = dict(phys['classes'])
     roles, bonds, subckts, sub_sources = {}, {}, {}, {}
-    sources, errors, limits = [], [], []
+    sources, errors, ratings, terminals, jmax = [], [], {}, {}, {}
     lefs = [design_dir / f for f in phys['sources']['lef']]
     netlists, liberties = [], []
     tree = Path(pdk_dir) if pdk_dir else None
@@ -255,18 +255,71 @@ def perc_io_evidence(design_dir: Path, pdk_dir: Optional[str]) -> Dict[str, Any]
             return None, None
 
     for path in dict.fromkeys(lefs):
-        text, _ = read(path, 'lef')
+        text, source = read(path, 'lef')
         if text is not None:
             classes.update(_pr.parse_lef_macro_classes(text))
             roles.update(_pr.parse_lef_pin_roles(text))
+            for master, pins in _pr.parse_lef_pin_ports(text).items():
+                start = next(m.start() for m in _pr._MACRO_RE.finditer(text)
+                             if m.group(1) == master)
+                for pin, shapes in pins.items():
+                    # The broad bond face is the external terminal, not the
+                    # narrow rail fingers also exposed as PORTs on that pin.
+                    layer, rect = max(shapes, key=lambda v: abs(
+                        (v[1][2] - v[1][0]) * (v[1][3] - v[1][1])))
+                    width = min(abs(rect[2] - rect[0]), abs(rect[3] - rect[1]))
+                    pin_start = next(m.start() for m in _pr._PIN_RE.finditer(text, start)
+                                     if m.group(1) == pin)
+                    line = next((text[pin_start:].count('\n', 0, m.start(1)) + 1
+                                 for m in re.finditer(r'(?m)^\s*RECT\s+([^;]+);', text[pin_start:])
+                                 if tuple(map(float, m[1].split())) == rect), None)
+                    if line is not None:
+                        line += text.count('\n', 0, pin_start)
+                    terminals.setdefault(master, {})[pin] = {
+                        'layer': layer, 'width_um': width,
+                        'source': dict(source, line=line)}
     for path in liberties:
-        text, _ = read(path, 'liberty_roles')
+        text, source = read(path, 'liberty_roles')
         if text is not None:
             for master, cell in _pr.parse_liberty_supply_view(text)['cells'].items():
                 for pins in cell.values():
                     for pin, attrs in pins.items():
                         if str(attrs.get('is_pad', '')).lower() == 'true':
                             bonds.setdefault(master, set()).add(pin)
+            # Explicit Liberty max_current uses the library's declared units.
+            from sdc_environment import _liberty_blocks
+            text = re.sub(r'/\*.*?\*/|//[^\n]*', lambda m: re.sub(r'[^\n]', ' ', m[0]), text, flags=re.S)
+            unit = re.search(r'\bcurrent_unit\s*:\s*"([0-9.eE+\-]+)\s*(A|mA|uA|nA)"', text)
+            scale = (float(unit[1]) * {'A': 1, 'mA': 1e-3, 'uA': 1e-6, 'nA': 1e-9}[unit[2]]
+                     if unit else None)
+            for master, body in _liberty_blocks(text, 'cell'):
+                for pin, attrs in _liberty_blocks(body, 'pin'):
+                    if re.search(r'\bmax_current\s*:', attrs):
+                        value = _pr._liberty_number(attrs, 'max_current')
+                        ratings.setdefault(master, {}).setdefault(pin, []).append({
+                            'limit_A': value * scale if value is not None and scale is not None else None,
+                            'source': source})
+    if tree:
+        import em_current_density_check as em
+        try:
+            techs = [path for lib in _pr._subdirs(tree / 'libs.ref')
+                     for path in _pr._ask(lib / 'techlef', 'glob', '*.tlef')]
+            for path in sorted(techs):
+                text, source = read(path, 'native_em_dc')
+                if text is None:
+                    continue
+                table, _ = em.native_jmax_table(text)
+                for name, rule in table.items():
+                    if rule['kind'] != 'routing':
+                        continue
+                    start = next(m.start() for m in em._LAYER_BLOCK_RE.finditer(text)
+                                 if m.group(1).lower() == name)
+                    match = em._DCDENS_RE.search(text, start)
+                    jmax.setdefault(name, []).append(dict(
+                        rule, source=dict(source, line=text.count('\n', 0, match.start(1)) + 1),
+                        temperature_basis='single PDK DC limit, no temperature table'))
+        except (OSError, ValueError, KeyError) as exc:
+            errors.append(str(exc))
     for path in netlists:
         text, source = read(path, 'io_netlist')
         if text is not None:
@@ -319,39 +372,65 @@ def perc_io_evidence(design_dir: Path, pdk_dir: Optional[str]) -> Dict[str, Any]
             'basis': ('explicit_noesd' if negated else 'pdk_netlist' if devices
                       else 'pdk_netlist_unproven' if source else 'name_hint_fallback'),
             'devices': devices, 'source': source}
-    # L19 owns physical constraints; L9 may carry an explicit integration
-    # contract. Read the same field in either; retain every authority, never
-    # silently prefer a weaker limit. Provider bridge declarations use it too.
-    gd = _p._pl.generated_docs_dir(design_dir)
-    contracts = sorted(gd.glob('L19*.json')) + sorted(gd.glob('L9*.json'))
-    if tree:
-        contracts.append(tree / 'bridge/signoff_config.json')
-    for path in contracts:
-        try:
-            if not _pr._ask(path, 'is_file'):
-                continue
-            text, source = read(path, 'supply_limit_contract')
-            doc = json.loads(text) if text is not None else {}
-            if 'io_supply_pad_sufficiency' in doc:
-                limits.append({'declaration': doc['io_supply_pad_sufficiency'], 'source': source})
-        except (OSError, ValueError, TypeError) as exc:
-            errors.append(f'{path}: {exc}')
     return {'classes': classes, 'pin_roles': roles,
             'bond_pins': {m: sorted(v) for m, v in bonds.items()},
-            'esd_evidence': evidence, 'limits': limits, 'sources': sources, 'errors': errors}
+            'esd_evidence': evidence, 'sources': sources, 'errors': errors,
+            'project': str(design_dir), 'rated_currents': ratings,
+            'terminals': terminals, 'native_jmax': jmax}
+
+
+def _supply_switching_current(project: Path, voltage: float, def_text: str) -> dict:
+    """Read literal SDC loads on every output; unsupported selectors refuse."""
+    import fnmatch
+    from lvs_def_port_seed import parse_def_pins
+    from sdc_constraints import create_clocks_in_text
+    from sdc_validator_check import _strip_comments
+    sdc = _p._pl.pnr_dir(project) / 'constraint.sdc'
+    text = _strip_comments(sdc.read_text())
+    clocks = create_clocks_in_text(text)
+    if len(clocks) != 1 or not clocks[0]['period_ns'] or clocks[0]['period_ns'] <= 0:
+        raise ValueError('output switching requires one readable clock period')
+    pins = parse_def_pins(def_text)
+    if any(not pin.direction for pin in pins):
+        raise ValueError('output port direction unreadable')
+    outputs = {p.name for p in pins if p.direction in ('OUTPUT', 'INOUT')}
+    if not outputs:
+        raise ValueError('output port population unreadable')
+    loads = {}
+    # Clock and port syntax use the existing readers. There is no existing
+    # set_load reader returning capacitance per output port.
+    for line in text.splitlines():
+        if re.match(r'\s*set_load\b', line):
+            match = re.fullmatch(r'\s*set_load\s+([0-9.eE+\-]+)\s+\[(all_outputs|get_ports\s+[^;]+)\]\s*', line)
+            if match is None:
+                raise ValueError('unreadable output set_load selector/value')
+            load = float(match[1])
+            if not math.isfinite(load) or load < 0:
+                raise ValueError('invalid output set_load')
+            selector = match[2]
+            if selector == 'all_outputs':
+                ports = outputs
+            else:
+                names = selector[len('get_ports'):].strip().strip('{}').split()
+                if not names or any(c in selector for c in '$\\;'):
+                    raise ValueError('unreadable output load port list')
+                ports = {p for p in outputs if any(fnmatch.fnmatchcase(p, name) for name in names)}
+            for port in ports:
+                loads[port] = max(loads.get(port, 0), load)
+    if set(loads) != outputs:
+        raise ValueError('output set_load absent for one or more outputs')
+    if re.search(r'\b(set_units|create_generated_clock)\b', text):
+        raise ValueError('unsupported SDC unit or generated-clock context')
+    current = sum(loads.values()) * 1e-12 * voltage / (clocks[0]['period_ns'] * 1e-9)
+    return {'current_A': current, 'source': str(sdc), 'output_load_pf': loads,
+            'period_ns': clocks[0]['period_ns']}
 
 
 def io_supply_pad_sufficiency(components, def_text: str, library) -> Dict[str, Any]:
-    """Advisory PERC row; declared count violations contribute AUTOMATED FAIL.
+    """Blocking measured supply-current comparison; missing authority is NOT_MEASURED.
 
-    Counts are physical instances in each resolvable (power_net, ground_net).
-    LEF USE identifies rails; Liberty is_pad identifies a supply pad's bond.
-    Ambiguous/unconnected domains stay unknown. PASS means the declared count
-    comparison only, never ESD/IR/SSN sign-off. There is no default ratio.
-
-    Contract: io_supply_pad_sufficiency.domains[] contains power_net,
-    ground_net, max_signal_pads_per_power_pad and/or
-    max_signal_pads_per_ground_pad. Limits must be finite positive numbers.
+    Ruling #71 replaces pad-count ratios: use a library rating, else native
+    DC Jmax times the LEF bond-terminal width, with low-margin IO load added.
     """
     classes, roles = library['classes'], library['pin_roles']
     census = pad_ring_census(components, classes)
@@ -402,45 +481,66 @@ def io_supply_pad_sufficiency(components, def_text: str, library) -> Dict[str, A
                 continue
         row = domains.setdefault(key, {'power_net': key[0], 'ground_net': key[1],
                                       'signal_pads': 0, 'power_pads': 0, 'ground_pads': 0,
-                                      'comparisons': []})
+                                      'comparisons': [], 'supply_instances': []})
         if signal:
             row['signal_pads'] += 1
         else:
             row['power_pads' if use == 'POWER' else 'ground_pads'] += 1
+            row['supply_instances'].append({'instance': inst, 'master': master,
+                                            'pin': bond, 'use': use})
+    from em_peak_current_authority_check import read_supply_authority
+    project = Path(library['project']) if library.get('project') else None
+    supplies = read_supply_authority(project, [project / 'reports/phase3/ir_drop.rpt']) if project else []
     bad, incomplete = False, bool(unknown or not census.get('source'))
     for key, row in domains.items():
-        # Unknown bond roles affect their known pair only. An unresolved pair
-        # may belong to any candidate domain and must remain conservative.
-        unknown_supply = unresolved_supply_pair or key in unknown_supply_pairs
-        compared = set()
-        for contract in library['limits']:
-            declaration = contract['declaration']
-            limits = declaration.get('domains', []) if isinstance(declaration, dict) else []
-            if not isinstance(limits, list):
+        authority = [s for s in supplies if s['net'] == key[0]
+                     and s['file'] == 'reports/phase3/ir_drop.rpt']
+        measured = max(authority, key=lambda s: s['supply_current_A']) if authority else None
+        for pad in row['supply_instances']:
+            comparison = dict(pad, result='NOT_MEASURED')
+            row['comparisons'].append(comparison)
+            try:
+                if unresolved_supply_pair or key in unknown_supply_pairs:
+                    raise ValueError('unresolved supply-pad rail/bond')
+                if measured is None:
+                    raise ValueError('native IR/PSM power and voltage absent for rail')
+                count = row['power_pads' if pad['use'] == 'POWER' else 'ground_pads']
+                current = measured['supply_current_A'] / count
+                comparison.update(measured=measured, per_pad_current_A=current)
+                rated = library.get('rated_currents', {}).get(pad['master'], {}).get(pad['pin'], [])
+                if rated:
+                    limit = min(rated, key=lambda r: r['limit_A'])
+                    comparison.update(limit, limit_basis='IO library rated current')
+                else:
+                    terminal = library.get('terminals', {}).get(pad['master'], {}).get(pad['pin'])
+                    if not terminal or not terminal['source'].get('line'):
+                        raise ValueError('LEF supply-terminal width unreadable')
+                    rules = library.get('native_jmax', {}).get(terminal['layer'].lower(), [])
+                    if not rules:
+                        raise ValueError('PDK native EM DC limit unreadable')
+                    rule = min(rules, key=lambda r: r['jmax_per_width_A_per_um'])
+                    limit = rule['jmax_per_width_A_per_um'] * terminal['width_um']
+                    comparison.update(limit_A=limit, limit_basis='native DC Jmax × LEF terminal width',
+                                      terminal=terminal, jmax=rule)
+                limit = comparison['limit_A']
+                if not math.isfinite(limit) or limit <= 0:
+                    raise ValueError('supply-pad current limit invalid')
+                margin = limit / current if current > 0 else None
+                comparison['psm_margin'] = margin
+                if 0 < current <= limit and margin < 2:
+                    switching = _supply_switching_current(project, measured['supply_voltage_V'],
+                                                         def_text)
+                    current += switching['current_A'] / count
+                    comparison.update(switching=switching, per_pad_current_A=current)
+                comparison.update(result='PASS' if current <= limit else 'FAIL',
+                                  margin=limit / current if current > 0 else None)
+                bad |= comparison['result'] == 'FAIL'
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                comparison['reason'] = str(exc)
                 incomplete = True
-                continue
-            for limit in limits:
-                if not isinstance(limit, dict) or (limit.get('power_net'), limit.get('ground_net')) != key:
-                    continue
-                for polarity, count in (('power', 'power_pads'), ('ground', 'ground_pads')):
-                    name = 'max_signal_pads_per_' + polarity + '_pad'
-                    value = limit.get(name)
-                    if value is None:
-                        continue
-                    if (isinstance(value, bool) or not isinstance(value, (int, float))
-                            or not math.isfinite(value) or value <= 0):
-                        incomplete = True
-                        continue
-                    failed = row['signal_pads'] > value * row[count]
-                    bad |= failed and not unknown_supply
-                    compared.add(polarity)
-                    row['comparisons'].append({'limit': name, 'value': value,
-                                               'result': ('NOT_DETERMINED' if unknown_supply
-                                                          else 'FAIL' if failed else 'PASS'),
-                                               'source': contract['source']})
-        if compared != {'power', 'ground'}:
+        if not row['power_pads'] or not row['ground_pads']:
             incomplete = True
-    result = 'FAIL' if bad else 'MANUAL_REVIEW' if incomplete or not domains else 'PASS'
+    result = 'FAIL' if bad else 'NOT_MEASURED' if incomplete or not domains else 'PASS'
     if not pads and not census.get('source') and not any(
             _p._classify_io_cell(m) != 'other' for _, m in components):
         result = 'N/A'
@@ -449,16 +549,12 @@ def io_supply_pad_sufficiency(components, def_text: str, library) -> Dict[str, A
                        f"{r['power_pads']} power, {r['ground_pads']} ground pad instances"
                        for r in rows)
     return {'category': 'io_supply_pad_sufficiency',
-            'status': 'AUTOMATED' if result in ('PASS', 'FAIL') else result,
-            'result': result, 'tool': 'DEF instances + LEF roles + Liberty bond terminals',
+            'status': 'N/A' if result == 'N/A' else 'AUTOMATED',
+            'result': result, 'tool': 'native IR/PSM current + IO rating or native EM DC × LEF width',
             'signal_pads': census.get('signal_pads'), 'power_pads': census.get('power_pads'),
             'domains': rows, 'unknown_domain_instances': sorted(unknown),
-            'authority': library['limits'], 'library_errors': library['errors'],
-            'note': (detail + f'; {len(unknown)} unknown-domain instance(s). ' +
-                     ('Declared count comparison only; ESD/IR/SSN robustness remains manual.'
-                      if result in ('PASS', 'FAIL') else
-                      'Supply sufficiency NOT_DETERMINED: no complete applicable declared limits '
-                      'or domain evidence; MANUAL_REVIEW. No default ratio.'))}
+            'authority': library.get('sources', []), 'library_errors': library['errors'],
+            'note': detail + '; ruling #71 current comparison: ' + result}
 
 
 def _pick_routed_def(design_dir: str) -> Optional[str]:
