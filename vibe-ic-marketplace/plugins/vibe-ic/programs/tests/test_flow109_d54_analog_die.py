@@ -132,3 +132,17 @@ def test_synthesized_top_cannot_use_analog_acceptance(carrier):
     assert result['digital_path']['status'] == 'NOT_MEASURED'
     assert result['reason'] == 'D54_MACRO_ONLY_TOP_CONFLICT'
     assert rc == 2
+
+
+def test_original_l5_label_alias_keeps_native_numeric_limits(carrier):
+    l5 = layout.generated_docs_dir(carrier) / 'L5_ADI_SPEC.json'
+    doc = json.loads(l5.read_text())
+    doc['analog_blocks'][0]['spec']['specs'][0]['name'] = 'Output voltage'
+    put(l5, doc)
+    report = json.loads((carrier / 'reports/analog_native/status.json').read_text())
+    for row in report['steps']:
+        row['input_views'] = native._input_views(carrier, row['block'], 'A14')
+    save(carrier, report)
+    rc, result = invoke(carrier)
+    assert result['default_row_status'] == 'PASS', result
+    assert rc == 0
