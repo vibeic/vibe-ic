@@ -42,6 +42,116 @@ def test_kmap_fires_and_is_correct():
     assert "(~b & a)" in rtl and "(b & ~a)" in rtl
 
 
+_DECLARED_LOGIC_REQUESTS = [
+    'Use only NAND gates.',
+    'Use a minimum number of two-input NAND gates.',
+    'Only NAND gates may be used.',
+    'Implement using only NOR gates.',
+    'The implementation must use only NAND gates and NOR gates.',
+    'Minimize the Boolean expression.',
+    'Use a minimized sum-of-products expression.',
+    'Use only\nNAND gates; no other gates are allowed.',
+]
+
+
+@pytest.mark.parametrize('obligation', _DECLARED_LOGIC_REQUESTS)
+@pytest.mark.parametrize('entry', ['producer', 'registry', 'chain', 'author'])
+def test_declared_logic_obligation_hands_off_before_sop(tmp_path, obligation, entry):
+    import deterministic_emit_chain as chain
+    import design_one_shot_runner as runner
+    import spec_artifact_registry as registry
+    import time
+
+    prompt = _KMAP_2IN + '\n' + obligation
+    if entry == 'producer':
+        rtl = K.synth(prompt, 'TopModule')
+    elif entry == 'registry':
+        _, rtl = registry.generate(prompt, 'TopModule')
+    elif entry == 'chain':
+        kind, rtl, rejected = chain.try_emit_ex(prompt, top='TopModule', check=False)
+    else:
+        result = runner._try_spec_artifact_registry_rtl(
+            tmp_path, time.time(), phase1_plain_text=prompt)
+        observed = result.status if result else 'NO_HANDOFF'
+        assert observed == 'PASS_WITH_WAIVERS', result
+        assert result.extras['fallback_skill'] == 'spec-to-rtl'
+        assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
+        assert Path(result.extras['fallback_skill_source']).is_file()
+        assert runner._rtl_gen_handoff([result]) == 'spec-to-rtl'
+        assert result.output_files == []
+        assert list(tmp_path.iterdir()) == []
+        return
+    observed = 'DECLINED' if rtl is None else 'SOP' if '&' in rtl else 'OTHER_RTL'
+    assert observed == 'DECLINED', {'observed': observed, 'rtl': rtl}
+    if entry == 'chain':
+        assert kind is None
+        assert rejected and 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in str(rejected)
+
+
+@pytest.mark.parametrize('obligation', [
+    '',
+    'NAND gates are an example of universal logic.',
+    'You may use NAND gates or sum-of-products.',
+    'Do not use only NAND gates.',
+    'NAND-only logic is not required.',
+    'The NAND-only restriction is withdrawn.',
+    'Use only NAND gates. This restriction is withdrawn.',
+    'A minimum number of NAND gates is not required.',
+    'For module helper, use only NAND gates.',
+    'Module helper must use only NAND gates.',
+    '// Use only NAND gates.',
+    '/* Use a minimum number of NAND gates. */',
+    'initial $display("Use only NAND gates.");',
+    'Use only AND, OR and NOT gates; sum-of-products is allowed.',
+])
+def test_inactive_logic_mentions_preserve_unrestricted_bytes(tmp_path, obligation):
+    import deterministic_emit_chain as chain
+    import design_one_shot_runner as runner
+    import spec_artifact_registry as registry
+    import time
+
+    prompt = _KMAP_2IN + '\n' + obligation
+    expected = K.synth(_KMAP_2IN, 'TopModule')
+    assert K.synth(prompt, 'TopModule') == expected
+    assert registry.generate(prompt, 'TopModule') == ('karnaugh_map', expected)
+    assert chain.try_emit_ex(prompt, top='TopModule', check=False) == (
+        'karnaugh_map', expected, [])
+    result = runner._try_spec_artifact_registry_rtl(
+        tmp_path, time.time(), phase1_plain_text=prompt)
+    assert result.status == 'PASS', result.detail
+    assert Path(result.output_files[0]).read_text() == K.synth(_KMAP_2IN, 'chip_top')
+
+
+@pytest.mark.parametrize('obligation', _DECLARED_LOGIC_REQUESTS[:2])
+@pytest.mark.parametrize('structured', [False, True])
+def test_ordinary_logic_handoff_precedes_all_producers_and_preserves_case(
+        tmp_path, obligation, structured):
+    import json
+    import design_one_shot_runner as runner
+
+    (tmp_path / 'input').mkdir()
+    (tmp_path / 'input/phase1_prompt.md').write_text(_KMAP_2IN + '\n' + obligation)
+    rtl_dir = tmp_path / 'phase2/stage1/rtl'
+    rtl_dir.mkdir(parents=True)
+    (rtl_dir / 'operator.txt').write_bytes(b'operator-owned\x00bytes\n')
+    if structured:
+        (tmp_path / 'input/rtl_spec.json').write_text(json.dumps({
+            'module': 'TopModule', 'rows': [
+                {'inputs': {'a': 0, 'b': 0}, 'outputs': {'q': 0}},
+                {'inputs': {'a': 0, 'b': 1}, 'outputs': {'q': 1}},
+                {'inputs': {'a': 1, 'b': 0}, 'outputs': {'q': 1}},
+                {'inputs': {'a': 1, 'b': 1}, 'outputs': {'q': 0}}]}))
+    before = {p.relative_to(tmp_path): p.read_bytes()
+              for p in tmp_path.rglob('*') if p.is_file()}
+    result = runner.step_rtl_gen(tmp_path, ic_class='__neutral_logic__', force_regen=True)
+    assert result.status == 'PASS_WITH_WAIVERS', result.detail
+    assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
+    assert result.extras['fallback_skill'] == 'spec-to-rtl'
+    assert {p.relative_to(tmp_path): p.read_bytes()
+            for p in tmp_path.rglob('*') if p.is_file()} == before
+    assert result.output_files == []
+
+
 def test_kmap_skip_on_dont_care():
     bad = _KMAP_2IN.replace("| 0 | 1 |", "| d | 1 |")
     assert K.synth(bad, "TopModule") is None
