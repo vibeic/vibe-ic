@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Audit Liberty delays separately from native-characterized leakage power.
 
-Signal outputs require timing attributes. All-zero timing remains a defect;
-models without timing or signal outputs instead require the existing A8 native
-leakage contract, including its pure-passive measured-zero inventory rule.
+Signal-driving output/inout pins require timing unless interface.json declares
+settling kept out of Liberty and verified in analog simulation. All-zero timing
+remains a defect. Every accepted model requires the existing A8 native leakage
+loader, including its pure-passive measured-zero inventory rule. Failures block
+signoff (exit 1); no analog blocks is VACUOUS (exit 2).
 
 Usage: analog_liberty_nonzero_delay_check.py <project_dir> [--json out.json]
 """
@@ -365,9 +367,20 @@ def _has_signal_output(text: str | _LibertySource) -> bool:
     text = _lex_liberty(text)
     for match in re.finditer(r"\b(?:pin|bus|bundle)\s*\([^)]*\)\s*\{", text.syntax):
         body = _balanced_group_body(text, match.end() - 1)
-        if (_attribute(body, "direction") or "").lower() == "output":
+        if (_attribute(body, "direction") or "").lower() in {"output", "inout"}:
             return True
     return False
+
+
+def _settling_kept_out_of_liberty(bdir: Path) -> bool:
+    try:
+        interface = json.loads((bdir / "interface.json").read_text())
+    except (OSError, ValueError):
+        return False
+    contract = interface.get("timing_contract") if isinstance(interface, dict) else None
+    return (isinstance(contract, dict)
+            and contract.get("settling_kept_out_of_liberty") is True
+            and contract.get("verified_in_analog_sim") is True)
 
 
 def _native_leakage_refusal(project: Path, block: str, text: str | _LibertySource) -> str:
@@ -472,7 +485,11 @@ def run_audit(project: Path) -> Result:
             continue
 
         has_arc = has_timing or bool(re.search(r"\btiming\s*\(", text.syntax))
-        if (not has_timing or not values) and (has_arc or _has_signal_output(text)):
+        settling_external = _settling_kept_out_of_liberty(an_dir / block)
+        if (not has_timing or not values) and (
+                has_arc or (_has_signal_output(text) and not settling_external)
+                or (_attribute(text, "cell_leakage_power") is None
+                    and _attribute(text, "leakage_power_unit") is None)):
             res.passed = False
             failed.append(block)
             res.findings.append(Finding(
@@ -495,17 +512,14 @@ def run_audit(project: Path) -> Result:
                          f"SPICE-measured delays.")))
             continue
 
-        leakage = _attribute(text, "cell_leakage_power")
-        if (not has_arc or leakage is None or not _NUM_RE.fullmatch(leakage)
-                or float(leakage) <= 0):
-            why = _native_leakage_refusal(project, block, text)
-            if why:
-                res.passed = False
-                failed.append(block)
-                res.findings.append(Finding(
-                    rule="LIB_LEAKAGE_UNMEASURED", severity="ERROR", block=block,
-                    message=f"Block '{block}': {why}"))
-                continue
+        why = _native_leakage_refusal(project, block, text)
+        if why:
+            res.passed = False
+            failed.append(block)
+            res.findings.append(Finding(
+                rule="LIB_LEAKAGE_UNMEASURED", severity="ERROR", block=block,
+                message=f"Block '{block}': {why}"))
+            continue
 
         arc_samples, time_unit = liberty_arc_delays_ns(text)
         arc_samples_examined += len(arc_samples)
@@ -581,7 +595,9 @@ def run_audit(project: Path) -> Result:
             continue
 
         model_detail = (f"{len(nonzero)} non-zero timing value(s)" if has_arc else
-                        "no signal output or timing arc; native leakage characterized")
+                        ("settling kept out of Liberty and verified in analog sim; "
+                         "native leakage characterized" if settling_external else
+                         "no signal output or timing arc; native leakage characterized"))
         ok_blocks.append(block)
         if content == _acc.CONTENT_STRUCTURE_ONLY:
             structure_only.append(block)

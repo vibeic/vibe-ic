@@ -9,6 +9,7 @@ import importlib
 import hashlib
 from pathlib import Path
 import json
+import re
 
 import pytest
 
@@ -36,7 +37,6 @@ LIB_REAL = """library(ldo_lib) {
 LIB_AREA_ONLY = """library(ldo_stub) {
   cell(ldo) {
     area : 10000 ;
-    pin(out) { direction : output; }
   }
 }"""
 
@@ -136,6 +136,11 @@ def _mk(root, block, lib_text=None, corner=None, spec=True):
     if lib_text is not None:
         h = root / "phase3" / "analog" / "hardmacro" / block
         h.mkdir(parents=True, exist_ok=True)
+        scalar = re.search(r"cell_leakage_power\s*:\s*([-+0-9.eE]+)", lib_text)
+        if scalar:
+            _native_measurement(root, block, ("nmos",), float(scalar[1]) * 1e-6)
+            if "leakage_power_unit" not in lib_text:
+                lib_text = lib_text.replace("{", '{ leakage_power_unit : "1uW";', 1)
         (h / f"{block}.lib").write_text(lib_text)
 
 
@@ -198,14 +203,16 @@ def test_fail_analog_settling_encoded_as_synchronous_arc(tmp_path):
     }]
 
 
-def test_output_without_arcs_still_requires_timing(tmp_path):
+def test_pass_leakage_and_caps_only_with_settling_kept_out_of_liberty(tmp_path):
     _clock(tmp_path, 1000.0)
     _mk(tmp_path, "controlled_analog", LIB_LEAKAGE_AND_CAPS_ONLY,
         corner={"_provenance": "real_ngspice",
                 "design_content": DESIGN_BOUND})
+    (tmp_path / "phase3/analog/controlled_analog/interface.json").write_text(
+        json.dumps({"timing_contract": {"settling_kept_out_of_liberty": True,
+                                      "verified_in_analog_sim": True}}))
     res = mod.run_audit(tmp_path)
-    assert res.passed is False
-    assert "LIB_NO_TIMING" in {f.rule for f in res.findings}
+    assert res.passed is True
     assert res.summary["arc_delay_samples_examined"] == 0
     assert res.summary["arc_period_violations"] == []
 
@@ -329,6 +336,14 @@ def _native_passive_case(root, roles=("cap",), power=0.0):
     block = mod.analyze_liberty(text)[2]
     _mk(root, block, text, corner={"design_content": DESIGN_BOUND})
     b = root / "phase3/analog" / block
+    _native_measurement(root, block, roles, power)
+    return b, root / "phase3/analog/hardmacro" / block / f"{block}.lib"
+
+
+def _native_measurement(root, block, roles, power):
+    """Synthetic loader-contract fixture; this does not run characterization."""
+    producer = importlib.import_module("analog_a8_hardmacro_emit")
+    b = root / "phase3/analog" / block
     topology = {"ports": ["TOP", "VSS"],
                 "rails": {"vdd": "TOP", "vss": "VSS"}}
     if roles is not None:
@@ -353,8 +368,6 @@ def _native_passive_case(root, roles=("cap",), power=0.0):
         rec[field] = str(path.relative_to(root))
         rec[field + "_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
     (b / "a8_measurement.json").write_text(json.dumps(rec))
-    return b, root / "phase3/analog/hardmacro" / block / f"{block}.lib"
-
 
 def test_r63_p1_retained_passive_native_zero_has_no_delay_defect(tmp_path):
     assert hashlib.sha256(PASSIVE_LIB.read_bytes()).hexdigest() == PASSIVE_LIB_SHA256
@@ -627,3 +640,37 @@ def test_r63_continuation_between_attribute_tokens_cannot_hide_output(tmp_path, 
     assert not result.passed
     assert "LIB_NO_TIMING" in {f.rule for f in result.findings}
     assert mod._has_signal_output(text)
+
+
+@pytest.mark.parametrize("state", ["MEASURED", "FAIL", "MISSING"])
+def test_r77_positive_leakage_with_arcs_always_checks_native(tmp_path, state):
+    b, lib = _native_passive_case(tmp_path, roles=("nmos",), power=1e-6)
+    text = lib.read_text().replace("cell_leakage_power : 0;", "cell_leakage_power : 1;")
+    text = text.replace("    pg_pin (TOP)", '    pin(signal) { direction : output; timing() { cell_rise(scalar) { values("0.5"); } } }\n    pg_pin (TOP)')
+    lib.write_text(text)
+    record = b / "a8_measurement.json"
+    if state == "MISSING":
+        record.unlink()
+    elif state == "FAIL":
+        data = json.loads(record.read_text())
+        data["status"] = state
+        record.write_text(json.dumps(data))
+    res = mod.run_audit(tmp_path)
+    assert res.passed is (state == "MEASURED")
+    assert ("LIB_LEAKAGE_UNMEASURED" in {f.rule for f in res.findings}) is (state != "MEASURED")
+
+
+@pytest.mark.parametrize("direction", ["output", "inout", '"in\\\nout"'])
+@pytest.mark.parametrize("settling", [None, False, True])
+def test_r77_driving_pins_need_arcs_unless_settling_is_external(tmp_path, direction, settling):
+    b, lib = _native_passive_case(tmp_path, roles=("nmos",), power=1e-6)
+    text = lib.read_text().replace("cell_leakage_power : 0;", "cell_leakage_power : 1;")
+    lib.write_text(text.replace("    pg_pin (TOP)", f"    pin(signal) {{ direction : {direction}; }}\n    pg_pin (TOP)"))
+    if settling is not None:
+        (b / "interface.json").write_text(json.dumps({"timing_contract": {
+            "settling_kept_out_of_liberty": True, "verified_in_analog_sim": settling}}))
+    res = mod.run_audit(tmp_path)
+    assert res.passed is (settling is True)
+    assert ("LIB_NO_TIMING" in {f.rule for f in res.findings}) is (settling is not True)
+    if res.passed:
+        assert "no signal output" not in res.findings[0].message
