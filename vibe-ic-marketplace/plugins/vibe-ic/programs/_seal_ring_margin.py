@@ -104,7 +104,7 @@ _RE_SEAL_RING_VAR = re.compile(
 _RE_RULE_ID = re.compile(r"\.output\s*\(\s*['\"]([^'\"]+)['\"]")
 _RE_CLEAR_ASSIGN = re.compile(rf"^[ \t]*({_IDENT})[ \t]*=[ \t]*([^\n]*)", re.M)
 _RE_RULE_VALUE = re.compile(
-    rf"({_IDENT})\s*\[\s*['\"]([^'\"]+)['\"]\s*\]\s*\.\s*to_f")
+    rf"({_IDENT})\s*\[\s*['\"]([^'\"]+)['\"]\s*\]\s*\.\s*to_[fi]\b(?![!?])")
 _RE_NUMBER = re.compile(r"(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 _RE_DECK_LITERAL = re.compile(r'''"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\#[^\n]*''')
 
@@ -198,6 +198,10 @@ def _clearance_value(expression: str, files: Dict[str, str],
         value = math.nan
     if not math.isfinite(value) or value < 0:
         return None, f"{path} has no finite nonnegative {json_table}[{key!r}]", (table, key)
+    if expression.endswith("to_i"):
+        if isinstance(raw, str) and not re.fullmatch(r"[+]?[0-9]+", raw.strip()):
+            return None, f"unsupported string to_i conversion of {table}[{key!r}]", (table, key)
+        value = float(math.trunc(value))
     table_offset, _ = _json_member_offset(text, json_table)
     _, key_offset = _json_member_offset(text, key, table_offset)
     line = text.count("\n", 0, key_offset) + 1
@@ -360,9 +364,18 @@ def _table_sources(table: str, assignment, text: str, source_path: str,
     tail = code[offset:before]
     first_line_end = tail.find("\n")
     tail = tail[first_line_end + 1:] if first_line_end >= 0 else ""
+    start = offset + first_line_end + 1
     for use in re.finditer(r"\b" + re.escape(table) + r"\b", tail):
-        suffix = text[offset + (first_line_end + 1 if first_line_end >= 0 else len(code)):before][use.end():]
-        if not re.match(r"\s*\[\s*['\"][^'\"]+['\"]\s*\]\s*\.\s*to_f\b", suffix):
+        reference = _RE_RULE_VALUE.match(text, start + use.start(), before)
+        suffix = code[reference.end():before] if reference else ""
+        suffix = re.sub(r"^\s*\.\s*um\b", "", suffix, count=1)
+        # Arithmetic on a converted copy cannot mutate the JSON table.
+        suffix = re.sub(rf"^(?:[ \t]*(?:\*\*|[+*/%-])[ \t]*[+-]?{_RE_NUMBER.pattern})+",
+                        "", suffix, count=1)
+        # A newline can continue a Ruby receiver; only a completed read is authority.
+        read_end = re.match(r"[ \t]*(?:[,;)]|\n(?=\s*(?:[A-Za-z_]|$))|$)", suffix)
+        if (not reference or "#{" in reference.group(2)
+                or not read_end):
             return [], f"unsupported mutation or use of JSON table {table}"
     return list(sources or []), error
 
@@ -411,10 +424,22 @@ def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None,
         value_expression = um.group(1).strip() if um else expression
         seen = set()
         before = match.start()
+        local_error = ""
         while re.fullmatch(_IDENT, value_expression) and value_expression not in seen:
             seen.add(value_expression)
+            bindings = [a for a in assignments if a.start() < before and a.group(1) == value_expression]
+            if len(bindings) > 1:
+                local_error = f"unsupported reassigned clearance local {value_expression}"
+                break
             source = assigned(value_expression, before)
             if not source:
+                break
+            interval = code[bindings[0].end(2):before]
+            local_pattern = r"\b" + re.escape(value_expression) + r"\b"
+            interpolations = re.findall(r"#\{([^}]*)\}", body[bindings[0].end(2):before])
+            if (re.search(local_pattern, interval)
+                    or any(re.search(local_pattern, interpolation) for interpolation in interpolations)):
+                local_error = f"unsupported mutation or use of clearance local {value_expression}"
                 break
             value_expression, before = source
         sources = []
@@ -423,11 +448,11 @@ def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None,
         if reference_match:
             table = reference_match.group(1)
             sources, binding_error = _table_sources(table, assigned(table, before), body,
-                                                    source_path, origins or [], before)
+                                                    source_path, origins or [], match.start())
         value, basis, reference = _clearance_value(value_expression, files or {}, sources) if um else (
             None, f"clearance `{expression}` has no readable um value", None)
-        if binding_error:
-            value, basis = None, binding_error
+        if local_error or binding_error:
+            value, basis = None, local_error or binding_error
         tail = _RE_RULE_ID.search(body, match.start(3), min(len(body), match.start(3) + 400))
         origin_path, origin_line = _source_at(match.start(), origins or [], source_path)
         segment = next((start for start, end, path, line in origins or [] if start <= match.start() < end), 0)

@@ -125,3 +125,32 @@ def test_real_image_missing_key_is_named_unreadable(real_pdk):
 def test_real_image_reassigned_local_is_named_unreadable(real_pdk):
     edit_deck(real_pdk, LOOKUP + "\n  seal_b_value = 4.9")
     assert_unreadable(real_pdk)
+
+
+@pytest.mark.parametrize("statements", [
+    "spacing = rules['clearance'].to_f\nspacing += 1\n",
+    'spacing = rules[\'clearance\'].to_f\nlogger.info("#{spacing = 12}")\n',
+    "spacing = rules['clearance'].to_f\nrules.clear\n",
+    "untrusted = rules['clearance'].to_f # comment\n .abs\nspacing = rules['clearance'].to_f\n",
+    'untrusted = rules["#{unknown}"].to_f\nspacing = rules[\'clearance\'].to_f\n',
+    "untrusted = rules['clearance'].to_i!\nspacing = rules['clearance'].to_f\n",
+    "untrusted = rules['clearance'].to_i?\nspacing = rules['clearance'].to_f\n",
+    "untrusted = rules['clearance'].to_f!\nspacing = rules['clearance'].to_f\n",
+    "untrusted = rules['clearance'].to_i=3\nspacing = rules['clearance'].to_f\n",
+    "untrusted = rules['clearance'].to_i = 3\nspacing = rules['clearance'].to_f\n",
+    "untrusted = rules['clearance'].to_i += 3\nspacing = rules['clearance'].to_f\n",
+    "untrusted = rules['clearance'].to_f *= 3\nspacing = rules['clearance'].to_f\n",
+    "untrusted = rules['clearance'].to_i **= 3\nspacing = rules['clearance'].to_f\n",
+    "untrusted = rules['clearance'].to_i&.unknown\nspacing = rules['clearance'].to_f\n",
+    "untrusted = rules['clearance'].to_i::unknown\nspacing = rules['clearance'].to_f\n",
+    "untrusted = rules['clearance'].to_f&.unknown\nspacing = rules['clearance'].to_f\n",
+    "untrusted = rules['clearance'].to_i\n &.unknown\nspacing = rules['clearance'].to_f\n",
+])
+def test_numeric_lookup_rejects_intervening_or_hidden_mutation(tmp_path, statements):
+    (tmp_path / "rules.json").write_text(json.dumps({"rules": {"clearance": 4.9}}))
+    (tmp_path / "main.drc").write_text(
+        "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\n"
+        + statements
+        + 'active.sep(guard_ring, spacing.um).output("clearance", "space")\n'
+    )
+    assert_unreadable(tmp_path)

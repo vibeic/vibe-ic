@@ -26,6 +26,21 @@
       "fixture_path": "libs.tech/klayout/tech/drc/rule_decks/feol/6_1_npnsubstratetie.drc",
       "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/tech/drc/rule_decks/feol/6_1_npnsubstratetie.drc",
       "sha256": "4826fe274df4f16f8310bee5f3933375fa8a675de691283ae28675fb512e6bfc"
+    },
+    {
+      "fixture_path": "libs.tech/klayout/tech/drc/rule_decks/beol/5_16_metal1.drc",
+      "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/tech/drc/rule_decks/beol/5_16_metal1.drc",
+      "sha256": "82a0ffa3d6412e88de6caf103c3b1eb1a4cf09b6cfa1857da8c67740f56c5ed0"
+    },
+    {
+      "fixture_path": "libs.tech/klayout/tech/drc/rule_decks/beol/5_17_metaln.drc",
+      "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/tech/drc/rule_decks/beol/5_17_metaln.drc",
+      "sha256": "0023b4dfc61eb71e14d2d4b3b003078d3f8121c732445ad80a9bca187279fb6e"
+    },
+    {
+      "fixture_path": "libs.tech/klayout/tech/drc/rule_decks/beol/5_25_topmetal2.drc",
+      "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/tech/drc/rule_decks/beol/5_25_topmetal2.drc",
+      "sha256": "356c09fdb4963e8157b9ee60efabf0d521474cd8c70a8ae17b4a2cd61eaff42e"
     }
   ]
 }
