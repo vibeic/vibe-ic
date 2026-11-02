@@ -23,6 +23,10 @@ Phase 1 already attributed to that block, and only that:
     phase1/generated_docs/L5_ADI_SPEC.json # analog_blocks[].spec.specs[]
         -> phase3/analog/<block>/spec.json      (layout (a): `specs: [...]`)
 
+Source-declared spec.input_conditions[] is retained separately as
+input_conditions[], including in a spec-gap record. It is an operating
+condition, never an output-performance target.
+
 The binding runs through the consumer's OWN vocabulary —
 `analog_real_corner_sweep.l5_block_specs()` / `normalize_spec_label()`, whose
 docstring says it is "Exported so the Phase-1 PRODUCER can emit spec names in
@@ -564,6 +568,28 @@ def _gap_body(project: Path, entry: Dict[str, Any], name: str, btype: str,
     }
 
 
+def _current_input_conditions(project: Path, entry: Dict[str, Any]) -> list:
+    """Conditions belong to the current named L5 block, never a type match.
+
+    A sparse block list is a selector. A list carrying conditions is also a
+    consistency assertion and must agree before any output is written.
+    """
+    name = entry.get("name") or entry.get("block") or entry.get("type")
+    l5 = _read_json(project / _L5_REL) or {}
+    matches = [b for b in l5.get("analog_blocks", [])
+               if isinstance(b, dict) and b.get("name") == name]
+    if len(matches) > 1:
+        raise AttributionRefusal("A1_INPUT_CONDITIONS_AMBIGUOUS_BLOCK", str(name))
+    current_spec = (matches[0].get("spec") or {}) if matches else {}
+    current = current_spec.get("input_conditions", []) if isinstance(current_spec, dict) else []
+    selected_spec = entry.get("spec")
+    if (isinstance(selected_spec, dict) and "input_conditions" in selected_spec
+            and selected_spec["input_conditions"] != current):
+        raise AttributionRefusal("A1_INPUT_CONDITIONS_BLOCK_LIST_MISMATCH",
+                                 f"{name}: block list disagrees with current named L5 block")
+    return current
+
+
 # ── per-block driver ──────────────────────────────────────────────────────
 def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
     """Emit spec.json OR spec_gap.json for one block. Returns a record."""
@@ -573,6 +599,7 @@ def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
     spec_path = bdir / "spec.json"
     rec: Dict[str, Any] = {"block": name, "block_type": btype}
     amendment = approved_electrical_attribution(project)
+    input_conditions = _current_input_conditions(project, entry)
 
     existing = _read_json(spec_path) if spec_path.is_file() else None
     if isinstance(existing, dict):
@@ -598,6 +625,8 @@ def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
                     if isinstance(s, dict) and s.get("name")]
         bdir.mkdir(parents=True, exist_ok=True)
         gap = _gap_body(project, entry, str(name), btype, seen)
+        if input_conditions:
+            gap["input_conditions"] = input_conditions
         (bdir / "spec_gap.json").write_text(
             json.dumps(gap, indent=2, ensure_ascii=False) + "\n",
             encoding="utf-8")
@@ -631,6 +660,9 @@ def emit_for_block(project: Path, entry: Dict[str, Any]) -> Dict[str, Any]:
         "_provenance": _provenance(project, entry, btype,
                                    [s["name"] for s in specs], match),
     }
+    # Boundary conditions retain their source identity and are not output targets.
+    if input_conditions:
+        body["input_conditions"] = input_conditions
     iface = _interface(entry)
     if not iface:
         staged = _staged_interface_ports(project, name, btype)
@@ -671,6 +703,8 @@ def run(project: Path, only: Optional[str] = None) -> Tuple[int, Dict[str, Any]]
                        "reason": f"block `{only}` is not declared in {src}",
                        "records": []}
     try:
+        for entry in entries:
+            _current_input_conditions(project, entry)
         amendment = approved_electrical_attribution(project)
         if amendment:
             # Validate all selected merges before writing any block/chip output.

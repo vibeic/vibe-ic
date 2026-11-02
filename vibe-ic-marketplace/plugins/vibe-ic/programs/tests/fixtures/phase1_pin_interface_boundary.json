@@ -1,0 +1,38 @@
+[
+  {
+    "case": "fenced-table",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n",
+      "conditions.md": "```markdown\n## Pin interface conditions\n\n| pin | condition | nominal | min | max | unit | consumer_blocks | basis |\n|---|---|---|---|---|---|---|---|\n| sense_a | externally_driven_reference | 2.0 | 1.96 | 2.04 | V | pll | signed owner input |\n```\n"
+    }
+  },
+  {
+    "case": "invalid-fence-closer",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n",
+      "conditions.md": "```markdown\n```not-a-closing-fence\n## Pin interface conditions\n\n| pin | condition | nominal | min | max | unit | consumer_blocks | basis |\n|---|---|---|---|---|---|---|---|\n| sense_a | externally_driven_reference | 2.0 | 1.96 | 2.04 | V | pll | signed owner input |\n"
+    }
+  },
+  {
+    "case": "quoted-table",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n",
+      "conditions.md": "> ## Pin interface conditions\n> \n> | pin | condition | nominal | min | max | unit | consumer_blocks | basis |\n> |---|---|---|---|---|---|---|---|\n> | sense_a | externally_driven_reference | 2.0 | 1.96 | 2.04 | V | pll | signed owner input |\n"
+    }
+  },
+  {
+    "case": "second-table-other-doc",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n",
+      "a.md": "## Pin interface conditions\n\n| pin | condition | nominal | min | max | unit | consumer_blocks | basis |\n|---|---|---|---|---|---|---|---|\n| sense_a | externally_driven_reference | 2.0 | 1.96 | 2.04 | V | pll | signed owner input |\n",
+      "b.md": "## Pin interface conditions\n\n| pin | condition | nominal | min | max | unit | consumer_blocks | basis |\n|---|---|---|---|---|---|---|---|\n| sense_b | externally_driven_reference | 2.0 | 1.96 | 2.04 | V | pll | signed owner input |\n"
+    }
+  },
+  {
+    "case": "second-table-same-doc",
+    "docs": {
+      "interface.md": "# Neutral interface\n## External Interface\n| Signal | Direction | Width |\n|---|---|---|\n| sense_a | input | 1 |\n| sense_b | input | 1 |\n## Block A \u2014 `pll` : analog phase locked loop operating at 1.5 V\n| Spec | Target | Range | Unit | Note |\n|---|---|---|---|---|\n| fclk | 20 | 19\u201321 | MHz | output |\n",
+      "conditions.md": "## Pin interface conditions\n\n| pin | condition | nominal | min | max | unit | consumer_blocks | basis |\n|---|---|---|---|---|---|---|---|\n| sense_a | externally_driven_reference | 2.0 | 1.96 | 2.04 | V | pll | signed owner input |\n## Pin interface conditions\n\n| pin | condition | nominal | min | max | unit | consumer_blocks | basis |\n|---|---|---|---|---|---|---|---|\n| sense_b | externally_driven_reference | 2.0 | 1.96 | 2.04 | V | pll | signed owner input |\n"
+    }
+  }
+]
