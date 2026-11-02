@@ -36,6 +36,7 @@ def _config(project, value):
 
 def _audit(project, *extra):
     report = project.parent / 'audit.json'
+    report.unlink(missing_ok=True)
     result = subprocess.run([
         sys.executable, fcc.__file__, str(project), '--strict',
         '--flow-def', str(project.parent / 'flow.yaml'),
@@ -95,11 +96,13 @@ def test_invalid_typed_config_refuses_by_name(project, config):
 
     result, report = _audit(project)
 
-    assert result.returncode == 2
-    assert 'OUTPUT_TOP_UNBOUND' in result.stderr
-    assert 'synthesis_resolved.json' in result.stderr
+    assert result.returncode == 1
+    assert report['steps'][0]['status'] == 'NOT_MEASURED'
+    assert any('OUTPUT_TOP_UNBOUND' in reason for reason in report['steps'][0]['reasons'])
+    assert report['steps'][0]['evidence'] == []
     assert 'Traceback' not in result.stderr
-    assert report is None
+    with pytest.raises(paths.OutputTopUnbound, match='synthesis_resolved.json'):
+        paths.acceptance_parameters(project)
 
 
 def test_unreadable_typed_config_refuses_by_name(project):
@@ -107,10 +110,48 @@ def test_unreadable_typed_config_refuses_by_name(project):
 
     result, report = _audit(project)
 
-    assert result.returncode == 2
-    assert 'OUTPUT_TOP_UNBOUND' in result.stderr
+    assert result.returncode == 1
+    assert report['steps'][0]['status'] == 'NOT_MEASURED'
+    assert any('OUTPUT_TOP_UNBOUND' in reason for reason in report['steps'][0]['reasons'])
+    assert report['steps'][0]['evidence'] == []
     assert 'Traceback' not in result.stderr
-    assert report is None
+    with pytest.raises(paths.OutputTopUnbound, match='synthesis_resolved.json'):
+        paths.acceptance_parameters(project)
+
+
+@pytest.mark.parametrize('stage', ['stage_phase1', 'stage2'])
+@pytest.mark.parametrize('config', ['{}', '{', '{"DESIGN_NAME": "../physical_cell"}'])
+def test_invalid_config_refuses_only_the_selected_gds_row(project, stage, config):
+    flow_path = project.parent / 'flow.yaml'
+    flow = yaml.safe_load(flow_path.read_text())
+    flow['steps'].append({
+        'id': 38, 'name': 'Unrelated output', 'stage': stage,
+        'required_outputs': ['input.txt'], 'gate': {'files_exist': ['input.txt']},
+    })
+    flow_path.write_text(yaml.safe_dump(flow))
+    (project / 'input.txt').write_text('unrelated stage output\n')
+
+    absent, absent_report = _audit(project, '--stage-id', stage)
+    _config(project, {}).write_text(config)
+    invalid, invalid_report = _audit(project, '--stage-id', stage)
+
+    assert absent.returncode == invalid.returncode == 0, invalid.stdout + invalid.stderr
+    assert invalid_report['steps'] == absent_report['steps']
+    assert len(invalid_report['steps']) == 1
+    row = invalid_report['steps'][0]
+    assert str(row['id']) == '38'
+    assert row['status'] == 'PASS'
+    assert row['evidence'] == ['input.txt']
+    assert 'OUTPUT_TOP_UNBOUND' not in invalid.stdout + invalid.stderr
+
+    result, report = _audit(project, '--stage-id', 'stage4')
+    assert result.returncode == 1
+    assert len(report['steps']) == 1
+    row = report['steps'][0]
+    assert str(row['id']) == '37'
+    assert row['status'] == 'NOT_MEASURED'
+    assert any('OUTPUT_TOP_UNBOUND' in reason for reason in row['reasons'])
+    assert row['evidence'] == []
 
 
 def test_explicit_top_precedes_retained_config(project):

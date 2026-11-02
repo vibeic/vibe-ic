@@ -20748,15 +20748,15 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     project = Path(args.project_dir).resolve()
     from flow_artifact_paths import (
-        acceptance_parameters, gate_parameters, OutputTopUnbound)
+        acceptance_parameters, current_parameters, gate_parameters, OutputTopUnbound)
     if not project.is_dir():
         print(f"flow_compliance_check: not a directory: {project}", file=sys.stderr)
         return 2
     try:
         parameters = acceptance_parameters(project, args.top)
-    except OutputTopUnbound as exc:
-        print(f"flow_compliance_check: {exc}", file=sys.stderr)
-        return 2
+    except OutputTopUnbound:
+        # GDS selectors report this refusal only when their row is audited.
+        parameters = current_parameters(project)
 
     # ── --read-only: audit a COPY, never the tree the caller handed us ──────
     #
