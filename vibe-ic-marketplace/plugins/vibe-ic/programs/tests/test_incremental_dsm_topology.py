@@ -239,6 +239,7 @@ def test_ir_equations_stamp_and_decoder_match_model(record):
 
 @pytest.mark.parametrize("ratio", [1., 1.4])
 def test_landed_shared_dac_declaration_drives_matched_decode(tmp_path, ratio):
+    pytest.importorskip("scipy", reason='CIFF producer control needs SciPy; vibeic-eda < 0.4.67 does not ship it (ruling #69)')
     from test_analog_ciff import _emit
     _, ir = _emit(tmp_path, shared_input_dac=1, ciff_dac_ratio=ratio)
     declared = stimulus.incremental_decode({"converter_type": "incremental"}, ir)
@@ -255,6 +256,8 @@ def test_landed_shared_dac_declaration_drives_matched_decode(tmp_path, ratio):
 
 @pytest.mark.parametrize("ciff", [0, 1])
 def test_landed_producer_equations_allow_unequal_stage_gains(tmp_path, ciff):
+    if ciff:
+        pytest.importorskip("scipy", reason='CIFF producer control needs SciPy; vibeic-eda < 0.4.67 does not ship it (ruling #69)')
     from test_analog_ciff import _emit
     order = 3 if ciff else 2  # The landed legacy CIFB entry admits orders 1 and 2.
     gains = {f"a{i}": gain for i, gain in enumerate((.21, .34, .18)[:order], 1)}
