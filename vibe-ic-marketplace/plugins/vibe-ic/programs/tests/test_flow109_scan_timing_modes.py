@@ -150,6 +150,56 @@ def acquire(software, owner='D49'):
     return ctx, coverage
 
 
+def test_software_derate_report_has_its_matching_declaration(software):
+    p, _, _, _, _ = software
+    _, coverage = acquire(software)
+    assert set(coverage['modes']) == {'shift', 'capture'}
+    for records in coverage['modes'].values():
+        folder = (p / records[0]['sta_state']['path']).parent
+        corners = signoff.corner_timing(folder)
+        assert corners[CORNER]['derate'] == signoff.DERATE_MARKER + ' early=0.95 late=1.05'
+        assert signoff.judge_timing(corners)['verdict'] == 'PASS'
+
+
+@pytest.mark.parametrize('percent', [None, 10], ids=['undeclared', 'mismatched'])
+def test_scan_consumer_refuses_report_without_matching_derate(software, monkeypatch, percent):
+    p, _, state, _, failures = software
+    resolve = signoff.resolve_step_configs
+
+    def without_matching_derate(*args, **kwargs):
+        configs = resolve(*args, **kwargs)
+        for path in configs.values():
+            config = json.loads(path.read_text())
+            if percent is None:
+                config.pop('TIME_DERATING_CONSTRAINT', None)
+            else:
+                config['TIME_DERATING_CONSTRAINT'] = percent
+            put(path, config)
+        return configs
+
+    monkeypatch.setattr(signoff, 'resolve_step_configs', without_matching_derate)
+    failures['shift'] = 'hold_ws'
+    ctx, coverage = acquire(software)
+    put(p/signoff.SIGNOFF_RECORD, {
+        'sta_state': str(put(p/'functional-state.json', state)), 'scan_timing_coverage': coverage})
+    monkeypatch.setenv('VIBEIC_FLOW109_CONTEXT', str(put(p/'context.json', ctx)))
+    monkeypatch.setattr(fcc, 'check_step',
+                        lambda *_a, **_k: fcc.StepResult(23, 'SOFTWARE upstream', 'phase3', 'PASS'))
+
+    observed = gates.evaluate(p, gates.canonical_family_row('23'))
+
+    assert observed['status'] == 'NOT_MEASURED', observed
+    modes = observed['scan_timing_coverage']
+    assert modes['status'] == 'NOT_MEASURED'
+    assert modes['not_measured'] == []
+    assert len(modes['observations']) == 2
+    assert any(row['corners'][CORNER]['hold_ws'] == -0.2 for row in modes['observations'].values())
+    for row in modes['observations'].values():
+        assert row['timing']['verdict'] == 'NOT_MEASURED'
+        assert row['timing']['derate_unrecorded'] == [CORNER]
+        assert row['corners'][CORNER]['derate'] is None
+
+
 @pytest.mark.parametrize('damage,expected', [('clean','PASS'),('shift-hold','FAIL'),('capture-setup','FAIL'),
     ('missing-capture','NOT_MEASURED'),('failed-shift-missing-capture','FAIL'),('stale-sdc','NOT_MEASURED'),
     ('forged-state','NOT_MEASURED'),('unbound-metrics','NOT_MEASURED'),('stale-model','NOT_MEASURED'),('missing-qualification','NOT_MEASURED')])
@@ -174,6 +224,7 @@ def test_actual_candidate_consumer(software, monkeypatch, damage, expected):
     observed=gates.evaluate(p,gates.canonical_family_row('23'))
     put(p/'actual-consumer.json',observed)
     assert observed['status']==expected, observed
+    assert observed['scan_timing_coverage']['status'] == expected, observed
     if damage=='clean':
         assert set(coverage['modes'])=={'shift','capture'}
         a,b=[Path(coverage['modes'][m][0]['sta_state']['path']) for m in ('shift','capture')]
