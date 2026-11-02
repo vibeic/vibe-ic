@@ -34,9 +34,19 @@ def _main(project, monkeypatch):
     monkeypatch.setattr(R._runner_lock, "acquire_or_reenter", lambda *a: object())
     monkeypatch.setattr(R._canonical_admission, "admit_span",
                         lambda *a: SimpleNamespace(admitted=True))
-    monkeypatch.setattr(R, "_detect_pdk", lambda *a: reached.append("PDK"))
+    _write(project, 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json',
+           {'fields': {'pdk_target': 'caseKit'}})
+    class ReachedPDK(Exception):
+        pass
+    def detect(*args):
+        reached.append("PDK")
+        raise ReachedPDK()
+    monkeypatch.setattr(R, "_detect_pdk", detect)
     monkeypatch.setattr(R.sys, "argv", ["phase3_one_shot_runner.py", str(project)])
-    return R.main(), reached
+    try:
+        return R.main(), reached
+    except ReachedPDK:
+        return 0, reached
 
 
 @pytest.mark.parametrize("fault", [
@@ -104,3 +114,49 @@ def test_owner_declaration_without_raw_answer_remains_usable(tmp_path, monkeypat
     _project(tmp_path)
     (tmp_path / ST.DESIGN_ANSWERS_REL).unlink()
     assert _main(tmp_path, monkeypatch) == (0, ["PDK"])
+
+
+def _declared_pdk_dispatch(project, monkeypatch, *, target='caseKit', requested='auto', returned=None):
+    """Stop the real public main at backend binding; no native tool runs."""
+    _project(project)
+    if target is not None:
+        _write(project, 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json',
+               {'fields': {'pdk_target': target}})
+    monkeypatch.setattr(R, '_activate_runtime_program_tree', lambda *_: None)
+    monkeypatch.setattr(R._runner_lock, 'acquire_or_reenter', lambda *a: object())
+    seen = []
+    def detect(current, selected):
+        seen.append(selected)
+        return SimpleNamespace(name=returned or (target if selected == target else 'fallbackKit'))
+    monkeypatch.setattr(R, '_detect_pdk', detect)
+    class Bound(Exception):
+        pass
+    def bind(current, pdk):
+        seen.append(pdk.name)
+        raise Bound()
+    monkeypatch.setattr(R, '_backend_parameter_values', bind)
+    monkeypatch.setattr(R.sys, 'argv', ['phase3_one_shot_runner.py', str(project), '--pdk', requested])
+    try:
+        rc = R.main()
+    except Bound:
+        rc = 99
+    return rc, seen
+
+
+def test_public_auto_pdk_uses_case_declaration_before_backend_binding(tmp_path, monkeypatch):
+    assert _declared_pdk_dispatch(tmp_path, monkeypatch) == (99, ['caseKit', 'caseKit'])
+
+
+@pytest.mark.parametrize('damage,code', [('missing', 'PDK_UNDECLARED'),
+    ('override', 'PDK_DECLARATION_CONFLICT'), ('conflict', 'PDK_DECLARATION_CONFLICT'),
+    ('resolved', 'PDK_DECLARATION_CONFLICT')])
+def test_public_pdk_selection_refuses_missing_or_different_case_target(tmp_path, monkeypatch, capsys, damage, code):
+    target = None if damage == 'missing' else 'caseKit'
+    if damage == 'conflict':
+        _write(tmp_path, 'phase1/generated_docs/L1_FUNCTIONAL_SPEC.json', {'target_pdk': 'otherKit'})
+    rc, seen = _declared_pdk_dispatch(tmp_path, monkeypatch, target=target,
+        requested='otherKit' if damage == 'override' else 'auto',
+        returned='otherKit' if damage == 'resolved' else None)
+    assert rc == 2, (rc, seen)
+    assert seen == (['caseKit'] if damage == 'resolved' else [])
+    assert code in capsys.readouterr().err
