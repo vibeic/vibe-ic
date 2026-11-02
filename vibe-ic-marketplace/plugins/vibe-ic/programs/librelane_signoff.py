@@ -973,32 +973,26 @@ _TIMED_VIEWS = ('def', 'nl', 'sdc', 'spef')
 
 
 def _liberty_host_path(project: Path, liberty: str,
-                       expected_image: str | None = None) -> Path | None:
-    """Resolve the tool's /pdk view through the run's recorded PDK mount."""
+                       expected_image: str | None = None, *,
+                       fingerprint: dict | None = None, pdk: str | None = None) -> Path | None:
+    """Resolve a recorded input through its mount or proven runtime content."""
+    from librelane_contract import resolve_state_pdk_asset
     path = Path(liberty)
     if path.is_file():
         return path
-    provenance = project / 'phase3/librelane_pdk_root.provenance.json'
+    mounts = []
     try:
-        doc = _load(provenance)
+        doc = _load(project / 'phase3/librelane_pdk_root.provenance.json')
         derivation = doc.get('derivation') or {}
-        # A DECLARED root (switch `pdk_root_host` / VIBEIC_LIBRELANE_PDK_ROOT)
-        # carries no image; its bytes are still bound, because every caller
-        # compares the mapped file's sha256 with the one the run recorded.
-        # An image-DERIVED root must be the image this run used.
         if (expected_image and doc.get('source') != 'declared'
                 and derivation.get('image') != expected_image):
             return None
-        root = Path(doc['path'])
-        pdk = derivation.get('pdk') or (doc.get('pdk') if doc.get('source') == 'declared'
-                                        else None)
-        guest = f'/pdk/{pdk}' if pdk else None
-        if guest and (liberty == guest or liberty.startswith(guest + '/')):
-            mapped = root / pdk / liberty[len(guest):].lstrip('/')
-            return mapped if mapped.is_file() else None
+        pdk = pdk or derivation.get('pdk') or doc.get('pdk')
+        if pdk:
+            mounts = [(Path(doc['path']) / pdk, Path('/pdk') / pdk)]
     except (OSError, ValueError, KeyError, TypeError):
         pass
-    return None
+    return resolve_state_pdk_asset(liberty, pdk=pdk, fingerprint=fingerprint, mounts=mounts)
 
 
 def _liberty_header_pvt(path: Path) -> dict[str, float] | None:
@@ -1116,12 +1110,14 @@ def step23_tool_arm(project: Path, artefacts: tuple[str, ...] = (CORNER_REPORT,)
         scene_process = name.split('_', 2)[1].lower() if '_' in name else None
         for lib in libs:
             host = _liberty_host_path(project, lib,
-                                      (receipt.get('input') or {}).get('image'))
+                                      (receipt.get('input') or {}).get('image'),
+                                      fingerprint=receipt.get('input'), pdk=config.get('PDK'))
             header = _liberty_header_pvt(host) if host else None
             lib_pvt = parse_liberty_pvt(lib)
             current_sha = digest(host) if host else None
             run_sha = liberty_at_run.get(lib)
-            liberty_views.append({'path': lib, 'sha256': current_sha,
+            liberty_views.append({'path': lib, 'resolved_path': str(host) if host else None,
+                                  'sha256': current_sha,
                                   'run_sha256': run_sha, 'header_pvt': header,
                                   'role': roles[lib],
                                   'filename_pvt_gaps': dict(lib_pvt.gaps)})

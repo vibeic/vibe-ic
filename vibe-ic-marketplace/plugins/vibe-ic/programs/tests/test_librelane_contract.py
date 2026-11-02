@@ -1662,3 +1662,67 @@ def test_stapostpnr_receipt_binds_native_lib_schema(tmp_path, monkeypatch, schem
         monkeypatch.setattr(contract, 'run_container', drift)
         with pytest.raises(contract.Refusal, match='LL_STA_LIBERTY_CHANGED_DURING_RUN'):
             invoke('changed')
+
+
+def _carrier_asset(tmp_path, monkeypatch):
+    from _hostpaths import require_repo
+    registry = json.loads(require_repo(
+        'vibe-ic-marketplace/plugins/vibe-ic/programs/pdk_registry.json').read_text())
+    family = next(entry['name'] for entry in registry['pdks'] if entry['name'] != 'custom_auto_detect')
+    root = tmp_path / 'runtime'
+    suffix = 'libs.ref/neutral/lib/neutral__tt.lib'
+    asset = root / family / suffix
+    asset.parent.mkdir(parents=True)
+    asset.write_text('library (neutral) { nom_voltage : 1.0; }\n')
+    recorded = tmp_path / 'missing-carrier' / family / suffix
+    fingerprint = {'config_files': {str(recorded): contract.digest(asset)}}
+    monkeypatch.setenv('PDK_ROOT', str(root))
+    return family, root, asset, recorded, fingerprint
+
+
+def test_state_pdk_asset_rebind_matches_recorded_content(tmp_path, monkeypatch):
+    family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
+    assert contract.resolve_state_pdk_asset(recorded, pdk=family, fingerprint=fingerprint) == asset
+    assert contract.config_file_hashes({'PDK': family, 'LIB': str(recorded)}, [],
+                                     fingerprint=fingerprint) == fingerprint['config_files']
+    assert not recorded.exists()
+
+
+@pytest.mark.parametrize('damage', ['bytes', 'identity', 'family', 'traversal',
+                                   'two_candidates', 'missing', 'conflicting_identity', 'symlink'])
+def test_state_pdk_asset_rebind_refuses_unproven_content(tmp_path, monkeypatch, damage):
+    family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
+    if damage == 'bytes':
+        asset.write_text('changed content\n')
+    elif damage == 'identity':
+        fingerprint = {}
+    elif damage == 'family':
+        family = 'unregistered_family'
+    elif damage == 'traversal':
+        recorded = recorded.parent / '..' / 'lib' / recorded.name
+        fingerprint = {'config_files': {str(recorded): contract.digest(asset)}}
+    elif damage == 'two_candidates':
+        # A declared selected-PDK root and a nested distribution both offer a file.
+        monkeypatch.setenv('PDK_ROOT', str(root / family))
+        second = root / family / family / asset.relative_to(root / family)
+        second.parent.mkdir(parents=True)
+        second.write_bytes(asset.read_bytes())
+    elif damage == 'missing':
+        asset.unlink()
+    elif damage == 'conflicting_identity':
+        fingerprint['liberty_files'] = {str(recorded): '0' * 64}
+    elif damage == 'symlink':
+        target = tmp_path / 'outside.lib'
+        asset.rename(target)
+        asset.symlink_to(target)
+    assert contract.resolve_state_pdk_asset(recorded, pdk=family, fingerprint=fingerprint) is None
+    with pytest.raises(contract.Refusal, match='LL_PDK_ASSET_UNRESOLVED'):
+        contract.config_file_hashes({'PDK': family, 'LIB': str(recorded)}, [],
+                                   fingerprint=fingerprint)
+
+
+def test_state_pdk_asset_existing_path_is_unchanged(tmp_path, monkeypatch):
+    family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
+    assert contract.resolve_state_pdk_asset(asset, pdk='unknown', fingerprint={}) == asset
+    assert contract.config_file_hashes({'PDK': family, 'LIB': str(asset)}, []) == {
+        str(asset): contract.digest(asset)}

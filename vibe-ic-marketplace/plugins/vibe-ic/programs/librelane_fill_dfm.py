@@ -261,7 +261,7 @@ def finish_candidate_gds(project: Path, image: str, pdk_root: Path, pdk: str, *,
     receipt = validate_step_receipt(state.parent, step)
     if (receipt['input'].get('image') != image
             or receipt['input'].get('config') != digest(config)
-            or receipt['input'].get('config_files') != config_file_hashes(cfg, _mounts(pdk_root, pdk))):
+            or receipt['input'].get('config_files') != config_file_hashes(cfg, _mounts(pdk_root, pdk), fingerprint=receipt['input'])):
         raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(config))
     current = _load(state)
     placement = {'config': cfg}
@@ -349,7 +349,7 @@ def resume_candidate_gds(project: Path, image: str, pdk_root: Path, pdk: str, *,
             or receipt['input'].get('image') != image
             or receipt['input'].get('config') != digest(config)
             or receipt['input'].get('config_files') !=
-               config_file_hashes(cfg, _mounts(pdk_root, pdk))):
+               config_file_hashes(cfg, _mounts(pdk_root, pdk), fingerprint=receipt['input'])):
         raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(config))
     current = _load(state)
     placement = {'config': cfg}
@@ -382,7 +382,7 @@ def resume_candidate_gds(project: Path, image: str, pdk_root: Path, pdk: str, *,
         if (native_receipt['input'].get('image') != image
                 or native_receipt['input'].get('config') != digest(expected_cfg)
                 or native_receipt['input'].get('config_files') !=
-                   config_file_hashes(_load(expected_cfg), _mounts(pdk_root, pdk))):
+                   config_file_hashes(_load(expected_cfg), _mounts(pdk_root, pdk), fingerprint=native_receipt['input'])):
             raise Refusal('LL_CANDIDATE_FINISHING_CONFIG', str(expected_cfg))
         return _load(folder / 'state_out.json'), native_receipt
 
@@ -1135,7 +1135,7 @@ def run_fill_insertion(project: Path, image: str, pdk_root: Path, pdk: str, *,
     current = {str(path): digest(path) for path in _walk_input_views(_load(state))}
     if (fp.get('image') != image or fp.get('config') != digest(configs[ODB_FILL_STEP])
             or fp.get('state') != digest(state) or fp.get('state_files') != current
-            or fp.get('config_files') != config_file_hashes(config, mounts)):
+            or fp.get('config_files') != config_file_hashes(config, mounts, fingerprint=fp)):
         raise Refusal('LL_FILL_INPUT_CHANGED', str(folder))
     out_state = _load(folder / 'state_out.json')
     filled = Path(str(out_state.get('def') or ''))
@@ -1225,7 +1225,7 @@ def validate_fill_handoff(project: Path, record: dict, *, routed_def: Path) -> d
                 or fp.get('config') != digest(config_path)
                 or fp.get('state') != digest(initial)
                 or fp.get('state_files') != {str(p): digest(p) for p in _walk_input_views(before)}
-                or fp.get('config_files') != config_file_hashes(config, binding['mounts'])
+                or fp.get('config_files') != config_file_hashes(config, binding['mounts'], fingerprint=fp)
                 or config.get('meta', {}).get('step') != ODB_FILL_STEP):
             raise ValueError('current input/config/image differs from producer')
         subject, output = Path(record['subject']), Path(record['filled_def'])
@@ -1530,7 +1530,7 @@ def _current_stage(project: Path, state: Path, step: str) -> tuple[dict, dict]:
     raw = _load(config)
     if (fp.get('image') != image or fp.get('config') != digest(config)
             or raw.get('meta', {}).get('step') != step
-            or fp.get('config_files') != config_file_hashes(raw, mounts)
+            or fp.get('config_files') != config_file_hashes(raw, mounts, fingerprint=fp)
             or fp.get('state_files') != {str(p): digest(p) for p in _walk_input_views(before)}):
         raise Refusal('LL_FINISHING_INPUT_CHANGED', str(state))
     candidates = (project / 'phase3/librelane').rglob('*.json')
@@ -2005,7 +2005,7 @@ def validate_density_result(project: Path, arm: dict, *, layout: Path | None = N
         switch = _load(switch_path) if switch_path.is_file() else {}
         mounts = native._pdk_mounts(project, switch, state.parent, resolve_image(project, record=False))
         config = _load(project / 'phase3/librelane' / CONFIG_FOLDER / 'KLayout.Density.json')
-        if receipt['input'].get('config_files') != config_file_hashes(config, mounts):
+        if receipt['input'].get('config_files') != config_file_hashes(config, mounts, fingerprint=receipt['input']):
             raise ValueError('density PDK material population changed')
         if row.get('value') != _count(arm.get(DENSITY_METRIC)):
             raise ValueError(row.get('reason') or 'density record differs from tool output')
