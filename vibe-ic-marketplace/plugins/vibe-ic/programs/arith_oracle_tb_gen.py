@@ -294,7 +294,7 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
     # These are descriptions of the supported arithmetic shape, not arbitrary
     # suffixes. Anything else (including overflow policy) remains unconsumed.
     descriptor = (r'(?:(?:unsigned|signed|parallel|serial|serial-parallel|binary)\s+)*'
-                  r'(?:multiplier|adder|subtractor|bitwise arithmetic|arithmetic datapath)')
+                  r'(?:multiplier|multiply|adder|subtractor|bitwise arithmetic|arithmetic datapath)')
     if re.fullmatch(descriptor, text, re.I):
         for rx, op in _WORD_OPERATOR:
             if rx.search(text) and op in ('*', '+'):

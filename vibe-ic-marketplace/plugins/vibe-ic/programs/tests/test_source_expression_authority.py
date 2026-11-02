@@ -180,3 +180,11 @@ def test_existing_serial_record_keeps_only_supported_shape_annotations(tmp_path,
     assert bool(spec) is accepted, (spec, reason)
     if accepted:
         assert (spec['operator'], spec['parallel'], spec['serial_in'], spec['serial_out']) == ('&', 'x', 'y', 'p')
+
+
+def test_existing_timed_serial_source_keeps_declared_multiply(tmp_path):
+    from test_fullstacktb_functional_population import _timed_fixture
+    p = _timed_fixture(tmp_path, 'core4')
+    spec, reason = oracle.extract_serial_arith_spec(p, 'digital_arithmetic_primitive')
+    assert spec is not None, reason
+    assert (spec['operator'], spec['width']) == ('*', 4)
