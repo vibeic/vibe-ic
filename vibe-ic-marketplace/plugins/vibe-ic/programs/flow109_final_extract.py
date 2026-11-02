@@ -95,6 +95,32 @@ def _native_refusal_status(code):
     return 'FAIL' if code == 'LL_STEP_FAILED' else 'NOT_MEASURED'
 
 
+# The shipped reducer refuses an elimination whose clique fill-in exceeds
+# --max-degree (vibeic-eda tools/pdk/final_fill/final_fill_spef.py:477, default
+# 64 at :1838 in image 0.4.67). That limit is our own computational guard, not a
+# signoff threshold: the Schur elimination is exact at any degree (ruling #88
+# D2). A node's degree when it is eliminated includes fill-in from earlier
+# eliminations, so the layout and the raw SPEF's static degree do not bound it,
+# and the raw SPEF only exists inside the native run. The guard's own refusal is
+# therefore the measurement.
+_DEGREE_REFUSAL = re.compile(
+    r'REFUSED: floating node (\S+) degree ([1-9][0-9]*) exceeds fail-closed limit ([1-9][0-9]*)')
+# Twice the measured degree admits at most four times that node's d*(d-1)/2
+# clique edges. A denser graph is refused again by the tool, never retried here.
+DEGREE_HEADROOM = 2
+
+
+def _measured_degree(completed):
+    """Return the tool's degree-guard measurement, or None for any other outcome."""
+    refusals = [line for line in completed.stderr.splitlines() if line.startswith('REFUSED:')]
+    match = (completed.returncode == 2 and len(refusals) == 1
+             and _DEGREE_REFUSAL.fullmatch(refusals[0]))
+    if not match or int(match[2]) <= int(match[3]):
+        return None
+    return {'floating_node': match[1], 'measured_degree': int(match[2]), 'tool_limit': int(match[3]),
+            'headroom_factor': DEGREE_HEADROOM, 'max_degree': DEGREE_HEADROOM * int(match[2])}
+
+
 def _fill_extraction_scope(d62):
     """Current-geometry correlation is separate from tool availability."""
     measurements = d62.get('measurements') or {}
@@ -263,20 +289,31 @@ def execute(project, context):
         if binary is None:
             raise AdmissionRefusal('D69_NATIVE_TOOL_ABSENT', 'released vibeic-final-fill-spef required')
         tool = files._record(project, Path(binary))
-        argv = [binary, 'extract', '--gds', str(final_gds), '--def', str(routed_def),
-                '--top', files.fill_records(routed_def)['top'], '--output-dir', str(attempt / 'native')]
+        top = files.fill_records(routed_def)['top']
+
+        def launch(name, *bound):
+            argv = [binary, 'extract', '--gds', str(final_gds), '--def', str(routed_def),
+                    '--top', top, '--output-dir', str(attempt / name), *bound]
+            started = time.monotonic()
+            completed = subprocess.run(argv, cwd=project, capture_output=True, text=True)
+            log = attempt / f'{name}.log'; log.write_text(completed.stdout + completed.stderr)
+            return completed, log, {'argv': argv, 'returncode': completed.returncode,
+                'elapsed_seconds': time.monotonic() - started, 'log': files._record(project, log), 'tool': tool}
         result['native_started'] = True
-        started = time.monotonic()
-        completed = subprocess.run(argv, cwd=project, capture_output=True, text=True)
-        log = attempt / 'native.log'; log.write_text(completed.stdout + completed.stderr)
-        result['native_execution'] = {'argv': argv, 'returncode': completed.returncode,
-            'elapsed_seconds': time.monotonic() - started, 'log': files._record(project, log), 'tool': tool}
+        native = 'native'
+        completed, log, execution = launch(native)
+        measured = _measured_degree(completed)
+        if measured is not None:
+            result['degree_bound'] = {**measured, 'measuring_execution': execution}
+            native = 'native-measured-bound'
+            completed, log, execution = launch(native, '--max-degree', str(measured['max_degree']))
+        result['native_execution'] = execution
         if completed.returncode != 0:
             raise AdmissionRefusal('D69_NATIVE_EXTRACT_FAILED', str(log), status='FAIL')
         if sources != operation_sources() or any(_sha(Path(p)) != digest for p, digest in basis.items()):
             raise AdmissionRefusal('D69_INPUT_CHANGED', 'source or geometry changed during extraction')
         _bound(project, tool)
-        native_ref = files._record(project, attempt / 'native/FINAL_FILL_EXTRACTION.json')
+        native_ref = files._record(project, attempt / native / 'FINAL_FILL_EXTRACTION.json')
         gds_ref, def_ref = files._record(project, final_gds), files._record(project, routed_def)
         final_spefs, scans = _native_outputs(project, native_ref, gds_ref, def_ref)
         result.update(component_status='PASS', reason='D69_NATIVE_FINAL_FILL_SPEF_MEASURED',

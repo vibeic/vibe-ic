@@ -3,11 +3,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import shutil
+import subprocess
+from types import SimpleNamespace
 
 import pytest
 
 from flow109_admission import AdmissionRefusal
 import flow109_final_extract as d69
+
+# Resolved before any test patches shutil.which or subprocess.run.
+_REDUCER = shutil.which('vibeic-final-fill-spef')
+_RUN = subprocess.run
 
 
 def _d62(fill_count=None, **untrusted):
@@ -406,3 +413,122 @@ def test_real_archived_def_prefix_has_insufficient_population_authority(tmp_path
     assert result['component_status'] == 'NOT_MEASURED', result
     assert result['reason'] == 'D69_REQUIRED_NET_CONTRACT_UNAVAILABLE', result
     assert 'complete unambiguous DEF net declarations required' in result['detail']
+
+
+# Ruling #88 D2: the shipped reducer's --max-degree is our own computational
+# guard. These fixtures run the shipped reducer's own guard; only Magic is
+# replaced, by a fixed raw SPEF in which floating node F<k> couples to R1..R<d_k>.
+needs_reducer = pytest.mark.skipif(_REDUCER is None, reason='shipped vibeic-final-fill-spef absent')
+
+
+def _raw_spef(degrees, conn='', ground='0.5'):
+    width = max(degrees)
+    text = '*SPEF "IEEE 1481-1998"\n*DESIGN "neutral"\n*C_UNIT 1 PF\n\n'
+    text += ''.join(f'*D_NET R{i} 0.1\n*CAP\n1 R{i} 0.1\n*END\n\n' for i in range(1, width + 1))
+    for k, degree in enumerate(degrees, 1):
+        text += (f'*D_NET F{k} 1\n' + conn.replace('F1', f'F{k}') + f'*CAP\n1 F{k} {ground}\n'
+                 + ''.join(f'{i + 1} F{k} R{i} 0.01\n' for i in range(1, degree + 1)) + '*END\n\n')
+    return text
+
+
+def _guarded_extract(tmp_path, monkeypatch, degrees, **raw):
+    width = max(degrees)
+    nets = ''.join(f'- R{i} ( PIN R{i} ) + USE SIGNAL ;\n' for i in range(1, width + 1))
+    paths, _ = _owner_fixture(tmp_path, monkeypatch, def_text=(
+        f'VERSION 5.8 ;\nDESIGN neutral ;\nUNITS DISTANCE MICRONS 1000 ;\nNETS {width} ;\n'
+        f'{nets}END NETS\nEND DESIGN\n'))
+    launches = []
+
+    def extract(argv, **kwargs):
+        if argv[0] != str(paths['tool']):
+            return _RUN(argv, **kwargs)
+        launches.append(argv)
+        folder = Path(argv[argv.index('--output-dir') + 1]); folder.mkdir()
+        keep = folder / 'routed-nets.txt'
+        keep.write_text(''.join(f'R{i}\n' for i in range(1, width + 1)))
+        bound = argv[argv.index('--max-degree'):][:2] if '--max-degree' in argv else []
+        corners = {}
+        for corner in ('nom', 'max', 'min'):
+            leaf = folder / corner; leaf.mkdir()
+            (leaf / 'raw.spef').write_text(_raw_spef(degrees, **raw))
+            proc = _RUN([_REDUCER, 'reduce', '--raw', str(leaf / 'raw.spef'), '--keep-nets', str(keep),
+                         '--output', str(leaf / 'final.spef'), '--receipt', str(leaf / 'reduction.json'),
+                         *bound], capture_output=True, text=True)
+            if proc.returncode:
+                return SimpleNamespace(returncode=proc.returncode, stdout='', stderr=proc.stderr)
+            corners[corner] = json.loads((leaf / 'reduction.json').read_text())
+        receipt = {'status': 'PASS', 'top': 'neutral', 'corners': corners,
+                   'geometry': {'path': str(paths['final.gds']), 'sha256': d69._sha(paths['final.gds'])},
+                   'routed_def': {'path': str(paths['filled.def']), 'sha256': d69._sha(paths['filled.def'])},
+                   'fill_aware_tech': d69.files._record(tmp_path, paths['tech']),
+                   'declared_corner_set': ['min', 'nom', 'max'], 'keep_net_count': width,
+                   'keep_nets_sha256': d69._sha(keep), 'floating_boundary_condition': 'zero-net-charge',
+                   'grounded_fill_approximation': False}
+        (folder / 'FINAL_FILL_EXTRACTION.json').write_text(json.dumps(receipt))
+        return SimpleNamespace(returncode=0, stdout=json.dumps(receipt), stderr='')
+    monkeypatch.setattr(d69.subprocess, 'run', extract)
+    return launches
+
+
+@needs_reducer
+@pytest.mark.parametrize('degree,bound', [(40, None), (80, 160)])
+def test_shipped_degree_guard_measures_and_one_relaunch_covers_it(tmp_path, monkeypatch, degree, bound):
+    launches = _guarded_extract(tmp_path, monkeypatch, [degree])
+    result = d69.execute(tmp_path, {'context_sha256': 'degree-control'})
+    assert result['component_status'] == 'PASS', result
+    assert '--max-degree' not in launches[0]
+    assert result['native_execution']['argv'] == launches[-1]
+    native = d69._read(d69._bound(tmp_path, result['native_receipt']))
+    assert {row['peak_eliminated_degree'] for row in native['corners'].values()} == {degree}
+    assert d69.validate_final_parasitics(tmp_path, result['receipt'])['final_spefs'] == result['final_spefs']
+    if bound is None:
+        assert len(launches) == 1 and 'degree_bound' not in result
+        return
+    assert len(launches) == 2 and launches[1][-2:] == ['--max-degree', str(bound)]
+    measuring = result['degree_bound'].pop('measuring_execution')
+    assert result['degree_bound'] == {'floating_node': 'F1', 'measured_degree': degree,
+        'tool_limit': 64, 'headroom_factor': 2, 'max_degree': bound}
+    assert measuring['argv'] == launches[0] and measuring['returncode'] == 2
+    assert (f'REFUSED: floating node F1 degree {degree} exceeds fail-closed limit 64'
+            in d69._bound(tmp_path, measuring['log']).read_text())
+    assert {row['max_degree'] for row in native['corners'].values()} == {bound}
+
+
+@needs_reducer
+@pytest.mark.parametrize('raw,refusal', [
+    ({'conn': '*CONN\n*P F1 I\n'}, 'refusing to eliminate non-retained net F1 with ports or resistance'),
+    ({'conn': '*RES\n1 F1:1 F1:2 1.0\n'}, 'refusing to eliminate non-retained net F1 with ports or resistance'),
+    ({'ground': 'nan'}, 'invalid capacitance nan: ground CAP'),
+    ({'ground': 'inf'}, 'invalid capacitance inf: ground CAP'),
+])
+def test_other_shipped_refusals_are_not_relaunched(tmp_path, monkeypatch, raw, refusal):
+    launches = _guarded_extract(tmp_path, monkeypatch, [80], **raw)
+    result = d69.execute(tmp_path, {'context_sha256': 'degree-control'})
+    assert result['component_status'] == 'FAIL', result
+    assert result['reason'] == 'D69_NATIVE_EXTRACT_FAILED'
+    assert len(launches) == 1 and '--max-degree' not in launches[0]
+    assert 'degree_bound' not in result
+    assert f'REFUSED: {refusal}' in d69._bound(tmp_path, result['native_execution']['log']).read_text()
+
+
+@needs_reducer
+def test_a_degree_beyond_the_measured_bound_stays_refused(tmp_path, monkeypatch):
+    launches = _guarded_extract(tmp_path, monkeypatch, [70, 150])
+    result = d69.execute(tmp_path, {'context_sha256': 'degree-control'})
+    assert result['component_status'] == 'FAIL', result
+    assert result['reason'] == 'D69_NATIVE_EXTRACT_FAILED'
+    assert len(launches) == 2 and launches[1][-2:] == ['--max-degree', '140']
+    assert result['degree_bound']['measured_degree'] == 70
+    assert ('REFUSED: floating node F2 degree 150 exceeds fail-closed limit 140'
+            in d69._bound(tmp_path, result['native_execution']['log']).read_text())
+
+
+@pytest.mark.parametrize('returncode,stderr', [
+    (1, 'REFUSED: floating node F degree 80 exceeds fail-closed limit 64\n'),
+    (2, 'REFUSED: floating node F degree 64 exceeds fail-closed limit 64\n'),
+    (2, 'REFUSED: floating node F degree 80 exceeds fail-closed limit 64 later\n'),
+    (2, 'REFUSED: x\nREFUSED: floating node F degree 80 exceeds fail-closed limit 64\n'),
+    (2, 'REFUSED: refusing to eliminate non-retained net F with ports or resistance\n'),
+])
+def test_only_the_shipped_degree_refusal_is_a_measurement(returncode, stderr):
+    assert d69._measured_degree(SimpleNamespace(returncode=returncode, stderr=stderr)) is None
