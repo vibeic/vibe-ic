@@ -41,6 +41,7 @@ NON_PROTOCOL_KEYS = frozenset({
     # clocking — l8_doc_clock_freq_synth and l8_clock_reset_waveform_emit
     *_clk._CLOCK_LIST_KEYS, _clk.SCALAR_KEY, _crw.L8_KEY,
     "clock_groups",  # explicit clock relationships, not protocol timing
+    "declared_clock_group_refusals",  # unresolved structural declarations
     "reset_strategy",  # declared startup/reset transport, not protocol timing
     # IC class tag — the phase-1 class detector
     "class_path",

@@ -99,8 +99,8 @@ def test_count_only_declaration_preserves_interface_audit_warning(tmp_path):
     runner.gen_l8_timing_waveform, runner.gen_l8_timing_waveform_doc])
 @pytest.mark.parametrize("relationship", ["asynchronous", "exclusive", "synchronous"])
 def test_declared_clock_groups_are_emitted(tmp_path, emitter, relationship):
-    quote = f"compute_clk_i, fabric_clk_i and service_clk_i are {relationship}."
-    text = "# Timing contract\n\n" + quote + "\n"
+    quote = f"| clock_group_1 | compute_clk_i, fabric_clk_i and service_clk_i | {relationship} |"
+    text = "| Group | Clocks | Relationship |\n|---|---|---|\n" + quote + "\n"
     source = tmp_path / "input/docs/timing.md"
     source.parent.mkdir(parents=True)
     source.write_text(text)

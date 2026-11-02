@@ -1287,11 +1287,14 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
     analog_final = (row.get("id") == "D70" and profile.get("id") == "analog_die"
                     and isinstance(dispatch, Mapping)
                     and dispatch.get("adapter") == "flow109_final_electrical")
+    analog_correlation = (row.get("id") == "D54" and profile.get("id") == "analog_die"
+                          and isinstance(dispatch, Mapping)
+                          and dispatch.get("adapter") == "analog_native_flow")
     analog_em = (row.get("id") == "D58" and profile.get("id") == "analog_die"
                  and isinstance(dispatch, Mapping)
                  and dispatch.get("adapter") == "em_current_density_check")
     if not isinstance(dispatch, Mapping) or (profile.get("id") != "default"
-                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_final_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir and not analog_power and not analog_em and not analog_final and not analog_si):
+                                             and not analog_floorplan and not analog_fill and not analog_stream and not analog_extract and not analog_final_extract and not analog_pv and not analog_antenna and not analog_pad and not analog_ir and not analog_power and not analog_em and not analog_final and not analog_si and not analog_correlation):
         return None
     native = dispatch.get("native_step_id")
     engines = dispatch.get("engine_families")
@@ -1302,7 +1305,11 @@ def source_owned_native_dispatch(row: Mapping) -> dict | None:
             or set(dispatch.get("engine_executables", {})) != set(engines))
     adapter = dispatch.get("adapter")
     if dispatch.get("admission_policy") == "source_owned_existing_native":
-        if adapter == "analog_native_flow":
+        if adapter == "analog_native_flow" and analog_correlation:
+            invalid = (common_invalid or native != "flow109.D54"
+                       or dispatch.get("producer") != "analog_native_physical.py:_resim existing A14 results"
+                       or dispatch.get("consumer") != "analog_native_flow.py:_d54_correlation")
+        elif adapter == "analog_native_flow":
             # The registered analog table owns both legacy A1 and stable
             # A01-A19 entries; reuse the same native admission as digital.
             from analog_native_flow import STEPS

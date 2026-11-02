@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1518
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1518)
+- **Total programs (excluding helpers / shims):** 1519
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1519)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1509 |
+| `any` | 1510 |
 
 ## Alphabetical listing
 
@@ -1040,6 +1040,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `phase1_consistency_check` | any | — | Cross-layer consistency gate (K4). |
 | `phase1_coverage_report_gen` | any | Wave 4 | Phase 1 (doc-extraction) extraction-coverage REPORT. |
 | `phase1_coverage_report_present_check` | any | Wave 5 | gate (BACKLOG-v13 Wave 5). |
+| `phase1_declared_connectivity` | any | — | Project structured document declarations; no circuit or clock-name inference. |
 | `phase1_dialogue_render` | any | — | render a Phase-1 DIALOGUE artifact into a freestyle design-description DOCUMENT for the unified DOC->JSON track. |
 | `phase1_doc_content_implementation_completeness_check` | any | Wave 47 | Generic Phase 1 (doc-extraction) coverage gate: every section heading / numbered list |
 | `phase1_doc_input_completeness_check` | any | — | strong gate ============================================================== |
@@ -1590,7 +1591,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1509 programs)
+### `any` (1510 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -2601,6 +2602,7 @@ _(no programs in this group)_
 - `phase1_consistency_check` — Cross-layer consistency gate (K4).
 - `phase1_coverage_report_gen` — Phase 1 (doc-extraction) extraction-coverage REPORT.  _[Wave 4]_
 - `phase1_coverage_report_present_check` — gate (BACKLOG-v13 Wave 5).  _[Wave 5]_
+- `phase1_declared_connectivity` — Project structured document declarations; no circuit or clock-name inference.
 - `phase1_dialogue_render` — render a Phase-1 DIALOGUE artifact into a freestyle design-description DOCUMENT for the unified DOC->JSON track.
 - `phase1_doc_content_implementation_completeness_check` — Generic Phase 1 (doc-extraction) coverage gate: every section heading / numbered list  _[Wave 47]_
 - `phase1_doc_input_completeness_check` — strong gate ==============================================================
