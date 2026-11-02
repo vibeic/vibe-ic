@@ -731,6 +731,12 @@ def _xor(project: Path) -> Cell:
     if verdict in {"PASS", "FAIL"} and isinstance(count, int) \
             and not isinstance(count, bool):
         ref = (rec.get("reference") or {}).get("kind") or "unstated"
+        if ref == "signoff_gds":
+            # The IC front door's receipt (ruling #88 D3): no layer is exempt.
+            return Cell(count, source=_XOR_REL,
+                        basis=(f"KLayout XOR of the delivered GDS against the "
+                               f"signoff GDS on all {rec.get('layers_compared')} "
+                               f"layer(s) compared; no layer is exempt"))
         return Cell(count, source=_XOR_REL,
                     basis=(f"design-layer XOR against the {ref} pre-finishing "
                            f"reference; {len(rec.get('finishing_layer_differences') or [])} "

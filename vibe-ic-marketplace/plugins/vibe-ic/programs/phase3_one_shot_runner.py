@@ -63244,6 +63244,13 @@ def step_signoff_metrics_aggregate(project: Path) -> StepResult:
                           time.time() - t0, f"producer not present: {prog}", reason_class=_V.ReasonClass.INPUT_ABSENT)
 
     drc_attr = _emit_drc_attribution_reports(project)
+    # Ruling #88 D3: the Flow109 IC front door selects no step-37.3 producer, so
+    # the XOR receipt this record reads is measured here first, natively: the
+    # delivered GDS against the signoff GDS. None on every other route.
+    import gds_xor_check as _gds_xor
+    ic_xor = _gds_xor.ic_front_door_xor(project)
+    xor_extra = ({} if ic_xor is None else {"ic_front_door_gds_xor": {
+        key: ic_xor.get(key) for key in ("verdict", "design__xor_difference__count", "reason")}})
 
     cp, stopped = _run_producer(
         "signoff_metrics_aggregate", [sys.executable, str(prog), str(project)],
@@ -63257,7 +63264,7 @@ def step_signoff_metrics_aggregate(project: Path) -> StepResult:
             "signoff_metrics_aggregate", "FAIL", time.time() - t0,
             f"the sign-off metrics record could not be written "
             f"(rc={cp.returncode}): {write_detail}",
-            extras={"flow_step": "37.4", "producer_rc": cp.returncode})
+            extras={"flow_step": "37.4", "producer_rc": cp.returncode, **xor_extra})
 
     checked, stopped = _run_producer(
         "signoff_metrics_aggregate",
@@ -63278,12 +63285,12 @@ def step_signoff_metrics_aggregate(project: Path) -> StepResult:
             f"state (rc={checked.returncode}): {check_detail}", outputs,
             {"flow_step": "37.4", "producer_rc": cp.returncode,
              "check_rc": checked.returncode,
-             "drc_attribution_reports": drc_attr})
+             "drc_attribution_reports": drc_attr, **xor_extra})
     return StepResult("signoff_metrics_aggregate", "PASS", time.time() - t0,
                       check_detail, outputs,
                       {"flow_step": "37.4", "producer_rc": cp.returncode,
                        "check_rc": checked.returncode,
-                       "drc_attribution_reports": drc_attr})
+                       "drc_attribution_reports": drc_attr, **xor_extra})
 
 
 @_spf.retained_step('37.5ic')
