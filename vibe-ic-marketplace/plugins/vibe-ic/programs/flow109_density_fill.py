@@ -1,6 +1,10 @@
-"""Blocking D62 ODB density-fill component, not a density/tapeout signoff.
+"""Blocking D62 density-fill component, not a density/tapeout signoff.
 
-Uses OpenROAD density_fill directly. A trusted, previously qualified per-use
+A PDK-native filler takes precedence, using an explicit bound GDS stream.
+Without one, retain the generic GDS and qualified OpenROAD ODB adapters.
+The native tool's successful transformation never claims density acceptance.
+
+The ODB fallback uses OpenROAD density_fill directly. A trusted, previously qualified per-use
 record must bind the actual rules/PDK/config/tool and this operation's sources.
 No rules or qualifications are generated here. Every attempt is retained.
 """
@@ -267,7 +271,8 @@ def validate_filled_odb(project, receipt_ref):
 def _gds_sources():
     paths = [Path(__file__), HERE / 'metal_fill_emit.py',
              HERE / '_klayout_launch.py', HERE / '_metal_fill_capacity.py',
-             HERE / '_inplace_chain.py', HERE / 'flow109_admission.py']
+             HERE / '_inplace_chain.py', HERE / 'flow109_admission.py',
+             HERE / '_pdk_fill_readback.py']
     return {str(p.relative_to(HERE.parent)): _sha(p) for p in paths}
 
 
@@ -280,6 +285,132 @@ def _gds_input(project, entry):
     if not path.is_relative_to(project) or (project / entry['path']).is_symlink():
         raise AdmissionRefusal('D62_GDS_INPUT_FOREIGN', entry['path'])
     return path
+
+
+def _discover_pdk_filler(project, manifest):
+    """Discover native all-layer entry points by PDK files, never kit names.
+
+    A bound PDK metadata document supplies name/root; otherwise use the
+    explicitly selected PDK and PDK_ROOT in this launched runtime. No PDK is
+    guessed from layout contents or a default kit.
+    """
+    metadata = _read(_bound(project, manifest['pdk'])) if manifest.get('pdk') else {}
+    switch = project / 'phase3/librelane_switch.json'
+    settings = _read(switch) if switch.is_file() else {}
+    name = metadata.get('name') or settings.get('pdk') or os.environ.get('PDK')
+    root = metadata.get('root')
+    if not root:
+        parent = settings.get('pdk_root_host') or os.environ.get('VIBEIC_LIBRELANE_PDK_ROOT') or os.environ.get('PDK_ROOT')
+        root = str(Path(parent) / name) if parent and name else None
+    if not root:
+        return None
+    kit = Path(root)
+    if not kit.is_dir():
+        raise AdmissionRefusal('D62_PDK_ROOT_ABSENT', str(kit))
+    base = kit / 'libs.tech/klayout'
+    scripts = [p for p in base.rglob('*') if p.is_file() and p.name in ('filler.py', 'fill_all.rb')]
+    if len(scripts) > 1:
+        raise AdmissionRefusal('D62_PDK_FILLER_AMBIGUOUS', str(scripts))
+    if not scripts:
+        return None
+    import xml.etree.ElementTree as ET
+    technologies = sorted(base.rglob('*.lyt'))
+    if len(technologies) > 1:
+        raise AdmissionRefusal('D62_PDK_TECHNOLOGY_AMBIGUOUS', str(technologies))
+    technology = ET.parse(technologies[0]).findtext('name') if technologies else None
+    # Native macros load dependencies relative to this tree. Bind the whole
+    # tree instead of claiming that hashing the entry point binds its decks.
+    sources = {str(p): _sha(p) for p in sorted(base.rglob('*')) if p.is_file()}
+    return {'path': str(scripts[0].resolve()), 'sha256': _sha(scripts[0]),
+            'kit': str(kit), 'technology': technology, 'sources': sources,
+            'contract': 'active_layout_output_file' if scripts[0].name == 'filler.py' else 'input_output'}
+
+
+def _execute_pdk_gds(project, context, manifest_path, manifest, paths, attempt, result, native):
+    """Blocking native transform; density acceptance remains native DRC's job.
+
+    A native failure never retries the generic fill engine. A successful
+    transformation never issues a density/whole-row PASS or ODB handoff.
+    """
+    import librelane_contract as launch
+    result.update(inputs={k: _record(project, p) for k, p in paths.items()},
+                  manifest=_record(project, manifest_path), engine=native,
+                  operation_sources=_gds_sources())
+    try:
+        if manifest.get('pdk'):
+            result['inputs']['pdk'] = _record(project, _bound(project, manifest['pdk']))
+        cell = manifest.get('cell')
+        if not isinstance(cell, str) or not cell.strip():
+            raise AdmissionRefusal('D62_GDS_CELL_UNBOUND', 'explicit input top cell required')
+        binary = shutil.which('klayout')
+        if not binary:
+            raise AdmissionRefusal('D62_KLAYOUT_UNAVAILABLE', 'local KLayout required')
+        executable = Path(binary).resolve()
+        result['tool'] = {'path': str(executable), 'sha256': _sha(executable)}
+        result['launch_admission'] = require_launch_admission(project, 'flow109.D62', {'flow109_context': context})
+        result['native_launch'] = launch.local_image_attestation()
+        output = attempt / 'filled.gds'
+        kit = Path(native['kit'])
+        env = {**os.environ, 'PDK_ROOT': str(kit.parent), 'PDK': kit.name,
+               'KLAYOUT_PATH': str(kit / 'libs.tech/klayout') + os.pathsep + os.environ.get('KLAYOUT_PATH', ''),
+               'QT_QPA_PLATFORM': 'offscreen'}
+        argv = [str(executable)]
+        if native['contract'] == 'active_layout_output_file':
+            argv += ['-zz']
+            if native['technology']:
+                argv += ['-n', native['technology']]
+            argv += ['-r', native['path'], '-rd', 'output_file=' + str(output), str(paths['input_gds'])]
+        else:
+            argv += ['-b', '-r', native['path'], '-rd', 'input=' + str(paths['input_gds']),
+                     '-rd', 'output=' + str(output), '-rd', 'threads=2']
+        result['native_started'] = True
+        proc = subprocess.run(argv, capture_output=True, text=True, env=env)
+        (attempt / 'producer.stdout').write_text(proc.stdout)
+        (attempt / 'producer.stderr').write_text(proc.stderr)
+        result['execution'] = {'argv': argv, 'returncode': proc.returncode,
+                               'environment': {k: env[k] for k in ('PDK_ROOT', 'PDK', 'KLAYOUT_PATH', 'QT_QPA_PLATFORM')}}
+        if proc.returncode:
+            raise AdmissionRefusal('D62_PDK_FILL_FAILED', f'rc={proc.returncode}', status='FAIL')
+        if not output.is_file() or not output.stat().st_size:
+            raise AdmissionRefusal('D62_PDK_FILL_OUTPUT_ABSENT', str(output), status='FAIL')
+        report = attempt / 'readback.json'
+        read_env = {**env, 'D62_BEFORE': str(paths['input_gds']), 'D62_AFTER': str(output),
+                    'D62_CELL': cell, 'D62_READBACK': str(report)}
+        require_launch_admission(project, 'flow109.D62', {'flow109_context': context})
+        argv = [str(executable), '-b', '-r', str(HERE / '_pdk_fill_readback.py')]
+        check = subprocess.run(argv, capture_output=True, text=True, env=read_env)
+        (attempt / 'readback.log').write_text(check.stdout + check.stderr)
+        result['readback_execution'] = {'argv': argv, 'returncode': check.returncode}
+        if check.returncode or not report.is_file():
+            raise AdmissionRefusal('D62_PDK_FILL_READBACK_FAILED', str(report), status='FAIL')
+        result['measurements'] = _read(report)
+        if not result['measurements'].get('original_polygon_geometry_preserved'):
+            raise AdmissionRefusal('D62_PDK_FILL_GEOMETRY_LOST', str(report), status='FAIL')
+        result['component_status'] = 'PASS'
+    except AdmissionRefusal as exc:
+        result.update(component_status='FAIL' if exc.status == 'FAIL' else 'NOT_MEASURED', reason=exc.code, detail=str(exc))
+    except (OSError, ValueError, KeyError, TypeError, launch.Refusal) as exc:
+        result.update(reason='D62_PDK_FILL_INCOMPLETE', detail=str(exc))
+    try:
+        _bound(project, result['manifest'])
+        for entry in result['inputs'].values():
+            _bound(project, entry)
+        current = _discover_pdk_filler(project, manifest)
+        if current != native or result['operation_sources'] != _gds_sources():
+            raise AdmissionRefusal('D62_PDK_FILL_STALE', 'native PDK/source changed')
+        if result.get('native_started') and (_sha(result['tool']['path']) != result['tool']['sha256'] or launch.local_image_attestation() != result['native_launch']):
+            raise AdmissionRefusal('D62_PDK_FILL_STALE', 'tool/image changed')
+    except (AdmissionRefusal, OSError, ValueError, KeyError, TypeError, launch.Refusal) as exc:
+        result.update(component_status='NOT_MEASURED', reason='D62_PDK_FILL_STALE', detail=str(exc))
+    result['outputs'] = {p.name: _record(project, p) for p in attempt.iterdir() if p.is_file()}
+    receipt = attempt / 'receipt.json'
+    _write(receipt, result)
+    result['receipt'] = _record(project, receipt)
+    result['metric_acceptance'] = accept_d62(project, context, result)
+    result['metric_acceptance_status'] = result['metric_acceptance']['status']
+    result['default_row_status'] = result['metric_acceptance_status']
+    result['completed'] = False
+    return result
 
 
 def _execute_gds(project, context):
@@ -309,7 +440,11 @@ def _execute_gds(project, context):
         manifest = _read(manifest_path)
         if manifest.get('schema') != SCHEMA:
             raise AdmissionRefusal('D62_INPUT_INVALID', 'existing D62 invocation schema required')
-        paths = {key: _gds_input(project, manifest.get(key)) for key in ('input_gds', 'rules')}
+        paths = {'input_gds': _gds_input(project, manifest.get('input_gds'))}
+        native = _discover_pdk_filler(project, manifest)
+        if native is not None:
+            return _execute_pdk_gds(project, context, manifest_path, manifest, paths, attempt, result, native)
+        paths['rules'] = _gds_input(project, manifest.get('rules'))
         cfg = _read(paths['rules'])
         if not isinstance(cfg.get('layers'), list) or not cfg['layers']:
             raise AdmissionRefusal('D62_RULES_ABSENT', 'declared per-layer GDS fill configuration required')
@@ -421,6 +556,13 @@ def execute(project, context):
               'step_id': 'D62', 'context_sha256': context.get('context_sha256'),
               'flow109_acceptance': 'NOT_MEASURED', 'native_started': False}
     try:
+        # A kit with a native GDS filler must not silently use the ODB-only
+        # generic engine instead. The GDS path keeps its explicit stream/SHA
+        # requirement and cannot issue an accepted ODB handoff.
+        if (project / INPUT).is_file():
+            manifest = _read(project / INPUT)
+            if _discover_pdk_filler(project, manifest) is not None:
+                return _execute_gds(project, context)
         prepared = prepare(project, context)
         admission = require_launch_admission(project, 'flow109.D62', {'flow109_context': context})
         result.update(inputs=prepared['inputs'], manifest=prepared['manifest'],

@@ -529,6 +529,48 @@ def density_rule_layer_identifiers(deck_text: str) -> Dict[str, List[str]]:
     return out
 
 
+def density_check_only_rules(deck_text: str) -> List[str]:
+    """Upper-bound-only executable checks have no fill obligation.
+
+    Read Ruby direction symbols and conditional comparisons, never rule prose.
+    Unknown or mixed-direction code retains its coverage obligation.
+    """
+    family = density_rule_layer_identifiers(deck_text)
+    die_names, _why = _dla.die_area_identifiers(deck_text)
+    code = _dla.deck_code_only(deck_text)
+    assignments = {}
+    for variable, expression in re.findall(r"^\s*([A-Za-z_]\w*)\s*=\s*([^\n]+)", code, re.M):
+        assignments.setdefault(variable, set()).update(re.findall(r"[A-Za-z_]\w*", expression))
+
+    def references(expression):
+        names = set(re.findall(r"[A-Za-z_]\w*", expression))
+        while True:
+            expanded = names | set().union(*(assignments.get(n, set()) for n in names))
+            if expanded == names:
+                return names
+            names = expanded
+
+    directions_by_rule = {}
+    for rid, _where, body in _dla._rule_blocks(deck_text):
+        if rid not in family:
+            continue
+        code = _dla.deck_code_only(body)
+        directions = set(re.findall(r":(min|max)\b", code))
+        for expression in re.findall(r"^\s*(?:if|elsif)\s+([^\n]+)", code, re.M):
+            names = references(expression)
+            # A condition on an enable flag or loop index does not describe
+            # the density bound. Follow only executable area dependencies.
+            if not (names & set(die_names) and names & set(family[rid])):
+                continue
+            if re.search(r"(?<![<>=])<(?![<])", expression):
+                directions.add('min')
+            if re.search(r"(?<![<>=])>(?![>])", expression):
+                directions.add('max')
+        directions_by_rule.setdefault(rid, set()).update(directions or {'unknown'})
+    return sorted(rid for rid, modes in directions_by_rule.items() if modes == {'max'})
+
+
+
 def density_rule_coverage(deck_text: str, layers: List[dict]
                           ) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
     """(covered, uncovered) — {rule: identifiers} split by whether THIS config
@@ -552,7 +594,10 @@ def density_rule_coverage(deck_text: str, layers: List[dict]
     names = {str(sp.get("name")) for sp in layers if sp.get("name")}
     covered: Dict[str, List[str]] = {}
     uncovered: Dict[str, List[str]] = {}
+    check_only = set(density_check_only_rules(deck_text))
     for rid, idents in sorted(density_rule_layer_identifiers(deck_text).items()):
+        if rid in check_only:
+            continue
         (covered if (set(idents) & names) else uncovered)[rid] = idents
     return covered, uncovered
 
@@ -663,6 +708,7 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
             # "this config was built before the concept existed" are
             # distinguishable to a consumer — the same rule the keep-out list
             # above already follows.
+            "density_rules_check_only": density_check_only_rules(deck_text),
             "density_rules_covered": _dens_covered,
             "density_rules_without_fill_entry": _dens_uncovered,
             # The deck's own NAME for each keep-out, so a reader can check the
