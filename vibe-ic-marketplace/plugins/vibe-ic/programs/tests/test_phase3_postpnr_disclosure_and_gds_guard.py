@@ -581,6 +581,10 @@ def _drive(monkeypatch, project: Path, *, die: str, util: float, execution_mode=
                             extras={"layout_digest": basis})
     monkeypatch.setattr(R, "step_prestream_gate", _fake_gate)
 
+    # The public entry now requires the case to declare the selected fixture PDK.
+    declared = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    declared.parent.mkdir(parents=True, exist_ok=True)
+    declared.write_text(json.dumps({"fields": {"pdk_target": _pdk(project).name}}))
     monkeypatch.setattr(R, "_detect_pdk",
                         lambda *a, **k: _pdk(project))
     # Native image/PDK discovery is outside this geometry-only transport.

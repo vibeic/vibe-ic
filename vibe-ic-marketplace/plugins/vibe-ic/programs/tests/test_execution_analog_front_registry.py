@@ -120,6 +120,9 @@ def test_phase3_backend_binding_carries_current_image_and_pdk_root(
 
     project = tmp_path / "backend"
     project.mkdir()
+    declared = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    declared.parent.mkdir(parents=True)
+    declared.write_text(json.dumps({"fields": {"pdk_target": "synthetic_process"}}))
     # The real backend resolver reads the selected Liberty on the host.
     # These are neutral role assets, not native measurement evidence.
     pdk_dir = tmp_path / "pdks" / "synthetic_process"
@@ -205,6 +208,9 @@ def test_backend_entry_does_not_register_an_analog_frontend(
 
     project = tmp_path / "backend"
     project.mkdir()
+    declared = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+    declared.parent.mkdir(parents=True)
+    declared.write_text(json.dumps({"fields": {"pdk_target": "synthetic_process"}}))
     registry = em.Registry()
     called = []
 
@@ -212,16 +218,28 @@ def test_backend_entry_does_not_register_an_analog_frontend(
         policy._register_analog_adapters(
             registry, subject, "no-analog-source-needed", parameters)
         called.append(subject)
+        raise RegistrationComplete
 
-    # This control owns only entry/registration. Admission is already granted;
-    # no PDK prevents any synthesis, stream-out or physical verdict afterwards.
+    # Stop the real entry at the registration boundary owned by this control.
+    # A missing PDK is now a refusal before registration, not a transport stub.
+    class RegistrationComplete(Exception):
+        pass
+    real_main = backend.main
+    def registration_main():
+        try:
+            return real_main()
+        except RegistrationComplete:
+            return 0
+    monkeypatch.setattr(backend, "main", registration_main)
+    monkeypatch.setattr(backend, "_backend_parameter_values", lambda *args: {})
     monkeypatch.setattr(policy, "configure", lambda args: None)
     monkeypatch.setattr(policy, "bootstrap", bootstrap)
     monkeypatch.setattr(backend, "_delivery_admission_refusal", lambda p: None)
     monkeypatch.setattr(backend, "_librelane_admission_facts", lambda p: {})
     monkeypatch.setattr(backend._canonical_admission, "admit_span",
                         lambda *args: SimpleNamespace(admitted=True))
-    monkeypatch.setattr(backend, "_detect_pdk", lambda *args: None)
+    monkeypatch.setattr(backend, "_detect_pdk",
+                        lambda *args: SimpleNamespace(name="synthetic_process"))
     argv = ["phase3_one_shot_runner.py", str(project),
             "--execution-mode", mode]
     if window:
