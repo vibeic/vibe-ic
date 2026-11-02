@@ -1,0 +1,21 @@
+library (ref_decap_interface) {
+  delay_model : table_lookup;
+  time_unit : "1ns";
+  voltage_unit : "1V";
+  current_unit : "1mA";
+  capacitive_load_unit (1, pf);
+  cell ("opaque//cell") {
+    is_macro_cell : true;
+    interface_timing : false;
+    leakage_power_unit : "1uW";
+    cell_leakage_power : 0;
+pin(in) { direction : input; } pin(out) { direction : output; timing() { related_pin : "in"; cell_rise(scalar) { values("0"); } cell_fall(scalar) { values("0"); } } } pg_pin (TOP) {
+      pg_type : "primary_power";
+      voltage_name : "TOP";
+    }
+    pg_pin (VSS) {
+      pg_type : "primary_ground";
+      voltage_name : "VSS";
+    }
+  }
+}

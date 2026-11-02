@@ -106,7 +106,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_incremental_statistics` | any | — | Prepare and replay foundry-mismatch incremental ADC chip cohorts. |
 | `analog_interface_classify` | any | — | structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141). |
 | `analog_lef_gds_outline_check` | any | — | Codifies the EXTRACT-NEW spot-check in |
-| `analog_liberty_nonzero_delay_check` | any | — | deterministic Liberty non-degeneracy gate. |
+| `analog_liberty_nonzero_delay_check` | any | — | Audit Liberty delays separately from native-characterized leakage power. |
 | `analog_loop_liveness_check` | any | — | a NULL over a DEAD LOOP certifies nothing. |
 | `analog_loop_liveness_samples_emit` | any | — | the samples `analog_loop_liveness_check` eats, exported from the transient the analog runner ALREADY simulated. |
 | `analog_lvs_comparison_prep` | any | — | COMPARISON-SIDE preparation for an open-PDK per-block LVS run (A6). Deterministic, chip-AGNOSTIC, no PDK literal. |
@@ -1671,7 +1671,7 @@ _(no programs in this group)_
 - `analog_incremental_statistics` — Prepare and replay foundry-mismatch incremental ADC chip cohorts.
 - `analog_interface_classify` — structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141).
 - `analog_lef_gds_outline_check` — Codifies the EXTRACT-NEW spot-check in
-- `analog_liberty_nonzero_delay_check` — deterministic Liberty non-degeneracy gate.
+- `analog_liberty_nonzero_delay_check` — Audit Liberty delays separately from native-characterized leakage power.
 - `analog_loop_liveness_check` — a NULL over a DEAD LOOP certifies nothing.
 - `analog_loop_liveness_samples_emit` — the samples `analog_loop_liveness_check` eats, exported from the transient the analog runner ALREADY simulated.
 - `analog_lvs_comparison_prep` — COMPARISON-SIDE preparation for an open-PDK per-block LVS run (A6). Deterministic, chip-AGNOSTIC, no PDK literal.

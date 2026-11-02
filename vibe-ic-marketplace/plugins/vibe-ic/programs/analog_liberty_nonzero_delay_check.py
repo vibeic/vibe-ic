@@ -1,62 +1,13 @@
 #!/usr/bin/env python3
-"""analog_liberty_nonzero_delay_check.py — deterministic Liberty non-degeneracy gate.
+"""Audit Liberty delays separately from native-characterized leakage power.
 
-Extracted from the `analog-hardmacro-gen` skill "Do not" rule:
-    "Do not generate Liberty with zero delays — use actual SPICE-measured values"
-and the Step-3 worst-case-corner requirement
-    "Derived from SPICE corner results (worst-case SS corner)".
+Signal-driving output/inout pins require timing unless interface.json declares
+settling kept out of Liberty and verified in analog simulation. All-zero timing
+remains a defect. Every accepted model requires the existing A8 native leakage
+loader, including its pure-passive measured-zero inventory rule. Failures block
+signoff (exit 1); no analog blocks is VACUOUS (exit 2).
 
-The skill documented these as prose; this program turns the
-non-degeneracy half into a deterministic structural check on the
-emitted Liberty (`hardmacro/<block>/<block>.lib`):
-
-  1. The .lib parses to a `library(...) { cell(<block>) { ... } }` shape.
-  2. The cell carries at least one timing-bearing numeric attribute and
-     ALL such numbers are non-zero — i.e. it is NOT a zero-delay /
-     area-only stub. Timing-bearing attributes checked:
-        cell_rise / cell_fall / rise_transition / fall_transition
-        cell_leakage_power / leakage_power value
-        intrinsic_rise / intrinsic_fall
-        timing() { ... values( ... ) ... }  (NLDM table — any non-zero entry)
-  3. If `analog/<block>/corner_results.json` exists, its provenance is
-     reported (real_ngspice vs stub) so a reviewer can see whether the
-     Liberty was derived from a real corner sweep.
-  4. If the design declares a clock period in its SDC or L8, every Liberty
-     propagation-delay arc must fit within that period. An analog settling
-     time longer than a clock period is an interface contract, not a
-     synchronous cell arc; it belongs in `interface.json` `timing_contract`.
-
-The defect this catches (real): a Liberty that only declares `area`
-(or whose every delay is `0.0`) passes STA vacuously — every path has
-zero delay, so the macro never violates setup/hold and the integration
-STA is meaningless. That is exactly the stub Liberty emitted at the
-A7 stub tier (`library(ldo_stub) { cell(ldo) { area : 10000 ; } }`).
-
-Honesty rules (NO vacuous PASS):
-  * No analog blocks                 -> VACUOUS (rc 2).
-  * .lib missing for a spec'd block  -> FAIL (cannot sign off STA).
-  * .lib present but unparseable     -> FAIL.
-  * .lib has a cell but NO timing-bearing attribute at all -> FAIL
-    (area-only stub, the documented zero-delay defect).
-  * .lib has a timing attribute whose value is 0 / 0.0 -> FAIL.
-  * .lib is non-degenerate, and NOTHING says what circuit those delays
-    model -> FAIL (LIB_SUBJECT_UNDECLARED). Asked LAST, after every rule
-    above. A model that records a library default still signs off, in the
-    PASS_STRUCTURE_ONLY tier; only silence costs.
-
-Usage:
-    python3 analog_liberty_nonzero_delay_check.py <project_dir>
-    python3 analog_liberty_nonzero_delay_check.py <project_dir> --json out.json
-
-Exit codes:
-    0 = PASS: at least one analog block was found and every Liberty is
-        non-degenerate
-    1 = FAIL (>=1 zero-delay / stub / missing Liberty)
-    2 = VACUOUS: nothing was examined — this project declares no analog block,
-        so there is no Liberty to prove non-degenerate. #521: the header
-        already said "Honesty rules (NO vacuous PASS)" and this branch was
-        exactly that, exiting 0 on 197 of the 200 tracked project roots. Also
-        rc 2 for an IO / argument error.
+Usage: analog_liberty_nonzero_delay_check.py <project_dir> [--json out.json]
 """
 from __future__ import annotations
 
@@ -81,6 +32,7 @@ import argparse
 import json
 import re
 import sys
+from bisect import bisect_left
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Tuple
@@ -152,21 +104,14 @@ _CONTENT_CHAIN = (_acc.CONTENT_GATE_OF_RECORD_ARTEFACT,)
 # Timing-bearing scalar attributes (single `attr : value ;`).
 _SCALAR_TIMING_ATTRS = (
     "cell_rise", "cell_fall", "rise_transition", "fall_transition",
-    "intrinsic_rise", "intrinsic_fall", "cell_leakage_power",
+    "intrinsic_rise", "intrinsic_fall",
 )
-_SCALAR_RE = {
-    a: re.compile(rf"\b{a}\s*:\s*([-+0-9.eE]+)\s*;")
-    for a in _SCALAR_TIMING_ATTRS
-}
 
 # NLDM-style table: values("0.1, 0.2", "0.3, 0.4");  inside a timing()/
 # table group. We pull every numeric token out of every values(...) blob.
-_VALUES_RE = re.compile(r"values\s*\(", re.IGNORECASE)
+_VALUES_RE = re.compile(r"\bvalues\s*\(", re.IGNORECASE)
 _NUM_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
-_LEAKAGE_GROUP_RE = re.compile(
-    r"leakage_power\s*\([^)]*\)\s*\{(?P<body>.*?)\}", re.DOTALL | re.IGNORECASE)
-_LEAKAGE_VALUE_RE = re.compile(r"\bvalue\s*:\s*([-+0-9.eE]+)\s*;")
-_CELL_RE = re.compile(r"\bcell\s*\(\s*([^)\s]+)\s*\)\s*\{", re.IGNORECASE)
+_CELL_RE = re.compile(r"\bcell\s*\(([^)]*)\)\s*\{", re.IGNORECASE)
 
 # A propagation delay is not the same thing as a leakage number or an output
 # transition. The comparison below therefore reads only the Liberty groups
@@ -182,11 +127,6 @@ _ARC_GROUP_RE = re.compile(
     r"(?:\([^)]*\))?\s*\{",
     re.IGNORECASE,
 )
-_TIME_UNIT_RE = re.compile(
-    r"\btime_unit\s*:\s*\"?\s*"
-    r"(?P<mult>\d+(?:\.\d+)?)\s*(?P<unit>fs|ps|ns|us|ms|s)\s*\"?\s*;",
-    re.IGNORECASE,
-)
 _TIME_UNIT_TO_NS = {
     "fs": 1e-6,
     "ps": 1e-3,
@@ -197,45 +137,145 @@ _TIME_UNIT_TO_NS = {
 }
 
 
-def _extract_values_blocks(text: str) -> List[str]:
-    """Return the raw content of each values(...) call (balanced-paren scan)."""
+@dataclass(frozen=True)
+class _LibertyToken:
+    kind: str
+    value: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
+class _LibertySource:
+    syntax: str
+    tokens: Tuple[_LibertyToken, ...]
+
+    def between(self, start: int, end: int) -> Tuple[_LibertyToken, ...]:
+        first = bisect_left(self.tokens, start, key=lambda token: token.start)
+        last = bisect_left(self.tokens, end, key=lambda token: token.start)
+        return tuple(t for t in self.tokens[first:last] if t.end <= end)
+
+    def slice(self, start: int, end: int) -> _LibertySource:
+        return _LibertySource(self.syntax[start:end], tuple(
+            _LibertyToken(t.kind, t.value, t.start - start, t.end - start)
+            for t in self.between(start, end)))
+
+    def argument(self, start: int, end: int) -> str:
+        tokens = self.between(start, end)
+        return (tokens[0].value if len(tokens) == 1
+                and tokens[0].kind in ("atom", "string") else "")
+
+
+def _lex_liberty(text: str | _LibertySource) -> _LibertySource:
+    if isinstance(text, _LibertySource):
+        return text
+    syntax = list(text)
+    tokens = []
+    punctuation = "(){}:;,"
+    i = 0
+    while i < len(text):
+        start = i
+        if text[i] == '"':
+            value = []
+            i += 1
+            while i < len(text):
+                if text[i] == "\\":
+                    if text.startswith("\\\r\n", i):
+                        i += 3
+                    elif text.startswith("\\\n", i):
+                        i += 2
+                    elif i + 1 < len(text):
+                        escaped = text[i + 1]
+                        value.append(escaped if escaped in '\\"' else "\\" + escaped)
+                        i += 2
+                    else:
+                        value.append("\\")
+                        i += 1
+                elif text[i] == '"':
+                    i += 1
+                    tokens.append(_LibertyToken("string", "".join(value), start, i))
+                    break
+                else:
+                    value.append(text[i])
+                    i += 1
+            end = min(i, len(text))
+            syntax[start:end] = [" "] * (end - start)
+        elif text.startswith("/*", i) or text.startswith("//", i):
+            if text.startswith("/*", i):
+                close = text.find("*/", i + 2)
+                i = len(text) if close < 0 else close + 2
+            else:
+                close = text.find("\n", i + 2)
+                i = len(text) if close < 0 else close
+            blank = ["\n" if c == "\n" else " " for c in text[start:i]]
+            syntax[start:i] = blank
+        elif text.startswith(("\\\r\n", "\\\n"), i):
+            i += 3 if text.startswith("\\\r\n", i) else 2
+            syntax[start:i] = [" "] * (i - start)
+        elif text[i].isspace():
+            i += 1
+        elif text[i] in punctuation:
+            tokens.append(_LibertyToken("punctuation", text[i], i, i + 1))
+            i += 1
+        else:
+            i += 1
+            while (i < len(text) and not text[i].isspace()
+                   and text[i] not in punctuation + '"'
+                   and not text.startswith(("//", "/*"), i)):
+                i += 1
+            tokens.append(_LibertyToken("atom", text[start:i], start, i))
+    return _LibertySource("".join(syntax), tuple(tokens))
+
+
+def _attributes(text: _LibertySource, name: str):
+    for i, token in enumerate(text.tokens[:-3]):
+        if token.kind != "atom" or token.value.lower() != name.lower():
+            continue
+        colon, value, semicolon = text.tokens[i + 1:i + 4]
+        if (colon.kind == "punctuation" and colon.value == ":"
+                and value.kind in ("atom", "string")
+                and semicolon.kind == "punctuation" and semicolon.value == ";"):
+            yield value.value.strip()
+
+
+def _attribute(text: _LibertySource, name: str) -> str | None:
+    return next(_attributes(text, name), None)
+
+
+def _extract_values_blocks(text: _LibertySource) -> List[str]:
+    """Return logical argument values for each live values(...) call."""
     blocks: List[str] = []
-    for m in _VALUES_RE.finditer(text):
+    for m in _VALUES_RE.finditer(text.syntax):
         i = m.end()  # position right after the '('
         depth = 1
         start = i
-        while i < len(text) and depth > 0:
-            c = text[i]
+        while i < len(text.syntax) and depth > 0:
+            c = text.syntax[i]
             if c == "(":
                 depth += 1
             elif c == ")":
                 depth -= 1
             i += 1
-        blocks.append(text[start:i - 1])
+        blocks.append(",".join(t.value for t in text.between(start, i - 1)
+                               if t.kind in ("atom", "string")))
     return blocks
 
 
-def _balanced_group_body(text: str, open_brace: int) -> str:
+def _balanced_group_body(text: _LibertySource, open_brace: int) -> _LibertySource:
     """Return one Liberty group's body, starting at its opening ``{``."""
     depth = 1
     i = open_brace + 1
     start = i
-    while i < len(text) and depth > 0:
-        if text[i] == "{":
+    while i < len(text.syntax) and depth > 0:
+        if text.syntax[i] == "{":
             depth += 1
-        elif text[i] == "}":
+        elif text.syntax[i] == "}":
             depth -= 1
         i += 1
-    return text[start:i - 1] if depth == 0 else text[start:]
+    return text.slice(start, i - 1 if depth == 0 else len(text.syntax))
 
 
-def _without_liberty_comments(text: str) -> str:
-    """Remove C- and C++-style comments before finding live arc syntax."""
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
-    return re.sub(r"//[^\n]*", "", text)
-
-
-def liberty_arc_delays_ns(text: str) -> Tuple[List[dict], str]:
+def liberty_arc_delays_ns(text: str | _LibertySource) -> Tuple[List[dict], str]:
     """Return propagation-delay samples normalised to ns and the time unit.
 
     Only ``cell_rise``, ``cell_fall``, ``intrinsic_rise`` and
@@ -244,8 +284,10 @@ def liberty_arc_delays_ns(text: str) -> Tuple[List[dict], str]:
     An absent/unrecognised ``time_unit`` returns raw samples with
     ``delay_ns=None`` so the caller can refuse an uncheckable comparison.
     """
-    text = _without_liberty_comments(text)
-    tm = _TIME_UNIT_RE.search(text)
+    text = _lex_liberty(text)
+    declared_unit = _attribute(text, "time_unit")
+    tm = re.fullmatch(r"(?P<mult>\d+(?:\.\d+)?)\s*(?P<unit>fs|ps|ns|us|ms|s)",
+                      declared_unit, re.I) if declared_unit is not None else None
     scale = None
     unit = "absent"
     if tm:
@@ -257,8 +299,10 @@ def liberty_arc_delays_ns(text: str) -> Tuple[List[dict], str]:
 
     # Scalar Liberty spelling: ``cell_rise : 0.42 ;``.
     for kind in _ARC_DELAY_ATTRS:
-        for m in _SCALAR_RE[kind].finditer(text):
-            raw = float(m.group(1))
+        for value in _attributes(text, kind):
+            if not _NUM_RE.fullmatch(value):
+                continue
+            raw = float(value)
             samples.append({
                 "kind": kind,
                 "raw_value": raw,
@@ -268,7 +312,7 @@ def liberty_arc_delays_ns(text: str) -> Tuple[List[dict], str]:
     # NLDM spelling: ``cell_rise(template) { values("..."); }``. Restrict
     # values() to the delay group body; a whole-file values() scan would also
     # mistake power tables for timing arcs.
-    for m in _ARC_GROUP_RE.finditer(text):
+    for m in _ARC_GROUP_RE.finditer(text.syntax):
         body = _balanced_group_body(text, m.end() - 1)
         for blob in _extract_values_blocks(body):
             for token in _NUM_RE.findall(blob):
@@ -299,45 +343,69 @@ class Result:
     summary: dict = field(default_factory=dict)
 
 
-def analyze_liberty(text: str) -> Tuple[bool, List[float], str]:
-    """Return (has_timing, numeric_values, cell_name).
-
-    has_timing      — True if >=1 timing-bearing attribute/table found.
-    numeric_values  — every timing-bearing number found (for zero check).
-    cell_name       — first cell(...) name (or "").
-    """
-    cm = _CELL_RE.search(text)
-    cell_name = cm.group(1) if cm else ""
-
+def analyze_liberty(text: str | _LibertySource) -> Tuple[bool, List[float], str]:
+    """Return whether timing attributes exist, their values, and the cell name."""
+    text = _lex_liberty(text)
+    cm = _CELL_RE.search(text.syntax)
     values: List[float] = []
     has_timing = False
-
-    # 1. scalar timing attrs
-    for attr, rx in _SCALAR_RE.items():
-        for m in rx.finditer(text):
+    for attr in _SCALAR_TIMING_ATTRS:
+        for value in _attributes(text, attr):
             has_timing = True
-            try:
-                values.append(float(m.group(1)))
-            except ValueError:
-                values.append(float("nan"))
-
-    # 2. NLDM values(...) tables
-    for blob in _extract_values_blocks(text):
-        nums = [float(n) for n in _NUM_RE.findall(blob)]
-        if nums:
+            if _NUM_RE.fullmatch(value):
+                values.append(float(value))
+        for match in re.finditer(rf"\b{attr}\s*\([^)]*\)\s*\{{", text.syntax):
             has_timing = True
-            values.extend(nums)
+            body = _balanced_group_body(text, match.end() - 1)
+            for blob in _extract_values_blocks(body):
+                values.extend(float(number) for number in _NUM_RE.findall(blob))
+    cell = text.argument(cm.start(1), cm.end(1)) if cm else ""
+    return has_timing, values, cell
 
-    # 3. leakage_power groups with `value : x ;`
-    for lg in _LEAKAGE_GROUP_RE.finditer(text):
-        for vm in _LEAKAGE_VALUE_RE.finditer(lg.group("body")):
-            has_timing = True
-            try:
-                values.append(float(vm.group(1)))
-            except ValueError:
-                values.append(float("nan"))
 
-    return has_timing, values, cell_name
+def _has_signal_output(text: str | _LibertySource) -> bool:
+    text = _lex_liberty(text)
+    for match in re.finditer(r"\b(?:pin|bus|bundle)\s*\([^)]*\)\s*\{", text.syntax):
+        body = _balanced_group_body(text, match.end() - 1)
+        if (_attribute(body, "direction") or "").lower() in {"output", "inout"}:
+            return True
+    return False
+
+
+def _settling_kept_out_of_liberty(bdir: Path) -> bool:
+    try:
+        interface = json.loads((bdir / "interface.json").read_text())
+    except (OSError, ValueError):
+        return False
+    contract = interface.get("timing_contract") if isinstance(interface, dict) else None
+    return (isinstance(contract, dict)
+            and contract.get("settling_kept_out_of_liberty") is True
+            and contract.get("verified_in_analog_sim") is True)
+
+
+def _native_leakage_refusal(project: Path, block: str, text: str | _LibertySource) -> str:
+    import analog_a8_hardmacro_emit as producer
+
+    bdir = _analog_dir(project) / block
+    try:
+        topology = json.loads((bdir / "topology.json").read_text())
+        if not isinstance(topology, dict) or not isinstance(topology.get("devices"), list):
+            return "declared device inventory is unavailable"
+        measurement, why = producer.load_native_measurement(
+            project, block, bdir / f"{block}.gds", topology)
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        return f"native leakage evidence is unavailable: {exc}"
+    if measurement is None:
+        return why
+    text = _lex_liberty(text)
+    scalar = _attribute(text, "cell_leakage_power")
+    unit = _attribute(text, "leakage_power_unit")
+    if scalar is None or not _NUM_RE.fullmatch(scalar) or unit is None:
+        return "Liberty lacks its measured leakage scalar or power unit"
+    if (unit != measurement["liberty_power_unit"] or
+            float(scalar) != float(f'{measurement["liberty_value"]:.12g}')):
+        return "Liberty leakage differs from the current native A8 measurement"
+    return ""
 
 
 def _discover_blocks(project: Path) -> List[str]:
@@ -405,9 +473,10 @@ def run_audit(project: Path) -> Result:
                 message=f"Block '{block}': {block}.lib unreadable: {exc}"))
             continue
 
+        text = _lex_liberty(text)
         has_timing, values, cell_name = analyze_liberty(text)
 
-        if not _CELL_RE.search(text):
+        if not cell_name:
             res.passed = False
             failed.append(block)
             res.findings.append(Finding(
@@ -415,13 +484,18 @@ def run_audit(project: Path) -> Result:
                 message=f"Block '{block}': Liberty has no cell(...) definition."))
             continue
 
-        if not has_timing:
+        has_arc = has_timing or bool(re.search(r"\btiming\s*\(", text.syntax))
+        settling_external = _settling_kept_out_of_liberty(an_dir / block)
+        if (not has_timing or not values) and (
+                has_arc or (_has_signal_output(text) and not settling_external)
+                or (_attribute(text, "cell_leakage_power") is None
+                    and _attribute(text, "leakage_power_unit") is None)):
             res.passed = False
             failed.append(block)
             res.findings.append(Finding(
                 rule="LIB_NO_TIMING", severity="ERROR", block=block,
                 message=(f"Block '{block}': Liberty cell '{cell_name}' has no "
-                         f"timing/leakage attributes (area-only stub). This is "
+                         f"timing attributes for a signal output or timing arc. This is "
                          f"the documented zero-delay defect: STA would pass "
                          f"vacuously.")))
             continue
@@ -436,6 +510,15 @@ def run_audit(project: Path) -> Result:
                 message=(f"Block '{block}': every timing value in the Liberty "
                          f"is 0 — zero-delay model (forbidden). Use actual "
                          f"SPICE-measured delays.")))
+            continue
+
+        why = _native_leakage_refusal(project, block, text)
+        if why:
+            res.passed = False
+            failed.append(block)
+            res.findings.append(Finding(
+                rule="LIB_LEAKAGE_UNMEASURED", severity="ERROR", block=block,
+                message=f"Block '{block}': {why}"))
             continue
 
         arc_samples, time_unit = liberty_arc_delays_ns(text)
@@ -511,25 +594,29 @@ def run_audit(project: Path) -> Result:
                          f"nothing would cost less than saying so.")))
             continue
 
+        model_detail = (f"{len(nonzero)} non-zero timing value(s)" if has_arc else
+                        ("settling kept out of Liberty and verified in analog sim; "
+                         "native leakage characterized" if settling_external else
+                         "no signal output or timing arc; native leakage characterized"))
         ok_blocks.append(block)
         if content == _acc.CONTENT_STRUCTURE_ONLY:
             structure_only.append(block)
             res.findings.append(Finding(
                 rule="LIB_STRUCTURE_ONLY", severity="WARNING", block=block,
                 message=(f"Block '{block}': Liberty cell '{cell_name}' has "
-                         f"{len(nonzero)} non-zero timing value(s) measured "
+                         f"{model_detail}; characterization "
                          f"OF A LIBRARY TOPOLOGY — `{cited}` records that its "
                          f"circuit came from a topology library and that no "
                          f"bound input reached any device parameter. The "
-                         f"delays are real and they are the default's; STA "
-                         f"closed on them is not closed on a designed "
-                         f"macro. corner provenance={provenance}.")))
+                         f"characterization belongs to that library default, "
+                         f"not a designed macro. corner provenance={provenance}.")))
         else:
             design_bound.append(block)
             res.findings.append(Finding(
-                rule="LIB_NONZERO_OK", severity="INFO", block=block,
+                rule="LIB_NONZERO_OK" if has_arc else "LIB_POWER_ONLY_OK",
+                severity="INFO", block=block,
                 message=(f"Block '{block}': Liberty cell '{cell_name}' has "
-                         f"{len(nonzero)} non-zero timing value(s); corner "
+                         f"{model_detail}; corner "
                          f"provenance={provenance}; design content "
                          f"design-bound per `{cited}`.")))
 

@@ -176,7 +176,11 @@ def _project(root: Path, design_content, blocks=BLOCKS,
         }, indent=2))
         hm = adir / "hardmacro" / b
         hm.mkdir(parents=True, exist_ok=True)
-        (hm / f"{b}.lib").write_text(_LIB.format(b=b))
+        # Keep the subject/tier controls clean under the existing native loader.
+        from test_analog_liberty_nonzero_delay_check import _native_measurement
+        _native_measurement(root, b, ("nmos",), 0.0031e-6)
+        (hm / f"{b}.lib").write_text(
+            _LIB.format(b=b).replace("{", '{ leakage_power_unit : "1uW";', 1))
     return root
 
 
