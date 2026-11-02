@@ -1,4 +1,4 @@
-"""Native final-State readers for the blocking D60 prestream gate.
+"""Native final-State readers for prestream and physical signoff.
 
 Ruling #62: steps chain through State; no publisher, historical stage probes,
 placed.def alias or signed threshold authority is an input to this path.
@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import filecmp
 import fnmatch
+import hashlib
 import json
 import math
 import os
 import re
 import shlex
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -42,16 +44,40 @@ def same_def(a: Path, b: Path) -> bool:
         return False
 
 
-def final_state(project: Path) -> Path | None:
+FLOW_ORDINAL = re.compile(r'^(\d+(?:\.\d+)?)(?:ic)?(?:-|$)')
+FINISHING_RECORD_REL = 'phase3/librelane/37-default-promotion.json'
+
+
+def final_state(project: Path, *, streamed: bool = False) -> Path | None:
     # Prefer the selected State. The existing signoff pointer is only a path;
     # its publisher, hashes and signatures are not admission requirements (#62).
     direct = project / 'state_out.json'
     if direct.is_file():
         state = load(direct)
-        if ('route__drc_errors_final' in (state.get('metrics') or {}) or
+        if (streamed or 'route__drc_errors_final' in (state.get('metrics') or {}) or
                 state.get('odb') and state.get('def') and (state.get('spef') or
                 same_def(path(project, state['def']), project / 'phase3/stage3/pnr/routed.def'))):
             return direct.resolve()
+    if streamed:
+        streams = []
+        base = project / 'phase3/librelane'
+        for candidate in sorted(base.glob('**/state_out.json')):
+            meta = load(candidate.parent / 'config.json').get('meta')
+            if isinstance(meta, dict) and meta.get('step') in (
+                    'KLayout.StreamOut', 'Magic.StreamOut', 'Vibeic.FillAwareStreamOut'):
+                parts = candidate.parent.relative_to(base).parts
+                ordinal = tuple(Decimal(match.group(1)) for folder in parts
+                                if (match := FLOW_ORDINAL.match(folder)))
+                if not FLOW_ORDINAL.match(parts[0]):
+                    raise ValueError(f'CURRENT_FINAL_STATE_UNORDERED: {candidate}')
+                streams.append((ordinal, candidate))
+        if not streams:
+            return None
+        latest = max(ordinal for ordinal, _ in streams)
+        finals = [candidate for ordinal, candidate in streams if ordinal == latest]
+        if len(finals) > 1:
+            raise ValueError('CURRENT_FINAL_STATE_AMBIGUOUS: ' + ', '.join(map(str, finals)))
+        return finals[0]
     selected = load(project / 'reports/phase3/sta_postpnr_signoff.json').get('sta_state')
     if isinstance(selected, str):
         p = path(project, selected)
@@ -69,6 +95,48 @@ def final_state(project: Path) -> Path | None:
                 and same_def(path(project, state['def']), routed)):
             candidates.append((bool(list(p.parent.glob('*/vibeic_signoff.rpt'))), p))
     return max(candidates)[1] if candidates else None
+
+
+def finished_gds(project: Path, selected: Path) -> Path:
+    """Seal and fill run after the final State, so their publisher names the GDS."""
+    record = load(project / FINISHING_RECORD_REL)
+    if not record.get('canonical'):
+        raise ValueError(f'CURRENT_FINISHED_GDS_RECORD_MISSING: {FINISHING_RECORD_REL}')
+    if not isinstance(record['canonical'], str):
+        raise ValueError('CURRENT_FINISHED_GDS_RECORD_INVALID: canonical must be a path string')
+    if path(project, str(record.get('stream_state'))).resolve() != selected.resolve():
+        raise ValueError(f"CURRENT_FINISHED_GDS_OTHER_STATE: {record.get('stream_state')} != {selected}")
+    if hashlib.sha256(selected.read_bytes()).hexdigest() != record.get('stream_state_sha256'):
+        raise ValueError(f'CURRENT_FINISHED_GDS_STATE_CHANGED: {selected}')
+    gds = path(project, record['canonical'])
+    if not gds.is_file() or gds.stat().st_size == 0:
+        raise ValueError(f'CURRENT_FINISHED_GDS_MISSING: {gds}')
+    if hashlib.sha256(gds.read_bytes()).hexdigest() != record.get('canonical_sha256'):
+        raise ValueError(f'CURRENT_FINISHED_GDS_CHANGED: {gds}')
+    return gds
+
+
+def signoff_inputs(project: Path, *roles: str) -> dict[str, Path]:
+    """The finished GDS plus the caller's other views from one final LibreLane State."""
+    project = Path(project).resolve()
+    selected = final_state(project, streamed=True)
+    if selected is None:
+        raise ValueError('CURRENT_FINAL_STATE_MISSING: state_out.json')
+    state = load(selected)
+    views = {}
+    for role in roles:
+        if role == 'gds':
+            views[role] = finished_gds(project, selected)
+            continue
+        name = 'nl' if role == 'netlist' else role
+        value = state.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f'CURRENT_FINAL_STATE_VIEW_MISSING: {name} in {selected}')
+        view = path(project, value)
+        if not view.is_file() or view.stat().st_size == 0:
+            raise ValueError(f'CURRENT_FINAL_STATE_VIEW_MISSING: {name}: {view}')
+        views[role] = view
+    return views
 
 
 def result(failures=(), missing=(), **values) -> dict:

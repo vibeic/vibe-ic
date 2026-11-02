@@ -4,6 +4,7 @@ route (asap7 -> asap7_finfet_lvs.py) instead of printing the FALSE
 """
 from __future__ import annotations
 
+import json
 import sys
 import types
 from pathlib import Path
@@ -12,6 +13,7 @@ _PROGRAMS = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_PROGRAMS))
 
 import phase3_one_shot_runner as R  # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 _ASAP7_REG = {
     "device_lvs_program": "asap7_finfet_lvs.py",
@@ -21,54 +23,53 @@ _ASAP7_REG = {
 }
 
 
-def test_asap7_uses_device_lvs_route_not_false_env_unavailable(monkeypatch):
-    monkeypatch.setattr(R, "_pdk_registry_entry",
-                        lambda n: _ASAP7_REG if n == "asap7" else None)
-    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)  # klayout present
-    pdk = types.SimpleNamespace(name="asap7", calibre_lvs=None)
-    res = R.step_lvs(Path("/tmp/proj"), "top", pdk, "vibeic-eda", upstream_pnr=None)
-    assert res.status == "PASS_WITH_WAIVERS"
-    assert res.extras.get("finding") == "LVS_DEVICE_LEVEL_AVAILABLE"
-    assert res.extras.get("device_lvs_program") == "asap7_finfet_lvs.py"
-    assert res.extras.get("lvs_method") == "klayout_device_geometric"
-    # the shipped library verification is surfaced, and it is NOT the false ENV msg
-    assert "159/208" in res.detail
-    assert "NOT an ENV gap" in res.detail
-    assert "netgen setup" not in res.detail  # the old misleading wording is gone
+def _state_project(tmp_path):
+    views = {}
+    for name in ("gds", "def", "nl"):
+        view = tmp_path / ("final." + name)
+        view.write_text("native " + name)
+        views[name] = str(view)
+    (tmp_path / "state_out.json").write_text(json.dumps(views))
+    publish_finished_gds(tmp_path)
+    return tmp_path
 
 
-def test_device_route_klayout_missing_names_klayout_not_netgen(monkeypatch):
-    monkeypatch.setattr(R, "_pdk_registry_entry",
-                        lambda n: _ASAP7_REG if n == "asap7" else None)
-    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: False)  # klayout absent
+def test_asap7_uses_device_lvs_route_not_false_env_unavailable(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "_pdk_registry_entry", lambda n: _ASAP7_REG)
+    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
+    monkeypatch.setattr(R, "_to_container_path", lambda p, c: p)
+    monkeypatch.setattr(R, "_docker_exec", lambda *a, **kw: (
+        0, 'A7_DESIGN_LVS {"verdict":"MATCH","power_shorts":0}', ""))
     pdk = types.SimpleNamespace(name="asap7", calibre_lvs=None)
-    res = R.step_lvs(Path("/tmp/proj"), "top", pdk, "vibeic-eda", upstream_pnr=None)
+    res = R.step_lvs(_state_project(tmp_path), "top", pdk, "vibeic-eda", _direct=True)
+    assert res.status == "PASS"
+    assert res.extras["finding"] == "LVS_MATCH"
+    assert res.extras["device_lvs_program"] == "asap7_finfet_lvs.py"
+    assert res.extras["lvs_engine"] == "asap7_device_klayout"
+
+
+def test_device_route_klayout_missing_names_klayout_not_netgen(tmp_path, monkeypatch):
+    monkeypatch.setattr(R, "_pdk_registry_entry", lambda n: _ASAP7_REG)
+    monkeypatch.setattr(R, "_tool_in_path", lambda c, t: False)
+    pdk = types.SimpleNamespace(name="asap7", calibre_lvs=None)
+    res = R.step_lvs(_state_project(tmp_path), "top", pdk, "vibeic-eda", _direct=True)
     assert res.status == "NOT_MEASURED"
-    assert res.extras.get("missing_tool") == "klayout"  # klayout, NOT magic/netgen
+    assert res.extras["missing_tool"] == "klayout"
 
 
-def test_non_device_pdk_does_not_take_device_route(monkeypatch):
-    # a PDK with no device_lvs_program must NOT hit the device route; it falls
-    # through to the netgen path (here: magic/netgen absent -> the old ENV branch).
+def test_non_device_pdk_does_not_take_device_route(tmp_path, monkeypatch):
     monkeypatch.setattr(R, "_pdk_registry_entry", lambda n: {})
     monkeypatch.setattr(R, "_tool_in_path", lambda c, t: False)
     pdk = types.SimpleNamespace(name="sky130A", calibre_lvs=None)
-    res = R.step_lvs(Path("/tmp/proj"), "top", pdk, "vibeic-eda", upstream_pnr=None)
+    res = R.step_lvs(_state_project(tmp_path), "top", pdk, "vibeic-eda", _direct=True)
     assert res.extras.get("finding") != "LVS_DEVICE_LEVEL_AVAILABLE"
 
 
-def test_upstream_pnr_fail_still_skips_before_device_route(monkeypatch):
-    # the upstream-pnr SKIP guard stays first (device route must not mask a dead pnr)
+def test_upstream_pnr_fail_still_skips_before_device_route(tmp_path, monkeypatch):
     monkeypatch.setattr(R, "_pdk_registry_entry", lambda n: _ASAP7_REG)
     monkeypatch.setattr(R, "_tool_in_path", lambda c, t: True)
     pdk = types.SimpleNamespace(name="asap7", calibre_lvs=None)
-    # R-0915-85 — the upstream is a FAIL (the route did not converge; the word
-    # `ROUTE_NOT_CONVERGED` lives in the DETAIL, where the reader acts on it),
-    # and a step standing on a failed input certifies nothing: NOT_MEASURED,
-    # naming the upstream.
-    bad = types.SimpleNamespace(status="FAIL",
-                                detail="ROUTE_NOT_CONVERGED: died",
-                                extras={})
-    res = R.step_lvs(Path("/tmp/proj"), "top", pdk, "vibeic-eda", upstream_pnr=bad)
+    bad = types.SimpleNamespace(status="FAIL", detail="ROUTE_NOT_CONVERGED: died", extras={})
+    res = R.step_lvs(tmp_path, "top", pdk, "vibeic-eda", upstream_pnr=bad, _direct=True)
     assert res.status == "NOT_MEASURED"
     assert res.reason_class == "upstream_failed"

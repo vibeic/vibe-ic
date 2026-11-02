@@ -23,6 +23,7 @@ import drv_capture_plan as capture_plan  # noqa: E402
 import drv_signoff_judge as drv  # noqa: E402
 from test_drv_signoff_judge import (_bundle, _file,  # noqa: E402
                                     _synthetic_scene_profile)  # noqa: F401 (autouse)
+from _finished_gds_fixture import publish_finished_gds
 
 
 def _streamed(tmp_path, *, lvs_status="PASS", gds_def=None, lvs_def=None,
@@ -148,10 +149,24 @@ def test_the_final_gate_refuses_an_in_flow_bundle(tmp_path):
                for n in json.loads(out.read_text())["not_measured"])
 
 
+def _lvs_record_project(tmp_path):
+    """Selected nonempty views stop at the signal-unrouted guard after recording inputs."""
+    from test_v0_2_97_issue477_lvs_incomplete import _proj
+    def_text = ("VERSION 5.8 ;\nDESIGN chip_top ;\nNETS 20 ;\n"
+                + "".join(f"- signal_{n} ( PIN signal_{n} ) ;\n" for n in range(20))
+                + "END NETS\nEND DESIGN\n")
+    project = _proj(tmp_path, def_bytes=def_text.encode())
+    (project / "state_out.json").write_text(json.dumps({
+        "def": str(project / "phase3/stage3/pnr/chip_top.def"),
+        "nl": str(project / "phase2/stage2/synth/chip_top_synth.v")}))
+    publish_finished_gds(project)
+    return project
+
+
 def test_step_lvs_records_the_layout_and_netlist_it_compares(tmp_path, monkeypatch):
     import phase3_one_shot_runner as R
-    from test_v0_2_97_issue477_lvs_incomplete import _pdk, _proj
-    project = _proj(tmp_path, def_bytes=b"")          # stops at the 0-byte guard
+    from test_v0_2_97_issue477_lvs_incomplete import _pdk
+    project = _lvs_record_project(tmp_path)
     stale = project / "reports/phase3/lvs_inputs.json"
     stale.parent.mkdir(parents=True, exist_ok=True)
     stale.write_text('{"stale": true}')
@@ -249,8 +264,8 @@ def test_step31_start_clears_both_lvs_records_in_librelane_mode(tmp_path, monkey
 
 def test_step_lvs_verdict_names_its_own_inputs_record(tmp_path, monkeypatch):
     import phase3_one_shot_runner as R
-    from test_v0_2_97_issue477_lvs_incomplete import _pdk, _proj
-    project = _proj(tmp_path, def_bytes=b"")          # stops at the 0-byte guard
+    from test_v0_2_97_issue477_lvs_incomplete import _pdk
+    project = _lvs_record_project(tmp_path)
     monkeypatch.setattr(R, "_docker_exec", lambda c, cmd, timeout=0, **_: (0, "", ""))
     monkeypatch.setattr(R, "_to_container_path", lambda s, c: s)
     R.step_lvs(project, "chip_top", _pdk(), "x", _direct=True)

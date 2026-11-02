@@ -2355,11 +2355,10 @@ def main() -> int:
             second_track = ("not run — D1 was REFUSED, so no L-doc exists for "
                             "the expert track to parse")
         elif rc_extract == 2:
-            # A VACUOUS generator-stamp handoff is an undetermined D1 result;
-            # parsing the absent population would manufacture a second error.
             rc_track = 2
-            second_track = ("not run — D1 was UNDETERMINED, so no L-doc "
-                            "population exists for the expert track")
+            second_track = ("not run — D1 returned an undetermined or refused "
+                            "result; the expert track requires a completed "
+                            "current extraction")
         else:
             rc_track = run_phase1_second_track(project, 0)
             rc = max(rc_extract, rc_track, rc_route)

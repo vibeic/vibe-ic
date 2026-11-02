@@ -1,10 +1,16 @@
 """Typed physical routing declarations, private branch compilation and proof."""
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 import copy
 import math
 from typing import Any
+
+
+CURRENT_ROUTE_PASSES = 4
+STACK_SHARE = 0.45
+PIN_SHARE = 0.10
 
 
 class IntentRefusal(ValueError):
@@ -50,10 +56,88 @@ class Separation:
 
 
 @dataclass(frozen=True)
+class CurrentBudget:
+    net: str
+    device: str
+    ir_drop_mv: float
+
+
+@dataclass(frozen=True)
+class PathSize:
+    rail_lam: int
+    cuts: int
+    pin_lam: int
+
+
+@dataclass(frozen=True)
+class CurrentPath:
+    """One declared current's series path: pin wire, pin via stack, rail, parallel terminal legs."""
+    current_ma: float
+    budget_mv: float
+    cut_ohms: tuple[float, ...]
+    sheet_ohm: float
+    pin_sheet_ohm: float
+    pin_run: int
+    source: int
+    sinks: tuple[int, ...]
+    leg_ohms: tuple[float, ...]
+
+    @property
+    def budget_ohm(self) -> float:
+        return self.budget_mv / self.current_ma
+
+    @property
+    def legs_ohm(self) -> float:
+        return 1 / sum(1 / ohm for ohm in self.leg_ohms)
+
+    def stack_ohm(self, cuts: int) -> float:
+        return sum(self.cut_ohms) / cuts
+
+    def pin_ohm(self, width_lam: int) -> float:
+        return self.pin_sheet_ohm * self.pin_run / width_lam
+
+    def rail_ohm(self, width_lam: int) -> float:
+        """Series-equivalent resistance of the rail for equal currents at its terminal legs."""
+        squares = 0.0
+        for side in ([x for x in self.sinks if x >= self.source], [x for x in self.sinks if x < self.source]):
+            share, here = len(side) / len(self.sinks), self.source
+            for x in sorted(side, key=lambda v: abs(v - self.source)):
+                squares += share * share * abs(x - here) / width_lam
+                here, share = x, share - 1 / len(self.sinks)
+        return self.sheet_ohm * squares
+
+    def _remaining(self, spent: float) -> float:
+        remaining = self.budget_ohm - self.legs_ohm - spent
+        if remaining <= 0:
+            refuse("IR_BUDGET_UNACHIEVABLE", f"{self.budget_mv:g} mV at {self.current_ma:g} mA leaves "
+                   f"{remaining:.3f} ohm after {self.legs_ohm:.3f} ohm of parallel terminal legs and "
+                   f"{spent:.3f} ohm of stack and pin wire")
+        return remaining
+
+    def size(self) -> PathSize:
+        """The smallest stack, rail and pin wire meeting the budget at fixed shares of what the legs leave."""
+        remaining = self._remaining(0.0)
+        cuts = max(1, math.ceil(self.stack_ohm(1) / (remaining * STACK_SHARE) - 1e-9))
+        pin = max(1, math.ceil(self.pin_ohm(1) / (remaining * PIN_SHARE) - 1e-9))
+        rail = math.ceil(self.rail_ohm(1) / (remaining * (1 - STACK_SHARE - PIN_SHARE)) - 1e-9)
+        return PathSize(2 * math.ceil(rail / 2), cuts, 2 * math.ceil(pin / 2))
+
+    def resize(self, drawn: PathSize) -> PathSize:
+        """Keep the seated stack; re-derive the wires for the rail and pin run it was given."""
+        pin = max(drawn.pin_lam, 2 * math.ceil(self.pin_ohm(1) / (self._remaining(self.stack_ohm(drawn.cuts)) * PIN_SHARE) / 2))
+        remaining = self._remaining(self.stack_ohm(drawn.cuts) + self.pin_ohm(pin))
+        return PathSize(2 * math.ceil(math.ceil(self.rail_ohm(1) / remaining - 1e-9) / 2), drawn.cuts, pin)
+
+    def total_ohm(self, drawn: PathSize) -> float:
+        return self.legs_ohm + self.rail_ohm(drawn.rail_lam) + self.stack_ohm(drawn.cuts) + self.pin_ohm(drawn.pin_lam)
+
+
+@dataclass(frozen=True)
 class RoutingIntent:
     topology: tuple[Topology, ...] = ()
     widths: tuple[Width, ...] = ()
     separations: tuple[Separation, ...] = ()
+    currents: tuple[CurrentBudget, ...] = ()
 
 
 @dataclass
@@ -104,7 +188,7 @@ def parse_intent(raw: Any) -> RoutingIntent:
     raw = _object(raw, {"version", "constraints"})
     if type(raw["version"]) is not int or raw["version"] != 1 or not isinstance(raw["constraints"], list):
         refuse("SCHEMA", "expected version 1 and a constraints array")
-    topology, widths, separations = [], [], []
+    topology, widths, separations, currents = [], [], [], []
     for item in raw["constraints"]:
         if not isinstance(item, dict):
             refuse("SCHEMA", "each constraint must be an object")
@@ -127,6 +211,9 @@ def parse_intent(raw: Any) -> RoutingIntent:
             if type(cuts) is not int or cuts < 1:
                 refuse("SCHEMA", "via_cuts must be a positive integer")
             widths.append(Width(_name(item["net"]), _positive(item["wire_width_um"]), cuts))
+        elif kind == "current_budget":
+            _object(item, {"kind", "net", "device", "ir_drop_mv"})
+            currents.append(CurrentBudget(_name(item["net"]), _name(item["device"]), _positive(item["ir_drop_mv"])))
         elif kind == "separation":
             _object(item, {"kind", "nets"}, {"spacing_um", "shield_net", "layer"})
             ns = item["nets"]
@@ -141,14 +228,16 @@ def parse_intent(raw: Any) -> RoutingIntent:
                 refuse("SCHEMA", "choose spacing_um or shield_net and layer")
         else:
             refuse("SCHEMA", f"unknown constraint kind {kind!r}")
-    for values in (topology, widths):
+    if {item.net for item in currents} & {item.net for item in widths}:
+        refuse("CONFLICT", "a net declares both an explicit width and a current budget")
+    for values in (topology, widths, currents):
         names = [item.net for item in values]
         if len(names) != len(set(names)):
             refuse("CONFLICT", "a net has repeated topology or width declarations")
     pairs = [tuple(sorted(item.nets)) for item in separations]
     if len(pairs) != len(set(pairs)):
         refuse("CONFLICT", "a net pair has repeated separation declarations")
-    return RoutingIntent(tuple(topology), tuple(widths), tuple(separations))
+    return RoutingIntent(tuple(topology), tuple(widths), tuple(separations), tuple(currents))
 
 
 def compile_branches(intent: RoutingIntent, devices, ports, pin_spec=None) -> Compiled:
@@ -634,12 +723,100 @@ def build_shields(plan, compiled, geo, facts, a5):
     return evidence
 
 
-def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, raw, options):
+def _current_path(plan, budget, compiled, geo):
+    """Read the path a current budget governs from an already routed plan."""
+    private = {net for ref, net in compiled.endpoints.items()
+               if ref.device == budget.device and compiled.canonical.get(net) == budget.net}
+    if len(private) != 1:
+        refuse("ENDPOINT", f"device {budget.device} has no single terminal group on {budget.net}")
+    net = private.pop()
+    pin = next((row for row in plan.pins if row["net"] == budget.net), None)
+    if pin is None or compiled.joins.get(budget.net, budget.net) != net:
+        refuse("CURRENT_PATH_UNSUPPORTED", f"{budget.net}: {budget.device} is not on the branch that owns the pin")
+    rows = [rails for rails in plan.row_rails if net in rails]
+    if len(rows) != 1:
+        refuse("CURRENT_PATH_UNSUPPORTED", f"{budget.net} spans {len(rows)} rows; only one rail is sized")
+    tables = (compiled.pin_spec or {}).get("resistance_ohm", {})
+    current = compiled.pin_spec["ports"][net].get("em", {}).get("current_mA")
+    if not current:
+        refuse("CURRENT_UNDECLARED", f"{budget.net} has no declared current in the block specification")
+    level, rail = int(pin["layer"][5:]), plan.rail_level
+    cuts = [tables.get("cut", {}).get(k) for k in range(rail, level)]
+    sheets = tables.get("metal_per_square", {})
+    sheet, leg_sheet, pin_sheet = (sheets.get(k) for k in (rail, rail + 1, level))
+    if not sheet or not leg_sheet or not pin_sheet or not all(cuts):
+        refuse("RESISTANCE_UNDECLARED", f"the tech LEF states no resistance for the {budget.net} path")
+    ry = rows[0][net]
+    groups = [group for device in plan.intent_placed if device["dev"]["name"] == budget.device
+              for group in device["groups"] if group["net"] == net and not group.get("body_tap")]
+    legs = tuple(leg_sheet * abs(group["abs_escape_y"] - ry) / geo.wire[rail + 1] + cuts[0] for group in groups)
+    source = (pin["strip_box"][0] + pin["strip_box"][2]) // 2
+    label = pin["label_box"]
+    pin_run = abs((label[0] + label[2]) // 2 - source) + abs((label[1] + label[3]) // 2 - ry)
+    return net, CurrentPath(current, budget.ir_drop_mv, tuple(cuts), sheet, pin_sheet, pin_run, source,
+                            tuple(group["lane_x"] for group in groups), legs)
+
+
+def _drawn_size(plan, net, cuts):
+    box = plan.intent_rail_boxes[net]
+    return PathSize(box[3] - box[1], cuts, plan.intent_pin_widths[net])
+
+
+def _build_current_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, intent, raw, options):
+    """Measure each governed path on a first route, then route once more at its derived size."""
+    if options.get("shared_capacitor_escapes"):
+        refuse("CURRENT_PATH_UNSUPPORTED", "current budgets size the single-rail placer's rails")
+    probe = build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec,
+                              dataclasses.replace(intent, currents=()), options)
+    compiled = compile_branches(intent, devs, ports, pin_spec)
+    paths = {budget: _current_path(probe, budget, compiled, base_geo) for budget in intent.currents}
+    sizes = {net: path.size() for net, path in paths.values()}
+    # A larger cut array can only seat further along its rail, and a wider rail
+    # pushes the pin run; re-derive both wires until the drawn path meets its budget.
+    for _ in range(CURRENT_ROUTE_PASSES):
+        plan = build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec,
+                                 dataclasses.replace(intent, currents=()), options, path_sizes=sizes)
+        paths = {budget: _current_path(plan, budget, compiled, base_geo) for budget in intent.currents}
+        drawn = {net: _drawn_size(plan, net, sizes[net].cuts) for net, _ in paths.values()}
+        over = {net: path for net, path in paths.values() if path.total_ohm(drawn[net]) > path.budget_ohm + 1e-9}
+        if not over:
+            break
+        sizes.update({net: path.resize(drawn[net]) for net, path in over.items()})
+    else:
+        net, path = next(iter(over.items()))
+        size = drawn[net]
+        refuse("IR_BUDGET_UNACHIEVED", f"{compiled.canonical[net]}: {path.total_ohm(size):.3f} ohm drawn > "
+               f"{path.budget_ohm:.3f} ohm budget (stack {path.stack_ohm(size.cuts):.3f} at {size.cuts} cuts, "
+               f"rail {path.rail_ohm(size.rail_lam):.3f} at {size.rail_lam / base_geo.lam:g} um, "
+               f"pin wire {path.pin_ohm(size.pin_lam):.3f}, legs {path.legs_ohm:.3f})")
+    evidence = []
+    for budget, (net, path) in paths.items():
+        size = drawn[net]
+        evidence.append({"kind": "current_budget", "net": budget.net, "device": budget.device,
+                         "current_mA": path.current_ma, "ir_drop_budget_mV": budget.ir_drop_mv,
+                         "rail_width_um": size.rail_lam / base_geo.lam, "pin_width_um": size.pin_lam / base_geo.lam,
+                         "cuts_per_via": size.cuts,
+                         "modelled_ohm": {"stack": path.stack_ohm(size.cuts), "rail": path.rail_ohm(size.rail_lam),
+                                          "pin_wire": path.pin_ohm(size.pin_lam), "terminal_legs": path.legs_ohm,
+                                          "total": path.total_ohm(size)}})
+    plan.routing_intent_evidence["declaration"] = raw if isinstance(raw, dict) else None
+    plan.routing_intent_evidence["constraints"].extend(evidence)
+    return plan
+
+
+def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, raw, options,
+                      path_sizes=None):
     import analog_a5_layout_emit as a5
     intent = raw if isinstance(raw, RoutingIntent) else parse_intent(raw)
+    if intent.currents:
+        return _build_current_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, intent, raw, options)
     if not (intent.topology or intent.widths or intent.separations):
         return a5._build_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, **options)
     compiled = compile_branches(intent, devs, ports, pin_spec)
+    for net, size in (path_sizes or {}).items():
+        spec = compiled.pin_spec["ports"][net]
+        spec["cuts"] = max(spec["cuts"], size.cuts)
+        spec["width_lam"] = max(spec["width_lam"], size.pin_lam)
     geo = copy.deepcopy(base_geo)
     geo.intent_strict = True
     geo.intent_cuts = {private: next((width.via_cuts for width in intent.widths if width.net == net), 1)
@@ -670,6 +847,7 @@ def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, 
                 profile.patch[level] = max(profile.patch[level], profile.long_half[level])
         profile.space = dict(geo.space)
         profile.default_space = geo.default_space
+        profile.rail_wire = path_sizes[private].rail_lam if private in (path_sizes or {}) else 0
         profiles[private] = profile
     for private, profile in profiles.items():
         cuts = profile.intent_cuts.get(private, 1)
@@ -696,6 +874,9 @@ def build_intent_plan(devs, ports, cells, facts, base_geo, tap_clear, pin_spec, 
                               compiled.pin_spec, **options)
     except a5.Refusal as exc:
         refuse("NO_LEGAL_ROUTE", str(exc))
+    plan.intent_rail_boxes = dict(plan.rail_box)
+    plan.intent_pin_widths = {compiled.joins.get(compiled.canonical.get(pin["net"], pin["net"]), pin["net"]): pin["width_lam"]
+                              for pin in plan.pins}
     _anchors(plan, compiled, a5)
     regions = {}
     band = 1

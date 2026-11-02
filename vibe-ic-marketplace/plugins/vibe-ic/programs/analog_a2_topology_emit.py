@@ -125,6 +125,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import copy
 import math
 import hashlib
 import json
@@ -7010,7 +7011,57 @@ def input_drain_cascode_problems(ir: Dict[str, Any],
         return ["INPUT_DRAIN_CASCODE_INVALID: " + str(exc)]
 
 
+_QUIET_VCM_FIELDS = ("vcm_reference_cap_ff", "vcm_integrator_cap_ff")
+
+
+def _quiet_vcm_library(lib, declared_names):
+    if not set(_QUIET_VCM_FIELDS).intersection(declared_names):
+        return lib
+    if any(device["name"] == "r_vcm_iso" for device in lib["devices"]):
+        return lib
+    lib = copy.deepcopy(lib)
+    index = lib["internal_nets"].index("vcm") + 1
+    lib["internal_nets"].insert(index, "vcm_buf")
+    for device in lib["devices"]:
+        if device["name"] in {"mn_cmfb", "mp_cmo", "mn_cmo", "c_cmc", "c_vcm"}:
+            device["nets"] = ["vcm_buf" if net == "vcm" else net
+                              for net in device["nets"]]
+    index = next(i for i, device in enumerate(lib["devices"])
+                 if device["name"] == "c_vcm") + 1
+    lib["devices"][index:index] = [
+        {"name": "c_vcm_ref", "role": "cap", "function":
+         "common-mode divider reference filtering before the buffer",
+         "nets": ["nvcmr", "vss"], "w": 10.0, "l": 1.0},
+        {"name": "r_vcm_iso", "role": "res", "function":
+         "common-mode buffer output isolation from the integrator reference reservoir",
+         "nets": ["vcm_buf", "vcm", "vss"], "w": 0.5, "l": 12.0},
+        {"name": "c_vcm_int", "role": "cap", "function":
+         "common-mode integrator reference reservoir after buffer output isolation",
+         "nets": ["vcm", "vss"], "w": 10.0, "l": 1.0},
+    ]
+    index = next(i for i, expression in enumerate(lib["device_param_exprs"])
+                 if expression["device"] == "c_vcm") + 1
+    lib["device_param_exprs"][index:index] = [
+        {"device": "c_vcm_ref", "param": "l",
+         "expr": cap_l_expr("vcm_reference_cap_ff"),
+         "ff_expr": "vcm_reference_cap_ff",
+         "rationale": "declared divider reference capacitance filters noise before the buffer"},
+        {"device": "c_vcm_int", "param": "l",
+         "expr": cap_l_expr("vcm_integrator_cap_ff"),
+         "ff_expr": "vcm_integrator_cap_ff",
+         "rationale": "declared integrator reference capacitance filters buffer noise after output isolation"},
+    ]
+    for field in _QUIET_VCM_FIELDS:
+        lib.setdefault(REQUIRES_BOUND_KEY, {})[field] = {
+            "unit": "fF", "why": "quiet common-mode filtering requires both declared capacitances"}
+        lib.setdefault(REQUIRES_DERIVED_KEY, []).append({
+            "name": "positive_" + field, "expr": "1 / " + field, "min": 0.0,
+            "why": "a declared filter capacitor must have positive capacitance"})
+    return lib
+
+
 def ciff_library(lib, spec_values):
+    lib = _quiet_vcm_library(lib, spec_values)
     specialized = _ciff.specialize(lib, spec_values, expand_stages, cap_l_expr,
                                   SAMPLING_CAP_FF_EXPR, _LOAD_OVER_CS_DERIVED_EXPR)
     return _ota_bias.prepare_library(specialized)
@@ -7995,6 +8046,20 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
     spec_values, spec_path = bound_spec_values(project, name)
     if btype == "delta_sigma":
         try:
+            data = _read_json(Path(spec_path)) if spec_path else {}
+            rows = data.get("specs") if isinstance(data, dict) else None
+            quiet_rows = [row for row in rows if isinstance(row, dict)
+                          and row.get("name") in _QUIET_VCM_FIELDS] if isinstance(rows, list) else []
+            names = [row["name"] for row in quiet_rows]
+            if len(names) != len(set(names)):
+                raise ValueError("duplicate quiet VCM capacitance field: "
+                                 + ", ".join(names))
+            for row in quiet_rows:
+                value = next((row[key] for key in ("target", "typ", "value", "min", "max")
+                              if key in row), None)
+                if isinstance(value, bool) or not isinstance(value, (int, float)):
+                    raise ValueError(row["name"] + " must declare a numeric capacitance")
+            lib = _quiet_vcm_library(lib, names)
             lib = ciff_library(lib, spec_values)
         except (ValueError, KeyError, ImportError) as exc:
             return _gap("CIFF_SPEC_INVALID", [{"requirement": "CIFF NTF and coefficient specification",
