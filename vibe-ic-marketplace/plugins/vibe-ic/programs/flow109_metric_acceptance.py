@@ -7144,12 +7144,13 @@ def _d0102_dimensionless(project: Path, expectation: dict, reads: dict) -> dict 
             or values[0].get('unit') not in (None, '', '—', '-')):
         item.update(usable=False, met=False, observed='Expected a dimensionless quantity record.')
         return item
-    observed = [Decimal(str(values[0][key])) for key in quantity_fields
-                if type(values[0].get(key)) in (int, float)]
-    if not observed or any(not value.is_finite() for value in observed):
+    observed = {key: values[0][key] for key in quantity_fields
+                if type(values[0].get(key)) in (int, float)}
+    if not observed or any(not Decimal(str(value)).is_finite() for value in observed.values()):
         item.update(usable=False, met=False, observed='Dimensionless quantity has no finite numeric value.')
         return item
-    missing = [token for token in numbers if Decimal(token) not in observed]
+    units = expert._haystack_units(observed)
+    missing = [token for token in numbers if not expert.present_in_units(token, units)]
     item.update(met=not missing, missing_tokens=missing,
                 observed=f'Dimensionless numeric values {observed} compared with {numbers}.')
     return item

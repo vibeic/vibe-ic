@@ -22,8 +22,8 @@ THE RULE PINNED HERE
     digest, a version, or a different number (`5.5` is not `55`, `15.5`,
     `5.55` or `1.5.5`; `40` is not `-40`);
   * equal values match after unit normalisation (`5.5 um` == `5500 nm` ==
-    `pad_edge_spacing_um: 5.5`); a unitless token compares with the number as
-    written, in whatever unit the layer states it;
+    `pad_edge_spacing_um: 5.5`); a unitless token requires a dimensionless
+    value, and a physical expectation states its unit in the same token;
   * every other token is matched exactly as before.
 
 Every fixture is synthesised from neutral parts; the layer stems are the
@@ -68,7 +68,8 @@ _LINE_55_LAYERS = {
 _SPACING = {"id": "spacing", "layer": "L19_CONSTRAINTS_PDK",
             "requirement": "the pad edge spacing is 5.5 um",
             "evidence": ["input/docs/rulings.md:13 — pad edge spacing 5.5 um"],
-            "expected_tokens": ["5.5"]}
+            "field_path": "/constraints/tapeout_geometry",
+            "expected_tokens": ["5.5 um"]}
 
 
 def _project(tmp_path, layers):
@@ -90,14 +91,14 @@ def test_the_measured_counterexample_no_longer_matches(tmp_path):
     c = T.converge_ai_expectation(_project(tmp_path, _LINE_55_LAYERS),
                                   dict(_SPACING))
     assert c["usable"] is True
-    assert c["met"] is False and c["missing_tokens"] == ["5.5"]
+    assert c["met"] is False and c["missing_tokens"] == ["5.5 um"]
     # The ownership answer is DECIDED and empty: no layer carries 5.5, and no
     # line number, citation, digest or other number is offered as evidence.
     assert c["owning_layers_status"] == "OK"
     assert c["owning_layers"] == []
     assert c["owning_layers_evidence"] == {}
     assert c["carriage"]["verdict"] == T.CARRIAGE_NOWHERE
-    assert c["carriage"]["tokens_in_no_layer"] == ["5.5"]
+    assert c["carriage"]["tokens_in_no_layer"] == ["5.5 um"]
 
 
 def test_the_raw_text_matcher_is_unchanged_and_no_longer_decides_numbers():
@@ -119,27 +120,29 @@ def test_a_typed_5_5_still_matches(tmp_path):
     p = _project(tmp_path, layers)
 
     whole = T.converge_ai_expectation(p, dict(_SPACING))
-    assert whole["met"] is True and whole["scope"] == "whole_layer"
+    assert whole["met"] is True and whole["scope"] == "json_pointer"
 
     pointed = T.converge_ai_expectation(p, dict(
         _SPACING, field_path="/constraints/tapeout_geometry/pad_edge_spacing_um"))
     assert pointed["met"] is True and pointed["scope"] == "json_pointer"
 
     # ownership and carriage read the same value through the same predicate
-    own = T.owning_layers_answer(p, ["5.5"])
+    own = T.owning_layers_answer(p, ["5.5 um"])
     assert own["status"] == "OK"
     assert own["layers"] == ["L19_CONSTRAINTS_PDK"]
-    assert own["evidence"] == {"L19_CONSTRAINTS_PDK": {"5.5": "5.5"}}
-    assert T.token_paths(layers["L19_CONSTRAINTS_PDK"], "5.5") == [
+    assert own["evidence"] == {"L19_CONSTRAINTS_PDK": {"5.5 um": "5.5"}}
+    assert T.token_paths(layers["L19_CONSTRAINTS_PDK"], "5.5 um") == [
         "constraints.tapeout_geometry.pad_edge_spacing_um"]
 
 
-@pytest.mark.parametrize("blob", [
-    {"x": 5.5}, {"x": "5.5"}, {"x": "5.50"}, {"x": " 5.5 "}, {"x": "5.5 um"},
-    {"x": [1, 5.5]}, {"pad_edge_spacing_um": 5.5},
+@pytest.mark.parametrize("token, blob", [
+    ("5.5", {"x": 5.5}), ("5.5", {"x": "5.5"}),
+    ("5.5", {"x": "5.50"}), ("5.5", {"x": " 5.5 "}),
+    ("5.5 um", {"x": "5.5 um"}), ("5.5", {"x": [1, 5.5]}),
+    ("5.5 um", {"pad_edge_spacing_um": 5.5}),
 ])
-def test_a_typed_5_5_matches_in_each_spelling(blob):
-    assert T.present_in_units("5.5", _units(blob)) is True
+def test_a_typed_5_5_matches_in_each_spelling(token, blob):
+    assert T.present_in_units(token, _units(blob)) is True
 
 
 # ── 3. equal values match after unit normalisation ─────────────────────────
@@ -152,10 +155,10 @@ def test_a_typed_5_5_matches_in_each_spelling(blob):
     ("5.5um", {"spacing": "5.5 \u03bcm"}),             # glyph variants
     ("1 MHz", {"freq_hz": 1000000}),
     ("100 us", {"t": {"min_typ_max": {"min": 100}, "unit": "us"}}),
-    ("-40", {"temperature_c": [-40, 27, 125]}),
+    ("-40 C", {"temperature_c": [-40, 27, 125]}),
     ("-40 C", {"temperature_c": [-40, 27, 125]}),
     ("\u221240 \u00b0C", {"t": "-40\u00b0C"}),         # U+2212 minus
-    ("14", {"enob": {"min": 14.0, "unit": "bit"}}),    # 14 == 14.0
+    ("14 bit", {"enob": {"min": 14.0, "unit": "bit"}}),
     ("16 bit", {"width": "16-bit"}),
 ])
 def test_a_unit_normalised_value_matches(token, blob):
@@ -217,7 +220,7 @@ def test_a_number_never_matches_a_position_or_another_number(token, blob):
     ("16", {"registers": [{"name": "CTRL", "offset": 16}]}),
     ("3", {"ball": {"row": "C", "column": 3}}),
     ("480", {"active_lines": 480}),
-    ("256", {"digest_bits": "256"}),
+    ("256 bit", {"digest_bits": "256"}),
 ])
 def test_the_refusals_above_are_not_vacuous(token, blob):
     """The pair: the same numbers, typed as values, DO match — and the
@@ -246,6 +249,9 @@ def test_a_token_that_is_not_a_number_is_matched_as_before(token):
     ("4,735", {"limit": 4735}, True),
     ("4,735", {"cite": "input/docs/a.md:4735"}, False),
     ("5.5 ns/cycle", {"notes": "55 ns/cycle"}, False),
+    ("5.5 um2/V", {"notes": "55 um2/V"}, False),
+    ("5.5 uV / sqrt(Hz)", {"notes": "55 uV / sqrt(Hz)"}, False),
+    ("1,23", {"cite": "a.md:123"}, False),
 ])
 def test_numeric_formats_never_fall_back_to_citation_or_prose(token, blob, expected):
     assert T.present_in_units(token, _units(blob)) is expected
