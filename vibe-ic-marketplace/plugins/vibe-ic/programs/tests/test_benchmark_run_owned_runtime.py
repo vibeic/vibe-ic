@@ -90,6 +90,23 @@ def test_fresh_name_is_stable_and_recorded_resume_does_not_supply(tmp_path, nati
     assert len(native) == 2
 
 
+def test_preproof_retries_keep_selected_runtime_after_absence(tmp_path, monkeypatch, native):
+    first = bd._runtime_pair_gate(tmp_path, "solve", pristine=True)[1]
+    selected = first["container"]
+    bd._write_runtime_pair_record(tmp_path, first)
+    pin = bd._runtime_pair._pin
+    monkeypatch.setattr(pin, "container_pin_state", lambda name, env=None:
+                        ("UNREADABLE", "CONTAINER_ABSENT: " + name) if name == selected else ("MATCH", ""))
+    for _ in range(3):
+        rc, pair = bd._runtime_pair_gate(tmp_path, "resume:ai-route")
+        assert rc == 2 and pair["container"] == selected, pair
+        argv = bd._solver_argv(Path("/unused/vibe_ic_one_shot_runner.py"),
+                               tmp_path / "projects/neutral", "D1", "1")
+        assert argv[argv.index("--container") + 1] == selected
+    assert len(native) == 1
+    assert not bd._native_challenge_identity_path(tmp_path).exists()
+
+
 def test_explicit_selection_does_not_supply(tmp_path, monkeypatch, native):
     monkeypatch.setenv("VIBEIC_EDA_CONTAINER", "operator-runtime")
     rc, pair = bd._runtime_pair_gate(tmp_path, "solve", pristine=True)
@@ -207,7 +224,7 @@ def test_selected_runtime_reaches_child_argv_and_environment(tmp_path, monkeypat
 
 
 FAKE_DOCKER = r'''#!/usr/bin/env python3
-import json, os, sys
+import copy, json, os, sys
 from pathlib import Path
 a = sys.argv[1:]
 p = Path(os.environ['NEUTRAL_STATE'])
@@ -223,7 +240,13 @@ elif a[:2] == ['container','inspect']:
     sys.exit(0 if name in s['containers'] else 1)
 elif a[0] == 'inspect':
     c = s['containers'][name]
-    fields = {'.Image':c['image'], '.State.Running':True, '.Mounts':c['mounts'],
+    declarations = c.get('declarations', [
+        {'Type':m['Type'],'Source':m.get('Name',m['Source']),'Target':m['Destination'],'ReadOnly':not m['RW']}
+        for m in c['mounts'] if m['Destination'] != '/work'])
+    fields = {'.Id':c['cid'], '.Image':c['image'], '.State.Running':True, '.Mounts':c['mounts'],
+              '.HostConfig.Mounts':declarations, '.HostConfig.VolumesFrom':c.get('volumes_from'),
+              '.HostConfig.Tmpfs':None, '.HostConfig.Memory':c.get('memory',1073741824),
+              '.HostConfig.MemorySwap':c.get('memory_swap',1073741824),
               '.Config.User':'1000', '.Config.WorkingDir':'/work',
               '.Config.Cmd':['sleep','infinity'], '.Config.Entrypoint':None}
     if fmt.startswith('{{json '): emit(fields[fmt[7:-2]])
@@ -235,12 +258,12 @@ elif a[0] == 'inspect':
         for m in c['mounts']:
             if m['Destination'] == '/work': print(m['Source']+':/work:rw')
     elif '.HostConfig.Mounts' in fmt:
-        for m in c['mounts']:
-            if m['Destination'] != '/work':
-                print('bind|'+m['Source']+'|'+m['Destination']+'|true|rprivate')
+        for m in declarations:
+            print(m['Type']+'|'+m.get('Source','')+'|'+m['Target']+'|'+str(m.get('ReadOnly',False)).lower()+'|'+m.get('BindOptions',{}).get('Propagation',''))
     elif '.Mounts' in fmt:
         for m in c['mounts']: print(m['Destination']+'|'+m['Source']+'|'+str(m['RW']).lower())
     elif fmt == '{{.Image}}': print(c['image'])
+    elif fmt == '{{.Id}}': print(c['cid'])
 elif a[0] == 'run':
     name = a[a.index('--name')+1]
     mounts=[]
@@ -249,7 +272,22 @@ elif a[0] == 'run':
             src,dst,*opts=a[i+1].split(':')
             mounts.append({'Type':'bind','Source':src,'Destination':dst,
                            'RW':'ro' not in ','.join(opts).split(','),'Propagation':'rprivate'})
-    s['containers'][name]={'cid':'new-'+name,'image':s['image'],'mounts':mounts}
+    inherited=[]
+    effective={}
+    if '--volumes-from' in a:
+        reference=a[a.index('--volumes-from')+1]
+        origin=next(c for n,c in s['containers'].items() if n==reference or c['cid']==reference)
+        mounts=copy.deepcopy(origin['mounts'])
+        inherited=[reference]
+        effective=copy.deepcopy(origin.get('effective_options',{}))
+    sizes={'1g':1073741824,'1024m':1073741824,'2g':2147483648}
+    def amount(flag):
+        if flag not in a:return 0
+        value=a[a.index(flag)+1]
+        return sizes[value] if value in sizes else int(value)
+    s['containers'][name]={'cid':'new-'+name,'image':s['image'],'mounts':mounts,
+        'declarations':[], 'volumes_from':inherited,'effective_options':effective,
+        'memory':amount('--memory'),'memory_swap':amount('--memory-swap')}
     p.write_text(json.dumps(s));print('new-'+name)
 elif a[0] == 'top': print('PID COMMAND\n123 sleep infinity')
 elif a[0] in ('rm','rename','stop','start','ps','images'): pass
@@ -272,8 +310,10 @@ def docker_fixture(tmp_path):
         "template": {"cid": "original-template", "image": IMAGE_ID, "mounts": mounts}}}
     statefile, logfile = tmp_path / "state.json", tmp_path / "calls.jsonl"
 
-    def invoke(script, target="target", existing=None, source_image=IMAGE_ID):
+    def invoke(script, target="target", existing=None, source_image=IMAGE_ID,
+               source_config=None, policy="1g"):
         current = copy.deepcopy(state)
+        current["containers"]["template"].update(copy.deepcopy(source_config or {}))
         current["containers"]["template"]["image"] = source_image
         if existing:
             current["containers"][target] = copy.deepcopy(existing)
@@ -281,7 +321,7 @@ def docker_fixture(tmp_path):
         logfile.write_text("")
         env = {**os.environ, "PATH": str(binpath) + ":" + os.environ["PATH"],
                "NAME": target, "SOURCE_CONTAINER": "template", "ENSURE_ONLY": "1",
-               "PULL": "0", "VIBEIC_DOCKER_MEMORY": "1g",
+               "PULL": "0", "VIBEIC_DOCKER_MEMORY": policy,
                "NEUTRAL_STATE": str(statefile), "NEUTRAL_LOG": str(logfile)}
         cp = subprocess.run(["bash", str(REPO / script), IMAGE], env=env,
                             capture_output=True, text=True, timeout=30)
@@ -323,3 +363,53 @@ def test_ensure_refuses_incompatible_state_without_mutation(docker_fixture, scri
     assert cp.returncode != 0
     assert after == before
     assert not [c for c in calls if c[0] in {"rm", "rename", "stop", "start", "run", "kill", "exec", "pull"}]
+
+
+@pytest.mark.parametrize("script", COPIES, ids=["repository", "packaged"])
+@pytest.mark.parametrize("policy,memory,swap,compatible", [
+    ("1g", 2 * 1024**3, 2 * 1024**3, False),
+    ("1g", 1024**3, 2 * 1024**3, False),
+    ("1024m", 1024**3, 1024**3, True),
+    ("0", 0, 0, True),
+    ("0", 1024**3, 1024**3, False),
+])
+def test_ensure_compares_declared_memory_and_swap(docker_fixture, script, policy, memory, swap, compatible):
+    invoke, template = docker_fixture
+    target = {**copy.deepcopy(template), "cid": "stable-target", "memory": memory, "memory_swap": swap}
+    cp, calls, after, before = invoke(script, existing=target, policy=policy)
+    assert (cp.returncode == 0) is compatible, (cp.stdout, cp.stderr)
+    assert after == before
+    assert not [c for c in calls if c[0] in {"rm", "rename", "stop", "start", "run", "kill", "exec", "pull"}]
+
+
+@pytest.mark.parametrize("script", COPIES, ids=["repository", "packaged"])
+@pytest.mark.parametrize("existing", [False, True])
+def test_ensure_preserves_nonrecursive_effective_access(docker_fixture, script, existing):
+    invoke, template = docker_fixture
+    source = copy.deepcopy(template)
+    source["declarations"] = [{"Type": "bind", "Source": source["mounts"][1]["Source"],
+        "Target": "/plugin", "ReadOnly": True, "BindOptions": {"NonRecursive": True}}]
+    source["effective_options"] = {"/plugin": {"NonRecursive": True}}
+    target = {**copy.deepcopy(template), "cid": "stable-target", "declarations": []} if existing else None
+    cp, calls, after, before = invoke(script, existing=target, source_config=source)
+    assert after["containers"]["template"] == before["containers"]["template"]
+    if existing:
+        assert cp.returncode != 0 and after == before
+        assert not [c for c in calls if c[0] in {"rm", "rename", "stop", "start", "run"}]
+    else:
+        assert cp.returncode == 0, (cp.stdout, cp.stderr)
+        assert after["containers"]["target"]["effective_options"] == source["effective_options"]
+
+
+@pytest.mark.parametrize("script", COPIES, ids=["repository", "packaged"])
+def test_ensure_reuses_actual_anonymous_volume_name(docker_fixture, script):
+    invoke, template = docker_fixture
+    source = copy.deepcopy(template)
+    source["mounts"].append({"Type": "volume", "Name": "original-volume", "Source": "/volumes/original-volume/_data",
+                             "Destination": "/cache", "RW": True, "Propagation": ""})
+    source["declarations"] = [{"Type": "volume", "Target": "/cache", "VolumeOptions": {"NoCopy": True}}]
+    cp, calls, after, before = invoke(script, source_config=source)
+    assert cp.returncode == 0, (cp.stdout, cp.stderr)
+    assert after["containers"]["template"] == before["containers"]["template"]
+    target = next(m for m in after["containers"]["target"]["mounts"] if m["Type"] == "volume")
+    assert target["Name"] == "original-volume"
