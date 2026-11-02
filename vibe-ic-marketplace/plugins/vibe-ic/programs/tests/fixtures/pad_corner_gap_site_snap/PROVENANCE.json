@@ -1,0 +1,8 @@
+{
+  "base_commit": "74041df29e0f3717885c25d13752c38720cfbe6d",
+  "producer": "programs/pad_ring_gen.py",
+  "producer_sha256": "592145eddbe80e15fc89d930d033d889659c524e5cb4eda115786126b9568bea",
+  "spacing_helper_sha256": "9da8cad333723e3c08dd34513a78592343c1ee4f5f0cb1c84504ab2806d90bab",
+  "fixture": "test_pad_ring._project defaults; two independently rooted runs produced identical bytes",
+  "centered_def_sha256": "f9b07e72dbf011d9849ff1ac29241e210543dcc32f82fa02b5a2c76d406f0b69"
+}

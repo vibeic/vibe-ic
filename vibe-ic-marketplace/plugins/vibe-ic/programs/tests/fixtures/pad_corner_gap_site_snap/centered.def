@@ -1,0 +1,132 @@
+VERSION 5.8 ;
+DIVIDERCHAR "/" ;
+BUSBITCHARS "[]" ;
+DESIGN core ;
+UNITS DISTANCE MICRONS 1000 ;
+DIEAREA ( 0 0 ) ( 2000000 2000000 ) ;
+COMPONENTS 41 ;
+- u_core CORE_MACRO + PLACED ( 900000 900000 ) N ;
+- pad_ssig0 pad_bidir + FIXED ( 556000 10000 ) N ;
+- pad_ssig1 pad_bidir + FIXED ( 827000 10000 ) N ;
+- pad_ssig2 pad_bidir + FIXED ( 1098000 10000 ) N ;
+- pad_ssig3 pad_bidir + FIXED ( 1369000 10000 ) N ;
+- pad_esig0 pad_bidir + FIXED ( 1640000 556000 ) W ;
+- pad_esig1 pad_bidir + FIXED ( 1640000 827000 ) W ;
+- pad_esig2 pad_bidir + FIXED ( 1640000 1098000 ) W ;
+- pad_esig3 pad_bidir + FIXED ( 1640000 1369000 ) W ;
+- pad_nsig0 pad_bidir + FIXED ( 556000 1640000 ) FS ;
+- pad_nsig1 pad_bidir + FIXED ( 827000 1640000 ) FS ;
+- pad_nsig2 pad_bidir + FIXED ( 1098000 1640000 ) FS ;
+- pad_nsig3 pad_bidir + FIXED ( 1369000 1640000 ) FS ;
+- pad_wsig0 pad_bidir + FIXED ( 10000 556000 ) FW ;
+- pad_wsig1 pad_bidir + FIXED ( 10000 827000 ) FW ;
+- pad_wsig2 pad_bidir + FIXED ( 10000 1098000 ) FW ;
+- pad_wsig3 pad_bidir + FIXED ( 10000 1369000 ) FW ;
+- pad_corner_SW pad_corner + FIXED ( 10000 10000 ) N ;
+- pad_corner_SE pad_corner + FIXED ( 1640000 10000 ) FN ;
+- pad_corner_NE pad_corner + FIXED ( 1640000 1640000 ) S ;
+- pad_corner_NW pad_corner + FIXED ( 10000 1640000 ) FS ;
+- vibeic_iofill_S_0_0 pad_fill196 + FIXED ( 360000 10000 ) N ;
+- vibeic_iofill_S_1_0 pad_fill196 + FIXED ( 631000 10000 ) N ;
+- vibeic_iofill_S_2_0 pad_fill196 + FIXED ( 902000 10000 ) N ;
+- vibeic_iofill_S_3_0 pad_fill196 + FIXED ( 1173000 10000 ) N ;
+- vibeic_iofill_S_4_0 pad_fill196 + FIXED ( 1444000 10000 ) N ;
+- vibeic_iofill_E_0_0 pad_fill196 + FIXED ( 1640000 360000 ) W ;
+- vibeic_iofill_E_1_0 pad_fill196 + FIXED ( 1640000 631000 ) W ;
+- vibeic_iofill_E_2_0 pad_fill196 + FIXED ( 1640000 902000 ) W ;
+- vibeic_iofill_E_3_0 pad_fill196 + FIXED ( 1640000 1173000 ) W ;
+- vibeic_iofill_E_4_0 pad_fill196 + FIXED ( 1640000 1444000 ) W ;
+- vibeic_iofill_N_0_0 pad_fill196 + FIXED ( 360000 1640000 ) FS ;
+- vibeic_iofill_N_1_0 pad_fill196 + FIXED ( 631000 1640000 ) FS ;
+- vibeic_iofill_N_2_0 pad_fill196 + FIXED ( 902000 1640000 ) FS ;
+- vibeic_iofill_N_3_0 pad_fill196 + FIXED ( 1173000 1640000 ) FS ;
+- vibeic_iofill_N_4_0 pad_fill196 + FIXED ( 1444000 1640000 ) FS ;
+- vibeic_iofill_W_0_0 pad_fill196 + FIXED ( 10000 360000 ) FW ;
+- vibeic_iofill_W_1_0 pad_fill196 + FIXED ( 10000 631000 ) FW ;
+- vibeic_iofill_W_2_0 pad_fill196 + FIXED ( 10000 902000 ) FW ;
+- vibeic_iofill_W_3_0 pad_fill196 + FIXED ( 10000 1173000 ) FW ;
+- vibeic_iofill_W_4_0 pad_fill196 + FIXED ( 10000 1444000 ) FW ;
+END COMPONENTS
+PINS 16 ;
+    - ssig0 + NET ssig0 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 7500 0 ) ( 67500 1000 )
+        + FIXED ( 556000 10000 ) N ;
+    - ssig1 + NET ssig1 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 7500 0 ) ( 67500 1000 )
+        + FIXED ( 827000 10000 ) N ;
+    - ssig2 + NET ssig2 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 7500 0 ) ( 67500 1000 )
+        + FIXED ( 1098000 10000 ) N ;
+    - ssig3 + NET ssig3 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 7500 0 ) ( 67500 1000 )
+        + FIXED ( 1369000 10000 ) N ;
+    - esig0 + NET esig0 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 349000 7500 ) ( 350000 67500 )
+        + FIXED ( 1640000 556000 ) N ;
+    - esig1 + NET esig1 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 349000 7500 ) ( 350000 67500 )
+        + FIXED ( 1640000 827000 ) N ;
+    - esig2 + NET esig2 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 349000 7500 ) ( 350000 67500 )
+        + FIXED ( 1640000 1098000 ) N ;
+    - esig3 + NET esig3 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 349000 7500 ) ( 350000 67500 )
+        + FIXED ( 1640000 1369000 ) N ;
+    - nsig0 + NET nsig0 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 7500 349000 ) ( 67500 350000 )
+        + FIXED ( 556000 1640000 ) N ;
+    - nsig1 + NET nsig1 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 7500 349000 ) ( 67500 350000 )
+        + FIXED ( 827000 1640000 ) N ;
+    - nsig2 + NET nsig2 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 7500 349000 ) ( 67500 350000 )
+        + FIXED ( 1098000 1640000 ) N ;
+    - nsig3 + NET nsig3 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 7500 349000 ) ( 67500 350000 )
+        + FIXED ( 1369000 1640000 ) N ;
+    - wsig0 + NET wsig0 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 0 7500 ) ( 1000 67500 )
+        + FIXED ( 10000 556000 ) N ;
+    - wsig1 + NET wsig1 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 0 7500 ) ( 1000 67500 )
+        + FIXED ( 10000 827000 ) N ;
+    - wsig2 + NET wsig2 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 0 7500 ) ( 1000 67500 )
+        + FIXED ( 10000 1098000 ) N ;
+    - wsig3 + NET wsig3 + DIRECTION INPUT + USE SIGNAL
+  + LAYER met2 ( -70 -70 ) ( 70 70 ) + PLACED ( 1000 1000 ) N
+      + PORT
+        + LAYER met2 ( 0 7500 ) ( 1000 67500 )
+        + FIXED ( 10000 1369000 ) N ;
+END PINS
+END DESIGN

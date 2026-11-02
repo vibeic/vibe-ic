@@ -1,0 +1,28 @@
+{
+  "ruling": "#75b supersedes #75 symmetry-only premise",
+  "image": "ghcr.io/vibeic/vibeic-eda:0.4.67",
+  "source_evidence": "ruling75/adc-native-counts.log",
+  "evidence_sha256": "69544faace1c20c1d0bdf1e08de73da013c9d22945fc7f2fb5115fb9f924206f",
+  "native_script_sha256": "ca1968e4f794241e6317f7d66ee6a8f7b2c7bf80203b0f5557196e593df5a295",
+  "die_um": 1300,
+  "pad_width_um": 80,
+  "pad_height_um": 180,
+  "corner_um": 180,
+  "site_um": 1,
+  "declared_edge_um": 5.5,
+  "native_accepted_positive_counts": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11
+  ],
+  "corner_end_policy": "native low-end integer-micron truncation; high gap measured from actual remaining space",
+  "regression": "tests/test_pad_corner_gap_site_snap.py executes native pad_cfg.tcl for every count, edge=0 and edge=5.5, and compares every pad/corner/side gap"
+}
