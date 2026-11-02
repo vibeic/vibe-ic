@@ -221,7 +221,7 @@ def parse_json_measure_sidecar(text):
 _JSON_MEASURE_SUPPORT = {}
 
 
-def _supports_json_measure(container, ngspice_bin):
+def _supports_json_measure(container, ngspice_bin, run=None, cwd=None):
     """Does THIS ngspice build carry the fork's `--json-measure`?
 
     MEASURED, not assumed: the deployed vibeic-eda:0.2.19 image ships an
@@ -229,6 +229,15 @@ def _supports_json_measure(container, ngspice_bin):
     '--json-measure=...'` (and still runs, rc=0). Probing keeps the structured
     path dormant until the image carries the patched build, instead of
     emitting a spurious option error on every corner of every run."""
+    if run is not None:
+        execution = run("@ngspice", ["--json-measure=/dev/null", "-v"], cwd=cwd)
+        blob = execution.get("stdout", "") + execution.get("stderr", "")
+        if "unrecognized option" in blob.lower():
+            return False
+        if execution["returncode"] != 0:
+            raise ValueError("NGSPICE_NATIVE_EXECUTION_UNAVAILABLE: "
+                + ("container " + container if container else "LOCAL") + ": " + blob)
+        return True
     key = (container, ngspice_bin)
     if key in _JSON_MEASURE_SUPPORT:
         return _JSON_MEASURE_SUPPORT[key]
@@ -1437,10 +1446,15 @@ def _selected_ngspice_binary(container, ngspice_bin):
 
 def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
                  run_to_completion=False, corner_job=None, deadline_s=None,
-                 budget_source=None, ngspice_bin=None):
+                 budget_source=None, ngspice_bin=None, run=None):
     """Run ngspice -b on a deck. `cwd` (optional) runs ngspice FROM that
     directory — the model lib's own directory, so any deck-relative output /
     scratch file lands beside it.
+
+    Native adapters may supply their existing A07 executor as `run`. Every
+    command, including capability and sidecar access, then uses that executor's
+    context. This no-clock route requires run_to_completion; it never retries
+    through another transport. Measurement parsing below is shared unchanged.
 
     A4 fresh corners pass a recorded budget to launch(), which supervises
     output and the exact container's CPU. A progressing simulation continues;
@@ -1482,8 +1496,16 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
             raise ValueError(
                 f"_run_ngspice: deadline_s={deadline_s!r} is `timeout 0` -- "
                 f"no deadline at all; a stated budget must be positive")
+    # Native adapters supply the same executor as A07. It owns LOCAL versus
+    # named-container execution and PDK startup; never probe Docker first.
+    if run is not None and (not run_to_completion or corner_job is not None
+                            or ngspice_bin is not None):
+        raise ValueError("NGSPICE_NATIVE_RUN_CONTEXT: native executor requires "
+                         "run_to_completion without a corner job or binary override")
     selected_binary = None
-    if ngspice_bin is not None:
+    if run is not None:
+        ngspice_bin = "ngspice"
+    elif ngspice_bin is not None:
         selected_binary = _selected_ngspice_binary(container, ngspice_bin)
         ngspice_bin = selected_binary["path"]
     else:
@@ -1494,14 +1516,23 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
     # answers `unrecognized option` and would emit that on every corner.
     json_path = None
     json_flag = ""
-    if _supports_json_measure(container, ngspice_bin):
+    supports_json = (_supports_json_measure(container, ngspice_bin, run=run, cwd=cwd) if run is not None
+                     else _supports_json_measure(container, ngspice_bin))
+    if supports_json:
         json_path = f"{sp_in_container}.measure.json"
         json_flag = f"--json-measure={shlex.quote(json_path)} "
     deadline = (int(-(-deadline_s // 1)) if deadline_s is not None  # ceil
                 else 0 if run_to_completion else sim_deadline_s(deck_text or ""))
     command = (f"{prefix}{shlex.quote(ngspice_bin)} -b {json_flag}"
                f"{shlex.quote(sp_in_container)} 2>&1")
-    if corner_job is None:
+    native_execution = None
+    if run is not None:
+        native_execution = run("@ngspice", ["-b", *([f"--json-measure={json_path}"] if json_path else []),
+                                           str(sp_in_container)], cwd=cwd)
+        cp = subprocess.CompletedProcess(native_execution["argv"],
+            native_execution["returncode"], native_execution.get("stdout", "") +
+            native_execution.get("stderr", ""), "")
+    elif corner_job is None:
         cp = _docker(container, command, timeout=deadline)
     else:
         # #2236: THIS is the canonical A4 producer's independent-corner path.
@@ -1532,8 +1563,12 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
     json_meas = None
     if json_path:
         try:
-            jc = _docker(container, f"cat {shlex.quote(json_path)} 2>/dev/null")
-            json_meas = parse_json_measure_sidecar(jc.stdout)
+            if run is not None:
+                jc = run("@cat", [json_path], cwd=cwd)
+                json_meas = parse_json_measure_sidecar(jc.get("stdout", ""))
+            else:
+                jc = _docker(container, f"cat {shlex.quote(json_path)} 2>/dev/null")
+                json_meas = parse_json_measure_sidecar(jc.stdout)
         except Exception:
             json_meas = None
     meas = {}
@@ -1667,6 +1702,8 @@ def _run_ngspice(container, sp_in_container, cwd=None, deck_text=None,
                 nulled_metrics=sorted(meas),
                 changed_inputs=["native_binary"],
             )
+    if native_execution is not None:
+        sim_status["native_execution"] = native_execution
     # #438(a): return the FULL transcript — run_block persists it as the
     # per-run ngspice invocation log that substantiates simulator_run.
     return cp.returncode == 0 and "*" not in failed_analyses, meas, txt, sim_status
