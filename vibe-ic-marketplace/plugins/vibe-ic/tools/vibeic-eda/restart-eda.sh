@@ -393,6 +393,13 @@ else
 fi
 echo "   memory       : ${MEMFLAGS[*]:-<unlimited — opted out>}"
 
+if [[ "$ENSURE_ONLY" == 1 ]]; then
+  SOURCE_ID="$(docker inspect "$SOURCE_CONTAINER" --format '{{.Id}}')" || die "source identity unreadable" 3
+  # Docker inherits the actual mount specifications, including recursive bind
+  # options and anonymous volume names. Do not flatten them into -v arguments.
+  BINDS=( --volumes-from "$SOURCE_ID" )
+fi
+
 declare -a RUN=( docker run -d --name "$NAME" )
 [[ -n "$USER_SPEC" ]] && RUN+=( -u "$USER_SPEC" )
 [[ -n "$WORKDIR"  ]] && RUN+=( -w "$WORKDIR" )
@@ -405,27 +412,57 @@ RUN+=( "$IMAGE" )
 # fields, not Config.Env, so source credentials are neither copied nor logged.
 if [[ "$ENSURE_ONLY" == 1 ]]; then
   ensure_readback() {
-    python3 - "$SOURCE_CONTAINER" "$1" "$TARGET_ID" "$TARGET_ENTRYPOINT" <<'PY'
+    python3 - "$SOURCE_CONTAINER" "$1" "$TARGET_ID" "$TARGET_ENTRYPOINT" "$SOURCE_ID" "$_MEMTOOL" "${MEMFLAGS[@]}" <<'PY'
 import json, subprocess, sys
-source, target, image, entrypoint = sys.argv[1:]
+from pathlib import Path
+source, target, image, entrypoint, source_id, memtool = sys.argv[1:7]
+sys.path.insert(0, str(Path(memtool).parent))
+from librelane_contract import _local_memory_bytes
+memory = {"Memory": 0, "MemorySwap": 0}
+flags = sys.argv[7:]
+for flag, value in zip(flags[::2], flags[1::2]):
+    memory[{"--memory": "Memory", "--memory-swap": "MemorySwap"}[flag]] = _local_memory_bytes(value)
 def read(name, field):
     return json.loads(subprocess.check_output(
         ["docker", "inspect", name, "--format", "{{json " + field + "}}"], text=True))
 def mounts(name):
     return sorted((m["Type"], m.get("Source", ""), m["Destination"],
-                   m["RW"], m.get("Propagation", "")) for m in read(name, ".Mounts"))
+                   m["RW"], m.get("Propagation", ""), m.get("Name", "")) for m in read(name, ".Mounts"))
+def options(name):
+    result = {}
+    for mount in read(name, ".HostConfig.Mounts") or []:
+        settings = {k: v for k, v in mount.items() if k not in ("Type", "Source", "Target", "ReadOnly")}
+        bind = settings.get("BindOptions", {}).copy()
+        bind.pop("Propagation", None)  # Compared through effective Mounts.
+        if bind:
+            settings["BindOptions"] = bind
+        else:
+            settings.pop("BindOptions", None)
+        result[mount["Target"]] = settings
+    return result
 try:
+    if read(source, ".Id") != source_id:
+        raise ValueError("source container identity changed during ensure")
     if read(source, ".Image") != image:
         raise ValueError("source image differs from requested immutable image")
     if read(source, ".Config.Entrypoint") != json.loads(entrypoint):
         raise ValueError("source entrypoint differs from image entrypoint")
-    if any(m[0] != "bind" for m in mounts(source)):
-        raise ValueError("ensure cannot preserve non-bind source mounts")
     if target:
         if read(target, ".Image") != image or not read(target, ".State.Running"):
             raise ValueError("target image differs or target is not running")
         if mounts(target) != mounts(source):
             raise ValueError("target effective mounts differ from source")
+        wanted, actual = options(source), options(target)
+        inherited = source_id in (read(target, ".HostConfig.VolumesFrom") or [])
+        for mount in mounts(source):
+            destination = mount[2]
+            if actual.get(destination, wanted.get(destination, {}) if inherited else {}) != wanted.get(destination, {}):
+                raise ValueError("target recursive/volume mount options differ from source: " + destination)
+        if read(target, ".HostConfig.Tmpfs") != read(source, ".HostConfig.Tmpfs"):
+            raise ValueError("target tmpfs options differ from source")
+        for field, expected in memory.items():
+            if read(target, ".HostConfig." + field) != expected:
+                raise ValueError("target " + field + " differs from declared memory policy")
         for field in (".Config.User", ".Config.WorkingDir", ".Config.Cmd", ".Config.Entrypoint"):
             if read(target, field) != read(source, field):
                 raise ValueError("target " + field + " differs from source")

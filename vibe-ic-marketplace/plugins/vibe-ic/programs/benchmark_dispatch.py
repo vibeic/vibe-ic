@@ -8632,9 +8632,11 @@ def _recorded_benchmark_container(run_p: Path) -> str | None:
     path = run_p / _RUNTIME_PAIR_RECORD
     if path.exists():
         pair = _read_json_regular(path)
-        if (pair.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH
-                and pair.get("execution_route") != "LOCAL"):
-            return pair.get("container")
+        if pair.get("execution_route") != "LOCAL":
+            if pair.get("selected_container"):
+                return pair["selected_container"]
+            if pair.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH:
+                return pair.get("container")
     return None
 
 
@@ -8669,15 +8671,24 @@ def _write_runtime_pair_record(run_p: Path, record: dict) -> None:
     """Record the reconciliation where the run that used it can be read with it."""
     run_p.mkdir(parents=True, exist_ok=True)
     path = run_p / _RUNTIME_PAIR_RECORD
-    if record.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH and path.is_file():
+    if path.is_file():
         prior_text = path.read_text()
         try:
             prior = _strict_json_loads(prior_text)
         except ValueError:
             prior = None
-        if isinstance(prior, dict) and prior.get("verdict") == _runtime_pair.RUNTIME_PAIR_MISMATCH:
-            _write_immutable_text(run_p / "runtime_pair_refusals" /
-                                  f"{_sha256_text(prior_text)}.json", prior_text)
+        if isinstance(prior, dict):
+            if (record.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH
+                    and prior.get("verdict") == _runtime_pair.RUNTIME_PAIR_MISMATCH):
+                _write_immutable_text(run_p / "runtime_pair_refusals" /
+                                      f"{_sha256_text(prior_text)}.json", prior_text)
+            # A failed readback is the latest status, not a new run selection.
+            if prior.get("execution_route") != "LOCAL":
+                selected = prior.get("selected_container")
+                if not selected and prior.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH:
+                    selected = prior.get("container")
+                if selected:
+                    record["selected_container"] = selected
     _atomic_write_json(path, record)
     if _read_json_regular(path) != record:
         raise ValueError("runtime pair persistence readback differs")
