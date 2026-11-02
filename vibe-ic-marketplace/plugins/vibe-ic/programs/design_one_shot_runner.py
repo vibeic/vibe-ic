@@ -2749,7 +2749,7 @@ def _defer_to_supplied(generator: str, project: Path,
 def _declared_logic_author_handoff(project: Path, t0: float,
                                   text: str) -> Optional[StepResult]:
     """Read-only author handoff before unsupported deterministic implementation."""
-    if not text.strip() or _design_supplied_build_rtl(project):
+    if _design_supplied_build_rtl(project):
         return None
     from dataclasses import asdict
     from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
@@ -2763,6 +2763,12 @@ def _declared_logic_author_handoff(project: Path, t0: float,
                 interface_text = interface_path.read_text()
             except (OSError, ValueError):
                 pass
+    spec_source = "phase1_plain_text"
+    if not text.strip():
+        if not interface_text.strip():
+            return None
+        text = interface_text
+        spec_source = str(interface_path.relative_to(project))
     try:
         contract = emission_spec_contract(text, interface_text)
     except ValueError as exc:
@@ -2791,6 +2797,7 @@ def _declared_logic_author_handoff(project: Path, t0: float,
                 "fallback_skill_unstaged_reason": "read-only declared-obligation handoff",
                 "rejected_emitters": [marker],
                 "rejected_rules": rules + unknown_rules,
+                "spec_source": spec_source,
                 "logic_obligations": [asdict(row) for row in contract.logic_obligations],
                 "unaccounted_source_spans": [asdict(row) for row in unaccounted]})
 
