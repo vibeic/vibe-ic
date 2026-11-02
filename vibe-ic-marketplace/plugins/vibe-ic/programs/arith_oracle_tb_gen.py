@@ -404,7 +404,11 @@ def _supports_function_reset(project: Path, polarity: str) -> bool:
         return False
     l9 = _read_json(_pl.generated_docs_dir(project) / 'L9_INTEGRATION_SPEC.json') or {}
     fields = l9.get('fields', l9)
+    if not isinstance(fields, dict):
+        return False
     domains = fields.get('reset_domains') or []
+    if not isinstance(domains, list):
+        return False
     selected = [r for r in domains if isinstance(r, dict) and r.get('name') == resets[0]]
     if len(selected) != 1:
         return False
@@ -422,7 +426,9 @@ def _supports_function_reset(project: Path, polarity: str) -> bool:
             and b['polarity'] == 'active_' + polarity for b in phases[resets[0]]):
         return False
     conventions = read_declared_conventions(project, ports)
-    if conventions is not None and conventions['reset_active_low'] != (polarity == 'low'):
+    active_low = (conventions['reset_active_low'] if conventions is not None
+                  else resets[0].lower().rstrip('i').endswith('n'))
+    if active_low != (polarity == 'low'):
         return False
     return True
 
