@@ -93,6 +93,7 @@ def software(tmp_path, monkeypatch):
         for step in steps:
             cfg = {'meta':{'step':step}, 'RCX_RULESETS':{'nom_*':str(paths['rc.rules'])},
                    'STA_CORNERS':[CORNER], 'CELL_LIBS':{CORNER:[str(paths['cells.lib'])]},
+                   'TIME_DERATING_CONSTRAINT': 5,
                    'SIGNOFF_SDC_FILE':str(paths['functional.sdc'])}
             for key, (value, _) in overlay.items():
                 cfg[key] = str(p/value[5:]) if isinstance(value,str) and value.startswith('dir::') else value
