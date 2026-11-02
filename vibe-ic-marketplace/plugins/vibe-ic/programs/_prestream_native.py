@@ -102,6 +102,8 @@ def finished_gds(project: Path, selected: Path) -> Path:
     record = load(project / FINISHING_RECORD_REL)
     if not record.get('canonical'):
         raise ValueError(f'CURRENT_FINISHED_GDS_RECORD_MISSING: {FINISHING_RECORD_REL}')
+    if not isinstance(record['canonical'], str):
+        raise ValueError('CURRENT_FINISHED_GDS_RECORD_INVALID: canonical must be a path string')
     if path(project, str(record.get('stream_state'))).resolve() != selected.resolve():
         raise ValueError(f"CURRENT_FINISHED_GDS_OTHER_STATE: {record.get('stream_state')} != {selected}")
     gds = path(project, record['canonical'])
