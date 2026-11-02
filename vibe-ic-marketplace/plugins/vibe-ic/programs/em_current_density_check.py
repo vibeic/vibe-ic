@@ -1233,6 +1233,8 @@ def validate_primary_ir(project: Path, *, for_em: bool = False) -> Dict[str, Any
     of Step-25 density coverage. A partial EM result cannot retire a static IR
     measurement, nor can report keywords substitute for primary adoption.
     """
+    from _prestream_native import final_state
+    final = final_state(project) is not None
     try:
         doc = json.loads((project / "reports/phase3/ir_drop_librelane.json").read_text())
         record = doc["record"]
@@ -1241,7 +1243,8 @@ def validate_primary_ir(project: Path, *, for_em: bool = False) -> Dict[str, Any
         source_keys = (_CURRENT_PRIMARY_IR_SOURCE_KEYS
                        if record.get("input_mode") == "current_stapostpnr_odb"
                        else _LEGACY_PRIMARY_IR_SOURCE_KEYS)
-        if (not doc.get("adopted") or not isinstance(recorded_source, dict)
+        # #62b: final-State native measurements do not expire with source edits.
+        if not final and (not doc.get("adopted") or not isinstance(recorded_source, dict)
                 or any(not current_source.get(name)
                        or recorded_source.get(name) != current_source[name]
                        for name in source_keys)):
@@ -1330,9 +1333,29 @@ def validate_primary_ir(project: Path, *, for_em: bool = False) -> Dict[str, Any
         import librelane_ir_antenna as la
         rebound_record = dict(record)
         rebound_record["tool_state"] = str(tool_state)
-        judged = la.judge_ir(rebound_record)
-        if judged != doc["judgment"] or judged["verdict"] not in ("PASS", "FAIL"):
-            raise ValueError("LibreLane IR measurement/coverage unavailable")
+        if final:
+            # #62b: judge the native number at the original 5% signoff limit,
+            # never the writer's 10% budget or its stored judgment.
+            from signoff_ladder_run import _STATIC_IR_BUDGET_PCT
+            native = json.loads((project / "reports/phase3/ir_drop.json").read_text())
+            worst = _num(native.get("worst_ir_uv"))
+            supply = _num(record.get("lib_voltage_v"))
+            if (native.get("tool") != "openroad-psm"
+                    or native.get("native_rc", 0) != 0
+                    or native.get("verdict") not in ("PASS", "FAIL")
+                    or type(native.get("worst_ir_uv")) not in (int, float)
+                    or type(record.get("lib_voltage_v")) not in (int, float)
+                    or worst is None or not math.isfinite(worst) or worst < 0
+                    or supply is None or not math.isfinite(supply) or supply <= 0
+                    or native.get("nets_analysis_failed")
+                    or native.get("unconnected_supply_pins")):
+                raise ValueError("native IR measurement/coverage unavailable")
+            budget = _STATIC_IR_BUDGET_PCT / 100.0 * supply * 1e6
+            judged = {"verdict": "FAIL" if worst > budget or native["verdict"] == "FAIL" else "PASS"}
+        else:
+            judged = la.judge_ir(rebound_record)
+            if judged != doc["judgment"] or judged["verdict"] not in ("PASS", "FAIL"):
+                raise ValueError("LibreLane IR measurement/coverage unavailable")
         result = {"valid": True, "verdict": judged["verdict"],
                   "producer": doc["producer"],
                   "tool_state_sha256": record["tool_state_sha256"]}
@@ -1439,7 +1462,10 @@ def validate_native_density(project: Path, margin: float = _DEFAULT_MARGIN,
         doc = json.loads((rpt / "em_openroad_density.json").read_text())
         if doc.get("schema") != "em_native_density/1":
             raise ValueError("native execution binding absent")
-        if doc.get("source_identity") != native_source_identity():
+        from _prestream_native import final_state
+        # #62b: retain native execution, coverage and PDK Jmax checks on final State;
+        # producer/consumer source hashes are not an electrical limit.
+        if final_state(project) is None and doc.get("source_identity") != native_source_identity():
             raise ValueError("native producer/consumer source changed")
         execution = doc["execution"]
         if execution["native_rc"] != 0 or not execution["argv"]:
@@ -1640,7 +1666,7 @@ def validate_native_density(project: Path, margin: float = _DEFAULT_MARGIN,
                 "authority_sha256": authority_sha, "pdk": doc["pdk"],
                 "nets": coverage, "violations": violations,
                 "unmeasured_segments": missing, "power_basis_complete": bool(basis.get("complete")),
-                "source_identity": doc["source_identity"],
+                "source_identity": doc.get("source_identity"),
                 "per_cut_authority": per_cut_authority}
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as exc:
         return {"valid": False, "verdict": "NOT_MEASURED",
