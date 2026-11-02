@@ -6,6 +6,7 @@ about any product or canonical carrier is made by these fixtures.
 import json
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,9 @@ END LIBRARY
 
 @pytest.fixture
 def case(tmp_path, monkeypatch):
+    # Other suites reload the canonical runner during collection. Keep the
+    # native helper import on the same runner whose transport this fixture owns.
+    monkeypatch.setitem(sys.modules, "phase3_one_shot_runner", runner)
     pnr = runner._pl.pnr_dir(tmp_path)
     pnr.mkdir(parents=True)
     reports = tmp_path / 'reports/phase3'
