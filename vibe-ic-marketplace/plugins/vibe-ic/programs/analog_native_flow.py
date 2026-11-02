@@ -1391,9 +1391,103 @@ def consume_default_row_completion(project, context, component):
         return {**base, "reason": getattr(exc, "code", "A18_COMPLETION_INPUT_NOT_CURRENT"), "detail": str(exc)}
 
 
+def _d54_correlation(project: Path, context: dict) -> dict:
+    """D54 analog-die consumer; missing/failed A14 blocks stop this row.
+
+    Reuse A14's native PEX grading and pre/post deltas. No new simulation,
+    threshold, receipt, or whole-flow acceptance is introduced here.
+    """
+    import flow109
+    from corner_yield_vs_spec_check import _spec_limits
+
+    project = Path(project).resolve()
+    context = flow109.validate_execution_context(context)
+    row = context["resolved_row"]
+    if row["id"] != "D54" or row["selected_profile"] != "analog_die":
+        raise flow109.Flow109Error("FLOW109_PROFILE_INAPPLICABLE", "D54.analog_die")
+    default = next(p for p in row["profiles"] if p["id"] == "default")
+    result = {"step_id": "D54", "context_sha256": context["context_sha256"],
+              "component_status": "NOT_MEASURED", "default_row_status": "NOT_MEASURED",
+              "completed": False, "native_started": False,
+              "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
+              "digital_path": {"status": "NOT_APPLICABLE",
+                  "reason": "declared analog-only physical top has no synthesized timing paths",
+                  "native_steps": default["native_steps"]},
+              "acceptance_dependency": "A14", "blocks": []}
+    try:
+        # Explicit analog-only declaration selects the profile. Absence alone
+        # never selects it; contradictory native synthesis facts refuse it.
+        synth = layout.synth_dir(project)
+        if (layout.mapped_synth_netlist(project) is not None
+                or any(synth.glob("*.v")) or any(synth.glob("*.sv"))
+                or (synth / layout.SYNTH_INPUTS_SIDECAR).exists()):
+            result["digital_path"] = {"status": "NOT_MEASURED",
+                "reason": "synthesized top contradicts macro-only declaration",
+                "native_steps": default["native_steps"]}
+            raise ValueError("D54_MACRO_ONLY_TOP_CONFLICT")
+        blocks = _declared_blocks(project)
+        l5 = layout.generated_docs_dir(project) / "L5_ADI_SPEC.json"
+        originals = {b.get("name") or b.get("block"): b
+                     for b in json.loads(l5.read_text())["analog_blocks"]}
+        report = json.loads((project / "reports/analog_native/status.json").read_text())
+        attempt = Path(report["attempt"])
+        if (not attempt.resolve().is_relative_to(project / "reports/analog_native")
+                or json.loads((attempt / "result.json").read_text()) != report):
+            raise ValueError("D54_A14_NATIVE_ATTEMPT_UNAVAILABLE")
+        rows = [r for r in report["steps"] if r.get("step") == "A14"]
+        for block in blocks:
+            name = block.get("name") or block.get("block")
+            found = [r for r in rows if r.get("block") == name]
+            observed = {"block": name, "status": "NOT_MEASURED"}
+            result["blocks"].append(observed)
+            if len(found) != 1:
+                observed["reason"] = "D54_A14_NATIVE_RESULT_MISSING"
+                continue
+            a14 = found[0]
+            if a14.get("status") == "FAIL":
+                observed.update(status="FAIL", reason="D54_A14_NATIVE_FAILED",
+                                metrics=a14.get("metrics", {}))
+                continue
+            if a14.get("status") != "PASS":
+                observed["reason"] = "D54_A14_NATIVE_NOT_MEASURED"
+                continue
+            try:
+                inputs, outputs = a14.get("input_views"), a14.get("output_views")
+                if (not inputs or not outputs or any(inputs.get(p) != h for p, h in
+                        _input_views(project, name, "A14").items())):
+                    raise ValueError("D54_A14_READSET_INCOMPLETE")
+                for p, h in {**inputs, **outputs}.items():
+                    path = Path(p) if Path(p).is_absolute() else project / p
+                    if not path.is_file() or _sha(path) != h:
+                        raise ValueError("D54_A14_READSET_STALE")
+                # A14 already grades spec.json. Require those exact limits to
+                # remain the block's original L5 limits before routing PASS.
+                original = _spec_limits(originals[name]["spec"])
+                spec = json.loads((layout.analog_dir(project) / name / "spec.json").read_text())
+                if not original or original != _spec_limits(spec):
+                    raise ValueError("D54_A14_ORIGINAL_L5_LIMITS_MISMATCH")
+                metrics = a14["metrics"]
+                if (not metrics.get("corners") or not metrics.get("specs")
+                        or not metrics.get("pre", {}).get("measurements")):
+                    raise ValueError("D54_A14_PEX_COMPARISON_MISSING")
+                observed.update(status="PASS", reason="D54_A14_NATIVE_PASS_ORIGINAL_L5",
+                                metrics=metrics)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                observed["reason"] = str(exc)
+        status = _aggregate(result["blocks"])
+        result.update(component_status=status, default_row_status=status,
+                      completed=status == "PASS", reason="D54_EXISTING_A14_NATIVE_RESULTS")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        result["reason"] = str(exc)
+    return result
+
+
+
 def execute(project, context):
     """Existing whole-flow front-door adapter for one analog row."""
     step = context["requested_step"]
+    if step == "D54":
+        return _d54_correlation(project, context)
     a02_invocation = None
     if step == "A02":
         import shutil

@@ -12762,10 +12762,10 @@
           "execution_status": "IMPLEMENTED_NATIVE_COMPONENT",
           "dispatch": {
             "kind": "native_adapter",
-            "adapter": "spice_correlation_check",
+            "adapter": "analog_native_flow",
             "native_step_id": "flow109.D54",
             "producer": "analog_native_physical.py:_resim existing A14 results",
-            "consumer": "spice_correlation_check.py:execute",
+            "consumer": "analog_native_flow.py:_d54_correlation",
             "engine_families": [
               "ngspice"
             ],
