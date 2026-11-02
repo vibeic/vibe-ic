@@ -275,7 +275,8 @@ def _historical_runner_sources_match(receipt: dict) -> bool:
         if retained:
             if any(digest != record["sha256"] for digest in retained):
                 return False
-        elif (not path.is_file()
+        elif ((trees and label == "consumer" and path != Path(__file__).resolve())
+              or not path.is_file()
               or hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"]):
             return False
     executable = shutil.which(argv[0]) or argv[0]
