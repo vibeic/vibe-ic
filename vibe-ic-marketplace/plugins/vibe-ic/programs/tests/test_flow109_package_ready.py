@@ -449,7 +449,12 @@ def test_wrong_domain_pad_pin_geometry_fails(tmp_path):
     assert _by_name(result, "pad_bterm_coincidence_check")["status"] == "FAIL"
 
 
-def test_disconnected_pad_fails_even_when_another_pad_is_undecided(tmp_path):
+@pytest.mark.parametrize("clock_x, disconnected, expected_status", [
+    (1000000, ["clk"], "FAIL"),
+    (1820000, [], "NOT_MEASURED"),
+])
+def test_disconnected_pad_fails_even_when_another_pad_is_undecided(
+        tmp_path, clock_x, disconnected, expected_status):
     project = _project(tmp_path)
     path = project / D75.PAD_DEF
     path.write_text(path.read_text().replace(
@@ -457,16 +462,16 @@ def test_disconnected_pad_fails_even_when_another_pad_is_undecided(tmp_path):
         "END COMPONENTS", "- u_pad_aux PADX + PLACED ( 1700000 0 ) N ;\nEND COMPONENTS").replace(
         "PINS 1 ;", "PINS 2 ;").replace(
         "+ PLACED ( 1820000 640000 ) N ;",
-        "+ PLACED ( 1000000 640000 ) N ;").replace(
+        f"+ PLACED ( {clock_x} 640000 ) N ;").replace(
         "END PINS", "- aux + NET aux + DIRECTION INPUT + USE SIGNAL ;\nEND PINS").replace(
         "NETS 1 ;", "NETS 2 ;").replace(
         "END NETS", "- aux ( PIN aux ) ( u_pad_aux PAD ) ;\nEND NETS"))
     result = D75.execute(project, _context(project))
     pads = _by_name(result, "pad_bterm_coincidence_check")
-    assert pads["detail"]["not_connected_nets"] == ["clk"]
+    assert pads["detail"]["not_connected_nets"] == disconnected
     assert pads["detail"]["undecided_nets"] == ["aux"]
-    assert pads["status"] == "FAIL"
-    assert result["component_status"] == "FAIL"
+    assert pads["status"] == expected_status
+    assert result["component_status"] == expected_status
 
 
 def test_missing_geometry_and_missing_required_package_models_do_not_pass(tmp_path):
