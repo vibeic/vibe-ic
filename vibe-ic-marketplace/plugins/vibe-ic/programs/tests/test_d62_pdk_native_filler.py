@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import xml.etree.ElementTree as ET
+import pytest
 
 import flow109_density_fill as fill
 import metal_fill_config_gen as config
@@ -156,3 +157,30 @@ end
 def test_one_rule_with_multiple_blocks_is_not_max_only():
     deck=DECK.replace('FLOOR.a','LIMIT.a')
     assert 'LIMIT.a' in config.density_rule_coverage(deck,[])[1]
+
+
+DIRECTION_CASES=json.loads((Path(__file__).parent/'fixtures/d62_direction_cases.json').read_text())
+@pytest.mark.parametrize('case',DIRECTION_CASES,ids=[c['case'] for c in DIRECTION_CASES])
+def test_reviewed_density_bound_cases(case):
+    covered,gaps=config.density_rule_coverage(case['deck'],[])
+    assert covered=={}
+    assert ('LIMIT.a' not in gaps) is case['check_only']
+
+
+@pytest.mark.parametrize('body,check_only',[
+    ('if 35 > (sample.area / chip_area) * 100\nend',False),
+    ('if -(sample.area / chip_area) > -0.35\nend',False),
+    ('inverse = 1 - sample.area / chip_area\nif inverse > 0.65\nend',False),
+    ('flag = !(sample.area / chip_area >= 0.35) || false',False),
+    ('if (sample.area / chip_area) > 0.55 && check_density(sample.area / chip_area)\nend',False),
+    ('if (sample.area / chip_area) == 0.35\nend',False),
+    ('if 0.55 < sample.area / chip_area\nend',True),
+    ('unless 0.35 <= sample.area / chip_area\nend',False),
+    ('d = sample.area / chip_area\nif d * 100 > 55\nend',True),
+    ('if sample.area / chip_area > 0.55\nend\nopaque_check()',False),
+    ('if sample.area / chip_area > 0.55\nend\nx = table[sample.area / chip_area]',False),
+    ('if sample.area / chip_area * 1e309 > 55\nend',False),
+])
+def test_all_density_checks_have_a_proven_direction(body,check_only):
+    deck='chip_area = extent.sized(0.0).area\n# Rule LIMIT.a: density\n'+body+'\n'
+    assert ('LIMIT.a' not in config.density_rule_coverage(deck,[])[1]) is check_only

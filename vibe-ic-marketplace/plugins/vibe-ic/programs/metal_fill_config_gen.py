@@ -537,36 +537,13 @@ def density_check_only_rules(deck_text: str) -> List[str]:
     """
     family = density_rule_layer_identifiers(deck_text)
     die_names, _why = _dla.die_area_identifiers(deck_text)
-    code = _dla.deck_code_only(deck_text)
-    assignments = {}
-    for variable, expression in re.findall(r"^\s*([A-Za-z_]\w*)\s*=\s*([^\n]+)", code, re.M):
-        assignments.setdefault(variable, set()).update(re.findall(r"[A-Za-z_]\w*", expression))
-
-    def references(expression):
-        names = set(re.findall(r"[A-Za-z_]\w*", expression))
-        while True:
-            expanded = names | set().union(*(assignments.get(n, set()) for n in names))
-            if expanded == names:
-                return names
-            names = expanded
-
+    from _density_bound_direction import DensityDirections
+    reader = DensityDirections(_dla.deck_code_only(deck_text), die_names)
     directions_by_rule = {}
     for rid, _where, body in _dla._rule_blocks(deck_text):
-        if rid not in family:
-            continue
-        code = _dla.deck_code_only(body)
-        directions = set(re.findall(r":(min|max)\b", code))
-        for expression in re.findall(r"^\s*(?:if|elsif)\s+([^\n]+)", code, re.M):
-            names = references(expression)
-            # A condition on an enable flag or loop index does not describe
-            # the density bound. Follow only executable area dependencies.
-            if not (names & set(die_names) and names & set(family[rid])):
-                continue
-            if re.search(r"(?<![<>=])<(?![<])", expression):
-                directions.add('min')
-            if re.search(r"(?<![<>=])>(?![>])", expression):
-                directions.add('max')
-        directions_by_rule.setdefault(rid, set()).update(directions or {'unknown'})
+        if rid in family:
+            directions_by_rule.setdefault(rid, set()).update(
+                reader.modes(_dla.deck_code_only(body), family[rid]))
     return sorted(rid for rid, modes in directions_by_rule.items() if modes == {'max'})
 
 

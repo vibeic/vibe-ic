@@ -1,0 +1,37 @@
+[
+  {
+    "case": "mixed_standard",
+    "deck": "chip_area = extent.sized(0.0).area\n# Rule LIMIT.a: density\nif (sample.area / chip_area) * 100 > 55\n  extent.output(\"LIMIT.a\", \"too high\")\nend\nif (sample.area / chip_area) * 100 < 35\n  extent.output(\"LIMIT.a\", \"too low\")\nend\n",
+    "check_only": false
+  },
+  {
+    "case": "mixed_modifier",
+    "deck": "chip_area = extent.sized(0.0).area\n# Rule LIMIT.a: density\nif (sample.area / chip_area) * 100 > 55\n  extent.output(\"LIMIT.a\", \"too high\")\nend\nextent.output(\"LIMIT.a\", \"too low\") if (sample.area / chip_area) * 100 < 35\n",
+    "check_only": false
+  },
+  {
+    "case": "mixed_until",
+    "deck": "chip_area = extent.sized(0.0).area\n# Rule LIMIT.a: density\nif (sample.area / chip_area) * 100 > 55\n  extent.output(\"LIMIT.a\", \"too high\")\nend\nunless (sample.area / chip_area) * 100 >= 35\n  extent.output(\"LIMIT.a\", \"too low\")\nend\n",
+    "check_only": false
+  },
+  {
+    "case": "unknown_only",
+    "deck": "chip_area = extent.sized(0.0).area\n# Rule LIMIT.a: density\ncheck_density(sample.area / chip_area)\n",
+    "check_only": false
+  },
+  {
+    "case": "max_and_unknown",
+    "deck": "chip_area = extent.sized(0.0).area\n# Rule LIMIT.a: density\nif (sample.area / chip_area) * 100 > 55\n  extent.output(\"LIMIT.a\", \"too high\")\nend\ncheck_density(sample.area / chip_area)\n",
+    "check_only": false
+  },
+  {
+    "case": "reversed_min",
+    "deck": "chip_area = extent.sized(0.0).area\n# Rule LIMIT.a: density\nif 35 > (sample.area / chip_area) * 100\n  extent.output(\"LIMIT.a\", \"too low\")\nend\n",
+    "check_only": false
+  },
+  {
+    "case": "reversed_max",
+    "deck": "chip_area = extent.sized(0.0).area\n# Rule LIMIT.a: density\nif 55 < (sample.area / chip_area) * 100\n  extent.output(\"LIMIT.a\", \"too high\")\nend\n",
+    "check_only": true
+  }
+]
