@@ -344,18 +344,23 @@ def run_audit(project: Path) -> AuditResult:
     # v0.2.68 (#438a) — PASS_WITH_DERIVED_CORNERS tier: passing blocks
     # whose PVT grid is partly arithmetic derivation never present as a
     # plain executed-sweep PASS.
-    verdict_tier = "PASS"
-    if result.passed and blocks_stub and blocks_stub == blocks_checked:
+    # The completed audit is the single outcome used by passed, summary.pass
+    # and the tier. Failure outranks every successful-block disclosure.
+    if not result.passed:
+        verdict_tier = "FAIL"
+    elif blocks_stub and blocks_stub == blocks_checked:
         verdict_tier = "PASS_WITH_STUB"
-    elif result.passed and blocks_stub:
+    elif blocks_stub:
         verdict_tier = "PASS_WITH_STUB_PARTIAL"
-    elif result.passed and blocks_structure_only:
+    elif blocks_structure_only:
         # Ahead of the derived tier on purpose: "which circuit" outranks "how
         # many of its corners were arithmetic". A sweep of a library nominal
         # is not this design's sweep however many corners it executed.
         verdict_tier = "PASS_STRUCTURE_ONLY"
-    elif result.passed and blocks_derived:
+    elif blocks_derived:
         verdict_tier = "PASS_WITH_DERIVED_CORNERS"
+    else:
+        verdict_tier = "PASS"
 
     result.summary = {
         "skipped": False,
