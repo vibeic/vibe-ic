@@ -1,6 +1,8 @@
 """The arithmetic oracle's function comes from the typed declaration field alone."""
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 import pytest
 
@@ -314,7 +316,93 @@ def test_serial_sign_must_be_declared(tmp_path):
     assert spec is None and 'sign' in why, (spec, why)
 
 
-def test_generated_serial_multiplier_declares_the_function_it_implements():
+def producer_project(tmp_path, location=None, field=None):
+    from test_serial_parallel_mul_synth import _mk_project, _SPM_PORTS
+    p = _mk_project(tmp_path, ports=_SPM_PORTS, top='source_intent_unit',
+                    l2_text='serial-parallel multiplier: p = (x * y) mod 2^N')
+    (p / 'reports').mkdir()
+    (p / 'reports/ic_class.json').write_text(json.dumps({
+        'ic_class': 'digital_arithmetic_primitive'}))
+    if location:
+        path = p / location
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(json.dumps({'integer_encoding': 'unsigned', 'function': field}))
+    return p
+
+
+def emit_serial(p, action='--emit'):
     import serial_parallel_mul_synth as synth
-    source = Path(synth.__file__).read_text()
-    assert '"operands": [spec["parallel"], spec["serial_in"]]' in source
+    result = subprocess.run([sys.executable, synth.__file__, str(p), action],
+                            capture_output=True, text=True)
+    (p / (action[2:] + '.stdout')).write_text(result.stdout)
+    (p / (action[2:] + '.stderr')).write_text(result.stderr)
+    return result
+
+
+def professional_step(p):
+    import design_one_shot_runner as runner
+    import professional_tb_check as consumer
+    step = runner.step_professional_tb_gen(p, 'source_intent_unit', '')
+    (p / 'native-step.json').write_text(json.dumps(step.__dict__, default=str, indent=2))
+    report = json.loads((p / 'reports/phase2/gates/professional_tb.json').read_text())
+    return step, report, consumer.check(p)
+
+
+def test_serial_producer_without_source_function_preserves_author_handoff(tmp_path):
+    p = producer_project(tmp_path)
+    for action in ('--emit', '--refresh-contract'):
+        result = emit_serial(p, action)
+        assert result.returncode == 0, result.stdout + result.stderr
+        assert (p / 'phase2/stage1/rtl/source_intent_unit.v').stat().st_size > 0
+        field, reason = oracle.declared_function(p)
+        assert field is None and 'function field' in reason, (field, reason)
+    step, report, check = professional_step(p)
+    assert (step.status, report['status'], report['ran_cocotb']) == (
+        'NOT_MEASURED', 'INCOMPLETE', False), (step.detail, report, check)
+    assert report['fallback_skill'] == 'testbench-gen', report
+    assert check['verdict'] == 'NOT_CHECKED', check
+
+
+@pytest.mark.parametrize('location', ['declaration.json', 'plugin_output/declaration.json'])
+@pytest.mark.parametrize('broken', [False, True], ids=['correct-dut', 'wrong-output'])
+def test_serial_producer_preserves_source_function_and_native_falsifiability(
+        tmp_path, location, broken):
+    field = function('*', 32, 'p', ('y', 'x'))
+    p = producer_project(tmp_path, location, field)
+    source = (p / location).read_bytes()
+    result = emit_serial(p)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert oracle.declared_function(p) == (field, '')
+    if location == 'declaration.json':
+        assert (p / location).read_bytes() == source
+    if broken:
+        rtl = p / 'phase2/stage1/rtl/source_intent_unit.v'
+        text = rtl.read_text()
+        assert 'assign p = pr;' in text
+        rtl.write_text(text.replace('assign p = pr;', "assign p = 1'b0;"))
+    step, report, check = professional_step(p)
+    status = 'FAIL' if broken else 'PASS'
+    assert (step.status, report['status'], check['verdict']) == (status,) * 3, (
+        step.detail, report, check)
+    assert report['ran_cocotb'] is True and report['functional_mismatch'] is broken, report
+    native = p / 'phase2/stage1/sim_professional/source_intent_unit'
+    assert (native / 'cocotb_run.log').stat().st_size > 0
+    assert (native / 'results.xml').stat().st_size > 0
+
+
+@pytest.mark.parametrize('location', ['declaration.json', 'plugin_output/declaration.json'])
+@pytest.mark.parametrize('field', [
+    pytest.param(function('+', 32, 'p', ('x', 'y')), id='add-conflicts-with-multiply'),
+    pytest.param(function('*', 16, 'p', ('x', 'y')), id='different-modulus'),
+    pytest.param(function('*', 32, 'x', ('p', 'y')), id='reversed-port-roles'),
+    pytest.param(function(['*'], 32, 'p', ('x', 'y')), id='malformed-operator'),
+])
+def test_serial_producer_refuses_incompatible_source_function_before_publication(
+        tmp_path, location, field):
+    p = producer_project(tmp_path, location, field)
+    before = (p / location).read_bytes()
+    result = emit_serial(p)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert json.loads(result.stdout)['verdict'] == 'DEFER'
+    assert (p / location).read_bytes() == before
+    assert not (p / 'phase2').exists()
