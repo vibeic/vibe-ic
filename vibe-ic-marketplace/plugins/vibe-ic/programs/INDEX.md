@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1519
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1519)
+- **Total programs (excluding helpers / shims):** 1520
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1520)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1510 |
+| `any` | 1511 |
 
 ## Alphabetical listing
 
@@ -85,6 +85,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_corner_margin_check` | any | — | A4 strict PVT-margin gate. NOT WIRED. |
 | `analog_corner_sweep_check` | any | — | deterministic gate for PVT corner coverage |
 | `analog_deck_vector_retention` | any | — | retain the vectors a deck MEASURES, and only those. |
+| `analog_declared_pvt` | any | — | Declared scalar PVT producer; callers block dependent work on non-PASS. |
 | `analog_digital_interface_check` | any | — | deterministic gate for digital-analog interface validation |
 | `analog_existing_design_validate` | any | — | Read-validate an existing analog DUT against its current typed design. |
 | `analog_flow_compliance_check` | any | — | analog track compliance gate (A1-A9) |
@@ -1591,7 +1592,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1510 programs)
+### `any` (1511 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1652,6 +1653,7 @@ _(no programs in this group)_
 - `analog_corner_margin_check` — A4 strict PVT-margin gate. NOT WIRED.
 - `analog_corner_sweep_check` — deterministic gate for PVT corner coverage
 - `analog_deck_vector_retention` — retain the vectors a deck MEASURES, and only those.
+- `analog_declared_pvt` — Declared scalar PVT producer; callers block dependent work on non-PASS.
 - `analog_digital_interface_check` — deterministic gate for digital-analog interface validation
 - `analog_existing_design_validate` — Read-validate an existing analog DUT against its current typed design.
 - `analog_flow_compliance_check` — analog track compliance gate (A1-A9)

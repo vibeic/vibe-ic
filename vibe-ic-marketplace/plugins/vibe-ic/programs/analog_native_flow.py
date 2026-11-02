@@ -118,11 +118,16 @@ def _input_views(project, name, step=None):
             paths.append(Path(selected["ngspice_bin"]))
     # A configured nominal/calibration deck can live outside the canonical
     # block directory. Retain the actual selected inputs, not only defaults.
-    from analog_native_sim import (_config, _inputs, _included_paths,
+    from analog_native_sim import (_config, _selected_config, _inputs, _included_paths,
                                    _testbench_inputs_path, _declared_testbench)
     config = _read(project / "input" / "analog_flow.json", {})
     for selected_step in STEPS[5:10]:
-        selected = _config({"config": config}, {"name": name}, selected_step)
+        try:
+            selected = (_selected_config(project, {"config": config}, {"name": name}, selected_step)
+                        if selected_step == step == 'A08' else
+                        _config({"config": config}, {"name": name}, selected_step))
+        except (OSError, ValueError):
+            selected = _config({"config": config}, {"name": name}, selected_step)
         if selected_step == "A07" and selected.get("nominal_testbench"):
             selected = {**selected, "testbench": selected["nominal_testbench"]}
         if selected_step == "A10" and isinstance(selected.get("calibration"), dict):
@@ -130,7 +135,7 @@ def _input_views(project, name, step=None):
         netlist, deck, spec = _inputs(project, name, selected)
         paths.extend([netlist, deck, spec])
         paths.extend(_included_paths(deck))
-        if selected_step == "A07":
+        if selected_step == 'A07' or selected_step == step == 'A08':
             try:
                 declaration = _testbench_inputs_path(project, name, selected)
             except ValueError:
@@ -140,6 +145,14 @@ def _input_views(project, name, step=None):
                 try:
                     _text, views = _declared_testbench(project, name, selected, netlist.parent)
                     paths.extend(Path(view["path"]) for view in views.values())
+                    pvt = selected.get('pvt') or {}
+                    if selected_step == 'A08' and isinstance(pvt, dict) and pvt.get('kind') == 'declared_testbench':
+                        import analog_declared_pvt as declared
+                        section, temperature = declared.coordinates(pvt)[0]
+                        sections = pvt['process_sections']
+                        _deck, _dut, views = declared.render_corner(project, name, selected, netlist.parent,
+                            sections, section, temperature)
+                        paths.extend(Path(view['path']) for view in views.values())
                 except ValueError:
                     pass  # The producer reports the invalid declaration.
     if step in ("A06", "A07"):
@@ -221,8 +234,8 @@ def _local_ngspice_startup(project, cwd, image):
     selected = availability.resolve_pdk(target, container='')
     if not selected.get('available') or selected.get('source') != 'container_installed':
         return {}, None  # Project-staged/builtin models keep their existing startup.
-    init = Path(cwd) / '.spiceinit'
-    if not init.is_file():
+    init = Path(cwd) / '.spiceinit' if cwd is not None else None
+    if init is None or not init.is_file():
         init = Path(selected['pdk_root']) / 'libs.tech/ngspice/.spiceinit'
     environment = {'PDK_ROOT': root, 'PDK': selected['matched_dir']}
     if not init.is_file():
@@ -1006,11 +1019,17 @@ def _a07_invocation(project, step="A07"):
         name = block.get("name") or block.get("block")
         inputs.update(_input_views(project, name, step))
         if step in ("A07", "A08"):
-            selected = analog_native_sim._config({"config": _read(project / "input/analog_flow.json", {})}, block, step)
+            try:
+                selected = analog_native_sim._selected_config(project,
+                    {"config": _read(project / "input/analog_flow.json", {})}, block, step)
+            except (OSError, ValueError):
+                return None  # The dispatcher records the invalid execution inputs.
             if selected.get("nominal_testbench"):
                 selected = {**selected, "testbench": selected["nominal_testbench"]}
             _netlist, deck, _spec = analog_native_sim._inputs(project, name, selected)
-            _environment, startup = _local_ngspice_startup(project, deck.parent, image)
+            pvt = selected.get('pvt')
+            derived = step == 'A08' and isinstance(pvt, dict) and pvt.get('kind') == 'declared_testbench'
+            _environment, startup = _local_ngspice_startup(project, None if derived else deck.parent, image)
             if startup:
                 inputs[startup["path"]] = startup["sha256"]
     paths = list((project / ("requirements/base_A6" if step == "A07" else "requirements/base_A7")).rglob("*"))
