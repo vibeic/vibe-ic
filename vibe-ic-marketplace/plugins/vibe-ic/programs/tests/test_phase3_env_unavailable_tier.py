@@ -107,8 +107,19 @@ class _FakePdkConfig:
         self.bridge_netgen_setup = bridge_netgen_setup
 
 
+@pytest.fixture
+def final_layout(tmp_path: Path) -> Path:
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "top.gds").write_text("gds")
+    (pnr / "top.def").write_text("DESIGN top ;\nEND DESIGN\n")
+    (tmp_path / "state_out.json").write_text(json.dumps({
+        "gds": str(pnr / "top.gds"), "def": str(pnr / "top.def")}))
+    return tmp_path
+
+
 def test_step_drc_env_unavailable_when_calibre_deck_present_but_binary_absent(
-        tmp_path: Path) -> None:
+        final_layout: Path) -> None:
     # 2026-07-12: step_drc first tries the native `svrfdrc` buddy (runs the
     # Calibre .rule deck license-free). Only when BOTH `calibre` AND the
     # svrfdrc buddy are absent does it emit ENV_UNAVAILABLE — and the
@@ -123,14 +134,14 @@ def test_step_drc_env_unavailable_when_calibre_deck_present_but_binary_absent(
         "programs.phase3_one_shot_runner._svrfdrc_bin_container",
         return_value=None,
     ):
-        res = step_drc(tmp_path, "top", pdk, "test-container")
+        res = step_drc(final_layout, "top", pdk, "test-container")
     assert res.status == "NOT_MEASURED"
     assert res.extras.get("missing_tool") == "calibre|svrfdrc"
     assert "ENV gap" in res.detail
 
 
 def test_step_drc_waived_when_calibre_binary_present_but_svrf_engine_absent(
-        tmp_path: Path) -> None:
+        final_layout: Path) -> None:
     # 2026-07-12: sign-off DRC PREFERS the native `svrfdrc` buddy (runs the real
     # Calibre deck license-free). WAIVED (defer to offline `calibre`) now happens
     # ONLY when the buddy is unavailable while the `calibre` binary IS present.
@@ -145,24 +156,20 @@ def test_step_drc_waived_when_calibre_binary_present_but_svrf_engine_absent(
         "programs.phase3_one_shot_runner._svrfdrc_bin_container",
         return_value=None,
     ):
-        res = step_drc(tmp_path, "top", pdk, "test-container")
+        res = step_drc(final_layout, "top", pdk, "test-container")
     assert res.status == "PASS_WITH_WAIVERS"
     assert "missing_tool" not in (res.extras or {})
 
 
 def test_step_drc_env_unavailable_when_klayout_deck_but_no_binary(
-        tmp_path: Path) -> None:
+        final_layout: Path) -> None:
     """KLayout deck found but klayout not in PATH."""
     pdk = _FakePdkConfig(drc_deck="/path/to/rules.lydrc")
-    # Need a GDS file to get past the SKIP-on-missing-GDS branch.
-    gds_dir = tmp_path / "phase3" / "stage3" / "pnr"
-    gds_dir.mkdir(parents=True, exist_ok=True)
-    (gds_dir / "top.gds").write_text("dummy")
     with patch(
         "programs.phase3_one_shot_runner._tool_in_path",
         side_effect=lambda c, t: False if t == "klayout" else True,
     ):
-        res = step_drc(tmp_path, "top", pdk, "test-container")
+        res = step_drc(final_layout, "top", pdk, "test-container")
     assert res.status == "NOT_MEASURED"
     assert res.extras.get("missing_tool") == "klayout"
 

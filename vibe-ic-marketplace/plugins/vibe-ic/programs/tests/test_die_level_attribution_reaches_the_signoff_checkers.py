@@ -337,6 +337,8 @@ def _current_signoff_subject(project: Path, report: Path) -> None:
     for path, body in materials.values():
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(body)
+    (project / "state_out.json").write_text(json.dumps({
+        "gds": str(gds), "def": str(materials["def"][0])}))
     native = project / "phase3/reports/drc.rpt"
     native.parent.mkdir(parents=True, exist_ok=True)
     native.write_bytes(report.read_bytes())
