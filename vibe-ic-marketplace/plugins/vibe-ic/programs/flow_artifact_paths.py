@@ -8,6 +8,10 @@ GDS_SPEC = 'phase3/stage4/gds/*.gds'
 _gate_parameters = ContextVar('flow_artifact_gate_parameters', default=None)
 
 
+class OutputTopUnbound(ValueError):
+    pass
+
+
 @contextmanager
 def gate_parameters(project, parameters):
     if parameters is None:
@@ -74,7 +78,7 @@ def resolve(project, pattern, parameters=None):
     tops = [source.get('top') for source in sources]
     if not tops or any(not isinstance(top, str) or not re.fullmatch(
             r'[A-Za-z_][A-Za-z0-9_$.-]*', top) for top in tops):
-        raise ValueError('OUTPUT_TOP_UNBOUND: typed invocation top is absent or unsafe')
+        raise OutputTopUnbound('OUTPUT_TOP_UNBOUND: typed invocation top is absent or unsafe')
     if len(set(tops)) != 1:
         raise ValueError('OUTPUT_TOP_CONFLICT: invocation and project tops differ')
     return str(Path(pattern).with_name(tops[0] + '.gds'))

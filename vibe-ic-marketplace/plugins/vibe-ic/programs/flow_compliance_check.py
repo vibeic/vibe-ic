@@ -2470,10 +2470,7 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
     so collapsing to one would have quietly reduced what gets scanned.
     """
     from flow_artifact_paths import resolve
-    try:
-        selected = resolve(project, spec)
-    except ValueError as exc:
-        return False, [], "project_glob", str(exc), _bind_detail("output_top_unbound", reason=str(exc))
+    selected = resolve(project, spec)
     alts = [a.strip() for a in str(selected).split(" OR ") if a.strip()]
     glob_ev: List[str] = []       # exactly what the pre-change loop collected
     glob_hits: List[str] = []     # every hit, for classification
@@ -16597,9 +16594,16 @@ def _with_child_gate_step(fn):
     def _judge(project, step, *args, **kwargs):
         token = _CHILD_GATE_STEP.set(str((step or {}).get("id") or ""))
         try:
-            from flow_artifact_paths import gate_parameters
+            from flow_artifact_paths import OutputTopUnbound, gate_parameters
             with gate_parameters(project, kwargs.pop("parameters", None)):
-                return fn(project, step, *args, **kwargs)
+                try:
+                    return fn(project, step, *args, **kwargs)
+                except OutputTopUnbound as exc:
+                    return StepResult(
+                        id=step["id"], name=step.get("name", ""),
+                        stage=step.get("stage", ""), status="NOT_MEASURED",
+                        reason_class=_T.ReasonClass.NOT_EXECUTED.value,
+                        reasons=[f"{exc}; rerun the audit with --top <logical top>"])
         finally:
             _CHILD_GATE_STEP.reset(token)
     return _judge

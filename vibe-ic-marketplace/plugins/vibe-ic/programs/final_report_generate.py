@@ -2874,7 +2874,8 @@ def _render(project: Path, run_audit: bool = True,
     md.append("")
     md.append("```bash")
     md.append(f"python3 {COMPLIANCE_TOOL} \\")
-    md.append(f"    {project} --strict")
+    from flow_artifact_paths import top_arguments
+    md.append(" ".join([f"    {project} --strict", *top_arguments(project)]))
     md.append("```")
     md.append("")
 

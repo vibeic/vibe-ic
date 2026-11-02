@@ -469,3 +469,54 @@ def test_legacy_window_carries_top_to_collection_and_private_audit(layout, monke
     assert report['steps_view']['status'] == 'OK'
     with pytest.raises(ValueError, match='OUTPUT_TOP_UNBOUND'):
         paths.resolve(layout, SPEC)
+
+
+def _topless_cli_audit(layout, *extra):
+    import subprocess
+    import sys
+    import yaml
+    flow = layout.parent / 'topless-flow.yaml'
+    flow.write_text(yaml.safe_dump({'steps': [
+        {'id': 37, 'name': 'GDS output', 'stage': 'stage4',
+         'required_outputs': [SPEC], 'gate': {'files_exist': [SPEC]}},
+        {'id': 38, 'name': 'Other output', 'stage': 'stage4',
+         'required_outputs': ['other.txt'], 'gate': {'files_exist': ['other.txt']}},
+        {'id': 39, 'name': 'GDS gate only', 'stage': 'stage4',
+         'gate': {'files_exist': [SPEC]}},
+    ]}))
+    (layout / 'other.txt').write_text('source fixture\n')
+    report = layout.parent / 'topless-audit.json'
+    result = subprocess.run(
+        [sys.executable, fcc.__file__, str(layout), '--flow-def', str(flow),
+         '--json', str(report), *extra], capture_output=True, text=True)
+    rows = {str(row['id']): row for row in json.loads(report.read_text())['steps']}
+    return result, rows
+
+
+def test_topless_audit_finishes_and_names_only_the_gds_step_not_measured(layout):
+    result, rows = _topless_cli_audit(layout, '--strict')
+    assert 'Traceback' not in result.stderr, result.stderr
+    assert result.returncode != 0
+    assert rows['37']['status'] == 'NOT_MEASURED'
+    assert rows['37']['reason_class']
+    assert any('OUTPUT_TOP_UNBOUND' in reason for reason in rows['37']['reasons'])
+    assert FOREIGN not in rows['37']['evidence'] and OWNED not in rows['37']['evidence']
+    assert rows['39']['status'] == 'NOT_MEASURED'
+    assert rows['38']['status'] != 'NOT_MEASURED'
+
+
+def test_topless_audit_refusal_does_not_leak_into_a_top_bound_step(layout, monkeypatch):
+    row = {'id': 37, 'name': 'GDS output', 'stage': 'stage4',
+           'required_outputs': [SPEC], 'gate': {'files_exist': [SPEC]}}
+    monkeypatch.setattr(execution_policy, '_ordinary_runtime', None)
+    assert fcc.check_step(layout, row, {}).status == 'NOT_MEASURED'
+    bound = fcc.check_step(layout, row, {}, parameters={'top': 'logical'})
+    assert bound.status != 'NOT_MEASURED'
+    assert OWNED in bound.evidence and FOREIGN not in bound.evidence
+
+
+def test_explicit_conflicting_top_still_raises_instead_of_a_step_row(layout):
+    with pytest.raises(ValueError, match='OUTPUT_TOP_CONFLICT'):
+        fcc.check_step(layout, {'id': 37, 'name': 'GDS', 'stage': 'stage4',
+                                'gate': {'files_exist': [SPEC]}}, {},
+                       parameters={'top': 'other'})
