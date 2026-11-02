@@ -54,22 +54,27 @@ def prepare_recipe(odb_path, config, intent, prefix, destination):
     vertical, horizontal = config["PDN_VERTICAL_LAYER"], config["PDN_HORIZONTAL_LAYER"]
     powers = [n for n, kind in intent["rails"].items() if kind == "POWER"]
     grounds = [n for n, kind in intent["rails"].items() if kind == "GROUND"]
+    # Only supply ports in the declared pad order have external pad bands.
+    external = [n for n in intent["rails"] if any(p["port"] == n for p in intent["pads"])]
     secondary = [n for n in intent["rails"] if n not in (powers[0], grounds[0])]
     lines = [prefix, f"set_voltage_domain -name Core -power {{{powers[0]}}} -ground {{{grounds[0]}}} "
              + "-secondary_power {" + " ".join(secondary) + "}",
              f"define_pdn_grid -name a18_grid -starts_with POWER -pins {{{vertical} {horizontal}}}"]
     for axis, layer in (("V", vertical), ("H", horizontal)):
         args = " ".join(f"-{key.lower()} {config['PDN_'+axis+key]}" for key in ("WIDTH", "PITCH", "OFFSET", "SPACING"))
-        lines.append(f"add_pdn_stripe -grid a18_grid -layer {{{layer}}} {args} -starts_with POWER -extend_to_core_ring")
+        lines.append(f"add_pdn_stripe -grid a18_grid -layer {{{layer}}} {args} -starts_with POWER "
+                     + "-nets {" + " ".join(intent["rails"]) + "} -extend_to_core_ring")
     width_v, width_h = float(config["PDN_CORE_RING_VWIDTH"]), float(config["PDN_CORE_RING_HWIDTH"])
-    lines.append(f"add_pdn_ring -grid a18_grid -layers {{{vertical} {horizontal}}} "
-                 f"-widths {{{width_v} {width_h}}} "
-                 f"-spacings {{{config['PDN_CORE_RING_VSPACING']} {config['PDN_CORE_RING_HSPACING']}}} "
-                 f"-core_offsets {{{config['PDN_CORE_RING_VOFFSET']} {config['PDN_CORE_RING_HOFFSET']}}} -connect_to_pads")
+    if external:
+        lines.append(f"add_pdn_ring -grid a18_grid -layers {{{vertical} {horizontal}}} "
+                     f"-widths {{{width_v} {width_h}}} "
+                     f"-spacings {{{config['PDN_CORE_RING_VSPACING']} {config['PDN_CORE_RING_HSPACING']}}} "
+                     f"-core_offsets {{{config['PDN_CORE_RING_VOFFSET']} {config['PDN_CORE_RING_HOFFSET']}}} "
+                     + "-nets {" + " ".join(external) + "} -connect_to_pads")
     # Ring positions follow actual placed pad PG bands, rather than a uniform
     # distance from the core. Corners are opaque; their internal PG connection
     # remains part of the verified pad cells.
-    for net in intent["rails"]:
+    for net in external:
         centers = {}
         for pad in intent["pads"]:
             inst = block.findInst(pad["name"])

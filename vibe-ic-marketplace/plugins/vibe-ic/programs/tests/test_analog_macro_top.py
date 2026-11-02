@@ -608,3 +608,129 @@ def test_native_macro_escape_still_refuses_pin_below_minwidth(tmp_path,block_via
         pdn.connect_macro_edges(db,{"rails": {"SUPPLY": "POWER", "RETURN": "GROUND"},
                                    "core_instances": ["macro0"]},
                                 {"PDN_VERTICAL_LAYER": "M2", "PDN_HORIZONTAL_LAYER": "M1"})
+
+
+@pytest.mark.parametrize("rail_name", ["regulated", "unnamed_supply"])
+@pytest.mark.parametrize("missing_side", [None, "west"])
+def test_internal_regulator_rail_needs_straps_not_external_pad_bands(tmp_path, rail_name, missing_side):
+    """Reviewer counterexample: an internal regulator output feeds a macro PG pin."""
+    import analog_macro_top_pdn as pdn
+    from librelane_contract import Refusal
+    odb = pytest.importorskip("odb")
+    lef = '''VERSION 5.8 ;
+BUSBITCHARS "[]" ; DIVIDERCHAR "/" ;
+UNITS DATABASE MICRONS 1000 ; END UNITS
+LAYER M1 TYPE ROUTING ; DIRECTION HORIZONTAL ; PITCH 2 ; WIDTH 1 ; SPACING 1 ; END M1
+LAYER C1 TYPE CUT ; SPACING 0.2 ; END C1
+LAYER M2 TYPE ROUTING ; DIRECTION VERTICAL ; PITCH 2 ; WIDTH 1 ; SPACING 1 ; END M2
+'''
+    lef += """VIA VIA12 DEFAULT
+ LAYER M1 ; RECT -0.5 -0.5 0.5 0.5 ;
+ LAYER C1 ; RECT -0.1 -0.1 0.1 0.1 ;
+ LAYER M2 ; RECT -0.5 -0.5 0.5 0.5 ;
+END VIA12
+"""
+    for master, kind, pins in [
+        ("pad_cell", "PAD", {"VP": "POWER", "VG": "GROUND"}),
+        ("regulator_cell", "BLOCK", {"IN": "POWER", "OUT": "POWER", "VG": "GROUND"}),
+        ("load_cell", "BLOCK", {"VP": "POWER", "VG": "GROUND"}),
+    ]:
+        lef += f'MACRO {master}\n CLASS {kind} ; ORIGIN 0 0 ; SIZE 10 BY 10 ;\n'
+        for i, (pin, use) in enumerate(pins.items()):
+            x = 1 + 2*i
+            lef += f' PIN {pin}\n DIRECTION INOUT ; USE {use} ; PORT LAYER M2 ; RECT {x} 1 {x+1} 2 ; END\n END {pin}\n'
+        lef += f'END {master}\n'
+    source = tmp_path / "neutral.lef"
+    source.write_text(lef + "END LIBRARY\n")
+    db = odb.dbDatabase.create()
+    odb.read_lef(db, str(source))
+    block = odb.dbBlock.create(odb.dbChip.create(db, db.getTech()), "internal_supply_top")
+    block.setDefUnits(1000)
+    block.setDieArea(odb.Rect(0, 0, 1000000, 1000000))
+    block.setCoreArea(odb.Rect(100000, 100000, 900000, 900000))
+    rails = {"external_supply": "POWER", "external_return": "GROUND", rail_name: "POWER"}
+    nets = {}
+    for name, kind in rails.items():
+        net = odb.dbNet.create(block, name)
+        net.setSigType(kind)
+        net.setSpecial()
+        nets[name] = net
+    def place(name, master, x, y, connections):
+        inst = odb.dbInst.create(block, db.findMaster(master), name)
+        inst.setLocation(x*1000, y*1000)
+        inst.setPlacementStatus("FIRM")
+        for pin, net in connections.items():
+            inst.findITerm(pin).connect(nets[net])
+        return inst
+    pads = []
+    for side, x, y in [("south", 500, 40), ("east", 950, 500), ("north", 500, 950), ("west", 40, 500)]:
+        if side == missing_side:
+            continue
+        name = "pad_" + side
+        place(name, "pad_cell", x, y, {"VP": "external_supply", "VG": "external_return"})
+        pads.append({"name": name, "side": side, "port": "external_supply", "terminal": "VP"})
+        pads.append({"name": name, "side": side, "port": "external_return", "terminal": "VG"})
+    regulator = place("regulator", "regulator_cell", 300, 300,
+                      {"IN": "external_supply", "OUT": rail_name, "VG": "external_return"})
+    load = place("load", "load_cell", 500, 500, {"VP": rail_name, "VG": "external_return"})
+    assert regulator.findITerm("OUT").getNet() == load.findITerm("VP").getNet()
+    source = tmp_path / "input.odb"
+    odb.write_db(db, str(source))
+    config = {"PDN_VERTICAL_LAYER": "M2", "PDN_HORIZONTAL_LAYER": "M1"}
+    for axis in ("V", "H"):
+        for key, value in [("WIDTH", 1), ("PITCH", 20), ("OFFSET", 2), ("SPACING", 2)]:
+            config['PDN_' + axis + key] = value
+        for key, value in [("WIDTH", 1), ("SPACING", 1), ("OFFSET", 2)]:
+            config['PDN_CORE_RING_' + axis + key] = value
+    intent = {"rails": rails, "core_instances": ["regulator", "load"], "pads": pads}
+    recipe = tmp_path / "pdn.tcl"
+    if missing_side:
+        with pytest.raises(Refusal, match="A18_PAD_PG_BAND_ABSENT.*external_supply"):
+            pdn.prepare_recipe(source, config, intent, "", recipe)
+        return
+    pdn.prepare_recipe(source, config, intent, "", recipe)
+    lines = recipe.read_text().splitlines()
+    stripes = [line for line in lines if line.startswith("add_pdn_stripe")]
+    rings = [line for line in lines if line.startswith("add_pdn_ring")]
+    assert len(stripes) == 2 and all(rail_name in line for line in stripes)
+    assert len(rings) == 3 and all(rail_name not in line for line in rings)
+    assert all(rail in "\n".join(rings) for rail in ("external_supply", "external_return"))
+    import shutil
+    import subprocess
+    openroad = shutil.which("openroad")
+    assert openroad, "The native image must provide OpenROAD"
+    script = tmp_path / "run-pdn.tcl"
+    output = tmp_path / "grid.odb"
+    script.write_text(f"read_db {{{source}}}\n" + recipe.read_text()
+                      + f"pdngen\nwrite_db {{{output}}}\n")
+    result = subprocess.run([openroad, "-exit", str(script)], capture_output=True, text=True)
+    (tmp_path / "pdngen.log").write_text(result.stdout + result.stderr)
+    assert result.returncode == 0, result.stdout + result.stderr
+    db = odb.dbDatabase.create()
+    odb.read_db(db, str(output))
+    internal = db.getChip().getBlock().findNet(rail_name)
+    shapes = [shape for wire in internal.getSWires() for shape in wire.getWires()]
+    assert any(not shape.isVia() for shape in shapes), "internal rail has no native straps"
+    assert any(shape.isVia() for shape in shapes), "internal rail straps are not joined"
+
+
+def test_generator_keeps_regulator_output_internal_in_pdn_intent(tmp_path):
+    from analog_macro_top_gen import generate
+    l9 = declaration(tmp_path)
+    l9["instances"][0]["connections"]["Y"] = "regulated"
+    l9["instances"][1]["connections"].update(A="sample", VP="regulated")
+    put(tmp_path, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", l9)
+    lef = tmp_path / "views/stage_alpha.lef"
+    lef.write_text(lef.read_text().replace(
+        "PIN Y\n  DIRECTION INOUT ;\n  USE SIGNAL",
+        "PIN Y\n  DIRECTION INOUT ;\n  USE POWER"))
+    l21 = tmp_path / "phase1/generated_docs/L21_POWER_INTENT.json"
+    power = json.loads(l21.read_text())
+    power["fields"]["power_rails"] = [{"name": "regulated", "kind": "POWER"}]
+    l21.write_text(json.dumps(power))
+    assert generate(tmp_path)["verdict"] == "WROTE"
+    intent = json.loads((tmp_path / "phase3/analog_top/pdn_intent.json").read_text())
+    assert intent["rails"]["regulated"] == "POWER"
+    assert all(pad["port"] != "regulated" for pad in intent["pads"])
+    flat = (tmp_path / "phase3/analog_top/chip_top.physical.v").read_text()
+    assert ".Y(regulated)" in flat and ".VP(regulated)" in flat
