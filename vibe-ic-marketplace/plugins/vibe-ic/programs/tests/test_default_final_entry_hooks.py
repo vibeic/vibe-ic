@@ -360,6 +360,24 @@ def test_actual_die_finishing_keeps_native_failure_or_capability_status(tmp_path
     assert not record['canonical_pass']
 
 
+@pytest.mark.parametrize('rc,status', [(1, 'FAIL'), (2, 'NOT_MEASURED'), (0, 'PASS')])
+def test_backend_seal_producer_preserves_native_verdict(tmp_path, monkeypatch, rc, status):
+    import execution_backend_producers as backend
+    import librelane_contract as ll
+    write(tmp_path, 'phase3/stage3/pnr/top.gds', b'fixture GDS; native call is stubbed')
+    pdk = SimpleNamespace(tech_lef='/pdk/fixture/libs.ref/tech.lef')
+    monkeypatch.setattr(backend, '_parameters', lambda *_args: (phase3, ll, pdk, ''))
+    monkeypatch.setattr(ll, 'selected_mode', lambda *args: 'direct')
+    monkeypatch.setattr(phase3._pr, 'run_best_effort', lambda *args, **kwargs:
+                        SimpleNamespace(returncode=rc, stdout='die_finishing_gen: native result', stderr=''))
+    result = backend.produce_signoff(tmp_path, {
+        'step_id': '26.5ic', 'top': 'top', 'pdk_root': '/pdk', 'image_id': 'SOURCE_ONLY'})
+    assert result['verdict'] == status
+    if rc:
+        assert 'native result' in result['detail']
+    assert saved(tmp_path, '26.5ic')[1]['result']['step_rows'][0]['status'] == status
+
+
 def test_nested_existing_leaf_calls_both_finish_without_false_recovery(tmp_path):
     bind_invocation_top(tmp_path, 'top')
     @preflight.retained_step('31')
