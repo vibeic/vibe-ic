@@ -263,3 +263,19 @@ def test_unused_budget_account_does_not_change_the_retained_frame_binding(tmp_pa
         "zz/unsupported.pdf": T.SKIP_UNSUPPORTED_FORMAT}
     assert report["truncation"]["left_out"] == ["zz/remaining.md"]
     assert report["source_frame"]["truncation"] == report["truncation"]
+
+
+def test_an_oversized_design_document_reports_the_file_and_overflow(tmp_path):
+    document = "x" * (CAP + 10)
+    project = _tree(tmp_path, {"input/docs/spec.md": document})
+    report = T.input_text_report(project)
+    assert report["source_frame"]["members"][0]["text"] == document
+    assert report["source_frame"]["members"][0]["complete"] is True
+    assert report["truncation"] is not None
+    assert report["truncation"]["budget_chars"] == CAP
+    assert report["truncation"]["overflow_chars"] == 10
+    assert report["truncation"]["overflow"] == [
+        {"path": "docs/spec.md", "chars": CAP + 10, "overflow_chars": 10}]
+    assert report["truncation"]["cut"] == []
+    assert report["truncation"]["left_out"] == []
+    assert report["source_frame"]["truncation"] == report["truncation"]

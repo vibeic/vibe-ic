@@ -653,6 +653,7 @@ _INPUT_TEXT_EXTS = (".md", ".txt", ".rst", ".adoc", ".yaml", ".yml", ".json")
 #: The frame's character budget. It bounds CONTEXT, never the design documents
 #: (ruling #82(5)): `input_text_report` reads the design documents first and in
 #: full, and only the rest of `input/` shares what they leave of this budget.
+#: Unavoidable design-document overflow is named in `truncation` (#98).
 _INPUT_TEXT_CAP = 200_000
 
 
@@ -962,8 +963,15 @@ def input_text_report(project: Path) -> Dict[str, Any]:
     skipped.sort(key=lambda sk: position[sk["path"]])
     left_out = [sk["path"] for sk in skipped if sk["reason"] == SKIP_FRAME_BUDGET]
     truncated = bool(cut or left_out or total >= _INPUT_TEXT_CAP)
+    overflow_chars = max(0, design_chars - _INPUT_TEXT_CAP)
+    overflow = [{"path": member["path"], "chars": len(member["text"]),
+                 "overflow_chars": len(member["text"]) - _INPUT_TEXT_CAP}
+                for member in members if member["path"] in design_read
+                and len(member["text"]) > _INPUT_TEXT_CAP]
     truncation = ({"budget_chars": _INPUT_TEXT_CAP, "design_document_chars": design_chars,
-                   "cut": cut, "left_out": left_out} if truncated else None)
+                   "cut": cut, "left_out": left_out,
+                   "overflow_chars": overflow_chars, "overflow": overflow}
+                  if truncated or overflow_chars else None)
     text = "\n".join(p for p in semantic_parts if p)
     unsupported: Dict[str, int] = {}
     for sk in skipped:
