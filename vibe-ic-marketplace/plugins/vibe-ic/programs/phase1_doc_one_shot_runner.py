@@ -56704,6 +56704,12 @@ def _l13_operator_contract(project: Path) -> Dict[str, Any]:
                 params[name] = value
                 contract["criterion_params"] = params
                 answered_keys.append(key)
+    if criterion in _CRITERIA:
+        from l13_bringup_contract_check import consumer_invalid_params
+
+        invalid = consumer_invalid_params(criterion, contract.get("criterion_params", {}))
+        if invalid:
+            raise ValueError(f"L13_CRITERION_PARAMS_INVALID: {criterion}: {invalid}")
     provenance = doc.get(td.PROVENANCE_KEY)
     if isinstance(provenance, dict):
         retained = {key: provenance[key] for key in answered_keys if key in provenance}

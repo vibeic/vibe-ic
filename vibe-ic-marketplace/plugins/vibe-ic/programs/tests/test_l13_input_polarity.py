@@ -204,6 +204,108 @@ def test_conflicting_answered_parameters_are_refused_before_publication(tmp_path
     assert not (tmp_path / "phase1/generated_docs/L13_LAB_CALIBRATION.json").exists()
 
 
+@pytest.mark.parametrize("criterion, parameter", [
+    ("distinct_non_padding_bytes", "min_distinct_non_padding"),
+    ("monotonic_adc_sweep", "min_samples"),
+    ("memory_readback_match", "min_pages"),
+    ("register_write_read_roundtrip", "min_registers"),
+    ("comparator_alert_on_threshold", "min_events"),
+])
+@pytest.mark.parametrize("individual_params", [False, True])
+def test_invalid_numeric_parameter_is_refused(
+        tmp_path, criterion, parameter, individual_params):
+    import l13_bringup_contract_check as gate
+
+    params = {key: "02" if key == "padding_byte" else 7
+              for key in gate.consumer_required_params(criterion)}
+    params[parameter] = "lots"
+    result = gate.check({"lab_calibration_present": True, "criterion": criterion,
+                         "criterion_params": params, "tester": "neutral bench rig"}, phase=1)
+    assert "l13_contract_complete" in {
+        finding["rule"] for finding in result["findings"] if finding["severity"] == "FAIL"}
+
+    answers = {"L13.criterion": criterion, "L13.tester": "neutral bench rig"}
+    if individual_params:
+        answers.update({f"L13.criterion_params.{key}": value for key, value in params.items()})
+    else:
+        answers["L13.criterion_params"] = params
+    _operator_answers(tmp_path, answers)
+    with pytest.raises(ValueError, match="L13_CRITERION_PARAMS_INVALID"):
+        p1.gen_l13_lab_calibration(tmp_path, {})
+    assert not (tmp_path / "phase1/generated_docs/L13_LAB_CALIBRATION.json").exists()
+
+
+@pytest.mark.parametrize("value", ["7", 7.5])
+def test_numeric_parameters_keep_consumer_conversion_semantics(tmp_path, value):
+    import l13_bringup_contract_check as gate
+
+    _operator_answers(tmp_path, {
+        "L13.criterion": "monotonic_adc_sweep", "L13.tester": "neutral bench rig",
+        "L13.criterion_params": {"min_samples": value},
+    })
+    doc = _emit(tmp_path, "1. Sweep the input and record output samples.\n")
+    assert doc["criterion_params"] == {"min_samples": value}
+    assert gate.main([str(tmp_path)]) == 0
+
+
+def test_numeric_parameter_validation_uses_live_consumer(tmp_path, monkeypatch):
+    import hardware_pass_attestation_check as consumer
+
+    def neutral_future_criterion(tx, params):
+        return int(params.get("neutral_points", 3)) > 0, "ok"
+
+    monkeypatch.setitem(consumer._CRITERIA, "neutral_future_kind", neutral_future_criterion)
+    _operator_answers(tmp_path, {
+        "L13.criterion": "neutral_future_kind",
+        "L13.criterion_params": {"neutral_points": "lots"},
+    })
+    with pytest.raises(ValueError, match="L13_CRITERION_PARAMS_INVALID"):
+        p1.gen_l13_lab_calibration(tmp_path, {})
+    assert not (tmp_path / "phase1/generated_docs/L13_LAB_CALIBRATION.json").exists()
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), [], {}])
+def test_unconvertible_numeric_parameters_are_refused(tmp_path, value):
+    _operator_answers(tmp_path, {
+        "L13.criterion": "monotonic_adc_sweep",
+        "L13.criterion_params": {"min_samples": value},
+    })
+    with pytest.raises(ValueError, match="L13_CRITERION_PARAMS_INVALID"):
+        p1.gen_l13_lab_calibration(tmp_path, {})
+    assert not (tmp_path / "phase1/generated_docs/L13_LAB_CALIBRATION.json").exists()
+
+
+def test_parameter_validation_source_unavailable_refuses(tmp_path, monkeypatch):
+    import l13_bringup_contract_check as gate
+
+    def unavailable(fn):
+        raise OSError("neutral unavailable validator source")
+
+    monkeypatch.setattr(gate.inspect, "getsource", unavailable)
+    _operator_answers(tmp_path, {
+        "L13.criterion": "monotonic_adc_sweep",
+        "L13.criterion_params": {"min_samples": 7},
+    })
+    with pytest.raises(ValueError, match="L13_CRITERION_PARAMS_INVALID.*source unavailable"):
+        p1.gen_l13_lab_calibration(tmp_path, {})
+
+
+def test_nested_function_conversion_is_not_a_consumer_parameter(tmp_path, monkeypatch):
+    import hardware_pass_attestation_check as consumer
+
+    def neutral_future_criterion(tx, params):
+        def unused(params):
+            return int(params.get("unused_points", 3))
+        return False, "no evidence"
+
+    monkeypatch.setitem(consumer._CRITERIA, "neutral_future_kind", neutral_future_criterion)
+    _operator_answers(tmp_path, {
+        "L13.criterion": "neutral_future_kind",
+        "L13.criterion_params": {"unused_points": "lots"},
+    })
+    assert p1._l13_operator_contract(tmp_path)["criterion_params"] == {"unused_points": "lots"}
+
+
 def test_criterion_in_prose_cannot_answer_contract(tmp_path):
     doc = _emit(tmp_path, "L13.criterion: monotonic_adc_sweep\n"
                 "L13.criterion_params: {min_samples: 7}\nL13.tester: neutral bench rig\n")
@@ -222,6 +324,9 @@ def test_producer_uses_live_consumer_registry(tmp_path, monkeypatch):
 @pytest.mark.parametrize("answers_text, named", [
     (json.dumps({"answers": {"L13.criterion": "unregistered_neutral_kind"}}), "L13_CRITERION_UNKNOWN"),
     (json.dumps({"answers": {"L13.criterion_params": 7}}), "L13_CRITERION_PARAMS_INVALID"),
+    (json.dumps({"answers": {"L13.criterion": "monotonic_adc_sweep",
+                            "L13.criterion_params": {"min_samples": "lots"}}}),
+     "L13_CRITERION_PARAMS_INVALID"),
     ("{not json", "L13_OPERATOR_ANSWERS_INVALID"),
 ])
 def test_refused_answer_stops_the_runner_and_keeps_the_prior_document(
