@@ -1117,7 +1117,7 @@ def _d43_inputs(project):
     target, target_source = declared_target(project)
     if not isinstance(target, str) or not target.strip():
         raise ValueError('D43_DECLARED_PDK_ABSENT')
-    facts = resolver.resolve_pdk(target, project=project)
+    facts = resolver.resolve_pdk(target)
     if facts.get('source') != 'container_installed' or not facts.get('available'):
         raise ValueError('D43_INSTALLED_DECLARED_PDK_UNAVAILABLE')
     deck, why = _discover_deck(facts['pdk_root'], _kl.host_read_bytes,

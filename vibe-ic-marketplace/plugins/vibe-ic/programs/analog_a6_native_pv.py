@@ -1465,7 +1465,7 @@ def _d42_inputs(project):
     target, _ = declared_target(project)
     if not isinstance(target, str) or not target.strip():
         raise ValueError('D42_DECLARED_PDK_ABSENT')
-    facts = resolver.resolve_pdk(target, project=project)
+    facts = resolver.resolve_pdk(target)
     if facts.get('source') != 'container_installed' or not facts.get('available'):
         raise ValueError('D42_INSTALLED_PDK_UNAVAILABLE')
     selected = {}
