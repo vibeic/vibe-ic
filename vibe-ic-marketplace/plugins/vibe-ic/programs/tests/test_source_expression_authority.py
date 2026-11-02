@@ -23,7 +23,7 @@ def project(root, content, *, widths=(3, 5, 6), signed=None):
         'top_module': 'neutral_arithmetic', 'top_ports': ports,
         'ic_class': 'digital_arithmetic_primitive'}))
     (root / 'declaration.json').write_text(json.dumps({
-        'ic_class': 'digital_arithmetic_primitive'}))
+        'ic_class': 'digital_arithmetic_primitive', 'N': widths[2]}))
     return root
 
 
@@ -237,3 +237,32 @@ def test_affirmative_prose_requires_consistent_shape_labels(tmp_path, source, ac
     assert bool(spec) is accepted, (spec, reason)
     if accepted:
         assert spec['operator'] == '+'
+
+
+@pytest.mark.parametrize('declared,accepted', [(None, False), (3, False), (6, True), (True, False)])
+def test_symbolic_modulus_uses_its_named_declaration(tmp_path, declared, accepted):
+    p = project(tmp_path, 'result = left + right mod 2^LIMIT.')
+    declaration = p / 'declaration.json'
+    data = json.loads(declaration.read_text())
+    if declared is not None:
+        data['LIMIT'] = declared
+    declaration.write_text(json.dumps(data))
+    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+    assert bool(spec) is accepted, (spec, reason)
+    if not accepted:
+        assert 'LIMIT' in reason, reason
+
+
+@pytest.mark.parametrize('title,accepted', [
+    ('Function', True), ('Forbidden example: do not implement', False),
+    ('Negative example', False), ('Prohibited implementation', False),
+    ('Function (not applicable)', False),
+])
+def test_frs_record_title_retains_its_authority(tmp_path, title, accepted):
+    p = project(tmp_path, 'result = left + right.')
+    path = p / 'phase1/generated_docs/L2_FRS.json'
+    path.write_text(json.dumps({'frs_sections': [{'title': title, 'content': 'result = left + right.'}]}))
+    before = {f.relative_to(p): f.read_bytes() for f in p.rglob('*') if f.is_file()}
+    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+    assert bool(spec) is accepted, (spec, reason)
+    assert all((p / name).read_bytes() == value for name, value in before.items())

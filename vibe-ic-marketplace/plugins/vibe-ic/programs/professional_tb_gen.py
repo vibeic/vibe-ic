@@ -455,6 +455,12 @@ def _detect_stream_operator(project: Path,
         return None
     found = _aog._function_operator(project)
     if found and found[2] == '*':
+        modulus, why = _aog._source_modulus(project)
+        if modulus is None and why:
+            return None
+        _, ports = _aog._load_top_ports(project)
+        if modulus is not None and modulus != _resolve_tb_width(project, ports):
+            return None
         return "*"
     return None
 

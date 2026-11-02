@@ -359,7 +359,7 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
 
 
 def _function_records(project: Path) -> List[str]:
-    """Read function content from structured L2 records, excluding metadata.
+    """Read affirmative function records, retaining their title's authority.
 
     An existing L2 is authoritative; incidental L1 descriptions or copied raw
     input must not override it. Do not concatenate separate records into code.
@@ -380,6 +380,14 @@ def _function_records(project: Path) -> List[str]:
                     not isinstance(row, dict) or not isinstance(row.get('content'), str)
                     for row in rows):
                 return []
+            from _prose_polarity import is_denied
+            for row in rows:
+                title = row.get('title', '')
+                if (not isinstance(title, str)
+                        or is_denied(title, ignore_bracketed=False)
+                        or re.search(r'\b(?:forbid\w*|prohibit\w*|negative[ -]+example|counterexample)\b',
+                                     title, re.I)):
+                    return []
             return [row['content'] for row in rows
                     if isinstance(row, dict) and isinstance(row.get('content'), str)
                     and row['content'].strip()]
@@ -389,6 +397,48 @@ def _function_records(project: Path) -> List[str]:
     if isinstance(overview, str) and overview.strip():
         return [overview]
     return []
+
+
+def _source_modulus(project: Path) -> Tuple[Optional[int], str]:
+    """Bind source exponents to exact declared names; never to a width guess."""
+    tokens = [m[1] for record in _function_records(project)
+              for m in re.finditer(r'\bmod\s+2\s*\^\s*(\d+|[A-Za-z_]\w*)\b', record)]
+    if not tokens:
+        return None, ''
+    values = []
+    params = None
+    top, _ = _load_top_ports(project)
+    for token in tokens:
+        declared = []
+        if token.isdigit():
+            declared = [int(token)]
+        else:
+            for name in ('plugin_output/declaration.json', 'declaration.json'):
+                doc = _read_json(project / name) or {}
+                if token in doc:
+                    value = doc[token]
+                    if isinstance(value, str) and value.strip().isdigit():
+                        value = int(value.strip())
+                    declared.append(value)
+            if not declared:
+                if params is None:
+                    from _port_width import defaults_from_sources
+                    sources = [(p, p.read_text(errors='replace'))
+                               for p in sorted(_pl.rtl_dir(project).rglob('*'))
+                               if p.is_file() and p.suffix in ('.v', '.sv')]
+                    params = defaults_from_sources(sources, top)
+                if token in params:
+                    declared.append(params[token])
+        if not declared:
+            return None, f'source modulus exponent {token} is unbound — defer to testbench-gen'
+        if any(type(v) is not int or v < 1 for v in declared):
+            return None, f'source modulus exponent {token} has no positive integer declaration — defer'
+        if len(set(declared)) != 1:
+            return None, f'source modulus exponent {token} has conflicting declarations — defer'
+        values.append((token, declared[0]))
+    if len({value for _, value in values}) > 1:
+        return None, f'conflicting source modulus exponents {values} — defer'
+    return (values[0][1], ', '.join(f'{name}={value}' for name, value in values)) if values else (None, '')
 
 
 def _supports_function_reset(project: Path, polarity: str) -> bool:
@@ -609,6 +659,9 @@ def extract_arith_spec(project: Path,
                           for p in ports) else '')
                       + ('; additional input controls or output functions require a reference' if extra else ''))
     res_name, lhs_name, operator, rhs_name = found
+    modulus, modulus_binding = _source_modulus(project)
+    if modulus is None and modulus_binding:
+        return None, modulus_binding
 
     width = _resolve_width(project, ports)
     text_l = '\n'.join(_function_records(project)).lower()
@@ -813,10 +866,9 @@ def extract_arith_spec(project: Path,
         signed = operand_signs[0]
     if signed and operator in ('<<', '>>'):
         return None, 'signed shift operator semantics are unresolved — defer'
-    for record in _function_records(project):
-        modulus = re.search(r'\bmod\s+2\s*\^\s*(\d+)\b', record)
-        if modulus and int(modulus[1]) != result_w:
-            return None, 'source modulus differs from declared result width — defer'
+    if modulus is not None and modulus != result_w:
+        return None, (f'source modulus {modulus_binding} differs from declared '
+                      f'result width {result_w} — defer to testbench-gen')
 
     spec = {
         "top": top,
@@ -1033,6 +1085,9 @@ def extract_serial_arith_spec(
     if not found:
         return None, "no recognised closed-form operator"
     res_name, lhs_name, operator, rhs_name = found
+    modulus, modulus_binding = _source_modulus(project)
+    if modulus is None and modulus_binding:
+        return None, modulus_binding
 
     names_lc = {str(p.get("name", "")).lower() for p in ports}
     clk = next((p["name"] for p in ports if p["dir"] == "input"
@@ -1078,6 +1133,8 @@ def extract_serial_arith_spec(
     # depth) can neither block the oracle nor false-FAIL a correct DUT.
     conv = read_declared_conventions(project, ports) or {}
     width = _resolve_width(project, ports)
+    if modulus is not None and modulus != width:
+        return None, f'source modulus {modulus_binding} differs from serial word width {width} — defer'
     text_l = _doc_text(project).lower()
     signed = bool(conv.get("signed")) or bool(
         re.search(r"\bsigned\b|2'?s? ?complement|signed_2c", text_l)

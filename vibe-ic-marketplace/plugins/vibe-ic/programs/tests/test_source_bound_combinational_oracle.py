@@ -93,3 +93,38 @@ async def saturated_reference(dut):
     assert (step.status, consumer.check(p)['verdict'], report['functional_mismatch']) == (
         ('FAIL', 'FAIL', True) if wrong else ('PASS', 'PASS', False)), report
     assert expert.read_bytes() == before
+
+
+@pytest.mark.parametrize('case', ['modulus_three', 'modulus_three_masked', 'modulus_unbound',
+                                 'forbidden_title', 'positive_title', 'modulus_six'])
+def test_native_review_source_authority_controls(tmp_path, case):
+    source = 'result = left + right' + (' mod 2^N' if case.startswith('modulus') else '.')
+    p = project(tmp_path, source)
+    declaration = p / 'declaration.json'
+    d = json.loads(declaration.read_text())
+    if case == 'modulus_unbound':
+        d.pop('N')
+    elif case.startswith('modulus_three'):
+        d['N'] = 3
+    declaration.write_text(json.dumps(d))
+    if case == 'forbidden_title':
+        doc = p / 'phase1/generated_docs/L2_FRS.json'
+        doc.write_text(json.dumps({'frs_sections': [{
+            'title': 'Forbidden example: do not implement', 'content': source}]}))
+    rtl = p / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    expression = "(left + right) & 6'd7" if case == 'modulus_three_masked' else 'left + right'
+    (rtl / 'neutral_arithmetic.v').write_text(
+        'module neutral_arithmetic(input [2:0] left, input [4:0] right, output [5:0] result); '
+        'assign result = ' + expression + '; endmodule\n')
+    before = {f.relative_to(p): f.read_bytes() for f in p.rglob('*') if f.is_file()}
+    import design_one_shot_runner as runner
+    step = runner.step_professional_tb_gen(p, 'neutral_arithmetic', 'unused')
+    report = json.loads((p / 'reports/phase2/gates/professional_tb.json').read_text())
+    if case in ('positive_title', 'modulus_six'):
+        assert (step.status, report['status'], report['ran_cocotb']) == ('PASS', 'PASS', True), report
+    else:
+        assert (step.status, report['status'], report['ran_cocotb']) == ('NOT_MEASURED', 'INCOMPLETE', False), report
+        assert step.extras['fallback_skill'] == 'testbench-gen'
+        assert not (p / 'phase2/stage1/sim_professional').exists()
+    assert all((p / name).read_bytes() == value for name, value in before.items())
