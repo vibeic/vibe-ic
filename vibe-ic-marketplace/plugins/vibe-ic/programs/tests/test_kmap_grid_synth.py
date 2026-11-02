@@ -222,6 +222,34 @@ def test_closed_world_structured_spec_cannot_bypass_source_accounting(tmp_path, 
             for p in tmp_path.rglob('*') if p.is_file()} == before
 
 
+@pytest.mark.parametrize('declared', [False, True])
+def test_closed_world_l9_only_spec_cannot_bypass_author_handoff(tmp_path, declared):
+    import json
+    import design_one_shot_runner as runner
+
+    sentence = 'Build it from NANDs only.'
+    rows = ([{'kind': 'logic_basis', 'family': ['nand'],
+              'source_span': [0, len(sentence)], 'source_sentence': sentence}]
+            if declared else [])
+    source = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+    source.parent.mkdir(parents=True)
+    text = json.dumps({'top_module': 'chip_top', 'ports': [], 'logic_obligations': rows})
+    source.write_text(text)
+    before = {p.relative_to(tmp_path): p.read_bytes()
+              for p in tmp_path.rglob('*') if p.is_file()}
+    result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
+    assert result.status == 'PASS_WITH_WAIVERS', result
+    assert result.extras['fallback_skill'] == 'spec-to-rtl'
+    assert result.extras.get('spec_source') == 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+    marker = 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' if declared else 'SPEC_SENTENCES_UNACCOUNTED'
+    assert marker in result.detail
+    for row in result.extras['unaccounted_source_spans']:
+        lo, hi = row['source_span']
+        assert text[lo:hi] == row['source_sentence']
+    assert {p.relative_to(tmp_path): p.read_bytes()
+            for p in tmp_path.rglob('*') if p.is_file()} == before
+
+
 @pytest.mark.parametrize('sentence', _BASIS_PARAPHRASES + _MINIMIZATION_PARAPHRASES)
 @pytest.mark.parametrize('entry', ['chain', 'ordinary', 'late'])
 def test_sentence_family_obligations_precede_all_author_paths(tmp_path, sentence, entry):
