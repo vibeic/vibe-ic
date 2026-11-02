@@ -1689,7 +1689,7 @@ def test_state_pdk_asset_rebind_matches_recorded_content(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('damage', ['bytes', 'identity', 'family', 'traversal',
-                                   'two_candidates', 'missing', 'conflicting_identity', 'symlink'])
+                                   'two_candidates', 'missing', 'conflicting_identity'])
 def test_state_pdk_asset_rebind_refuses_unproven_content(tmp_path, monkeypatch, damage):
     family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
     if damage == 'bytes':
@@ -1711,10 +1711,6 @@ def test_state_pdk_asset_rebind_refuses_unproven_content(tmp_path, monkeypatch, 
         asset.unlink()
     elif damage == 'conflicting_identity':
         fingerprint['liberty_files'] = {str(recorded): '0' * 64}
-    elif damage == 'symlink':
-        target = tmp_path / 'outside.lib'
-        asset.rename(target)
-        asset.symlink_to(target)
     assert contract.resolve_state_pdk_asset(recorded, pdk=family, fingerprint=fingerprint) is None
     with pytest.raises(contract.Refusal, match='LL_PDK_ASSET_UNRESOLVED'):
         contract.config_file_hashes({'PDK': family, 'LIB': str(recorded)}, [],
@@ -1726,3 +1722,32 @@ def test_state_pdk_asset_existing_path_is_unchanged(tmp_path, monkeypatch):
     assert contract.resolve_state_pdk_asset(asset, pdk='unknown', fingerprint={}) == asset
     assert contract.config_file_hashes({'PDK': family, 'LIB': str(asset)}, []) == {
         str(asset): contract.digest(asset)}
+
+
+@pytest.mark.parametrize('link_type', ['directory', 'file'])
+@pytest.mark.parametrize('changed', [False, True])
+def test_state_pdk_asset_nix_links_require_original_content(tmp_path, monkeypatch, link_type, changed):
+    family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
+    package = tmp_path / 'store-package' / family
+    package.mkdir(parents=True)
+    target = package / asset.relative_to(root / family)
+    if link_type == 'directory':
+        (root / family / 'libs.ref').rename(package / 'libs.ref')
+        (root / family / 'libs.ref').symlink_to(package / 'libs.ref', target_is_directory=True)
+    else:
+        target.parent.mkdir(parents=True)
+        asset.rename(target)
+        asset.symlink_to(target)
+    if changed:
+        target.write_text('different from the original recorded content\n')
+    resolved = contract.resolve_state_pdk_asset(recorded, pdk=family, fingerprint=fingerprint)
+    if changed:
+        assert resolved is None
+        with pytest.raises(contract.Refusal, match='LL_PDK_ASSET_UNRESOLVED'):
+            contract.config_file_hashes({'PDK': family, 'LIB': str(recorded)}, [],
+                                       fingerprint=fingerprint)
+    else:
+        assert resolved == asset
+        assert resolved.resolve() == target
+        assert contract.config_file_hashes({'PDK': family, 'LIB': str(recorded)}, [],
+                                         fingerprint=fingerprint) == fingerprint['config_files']

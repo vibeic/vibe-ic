@@ -2231,9 +2231,9 @@ def resolve_state_pdk_asset(value: str | Path, *, pdk: str | None,
         candidates = []
         for selected in roots:
             candidate = selected.joinpath(*suffix)
-            if candidate.is_file() and not candidate.is_symlink():
-                if not candidate.resolve().is_relative_to(selected.resolve()):
-                    return None
+            # Nix directory/file links may target a different store package.
+            # Containment is lexical; the recorded digest proves the content.
+            if candidate.is_relative_to(selected) and candidate.is_file():
                 candidates.append(candidate)
         if len(candidates) != 1:
             return None
