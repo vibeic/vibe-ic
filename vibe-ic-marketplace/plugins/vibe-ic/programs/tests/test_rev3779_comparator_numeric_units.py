@@ -82,8 +82,10 @@ def test_ownership_and_carriage_keep_json_decimal_precision(tmp_path, token, exp
     for stem in ("L5_ADI_SPEC", "L19_CONSTRAINTS_PDK"):
         (folder / f"{stem}.json").write_text('{}')
     answer = track.owning_layers_answer(case, [token])
+    json.dumps(answer)
     assert bool(answer["layers"]) is expected, answer
     carriage = track.token_carriage(case, [token])
+    json.dumps(carriage)
     assert (carriage["verdict"] == track.CARRIAGE_NAMED_FIELD) is expected, carriage
 
 
@@ -97,4 +99,14 @@ def test_comparator_precision_does_not_change_other_d0102_json_reads(tmp_path, r
     observed = metrics._d0102_read(case, relative, {})
     assert type(observed["target"]) is float
     assert observed["target"] == 1.0
+
+
+def test_unrepresentable_json_decimal_is_refused_without_aborting(tmp_path):
+    case = raw_project(tmp_path, '{"quantity":{"target":1e9999999999999999999,"unit":"V"}}')
+    item = expectation("1 V")
+    assert track.converge_ai_expectation(case, item)["met"] is False
+    assert track.owning_layers_answer(case, ["1 V"])["layers"] == []
+    assert track.token_carriage(case, ["1 V"])["verdict"] == track.CARRIAGE_NOWHERE
+    actual, _, _ = metrics._d0102_compare(case, {"expectations": [item]}, {})
+    assert actual == []
 
