@@ -1,0 +1,53 @@
+type: enhancement
+component: program:phase1_one_shot_runner
+title: Finalize Phase 1 report binding after its own producer identity is durably written
+plugin_version: 1.35.51
+plugin_version_role: filing-time plugin version
+target_repository: vibeic/vibe-ic
+status: SUBMITTED_OPEN
+issue_url: https://github.com/vibeic/vibe-ic/issues/3784
+source_snapshot:
+  plugin_base: 95a3be2b31bb3fe17c0e5bdbf3f654be020ee078
+  plugin_version: 1.35.51
+  eda_base: 0af058989303d36f3d79ced703b5da3ad0fea7c8
+capture_ids:
+- RESUMED-004
+body_sha256: 771bb08c20fce79f4ad961414be685c1792ad73bd73f3f73390ef73fcdd25435
+body_contract: pattern is the exact complete Markdown issue body; title and all acceptance commands are included without rewriting
+pattern: |
+  # Finalize Phase 1 report binding after its own producer identity is durably written
+
+  ## General gap
+
+  The ordinary Phase 1 producer can bind its report before the same invocation persists an identity sidecar that belongs to the report's material readset. The producer's own final write then makes an otherwise current report stale. A safe finalizer may account for only that exact identity-writer delta; unrelated design input, RTL, generated-document, report or owner-context changes must still refuse.
+
+  This is RESUMED-004. It is separate from #3776's freshness-before-pending-answer routing and from the broader delivery ownership work in #3774.
+
+  ## Neutral minimal reproduction
+
+  Use a tiny standalone neutral Phase 1 input and invoke the ordinary recorded producer. Compare the report-bound material immediately before and after the identity writer persists its output. Verify the final report through the ordinary reader. Then inject an unrelated input/document/RTL/owner change between those two stages: the same finalization must refuse that arm, rather than rebinding all current bytes.
+
+  ## Current source and rejected local proposal
+
+  Owner: `programs/phase1_one_shot_runner.py`, especially the recorded entry and report publication boundary. Local candidate history includes `457017a16469346f82f7fe36bd66a110b409c3e6` and `752fc68f4d2781996a4def28b367bfd223f90604`.
+
+  The retained independent capture status is **R1_REJECTED_R2_REPAIR_PENDING**. The first candidate does not meet the exact-writer-delta boundary and must not be imported as an accepted repair. Removing a freshness refusal did not resolve separate extraction/source-authority failures and did not establish canonical acceptance. This issue captures the observed general gap and the rejected approach, not a completed implementation.
+
+  ## 驗收
+
+  Keep direct ordinary report publication. Bind only the exact persisted identity writer delta. Use real report/identity writer calls with neutral data and mutation hooks around the write boundary; retain unrelated input, RTL, document, report and owner-context drift controls. Prove ordinary reader acceptance of the unchanged arm and refusal of every unrelated-drift arm. Preserve verdict, return code, source identity and all consumer validation fields.
+
+  After adding or porting the focused suites, run from repository root:
+
+  ```bash
+  cd vibe-ic-marketplace/plugins/vibe-ic
+  python3 -m pytest -q programs/tests/test_phase1_report_finalization.py programs/tests/test_phase1_report_generation.py
+  ```
+
+  The finalization suite is an implementation deliverable, absent on the filing base. A new independently reviewed candidate is required; no earlier rejected candidate receives acceptance credit.
+
+  ## Evidence and submission boundary
+
+  This is a general enhancement backlog, not a benchmark result. Filing source: plugin 1.35.51, main `95a3be2b31bb3fe17c0e5bdbf3f654be020ee078`. The owning source presence and related public submissions were inspected at this snapshot. The behavioral findings below come from retained local capture metadata; the complete implementation has not been ported or freshly reproduced on this upstream snapshot. No benchmark solution, official reference, private transcript, or local machine path is included.
+
+  Local candidate implementation and focused acceptance are distinct from upstream delivery. No new native run, full-suite result, source-semantic approval, or benchmark PASS is claimed by filing this issue. The commands under acceptance are implementation deliverables, not filing-time execution claims. Any named new test module must be added before its command can supply evidence; missing-module errors do not count as negative controls.
