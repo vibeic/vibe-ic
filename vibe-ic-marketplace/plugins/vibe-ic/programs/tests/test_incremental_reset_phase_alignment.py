@@ -147,5 +147,26 @@ def test_qualification_check_rejects_one_real_unqualified_path(tmp_path):
     assert_qualified(ir)
     rows = devices(ir)
     rows["mn_cstv2"]["nets"][1] = "nph2"
-    with pytest.raises(AssertionError, match="independent of conversion reset"):
+    with pytest.raises(AssertionError, match="independent of conversion reset|no fresh-decision eligibility"):
         assert_qualified(ir)
+
+
+@pytest.mark.parametrize("family", ("CIFF", "CIFB"))
+def test_reset_clears_valid_and_ready_for_both_clock_levels(tmp_path, family):
+    ir, *_ = _emit(tmp_path, family, 2)
+    rows = devices(ir)
+    control = ir.get("incremental_startup")
+    assert control, "No physical fresh-window storage is emitted"
+    for phase, nq_n, nq_p in itertools.product((0, 1), repeat=3):
+        known = {"nall": 1, "nrstb": 0, "clk": phase, "nclkb": 1-phase,
+                 "nph1": phase, "nph1b": 1-phase, "nph2": 1-phase,
+                 "nph2b": phase, "nq_n": nq_n, "nq_p": nq_p}
+        for key in ("decision_valid_net", "transfer_ready_net"):
+            assert logic(rows, control[key], known) == 0, (key, known)
+
+
+def test_chopped_first_stage_is_not_lost_by_virtual_node_discovery(tmp_path):
+    from test_analog_ota1_options import _case
+    _, ir = _case(tmp_path, 1, 1, phase=1, ratio=2, stages=3, remove_cc=1)
+    assert any(n["name"] == "mn_cstv1" for n, _ in transfer_pairs(ir))
+    assert_qualified(ir)
