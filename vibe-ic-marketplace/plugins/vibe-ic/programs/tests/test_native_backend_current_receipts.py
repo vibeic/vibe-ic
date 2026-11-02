@@ -397,8 +397,7 @@ def test_default_step37_finishing_publishes_measured_provenance(
     assert retained[0]['reconstructed'] is True
     assert retained[0]['measurement']['measured'] is True
     assert retained[0]['measurement']['wrote'] == [retained_relative]
-    # The native lane is reusable; both delivery aliases must derive from the
-    # independently retained finished bytes, not a newly asserted invocation.
+    # Both delivery aliases derive from the independently retained finished bytes.
     publications = [entry for entry in entries if entry.get('record') ==
                     'declared_transform' and entry.get('producing_step') ==
                     'step37_default_finishing_publication']
@@ -439,13 +438,12 @@ def test_default_step37_finishing_publishes_measured_provenance(
     assert any(row.get('gate') == 'provenance_check' and row.get('rc') == 0
                for row in consumed['gate_ledger'])
     assert provenance_check.main(argv) == 0
-    assert calls == ['primary', 'seal', 'filler-density'], 'retained publication runs no native epoch'
-    assert {name: LC.digest(Path(first[name])) for name in identities} == {
-        name: identity[0] for name, identity in identities.items()}
-    # The existing outer producer always copies the stage4 alias. The source
-    # and pnr stream remain untouched; publication itself is ledger-only.
-    assert {name: Path(first[name]).stat().st_mtime_ns for name in ('source', 'pnr_gds')} == {
-        name: identities[name][1] for name in ('source', 'pnr_gds')}
+    assert calls == ['primary', 'seal', 'filler-density'] * 2
+    current_stream = LF.validate_default_stream(project)
+    assert {name: LC.digest(Path(current_stream[name])) for name in identities} == {
+        name: current_stream[name + '_sha256'] for name in identities}
+    assert all(Path(first[name]).stat().st_mtime_ns != identities[name][1]
+               for name in ('source', 'pnr_gds'))
 
 
 @pytest.mark.parametrize('scenario', [
@@ -474,7 +472,7 @@ def test_default_step37_whole_reuse_reaches_current_consumer(
         elif scenario in targets:
             targets[scenario].write_bytes(targets[scenario].read_bytes() + b'\nchanged\n')
     monkeypatch.setattr(R, '_librelane_antenna_gds', after_stream)
-    # Real produce_signoff -> real step_gds -> existing whole-reuse owner;
+    # Real produce_signoff -> real step_gds -> fresh stream owner;
     # omitting finishing_receipt at that return site must break the positive.
     result = producers.produce(project, params)
     current = result['current_step_declared_producers']
@@ -484,18 +482,19 @@ def test_default_step37_whole_reuse_reaches_current_consumer(
         attempt = versions.begin_step(project, '37', params['resolved_input_manifest']['files'])
         versions.publish_producer_outputs(project, attempt)
     consumed = worker.execute_current_step(project, step_id='37', producer=result)
-    assert calls == ['primary', 'seal', 'filler-density'], 'no second native epoch'
+    assert calls == ['primary', 'seal', 'filler-density'] * 2
     if scenario != 'current_reuse':
         assert result['verdict'] == 'NOT_MEASURED'
-        assert 'NATIVE_CURRENT_OUTPUT_UNCHANGED' in current['reason']
+        assert 'NATIVE_CURRENT_STREAM_REFUSED' in current['reason']
+        with pytest.raises((LF.Refusal, OSError, ValueError, KeyError, TypeError)):
+            producers._step37_retained_output_sources(project, first['receipt'])
         assert consumed['verdict'] == 'NOT_MEASURED'
         return
     assert result['verdict'] == 'PASS', result
     assert result['finishing_receipt'] == str(project / LF.DEFAULT_STREAM_REL)
-    assert (log.read_bytes(), log.stat().st_mtime_ns) == before
-    adopted = current['retained_outputs']['outputs']
-    assert str(log.relative_to(project)) in adopted
-    assert set(adopted) <= set(current['outputs'])
+    assert log.read_bytes() == before[0]
+    assert log.stat().st_mtime_ns != before[1]
+    assert str(log.relative_to(project)) in current['outputs']
     assert consumed['verdict'] == 'PASS', consumed
     assert consumed['canonical_step_result']['status'] == 'PASS'
     assert any(row.get('gate') == 'gds_substance_check'
@@ -611,10 +610,10 @@ def test_admitted_default_stream_rechecks_owner_without_restarting_native_produc
         restarted.append('prestream')
         return R.StepResult('prestream', 'PASS', 0.0, 'SOURCE_FIXTURE transport',
                             extras={'layout_digest': 'fixture-layout'})
+    original_stream = R.step_gds
     def stream(*args, **kwargs):
         restarted.append('stream')
-        return R.StepResult('gds', 'PASS', 0.0, 'SOURCE_FIXTURE transport',
-                            extras={'finishing_receipt': first['receipt']})
+        return original_stream(*args, **kwargs)
     monkeypatch.setattr(R, 'step_prestream_gate', prestream)
     monkeypatch.setattr(R, 'step_gds', stream)
     if mutation == 'changed_final_gds':
@@ -622,15 +621,13 @@ def test_admitted_default_stream_rechecks_owner_without_restarting_native_produc
             output.write(b'changed native output')
     elif mutation == 'missing_native_proof':
         Path(first['stream_state']).with_name('vibeic_receipt.json').unlink()
-    result = None
-    try:
-        result = producers.produce_signoff(project, params)
-    except LC.Refusal:
-        pass
-    assert len(restarted) == 0, restarted
-    if mutation == 'current':
-        assert result['verdict'] == 'PASS', result
-        assert result['finishing_receipt'] == first['receipt']
-        assert calls == ['primary', 'seal', 'filler-density']
-    else:
-        assert result is None, result
+    import librelane_fill_dfm as LF
+    if mutation != 'current':
+        with pytest.raises((LF.Refusal, ValueError, KeyError)):
+            LF.validate_default_stream(project)
+    result = producers.produce_signoff(project, params)
+    assert restarted == ['prestream', 'stream'], restarted
+    assert result['verdict'] == 'PASS', result
+    assert result['finishing_receipt'] == first['receipt']
+    assert calls == ['primary', 'seal', 'filler-density'] * 2
+    assert LF.validate_default_stream(project)['canonical_sha256'] == LC.digest(Path(first['canonical']))

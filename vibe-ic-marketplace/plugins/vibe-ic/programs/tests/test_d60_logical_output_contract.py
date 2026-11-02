@@ -110,12 +110,15 @@ def test_retained_owner_does_not_adopt_foreign_physical_cell(tmp_path, monkeypat
     geometry.top_cell().shapes(geometry.layer(99, 0)).insert(db.Box(1, 2, 30, 40))
     geometry.write(str(sibling))
     before = producers._native_output_identity(sibling)
+    owned_before = producers._native_output_identity(canonical)
     result = producers.produce(project, params)
     current = result['current_step_declared_producers']
     assert result['verdict'] == 'PASS', current
     assert str(sibling.relative_to(project)) not in current['outputs']
-    assert str(canonical.relative_to(project)) in current['retained_outputs']['outputs']
-    assert calls == ['primary', 'seal', 'filler-density']
+    assert str(canonical.relative_to(project)) in current['outputs']
+    assert str(canonical.relative_to(project)) not in current.get('retained_outputs', {}).get('outputs', {})
+    assert producers._native_output_identity(canonical)['sha256'] != owned_before['sha256']
+    assert calls == ['primary', 'seal', 'filler-density'] * 2
     attempt = versions.begin_step(project, '37', params['resolved_input_manifest']['files'])
     published = versions.publish_producer_outputs(project, attempt)
     consumed = worker.execute_current_step(project, step_id='37', producer=result)
@@ -180,6 +183,20 @@ def test_new_native_writer_changes_owned_identity_and_is_credited(tmp_path, monk
         'native_calls': calls, 'owned_before': before, 'owned_after': after,
         'foreign_before': foreign_before, 'foreign_after': producers._native_output_identity(sibling),
         'current_receipt': current}, indent=2))
+
+
+def test_noop_with_valid_promotion_remains_not_measured(tmp_path, monkeypatch):
+    project, params, first, calls = _retained_default_stream(tmp_path, monkeypatch)
+    _runtime(monkeypatch, project, params['top'])
+    producers._step37_retained_output_sources(project, first['receipt'])
+    before = producers._native_output_identity(Path(first['canonical']))
+    monkeypatch.setattr(producers, 'produce_signoff', lambda *_: {
+        'verdict': 'PASS', 'finishing_receipt': first['receipt']})
+    result = producers.produce(project, params)
+    assert result['verdict'] == 'NOT_MEASURED'
+    assert 'NATIVE_CURRENT_OUTPUT_UNCHANGED' in result['current_step_declared_producers']['reason']
+    assert calls == ['primary', 'seal', 'filler-density']
+    assert producers._native_output_identity(Path(first['canonical'])) == before
 
 
 def test_true_noop_without_retained_owner_remains_not_measured(layout, monkeypatch):

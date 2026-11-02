@@ -2424,26 +2424,6 @@ def produce_signoff(project, params):
             if not R._emit_metal_density_report(project, top, pdk, container, rpt / 'density.json', notes):
                 raise em.Refusal('BACKEND_DENSITY_NATIVE_UNMEASURED', sid)
     elif sid == '37':
-        if params.get('execution_mode') == 'default':
-            import librelane_fill_dfm as fill
-            promotion = project / fill.DEFAULT_STREAM_REL
-            basis, error = R._layout_basis(project, top, pdk, container)
-            if (promotion.is_file() and not error and
-                    R._ga.admitted_gds(project, pnr / (top + '.gds'), basis)):
-                # A final-consumer repair must not replay an already admitted
-                # native stream, seal/fill or its pre-stream instruments. The
-                # existing owner rechecks all retained native bytes, readsets
-                # and per-layer density before the unchanged full row consumer.
-                _step37_retained_output_sources(project, str(promotion))
-                pad = (R.step_pad_ring_final_evidence(
-                    project, top, R.StepResult('gds', 'PASS', 0.0,
-                        'retained native stream owner validated'), container)
-                    if R._chip_path_requests_pad_ring(project) else None)
-                return {'verdict': pad.status if pad else 'PASS',
-                        'detail': (pad.detail if pad else
-                                   'admitted native stream retained and validated'),
-                        'streamout_engine': 'klayout',
-                        'finishing_receipt': str(promotion)}
         pre = R.step_prestream_gate(project, top, pdk, container)
         if pre.status != 'PASS':
             return {'verdict': pre.status, 'detail': pre.detail}
@@ -2731,13 +2711,12 @@ def _native_current_step_receipt(project, step_id, params, result,
             after = _native_output_identity(path)
             if before is not None and after == before:
                 try:
-                    if (sid not in ('34', '37') or verdict != 'PASS'
+                    if (sid != '34' or verdict != 'PASS'
                             or params.get('execution_mode') != 'default'):
                         raise ValueError('no retained Default stream producer')
                     if retained_sources is None:
-                        owner = (_step34_retained_output_sources if sid == '34'
-                                 else _step37_retained_output_sources)
-                        retained_sources = owner(project, result.get('finishing_receipt'))
+                        retained_sources = _step34_retained_output_sources(
+                            project, result.get('finishing_receipt'))
                     if retained_sources.get(raw) != digest:
                         raise ValueError('output is not bound by the retained stream')
                 except (OSError, ValueError, KeyError, TypeError, em.Refusal, LibrelaneRefusal) as exc:
@@ -2760,6 +2739,13 @@ def _native_current_step_receipt(project, step_id, params, result,
     if receipt['verdict'] == 'PRODUCED' and not receipt['outputs']:
         receipt['verdict'] = 'NOT_MEASURED'
         receipt['reason'] = 'NATIVE_CURRENT_OUTPUT_EMPTY'
+    if sid == '37' and verdict == 'PASS' and params.get('execution_mode') == 'default':
+        try:
+            _step37_retained_output_sources(project, result.get('finishing_receipt'))
+        except (OSError, ValueError, KeyError, TypeError, em.Refusal, LibrelaneRefusal) as exc:
+            receipt['verdict'] = 'NOT_MEASURED'
+            receipt['reason'] = f'NATIVE_CURRENT_STREAM_REFUSED: {exc}'
+            return receipt
     return receipt
 
 
@@ -2814,6 +2800,15 @@ def _current_step_producer_authority(record, project=None):
                     return False, f"native current producer output changed: {raw}", "NOT_MEASURED"
             except OSError:
                 return False, f"native current producer output absent: {raw}", "NOT_MEASURED"
+        if sid == '37':
+            import execution_policy as policy
+            if policy.request().get('mode') == 'default':
+                try:
+                    import librelane_fill_dfm as fill
+                    _step37_retained_output_sources(
+                        project, str(Path(project) / fill.DEFAULT_STREAM_REL))
+                except (OSError, ValueError, KeyError, TypeError, em.Refusal, LibrelaneRefusal) as exc:
+                    return False, f"native retained stream refused: {exc}", "NOT_MEASURED"
         adoption = record.get('retained_outputs')
         if adoption is not None:
             try:

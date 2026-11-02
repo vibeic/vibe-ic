@@ -2654,6 +2654,12 @@ def _disclose_output_binding(result: "StepResult") -> "StepResult":
     if any(r.startswith("OUTPUT ATTRIBUTION:") for r in result.reasons):
         return result                       # both exits can reach this helper
     n, k = b["n_specs"], b["n_step_attributed"]
+    if b.get("n_unresolved"):
+        result.reasons.append(
+            f"OUTPUT ATTRIBUTION: {b['n_unresolved']}/{n} declared output(s) "
+            f"unresolved (OUTPUT_TOP_UNBOUND); {k} step-attributed, "
+            f"{b['n_project_glob']} project-wide; no unresolved output credited")
+        return result
     # The typed codes go on the line in BOTH directions. `mixed` used to be a
     # word whose content lived only in prose; a reader (human or grep) now
     # gets the closed vocabulary that produced it.
@@ -2686,18 +2692,30 @@ def _disclose_output_binding(result: "StepResult") -> "StepResult":
 
 def _check_files_exist(project: Path, patterns: List[str], any_of: bool) -> tuple[bool, List[str], List[str]]:
     """Return (passed, found_paths, missing_patterns)."""
+    from flow_artifact_paths import OutputTopUnbound
     found: List[str] = []
     missing: List[str] = []
+    unresolved = []
     for pat in patterns:
         # Support "A OR B" syntax in YAML-level patterns by splitting
         sub_patterns = [p.strip() for p in pat.split(" OR ")]
         hits_for_this = []
+        unknown_for_this = []
         for sp in sub_patterns:
-            hits_for_this.extend(_glob_first(project, sp))
+            try:
+                hits_for_this.extend(_glob_first(project, sp))
+            except OutputTopUnbound as exc:
+                unknown_for_this.append(exc)
         if hits_for_this:
             found.extend(hits_for_this)
+        elif unknown_for_this:
+            unresolved.extend(unknown_for_this)
         else:
             missing.append(pat)
+    # OR has a decisive PASS; AND has a decisive FAIL. Otherwise an
+    # unbound selector leaves the file predicate unmeasured.
+    if unresolved and not (bool(found) if any_of else bool(missing)):
+        raise unresolved[0]
     if any_of:
         passed = len(found) > 0
     else:
@@ -12919,6 +12937,19 @@ def _declared_gate_summary(gate: Any) -> str:
     return ", ".join(parts)
 
 
+def _with_output_top_incomplete(fn):
+    @functools.wraps(fn)
+    def _judge(*args, **kwargs):
+        from flow_artifact_paths import OutputTopUnbound
+        try:
+            return fn(*args, **kwargs)
+        except OutputTopUnbound as exc:
+            return True, [f"{_INCOMPLETE_HINT_PREFIX}{exc}; "
+                          "rerun the audit with --top <logical top>"]
+    return _judge
+
+
+@_with_output_top_incomplete
 def _evaluate_gate(project: Path, gate: Dict[str, Any],
                    skip_analog: bool = False) -> tuple[bool, List[str]]:
     """Evaluate a gate spec, return (passed, reasons).
@@ -13593,6 +13624,7 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
 
     # `any_of` - list of sub-gates, any one passes
     if "any_of" in gate and isinstance(gate["any_of"], list):
+        incomplete = []
         for sub in gate["any_of"]:
             if not isinstance(sub, dict):
                 continue
@@ -13608,6 +13640,10 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                     "alongside them instead (#306).")
                 return False, reasons
             p, r = _evaluate_gate(project, sub, skip_analog=skip_analog)
+            unknown = [h for h in r if h.startswith(_INCOMPLETE_HINT_PREFIX)]
+            if p and unknown:
+                incomplete.extend(unknown)
+                continue
             if p:
                 # W4 — an `any_of` satisfied by a branch that DID NOT RUN is
                 # the group's whole verdict resting on a non-verdict. The
@@ -13623,6 +13659,8 @@ def _evaluate_gate(project: Path, gate: Dict[str, Any],
                         _EXECUTED_DECLARED_NA_HINT_PREFIX,
                     )))
                 return True, reasons
+        if incomplete:
+            return True, incomplete
         reasons.append(f"no sub-gate passed in any_of")
         return False, reasons
 
@@ -16594,16 +16632,9 @@ def _with_child_gate_step(fn):
     def _judge(project, step, *args, **kwargs):
         token = _CHILD_GATE_STEP.set(str((step or {}).get("id") or ""))
         try:
-            from flow_artifact_paths import OutputTopUnbound, gate_parameters
+            from flow_artifact_paths import gate_parameters
             with gate_parameters(project, kwargs.pop("parameters", None)):
-                try:
-                    return fn(project, step, *args, **kwargs)
-                except OutputTopUnbound as exc:
-                    return StepResult(
-                        id=step["id"], name=step.get("name", ""),
-                        stage=step.get("stage", ""), status="NOT_MEASURED",
-                        reason_class=_T.ReasonClass.NOT_EXECUTED.value,
-                        reasons=[f"{exc}; rerun the audit with --top <logical top>"])
+                return fn(project, step, *args, **kwargs)
         finally:
             _CHILD_GATE_STEP.reset(token)
     return _judge
@@ -16956,6 +16987,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     # `output_binding`, never taken silently.
     outputs = step.get("required_outputs", [])
     missing_entries: List[str] = []
+    unresolved_outputs: List[str] = []
     _binding = _load_step_binding(project) if outputs else None
     _bind_notes: List[str] = []
     _bind_modes: Dict[str, str] = {}
@@ -16977,8 +17009,17 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             _not_owed.append(pat)
             result.reasons.append(_why_not_owed)
             continue
-        _sat, _ev, _mode, _note, _detail = _resolve_required_output(
-            project, sid, pat, _binding or {})
+        from flow_artifact_paths import OutputTopUnbound
+        try:
+            _sat, _ev, _mode, _note, _detail = _resolve_required_output(
+                project, sid, pat, _binding or {})
+        except OutputTopUnbound as exc:
+            unresolved_outputs.append(pat)
+            _bind_specs.append(dict(spec=pat, mode="unresolved",
+                                    code="output_top_unbound", satisfied=None))
+            result.reasons.append(
+                f"{exc}: {pat}; rerun the audit with --top <logical top>")
+            continue
         _bind_modes[pat] = _mode
         if _mode == "step_attributed":
             _n_attr += 1
@@ -17007,7 +17048,9 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             # notes that ARE per-spec under a wall of the same sentence.
             _bind_notes = [f"whole run: {_binding.get('reason')}"]
         result.output_binding = {
-            "mode": ("step_attributed" if _n_glob == 0 else
+            "mode": ("unresolved" if unresolved_outputs and not (_n_attr + _n_glob) else
+                     "mixed" if unresolved_outputs else
+                     "step_attributed" if _n_glob == 0 else
                      "project_glob" if _n_attr == 0 else "mixed"),
             "n_specs": len(outputs) - len(_not_owed),
             "not_owed": _not_owed,
@@ -17029,6 +17072,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             # predicate requires BOTH, so nothing is loosened by letting this
             # field mean what its name says.
             "n_satisfied": sum(1 for d in _bind_specs if d.get("satisfied")),
+            "n_unresolved": len(unresolved_outputs),
             "n_project_glob": _n_glob, "source": _src,
             # `codes` is the machine handle: a closed vocabulary (see
             # `_bind_detail`) that says WHICH degradation `mixed` is made of.
@@ -18033,7 +18077,8 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 f"enforcement={_clause_enforcement_label(rec)}")
     else:
         # No gate — just presence of outputs counts
-        result.status = (_T.Verdict.PASS.value if result.evidence
+        result.status = (_T.Verdict.NOT_MEASURED.value if unresolved_outputs
+                         else _T.Verdict.PASS.value if result.evidence
                          else _T.Verdict.FAIL.value)
         if result.status == _T.Verdict.FAIL.value:
             result.reason_class = _T.ReasonClass.MISSING_ARTEFACT.value
@@ -18362,6 +18407,10 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
                 f"(steps/<...>/written.json, or reports/write_ledger.json via "
                 f"step_write_ledger.emit); relaxing this check is not the "
                 f"remedy.")
+
+    if unresolved_outputs and result.status != _T.Verdict.FAIL.value:
+        result.status = _T.Verdict.NOT_MEASURED.value
+        result.reason_class = _T.ReasonClass.NOT_EXECUTED.value
 
     # natural verdict is FAIL or MISSING AND an ENV_UNAVAILABLE-tier
     # waiver matches this step, convert to WAIVED-DEFERRED. The

@@ -159,8 +159,12 @@ def test_real_default_stream_retries_a_changed_route_and_retains_prior_epoch(tmp
     first_bytes = (p / LF.DEFAULT_STREAM_REL).read_bytes()
     first_stream = Path(first['stream']).read_bytes()
     assert LF.validate_default_stream(p)['canonical_sha256'] == LC.digest(Path(first['canonical']))
-    LF.default_stream(p, 'top', pdk, '')
-    assert calls == ['primary', 'seal', 'filler-density'], calls
+    repeated = LF.default_stream(p, 'top', pdk, '')
+    repeated_bytes = (p / LF.DEFAULT_STREAM_REL).read_bytes()
+    assert calls == ['primary', 'seal', 'filler-density'] * 2, calls
+    assert repeated['filled_def_sha256'] == first['filled_def_sha256']
+    assert Path(repeated['stream']).read_bytes() != first_stream
+    assert LF.validate_default_stream(p)['canonical_sha256'] == LC.digest(Path(repeated['canonical']))
     routed = p / 'phase3/stage3/pnr/routed.def'
     routed.write_text(routed.read_text() + '\n# legitimate new route epoch\n')
     # The existing fill producer must bind the new route before streaming it.
@@ -175,13 +179,13 @@ def test_real_default_stream_retries_a_changed_route_and_retains_prior_epoch(tmp
     if failed['stream']:
         with pytest.raises(LC.Refusal, match='controlled failed new native stream'):
             LF.default_stream(p, 'top', pdk, '')
-        assert calls.count('primary') == 2
-        assert (p / LF.DEFAULT_STREAM_REL).read_bytes() == first_bytes
+        assert calls.count('primary') == 3
+        assert (p / LF.DEFAULT_STREAM_REL).read_bytes() == repeated_bytes
         with pytest.raises((LC.Refusal, ValueError, KeyError)):
             LF.validate_default_stream(p)
     else:
         second = LF.default_stream(p, 'top', pdk, '')
-        assert calls == ['primary', 'seal', 'filler-density'] * 2
+        assert calls == ['primary', 'seal', 'filler-density'] * 3
         assert Path(second['stream']).read_bytes() != first_stream
         assert LF.validate_default_stream(p) == json.loads((p / LF.DEFAULT_STREAM_REL).read_text())
         assert versions.latest_pass(p, '26.5ic')['current_inputs']
