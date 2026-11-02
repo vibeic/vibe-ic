@@ -160,11 +160,12 @@ def test_independent_l10_pass_cannot_hide_functional_mismatch(tmp_path, status):
     assert res["cocotb_xml_failures"] == 1
 
 
-def test_independent_l10_pass_cannot_hide_declared_bundle_defect(tmp_path):
+@pytest.mark.parametrize('status', ['PASS', 'SKIP', 'INCOMPLETE'])
+def test_independent_l10_pass_cannot_hide_declared_bundle_defect(tmp_path, status):
     _l10_unit_track(tmp_path)
     out = tmp_path / "phase2/stage1/sim_professional/neutral"
     out.mkdir()
-    _report(tmp_path, {"status": "PASS", "ran_cocotb": True,
+    _report(tmp_path, {"status": status, "ran_cocotb": True,
                        "functional_mismatch": False, "out_dir": str(out),
                        "files": ["tb_neutral.py"]})
     res = G.check(tmp_path)
