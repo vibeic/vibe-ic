@@ -125,6 +125,12 @@ def realize(lib, values, stages, devices, nets, startup=None):
     counter = next((g for g in groups if g.get("role") == "conversion_window_counter"), None)
     if counter is None:
         return None
+    if startup:
+        # The raw POR helper retains its published implementation. This owner
+        # replaces its final OR so bootstrap and the phi1 slave own release.
+        legacy_or = {"mp_por_or1", "mp_por_or2", "mn_por_or1", "mn_por_or2",
+                     "mp_por_or", "mn_por_or"}
+        devices[:] = [d for d in devices if d["name"] not in legacy_or]
     for d in devices:
         d["nets"] = list(d["nets"])
     before = {d["name"]: tuple(d["nets"]) for d in devices}
