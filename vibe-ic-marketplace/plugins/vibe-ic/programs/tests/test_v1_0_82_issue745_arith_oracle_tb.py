@@ -111,7 +111,7 @@ def test_a_parallel_multiplier_emits_tb_with_computed_golden(tmp_path):
     project = _mk_project(
         tmp_path, top="mult8", ports=ports,
         l2="p = x * y mod 2^N parallel multiplier",
-        decl={"size_param": 8, "integer_encoding": "unsigned"})
+        decl={"size_param": 8, "N": 16, "integer_encoding": "unsigned"})
 
     rep, rc = aotg.generate(project, "digital_arithmetic_primitive")
     assert rc == 0, rep
@@ -226,7 +226,7 @@ def test_b_serial_streaming_datapath_emits_self_calibrating_oracle(tmp_path):
     ]
     project = _mk_project(tmp_path, top="spm", ports=ports,
                           l2="p = (x * y) mod 2^N serial multiplier",
-                          decl={"size_param": 32,
+                          decl={"size_param": 32, "N": 32,
                                 "integer_encoding": "unsigned"})
     rep, rc = aotg.generate(project, "digital_arithmetic_primitive")
     assert rc == 0 and rep["verdict"] == "TB_EMITTED"

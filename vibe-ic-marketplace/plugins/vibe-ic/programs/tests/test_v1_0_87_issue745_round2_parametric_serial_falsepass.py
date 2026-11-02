@@ -116,7 +116,7 @@ def test_production_no_declaration_parametric_serial_emits_real_oracle(tmp_path)
     invariant is preserved by _assert_real_serial_oracle (N=32, non-vacuous,
     falsifiable), so a regression that re-collapsed the width to 1 still fails."""
     project = _mk_project(tmp_path, top="spm", ports=_SPM_PORTS,
-                          l2="p = (x * y) mod 2^N serial multiplier")
+                          l2="p = (x * y) mod 2^32 serial multiplier")
     # production path writes no declaration.json — the oracle self-calibrates
     # the serial framing, so no declaration is needed.
     assert not (project / "plugin_output" / "declaration.json").exists()
@@ -133,7 +133,7 @@ def test_resolve_width_does_not_collapse_to_one_with_parametric_bus(tmp_path):
     """Root-cause pin: with only 1-bit numeric ports + a parametric bus,
     _resolve_width must NOT return 1 (the collapse that disarmed the guard)."""
     project = _mk_project(tmp_path, top="spm", ports=_SPM_PORTS,
-                          l2="p = (x * y) mod 2^N serial multiplier")
+                          l2="p = (x * y) mod 2^32 serial multiplier")
     _top, ports = aotg._load_top_ports(project)
     # x is recognized as a parametric (non-numeric, symbolic) bus, not None-only
     xp = next(p for p in ports if p["name"] == "x")
@@ -155,7 +155,7 @@ def test_noleak_parallel_multiplier_still_emits_real_oracle(tmp_path):
     ]
     project = _mk_project(tmp_path, top="mult8", ports=ports,
                           l2="p = x * y mod 2^N parallel multiplier",
-                          decl={"size_param": 8, "integer_encoding": "unsigned"})
+                          decl={"size_param": 8, "N": 16, "integer_encoding": "unsigned"})
     rep, rc = aotg.generate(project, "digital_arithmetic_primitive")
     assert rc == 0, rep
     assert rep["verdict"] == "TB_EMITTED"
@@ -217,7 +217,7 @@ def test_478_endstate_subprocess_production_serial_emits(tmp_path):
     calibrating oracle on disk (never the vacuous N=1 PASS the round-2 guard
     protects against)."""
     project = _mk_project(tmp_path, top="spm", ports=_SPM_PORTS,
-                          l2="p = (x * y) mod 2^N serial multiplier")
+                          l2="p = (x * y) mod 2^32 serial multiplier")
     prog = PROGRAMS / "arith_oracle_tb_gen.py"
     r = subprocess.run(
         [sys.executable, str(prog), str(project),
@@ -238,7 +238,7 @@ def test_478_endstate_subprocess_parallel_emits(tmp_path):
     ]
     project = _mk_project(tmp_path, top="mult8", ports=ports,
                           l2="p = x * y mod 2^N parallel multiplier",
-                          decl={"size_param": 8, "integer_encoding": "unsigned"})
+                          decl={"size_param": 8, "N": 16, "integer_encoding": "unsigned"})
     prog = PROGRAMS / "arith_oracle_tb_gen.py"
     r = subprocess.run(
         [sys.executable, str(prog), str(project),
@@ -265,7 +265,7 @@ def test_745r2_prose_serial_operand_emits_real_oracle(tmp_path):
         {"name": "p", "direction": "output", "width": "serial"},
     ]
     proj = _mk_project(tmp_path, top="psm",
-                       ports=ports, l2="p = (x * y) mod 2^N, 32-bit multiplier")
+                       ports=ports, l2="p = (x * y) mod 2^32, 32-bit multiplier")
     rep, rc = aotg.generate(proj, "digital_arithmetic_primitive")
     assert rc == 0 and rep.get("verdict") == "TB_EMITTED", (rc, rep)
     assert rep.get("topology") == "serial_parallel"
@@ -282,7 +282,7 @@ def test_745r2_fully_serial_multiplier_defers(tmp_path):
         {"name": "p", "direction": "output", "width": 1},
     ]
     proj = _mk_project(tmp_path, top="fsm",
-                       ports=ports, l2="p = (x * y) mod 2^N, a 32-bit multiplier")
+                       ports=ports, l2="p = (x * y) mod 2^32, a 32-bit multiplier")
     rep, rc = aotg.generate(proj, "digital_arithmetic_primitive")
     assert rc == 2 and rep.get("verdict") == "DEFER", (rc, rep)
     assert _oracle_tbs(proj) == []

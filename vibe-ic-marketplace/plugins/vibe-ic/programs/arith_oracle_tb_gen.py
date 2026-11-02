@@ -534,6 +534,27 @@ def _resolve_width(project: Path, ports: List[dict]) -> int:
     # return the conventional parametric datapath default so the mixed-topology
     # SERIAL-DEFER check fires (it judges parametric-vs-1-bit, not the number).
     if widest <= 1 and any_parametric:
+        from _port_width import defaults_from_sources, resolve
+        top, _ = _load_top_ports(project)
+        sources = [(p, p.read_text(errors='replace'))
+                   for p in sorted(_pl.rtl_dir(project).rglob('*'))
+                   if p.is_file() and p.suffix in ('.v', '.sv')]
+        params = defaults_from_sources(sources, top)
+        resolved_widths = []
+        for port in ports:
+            raw = port.get('raw') or port
+            cell = raw.get('width_decl') or raw.get('width_symbolic')
+            if not cell and raw.get('msb') is not None and raw.get('lsb') is not None:
+                cell = f"{raw['msb']}:{raw['lsb']}"
+            if not cell:
+                continue
+            cell = cell if str(cell).strip().startswith('[') else f'[{cell}]'
+            decl, _ = resolve(cell, params)
+            value = _port_numeric_width({'width_decl': (decl or '').strip()})
+            if value is not None and value > 1:
+                resolved_widths.append(value)
+        if resolved_widths:
+            return max(resolved_widths)
         return 32  # parametric datapath default — keeps width != 1 for the guard
     if widest >= 1:
         return widest

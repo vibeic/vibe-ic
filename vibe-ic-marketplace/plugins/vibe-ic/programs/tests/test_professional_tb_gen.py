@@ -37,7 +37,7 @@ def _mk_spm_project(tmp: Path) -> Path:
     }}))
     (gd / "L2_FRS.json").write_text(json.dumps({"frs_sections": [
         {"title": "Function", "content": "serial-parallel multiplier "
-         "p = (x * y) mod 2^N"}]}))
+         "p = (x * y) mod 2^size"}]}))
     # Use the filename Phase 1 ACTUALLY writes. This fixture previously wrote
     # `L16_COMPLIANCE.json`, a name that exists in ZERO real runs — so the test
     # passed while the production read path was dead in every real run. A

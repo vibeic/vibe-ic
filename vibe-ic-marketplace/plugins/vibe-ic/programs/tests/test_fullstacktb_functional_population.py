@@ -807,7 +807,7 @@ def _mk_project(tmp_path: Path, *, die: bool, chip_top: bool = True,
         {"opcodes": [], "no_opcodes_in_input": True}))
     _write(gd / "L4_REGMAP.json", json.dumps({"registers": []}))
     _write(gd / "L2_FRS.json", json.dumps(
-        {"function": "p = x * y mod 2^N (serial-parallel multiplier)"}))
+        {"function": "p = x * y mod 2^8 (serial-parallel multiplier)"}))
     _write(gd / "L9_INTEGRATION_SPEC.json", json.dumps({
         "top_module": CORE,
         "top_ports": [
