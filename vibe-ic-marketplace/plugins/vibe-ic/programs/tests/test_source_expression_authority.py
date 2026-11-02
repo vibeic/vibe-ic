@@ -393,6 +393,32 @@ def test_serial_producer_without_source_function_preserves_author_handoff(tmp_pa
     assert check['verdict'] == 'NOT_CHECKED', check
 
 
+def test_serial_legacy_output_function_cannot_become_input_authority_on_refresh(tmp_path):
+    import serial_parallel_mul_synth as synth
+    p = producer_project(tmp_path)
+    spec, reason = synth.extract_serial_parallel_mul_spec(p, 'digital_arithmetic_primitive')
+    assert spec is not None, reason
+    rtl = p / 'phase2/stage1/rtl/source_intent_unit.v'
+    rtl.parent.mkdir(parents=True)
+    rtl.write_text(synth.emit_rtl(spec))
+    path = p / 'plugin_output/declaration.json'
+    path.parent.mkdir()
+    legacy = {**synth.plugin_declaration(spec), 'function': function('*', 32, 'p', ('x', 'y'))}
+    original = (json.dumps(legacy, indent=4) + '\n\n').encode()
+    path.write_bytes(original)
+    before = path.stat()
+    result = emit_serial(p, '--refresh-contract')
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert path.read_bytes() == original
+    after = path.stat()
+    assert (after.st_ino, after.st_mtime_ns) == (before.st_ino, before.st_mtime_ns)
+    step, report, check = professional_step(p)
+    assert (step.status, report['status'], check['verdict']) == (
+        'NOT_MEASURED', 'INCOMPLETE', 'NOT_CHECKED'), (step.detail, report, check)
+    assert report['ran_cocotb'] is False and report['fallback_skill'] == 'testbench-gen', report
+    assert path.read_bytes() == original
+
+
 @pytest.mark.parametrize('location', ['declaration.json', 'plugin_output/declaration.json'])
 @pytest.mark.parametrize('broken', [False, True], ids=['correct-dut', 'wrong-output'])
 def test_serial_producer_preserves_source_function_and_native_falsifiability(
