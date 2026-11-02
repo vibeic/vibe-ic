@@ -352,9 +352,9 @@ def test_ordinary_primary_and_gate_invoke_existing_per_layer_consumer(
 
     def fresh_stream(project, top, pdk, container):
         streams.append(top)
-        prior = LF.validate_default_stream(project)
-        assert LF.current_metal_density(project, arm, prior)['verdict'] == 'PASS'
-        return dict(prior, receipt=str(project / LF.DEFAULT_STREAM_REL))
+        assert LF.current_metal_density(project, arm, record)['verdict'] == 'PASS'
+        R._step37_declare_streamout_gds_provenance(project, top, default_finishing=True)
+        return dict(record, receipt=str(project / LF.DEFAULT_STREAM_REL))
 
     monkeypatch.setattr(LF, 'default_stream', fresh_stream)
     calls, original = [], MLD.check
