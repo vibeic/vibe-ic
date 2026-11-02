@@ -299,3 +299,35 @@ def test_a1_current_named_l5_conditions_after_regeneration(tmp_path, selector):
         assert emitted['_provenance']['input']['sha256'] == hashlib.sha256(l5_path.read_bytes()).hexdigest()
         gate = run_prog(GATE_A1, tmp_path, '--block', 'pll')
         assert gate.returncode == 0, gate.stdout + gate.stderr
+
+
+@pytest.mark.parametrize('opener,continuation', [
+    ('10. ```text', '    '),  # Exact independent review counterexample.
+    ('100) ```text', '     '),
+    ('  10. ```text', '      '),
+    ('> 10. ```text', '>     '),
+    ('10. ```text', '       '),  # Three spaces relative to the list content.
+])
+@pytest.mark.parametrize('emitter', ['gen_l1_datasheet', 'gen_l5_adi_spec'])
+def test_closed_ordered_list_fence_preserves_container_indentation(
+        tmp_path, markdown_backend, opener, continuation, emitter):
+    generate(tmp_path, table())
+    other = opener + '\n' + continuation + 'ordinary example\n' + continuation + '```\n'
+    docs = {'interface.md': INTERFACE, 'conditions.md': table(), 'other.md': other}
+    result = getattr(runner, emitter)(tmp_path, docs)
+    body = json.loads(Path(result.path).read_text())
+    rows = pin_rows(body) if emitter == 'gen_l1_datasheet' else block_rows(body)
+    assert rows[0]['min_typ_max'] == {'typ': 2.0, 'min': 1.96, 'max': 2.04}
+    backend, calls = markdown_backend
+    if backend == 'commonmark':
+        assert other in calls
+
+
+@pytest.mark.parametrize('emitter', ['gen_l1_datasheet', 'gen_l5_adi_spec'])
+def test_unclosed_multi_digit_list_fence_still_refuses(
+        tmp_path, markdown_backend, emitter):
+    generate(tmp_path, table())
+    docs = {'interface.md': INTERFACE, 'conditions.md': table(),
+            'other.md': '10. ```text\n    ordinary example\n'}
+    with pytest.raises(ValueError, match='PIN_INTERFACE_CONDITION_UNCLOSED_FENCE'):
+        getattr(runner, emitter)(tmp_path, docs)

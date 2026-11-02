@@ -27,8 +27,8 @@ _FORBIDDEN = re.compile(r'[<>`~]')
 def _validate_fences(text):
     """Delimiter integrity only; this never decides table authority.
 
-    Recognize delimiters after punctuation-only container prefixes without
-    classifying block types. An unknown/mismatched delimiter refuses rather
+    Recognize delimiters after quote/list container prefixes without
+    granting table authority. An unknown/mismatched delimiter refuses rather
     than making a following header live. Authority uses the allowlist below.
     """
     fence = None
@@ -39,15 +39,23 @@ def _validate_fences(text):
         prefix, token, tail = marker.groups()
         list_prefix = re.search(r'(?:\d{1,9}[.)]|[-+*])[ \t]+', prefix)
         container = ''.join(re.sub(r'(?:\d{1,9}[.)]|[-+*])[ \t]+', '', prefix).split())
+        # Quote markers are containers, not list-content indentation. Retain
+        # the list marker's full width (including multi-digit numbers) so a
+        # continuation closer is checked relative to that content column.
+        local_prefix = re.sub(r'^[ \t]*>(?:[ \t]*>)*[ \t]?', '', prefix)
+        content_indent = len(local_prefix.expandtabs(4)) if list_prefix else None
         indentation_valid = bool(container) or bool(list_prefix) or ('\t' not in prefix and len(prefix) <= 3)
         if fence is not None:
+            if fence[4] is not None:
+                relative_indent = len(local_prefix.expandtabs(4)) - fence[4]
+                indentation_valid = not list_prefix and 0 <= relative_indent <= 3
             if (indentation_valid and container == fence[2] and token[0] == fence[0]
                     and len(token) >= fence[1] and not tail.strip(' \t')):
                 fence = None
             else:
                 _refuse('INVALID_FENCE', f'line {number}')
         elif indentation_valid and (token[0] != '`' or '`' not in tail):
-            fence = (token[0], len(token), container, number)
+            fence = (token[0], len(token), container, number, content_indent)
     if fence is not None:
         _refuse('UNCLOSED_FENCE', f'line {fence[3]}')
 
