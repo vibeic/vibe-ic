@@ -193,6 +193,17 @@ def test_bad_path_authoring_advice_never_recommends_omitting_scope(tmp_path):
     assert reason is not None and "or omit" not in reason
 
 
+@pytest.mark.parametrize("token", ["2,000", "2000", "2e3", "2,000 —"])
+@pytest.mark.parametrize("target, expected", [(3, False), (2000, True)])
+def test_dimensionless_quantity_fence_uses_the_canonical_number_grammar(
+        tmp_path, token, target, expected):
+    case = project(tmp_path, {"quantity": {"target": target, "description": "2,000", "unit": "—"}})
+    actual, unresolved, unrouted = metrics._d0102_compare(
+        case, {"expectations": [expectation([token])]}, {})
+    assert bool(actual) is expected
+    assert unresolved == [] and unrouted == []
+
+
 def test_expert_handoff_requires_scopes_for_single_and_split_branches(tmp_path):
     case = project(tmp_path, {"quantity": 1})
     handoff = pack.assemble("Review this typed quantity.", None, None, [], [],

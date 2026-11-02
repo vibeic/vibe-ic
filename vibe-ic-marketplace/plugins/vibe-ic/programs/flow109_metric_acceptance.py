@@ -7119,8 +7119,9 @@ def _d0102_dimensionless(project: Path, expectation: dict, reads: dict) -> dict 
             or str(expectation.get('id', '')).startswith('qualified_by:')):
         return None
     numbers = [t for t in tokens if t not in ('', '—', '-')]
-    if not numbers or any(not isinstance(t, str) or not re.fullmatch(
-            r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?', t) for t in numbers):
+    quantities = [expert.parse_quantity(token) for token in numbers]
+    if not numbers or any(quantity is None or quantity.dimension not in (None, 'dimensionless')
+                          for quantity in quantities):
         return None
     explicit_unit = any(t in ('', '—', '-') for t in tokens)
     quantity_fields = ('value', 'target', 'typ', 'min', 'max')
