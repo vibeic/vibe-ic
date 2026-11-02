@@ -236,14 +236,21 @@ separate.
 
 ## Native final floating-fill extraction
 
-D69 Default selects the released `vibeic-final-fill-spef extract` owner path:
+D69 Default selects the primary final-fill extraction path:
 Magic reads the final GDS with the dedicated floating-fill deck, retains the
 matching DEF routed nets, and eliminates floating conductors using exact
 zero-net-charge Schur reduction. The existing `flow109_final_extract` owner
-invokes this tool and consumes its hash-bound `FINAL_FILL_EXTRACTION.json`
+uses `_final_fill_primary` with the released tool's DEF reader, Magic and
+reducer, and consumes its hash-bound `FINAL_FILL_EXTRACTION.json`
 and min/nom/max SPEFs. Its downstream STA owner consumes those same files;
 an old pre-fill SPEF cannot substitute for them. The `analog_die` profile
 remains `Magic.RCX`; this does not claim stock IHP fill-aware extraction.
+The 0.4.67 tool's normal extract CLI automatically supplies native bindings
+when a DEF contains routes, producing diagnostic-only adoption receipts.
+The primary driver instead extracts the unchanged GDS without annotations or
+alias adoption. Missing native net names fail; adoption receipts and explicit
+`d69_credit=false` records never receive credit. This does not establish
+primary extraction feasibility for an unlabeled full-chip GDS.
 The reducer's `--max-degree` is our own computational guard on one
 elimination's clique fill-in, not a signoff threshold (ruling #88 D2). When
 that guard alone refuses, D69 relaunches the tool once with `--max-degree` at
