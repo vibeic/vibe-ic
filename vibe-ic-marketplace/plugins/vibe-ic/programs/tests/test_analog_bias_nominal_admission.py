@@ -22,6 +22,13 @@ def test_declared_anchor_with_unmet_nominal_settling_is_not_admitted(tmp_path):
     }
     (directory / "bias_network_inputs.json").write_text(json.dumps(declaration))
     result = run_prog(A2, root, "--pdk", "ihp-sg13g2")
+    evidence = {"rc": result.returncode, "stdout": result.stdout,
+                "stderr": result.stderr, "declaration": declaration}
+    for name in ("topology_gap.json", "topology.json"):
+        path = directory / name
+        if path.exists():
+            evidence[name] = json.loads(path.read_text())
+    (tmp_path / "nominal-counter.json").write_text(json.dumps(evidence, indent=2))
     assert result.returncode == 2, result.stdout + result.stderr
     gap = json.loads((directory / "topology_gap.json").read_text())
     assert gap["status"] == "ENTRY_REQUIREMENTS_NOT_MET"
