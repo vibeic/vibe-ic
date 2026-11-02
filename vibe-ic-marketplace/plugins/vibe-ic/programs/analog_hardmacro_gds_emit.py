@@ -850,7 +850,7 @@ def _d60_inputs(project):
         remember(declaration)
     if resolver.families_agree(target, tech) is not True:
         raise ValueError('D60_DECLARED_TECHNOLOGY_MISMATCH')
-    facts = resolver.resolve_pdk(target, project=project)
+    facts = resolver.resolve_pdk(target)
     if facts.get('source') != 'container_installed' or not facts.get('available'):
         raise ValueError('D60_INSTALLED_TECHNOLOGY_UNAVAILABLE')
     magic_dir = (Path(facts['pdk_root']) / 'libs.tech/magic').resolve(strict=True)
