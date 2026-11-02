@@ -299,6 +299,46 @@ def test_unqualified_or_unbound_subject_stops_before_model_or_proof_launch(tmp_p
     assert not (tmp_path / lec.BASELINE).exists()
 
 
+@pytest.mark.parametrize('owner', ['native_fill_inputs', 'retained_postroute_inputs'])
+@pytest.mark.parametrize('refusal', [
+    lambda: __import__('librelane_contract').Refusal('LL_FILL_HANDOFF_UNBOUND', 'LL_PDK_MATERIAL_MISSING'),
+    lambda: ValueError('native fill dependency absent'),
+    lambda: KeyError('state')], ids=['owner_refusal', 'value_error', 'key_error'])
+def test_physical_owner_refusal_is_recorded_before_any_native_launch(tmp_path, monkeypatch, owner, refusal):
+    features = next(p['features'] for p in flow109.load_registry()['reference_profiles']
+                    if p['name'] == 'Small digital IC without DFT')
+    context = flow109.execution_context(flow109.resolve_plan(features), 'D44', 'D44')
+    netlist = _put(tmp_path, 'inputs/adopted.v', 'module proof_alpha; endmodule')
+    rtl = _put(tmp_path, 'inputs/reference.v', 'module proof_alpha; endmodule')
+    liberty = _put(tmp_path, 'inputs/cells.lib', 'library(cells) {}')
+    manifest = {'schema': lec.SCHEMA, 'top': 'proof_alpha', 'rtl': [rtl], 'adopted_netlist': netlist,
+                'liberty': liberty}
+    _put(tmp_path, lec.INPUT, manifest)
+    extra = {name: _put(tmp_path, f'inputs/{name}.txt', name)
+             for name in ('adopted_state', 'adopted_receipt', 'final_def', 'wrapper',
+                          'wrapper_record', 'io_liberty')}
+    physical_input = _put(tmp_path, 'input/flow109/D44-physical.json', {
+        'schema': lec.physical.SCHEMA, 'top': manifest['top'], 'logical_top': manifest['top'],
+        'rtl': rtl, 'adopted_netlist': netlist, 'liberty': liberty, **extra})
+    manifest['transformations'] = [{'kind': lec.physical.KIND, 'input': physical_input}]
+    (tmp_path / lec.INPUT).write_text(json.dumps(manifest))
+    monkeypatch.setattr(lec.physical, 'native_fill_inputs', lambda paths: {})
+    monkeypatch.setattr(lec.physical, 'retained_postroute_inputs', lambda project, paths: {})
+    def refuse(*args):
+        raise refusal()
+    monkeypatch.setattr(lec.physical, owner, refuse)
+    calls = []
+    monkeypatch.setattr(lec, '_model_census', lambda *a: calls.append('native'))
+    record = lec.execute(tmp_path, context)
+    assert record['component_status'] == 'NOT_MEASURED', record
+    assert record['reason'] == 'D44_PHYSICAL_PROOF_INPUT_REFUSED'
+    assert str(refusal().args[0]) in record['detail']
+    assert record['native_started'] is False and calls == []
+    assert record['completed'] is False
+    assert not (tmp_path / lec.BASELINE).exists()
+    assert json.loads((tmp_path / record['receipt']['path']).read_text())['reason'] == record['reason']
+
+
 def test_checked_in_native_eqy_sample_cannot_lose_a_required_partition(tmp_path):
     context = _case(tmp_path)
     sample = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs', 'calibration',

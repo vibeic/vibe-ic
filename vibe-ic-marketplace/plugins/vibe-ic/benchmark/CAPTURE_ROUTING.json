@@ -1,6 +1,22 @@
 {
   "_comment": "Maps each Vibe-IC flow step to the right Bucket-A program file + Bucket-B skill file. Used by enhancement_emit.py to route a captured recovery to the correct target. Step IDs match the canonical flow naming.",
   "steps": {
+    "benchmark.reference_model_handoff": {
+      "description": "Producer advisory for the existing persistent reference-model input; ordinary native verification and independent review remain the boundary.",
+      "bucket_A_program": "programs/professional_tb_gen.py",
+      "bucket_A_related": ["programs/design_one_shot_runner.py"],
+      "bucket_B_skill_file": "skills/testbench-gen/SKILL.md"
+    },
+    "benchmark.review_correction": {
+      "description": "Ordered hash-bound review correction requests under the existing coordinator lock, followed by one ordinary resume; per-request immutable transition and refusal contracts remain unchanged.",
+      "bucket_A_program": "programs/benchmark_dispatch.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
+    "benchmark.retained_handoff": {
+      "description": "Completed worker checkpoint retention and ordinary resume recovery from an unchanged native report owner; later duplicate observations remain diagnostic, with no acceptance authority.",
+      "bucket_A_program": "programs/benchmark_dispatch.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
     "flow.task_features": {
       "description": "General source/evidence-bound task profile selection before public admission; capture routing only, not a new flow step or acceptance gate.",
       "bucket_A_program": "programs/flow109.py",
@@ -117,6 +133,12 @@
       "bucket_A_related": [
         "programs/spec_artifact_registry.py"
       ],
+      "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
+    },
+    "phase2.rtl_repair.public_port_metadata": {
+      "description": "Source-bound native public-header port metadata in the existing structural repair contract; capture routing only, not a new gate.",
+      "bucket_A_program": "programs/rtl_repair_contract.py",
+      "bucket_A_related": ["programs/benchmark_dispatch.py"],
       "bucket_B_skill_file": "skills/spec-to-rtl/SKILL.md"
     },
     "phase2.rtl_gen.public_port_order": {
@@ -451,6 +473,11 @@
       "_note": "Bucket A target TBD — analog sizing loop currently has no single dedicated check program; the closest is the analog-sizing-loop skill itself. File a backlog if a deterministic sizing-loop checker is authored.",
       "bucket_B_skill_file": "skills/analog-sizing-loop/SKILL.md"
     },
+    "benchmark.spec_adjudication": {
+      "description": "Independent IC-expert adjudication handoff for autonomous evaluation source questions; existing review correction only, capture routing not a flow row or gate.",
+      "bucket_A_program": "programs/benchmark_dispatch.py",
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
+    },
     "benchmark.program_regate": {
       "description": "The ONE explicit Program re-entry: re-run the FIXED Program on one preserved, signed pre-gate input, in a staged project through the shared coordinator and the ordinary declared validation route. Bound by BOTH Program identities -- the declared version pair and the executable source tree. Preserve prior output and proof; require a fresh independent review. This is neither an AI repair nor an acceptance. Merged from benchmark.program_regate (v1.17.63) and benchmark.program_retry (v1.17.71) under #2047; --program-retry remains a deprecated alias of --program-regate.",
       "bucket_A_program": "programs/benchmark_dispatch.py",
@@ -479,6 +506,11 @@
     "capture.emit": {
       "bucket_A_program": "programs/enhancement_emit.py",
       "bucket_B_skill_file": "skills/benchmark-enhancement-capture/SKILL.md"
+    },
+    "mcp_eda.tool_resolution": {
+      "description": "Capture subtype for container-side resolution of built-in legacy tool defaults; preserve executable legacy paths and explicit operator commands, otherwise discover the command on the container PATH. Metadata only; no new flow row or gate.",
+      "bucket_A_program": "mcp-eda/src/index.js",
+      "bucket_B_skill_file": "skills/synth-doctor/SKILL.md"
     },
     "mcp_eda.cocotb": {
       "description": "MCP eda_cocotb — sibling .py staging, PYTHONPATH, etc. (the CVDP harness_library lesson)",
@@ -703,6 +735,15 @@
       "bucket_A_program": null,
       "bucket_B_skill_file": "skills/catalog-glue-author/SKILL.md",
       "bucket_B_section_anchor": "Synchronous reset at an external memory interface"
+    },
+    "runtime.retained_integrity": {
+      "description": "Retention of runtime companion assets and read-only verification of historical producer bundles; capture routing only, not a new flow step or gate.",
+      "bucket_A_program": "programs/runtime_program_tree.py",
+      "bucket_A_related": [
+        "programs/phase1_gate_contract_check.py",
+        "programs/benchmark_dispatch.py"
+      ],
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     }
   },
   "default_routing": {

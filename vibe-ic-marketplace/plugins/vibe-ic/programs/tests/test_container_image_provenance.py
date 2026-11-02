@@ -221,6 +221,7 @@ def test_local_host_cid_attestation_satisfies_image_admission(
     assert rec["attestation_path"] == str(path)
     if demand:
         assert rec["image_match"] is True
+        assert rec["require_image_id"] == PINNED_ID
 
 
 @pytest.mark.parametrize("mutation", [

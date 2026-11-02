@@ -1,6 +1,7 @@
 """Behavioral controls for the Default native A06--A10 consumers."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -144,6 +145,94 @@ def _performance_deck(project, *, analyses=True, definitions=True):
                   'meas ac psrr find vdb(out) at=1\n')
     deck.write_text(text.replace(".endc", extra + ".endc"))
     return deck
+
+
+def _declared_performance_inputs(project):
+    _source_performance_spec(project)
+    text = _performance_deck(project).read_text()
+    # Keep the canonical producer's OP-only deck as the negative control.
+    deck = _op_deck(project)
+    deck.write_text(deck.read_text().replace("MEAS level=", "MEAS vout="))
+    declaration = project / "declared-inputs.json"
+    declaration.write_text(json.dumps({"block": "stage", "ports": ["in", "out"],
+        "testbench": {"supply_exprs": ["1"], "stimulus": ["v1 in 0 {supply} ac 1"],
+        "control": text.split(".control\n")[1].split(".endc")[0].splitlines() + [
+            "let monitored = v(in)", 'echo "MEAS supply_monitor=" $&monitored']}}))
+    return declaration
+
+
+@pytest.mark.parametrize("source", ["config", "sidecar"])
+@pytest.mark.parametrize("vout,expected", [(1.2, "PASS"), (1.5, "FAIL")])
+def test_a07_declared_inputs_render_and_measure_without_changing_canonical_deck(
+        project, source, vout, expected):
+    declaration = _declared_performance_inputs(project)
+    config = {"blocks": {"stage": {"testbench_inputs": str(declaration.relative_to(project))}}}
+    if source == "sidecar":
+        target = project / "phase3/analog/stage/testbench_inputs.json"
+        declaration.rename(target)
+        declaration, config = target, {}
+    canonical = project / "phase3/analog/stage/tb_stage.sp"
+    before = canonical.read_bytes()
+    calls = []
+    def run(program, argv, **kwargs):
+        calls.append(Path(argv[1]))
+        assert program == "@ngspice"
+        assert "meas ac psrr" in calls[-1].read_text()
+        assert sim._validate_deck(project / "phase3/analog/stage/stage.sp", calls[-1], {})[0] == "PASS"
+        return {"returncode": 0, "stdout": f"MEAS vout={vout} iq=20 dropout=0.3 psrr=50 supply_monitor=1\n"}
+    result = sim.run_step("A07", project, {"name": "stage"}, _options(config=config), run)
+    assert result["status"] == expected
+    assert len(calls) == 1 and calls[0] != canonical
+    assert result["metrics"]["iq"] == 20
+    assert result["native_inputs"]["testbench_inputs"]["sha256"] == hashlib.sha256(declaration.read_bytes()).hexdigest()
+    assert canonical.read_bytes() == before
+
+
+@pytest.mark.parametrize("fault", ["missing", "malformed", "wrong_block", "wrong_ports", "unbound_supply"])
+def test_a07_invalid_explicit_declaration_never_falls_back_or_launches(project, fault):
+    declaration = _declared_performance_inputs(project)
+    data = json.loads(declaration.read_text())
+    if fault == "missing":
+        declaration.unlink()
+    elif fault == "malformed":
+        declaration.write_text("{")
+    else:
+        if fault == "wrong_block": data["block"] = "other"
+        if fault == "wrong_ports": data["ports"] = ["out", "in"]
+        if fault == "unbound_supply": data["testbench"]["supply_exprs"] = ["undefined_supply"]
+        declaration.write_text(json.dumps(data))
+    result = sim.run_step("A07", project, {"name": "stage"}, _options(config={
+        "blocks": {"stage": {"testbench_inputs": str(declaration)}}}), _never)
+    assert result["status"] == "NOT_MEASURED"
+    assert "declared testbench" in result["detail"]
+
+
+def test_a07_repo_declared_op_only_testbench_keeps_source_coverage_refusal(project):
+    fixture = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs", "tests",
+                           "fixtures", "a8_native_rc_wrapper")
+    ir = json.loads((fixture / "topology.json").read_text())
+    ir["block"] = "stage"
+    bdir = project / "phase3/analog/stage"
+    (bdir / "stage.sp").write_text(f".subckt stage {' '.join(ir['ports'])}\n.ends stage\n")
+    (bdir / "spec.json").write_bytes((fixture / "spec.json").read_bytes())
+    (bdir / "testbench_inputs.json").write_text(json.dumps(ir))
+    result = sim.run_step("A07", project, {"name": "stage"}, _options(), _never)
+    assert result["status"] == "NOT_MEASURED"
+    assert result["metrics"]["measurement_definition_coverage"]["missing"] == ["dropout", "iq", "psrr"]
+    rendered = Path(result["native_inputs"]["testbench"]["path"])
+    assert rendered != bdir / "tb_stage.sp"
+    assert "r_load vout 0 1k" in rendered.read_text()
+
+
+def test_a07_declared_inputs_changed_during_simulation_stay_unmeasured(project):
+    declaration = _declared_performance_inputs(project)
+    def run(*args, **kwargs):
+        declaration.write_text(declaration.read_text() + "\n")
+        return {"returncode": 0, "stdout": "MEAS vout=1.2 iq=20 dropout=0.3 psrr=50\n"}
+    result = sim.run_step("A07", project, {"name": "stage"}, _options(config={"blocks": {
+        "stage": {"testbench_inputs": str(declaration)}}}), run)
+    assert result["status"] == "NOT_MEASURED"
+    assert "testbench_inputs" in result["detail"]
 
 
 @pytest.mark.parametrize("analyses,definitions", [(False, True), (True, False)])
@@ -419,6 +508,22 @@ def _process_starttime(pid):
     return int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
 
 
+@contextmanager
+def _live_process(executable, deck, log):
+    # Popen can return while /proc/<pid>/cmdline is still empty. Establish
+    # readiness independently of the guard whose refusal this fixture tests.
+    argv = [str(executable), "-c", "import time; print('LIVE_READY', flush=True); time.sleep(30)",
+            "-b", str(deck), "-o", str(log)]
+    process = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True)
+    try:
+        assert process.stdout.readline() == "LIVE_READY\n"
+        yield process, argv
+    finally:
+        process.terminate()
+        process.wait()
+        process.stdout.close()
+
+
 def test_selected_local_ngspice_identity_comes_from_current_resolver(monkeypatch):
     selected = Path(sys.executable).resolve()
     monkeypatch.setattr(shutil, "which", lambda name: str(selected) if name == "ngspice" else None)
@@ -447,9 +552,7 @@ def test_running_native_work_is_retained_without_duplicate_launch(project, monke
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: selected)
     log = tmp_path / "native.log"
     log.write_text("running\n")
-    argv = [str(executable), "-c", "import time; time.sleep(30)", "-b", str(deck), "-o", str(log)]
-    process = subprocess.Popen(argv)
-    try:
+    with _live_process(executable, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(executable.resolve()),
                   "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
@@ -461,9 +564,6 @@ def test_running_native_work_is_retained_without_duplicate_launch(project, monke
         assert result["executions"] == [{**record, "transport_identity": "VERIFIED",
                                          "selected_tool": selected}]
         assert "existing native jobs" in result["detail"]
-    finally:
-        process.terminate()
-        process.wait()
 
 
 def test_unrelated_live_pid_cannot_suppress_native_launch(project):
@@ -482,7 +582,7 @@ def test_unrelated_live_pid_cannot_suppress_native_launch(project):
     assert calls and calls[0][0][0] == "@ngspice"
 
 
-@pytest.mark.parametrize("mutation", ["starttime", "argv", "log", "selected_tool", "container"])
+@pytest.mark.parametrize("mutation", ["starttime", "argv", "log", "selected_tool", "container", "cmdline_unobservable"])
 def test_active_run_requires_complete_live_transport_identity(project, monkeypatch, tmp_path, mutation):
     deck = project / "phase3/analog/stage/tb_stage.sp"
     executable = Path("/proc/self/exe").resolve()
@@ -491,9 +591,7 @@ def test_active_run_requires_complete_live_transport_identity(project, monkeypat
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: selected)
     log = tmp_path / "native.log"
     log.write_text("running\n")
-    argv = [str(executable), "-c", "import time; time.sleep(30)", "-b", str(deck), "-o", str(log)]
-    process = subprocess.Popen(argv)
-    try:
+    with _live_process(executable, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(executable.resolve()),
                   "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
@@ -512,15 +610,17 @@ def test_active_run_requires_complete_live_transport_identity(project, monkeypat
         elif mutation == "selected_tool":
             monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: {
                 **selected, "sha256": "0" * 64})
+        elif mutation == "cmdline_unobservable":
+            read_bytes = Path.read_bytes
+            cmdline = Path("/proc") / str(process.pid) / "cmdline"
+            monkeypatch.setattr(Path, "read_bytes", lambda path:
+                b"" if path == cmdline else read_bytes(path))
         else:
             changed["container"] = "claimed-container"
             changed["cid"] = "claimed-cid"
         changed_options = _options(container=("required-container" if mutation == "container" else ""),
                                    config={"active_runs": {"stage": [changed]}})
         assert sim._active_runs(changed_options, "stage") == []
-    finally:
-        process.terminate()
-        process.wait()
 
 
 def test_copied_python_named_ngspice_is_not_selected_native_tool(project, monkeypatch, tmp_path):
@@ -533,9 +633,7 @@ def test_copied_python_named_ngspice_is_not_selected_native_tool(project, monkey
     shutil.copy2(sys.executable, renamed)
     log = tmp_path / "renamed.log"
     log.write_text("not native ngspice\n")
-    argv = [str(renamed), "-c", "import time; time.sleep(30)", "-b", str(deck), "-o", str(log)]
-    process = subprocess.Popen(argv)
-    try:
+    with _live_process(renamed, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(renamed.resolve()),
                   "executable_sha256": hashlib.sha256(renamed.read_bytes()).hexdigest(),
@@ -543,9 +641,6 @@ def test_copied_python_named_ngspice_is_not_selected_native_tool(project, monkey
                   "log": str(log)}
         options = _options(container="", config={"active_runs": {"stage": [record]}})
         assert sim._active_runs(options, "stage") == []
-    finally:
-        process.terminate()
-        process.wait()
 
 
 def test_unobservable_selected_tool_protects_plausible_active_job_without_verifying_it(
@@ -555,9 +650,7 @@ def test_unobservable_selected_tool_protects_plausible_active_job_without_verify
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: None)
     log = tmp_path / "unverified.log"
     log.write_text("running\n")
-    argv = [str(executable), "-c", "import time; time.sleep(30)", "-b", str(deck), "-o", str(log)]
-    process = subprocess.Popen(argv)
-    try:
+    with _live_process(executable, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(executable),
                   "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
@@ -570,9 +663,6 @@ def test_unobservable_selected_tool_protects_plausible_active_job_without_verify
         result = sim.run_step("A07", project, {"name": "stage"}, options, _never)
         assert result["status"] == "NOT_MEASURED"
         assert result["executions"] == active
-    finally:
-        process.terminate()
-        process.wait()
 
 
 def test_a08_requires_nominal_pass_before_native_pvt(project):

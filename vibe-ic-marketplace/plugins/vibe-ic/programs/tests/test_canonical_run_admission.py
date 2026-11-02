@@ -603,6 +603,7 @@ def test_direct_phase_runners_refuse_before_expensive_dispatch(tmp_path, monkeyp
                                                                 capsys):
     """Integration seam: both bypassable CLIs obey a negative admission."""
     import execution_policy as policy
+    import runtime_program_tree
     # The CLIs bootstrap before admission. Restore that in-process metadata
     # on teardown so a later caller does not inherit this fixture's project.
     monkeypatch.setattr(policy, '_ordinary_runtime', None)
@@ -614,39 +615,48 @@ def test_direct_phase_runners_refuse_before_expensive_dispatch(tmp_path, monkeyp
     project = _project(tmp_path / "proj")
     refused = cra.Admission(False, "DUPLICATE_NO_NEW_EVIDENCE", "x", {}, "control")
 
-    design = _load_runner("design_one_shot_runner.py", "_test_direct_phase2")
-    monkeypatch.setattr(design._runner_lock, "acquire_or_reenter", lambda *_: object())
-    monkeypatch.setattr(design._canonical_admission, "admit_span", lambda *a, **k: refused)
-    monkeypatch.setattr(sys, "argv", ["design_one_shot_runner.py", str(project)])
-    assert design.main() == 2
-    assert "canonical Phase-2 admission" in capsys.readouterr().err
-    # Cleanup must not weaken the active invocation's source guard.
-    import pytest
-    import runtime_program_tree
-    with pytest.raises(runtime_program_tree.RuntimeTreeError,
-                       match="LIVE_PLUGIN_PATH_AFTER_RETENTION"):
-        design._RUNTIME_PROGRAM_TREE.verify_command(
-            [sys.executable, str(PROGRAMS / 'serial_parallel_mul_synth.py')])
+    retained_environment = {
+        name: os.environ.get(name) for name in (
+            runtime_program_tree.ENV_ROOT, runtime_program_tree.ENV_MANIFEST)}
+    try:
+        design = _load_runner("design_one_shot_runner.py", "_test_direct_phase2")
+        monkeypatch.setattr(design._runner_lock, "acquire_or_reenter", lambda *_: object())
+        monkeypatch.setattr(design._canonical_admission, "admit_span", lambda *a, **k: refused)
+        monkeypatch.setattr(sys, "argv", ["design_one_shot_runner.py", str(project)])
+        assert design.main() == 2
+        assert "canonical Phase-2 admission" in capsys.readouterr().err
+        # Cleanup must not weaken the active invocation's source guard.
+        import pytest
+        with pytest.raises(runtime_program_tree.RuntimeTreeError,
+                           match="LIVE_PLUGIN_PATH_AFTER_RETENTION"):
+            design._RUNTIME_PROGRAM_TREE.verify_command(
+                [sys.executable, str(PROGRAMS / 'serial_parallel_mul_synth.py')])
 
-    # Phase 3 refuses an UNDECLARED delivery before it asks admission (#2376,
-    # `_delivery_admission_refusal`), so without a declaration this arm was
-    # measuring that gate and never reached the admission it is about -- the
-    # same missing input 71fa6cea0 supplied to two other `main()` fixture
-    # families. The delivery gate stays enabled; the input is supplied.
-    _declare(project)
-    phase3 = _load_runner("phase3_one_shot_runner.py", "_test_direct_phase3")
-    monkeypatch.setattr(phase3._runner_lock, "acquire_or_reenter", lambda *_: object())
-    # Supply the case declaration; model only the unrelated runtime transport.
-    declared = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
-    declared.parent.mkdir(parents=True, exist_ok=True)
-    declared.write_text(json.dumps({"fields": {"pdk_target": "caseKit"}}))
-    from types import SimpleNamespace
-    monkeypatch.setattr(phase3, "_detect_pdk", lambda *a: SimpleNamespace(name="caseKit"))
-    monkeypatch.setattr(phase3, "_backend_parameter_values", lambda *a: {})
-    monkeypatch.setattr(phase3._canonical_admission, "admit_span", lambda *a, **k: refused)
-    monkeypatch.setattr(sys, "argv", ["phase3_one_shot_runner.py", str(project)])
-    assert phase3.main() == 2
-    assert "canonical Phase-3 admission" in capsys.readouterr().err
+        # Phase 3 refuses an UNDECLARED delivery before it asks admission (#2376,
+        # `_delivery_admission_refusal`), so without a declaration this arm was
+        # measuring that gate and never reached the admission it is about -- the
+        # same missing input 71fa6cea0 supplied to two other `main()` fixture
+        # families. The delivery gate stays enabled; the input is supplied.
+        _declare(project)
+        phase3 = _load_runner("phase3_one_shot_runner.py", "_test_direct_phase3")
+        monkeypatch.setattr(phase3._runner_lock, "acquire_or_reenter", lambda *_: object())
+        # Supply the case declaration; model only the unrelated runtime transport.
+        declared = project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json"
+        declared.parent.mkdir(parents=True, exist_ok=True)
+        declared.write_text(json.dumps({"fields": {"pdk_target": "caseKit"}}))
+        from types import SimpleNamespace
+        monkeypatch.setattr(phase3, "_detect_pdk", lambda *a: SimpleNamespace(name="caseKit"))
+        monkeypatch.setattr(phase3, "_backend_parameter_values", lambda *a: {})
+        monkeypatch.setattr(phase3._canonical_admission, "admit_span", lambda *a, **k: refused)
+        monkeypatch.setattr(sys, "argv", ["phase3_one_shot_runner.py", str(project)])
+        assert phase3.main() == 2
+        assert "canonical Phase-3 admission" in capsys.readouterr().err
+    finally:
+        for name, value in retained_environment.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
 
 
 _EXPERT_TB = ('import cocotb\n@cocotb.test()\nasync def test_value(dut):\n'

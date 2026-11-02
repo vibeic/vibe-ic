@@ -118,7 +118,8 @@ def _input_views(project, name, step=None):
             paths.append(Path(selected["ngspice_bin"]))
     # A configured nominal/calibration deck can live outside the canonical
     # block directory. Retain the actual selected inputs, not only defaults.
-    from analog_native_sim import _config, _inputs, _included_paths
+    from analog_native_sim import (_config, _inputs, _included_paths,
+                                   _testbench_inputs_path, _declared_testbench)
     config = _read(project / "input" / "analog_flow.json", {})
     for selected_step in STEPS[5:10]:
         selected = _config({"config": config}, {"name": name}, selected_step)
@@ -129,6 +130,18 @@ def _input_views(project, name, step=None):
         netlist, deck, spec = _inputs(project, name, selected)
         paths.extend([netlist, deck, spec])
         paths.extend(_included_paths(deck))
+        if selected_step == "A07":
+            try:
+                declaration = _testbench_inputs_path(project, name, selected)
+            except ValueError:
+                declaration = None  # The producer reports the invalid declaration.
+            if declaration is not None:
+                paths += [declaration, netlist.parent / "netlist_provenance.json"]
+                try:
+                    _text, views = _declared_testbench(project, name, selected, netlist.parent)
+                    paths.extend(Path(view["path"]) for view in views.values())
+                except ValueError:
+                    pass  # The producer reports the invalid declaration.
     if step in ("A06", "A07"):
         # The declaration names real study inputs outside input/. Changing
         # one of those inputs must invalidate its retained measurement too.
@@ -202,7 +215,10 @@ def _local_ngspice_startup(project, cwd, image):
     if root is None:
         return {}, None
     target, _ = declared_target(project)
-    selected = availability.resolve_pdk(target, project=project, container='')
+    # Staged model libraries do not replace the runtime technology's startup.
+    # Use the same installed-PDK selection as the default path; keep model
+    # resolution and its project-first precedence unchanged.
+    selected = availability.resolve_pdk(target, container='')
     if not selected.get('available') or selected.get('source') != 'container_installed':
         return {}, None  # Project-staged/builtin models keep their existing startup.
     init = Path(cwd) / '.spiceinit'
@@ -210,7 +226,12 @@ def _local_ngspice_startup(project, cwd, image):
         init = Path(selected['pdk_root']) / 'libs.tech/ngspice/.spiceinit'
     environment = {'PDK_ROOT': root, 'PDK': selected['matched_dir']}
     if not init.is_file():
-        return environment, None  # An absent optional init is not a model verdict.
+        # Compiled models need the PDK's startup to register their device types.
+        # Built-in SPICE models can still run without an optional startup.
+        osdi = next((path for path in init.parent.rglob('*.osdi') if path.is_file()), None)
+        if osdi is not None:
+            raise ValueError(f'NGSPICE_NATIVE_INIT_MISSING: {init} (required by {osdi})')
+        return environment, None
     environment['SPICE_USERINIT_DIR'] = str(init.parent)
     return environment, {'path': str(init), 'sha256': _sha(init)}
 
@@ -1453,9 +1474,168 @@ def consume_default_row_completion(project, context, component):
         return {**base, "reason": getattr(exc, "code", "A18_COMPLETION_INPUT_NOT_CURRENT"), "detail": str(exc)}
 
 
+def _d54_correlation(project: Path, context: dict) -> dict:
+    """D54 analog-die consumer; missing/failed A14 blocks stop this row.
+
+    Reuse A14's native PEX grading and pre/post deltas. No new simulation,
+    threshold, receipt, or whole-flow acceptance is introduced here.
+    """
+    import flow109
+    import analog_native_physical as physical
+    import analog_a7_post_layout_emit as a7
+    from corner_yield_vs_spec_check import _spec_limits
+    from analog_real_corner_sweep import normalize_spec_label
+
+    def limits(spec):
+        return {normalize_spec_label(key) or str(key).casefold(): bound
+                for key, bound in _spec_limits(spec).items()}
+
+    project = Path(project).resolve()
+    context = flow109.validate_execution_context(context)
+    row = context["resolved_row"]
+    if row["id"] != "D54" or row["selected_profile"] != "analog_die":
+        raise flow109.Flow109Error("FLOW109_PROFILE_INAPPLICABLE", "D54.analog_die")
+    default = next(p for p in row["profiles"] if p["id"] == "default")
+    result = {"step_id": "D54", "context_sha256": context["context_sha256"],
+              "component_status": "NOT_MEASURED", "default_row_status": "NOT_MEASURED",
+              "completed": False, "native_started": False,
+              "whole_flow_acceptance": "NOT_MEASURED", "delivery_accepted": False,
+              "digital_path": {"status": "NOT_APPLICABLE",
+                  "reason": "declared analog-only physical top has no synthesized timing paths",
+                  "native_steps": default["native_steps"]},
+              "acceptance_dependency": "A14", "blocks": []}
+    try:
+        # A synthesized wrapper can still contain only declared analog
+        # macros. Inspect its cell population; a file or sidecar is not a
+        # standard-cell timing path. Unknown/behavioural logic refuses reuse.
+        from synth_netlist_check import count_cell_instances
+        synth = layout.synth_dir(project)
+        netlists = set(synth.glob("*.v")) | set(synth.glob("*.sv"))
+        mapped = layout.mapped_synth_netlist(project)
+        if mapped is not None:
+            netlists.add(mapped)
+        l9 = _read(layout.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json", {})
+        macros = set(l9.get("macros") or {})
+        macros.update(b.get("name") or b.get("block") for b in _declared_blocks(project))
+        for netlist in netlists:
+            text = re.sub(r"/\*.*?\*/|//[^\n]*", " ", netlist.read_text(), flags=re.S)
+            # Normalise statement boundaries for the existing cell census.
+            text = text.replace(";", ";\n")
+            count, cells = count_cell_instances(text)
+            modules = set(re.findall(r"\bmodule\s+([A-Za-z_][\w$]*)", text))
+            assignments = re.findall(r"\bassign\s+[^=;]+=\s*([^;]+);", text)
+            wiring = all(re.fullmatch(r"\s*(?:[A-Za-z_][\w$]*(?:\[\d+\])?|"
+                         r"(?:\d+)?'[sS]?[bBoOdDhH][0-9a-fA-F_xXzZ]+|[01])\s*", rhs)
+                         for rhs in assignments)
+            if (not count or set(cells) - macros - modules or not wiring
+                    or re.search(r"\b(?:always\w*|initial|function|generate)\b", text)):
+                result["digital_path"] = {"status": "NOT_MEASURED",
+                    "reason": "synthesized top is not a declared macro-only interconnect",
+                    "native_steps": default["native_steps"]}
+                raise ValueError("D54_MACRO_ONLY_TOP_CONFLICT")
+        if not netlists and (synth / layout.SYNTH_INPUTS_SIDECAR).exists():
+            raise ValueError("D54_SYNTHESIZED_TOP_UNAVAILABLE")
+        blocks = _declared_blocks(project)
+        l5 = layout.generated_docs_dir(project) / "L5_ADI_SPEC.json"
+        originals = {b.get("name") or b.get("block"): b
+                     for b in json.loads(l5.read_text())["analog_blocks"]}
+        report = json.loads((project / "reports/analog_native/status.json").read_text())
+        attempt = Path(report["attempt"])
+        if (not attempt.resolve().is_relative_to(project / "reports/analog_native")
+                or json.loads((attempt / "result.json").read_text()) != report):
+            raise ValueError("D54_A14_NATIVE_ATTEMPT_UNAVAILABLE")
+        rows = [r for r in report["steps"] if r.get("step") == "A14"]
+        for block in blocks:
+            name = block.get("name") or block.get("block")
+            found = [r for r in rows if r.get("block") == name]
+            observed = {"block": name, "status": "NOT_MEASURED"}
+            result["blocks"].append(observed)
+            if len(found) != 1:
+                observed["reason"] = "D54_A14_NATIVE_RESULT_MISSING"
+                continue
+            a14 = found[0]
+            if a14.get("status") == "FAIL":
+                observed.update(status="FAIL", reason="D54_A14_NATIVE_FAILED",
+                                metrics=a14.get("metrics", {}))
+                continue
+            if a14.get("status") != "PASS":
+                observed["reason"] = "D54_A14_NATIVE_NOT_MEASURED"
+                continue
+            try:
+                inputs, outputs = a14.get("input_views"), a14.get("output_views")
+                if (not inputs or not outputs or any(inputs.get(p) != h for p, h in
+                        _input_views(project, name, "A14").items())):
+                    raise ValueError("D54_A14_READSET_INCOMPLETE")
+                for p, h in {**inputs, **outputs}.items():
+                    path = Path(p) if Path(p).is_absolute() else project / p
+                    if not path.is_file() or _sha(path) != h:
+                        raise ValueError("D54_A14_READSET_STALE")
+                # A14 already grades spec.json. Require those exact limits to
+                # remain the block's original L5 limits before routing PASS.
+                original = limits(originals[name]["spec"])
+                spec = json.loads((layout.analog_dir(project) / name / "spec.json").read_text())
+                if not original or original != limits(spec):
+                    raise ValueError("D54_A14_ORIGINAL_L5_LIMITS_MISMATCH")
+                metrics = a14["metrics"]
+                if (not metrics.get("corners") or not metrics.get("specs")
+                        or not metrics.get("pre", {}).get("measurements")):
+                    raise ValueError("D54_A14_PEX_COMPARISON_MISSING")
+                # Ordinary A14 run_window results have no collector A14 entry.
+                # Their existing corner fields bind the actual POST netlist
+                # and TB; A13 binds the extracted input to the current layout.
+                bdir, work = physical._paths(project, name)
+                extraction = _read(work / "A13.json", {})
+                extracted = extraction.get("metrics") or {}
+                net = bdir / (name + ".sp")
+                if (extraction.get("status") != "PASS"
+                        or extracted.get("layout_sha256") != _sha(bdir / (name + ".gds"))
+                        or extracted.get("netlist_sha256") != _sha(net)):
+                    raise ValueError("D54_A14_EXTRACTION_NOT_CURRENT")
+                sources = extracted.get("corners") or []
+                if (len(sources) != len(metrics["corners"])
+                        or len({c["style"] for c in sources}) != len(sources)
+                        or {c["style"] for c in sources} != {c["style"] for c in metrics["corners"]}):
+                    raise ValueError("D54_A14_EXTRACTION_CORNERS_MISMATCH")
+                for corner in metrics["corners"]:
+                    for role in ("post_netlist", "post_testbench"):
+                        raw = corner.get(role)
+                        if not isinstance(raw, str) or not raw:
+                            raise ValueError("D54_A14_POST_INPUT_ABSENT")
+                        path = (project / raw).resolve()
+                        if (not path.is_relative_to(project) or not path.is_file()
+                                or corner.get(role + "_sha256") != _sha(path)):
+                            raise ValueError("D54_A14_POST_INPUT_STALE")
+                    matches = [c for c in sources if c["style"] == corner["style"]]
+                    if len(matches) != 1:
+                        raise ValueError("D54_A14_EXTRACTION_CORNERS_MISMATCH")
+                    source = matches[0]
+                    source_path = project / source["extracted_netlist"]
+                    if source.get("sha256") != _sha(source_path):
+                        raise ValueError("D54_A14_EXTRACTION_NOT_CURRENT")
+                    post_net = project / corner["post_netlist"]
+                    body, _ = a7.post_layout_netlist(name,
+                        a7.subckt_ports(net.read_text(), name), source_path.read_text(),
+                        a7.model_binding_lines(net.read_text(), bdir, post_net.parent))
+                    if hashlib.sha256(body.encode()).hexdigest() != corner["post_netlist_sha256"]:
+                        raise ValueError("D54_A14_POST_NETLIST_DIFFERS_FROM_CURRENT_A13")
+                observed.update(status="PASS", reason="D54_A14_NATIVE_PASS_ORIGINAL_L5",
+                                metrics=metrics)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                observed["reason"] = str(exc)
+        status = _aggregate(result["blocks"])
+        result.update(component_status=status, default_row_status=status,
+                      completed=status == "PASS", reason="D54_EXISTING_A14_NATIVE_RESULTS")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        result["reason"] = str(exc)
+    return result
+
+
+
 def execute(project, context):
     """Existing whole-flow front-door adapter for one analog row."""
     step = context["requested_step"]
+    if step == "D54":
+        return _d54_correlation(project, context)
     a02_invocation = None
     if step == "A02":
         import shutil

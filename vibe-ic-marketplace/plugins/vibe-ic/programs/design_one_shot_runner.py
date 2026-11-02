@@ -10792,6 +10792,10 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                 "denominator and clean pass marker"))
         _write({**rec, "status": "INCOMPLETE", "reason": gap,
                 "fallback_skill": "testbench-gen"})
+        handoff = gen.get("reference_model_handoff")
+        handoff = ({**handoff, "report_path": str(report),
+                    "report_sha256": hashlib.sha256(report.read_bytes()).hexdigest()}
+                   if _hook_unfilled and isinstance(handoff, dict) else None)
         return StepResult(
             "professional_tb_gen", "NOT_MEASURED", time.time() - t0,
             detail=(f"{dut_kind} TB generated and RUN; functional run "
@@ -10799,7 +10803,9 @@ def step_professional_tb_gen(project: Path, top_name: str = "",
                     f"skipped={xml_summary['skipped']}); "
                     "fallback_skill=testbench-gen"),
             extras={"fallback_skill": "testbench-gen",
-                    "program_first": "professional_tb_gen"}, reason_class=_V.ReasonClass.PARTIAL_POPULATION)
+                    "program_first": "professional_tb_gen",
+                    **({"reference_model_handoff": handoff} if handoff else {})},
+            reason_class=_V.ReasonClass.PARTIAL_POPULATION)
 
     # The generator reported a bundle that is not on disk. There is nothing to
     # run and nowhere to record a refusal, so say THAT — reporting it as an

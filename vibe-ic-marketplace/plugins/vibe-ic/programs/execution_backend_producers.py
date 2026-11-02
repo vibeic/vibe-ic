@@ -2261,9 +2261,9 @@ def produce_signoff(project, params):
         if params.get('execution_mode') != 'default' and gds.is_file():
             R._librelane_antenna_gds(project, top, pdk, 'librelane', written)
     elif sid == '26.5ic':
-        ok, detail = R._die_finishing(project, top, pdk, _require(pnr / (top + '.gds')), container)
-        if not ok:
-            return {'verdict': 'NOT_MEASURED', 'detail': detail}
+        result = R._die_finishing_record(project, top, pdk, _require(pnr / (top + '.gds')), container)
+        if not result.extras['completed']:
+            return {'verdict': result.status, 'detail': result.detail}
     elif sid == '27':
         import si_mcf_sta as mcf
         nl = _require(pnr / (top + '_pnr.v'))

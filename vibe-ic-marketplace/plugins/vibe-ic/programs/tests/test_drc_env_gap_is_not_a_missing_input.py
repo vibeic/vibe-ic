@@ -16,6 +16,7 @@ container the message named, while the step reported the engine "was not found
 on PATH" and Step 31's natural FAIL became WAIVED-DEFERRED. The GDS was absent
 because an upstream step had failed and stream-out never ran.
 """
+import json
 import sys
 import types
 from pathlib import Path
@@ -25,6 +26,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import phase3_one_shot_runner as R  # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 
 class _Pdk:
@@ -34,7 +36,12 @@ class _Pdk:
 
 @pytest.fixture
 def project(tmp_path):
-    (tmp_path / "phase3" / "stage3" / "pnr").mkdir(parents=True)
+    pnr = tmp_path / "phase3" / "stage3" / "pnr"
+    pnr.mkdir(parents=True)
+    (pnr / "topx.def").write_text("DESIGN topx ;\nEND DESIGN\n")
+    (tmp_path / "state_out.json").write_text(json.dumps({
+        "gds": str(pnr / "topx.gds"), "def": str(pnr / "topx.def")}))
+    publish_finished_gds(tmp_path)
     return tmp_path
 
 
@@ -45,6 +52,7 @@ def _patch(monkeypatch, *, engine, gds_present, project, top):
     monkeypatch.setattr(R, "_try_svrf_native_drc", lambda *a, **k: None)
     if gds_present:
         (R._pl.pnr_dir(project) / f"{top}.gds").write_text("gds")
+        publish_finished_gds(project)
 
 
 def test_no_layout_is_not_an_environment_gap(project, monkeypatch):
@@ -61,10 +69,9 @@ def test_no_layout_is_not_an_environment_gap(project, monkeypatch):
         "a missing GDS must never claim the environment is missing a tool — "
         f"that claim carries a waiver tier; got {res.reason_class!r}")
     assert res.reason_class != "tool_absent"
-    assert "DRC_NO_LAYOUT" in res.detail
-    # it must say the engine IS there, so no reader goes chasing the image
-    assert "/tools/svrfdrc" in res.detail
-    assert res.extras["missing_input"] == "gds"
+    assert "CURRENT_FINISHED_GDS_MISSING" in res.detail
+    assert str(R._pl.pnr_dir(project) / "topx.gds") in res.detail
+    assert "missing_tool" not in res.extras
 
 
 def test_a_genuinely_absent_engine_is_still_an_environment_gap(
@@ -87,6 +94,8 @@ def test_engine_absent_and_no_layout_still_reports_the_environment(
 
 def test_the_native_path_running_is_unchanged(project, monkeypatch):
     """When the engine runs, its own result is returned untouched."""
+    (R._pl.pnr_dir(project) / "topx.gds").write_text("gds")
+    publish_finished_gds(project)
     monkeypatch.setattr(R, "_tool_in_path", lambda *a, **k: False)
     sentinel = R.StepResult("drc", "FAIL", 0.0, "15 rules fired", [])
     monkeypatch.setattr(R, "_try_svrf_native_drc", lambda *a, **k: sentinel)

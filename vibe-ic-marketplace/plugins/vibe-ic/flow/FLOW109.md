@@ -236,14 +236,25 @@ separate.
 
 ## Native final floating-fill extraction
 
-D69 Default selects the released `vibeic-final-fill-spef extract` owner path:
-Magic reads the final GDS with the dedicated floating-fill deck, retains the
-matching DEF routed nets, and eliminates floating conductors using exact
-zero-net-charge Schur reduction. The existing `flow109_final_extract` owner
-invokes this tool and consumes its hash-bound `FINAL_FILL_EXTRACTION.json`
-and min/nom/max SPEFs. Its downstream STA owner consumes those same files;
-an old pre-fill SPEF cannot substitute for them. The `analog_die` profile
-remains `Magic.RCX`; this does not claim stock IHP fill-aware extraction.
+D69 Default calls the released `vibeic-final-fill-spef extract` directly:
+Magic reads the unchanged final GDS with the dedicated floating-fill deck, and
+floating conductors are eliminated by exact zero-net-charge Schur reduction.
+For a routed DEF the tool joins each route one-to-one to its native conductor
+in that GDS and labels it for extraction only; a disconnected route or a
+missing signal name refuses (ruling #90b). A finished stream carries few net
+labels, so a GDS-only name contract cannot apply to it. The tool labels this
+path's receipts `DIAGNOSTIC_ONLY`/`d69_credit=false`; D69 accepts them only when
+the tool produced the names in that run, with rc=0, all of min/nom/max reduced
+and every DEF signal net present. Bindings a caller supplies through
+`VIBEIC_FINAL_FILL_ADOPTION` are refused and stay diagnostic. The downstream STA
+owner consumes the same SPEFs; an old pre-fill SPEF cannot substitute for them.
+The `analog_die` profile remains `Magic.RCX`; this does not claim stock IHP
+fill-aware extraction.
+The reducer's `--max-degree` is our own computational guard on one
+elimination's clique fill-in, not a signoff threshold (ruling #88 D2). When
+that guard alone refuses, D69 relaunches the tool once with `--max-degree` at
+twice the degree the refusal measured; any other refusal, or a second guard
+refusal, stays a FAIL.
 
 In EDA 0.4.29, OpenROAD `d4d1c6987aa8a1c4bdf99cf8166130549c981b03`
 produced identical SPEF bytes (excluding DATE) before and after adding 41,549

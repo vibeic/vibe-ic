@@ -138,6 +138,33 @@ Every candidate therefore has two required checks: deterministic product gates
 and semantic AI review. `program_first_ai_acceptance.json` must be `COMPLETE`
 before scoring.
 
+### Autonomous evaluation: IC-expert adjudication of ambiguity
+
+In an autonomous evaluation, the IC expert owns engineering adjudication of
+the supplied contract. Do not make the human owner solve each benchmark case
+when a review asks a source question. First route that question to an
+independent IC expert with the entire visible input, including prose, tables,
+diagrams, interface declarations and timing examples. The expert records the
+conflicting clauses, derives the best defensible interpretation of the complete
+functional contract, and explains why alternative readings conflict with it.
+Preserve the original discrepancy; do not invent a human clarification or
+rewrite the frozen input. There is no blanket rule that prose overrides a
+diagram, a majority of statements wins, or a familiar circuit supplies missing
+behavior. Hidden references, testbenches and scorer results provide no authority.
+
+When that source-bound adjudication establishes that the prior review question
+should be corrected, use the existing `--resume --review-correction` boundary
+below, followed by a fresh independent review and all normal proof obligations.
+The adjudication itself is neither acceptance nor an RTL repair permit. If the
+whole visible contract still cannot support a defensible interpretation, retain
+the source question and honest `NOT_MEASURED`; do not fabricate certainty. A
+genuine input amendment retains the ordinary fresh-input workflow.
+
+*why_not_bucket_a*: deciding whether contextual hardware requirements support a
+defensible interpretation of conflicting clauses requires IC design judgment;
+no generic regex, clause vote or source-type priority can decide it. The
+deterministic handoff and immutable review boundary remain program-owned.
+
 ### Correcting an immutable review question
 
 An incorrect source-bound review question must not be overwritten, and correct

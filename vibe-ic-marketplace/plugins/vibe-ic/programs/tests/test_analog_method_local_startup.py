@@ -10,6 +10,209 @@ import analog_native_flow as native
 import analog_incremental_capture as incremental
 import librelane_contract as contract
 from test_a05_native_model_loading import case
+from _hostpaths import require_repo
+
+
+@pytest.mark.parametrize('staged', [False, True])
+def test_repo_declared_pdk_startup_is_independent_of_model_staging(tmp_path, monkeypatch, staged):
+    import analog_pdk_availability as availability
+    from declared_pdk_is_the_pdk_used_check import declared_target
+    declaration = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic', 'programs',
+        'tests', 'fixtures', 'm4_native_top', 'phase1', 'generated_docs', 'L19_CONSTRAINTS_PDK.json')
+    project = tmp_path / 'project'
+    target = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+    target.parent.mkdir(parents=True)
+    shutil.copyfile(declaration, target)
+    family, _ = declared_target(project)
+    root = tmp_path / 'runtime-pdks'
+    init = root / family / 'libs.tech/ngspice/.spiceinit'
+    init.parent.mkdir(parents=True)
+    init.write_text('* runtime-owned startup\nset num_threads=1\n')
+    monkeypatch.setattr(availability, 'local_pdks_root', lambda *a: str(root))
+    if staged:
+        model = project / 'input/pdk/models/device.lib'
+        model.parent.mkdir(parents=True)
+        model.write_text('.model neutral_diode D\n')
+        assert availability.resolve_pdk(family, project=project, container='')['source'] == 'project_custom_pdk'
+    environment, source = native._local_ngspice_startup(project, project, 'test-runtime')
+    assert environment == {'PDK_ROOT': str(root), 'PDK': family,
+                           'SPICE_USERINIT_DIR': str(init.parent)}
+    assert source == {'path': str(init), 'sha256': native._sha(init)}
+
+
+def test_staged_models_do_not_select_an_undeclared_installed_startup(tmp_path, monkeypatch):
+    import analog_pdk_availability as availability
+    project = tmp_path / 'project'
+    declaration = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+    declaration.parent.mkdir(parents=True)
+    declaration.write_text(json.dumps({'fields': {'pdk_target': 'foreign_omega'}}))
+    root = tmp_path / 'runtime-pdks'
+    init = root / 'resident_alpha/libs.tech/ngspice/.spiceinit'
+    init.parent.mkdir(parents=True)
+    init.write_text('* not the declared process\n')
+    model = project / 'input/pdk/models/device.lib'
+    model.parent.mkdir(parents=True)
+    model.write_text('.model neutral_diode D\n')
+    monkeypatch.setattr(availability, 'local_pdks_root', lambda *a: str(root))
+    assert availability.resolve_pdk('foreign_omega', container='')['available'] is False
+    assert native._local_ngspice_startup(project, project, 'test-runtime') == ({}, None)
+
+
+@pytest.mark.parametrize('startup', ['builtin', 'missing', 'cwd'])
+def test_installed_model_startup_requirement(tmp_path, monkeypatch, startup):
+    import analog_pdk_availability as availability
+    project = tmp_path / 'project'
+    declaration = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+    declaration.parent.mkdir(parents=True)
+    family = 'process_alpha'
+    declaration.write_text(json.dumps({'fields': {'pdk_target': family}}))
+    root = tmp_path / 'runtime-pdks'
+    init = root / family / 'libs.tech/ngspice/.spiceinit'
+    init.parent.mkdir(parents=True)
+    (init.parent / 'device.lib').write_text('.model neutral_diode D\n')
+    if startup != 'builtin':
+        osdi = init.parent / 'osdi/device_alpha.osdi'
+        osdi.parent.mkdir()
+        osdi.write_bytes(b'synthetic compiled-model asset')
+    monkeypatch.setattr(availability, 'local_pdks_root', lambda *a: str(root))
+    if startup == 'missing':
+        with pytest.raises(ValueError, match='NGSPICE_NATIVE_INIT_MISSING') as refused:
+            native._local_ngspice_startup(project, project, 'test-runtime')
+        assert str(init) in str(refused.value)
+    else:
+        cwd_init = project / '.spiceinit'
+        if startup == 'cwd':
+            cwd_init.write_text('* existing working-directory startup\n')
+        environment, source = native._local_ngspice_startup(project, project, 'test-runtime')
+        assert environment == {'PDK_ROOT': str(root), 'PDK': family,
+            **({'SPICE_USERINIT_DIR': str(project)} if startup == 'cwd' else {})}
+        assert source == ({'path': str(cwd_init), 'sha256': native._sha(cwd_init)}
+                          if startup == 'cwd' else None)
+
+
+@pytest.fixture
+def psp_runtime():
+    import analog_pdk_availability as availability
+    image = os.environ.get('VIBEIC_EDA_IMAGE')
+    if not os.environ.get(contract.LOCAL_ATTESTATION_ENV) or not shutil.which('ngspice'):
+        pytest.skip('requires real ngspice and a live host-attested image')
+    root = availability.local_pdks_root(image)
+    assert root
+    starts = sorted(path for path in Path(root).glob('*/libs.tech/ngspice/.spiceinit')
+                    if 'psp103.osdi' in path.read_text(errors='replace'))
+    assert starts, 'the pinned image must supply a PSP-capable PDK startup'
+    family = starts[0].parents[2].name
+    selected = availability.resolve_pdk(family, container='')
+    assert selected['available'], selected
+    init = Path(selected['pdk_root']) / 'libs.tech/ngspice/.spiceinit'
+    return image, family, init
+
+
+def _psp_project(tmp_path, family, mode, *, model_type='psp103va'):
+    project = tmp_path / 'project'
+    docs = project / 'phase1/generated_docs'
+    docs.mkdir(parents=True)
+    (docs / 'L19_CONSTRAINTS_PDK.json').write_text(json.dumps({'fields': {'pdk_target': family}}))
+    directory = project / 'phase3/analog/device_alpha'
+    directory.mkdir(parents=True)
+    (directory.parent / 'analog_block_list.json').write_text(json.dumps({'blocks': [{'name': 'device_alpha'}]}))
+    spec = {'specs': [{'name': 'vout', 'min': 0.9, 'max': 1.1, 'unit': 'V'}]}
+    (directory / 'spec.json').write_text(json.dumps(spec))
+    model_text = '.model model_alpha ' + model_type + ' type=1\n'
+    if mode != 'canonical':
+        model = project / 'input/pdk/models/device.lib'
+        model.parent.mkdir(parents=True)
+        model.write_text(model_text)
+        model_text = '.include ../../../input/pdk/models/device.lib\n'
+    (directory / 'device_alpha.sp').write_text('* synthetic PSP device\n' + model_text +
+        '.subckt device_alpha d g vss\nn_active d g vss vss model_alpha w=1u l=1u\n.ends device_alpha\n')
+    control = ['op', 'let sensed = v(d)', 'echo "MEAS vout=" $&sensed',
+               'let device_current = -i(v_force)', 'echo "MEAS device_current=" $&device_current', 'quit']
+    canonical = directory / 'tb_device_alpha.sp'
+    canonical.write_text('* canonical PSP testbench\n.include device_alpha.sp\n'
+        'v_force d 0 1\nv_gate g 0 1\nxdut d g 0 device_alpha\n.control\n' +
+        '\n'.join(control) + '\n.endc\n.end\n')
+    config = {'blocks': {'device_alpha': {'required_measurements': ['vout']}}}
+    if mode in ('declared', 'sidecar'):
+        declaration = directory / ('testbench_inputs.json' if mode == 'sidecar' else 'declared.json')
+        declaration.write_text(json.dumps({'block': 'device_alpha', 'ports': ['d', 'g', 'vss'],
+            'rails': {'vss': 'vss'}, 'testbench': {'supply_exprs': ['1'],
+            'stimulus': ['v_force d 0 {supply}', 'v_gate g 0 {supply}'], 'control': control}}))
+        if mode == 'declared':
+            config['blocks']['device_alpha']['testbench_inputs'] = str(declaration.relative_to(project))
+    (project / 'input').mkdir(exist_ok=True)
+    (project / 'input/analog_flow.json').write_text(json.dumps(config))
+    return project, canonical
+
+
+@pytest.mark.parametrize('mode', ['canonical', 'declared', 'sidecar'])
+def test_real_a07_psp_uses_the_same_runtime_startup(tmp_path, psp_runtime, mode):
+    image, family, init = psp_runtime
+    project, canonical = _psp_project(tmp_path, family, mode)
+    before = canonical.read_bytes()
+    args = SimpleNamespace(entry_step='A07', exit_step='A07', blocks='device_alpha',
+                           container='', image=image, transport='LOCAL', pdk=family)
+    report = native.run_window(project, args)
+    row = report['steps'][0]
+    assert row['status'] == 'PASS', row
+    assert row['metrics']['vout'] == pytest.approx(1.0)
+    assert row['metrics']['device_current'] > 0
+    execution = row['executions'][0]
+    assert execution['native_init'] == {'path': str(init), 'sha256': native._sha(init)}
+    assert execution['native_environment']['PDK'] == family
+    assert execution['native_environment']['SPICE_USERINIT_DIR'] == str(init.parent)
+    assert row['input_views'][str(init)] == native._sha(init)
+    assert canonical.read_bytes() == before
+    assert ('testbench_inputs' in row['native_inputs']) == (mode != 'canonical')
+
+
+def test_real_declared_psp_unknown_model_remains_failure(tmp_path, psp_runtime):
+    image, family, _ = psp_runtime
+    project, _ = _psp_project(tmp_path, family, 'declared', model_type='unavailable_model_type')
+    report = native.run_window(project, SimpleNamespace(entry_step='A07', exit_step='A07',
+        blocks='device_alpha', container='', image=image, transport='LOCAL', pdk=family))
+    row = report['steps'][0]
+    assert row['status'] == 'FAIL'
+    assert row['executions'][0]['returncode'] != 0
+
+
+def test_missing_psp_startup_refuses_before_ngspice(tmp_path, psp_runtime, monkeypatch):
+    image, family, init = psp_runtime
+    project, _ = _psp_project(tmp_path, family, 'declared')
+    is_file = Path.is_file
+    # Hide only the selected startup, leaving the real PDK/model population intact.
+    monkeypatch.setattr(Path, 'is_file', lambda path: False if path == init else is_file(path))
+    calls = []
+    run = native.subprocess.run
+
+    def observe(argv, *args, **kwargs):
+        if Path(argv[0]).name == 'ngspice':
+            calls.append(argv)
+        return run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(native.subprocess, 'run', observe)
+    report = native.run_window(project, SimpleNamespace(entry_step='A07', exit_step='A07',
+        blocks='device_alpha', container='', image=image, transport='LOCAL', pdk=family))
+    row = report['steps'][0]
+    assert row['status'] == 'NOT_MEASURED', row
+    assert 'NGSPICE_NATIVE_INIT_MISSING' in row['detail']
+    assert str(init) in row['detail']
+    assert calls == []
+    assert not row.get('executions')
+
+
+def test_undeclared_staged_case_keeps_coverage_refusal(tmp_path, psp_runtime):
+    image, family, _ = psp_runtime
+    project, _ = _psp_project(tmp_path, family, 'undeclared')
+    spec = project / 'phase3/analog/device_alpha/spec.json'
+    spec.write_text(json.dumps({'specs': [{'name': 'vout', 'min': 0.9, 'max': 1.1},
+                                       {'name': 'psrr', 'min': 40}]}))
+    report = native.run_window(project, SimpleNamespace(entry_step='A07', exit_step='A07',
+        blocks='device_alpha', container='', image=image, transport='LOCAL', pdk=family))
+    row = report['steps'][0]
+    assert row['status'] == 'NOT_MEASURED'
+    assert row['executions'] == []
+    assert 'psrr' in row['detail']
 
 
 @pytest.mark.parametrize(('step', 'program', 'arguments'), [

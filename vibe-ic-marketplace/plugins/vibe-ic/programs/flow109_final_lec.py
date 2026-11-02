@@ -138,8 +138,11 @@ def prepare(project, context):
         adoption_paths = {
             name: _bound(project, physical_manifest[name])
             for name in ('adopted_netlist', 'adopted_state', 'adopted_receipt', 'final_def')}
-        physical_inputs.update(physical.native_fill_inputs(adoption_paths))
-        physical_inputs.update(physical.retained_postroute_inputs(project, adoption_paths))
+        try:
+            physical_inputs.update(physical.native_fill_inputs(adoption_paths))
+            physical_inputs.update(physical.retained_postroute_inputs(project, adoption_paths))
+        except (ValueError, RuntimeError, KeyError) as exc:
+            raise AdmissionRefusal('D44_PHYSICAL_PROOF_INPUT_REFUSED', str(exc)) from exc
     roles = manifest.get('consumer_netlists')
     if not isinstance(roles, dict) or set(roles) != {'sta', 'lvs_reference', 'release'}:
         raise AdmissionRefusal('D44_CONSUMER_BASELINE_ABSENT', 'STA/LVS-reference/release must all have a source')

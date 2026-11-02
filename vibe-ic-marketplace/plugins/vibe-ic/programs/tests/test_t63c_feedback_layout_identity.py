@@ -31,25 +31,29 @@ def _layout(tmp_path):
     return project, source, gds, receipt
 
 
-def test_final_drc_refuses_feedback_for_the_old_route(tmp_path, monkeypatch):
+def test_final_drc_without_state_does_not_fall_back_to_old_feedback(tmp_path, monkeypatch):
     project, source, _, _ = _layout(tmp_path)
     source.write_text('DESIGN unit ;\n# later route writer\n')
     monkeypatch.setattr(runner, '_vacuous_on_unrouted',
                         lambda *a: runner.StepResult('drc', 'PASS', 0, 'sentinel'))
     result = runner.step_drc(project, 'unit',
                              SimpleNamespace(drc_deck='/pdk/gf180mcu.drc'), 'eda')
-    assert result.status == 'FAIL'
-    assert 'DIGEST_MISMATCH' in result.detail
+    assert result.status == 'NOT_MEASURED'
+    assert result.reason_class == 'input_absent'
+    assert 'CURRENT_FINAL_STATE_MISSING: state_out.json' in result.detail
 
 
-def test_private_sdr_candidate_can_measure_before_feedback(tmp_path, monkeypatch):
+def test_private_sdr_candidate_can_measure_before_feedback_but_signoff_needs_state(tmp_path, monkeypatch):
     project, _, _, receipt = _layout(tmp_path / 'sdr_candidates')
     receipt.unlink()
     monkeypatch.setattr(runner, '_vacuous_on_unrouted',
                         lambda *a: runner.StepResult('drc', 'PASS', 0, 'candidate measured'))
     pdk = SimpleNamespace(drc_deck='/pdk/gf180mcu.drc')
     assert runner.step_drc(project, 'unit', pdk, 'eda', candidate=True).status == 'PASS'
-    assert runner.step_drc(project, 'unit', pdk, 'eda').status == 'FAIL'
+    result = runner.step_drc(project, 'unit', pdk, 'eda')
+    assert result.status == 'NOT_MEASURED'
+    assert result.reason_class == 'input_absent'
+    assert 'CURRENT_FINAL_STATE_MISSING: state_out.json' in result.detail
 
 
 def test_finished_gds_mutation_refused_and_exact_bytes_accepted(tmp_path):

@@ -1,0 +1,62 @@
+type: enhancement
+component: program:phase1_doc_one_shot_runner
+title: Preserve complete source authority in Phase 1 declarations, intent and clock applicability
+plugin_version: 1.35.51
+plugin_version_role: filing-time plugin version
+target_repository: vibeic/vibe-ic
+status: SUBMITTED_OPEN
+issue_url: https://github.com/vibeic/vibe-ic/issues/3780
+source_snapshot:
+  plugin_base: 95a3be2b31bb3fe17c0e5bdbf3f654be020ee078
+  plugin_version: 1.35.51
+  eda_base: 0af058989303d36f3d79ced703b5da3ad0fea7c8
+capture_ids:
+- PLUGIN-001
+- PLUGIN-009
+- source-owned-module-intent
+- RESUMED-001
+- RESUMED-002
+- source-owned-verification-intent
+body_sha256: 30215f88587aa4fef0fa752ee2e30de0576925a404226fc7cc2e0705e88acefd
+body_contract: pattern is the exact complete Markdown issue body; title and all acceptance commands are included without rewriting
+pattern: |
+  # Preserve complete source authority in Phase 1 declarations, intent and clock applicability
+
+  ## General gap
+
+  Related source readers need a shared authority boundary: accept a complete affirmative declaration or obligation owned by the current source; preserve record, file and HDL-fence boundaries; refuse withdrawn, illustrative, foreign-module or unresolved statements. Scope-sensitive clock-target validation must distinguish a validated bounded RTL request from an applicable physical-delivery target requirement.
+
+  This captures local records PLUGIN-001, PLUGIN-009, RESUMED-001, RESUMED-002, source-owned-module-intent and source-owned-verification-intent. PLUGIN-009's initial unresolved design choice is superseded locally by RESUMED-001's scope-based applicability; no frequency or clockless fact was invented. Missing numeric frequency alone never proves that a design has no clock.
+
+  ## Neutral minimal reproduction
+
+  Use independently authored tiny sources, never a benchmark task: (1) a complete HDL declaration with repeated ANSI directions and resolved scalar/vector widths; (2) the identical declaration preceded by a denial, inside an incomplete fence, or with an unresolved width; (3) a direct request to implement a neutrally named module, paired with the same text inside an example or HDL string; (4) an affirmative request to verify a property whose checked data can be discarded, paired with a withdrawal of the verification obligation itself; (5) a validated bounded RTL request without a numeric clock target, paired with a physical request that requires a target and explicit zero, negative, nonnumeric and nonfinite targets.
+
+  Exercise normal Phase 1 document production and the actual name/verification consumers. Expected differences must follow source authority and scope, not mere token presence or file position. True design-input edits must still invalidate downstream evidence.
+
+  ## Existing implementation and scope
+
+  - Source owners: `programs/phase1_port_extract.py`, `programs/phase1_doc_one_shot_runner.py`, `programs/phase1_consistency_check.py`.
+  - Local source/width and clock-applicability candidates have bounded independent acceptance. Local module and verification intent candidates also have independently checked synthetic-source/ordinary-CLI evidence. These counts do not establish a final-source full-flow run.
+  - Closed #3753 already fixes wrapped verification bullets and their role propagation. Preserve that repair; the new intent cases concern affirmative/withdrawn authority, not missing continuation lines.
+  - Merged #3764 already resolves bounded RTL profiles. Reuse its validated scope; this issue does not request another route resolver or a target waiver.
+  - Open #3774 changes broader source-bound delivery. It is related, not a demonstrated implementation of these complete declaration and intent cases.
+
+  ## 驗收
+
+  Port the focused cases with neutral fixtures. Run the same exact IDs on before/after source and record actual typed-field and ordinary-consumer values. Retain denials, malformed fences, opaque literals, foreign-module references, unresolved width, physical missing-target and invalid supplied-target refusal controls. Preserve existing named-module behavior and closed #3753 continuation handling. Do not declare arbitrary SystemVerilog parsing or semantic proof.
+
+  From repository root, after the focused fixtures are present:
+
+  ```bash
+  cd vibe-ic-marketplace/plugins/vibe-ic
+  python3 -m pytest -q programs/tests/test_phase1_hdl_port_witness.py programs/tests/test_hdl_witness_module_authority.py programs/tests/test_phase1_clock_target_applicability.py programs/tests/test_source_owned_phase1_intent.py
+  ```
+
+  The last module is a proposed neutral normal-consumer suite; the preceding modules are local-port deliverables, absent on the filing base.
+
+  ## Evidence and submission boundary
+
+  This is a general enhancement backlog, not a benchmark result. Filing source: plugin 1.35.51, main `95a3be2b31bb3fe17c0e5bdbf3f654be020ee078`. The owning source presence and related public submissions were inspected at this snapshot. The behavioral findings below come from retained local capture metadata; the complete implementation has not been ported or freshly reproduced on this upstream snapshot. No benchmark solution, official reference, private transcript, or local machine path is included.
+
+  Local candidate implementation and focused acceptance are distinct from upstream delivery. No new native run, full-suite result, source-semantic approval, or benchmark PASS is claimed by filing this issue. The commands under acceptance are implementation deliverables, not filing-time execution claims. Any named new test module must be added before its command can supply evidence; missing-module errors do not count as negative controls.

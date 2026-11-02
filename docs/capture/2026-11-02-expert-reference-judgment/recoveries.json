@@ -1,0 +1,19 @@
+[
+  {
+    "step": "phase2.full_stack_tb",
+    "design": "generic missing expert reference hook component recoveries",
+    "bucket": "B",
+    "skill_title": "Complete the declared expert reference fallback",
+    "pattern": "A skipped professional testbench can expose an unfilled expert reference hook without proving an RTL defect.",
+    "when": "When `professional_tb_gen.py` reports `NOT_MEASURED` with a `testbench-gen` fallback, inspect the actual skip cause and producer evidence. The IC expert resolves evaluation semantics from the visible contract instead of asking the human to supply the model.",
+    "what": "After the producer's typed handoff, fill only its declared `expert_reference_tb.py` with an independent input-derived model. Derive operand and result widths, signedness, overflow and flag ordering, reset behavior, deassertion and settled observation phases from that contract. For a wrapping result, determine whether the flag observes the width-limited value; for selection, establish the specified bit significance. Check source-promised known values and latch behavior after deassertion: an X-only check can miss a wrong known value. Expected results must not come from DUT behavior or a hidden oracle. Preserve the prior candidate, receipts and reviews.",
+    "example": "An absent hook produced one genuine JUnit skip and no passes or failures. Filling the declared hook with an independent model allowed the same frozen RTL to execute; substantive wrong-behavior controls failed without skipping and exact restoration passed. These are component proofs.",
+    "generality": "Rerun the normal producer and require actual non-skipped JUnit comparisons, its success markers, discriminating wrong-behavior controls and a fresh independent review. Retain required gates and do not perturb RTL to force entry. Model derivation from arbitrary visible prose requires engineering judgment; existing programs own handoff and execution validation. Component evidence cannot credit canonical handoff, regating, whole-flow acceptance or a benchmark score.",
+    "why_not_bucket_a": "The exact input is arbitrary visible behavioral prose and its interface contract. Selecting an independent model's state, width and overflow interpretation, reset and deassertion observation phases and discriminating stimuli requires engineering adjudication when those facts are not in a closed supported schema. Deterministic handoff, origin and hash rules belong to the existing producer and the separate source-author repair; this capture introduces no program rule or new gate.",
+    "before_state": "The parent's bounded completed-component handoff reports three missing expert reference hooks: professional_tb_gen declared NOT_MEASURED plus fallback testbench-gen, and actual JUnit showed one skip with zero passes and zero failures.",
+    "after_state": "The parent's handoff reports independent prompt-bound models at producer-declared paths, genuine Cocotb execution on unchanged frozen RTL with one pass and zero skips, restored-bug controls with genuine failures and zero skips, and independent component review of three positives plus ten meaningful bad controls.",
+    "ai_reasoning": "A missing expert model is an unfilled fallback. Its skip does not prove an RTL defect. Independent visible-contract modeling can complete that fallback while leaving source protocol ownership and canonical acceptance with their existing consumers.",
+    "capture_scope": "General Bucket-B lesson from parent-supplied component observations only. Actual private case files were not read or replayed. Canonical model handoff, regating and fresh canonical review remain NOT_RUN. No acceptance or benchmark-score claim.",
+    "evidence": "CAPTURE.md records the bounded parent handoff, evidence limits, existing route and command-based documentation checks; enhancement_emit.py writes the distinct summary.json manifest without bypass flags."
+  }
+]

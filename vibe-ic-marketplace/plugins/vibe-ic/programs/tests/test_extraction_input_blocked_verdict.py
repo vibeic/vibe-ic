@@ -186,6 +186,10 @@ def _proj(tmp_path):
     synth = tmp_path / "phase2" / "stage2" / "synth"
     synth.mkdir(parents=True)
     (synth / "chip_top_synth.v").write_text("module chip_top();\nendmodule\n")
+    (tmp_path / "state_out.json").write_text(json.dumps({
+        "def": "phase3/stage3/pnr/chip_top.def",
+        "nl": "phase2/stage2/synth/chip_top_synth.v",
+    }))
     return tmp_path
 
 

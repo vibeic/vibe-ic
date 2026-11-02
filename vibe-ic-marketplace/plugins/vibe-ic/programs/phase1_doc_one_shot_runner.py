@@ -56760,9 +56760,70 @@ def _l13_input_clauses(text: str):
                 yield clause, negated
 
 
+def _l13_operator_contract(project: Path) -> Dict[str, Any]:
+    """Read only structured step-0.5ic answers, never a prose pass claim.
+
+    Keys use the question bank's dotted paths inside ``answers``. Parameters
+    may be answered as a mapping or as individual ``L13.criterion_params.*``
+    questions. Retain their original answer provenance alongside the values.
+    """
+    import _submission_template as st
+    import _tapeout_declaration as td
+    from hardware_pass_attestation_check import _CRITERIA
+
+    path = project / st.DESIGN_ANSWERS_REL
+    if not path.is_file():
+        return {}
+    doc, error = td.load(path)
+    if error or not isinstance(doc, dict) or not isinstance(doc.get("answers", {}), dict):
+        raise ValueError("L13_OPERATOR_ANSWERS_INVALID: structured answers must be a JSON object")
+    contract: Dict[str, Any] = {}
+    answered_keys = []
+    for field in ("criterion", "criterion_params", "tester"):
+        key = f"L13.{field}"
+        value = td.answer(doc, key)
+        if td.is_answered(value):
+            contract[field] = value
+            answered_keys.append(key)
+    criterion = contract.get("criterion")
+    if "criterion" in contract and (not isinstance(criterion, str) or criterion not in _CRITERIA):
+        raise ValueError(f"L13_CRITERION_UNKNOWN: criterion {criterion!r} is not registered by hardware_pass_attestation_check")
+    if "criterion_params" in contract and not isinstance(contract["criterion_params"], dict):
+        raise ValueError("L13_CRITERION_PARAMS_INVALID: expected a parameter mapping")
+    if "criterion_params" in contract:
+        contract["criterion_params"] = {
+            key: value for key, value in contract["criterion_params"].items()
+            if td.is_answered(value)}
+    prefix = "L13.criterion_params."
+    for key in sorted(doc.get("answers", {})):
+        if key.startswith(prefix) and key[len(prefix):]:
+            value = td.answer(doc, key)
+            if td.is_answered(value):
+                params = contract.setdefault("criterion_params", {}).copy()
+                name = key[len(prefix):]
+                if name in params and params[name] != value:
+                    raise ValueError(f"L13_CRITERION_PARAMS_CONFLICT: {key}")
+                params[name] = value
+                contract["criterion_params"] = params
+                answered_keys.append(key)
+    if criterion in _CRITERIA:
+        from l13_bringup_contract_check import consumer_invalid_params
+
+        invalid = consumer_invalid_params(criterion, contract.get("criterion_params", {}))
+        if invalid:
+            raise ValueError(f"L13_CRITERION_PARAMS_INVALID: {criterion}: {invalid}")
+    provenance = doc.get(td.PROVENANCE_KEY)
+    if isinstance(provenance, dict):
+        retained = {key: provenance[key] for key in answered_keys if key in provenance}
+        if retained:
+            contract[td.PROVENANCE_KEY] = retained
+    return contract
+
+
 def gen_l13_lab_calibration(project: Path,
                             extracted: Dict[str, str]) -> LDocResult:
     """L13: lab cal / cosim checklist from cosim_check_list / engineer-mode."""
+    operator_contract = _l13_operator_contract(project)
     ic_name = _ic_name_from_docs(extracted, project)
     cal_steps: List[Dict[str, Any]] = []
     evidence: Dict[str, List[Dict[str, str]]] = {}
@@ -56944,6 +57005,7 @@ def gen_l13_lab_calibration(project: Path,
         "no_l13_test_cases_in_input": no_l13_test_cases_in_input,
         "trim_loop": cal_steps[:32],
     }
+    content.update(operator_contract)
     return _write_l_doc(
         project, "L13_LAB_CALIBRATION", content, evidence,
         source_documents=_source_documents_from_extracted(project, extracted))
@@ -67504,6 +67566,14 @@ def main() -> int:
             print(f"ERROR: --pdk {_CLI_PDK!r} conflicts with declared "
                   f"PDK targets {targets!r} at {source}:{line}", file=sys.stderr)
             return 2
+
+    # The per-step watchdog turns a raised refusal into a stub, which the L13
+    # gate reads as "no hardware in scope" and passes. Refuse before it runs.
+    try:
+        _l13_operator_contract(project)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
 
     # Step 1: text extraction
     print(f"[1/15] Extracting text from input/docs/ ...")

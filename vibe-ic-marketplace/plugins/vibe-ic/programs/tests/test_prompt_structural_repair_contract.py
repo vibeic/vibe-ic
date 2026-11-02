@@ -482,3 +482,252 @@ def test_source_facts_do_not_treat_parameter_prose_or_markdown_names_as_hdl():
     assert rc.prompt_rtl_source_facts(prompt)["kind"] == "NONE"
     assert rc.prompt_rtl_source_facts("Complete: module inline_unit(input a); assign y=a; endmodule")["kind"] == "UNSUPPORTED"
     assert rc.prompt_rtl_source_facts("parameter P=1;\n")["kind"] == "UNSUPPORTED"
+
+
+PORT_HEADER = "module neutral_select(input [2:0] data, output [5:3] result);"
+PORT_PROMPT = "Copy data to result through a whole-vector connection.\n```verilog\n" + PORT_HEADER + "\n```\n"
+PORT_GOOD = PORT_HEADER + "\nassign result=data;\nendmodule\n"
+PORT_BAD = PORT_GOOD.replace("[5:3]", "[2:0]")
+PORT_CHALLENGE = '''module vibeic_ai_challenge_tb;
+reg [2:0] data; wire [5:3] result; integer i;
+neutral_select dut(.data(data), .result(result));
+initial begin
+ for(i=0;i<8;i=i+1) begin
+  data=i; #1;
+  if(result !== data) begin $display("VIBEIC_AI_CHALLENGE=FAIL"); $fatal(1); end
+ end
+ $display("VIBEIC_AI_CHALLENGE=PASS"); $finish;
+end
+endmodule
+'''
+
+
+def port_task(tmp_path, native, monkeypatch, candidate=PORT_BAD, prompt=PORT_PROMPT):
+    monkeypatch.setitem(globals(), "PROMPT", prompt)
+    monkeypatch.setattr(existing, "PROMPT", prompt)
+    task, review = task_and_review(tmp_path, native, candidate, nature="completion", bind_header=True)
+    declaration = review["structural_verification"]
+    declaration.update(scope="top_module_ports", expectations={"ports_from_prompt_header": True})
+    facts = rc.prompt_rtl_source_facts(prompt)
+    declaration["requirement_source"].update(quote=facts["header"], quote_sha256=rc.sha256_text(facts["header"]))
+    review["semantic_review"].update(findings=[{"issue": "the supplied port range changed"}],
+        rationale="The exact public header defines the declared output bounds independently of whole-vector behavior.")
+    Path(task["challenge_path"]).write_text(PORT_CHALLENGE)
+    review["verification_test"].update(sha256=rc.sha256_text(PORT_CHALLENGE),
+        rationale="Exhaustively exercise all three-bit input values using ordinary whole-vector connections to check the public copy behavior.",
+        expected_behavior="Copy every three-bit data value to the result whole-vector port.")
+    save_review(task, review)
+    return task, review
+
+
+def test_native_port_range_mismatch_has_functional_pass_and_measured_structural_fail(tmp_path, native, monkeypatch):
+    task, review = port_task(tmp_path, native, monkeypatch)
+    verdict = bd._validate_ai_review(task)
+    assert verdict["status"] == "REPAIR_REQUIRED", verdict
+    assert verdict["challenge_result"]["status"] == "PASS"
+    measured = verdict["structural_result"]
+    assert measured["verdict"] == "FAIL"
+    assert {x["code"] for x in measured["findings"]} == {"STRUCTURAL_CONTRACT_VIOLATION"}
+    assert measured["observation"]["ports"]["result"]["left"] == 2
+    assert measured["observation"]["ports"]["result"]["right"] == 0
+    assert measured["expected_observation"]["ports"]["result"]["left"] == 5
+    assert measured["expected_observation"]["ports"]["result"]["right"] == 3
+    assert measured["execution"]["limits"]["memory"] == "2g"
+    working = Path(task["project"]) / "phase2/stage1/rtl/neutral_select.sv"
+    working.write_text(PORT_GOOD)
+    structural = copy.deepcopy(review["structural_verification"])
+    structural["candidate_sha256"] = rc.sha256_text(PORT_GOOD)
+    contract = {"schema": COMPLETION_SCHEMA, "prompt_sha256": task["prompt_sha256"],
+        "candidate_sha256": bd._sha256_text(bd._candidate_text(bd._rtl_files(Path(task["project"])))),
+        "structural": structural}
+    repaired = bio.collect("rtllm", "neutral", Path(task["project"]), supplied_rtl=True,
+        repair_contract=contract, require_repair_contract=True)
+    assert repaired["ok"], repaired
+    replay = repaired["repair_contract"]["structural"]
+    assert replay["verdict"] == "PASS"
+    assert replay["execution"]["script_sha256"] == measured["execution"]["script_sha256"]
+    author = {"kind": "AI", "model": "neutral-port-repair-control"}
+    challenge = verdict["verified_challenge"]
+    contract.update(parent_rtl_sha256=task["rtl_sha256"],
+        challenge_sha256=challenge["sha256"], author=author, oracle_accessed=False)
+    record = {"schema": bd._AI_REPAIR_RECORD_SCHEMA, "id": task["id"],
+        "prompt_sha256": task["prompt_sha256"], "parent_rtl_sha256": task["rtl_sha256"],
+        "repaired_rtl_sha256": contract["candidate_sha256"], "challenge_sha256": challenge["sha256"],
+        "author": author, "oracle_accessed": False,
+        "rationale": "Restore the original public declaration and retain the exact admitted native and functional contracts.",
+        "repair_contract": contract}
+    record_path = bd._repair_record_path(Path(task["project"]).parent.parent, task)
+    record_path.parent.mkdir(parents=True, exist_ok=True)
+    record_path.write_text(json.dumps(record))
+    provenance, reasons = bd._validate_repair_record(record_path, task, contract["candidate_sha256"], challenge)
+    assert reasons == [], reasons
+    fresh = bd._make_ai_review_task("neutral", Path(task["project"]), repaired, existing.ROUTING, 0,
+        Path(task["project"]).parent.parent, "AI_REPAIR", verification_challenges=[challenge],
+        repair_provenance=provenance, repair_parent_candidate=task["candidate_snapshot"])
+    fresh["verification_execution"] = native
+    assert bd._validate_ai_review(fresh)["status"] == "PENDING"
+    fresh_review = copy.deepcopy(review)
+    fresh_review.update(prompt_sha256=fresh["prompt_sha256"], rtl_sha256=fresh["rtl_sha256"])
+    fresh_review.pop("structural_verification")
+    fresh_review["routing"]["ai_nature"] = fresh["program_routing"]["nature"]
+    fresh_review["semantic_review"].update(verdict="PASS", findings=[])
+    fresh_review["verification_test"]["path"] = str(Path(fresh["challenge_path"]).resolve())
+    Path(fresh["challenge_path"]).parent.mkdir(parents=True, exist_ok=True)
+    Path(fresh["challenge_path"]).write_text(PORT_CHALLENGE)
+    save_review(fresh, fresh_review)
+    accepted = bd._validate_ai_review(fresh)
+    assert accepted["status"] == "ACCEPTED", accepted
+    # Restoring metadata alone is insufficient: significant header tokens are
+    # still protected at the actual normal-repair consumer.
+    changed = PORT_GOOD.replace("output [5:3]", "output wire [5:3]")
+    working.write_text(changed)
+    structural["candidate_sha256"] = rc.sha256_text(changed)
+    contract["candidate_sha256"] = bd._sha256_text(bd._candidate_text(bd._rtl_files(Path(task["project"]))))
+    refused = bio.collect("rtllm", "neutral", Path(task["project"]), supplied_rtl=True,
+        repair_contract=contract, require_repair_contract=True)
+    assert not refused["ok"]
+    assert refused["repair_contract"]["structural"]["findings"][0]["code"] == "STRUCTURAL_PROMPT_HEADER_CHANGED"
+
+
+@pytest.mark.parametrize("change", ["good", "ascending", "ascending_match", "signed", "default_offset", "zero_match", "order", "reverse"])
+def test_native_port_metadata_discriminates_declarations(tmp_path, native, monkeypatch, change):
+    candidate, prompt = PORT_GOOD, PORT_PROMPT
+    if change == "ascending":
+        candidate = candidate.replace("[5:3]", "[3:5]")
+    elif change == "signed":
+        candidate = candidate.replace("output [5:3]", "output signed [5:3]")
+    elif change == "default_offset":
+        candidate = PORT_BAD
+    elif change == "order":
+        candidate = candidate.replace(PORT_HEADER, "module neutral_select(output [5:3] result, input [2:0] data);")
+    elif change == "reverse":
+        prompt = prompt.replace("[5:3]", "[2:0]")
+    elif change == "ascending_match":
+        candidate, prompt = candidate.replace("[5:3]", "[3:5]"), prompt.replace("[5:3]", "[3:5]")
+    elif change == "zero_match":
+        candidate, prompt = PORT_BAD, prompt.replace("[5:3]", "[2:0]")
+    task, review = port_task(tmp_path, native, monkeypatch, candidate, prompt)
+    proof = bd._run_review_structural_proof(task, task["candidate_snapshot"], review["structural_verification"], prompt)
+    assert proof["verdict"] == ("PASS" if change in ("good", "ascending_match", "zero_match") else "FAIL"), proof
+    if change == "ascending":
+        assert proof["observation"]["ports"]["result"]["upto"] == 1
+    elif change == "signed":
+        assert proof["observation"]["ports"]["result"]["signed"] == 1
+    elif change == "order":
+        assert proof["observation"]["ordered_ports"] == ["result", "data"]
+        assert proof["expected_observation"]["ordered_ports"] == ["data", "result"]
+
+
+@pytest.mark.parametrize("tamper", ["invented_expectation", "candidate", "source", "quote", "header", "image", "source_mode"])
+def test_port_observation_refuses_invented_or_unbound_contract(tmp_path, native, monkeypatch, tamper):
+    task, review = port_task(tmp_path, native, monkeypatch)
+    declaration = review["structural_verification"]
+    if tamper == "invented_expectation":
+        declaration["expectations"]["ports"] = {"result": {"left": 2, "right": 0}}
+    elif tamper == "candidate":
+        declaration["candidate_sha256"] = "0" * 64
+    elif tamper == "source":
+        declaration["requirement_source"]["sha256"] = "0" * 64
+    elif tamper == "quote":
+        declaration["requirement_source"].update(quote="Copy data", quote_sha256=rc.sha256_text("Copy data"))
+    elif tamper == "header":
+        declaration["prompt_header_preservation"]["header_sha256"] = "0" * 64
+    elif tamper == "image":
+        declaration["backend"]["image_id"] = "sha256:" + "0" * 64
+    else:
+        declaration["source_path"] = "neutral_select.sv"
+    proof = bd._run_review_structural_proof(task, task["candidate_snapshot"], declaration, PORT_PROMPT)
+    assert proof["verdict"] == "REFUSED", proof
+    assert "execution" not in proof
+
+
+@pytest.mark.parametrize("header", [PARAM_HEADER, PORT_HEADER + "\nassign result=data;\nendmodule", PORT_HEADER + "\nmodule other;",
+    "module neutral_select(input [2:0] data, output [`WIDTH:3] result);",
+    'module neutral_select(input [2:0] data,\n// @\n(* single_bit_vector = 0 *) output [0:0] result);'])
+def test_port_source_scope_does_not_infer_unsupported_header(tmp_path, native, monkeypatch, header):
+    candidate = tmp_path / "candidate.sv"
+    candidate.write_text("`define WIDTH 5\n" + PORT_BAD)
+    prompt = "Copy data.\n```verilog\n" + header + "\n```\n"
+    declaration = {"schema": PROMPT_SCHEMA, "candidate_path": "neutral_select.sv",
+        "candidate_sha256": rc.sha256_text(candidate.read_text()), "top": "neutral_select",
+        "abstraction": "RTLIL_AFTER_PROC_OPT", "scope": "top_module_ports",
+        "expectations": {"ports_from_prompt_header": True},
+        "requirement_source": {"path": "input/phase1_prompt.md", "sha256": rc.sha256_text(prompt),
+            "quote": header, "quote_sha256": rc.sha256_text(header)}}
+    facts = rc.prompt_rtl_source_facts(prompt)
+    if facts["kind"] == "HEADER_ONLY":
+        declaration["prompt_header_preservation"] = rc.prompt_header_preservation(facts)
+    proof = rc.run_structural_contract(candidate, declaration, original_source=None,
+        requirement_sources={"input/phase1_prompt.md": prompt})
+    assert proof["verdict"] == "NOT_MEASURED", proof
+    assert "execution" not in proof
+
+
+def test_normal_port_repair_missing_candidate_is_a_typed_refusal(tmp_path):
+    structural = {"schema": PROMPT_SCHEMA, "scope": "top_module_ports",
+        "abstraction": "RTLIL_AFTER_PROC_OPT", "candidate_path": "neutral_select.sv"}
+    result = rc.validate_normal_repair_contract({}, {}, {"structural": structural},
+        candidate_path=tmp_path / "missing.sv", original_source=None)
+    assert result["verdict"] == "REFUSED"
+    assert result["structural"]["findings"][0]["code"] == "STRUCTURAL_CANDIDATE_MISSING"
+    assert "execution" not in result["structural"]
+
+
+@pytest.mark.parametrize("attribute", ["single_bit_vector = 0", 'single_bit_vector = ""',
+    "\\single_bit_vector = 0", "irrelevant = 1", "macro_alias", "split_macro", "comment_context"])
+def test_native_port_metadata_refuses_candidate_attribute_authority(tmp_path, native, monkeypatch, attribute):
+    scalar_header = "module neutral_select(input data, output result);"
+    prompt = "Copy data to result.\n```verilog\n" + scalar_header + "\n```\n"
+    if attribute == "macro_alias":
+        candidate = '`define ALIAS (* single_bit_vector = 0 *)\nmodule neutral_select(input data, `ALIAS output [0:0] result);\nassign result=data;\nendmodule\n'
+    elif attribute == "split_macro":
+        candidate = '`define OPEN (*\n`define CLOSE *)\nmodule neutral_select(input data, `OPEN single_bit_vector = 0 `CLOSE output [0:0] result);\nassign result=data;\nendmodule\n'
+    elif attribute == "comment_context":
+        candidate = 'module neutral_select(input data,\n// @\n(* single_bit_vector = 0 *) output [0:0] result);\nassign result=data;\nendmodule\n'
+    else:
+        candidate = scalar_header.replace("output result", "(* " + attribute + " *) output [0:0] result") + "\nassign result=data;\nendmodule\n"
+    task, review = port_task(tmp_path, native, monkeypatch, candidate, prompt)
+    proof = bd._run_review_structural_proof(task, task["candidate_snapshot"], review["structural_verification"], prompt)
+    assert proof["verdict"] == "NOT_MEASURED", proof
+    assert proof["findings"][0]["code"] == "STRUCTURAL_PORT_METADATA_UNTRUSTED"
+    assert "execution" not in proof
+
+
+@pytest.mark.parametrize("variant", ["scalar", "vector", "comment", "string", "wildcard", "wildcard_comment"])
+def test_native_port_metadata_scalar_vector_fact_requires_clean_provenance(tmp_path, native, monkeypatch, variant):
+    scalar_header = "module neutral_select(input data, output result);"
+    prompt = "Copy data to result.\n```verilog\n" + scalar_header + "\n```\n"
+    candidate = scalar_header + "\nassign result=data;\nendmodule\n"
+    if variant == "vector":
+        candidate = candidate.replace("output result", "output [0:0] result")
+    elif variant == "comment":
+        candidate += '\n// `ALIAS (* single_bit_vector = 0 *)\n'
+    elif variant == "string":
+        candidate = candidate.replace("assign result", 'localparam NOTE="`ALIAS (* single_bit_vector = 0 *)";\nassign result')
+    elif variant in ("wildcard", "wildcard_comment"):
+        event = "@(*)" if variant == "wildcard" else "@ /* retained comment */ (*)"
+        candidate = candidate.replace("output result", "output reg result").replace("assign result=data;", "always " + event + " result=data;")
+    task, review = port_task(tmp_path, native, monkeypatch, candidate, prompt)
+    proof = bd._run_review_structural_proof(task, task["candidate_snapshot"], review["structural_verification"], prompt)
+    assert proof["verdict"] == ("FAIL" if variant == "vector" else "PASS"), proof
+    assert "execution" in proof
+    assert proof["observation"]["ports"]["result"]["single_bit_vector"] == (variant == "vector")
+
+
+@pytest.mark.parametrize("raw", ["comment_like", "quote_like", "plain_identifier", "string_backslash", "header_identifier"])
+def test_port_proof_refuses_raw_escaped_syntax_before_masking(tmp_path, native, monkeypatch, raw):
+    header = "module neutral_select(input data, output result);"
+    prompt = "Copy data to result.\n```verilog\n" + header + "\n```\n"
+    candidate = header + "\nassign result=data;\nendmodule\n"
+    if raw == "header_identifier":
+        prompt = prompt.replace("output result", "output \\result ")
+    elif raw == "string_backslash":
+        candidate = candidate.replace("assign result", 'localparam NOTE="\\\\escaped";\nassign result')
+    else:
+        name = {"comment_like": "unused//comment", "quote_like": 'unused"quote', "plain_identifier": "unused"}[raw]
+        candidate = 'module neutral_select(input data, output [0:0] result); wire \\' + name + ' ; (* single_bit_vector = 0 *) wire [0:0] result; assign result=data; endmodule\n'
+    task, review = port_task(tmp_path, native, monkeypatch, candidate, prompt)
+    proof = bd._run_review_structural_proof(task, task["candidate_snapshot"], review["structural_verification"], prompt)
+    assert proof["verdict"] == "NOT_MEASURED", proof
+    assert proof["findings"][0]["code"] == "STRUCTURAL_PORT_METADATA_UNTRUSTED"
+    assert "execution" not in proof

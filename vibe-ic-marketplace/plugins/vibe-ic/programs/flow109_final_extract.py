@@ -27,6 +27,7 @@ from spef_extraction_check import scan_spef
 
 SCHEMA = 'vibeic.flow109.final-extract.v1'
 INPUT = 'input/flow109/D69.json'
+NATIVE_NAMING_METHOD = 'final-GDS-native-conductor-route-coverage'
 
 
 def _sha(path):
@@ -50,13 +51,12 @@ def _bound(project, ref):
 def _retained_geometry(project, manifest):
     """Reopen the existing Default native owner; never translate its verdict."""
     import librelane_fill_dfm as retained
-    import _physical_current as current
+    from _prestream_native import signoff_inputs
     ref = manifest.get('retained_default_fill')
     report = _bound(project, ref)
     if report.parts[-3:] != ('reports', 'phase3', 'fill_librelane.json'):
         raise AdmissionRefusal('D69_RETAINED_OWNER_INVALID', str(report))
     owner = report.parents[2]
-    stream = retained.validate_default_stream(owner)
     document = _read(report)
     tool = document['odb']['tool']
     state_path = Path(tool['state'])
@@ -69,21 +69,20 @@ def _retained_geometry(project, manifest):
         raise AdmissionRefusal('D69_RETAINED_ODB_UNBOUND', str(state['odb']))
     if digest(Path(state['def'])) != tool['filled_def_sha256']:
         raise AdmissionRefusal('D69_RETAINED_DEF_CHANGED', str(state['def']))
-    actual = current.default_signoff_inputs(owner)
+    actual = signoff_inputs(owner, 'gds', 'odb', 'def', 'netlist', 'sdc')
     views = manifest.get('adopted_views') or {}
-    if not actual or set(views) != {'netlist', 'sdc'}:
+    if set(views) != {'netlist', 'sdc'}:
         raise AdmissionRefusal('D69_ADOPTED_VIEWS_ABSENT', 'current netlist and SDC required')
-    expected_sdc = Path(actual.get('sdc') or owner / 'phase3/stage3/pnr/constraint.sdc')
-    for key, expected in [('netlist', Path(actual['netlist'])), ('sdc', expected_sdc)]:
+    for key, expected in [('netlist', actual['netlist']), ('sdc', actual['sdc'])]:
         if _bound(project, views[key]).resolve() != expected.resolve():
             raise AdmissionRefusal('D69_RETAINED_ADOPTED_VIEW_MISMATCH', key)
-    if Path(actual['gds']).resolve() != Path(stream['canonical']).resolve():
-        raise AdmissionRefusal('D69_RETAINED_GDS_MISMATCH', str(actual['gds']))
-    if manifest.get('librelane', {}).get('image', stream['image']) != stream['image']:
+    from librelane_contract import resolve_image
+    image = resolve_image(owner, record=False)
+    if manifest.get('librelane', {}).get('image', image) != image:
         raise AdmissionRefusal('D69_RETAINED_IMAGE_MISMATCH', 'native image differs from stream owner')
     # Native cell-fill/stream evidence is not a dbFill census or fill-sensitive RC proof.
-    geometry = {'odb': files._record(project, Path(state['odb'])),
-                'filled_def': files._record(project, Path(state['def'])),
+    geometry = {'odb': files._record(project, actual['odb']),
+                'filled_def': files._record(project, actual['def']),
                 'retained_default_fill': ref,
                 'native_fill_state': files._record(project, state_path),
                 'native_fill_receipt': files._record(project, state_path.parent / 'vibeic_receipt.json'),
@@ -93,6 +92,32 @@ def _retained_geometry(project, manifest):
 
 def _native_refusal_status(code):
     return 'FAIL' if code == 'LL_STEP_FAILED' else 'NOT_MEASURED'
+
+
+# The shipped reducer refuses an elimination whose clique fill-in exceeds
+# --max-degree (vibeic-eda tools/pdk/final_fill/final_fill_spef.py:477, default
+# 64 at :1838 in image 0.4.67). That limit is our own computational guard, not a
+# signoff threshold: the Schur elimination is exact at any degree (ruling #88
+# D2). A node's degree when it is eliminated includes fill-in from earlier
+# eliminations, so the layout and the raw SPEF's static degree do not bound it,
+# and the raw SPEF only exists inside the native run. The guard's own refusal is
+# therefore the measurement.
+_DEGREE_REFUSAL = re.compile(
+    r'REFUSED: floating node (\S+) degree ([1-9][0-9]*) exceeds fail-closed limit ([1-9][0-9]*)')
+# Twice the measured degree admits at most four times that node's d*(d-1)/2
+# clique edges. A denser graph is refused again by the tool, never retried here.
+DEGREE_HEADROOM = 2
+
+
+def _measured_degree(completed):
+    """Return the tool's degree-guard measurement, or None for any other outcome."""
+    refusals = [line for line in completed.stderr.splitlines() if line.startswith('REFUSED:')]
+    match = (completed.returncode == 2 and len(refusals) == 1
+             and _DEGREE_REFUSAL.fullmatch(refusals[0]))
+    if not match or int(match[2]) <= int(match[3]):
+        return None
+    return {'floating_node': match[1], 'measured_degree': int(match[2]), 'tool_limit': int(match[3]),
+            'headroom_factor': DEGREE_HEADROOM, 'max_degree': DEGREE_HEADROOM * int(match[2])}
 
 
 def _fill_extraction_scope(d62):
@@ -172,10 +197,48 @@ def _require_net_population(required, names, corner, artifact):
             'unexpected': sorted(actual - required), 'duplicates': duplicates}, sort_keys=True), status='FAIL')
 
 
+def _tool_named(project, receipt_ref, native, gds_ref, def_ref, required):
+    """Tell the tool's own routed-DEF naming from bindings a caller supplied.
+
+    The tool writes DIAGNOSTIC_ONLY on both (ruling #90b credits only its own),
+    so the difference is read from the run: the query sits in this receipt's
+    output directory and the producer is the released tool source.
+    """
+    identity = native.get('native_adoption') or {}
+    pins = identity.get('pins') or {}
+    source = (pins.get('producer_source') or {}).get('path') or ''
+    binary = shutil.which('vibeic-final-fill-spef')
+    if (identity.get('method') != NATIVE_NAMING_METHOD
+            or identity.get('expected_names') != sorted(required)
+            or not binary or not source or source not in Path(binary).resolve().read_text(errors='replace')
+            or not Path(source).is_file() or _sha(source) != pins['producer_source'].get('sha256')):
+        return False
+    bound = {'geometry': _bound(project, gds_ref), 'routed_def': _bound(project, def_ref)}
+    if any(not pins.get(role) or Path(pins[role].get('path') or '') != path.resolve()
+           or pins[role].get('sha256') != _sha(path) for role, path in bound.items()):
+        return False
+    directory = _bound(project, receipt_ref).parent.resolve()
+    for reduction in native['corners'].values():
+        binding, authority = reduction.get('native_binding') or {}, reduction.get('native_authority') or {}
+        query = binding.get('query') or {}
+        path = Path(query.get('path') or '')
+        if (any(binding.get(role) != pins[role] for role in ('geometry', 'routed_def', 'producer_source'))
+                or not path.is_file() or not path.resolve().is_relative_to(directory)
+                or _sha(path) != query.get('sha256') or authority.get('query') != query.get('sha256')
+                or authority.get('raw') != reduction.get('raw_spef_sha256')
+                or reduction.get('expected_name_count') != len(required)):
+            return False
+    return True
+
+
 def _native_outputs(project, receipt_ref, gds_ref, def_ref):
     """Block incomplete nets using the normal producer's already bound DEF."""
     native = _read(_bound(project, receipt_ref))
-    if (native.get('status') != 'PASS'
+    # A routed DEF takes the tool's naming path, which labels itself this way;
+    # an already-named input takes the direct path and reports PASS.
+    named_by_tool = native.get('status') == 'DIAGNOSTIC_ONLY'
+    if ((native.get('d69_credit') is not False if named_by_tool
+         else native.get('status') != 'PASS' or native.get('d69_credit') is False)
             or native.get('geometry') != {'path': str(_bound(project, gds_ref)), 'sha256': gds_ref['sha256']}
             or native.get('routed_def') != {'path': str(_bound(project, def_ref)), 'sha256': def_ref['sha256']}
             or native.get('top') != files.fill_records(_bound(project, def_ref))['top']
@@ -187,9 +250,12 @@ def _native_outputs(project, receipt_ref, gds_ref, def_ref):
         raise AdmissionRefusal('D69_NATIVE_RECEIPT_MISMATCH', str(receipt_ref))
     required = _normal_required_nets(_bound(project, def_ref))
     _bound(project, native.get('fill_aware_tech'))
+    if named_by_tool and not _tool_named(project, receipt_ref, native, gds_ref, def_ref, required):
+        raise AdmissionRefusal('D69_NATIVE_RECEIPT_MISMATCH', 'names not produced by this tool run')
     spefs, scans = {}, {}
     for corner, reduction in native['corners'].items():
-        if (reduction.get('status') != 'PASS'
+        if ((reduction.get('status') != 'DIAGNOSTIC_ONLY' or reduction.get('d69_credit') is not False
+             if named_by_tool else reduction.get('status') != 'PASS' or reduction.get('d69_credit') is False)
                 or reduction.get('method') != 'exact-capacitance-matrix-schur-complement'
                 or reduction.get('floating_boundary_condition') != 'zero-net-charge'
                 or reduction.get('grounded_fill_approximation') is not False
@@ -263,20 +329,35 @@ def execute(project, context):
         if binary is None:
             raise AdmissionRefusal('D69_NATIVE_TOOL_ABSENT', 'released vibeic-final-fill-spef required')
         tool = files._record(project, Path(binary))
-        argv = [binary, 'extract', '--gds', str(final_gds), '--def', str(routed_def),
-                '--top', files.fill_records(routed_def)['top'], '--output-dir', str(attempt / 'native')]
+        top = files.fill_records(routed_def)['top']
+        if os.environ.get('VIBEIC_FINAL_FILL_ADOPTION') is not None:
+            raise AdmissionRefusal('D69_CALLER_BINDINGS_REFUSED',
+                                   'caller-supplied native bindings stay diagnostic', status='FAIL')
+
+        def launch(name, *bound):
+            argv = [binary, 'extract', '--gds', str(final_gds), '--def', str(routed_def),
+                    '--top', top, '--output-dir', str(attempt / name), *bound]
+            started = time.monotonic()
+            completed = subprocess.run(argv, cwd=project, capture_output=True, text=True)
+            log = attempt / f'{name}.log'; log.write_text(completed.stdout + completed.stderr)
+            return completed, log, {'argv': argv, 'returncode': completed.returncode,
+                'elapsed_seconds': time.monotonic() - started, 'log': files._record(project, log),
+                'tool': tool}
         result['native_started'] = True
-        started = time.monotonic()
-        completed = subprocess.run(argv, cwd=project, capture_output=True, text=True)
-        log = attempt / 'native.log'; log.write_text(completed.stdout + completed.stderr)
-        result['native_execution'] = {'argv': argv, 'returncode': completed.returncode,
-            'elapsed_seconds': time.monotonic() - started, 'log': files._record(project, log), 'tool': tool}
+        native = 'native'
+        completed, log, execution = launch(native)
+        measured = _measured_degree(completed)
+        if measured is not None:
+            result['degree_bound'] = {**measured, 'measuring_execution': execution}
+            native = 'native-measured-bound'
+            completed, log, execution = launch(native, '--max-degree', str(measured['max_degree']))
+        result['native_execution'] = execution
         if completed.returncode != 0:
             raise AdmissionRefusal('D69_NATIVE_EXTRACT_FAILED', str(log), status='FAIL')
         if sources != operation_sources() or any(_sha(Path(p)) != digest for p, digest in basis.items()):
             raise AdmissionRefusal('D69_INPUT_CHANGED', 'source or geometry changed during extraction')
         _bound(project, tool)
-        native_ref = files._record(project, attempt / 'native/FINAL_FILL_EXTRACTION.json')
+        native_ref = files._record(project, attempt / native / 'FINAL_FILL_EXTRACTION.json')
         gds_ref, def_ref = files._record(project, final_gds), files._record(project, routed_def)
         final_spefs, scans = _native_outputs(project, native_ref, gds_ref, def_ref)
         result.update(component_status='PASS', reason='D69_NATIVE_FINAL_FILL_SPEF_MEASURED',
@@ -440,7 +521,7 @@ def _analog_inputs(project):
     if not nets or any(not re.fullmatch(r'[A-Za-z0-9_!./:$-]+', n) for n in nets):
         raise AdmissionRefusal('D69_NET_CENSUS_UNSUPPORTED', 'complete logical net census required')
     target, target_source = declared_target(project)
-    facts = resolver.resolve_pdk(target, project=project)
+    facts = resolver.resolve_pdk(target)
     if not facts.get('available') or facts.get('source') != 'container_installed':
         raise AdmissionRefusal('D69_INSTALLED_MODEL_ABSENT', 'declared PDK must resolve in this runtime')
     directory = (Path(facts['pdk_root']) / 'libs.tech/magic').resolve(strict=True)
