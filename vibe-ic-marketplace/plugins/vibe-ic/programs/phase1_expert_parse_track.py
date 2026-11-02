@@ -1659,7 +1659,7 @@ def _record_unit(record: Dict[Any, Any],
     including one that cannot be parsed: an unknown unit is unknown, never
     permission to reach for an outer one."""
     declarations = [parse_unit(v) if isinstance(v, str) else None
-                    for k, v in record.items()
+                    for k, v in getattr(record, "member_pairs", record.items())
                     if str(k).strip().lower() in ("unit", "units")]
     if not declarations:
         return inherited
@@ -1753,6 +1753,7 @@ class _PointerObject(dict):
     """Retain duplicate-member ambiguity for RFC6901; legacy keeps last value."""
     def __init__(self, pairs):
         super().__init__(pairs)
+        self.member_pairs = tuple(pairs)
         seen = set()
         self.duplicate_keys = set()
         for key, _ in pairs:
@@ -2534,7 +2535,7 @@ def owning_layers_answer(project: Path, tokens: List[str],
         if exclude is not None and p == exclude:
             continue
         try:
-            blob = json.loads(p.read_text(errors="replace"))
+            blob = json.loads(p.read_text(errors="replace"), object_pairs_hook=_PointerObject)
         except (OSError, ValueError):
             continue          # unreadable content is not content
         searched.append((p.stem, _ownership_units(blob)))
@@ -2885,7 +2886,7 @@ def token_carriage(project: Path, tokens: List[str],
         if exclude is not None and p == exclude:
             continue
         try:
-            blob = json.loads(p.read_text(errors="replace"))
+            blob = json.loads(p.read_text(errors="replace"), object_pairs_hook=_PointerObject)
         except (OSError, ValueError):
             continue          # unreadable content is not content
         for tok in tokens:

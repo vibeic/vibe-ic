@@ -7024,8 +7024,9 @@ def accept_d70(project: Path, context: Mapping[str, Any], component: Mapping[str
 
 
 def _d0102_read(project: Path, relative: str, reads: dict) -> dict:
+    import phase1_expert_parse_track as expert
     raw = _safe_project_file(project, relative).read_bytes()
-    value = json.loads(raw)
+    value = json.loads(raw, object_pairs_hook=expert._PointerObject)
     if not isinstance(value, dict):
         raise MetricRefusal('D0102_INPUT_INVALID', relative)
     reads[relative] = _sha(raw)

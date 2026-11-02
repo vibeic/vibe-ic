@@ -204,6 +204,36 @@ def test_dimensionless_quantity_fence_uses_the_canonical_number_grammar(
     assert unresolved == [] and unrouted == []
 
 
+@pytest.mark.parametrize("declarations, token, expected", [
+    ('"unit":"V","unit":"mV"', "1 mV", False),
+    ('"unit":"V","unit":""', "1", False),
+    ('"units":"V","units":"mV"', "1 mV", False),
+    ('"unit":"mV","unit":"mV"', "1 mV", True),
+])
+@pytest.mark.parametrize("path", ["/quantity", "/quantity/target"])
+def test_duplicate_unit_context_is_consistent_in_direct_and_d0102_readers(
+        tmp_path, declarations, token, expected, path):
+    case = project(tmp_path, {})
+    source = case / "phase1/generated_docs/L22_VERIFICATION_PLAN.json"
+    source.write_text('{"quantity":{"target":1,' + declarations + '}}')
+    item = expectation([token], path)
+    assert track.converge_ai_expectation(case, item)["met"] is expected
+    actual, unresolved, _ = metrics._d0102_compare(case, {"expectations": [item]}, {})
+    assert bool(actual) is expected
+    assert unresolved == []
+
+
+def test_ownership_and_carriage_do_not_adopt_a_conflicting_duplicate_unit(tmp_path):
+    case = project(tmp_path, {})
+    folder = case / "phase1/generated_docs"
+    (folder / "L22_VERIFICATION_PLAN.json").write_text(
+        '{"quantity":{"target":1,"unit":"V","unit":"mV"}}')
+    for stem in ("L5_ADI_SPEC", "L19_CONSTRAINTS_PDK"):
+        (folder / f"{stem}.json").write_text('{}')
+    assert track.owning_layers_answer(case, ["1 mV"])["layers"] == []
+    assert track.token_carriage(case, ["1 mV"])["verdict"] == track.CARRIAGE_NOWHERE
+
+
 def test_expert_handoff_requires_scopes_for_single_and_split_branches(tmp_path):
     case = project(tmp_path, {"quantity": 1})
     handoff = pack.assemble("Review this typed quantity.", None, None, [], [],
