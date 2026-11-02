@@ -253,6 +253,51 @@ def _overlap(a: tuple[float, float], b: tuple[float, float]) -> bool:
     return max(a[0], b[0]) < min(a[1], b[1])
 
 
+@pytest.mark.parametrize("failure", ["worker", "callback", "sibling"])
+def test_parallel_shutdown_delivers_successes_once_and_preserves_failure(
+        monkeypatch, failure):
+    started, release = threading.Event(), threading.Event()
+    finished, committed = [], []
+    original = KeyboardInterrupt("neutral coordinator interruption")
+    shutdown = bd.concurrent.futures.ThreadPoolExecutor.shutdown
+
+    def releasing_shutdown(pool, **kwargs):
+        release.set()
+        return shutdown(pool, **kwargs)
+
+    monkeypatch.setattr(bd.concurrent.futures.ThreadPoolExecutor,
+                        "shutdown", releasing_shutdown)
+
+    def worker(row):
+        if row == "first":
+            assert started.wait(5)
+            if failure == "callback":
+                return row
+            raise original
+        started.set()
+        assert release.wait(5)
+        if failure == "sibling":
+            raise ValueError("neutral sibling failure")
+        finished.append(row)
+        return row
+
+    def commit(row):
+        committed.append(row)
+        if failure == "callback" and row == "first":
+            raise original
+
+    with pytest.raises(KeyboardInterrupt) as caught:
+        bd._ordered_parallel_map(["first", "retained"], worker, 2,
+                                  on_complete=commit)
+    assert caught.value is original
+    assert finished == ([] if failure == "sibling" else ["retained"])
+    assert committed == ({"worker": ["retained"],
+                          "callback": ["first", "retained"],
+                          "sibling": []}[failure])
+    if failure == "sibling":
+        assert isinstance(caught.value.__cause__, ValueError)
+
+
 def _prior_collectable_report(project: Path, *, invocation_context=None):
     report = project / "reports" / "orchestrator" / "phase2_one_shot.json"
     report.parent.mkdir(parents=True, exist_ok=True)

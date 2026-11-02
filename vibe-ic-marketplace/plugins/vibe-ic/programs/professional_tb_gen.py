@@ -1090,6 +1090,13 @@ async def professional_smoke_test(dut):
 '''
 
 
+def reference_model_handoff(out: Path) -> dict:
+    """Name the persistent input consumed by the professional model loader."""
+    return {"schema": "vibeic.professional.reference_model_handoff.v1",
+            "status": "REQUIRED", "fallback_skill": "testbench-gen",
+            "artifact_path": str(out / "expert_reference_tb.py")}
+
+
 def _load_expert_reference_tb(out: Path) -> Optional[str]:
     """Load the judgment-layer Tier-3 hook only when it is self-checking.
 
@@ -1098,7 +1105,7 @@ def _load_expert_reference_tb(out: Path) -> Optional[str]:
     Execution/JUnit remains the final authority; these checks reject the
     common placeholder and TestSkip shapes before a simulator is launched.
     """
-    source = out / "expert_reference_tb.py"
+    source = Path(reference_model_handoff(out)["artifact_path"])
     try:
         text = source.read_text(errors="replace")
         tree = ast.parse(text)
@@ -1292,6 +1299,8 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
     (out / "verification_plan.json").write_text(
         json.dumps(vplan, indent=2) + "\n")
     return {"status": "PASS", "ic_class": ic_class, "dut_kind": run_kind,
+            **({"reference_model_handoff": reference_model_handoff(out)}
+               if ref_tier == "hook_unfilled" else {}),
             **({'random_goal_plan': random_plan} if random_plan else {}),
             **memory_metadata,
             **conditioned_metadata,

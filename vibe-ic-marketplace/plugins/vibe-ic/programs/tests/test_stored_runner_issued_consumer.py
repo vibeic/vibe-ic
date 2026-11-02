@@ -27,6 +27,54 @@ def load_dispatch(path, suffix=""):
     return module
 
 
+@pytest.mark.parametrize("execution_route,admitted_kind,accepted", [
+    ("local", "content", True),
+    ("local", "other", False),
+    ("local", "registry", False),
+    (None, "registry", True),
+], ids=["local-content-id-matches", "different-image-refused",
+        "local-registry-alias-refused", "docker-registry-id-preserved"])
+def test_retained_scene_compares_the_recorded_image_identity(
+        tmp_path, execution_route, admitted_kind, accepted):
+    """Transport metadata fixture, not a fabricated native launch/result."""
+    import canonical_run_admission as admission
+    content_id = "sha256:" + "a" * 64
+    registry_id = "sha256:" + "b" * 64
+    reference = "registry.invalid/neutral@" + registry_id
+    assert content_id != registry_id
+    admitted_image = {"content": content_id, "registry": registry_id,
+                      "other": "sha256:" + "c" * 64}[admitted_kind]
+    programs = Path(current.__file__).parent
+    config = {"entry_step": "2", "exit_step": "2", "rtl_input": "original"}
+    identity = admission.build_identity(
+        tmp_path, "phase2", container_image=admitted_image, config=config,
+        program_paths=admission.canonical_program_paths(programs))
+    digest = admission.identity_sha256(identity)
+    current._write_jsonl(admission.ledger_path(tmp_path), [{
+        "status": "ADMITTED", "admitted_at": "1970-01-01T00:00:02Z",
+        "identity": identity, "identity_sha256": digest}])
+    original = {
+        "started_ns": 1_000_000_000, "finished_ns": 3_000_000_000,
+        "argv": ["python3", "runner.py", str(tmp_path), "--rtl-input", "original"],
+        "reports_after": {"phase2_one_shot.json": {"runner_binding": {
+            "producer": {"path": str(programs / "design_one_shot_runner.py")}}}}}
+    wrapper = {
+        "phases": [{"name": "phase2", "verdict": "REFUSED-CANONICAL-ADMISSION", "rc": 2}],
+        "halted_at": "phase2", "verdict": "NOT_MEASURED",
+        "declared_window": {"entry_step": "2", "exit_step": "2"},
+        "container_image": {"status": "ok", "image_ref": reference,
+            "image_id": content_id, "image_match": True,
+            "require_image": reference, "require_image_id": content_id}}
+    if execution_route is not None:
+        wrapper["container_image"]["execution_route"] = execution_route
+    scene = current._stored_duplicate_scene(
+        original, {"started_ns": 4_000_000_000}, wrapper, tmp_path)
+    if accepted:
+        assert scene == {"admission_identity_sha256": [digest]}
+    else:
+        assert scene is None
+
+
 def measured(tmp_path):
     issuer = load_dispatch(tmp_path / "issued_dispatch.py")
     auditor = load_dispatch(tmp_path / "auditor_dispatch.py", "\n# next neutral audit revision\n")
@@ -117,10 +165,9 @@ def ordinary_duplicate(tmp_path_factory):
     switch.write_text('{"steps":{"2":"direct"}}')
     import source_manifest_md_emit
     assert source_manifest_md_emit.emit(project).is_file()
-    argv = [sys.executable, str(Path(current.__file__).parent / "vibe_ic_one_shot_runner.py"),
-            str(project), "--entry-step", "2", "--exit-step", "2",
-            "--rtl-input", "original", "--route", "ip", "--skip-phase3",
-            "--skip-analog", "--skip-hardware", "--no-dashboard"]
+    argv = current._solver_argv(
+        Path(current.__file__).parent / "vibe_ic_one_shot_runner.py", project,
+        "2", "2", "ip", "original", "rtl")
     budget = current._RunnerBudget(1, 1, 1)
     measured = budget.run(argv)
     assert not measured.error, measured.stderr
@@ -158,16 +205,17 @@ def test_duplicate_wrapper_with_additional_phase2_failure_is_rejected(ordinary_d
     root, project, argv, measured, duplicate = ordinary_duplicate
     assert not current._stored_runner_diagnostics(measured.invocation).get("reason")
     path = project / "reports/orchestrator/vibe_ic_one_shot.json"
-    wrapper = json.loads(path.read_text())
-    wrapper["phases"].append({"name": "phase2", "verdict": "FAIL", "rc": 1})
-    path.write_text(json.dumps(wrapper))
     later_path = Path(duplicate.receipt_path)
-    later = json.loads(later_path.read_text())
-    later["reports_after"] = current._runner_report_snapshot(project)
-    later_path.write_text(json.dumps(later))
-    diagnostic = current._stored_runner_diagnostics(measured.invocation)
-    (root / "mixed-phase2-failure.json").write_text(json.dumps(diagnostic, indent=2))
-    assert diagnostic.get("reason"), diagnostic
+    with restore_bytes([path, later_path]):
+        wrapper = json.loads(path.read_text())
+        wrapper["phases"].append({"name": "phase2", "verdict": "FAIL", "rc": 1})
+        path.write_text(json.dumps(wrapper))
+        later = json.loads(later_path.read_text())
+        later["reports_after"] = current._runner_report_snapshot(project)
+        later_path.write_text(json.dumps(later))
+        diagnostic = current._stored_runner_diagnostics(measured.invocation)
+        (root / "mixed-phase2-failure.json").write_text(json.dumps(diagnostic, indent=2))
+        assert diagnostic.get("reason"), diagnostic
 
 
 @contextmanager
@@ -179,6 +227,168 @@ def restore_bytes(paths):
     finally:
         for path, data in originals.items():
             path.write_bytes(data)
+
+
+@pytest.fixture(scope="module")
+def retained_runtime():
+    """Bind the real enclosing image before the child records its admission.
+
+    An in-image panel supplies its host-inspected CID/image through the existing
+    local attestation protocol. No native result or image identity is mocked.
+    """
+    from librelane_contract import local_image_attestation
+    identity = local_image_attestation()
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("VIBEIC_EDA_IMAGE", identity["image"])
+        yield identity
+
+
+@pytest.fixture(scope="module")
+def retained_orphan(tmp_path_factory, retained_runtime):
+    import benchmark_io_adapter as bio
+    import test_benchmark_program_first_ai_review as envelope
+    root = tmp_path_factory.mktemp("retained_orphan")
+    run, project = root / "run", root / "run/projects/neutral"
+    prompt = project / "input/phase1_prompt.md"
+    prompt.parent.mkdir(parents=True)
+    prompt.write_text("Design a module named neutral with input a and output y. "
+                      "Output y must always equal input a.\n")
+    public = bio._stage_public_original("neutral", prompt.read_text(), {}, project)
+    routes = envelope._write_issued_run_envelope(run, {
+        "id": "neutral", "project": str(project), "public_original_input": public})
+    receipt = envelope._issue_pending_route_fixture(
+        run, routes[0], requested_evidence="lint_validated")
+    assert receipt["input_contract"] == "original"
+    runner = Path(current.__file__).parent / "vibe_ic_one_shot_runner.py"
+    argv = current._solver_argv(runner, project, receipt["entry_step"],
+        receipt["verify_through"], "ip", "original", "rtl")
+    budget = current._RunnerBudget(1, 1, 1)
+    original = budget.run(argv)
+    assert original.rc == 1 and not original.error, original.stderr
+    assert current._rtl_gen_waive(project)["fallback_skill"] == "spec-to-rtl"
+    duplicate = budget.run(argv)
+    assert duplicate.rc == 1 and not duplicate.error, duplicate.stderr
+    diagnostic = current._runner_diagnostics(duplicate, argv, project)
+    assert diagnostic["status"] == "STALE_RUNNER_REPORT", diagnostic
+    for name in (current._BACKUP_WORKLIST, current._REVIEW_WORKLIST,
+                 current._REPAIR_WORKLIST, current._ENHANCEMENT_WORKLIST):
+        current._write_jsonl(run / name, [])
+    current._atomic_write_json(run / "solve_report.json", {
+        "bench": "rtllm", "format": "rtllm", "dataset": "/unused", "total": 1,
+        "solved": 0, "accepted": 0, "routing_phase": "COMPLETE",
+        "acceptance_policy": {"required": True,
+            "review_task_schema": current._REVIEW_TASK_SCHEMA,
+            "review_schema": current._AI_REVIEW_SCHEMA},
+        "results": [{"id": "neutral", "ok": False, "candidate_ready": False,
+            "accepted": False, "candidate_origin": "NONE", "awaiting_ai": False,
+            "entry": receipt["entry_step"], "exit": receipt["verify_through"],
+            "evidence": receipt["requested_evidence"], "delivery_route": "ip",
+            "routing_verdict": {"nature": "spec_generation", "route_receipt": receipt},
+            "route_receipt": receipt, "public_original_input": public,
+            "runner_invocation": duplicate.invocation, "runner_diagnostics": diagnostic}]})
+    current._atomic_write_json(run / current._ACCEPTANCE_REPORT, {
+        "schema": current._ACCEPTANCE_SCHEMA, "status": "PENDING", "accepted": 0,
+        "accepted_ids": [], "total": 1})
+    return run, project, original, duplicate
+
+
+def _orphan_projection_paths(run):
+    return [run / name for name in ("solve_report.json", current._ACCEPTANCE_REPORT,
+        current._BACKUP_WORKLIST, current._REVIEW_WORKLIST,
+        current._REPAIR_WORKLIST, current._ENHANCEMENT_WORKLIST)]
+
+
+def test_normal_resume_recovers_native_waive_handoff_without_rerun(
+        retained_orphan, monkeypatch):
+    run, project, original, duplicate = retained_orphan
+    def no_runner(*args, **kwargs):
+        pytest.fail("retained handoff recovery must not rerun a native producer")
+    monkeypatch.setattr(current._RunnerBudget, "run", no_runner)
+    before = {p: p.read_bytes() for p in
+              [Path(original.receipt_path), Path(duplicate.receipt_path)]}
+    with restore_bytes(_orphan_projection_paths(run)):
+        rc = current.cmd_resume("rtllm", "/unused", str(run))
+        row = current._read_json_regular(run / "solve_report.json")["results"][0]
+        assert row["candidate_origin"] == "AI_BACKUP_PENDING", row
+        assert rc == 2
+        assert row["accepted"] is False and row["candidate_ready"] is False
+        assert row["runner_invocation"]["invocation_id"] == original.invocation_id
+        assert row["retained_handoff_recovery"]["observed_runner_invocation"] == duplicate.invocation
+        tasks = current._read_jsonl(run / current._BACKUP_WORKLIST)
+        assert len(tasks) == 1 and tasks[0]["id"] == "neutral"
+        assert tasks[0]["handoff_source"] == "rtl_gen_waive"
+        assert tasks[0]["input_authority"] == "original"
+        assert current.cmd_resume("rtllm", "/unused", str(run)) == 2
+        assert current._read_jsonl(run / current._BACKUP_WORKLIST) == tasks
+        assert current._read_jsonl(run / current._REVIEW_WORKLIST) == []
+    assert all(path.read_bytes() == raw for path, raw in before.items())
+
+
+@pytest.mark.parametrize("damage", ["input", "report", "hash", "route", "source",
+                                   "ambiguous", "published", "late_admission", "missing_manifest", "config"])
+def test_normal_resume_retained_handoff_mismatches_remain_blocked(
+        retained_orphan, monkeypatch, damage):
+    run, project, original, duplicate = retained_orphan
+    monkeypatch.setattr(current._RunnerBudget, "run",
+        lambda *args, **kwargs: pytest.fail("mismatched retained evidence must not launch"))
+    report = project / "reports/orchestrator/phase2_one_shot.json"
+    prompt = project / "input/phase1_prompt.md"
+    producer = Path(original.invocation["reports_after"][report.name]["runner_binding"]["producer"]["path"])
+    receipt = Path(original.receipt_path)
+    manifest = project / "input/flow109-manifest.json"
+    import canonical_run_admission as admission
+    ledger = admission.ledger_path(project)
+    extra = None
+    with restore_bytes([*_orphan_projection_paths(run), prompt, report, producer,
+                        receipt, manifest, ledger]):
+        try:
+            if damage == "input":
+                prompt.write_text(prompt.read_text() + "A changed public requirement.\n")
+            elif damage == "report":
+                report.write_text(report.read_text() + "\n")
+            elif damage == "hash":
+                document = current._read_json_regular(receipt)
+                document["reports_after"][report.name]["sha256"] = "0" * 64
+                receipt.write_text(json.dumps(document))
+            elif damage == "route":
+                solve = current._read_json_regular(run / "solve_report.json")
+                solve["results"][0]["exit"] = "8"
+                current._atomic_write_json(run / "solve_report.json", solve)
+            elif damage == "source":
+                producer.write_bytes(producer.read_bytes() + b"\n# changed neutral producer\n")
+            elif damage == "ambiguous":
+                extra = receipt.with_name("ambiguous.json")
+                extra.write_bytes(receipt.read_bytes())
+            elif damage == "late_admission":
+                from datetime import datetime, timezone
+                rows = current._read_jsonl(ledger)
+                for row in rows:
+                    row["admitted_at"] = datetime.fromtimestamp(
+                        original.invocation["finished_ns"] / 1e9 + 10,
+                        timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+                current._write_jsonl(ledger, rows)
+            elif damage == "missing_manifest":
+                manifest.unlink()
+            elif damage == "config":
+                extra = project / "phase3/librelane_switch.json"
+                assert not extra.exists()
+                extra.parent.mkdir(exist_ok=True)
+                extra.write_text('{"steps":{"2":"direct"}}')
+            else:
+                extra = run / "responses/neutral.json"
+                extra.parent.mkdir(exist_ok=True)
+                extra.write_text('{}')
+            assert current.cmd_resume("rtllm", "/unused", str(run)) != 0
+            row = current._read_json_regular(run / "solve_report.json")["results"][0]
+            assert row["candidate_origin"] == "NONE", row
+            assert row["retained_handoff_recovery"]["status"] == "BLOCKED", row
+            assert row["accepted"] is False
+            assert current._read_jsonl(run / current._BACKUP_WORKLIST) == []
+            if damage == "missing_manifest":
+                assert not manifest.exists(), "recovery must never recreate missing input"
+        finally:
+            if extra is not None:
+                extra.unlink()
 
 
 @pytest.mark.parametrize("damage", [
