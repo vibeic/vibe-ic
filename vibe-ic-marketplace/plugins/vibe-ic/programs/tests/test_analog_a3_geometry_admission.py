@@ -513,3 +513,50 @@ def test_invalid_or_zero_dimensions_refuse(case,parameter,value):
     ir,ctx,_=case
     with pytest.raises(ValueError,match="INVALID_DIMENSION"):
         a3.resolve_admitted_geometry(ir,ctx,{"upper":{parameter:value}})
+
+
+def prepare_staged_context(case, tmp_path, monkeypatch, installed):
+    """A complete project-staged PDK resolves rung 1, which carries no installed root."""
+    import analog_pdk_availability as availability
+
+    _, ctx, _ = case
+    root, _grid = use_installed_grid(ctx, tmp_path)
+    ctx.pop("installed_pdk_root", None)
+    directory = prepare_emission(case, tmp_path, monkeypatch)
+    asked = []
+
+    def resolve(target, **kwargs):
+        asked.append((target, kwargs))
+        return installed(root)
+
+    monkeypatch.setattr(availability, "resolve_pdk", resolve)
+    return directory, root, asked
+
+
+def test_staged_context_verifies_pdk_sources_against_installed_family(case, tmp_path, monkeypatch):
+    _ir, ctx, _recipe = case
+    _directory, _root, asked = prepare_staged_context(
+        case, tmp_path, monkeypatch, lambda root: {"pdk_root": str(root)})
+    record = a3.emit_for_block(tmp_path, {"name": "divider"}, "portable_test", "", False)
+    assert record.get("status") != "GEOMETRY_NOT_REPRESENTABLE", record
+    assert ctx["geometry_admission_result"]["status"] == "ADMITTED"
+    assert asked == [("portable_test", {"container": ""})]
+
+
+def test_staged_context_refuses_when_installed_family_bytes_differ(case, tmp_path, monkeypatch):
+    directory, root, _asked = prepare_staged_context(
+        case, tmp_path, monkeypatch, lambda root: {"pdk_root": str(root)})
+    (root / "technology/selected.tlef").write_text("MANUFACTURINGGRID 0.01 ;\n")
+    record = a3.emit_for_block(tmp_path, {"name": "divider"}, "portable_test", "", False)
+    assert record["status"] == "GEOMETRY_NOT_REPRESENTABLE", record
+    assert "GEOMETRY_ADMISSION_SOURCE_CHANGED: pdk:technology/selected.tlef" in record["reason"]
+    assert not (directory / "divider.sp").exists()
+
+
+def test_staged_context_without_installed_family_still_refuses_by_name(case, tmp_path, monkeypatch):
+    directory, _root, _asked = prepare_staged_context(
+        case, tmp_path, monkeypatch, lambda root: {"available": False, "pdk_root": None})
+    record = a3.emit_for_block(tmp_path, {"name": "divider"}, "portable_test", "", False)
+    assert record["status"] == "GEOMETRY_NOT_REPRESENTABLE", record
+    assert "GEOMETRY_ADMISSION_RUNTIME_ROOT_MISSING: pdk" in record["reason"]
+    assert not (directory / "divider.sp").exists()
