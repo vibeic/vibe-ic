@@ -18,6 +18,32 @@ def test_window_publishes_fresh_step32_write_record_before_gate_audit(
         project, p3.PROGRAMS_DIR, runner="phase3_one_shot_runner",
         only_steps={"32"})
     assert prior["status"] == "OK"
+    steps_root = project / "steps"
+    prior_index = json.loads((steps_root / "index.json").read_text())
+    prior_row, = (row for row in prior_index["steps"] if row["id"] == "32")
+    prior_folder = steps_root / prior_row["folder"]
+
+    def current_write_record():
+        # Versions are retained; glob order can select the old empty record.
+        # The published index, rather than time or directory order, owns
+        # which version the gate must consume.
+        index = json.loads((steps_root / "index.json").read_text())
+        row, = (row for row in index["steps"] if row["id"] == "32")
+        folder = steps_root / row["folder"]
+        assert folder != prior_folder
+        written = json.loads((folder / "written.json").read_text())
+        assert any(row["rel"].endswith("postroute_timing_repair_decision.json")
+                   for row in written["produced"])
+        return folder
+
+    gate_audit = p3._phase3_window_full_gate_audit
+    audited_folders = []
+
+    def audit_after_publication(subject, step_ids):
+        assert subject == project
+        assert step_ids == {"32"}
+        audited_folders.append(current_write_record())
+        return gate_audit(subject, step_ids)
 
     def eda_writes(isolated, _copy, _cmd):
         target = isolated / "phase3/stage3/postroute_timing_repair"
@@ -33,14 +59,14 @@ def test_window_publishes_fresh_step32_write_record_before_gate_audit(
                                elapsed_s=1.0, outcome="natural"), Path("eda.stderr")
 
     monkeypatch.setattr(p3, "_phase3_enclosing_supervised", eda_writes)
+    monkeypatch.setattr(p3, "_phase3_window_full_gate_audit", audit_after_publication)
     args = SimpleNamespace(entry_step="32", exit_step="32", container="")
     assert p3._run_phase3_window(
         project, "spm", SimpleNamespace(name="gf180mcuD"), args,
         ["enclosing_phase3"]) == 1
 
-    written = json.loads(next((project / "steps/phase3").glob("**/32_*/written.json")).read_text())
-    assert any(row["rel"].endswith("postroute_timing_repair_decision.json")
-               for row in written["produced"])
+    assert audited_folders == [current_write_record()]
+    assert json.loads((prior_folder / "written.json").read_text())["produced"] == []
     # The failed physical decision remains failed; attribution cannot turn
     # residual fanout into a passing design verdict.
     # The window's audit is its own record, beside the whole-flow one.
