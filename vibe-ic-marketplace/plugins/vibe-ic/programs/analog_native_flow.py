@@ -215,7 +215,10 @@ def _local_ngspice_startup(project, cwd, image):
     if root is None:
         return {}, None
     target, _ = declared_target(project)
-    selected = availability.resolve_pdk(target, project=project, container='')
+    # Staged model libraries do not replace the runtime technology's startup.
+    # Use the same installed-PDK selection as the default path; keep model
+    # resolution and its project-first precedence unchanged.
+    selected = availability.resolve_pdk(target, container='')
     if not selected.get('available') or selected.get('source') != 'container_installed':
         return {}, None  # Project-staged/builtin models keep their existing startup.
     init = Path(cwd) / '.spiceinit'
