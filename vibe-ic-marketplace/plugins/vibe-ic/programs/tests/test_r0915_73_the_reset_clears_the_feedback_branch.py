@@ -33,6 +33,7 @@ No chip / SKU / foundry literal.
 from __future__ import annotations
 
 import json
+from itertools import product
 import math
 import statistics
 import sys
@@ -45,6 +46,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import analog_incremental_decimator as D          # noqa: E402
 
 import analog_a2_topology_emit as a2              # noqa: E402
+from test_incremental_reset_phase_alignment import logic
 
 N = 256
 COEFF = 0.2499
@@ -201,44 +203,50 @@ def test_every_dac_return_switch_holds_the_plate_through_the_reset(emitted_ir):
 
 
 def test_the_gated_clock_is_the_clock_ANDed_with_the_resets_complement(emitted_ir):
-    """Derived, not asserted by name: the NAND's two inputs must be the clock
-    and the reset complement, and its output must be inverted once."""
-    gates = {d["name"]: d["nets"] for d in emitted_ir["devices"]}
-    # ROUND-ICADC2: RESOLVED through the entry's declared phase aliases. The
-    # property is that this NAND's two inputs are THE SAMPLING PHASE and the
-    # reset complement; `clk` was the mechanism. The gate is now driven from
-    # the declared phase so that both plates of the feedback capacitor move
-    # together -- gating it from raw clk while the summing-node switches ran
-    # on the declared phases railed the integrator (measured: the branch's
-    # rise-edge charge went from +0.02541 sd 0.49949 to +0.54421 sd 0.00644,
-    # i.e. it stopped depending on the decision). An input that is genuinely
-    # not the sampling phase resolves to something else and still fails.
-    _al = a2.LIBRARY["delta_sigma"][a2.CLOCK_PHASE_ALIASES_KEY]
-    _r = lambda n: a2._resolve_phase(n, _al)
-    nand_inputs = {_r(gates[n][1]) for n in ("mp_ndac1", "mp_ndac2")}
-    assert nand_inputs == {"clk", "nrstb"}, nand_inputs
-    assert {_r(gates[n][1]) for n in ("mn_ndac1", "mn_ndac2")} == {"clk", "nrstb"}
-    # the n-side is a SERIES pair — that is what makes it an AND and not an OR
+    """The original sample phase is admitted only after reset and a fresh decision."""
+    rows = {d["name"]: d for d in emitted_ir["devices"]}
+    gates = {name: d["nets"] for name, d in rows.items()}
+    aliases = a2.LIBRARY["delta_sigma"][a2.CLOCK_PHASE_ALIASES_KEY]
+    for name in ("mp_ndac1", "mn_ndac1"):
+        assert a2._resolve_phase(gates[name][1], aliases) == "clk"
+    assert gates["mp_ndac2"][1] == gates["mn_ndac2"][1]
+    valid = emitted_ir["incremental_startup"]["decision_valid_net"]
+    for reset, decision_valid, sample in product((0, 1), repeat=3):
+        known = {"nrstb": 1-reset, valid: decision_valid, "nph1": sample}
+        assert logic(rows, gates["mn_ndac2"][1], known) == int(not reset and decision_valid)
+        expected = int(sample and not reset and decision_valid)
+        assert logic(rows, "nckdac", known) == expected
+        assert logic(rows, "nckdacb", known) == 1-expected
     assert gates["mn_ndac1"][2] == gates["mn_ndac2"][0] == "nndacs"
-    # one inversion to nckdac, one more to its complement
     assert gates["mp_ckdac"][1] == gates["mn_ckdac"][1] == "nndac"
     assert gates["mp_ckdacb"][1] == gates["mn_ckdacb"][1] == "nckdac"
 
 
 def test_outside_the_reset_the_branch_is_on_the_clock_it_always_was(emitted_ir):
-    """`nckdac` is `clk AND nrstb`, so with the reset released it IS the clock.
-    The change must not re-time the branch in normal operation — pinned on the
-    structure, because a gate term that also inverted or delayed the phase
-    would be a different circuit with the same net name."""
-    gates = {d["name"]: d["nets"] for d in emitted_ir["devices"]}
-    # the input branch is untouched and still on the raw clock: the two
-    # branches must meet at the summing node in the SAME transfer
-    # ROUND-ICADC2: RESOLVED through the entry's declared phase aliases. The
-    # property is that the two branches meet at the summing node in the SAME
-    # transfer phase; `nclkb` was the mechanism. A branch moved to a genuinely
-    # different phase still resolves to that phase and still fails here.
-    _al = a2.LIBRARY["delta_sigma"][a2.CLOCK_PHASE_ALIASES_KEY]
-    assert a2._resolve_phase(gates["mn_cstv1"][1], _al) == "nclkb"
+    """Qualified input and feedback still transfer together in steady operation.
+
+    D1's first input update retains its zero feedback pipeline; it must not
+    wait for the comparator decision that this same update produces.
+    """
+    rows = {d["name"]: d for d in emitted_ir["devices"]}
+    gates = {name: d["nets"] for name, d in rows.items()}
+    control = emitted_ir["incremental_startup"]
+    assert emitted_ir["loop_declaration"]["D"] == 1
+    valid, ready = control["decision_valid_net"], control["transfer_ready_net"]
+    feedback_ready = control["feedback_ready_net"]
+    for reset, phi2 in product((0, 1), repeat=2):
+        known = {"nrstb": 1-reset, "nph1": 1-phi2, "nph2": phi2,
+                 valid: 1, ready: 1, feedback_ready: 1}
+        expected = int(not reset and phi2)
+        for stem in ("cstv1", "cftv1"):
+            assert logic(rows, gates["mn_"+stem][1], known) == expected
+            assert logic(rows, gates["mp_"+stem][1], known) == 1-expected
+        assert logic(rows, "nckdac", known) == int(not reset and not phi2)
+    first = {"nrstb": 1, "nph1": 0, "nph2": 1,
+             valid: 0, ready: 1, feedback_ready: 0}
+    assert logic(rows, gates["mn_cstv1"][1], first) == 1
+    assert logic(rows, gates["mn_cftv1"][1], first) == 0
+    assert logic(rows, "nckdac", first) == 0
     assert gates["mn_dacs1"][1] == "nckdac"
     assert gates["mn_dacr1"][1] == "nckdacb"
 

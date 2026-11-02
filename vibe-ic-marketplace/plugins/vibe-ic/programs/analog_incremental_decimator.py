@@ -486,6 +486,15 @@ def read_stamp(deck_text: str) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]
                 raise ValueError(BAD_STATE_EQUATIONS + ": inconsistent stamp order/delay")
         except (ValueError, TypeError, UnicodeError) as exc:
             return None, {"reason": BAD_STATE_EQUATIONS, "detail": str(exc)}
+    if "reset_release_node" in kv:
+        node = kv["reset_release_node"]
+        try:
+            active = int(kv["active_transfers"])
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:$-]*", node) or active != out["window_clocks"] - 1 or active < 1:
+                raise ValueError
+        except (KeyError, ValueError):
+            return None, {"reason": BAD_STAMP, "detail": "invalid reset-release timing"}
+        out.update(reset_release_node=node, active_transfers=active)
     return out, {"line": m.group(0).strip()}
 
 
@@ -497,19 +506,17 @@ NO_SAMPLES_IN_RECORD = "record_holds_no_sample_at_the_first_clock_instant"
 def sample_decisions(times: Sequence[float], vals: Sequence[float],
                      first_clock_s: float, period_s: float, threshold: float,
                      settle_fraction: float = 0.9,
-                     encoding: Optional[Dict[str, Any]] = None
+                     encoding: Optional[Dict[str, Any]] = None,
+                     reset_release_values: Optional[Sequence[float]] = None,
+                     window_clocks: Optional[int] = None
                      ) -> Tuple[List[float], Dict[str, Any]]:
     """The decision on every clock of the record, as +1 / -1, reset-aligned.
 
-    `first_clock_s` is the deck's own clock delay — the instant the modulator's
-    first active edge falls, which is also where the window counter starts,
-    because the counter powers up in its reset state and is clocked by that
-    same edge. Sampling at `settle_fraction` of the way through a period reads
-    the decision AFTER the latch has taken it and BEFORE the next edge, which
-    is the only instant in the period at which the node is not in transit.
-
-    Returns as many decisions as the record actually covers — a truncated
-    record yields fewer, and saying so is the caller's job, not this one's.
+    For controller decks, the observed rising edge of its declared active-low
+    reset is the complete phi1 release. Slot zero is the decision for that
+    first transfer. Each reset period has N-1 updates; reset-only output has
+    no weight. The raw source delay is used only for older decks without this
+    controller declaration.
     """
     out: List[float] = []
     if not times or period_s <= 0:
@@ -518,8 +525,36 @@ def sample_decisions(times: Sequence[float], vals: Sequence[float],
     n = 0
     idx = 0
     n_rows = len(times)
+    wants = None
+    aligned_start = first_clock_s
+    if reset_release_values is not None:
+        if len(reset_release_values) != n_rows or not isinstance(window_clocks, int) or window_clocks < 2:
+            return [], {"reason": "incremental_reset_release_record_invalid"}
+        releases = [i for i in range(1, n_rows)
+                    if reset_release_values[i-1] <= threshold < reset_release_values[i]]
+        wants = []
+        if releases:
+            aligned_start = times[releases[0]]
+        for release in releases:
+            start = times[release]
+            last = start + (window_clocks - 2 + settle_fraction) * period_s
+            if last > t_end:
+                break
+            # Reject a reset assertion inside the proposed update interval.
+            end = release
+            while end + 1 < n_rows and times[end + 1] <= last:
+                end += 1
+            if any(v <= threshold for v in reset_release_values[release:end+1]):
+                return [], {"reason": "incremental_reset_interrupts_conversion", "release_s": start}
+            wants.extend(start + (slot + settle_fraction) * period_s
+                         for slot in range(window_clocks - 1))
     while True:
-        want = first_clock_s + (n + settle_fraction) * period_s
+        if wants is not None:
+            if n == len(wants):
+                break
+            want = wants[n]
+        else:
+            want = first_clock_s + (n + settle_fraction) * period_s
         if want > t_end:
             break
         while idx + 1 < n_rows and times[idx + 1] <= want:
@@ -537,6 +572,8 @@ def sample_decisions(times: Sequence[float], vals: Sequence[float],
     if not out:
         return out, {"reason": NO_SAMPLES_IN_RECORD,
                      "first_clock_s": first_clock_s, "record_end_s": t_end}
-    return out, {"clocks": len(out), "first_clock_s": first_clock_s,
+    return out, {"clocks": len(out), "first_clock_s": aligned_start,
                  "period_s": period_s, "threshold_v": threshold,
-                 "settle_fraction": settle_fraction}
+                 "settle_fraction": settle_fraction,
+                 "alignment": "observed_phi1_reset_release" if wants is not None else "legacy_clock_delay",
+                 "active_transfers": window_clocks - 1 if wants is not None else None}

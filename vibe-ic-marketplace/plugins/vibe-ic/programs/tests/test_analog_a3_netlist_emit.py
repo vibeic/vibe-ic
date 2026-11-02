@@ -664,6 +664,20 @@ def sc_integrator_report(sp_text):
                 st["integrating_cap_instances"].append(cn)
                 st["integrating_cap_node_pairs"].add(frozenset((S, O)))
 
+    # Normal charge phases are evaluated with the integrator reset open.
+    # Infer the reset-only controls from the physical TG across each Ci,
+    # preserving the gate/body pairing so an opposite-polarity switch is not
+    # mistaken for an inactive reset device. Parallel reset throws do not
+    # become extra normal-phase throws.
+    reset_controls = set()
+    for S, state in summing.items():
+        reset = groups[frozenset((S, state["amp_out"]))]
+        reset_controls.update(reset.items())
+    active_groups = {ends: {gate: body for gate, body in controls.items()
+                            if (gate, body) not in reset_controls}
+                     for ends, controls in groups.items()}
+    active_groups = {ends: controls for ends, controls in active_groups.items() if controls}
+
     # A CHARGE BRANCH is a capacitor BOTH of whose plates are two-position
     # switched, neither of which is a summing node or an amplifier output.
     # Enumerating branches this way — from the capacitor, never from the
@@ -677,7 +691,7 @@ def sc_integrator_report(sp_text):
             continue
         if {a, b} & (set(summing) | {v["amp_out"] for v in summing.values()}):
             continue
-        ta, tb = (_two_position(a, groups), _two_position(b, groups))
+        ta, tb = (_two_position(a, active_groups), _two_position(b, active_groups))
         if not ta or not tb:
             continue
         # the TOP plate is the one that reaches a summing node; when neither

@@ -4,6 +4,7 @@ Study numbers appear only as independent regression expectations / state
 scaling inputs. Production synthesis contains no ADC-specific coefficients.
 """
 import json
+from itertools import product
 import re
 import subprocess
 
@@ -13,6 +14,18 @@ import pytest
 import analog_a3_netlist_emit as a3
 from _analog_producer_fixture import A1, A2, A3, block, make_project, run_prog, bdir, read_json, stage_custom_pdk
 from test_analog_a3_netlist_emit import DS_SPEC, DS_PDK_RECORD
+from test_incremental_reset_phase_alignment import fanin, logic
+
+
+def _assert_phi2_or_reset_pair(devices, name, left, right):
+    """Reset prepares the passive sum before the first phi1 return."""
+    for prefix in ("mn_", "mp_"):
+        assert devices[prefix+name]["nets"][::2] == [left, right]
+    for reset, phi2 in product((0, 1), repeat=2):
+        known = {"nall": reset, "nph2": phi2}
+        expected = int(reset or phi2)
+        assert logic(devices, devices["mn_"+name]["nets"][1], known) == expected
+        assert logic(devices, devices["mp_"+name]["nets"][1], known) == 1-expected
 
 
 def _project(tmp_path, order=3, window=512, **values):
@@ -90,7 +103,28 @@ def test_declared_startup_reset_reaches_counter_and_all_integrators(tmp_path, ci
     assert devs["mn_cki1"]["nets"][1] == por["counter_clock_net"]
     assert devs["mp_por_clear1_0"]["nets"][0] == "nm1"
     assert devs["mp_por_clear1_1"]["nets"][0] == "ns1"
-    assert devs["mn_por_or"]["nets"][0] == por["reset_net"]
+    control = ir["incremental_startup"]
+    window, boot = control["window_reset_net"], control["bootstrap_net"]
+    assert {window, boot, "npor_runb"} <= fanin(devs, por["reset_net"])
+    storage = devs["mn_rout"]["nets"][1]
+    assert devs["mn_rout"]["nets"][0] == window
+    assert any(d["role"] == "pmos" and d["nets"][:3] ==
+               [storage, "npor_run", "vdd"] for d in devs.values())
+    for terminal, boot_held, running in product((0, 1), repeat=3):
+        known = {window: terminal, boot: boot_held, "npor_runb": 1-running}
+        assert logic(devs, por["reset_net"], known) == int(terminal or boot_held or not running)
+    known = {"nall": 1, "nrstb": 0, "nq_n": 0, "nq_p": 0}
+    assert logic(devs, devs["mn_n1a"]["nets"][1], known) == 1
+    assert logic(devs, devs["mn_n2a"]["nets"][1], known) == 0
+    plates = {n for d in devs.values() if d["role"] == "cap"
+              and re.fullmatch(r"(?:cs|cf|czero)\d+(?:_u\d+)?", d["name"])
+              for n in d["nets"]}
+    assert plates
+    for plate in plates:
+        for role, gate in (("nmos", "nall"), ("pmos", "nrstb")):
+            assert any(d["role"] == role and d["nets"][1] == gate
+                       and {d["nets"][0], d["nets"][2]} == {plate, "vcm"}
+                       for d in devs.values()), (plate, role)
     for i in (1, 2):
         assert devs[f"mn_rsti{i}"]["nets"][1] == por["reset_net"]
     assert run_prog(A3, p).returncode == 0
@@ -192,7 +226,7 @@ def test_template_emits_passive_summer_and_only_first_stage_dac(tmp_path, order,
         assert devices["mn_sum_hold"]["nets"][:3] == ["nsum", "nph1", "nqz"]
     else:
         assert "mn_sum_hold" not in devices
-        assert devices["mn_sum_reset"]["nets"][:3] == ["nqz", "nph2", "vcm"]
+        _assert_phi2_or_reset_pair(devices, "sum_reset", "nqz", "vcm")
     for i in range(order+1):
         assert any(n == f"cff{i}" or n.startswith(f"cff{i}_u") for n in devices)
     assert "mn_dacs1" in devices

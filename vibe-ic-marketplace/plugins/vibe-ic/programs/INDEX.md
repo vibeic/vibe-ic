@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1517
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1517)
+- **Total programs (excluding helpers / shims):** 1518
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1518)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1508 |
+| `any` | 1509 |
 
 ## Alphabetical listing
 
@@ -103,6 +103,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_incremental_decimator` | any | — | R-0915-70: the matched decimator for an INCREMENTAL converter, DERIVED from the loop's own recurrence. |
 | `analog_incremental_pvt` | any | — | Prepare, run, or independently collect actual incremental ADC PVT series. |
 | `analog_incremental_resolution` | any | — | what resolution an INCREMENTAL loop can actually reach, MEASURED on its own recurrence. |
+| `analog_incremental_startup` | any | — | Physical conversion boundaries shared by incremental CIFF and CIFB loops. |
 | `analog_incremental_statistics` | any | — | Prepare and replay foundry-mismatch incremental ADC chip cohorts. |
 | `analog_interface_classify` | any | — | structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141). |
 | `analog_lef_gds_outline_check` | any | — | Codifies the EXTRACT-NEW spot-check in |
@@ -1589,7 +1590,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1508 programs)
+### `any` (1509 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1668,6 +1669,7 @@ _(no programs in this group)_
 - `analog_incremental_decimator` — R-0915-70: the matched decimator for an INCREMENTAL converter, DERIVED from the loop's own recurrence.
 - `analog_incremental_pvt` — Prepare, run, or independently collect actual incremental ADC PVT series.
 - `analog_incremental_resolution` — what resolution an INCREMENTAL loop can actually reach, MEASURED on its own recurrence.
+- `analog_incremental_startup` — Physical conversion boundaries shared by incremental CIFF and CIFB loops.
 - `analog_incremental_statistics` — Prepare and replay foundry-mismatch incremental ADC chip cohorts.
 - `analog_interface_classify` — structural L9 top-interface classifier (ORGANIC #144-sibling, filed as #141).
 - `analog_lef_gds_outline_check` — Codifies the EXTRACT-NEW spot-check in
