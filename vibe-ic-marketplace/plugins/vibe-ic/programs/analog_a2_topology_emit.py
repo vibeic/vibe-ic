@@ -145,6 +145,7 @@ import analog_incremental_decimator as _dec  # noqa: E402
 import analog_resolution_stimulus as _stim  # noqa: E402
 import analog_ciff as _ciff  # noqa: E402
 import analog_ota1_options as _ota1  # noqa: E402
+import analog_ota_bias as _ota_bias  # noqa: E402
 from _analog_producer_fingerprint import producer_fingerprint as _source_fingerprint
 
 PRODUCER = "analog_a2_topology_emit"
@@ -6635,6 +6636,7 @@ def folded_first_stage_problems(ir: Dict[str, Any], project: Optional[Path]) -> 
         wanted = expand_folded_first_stage(lib, values, ir["knobs"], expected, nets, sizing, Path(project))
         apply_sizing_inputs({"device_parameters": sizing.get("device_parameters", {})},
                             {}, {}, [], expected, exprs, {}, {})
+        _ota_bias.route_existing_consumers(expected, ir.get("ota_bias_network"))
         finish_folded_first_stage(wanted, expected)
         renames = (ir.get("port_binding") or {}).get("renamed") or {}
         wanted = _rename_nets(wanted, renames)
@@ -7008,8 +7010,9 @@ def input_drain_cascode_problems(ir: Dict[str, Any],
 
 
 def ciff_library(lib, spec_values):
-    return _ciff.specialize(lib, spec_values, expand_stages, cap_l_expr,
-                            SAMPLING_CAP_FF_EXPR, _LOAD_OVER_CS_DERIVED_EXPR)
+    specialized = _ciff.specialize(lib, spec_values, expand_stages, cap_l_expr,
+                                  SAMPLING_CAP_FF_EXPR, _LOAD_OVER_CS_DERIVED_EXPR)
+    return _ota_bias.prepare_library(specialized)
 
 
 def build_ir(block: str, btype: str, entry: Dict[str, Any],
@@ -7025,6 +7028,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
              maxima_source: Optional[str] = None,
              measured_loop: Optional[Dict[str, Any]] = None,
              ) -> Dict[str, Any]:
+    """Bind loop measurements to the complete emitted network, including bias routing."""
+    original_lib, original_spec_values = lib, dict(spec_values)
     # ── WHAT THE LOOP'S FEEDBACK DELAY IS, DERIVED FROM THE BRANCH ───────
     # It used to be a typed constant, and a typed constant about the emitted
     # circuit is exactly what this file exists to avoid. It is a consequence
@@ -7145,6 +7150,16 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
     loop_swing = None
     if isinstance(_loop_decl, dict):
         _struct = loop_structure_fingerprint({"devices": devices})
+        if isinstance(measured_loop, dict):
+            preview = build_ir(
+                block, btype, entry, original_lib, original_spec_values,
+                spec_path, project, pdk_family, pdk_params,
+                role_minima=role_minima, minima_source=minima_source,
+                measured_params=measured_params,
+                measured_provenance=measured_provenance,
+                role_maxima=role_maxima, maxima_source=maxima_source,
+                measured_loop=None)
+            _struct = loop_structure_fingerprint(preview)
         loop_swing = loop_swing_and_sizing(
             lib, stage_rec, _choice, declared_spec_values, constants,
             measured_loop, _struct, knobs.get("second_integrator_state_scale", 1.0))
@@ -7217,6 +7232,14 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                 {name for name, row in sizing_inputs.get("device_parameters", {}).items()
                  if "w" in row}, _minima.min_length_um(role_minima, CAP_ROLE))
         except ValueError as exc:
+            raise SizingInputsInvalid(str(exc)) from exc
+    ota_bias_network = None
+    if btype == "delta_sigma":
+        try:
+            ota_bias_network = _ota_bias.apply(
+                lib, spec_values, devices, param_exprs, internal_nets,
+                constants, split_env, _safe_eval, project, block, role_minima, role_maxima, spec_path)
+        except (ValueError, KeyError) as exc:
             raise SizingInputsInvalid(str(exc)) from exc
     devices, param_exprs, splits, split_refusals = split_oversize_capacitors(
         devices, param_exprs, split_env, role_maxima, role_minima,
@@ -7439,6 +7462,10 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         ir["startup_reset"] = startup_reset
     if ota1_options:
         ir["ota1_options"] = ota1_options
+    if ota_bias_network:
+        ir["ota_bias_network"] = ota_bias_network
+        if ota_bias_network.get("input"):
+            ir["_provenance"]["inputs"].append(dict(ota_bias_network["input"], role="bias_network"))
     if cascodes:
         ir["input_drain_cascodes"] = cascodes
     if matched_length:
@@ -7468,7 +7495,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         for _key in ("ports", "rails", "internal_nets", "devices",
                      "constants", "device_param_exprs", "measurements",
                      "testbench", "stimulus", "input_drain_cascodes", "folded_first_stage", "miller_nulling",
-                     "loop_declaration", "startup_reset", "ota1_options"):
+                     "loop_declaration", "startup_reset", "ota1_options", "ota_bias_network"):
             if _key in ir:
                 ir[_key] = _rename_nets(ir[_key], _renames)
     ir["port_binding"] = {
@@ -7494,6 +7521,23 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
                      "analog_a2_topology_emit.rendering_env, in A2's split "
                      "and in A3's _resolve_params alike"),
         }
+    if isinstance(ir.get("loop_swing"), dict) and "structure_sha256" in ir["loop_swing"]:
+        ir["loop_swing"]["structure_sha256"] = loop_structure_fingerprint(ir)
+    if ota_bias_network:
+        rows = ota_bias_network["stage_table"]
+        ceiling = min(row["settling_time_constants_at_fclk_max"] for row in rows)
+        requirement = rows[0]["settling_time_constants_required"]
+        ir["derived_informational"] = [{
+            "field": "settling_time_constants_at_fclk_max",
+            "expr": "min(stage.settling_time_constants * fclk / fclk_max)",
+            "min_expr": "(enob + settling_lsb_fraction_bits) * ln2",
+            "value": ceiling, "requirement": requirement,
+            "state": "MET" if ceiling >= requirement else "NOT_MET",
+            "blocking": False,
+            "per_stage": [{"stage": row["stage"],
+                           "nominal": row["settling_time_constants"],
+                           "value": row["settling_time_constants_at_fclk_max"]}
+                          for row in rows]}]
     return ir
 
 
@@ -7764,6 +7808,16 @@ def render_md(ir: Dict[str, Any], lib: Dict[str, Any],
             L.append(f"| `{e.get('device')}.{e.get('param')}` | "
                      f"`{e.get('expr')}` | {e.get('rationale', '')} |")
         L.append("")
+    bias_network = ir.get("ota_bias_network")
+    if bias_network:
+        L.extend(["## Per-OTA declared-load bias", "",
+                  "| OTA | SC load fF | beta | slew current A | settling current A | bias gate |",
+                  "|---|---|---|---|---|---|"])
+        for row in bias_network["stage_table"]:
+            L.append(f"| {row['stage']} | {row['load_ff']:.9g} | {row['beta']:.9g} | {row['I_slew_a']:.9g} | {row['I_settle_a']:.9g} | {row['gate']} |")
+        L.extend(["", "Current-budget model: " + bias_network["budget"]["status"] + "; native current verification is required.", ""])
+        L.extend("WARNING: " + warning for warning in bias_network["warnings"])
+        L.append("")
     L.append("## Provenance")
     L.append("")
     L.append(f"- producer: `{prov['producer']}` (schema {prov['schema']})")
@@ -7987,7 +8041,19 @@ def emit_for_block(project: Path, entry: Dict[str, Any],
                     [{"requirement": "capacitor drawable at the library "
                                      "drawn width", "detail": r}
                      for r in exc.refusals], informational)
+    informational = list(informational) + ir.get("derived_informational", [])
     ir["derived_informational"] = list(informational)
+    nominal = lib.get("ota_bias_nominal_settling_requirement")
+    if nominal and ir.get("ota_bias_network"):
+        refusals = []
+        for row in ir["ota_bias_network"]["stage_table"]:
+            requirement = dict(nominal, expr=repr(row["settling_time_constants"]))
+            stage_refusals = entry_admission(
+                {"constants": ir["constants"], REQUIRES_DERIVED_KEY: [requirement]},
+                spec_values, {}, measured)
+            refusals.extend(dict(refusal, stage=row["stage"]) for refusal in stage_refusals)
+        if refusals:
+            return _gap("ENTRY_REQUIREMENTS_NOT_MET", refusals, informational)
     md = render_md(ir, lib, fam, params)
     bdir.mkdir(parents=True, exist_ok=True)
     md_path.write_text(md, encoding="utf-8")

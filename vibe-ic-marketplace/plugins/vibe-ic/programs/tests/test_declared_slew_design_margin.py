@@ -32,8 +32,9 @@ def test_default_and_explicit_two_have_identical_device_cards(tmp_path):
     assert snapshots[0] == snapshots[1]
 
 
-def test_positive_margin_changes_only_bias_resistor_card(tmp_path):
+def test_positive_margin_changes_only_bias_network_cards(tmp_path):
     snapshots = []
+    networks = []
     for name, margin in [("base", 2.0), ("sized", 4.0)]:
         project = _project(tmp_path / name, order=2, ciff=0)
         folder, result = emit(project, {"slew_design_margin": margin})
@@ -41,8 +42,17 @@ def test_positive_margin_changes_only_bias_resistor_card(tmp_path):
         result = run_prog(A3, project)
         assert result.returncode == 0, result.stdout + result.stderr
         snapshots.append(cards(folder))
+        networks.append(read_json(folder / "topology.json")["ota_bias_network"])
     assert snapshots[0].keys() == snapshots[1].keys()
-    assert {name for name in snapshots[0] if snapshots[0][name] != snapshots[1][name]} == {"xr_ib"}
+    changed = {name for name in snapshots[0] if snapshots[0][name] != snapshots[1][name]}
+    bias_cards = {"xr_ib"} | {"x" + name for row in networks[1]["stage_table"]
+                             for name in row["translator_devices"]}
+    assert "xr_ib" in changed
+    assert changed <= bias_cards
+    for before, after in zip(networks[0]["stage_table"], networks[1]["stage_table"]):
+        assert after["load_ff"] == pytest.approx(before["load_ff"])
+        assert after["I_slew_a"] == pytest.approx(2 * before["I_slew_a"])
+        assert after["I_settle_a"] == pytest.approx(before["I_settle_a"])
 
 
 @pytest.mark.parametrize("value", [0, -1, float("inf"), float("nan"), True, "invalid"])

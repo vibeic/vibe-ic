@@ -77,14 +77,22 @@ def test_actual_normal_folded_graph_body_and_geometry_render(tmp_path):
     assert not a3._validate_ir(ir, _context(tmp_path), project)
     audit = ir["folded_first_stage"]
     assert len(audit["expanded_devices"]) == 28
-    assert len(ir["devices"]) == len(base["devices"]) + 18
+    folded_bias_cards = [card for row in ir["ota_bias_network"]["stage_table"]
+                         for card in row["folded_cards"]]
+    assert len(folded_bias_cards) == 6
+    assert len(ir["devices"]) == len(base["devices"]) + 18 + len(folded_bias_cards)
     before = {d["name"]: d for d in base["devices"]}
     after = {d["name"]: d for d in ir["devices"]}
     removed = {f"mp_ld{leg}_{i}" for leg in (1, 2) for i in (1, 2)}
     assert set(before) - set(after) == removed
+    bias_cards = {name for row in ir["ota_bias_network"]["stage_table"]
+                  for name in row["translator_devices"]}
     for name in before.keys() & after.keys():
-        if name not in {f"mn_{kind}{i}" for kind in ("in", "ref") for i in (1, 2)}:
+        if name not in bias_cards | {f"mn_{kind}{i}" for kind in ("in", "ref") for i in (1, 2)}:
             assert before[name] == after[name]
+    for name in bias_cards:
+        assert before[name]["role"] == after[name]["role"]
+        assert before[name]["nets"] == after[name]["nets"]
     assert ir["ports"] == base["ports"]
     assert ir["device_param_exprs"] == base["device_param_exprs"]
     assert audit["evidence"]["parent_history_entries"] == 5

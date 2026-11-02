@@ -1,4 +1,4 @@
-"""Normal compensation sizing changes only the expression-owned Miller caps."""
+"""Compensation sizing propagates its declared load into the independent bias."""
 import json
 import math
 
@@ -34,17 +34,50 @@ def capacitance(dim):
     return 1.5 * dim["w"] * dim["l"] + .08 * (dim["w"] + dim["l"])
 
 
-def test_normal_scale_changes_only_two_miller_capacitances(tmp_path):
+def test_normal_scale_changes_miller_caps_and_their_derived_bias(tmp_path):
     base = emit(tmp_path / "base")
     candidate = emit(tmp_path / "candidate", {"knobs": {"ota_compensation_scale": 1.5}})
     before, after = dimensions(base), dimensions(candidate)
     assert base["ports"] == candidate["ports"]
-    assert base["devices"] == candidate["devices"]
+    base_devices = {d["name"]: d for d in base["devices"]}
+    candidate_devices = {d["name"]: d for d in candidate["devices"]}
+    assert base_devices.keys() == candidate_devices.keys()
+    sink_names = {"ota_bias_2_sink", "ota_bias_common_mode_sink"}
+    for name in base_devices:
+        if name in sink_names:
+            assert {k: v for k, v in base_devices[name].items() if k != "w"} == {
+                k: v for k, v in candidate_devices[name].items() if k != "w"}
+        else:
+            assert base_devices[name] == candidate_devices[name]
     assert base["loop_swing"] == candidate["loop_swing"]
     changed = {name for name in before if before[name] != after[name]}
-    assert changed == {"cc1", "cc2"}
-    for name in changed:
+    assert changed == {"cc1", "cc2", "r_ib", *sink_names}
+    for name in ("cc1", "cc2"):
         assert capacitance(after[name]) / capacitance(before[name]) == pytest.approx(1.5)
+    rows_before, rows_after = ({r["stage"]: r for r in ir["ota_bias_network"]["stage_table"]}
+                               for ir in (base, candidate))
+    for stage in (1, 2):
+        cap = "cc" + str(stage)
+        assert rows_after[stage]["output_load_ff"] - rows_before[stage]["output_load_ff"] == pytest.approx(
+            capacitance(after[cap]) - capacitance(before[cap]))
+    refs = [ir["ota_bias_network"]["reference"] for ir in (base, candidate)]
+    for ref, dim in zip(refs, (before["r_ib"], after["r_ib"])):
+        assert dim["l"] == ref["resistor_length_um"]
+        assert dim["w"] == ref["resistor_width_um"]
+    assert after["r_ib"]["w"] == before["r_ib"]["w"]
+    assert after["r_ib"]["l"] / before["r_ib"]["l"] == pytest.approx(
+        refs[0]["current_a"] / refs[1]["current_a"])
+    assert rows_after["common_mode"]["load_ff"] == rows_before["common_mode"]["load_ff"]
+    assert rows_after["common_mode"]["reference_current_a"] == rows_before["common_mode"]["reference_current_a"]
+    assert candidate_devices["ota_bias_common_mode_sink"]["w"] / base_devices["ota_bias_common_mode_sink"]["w"] == pytest.approx(
+        refs[0]["current_a"] / refs[1]["current_a"])
+    for stage, name in ((2, "ota_bias_2_sink"), ("common_mode", "ota_bias_common_mode_sink")):
+        for devices, rows, ref in zip((base_devices, candidate_devices),
+                                       (rows_before, rows_after), refs):
+            sink, master = devices[name], devices["mn_bias"]
+            ratio = (sink["w"] / sink["l"]) / (master["w"] / master["l"])
+            assert ratio == pytest.approx(rows[stage]["mirror_ratio"])
+            assert ratio * ref["current_a"] == pytest.approx(rows[stage]["reference_current_a"])
     assert candidate["knob_sources"]["ota_compensation_scale"] == "explicit_design_sizing"
 
 

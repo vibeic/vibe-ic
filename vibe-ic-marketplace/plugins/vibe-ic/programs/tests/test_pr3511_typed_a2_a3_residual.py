@@ -121,13 +121,39 @@ def test_one_matched_length_has_exact_normal_deltas_and_history_binding(tmp_path
     ir = _matched_build(project, {"matched_gain_length_um": 1.5})
     expected = {f"{n}{i}" for i in (1, 2) for n in (
         "mn_in", "mn_ref", "mp_ld1_", "mp_ld2_", "mp_o", "mn_o")}
+    derived = {"ota_bias_2_sink", "ota_bias_common_mode_sink"}
     before = {d["name"]: d for d in base["devices"]}
     after = {d["name"]: d for d in ir["devices"]}
-    assert {n for n in before if before[n] != after[n]} == expected
+    assert {n for n in before if before[n] != after[n]} == expected | derived
+    expected_widths = {}
+    for topology in (base, ir):
+        devices = {d["name"]: d for d in topology["devices"]}
+        network = topology["ota_bias_network"]
+        reference = devices[network["reference"]["device"]]
+        aspect = lambda d: d["w"] * d.get("m", 1) / d["l"]
+        for row in network["stage_table"]:
+            if row["stage"] not in (2, "common_mode"):
+                continue
+            tail_ratio, output_ratio = (aspect(devices[n]) / aspect(reference)
+                                        for n in row["devices"])
+            assert row["tail_ratio"] == pytest.approx(tail_ratio)
+            assert row["output_ratio"] == pytest.approx(output_ratio)
+            target = max(row["I_settle_a"] / tail_ratio,
+                         row["I_slew_a"] / output_ratio)
+            ratio = target / network["reference"]["current_a"]
+            name = f"ota_bias_{row['stage']}_sink"
+            sink = devices[name]
+            assert row["reference_current_a"] == pytest.approx(target)
+            assert row["mirror_ratio"] == pytest.approx(ratio)
+            assert aspect(sink) / aspect(reference) == pytest.approx(ratio)
+            if topology is ir:
+                expected_widths[name] = ratio * aspect(reference) * sink["l"] / sink.get("m", 1)
     for name in before:
         want = dict(before[name])
         if name in expected:
             want["l"] = max(1.5, want["l"])
+        elif name in derived:
+            want["w"] = pytest.approx(expected_widths[name])
         assert after[name] == want
     assert ir["ports"] == base["ports"]
     assert ir["device_param_exprs"] == base["device_param_exprs"]
@@ -346,7 +372,8 @@ def test_disabled_option_preserves_legacy_device_graph(tmp_path):
     new = _build(tmp_path / "disabled", disabled)
     old_library = copy.deepcopy(a2.LIBRARY["delta_sigma"])
     old_library.pop("input_drain_cascodes")
-    old_library["spec_knobs"] = []
+    old_library["spec_knobs"] = [k for k in old_library["spec_knobs"]
+                                 if k["name"] != "ota_input_drain_cascodes"]
     for group in old_library["stage"]:
         group.pop("input_drain_cascodes", None)
     old_project = tmp_path / "legacy"

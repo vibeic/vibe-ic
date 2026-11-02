@@ -334,63 +334,50 @@ def test_the_sampling_capacitor_follows_the_declared_reference(tmp_path):
     assert c2["cs1"] == pytest.approx(c1["cs1"] * 2.25, rel=1e-3)
 
 
-def test_a_decade_of_clock_range_is_refused_because_it_cannot_settle(tmp_path):
-    """The declaration this fixture used to carry by default: fclk 1.0 MHz over
-    a stated 0.1-10 MHz range.
-
-    MEASURED end to end, on the real block and reproduced to six decimals on
-    two hosts by two independent lanes: the emitted deck runs the modulator at
-    `fclk_max` (100 ns period -- the deck's own condition line calls it "the
-    binding settling corner"), holds the input one tenth of the reference above
-    mid-scale, and states that the mean of the 1-bit output "must be 0.5 plus
-    the input's fraction of the reference span -- 0.6 here". It measures
-    density 0.462028 with swing 1.04976: below mid-scale for an input above it,
-    with the quantiser toggling rather than latched. The converter does not
-    carry its input code.
-
-    The settling count at that clock is (1/10) * 13.33 = 1.33 against the 10.40
-    that enob 14 needs; at the clock the declaration NAMES as its operating
-    point it is 13.33 against the same 10.40.
-
-    RE-AIMED (vibe-ic#2062, owner ruling 2026-09-06). The entry used to REFUSE
-    this declaration on the ceiling figure. It now ADMITS it at the declared
-    operating point and PUBLISHES the ceiling figure beside it, because a
-    stated range is not a requirement: refusing here makes a declaration's
-    honesty about its own span cost it the topology. Both numbers this test
-    pinned before are still pinned — 1.3333333 and 10.3972077 — and the
-    admission and the operating-point figure are pinned in addition. The
-    measured density evidence above is unchanged and still stands as the
-    reason the RANGE does not close, which is now what the record says.
-    """
+def test_a_decade_of_clock_range_reports_actual_stage_settling(tmp_path):
+    """The declared ceiling reports actual-load settling without refusing nominal."""
     d, res, _ = a2(tmp_path, "decade", fclk=1.0, fclk_max=10.0)
     assert res.returncode == 0, res.stderr[-2000:]
     ir = read_json(d / "topology.json")
-    info = [r for r in (ir.get("derived_informational") or [])
+    rows = ir["ota_bias_network"]["stage_table"]
+    info = [r for r in ir["derived_informational"]
             if r.get("field") == "settling_time_constants_at_fclk_max"]
-    assert info, ir.get("derived_informational")
+    assert len(info) == 1
     assert info[0]["blocking"] is False
     assert info[0]["state"] == "NOT_MET"
-    assert info[0]["value"] == pytest.approx(1.3333333, rel=1e-5)
+    for row in rows:
+        assert row["settling_time_constants"] >= row["settling_time_constants_required"] * (1 - 1e-12)
+        assert row["settling_time_constants_at_fclk_max"] == pytest.approx(
+            row["settling_time_constants"] / 10)
+    assert info[0]["value"] == pytest.approx(min(
+        row["settling_time_constants_at_fclk_max"] for row in rows))
     assert info[0]["requirement"] == pytest.approx(10.3972077, rel=1e-6)
-    # ...and no refusal was recorded for the blocking row at the operating
-    # point, which is the half of the ruling that admits the block.
     assert not (d / "topology_gap.json").is_file()
 
 
-def test_a_reference_too_small_to_settle_the_declared_resolution_is_refused(
-        tmp_path):
-    """The low point the sweep above used to run at, kept as a REFUSAL rather
-    than dropped. At vref 0.5 the slew-derived bias delivers 6.67 settling
-    time constants against the 10.40 that enob 14 needs, so the converter
-    slews to the answer and never settles on it. Emitting a topology here
-    would render a modulator whose bitstream carries no code."""
+def test_a_small_reference_sizes_for_both_settling_and_slew(tmp_path):
     d, res, _ = a2(tmp_path, "v05", vref=0.5)
-    assert res.returncode == 2
-    g = _gap(d)
-    bad = [r for r in g["admission_refusals"]
-           if r.get("field") == "settling_time_constants"]
-    assert bad, g["admission_refusals"]
-    assert bad[0]["value"] < float(bad[0]["min"])
+    assert res.returncode == 0, res.stderr[-2000:]
+    ir = read_json(d / "topology.json")
+    for row in ir["ota_bias_network"]["stage_table"]:
+        assert row["I_target_a"] == max(row["I_slew_a"], row["I_settle_a"])
+        assert row["settling_time_constants_required"] == pytest.approx(10.3972077, rel=1e-6)
+        assert row["settling_time_constants"] >= row["settling_time_constants_required"] * (1 - 1e-12)
+        assert row["slew_margin"] >= 2 * (1 - 1e-12)
+        assert row["status"] == "SIZED"
+    assert not (d / "topology_gap.json").is_file()
+
+
+def test_an_explicit_underbiased_reference_cannot_claim_settling(tmp_path):
+    from test_declared_load_bias_branches import _emit, _inputs
+    bias = _inputs(3)
+    bias["reference"]["current_a"] = 1e-12
+    ir, _, _, _, _ = _emit(tmp_path, bias=bias)
+    network = ir["ota_bias_network"]
+    row = network["stage_table"][0]
+    assert row["settling_time_constants"] < row["settling_time_constants_required"]
+    assert row["status"] == "UNDER_BIASED"
+    assert "OTA_BIAS_STAGE_UNDER_BIASED: 1" in network["warnings"]
 
 
 def test_the_capacitor_ratio_is_the_loop_coefficient(tmp_path):
