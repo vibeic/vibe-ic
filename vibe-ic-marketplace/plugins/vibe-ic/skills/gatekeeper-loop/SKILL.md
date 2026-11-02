@@ -186,6 +186,31 @@ gh pr review <num> --request-changes --body-file <comment_file.md>
 > exit-code questions. No LLM reads them. The gatekeeper only *relays*
 > the failing output into the review.
 
+### Step 2.1 — never measure the same head twice: reuse the reviewer's panel
+
+An independent reviewer may have already run the suite part of the gate on
+this exact head. That means base versus the merge with `main`, covering the
+owning test files and the direct callers of every changed production
+function, in the same pinned EDA image the landing uses. When it has, that
+panel IS the landing measurement. Do not rerun it when all three hold:
+
+1. The review verdict is APPROVE for exactly the head being landed (same SHA).
+2. The panel reports base and candidate pass/fail/skip counts with
+   `NEW_FAILED = []`, on the same image digest the landing pins. A panel on
+   a different digest is not reusable.
+3. The files changed on `main` since the reviewer's base do not intersect
+   the branch's changed files or the test files the panel ran. Check with
+   `git diff --name-only <reviewer-base> origin/main`. When they do
+   intersect, rerun only the intersecting test files.
+
+Otherwise run the gate yourself as above. The fast static gates still always
+run: version bump, chip-agnostic diff scan, NDA scan.
+
+> **why:** measured 2026-11-02. Every landing re-ran a 40–60 minute panel
+> that its reviewer had already run on the same head and image. The duplicate
+> run was the whole landing bottleneck. Reusing the panel makes a landing
+> take minutes after APPROVE. The owner approved it as standing doctrine.
+
 ### Step 2.7 — the one agent gate within bounded preparation
 
 Within that bounded preparation, when **and only when** the machine gates are
