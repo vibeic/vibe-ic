@@ -5,6 +5,11 @@ ENFORCEMENT: advisory
 (Advisory describes the FINDINGS. The track's EXECUTION is mandatory — see
 "A track that cannot fail silently" below.)
 
+Ruling #94: numeric tokens require exact values and compatible dimensions.
+Write the number and unit in one token; a bare number is dimensionless.
+Every single expectation needs a resolvable field_path. Missing scope is an
+UNSCOPED authoring refusal, never agreement or a design defect.
+
 The gap this closes
 -------------------
 The doctrine is program-first + AI-backup DUAL-TRACK CONVERGENCE: two tracks
@@ -306,12 +311,14 @@ Never an oracle, a golden artefact or a harness.
 from __future__ import annotations
 
 import argparse
+import functools
 import hashlib
 import json
 import re
 import sys
+from decimal import Decimal
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
@@ -1373,12 +1380,16 @@ _TOKEN_ELLIPSIS = re.compile(r"\.\.\.|\u2026")
 #: told nothing about what the comparator can represent, and the two shapes it
 #: cannot are exactly the two an author writes when the fact is awkward: a
 #: non-Latin token, and a pattern with an ellipsis in it.
+#:
+#: A NUMERIC token is decided by value, not by this matcher (`token_in_unit`,
+#: ruling #82(5)). This declaration is hashed into every expert input frame,
+#: so rewording it is a scheduled change of its own — see that block first.
 TOKEN_LANGUAGE = {
-    "matcher": ("each token is compared with `phrase_present`: both the token "
-                "and the document are lower-cased and every run of "
-                "non-[a-z0-9] characters is collapsed to one space, then the "
-                "token matches iff some CONTIGUOUS run of document tokens "
-                "concatenates to it"),
+    "matcher": ("numeric tokens require equal typed values with compatible "
+                "dimensions after exact unit normalization. A bare number is "
+                "dimensionless; write physical quantities in one token such "
+                "as '1000 mV'. Unsupported numeric units never use text matching. "
+                "Other literal tokens use phrase_present within one scalar"),
     "rules": [
         "a token MUST contain at least one [a-zA-Z0-9] character. A token "
         "written wholly in CJK, Greek, Cyrillic or punctuation normalises to "
@@ -1389,6 +1400,8 @@ TOKEN_LANGUAGE = {
         "becomes a demand for the contiguous phrase with the elided words "
         "removed. State the phrase the document actually uses, or state the "
         "surviving words as SEPARATE tokens",
+        "each single expectation requires a resolvable field_path. Missing "
+        "paths report UNSCOPED and never met; unresolved paths are refused",
     ],
     "separators_are_not_a_disagreement": (
         "`1.8 V` matches `1.8V` and `TRIM_SEL` matches `trim sel`; a token "
@@ -1399,6 +1412,8 @@ TOKEN_LANGUAGE = {
 #: consumer must be able to count them without parsing a sentence.
 TOKEN_NO_MATCHABLE_CHARACTER = "NO_MATCHABLE_CHARACTER"
 TOKEN_ELLIPSIS_ERASED = "ELLIPSIS_ERASED"
+TOKEN_NUMERIC_UNIT_UNSUPPORTED = "NUMERIC_UNIT_UNSUPPORTED"
+TOKEN_SEPARATE_UNIT = "SEPARATE_UNIT_TOKEN"
 
 
 def unaskable_tokens(tokens: Any) -> List[Dict[str, Any]]:
@@ -1443,6 +1458,21 @@ def unaskable_tokens(tokens: Any) -> List[Dict[str, Any]]:
                         "one written and is answered as though it were the "
                         "same one"),
             })
+        if _unsupported_numeric_token(text):
+            out.append({"token": text, "reason": TOKEN_NUMERIC_UNIT_UNSUPPORTED,
+                        "asked_instead": None,
+                        "why": "the numeric token has an unsupported unit or number format; "
+                               "it is never compared as prose"})
+    physical_units = [t for t in (tokens or []) if isinstance(t, str)
+                      and parse_unit(t) not in (None, ("dimensionless", 0))]
+    if physical_units:
+        for text in (tokens or []):
+            quantity = _token_quantity(text) if isinstance(text, str) else None
+            if quantity is not None and quantity.dimension is None:
+                out.append({"token": text, "reason": TOKEN_SEPARATE_UNIT,
+                            "asked_instead": None,
+                            "why": "write the number and physical unit in the same token; "
+                                   "separate tokens do not declare their pairing"})
     return out
 
 
@@ -1469,7 +1499,8 @@ def _layer_haystack(blob: Any) -> str:
     return " ".join(out)
 
 
-def _haystack_units(blob: Any) -> List[str]:
+def _haystack_units(blob: Any, key: Any = None,
+                    unit: Optional[Tuple[str, int]] = None) -> List[str]:
     """The layer's searchable text as INDEPENDENT UNITS — one per key, one per
     scalar — rather than as one joined document (#2127 addendum, #2128).
 
@@ -1489,33 +1520,349 @@ def _haystack_units(blob: Any) -> List[str]:
     Matching per UNIT keeps every property `phrase_present` was built for — a
     phrase still cannot match inside a token (`REF` does not match `REFHI`),
     and a separator difference is still not a disagreement (`1.8 V` matches
-    `1.8V` within one unit) — and removes only the cross-field assembly."""
+    `1.8V` within one unit) — and removes only the cross-field assembly.
+
+    A scalar unit is a `_ValueUnit`: the same text, plus the typed value a
+    NUMERIC token is compared with. `key` / `unit` are the context a scoped
+    subtree was reached under (`_scope_context`)."""
     out: List[str] = []
 
-    def walk(node: Any) -> None:
+    def walk(node: Any, key: Any, unit: Optional[Tuple[str, int]]) -> None:
         if isinstance(node, dict):
+            unit = _record_unit(node, unit)
             for k, v in node.items():
                 out.append(str(k))
-                walk(v)
+                walk(v, k, _key_unit(k, unit))
         elif isinstance(node, list):
             for v in node:
-                walk(v)
+                walk(v, key, unit)
         elif node is not None:
-            out.append(str(node))
+            out.append(_ValueUnit(node, key, unit))
 
-    walk(blob)
+    walk(blob, key, unit)
     return out
 
 
+# ── a NUMERIC token is compared by VALUE, never by its digits (#82(5)) ──────
+#
+# `phrase_present` reduces both sides with `_norm`, which deletes the decimal
+# point and the sign along with every other separator. For a word that is the
+# separator tolerance it was built for; for a number it CHANGES the number.
+# `5.5` becomes the tokens `5 5`, which concatenate to `55`. MEASURED on the
+# ADC D1 root (8HD-d, case-r5c, `expert_parse_track.json`
+# /ai_subtrack/converged/40): `r5:pad_edge_spacing` expects `5.5`, and the
+# owning-layer answer named L8_RTL_CONSTANTS, L8_TIMING_WAVEFORM and
+# L9_INTEGRATION_SPEC on the strength of `reset_strategy.evidence.line: 55` —
+# a citation LINE NUMBER — and L22_VERIFICATION_PLAN on the string
+# `input/docs/…_OWNER_RULINGS_R2.md:55`. None of them carries 5.5. The
+# conclusion happened to be right (the fact is mis-scoped; its carrier is the
+# 0.5ic `pad_edge_spacing_um`); the evidence published for it was not. The
+# same reduction makes `1.0` equal `10`, `5.5` equal `5.55` and `v1.5.5`, and
+# `40` equal `-40`.
+#
+# So a token that IS a number, optionally with a unit, is asked a different
+# question: does the layer carry a TYPED VALUE equal to it? A typed value is
+# a JSON number, or a string that is WHOLLY one number with an optional unit
+# (`1.8 V`, `5.5um`, `-40`, `16-bit`). Never a key; never a number inside
+# prose, a citation, a version or a range (`…R2.md:55`, `v1.5.5`, `0–1.2`);
+# never a source position (`_SOURCE_POSITION_KEYS`); never a digest string.
+# Values compare after unit normalisation — `5.5 um` equals `5500 nm`, a
+# `pad_edge_spacing_um: 5.5` field and `{"value": 5.5, "unit": "µm"}` — and a
+# bare numeric token requires a dimensionless value. Expected physical units
+# must be stated in that same token, independently of observed content.
+#
+# ONE predicate, `token_in_unit`, decides `met`, the owning-layer answer and
+# the carriage paths, so the three cannot disagree about a number.
+#
+# `TOKEN_LANGUAGE` is hashed into the expert input frame. These changed
+# semantics require a newly authored answer rather than accepting an old frame.
+
+#: SI prefixes as powers of ten. `K` is the common mis-capitalised kilo
+#: (`KHz`, `Kohm`); no unit below is spelled with a bare capital K otherwise.
+_SI_PREFIX_EXP = {"f": -15, "p": -12, "n": -9, "u": -6, "m": -3,
+                  "k": 3, "K": 3, "M": 6, "G": 9, "T": 12}
+#: Symbols a prefix may precede: symbol -> (dimension, power the prefix is
+#: raised to). SI capitalisation is load-bearing (`mA` is not `MA`). Area is
+#: its own dimension, so `5 mm2` can never equal `5 um`.
+_PREFIXABLE_UNITS = {"ohm": ("ohm", 1), "bit": ("bit", 1), "sps": ("sps", 1),
+                     "S/s": ("sps", 1), "Hz": ("Hz", 1), "m2": ("m2", 2),
+                     "V": ("V", 1), "A": ("A", 1), "W": ("W", 1),
+                     "s": ("s", 1), "F": ("F", 1), "H": ("H", 1),
+                     "m": ("m", 1)}
+_PREFIXABLE_LONGEST_FIRST = sorted(_PREFIXABLE_UNITS.items(),
+                                   key=lambda kv: -len(kv[0]))
+#: Symbols no prefix may precede.
+_PLAIN_UNITS = {"%": "%", "ppm": "ppm", "dB": "dB", "dBm": "dBm",
+                "dBc": "dBc", "dBFS": "dBFS", "C": "degC", "LSB": "LSB",
+                "cycle": "cycle", "cycles": "cycle", "clocks": "cycle",
+                "": "dimensionless", "—": "dimensionless", "-": "dimensionless"}
+#: Lowercase field-name aliases (`pad_edge_spacing_um`, `freq_mhz`,
+#: `temperature_c`). SI symbols keep their case; these legacy aliases are
+#: explicit, so `mhz` is MHz while `mHz` is millihertz. The suffixes measured on
+#: emitted L-docs plus their unambiguous siblings; a suffix that also names
+#: something else (`_ff` is a process corner; a lone `_s`, `_a`, `_w` is as
+#: often a plural or a label) states no unit.
+_KEY_SUFFIX_UNITS = {
+    "v": ("V", 0), "mv": ("V", -3), "uv": ("V", -6),
+    "ma": ("A", -3), "ua": ("A", -6), "na": ("A", -9),
+    "mw": ("W", -3), "uw": ("W", -6), "nw": ("W", -9),
+    "hz": ("Hz", 0), "khz": ("Hz", 3), "mhz": ("Hz", 6), "ghz": ("Hz", 9),
+    "ms": ("s", -3), "us": ("s", -6), "ns": ("s", -9), "ps": ("s", -12),
+    "pf": ("F", -12), "nf": ("F", -9), "uf": ("F", -6),
+    "ohm": ("ohm", 0), "kohm": ("ohm", 3),
+    "nm": ("m", -9), "um": ("m", -6), "mm": ("m", -3),
+    "um2": ("m2", -12), "mm2": ("m2", -6),
+    "c": ("degC", 0), "degc": ("degC", 0),
+    "pct": ("%", 0), "percent": ("%", 0), "ppm": ("ppm", 0),
+    "db": ("dB", 0), "dbm": ("dBm", 0), "bit": ("bit", 0), "bits": ("bit", 0),
+    "sps": ("sps", 0), "ksps": ("sps", 3), "msps": ("sps", 6),
+}
+_INVALID_FIELD_UNIT = ("invalid_field_unit", 0)
+#: Fields that say WHERE in a source document something was read — a citation
+#: line, a clause position. Their numbers are positions, not values. MEASURED
+#: on 707 emitted L-docs: `line`, `header_line`, `alignment_line`, `row_line`
+#: and `clause_index` are the shapes that occur. `offset`, `index`, `column`,
+#: `page` and `lines` are deliberately NOT here: a register offset, a channel
+#: index, a ball-map column, a memory page or a display's line count is a
+#: design value.
+_SOURCE_POSITION_KEYS = frozenset({
+    "line", "lineno", "line_no", "line_number", "line_num", "char_offset",
+    "clause_index"})
+_SOURCE_POSITION_SUFFIXES = ("_line", "_lineno", "_line_no", "_line_number")
+#: Fields whose STRING value is a digest (`sha256`, `document_sha256`). A short
+#: hex prefix can be all digits (`91094619`) and would otherwise read as a
+#: number. The digest word must END the name: `digest_bits` is a width.
+_DIGEST_KEY = re.compile(r"(?:^|_)(?:sha\d*|digest|hash|checksum)$")
+_QUANTITY = re.compile(
+    r"([-+]?(?:(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]*)?"
+    r"|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)"
+    r"(?:\s*-?\s*(\S.*))?", re.S)
+
+
+class Quantity(NamedTuple):
+    """A number AS WRITTEN, and the unit it is stated in.
+
+    `dimension` is None for a bare dimensionless number; `exp10` is the
+    unit's power of ten (`um` -> -6), so `value` stays exactly what was
+    written and the scale is applied only when two quantities are compared."""
+    value: Decimal
+    dimension: Optional[str] = None
+    exp10: int = 0
+
+    def matches(self, typed: "Quantity") -> bool:
+        """Is `typed` (a value a layer carries) equal to this expected one?
+
+        A bare number requires a dimensionless value. A physical quantity
+        requires the same dimension and an equal normalized value."""
+        if (typed.dimension or "dimensionless") != (self.dimension or "dimensionless"):
+            return False
+        def canonical(quantity):
+            sign, digits, exponent = quantity.value.as_tuple()
+            if not any(digits):
+                return 0, (0,), 0
+            end = len(digits)
+            while digits[end - 1] == 0:
+                end -= 1
+            return sign, digits[:end], exponent + len(digits) - end + quantity.exp10
+
+        return canonical(self) == canonical(typed)
+
+
+def parse_unit(text: str) -> Optional[Tuple[str, int]]:
+    """`(dimension, power of ten)` for one unit spelling, or None."""
+    u = str(text).strip()
+    if u in ("°C", "℃"):
+        return "degC", 0
+    if u in ("°F", "℉"):
+        return "degF", 0
+    if "°" in u:
+        return None
+    for glyph, ascii_ in (("\u00b5", "u"), ("\u03bc", "u"), ("\u2126", "ohm"),
+                          ("\u03a9", "ohm"), ("\u00b2", "2"), ("^2", "2")):
+        u = u.replace(glyph, ascii_)
+    u = re.sub(r"(?i)ohms?$", "ohm", re.sub(r"^deg\s*C$", "C", u.strip()))
+    u = re.sub(r"bits$", "bit", u)
+    if u in _PLAIN_UNITS:
+        return _PLAIN_UNITS[u], 0
+    for symbol, (dimension, power) in _PREFIXABLE_LONGEST_FIRST:
+        if u.endswith(symbol):
+            prefix = u[:len(u) - len(symbol)]
+            if not prefix:
+                return dimension, 0
+            if prefix in _SI_PREFIX_EXP:
+                return dimension, _SI_PREFIX_EXP[prefix] * power
+            return None
+    return None
+
+
+def parse_quantity(text: Any) -> Optional[Quantity]:
+    """`text` read as ONE number with an optional unit — else None.
+
+    The WHOLE string must be the quantity: `1.8 V`, `5.5um`, `-40`, `16-bit`.
+    A number inside prose, a citation, a version or a range is not one:
+    `…R2.md:55`, `v1.5.5`, `0–1.2`, `pads 4/7/5/8` and `0xc` are all None, as
+    is a number followed by a word that is not a unit (`2 clocks`)."""
+    if not isinstance(text, str):
+        return None
+    s = text.strip().replace("\u2212", "-")
+    if not s or s[0] not in "0123456789+-.":
+        return None
+    m = _QUANTITY.fullmatch(s)
+    if m is None:
+        return None
+    dimension, exp10 = None, 0
+    if m.group(2):
+        unit = parse_unit(m.group(2))
+        if unit is None:
+            return None
+        dimension, exp10 = unit
+    try:
+        value = Decimal(m.group(1).replace(",", ""))
+    except (ArithmeticError, ValueError):
+        return None
+    return Quantity(value, dimension, exp10) if value.is_finite() else None
+
+
+@functools.lru_cache(maxsize=4096)
+def _token_quantity(token: str) -> Optional[Quantity]:
+    """The expected token as a number, or None when it is not one."""
+    return parse_quantity(token)
+
+
+def _unsupported_numeric_token(token: str) -> bool:
+    if _token_quantity(token) is not None:
+        return False
+    text = token.strip().replace("\u2212", "-")
+    if re.fullmatch(r"0[xX][0-9a-fA-F]+", text):
+        return False
+    unwrapped = re.sub(r"^[^A-Za-z0-9]+", "", text)
+    return bool(re.match(r"[0-9]", unwrapped)
+                or re.match(r"(?:inf(?:inity)?|nan)(?:$|[^A-Za-z0-9_])", unwrapped, re.I))
+
+
+def _key_unit(key: Any, inherited: Optional[Tuple[str, int]] = None
+              ) -> Optional[Tuple[str, int]]:
+    """A field-name unit or its inherited unit; invalid field units stay invalid."""
+    if inherited == _INVALID_FIELD_UNIT:
+        return inherited
+    k = str(key).strip()
+    if "_" not in k:
+        return inherited
+    suffix = k.rsplit("_", 1)[1]
+    if suffix in _KEY_SUFFIX_UNITS:
+        return _KEY_SUFFIX_UNITS[suffix]
+    if suffix.lower() in _KEY_SUFFIX_UNITS:
+        return parse_unit(suffix) or _INVALID_FIELD_UNIT
+    return inherited
+
+
+def _record_unit(record: Dict[Any, Any],
+                 inherited: Optional[Tuple[str, int]]
+                 ) -> Optional[Tuple[str, int]]:
+    """The unit a record states for its own values (`{"target": 1.0,
+    "unit": "V"}`), else the one it inherits. The NEAREST statement wins,
+    including one that cannot be parsed: an unknown unit is unknown, never
+    permission to reach for an outer one."""
+    if inherited == _INVALID_FIELD_UNIT:
+        return inherited
+    declarations = [parse_unit(v) if isinstance(v, str) else None
+                    for k, v in getattr(record, "member_pairs", record.items())
+                    if str(k).strip().lower() in ("unit", "units")]
+    if not declarations:
+        return inherited
+    unit = declarations[0]
+    return unit if unit is not None and all(v == unit for v in declarations) \
+        else ("unknown", 0)
+
+
+def _source_position_key(key: Any) -> bool:
+    """Does this field hold a position in a SOURCE document, not a value?"""
+    k = str(key).strip().lower()
+    return k in _SOURCE_POSITION_KEYS or k.endswith(_SOURCE_POSITION_SUFFIXES)
+
+
+def _typed_quantity(node: Any, key: Any,
+                    unit: Optional[Tuple[str, int]]) -> Optional[Quantity]:
+    """The typed numeric VALUE this scalar is, or None when it is not one."""
+    if unit == _INVALID_FIELD_UNIT:
+        return None
+    if key is not None and _source_position_key(key):
+        return None
+    if isinstance(node, bool):
+        return None
+    if isinstance(node, (int, float, Decimal)):
+        value = Decimal(str(node)) if isinstance(node, float) else Decimal(node)
+        if not value.is_finite():
+            return None
+        return Quantity(value, *unit) if unit else Quantity(value)
+    if isinstance(node, str):
+        if key is not None and _DIGEST_KEY.search(str(key).strip().lower()):
+            return None
+        q = parse_quantity(node)
+        if q is not None and q.dimension is None and unit:
+            return Quantity(q.value, *unit)
+        return q
+    return None
+
+
+class _ValueUnit(str):
+    """A haystack unit that is a scalar VALUE: its text, plus the typed value
+    a numeric token is compared with (`quantity`, None when it is not one).
+    A key stays a plain `str`, so a key can never satisfy a number."""
+    quantity: Optional[Quantity]
+
+    def __new__(cls, node: Any, key: Any = None,
+                unit: Optional[Tuple[str, int]] = None) -> "_ValueUnit":
+        self = super().__new__(cls, str(node))
+        self.quantity = _typed_quantity(node, key, unit)
+        return self
+
+
+def token_in_unit(token: str, unit: str) -> bool:
+    """Does this ONE haystack unit carry the expected token?
+
+    A NUMERIC token (a number, optionally with a unit) is carried only by a
+    typed value equal to it; every other token by `phrase_present`, exactly
+    as before. The one predicate behind `met`, ownership and carriage."""
+    want = _token_quantity(token)
+    if want is None:
+        if _unsupported_numeric_token(token):
+            return False
+        return phrase_present(token, unit)
+    have = getattr(unit, "quantity", None)
+    return have is not None and want.matches(have)
+
+
 def present_in_units(phrase: str, units: List[str]) -> bool:
-    """Is the phrase present WITHIN ONE unit? Never assembled across two."""
-    return any(phrase_present(phrase, u) for u in units)
+    """Is the token present WITHIN ONE unit? Never assembled across two.
+    A numeric token is present only as a typed value (`token_in_unit`)."""
+    return any(token_in_unit(phrase, u) for u in units)
+
+
+class _ScopedNode(NamedTuple):
+    value: Any
+    key: Any = None
+    unit: Optional[Tuple[str, int]] = None
+
+
+def _scoped_nodes_at(blob: Any, field_path: Any,
+                     layer: Any = None) -> Optional[list]:
+    if _is_json_pointer(field_path):
+        return _pointer_at(blob, field_path, with_context=True)
+    key = _normalise_field_path(field_path, layer)
+    if key:
+        for candidate in _field_path_spellings(key):
+            nodes = _walk_field_path(blob, candidate, with_context=True)
+            if nodes is not None:
+                return nodes
+    return None
 
 
 class _PointerObject(dict):
     """Retain duplicate-member ambiguity for RFC6901; legacy keeps last value."""
     def __init__(self, pairs):
         super().__init__(pairs)
+        self.member_pairs = tuple(pairs)
         seen = set()
         self.duplicate_keys = set()
         for key, _ in pairs:
@@ -1528,7 +1875,7 @@ def _is_json_pointer(field_path: Any) -> bool:
     return isinstance(field_path, str) and field_path.startswith("/")
 
 
-def _pointer_at(blob: Any, pointer: str) -> Optional[list]:
+def _pointer_at(blob: Any, pointer: str, *, with_context=False) -> Optional[list]:
     """RFC6901 string representation, exact root/case; never legacy fallback.
 
     An unresolved/invalid selector returns None, including ambiguous object
@@ -1536,6 +1883,7 @@ def _pointer_at(blob: Any, pointer: str) -> Optional[list]:
     [None], not an absent selector. URI-fragment syntax is not enabled here.
     """
     node = blob
+    key, unit = None, None
     for raw in pointer[1:].split("/"):
         if re.search(r"~(?:[^01]|$)", raw):
             return None
@@ -1543,7 +1891,8 @@ def _pointer_at(blob: Any, pointer: str) -> Optional[list]:
         if isinstance(node, dict):
             if token not in node or token in getattr(node, "duplicate_keys", ()):
                 return None
-            node = node[token]
+            unit = _key_unit(token, _record_unit(node, unit))
+            node, key = node[token], token
         elif isinstance(node, list):
             if not re.fullmatch(r"0|[1-9][0-9]*", token):
                 return None
@@ -1556,7 +1905,7 @@ def _pointer_at(blob: Any, pointer: str) -> Optional[list]:
             node = node[index]
         else:
             return None
-    return [node]
+    return [_ScopedNode(node, key, unit)] if with_context else [node]
 
 
 def subtree_at(blob: Any, field_path: Any, layer: Any = None) -> Optional[list]:
@@ -1569,22 +1918,8 @@ def subtree_at(blob: Any, field_path: Any, layer: Any = None) -> Optional[list]:
     "the path is there and empty" are different answers and this repo has
     measured what happens when a program supplies one for the other.
     """
-    if _is_json_pointer(field_path):
-        return _pointer_at(blob, field_path)
-    key = _normalise_field_path(field_path, layer)
-    if not key:
-        return None
-    # The emitter nests the payload under `fields`; some protocol synthesizers
-    # write it flat (`l_doc_consumer_contract.l_doc_fields` accepts both). An
-    # expectation may spell either, and a spelling difference between a schema
-    # and an expectation is not a defect — this repo has measured what scoring
-    # one as a defect does to an advisory channel. Both spellings are tried,
-    # HERE and only here, so the resolver and the status can never disagree.
-    for candidate in _field_path_spellings(key):
-        nodes = _walk_field_path(blob, candidate)
-        if nodes is not None:
-            return nodes
-    return None
+    nodes = _scoped_nodes_at(blob, field_path, layer)
+    return [node.value for node in nodes] if nodes is not None else None
 
 
 def _field_path_spellings(key: str) -> List[str]:
@@ -1594,25 +1929,27 @@ def _field_path_spellings(key: str) -> List[str]:
     return [key, "fields." + key]
 
 
-def _walk_field_path(blob: Any, key: str) -> Optional[list]:
+def _walk_field_path(blob: Any, key: str, *, with_context=False) -> Optional[list]:
     """One literal walk of one spelling. `None` when a segment is absent."""
-    nodes: List[Any] = [blob]
+    nodes = [_ScopedNode(blob)]
     for seg in key.split("."):
         nxt: List[Any] = []
         for node in nodes:
             stack = [node]
             while stack:
                 cur = stack.pop()
-                if isinstance(cur, list):
-                    stack.extend(cur)
-                elif isinstance(cur, dict):
-                    for k, v in cur.items():
+                if isinstance(cur.value, list):
+                    stack.extend(_ScopedNode(v, cur.key, cur.unit)
+                                 for v in cur.value)
+                elif isinstance(cur.value, dict):
+                    unit = _record_unit(cur.value, cur.unit)
+                    for k, v in cur.value.items():
                         if str(k).lower() == seg:
-                            nxt.append(v)
+                            nxt.append(_ScopedNode(v, k, _key_unit(k, unit)))
         if not nxt:
             return None
         nodes = nxt
-    return nodes
+    return nodes if with_context else [node.value for node in nodes]
 
 
 def resolve_layer_file(project: Path, layer: str) -> Optional[Path]:
@@ -1881,13 +2218,6 @@ def authoring_schema(project: Path) -> Dict[str, Any]:
                       "a layer's list is either deeper than max_depth or not "
                       "declared — the counts say which"),
         },
-        # #2150 F5, second half. The vocabulary above is for `field_path`,
-        # which an expectation only DECORATES with — the reading falls back
-        # to the whole layer when it does not resolve. `expected_tokens` is
-        # the field every verdict rests on, and F5 as first landed declared
-        # nothing about it at all. The two shapes the matcher cannot
-        # represent are named here, at authoring time, by the same
-        # declaration `unaskable_tokens` refuses by at review time.
         "expected_tokens_rule": TOKEN_LANGUAGE,
         "json_pointer_field_path": {
             "standard": "https://www.rfc-editor.org/rfc/rfc6901",
@@ -1929,11 +2259,9 @@ def authoring_schema(project: Path) -> Dict[str, Any]:
                      "writer nor this track creates or signs its matching answer.")},
         "rule": ("an expectation's `field_path` MUST be one this schema lists "
                  "for the layer it addresses (declared_field_paths for legacy "
-                 "dotted paths, declared_json_pointer_paths for / pointers), "
-                 "or be omitted entirely. A legacy path "
-                 "no layer declares is refused BY NAME at review time and the "
-                 "reading silently falls back to the whole layer, so the "
-                 "finding then describes a field nothing looked at"),
+                 "dotted paths, declared_json_pointer_paths for / pointers). "
+                 "Missing paths report UNSCOPED; unresolved paths are authoring "
+                 "refusals. Neither performs a whole-layer comparison"),
         "layers": layers,
     }
 
@@ -1946,15 +2274,12 @@ def refuse_undeclared_field_path(schema: Dict[str, Any], layer: Any,
     bare boolean, because the author has to be told which layer was consulted
     and what it does declare, or the refusal costs more than it saves.
 
-    An ABSENT field_path is acceptable: the expectation then addresses the
-    whole layer and says so. That is a weaker claim, not an authoring error,
-    and refusing it here would make this schema stricter than the guard it is
-    supposed to be the other reading of.
+    An absent field_path is UNSCOPED and cannot support agreement.
     """
     if schema.get("status") != "OK":
         return None          # nothing was read; refusing on that is a guess
-    if not str(field_path or "").strip():
-        return None
+    if not _is_json_pointer(field_path) and not _normalise_field_path(field_path, layer):
+        return "UNSCOPED: provide a declared field_path before comparing tokens"
     layers = schema.get("layers") or {}
     stem = None
     want = str(layer or "").strip().lower()
@@ -1998,8 +2323,8 @@ def refuse_undeclared_field_path(schema: Dict[str, Any], layer: Any,
             + (" (first 20 of "
                f"{layers[stem]['declared_field_path_count']})"
                if len(declared) > 20 else "")
-            + ". Address a path this layer declares, or omit `field_path` and "
-              "state that the expectation is about the whole layer.")
+            + ". Select a path this layer declares; missing scope is UNSCOPED "
+              "and whole-layer fallback is not permitted.")
 
 
 def taxonomy_layer_stems() -> List[str]:
@@ -2200,8 +2525,10 @@ def _ownership_units(blob: Any) -> List[str]:
     envelope. See `_L_DOC_ENVELOPE_KEYS` for what is dropped and why."""
     out: List[str] = []
 
-    def walk(node: Any, path: List[str]) -> None:
+    def walk(node: Any, path: List[str], at: Any,
+             unit: Optional[Tuple[str, int]]) -> None:
         if isinstance(node, dict):
+            unit = _record_unit(node, unit)
             for key, value in node.items():
                 if not path and key in _L_DOC_ENVELOPE_KEYS:
                     continue
@@ -2214,14 +2541,14 @@ def _ownership_units(blob: Any) -> List[str]:
                         out.extend(_evidence_units(entry))
                     continue
                 out.append(str(key))
-                walk(value, path + [str(key)])
+                walk(value, path + [str(key)], key, _key_unit(key, unit))
         elif isinstance(node, list):
             for value in node:
-                walk(value, path)
+                walk(value, path, at, unit)
         elif node is not None:
-            out.append(str(node))
+            out.append(_ValueUnit(node, at, unit))
 
-    walk(blob, [])
+    walk(blob, [], None, None)
     return out
 
 
@@ -2229,20 +2556,21 @@ def _evidence_units(node: Any) -> List[str]:
     """`_haystack_units` over one evidence entry, minus its `label`."""
     out: List[str] = []
 
-    def walk(cur: Any) -> None:
+    def walk(cur: Any, at: Any, unit: Optional[Tuple[str, int]]) -> None:
         if isinstance(cur, dict):
+            unit = _record_unit(cur, unit)
             for k, v in cur.items():
                 if k in _EVIDENCE_PROVENANCE_KEYS:
                     continue
                 out.append(str(k))
-                walk(v)
+                walk(v, k, _key_unit(k, unit))
         elif isinstance(cur, list):
             for v in cur:
-                walk(v)
+                walk(v, at, unit)
         elif cur is not None:
-            out.append(str(cur))
+            out.append(_ValueUnit(cur, at, unit))
 
-    walk(node)
+    walk(node, None, None)
     return out
 
 
@@ -2316,8 +2644,9 @@ def owning_layers_answer(project: Path, tokens: List[str],
         if exclude is not None and p == exclude:
             continue
         try:
-            blob = json.loads(p.read_text(errors="replace"))
-        except (OSError, ValueError):
+            blob = json.loads(p.read_text(errors="replace"), parse_float=Decimal,
+                              object_pairs_hook=_PointerObject)
+        except (OSError, ValueError, ArithmeticError):
             continue          # unreadable content is not content
         searched.append((p.stem, _ownership_units(blob)))
     answer["searched_layers"] = len(searched)
@@ -2333,8 +2662,9 @@ def owning_layers_answer(project: Path, tokens: List[str],
     for stem, units in searched:
         found = {}
         for t in wanted:
-            where = next((u for u in units if phrase_present(t, u)), None)
+            where = next((u for u in units if token_in_unit(t, u)), None)
             if where is not None:
+                where = str(where)
                 found[t] = where if len(where) <= 200 else where[:200] + "…"
         hits[stem] = found
     breadth = {t: sum(1 for f in hits.values() if t in f) for t in wanted}
@@ -2463,14 +2793,8 @@ def _converge_split(project: Path, base: Dict[str, Any], exp: Any,
             "expected_tokens": sub.get("expected_tokens"),
         }
         res = converge_ai_expectation(project, child)
-        if not res["usable"]:
-            return _split_refusal(
-                base, f"branch {i} ({child['id']}) cannot be converged: "
-                      f"{res['observed']}. A split is decided only when every "
-                      f"branch is")
         branches.append(res)
 
-    base["usable"] = True
     base["sub_results"] = branches
     base["sub_layers"] = [b["layer"] for b in branches]
     # #2150 item 2. The parent states no tokens of its own, so its unaskable
@@ -2480,6 +2804,12 @@ def _converge_split(project: Path, base: Dict[str, Any], exp: Any,
     base["tokens_unaskable"] = [
         {**u, "branch": b["id"]}
         for b in branches for u in (b.get("tokens_unaskable") or [])]
+    refused = [(i, branch) for i, branch in enumerate(branches) if not branch["usable"]]
+    if refused:
+        return _split_refusal(base, "; ".join(
+            f"branch {i} ({branch['id']}) cannot be converged: {branch['observed']}"
+            for i, branch in refused) + ". A split is decided only when every branch is")
+    base["usable"] = True
 
     # A branch addressing a layer this Phase-1 root does not contain (#2150,
     # first commit) makes the whole conjunction undecidable about the DESIGN:
@@ -2623,24 +2953,27 @@ def token_paths(blob: Any, token: str) -> List[str]:
     List indices are elided — `registers[7].reset_value` and
     `registers[8].reset_value` are one path, because the question is which
     FIELD carries the fact and not how many records do. Uses the same
-    `phrase_present` the comparator uses, so the two can never disagree about
+    `token_in_unit` the comparator uses, so the two can never disagree about
     whether a token is present.
     """
     hits: List[str] = []
 
-    def walk(node: Any, path: List[str]) -> None:
+    def walk(node: Any, path: List[str], at: Any,
+             unit: Optional[Tuple[str, int]]) -> None:
         if isinstance(node, dict):
+            unit = _record_unit(node, unit)
             for k, v in node.items():
                 if _negative_status_key(k):
                     continue
-                walk(v, path + [str(k)])
+                walk(v, path + [str(k)], k, _key_unit(k, unit))
         elif isinstance(node, list):
             for v in node:
-                walk(v, path)
-        elif node is not None and phrase_present(token, str(node)):
+                walk(v, path, at, unit)
+        elif node is not None and token_in_unit(token,
+                                                _ValueUnit(node, at, unit)):
             hits.append(".".join(path))
 
-    walk(blob, [])
+    walk(blob, [], None, None)
     return sorted(set(hits))
 
 
@@ -2663,8 +2996,9 @@ def token_carriage(project: Path, tokens: List[str],
         if exclude is not None and p == exclude:
             continue
         try:
-            blob = json.loads(p.read_text(errors="replace"))
-        except (OSError, ValueError):
+            blob = json.loads(p.read_text(errors="replace"), parse_float=Decimal,
+                              object_pairs_hook=_PointerObject)
+        except (OSError, ValueError, ArithmeticError):
             continue          # unreadable content is not content
         for tok in tokens:
             paths = token_paths(blob, tok)
@@ -2941,9 +3275,7 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
         # ownership claim can be falsified from the report rather than only by
         # re-running the comparator.
         "owning_layers_evidence": {},
-        # WHERE the token search happened: `field_path` when the named path
-        # resolved, `whole_layer` when it did not. NOT_MEASURED until a layer
-        # document is in hand.
+        # UNSCOPED is a refusal; field_path/json_pointer are actual readings.
         "scope": "NOT_MEASURED",
         # None = the expectation was not withdrawn. "" = it was withdrawn with
         # no usable reason, which is refused. A non-empty string is the reason.
@@ -3022,13 +3354,21 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
             "decided by a program and must not be counted as agreed")
         return base
 
+    if (not _is_json_pointer(base["field_path"])
+            and not _normalise_field_path(base["field_path"], base["layer"])):
+        base.update(scope="UNSCOPED", field_path_status="ABSENT",
+                    observed="UNSCOPED: the expectation supplies no field_path; "
+                             "no layer-wide comparison was performed")
+        return base
+
     base["usable"] = True
-    # #2150 item 2 — asked BEFORE the Phase-1 root is opened, because it is a
-    # question about the expectation and the matcher, not about the design.
-    # Recorded, never acted on here: `met` is decided over the whole layer
-    # exactly as it was, so no verdict moves and no moved verdict can be
-    # attributed to this check — the separation #2127 and #2191 both kept.
     base["tokens_unaskable"] = unaskable_tokens(base["expected_tokens"])
+    if any(t["reason"] in (TOKEN_NUMERIC_UNIT_UNSUPPORTED, TOKEN_SEPARATE_UNIT)
+           for t in base["tokens_unaskable"]):
+        base.update(usable=False, scope="TOKEN_REFUSED",
+                    observed="numeric expectation refused: " + ", ".join(
+                        t["reason"] for t in base["tokens_unaskable"]))
+        return base
     path = resolve_layer_file(project, base["layer"])
     if path is None:
         # #2150 — the LAYER is absent from the Phase-1 root. Recorded as its
@@ -3073,62 +3413,41 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
         return base
     base["layer_present"] = True
     try:
-        blob = json.loads(path.read_text(errors="replace"),
+        blob = json.loads(path.read_text(errors="replace"), parse_float=Decimal,
                           object_pairs_hook=_PointerObject)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, ArithmeticError) as exc:
         base["observed"] = (f"{base['layer']} exists but does not parse "
                             f"({exc.__class__.__name__}); unreadable content "
                             f"is not content")
         return base
 
-    # #2127 — the guard. Read BEFORE the token search and kept independent of
-    # it: `met` is decided over the whole layer exactly as it was, so a moved
-    # verdict can never be attributed to this check.
     base["field_path_status"] = field_path_status(
         blob, base["field_path"], base["layer"])
     if base["field_path_status"] == "UNDECLARED":
         base["layer_declares"] = sorted(
             blob.keys() if isinstance(blob, dict) else [])
-        if _is_json_pointer(base["field_path"]):
-            base["usable"] = False
-            base["scope"] = "json_pointer_refused"
-            base["observed"] = (
-                f"{base['layer']} does not resolve the RFC6901 JSON Pointer "
-                f"{base['field_path']!r} unambiguously. This is an authoring "
-                "refusal, not a design comparison; no whole-layer reading occurred.")
-            return base
-
-    # #2127 addendum (#2128) — WHERE the tokens are looked for.
-    #
-    # The reading is SCOPED to the field the expectation names whenever that
-    # path resolves. Unscoped, any field of the layer can satisfy any token:
-    # MEASURED on a real run, adding an unrelated boolean key to L19 made the
-    # token "false" score and moved a row from 2-missing to 1-missing, on a
-    # coincidence. A coincidence can score as agreement in both directions.
-    #
-    # When the path does NOT resolve there is nowhere to scope to, and the
-    # whole-layer reading is kept — moving those verdicts is a much larger
-    # decision than this one and would need its own landing — but the scope is
-    # RECORDED, so a `met` obtained without scoping is visibly the weaker
-    # claim it is rather than passing for a reading at the named field.
-    subtree = subtree_at(blob, base["field_path"], base["layer"])
-    if subtree is None:
-        base["scope"] = "whole_layer"
-        units = _haystack_units(blob)
-    else:
-        base["scope"] = "json_pointer" if _is_json_pointer(base["field_path"]) \
+        base["usable"] = False
+        base["scope"] = "json_pointer_refused" if _is_json_pointer(base["field_path"]) \
+            else "field_path_refused"
+        selector_kind = "the RFC6901 JSON Pointer" if _is_json_pointer(base["field_path"]) \
             else "field_path"
-        units = [u for node in subtree for u in _haystack_units(node)]
+        base["observed"] = (
+            f"{base['layer']} does not resolve {selector_kind} "
+            f"{base['field_path']!r} unambiguously. This is an authoring "
+            "refusal, not a design comparison; no whole-layer reading occurred.")
+        return base
+
+    subtree = _scoped_nodes_at(blob, base["field_path"], base["layer"])
+    base["scope"] = "json_pointer" if _is_json_pointer(base["field_path"]) \
+        else "field_path"
+    units = [u for node in subtree
+             for u in _haystack_units(node.value, node.key, node.unit)]
 
     missing = [t for t in base["expected_tokens"]
                if not present_in_units(t, units)]
     base["met"] = not missing
     base["missing_tokens"] = missing
-    where = (f"{base['layer']}.{base['field_path']}"
-             if base["scope"] in ("field_path", "json_pointer") else
-             f"{base['layer']} (WHOLE LAYER — the expectation's field_path "
-             f"{base['field_path']!r} does not resolve, so the reading is "
-             f"UNSCOPED and any field of the layer could satisfy a token)")
+    where = f"{base['layer']}.{base['field_path']}"
     base["observed"] = (
         f"{where} carries all of {base['expected_tokens']}"
         if not missing else
@@ -4113,7 +4432,7 @@ def evaluate(project: Path) -> Dict[str, Any]:
             # report's wording suggests, and a count is the only way a reader
             # sees that without opening each finding.
             "unscoped_readings": len(
-                [c for c in converged if c["scope"] == "whole_layer"]),
+                [c for c in converged if c["scope"] == "UNSCOPED"]),
             # Withdrawn WITH a reason. A reasonless withdrawal is refused and
             # is therefore NOT counted here — it is still decided, and counting
             # it would make a refused withdrawal look like an honoured one.

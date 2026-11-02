@@ -40,7 +40,7 @@ def test_dimensionless_requirement_refuses_a_physical_unit(tmp_path, expected_un
 
 
 def test_physical_unit_mismatch_still_fails(tmp_path):
-    actual, unresolved, _ = compare(tmp_path, {'target':2.0,'unit':'mA'}, ['2.0','V'])
+    actual, unresolved, _ = compare(tmp_path, {'target':2.0,'unit':'mA'}, ['2.0 V'])
     assert actual == []
     assert unresolved == []
 

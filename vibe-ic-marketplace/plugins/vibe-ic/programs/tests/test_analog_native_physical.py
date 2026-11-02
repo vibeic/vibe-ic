@@ -8,6 +8,8 @@ import pytest
 
 import _plugin_tree
 import analog_native_physical as physical
+from _hostpaths import require_repo
+from test_analog_method_local_startup import psp_runtime, _psp_project
 
 
 def put(path, data):
@@ -24,6 +26,135 @@ def project(tmp_path):
     put(block / "tb_unit.sp", ".include unit.sp\nX1 a b 0 unit\n.control\nop\necho \"MEAS vout=\" $&v(b)\n.endc\n.end\n")
     put(block / "spec.json", {"specs": [{"name": "vout", "min": 1.1, "max": 1.3}]})
     return project
+
+
+def _resim_extraction(project, name, raw):
+    """Supply synthetic RC/A13 prerequisites; no PV/extraction qualification."""
+    bdir, work = physical._paths(project, name)
+    gds = put(bdir / f"{name}.gds", "synthetic layout prerequisite")
+    extracted = put(work / "extracted.spice", raw)
+    put(work / "A13.json", {"status": "PASS", "metrics": {
+        "netlist_sha256": physical._sha(bdir / f"{name}.sp"),
+        "layout_sha256": physical._sha(gds), "corners": [{"style": "ngspice()",
+        "extracted_netlist": str(extracted), "sha256": physical._sha(extracted)}]}})
+
+
+def _real_windows(project, name, image, family):
+    import analog_native_flow as native
+    args = SimpleNamespace(entry_step="A07", exit_step="A07", blocks=name,
+                           container="", image=image, transport="LOCAL", pdk=family)
+    pre = native.run_window(project, args)["steps"][0]
+    assert pre["status"] == "PASS", pre
+    args.entry_step = args.exit_step = "A14"
+    report = native.run_window(project, args)
+    post = next(row for row in report["steps"] if row["step"] == "A14")
+    return pre, post
+
+
+def test_real_a14_local_uses_repo_declared_context_without_optional_init(tmp_path, psp_runtime):
+    from declared_pdk_is_the_pdk_used_check import declared_target
+    image, _, _ = psp_runtime
+    project = tmp_path / "project"
+    declaration = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+        "tests", "fixtures", "m4_native_top", "phase1", "generated_docs", "L19_CONSTRAINTS_PDK.json")
+    put(project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json", declaration.read_text())
+    family, _ = declared_target(project)
+    bdir = project / "phase3/analog/unit"
+    circuit = ".subckt unit a b vss\nR1 a b 1k\nR2 b vss 2k\n.ends unit\n"
+    put(bdir / "unit.sp", circuit)
+    put(bdir / "tb_unit.sp", "* preserved canonical input\n")
+    put(bdir / "spec.json", {"specs": [{"name": "vout", "min": 1.1, "max": 1.3}]})
+    put(bdir / "testbench_inputs.json", {"block": "unit", "ports": ["a", "b", "vss"],
+        "rails": {"vss": "vss"}, "testbench": {"supply_exprs": ["1.8"],
+        "stimulus": ["v_force a 0 {supply}"],
+        "control": ["op", "let sensed = v(b)", 'echo "MEAS vout=" $&sensed', "quit"]}})
+    put(project / "phase3/analog/analog_block_list.json", {"blocks": [{"name": "unit"}]})
+    _resim_extraction(project, "unit", circuit.replace(".ends unit", "Rpex b sense 10\nCpex sense vss 1p\n.ends unit"))
+    pre, post = _real_windows(project, "unit", image, family)
+    assert post["status"] == "PASS", post
+    assert post["metrics"]["pre"]["measurements"]["vout"] == pre["metrics"]["vout"]
+    corner = post["metrics"]["corners"][0]
+    assert corner["measurements"]["vout"] == pytest.approx(1.2)
+    execution = corner["simulation"]["native_execution"]
+    assert execution["argv"][0] == "ngspice"
+    assert execution["native_init"] is None
+    assert execution["native_environment"]["PDK"] == family
+    assert (bdir / "tb_unit.sp").read_text() == "* preserved canonical input\n"
+
+
+@pytest.mark.parametrize("bad_model", [False, True])
+def test_real_a14_local_reuses_a07_psp_startup(tmp_path, psp_runtime, bad_model):
+    image, family, init = psp_runtime
+    project, canonical = _psp_project(tmp_path, family, "declared")
+    before = canonical.read_bytes()
+    model = "unavailable_model_alpha" if bad_model else "model_alpha"
+    raw = (".subckt device_alpha d g vss\nn_active core g vss vss " + model +
+           " w=1u l=1u\nRpex d core 2\nCpex core vss 1p\n.ends device_alpha\n")
+    _resim_extraction(project, "device_alpha", raw)
+    if not bad_model:
+        record = physical._paths(project, "device_alpha")[1] / "A13.json"
+        extraction = json.loads(record.read_text())
+        extraction["metrics"]["corners"].append(
+            {**extraction["metrics"]["corners"][0], "style": "ngspice(hrhc)"})
+        put(record, extraction)
+    pre, post = _real_windows(project, "device_alpha", image, family)
+    assert post["status"] == ("FAIL" if bad_model else "PASS"), post
+    simulation = post["metrics"]["simulation"] if bad_model else post["metrics"]["corners"][0]["simulation"]
+    execution = simulation["native_execution"]
+    assert execution["argv"][0] == "ngspice"
+    assert execution["native_init"] == pre["executions"][0]["native_init"]
+    assert execution["native_environment"] == pre["executions"][0]["native_environment"]
+    assert execution["native_init"]["path"] == str(init)
+    assert canonical.read_bytes() == before
+    if bad_model:
+        assert simulation["rc"] != 0
+        assert "*" in simulation["failed_analyses"]
+    else:
+        assert post["metrics"]["corners"][0]["measurements"]["device_current"] > 0
+        assert any(view.get("path") == str(init) for view in post["native_inputs"].values())
+        executions = [c["simulation"]["native_execution"] for c in post["metrics"]["corners"]]
+        assert len(executions) == len({e["log"] for e in executions}) == 2
+        assert all(e["log_sha256"] == physical._sha(Path(e["log"])) for e in executions)
+
+
+@pytest.mark.parametrize("outcome", ["success", "missing_docker", "missing_container"])
+def test_a14_requested_container_never_falls_back_to_local(project, monkeypatch, outcome):
+    import analog_native_flow as native
+    import subprocess
+    _extraction_project(project, monkeypatch)
+    put(physical._paths(project, "unit")[1] / "A13.json",
+        physical._extract(project, "unit", "requested_alpha", "image", "process", {}))
+    state = _declared_pre_state(project)
+    calls = []
+
+    def execute(argv, **kwargs):
+        calls.append(argv)
+        if outcome == "missing_docker":
+            raise FileNotFoundError(2, "No such file or directory", "docker")
+        if outcome == "missing_container":
+            return subprocess.CompletedProcess(argv, 1, "", "No such container: requested_alpha")
+        if argv[:2] != ["docker", "exec"] or "analog-native" not in argv:
+            raise FileNotFoundError(2, "Only the declared native context is available", "docker")
+        return subprocess.CompletedProcess(argv, 0,
+            "MEAS vout=1.19 rising_min=1.14 falling_peak=1.26\n", "")
+
+    monkeypatch.setattr(native.subprocess, "run", execute)
+    monkeypatch.setattr(native, "_local_ngspice_startup",
+        lambda *a: pytest.fail("a requested container must never select LOCAL startup"))
+    destination = project / "result.json"
+    rc = physical.main(["resim", str(project), "--block", "unit", "--container", "requested_alpha",
+        "--image", "image", "--pdk", "process", "--settings", json.dumps({"_pre_result": state}),
+        "--json", str(destination)])
+    result = json.loads(destination.read_text())
+    expected = {"success": (0, "PASS"), "missing_docker": (2, "NOT_MEASURED"),
+                "missing_container": (2, "NOT_MEASURED")}[outcome]
+    assert (rc, result["status"]) == expected, result
+    assert len(calls) == (3 if outcome == "success" else 1)
+    assert all(argv[:2] == ["docker", "exec"] and "requested_alpha" in argv for argv in calls)
+    if outcome != "success":
+        assert "requested_alpha" in result["detail"]
+        if outcome == "missing_docker":
+            assert "NGSPICE_NATIVE_EXECUTION_UNAVAILABLE" in result["detail"]
 
 
 def test_layout_executes_producer_and_requires_actual_outputs(project):

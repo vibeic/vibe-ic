@@ -158,7 +158,7 @@ def test_the_generic_sentence_states_the_ruling_and_names_the_bucket(tmp_path):
 # ── additive: `met` is decided where it always was ──────────────────────────
 
 def _exp(**kw):
-    base = {"id": "row", "layer": "L9_INTEGRATION_SPEC", "field_path": None,
+    base = {"id": "row", "layer": "L9_INTEGRATION_SPEC", "field_path": "ports",
             "requirement": "r", "evidence": [],
             "expected_tokens": ["FACTTOKEN"]}
     base.update(kw)
