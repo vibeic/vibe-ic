@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -198,3 +199,9 @@ def test_other_owner_keeps_existing_noncanonical_dispatch(monkeypatch, tmp_path)
     assert len(seen) == 1
     assert not seen[0].get('_preflight_canonical_acceptance')
     assert not seen[0].get('owner_capture')
+
+
+def test_unapproved_dispatch_is_forbidden_during_this_module():
+    with pytest.raises(AssertionError, match='Native/proof/STA/global dispatch forbidden'):
+        subprocess.run([sys.executable, '-c', "print('must not execute')"],
+                       capture_output=True, text=True, timeout=10)
