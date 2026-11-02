@@ -291,6 +291,13 @@ class NativeCommands:
                 "native_environment": startup_environment}
 
 
+def _a18_model_sources():
+    import flow109_metric_acceptance as metrics
+    paths = [Path(__file__), Path(metrics.__file__),
+             *[HERE / name for name in ("analog_macro_top_gen.py", "analog_macro_top_run.py", "analog_macro_top_pdn.py")]]
+    return {path.name: _sha(path) for path in paths}
+
+
 def _a18_metrics(project, name, settings, evidence, execution, limits_before):
     """Consume A18 values without promoting component evidence to row acceptance."""
     import flow109_metric_acceptance as metrics
@@ -306,25 +313,41 @@ def _a18_metrics(project, name, settings, evidence, execution, limits_before):
             inputs[str(path)] = digest
             return path
 
-        outputs = evidence.get("outputs")
-        if not isinstance(outputs, dict) or not outputs:
-            raise ValueError("A18_PRODUCER_OUTPUT_IDENTITY_ABSENT")
-        receipt = Path(settings["evidence"])
-        receipt = receipt if receipt.is_absolute() else project / receipt
+        from analog_macro_top_gen import RECORD
+        from analog_macro_top_run import RUN_RECORD
+        receipt = project / RUN_RECORD
         reopen(str(receipt.relative_to(project)), execution.get("outputs", {}).get(str(receipt)))
         if _read(receipt) != evidence:
             raise ValueError("A18_RECEIPT_CONTENT_CHANGED")
+        if evidence.get("producer") != "analog_macro_top_run":
+            raise ValueError("A18_PRODUCER_IDENTITY_ABSENT")
+        generation = project / RECORD
+        reopen(RECORD, evidence.get("generation_sha256"))
+        generated = _read(generation)
+        if generated.get("verdict") != "WROTE":
+            raise ValueError("A18_GENERATION_NOT_CURRENT")
+        for path, digest in {**generated["inputs"], **generated["outputs"]}.items():
+            current = Path(path)
+            if not current.is_file() or _sha(current) != digest:
+                raise ValueError("A18_INPUT_STALE: " + path)
+            inputs[str(current)] = digest
+        outputs = evidence.get("outputs")
+        if not isinstance(outputs, dict) or not outputs:
+            raise ValueError("A18_PRODUCER_OUTPUT_IDENTITY_ABSENT")
         bound = {}
-        for leaf, view in outputs.items():
-            if Path(leaf).name != leaf or not isinstance(view, dict):
+        for raw, digest in outputs.items():
+            if not isinstance(raw, str) or not isinstance(digest, str):
                 raise ValueError("A18_PRODUCER_OUTPUT_INVALID")
-            path = receipt.parent / leaf
+            path = Path(raw)
+            path = path if path.is_absolute() else project / path
             relative = str(path.relative_to(project))
-            reopen(relative, view.get("sha256"))
+            reopen(relative, digest)
             observed = execution.get("outputs", {}).get(str(path))
-            if observed != view.get("sha256"):
-                raise ValueError("A18_OUTPUT_NOT_FROM_EXECUTION: " + leaf)
-            bound[leaf] = path
+            if observed is not None and observed != digest:
+                raise ValueError("A18_OUTPUT_NOT_FROM_EXECUTION: " + raw)
+            # The authenticated execution output is the producer's manifest;
+            # its immutable view hashes also bind dynamically named native logs.
+            bound[raw] = path
         tops = [p for p in bound.values() if p.suffix == ".gds"]
         extracted = [p for p in bound.values() if p.name.endswith(".extracted.spice")]
         if len(tops) != 1 or len(extracted) != 1:
@@ -334,7 +357,10 @@ def _a18_metrics(project, name, settings, evidence, execution, limits_before):
         if (adopted.get("producer") != "analog_a8_hardmacro_emit"
                 or adopted.get("block") != name
                 or evidence.get("core_embedded_unchanged") is not True
-                or evidence.get("core_input_sha256") != adopted.get("source_gds_sha256")):
+                or evidence.get("core_inputs_sha256", {}).get(str(project / adopted.get("source_gds", "")))
+                != adopted.get("source_gds_sha256")
+                or generated["inputs"].get(str(project / adopted.get("source_gds", "")))
+                != adopted.get("source_gds_sha256")):
             raise ValueError("A18_A17_CORE_IDENTITY_ABSENT")
         reopen(str(provenance.relative_to(project)), _sha(provenance))
         reopen(adopted["source_gds"], adopted["source_gds_sha256"])
@@ -376,7 +402,8 @@ def _a18_metrics(project, name, settings, evidence, execution, limits_before):
                  "identity": {"producer": "analog_native.A18", "checker": _sha(Path(__file__)),
                               "tool_execution": {"outputs": execution["outputs"],
                                                  "returncode": execution["returncode"]}, "consumed_inputs": inputs,
-                              "requirements": authority, "configuration": settings}},
+                              "requirements": authority, "configuration": {
+                                  "generation_sha256": evidence["generation_sha256"]}}},
                 {"status": "APPROVED", "limits": declared[net], "unit": units[net]})
             if units[net] != "um":
                 raise ValueError("A18_ROUTE_UNIT_UNSUPPORTED: " + net)
@@ -400,51 +427,68 @@ def _views(step, project, block, options, run):
             return {"status": "NOT_APPLICABLE", "detail":
                     "The declared mixed-signal digital top owns pad/power integration.",
                     "outputs": []}
+        import analog_macro_top_gen as top
+        from analog_macro_top_run import RUN_RECORD
+        import copy
         settings = options["config"].get("analog_top", {})
-        script = Path(settings.get("implementation_script", "__absent_top_script__"))
-        script = script if script.is_absolute() else project / script
-        if not script.is_file():
-            return {"status": "NOT_MEASURED", "detail":
-                    "Pure-analog top implementation script is absent", "outputs": []}
-        magicrc = settings.get("magicrc")
-        command = ["-dnull", "-noconsole"] + (["-rcfile", str(magicrc)] if magicrc else [])
-        limits_path = project / "requirements/analog_top_route/analog_sensitive_route_constraints.json"
-        limits_before = _sha(limits_path) if limits_path.is_file() else None
-        script_before = _sha(script)
-        result = run("@magic", command, cwd=script.parent,
-                     input_text=script.read_text() + "\nquit -noprompt\n",
-                     outputs=settings.get("outputs", []))
-        receipt = Path(settings.get("evidence", "__absent_a18_evidence__"))
-        receipt = receipt if receipt.is_absolute() else project / receipt
-        evidence = _read(receipt, {})
-        if not isinstance(evidence, dict):
-            evidence = {}
-        status = evidence.get("component_status", "NOT_MEASURED")
-        if status not in STATUSES:
-            status = "NOT_MEASURED"
-        detail = (evidence.get("reason") or evidence.get("detail") or
-                  f"Native A18 component reported {status}")
-        if status != "FAIL" and result["returncode"] != 0:
+        limits = project / "requirements/analog_top_route/analog_sensitive_route_constraints.json"
+        if "a18_result" in options:
+            result = copy.deepcopy(options["a18_result"])
+            if not result.get("executions"):
+                return result
+            generated = _read(project / top.RECORD)
+            execution = result["executions"][0]
+            evidence = result["native_evidence"]
+            status = result["status"]
+            outputs = result["outputs"]
+        else:
+            options["a18_limits_before"] = _sha(limits) if limits.is_file() else None
+            try:
+                generated = top.generate(project)
+            except (OSError, ValueError, TypeError, KeyError, top.Refusal) as exc:
+                result = {"status": "NOT_MEASURED", "detail": str(exc), "outputs": [],
+                          "reason": getattr(exc, "code", "A18_DECLARATION_INVALID"),
+                          "native_inputs": {}, "metric_acceptance": {
+                              "status": "NOT_MEASURED", "metrics": {}, "reason": str(exc)}}
+                write_json(project / top.RECORD, {"verdict": "REFUSED", **result})
+                options["a18_result"] = result
+                return result
+            receipt = project / RUN_RECORD
+            receipt.unlink(missing_ok=True)
+            execution = run("analog_macro_top_run.py", [str(project)], outputs=[str(receipt)])
+            evidence = _read(receipt, {})
+            if not isinstance(evidence, dict):
+                evidence = {}
+            outputs = list(generated["outputs"]) + [str(project / top.RECORD), str(receipt)]
+            native_outputs = evidence.get("outputs", {})
+            outputs += list(native_outputs) if isinstance(native_outputs, dict) else []
+            status = evidence.get("component_status", "NOT_MEASURED")
+            if status not in STATUSES:
+                status = "NOT_MEASURED"
+            if execution["returncode"] or execution["missing_outputs"]:
+                status = "FAIL"
+            if any(not Path(path).is_file() or _sha(path) != digest
+                   for path, digest in generated["inputs"].items()):
+                status = "FAIL"
+                evidence["reason"] = "A18_INPUT_CHANGED_DURING_EXECUTION"
+            if status == "PASS" and (not native_outputs or any(
+                    not Path(path).is_file() or _sha(path) != digest
+                    for path, digest in native_outputs.items())):
+                status = "FAIL"
+            options["a18_result"] = {"status": status, "outputs": outputs,
+                                     "executions": [execution], "native_evidence": evidence}
+        limits_before = options["a18_limits_before"]
+        acceptance = _a18_metrics(project, name, settings, evidence, execution, limits_before)
+        acceptance["input_views"].update(generated["inputs"])
+        if acceptance["status"] == "FAIL":
             status = "FAIL"
-            detail = f"Native pure-analog top implementation exited {result['returncode']}"
-        elif status != "FAIL" and not settings.get("outputs"):
-            status = "FAIL"
-            detail = "Native pure-analog top implementation declares no outputs"
-        elif status != "FAIL" and result["missing_outputs"]:
-            status = "FAIL"
-            detail = "Native pure-analog top implementation omitted declared outputs"
-        acceptance = _a18_metrics(project, name, settings, evidence, result, limits_before)
-        if _sha(script) != script_before:
-            acceptance = {"status": "NOT_MEASURED", "metrics": {}, "input_views": {},
-                          "reason": "A18_PRODUCER_CHANGED_DURING_EXECUTION"}
-        acceptance["input_views"][str(script)] = script_before
-        if acceptance["status"] == "FAIL" and status != "FAIL":
-            status, detail = "FAIL", "A18 native measurement misses declared expectation"
-        return {"status": status, "detail": detail,
-                "outputs": settings.get("outputs", []), "executions": [result],
-                "native_evidence": evidence, "metric_acceptance": acceptance,
-                "native_inputs": {path: {"path": path, "sha256": digest}
-                                  for path, digest in acceptance["input_views"].items()}}
+        result = {"status": status, "detail": evidence.get("detail") or evidence.get("reason")
+                  or "A18 native implementation receipt absent", "outputs": outputs,
+                  "executions": [execution], "native_evidence": evidence,
+                  "metric_acceptance": acceptance,
+                  "native_inputs": {path: {"path": path, "sha256": digest}
+                                    for path, digest in acceptance["input_views"].items()}}
+        return result
     if step == "A19":
         prior = options["previous_results"]
         rows = [{"step": sid, **prior.get(sid, {}).get(name, {
@@ -685,10 +729,13 @@ def run_window(project, args, *, features=None):
 
     state_lock = threading.Lock()
 
+    window_steps = list(STEPS[STEPS.index(entry):STEPS.index(exit_) + 1])
+    selected_steps = [s for s in window_steps if s < "A18"] if "A18" in window_steps else window_steps
+
     def execute_block(block):
         # A long simulation in one block does not hold another block's ready
         # layout, extraction or delivery work behind a global step barrier.
-        for step in STEPS[STEPS.index(entry):STEPS.index(exit_) + 1]:
+        for step in selected_steps:
             current = execute_one(step, block)
             with state_lock:
                 rows.append(current)
@@ -701,6 +748,14 @@ def run_window(project, args, *, features=None):
 
     with ThreadPoolExecutor(max_workers=options["workers"]) as pool:
         list(pool.map(execute_block, blocks))
+        if "A18" in window_steps:
+            # Global chip assembly must not race another block's A17 writer.
+            selected_steps = ["A18"]
+            for block in blocks:
+                execute_block(block)
+            if "A19" in window_steps:
+                selected_steps = ["A19"]
+                list(pool.map(execute_block, blocks))
     report["finished_at"] = datetime.now(timezone.utc).isoformat()
     write_json(attempt / "result.json", report)
     write_json(parent / "status.json", report)
@@ -1325,6 +1380,9 @@ def consume_default_row_completion(project, context, component):
             "delivery_accepted": False, "qualification": "NOT_MEASURED"}
     if component.get("component_status") == "FAIL":
         return {**base, "default_row_status": "FAIL", "reason": component.get("reason")}
+    if any(row.get("native_evidence", {}).get("stand_in") is True
+           for row in component.get("native_results", {}).get("steps", [])):
+        return {**base, "reason": "A18_MACRO_TOP_SIGNOFF_NOT_MEASURED"}
     try:
         import flow109
         import flow109_admission as admission
@@ -1334,7 +1392,7 @@ def consume_default_row_completion(project, context, component):
         if component.get("component_status") != "PASS" or context["native_step_id"] != "flow109.A18":
             raise ValueError("A18_NATIVE_COMPONENT_NOT_PASS")
         qualified = admission.require_admission(project, context)
-        sources = {p.name: _sha(p) for p in (Path(__file__), Path(metrics.__file__))}
+        sources = _a18_model_sources()
         for use in context["runtime_tool_uses"]:
             config = _read(project / use["config"]["path"])
             if config != {"purpose": use["semantics"]["purpose"],
@@ -1345,8 +1403,8 @@ def consume_default_row_completion(project, context, component):
         rows, readset = _a18_current_rows(project, component["native_results"], "A18", blocks, image)
         config = _read(project / "input/analog_flow.json")
         settings = config["analog_top"]
-        receipt = Path(settings["evidence"])
-        receipt = receipt if receipt.is_absolute() else project / receipt
+        from analog_macro_top_run import RUN_RECORD
+        receipt = project / RUN_RECORD
         limits = project / "requirements/analog_top_route/analog_sensitive_route_constraints.json"
         observations = []
         for row in rows:
@@ -1354,12 +1412,16 @@ def consume_default_row_completion(project, context, component):
             if len(executions) != 1 or executions[0].get("returncode") != 0 or executions[0].get("missing_outputs"):
                 raise ValueError("A18_NATIVE_EXECUTION_INCOMPLETE")
             execution = executions[0]
-            script = Path(settings["implementation_script"])
-            script = script if script.is_absolute() else project / script
-            argv = ["magic", "-dnull", "-noconsole"]
-            if settings.get("magicrc"):
-                argv += ["-rcfile", str(settings["magicrc"])]
-            if execution.get("argv") != argv or execution.get("cwd") != str(script.parent):
+            evidence = _read(receipt)
+            for use in context["runtime_tool_uses"]:
+                view = evidence.get("native_tools", {}).get(use["tool_id"])
+                if view != use["executable"] or _sha(Path(view["path"])) != view["sha256"]:
+                    raise ValueError("A18_QUALIFIED_TOOL_MISMATCH")
+                readset[view["path"]] = view["sha256"]
+            argv = execution.get("argv", [])
+            if (len(argv) != 3 or Path(argv[0]).resolve() != Path(evidence["native_tools"]["python3"]["path"]).resolve()
+                    or argv[1:] != [str(HERE / "analog_macro_top_run.py"), str(project)]
+                    or execution.get("cwd") != str(project)):
                 raise ValueError("A18_QUALIFIED_INVOCATION_MISMATCH")
             log = Path(execution["log"])
             log = log if log.is_absolute() else project / log

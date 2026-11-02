@@ -8,6 +8,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import analog_native_flow as native
+from programs.tests.test_analog_macro_top import declaration
+
+RUN_RECORD = "reports/phase3/analog_macro_top_run.json"
 
 
 def digest(path):
@@ -24,8 +27,12 @@ def put(root, relative, value):
 @pytest.fixture
 def carrier(tmp_path):
     root = tmp_path
-    script = put(root, "input/top.tcl", "puts synthetic-control")
+    declaration(root)
     core = put(root, "phase3/analog/core/core.gds", "synthetic-core")
+    l9_path = root / "phase1/generated_docs/L9_INTEGRATION_SPEC.json"
+    l9 = json.loads(l9_path.read_text())
+    l9["macros"]["stage_alpha"]["gds"] = str(core.relative_to(root))
+    l9_path.write_text(json.dumps(l9))
     pex = put(root, "phase3/analog/core/core.pex.spice", "synthetic-core-pex")
     measurement = put(root, "phase3/analog/core/a8_measurement.json", {})
     log = put(root, "phase3/analog/core/native.log", "synthetic-native-log")
@@ -46,19 +53,22 @@ def carrier(tmp_path):
             "status": "APPROVED", "authority": "requirements_owner", "source_reference": view(source)},
         "limits": {"VREF": {"max": 10}}, "units": {"VREF": "um"}})
     evidence = {"component_status": "PASS", "core_embedded_unchanged": True,
-        "core_input_sha256": digest(core), "outputs": {
-            path.name: {"sha256": digest(path)} for path in (top, extracted)},
+        "core_inputs_sha256": {str(core): digest(core)}, "outputs": {str(path): digest(path) for path in (top, extracted)},
         "checks": {"analog_top_pad_core_connectivity_errors": 0},
         "route_measurements": [{"net": "VREF", "length_um": 9, "unit": "um",
             "geometry_sha256": digest(top), "pex_sha256": digest(extracted), "pass": True}]}
-    receipt = put(root, "top/a18.json", evidence)
-    settings = {"implementation_script": str(script), "evidence": str(receipt),
-                "outputs": [str(top), str(extracted), str(receipt)]}
+    receipt = put(root, RUN_RECORD, evidence)
+    settings = {}
     def run_case(during_execution=None, after_capture=None, omit_receipt_hash=False):
         receipt.write_text(json.dumps(evidence))
         def run(*args, **kwargs):
             if during_execution:
                 during_execution()
+            from analog_macro_top_gen import RECORD
+            evidence.update(producer="analog_macro_top_run", generation_sha256=digest(root / RECORD))
+            import shutil
+            evidence["native_tools"] = {name: {"path": str(Path(shutil.which(name)).resolve()), "sha256": digest(Path(shutil.which(name)).resolve())} for name in ("python3", "openroad")}
+            receipt.write_text(json.dumps(evidence))
             outputs = {str(p): digest(p) for p in (top, extracted, receipt)}
             if after_capture:
                 after_capture()
@@ -174,7 +184,7 @@ def test_receipt_values_require_execution_bound_json(carrier, fault):
     original_geometry = {name: digest(root / "top" / name)
                          for name in ("top.gds", "top.extracted.spice")}
     def alter_receipt():
-        path = root / "top/a18.json"
+        path = root / RUN_RECORD
         value = json.loads(path.read_text())
         value["checks"]["analog_top_pad_core_connectivity_errors"] = 0
         value["route_measurements"][0]["length_um"] = 9
@@ -227,7 +237,7 @@ def test_ordered_window_a18_actual_consumer(carrier, monkeypatch, producer):
     features = next(p["features"] for p in flow109.load_registry()["reference_profiles"]
                     if p["name"] == "Analog IC external trim")
     manifest = put(root, "manifest.json", {"features": features})
-    monkeypatch.setattr(_delivery_route, "report_label", lambda project: {"delivery_route": "IC"})
+    monkeypatch.setattr(_delivery_route, "report_label", lambda project, **kwargs: {"delivery_route": "IC"})
     consumed = []
     def window(project, context):
         assert context["requested_step"] == "A18"
@@ -282,9 +292,7 @@ def completion_case(carrier, monkeypatch):
 
     root, evidence, run = carrier
     image = "ghcr.io/vibeic/vibeic-eda@sha256:1fb01aadad86b5aea7c84cffb723f10d3b20aab7b6bf938f428a215a3233cfda"
-    config = {"analog_top": {"implementation_script": str(root / "input/top.tcl"),
-        "evidence": str(root / "top/a18.json"), "outputs": [str(root / "top" / name)
-        for name in ("top.gds", "top.extracted.spice", "a18.json")]}}
+    config = {"analog_top": {}}
     put(root, "input/analog_flow.json", config)
     put(root, "phase3/analog/analog_block_list.json", {"blocks": [{"name": "core", "type": "ldo"}]})
     features = copy.deepcopy(next(p["features"] for p in flow109.load_registry()["reference_profiles"]
@@ -292,6 +300,8 @@ def completion_case(carrier, monkeypatch):
     plan = flow109.resolve_plan(features)
     model_sources = {Path(native.__file__).name: digest(Path(native.__file__)),
                      Path(metrics.__file__).name: digest(Path(metrics.__file__))}
+    if hasattr(native, "_a18_model_sources"):
+        model_sources = native._a18_model_sources()
     contexts = {}
     for step in ("D03", "A17", "D31", "D32", "A18"):
         row = flow109.resolve_step(plan, step)
@@ -352,13 +362,13 @@ def completion_case(carrier, monkeypatch):
     monkeypatch.setattr(pads, "_d32_inputs", lambda project: {"top": "synthetic_top", "inputs": {str(material): digest(material)}})
     monkeypatch.setattr(packages, "run_audit", lambda project: SimpleNamespace(summary={"design_bound_blocks": ["core"]}))
     monkeypatch.setattr(launch, "resolve_image", lambda *args, **kwargs: image)
-    monkeypatch.setattr(_delivery_route, "report_label", lambda project: {"delivery_route": "IC"})
+    monkeypatch.setattr(_delivery_route, "report_label", lambda project, **kwargs: {"delivery_route": "IC"})
     def generate():
         observed = {**native_row("A18"), **run()}
         observed["input_views"].update({v["path"]: v["sha256"] for v in observed["native_inputs"].values()})
-        invocation_log = put(root, "reports/analog_native/synthetic-A18/magic.log", "SYNTHETIC MAGIC EXECUTION SEAM")
-        observed["executions"][0].update(argv=["magic", "-dnull", "-noconsole"],
-            cwd=str(root / "input"), log=str(invocation_log), log_sha256=digest(invocation_log))
+        invocation_log = put(root, "reports/analog_native/synthetic-A18/producer.log", "SYNTHETIC MACRO PRODUCER EXECUTION SEAM")
+        observed["executions"][0].update(argv=[sys.executable, str(native.HERE / "analog_macro_top_run.py"), str(root)],
+            cwd=str(root), log=str(invocation_log), log_sha256=digest(invocation_log))
         observed["output_views"] = native._output_views(observed)
         return report("A18", [observed])
     current_report = generate()
@@ -430,7 +440,7 @@ def test_a18_completion_refuses_incomplete_evidence(completion_case, fault):
         replacement = case.generate()
         case.report.clear();case.report.update(replacement)
     elif fault == "stale_native_receipt":
-        (case.root / "top/a18.json").write_text("{}")
+        (case.root / RUN_RECORD).write_text("{}")
     result = case.invoke()
     assert result["default_row_status"] == "NOT_MEASURED", result
     assert result["completed"] is False, result
@@ -511,3 +521,23 @@ def test_a18_completion_accepts_existing_window_projection(completion_case):
     path.write_text(json.dumps(body))
     result = case.invoke()
     assert result["default_row_status"] == "PASS", (result.get("reason"), result.get("detail"))
+
+
+def test_a18_completion_never_accepts_stand_in(completion_case):
+    case = completion_case
+    case.evidence["stand_in"] = True
+    replacement = case.generate()
+    case.report.clear()
+    case.report.update(replacement)
+    result = case.invoke()
+    assert result["default_row_status"] == "NOT_MEASURED", result
+    assert result["completed"] is False, result
+
+
+def test_a18_completion_refuses_foreign_python_invocation(completion_case):
+    case = completion_case
+    case.report["steps"][0]["executions"][0]["argv"][0] = "/foreign/python3"
+    put(case.root, str((Path(case.report["attempt"]) / "result.json").relative_to(case.root)), case.report)
+    result = case.invoke()
+    assert result["default_row_status"] == "NOT_MEASURED", result
+    assert result["completed"] is False, result
