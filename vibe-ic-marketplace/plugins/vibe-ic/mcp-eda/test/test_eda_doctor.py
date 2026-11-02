@@ -10,25 +10,69 @@ Edge   : skip_versions=true short-circuits per-tool version queries.
 SKIP   : when docker is unreachable, doc_* probes are still skipped.
 """
 from pathlib import Path
+import ctypes
+import ctypes.util
 import json
 import shutil
 import subprocess
 from shlex import quote
 
-import pytest
-
 INDEX_JS = Path(__file__).resolve().parent.parent / "src" / "index.js"
 
 
-def _run_version_probe(tmp_path, *, legacy=None, native=True):
-    """Execute the shipped version consumer, with a controlled container PATH.
+def _consume_stubbed_probe(script):
+    """Run the shipped JS consumer with stubbed transport, without Node.
 
-    The dockerExec stand-in runs bash locally; it never resolves a tool on the
-    host's ordinary PATH. Live immutable-image proof is retained separately.
+    JavaScriptCore is already shipped in the prescribed EDA image. This uses
+    its public GLib API; the version classifier and shell resolver below are
+    read from production source rather than reimplemented in Python.
     """
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("MCP_NODE_NOT_MEASURED: Node is required to execute the JavaScript version consumer")
+    library = ctypes.util.find_library("javascriptcoregtk-4.1")
+    if library is None:
+        library = next(iter(sorted(Path("/nix/store").glob(
+            "*/lib/libjavascriptcoregtk-4.1.so"))), None)
+    assert library is not None, "MCP_TEST_JAVASCRIPTCORE_ABSENT: use the prescribed EDA image"
+    engine = ctypes.CDLL(str(library))
+    pointer = ctypes.c_void_p
+    signatures = {
+        "jsc_context_new": (pointer, []),
+        "jsc_context_evaluate": (pointer, [pointer, ctypes.c_char_p, ctypes.c_ssize_t]),
+        "jsc_context_get_exception": (pointer, [pointer]),
+        "jsc_exception_report": (pointer, [pointer]),
+        "jsc_value_to_string": (pointer, [pointer]),
+        "g_free": (None, [pointer]),
+        "g_object_unref": (None, [pointer]),
+    }
+    for name, (result, arguments) in signatures.items():
+        function = getattr(engine, name)
+        function.restype, function.argtypes = result, arguments
+
+    def string_and_free(value):
+        try:
+            return ctypes.string_at(value).decode()
+        finally:
+            engine.g_free(value)
+
+    context = engine.jsc_context_new()
+    value = None
+    try:
+        value = engine.jsc_context_evaluate(context, script.encode(), -1)
+        exception = engine.jsc_context_get_exception(context)
+        assert not exception, string_and_free(engine.jsc_exception_report(exception))
+        return json.loads(string_and_free(engine.jsc_value_to_string(value)))
+    finally:
+        if value:
+            engine.g_object_unref(value)
+        engine.g_object_unref(context)
+
+
+def _run_version_probe(tmp_path, *, legacy=None, native=True):
+    """Feed controlled probe output to the actual version consumer.
+
+    The command is produced by the shipped resolver. Only fixture executables
+    print versions; dockerExec receives their captured result as a JSON stub.
+    No Docker client, real EDA tool or Node process is launched.
+    """
     binary_dir = tmp_path / "native"
     binary_dir.mkdir()
     for utility in ("head", "grep"):
@@ -49,18 +93,30 @@ def _run_version_probe(tmp_path, *, legacy=None, native=True):
     consumer = source[start:source.index("\n}\n", start) + 3]
     start = source.index("const _ERR_PATTERNS =")
     errors = source[start:source.index("\n];", start) + 3]
-    script = "\n".join([
-        "import {spawnSync} from 'node:child_process';",
-        "import {containerToolCommand} from " + json.dumps((INDEX_JS.parent / "lib/tool_path.mjs").as_uri()) + ";",
-        "const TOOLS = " + json.dumps(str(tools)) + ";",
-        "const _versionCache = new Map(); const calls=[];",
-        "function _ensureVersionCacheFresh() {}",
-        "function dockerExec(cmd) {calls.push(cmd); const r=spawnSync(" + json.dumps(shutil.which("bash")) + ",['-c',cmd],{encoding:'utf8',env:{...process.env,PATH:" + json.dumps(str(binary_dir)) + "}}); return {success:r.status===0,output:(r.stdout||'')+(r.stderr||''),error:r.stderr};}",
-        errors, consumer,
-        "console.log(JSON.stringify({version:getToolVersion('yosys'),calls}));",
-    ])
-    result = subprocess.run([node, "--input-type=module", "-e", script], capture_output=True, text=True, check=True)
-    return json.loads(result.stdout), native_called.exists()
+    safety = (INDEX_JS.parent / "lib/shell_safety.mjs").read_text()
+    start = safety.index("export function shq(")
+    quoting = safety[start:safety.index("\n}\n", start) + 3].replace("export function", "function", 1)
+    resolver = (INDEX_JS.parent / "lib/tool_path.mjs").read_text()
+    resolver = resolver[resolver.index("export function containerToolCommand"):].replace("export function", "function", 1)
+
+    def consume(response):
+        script = "\n".join([
+            "const TOOLS = " + json.dumps(str(tools)) + ";",
+            "const _versionCache = new Map(); const calls=[];",
+            "function _ensureVersionCacheFresh() {}",
+            "function dockerExec(cmd) {calls.push(cmd); return " + json.dumps(response) + ";}",
+            quoting, resolver, errors, consumer,
+            "JSON.stringify({version:getToolVersion('yosys'),calls});",
+        ])
+        return _consume_stubbed_probe(script)
+
+    probe = consume({"success": True, "output": "fixture version 0.0"})["calls"][0]
+    result = subprocess.run([shutil.which("bash"), "-c", probe],
+        env={"PATH": str(binary_dir)}, capture_output=True, text=True, check=False)
+    got = consume({"success": result.returncode == 0,
+                   "output": result.stdout + result.stderr, "error": result.stderr})
+    assert got["calls"] == [probe]
+    return got, native_called.exists()
 
 
 def test_native_container_path_replaces_an_absent_builtin_legacy_default(tmp_path):

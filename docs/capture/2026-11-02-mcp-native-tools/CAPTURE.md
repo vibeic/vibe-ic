@@ -14,8 +14,9 @@ The PR rework restores the existing deterministic Magic and Fault commands and
 all original doctor assertions, including the bare-PATH Fault prohibition.
 Container PATH resolution remains for the other tools. Historical 17/17 doctor
 and source-patch identities below describe the earlier component experiment;
-they do not qualify this reworked tree. New JavaScript controls require Node
-and report `MCP_NODE_NOT_MEASURED` when that prerequisite is absent.
+they do not qualify this reworked tree. The five added controls feed stubbed probe output directly to the shipped
+version consumer using the image-provided JavaScriptCore runtime. They do not
+launch Node or skip on its absence.
 
 ## Program First
 
