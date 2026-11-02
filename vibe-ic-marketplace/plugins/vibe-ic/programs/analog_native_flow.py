@@ -1461,6 +1461,11 @@ def _d54_correlation(project: Path, context: dict) -> dict:
     """
     import flow109
     from corner_yield_vs_spec_check import _spec_limits
+    from analog_real_corner_sweep import normalize_spec_label
+
+    def limits(spec):
+        return {normalize_spec_label(key) or str(key).casefold(): bound
+                for key, bound in _spec_limits(spec).items()}
 
     project = Path(project).resolve()
     context = flow109.validate_execution_context(context)
@@ -1524,9 +1529,9 @@ def _d54_correlation(project: Path, context: dict) -> dict:
                         raise ValueError("D54_A14_READSET_STALE")
                 # A14 already grades spec.json. Require those exact limits to
                 # remain the block's original L5 limits before routing PASS.
-                original = _spec_limits(originals[name]["spec"])
+                original = limits(originals[name]["spec"])
                 spec = json.loads((layout.analog_dir(project) / name / "spec.json").read_text())
-                if not original or original != _spec_limits(spec):
+                if not original or original != limits(spec):
                     raise ValueError("D54_A14_ORIGINAL_L5_LIMITS_MISMATCH")
                 metrics = a14["metrics"]
                 if (not metrics.get("corners") or not metrics.get("specs")
