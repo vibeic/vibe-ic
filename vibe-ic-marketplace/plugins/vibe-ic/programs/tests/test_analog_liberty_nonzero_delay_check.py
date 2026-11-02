@@ -562,3 +562,56 @@ def test_r63_empty_cell_name_is_not_a_definition(tmp_path, cell):
     result = mod.run_audit(tmp_path)
     assert not result.passed
     assert "LIB_NO_CELL" in {f.rule for f in result.findings}
+
+
+@pytest.mark.parametrize("specimen,rule,cell", [
+    ("continued_direction.lib", "LIB_NO_TIMING", "ref_decap"),
+    ("continued_documentation.lib", None, "ref_decap"),
+    ("quoted_cell_zero_arcs.lib", "LIB_ZERO_DELAY", "opaque//cell"),
+])
+def test_r63_review63b_logical_string_specimens(tmp_path, specimen, rule, cell):
+    _, lib = _native_passive_case(tmp_path)
+    fixture = Path(__file__).parent / "fixtures/liberty_logical_strings" / specimen
+    lib.write_bytes(fixture.read_bytes())
+    result = mod.run_audit(tmp_path)
+    assert mod.analyze_liberty(lib.read_text())[2] == cell
+    if rule is None:
+        assert result.passed, [(f.rule, f.message) for f in result.findings]
+        assert mod.analyze_liberty(lib.read_text())[:2] == (False, [])
+        assert mod.liberty_arc_delays_ns(lib.read_text()) == ([], "1ns")
+    else:
+        assert not result.passed
+        assert rule in {f.rule for f in result.findings}
+        samples, _ = mod.liberty_arc_delays_ns(lib.read_text())
+        if rule == "LIB_NO_TIMING":
+            assert samples == []
+        else:
+            assert len(samples) == 2
+            assert all(sample["delay_ns"] == 0 for sample in samples)
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n"], ids=["LF", "CRLF"])
+def test_r63_logical_attributes_and_table_values_share_continuation_rules(tmp_path, ending):
+    join = "\\" + ending
+    _, lib = _native_passive_case(tmp_path)
+    text = lib.read_text().replace('time_unit : "1ns";', 'time_unit : "1n' + join + 's";')
+    text = text.replace('leakage_power_unit : "1uW";', 'leakage_power_unit : "1u' + join + 'W";')
+    text = text.replace('cell (ref_decap)', 'cell ("ref_' + join + 'decap")')
+    lib.write_bytes(text.encode())
+    result = mod.run_audit(tmp_path)
+    assert result.passed, [(f.rule, f.message) for f in result.findings]
+    assert mod.analyze_liberty(text) == (False, [], "ref_decap")
+    assert mod.liberty_arc_delays_ns(text) == ([], "1ns")
+    active = LIB_SETTLING_AS_ARC.replace('values("2.97")', 'values("2.' + join + '97")')
+    assert 2.97 in mod.analyze_liberty(active)[1]
+    samples, unit = mod.liberty_arc_delays_ns(active)
+    assert unit == "1us"
+    assert samples[0]["raw_value"] == 2.97
+
+
+def test_r63_quoted_escapes_are_decoded_once_and_unknown_escapes_retained():
+    text = r'cell("quoted\"name\\tail") { comment : "// still a string"; }'
+    assert mod.analyze_liberty(text) == (False, [], 'quoted"name\\tail')
+    source = mod._lex_liberty(r'pin(out) { direction : "out\put"; }')
+    assert mod._attribute(source, "direction") == r'out\put'
+    assert not mod._has_signal_output(source)

@@ -30,6 +30,7 @@ import argparse
 import json
 import re
 import sys
+from bisect import bisect_left
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 from typing import List, Tuple
@@ -103,10 +104,6 @@ _SCALAR_TIMING_ATTRS = (
     "cell_rise", "cell_fall", "rise_transition", "fall_transition",
     "intrinsic_rise", "intrinsic_fall",
 )
-_SCALAR_RE = {
-    a: re.compile(rf"\b{a}\s*:\s*([-+0-9.eE]+)\s*;")
-    for a in _SCALAR_TIMING_ATTRS
-}
 
 # NLDM-style table: values("0.1, 0.2", "0.3, 0.4");  inside a timing()/
 # table group. We pull every numeric token out of every values(...) blob.
@@ -139,31 +136,65 @@ _TIME_UNIT_TO_NS = {
 
 
 @dataclass(frozen=True)
+class _LibertyToken:
+    kind: str
+    value: str
+    start: int
+    end: int
+
+
+@dataclass(frozen=True)
 class _LibertySource:
-    code: str
     syntax: str
+    tokens: Tuple[_LibertyToken, ...]
+
+    def between(self, start: int, end: int) -> Tuple[_LibertyToken, ...]:
+        first = bisect_left(self.tokens, start, key=lambda token: token.start)
+        last = bisect_left(self.tokens, end, key=lambda token: token.start)
+        return tuple(t for t in self.tokens[first:last] if t.end <= end)
 
     def slice(self, start: int, end: int) -> _LibertySource:
-        return _LibertySource(self.code[start:end], self.syntax[start:end])
+        return _LibertySource(self.syntax[start:end], tuple(
+            _LibertyToken(t.kind, t.value, t.start - start, t.end - start)
+            for t in self.between(start, end)))
+
+    def argument(self, start: int, end: int) -> str:
+        tokens = self.between(start, end)
+        return (tokens[0].value if len(tokens) == 1
+                and tokens[0].kind in ("atom", "string") else "")
 
 
 def _lex_liberty(text: str | _LibertySource) -> _LibertySource:
     if isinstance(text, _LibertySource):
         return text
-    code = list(text)
     syntax = list(text)
+    tokens = []
+    punctuation = "(){}:;,"
     i = 0
     while i < len(text):
         start = i
         if text[i] == '"':
+            value = []
             i += 1
             while i < len(text):
                 if text[i] == "\\":
-                    i += 2
+                    if text.startswith("\\\r\n", i):
+                        i += 3
+                    elif text.startswith("\\\n", i):
+                        i += 2
+                    elif i + 1 < len(text):
+                        escaped = text[i + 1]
+                        value.append(escaped if escaped in '\\"' else "\\" + escaped)
+                        i += 2
+                    else:
+                        value.append("\\")
+                        i += 1
                 elif text[i] == '"':
                     i += 1
+                    tokens.append(_LibertyToken("string", "".join(value), start, i))
                     break
                 else:
+                    value.append(text[i])
                     i += 1
             end = min(i, len(text))
             syntax[start:end] = [" "] * (end - start)
@@ -175,26 +206,39 @@ def _lex_liberty(text: str | _LibertySource) -> _LibertySource:
                 close = text.find("\n", i + 2)
                 i = len(text) if close < 0 else close
             blank = ["\n" if c == "\n" else " " for c in text[start:i]]
-            code[start:i] = blank
             syntax[start:i] = blank
+        elif text[i].isspace():
+            i += 1
+        elif text[i] in punctuation:
+            tokens.append(_LibertyToken("punctuation", text[i], i, i + 1))
+            i += 1
         else:
             i += 1
-    return _LibertySource("".join(code), "".join(syntax))
+            while (i < len(text) and not text[i].isspace()
+                   and text[i] not in punctuation + '"'
+                   and not text.startswith(("//", "/*"), i)):
+                i += 1
+            tokens.append(_LibertyToken("atom", text[start:i], start, i))
+    return _LibertySource("".join(syntax), tuple(tokens))
+
+
+def _attributes(text: _LibertySource, name: str):
+    for i, token in enumerate(text.tokens[:-3]):
+        if token.kind != "atom" or token.value.lower() != name.lower():
+            continue
+        colon, value, semicolon = text.tokens[i + 1:i + 4]
+        if (colon.kind == "punctuation" and colon.value == ":"
+                and value.kind in ("atom", "string")
+                and semicolon.kind == "punctuation" and semicolon.value == ";"):
+            yield value.value.strip()
 
 
 def _attribute(text: _LibertySource, name: str) -> str | None:
-    match = re.search(rf"\b{name}\s*:", text.syntax, re.I)
-    if match is None:
-        return None
-    value = re.match(r'\s*(?:"((?:\\.|[^"\\])*)"|([^;]*))\s*;',
-                     text.code[match.end():])
-    if value is None:
-        return None
-    return (value.group(1) if value.group(1) is not None else value.group(2)).strip()
+    return next(_attributes(text, name), None)
 
 
 def _extract_values_blocks(text: _LibertySource) -> List[str]:
-    """Return the raw content of each values(...) call (balanced-paren scan)."""
+    """Return logical argument values for each live values(...) call."""
     blocks: List[str] = []
     for m in _VALUES_RE.finditer(text.syntax):
         i = m.end()  # position right after the '('
@@ -207,7 +251,8 @@ def _extract_values_blocks(text: _LibertySource) -> List[str]:
             elif c == ")":
                 depth -= 1
             i += 1
-        blocks.append(text.code[start:i - 1])
+        blocks.append(",".join(t.value for t in text.between(start, i - 1)
+                               if t.kind in ("atom", "string")))
     return blocks
 
 
@@ -249,8 +294,10 @@ def liberty_arc_delays_ns(text: str | _LibertySource) -> Tuple[List[dict], str]:
 
     # Scalar Liberty spelling: ``cell_rise : 0.42 ;``.
     for kind in _ARC_DELAY_ATTRS:
-        for m in _SCALAR_RE[kind].finditer(text.syntax):
-            raw = float(m.group(1))
+        for value in _attributes(text, kind):
+            if not _NUM_RE.fullmatch(value):
+                continue
+            raw = float(value)
             samples.append({
                 "kind": kind,
                 "raw_value": raw,
@@ -297,19 +344,17 @@ def analyze_liberty(text: str | _LibertySource) -> Tuple[bool, List[float], str]
     cm = _CELL_RE.search(text.syntax)
     values: List[float] = []
     has_timing = False
-    for attr, rx in _SCALAR_RE.items():
-        for match in rx.finditer(text.syntax):
+    for attr in _SCALAR_TIMING_ATTRS:
+        for value in _attributes(text, attr):
             has_timing = True
-            try:
-                values.append(float(match.group(1)))
-            except ValueError:
-                values.append(float("nan"))
+            if _NUM_RE.fullmatch(value):
+                values.append(float(value))
         for match in re.finditer(rf"\b{attr}\s*\([^)]*\)\s*\{{", text.syntax):
             has_timing = True
             body = _balanced_group_body(text, match.end() - 1)
             for blob in _extract_values_blocks(body):
                 values.extend(float(number) for number in _NUM_RE.findall(blob))
-    cell = text.code[cm.start(1):cm.end(1)].strip().strip('"') if cm else ""
+    cell = text.argument(cm.start(1), cm.end(1)) if cm else ""
     return has_timing, values, cell
 
 
@@ -337,12 +382,12 @@ def _native_leakage_refusal(project: Path, block: str, text: str | _LibertySourc
     if measurement is None:
         return why
     text = _lex_liberty(text)
-    scalar = re.search(r"\bcell_leakage_power\s*:\s*([-+0-9.eE]+)\s*;", text.syntax)
+    scalar = _attribute(text, "cell_leakage_power")
     unit = _attribute(text, "leakage_power_unit")
-    if scalar is None or unit is None:
+    if scalar is None or not _NUM_RE.fullmatch(scalar) or unit is None:
         return "Liberty lacks its measured leakage scalar or power unit"
     if (unit != measurement["liberty_power_unit"] or
-            float(scalar.group(1)) != float(f'{measurement["liberty_value"]:.12g}')):
+            float(scalar) != float(f'{measurement["liberty_value"]:.12g}')):
         return "Liberty leakage differs from the current native A8 measurement"
     return ""
 
@@ -447,8 +492,9 @@ def run_audit(project: Path) -> Result:
                          f"SPICE-measured delays.")))
             continue
 
-        leakage = re.search(r"\bcell_leakage_power\s*:\s*([-+0-9.eE]+)\s*;", text.syntax)
-        if (not has_arc or leakage is None or float(leakage.group(1)) <= 0):
+        leakage = _attribute(text, "cell_leakage_power")
+        if (not has_arc or leakage is None or not _NUM_RE.fullmatch(leakage)
+                or float(leakage) <= 0):
             why = _native_leakage_refusal(project, block, text)
             if why:
                 res.passed = False
