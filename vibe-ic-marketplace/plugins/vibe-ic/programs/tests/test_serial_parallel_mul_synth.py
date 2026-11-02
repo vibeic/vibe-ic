@@ -51,6 +51,9 @@ def _mk_project(tmp: Path, *, ports, l2_text, top="spm") -> Path:
     rst_name = next((p["name"] for p in ports
                      if p["name"] in ("rst", "rst_n", "reset", "reset_n")), "rst")
     polarity = "active-low" if rst_name.endswith("_n") else "active-high"
+    # The generated module declares size; an unbound mathematical N cannot
+    # stand in for that parameter in an executable reference contract.
+    l2_text = l2_text.replace("mod 2^N", "mod 2^size")
     l2_text += f"; synchronous {polarity} reset"
     (gd / "L2_FRS.json").write_text(json.dumps(
         {"ic_name": top, "frs_sections": [{"content": l2_text}]},
