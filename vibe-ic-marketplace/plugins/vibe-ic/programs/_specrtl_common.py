@@ -662,9 +662,13 @@ class SpecContract:
     # silent 0-port skip on a table-only interface spec is visible.
     notes: List[str] = field(default_factory=list)
     logic_obligations: List["LogicObligation"] = field(default_factory=list)
+    function: Optional[dict] = None
+    accounted_source_spans: List["SourceAccounting"] = field(default_factory=list)
+    unaccounted_source_spans: List["SourceAccounting"] = field(default_factory=list)
 
 
 DECLARED_LOGIC_OBLIGATION_UNSUPPORTED = "DECLARED_LOGIC_OBLIGATION_UNSUPPORTED"
+SPEC_SENTENCES_UNACCOUNTED = "SPEC_SENTENCES_UNACCOUNTED"
 
 
 @dataclass(frozen=True)
@@ -678,6 +682,22 @@ class LogicObligation:
     @property
     def clause(self) -> str:
         return " ".join(self.source_sentence.split())
+
+
+@dataclass(frozen=True)
+class SourceAccounting:
+    kind: str
+    source_span: Tuple[int, int]
+    source_sentence: str
+    contract_field: str
+
+    @property
+    def clause(self) -> str:
+        return " ".join(self.source_sentence.split())
+
+
+def unaccounted_spec_sentences(contract: SpecContract) -> Tuple[SourceAccounting, ...]:
+    return tuple(contract.unaccounted_source_spans)
 
 
 _LOGIC_FAMILIES = frozenset({"nand", "nor", "xor", "xnor", "and", "or", "not", "mux"})
@@ -828,19 +848,201 @@ def declared_logic_obligations(text: str, top: Optional[str] = None, *,
     return unsupported_logic_obligations(contract)
 
 
+def _parsed_kmap_function(text: str, contract: SpecContract):
+    """The producer's complete scalar-output grid and its actual source range."""
+    if 'karnaugh' not in text.lower():
+        return None
+    import kmap_grid_synth as kmap
+    parsed = kmap._parse_kmap(text)
+    ports = kmap.parse_ports(text)
+    if parsed is None or ports is None:
+        return None
+    col_bits, row_bits, col_codes, (row_codes, grid) = parsed
+    outputs = [(direction, width, name) for direction, width, name in ports.values()
+               if direction == 'output']
+    if len(outputs) != 1 or outputs[0][1] != 1:
+        return None
+    axes = list(row_bits) + list(col_bits)
+    if len(set(axes)) != len(axes):
+        return None
+    actual_ports = {port.name: (port.direction, port.width) for port in contract.ports}
+    for direction, width, name in ports.values():
+        if actual_ports.get(name) != (direction, width):
+            return None
+    physical_axes = set()
+    for axis in axes:
+        token = re.fullmatch(r'([A-Za-z_]\w*)(?:\[(\d+)\])?', axis)
+        if token is None:
+            return None
+        name, index = token.groups()
+        declared = ports.get(name.lower())
+        if declared is None or declared[0] != 'input' or declared[2] != name:
+            return None
+        if index is None:
+            if declared[1] != 1:
+                return None
+            packed = kmap._decl_range(text, name, declared[1])
+            bounds = re.fullmatch(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*', packed)
+            index = bounds.group(1) if bounds is not None else '0'
+        else:
+            packed = kmap._decl_range(text, name, declared[1])
+            bounds = re.fullmatch(r'\[\s*(\d+)\s*:\s*(\d+)\s*\]\s*', packed)
+            lower, upper = (sorted(map(int, bounds.groups())) if bounds else (0, 0))
+            if not lower <= int(index) <= upper:
+                return None
+        physical_axis = (name, int(index))
+        if physical_axis in physical_axes:
+            return None
+        physical_axes.add(physical_axis)
+    for codes, bits in ((col_codes, col_bits), (row_codes, row_bits)):
+        if (len(codes) != 2 ** len(bits)
+                or {int(code, 2) for code in codes} != set(range(2 ** len(bits)))):
+            return None
+    if any(value not in ('0', '1') for row in grid for value in row):
+        return None
+    lines = text.splitlines(keepends=True)
+    starts, offset = [], 0
+    for line in lines:
+        starts.append(offset)
+        offset += len(line)
+    grid_start = next((i for i, line in enumerate(lines) if kmap._GRID_ROW.fullmatch(line.rstrip('\r\n'))), None)
+    if grid_start is None:
+        return None
+    grid_end = grid_start
+    while grid_end < len(lines) and kmap._GRID_ROW.fullmatch(lines[grid_end].rstrip('\r\n')):
+        grid_end += 1
+    if grid_end - grid_start != len(row_codes):
+        return None
+    header = grid_start - 1
+    while header >= 0 and not lines[header].strip():
+        header -= 1
+    axis = header - 1
+    while axis >= 0 and not lines[axis].strip():
+        axis -= 1
+    if axis < 0:
+        return None
+    function = {'kind': 'truth_table', 'inputs': axes, 'output': outputs[0][2],
+                'rows': [{'in': row_code + col_code, 'out': grid[i][j]}
+                         for i, row_code in enumerate(row_codes)
+                         for j, col_code in enumerate(col_codes)]}
+    end = starts[grid_end] if grid_end < len(lines) else len(text)
+    return function, (starts[axis], end)
+
+
+def _supported_sop_sentence(sentence: str) -> Optional[Tuple[str, ...]]:
+    """A fully consumed permission/basis declaration for the K-map SOP producer."""
+    if re.fullmatch(r'(?:sum-of-products|sop)(?:\s+(?:logic|implementation))?\s+'
+                    r'is\s+(?:explicitly\s+)?(?:allowed|permitted)', sentence, re.I):
+        return ('and', 'not', 'or')
+    match = re.fullmatch(
+        r'(?:(?:you|the\s+(?:module|implementation|circuit))\s+)?'
+        r'(?:(?:must|shall|should|may|can)\s+)?(?:use|implement\s+using)\s+'
+        r'(?:only\s+)?(.+)', sentence, re.I)
+    if match is None:
+        return None
+    unit = re.compile(r'(AND|OR|NOT|NAND|NOR|XOR|XNOR|inverters?|multiplexers?|mux(?:es)?)'
+                      r'(?:\s+(?:logic\s+)?gates?)?', re.I)
+    def read_list(tail, families):
+        gate = unit.match(tail)
+        if gate is None:
+            return None
+        family = gate.group(1).lower()
+        family = ('not' if family.startswith('inverter') else
+                  'mux' if family.startswith(('mux', 'multiplexer')) else family)
+        families = families | {family}
+        tail = tail[gate.end():]
+        if not tail:
+            return tuple(sorted(families)) if {'and', 'or', 'not'}.issubset(families) else None
+        for pattern in (r'\s*,\s*', r'\s*,?\s*(?:and|or)\s+'):
+            separator = re.match(pattern, tail, re.I)
+            if separator is not None:
+                parsed = read_list(tail[separator.end():], families)
+                if parsed is not None:
+                    return parsed
+        return None
+    return read_list(match.group(1), set())
+
+
+def account_spec_source(text: str, contract: SpecContract) -> SpecContract:
+    """Rebuild semantic source consumption from positive parsers, never caller claims."""
+    clean = text
+    remainder = list(clean)
+    accounted: List[SourceAccounting] = []
+
+    def add(kind, lo, hi, contract_field):
+        while lo < hi and clean[lo].isspace():
+            lo += 1
+        while hi > lo and clean[hi - 1].isspace():
+            hi -= 1
+        if lo == hi:
+            return
+        accounted.append(SourceAccounting(kind, (lo, hi), text[lo:hi], contract_field))
+        remainder[lo:hi] = ['\n' if ch == '\n' else ' ' for ch in clean[lo:hi]]
+
+    port_map = {port.name: (port.direction, port.width) for port in contract.ports}
+    offset = 0
+    for line in clean.splitlines(keepends=True):
+        content = line.rstrip('\r\n')
+        port = re.fullmatch(r'\s*[-*]\s*(input|output|inout)\s+`?([A-Za-z_]\w*)`?'
+                            r'(?:\s*\(\s*(\d+)\s*bits?\s*\))?\s*', content, re.I)
+        if port is not None:
+            direction, name, width = port.groups()
+            if port_map.get(name) == (direction.lower(), int(width) if width else 1):
+                add('interface', offset, offset + len(content), 'ports.' + name)
+        offset += len(line)
+    parsed = _parsed_kmap_function(clean, contract)
+    contract.function = parsed[0] if parsed is not None else None
+    if parsed is not None:
+        add('function', *parsed[1], 'function')
+    unknown: List[SourceAccounting] = []
+    for match in re.finditer(r'[^.!?;]+[.!?;]?', ''.join(remainder)):
+        raw = match.group(0)
+        lo = match.start() + len(raw) - len(raw.lstrip())
+        hi = match.end() - len(raw) + len(raw.rstrip())
+        if lo >= hi:
+            continue
+        sentence = ' '.join(clean[lo:hi].split()).rstrip('.!?;').strip()
+        if not sentence:
+            continue
+        module = re.fullmatch(
+            r'(?:implement|design|create|build)\s+(?:a\s+|the\s+)?(?:Verilog\s+)?'
+            r'module\s+(?:named|called)\s+`?([A-Za-z_]\w*)`?', sentence, re.I)
+        reference = re.fullmatch(
+            r'(?:the|this)\s+module\s+(?:(?:should|must|shall|will)\s+)?'
+            r'implement(?:s)?\s+the\s+function\s+shown\s+in\s+the\s+'
+            r'(?:Karnaugh\s+map|K-map)\s+(?:below|above)', sentence, re.I)
+        if module is not None and module.group(1) == contract.module:
+            add('interface', lo, hi, 'module')
+        elif contract.function is not None and reference is not None:
+            add('function', lo, hi, 'function')
+        elif contract.function is not None and _supported_sop_sentence(sentence):
+            field = ('logic_obligations' if any(row.source_span == (lo, hi)
+                     for row in contract.logic_obligations) else 'function')
+            add('supported_implementation', lo, hi, field)
+        else:
+            unknown.append(SourceAccounting('unaccounted', (lo, hi), text[lo:hi], ''))
+    contract.accounted_source_spans = sorted(accounted, key=lambda row: row.source_span)
+    contract.unaccounted_source_spans = unknown
+    return contract
+
+
 def emission_spec_contract(text: str, interface_text: str = "", top: Optional[str] = None) -> SpecContract:
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        data = None
+    contract = extract_spec_contract(text, is_json=isinstance(data, (dict, list)), confirm=False, top=top)
     if interface_text:
         try:
             interface = json.loads(interface_text)
         except (ValueError, TypeError):
             interface = None
         if isinstance(interface, dict) and "logic_obligations" in interface:
-            return extract_spec_contract(interface_text, is_json=True, confirm=False)
-    try:
-        data = json.loads(text)
-    except (ValueError, TypeError):
-        data = None
-    return extract_spec_contract(text, is_json=isinstance(data, (dict, list)), confirm=False, top=top)
+            declared = logic_obligations_from_records(interface['logic_obligations'])
+            module = interface.get('module') or interface.get('top_module')
+            contract.logic_obligations = [row for row in declared
+                                          if row.module is None or module is None or row.module == module]
+    return account_spec_source(text, contract)
 
 
 # Natural-language interface bullet:  " - input  d   (8 bits)"  /  " - output q"
@@ -1877,7 +2079,7 @@ def extract_spec_contract(text: str, is_json: bool = False,
         ports = [Port(d['name'], _json_port_direction(d), _json_port_width(d),
                       bool(d.get('optional')) if isinstance(d, dict) else False)
                  for d in port_dicts]
-        return SpecContract(module=mod, ports=ports,
+        contract = SpecContract(module=mod, ports=ports,
                             reset_mode=rst.get('mode'),
                             reset_polarity=rst.get('polarity'),
                             reset_signal=rst.get('signal'),
@@ -1887,6 +2089,7 @@ def extract_spec_contract(text: str, is_json: bool = False,
                             source='json',
                             logic_obligations=logic_obligations_from_records(
                                 data.get('logic_obligations', []) if isinstance(data, dict) else []))
+        return account_spec_source(text, contract)
 
     clean = strip_comments(text)
     ports = _parse_nl_ports(clean)
@@ -1961,4 +2164,4 @@ def extract_spec_contract(text: str, is_json: bool = False,
             from .llm_semantic_confirm import confirm_contract, manifest  # packaged
         contract.semantic_confirmations = manifest(
             confirm_contract(contract, text, client_factory=client_factory))
-    return contract
+    return account_spec_source(text, contract)

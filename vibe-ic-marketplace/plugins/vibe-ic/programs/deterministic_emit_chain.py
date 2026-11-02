@@ -45,8 +45,14 @@ def _registry(prompt: str, ifc: str, top: str) -> Tuple[Optional[str], Optional[
         return None, None
     from _specrtl_common import emission_spec_contract
     contract = emission_spec_contract(prompt, ifc, top)
-    if contract.source == 'json' and ifc:
-        return _reg.generate(prompt, top, contract=contract)
+    if ifc:
+        import json
+        try:
+            interface = json.loads(ifc)
+        except ValueError:
+            interface = None
+        if isinstance(interface, dict) and 'logic_obligations' in interface:
+            return _reg.generate(prompt, top, contract=contract)
     return _reg.generate(prompt, top)
 
 
@@ -253,15 +259,23 @@ def try_emit_ex(prompt_text: str, ifc_text: str = "", top: str = "TopModule",
     if not (prompt_text or "").strip():
         return None, None, rejected
     from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
-                                 emission_spec_contract, unsupported_logic_obligations)
+                                 SPEC_SENTENCES_UNACCOUNTED, emission_spec_contract,
+                                 unsupported_logic_obligations, unaccounted_spec_sentences)
     try:
         contract = emission_spec_contract(prompt_text, ifc_text, top)
     except ValueError as exc:
         return None, None, [('DECLARED_LOGIC_OBLIGATION_INVALID', [str(exc)])]
     obligations = unsupported_logic_obligations(contract)
+    unaccounted = unaccounted_spec_sentences(contract)
     if obligations:
-        return None, None, [(DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
-                            [f"{o.kind}: {o.clause}" for o in obligations])]
+        rejected.append((DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
+                         [f"{o.kind}: {o.clause}" for o in obligations]))
+    if unaccounted:
+        rejected.append((SPEC_SENTENCES_UNACCOUNTED,
+                         [f"[{row.source_span[0]}:{row.source_span[1]}] {row.source_sentence}"
+                          for row in unaccounted]))
+    if rejected:
+        return None, None, rejected
     for name, fn in EMITTERS:
         try:
             kind, rtl = fn(prompt_text, ifc_text, top)

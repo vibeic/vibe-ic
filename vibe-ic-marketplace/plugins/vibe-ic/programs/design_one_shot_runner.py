@@ -2751,8 +2751,10 @@ def _declared_logic_author_handoff(project: Path, t0: float,
     """Read-only author handoff before unsupported deterministic implementation."""
     if not text.strip() or _design_supplied_build_rtl(project):
         return None
+    from dataclasses import asdict
     from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
-                                 emission_spec_contract, unsupported_logic_obligations)
+                                 SPEC_SENTENCES_UNACCOUNTED, emission_spec_contract,
+                                 unsupported_logic_obligations, unaccounted_spec_sentences)
     interface_text = ''
     if _pl.rtl_input(project) != "original":
         interface_path = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
@@ -2769,22 +2771,28 @@ def _declared_logic_author_handoff(project: Path, t0: float,
             f'DECLARED_LOGIC_OBLIGATION_INVALID: {exc}; no RTL was generated or changed.',
             reason_class=_V.ReasonClass.NOT_EXECUTED)
     obligations = unsupported_logic_obligations(contract)
-    if not obligations:
+    unaccounted = unaccounted_spec_sentences(contract)
+    if not obligations and not unaccounted:
         return None
     rules = [f"{o.kind}: {o.clause}" for o in obligations]
+    unknown_rules = [f"[{row.source_span[0]}:{row.source_span[1]}] {row.source_sentence}"
+                     for row in unaccounted]
+    marker = DECLARED_LOGIC_OBLIGATION_UNSUPPORTED if obligations else SPEC_SENTENCES_UNACCOUNTED
     skill_source = SKILLS_DIR / "spec-to-rtl" / "SKILL.md"
     return StepResult(
         "rtl_gen", "PASS_WITH_WAIVERS", time.time() - t0,
-        f"{DECLARED_LOGIC_OBLIGATION_UNSUPPORTED}: " + "; ".join(rules)
-        + ". Deterministic producers do not establish this implementation "
-        f"obligation. AI invokes `spec-to-rtl` from {skill_source}; "
+        f"{marker}: " + "; ".join(rules + unknown_rules)
+        + ". The parsed contract does not account for the complete spec. "
+        f"AI invokes `spec-to-rtl` from {skill_source} and reads the full spec; "
         "no RTL was generated or changed.",
         extras={"fallback_skill": "spec-to-rtl",
                 "fallback_skill_source": str(skill_source),
                 "fallback_skill_staged": False,
                 "fallback_skill_unstaged_reason": "read-only declared-obligation handoff",
-                "rejected_emitters": [DECLARED_LOGIC_OBLIGATION_UNSUPPORTED],
-                "rejected_rules": rules})
+                "rejected_emitters": [marker],
+                "rejected_rules": rules + unknown_rules,
+                "logic_obligations": [asdict(row) for row in contract.logic_obligations],
+                "unaccounted_source_spans": [asdict(row) for row in unaccounted]})
 
 
 def _try_spec_artifact_registry_rtl(
@@ -2879,6 +2887,32 @@ _STRUCTURED_RTL_SPEC_PATHS = (
     "phase2/stage1/rtl_spec.yaml", "phase2/rtl_spec.yaml", "input/rtl_spec.yaml")
 
 
+def _structured_spec_author_handoff(project: Path, t0: float) -> Optional[StepResult]:
+    if (_pl.rtl_input(project) == "original" or _design_supplied_build_rtl(project)
+            or _design_supplied_unstageable_hdl(project)):
+        return None
+    for name in _STRUCTURED_RTL_SPEC_PATHS:
+        spec = project / name
+        parts = [spec, *spec.parents]
+        if any(path.is_symlink() for path in parts[:parts.index(project)]):
+            return StepResult("rtl_gen", "FAIL", time.time() - t0,
+                              f"STRUCTURED_RTL_SPEC_UNREADABLE: symlink at {name}; no RTL was changed.",
+                              reason_class=_V.ReasonClass.NOT_EXECUTED)
+        if not spec.is_file():
+            continue
+        try:
+            text = spec.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            return StepResult("rtl_gen", "FAIL", time.time() - t0,
+                              f"STRUCTURED_RTL_SPEC_UNREADABLE: {name}: {exc}; no RTL was changed.",
+                              reason_class=_V.ReasonClass.NOT_EXECUTED)
+        handoff = _declared_logic_author_handoff(project, t0, text)
+        if handoff is not None:
+            handoff.extras["spec_source"] = name
+        return handoff
+    return None
+
+
 def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepResult]:
     """since v0.1.10 — program-first RTL. If the project ships a structured RTL
     spec, route it through deterministic_rtl_dispatcher (FSM-table / truth-table /
@@ -2945,6 +2979,9 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
                     "declined_spec": str(spec.relative_to(project)),
                     "design_rtl_sample": _rel}, declared_by=f"the design ships its own build RTL ({len(_own)} file(s), e.g. {_rel})")
 
+    handoff = _structured_spec_author_handoff(project, t0)
+    if handoff is not None:
+        return handoff
     dispatcher = PROGRAMS_DIR / "deterministic_rtl_dispatcher.py"
     if not dispatcher.is_file():
         return None
@@ -8832,6 +8869,9 @@ def _step_rtl_gen_bound(
             project / staged_link,
             "the isolated RTL dispatch snapshot contains a symlink that a "
             "reader or generator could follow outside the held project tree")
+    handoff = _structured_spec_author_handoff(project, t0)
+    if handoff is not None:
+        return handoff
     # v0.1.10: program-FIRST. If a structured RTL spec is present and is
     # mechanically derivable (FSM table / truth table / gate netlist / vector op),
     # emit RTL deterministically with NO LLM before any class-registry / AI path.
