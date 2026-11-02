@@ -404,7 +404,9 @@ def _declared_pre_state(project, source="sidecar"):
         put(project / "input/analog_flow.json", config)
     def run(program, argv, **kwargs):
         log = put(Path(argv[argv.index("-o") + 1]), "MEAS vout=1.2 rising_min=1.15 falling_peak=1.25\n")
-        return {"returncode": 0, "log": str(log), "log_sha256": physical._sha(log),
+        capture = put(log.parent / "capture.log", "ngspice batch mode\n")
+        return {"returncode": 0, "log": str(capture), "log_sha256": physical._sha(capture),
+                "outputs": {str(log): physical._sha(log)},
                 "argv": ["ngspice", *argv]}
     return sim.run_step("A07", project, {"name": "unit"}, {"config": config}, run)
 
@@ -470,13 +472,51 @@ def test_a14_declared_pre_change_during_post_keeps_unmeasured(project, monkeypat
     monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
     monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
     def spice(*args, **kwargs):
-        path = bdir / "testbench_inputs.json" if changed == "declaration" else Path(state["executions"][0]["log"])
+        path = bdir / "testbench_inputs.json" if changed == "declaration" else Path(state["executions"][0]["stdout_path"])
         path.write_text(path.read_text() + "\n")
         return True, {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}, "MEAS vout=1.19\n", {}
     monkeypatch.setattr(ars, "_run_ngspice", spice)
     result = physical._resim(project, "unit", "container", "image", "process", {"_pre_result": state})
     assert result["status"] == "NOT_MEASURED"
     assert "changed during POST" in result["detail"]
+
+
+@pytest.mark.parametrize("changed", [None, "bytes", "digest", "missing"])
+def test_a14_reuses_real_a07_output_stream_only_while_current(project, changed):
+    import shutil
+    import analog_native_flow as native
+    import analog_native_sim as sim
+    if not shutil.which("ngspice"):
+        pytest.skip("native ngspice is required for the A07 to A14 stream control")
+    bdir, _ = physical._paths(project, "unit")
+    put(bdir / "unit.sp", ".subckt unit a b vss\nr1 a b 1k\nr2 b vss 1k\n.ends unit\n")
+    put(bdir / "spec.json", {"specs": [{"name": "vout", "min": 0.9, "max": 1.1}]})
+    put(bdir / "testbench_inputs.json", {"block": "unit", "ports": ["a", "b", "vss"],
+        "rails": {"vss": "vss"},
+        "testbench": {"supply_exprs": ["2"], "stimulus": ["v1 a 0 {supply}"],
+        "control": ["op", "let sensed = v(b)", 'echo "MEAS vout=" $&sensed', "quit"]}})
+    destination = project / "native-capture"
+    destination.mkdir()
+    state = sim.run_step("A07", project, {"name": "unit"}, {"config": {}},
+                         native.NativeCommands(project, destination, ""))
+    assert state["status"] == "PASS", state
+    execution = state["executions"][0]
+    output = Path(execution["stdout_path"])
+    assert output != Path(execution["log"])
+    assert "MEAS vout=" in output.read_text()
+    assert "MEAS vout=" not in Path(execution["log"]).read_text()
+    if changed == "bytes":
+        output.write_text(output.read_text() + "\n")
+    elif changed == "digest":
+        execution["outputs"].pop(str(output))
+    elif changed == "missing":
+        output.unlink()
+    values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
+    assert values == ({} if changed else {"vout": pytest.approx(1.0)})
+    if changed is None:
+        assert record["reused"] is True
+        assert record["log"] == str(output)
+        assert record["log_sha256"] == execution["outputs"][str(output)]
 
 
 @pytest.mark.parametrize("kind", ["alternate_actual_tb", "changed_actual_input", "legacy_no_argv", "legacy_alternate_tb"])

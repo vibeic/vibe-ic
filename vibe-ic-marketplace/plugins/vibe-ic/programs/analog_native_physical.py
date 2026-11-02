@@ -688,10 +688,18 @@ def _pre_layout_measurements(project: Path, name: str, cfg: dict) -> tuple[dict,
                 if actual_deck.resolve() != tb.resolve():
                     refusal_reasons.append("legacy A07 executed a different testbench from the canonical PRE comparison")
                     continue
-            path = Path(execution.get("log") or execution.get("log_path") or "")
-            if not path.is_file() or (execution.get("log_sha256") and
-                                      execution["log_sha256"] != _sha(path)):
-                continue
+            if execution.get("stdout_path"):
+                # A07 records ngspice's -o stream as an existing output.
+                # NativeCommands.log captures a different stdout/stderr stream.
+                path = Path(execution["stdout_path"])
+                digest = (execution.get("outputs") or {}).get(str(path))
+                if not digest or not path.is_file() or digest != _sha(path):
+                    continue
+            else:
+                path = Path(execution.get("log") or execution.get("log_path") or "")
+                if not path.is_file() or (execution.get("log_sha256") and
+                                          execution["log_sha256"] != _sha(path)):
+                    continue
             values = measured_log(path.read_text(errors="replace"))
             # Read the actual native transcript, even when nominal acceptance
             # was NOT_MEASURED because other required metrics were absent.

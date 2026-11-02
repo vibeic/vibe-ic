@@ -417,7 +417,10 @@ def test_normal_a07_window_consumes_declared_inputs_and_retains_actual_deck(tmp_
         calls.append((program, argv))
         log = Path(argv[argv.index("-o") + 1])
         log.write_text("MEAS vout=1.0\n")
-        return {"returncode": 0, "log": str(log), "log_sha256": native._sha(log)}
+        capture = log.parent / "capture.log"
+        capture.write_text("ngspice batch mode\n")
+        return {"returncode": 0, "log": str(capture), "log_sha256": native._sha(capture),
+                "outputs": {str(log): native._sha(log)}}
     monkeypatch.setattr(native.NativeCommands, "__call__", run)
     report = native.run_window(root, args("A07", "A07"))
     assert report["verdict"] == "PASS"
