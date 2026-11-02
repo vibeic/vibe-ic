@@ -305,7 +305,7 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
     if introduction:
         descriptions.append(introduction[1])
         text = text[introduction.end():]
-    prefix = re.match(r'^(' + descriptor + r')\s+(?=[A-Za-z_]\w*\s*=)', text, re.I)
+    prefix = re.match(r'^(' + descriptor + r')(?:\s*:\s*|\s+)(?=[A-Za-z_]\w*\s*=)', text, re.I)
     if prefix:
         descriptions.append(prefix[1])
         text = text[prefix.end():]

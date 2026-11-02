@@ -188,3 +188,16 @@ def test_existing_timed_serial_source_keeps_declared_multiply(tmp_path):
     spec, reason = oracle.extract_serial_arith_spec(p, 'digital_arithmetic_primitive')
     assert spec is not None, reason
     assert (spec['operator'], spec['width']) == ('*', 4)
+
+
+@pytest.mark.parametrize('source,accepted', [
+    ('serial-parallel multiplier: result = left * right mod 2^N', True),
+    ('serial-parallel multiplier: result = left * right + left', False),
+    ('serial-parallel multiplier: Do not implement result = left * right', False),
+    ('serial-parallel multiplier: result = left * right. Saturate on overflow.', False),
+])
+def test_shape_label_colon_preserves_the_complete_expression(source, accepted):
+    parsed = oracle._extract_operator(source)
+    assert bool(parsed) is accepted, parsed
+    if accepted:
+        assert parsed == ('result', 'left', '*', 'right')
