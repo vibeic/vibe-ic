@@ -1460,7 +1460,8 @@ def _d54_correlation(project: Path, context: dict) -> dict:
     threshold, receipt, or whole-flow acceptance is introduced here.
     """
     import flow109
-    import step_output_collector as versions
+    import analog_native_physical as physical
+    import analog_a7_post_layout_emit as a7
     from corner_yield_vs_spec_check import _spec_limits
     from analog_real_corner_sweep import normalize_spec_label
 
@@ -1483,16 +1484,36 @@ def _d54_correlation(project: Path, context: dict) -> dict:
                   "native_steps": default["native_steps"]},
               "acceptance_dependency": "A14", "blocks": []}
     try:
-        # Explicit analog-only declaration selects the profile. Absence alone
-        # never selects it; contradictory native synthesis facts refuse it.
+        # A synthesized wrapper can still contain only declared analog
+        # macros. Inspect its cell population; a file or sidecar is not a
+        # standard-cell timing path. Unknown/behavioural logic refuses reuse.
+        from synth_netlist_check import count_cell_instances
         synth = layout.synth_dir(project)
-        if (layout.mapped_synth_netlist(project) is not None
-                or any(synth.glob("*.v")) or any(synth.glob("*.sv"))
-                or (synth / layout.SYNTH_INPUTS_SIDECAR).exists()):
-            result["digital_path"] = {"status": "NOT_MEASURED",
-                "reason": "synthesized top contradicts macro-only declaration",
-                "native_steps": default["native_steps"]}
-            raise ValueError("D54_MACRO_ONLY_TOP_CONFLICT")
+        netlists = set(synth.glob("*.v")) | set(synth.glob("*.sv"))
+        mapped = layout.mapped_synth_netlist(project)
+        if mapped is not None:
+            netlists.add(mapped)
+        l9 = _read(layout.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json", {})
+        macros = set(l9.get("macros") or {})
+        macros.update(b.get("name") or b.get("block") for b in _declared_blocks(project))
+        for netlist in netlists:
+            text = re.sub(r"/\*.*?\*/|//[^\n]*", " ", netlist.read_text(), flags=re.S)
+            # Normalise statement boundaries for the existing cell census.
+            text = text.replace(";", ";\n")
+            count, cells = count_cell_instances(text)
+            modules = set(re.findall(r"\bmodule\s+([A-Za-z_][\w$]*)", text))
+            assignments = re.findall(r"\bassign\s+[^=;]+=\s*([^;]+);", text)
+            wiring = all(re.fullmatch(r"\s*(?:[A-Za-z_][\w$]*(?:\[\d+\])?|"
+                         r"(?:\d+)?'[sS]?[bBoOdDhH][0-9a-fA-F_xXzZ]+|[01])\s*", rhs)
+                         for rhs in assignments)
+            if (not count or set(cells) - macros - modules or not wiring
+                    or re.search(r"\b(?:always\w*|initial|function|generate)\b", text)):
+                result["digital_path"] = {"status": "NOT_MEASURED",
+                    "reason": "synthesized top is not a declared macro-only interconnect",
+                    "native_steps": default["native_steps"]}
+                raise ValueError("D54_MACRO_ONLY_TOP_CONFLICT")
+        if not netlists and (synth / layout.SYNTH_INPUTS_SIDECAR).exists():
+            raise ValueError("D54_SYNTHESIZED_TOP_UNAVAILABLE")
         blocks = _declared_blocks(project)
         l5 = layout.generated_docs_dir(project) / "L5_ADI_SPEC.json"
         originals = {b.get("name") or b.get("block"): b
@@ -1502,15 +1523,6 @@ def _d54_correlation(project: Path, context: dict) -> dict:
         if (not attempt.resolve().is_relative_to(project / "reports/analog_native")
                 or json.loads((attempt / "result.json").read_text()) != report):
             raise ValueError("D54_A14_NATIVE_ATTEMPT_UNAVAILABLE")
-        # The native block readset omits physical inputs. Reuse the flow's
-        # canonical current-result decision rather than infer freshness here.
-        current = versions.latest_pass(project, "A14")
-        if (not isinstance(current, dict) or current.get("id") != "A14"
-                or current.get("status") != "PASS"
-                or current.get("canonical_pass") is not True
-                or current.get("current_inputs") is not True
-                or current.get("capture_errors")):
-            raise ValueError("D54_A14_CURRENT_CANONICAL_RESULT_ABSENT")
         rows = [r for r in report["steps"] if r.get("step") == "A14"]
         for block in blocks:
             name = block.get("name") or block.get("block")
@@ -1547,6 +1559,44 @@ def _d54_correlation(project: Path, context: dict) -> dict:
                 if (not metrics.get("corners") or not metrics.get("specs")
                         or not metrics.get("pre", {}).get("measurements")):
                     raise ValueError("D54_A14_PEX_COMPARISON_MISSING")
+                # Ordinary A14 run_window results have no collector A14 entry.
+                # Their existing corner fields bind the actual POST netlist
+                # and TB; A13 binds the extracted input to the current layout.
+                bdir, work = physical._paths(project, name)
+                extraction = _read(work / "A13.json", {})
+                extracted = extraction.get("metrics") or {}
+                net = bdir / (name + ".sp")
+                if (extraction.get("status") != "PASS"
+                        or extracted.get("layout_sha256") != _sha(bdir / (name + ".gds"))
+                        or extracted.get("netlist_sha256") != _sha(net)):
+                    raise ValueError("D54_A14_EXTRACTION_NOT_CURRENT")
+                sources = extracted.get("corners") or []
+                if (len(sources) != len(metrics["corners"])
+                        or len({c["style"] for c in sources}) != len(sources)
+                        or {c["style"] for c in sources} != {c["style"] for c in metrics["corners"]}):
+                    raise ValueError("D54_A14_EXTRACTION_CORNERS_MISMATCH")
+                for corner in metrics["corners"]:
+                    for role in ("post_netlist", "post_testbench"):
+                        raw = corner.get(role)
+                        if not isinstance(raw, str) or not raw:
+                            raise ValueError("D54_A14_POST_INPUT_ABSENT")
+                        path = (project / raw).resolve()
+                        if (not path.is_relative_to(project) or not path.is_file()
+                                or corner.get(role + "_sha256") != _sha(path)):
+                            raise ValueError("D54_A14_POST_INPUT_STALE")
+                    matches = [c for c in sources if c["style"] == corner["style"]]
+                    if len(matches) != 1:
+                        raise ValueError("D54_A14_EXTRACTION_CORNERS_MISMATCH")
+                    source = matches[0]
+                    source_path = project / source["extracted_netlist"]
+                    if source.get("sha256") != _sha(source_path):
+                        raise ValueError("D54_A14_EXTRACTION_NOT_CURRENT")
+                    post_net = project / corner["post_netlist"]
+                    body, _ = a7.post_layout_netlist(name,
+                        a7.subckt_ports(net.read_text(), name), source_path.read_text(),
+                        a7.model_binding_lines(net.read_text(), bdir, post_net.parent))
+                    if hashlib.sha256(body.encode()).hexdigest() != corner["post_netlist_sha256"]:
+                        raise ValueError("D54_A14_POST_NETLIST_DIFFERS_FROM_CURRENT_A13")
                 observed.update(status="PASS", reason="D54_A14_NATIVE_PASS_ORIGINAL_L5",
                                 metrics=metrics)
             except (OSError, ValueError, KeyError, TypeError) as exc:
