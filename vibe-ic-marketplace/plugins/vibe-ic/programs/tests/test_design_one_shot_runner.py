@@ -212,6 +212,20 @@ def _load_runner():
 
 _EMITTED_RTL = "module chip_top(input clk);\nendmodule\n"
 
+_ACCOUNTED_OPERATOR_SPEC = """
+Implement a module named TopModule.
+ - input  a
+ - input  b
+ - output q
+
+The module should implement the function shown in the Karnaugh map below.
+
+       a
+  b   0   1
+  0 | 0 | 1 |
+  1 | 1 | 0 |
+"""
+
 
 class _FakeChain:
     """Stands in for deterministic_emit_chain: one emitter, one known body."""
@@ -228,7 +242,7 @@ def _emit_candidate(project: Path, mod):
     sys.modules["deterministic_emit_chain"] = _FakeChain
     try:
         res = mod._try_spec_artifact_registry_rtl(
-            project, 0.0, phase1_plain_text="a parse-complete prompt")
+            project, 0.0, phase1_plain_text=_ACCOUNTED_OPERATOR_SPEC)
     finally:
         sys.modules.pop("deterministic_emit_chain", None)
     return res, (project / "phase2" / "stage1" / "rtl" / "chip_top.sv")

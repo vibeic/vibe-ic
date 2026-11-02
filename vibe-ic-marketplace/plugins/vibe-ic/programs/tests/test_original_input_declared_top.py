@@ -14,6 +14,8 @@ import design_one_shot_runner as runner
 import benchmark_dispatch as dispatch
 import flow_phase_attribution as fpa
 import port_parser
+import spec_artifact_registry
+from _prose_handoff_assertions import assert_prose_handoff
 
 
 BODY = """All input and output ports are one bit.
@@ -55,7 +57,17 @@ def test_original_program_emit_uses_only_unique_public_module_name(tmp_path, dec
         assert not files
         assert result.extras["fallback_skill"] == "spec-to-rtl"
         return
-    assert result.status == "PASS", result
+    assert_prose_handoff(result, prompt)
+    assert (0, 63) in [tuple(span["source_span"])
+                       for span in result.extras["unaccounted_source_spans"]]
+    assert not files
+    top = runner._phase1_declared_module_name(prompt)
+    kind, candidate = spec_artifact_registry.generate(prompt, top)
+    assert kind and candidate
+    component = tmp_path / "component"
+    component.mkdir()
+    files = [component / f"{top}.sv"]
+    files[0].write_text(candidate)
     assert [file.name for file in files] == ["cedar_vote.sv"]
     text = files[0].read_text()
     assert re.search(r"\bmodule\s+cedar_vote\b", text)

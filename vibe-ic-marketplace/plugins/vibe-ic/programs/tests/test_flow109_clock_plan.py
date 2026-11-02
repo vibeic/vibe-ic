@@ -114,7 +114,7 @@ def _log(domains):
 
 def _approved(project, relative, schema, payload, source):
     _write(project / relative, {"schema": schema, **payload, "approval": {
-        "authority": "requirements_owner", "status": "APPROVED",
+        "authority": "requirements_owner", 'approver': 'neutral-requirements-reviewer', "status": "APPROVED",
         "source_reference": _rel(project, project / source)}})
 
 

@@ -40,6 +40,18 @@ _ALLOWED = {
 # general truths, not problem-specific hints. (The fsm one is the lesson from a confirm that
 # wrongly overrode a correct Moore candidate to Mealy, reasoning "Moore is impossible here".)
 _FIELD_NOTE = {
+    "logic_obligations": (
+        "Review ALL source sentences, including obligations missed by the parser. "
+        "Return a list of active design implementation obligations, or [] when none apply. "
+        "Each row has kind ('logic_basis' or 'logic_minimization'), family (a list of "
+        "normalized gate families nand/nor/xor/xnor/and/or/not/mux, or implementation costs "
+        "gates/literals/cells/transistors/area/expression), source_span ([start,end], "
+        "zero-based half-open character offsets into the complete evidence), "
+        "source_sentence (the exact evidence slice), and optional module. "
+        "Only design obligations count; exclude library facts, NAND flash, latency-only "
+        "optimization, withdrawn/denied restrictions, foreign modules and opaque HDL strings. "
+        "The structured rows replace the parser's candidates even when its list is empty. "
+        "Do not infer that functional correctness proves gate basis or optimal cost."),
     "fsm_output_style": (
         "Decide ONLY what the spec REQUIRES — do not judge feasibility. A Moore machine is "
         "realizable for ANY sequential function (register the output: z_reg <= f(state)), so "
@@ -73,6 +85,7 @@ def backend_available() -> bool:
 
 def _build_prompt(field: str, candidate: Any, evidence: str) -> str:
     allowed = _ALLOWED.get(field)
+    source = evidence if field == "logic_obligations" else evidence.strip()
     allowed_str = ", ".join("null" if a is None else repr(a) for a in allowed) if allowed else "any"
     return (
         "You are double-checking a deterministic parser that extracts one SEMANTIC fact "
@@ -80,7 +93,7 @@ def _build_prompt(field: str, candidate: Any, evidence: str) -> str:
         f"Field: {field}\n"
         f"Allowed values: {allowed_str}\n"
         f"Parser's candidate: {json.dumps(candidate)}\n\n"
-        f"Spec evidence:\n\"\"\"\n{evidence.strip()}\n\"\"\"\n\n"
+        f"Spec evidence:\n\"\"\"\n{source}\n\"\"\"\n\n"
         + (_FIELD_NOTE[field] + "\n\n" if field in _FIELD_NOTE else "")
         + "Reply with ONLY a JSON object: "
         '{\"value\": <one allowed value>, \"agree\": <true|false>, \"reason\": \"<short>\"}. '
@@ -111,12 +124,15 @@ def confirm_semantic(field: str, candidate: Any, evidence: str,
             client = anthropic.Anthropic()
         msg = client.messages.create(
             model=model or os.environ.get("VIBE_IC_CONFIRM_MODEL", DEFAULT_MODEL),
-            max_tokens=300,
+            max_tokens=1500 if field == "logic_obligations" else 300,
             messages=[{"role": "user", "content": _build_prompt(field, candidate, evidence)}],
         )
         text = "".join(getattr(b, "text", "") for b in msg.content)
         data = _parse_reply(text)
         value = data.get("value", candidate)
+        if field == "logic_obligations":
+            from _specrtl_common import logic_obligations_from_records
+            value = [asdict(row) for row in logic_obligations_from_records(value, evidence)]
         if field in _ALLOWED and value not in _ALLOWED[field]:
             # LLM returned something outside the allowed set — keep candidate, flag it.
             return Confirmation(field, candidate, candidate, False, None,
@@ -129,7 +145,7 @@ def confirm_semantic(field: str, candidate: Any, evidence: str,
 
 
 # Which SpecContract fields are semantic (need confirmation) + how to find their evidence.
-_SEMANTIC_FIELDS = ("reset_mode", "reset_polarity", "latency_registered", "fsm_output_style")
+_SEMANTIC_FIELDS = ("reset_mode", "reset_polarity", "latency_registered", "fsm_output_style", "logic_obligations")
 
 
 def _sentences(text: str) -> List[str]:
@@ -138,6 +154,8 @@ def _sentences(text: str) -> List[str]:
 
 def evidence_for(field: str, text: str) -> str:
     """Best-effort: the spec sentence(s) that bear on this field."""
+    if field == "logic_obligations":
+        return text
     keys = {
         "reset_mode": ("reset",),
         "reset_polarity": ("reset", "active"),
@@ -161,10 +179,16 @@ def confirm_contract(contract, spec_text: str,
         candidate = getattr(contract, field, None)
         if candidate is None:
             continue  # nothing declared → nothing to confirm
+        if field == "logic_obligations":
+            candidate = [asdict(row) for row in candidate]
         c = confirm_semantic(field, candidate, evidence_for(field, spec_text),
                              client_factory=client_factory, model=model)
         if c.confirmed and c.value != candidate:
-            setattr(contract, field, c.value)  # adopt the LLM correction
+            if field == "logic_obligations":
+                from _specrtl_common import logic_obligations_from_records
+                contract.logic_obligations = logic_obligations_from_records(c.value, spec_text)
+            else:
+                setattr(contract, field, c.value)  # adopt the LLM correction
         confs.append(c)
     return confs
 

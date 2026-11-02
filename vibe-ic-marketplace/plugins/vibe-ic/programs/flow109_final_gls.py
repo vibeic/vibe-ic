@@ -351,6 +351,8 @@ def prepare(project, context):
     approval = requirements.get('approval') or {}
     if not engineering and (approval.get('status') != 'APPROVED'
             or approval.get('authority') != 'requirements_owner'
+            or not isinstance(approval.get('approver'), str)
+            or not approval['approver'].strip()
             or not approval.get('source_reference')):
         raise AdmissionRefusal('D71_REQUIREMENTS_NOT_APPROVED', str(requirements_path))
     corners = requirements.get('required_corners')

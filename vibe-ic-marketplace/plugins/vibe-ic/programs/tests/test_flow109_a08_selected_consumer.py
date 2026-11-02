@@ -34,7 +34,7 @@ def authority(root, *, names, floor=14.):
     source = root / 'input/independent-requirement.txt'
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text('Software consumer contract authority. No IC qualification or ADC count.')
-    approval = {'status': 'APPROVED', 'authority': 'requirements_owner',
+    approval = {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                 'source_reference': {'path': str(source.relative_to(root)), 'sha256': sha(source)}}
     put(root, 'requirements/base_A7/pvt_load_modes.json', {'schema': metrics.AUTHORITY_SCHEMA,
         'approval': approval, 'required_items': [{'block': name, 'name': corner} for name, corner in names]})

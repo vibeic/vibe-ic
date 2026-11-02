@@ -118,7 +118,7 @@ def case(tmp_path):
     source_ref = put(source, {'feature_inventory': {'reference': reference, 'reference_identity': identity(d10subject)}})
     source_ref['path'] = str(source.relative_to(p))
     put(p / 'adopted/base_04/feature_inventory.json', {'schema': 'vibeic.flow109.adopted-reference.v1',
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': source_ref},
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': source_ref},
         'reference': reference, 'reference_identity': identity(d10subject)})
     put(p / 'reports/flow109/default_rows/D10.json', {'step_id': 'D10', 'completed': True,
         'default_row_status': 'PASS', 'component_status': 'PASS', 'fixture_scope': 'SOFTWARE_ONLY',
@@ -135,7 +135,7 @@ def case(tmp_path):
     source_ref = put(source, {'fixture_scope': 'SOFTWARE_AUTHORITY_ONLY', 'lint_execution': adopted,
                             'source_file_coverage': {'required_items': subject['source_files'], 'subject': subject}})
     source_ref['path'] = str(source.relative_to(p))
-    approval = {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': source_ref}
+    approval = {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': source_ref}
     put(p / 'requirements/base_05/source_file_coverage.json', {'schema': metrics.AUTHORITY_SCHEMA,
         'approval': approval, 'required_items': subject['source_files']})
     put(p / 'adopted/base_05/lint_execution.json', {'schema': 'vibeic.flow109.adopted-reference.v1',

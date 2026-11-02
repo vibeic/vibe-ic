@@ -1118,7 +1118,7 @@ def _load_expert_reference_tb(out: Path) -> Optional[str]:
     try:
         text = source.read_text(errors="replace")
         tree = ast.parse(text)
-    except (OSError, SyntaxError):
+    except (OSError, SyntaxError, ValueError):
         return None
     if "TestSkip" in text or "PROFESSIONAL_TB PASS" not in text:
         return None
@@ -1137,6 +1137,12 @@ def _load_expert_reference_tb(out: Path) -> Optional[str]:
                                 for child in ast.walk(node)):
             return text
     return None
+
+
+def reference_model_identity(out: Path) -> Optional[str]:
+    """SHA-256 of the expert model `out` would load now, or None if it would not."""
+    text = _load_expert_reference_tb(out)
+    return None if text is None else hashlib.sha256(text.encode()).hexdigest()
 
 
 def emit_makefile(shape: dict, rtl_files: List[str]) -> str:
@@ -1224,10 +1230,15 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
     out = out_dir or (_pl.rtl_dir(project).parent / "sim_professional" / top)
     expert_tb = (_load_expert_reference_tb(out)
                  if shape["kind"] == "generic" else None)
+    # Bind the source loaded for this generation, before instrumentation or
+    # another writer can change the persistent author file.
+    expert_sha256 = (hashlib.sha256(expert_tb.encode()).hexdigest()
+                     if expert_tb is not None else None)
     if shape.get('reference_refusal') and expert_tb is None:
         return {'status': 'INCOMPLETE', 'reason': shape['reference_refusal'],
                 'ic_class': ic_class, 'fallback_skill': 'testbench-gen',
                 'out_dir': str(out), 'reference_model_tier': 'hook_unfilled',
+                'reference_model_sha256': expert_sha256,
                 'reference_model_handoff': reference_model_handoff(out)}
     out.mkdir(parents=True, exist_ok=True)
 
@@ -1246,6 +1257,10 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
         except ValueError as error:
             return {"status": "INCOMPLETE", "reason": str(error),
                     "memory_signature_required": True, "ic_class": ic_class,
+                    "reference_model_tier": ("expert_filled" if expert_sha256
+                                             else "hook_unfilled"),
+                    "reference_model_sha256": expert_sha256,
+                    "reference_model_handoff": reference_model_handoff(out),
                     "out_dir": str(out), "fallback_skill": "testbench-gen",
                     "request": "Declare the byte-addressed L10 memory_signature interface/expected_bytes and author same-case coroutines in expert_reference_tb.py"}
     if expert_tb is not None:
@@ -1315,6 +1330,8 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
     return {"status": "PASS", "ic_class": ic_class, "dut_kind": run_kind,
             **({"reference_model_handoff": reference_model_handoff(out)}
                if ref_tier == "hook_unfilled" else {}),
+            **({"reference_model_sha256": expert_sha256}
+               if ref_tier == "expert_filled" else {}),
             **({'random_goal_plan': random_plan} if random_plan else {}),
             **memory_metadata,
             **conditioned_metadata,

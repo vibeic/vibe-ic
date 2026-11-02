@@ -33,7 +33,7 @@ def _authority(tmp_path: Path, name: str, fields: tuple[str, ...], items: list[d
     path.parent.mkdir(parents=True, exist_ok=True)
     body = {
         "schema": metrics.AUTHORITY_SCHEMA,
-        "approval": {"status": "APPROVED", "authority": "requirements_owner",
+        "approval": {"status": "APPROVED", "authority": "requirements_owner", 'approver': 'neutral-requirements-reviewer',
                      "source_reference": {"path": str(source.relative_to(tmp_path)),
                         "sha256": hashlib.sha256(source.read_bytes()).hexdigest()}},
         "required_items": [{key: item[key] for key in fields} for item in items],

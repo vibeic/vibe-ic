@@ -112,9 +112,10 @@ import shutil
 import sys
 import tempfile
 import time
-from dataclasses import dataclass, field, asdict, fields as _dc_fields
+from dataclasses import dataclass, field, asdict, fields as _dc_fields, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from _specrtl_common import SpecContract
 import _path_layout as _pl
 import verdict as _V  # R-0915-85: the five step verdicts + the one cascade rule
 import _audit_verdict  # the ONE reader of the compliance audit's verdict + exit code
@@ -2746,9 +2747,81 @@ def _defer_to_supplied(generator: str, project: Path,
     return True
 
 
+def _declared_logic_source_contract(
+        project: Path, text: str) -> Tuple[Optional[SpecContract], str]:
+    from _specrtl_common import prose_emission_spec_contract, structured_logic_contract
+    interface_text = ''
+    if _pl.rtl_input(project) != "original":
+        interface_path = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
+        if interface_path.is_file():
+            try:
+                interface_text = interface_path.read_text()
+            except (OSError, ValueError):
+                pass
+    if text.strip():
+        return prose_emission_spec_contract(text, interface_text), "phase1_plain_text"
+    try:
+        interface = json.loads(interface_text)
+    except (ValueError, TypeError):
+        return None, ""
+    if not isinstance(interface, dict):
+        return None, ""
+    return structured_logic_contract(interface), str(interface_path.relative_to(project))
+
+
+def _declared_logic_author_handoff(project: Path, t0: float,
+                                  text: str) -> Optional[StepResult]:
+    """Hand off the contract of the source this producer consumes."""
+    if _design_supplied_build_rtl(project):
+        return None
+    try:
+        contract, spec_source = _declared_logic_source_contract(project, text)
+    except ValueError as exc:
+        return StepResult(
+            'rtl_gen', 'NOT_MEASURED', time.time() - t0,
+            f'DECLARED_LOGIC_OBLIGATION_INVALID: {exc}; no RTL was generated or changed.',
+            reason_class=_V.ReasonClass.NOT_EXECUTED)
+    if contract is None:
+        return None
+    return _spec_contract_author_handoff(project, t0, contract, spec_source)
+
+
+def _spec_contract_author_handoff(project: Path, t0: float, contract: SpecContract,
+                                  spec_source: str) -> Optional[StepResult]:
+    from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
+                                 SPEC_SENTENCES_UNACCOUNTED,
+                                 unsupported_logic_obligations, unaccounted_spec_sentences)
+    obligations = unsupported_logic_obligations(contract)
+    unaccounted = unaccounted_spec_sentences(contract)
+    if not obligations and not unaccounted:
+        return None
+    rules = [f"{o.kind}: {o.clause}" for o in obligations]
+    unknown_rules = [f"[{row.source_span[0]}:{row.source_span[1]}] {row.source_sentence}"
+                     for row in unaccounted]
+    marker = DECLARED_LOGIC_OBLIGATION_UNSUPPORTED if obligations else SPEC_SENTENCES_UNACCOUNTED
+    explanation = ("Deterministic producers do not establish this implementation obligation. "
+                   if obligations else "The parsed contract does not account for the complete prose spec. ")
+    skill_hint, skill_extras = _stage_fallback_skill(project, "spec-to-rtl")
+    author_hint, author_extras = _stage_author_knowledge_digests(project)
+    return StepResult(
+        "rtl_gen", "PASS_WITH_WAIVERS", time.time() - t0,
+        f"{marker}: " + "; ".join(rules + unknown_rules)
+        + ". " + explanation
+        + "AI invokes `spec-to-rtl` and reads the full spec; "
+        "no RTL was generated or changed." + skill_hint + author_hint,
+        extras={"fallback_skill": "spec-to-rtl",
+                **skill_extras, **author_extras,
+                "rejected_emitters": [marker],
+                "rejected_rules": rules + unknown_rules,
+                "spec_source": spec_source,
+                "logic_obligations": [asdict(row) for row in contract.logic_obligations],
+                "unaccounted_source_spans": [asdict(row) for row in unaccounted]})
+
+
 def _try_spec_artifact_registry_rtl(
         project: Path, t0: float,
-        phase1_plain_text: str = "") -> Optional[StepResult]:
+        phase1_plain_text: str = "",
+        handoff_contract: Optional[SpecContract] = None) -> Optional[StepResult]:
     """Deterministic RTL straight from the prompt text, or None to defer.
 
     Delegates to `deterministic_emit_chain`, which owns the ORDER. That chain
@@ -2768,6 +2841,10 @@ def _try_spec_artifact_registry_rtl(
         return None
     if _defer_to_supplied("spec_artifact_registry", project):
         return None  # D6 — the design's own implementation outranks an emit
+    if handoff_contract is None:
+        handoff = _declared_logic_author_handoff(project, t0, text)
+        if handoff is not None:
+            return handoff
     try:
         sys.path.insert(0, str(PROGRAMS_DIR))
         import deterministic_emit_chain as _chain      # noqa: PLC0415
@@ -2787,6 +2864,23 @@ def _try_spec_artifact_registry_rtl(
             top = json.loads(ifc).get("top_module") or "chip_top"
     except (OSError, ValueError):
         pass
+
+    if handoff_contract is not None:
+        try:
+            kind, rejected = _chain.functional_applicability(
+                text, ifc, top, handoff_contract)
+        except Exception as exc:
+            print("[rtl_gen] RTL_PROSE_APPLICABILITY_UNAVAILABLE: "
+                  f"{type(exc).__name__}: {exc}; deferring to the typed class producer",
+                  file=sys.stderr)
+            return None
+        if not kind:
+            if rejected:
+                print("[rtl_gen] RTL_PROSE_APPLICABILITY_UNAVAILABLE: "
+                      f"{rejected}; deferring to the typed class producer", file=sys.stderr)
+            return None
+        return _spec_contract_author_handoff(
+            project, t0, handoff_contract, "phase1_plain_text")
 
     try:
         kind, rtl, rejected = _chain.try_emit_ex(text, ifc, top)
@@ -2833,6 +2927,53 @@ def _try_spec_artifact_registry_rtl(
 _STRUCTURED_RTL_SPEC_PATHS = (
     "phase2/stage1/rtl_spec.json", "phase2/rtl_spec.json", "input/rtl_spec.json",
     "phase2/stage1/rtl_spec.yaml", "phase2/rtl_spec.yaml", "input/rtl_spec.yaml")
+
+
+def _structured_spec_author_handoff(project: Path, t0: float) -> Optional[StepResult]:
+    if (_pl.rtl_input(project) == "original" or _design_supplied_build_rtl(project)
+            or _design_supplied_unstageable_hdl(project)):
+        return None
+    for name in _STRUCTURED_RTL_SPEC_PATHS:
+        spec = project / name
+        parts = [spec, *spec.parents]
+        if any(path.is_symlink() for path in parts[:parts.index(project)]):
+            return StepResult("rtl_gen", "FAIL", time.time() - t0,
+                              f"STRUCTURED_RTL_SPEC_UNREADABLE: symlink at {name}; no RTL was changed.",
+                              reason_class=_V.ReasonClass.NOT_EXECUTED)
+        if not spec.is_file():
+            continue
+        try:
+            text = spec.read_text(encoding="utf-8")
+        except (OSError, UnicodeError) as exc:
+            return StepResult("rtl_gen", "FAIL", time.time() - t0,
+                              f"STRUCTURED_RTL_SPEC_UNREADABLE: {name}: {exc}; no RTL was changed.",
+                              reason_class=_V.ReasonClass.NOT_EXECUTED)
+        if spec.suffix.lower() in (".yaml", ".yml"):
+            try:
+                import yaml
+            except ImportError:
+                return None
+            try:
+                data = yaml.safe_load(text)
+            except yaml.YAMLError:
+                return None
+        else:
+            try:
+                data = json.loads(text)
+            except ValueError:
+                return None
+        if not isinstance(data, dict):
+            return None
+        from _specrtl_common import structured_logic_contract
+        try:
+            contract = structured_logic_contract(data)
+        except ValueError as exc:
+            return StepResult(
+                'rtl_gen', 'NOT_MEASURED', time.time() - t0,
+                f'DECLARED_LOGIC_OBLIGATION_INVALID: {exc}; no RTL was generated or changed.',
+                reason_class=_V.ReasonClass.NOT_EXECUTED)
+        return _spec_contract_author_handoff(project, t0, contract, name)
+    return None
 
 
 def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepResult]:
@@ -2901,6 +3042,12 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
                     "declined_spec": str(spec.relative_to(project)),
                     "design_rtl_sample": _rel}, declared_by=f"the design ships its own build RTL ({len(_own)} file(s), e.g. {_rel})")
 
+    handoff = _declared_logic_author_handoff(project, t0, '')
+    if handoff is not None:
+        return handoff
+    handoff = _structured_spec_author_handoff(project, t0)
+    if handoff is not None:
+        return handoff
     dispatcher = PROGRAMS_DIR / "deterministic_rtl_dispatcher.py"
     if not dispatcher.is_file():
         return None
@@ -3119,16 +3266,30 @@ def _try_canonical_primitive_rtl(
         shape, module, rtl = watchdog["shape"], watchdog["module"], watchdog["rtl"]
         desc = ""  # policy came from a declared mapping, not a prose guess
     else:
-        desc = _gather_spec_text(project, phase1_plain_text=phase1_plain_text)
+        desc = (_gather_spec_text(project, phase1_plain_text="")
+                if _pl.rtl_input(project) == "structured" else "")
         _phase1_project_checkpoint(project)
-        if not desc:
-            return None
         try:
-            shape = _cps.detect_shape(desc)
+            shape = _cps.detect_shape(desc) if desc else None
         except Exception:
             return None
-        if not shape:
-            return None  # DEFER → fall through to spec-to-rtl
+        if shape:
+            handoff = _declared_logic_author_handoff(project, t0, '')
+        else:
+            desc = _gather_spec_text(project, phase1_plain_text=phase1_plain_text)
+            _phase1_project_checkpoint(project)
+            if not desc:
+                return None
+            try:
+                shape = _cps.detect_shape(desc)
+            except Exception:
+                return None
+            if not shape:
+                return None
+            handoff = (_declared_logic_author_handoff(project, t0, phase1_plain_text)
+                       if phase1_plain_text is not None else None)
+        if handoff is not None:
+            return handoff
         module = _cps.module_name_of(desc) or "chip_top"
         try:
             rtl = _cps.emit_rtl(shape, desc)
@@ -8785,6 +8946,9 @@ def _step_rtl_gen_bound(
             project / staged_link,
             "the isolated RTL dispatch snapshot contains a symlink that a "
             "reader or generator could follow outside the held project tree")
+    handoff = _structured_spec_author_handoff(project, t0)
+    if handoff is not None:
+        return handoff
     # v0.1.10: program-FIRST. If a structured RTL spec is present and is
     # mechanically derivable (FSM table / truth table / gate netlist / vector op),
     # emit RTL deterministically with NO LLM before any class-registry / AI path.
@@ -8815,6 +8979,9 @@ def _step_rtl_gen_bound(
     # to spec-to-rtl. DEFERs (returns None) on every other shape/class, so all
     # non-matching designs keep the existing class-registry / AI-fallback path.
     project_binding.require_current()
+    handoff = _declared_logic_author_handoff(project, t0, '')
+    if handoff is not None:
+        return handoff
     _sp = _try_serial_parallel_mul_rtl(project, ic_class, t0)
     project_binding.require_current()
     if _sp is not None:
@@ -8830,48 +8997,42 @@ def _step_rtl_gen_bound(
     project_binding.require_current()
     if _cp is not None:
         return _cp
-    # PROMPT-TEXT DETERMINISTIC EMIT — the general form of the same idea, and
-    # the one the runner was NOT using (2026-08-25).
-    #
-    # `spec_artifact_registry.generate(text, top)` turns a parse-complete prompt
-    # into exact RTL. It is general, neutrally named and already lives in
-    # programs/ — the runner just never called it on plain prompt text; only the
-    # narrow `_try_phase1_behavioral_fsm_rtl_bound` path used it.
-    #
-    # The one place that DID call it that way was `benchmark/gates_atomic.py`,
-    # and it called it in the wrong ORDER: that harness refuses to run until an
-    # LLM has already authored sample.sv ("MISSING {f} — agent must author it
-    # first", sys.exit(2)) and only THEN runs the generator, overwriting the
-    # author's work. Program-first is structurally impossible in that shape —
-    # the program can only ever run second. Calling it HERE, before the
-    # spec-to-rtl waive, is what makes program-first actually first, for every
-    # entry point rather than only inside one benchmark harness.
-    # NARROWEST FIRST. A strictly recognized behavioral Moore FSM may live only
-    # in the original Phase-1 prompt/doc (before an L-doc extractor has
-    # materialized a structured rtl_spec). This path gives that prose the same
-    # registry-backed deterministic emit, accepts ONLY the behavioral_fsm family
-    # and otherwise DEFERs — so putting it first cannot take work away from the
-    # general chain below, and leaving it second DID take work away from it.
-    #
-    # Both paths reach `spec_artifact_registry` and get the same RTL. What
-    # differs is what they say about it: this one records `artifact_type`,
-    # `module`, `spec_source` and `spec_sources` and writes `<top>.v` named from
-    # the spec, where the general chain records the emitter name and writes
-    # `chip_top.sv`. Ordered general-first, the chain answered every behavioral
-    # FSM before this path was reached, and six tests that assert the richer
-    # record went red saying `KeyError: 'artifact_type'`. A more specific
-    # producer that DEFERS when it does not apply belongs ahead of a general one.
-    _behavior_force = (_FORCE_RTL_REGEN
-                       if force_regen is None else force_regen)
-    _bf = _try_phase1_behavioral_fsm_rtl(
-        project, t0, force_regen=_behavior_force, gathered=_phase1_plain,
-        project_binding=project_binding)
-    project_binding.require_current()
-    if _bf is not None:
-        return _bf
-    project_binding.require_current()
-    _sar = _try_spec_artifact_registry_rtl(
-        project, t0, phase1_plain_text=_phase1_plain.text)
+    # A class generator owns unrecognized prose, while the earlier canonical
+    # route and recognized registry source retain their own source contracts.
+    typed_generator = (_lookup_class(ic_class) or {}).get("rtl_gen")
+    prose_contract = None
+    if typed_generator and not _design_supplied_build_rtl(project):
+        from _specrtl_common import (unsupported_logic_obligations,
+                                     unaccounted_spec_sentences)
+        try:
+            prose_contract, _ = _declared_logic_source_contract(
+                project, _phase1_plain.text)
+        except ValueError as exc:
+            return StepResult(
+                'rtl_gen', 'NOT_MEASURED', time.time() - t0,
+                f'DECLARED_LOGIC_OBLIGATION_INVALID: {exc}; no RTL was generated or changed.',
+                reason_class=_V.ReasonClass.NOT_EXECUTED)
+    elif not typed_generator:
+        handoff = _declared_logic_author_handoff(project, t0, _phase1_plain.text)
+        if handoff is not None:
+            return handoff
+    if prose_contract is not None and (
+            unsupported_logic_obligations(prose_contract)
+            or unaccounted_spec_sentences(prose_contract)):
+        _sar = _try_spec_artifact_registry_rtl(
+            project, t0, phase1_plain_text=_phase1_plain.text,
+            handoff_contract=prose_contract)
+    else:
+        _behavior_force = (_FORCE_RTL_REGEN
+                           if force_regen is None else force_regen)
+        _bf = _try_phase1_behavioral_fsm_rtl(
+            project, t0, force_regen=_behavior_force, gathered=_phase1_plain,
+            project_binding=project_binding)
+        project_binding.require_current()
+        if _bf is not None:
+            return _bf
+        _sar = _try_spec_artifact_registry_rtl(
+            project, t0, phase1_plain_text=_phase1_plain.text)
     project_binding.require_current()
     if _sar is not None:
         return _sar
@@ -15246,17 +15407,20 @@ def _rtl_gen_handoff(plan: Sequence["StepResult"]) -> Optional[str]:
     """The skill the CURRENT rtl_gen result handed the RTL to, or None.
 
     The latest `rtl_gen` row of THIS run's plan, when it waived authoring to a
-    skill it staged (PASS_WITH_WAIVERS / WAIVED with `fallback_skill` and
-    `fallback_skill_staged` true). Read from the run's own result, never from
-    `phase2/stage1/fallback_skill.md`, which is written by a hand-off and never
-    removed, so it outlives the agent pass that answered it."""
+    staged skill or the readable skill source in this tree. Read from the run's
+    own result, never from `phase2/stage1/fallback_skill.md`, which is written
+    by a hand-off and never removed, so it outlives the agent pass that answered it.
+    """
     for row in reversed(list(plan or ())):
         if getattr(row, "name", None) != "rtl_gen":
             continue
         ex = getattr(row, "extras", None) or {}
+        readable_source = (ex.get("fallback_skill_source")
+                           == str(SKILLS_DIR / str(ex.get("fallback_skill")) / "SKILL.md")
+                           and Path(ex["fallback_skill_source"]).is_file())
         if (row.status in ("PASS_WITH_WAIVERS", "WAIVED", "WAIVED-DEFERRED")
                 and ex.get("fallback_skill")
-                and ex.get("fallback_skill_staged") is True):
+                and (ex.get("fallback_skill_staged") is True or readable_source)):
             return str(ex["fallback_skill"])
         return None
     return None

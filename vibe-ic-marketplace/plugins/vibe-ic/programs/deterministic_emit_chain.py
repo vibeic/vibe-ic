@@ -37,12 +37,24 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 
-def _registry(prompt: str, ifc: str, top: str) -> Tuple[Optional[str], Optional[str]]:
+def _registry(prompt: str, ifc: str, top: str, *, contract=None) -> Tuple[Optional[str], Optional[str]]:
     """The canonical recognisers. Broad coverage, mutual-exclusion checked."""
     try:
         import spec_artifact_registry as _reg
     except ImportError:
         return None, None
+    if contract is not None:
+        return _reg.generate(prompt, top, contract=contract)
+    from _specrtl_common import emission_spec_contract
+    contract = emission_spec_contract(prompt, ifc, top)
+    if ifc:
+        import json
+        try:
+            interface = json.loads(ifc)
+        except ValueError:
+            interface = None
+        if isinstance(interface, dict) and 'logic_obligations' in interface:
+            return _reg.generate(prompt, top, contract=contract)
     return _reg.generate(prompt, top)
 
 
@@ -248,9 +260,38 @@ def try_emit_ex(prompt_text: str, ifc_text: str = "", top: str = "TopModule",
     rejected: List[Tuple[str, List[str]]] = []
     if not (prompt_text or "").strip():
         return None, None, rejected
+    from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
+                                 SPEC_SENTENCES_UNACCOUNTED, emission_spec_contract,
+                                 unsupported_logic_obligations, unaccounted_spec_sentences)
+    try:
+        contract = emission_spec_contract(prompt_text, ifc_text, top)
+    except ValueError as exc:
+        return None, None, [('DECLARED_LOGIC_OBLIGATION_INVALID', [str(exc)])]
+    obligations = unsupported_logic_obligations(contract)
+    unaccounted = unaccounted_spec_sentences(contract)
+    if obligations:
+        rejected.append((DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
+                         [f"{o.kind}: {o.clause}" for o in obligations]))
+    if unaccounted:
+        rejected.append((SPEC_SENTENCES_UNACCOUNTED,
+                         [f"[{row.source_span[0]}:{row.source_span[1]}] {row.source_sentence}"
+                          for row in unaccounted]))
+    if rejected:
+        return None, None, rejected
+    if contract.source == 'json':
+        return None, None, rejected
+    return _try_emitters(prompt_text, ifc_text, top, verify, check)
+
+
+def _try_emitters(prompt_text, ifc_text, top, verify, check, registry_contract=None):
+    """Run the ordinary producer order and its existing acceptance checks."""
+    rejected: List[Tuple[str, List[str]]] = []
     for name, fn in EMITTERS:
         try:
-            kind, rtl = fn(prompt_text, ifc_text, top)
+            if registry_contract is not None and fn is _registry:
+                kind, rtl = _registry(prompt_text, ifc_text, top, contract=registry_contract)
+            else:
+                kind, rtl = fn(prompt_text, ifc_text, top)
         except Exception as exc:                       # noqa: BLE001
             # An emitter that raises must not take the chain down; the next one
             # and ultimately the AI backup are the designed fallbacks. But a
@@ -269,6 +310,21 @@ def try_emit_ex(prompt_text: str, ifc_text: str = "", top: str = "TopModule",
             continue
         return (kind or name), rtl, rejected
     return None, None, rejected
+
+
+def functional_applicability(prompt_text, ifc_text, top, contract):
+    """Probe the same chain for an author handoff; never return publishable RTL.
+
+    The caller retains the strict contract. Only this probe omits implementation
+    obligations, so a functional match can route that contract to its author.
+    """
+    if not (prompt_text or "").strip():
+        return None, []
+    from dataclasses import replace
+    kind, rtl, rejected = _try_emitters(
+        prompt_text, ifc_text, top, None, True,
+        registry_contract=replace(contract, logic_obligations=[]))
+    return (kind if rtl else None), rejected
 
 
 def try_emit(prompt_text: str, ifc_text: str = "",

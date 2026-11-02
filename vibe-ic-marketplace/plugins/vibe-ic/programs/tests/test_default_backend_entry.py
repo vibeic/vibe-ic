@@ -444,7 +444,7 @@ def d20_metric_case(tmp_path, monkeypatch):
     put(project / 'input/requirements-source.json', {'exception_justification': population})
     put(project / 'requirements/base_10/exception_justification.json', {
         'schema': metrics.AUTHORITY_SCHEMA, 'approval': {'status': 'APPROVED',
-            'authority': 'requirements_owner', 'source_reference': ref('input/requirements-source.json')},
+            'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': ref('input/requirements-source.json')},
         **population})
     inputs = {r: digest(project / r) for r in ['input/constraints/clock.sdc',
         'phase1/generated_docs/L8_TIMING_WAVEFORM.json', 'phase1/generated_docs/L9_INTEGRATION_SPEC.json',
@@ -455,7 +455,7 @@ def d20_metric_case(tmp_path, monkeypatch):
     put(project / 'input/cdc-reference-source.json', {'cdc_exception_reconciliation': payload})
     put(project / 'adopted/base_11/cdc_exception_reconciliation.json', {
         'schema': 'vibeic.flow109.adopted-reference.v1', 'approval': {'status': 'APPROVED',
-            'authority': 'requirements_owner', 'source_reference': ref('input/cdc-reference-source.json')},
+            'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': ref('input/cdc-reference-source.json')},
         **payload})
     for step in ('D12', 'D19'):
         put(project / f'reports/flow109/default_rows/{step}.json', {

@@ -131,7 +131,7 @@ def supplemental_fixture(c):
         'case':name,'source_authority':authority['source'],'execution':execution})
     adopted=p/'adopted/base_07/scenario_executions/binary_case.json'
     put(adopted,{'schema':'vibeic.flow109.adopted-reference.v1','approval':{
-        'status':'APPROVED','authority':'requirements_owner','source_reference':ref(p,input_path)},
+        'status':'APPROVED','authority':'requirements_owner', 'approver': 'neutral-requirements-reviewer','source_reference':ref(p,input_path)},
         'reference':execution})
     return p,source,execution,input_path,adopted
 

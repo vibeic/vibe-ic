@@ -26,7 +26,7 @@ def source_authority(root, path, body):
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text('Neutral source-only allocation and calibration control. No native qualification.')
     return put(root, path, {'schema': metrics.AUTHORITY_SCHEMA, 'approval': {
-        'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': view(root, source)}, **body})
+        'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': view(root, source)}, **body})
 
 
 def run_row(root, step, monkeypatch):

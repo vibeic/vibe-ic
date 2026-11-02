@@ -44,7 +44,7 @@ def authority(project, name, payload, *, adopted=False):
     reference = {'path': source.relative_to(project).as_posix(),
                  'sha256': hashlib.sha256(source.read_bytes()).hexdigest()}
     body = {'schema': 'vibeic.flow109.adopted-reference.v1' if adopted else metrics.AUTHORITY_SCHEMA,
-            'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+            'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                          'source_reference': reference}, **payload}
     # Absence source points to this input; remove its own hash from the input to
     # avoid a recursive hash. Keep reasoned absence in a separate normal INPUT.
@@ -252,7 +252,7 @@ def _self_tapeout_absence(sample):
     write(source, {NAMES[1]: payload})
     path = project / 'requirements/package_ready/escape_bond_feasibility.json'
     write(path, {'schema': metrics.AUTHORITY_SCHEMA, **payload,
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
             'source_reference': {'path': source.relative_to(project).as_posix(),
                                  'sha256': hashlib.sha256(source.read_bytes()).hexdigest()}}})
     rebind(project, component)

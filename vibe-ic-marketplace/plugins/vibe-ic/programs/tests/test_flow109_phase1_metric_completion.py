@@ -96,7 +96,7 @@ def approve(project, payload):
         write(project, f'requirements/{key}/{metric}.json', {
             'schema': metrics.AUTHORITY_SCHEMA,
             'required_items': payload[metric]['required_items'],
-            'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': ref}})
+            'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': ref}})
 
 
 def complete(project):

@@ -1,0 +1,14 @@
+[
+  {
+    "step": "benchmark.reference_model_handoff",
+    "design": "neutral-route-declared-debug",
+    "bucket": "A",
+    "rule_name": "reference_model_step4_reentry",
+    "docstring": "A candidate whose required simulation gate failed on an unfilled reference-model hook re-enters Step 4 on the same bytes once a different accepted model exists; the AI backup task names the model before the first re-gate.",
+    "expected_signal": "AUTO-FIX",
+    "fix_action": "The producer report names the measured model; the resume consumer plans the existing same-bytes regate when a different accepted model exists; the backup task carries the path as a conditional advisory.",
+    "capture_kind": "FLOW_ENHANCEMENT",
+    "recovered_rtl_case": false,
+    "benchmark_result_change": "NONE; a route with a required Step 4 can now reach acceptance, and no score is claimed"
+  }
+]

@@ -35,7 +35,7 @@ def op_case(tmp_path, monkeypatch):
     put(root, 'input/analog_flow.json', {})
     authority = put(root, 'requirements/base_A4/operating_point_targets.json', {
         'schema': metrics.AUTHORITY_SCHEMA,
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': {'path': str(source.relative_to(root)), 'sha256': sha(source)}},
         'limits': {'cell_alpha': {'out': {'min': .5, 'max': .7}}},
         'units': {'cell_alpha': {'out': 'V'}}})

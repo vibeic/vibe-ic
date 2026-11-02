@@ -35,7 +35,7 @@ def authority(root, metric, *, ceiling=.7):
     source = root / 'input/independent-bound-source.txt'
     source.write_text('Synthetic independent source-control authority; no IC qualification.')
     document = {'schema': metrics.AUTHORITY_SCHEMA, 'approval': {'status': 'APPROVED',
-        'authority': 'requirements_owner', 'source_reference': {'path': str(source.relative_to(root)), 'sha256': sha(source)}},
+        'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': {'path': str(source.relative_to(root)), 'sha256': sha(source)}},
         'limits': {'unit_alpha': {'vout_dc': {'min': .5, 'max': ceiling}}},
         'units': {'unit_alpha': {'vout_dc': 'V'}}}
     if metric == 'early_model_correlation':
@@ -46,7 +46,7 @@ def authority(root, metric, *, ceiling=.7):
     return put(root, 'requirements/base_A6/' + metric + '.json', document)
 
 
-def make_case(root, monkeypatch, *, ceiling=.7, missing_correlation=False, extra_point=False):
+def make_case(root, monkeypatch, *, ceiling=.7, missing_correlation=False, extra_point=False, prepare=None):
     image = os.environ.get('VIBEIC_EDA_IMAGE')
     if not image or not shutil.which('ngspice'):
         pytest.skip('actual stated-image ngspice execution environment required')
@@ -79,6 +79,8 @@ def make_case(root, monkeypatch, *, ceiling=.7, missing_correlation=False, extra
     profile = next(v for v in flow109.load_registry()['reference_profiles'] if v['name'] == 'Analog model-IP')
     plan = flow109.resolve_plan(profile['features'])
     context = flow109.execution_context(plan, 'A07', 'A07')
+    if prepare:
+        prepare(root)
     component = native.execute(root, context)
     component['context_sha256'] = context['context_sha256']
     return root, context, component, nominal, correlation, library
@@ -227,7 +229,7 @@ def partial_pvt_source_fixture(case):
     """
     root, _, nominal, *_ = case
     requirement = put(root, 'requirements/base_A7/pvt_load_modes.json', {
-        'schema': metrics.AUTHORITY_SCHEMA, 'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'schema': metrics.AUTHORITY_SCHEMA, 'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
             'source_reference': {'path': 'input/independent-bound-source.txt', 'sha256': sha(root / 'input/independent-bound-source.txt')}},
         'required_items': [{'block': 'unit_alpha', 'name': 'typical_27c'}, {'block': 'unit_alpha', 'name': 'slow_125c'}]})
     scalar = nominal['native_results']['steps'][0]
@@ -294,3 +296,39 @@ def test_nominal_native_log_is_reopened_with_exact_output_identity(case, fault):
     with pytest.raises(metrics.MetricRefusal) as caught:
         metrics._a0708_transcript(root, [execution], deck, invocation)
     assert caught.value.code in ('A0708_NATIVE_EXECUTION_INCOMPLETE', 'A0708_NATIVE_INPUT_CHANGED')
+
+
+def declared_case(root, monkeypatch):
+    def declare(project):
+        declaration = put(project, 'input/declared-bench.json', {
+            'block': 'unit_alpha', 'ports': ['p', 'q'], 'rails': {'vdd': 'vdd', 'vss': 'vss'},
+            'testbench': {'supply_exprs': ['1'], 'conditions': ['neutral control'],
+                          'stimulus': ['v_drive p 0 {supply}'], 'cards': [],
+                          'control': ['op', 'let observed = v(q)', 'echo "MEAS vout_dc=" $&observed']}})
+        put(project, 'input/analog_flow.json', {'blocks': {'unit_alpha': {
+            'testbench_inputs': str(declaration.relative_to(project))}}})
+    return make_case(root, monkeypatch, prepare=declare)
+
+
+def test_declared_testbench_row_is_read_from_the_deck_it_ran(tmp_path, monkeypatch):
+    case = declared_case(tmp_path, monkeypatch)
+    component = case[2]
+    assert component['component_status'] == 'PASS', component['native_results']
+    assert selected(case)['metric_acceptance_status'] == 'PASS', component['metric_acceptance']
+    row = component['native_results']['steps'][-1]
+    assert row['native_inputs']['testbench']['path'] != str(tmp_path / 'phase3/analog/unit_alpha/tb_unit_alpha.sp')
+
+
+@pytest.mark.parametrize('fault, reason', [
+    ('edited_deck', 'A0708_NATIVE_INPUT_CHANGED'),
+    ('edited_declaration', 'A07_INVOCATION_CHANGED_OR_ABSENT')])
+def test_declared_testbench_deck_stays_bound_to_its_declaration(tmp_path, monkeypatch, fault, reason):
+    root, context, component, *_ = declared_case(tmp_path, monkeypatch)
+    if fault == 'edited_deck':
+        deck = Path(component['native_results']['steps'][-1]['native_inputs']['testbench']['path'])
+        deck.write_text(deck.read_text() + '* edited\n')
+    else:
+        declaration = root / 'input/declared-bench.json'
+        declaration.write_text(declaration.read_text().replace('neutral control', 'other control'))
+    measured = metrics.accept_a07(root, context, component)
+    assert measured['status'] == 'NOT_MEASURED' and measured['reason'] == reason, measured
