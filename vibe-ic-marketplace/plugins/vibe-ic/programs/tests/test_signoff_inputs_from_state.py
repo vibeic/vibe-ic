@@ -207,3 +207,10 @@ def test_only_requested_views_are_required(subject):
     project, views, direct, _, _ = subject
     put(direct, {'def': str(views['def'])})
     assert native.signoff_inputs(project, 'def') == {'def': views['def']}
+
+
+def test_partial_root_is_not_a_final_prestream_state(subject):
+    project, views, direct, _, _ = subject
+    put(direct, {'nl': str(views['nl'])})
+    assert native.final_state(project) is None
+    assert native.signoff_inputs(project, 'netlist') == {'netlist': views['nl']}
