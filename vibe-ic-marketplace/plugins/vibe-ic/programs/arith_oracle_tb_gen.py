@@ -375,6 +375,21 @@ def _affirmative_function_context(record: dict) -> bool:
     }
 
 
+_FUNCTION_RECORD_KEYS = frozenset({'title', 'content', 'section', 'evidence', 'heading_shape'})
+_FUNCTION_WRAPPER_KEYS = frozenset({'title', 'function', 'content', 'fields'})
+
+
+def _closed_function_record(row: dict) -> bool:
+    """Any other key can qualify a record as much as its title can, so it defers.
+
+    ``section`` is the Phase-1 heading position (h2, 1.1, unheaded), never prose.
+    """
+    section = row.get('section', 'unheaded')
+    return (row.keys() <= _FUNCTION_RECORD_KEYS and _affirmative_function_context(row)
+            and isinstance(section, str)
+            and re.fullmatch(r'h\d+|unheaded|\d+(?:\.\d+)*', section) is not None)
+
+
 def _function_records(project: Path) -> List[str]:
     """Read affirmative function records, retaining their title's authority.
 
@@ -390,15 +405,15 @@ def _function_records(project: Path) -> List[str]:
                     or not _affirmative_function_context(fields)):
                 return []
             rows = fields.get('frs_sections') or []
-            if not rows and isinstance(fields.get('function'), str):
-                return [fields['function']]
-            if not rows and isinstance(fields.get('content'), str):
-                return [fields['content']]
+            for key in ('function', 'content'):
+                if not rows and isinstance(fields.get(key), str):
+                    closed = doc.keys() <= _FUNCTION_WRAPPER_KEYS and fields.keys() <= _FUNCTION_WRAPPER_KEYS
+                    return [fields[key]] if closed else []
             if not isinstance(rows, list) or any(
                     not isinstance(row, dict) or not isinstance(row.get('content'), str)
                     for row in rows):
                 return []
-            if any(not _affirmative_function_context(row) for row in rows):
+            if not all(_closed_function_record(row) for row in rows):
                 return []
             return [row['content'] for row in rows
                     if isinstance(row, dict) and isinstance(row.get('content'), str)

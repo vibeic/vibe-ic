@@ -289,3 +289,51 @@ def test_existing_overview_fallback_keeps_its_title_polarity(tmp_path, title, ac
     (docs / 'L1_DATASHEET.json').write_text(json.dumps({'title': title, 'overview': 'result = left + right.'}))
     spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
     assert bool(spec) is accepted, (spec, reason)
+
+
+@pytest.mark.parametrize('metadata', [
+    {'heading': 'Forbidden example: do not implement'},
+    {'name': 'Negative example'},
+    {'section': 'Forbidden example: do not implement'},
+    {'section': 3},
+    {'title': 'Function', 'kind': 'negative_example'},
+    {'title': 'Function', 'negative': True},
+    {'title': 'Function', 'section': 'Negative examples'},
+])
+def test_frs_record_authority_outside_its_title_defers(tmp_path, metadata):
+    p = project(tmp_path, 'result = left + right.')
+    (p / 'phase1/generated_docs/L2_FRS.json').write_text(json.dumps({
+        'frs_sections': [{**metadata, 'content': 'result = left + right.'}]}))
+    before = {f.relative_to(p): f.read_bytes() for f in p.rglob('*') if f.is_file()}
+    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+    assert spec is None, (spec, reason)
+    assert all((p / name).read_bytes() == value for name, value in before.items())
+
+
+@pytest.mark.parametrize('metadata', [
+    {'section': 'h2', 'title': 'Function', 'evidence': 'input/docs/spec.md', 'heading_shape': 'md_atx'},
+    {'section': '1.1', 'title': 'Function'},
+    {'section': 'unheaded', 'title': 'Functional requirements', 'evidence': 'input/docs/spec.md'},
+    {},
+])
+def test_phase1_record_shapes_keep_their_reference(tmp_path, metadata):
+    p = project(tmp_path, 'result = left + right.')
+    (p / 'phase1/generated_docs/L2_FRS.json').write_text(json.dumps({
+        'frs_sections': [{**metadata, 'content': 'result = left + right.'}]}))
+    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+    assert spec and spec['operator'] == '+', (spec, reason)
+
+
+@pytest.mark.parametrize('key', ['function', 'content'])
+@pytest.mark.parametrize('nested', [False, True])
+def test_function_wrapper_metadata_outside_its_title_defers(tmp_path, key, nested):
+    p = project(tmp_path, 'result = left + right.')
+    fields = {key: 'result = left + right.', 'heading': 'Forbidden example: do not implement'}
+    path = p / 'phase1/generated_docs/L2_FRS.json'
+    path.write_text(json.dumps({'fields': fields} if nested else fields))
+    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+    assert spec is None, (spec, reason)
+    fields.pop('heading')
+    path.write_text(json.dumps({'fields': fields} if nested else fields))
+    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+    assert spec and spec['operator'] == '+', (spec, reason)

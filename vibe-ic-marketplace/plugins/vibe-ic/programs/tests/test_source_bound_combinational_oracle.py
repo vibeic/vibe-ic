@@ -96,7 +96,7 @@ async def saturated_reference(dut):
 
 
 @pytest.mark.parametrize('case', ['modulus_three', 'modulus_three_masked', 'modulus_unbound',
-                                 'forbidden_title', 'positive_title', 'modulus_six'])
+                                 'forbidden_title', 'forbidden_heading', 'positive_title', 'modulus_six'])
 def test_native_review_source_authority_controls(tmp_path, case):
     source = 'result = left + right' + (' mod 2^N' if case.startswith('modulus') else '.')
     p = project(tmp_path, source)
@@ -111,6 +111,10 @@ def test_native_review_source_authority_controls(tmp_path, case):
         doc = p / 'phase1/generated_docs/L2_FRS.json'
         doc.write_text(json.dumps({'frs_sections': [{
             'title': 'Forbidden example: do not implement', 'content': source}]}))
+    if case == 'forbidden_heading':
+        doc = p / 'phase1/generated_docs/L2_FRS.json'
+        doc.write_text(json.dumps({'frs_sections': [{
+            'heading': 'Forbidden example: do not implement', 'content': source}]}))
     rtl = p / 'phase2/stage1/rtl'
     rtl.mkdir(parents=True)
     expression = "(left + right) & 6'd7" if case == 'modulus_three_masked' else 'left + right'
