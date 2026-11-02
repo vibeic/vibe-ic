@@ -80,6 +80,12 @@ It **combines open-source** frameworks rather than re-inventing them: **cocotb**
   `tests>0, passed>0, failures==0, errors==0`. The marker never credits a case
   on its own.
 
+  In a benchmark run, an AI backup task whose evidence window reaches Step 4
+  names this path in `reference_model_handoff`. Fill it before `--resume` so the
+  first re-gate measures it. A model filled or replaced later is measured by the
+  next `--resume`, which re-enters the runner on the same RTL bytes and issues a
+  fresh review. A model the last run already measured is not re-run.
+
   *Measured (2026-09-02, a subservient × gf180mcuD acceptance run): the whole
   convention was named in exactly two files — `professional_tb_gen.py` and its
   own test. No gate message, no skill and no doc mentioned it, so an agent

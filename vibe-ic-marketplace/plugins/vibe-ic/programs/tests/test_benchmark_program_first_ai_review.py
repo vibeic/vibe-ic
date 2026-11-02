@@ -1825,6 +1825,106 @@ def test_dispatched_ai_repair_consumes_changed_rtl_before_regate(
     assert Path(runner).is_file()
 
 
+@pytest.mark.parametrize("review_state", ["pending", "pass", "semantic-fail"])
+@pytest.mark.parametrize("filled", [True, False], ids=["model-filled", "hook-unfilled"])
+def test_required_sim_failure_reenters_only_for_a_filled_reference_model(
+        tmp_path, monkeypatch, filled, review_state):
+    """The real resume consumer re-gates the same bytes and asks for a fresh review."""
+    run, task, runner = _dispatched_parent_task(tmp_path)
+    _solve_report(run, task)
+    project = Path(task["project"])
+    out = project / "phase2/stage1/sim_professional/dut"
+    out.mkdir(parents=True)
+    report = project / bd._PROFESSIONAL_TB_REPORT
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({"out_dir": str(out),
+                                  "reference_model_tier": "hook_unfilled"}))
+    if filled:
+        (out / "expert_reference_tb.py").write_text(
+            "import cocotb\n"
+            "@cocotb.test()\n"
+            "async def model(dut):\n"
+            "    assert dut.y.value == 0\n"
+            "    dut._log.info('PROFESSIONAL_TB PASS')\n")
+    monkeypatch.setattr(bd, "_required_gate_ledger", lambda _result: {
+        "failed_required": ["sim"], "in_scope": {"sim": "FAIL"},
+        "unmeasured_required": [], "eligibility": "INELIGIBLE"})
+    _stub_dispatched_reentry(monkeypatch)
+    real_argv = bd._resume_solver_argv
+    monkeypatch.setattr(
+        bd, "_resume_solver_argv",
+        lambda _runner, project, supplied_rtl, entry, exit_step,
+               delivery_route="ip", *args, **kwargs: real_argv(
+                   runner, project, supplied_rtl, entry, exit_step,
+                   delivery_route, *args, **kwargs))
+    real_collect = bio.collect
+    monkeypatch.setattr(bio, "collect", lambda fmt, pid, proj, **kwargs: (
+        {"ok": True, "completion": (proj / "phase2/stage1/rtl/dut.v").read_text(),
+         "rtl_gen": "NOT_APPLICABLE", "supplied_rtl": True}
+        if kwargs.get("supplied_rtl") else real_collect(fmt, pid, proj, **kwargs)))
+
+    if review_state != "pending":
+        _write_review(task, _proven_fail_review(task) if review_state == "semantic-fail"
+                      else _valid_review(task))
+        monkeypatch.setattr(bd, "_run_verification_challenge", lambda candidate, challenge: {
+            "status": "FAIL" if review_state == "semantic-fail" else "PASS",
+            "candidate_rtl_sha256": candidate["rtl_sha256"],
+            "challenge_sha256": challenge["sha256"],
+        })
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+
+    current = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    archives = list((run / "runner_regates" / task["id"]).glob("runner-regate-*"))
+    assert not any(row.get("status") == "RUNNER_REGATE_BLOCKED"
+                   for row in bd._read_jsonl(run / bd._REPAIR_WORKLIST))
+    assert current["rtl_sha256"] == task["rtl_sha256"]
+    assert current["candidate_origin"] == task["candidate_origin"]
+    if filled and review_state != "semantic-fail":
+        assert current["review_path"] != task["review_path"]
+        assert len(archives) == 1
+        assert bd._strict_json_loads((archives[0] / "prior_task.json").read_text()) == task
+        assert not Path(current["review_path"]).exists()
+        assert not Path(current["response_path"]).exists()
+        # Model the producer's updated report; no new model means no second re-gate.
+        import professional_tb_gen as tb
+        report.write_text(json.dumps({"out_dir": str(out),
+            "reference_model_tier": "expert_filled",
+            "reference_model_sha256": tb.reference_model_identity(out)}))
+        assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+        assert bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]["review_path"] == current["review_path"]
+        assert len(list((run / "runner_regates" / task["id"]).glob("runner-regate-*"))) == 1
+    else:
+        assert current["review_path"] == task["review_path"]
+        assert archives == []
+    if review_state == "semantic-fail":
+        repair = bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]
+        assert repair["status"] == "AI_SEMANTIC_REPAIR_REQUIRED"
+        assert repair["challenge_result"]["status"] == "FAIL"
+
+
+def test_non_sim_gate_failure_keeps_its_repair_instruction(tmp_path, monkeypatch):
+    run, task, _ = _dispatched_parent_task(tmp_path)
+    _solve_report(run, task)
+    _write_review(task, _valid_review(task))
+    project = Path(task["project"])
+    report = project / bd._PROFESSIONAL_TB_REPORT
+    report.parent.mkdir(parents=True)
+    report.write_text(json.dumps({"reference_model_handoff": {
+        "status": "REQUIRED", "artifact_path": "old/expert_reference_tb.py"}}))
+    monkeypatch.setattr(bd, "_required_gate_ledger", lambda _result: {
+        "failed_required": ["lint"], "in_scope": {"lint": "FAIL", "sim": "PASS"},
+        "unmeasured_required": [], "eligibility": "INELIGIBLE"})
+    monkeypatch.setattr(bd, "_run_verification_challenge", lambda candidate, challenge: {
+        "status": "PASS", "candidate_rtl_sha256": candidate["rtl_sha256"],
+        "challenge_sha256": challenge["sha256"]})
+    _stub_dispatched_reentry(monkeypatch)
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    repair = bd._read_jsonl(run / bd._REPAIR_WORKLIST)[0]
+    assert repair["status"] == "PROGRAM_GATE_INELIGIBLE"
+    assert repair["required_next"].startswith("repair the RTL"), repair
+    assert "reference_model_handoff" not in repair
+
+
 @pytest.mark.parametrize("original", [False, True])
 @pytest.mark.parametrize("mutation", ["repair_record", "challenge"])
 def test_dispatched_changed_rtl_without_valid_repair_proof_stays_stale(

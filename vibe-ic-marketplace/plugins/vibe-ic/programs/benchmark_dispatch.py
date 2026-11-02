@@ -769,6 +769,57 @@ def _runner_terminal_error(rc, stdout: str, stderr: str) -> str | None:
     return None
 
 
+def _reference_model_reentry_reason(project: Path, result: dict) -> str | None:
+    """Why Step 4 must measure unchanged RTL again, or None.
+
+    Step 4 hands a missing reference model to the expert and asks for a re-run.
+    A candidate whose RTL stays the same otherwise never returns to the runner,
+    so it stays INELIGIBLE on a measurement that no longer describes its
+    verification input and the run cannot complete. The gate report names the
+    model it measured, so only a different accepted model re-enters, and a
+    repeated --resume cannot loop.
+    """
+    if (result.get("accepted") or "sim" not in
+            (_required_gate_ledger(result).get("failed_required") or [])):
+        return None
+    try:
+        report = _read_json_regular(Path(project) / _PROFESSIONAL_TB_REPORT)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(report, dict):
+        return None
+    top = Path(str(report.get("out_dir") or "")).name
+    measured = report.get("reference_model_sha256")
+    if not top or report.get("reference_model_tier") not in {
+            "hook_unfilled", "expert_filled"}:
+        return None
+    import professional_tb_gen as tb                     # noqa: PLC0415
+    current = tb.reference_model_identity(
+        Path(project) / "phase2" / "stage1" / "sim_professional" / top)
+    if current is None or current == measured:
+        return None
+    return ("REFERENCE_MODEL_CHANGED: Step 4 has not measured the current "
+            f"reference model {current}")
+
+
+def _reference_model_next(project) -> dict:
+    """Name the missing model, when that rather than the RTL is what Step 4 waits on."""
+    try:
+        report = _read_json_regular(Path(str(project)) / _PROFESSIONAL_TB_REPORT)
+    except (OSError, ValueError):
+        return {}
+    handoff = report.get("reference_model_handoff") if isinstance(report, dict) else None
+    if not isinstance(handoff, dict):
+        return {}
+    return {"reference_model_handoff": handoff,
+            "required_next": (
+                "Step 4 requires a usable reference model: author or correct "
+                f"{handoff.get('artifact_path')} from the visible input, then run "
+                "--resume to re-measure the same bytes and submit a fresh AI review; "
+                "an independent semantic PASS does not discharge a required "
+                "in-scope gate failure")}
+
+
 def _runner_reentry_reason(task: dict, result: dict, *,
                            allow_repaired_output: bool = False,
                            repaired_output_sha256: str | None = None) -> str | None:
@@ -1562,6 +1613,8 @@ _REPAIR_WORKLIST = "needs_ai_repair.jsonl"
 _CLARIFICATION_WORKLIST = "needs_spec_clarification.jsonl"
 _ENHANCEMENT_WORKLIST = "program_enhancement_candidates.jsonl"
 _ACCEPTANCE_REPORT = "program_first_ai_review_acceptance.json"
+_PROFESSIONAL_TB_REPORT = "reports/phase2/gates/professional_tb.json"
+_STEP4_FUNCTIONAL_EVIDENCE = 4
 _REVIEW_CORRECTION_SCHEMA = "vibeic.benchmark.ai_review_correction.v1"
 _PROGRAM_REGATE_SCHEMA = "vibeic.benchmark.program_regate.v1"
 _PRE_GATE_INPUT_SCHEMA = "vibeic.benchmark.pre_gate_input.v1"
@@ -8385,7 +8438,8 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
                          source: str, detail: str, bench: str,
                          dataset: Path, run_p: Path,
                          required_top: str | None = None,
-                         expected_public_input: dict | None = None) -> dict:
+                         expected_public_input: dict | None = None,
+                         exit_step: object = None) -> dict:
     """Build one prompt-bound handoff into the runner-owned RTL directory.
 
     `required_top` carries the module name the benchmark's SCORER will
@@ -8458,6 +8512,19 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
     task["public_original_input_paths"] = [
         str(project / "input" / "public_original" / "files" / row["relative_path"])
         for row in task["public_original_input"]["files"]]
+    if str(exit_step).isdigit() and int(exit_step) >= _STEP4_FUNCTIONAL_EVIDENCE:
+        # Advisory, like the producer's own handoff: Program may still derive
+        # the reference itself. Filling it now measures the first re-gate
+        # instead of spending a review on a candidate Step 4 could not measure.
+        import professional_tb_gen as tb                 # noqa: PLC0415
+        task["reference_model_handoff"] = {
+            **tb.reference_model_handoff(
+                project / "phase2" / "stage1" / "sim_professional"
+                / (required_top or "<top_module>")),
+            "status": "CONDITIONAL",
+            "when": ("this route's evidence window includes Step 4; it reads "
+                     "this model when Program cannot derive the reference"),
+        }
     task["task_sha256"] = _sha256_text(json.dumps(task, sort_keys=True))
     _write_immutable_json(run_p / "ai_backup_tasks" /
                           f"{task['task_sha256']}.json", task)
@@ -8537,7 +8604,7 @@ def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
             str(waive.get("detail") or "") if waive else str(got.get("reason") or ""),
             bench, Path(dataset), run_p,
             required_top=_required_scorer_top(_entry(bench), fmt),
-            expected_public_input=public)
+            expected_public_input=public, exit_step=result.get("exit"))
     observed = result.get("runner_invocation")
     result.update(
         runner_invocation=invocation, runner_diagnostics=diagnostic,
@@ -9120,7 +9187,8 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                     pid, proj, backup_skills, str(backup_source),
                     backup_detail, bench, ds, run_p,
                     required_top=_required_scorer_top(_entry(bench), fmt),
-                    expected_public_input=staged["public_original_input"])
+                    expected_public_input=staged["public_original_input"],
+                    exit_step=exit_step)
             state = ("candidate->AI-review" if got.get("ok")
                      else ("WAIVE->AI" if backup_source == "rtl_gen_waive"
                            else ("route-declared->AI" if awaiting_backup
@@ -9799,7 +9867,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             backup.append(_make_ai_backup_task(
                 pid, proj, backup_skills, str(backup_source), backup_detail,
                 bench, Path(dataset).resolve(), run_p,
-                required_top=_required_scorer_top(_entry(bench), fmt)))
+                required_top=_required_scorer_top(_entry(bench), fmt),
+                exit_step=result.get("exit")))
             existing_backup_ids.add(pid)
         print(f"  {pid:44s} Program worker retry completed (rc={rc})")
 
@@ -10066,6 +10135,16 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         invocation_reason = _runner_reentry_reason(
             task, result, allow_repaired_output=repair_state,
             repaired_output_sha256=repair_output_sha256)
+        if not invocation_reason and working_hash == task.get("rtl_sha256"):
+            invocation_reason = _reference_model_reentry_reason(proj, result)
+            if invocation_reason and Path(str(task.get("review_path") or "")).is_file():
+                # Filling a model cannot erase a proven RTL defect or an
+                # unresolved source question. Keep its existing review and
+                # repair authorization until that issue is resolved.
+                prior_review = _validate_ai_review(task)
+                if prior_review.get("status") in {
+                        "REPAIR_REQUIRED", "SPEC_CLARIFICATION_REQUIRED"}:
+                    invocation_reason = None
         if invocation_reason:
             reentry_state = _route_reentry_state(pid, result, allow_d1_only=False)
             if reentry_state.get("status") != "ACTIVE":
@@ -10649,6 +10728,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                     "run --resume for PROGRAM gates and submit a fresh AI "
                     "review for the new hash; an independent semantic PASS "
                     "does not discharge a required in-scope gate failure"),
+                **(_reference_model_next(task.get("project"))
+                   if "sim" in gate_ledger["failed_required"] else {}),
             })
             result.update({"accepted": False, "awaiting_ai": True,
                            "awaiting_ai_review": False,

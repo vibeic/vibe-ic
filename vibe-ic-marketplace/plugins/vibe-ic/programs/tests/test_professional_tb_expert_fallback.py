@@ -89,6 +89,60 @@ def test_expert_reference_survives_regeneration_and_closes_hook(tmp_path):
     assert plan["reference_model_tier"] == "expert_filled"
 
 
+def test_generator_names_only_the_expert_model_it_measured(tmp_path):
+    project = _project(tmp_path)
+    first = SUBJECT.generate(project)
+    assert "reference_model_sha256" not in first
+    (Path(first["out_dir"]) / "expert_reference_tb.py").write_text(EXPERT)
+
+    second = SUBJECT.generate(project)
+    assert second["reference_model_sha256"] == hashlib.sha256(EXPERT.encode()).hexdigest()
+
+
+def test_model_identity_names_the_loaded_bytes_when_source_changes(tmp_path, monkeypatch):
+    project = _project(tmp_path)
+    out = Path(SUBJECT.generate(project)["out_dir"])
+    source = out / "expert_reference_tb.py"
+    source.write_text(EXPERT)
+    real_build = SUBJECT.build_coverage_model
+
+    def replace_after_loading(shape):
+        source.write_text(EXPERT + "\n# revised after loading\n")
+        return real_build(shape)
+
+    monkeypatch.setattr(SUBJECT, "build_coverage_model", replace_after_loading)
+    result = SUBJECT.generate(project)
+    emitted = (out / "tb_converter.py").read_text()
+    assert emitted == EXPERT
+    assert result["reference_model_sha256"] == hashlib.sha256(emitted.encode()).hexdigest()
+    assert result["reference_model_sha256"] != SUBJECT.reference_model_identity(out)
+
+
+@pytest.mark.parametrize("initial", ["missing", "wrong-case"])
+def test_memory_model_refusal_can_reenter_after_correction(tmp_path, monkeypatch, initial):
+    import benchmark_dispatch as dispatch
+    import design_one_shot_runner as runner
+
+    project, out = _signature_project(tmp_path)
+    source = out / "expert_reference_tb.py"
+    good = source.read_text()
+    if initial == "missing":
+        source.unlink()
+    else:
+        source.write_text(good.replace("signature_result", "other_case"))
+    monkeypatch.setattr(runner, "_professional_tb_exec_site", lambda _container: None)
+    failed = {"exit": "4", "phases": {"phase3_verifying": {"ran": {"sim": "FAIL"}}}}
+    step = runner.step_professional_tb_gen(project, "signature_unit", "unused")
+    assert step.status == "NOT_MEASURED"
+    assert dispatch._reference_model_reentry_reason(project, failed) is None
+    source.write_text(good)
+    reason = dispatch._reference_model_reentry_reason(project, failed)
+    assert reason is not None and reason.startswith("REFERENCE_MODEL_CHANGED"), reason
+    # A repeated attempt on the same model stays bounded, even with no simulator.
+    runner.step_professional_tb_gen(project, "signature_unit", "unused")
+    assert dispatch._reference_model_reentry_reason(project, failed) is None
+
+
 def test_skip_based_expert_source_is_rejected(tmp_path):
     project = _project(tmp_path)
     first = SUBJECT.generate(project)
