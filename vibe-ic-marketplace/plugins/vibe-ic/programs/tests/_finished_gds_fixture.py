@@ -13,5 +13,6 @@ def publish_finished_gds(project, state_path=None):
     record.parent.mkdir(parents=True, exist_ok=True)
     record.write_text(json.dumps({
         'stream_state': str(state_path), 'canonical': str(gds),
+        'stream_state_sha256': hashlib.sha256(state_path.read_bytes()).hexdigest(),
         'canonical_sha256': hashlib.sha256(gds.read_bytes()).hexdigest() if gds.is_file() else None}))
     return gds

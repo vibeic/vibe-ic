@@ -1,4 +1,5 @@
 """Ruling 93 signoff inputs from one native final State."""
+import hashlib
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -74,6 +75,7 @@ def test_step31_missing_view_is_named_without_alias_fallback(subject, half, view
     state = json.loads(state_path.read_text())
     state.pop(view)
     put(state_path, state)
+    publish_finished_gds(project)
     row = runner._step31_librelane(project, 'unit', pdk, half, publish=False)
     assert row.status == 'NOT_MEASURED', row.detail
     assert view in row.detail
@@ -112,6 +114,7 @@ def test_selected_native_gds_convention_and_relative_paths(subject, view_name):
     state[view_name] = state.pop('gds')
     state.pop('metrics')
     put(state_path, state)
+    publish_finished_gds(project)
     assert native.signoff_inputs(project, 'gds', 'def', 'netlist', 'sdc', 'odb') == {
         ('netlist' if name == 'nl' else name): value for name, value in views.items()}
 
@@ -144,6 +147,10 @@ def test_state_gds_fields_do_not_replace_the_finished_gds(subject):
     state['klayout_gds'] = 'stream.gds'
     state['gds'] = 'missing.gds'
     put(state_path, state)
+    promotion = project / native.FINISHING_RECORD_REL
+    record = json.loads(promotion.read_text())
+    record['stream_state_sha256'] = hashlib.sha256(state_path.read_bytes()).hexdigest()
+    put(promotion, record)
     assert native.signoff_inputs(project, 'gds') == {'gds': views['gds']}
 
 
