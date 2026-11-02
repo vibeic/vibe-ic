@@ -81,7 +81,7 @@ def test_duplicate_pin_refuses_regardless_of_document_order(tmp_path,different,r
     other=table(ROW.replace('2.04','2.05')) if different else table()
     docs={'interface.md':INTERFACE,'a.md':table(),'b.md':other}
     if reverse:docs=dict(reversed(list(docs.items())))
-    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_'+('CONFLICT' if different else 'DUPLICATE_PIN')):
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_MULTIPLE_TABLES'):
         generate_docs(tmp_path,docs)
 
 def test_multiple_rows_are_independent(tmp_path):
@@ -89,7 +89,7 @@ def test_multiple_rows_are_independent(tmp_path):
     assert len(pin_rows(l1))==len(pin_rows(l1,'sense_b'))==1
     assert len(block_rows(l5))==1
 
-@pytest.mark.parametrize('text',[table().replace('Pin interface conditions','Proposed interface conditions'), '```markdown\n'+table()+'```'])
+@pytest.mark.parametrize('text',[table().replace('Pin interface conditions','Proposed interface conditions')])
 def test_only_exact_real_section_is_parsed(tmp_path,text):
     l1,l5=generate(tmp_path,text)
     assert not any(r.get('kind')=='input_condition' for r in pin_rows(l1))
@@ -134,3 +134,49 @@ def test_stale_l1_cannot_authorize_a_new_l5_row(tmp_path):
     changed={'interface.md':INTERFACE,'conditions.md':table(ROW.replace('2.04','2.05'))}
     with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_L1_NOT_CURRENT'):
         runner.gen_l5_adi_spec(tmp_path,changed)
+
+
+BOUNDARY_CASES=json.loads((Path(__file__).parent/'fixtures/phase1_pin_interface_boundary.json').read_text())
+@pytest.mark.parametrize('case',BOUNDARY_CASES,ids=[c['case'] for c in BOUNDARY_CASES])
+def test_reviewed_boundary_specimens_refuse(tmp_path,case):
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_'):
+        generate_docs(tmp_path,case['docs'])
+
+
+@pytest.mark.parametrize('different',[False,True])
+def test_duplicate_rows_within_one_table_still_refuse(tmp_path,different):
+    other=ROW.replace('2.04','2.05') if different else ROW
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_'+('CONFLICT' if different else 'DUPLICATE_PIN')):
+        generate(tmp_path,table(ROW+'\n'+other))
+
+@pytest.mark.parametrize('opener,closer',[
+    ('```markdown','```not-a-close'),('~~~~','~~~'),('```','~~~~'),
+    ('```','``` trailing'),('```','    ```')])
+def test_ambiguous_fences_fail_closed(tmp_path,opener,closer):
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_'):
+        generate(tmp_path,opener+'\n'+closer+'\n'+table())
+
+@pytest.mark.parametrize('opener,closer',[('```markdown','````'),('~~~text','~~~~'),('   ```','  ```\t')])
+def test_valid_fence_before_live_table_preserves_authority(tmp_path,opener,closer):
+    l1,l5=generate(tmp_path,opener+'\nordinary example\n'+closer+'\n'+table())
+    assert len(pin_rows(l1))==1 and block_rows(l5)==pin_rows(l1)
+
+@pytest.mark.parametrize('text',['```markdown\n'+table()+'```','> '+table().replace('\n','\n> ')])
+def test_hidden_tables_are_named_refusals(tmp_path,text):
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_HIDDEN_TABLE'):
+        generate(tmp_path,text)
+
+
+def test_unclosed_fence_after_live_table_refuses(tmp_path):
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_UNCLOSED_FENCE'):
+        generate(tmp_path,table()+'\n## Other\n```markdown\nunclosed')
+
+
+def test_nonclosing_indented_fence_like_line_refuses_even_before_a_real_close(tmp_path):
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_INVALID_FENCE'):
+        generate(tmp_path,'```markdown\n    ```\n```\n'+table())
+
+
+def test_non_commonmark_heading_does_not_authorize_a_table(tmp_path):
+    l1,l5=generate(tmp_path,table().replace('Pin interface conditions','Pin interface conditions###'))
+    assert not pin_rows(l1) and not block_rows(l5)
