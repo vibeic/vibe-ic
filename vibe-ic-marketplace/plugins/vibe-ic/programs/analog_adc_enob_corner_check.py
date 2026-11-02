@@ -390,8 +390,6 @@ def sndr_db_from_transient(deck_text: str, dump_text: str,
             continue                      # a header row, not a sample
         times.append(t)
         vals.append(v)
-        if reset_node:
-            reset_values.append(reset_v)
     if len(times) < 64:
         return None, {"reason": _UNMEASURABLE_NO_ROWS, "rows": len(times)}
 
