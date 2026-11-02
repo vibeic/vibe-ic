@@ -12,6 +12,7 @@ from pathlib import Path
 import hashlib
 import shutil
 import subprocess
+import sys
 import ast
 
 import pytest
@@ -202,7 +203,7 @@ def test_existing_native_readers_reopen_neutral_geometry_without_any_qualificati
     script.write_text('import pya\nl=pya.Layout();l.dbu=0.001\nlayer=l.layer(1,0)\n' +
         '\n'.join(f'l.create_cell({name!r}).shapes(layer).insert(pya.Box(0,0,1000,1000))'
                   for name in masters) + f'\nl.write({str(gds)!r})\n')
-    tools = {name: {'path': shutil.which(name)} for name in ('openroad', 'klayout')}
+    tools = {'python3': {'path': sys.executable}, 'klayout': {'path': shutil.which('klayout')}}
     assert all(row['path'] for row in tools.values()), 'run in the installed official EDA image'
     proc = subprocess.run([tools['klayout']['path'], '-b', '-r', str(script)],
                           capture_output=True, text=True, timeout=30)

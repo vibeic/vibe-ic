@@ -1962,12 +1962,14 @@ def execute(project,context):
         checked=checker.main(args);consumer=json.loads(report.read_text());result['consumer']=consumer
         if checked or consumer.get('verdict')!='PASS':
             result['component_status']='FAIL';raise ValueError('D32_EXISTING_RING_CHECK_FAILED')
-        tools={name:shutil.which(name) for name in ('openroad','klayout')}
+        # This process is bound by native_launch to the selected immutable
+        # image. Its shared Python supplies the image's native odb binding.
+        tools={'python3':sys.executable,'klayout':shutil.which('klayout')}
         if not all(tools.values()):raise ValueError('D32_NATIVE_TOOL_UNAVAILABLE')
         result['tools']={k:{'path':v,'sha256':digest(Path(v).resolve())} for k,v in tools.items()}
         dbscript=work/'read_db.py';dbscript.write_text(_D32_DB_READ);dbout=work/'native_db.json';request=work/'db-request.json'
         request.write_text(json.dumps({'lefs':data['lefs'],'def':str(case/PR.PADRING_DEF_REL),'odb':str(work/'padring.odb'),'out':str(dbout)}))
-        run([tools['openroad'],'-exit','-python',str(dbscript),str(request)],'OpenDB')
+        run([tools['python3'],str(dbscript),str(request)],'OpenDB')
         db=json.loads(dbout.read_text());result['native_db']=db
         if db.get('top')!=data['top'] or set(db.get('ports',{}))!=set(data['ports']):raise ValueError('D32_NATIVE_PORT_POPULATION_MISMATCH')
         pads=producer['pads'];required={p['instance']:p['master'] for p in pads+producer['corners']+producer['fillers']}
@@ -2131,7 +2133,7 @@ def _d32_metric_observation(project, context, component):
                        'out': str(work / 'native_gds.json')}:
         raise ValueError('D32_NATIVE_CELL_POPULATION_CHANGED')
     tools = component.get('tools')
-    if not isinstance(tools, dict) or set(tools) != {'openroad', 'klayout'}:
+    if not isinstance(tools, dict) or set(tools) != {'python3', 'klayout'}:
         raise ValueError('D32_NATIVE_TOOL_IDENTITY_ABSENT')
     for tool in tools.values():
         path = Path(tool['path']).resolve(strict=True)
@@ -2181,7 +2183,7 @@ def _d32_metric_readback(project, data, work, tools):
     request.write_text(json.dumps({'lefs': data['lefs'],
         'def': str(work / 'case' / PR.PADRING_DEF_REL),
         'odb': str(target / 'padring.odb'), 'out': str(target / 'native_db.json')}))
-    commands = [('OpenDB', [tools['openroad']['path'], '-exit', '-python', str(script), str(request)])]
+    commands = [('OpenDB', [tools['python3']['path'], str(script), str(request)])]
     gdsscript = target / 'read_gds.py'
     gdsscript.write_text(_D32_GDS_READ)
     gdssource = json.loads((work / 'gds-request.json').read_text())
