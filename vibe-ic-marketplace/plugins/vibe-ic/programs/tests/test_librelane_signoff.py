@@ -1080,3 +1080,42 @@ def test_step23_tool_arm_reads_native_lib_schema(tmp_path, schema):
             library.write_text(library.read_text() + '# changed after native STA\n')
             changed = signoff.step23_tool_arm(project)
             assert any('liberty_digest' in row['scope_gaps'] for row in changed['corners'].values())
+
+
+@pytest.mark.parametrize('changed', [False, True])
+def test_step23_carrier_move_uses_original_content_identity(tmp_path, monkeypatch, changed):
+    """Exercise the receipt-bound public reader, including its unresolved verdict gaps."""
+    from _hostpaths import require_repo
+    from test_f15_step23_gates_read_the_tool_arm import tool_project, rebind, STA
+    registry = json.loads(require_repo(
+        'vibe-ic-marketplace/plugins/vibe-ic/programs/pdk_registry.json').read_text())
+    family = next(row['name'] for row in registry['pdks'] if row['name'] != 'custom_auto_detect')
+    project = tool_project(tmp_path)
+    runtime = tmp_path / 'runtime'
+    runtime.mkdir()
+    (tmp_path / 'pdk_root/p').rename(runtime / family)
+    old_prefix = str(tmp_path / 'gone-carrier' / family) + '/'
+    for path in project.rglob('*'):
+        if path.is_file():
+            path.write_text(path.read_text().replace('/pdk/p/', old_prefix))
+    config_path = project / STA / 'config.json'
+    config = json.loads(config_path.read_text())
+    config['PDK'] = family
+    config_path.write_text(json.dumps(config))
+    provenance = project / 'phase3/librelane_pdk_root.provenance.json'
+    provenance.write_text(json.dumps({'path': str(tmp_path / 'gone-carrier'),
+                                     'derivation': {'pdk': family}}))
+    rebind(project)
+    monkeypatch.setenv('PDK_ROOT', str(runtime))
+    if changed:
+        for path in runtime.rglob('*.lib'):
+            path.write_text(path.read_text() + '# changed after run\n')
+    arm = signoff.step23_tool_arm(project)
+    assert len(arm['corners']) == 9
+    for row in arm['corners'].values():
+        if changed:
+            assert 'liberty_digest' in row['scope_gaps']
+        else:
+            assert not row['scope_gaps'], row['scope_gaps']
+            assert all(v['sha256'] == v['run_sha256'] for v in row['liberties'])
+            assert all(v['resolved_path'].startswith(str(runtime)) for v in row['liberties'])

@@ -2186,23 +2186,79 @@ def validate_step_receipt(folder: Path, step: str) -> dict:
         raise Refusal('LL_STEP_OUTPUT_UNBOUND', f'{folder}: {exc}') from exc
 
 
-def config_file_hashes(config: dict, mounts: list) -> dict[str, str]:
-    """Hash config files on the host, including files behind PDK mounts."""
+def resolve_state_pdk_asset(value: str | Path, *, pdk: str | None,
+                            fingerprint: dict | None = None,
+                            mounts: list = ()) -> Path | None:
+    """Read an existing view or uniquely rebind a missing recorded PDK asset.
+
+    No runtime discovery, cache writes, or changes to the recorded inputs.
+    An unresolved asset must remain unmeasured by its consumer.
+    """
+    path = Path(value)
+    if '..' in path.parts:
+        return None
+    # Select the mounted source before testing existence: a visible guest file
+    # may contain different bytes from the file the tool actually mounts.
+    source = path
+    for host, guest in sorted(mounts, key=lambda m: len(str(m[1])), reverse=True):
+        if path.is_relative_to(guest):
+            source = Path(host) / path.relative_to(guest)
+            break
+    if source.is_file():
+        return source
+    try:
+        registry = json.loads(Path(__file__).with_name('pdk_registry.json').read_text())
+        if not pdk or pdk not in {entry['name'] for entry in registry['pdks']}:
+            return None
+        parts = path.parts
+        if not path.is_absolute() or parts.count(pdk) != 1:
+            return None
+        suffix = parts[parts.index(pdk) + 1:]
+        if len(suffix) < 2 or suffix[0] not in ('libs.ref', 'libs.tech'):
+            return None
+        fp = (fingerprint or {}).get('input', fingerprint or {})
+        hashes = {group[str(path)] for key in ('config_files', 'liberty_files')
+                  if isinstance(group := fp.get(key), dict) and str(path) in group}
+        if len(hashes) != 1 or not re.fullmatch('[0-9a-f]{64}', str(next(iter(hashes)))):
+            return None
+        declared = os.environ.get('PDK_ROOT', '')
+        root = Path(declared)
+        if not declared or not root.is_absolute() or '..' in root.parts:
+            return None
+        roots = [root / pdk]
+        if root.name == pdk:
+            roots.append(root)
+        candidates = []
+        for selected in roots:
+            candidate = selected.joinpath(*suffix)
+            # Nix directory/file links may target a different store package.
+            # Containment is lexical; the recorded digest proves the content.
+            if candidate.is_relative_to(selected) and candidate.is_file():
+                candidates.append(candidate)
+        if len(candidates) != 1:
+            return None
+        # carrier moved images; content proven identical by recorded sha256
+        return candidates[0] if digest(candidates[0]) in hashes else None
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def config_file_hashes(config: dict, mounts: list, *,
+                       fingerprint: dict | None = None) -> dict[str, str]:
+    """Hash config files, retaining their recorded names across image moves."""
     result = {}
     for path in _walk_paths(config):
-        source = path
-        for host, guest in sorted(mounts, key=lambda m: len(str(m[1])), reverse=True):
-            if path.is_relative_to(guest):
-                source = Path(host) / path.relative_to(guest)
-                break
-        if source.is_file():
+        source = resolve_state_pdk_asset(path, pdk=config.get('PDK'),
+                                         fingerprint=fingerprint, mounts=mounts)
+        if source is not None:
             result[str(path)] = digest(source)
-            # Density decks load their rule/layer definitions from Ruby
-            # siblings. Bind those executable inputs before running/caching.
+            # Density decks load their rule/layer definitions from Ruby siblings.
             if str(path) == config.get('KLAYOUT_DENSITY_RUNSET'):
                 for dependency in sorted(source.parent.rglob('*.rb')):
                     guest = path.parent / dependency.relative_to(source.parent)
                     result[str(guest)] = digest(dependency)
+        elif fingerprint is not None and any(part in path.parts for part in ('libs.ref', 'libs.tech')):
+            raise Refusal('LL_PDK_ASSET_UNRESOLVED', str(path))
     return result
 
 

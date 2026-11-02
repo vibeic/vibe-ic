@@ -4300,3 +4300,27 @@ def test_cold_post_stream_gate_retains_source_and_admits_current_runtime(tmp_pat
     note.write_text(json.dumps(observation, indent=2) + '\n')
     assert changed['verdict'] == 'NOT_MEASURED', changed
     assert any('GDS' in reason and 'sha256' in reason for reason in changed['not_measured']), changed
+
+
+@pytest.mark.parametrize('changed', [False, True])
+def test_drv_scene_files_rebind_only_recorded_content(tmp_path, monkeypatch, changed):
+    from test_librelane_contract import _carrier_asset
+    import drv_capture_plan as planner
+    family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
+    lef = asset.parents[1] / 'lef' / 'neutral.lef'
+    lef.parent.mkdir()
+    lef.write_text('VERSION 5.8 ;\nEND LIBRARY\n')
+    old_lef = recorded.parents[1] / 'lef' / lef.name
+    fingerprint['config_files'][str(old_lef)] = hashlib.sha256(lef.read_bytes()).hexdigest()
+    env = {'CELL_LIBS': str(recorded), 'CELL_LEFS': str(old_lef), 'PAD_LIBS': str(recorded)}
+    if changed:
+        asset.write_text('changed after run\n')
+        with pytest.raises(ValueError, match='recorded PDK asset unresolved'):
+            planner._scene_files(env, tmp_path / 'gone', family, 'tt', fingerprint=fingerprint)
+    else:
+        libraries, lefs = planner._scene_files(env, tmp_path / 'gone', family, 'tt',
+                                              fingerprint=fingerprint)
+        assert libraries[0]['path'] == str(asset)
+        assert lefs[0]['path'] == str(lef)
+        assert planner._pad_lib_paths(env, tmp_path / 'gone', family, 'tt',
+                                      fingerprint=fingerprint) == [asset]

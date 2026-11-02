@@ -286,9 +286,9 @@ def _pad_cells(liberties, io_library_paths=()) -> frozenset:
     return frozenset(cells)
 
 
-def _pad_lib_paths(env: dict, root: Path, pdk: str, pvt: str) -> list[Path]:
+def _pad_lib_paths(env: dict, root: Path, pdk: str, pvt: str, *, fingerprint: dict | None = None) -> list[Path]:
     """The scene's IO Liberties, as `_scene_files` links them from PAD_LIBS."""
-    return [_pdk_path(value, root, pdk)
+    return [_pdk_path(value, root, pdk, fingerprint=fingerprint)
             for value in re.findall(r"/[^\s\"\\]+\.lib\b", env.get("PAD_LIBS", ""))
             if pvt in value]
 
@@ -412,10 +412,13 @@ def _env(scene_dir: Path) -> dict[str, str]:
     return result
 
 
-def _pdk_path(value: str, root: Path, pdk: str) -> Path:
-    if value.startswith("/pdk/" + pdk + "/"):
-        return root / value[len("/pdk/"):]
-    return Path(value)
+def _pdk_path(value: str, root: Path, pdk: str, *, fingerprint: dict | None = None) -> Path:
+    from librelane_contract import resolve_state_pdk_asset
+    resolved = resolve_state_pdk_asset(value, pdk=pdk, fingerprint=fingerprint,
+                                      mounts=[(root / pdk, Path('/pdk') / pdk)])
+    if resolved is None:
+        raise ValueError(f'recorded PDK asset unresolved: {value}')
+    return resolved
 
 
 def _clock_io_values(sdc: str) -> tuple[float | None, float | None]:
@@ -428,19 +431,19 @@ def _clock_io_values(sdc: str) -> tuple[float | None, float | None]:
     return period, io_delay
 
 
-def _scene_files(env: dict, root: Path, pdk: str, pvt: str) -> tuple[list[dict], list[dict]]:
+def _scene_files(env: dict, root: Path, pdk: str, pvt: str, *, fingerprint: dict | None = None) -> tuple[list[dict], list[dict]]:
     libs = []
     lefs = []
     for key in ("CELL_LIBS", "PAD_LIBS"):
         declared = (env.get("LIB", env.get("CELL_LIBS"))
                     if key == "CELL_LIBS" else env.get(key)) or ""
         paths = re.findall(r"/[^\s\"\\]+\.lib\b", declared)
-        selected = [_pdk_path(value, root, pdk) for value in paths if pvt in value]
+        selected = [_pdk_path(value, root, pdk, fingerprint=fingerprint) for value in paths if pvt in value]
         for path in selected:
             libs.append({"name": path.stem, **_ref(path)})
     for key in ("CELL_LEFS", "PAD_LEFS", "MACRO_LEFS"):
         for value in re.findall(r"/[^\s\"\\]+\.lef\b", env.get(key, "")):
-            path = _pdk_path(value, root, pdk)
+            path = _pdk_path(value, root, pdk, fingerprint=fingerprint)
             lefs.append(_ref(path))
     if not libs or not lefs:
         raise ValueError("linked scene Liberty or LEF inventory absent")
@@ -855,18 +858,12 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
     from drv_signoff_anchor import pdk_source_identity
     source = pdk_source_identity(provenance, project=project)
     pdk, image = source["pdk"], source["image"]
-    # A same-host checkpoint already names its PDK inputs. Reading them does
-    # not require launching the older executable that produced the layout.
-    # Only recreate the original image's PDK when that cache is unavailable.
+    # Resolve missing carrier assets read-only; never recreate the producer image PDK.
     root = Path(provenance["path"])
-    if not (root / pdk).is_dir():
-        from librelane_contract import pdk_root_resolution
-        resolution = pdk_root_resolution(None, pdk, image=image)
-        resolved_id = ((resolution.get("provider") or {}).get("reference")
-                       if source.get("provider") else resolution["derivation"]["image_id"])
-        if resolved_id != source["image_id"]:
-            raise ValueError("final STA PDK image differs from run provenance")
-        root = Path(resolution["path"])
+    fingerprint_path = state_path.parent / 'input_fingerprint.json'
+    receipt_path = state_path.parent / 'vibeic_receipt.json'
+    fingerprint = (json.loads(fingerprint_path.read_text()) if fingerprint_path.is_file() else
+                   json.loads(receipt_path.read_text()).get('input', {}) if receipt_path.is_file() else {})
     recorded_netlist = _run_path(project, state["nl"])
     routed_identity = _current_routed_identity(project, recorded_netlist)
     if routed_identity is None:
@@ -922,10 +919,10 @@ def build(project: Path, *, final_state: dict | None = None) -> dict:
         # not linked as an input by this scene; only the environment's CELL_LIBS
         # and PAD_LIBS were read into STA.
         generated_liberty = _run_path(project, state["lib"][actual_name])
-        linked, lefs = _scene_files(env, root, pdk, pvt)
+        linked, lefs = _scene_files(env, root, pdk, pvt, fingerprint=fingerprint)
         macro_views = _macro_scene_views(state_path, actual_name)
         linked.extend(macro_views.pop('macro_liberties', []))
-        io_library_paths.extend(_pad_lib_paths(env, root, pdk, pvt))
+        io_library_paths.extend(_pad_lib_paths(env, root, pdk, pvt, fingerprint=fingerprint))
         for item in linked:
             existing = liberties.setdefault(item["name"], item)
             if existing != item:

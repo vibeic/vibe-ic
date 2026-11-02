@@ -1662,3 +1662,142 @@ def test_stapostpnr_receipt_binds_native_lib_schema(tmp_path, monkeypatch, schem
         monkeypatch.setattr(contract, 'run_container', drift)
         with pytest.raises(contract.Refusal, match='LL_STA_LIBERTY_CHANGED_DURING_RUN'):
             invoke('changed')
+
+
+def _carrier_asset(tmp_path, monkeypatch):
+    from _hostpaths import require_repo
+    registry = json.loads(require_repo(
+        'vibe-ic-marketplace/plugins/vibe-ic/programs/pdk_registry.json').read_text())
+    family = next(entry['name'] for entry in registry['pdks'] if entry['name'] != 'custom_auto_detect')
+    root = tmp_path / 'runtime'
+    suffix = 'libs.ref/neutral/lib/neutral__tt.lib'
+    asset = root / family / suffix
+    asset.parent.mkdir(parents=True)
+    asset.write_text('library (neutral) { nom_voltage : 1.0; }\n')
+    recorded = tmp_path / 'missing-carrier' / family / suffix
+    fingerprint = {'config_files': {str(recorded): contract.digest(asset)}}
+    monkeypatch.setenv('PDK_ROOT', str(root))
+    return family, root, asset, recorded, fingerprint
+
+
+def test_state_pdk_asset_rebind_matches_recorded_content(tmp_path, monkeypatch):
+    family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
+    assert contract.resolve_state_pdk_asset(recorded, pdk=family, fingerprint=fingerprint) == asset
+    assert contract.config_file_hashes({'PDK': family, 'LIB': str(recorded)}, [],
+                                     fingerprint=fingerprint) == fingerprint['config_files']
+    assert not recorded.exists()
+
+
+@pytest.mark.parametrize('damage', ['bytes', 'identity', 'family', 'traversal',
+                                   'two_candidates', 'missing', 'conflicting_identity'])
+def test_state_pdk_asset_rebind_refuses_unproven_content(tmp_path, monkeypatch, damage):
+    family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
+    if damage == 'bytes':
+        asset.write_text('changed content\n')
+    elif damage == 'identity':
+        fingerprint = {}
+    elif damage == 'family':
+        family = 'unregistered_family'
+    elif damage == 'traversal':
+        recorded = recorded.parent / '..' / 'lib' / recorded.name
+        fingerprint = {'config_files': {str(recorded): contract.digest(asset)}}
+    elif damage == 'two_candidates':
+        # A declared selected-PDK root and a nested distribution both offer a file.
+        monkeypatch.setenv('PDK_ROOT', str(root / family))
+        second = root / family / family / asset.relative_to(root / family)
+        second.parent.mkdir(parents=True)
+        second.write_bytes(asset.read_bytes())
+    elif damage == 'missing':
+        asset.unlink()
+    elif damage == 'conflicting_identity':
+        fingerprint['liberty_files'] = {str(recorded): '0' * 64}
+    assert contract.resolve_state_pdk_asset(recorded, pdk=family, fingerprint=fingerprint) is None
+    with pytest.raises(contract.Refusal, match='LL_PDK_ASSET_UNRESOLVED'):
+        contract.config_file_hashes({'PDK': family, 'LIB': str(recorded)}, [],
+                                   fingerprint=fingerprint)
+
+
+def test_state_pdk_asset_existing_path_is_unchanged(tmp_path, monkeypatch):
+    family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
+    assert contract.resolve_state_pdk_asset(asset, pdk='unknown', fingerprint={}) == asset
+    assert contract.config_file_hashes({'PDK': family, 'LIB': str(asset)}, []) == {
+        str(asset): contract.digest(asset)}
+
+
+@pytest.mark.parametrize('link_type', ['directory', 'file'])
+@pytest.mark.parametrize('changed', [False, True])
+def test_state_pdk_asset_nix_links_require_original_content(tmp_path, monkeypatch, link_type, changed):
+    family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
+    package = tmp_path / 'store-package' / family
+    package.mkdir(parents=True)
+    target = package / asset.relative_to(root / family)
+    if link_type == 'directory':
+        (root / family / 'libs.ref').rename(package / 'libs.ref')
+        (root / family / 'libs.ref').symlink_to(package / 'libs.ref', target_is_directory=True)
+    else:
+        target.parent.mkdir(parents=True)
+        asset.rename(target)
+        asset.symlink_to(target)
+    if changed:
+        target.write_text('different from the original recorded content\n')
+    resolved = contract.resolve_state_pdk_asset(recorded, pdk=family, fingerprint=fingerprint)
+    if changed:
+        assert resolved is None
+        with pytest.raises(contract.Refusal, match='LL_PDK_ASSET_UNRESOLVED'):
+            contract.config_file_hashes({'PDK': family, 'LIB': str(recorded)}, [],
+                                       fingerprint=fingerprint)
+    else:
+        assert resolved == asset
+        assert resolved.resolve() == target
+        assert contract.config_file_hashes({'PDK': family, 'LIB': str(recorded)}, [],
+                                         fingerprint=fingerprint) == fingerprint['config_files']
+
+
+@pytest.mark.parametrize('nested', [False, True])
+@pytest.mark.parametrize('with_fingerprint', [False, True])
+def test_config_hashes_mount_precedes_existing_guest(tmp_path, nested, with_fingerprint):
+    guest = tmp_path / 'guest'
+    host = tmp_path / 'host'
+    guest.mkdir()
+    host.mkdir()
+    recorded = guest / 'shared.lib'
+    mounted = host / 'shared.lib'
+    recorded.write_text('unrelated visible guest content\n')
+    mounted.write_text('actual mounted host content\n')
+    mounts = [(host, guest)]
+    if nested:
+        parent = tmp_path / 'parent-host'
+        parent.mkdir()
+        (parent / 'shared.lib').write_text('less specific mount content\n')
+        mounts.insert(0, (parent, tmp_path))
+    fingerprint = {'config_files': {str(recorded): contract.digest(recorded)}}
+    kwargs = {'fingerprint': fingerprint} if with_fingerprint else {}
+    actual = contract.config_file_hashes({'LIB': str(recorded)}, mounts, **kwargs)
+    assert actual == {str(recorded): contract.digest(mounted)}
+    assert actual[str(recorded)] != contract.digest(recorded)
+
+
+def test_config_hashes_missing_mapped_file_does_not_hash_visible_guest(tmp_path):
+    guest = tmp_path / 'guest'
+    host = tmp_path / 'host'
+    guest.mkdir()
+    host.mkdir()
+    recorded = guest / 'shared.lib'
+    recorded.write_text('not mounted by the tool\n')
+    assert contract.config_file_hashes({'LIB': str(recorded)}, [(host, guest)]) == {}
+
+
+def test_config_hashes_rebinds_only_missing_mapped_pdk_asset(tmp_path, monkeypatch):
+    family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
+    recorded.parent.mkdir(parents=True)
+    recorded.write_text('unrelated visible guest content\n')
+    host = tmp_path / 'mounted'
+    host.mkdir()
+    mounted = host / recorded.name
+    mounts = [(host, recorded.parent)]
+    config = {'PDK': family, 'LIB': str(recorded)}
+    assert contract.config_file_hashes(config, mounts, fingerprint=fingerprint) == fingerprint['config_files']
+    mounted.write_text('actual mounted bytes differ from recorded bytes\n')
+    assert contract.config_file_hashes(config, mounts, fingerprint=fingerprint) == {
+        str(recorded): contract.digest(mounted)}
+    assert contract.digest(mounted) != contract.digest(asset)
