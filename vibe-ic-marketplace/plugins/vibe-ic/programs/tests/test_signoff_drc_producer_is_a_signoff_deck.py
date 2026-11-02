@@ -151,7 +151,7 @@ def gate(proj, *extra, under="reports/phase3/drc_signoff.rpt"):
     out, err = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         rc = drc_report_check.run([str(proj), "--mode", "drc",
-                                   "--under", under, *extra])
+                                   "--under", under, "--subject", under, *extra])
     try:
         payload = json.loads(out.getvalue())
     except ValueError:
@@ -593,7 +593,9 @@ def test_step21_router_gate_is_untouched(tmp_path):
     with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
         rc = drc_report_check.run([str(proj), "--mode", "drc",
                                    "--under", "phase3/stage3/pnr",
-                                   "--under", "reports/phase3/drc_router.rpt"])
+                                   "--under", "reports/phase3/drc_router.rpt",
+                                    "--subject", "phase3/stage3/pnr/routed.drc.rpt",
+                                    "--subject", "reports/phase3/drc_router.rpt"])
     payload = json.loads(out.getvalue())
     assert rc == 1
     # ONE measurement, filed twice. The runner writes a single body to both
@@ -614,7 +616,9 @@ def test_step21_router_gate_is_untouched(tmp_path):
     with contextlib.redirect_stdout(out2), contextlib.redirect_stderr(err2):
         rc2 = drc_report_check.run([str(proj), "--mode", "drc",
                                     "--under", "phase3/stage3/pnr",
-                                    "--under", "reports/phase3/drc_router.rpt"])
+                                    "--under", "reports/phase3/drc_router.rpt",
+                                    "--subject", "phase3/stage3/pnr/routed.drc.rpt",
+                                    "--subject", "reports/phase3/drc_router.rpt"])
     assert rc2 == 0, "step 21 must still credit a clean router DRC"
 
 

@@ -107,6 +107,7 @@ class _Proj(unittest.TestCase):
             [sys.executable, str(PROGRAMS / "drc_report_check.py"), ".",
              "--mode", "drc", "--signoff",
              "--under", "reports/phase3/drc_signoff.rpt",
+             "--subject", "reports/phase3/drc_signoff.rpt",
              "--json", str(out)],
             cwd=self.proj, capture_output=True, text=True)
         self.assertTrue(out.is_file(),

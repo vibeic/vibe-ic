@@ -65,7 +65,9 @@ def _project(tmp_path: Path, name: str, body: str) -> Path:
 
 
 def _drc(project: Path):
-    return A._check_drc(project)
+    with A.named_subjects([p for p in (project / "reports/phase3").iterdir()
+                           if p.suffix == ".rpt"]):
+        return A._check_drc(project)
 
 
 def _sha(path: Path) -> str:

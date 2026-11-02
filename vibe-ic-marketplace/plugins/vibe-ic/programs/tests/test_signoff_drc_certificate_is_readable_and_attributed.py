@@ -267,7 +267,8 @@ def test_an_unreadable_report_beside_a_clean_one_does_not_pass(tmp_path):
         _RUNNER_PREAMBLE + _rdb(_item("li.3", "chip_top") * 40)[:900])
 
     with era.scoped_discovery([tmp_path / "proj"]):
-        res = era._check_drc(tmp_path / "proj")
+        with era.named_subjects([d / "drc_router.rpt", d / "drc_signoff.rpt"]):
+            res = era._check_drc(tmp_path / "proj")
 
     rules = [f.rule for f in res.findings if f.severity == "ERROR"]
     assert "DRC_REPORT_NOT_READABLE" in rules, (
@@ -290,7 +291,9 @@ def test_a_discovered_but_unopenable_report_gates(tmp_path):
     (proj / "reports" / "drc_router.rpt").write_text(_clean_text_report())
     (steps / "drc_signoff.rpt").symlink_to(proj / "reports" / "gone.rpt")
 
-    res = era._check_drc(proj)
+    with era.named_subjects([proj / "reports/drc_router.rpt",
+                             steps / "drc_signoff.rpt"]):
+        res = era._check_drc(proj)
     rules = [f.rule for f in res.findings if f.severity == "ERROR"]
     assert "DRC_REPORT_NOT_READABLE" in rules, rules
     assert res.passed is False
@@ -304,7 +307,8 @@ def test_all_readable_and_clean_still_passes(tmp_path):
     (d / "drc_signoff.rpt").write_text(
         _RUNNER_PREAMBLE + _rdb("", pad=True))
     with era.scoped_discovery([tmp_path / "proj"]):
-        res = era._check_drc(tmp_path / "proj")
+        with era.named_subjects([d / "drc_router.rpt", d / "drc_signoff.rpt"]):
+            res = era._check_drc(tmp_path / "proj")
     assert res.passed is True, [f.rule for f in res.findings
                                 if f.severity == "ERROR"]
     assert res.summary["unreadable_files"] == 0
@@ -324,7 +328,8 @@ def test_waived_disclosure_is_not_filed_at_the_skimmable_tier():
             _RUNNER_PREAMBLE
             + _rdb(_item("li.3", "sky130_fd_sc_hd__dfrtp_1") * 12, pad=True))
         with era.scoped_discovery([tmp]):
-            return era._check_drc(tmp)
+            with era.named_subjects([d / "drc_signoff.rpt"]):
+                return era._check_drc(tmp)
 
     import tempfile
     with tempfile.TemporaryDirectory() as td:
