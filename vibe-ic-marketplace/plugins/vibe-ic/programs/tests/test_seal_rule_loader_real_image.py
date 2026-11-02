@@ -191,3 +191,19 @@ def test_numeric_model_calls_units_and_division(tmp_path, statements, expected):
     else:
         value, basis = read(tmp_path)
         assert value == pytest.approx(expected), basis
+
+
+@pytest.mark.parametrize("separator", ["# comment\n", "\n", "# comment\n\n# second comment\n"])
+@pytest.mark.parametrize("method", ["ceil", "unknown"])
+@pytest.mark.parametrize("receiver", ["(rules['clearance'].to_f)", "4.9"])
+def test_review_receiver_continues_across_comments_and_blank_lines(
+        tmp_path, separator, method, receiver):
+    (tmp_path / "rules.json").write_text(json.dumps({"rules": {"clearance": 4.9}}))
+    (tmp_path / "main.drc").write_text(
+        "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\n"
+        + f"spacing = {receiver}\n{separator} .{method}\n"
+        + 'active.separation(guard_ring, spacing.um).output("clearance", "space")\n'
+    )
+    # Neither method is in the bounded numeric model. In particular ceil(4.9)
+    # is 5, so accepting a declared 4.95 edge using the truncated 4.9 is unsafe.
+    assert_unreadable(tmp_path)
