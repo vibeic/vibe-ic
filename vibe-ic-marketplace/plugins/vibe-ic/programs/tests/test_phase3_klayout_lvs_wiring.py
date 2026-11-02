@@ -14,6 +14,7 @@ import json
 import shlex
 
 import pytest
+from _finished_gds_fixture import publish_finished_gds
 
 mod = importlib.import_module("phase3_one_shot_runner")
 guard_mod = importlib.import_module("decap_route_short_guard")
@@ -84,13 +85,13 @@ class TestRestoreGatedOff:
 ])
 def test_native_producer_records_the_measured_child_and_refuses_stale_invocation(
         tmp_path, monkeypatch, state, stale, expected):
-    import _physical_current as current
     import klayout_pdk_lvs as native
     layout = tmp_path / "layout.gds"; layout.write_bytes(b"layout")
     netlist = tmp_path / "routed.v"; netlist.write_text("module unit(); endmodule")
     def_file = tmp_path / "routed.def"; def_file.write_text("DESIGN unit ;")
-    monkeypatch.setattr(current, "default_signoff_inputs", lambda project:
-                        {"gds": layout, "def": def_file, "netlist": netlist})
+    (tmp_path / "state_out.json").write_text(json.dumps(
+        {"gds": str(layout), "def": str(def_file), "nl": str(netlist)}))
+    publish_finished_gds(tmp_path)
     monkeypatch.setattr(mod, "_streamout_top", lambda *a: ("unit", None))
     monkeypatch.setattr(mod, "_stage_padring_io_lefs_for_lvs", lambda *a: [])
     monkeypatch.setattr(mod, "_to_container_path", lambda path, container: str(path))

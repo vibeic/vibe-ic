@@ -121,10 +121,6 @@ def pdk(lib):
 
 
 def original_transport(tmp_path, monkeypatch, p, folder):
-    """Neutral retained Default owner for the exact external readset seam."""
-    import _physical_current as physical
-    import librelane_fill_dfm as fill
-
     owner = tmp_path / 'original-owner'
     native = owner / 'phase3/librelane/34/01-openroad-fillinsertion'
     odb = write(native / 'neutral.odb', 'neutral immutable ODB\n')
@@ -132,34 +128,18 @@ def original_transport(tmp_path, monkeypatch, p, folder):
     netlist = write(native / 'neutral.nl.v', NETLIST)
     sdc = write(native / 'neutral.sdc',
                 'create_clock -name c -period 10 [get_ports x]\n')
-    fill_state = put(native / 'state_out.json', {
-        'odb': str(odb), 'def': str(routed_def)})
-    fill_receipt = put(native / 'vibeic_receipt.json', {'source_control_only': True})
-    fill_record = put(owner / fill.RECORD_REL, {'odb': {'tool': {
-        'state': str(fill_state), 'state_sha256': LC.digest(fill_state),
-        'filled_def_sha256': LC.digest(routed_def)}}})
     image = json.loads((folder / 'vibeic_receipt.json').read_text())['input']['image']
-    real_validate = LC.validate_step_receipt
+    real_resolve = LC.resolve_image
 
-    def validate_step(where, step):
-        if Path(where).resolve() == native.resolve():
-            assert step == fill.ODB_FILL_STEP
-            return {'input': {}, 'sha256': {}}
-        return real_validate(where, step)
+    def resolve(root, **kwargs):
+        return image if Path(root).resolve() == owner.resolve() else real_resolve(root, **kwargs)
 
-    monkeypatch.setattr(LC, 'validate_step_receipt', validate_step)
-    monkeypatch.setattr(fill, 'validate_default_stream', lambda root: {
-        'image': image, 'canonical': str(owner / 'neutral.gds')}
-        if Path(root).resolve() == owner.resolve()
-        else pytest.fail('unrelated original owner selected'))
-    monkeypatch.setattr(physical, 'default_signoff_inputs', lambda root: {
-        'netlist': netlist, 'sdc': sdc, 'def': routed_def,
-        'gds': owner / 'neutral.gds'}
-        if Path(root).resolve() == owner.resolve()
-        else pytest.fail('unrelated original signoff owner selected'))
+    monkeypatch.setattr(LC, 'resolve_image', resolve)
+    state = put(owner / 'state_out.json', {
+        'nl': str(netlist), 'sdc': str(sdc), 'def': str(routed_def),
+        'odb': str(odb), 'gds': str(owner / 'neutral.gds')})
     return {'owner': owner, 'odb': odb, 'def': routed_def, 'netlist': netlist,
-            'sdc': sdc, 'record': fill_record, 'receipt': fill_receipt,
-            'image': image}
+            'sdc': sdc, 'record': state, 'image': image}
 
 
 def bind_original_transport(p, folder, original):
@@ -272,7 +252,7 @@ def test_current_power_adopts_validated_original_owner_transport(tmp_path, monke
     assert gate(p, '33') == 0
     receipt = json.loads((p / 'reports/phase3/power.current.json').read_text())
     transport = receipt['input_transport']
-    assert transport['kind'] == 'validated_default_fill_original'
+    assert transport['kind'] == 'final_state_original'
     assert transport['source_project'] == str(original['owner'].resolve())
     assert set(transport['roles']) == {'netlist', 'sdc'}
     assert transport['source_record']['sha256'] == LC.digest(original['record'])
