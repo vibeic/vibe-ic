@@ -151,13 +151,6 @@ def test_unregistered_block_name_is_refused(tmp_path):
     6, [6], {"pll": True}, {"pll": 0}, {"pll": -1}, {"pll": 6.0}, {"pll": "6"}, {}])
 def test_malformed_answer_is_refused(tmp_path, value):
     _answers(tmp_path, value)
-    if value == {}:
-        # An empty mapping reads as unanswered or as malformed, never as a count.
-        try:
-            assert runner._typed_block_multiplicity(tmp_path) == {}
-        except ValueError as exc:
-            assert "L5_BLOCK_MULTIPLICITY_INVALID" in str(exc)
-        return
     with pytest.raises(ValueError, match="L5_BLOCK_MULTIPLICITY_INVALID"):
         runner._typed_block_multiplicity(tmp_path)
 
@@ -180,3 +173,68 @@ def test_refusal_stops_the_runner_before_any_stub(tmp_path, monkeypatch, capsys,
     assert runner.main() == 2
     assert named in capsys.readouterr().err
     assert not (tmp_path / "phase1/generated_docs/L5_ADI_SPEC.json").exists()
+
+
+@pytest.mark.parametrize("text,value,named", [
+    (HEADING, {"ldo": 1}, "L5_BLOCK_MULTIPLICITY_UNKNOWN_BLOCK: ldo"),
+    ("The analog section contains 3 x PLL at 1.8 V.\n", {"pll": 2},
+     "L5_BLOCK_MULTIPLICITY_CONTRADICTION: pll"),
+    (HEADING + "\n## Block C — `pll` : spare clock generator (×4)\n",
+     {"pll": 6}, "L5_BLOCK_MULTIPLICITY_CONTRADICTION: pll"),
+])
+def test_document_refusal_is_fatal_without_l5_stub(
+        tmp_path, monkeypatch, capsys, text, value, named):
+    (tmp_path / "input/docs").mkdir(parents=True)
+    (tmp_path / "input/docs/spec.md").write_text(text, encoding="utf-8")
+    _answers(tmp_path, value)
+    monkeypatch.setattr("sys.argv", ["phase1_doc_one_shot_runner", str(tmp_path)])
+    result = runner.main()
+    assert result == 2
+    assert named in capsys.readouterr().err
+    assert not (tmp_path / "phase1/generated_docs/L5_ADI_SPEC.json").exists()
+
+
+def test_later_document_heading_contradiction_is_refused(tmp_path):
+    _answers(tmp_path, {"pll": 6})
+    with pytest.raises(ValueError, match="L5_BLOCK_MULTIPLICITY_CONTRADICTION: pll"):
+        runner.gen_l5_adi_spec(tmp_path, {
+            "first.md": HEADING,
+            "second.md": "## Block B — pll (×4)\n",
+        })
+    assert not (tmp_path / "phase1/generated_docs/L5_ADI_SPEC.json").exists()
+
+
+def test_matching_headings_across_documents_accept_the_typed_count(tmp_path):
+    _answers(tmp_path, {"pll": 6})
+    emitted = runner.gen_l5_adi_spec(tmp_path, {
+        "first.md": HEADING,
+        "second.md": "## Block B — pll (×6)\n",
+    })
+    block = _pll(json.loads(Path(emitted.path).read_text()))
+    assert block["count"] == 6
+    assert block["multiplicity_evidence"]["low_confidence"] is False
+
+
+def test_fatal_refusal_keeps_prior_l5(tmp_path, monkeypatch, capsys):
+    (tmp_path / "input/docs").mkdir(parents=True)
+    (tmp_path / "input/docs/spec.md").write_text(HEADING, encoding="utf-8")
+    _answers(tmp_path, {"ldo": 1})
+    l5 = tmp_path / "phase1/generated_docs/L5_ADI_SPEC.json"
+    l5.parent.mkdir(parents=True)
+    before = b'{"analog_blocks": [{"name": "pll", "count": 6}]}\n'
+    l5.write_bytes(before)
+    monkeypatch.setattr("sys.argv", ["phase1_doc_one_shot_runner", str(tmp_path)])
+    assert runner.main() == 2
+    assert "L5_BLOCK_MULTIPLICITY_UNKNOWN_BLOCK: ldo" in capsys.readouterr().err
+    assert l5.read_bytes() == before
+
+
+@pytest.mark.parametrize("provenance", [["x"], "invalid", 5])
+def test_malformed_provenance_is_a_named_refusal(tmp_path, provenance):
+    _answers(tmp_path, {"pll": 6})
+    path = tmp_path / "input/step_0_5ic_answers.json"
+    doc = json.loads(path.read_text())
+    doc["answer_provenance"] = provenance
+    path.write_text(json.dumps(doc))
+    with pytest.raises(ValueError, match="L5_BLOCK_MULTIPLICITY_PROVENANCE_ABSENT"):
+        runner._typed_block_multiplicity(tmp_path)
