@@ -676,7 +676,6 @@ def test_public_default31_native_owner_closes_retained_subject(
         assert not record["canonical_pass"] and retained is None
         if case == "legacy_feedback":
             assert 'FEEDBACK_LAYOUT_DIGEST_MISMATCH_OR_UNMEASURED' in record['result']['detail']
-            assert 'LL_PV_VIEW_MISSING' in record['result']['detail']
         return
     assert rc == 0 and record["canonical_pass"] is True, record
     assert record["result"]["producer_verdict"] == "PASS"
@@ -979,8 +978,7 @@ def _native31_runtime_fixture(tmp_path, monkeypatch, local_image, case):
     import re
     import shutil
     import librelane_contract as lc
-    import librelane_fill_dfm as fill
-    import _native373_current as native373
+    import _prestream_native as native
     import _flow_yaml
     import l24_signoff_requirements_extract as requirements
 
@@ -989,17 +987,12 @@ def _native31_runtime_fixture(tmp_path, monkeypatch, local_image, case):
     shutil.copytree(_project(tmp_path / "native31-dependencies"), project,
         dirs_exist_ok=True, ignore=shutil.ignore_patterns("provenance.jsonl"))
     pnr = R._pl.pnr_dir(project)
-    # Use owners already present on base40 so the red arm reaches the actual
-    # Step31 window, rather than failing on a helper introduced by this patch.
     monkeypatch.setattr(P, "request", lambda: {"mode": "default"})
-    checked_stream = fill.validate_default_stream(project)
-    selected = native373._source_inputs(project, native373._source_def(project))
-    selected["gds"] = Path(checked_stream["canonical"])
+    selected = native.signoff_inputs(project, "gds", "def", "netlist", "sdc")
     selected["design"] = subject["design"]
     selected["material"] = root / "neutral/stream.lef"
     selected["sta_parent"] = subject["parent_netlist"]
     assert selected["def"] == Path(stream["filled_def"])
-    assert selected["gds"] == Path(stream["canonical"])
     master = subject["master"]
     cell_lef = put(root, "neutral/native31-cells.lef",
         f"MACRO {master}\n CLASS CORE ;\n"
@@ -1154,14 +1147,14 @@ def _native31_synthesis_handoff(project, pdk, source_netlist):
 
 def _observe_native31_closure_calls(monkeypatch):
     """Count real validator entries; no verdict, material or timing substitute."""
-    import _physical_current as current
+    import _prestream_native as native
     import _native373_current as streams
     import librelane_fill_dfm as fill
     observed = {"totals": {"whole_stream": 0, "native_current": 0},
                 "resolver_calls": []}
     original_fill = fill.validate_default_stream
     original_native = streams.read_current
-    original_resolver = current.default_signoff_inputs
+    original_resolver = native.signoff_inputs
 
     def whole_stream(*args, **kwargs):
         observed["totals"]["whole_stream"] += 1
@@ -1181,7 +1174,7 @@ def _observe_native31_closure_calls(monkeypatch):
 
     monkeypatch.setattr(fill, "validate_default_stream", whole_stream)
     monkeypatch.setattr(streams, "read_current", native_current)
-    monkeypatch.setattr(current, "default_signoff_inputs", resolver)
+    monkeypatch.setattr(native, "signoff_inputs", resolver)
     return observed
 
 

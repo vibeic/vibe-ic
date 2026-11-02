@@ -15,6 +15,7 @@ run_svrf_drc.py, so the tally/classifier tests are unchanged.
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 
@@ -37,6 +38,15 @@ SKIP  ANT.M3             COPY antenna -> antenna routed to its own checker
 
 # tally: {'PASS': 7138, 'FAIL': 2, 'SKIP': 1}
 """
+
+
+def _state_inputs(project, top):
+    views = {}
+    for view in ("gds", "def", "nl"):
+        path = project / ("selected." + view)
+        path.write_text("DESIGN " + top + " ;\nEND DESIGN\n" if view == "def" else view)
+        views[view] = str(path)
+    (project / "state_out.json").write_text(json.dumps(views))
 
 
 def test_parse_svrf_tally_counts_and_failing_rules(tmp_path):
@@ -138,7 +148,7 @@ def test_try_svrf_native_drc_returns_none_when_buddy_absent(
         R.PdkConfig(name="custom:commercial_pdk", liberty="x", tech_lef="x",
                     cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
                     calibre_drc="/x/DRC.rule"),
-        "vibeic-eda")
+        "vibeic-eda", gds=tmp_path / "absent.gds", routed_def=tmp_path / "selected.def")
     assert res is None
 
 
@@ -162,7 +172,7 @@ def test_try_svrf_native_drc_invokes_native_buddy(tmp_path, monkeypatch):
         R.PdkConfig(name="custom:commercial_pdk", liberty="x", tech_lef="x",
                     cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
                     calibre_drc="/x/DRC.rule"),
-        "vibeic-eda")
+        "vibeic-eda", gds=gds, routed_def=tmp_path / "selected.def")
     assert seen["cmd"].startswith("svrfdrc ")
     assert "--cell=spm" in seen["cmd"]
     assert "run_svrf_drc.py" not in seen["cmd"]
@@ -171,6 +181,7 @@ def test_try_svrf_native_drc_invokes_native_buddy(tmp_path, monkeypatch):
 
 def test_step_drc_env_unavailable_names_buddy(tmp_path, monkeypatch):
     # calibre absent + svrfdrc buddy absent → ENV_UNAVAILABLE mentioning svrfdrc.
+    _state_inputs(tmp_path, "spm")
     monkeypatch.setattr(R, "_tool_in_path", lambda c, t: False)
     monkeypatch.setattr(R, "_svrfdrc_bin_container", lambda c: None)
     pdk = R.PdkConfig(name="custom:commercial_pdk", liberty="x", tech_lef="x",
@@ -223,7 +234,7 @@ def _drc_probe_harness(tmp_path, monkeypatch, rc):
         R.PdkConfig(name="custom:commercial_pdk", liberty="x", tech_lef="x",
                     cell_lef="x", cell_gds=None, site="unit", drc_deck=None,
                     calibre_drc="/x/DRC.rule"),
-        "vibeic-eda")
+        "vibeic-eda", gds=gds, routed_def=tmp_path / "selected.def")
     return res, seen
 
 
@@ -265,6 +276,7 @@ def test_a_killed_open_source_drc_is_blocked_not_a_claimed_violation(
     # container PATH. A fixture that does not get past those is a test of the
     # guards, not of the kill path — it would have passed on the unfixed
     # program for the wrong reason.
+    _state_inputs(tmp_path, "spm")
     gds = R._pl.pnr_dir(tmp_path) / "spm.gds"
     gds.parent.mkdir(parents=True, exist_ok=True)
     gds.write_text("gds")
@@ -313,6 +325,7 @@ def test_a_drc_that_found_violations_is_still_a_fail(tmp_path, monkeypatch):
     every failure. A deck that RAN and found violations must keep FAIL — the
     distinction being restored is 'could not look' vs 'looked and found', and a
     fix that erased the second would be strictly worse than the defect."""
+    _state_inputs(tmp_path, "spm")
     rpt = tmp_path / "phase3" / "reports" / "drc.rpt"
     rpt.parent.mkdir(parents=True, exist_ok=True)
     rpt.write_text("<items><item/><item/></items>")

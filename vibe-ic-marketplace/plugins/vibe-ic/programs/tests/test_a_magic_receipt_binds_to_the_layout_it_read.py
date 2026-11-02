@@ -310,6 +310,9 @@ def _bind_current_drc_fixture(proj):
     put("reports/phase3/technology_units.json", b'{"pdk":"open_fixture"}\n')
     put("phase3/stage3/pnr/chip_top.def", b"DESIGN chip_top ;\nEND DESIGN\n")
     put("phase3/stage3/pnr/chip_top_pnr.v", b"module chip_top(); endmodule\n")
+    put("state_out.json", json.dumps({
+        "gds": str(proj / "phase3/stage3/pnr/chip_top.gds"),
+        "def": str(proj / "phase3/stage3/pnr/chip_top.def")}).encode())
     report = proj / R._MAGIC_SIGNOFF_DRC_REL
     native = put("phase3/reports/drc.rpt", report.read_bytes())
     put("reports/phase3/drc_signoff.rpt", report.read_bytes())

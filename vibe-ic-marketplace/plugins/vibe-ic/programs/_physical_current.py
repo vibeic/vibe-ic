@@ -431,59 +431,18 @@ def clock_plan_sinks(text, clock_names):
     return {name: sorted(pins) for name, pins in listed.items()}
 
 
-def default_signoff_inputs(project):
-    """The existing finished-stream and filled-view owners, when selected."""
-    import librelane_fill_dfm as fill
-    import execution_policy
-    project = Path(project).resolve()
-    if (execution_policy.request()["mode"] != "default"
-            or not (project / fill.DEFAULT_STREAM_REL).is_file()):
-        return None
-    import gds_xor_check as xor
-    import _native373_current as streams
-    report = json.loads((project / "reports/phase3/gds_xor.json").read_text())
-    if (report.get("gate") != xor.GATE or report.get("verdict") != "PASS"
-            or report.get("design_layer_differences") != []
-            or type(report.get("design__xor_difference__count")) is not int
-            or report["design__xor_difference__count"] != 0
-            or type(report.get("layers_compared")) is not int
-            or report["layers_compared"] <= 0):
-        raise ValueError("CURRENT_FINISHED_GEOMETRY_NOT_CLEAN")
-    # These results belong to this call only. Public XOR readers without the
-    # private arguments still obtain their own complete current proof.
-    stream = fill.validate_default_stream(project)
-    current = streams.read_current(project)
-    refusal = xor.current_geometry_refusal(project, report, _validated_stream=stream)
-    if refusal:
-        raise ValueError("CURRENT_FINISHED_STREAM_REFUSED: " + refusal)
-    if current.get("count") != 0:
-        raise ValueError("CURRENT_STREAM_CONNECTIVITY_NOT_CLEAN")
-    connectivity = xor.gds_connectivity(project, digest(Path(stream["canonical"])), report,
-                                         _validated_native=current)
-    if connectivity.get("verdict") != "PASS":
-        raise ValueError("CURRENT_FINISHED_CONNECTIVITY_REFUSED: " + str(connectivity))
-    # read_current already derived and checked these exact fill-owned roles.
-    paths = {role: project / current["current"]["inputs"][role]["path"]
-             for role in ("def", "netlist", "sdc")}
-    for role, path in paths.items():
-        if entry(project, path) != current["current"]["inputs"][role]:
-            raise ValueError("CURRENT_FILLED_VIEW_CHANGED: " + role)
-    return {**paths, "gds": Path(stream["canonical"]),
-            "stream_fidelity": project / "reports/phase3/gds_xor.json",
-            "native_streams": project / streams.REL}
-
-
 def _bound(row, files):
     return files.get(row["path"]) in (row["sha256"], "sha256:" + row["sha256"])
 
 
 def _lvs_def_chain(project, inputs, native, entries):
-    """Re-derive the existing DEF extraction/compare and finished-stream link."""
+    """Re-derive the native DEF extraction/compare against final State views."""
     import phase3_one_shot_runner as runner
     import lvs_power_aware_netlist_emit as power
-    selected = default_signoff_inputs(project)
-    if selected is None or any(inputs[role] != entry(project, selected[role])
-                               for role in ("gds", "def", "netlist")):
+    from _prestream_native import signoff_inputs
+    selected = signoff_inputs(project, "gds", "def", "netlist")
+    if any(inputs[role] != entry(project, selected[role])
+           for role in ("gds", "def", "netlist")):
         raise ValueError("CURRENT_NATIVE_LAYOUT_UNBOUND")
     path = project / "reports/phase3/lvs_inputs.json"
     doc = json.loads(path.read_text())
@@ -563,10 +522,8 @@ def direct_half(project, top, pdk, half, producer):
     path.unlink(missing_ok=True)
     inputs, refusal = {}, ""
     try:
-        pnr = project / "phase3/stage3/pnr"
-        selected = default_signoff_inputs(project) or {
-            "gds": pnr / f"{top}.gds", "def": pnr / f"{top}.def",
-            "netlist": pnr / f"{top}_pnr.v"}
+        from _prestream_native import signoff_inputs
+        selected = signoff_inputs(project, "gds", "def", *(('netlist',) if half == 'lvs' else ()))
         for role, source in {**selected, "pdk_tech_lef": pdk.tech_lef,
                              "pdk_cell_lef": pdk.cell_lef}.items():
             inputs[role] = entry(project, source, external=role.startswith("pdk_"))
@@ -662,7 +619,8 @@ def _direct_half_refusal(project, half):
         return f"CURRENT_NATIVE_RECORD_MISSING: {exc}"
     refusal = validate(project, record, step="31", stage="stage4",
                        tools=("klayout", "magic", "netgen", "svrfdrc"),
-                       required_inputs=("gds", "def", "netlist", "technology", "pdk_deck", "pdk_tech_lef", "pdk_cell_lef"),
+                       required_inputs=("gds", "def", "technology", "pdk_deck", "pdk_tech_lef", "pdk_cell_lef",
+                                        *(('netlist',) if half == 'lvs' else ())),
                        required_outputs=("report", "native_report", "log"))
     if refusal:
         return refusal
@@ -681,12 +639,8 @@ def _direct_half_refusal(project, half):
         row = record["outputs"][role]
         if (native.get("outputs") or {}).get(row["path"]) != "sha256:" + row["sha256"]:
             return "CURRENT_NATIVE_OUTPUT_UNBOUND"
-    pnr = project / "phase3/stage3/pnr"
-    selected = default_signoff_inputs(project)
-    file_top = record.get("file_top", record["design"])
-    expected = selected or {"gds": pnr / f"{file_top}.gds",
-                            "def": pnr / f"{file_top}.def",
-                            "netlist": pnr / f"{file_top}_pnr.v"}
+    from _prestream_native import signoff_inputs
+    expected = signoff_inputs(project, "gds", "def", *(('netlist',) if half == 'lvs' else ()))
     for role, source in expected.items():
         if record["inputs"].get(role) != entry(project, source):
             return "CURRENT_NATIVE_SUBJECT_SWAPPED"

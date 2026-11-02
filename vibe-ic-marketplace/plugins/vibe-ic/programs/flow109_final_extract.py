@@ -50,13 +50,12 @@ def _bound(project, ref):
 def _retained_geometry(project, manifest):
     """Reopen the existing Default native owner; never translate its verdict."""
     import librelane_fill_dfm as retained
-    import _physical_current as current
+    from _prestream_native import signoff_inputs
     ref = manifest.get('retained_default_fill')
     report = _bound(project, ref)
     if report.parts[-3:] != ('reports', 'phase3', 'fill_librelane.json'):
         raise AdmissionRefusal('D69_RETAINED_OWNER_INVALID', str(report))
     owner = report.parents[2]
-    stream = retained.validate_default_stream(owner)
     document = _read(report)
     tool = document['odb']['tool']
     state_path = Path(tool['state'])
@@ -69,21 +68,20 @@ def _retained_geometry(project, manifest):
         raise AdmissionRefusal('D69_RETAINED_ODB_UNBOUND', str(state['odb']))
     if digest(Path(state['def'])) != tool['filled_def_sha256']:
         raise AdmissionRefusal('D69_RETAINED_DEF_CHANGED', str(state['def']))
-    actual = current.default_signoff_inputs(owner)
+    actual = signoff_inputs(owner, 'gds', 'odb', 'def', 'netlist', 'sdc')
     views = manifest.get('adopted_views') or {}
-    if not actual or set(views) != {'netlist', 'sdc'}:
+    if set(views) != {'netlist', 'sdc'}:
         raise AdmissionRefusal('D69_ADOPTED_VIEWS_ABSENT', 'current netlist and SDC required')
-    expected_sdc = Path(actual.get('sdc') or owner / 'phase3/stage3/pnr/constraint.sdc')
-    for key, expected in [('netlist', Path(actual['netlist'])), ('sdc', expected_sdc)]:
+    for key, expected in [('netlist', actual['netlist']), ('sdc', actual['sdc'])]:
         if _bound(project, views[key]).resolve() != expected.resolve():
             raise AdmissionRefusal('D69_RETAINED_ADOPTED_VIEW_MISMATCH', key)
-    if Path(actual['gds']).resolve() != Path(stream['canonical']).resolve():
-        raise AdmissionRefusal('D69_RETAINED_GDS_MISMATCH', str(actual['gds']))
-    if manifest.get('librelane', {}).get('image', stream['image']) != stream['image']:
+    from librelane_contract import resolve_image
+    image = resolve_image(owner, record=False)
+    if manifest.get('librelane', {}).get('image', image) != image:
         raise AdmissionRefusal('D69_RETAINED_IMAGE_MISMATCH', 'native image differs from stream owner')
     # Native cell-fill/stream evidence is not a dbFill census or fill-sensitive RC proof.
-    geometry = {'odb': files._record(project, Path(state['odb'])),
-                'filled_def': files._record(project, Path(state['def'])),
+    geometry = {'odb': files._record(project, actual['odb']),
+                'filled_def': files._record(project, actual['def']),
                 'retained_default_fill': ref,
                 'native_fill_state': files._record(project, state_path),
                 'native_fill_receipt': files._record(project, state_path.parent / 'vibeic_receipt.json'),

@@ -34,6 +34,7 @@ TWO ARMS, both required by the issue's acceptance criteria:
 """
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 import pytest
@@ -42,6 +43,15 @@ PROG = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROG))
 import phase3_one_shot_runner as R   # noqa: E402
 import verdict as T      # noqa: E402
+
+
+def _state_inputs(project, top):
+    views = {}
+    for view in ("gds", "def", "nl"):
+        path = project / ("selected." + view)
+        path.write_text("DESIGN " + top + " ;\nEND DESIGN\n" if view == "def" else view)
+        views[view] = str(path)
+    (project / "state_out.json").write_text(json.dumps(views))
 
 
 def _pdk(**kw):
@@ -87,7 +97,7 @@ def _timed_out_drc(tmp_path, monkeypatch, rc, write_partial=False):
     gds = R._pl.pnr_dir(tmp_path) / "top.gds"
     gds.parent.mkdir(parents=True, exist_ok=True)
     gds.write_text("gds")
-    res = R._try_svrf_native_drc(tmp_path, "top", _pdk(), "img")
+    res = R._try_svrf_native_drc(tmp_path, "top", _pdk(), "img", gds=gds, routed_def=tmp_path / "selected.def")
     return res, rpt
 
 
@@ -174,6 +184,7 @@ def test_guard_a_design_dependent_or_env_absence_is_NOT_a_failure(tmp_path,
     finding about a design nothing looked at.
     """
     # (a) the PDK ships no DRC deck at all — a design/PDK property.
+    _state_inputs(tmp_path, "top")
     monkeypatch.setattr(R, "_tool_in_path", lambda c, t: False)
     res = R.step_drc(tmp_path, "top", _pdk(drc_deck=None, calibre_drc=None),
                      "img")
@@ -218,7 +229,7 @@ def test_guard_a_completed_clean_drc_is_still_a_full_pass(tmp_path,
     gds = R._pl.pnr_dir(tmp_path) / "top.gds"
     gds.parent.mkdir(parents=True, exist_ok=True)
     gds.write_text("gds")
-    res = R._try_svrf_native_drc(tmp_path, "top", _pdk(), "img")
+    res = R._try_svrf_native_drc(tmp_path, "top", _pdk(), "img", gds=gds, routed_def=tmp_path / "selected.def")
     assert R._aggregate_verdict([R.StepResult("pnr", "PASS"), res]) == "PASS"
     assert rpt.is_file(), "a COMPLETED run's report must not be isolated"
     assert R._parse_svrf_tally(rpt)[0] == 0, \

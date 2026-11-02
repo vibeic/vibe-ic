@@ -1,4 +1,4 @@
-"""Native final-State readers for the blocking D60 prestream gate.
+"""Native final-State readers for prestream and physical signoff.
 
 Ruling #62: steps chain through State; no publisher, historical stage probes,
 placed.def alias or signed threshold authority is an input to this path.
@@ -42,16 +42,23 @@ def same_def(a: Path, b: Path) -> bool:
         return False
 
 
-def final_state(project: Path) -> Path | None:
+def final_state(project: Path, *, streamed: bool = False) -> Path | None:
     # Prefer the selected State. The existing signoff pointer is only a path;
     # its publisher, hashes and signatures are not admission requirements (#62).
     direct = project / 'state_out.json'
     if direct.is_file():
-        state = load(direct)
-        if ('route__drc_errors_final' in (state.get('metrics') or {}) or
-                state.get('odb') and state.get('def') and (state.get('spef') or
-                same_def(path(project, state['def']), project / 'phase3/stage3/pnr/routed.def'))):
-            return direct.resolve()
+        return direct.resolve()
+    if streamed:
+        streams = []
+        for candidate in sorted((project / 'phase3/librelane').glob('**/state_out.json')):
+            meta = load(candidate.parent / 'config.json').get('meta')
+            if isinstance(meta, dict) and meta.get('step') in (
+                    'KLayout.StreamOut', 'Magic.StreamOut', 'Vibeic.FillAwareStreamOut'):
+                streams.append(candidate)
+        if len(streams) > 1:
+            raise ValueError('CURRENT_FINAL_STATE_AMBIGUOUS: ' + ', '.join(map(str, streams)))
+        if streams:
+            return streams[0]
     selected = load(project / 'reports/phase3/sta_postpnr_signoff.json').get('sta_state')
     if isinstance(selected, str):
         p = path(project, selected)
@@ -69,6 +76,28 @@ def final_state(project: Path) -> Path | None:
                 and same_def(path(project, state['def']), routed)):
             candidates.append((bool(list(p.parent.glob('*/vibeic_signoff.rpt'))), p))
     return max(candidates)[1] if candidates else None
+
+
+def signoff_inputs(project: Path, *roles: str) -> dict[str, Path]:
+    """Require the caller's views from one selected final LibreLane State."""
+    project = Path(project).resolve()
+    selected = final_state(project, streamed=True)
+    if selected is None:
+        raise ValueError('CURRENT_FINAL_STATE_MISSING: state_out.json')
+    state = load(selected)
+    views = {}
+    for role in roles:
+        name = 'nl' if role == 'netlist' else role
+        if role == 'gds' and state.get('gds') in (None, ''):
+            name = 'klayout_gds' if 'klayout_gds' in state else 'gds'
+        value = state.get(name)
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError(f'CURRENT_FINAL_STATE_VIEW_MISSING: {name} in {selected}')
+        view = path(project, value)
+        if not view.is_file() or view.stat().st_size == 0:
+            raise ValueError(f'CURRENT_FINAL_STATE_VIEW_MISSING: {name}: {view}')
+        views[role] = view
+    return views
 
 
 def result(failures=(), missing=(), **values) -> dict:

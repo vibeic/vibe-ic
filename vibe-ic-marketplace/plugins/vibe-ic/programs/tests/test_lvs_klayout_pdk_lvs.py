@@ -378,12 +378,11 @@ def _bound_native_record(project, state="Match"):
 
 @pytest.mark.parametrize("state,passed", [("Match", True), ("NoMatch", False)])
 def test_native_reader_and_existing_consumers_agree(tmp_path, monkeypatch, state, passed):
-    import _physical_current as current
     import lvs_tapeout_signoff_check as signoff
     import eda_report_audit as audit
     import lvs_signoff_guard as guard
     layout, report, record = _bound_native_record(tmp_path, state)
-    monkeypatch.setattr(current, "default_signoff_inputs", lambda project: {"gds": layout})
+    (tmp_path / "state_out.json").write_text(json.dumps({"gds": str(layout)}))
     assert mod.read_current_verdict(tmp_path, report, layout)["status"] == record["status"]
     assert signoff.check(tmp_path)["passed"] is passed
     assert audit._check_lvs(tmp_path).passed is passed
@@ -391,7 +390,6 @@ def test_native_reader_and_existing_consumers_agree(tmp_path, monkeypatch, state
 
 
 def test_corrupt_current_native_cannot_restore_a_retained_legacy_match(tmp_path, monkeypatch):
-    import _physical_current as current
     import lvs_tapeout_signoff_check as signoff
     import eda_report_audit as audit
     import lvs_signoff_guard as guard
@@ -399,7 +397,7 @@ def test_corrupt_current_native_cannot_restore_a_retained_legacy_match(tmp_path,
     from test_lvs_signoff_guard import PORTED
     from test_eda_report_audit import _PAD
     layout, report, _ = _bound_native_record(tmp_path, "NoMatch")
-    monkeypatch.setattr(current, "default_signoff_inputs", lambda project: {"gds": layout})
+    (tmp_path / "state_out.json").write_text(json.dumps({"gds": str(layout)}))
     report.with_name("lvs.rpt").write_text(
         "Netgen LVS comparison\nSubcircuit instance summary: 567 instances compared\n"
         "NET count: 1234\ndevice count: 567\n" + _MATCH + _PAD)

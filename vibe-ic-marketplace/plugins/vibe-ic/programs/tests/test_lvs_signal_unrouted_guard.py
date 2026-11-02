@@ -87,11 +87,10 @@ def test_routed_signal_def_detected(tmp_path):
     assert routed is True
 
 
-def test_power_only_def_is_has_routing_TRUE_but_signal_unrouted(tmp_path):
+def test_power_only_def_is_signal_unrouted(tmp_path):
     # THE GAP THE FIX CLOSES: `_def_has_routing` says routed (power straps),
     # but the signal-aware classifier correctly says signal-unrouted.
     p = _write(tmp_path, _unrouted_def(40))
-    assert R._def_has_routing(p) is True                     # power straps → True
     routed, nets = R._def_signal_routing_stats(p)
     assert routed is False and nets == 40                    # signal → unrouted
 

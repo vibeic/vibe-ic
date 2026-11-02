@@ -52833,8 +52833,8 @@ def _svrfdrc_supports_cell_aware_feol(container: str, bin_c: str) -> bool:
 
 
 def _build_cell_aware_feol_cfg(project: Path, top: str, pdk: PdkConfig,
-                               container: str, bin_c: str, deck_c: str
-                               ) -> Optional[Any]:
+                               container: str, bin_c: str, deck_c: str, *,
+                               routed_def: Path) -> Optional[Any]:
     """Build the opt-in ``--cell-aware-feol`` cfg for the native svrfdrc engine,
     or return None when the gate is not met (byte-identical stock DRC).
 
@@ -52852,7 +52852,7 @@ def _build_cell_aware_feol_cfg(project: Path, top: str, pdk: PdkConfig,
         return None
     if not pdk.cell_gds:
         return None
-    def_host = _pl.pnr_dir(project) / f"{top}.def"
+    def_host = routed_def
     if not def_host.is_file():
         return None
     try:
@@ -53044,7 +53044,7 @@ def _drc_wall_budget_s() -> float:
 
 
 def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
-                         container: str,
+                         container: str, *, gds: Path, routed_def: Path,
                          physical_top: Optional[str] = None
                          ) -> Optional[StepResult]:
     """Run the commercial Calibre/SVRF `.rule` DRC deck NATIVELY via the vibeic
@@ -53060,7 +53060,6 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     bin_c = _svrfdrc_bin_container(container)
     if bin_c is None:
         return None
-    gds = _pl.pnr_dir(project) / f"{top}.gds"
     if not gds.is_file():
         return None
     cell_top = physical_top or top
@@ -53096,7 +53095,7 @@ def _try_svrf_native_drc(project: Path, top: str, pdk: PdkConfig,
     caf_res = None
     if _svrfdrc_supports_cell_aware_feol(container, bin_c):
         caf_res = _build_cell_aware_feol_cfg(project, top, pdk, container,
-                                             bin_c, deck_c)
+                                             bin_c, deck_c, routed_def=routed_def)
         if caf_res is not None and getattr(caf_res, "written", False):
             cfg_c = _to_container_path(str(caf_res.cfg_path), container)
             cmd += f" --cell-aware-feol={cfg_c}"
@@ -53339,7 +53338,12 @@ def _step31_librelane(project: Path, top: str, pdk: PdkConfig, half: str,
     t0 = time.time()
     import librelane_pv_signoff as _pv
     from librelane_contract import Refusal, tool_stop_reason, resolve_image, resolve_pdk_root
-    pnr = _pl.pnr_dir(project)
+    try:
+        from _prestream_native import signoff_inputs
+        views = signoff_inputs(project, "gds", "def", "netlist", "sdc")
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        return StepResult(half, "NOT_MEASURED", time.time() - t0, str(exc),
+                          reason_class=_V.ReasonClass.INPUT_ABSENT)
     try:
         image = resolve_image(project)
     except Refusal as exc:
@@ -53351,30 +53355,15 @@ def _step31_librelane(project: Path, top: str, pdk: PdkConfig, half: str,
                           "LL_PDK_ROOT_NOT_RESOLVABLE",
                           reason_class=_V.ReasonClass.TOOL_ABSENT)
     try:
-        views = {"gds": pnr / f"{top}.gds", "def": pnr / f"{top}.def",
-                 "netlist": pnr / f"{top}_pnr.v"}
         powered = None
         physical_top = None
         if half == "lvs":
-            import _physical_current as current
-            reference_project = project
-            release = None
-            release_record = project / "reports/phase3/provider_die_assembly.json"
-            if release_record.is_file():
-                from die_finishing_gen import read_admitted_release
-                release = read_admitted_release(project, release_record)
-                reference_project = release["source_project"]
-            selected = current.default_signoff_inputs(reference_project)
-            if not selected:
-                raise Refusal("LL_PV_VIEW_MISSING", "current final GDS and physical reference")
-            views = {**selected, **({"gds": release["gds"]} if release else {})}
-            pnr = _pl.pnr_dir(reference_project)
             physical_top, _ = _streamout_top(views["def"], top)
             job = project / "reports/phase3" / f"librelane_lvs_reference_{time.time_ns()}"
             job.mkdir(parents=True)
             powered = job / "reference.v"
             additional_lefs = sorted({
-                *_pl.extracted_dir(reference_project).glob("*.extract.lef"),
+                *_pl.extracted_dir(project).glob("*.extract.lef"),
                 *_stage_padring_io_lefs_for_lvs(project, pdk, image)}, key=str)
             _lvs_pa.emit_to_file(views["netlist"], pdk.name, powered,
                                 top=physical_top, rails_as_ports=True,
@@ -53382,7 +53371,7 @@ def _step31_librelane(project: Path, top: str, pdk: PdkConfig, half: str,
                                 additional_lefs=additional_lefs)
         record = _pv.run_half(project, image, Path(root), pdk.name, half,
                               gds=views["gds"], routed_def=views["def"],
-                              netlist=views["netlist"], sdc=views.get("sdc", pnr / "constraint.sdc"),
+                              netlist=views["netlist"], sdc=views["sdc"],
                               powered_netlist=powered, physical_top=physical_top)
     except (OSError, ValueError) as exc:
         return StepResult(half, "NOT_MEASURED", time.time() - t0, str(exc),
@@ -53531,8 +53520,8 @@ def _retained_default_drc(project: Path, pdk: PdkConfig) -> Optional[StepResult]
         checked = current.read_direct_half(project, 'drc')
         if checked['verdict'] != 'CURRENT' or checked['tool'] != 'klayout':
             return None
-        if current.default_signoff_inputs(project) is None:
-            return None
+        from _prestream_native import signoff_inputs
+        signoff_inputs(project, "gds", "def", "netlist")
         if checked['pdk'] != pdk.name:
             return None
         for role, path in (('pdk_tech_lef', pdk.tech_lef),
@@ -53691,19 +53680,12 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
     if candidate and "sdr_candidates" not in Path(project).parts:
         return StepResult("drc", "FAIL", time.time() - t0,
                           "candidate DRC requires private SDR scratch")
-    import drc_feedback_repair as _drc_feedback
-    import _physical_current as _current
     try:
-        finished_inputs = None if candidate else _current.default_signoff_inputs(project)
+        from _prestream_native import signoff_inputs
+        finished_inputs = None if candidate else signoff_inputs(project, "gds", "def")
     except (OSError, ValueError, KeyError, RuntimeError) as exc:
         return StepResult("drc", "NOT_MEASURED", time.time() - t0, str(exc),
                           reason_class=_V.ReasonClass.INPUT_ABSENT)
-    if (not candidate and finished_inputs is None and
-            _drc_feedback.has_reviewed_rule(getattr(pdk, "drc_deck", None))):
-        _bound, _why = _drc_feedback.check_binding(
-            project, top, _pl.pnr_dir(project) / f"{top}.gds")
-        if not _bound:
-            return StepResult("drc", "FAIL", time.time() - t0, _why)
     _vac = _vacuous_on_unrouted(project, "drc", t0)
     if _vac is not None:
         return _vac
@@ -53725,6 +53707,8 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
                 # do we fall back to the honest ENV_UNAVAILABLE.
                 svrf = _try_svrf_native_drc(
                     project, top, pdk, container,
+                    gds=finished_inputs["gds"] if finished_inputs else _pl.pnr_dir(project) / f"{top}.gds",
+                    routed_def=finished_inputs["def"] if finished_inputs else _pl.pnr_dir(project) / f"{top}.def",
                     physical_top=physical_top)
                 if svrf is not None:
                     return svrf
@@ -53742,7 +53726,7 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
                 # was absent because an upstream step had failed and the stream-
                 # out never ran; nothing about the environment was missing.
                 _svrf_bin = _svrfdrc_bin_container(container)
-                _gds_p = _pl.pnr_dir(project) / f"{top}.gds"
+                _gds_p = finished_inputs["gds"] if finished_inputs else _pl.pnr_dir(project) / f"{top}.gds"
                 if _svrf_bin is not None and not _gds_p.is_file():
                     return StepResult(
                         "drc", "NOT_MEASURED", time.time() - t0,
@@ -54336,31 +54320,6 @@ def step_drc(project: Path, top: str, pdk: PdkConfig,
 _DEF_WIRING_RE = re.compile(r"\+\s+(?:ROUTED|FIXED|COVER|NOSHIELD)\b")
 
 
-def _def_has_routing(def_path: Path) -> bool:
-    """ORGANIC #571 — True when a DEF carries actual routing geometry: a
-    NETS section with a `+ ROUTED`/`+ FIXED`/`+ COVER`/`+ NOSHIELD` wiring
-    statement, or a non-empty
-    SPECIALNETS section (PG straps). A floorplan / placement-stage DEF has
-    COMPONENTS + PINS but no routed wiring — feeding it to Magic ext2spice
-    wastes hours on an interconnect-less extraction. Reads a bounded prefix
-    so a huge routed DEF is cheap to classify. chip-AGNOSTIC."""
-    try:
-        # routing markers can appear deep; scan the whole file but stop early
-        # on the first positive.
-        with def_path.open("r", errors="ignore") as fh:
-            for line in fh:
-                if _DEF_WIRING_RE.search(line):
-                    return True
-                if line.lstrip().startswith("SPECIALNETS"):
-                    # SPECIALNETS <n> ; — a positive count means PG routing
-                    m = re.match(r"SPECIALNETS\s+(\d+)", line.strip())
-                    if m and int(m.group(1)) > 0:
-                        return True
-    except OSError:
-        return False
-    return False
-
-
 # A DEF must carry this many SIGNAL nets before the signal-routing guard fires.
 # Below it, a design is too trivial to reliably distinguish "unrouted" from
 # "everything abuts", so we never block it (it extracts fast anyway).
@@ -54637,17 +54596,17 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
              f"{_rsum.summary_detail(upstream_pnr.detail, width=400)}"),
             extras={"finding": "LVS_UPSTREAM_PNR_INCOMPLETE",
                     "upstream_pnr_status": upstream_pnr.status}, reason_class=_V.ReasonClass.UPSTREAM_FAILED)
-    # v1.4.70/#182 — DEVICE-level LVS route. A PDK whose registry declares a
-    # `device_lvs_program` (asap7 -> asap7_finfet_lvs.py) has an OSS device-LVS
-    # route: KLayout geometric transistor extraction (GATE_CUT-severed real gate)
-    # vs the CDL golden. It must NOT dead-end at the netgen/magic
-    # "no LVS setup -> ENV_UNAVAILABLE" branches below (that message is FALSE for
-    # such a PDK). v1.4.70 emitted WAIVED (library-only). #182: when a routed
-    # design GDS + gate netlist are present, run the DESIGN-level extract+compare
-    # (routed layout vs the CDL-expanded gate netlist) for a REAL per-design
-    # PASS/FAIL; keep WAIVED only when no routed design is available (library-only).
     _lvs_reg = _pdk_registry_entry(pdk.name) or {}
     _dev_lvs_prog = _lvs_reg.get("device_lvs_program")
+    try:
+        from _prestream_native import signoff_inputs
+        roles = ("def", "netlist")
+        if _dev_lvs_prog or getattr(pdk, "lvs_engine", "magic") == "klayout":
+            roles += ("gds",)
+        finished_inputs = signoff_inputs(project, *roles)
+    except (OSError, ValueError, KeyError, RuntimeError) as exc:
+        return StepResult("lvs", "NOT_MEASURED", time.time() - t0, str(exc),
+                          reason_class=_V.ReasonClass.INPUT_ABSENT)
     if _dev_lvs_prog and _lvs_reg.get("cdl_netlist") and _lvs_reg.get("klayout_lvs_tech"):
         if not _tool_in_path(container, "klayout"):
             return StepResult(
@@ -54656,39 +54615,10 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
                 f"`klayout` in container {container!r} PATH.",
                 extras={"missing_tool": "klayout",
                         "device_lvs_program": _dev_lvs_prog}, reason_class=_V.ReasonClass.TOOL_ABSENT)
-        # #182 — DESIGN-level device LVS when a routed design GDS + a gate netlist
-        # exist. A routed sign-off GDS + its gate netlist are the two inputs the
-        # design-level extract+compare needs; run it for a real PASS/FAIL.
-        _a7_gds = _pl.pnr_dir(project) / f"{top}.gds"
-        _a7_def = _pl.pnr_dir(project) / f"{top}.def"
-        _a7_net, _a7_reason = _v0_3_15_select_lvs_netlist(project, top, _a7_def)
-        if (_a7_gds.is_file() and _a7_gds.stat().st_size > 0
-                and _a7_net is not None and _a7_net.is_file()):
-            return _run_asap7_device_lvs(project, top, pdk, container, _lvs_reg,
-                                         _a7_net, _a7_def, t0)
-        # No routed design (library-only context) -> WAIVED with the library
-        # verification and a pointer to the design-level route.
-        _dev_ver = _lvs_reg.get("device_lvs_verified") or {}
-        return StepResult(
-            "lvs", "PASS_WITH_WAIVERS", time.time() - t0,
-            f"{pdk.name}: open-source DEVICE-level LVS is available via "
-            f"{_dev_lvs_prog} — KLayout geometric transistor extraction "
-            f"(GATE_CUT-severed real gate) compared against the CDL "
-            f"golden ({_lvs_reg.get('cdl_netlist')}); NO netgen/magic setup "
-            f"needed, so this is NOT an ENV gap. No routed design GDS + gate "
-            f"netlist present here ({_a7_reason}), so this runs the shipped "
-            f"std-cell library verification: {_dev_ver.get('match')}/"
-            f"{_dev_ver.get('compared')} cells MATCH (proven-negative="
-            f"{_dev_ver.get('proven_negative')}). A routed design gets a real "
-            f"design-level PASS/FAIL (`{_dev_lvs_prog} design <routed.gds> "
-            f"--top NAME --gate-netlist <v> --golden-cdl <cdl>`). "
-            f"NOT silicon-proven ({pdk.name} predictive).",
-            extras={"device_lvs_program": _dev_lvs_prog,
-                    "device_lvs_verified": _dev_ver,
-                    "klayout_lvs_tech": _lvs_reg.get("klayout_lvs_tech"),
-                    "cdl_netlist": _lvs_reg.get("cdl_netlist"),
-                    "lvs_method": "klayout_device_geometric",
-                    "finding": "LVS_DEVICE_LEVEL_AVAILABLE"})
+        return _run_asap7_device_lvs(
+            project, top, pdk, container, _lvs_reg,
+            finished_inputs["netlist"], finished_inputs["def"], t0,
+            gds_path=finished_inputs["gds"])
     if pdk.calibre_lvs:
         # v1.6.54 — verdict-tier split: ENV_UNAVAILABLE if calibre
         # binary absent, WAIVED if binary present (agent has chosen
@@ -54834,40 +54764,13 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
     # KLayout-streamed GDS was either compact-layermapped (Magic-unreadable)
     # or a 70-byte abstract-view shell → portless extraction → all-top
     # disconnected. Prefer the routed DEF; fall back to any pnr DEF.
-    import _physical_current as _current
-    try:
-        finished_inputs = _current.default_signoff_inputs(project)
-    except (OSError, ValueError, KeyError, RuntimeError) as exc:
-        return StepResult("lvs", "NOT_MEASURED", time.time() - t0, str(exc),
-                          reason_class=_V.ReasonClass.INPUT_ABSENT)
-    def_file = (finished_inputs["def"] if finished_inputs else
-                _pl.pnr_dir(project) / f"{top}.def")
-    _def_fell_back = False
-    if not def_file.is_file():
-        # ORGANIC #571 (a) — when the named routed DEF is absent and we must
-        # fall back to a glob, PREFER a routed DEF and de-prioritise a
-        # floorplan/placement-stage DEF, then sanity-check below. A bare
-        # `*.def` glob used to pick `floorplan.def` (pre-route, no NETS
-        # geometry) and feed it to Magic for a ~2h interconnect-less extract.
-        routed_cands = (sorted(_pl.pnr_dir(project).glob("*.routed.def"))
-                        + sorted(_pl.pnr_dir(project).glob("routed*.def")))
-        other_cands = [d for d in sorted(_pl.pnr_dir(project).glob("*.def"))
-                       if d not in routed_cands]
-        d_cands = routed_cands + other_cands
-        if d_cands:
-            def_file = d_cands[0]
-            _def_fell_back = True
+    def_file = finished_inputs["def"]
     # v0.3.15 — ORGANIC #509 round-4: pick the POST-PnR schematic netlist
     # whose cell population matches the routed layout (the pre-PnR synth
     # netlist has 0 spares → netgen mismatch). #512 lesson: the netlist
     # CHOICE was the runner's blind spot vs the field's manual run.
-    if finished_inputs:
-        netlist = finished_inputs["netlist"]
-        _nl_reason = "receipt-bound FillInsertion output paired with the current filled DEF"
-    else:
-        netlist, _nl_reason = _v0_3_15_select_lvs_netlist(project, top, def_file)
-    if netlist is None:
-        netlist = _pl.synth_dir(project) / f"{top}_synth.v"  # for the guard msg
+    netlist = finished_inputs["netlist"]
+    _nl_reason = "final LibreLane State netlist paired with its DEF"
     if not def_file.is_file() or not netlist.is_file():
         return StepResult(
             "lvs", "NOT_MEASURED", time.time() - t0,
@@ -54901,22 +54804,6 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
             extras={"finding": "LVS_INPUT_DEF_EMPTY",
                     "def": str(def_file),
                     "lvs_verdict": verdict})
-    # ORGANIC #571 (a) — DEF stage sanity, scoped to the FALLBACK case. When
-    # the named routed DEF (`{top}.def`) is present the runner produced it as
-    # the routed output — trust it. Only when we FELL BACK to a glob (named
-    # DEF absent) and the only candidate is a floorplan/placement-stage DEF
-    # (no `+ ROUTED` wiring / SPECIALNETS) do we named-SKIP instead of burning
-    # ~2h in Magic ext2spice on an interconnect-less layout.
-    if _def_fell_back and not _def_has_routing(def_file):
-        return StepResult(
-            "lvs", "NOT_MEASURED", time.time() - t0,
-            f"LVS skipped: DEF {def_file.name} carries no routing geometry "
-            f"(no '+ ROUTED' wiring / SPECIALNETS) — it is a floorplan/"
-            f"placement-stage DEF, not a routed layout. Extracting it would "
-            f"burn ~2h producing an interconnect-less netlist. Run "
-            f"detailed_route first (#571).",
-            extras={"finding": "LVS_INPUT_DEF_NOT_ROUTED",
-                    "def": str(def_file)}, reason_class=_V.ReasonClass.INPUT_ABSENT)
     # SIGNAL-ROUTING honesty guard — a DEF can pass the check above on power
     # SPECIALNETS alone yet carry ZERO signal-net routing (interconnect never
     # written to THIS DEF: write_def ran before/without detailed_route, or the
@@ -54974,7 +54861,8 @@ def step_lvs(project: Path, top: str, pdk: PdkConfig,
     # Magic's top extraction). Default "magic" = the #443 ext2spice route → the
     # general flow is byte-for-byte unchanged.
     if pdk.lvs_engine == "klayout":
-        return _run_klayout_lvs(project, top, pdk, container, netlist, t0)
+        return _run_klayout_lvs(project, top, pdk, container, netlist, t0,
+                                 gds_path=finished_inputs["gds"])
     _local_setup_host, local_setup_c = _emit_local_netgen_setup(
         project, pdk, container, spare_only_classes=_spare_classes)
     return _run_extraction_lvs(project, top, pdk, container, def_file,
@@ -55398,63 +55286,8 @@ quit -noprompt
 """
 
 
-def _v0_3_15_count_pnr_inserted(text: str) -> int:
-    """v0.3.15 — ORGANIC #509 round-4. Count PnR/ECO-inserted instances
-    (spare cells + CTS clock-tree buffers) — the pre-vs-post-PnR signature.
-    A pre-PnR synth netlist has ~0 of these; a post-PnR netlist (the LVS
-    schematic that must match the routed layout) carries them. Used to
-    pick the netlist whose cell population matches the layout DEF, so the
-    LVS compare is post-vs-post (not post-layout-vs-pre-synth). Spare
-    count is the cleanest discriminator (spares are never in synth).
-    chip-AGNOSTIC: generic spare/clkbuf conventions."""
-    spares = len(re.findall(r'spare', text or "", re.I))
-    clkbuf = len(re.findall(
-        r'sky130_\w+?__(?:clkbuf|clkdlybuf|dlygate|dlymetal)', text or ""))
-    return spares + clkbuf
 
 
-def _v0_3_15_select_lvs_netlist(project: Path, top: str,
-                                def_file: Path) -> Tuple[Optional[Path], str]:
-    """v0.3.15 — ORGANIC #509 round-4. Choose the LVS SCHEMATIC netlist
-    that matches the routed layout's cell population. The runner used to
-    pick `synth/<top>_synth.v` (PRE-PnR: 0 spares) but the layout DEF
-    carries PnR-inserted spares/clkbufs → netgen mismatch. Field lesson
-    (#512): the netlist CHOICE was the blind spot. Fix: prefer the
-    POST-PnR netlist (pnr dir), and sanity-check the pre-vs-post signature
-    — if the layout DEF has spare/PnR cells but the chosen netlist has
-    none, it is the wrong (pre-PnR) netlist → switch to a post-PnR one.
-    chip/PDK-AGNOSTIC: pure pre-vs-post signature, no chip literal.
-    Returns (netlist_path or None, reason)."""
-    pnr = _pl.pnr_dir(project)
-    synth = _pl.synth_dir(project)
-    ordered: List[Path] = []
-    for c in ([pnr / f"{top}_pnr.v"]
-              + sorted(pnr.glob("*_pnr.v")) + sorted(pnr.glob("*.v"))
-              + [synth / f"{top}_synth.v"] + sorted(synth.glob("*.v"))):
-        if c.is_file() and c.stat().st_size > 0 and c not in ordered:
-            ordered.append(c)
-    if not ordered:
-        return None, "no netlist found"
-    # layout signature: does the DEF carry PnR-inserted spare/clk cells?
-    try:
-        layout_sig = _v0_3_15_count_pnr_inserted(
-            def_file.read_text(errors="replace"))
-    except OSError:
-        layout_sig = 0
-    if layout_sig > 0:
-        # the schematic MUST carry them too — pick the first candidate
-        # whose signature is non-zero (post-PnR), preferring pnr-dir order.
-        for c in ordered:
-            try:
-                if _v0_3_15_count_pnr_inserted(c.read_text(errors="replace")) > 0:
-                    return c, (f"post-PnR netlist {c.name} (layout has "
-                               f"PnR-inserted cells; pre-vs-post signature "
-                               f"match)")
-            except OSError:
-                continue
-    # layout has no PnR cells (or none of the netlists do): default to the
-    # priority order (pnr-dir first).
-    return ordered[0], f"default priority {ordered[0].name}"
 
 
 def _v0_3_14_detect_spare_only_classes(netlist_text: str) -> List[str]:
@@ -56115,15 +55948,13 @@ def _try_power_aware_lvs(project: Path, top: str, pdk: PdkConfig,
 def _run_native_pdk_gds_lvs(project: Path, top: str, pdk: PdkConfig,
                             container: str, t0: float) -> StepResult:
     """Step 31's PDK-owned final-GDS route; never substitute a DEF-only match."""
-    import _physical_current as current
     import klayout_pdk_lvs as native
     report = project / "reports/phase3/lvs_verdict.json"
     raw = project / "reports/phase3/lvs.rpt"
     raw_log = raw.with_suffix(".log")
     try:
-        selected = current.default_signoff_inputs(project)
-        if not selected:
-            raise ValueError("NATIVE_LVS_FINAL_STREAM_MISSING")
+        from _prestream_native import signoff_inputs
+        selected = signoff_inputs(project, "gds", "def", "netlist")
         layout, def_file, netlist = selected["gds"], selected["def"], selected["netlist"]
         physical_top, _ = _streamout_top(def_file, top)
         job = project / "reports/phase3" / f"native_gds_lvs_{time.time_ns()}"
@@ -56198,7 +56029,8 @@ def _run_native_pdk_gds_lvs(project: Path, top: str, pdk: PdkConfig,
 
 
 def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
-                     container: str, netlist: Path, t0: float) -> StepResult:
+                     container: str, netlist: Path, t0: float, *,
+                     gds_path: Path) -> StepResult:
     """v1.3.91 — geometric transistor-level LVS (KLayout `LayoutToNetlist`).
 
     The route that stays net-correct where a commercial-PDK LEF-abstract collapses
@@ -56213,7 +56045,6 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
     INPUT), never any oracle/golden."""
     ext_dir = _pl.extracted_dir(project)
     ext_dir.mkdir(parents=True, exist_ok=True)
-    gds_path = _pl.pnr_dir(project) / f"{top}.gds"
     if not gds_path.is_file():
         verdict = _write_lvs_verdict(
             project, "FAIL", "LVS_NO_SIGNOFF_GDS",
@@ -56223,26 +56054,7 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
                           f"KLayout LVS: sign-off GDS {gds_path.name} missing",
                           extras={"finding": "LVS_NO_SIGNOFF_GDS",
                                   "lvs_verdict": verdict})
-    # U15: the bytes whose connectivity this LVS reads are the MASK GDS's. A
-    # private `.lvs.gds` copy is admitted below only when its receipt binds it
-    # to the mask GDS's sha256, so the recorded source stays the mask GDS.
     _mask_gds, _mask_sha = gds_path, _sha256_file(gds_path)
-    _lvs_copy = gds_path.with_suffix(".lvs.gds")
-    if _lvs_copy.is_file():
-        try:
-            _lvs_receipt = json.loads(
-                _lvs_copy.with_suffix(".gds.receipt.json").read_text())
-            _lvs_bound = (
-                _lvs_receipt.get("mask_gds_sha256") == _sha256_file(gds_path)
-                and _lvs_receipt.get("def_sha256") == _sha256_file(
-                    _pl.pnr_dir(project) / f"{top}.def")
-                and _lvs_receipt.get("lvs_gds_sha256") == _sha256_file(_lvs_copy))
-        except (OSError, ValueError):
-            _lvs_bound = False
-        if not _lvs_bound:
-            return StepResult("lvs", "FAIL", time.time() - t0,
-                              "LVS_PRIVATE_GDS_DIGEST_MISMATCH")
-        gds_path = _lvs_copy
     if not (pdk.cell_gds and Path(pdk.cell_gds).is_file()):
         verdict = _write_lvs_verdict(
             project, "ENV_UNAVAILABLE", "LVS_NO_CELL_GDS",
@@ -56516,7 +56328,7 @@ def _run_klayout_lvs(project: Path, top: str, pdk: PdkConfig,
 def _run_asap7_device_lvs(project: Path, top: str, pdk: PdkConfig,
                           container: str, reg: Dict[str, Any],
                           netlist: Path, def_file: Path,
-                          t0: float) -> StepResult:
+                          t0: float, *, gds_path: Path) -> StepResult:
     """#182 — DESIGN-level device LVS for a PDK with a device_lvs_program (asap7).
 
     Replaces the v1.4.70 library-only WAIVE with a REAL per-design PASS/FAIL: extract the
@@ -56531,7 +56343,6 @@ def _run_asap7_device_lvs(project: Path, top: str, pdk: PdkConfig,
     asap7 is a predictive academic PDK (tapeout_capable=false)."""
     ext_dir = _pl.extracted_dir(project)
     ext_dir.mkdir(parents=True, exist_ok=True)
-    gds_path = _pl.pnr_dir(project) / f"{top}.gds"
     cdl_rel = reg.get("cdl_netlist")
     cbase = str(reg.get("container_path", "")).rstrip("/")
     # Pass the CDL DIRECTORY (all VT/SRAM flavors), not just the R file — a routed

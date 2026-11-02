@@ -427,14 +427,14 @@ def _published_half(tmp_path, runner, monkeypatch, half, record, files, *, extra
     monkeypatch.setattr(contract, "resolve_pdk_root", lambda *a, **k: tmp_path)
     monkeypatch.setattr(pv, "run_half", lambda *a, **k: _put(
         project / pv.RECORD_REL.format(half=half), record) and record)
+    selected = {}
+    for key, name in (("gds", "current.gds"), ("def", "current.def"),
+                      ("nl", "current.v"), ("sdc", "current.sdc")):
+        selected[key] = project / name
+        selected[key].write_text(name)
+    _put(project / "state_out.json", {key: str(path) for key, path in selected.items()})
     pdk = SimpleNamespace(name="procA")
     if half == "lvs":
-        current = importlib.import_module("_physical_current")
-        selected = {}
-        for key, name in (("gds", "current.gds"), ("def", "current.def"),
-                          ("netlist", "current.v")):
-            selected[key] = project / name; selected[key].write_text(name)
-        monkeypatch.setattr(current, "default_signoff_inputs", lambda p: selected)
         monkeypatch.setattr(runner, "_streamout_top", lambda *a: ("chip", None))
         monkeypatch.setattr(runner, "_stage_padring_io_lefs_for_lvs", lambda *a: [])
         monkeypatch.setattr(runner._lvs_pa, "emit_to_file",
@@ -448,15 +448,15 @@ def _published_half(tmp_path, runner, monkeypatch, half, record, files, *, extra
                                                                (True, True)])
 def test_librelane_lvs_caller_uses_current_final_and_well_tied_reference(
         tmp_path, runner, monkeypatch, current_available, provider_release):
-    current = importlib.import_module("_physical_current")
     pnr = tmp_path / "phase3/stage3/pnr"; pnr.mkdir(parents=True)
     (pnr / "core.gds").write_text("old unadopted stream")
     selected = {}
     for key, name in (("gds", "current-final.gds"), ("def", "filled.def"),
-                      ("netlist", "physical.v")):
+                      ("netlist", "physical.v"), ("sdc", "current.sdc")):
         selected[key] = tmp_path / name; selected[key].write_text(name)
-    monkeypatch.setattr(current, "default_signoff_inputs",
-                        lambda p: selected if current_available else None)
+    if current_available:
+        _put(tmp_path / "state_out.json", {
+            "nl" if key == "netlist" else key: str(path) for key, path in selected.items()})
     provider_gds = None
     if provider_release:
         import die_finishing_gen
@@ -487,7 +487,7 @@ def test_librelane_lvs_caller_uses_current_final_and_well_tied_reference(
         assert consumed == {} and emitted == {}
     else:
         assert result.status == "PASS"
-        assert consumed["gds"] == (provider_gds or selected["gds"])
+        assert consumed["gds"] == selected["gds"]
         assert consumed["routed_def"] == selected["def"]
         assert consumed["netlist"] == emitted["source"] == selected["netlist"]
         assert consumed["physical_top"] == emitted["top"] == "physical_chip"

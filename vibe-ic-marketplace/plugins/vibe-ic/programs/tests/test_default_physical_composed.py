@@ -153,6 +153,8 @@ def _step31_control(tmp_path, monkeypatch, control):
     put(project, "phase3/stage3/pnr/routed.def", def_text)
     gds = project / "phase3/stage3/pnr/chip_top.gds"
     gds.write_bytes(_gds_bytes(top))
+    put(project, "state_out.json", json.dumps({
+        "gds": str(gds), "def": str(project / "phase3/stage3/pnr/chip_top.def")}))
     put(project, "phase3/stage3/pnr/chip_top_pnr.v", "module chip_top(); endmodule\n")
     put(project, "phase2/stage2/synth/netlist_yosys.v", "module chip_top(); endmodule\n")
     put(project, "phase2/stage1/rtl/chip_top.v", "module chip_top(); endmodule\n")
