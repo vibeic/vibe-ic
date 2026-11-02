@@ -133,6 +133,27 @@ def test_an_unusable_gate_report_does_not_reenter(tmp_path, sim_failed, report_t
     assert bd._reference_model_reentry_reason(project, {}) is None
 
 
+@pytest.mark.parametrize("tier", [[], {}], ids=["list", "object"])
+def test_malformed_model_tier_keeps_ordinary_resume_ineligible(tmp_path, monkeypatch, tier):
+    import test_benchmark_program_first_ai_review as parent
+
+    run, task, _runner = parent._dispatched_parent_task(tmp_path)
+    parent._solve_report(run, task)
+    project = Path(task["project"])
+    out = project / "phase2/stage1/sim_professional/dut"
+    out.mkdir(parents=True)
+    report = project / bd._PROFESSIONAL_TB_REPORT
+    report.parent.mkdir(parents=True, exist_ok=True)
+    report.write_text(json.dumps({"out_dir": str(out), "reference_model_tier": tier}))
+    monkeypatch.setattr(bd, "_required_gate_ledger", lambda _result: {
+        **SIM_FAILED, "unmeasured_required": []})
+    parent._stub_dispatched_reentry(monkeypatch)
+
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    result = json.loads((run / "solve_report.json").read_text())["results"][0]
+    assert result["accepted"] is False
+
+
 def test_ineligible_row_names_the_model_only_when_step4_is_waiting_on_it(tmp_path):
     project = _project(tmp_path)
     assert bd._reference_model_next(project) == {}
