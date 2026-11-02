@@ -172,13 +172,72 @@ def padring(project: Path, state_path: Path, producer: dict, *,
     log.parent.mkdir(parents=True, exist_ok=True)
     log.unlink(missing_ok=True)
     odb = path(project, str(load(state_path).get('odb', '')))
-    pads = producer.get('pads') or []
-    evidence = dict(state=str(state_path), odb=str(odb), expected_pads=len(pads),
+    assignment_path = project / pr.ASSIGNMENT_REL
+    assignment, declared = None, {}
+    try:
+        assignment = json.loads(assignment_path.read_text())
+    except OSError as exc:
+        missing.append(f'PADRING_PAD_ASSIGNMENT_UNREADABLE:{assignment_path}:{exc}')
+    except ValueError as exc:
+        failures.append(f'PADRING_PAD_ASSIGNMENT_MALFORMED:{assignment_path}:{exc}')
+    else:
+        if not isinstance(assignment, dict):
+            failures.append(f'PADRING_PAD_ASSIGNMENT_MALFORMED:{assignment_path}:not an object')
+        else:
+            for side in pr.SIDES:
+                names = assignment.get(pr.SIDE_VAR[side])
+                if not isinstance(names, list):
+                    failures.append(f'PADRING_PAD_ASSIGNMENT_MALFORMED:{pr.SIDE_VAR[side]}:{names!r}')
+                    continue
+                for order, name in enumerate(names):
+                    if not isinstance(name, str) or not name.strip():
+                        failures.append(f'PADRING_PAD_ASSIGNMENT_MALFORMED:{pr.SIDE_VAR[side]}[{order}]:{name!r}')
+                    elif name in declared:
+                        failures.append(f'PADRING_DECLARED_PAD_DUPLICATED:{name}')
+                    else:
+                        declared[name] = (side, order)
+            if not declared:
+                failures.append('PADRING_DECLARED_PAD_POPULATION_EMPTY')
+
+    records = producer.get('pads') or []
+    by_name = {}
+    side_orders = dict.fromkeys(pr.SIDES, 0)
+    if not isinstance(records, list):
+        failures.append('PADRING_PRODUCER_PAD_POPULATION_MALFORMED:not a list')
+        records = []
+    for pad in records:
+        name = pad.get('instance') if isinstance(pad, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            failures.append(f'PADRING_PRODUCER_PAD_POPULATION_MALFORMED:{name!r}')
+            continue
+        if name in by_name:
+            failures.append(f'PADRING_PRODUCER_PAD_DUPLICATED:{name}')
+            continue
+        by_name[name] = pad
+        if assignment is None:
+            continue
+        if name not in declared:
+            failures.append(f'PADRING_PRODUCER_PAD_UNDECLARED:{name}')
+            continue
+        side, order = declared[name]
+        if (pad.get('side') != side or type(pad.get('order')) is not int
+                or pad['order'] != order):
+            failures.append(f'PADRING_PRODUCER_PAD_SIDE_ORDER_MISMATCH:{name}:expected={side}/{order}')
+        if side_orders[side] != order:
+            failures.append(f'PADRING_PRODUCER_PAD_ORDER_MISMATCH:{name}:expected={order}; observed={side_orders[side]}')
+        side_orders[side] += 1
+    failures.extend(f'PADRING_DECLARED_PAD_MISSING_FROM_PRODUCER:{name}'
+                    for name in declared if name not in by_name)
+    if not records:
+        failures.append('PADRING_EXPECTED_PAD_POPULATION_EMPTY')
+    evidence = dict(state=str(state_path), odb=str(odb),
+                    expected_pads=len(declared) if assignment is not None else None,
                     output_files=[str(log)])
+    if failures or missing:
+        return result(failures, missing, **evidence)
     if not odb.is_file():
         return result(missing=[f'PADRING_NATIVE_ODB_UNREADABLE:{odb}'], **evidence)
-    if not pads:
-        return result(failures=['PADRING_EXPECTED_PAD_POPULATION_EMPTY'], **evidence)
+    pads = [by_name[name] for name in declared]
     route = container if container is not None else (
         os.environ.get('EDA_CONTAINER') or runner._pin.default_container_name())
 
