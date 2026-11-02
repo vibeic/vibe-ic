@@ -1125,6 +1125,8 @@ class _RunnerBudget:
                     # A private per-call env, including when worker_threads=0.
                     # Never mutate a shared worker environment across siblings.
                     kwargs["env"] = dict(kwargs.get("env") or os.environ)
+                    if "--container" in argv:
+                        kwargs["env"]["VIBEIC_EDA_CONTAINER"] = argv[argv.index("--container") + 1]
                     kwargs["env"][_RUNNER_CONTEXT_ENV] = json.dumps({
                         "invocation_id": invocation_id, "argv": argv,
                         "project": str(project), "source": source_before,
@@ -6757,6 +6759,14 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
                 del argv[index:index + 2]
         argv += ["--flow", "109", "--flow109-manifest", str(manifest_path),
                  "--entry-step", first, "--exit-step", last]
+    # Same-bytes re-entry stages below program_regates, rather than projects.
+    for owner in Path(proj).resolve().parents:
+        if ((owner / _RUNTIME_PAIR_RECORD).exists()
+                or _native_challenge_identity_path(owner).exists()):
+            container = _recorded_benchmark_container(owner)
+            if container:
+                argv += ["--container", container]
+            break
     return argv
 
 
@@ -8566,6 +8576,10 @@ def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
         str(receipt.get("input_contract") or "structured"),
         _rtl_delivery_target(receipt), resolve_manifest=False)
     expected[0] = invocation["argv"][0]  # its recorded interpreter is checked below
+    if "--container" not in invocation["argv"] and "--container" in expected:
+        # Historical runners inherited their selection through the environment.
+        index = expected.index("--container")
+        del expected[index:index + 2]
     if (invocation.get("status") != "COMPLETED" or invocation.get("error")
             or invocation.get("rc") not in (0, 1)
             or invocation.get("project") != str(project)
@@ -8678,19 +8692,71 @@ def _prepare_general_solve_run(bench: str, dataset: Path, run_p: Path,
 _RUNTIME_PAIR_RECORD = "runtime_pair_preflight.json"
 
 
+def _recorded_benchmark_container(run_p: Path) -> str | None:
+    """Keep a run's original native selection across coordinator processes."""
+    frozen = _frozen_native_challenge_identity(run_p)
+    if frozen is not None:
+        return frozen["container"]
+    path = run_p / _RUNTIME_PAIR_RECORD
+    if path.exists():
+        pair = _read_json_regular(path)
+        if pair.get("execution_route") != "LOCAL":
+            if pair.get("selected_container"):
+                return pair["selected_container"]
+            if pair.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH:
+                return pair.get("container")
+    return None
+
+
+def _benchmark_runtime_env(run_p: Path, *, fresh: bool) -> dict:
+    """Supply only an implicit fresh Docker runtime through the deployment owner."""
+    env = dict(os.environ)
+    recorded = _recorded_benchmark_container(run_p)
+    if recorded:
+        env["VIBEIC_EDA_CONTAINER"] = recorded
+    elif (fresh and not env.get("VIBEIC_EDA_CONTAINER", "").strip()
+          and not _challenge_exec.no_container_route()):
+        pin = _runtime_pair._pin
+        source = pin.default_container_name(env)
+        reference, why = pin.container_image_reference(source)
+        if not reference:
+            raise ValueError(why or "source container image is unreadable")
+        name = "vibeic-bench-" + _sha256_text(str(run_p.resolve()))[:24]
+        helper = Path(__file__).resolve().parents[1] / "tools/vibeic-eda/restart-eda.sh"
+        helper_env = {**env, "NAME": name, "SOURCE_CONTAINER": source,
+                      "ENSURE_ONLY": "1", "PULL": "0"}
+        result = subprocess.run(
+            ["bash", str(helper), reference],
+            env=helper_env, capture_output=True, text=True)
+        if result.returncode:
+            raise ValueError((result.stderr or result.stdout).strip()
+                             or "run runtime creation refused")
+        env["VIBEIC_EDA_CONTAINER"] = name
+    return env
+
+
 def _write_runtime_pair_record(run_p: Path, record: dict) -> None:
     """Record the reconciliation where the run that used it can be read with it."""
     run_p.mkdir(parents=True, exist_ok=True)
     path = run_p / _RUNTIME_PAIR_RECORD
-    if record.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH and path.is_file():
+    if path.is_file():
         prior_text = path.read_text()
         try:
             prior = _strict_json_loads(prior_text)
         except ValueError:
             prior = None
-        if isinstance(prior, dict) and prior.get("verdict") == _runtime_pair.RUNTIME_PAIR_MISMATCH:
-            _write_immutable_text(run_p / "runtime_pair_refusals" /
-                                  f"{_sha256_text(prior_text)}.json", prior_text)
+        if isinstance(prior, dict):
+            if (record.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH
+                    and prior.get("verdict") == _runtime_pair.RUNTIME_PAIR_MISMATCH):
+                _write_immutable_text(run_p / "runtime_pair_refusals" /
+                                      f"{_sha256_text(prior_text)}.json", prior_text)
+            # A failed readback is the latest status, not a new run selection.
+            if prior.get("execution_route") != "LOCAL":
+                selected = prior.get("selected_container")
+                if not selected and prior.get("verdict") == _runtime_pair.RUNTIME_PAIR_MATCH:
+                    selected = prior.get("container")
+                if selected:
+                    record["selected_container"] = selected
     _atomic_write_json(path, record)
     if _read_json_regular(path) != record:
         raise ValueError("runtime pair persistence readback differs")
@@ -8742,7 +8808,14 @@ def _runtime_pair_gate(run_p: Path, operation: str,
     root would make the next `--solve` refuse it as non-empty and the operator
     would read the clean-room message instead of the mismatch.
     """
-    record = _runtime_pair.preflight()
+    try:
+        env = _benchmark_runtime_env(run_p, fresh=pristine)
+        record = _runtime_pair.preflight(env)
+    except (OSError, ValueError) as exc:
+        record = {"schema": "vibeic.runtime.pair_preflight.v1",
+                  "verdict": _runtime_pair.RUNTIME_PAIR_MISMATCH,
+                  "container": None, "required_digest": None, "found_digest": None,
+                  "checks": [], "disagreed": "run_runtime_supply", "evidence": [str(exc)]}
     record["operation"] = operation
     if record["verdict"] == _runtime_pair.RUNTIME_PAIR_MATCH:
         if not pristine:
