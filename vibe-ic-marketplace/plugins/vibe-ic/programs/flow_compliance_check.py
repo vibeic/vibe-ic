@@ -16963,6 +16963,7 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
     _n_attr = 0
     _n_glob = 0
     _not_owed: List[str] = []
+    _output_obligations = []
     for pat in outputs:
         try:
             _why_not_owed = _output_not_owed(project, step, pat)
@@ -16970,6 +16971,8 @@ def check_step(project: Path, step: Dict[str, Any], waivers: Dict,
             result.reason_class = ""
             result.reasons.append(f"HARDMACRO_BOUGHT_SLOT_CONTRADICTION: {exc}")
             return result
+        _output_obligations.append((pat, _why_not_owed))
+    for pat, _why_not_owed in _output_obligations:
         if _why_not_owed:
             _not_owed.append(pat)
             result.reasons.append(_why_not_owed)
