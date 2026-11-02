@@ -117,6 +117,9 @@ def realize(lib, values, stages, devices, nets, startup=None):
 
     The existing raw-POR helper owns only power detection and counter startup.
     This owner controls the reset edge, decisions and every SC update path.
+    A retained delay-chain level cannot start evaluation in non-overlap dead
+    time. D1 summer clearing follows the qualified evaluation edge so the
+    held sum remains available until the comparator has actually started.
     """
     groups = (stages or {}).get("groups", [])
     counter = next((g for g in groups if g.get("role") == "conversion_window_counter"), None)
@@ -157,7 +160,12 @@ def realize(lib, values, stages, devices, nets, startup=None):
         n = by_name[f"mn_no{phase}a"]
         cells.mos(f"mn_no{phase}_reset", "nmos", output, "nall", "vss", n["w"], n["l"])
 
-    cells.and_("conversion_qeval", "nqeval", "nqstb", "nrstb")
+    cells.and_("conversion_qeval", "nqeval_run", "nqstb", "nrstb")
+    cells.and_("conversion_qeval_phase", "nqeval", "nqeval_run",
+               "nph1" if mode == 0 else "nph2")
+    if mode and lib.get("sc_loop"):
+        for name in ("mn_sumrb", "mp_sumrb"):
+            by_name[name]["nets"][1] = "nqeval"
     for name in ("mn_qtail", "mp_qrst1", "mp_qrst2", "mp_qrsti1", "mp_qrsti2"):
         by_name[name]["nets"][1] = "nqeval"
     cells.or_("conversion_setb", "nq_setb", "nq_n", "nall")
