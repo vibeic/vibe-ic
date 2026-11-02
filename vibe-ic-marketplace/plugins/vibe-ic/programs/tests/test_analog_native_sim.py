@@ -1,6 +1,7 @@
 """Behavioral controls for the Default native A06--A10 consumers."""
 from __future__ import annotations
 
+from contextlib import contextmanager
 import hashlib
 import json
 import os
@@ -507,6 +508,22 @@ def _process_starttime(pid):
     return int(Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19])
 
 
+@contextmanager
+def _live_process(executable, deck, log):
+    # Popen can return while /proc/<pid>/cmdline is still empty. Establish
+    # readiness independently of the guard whose refusal this fixture tests.
+    argv = [str(executable), "-c", "import time; print('LIVE_READY', flush=True); time.sleep(30)",
+            "-b", str(deck), "-o", str(log)]
+    process = subprocess.Popen(argv, stdout=subprocess.PIPE, text=True)
+    try:
+        assert process.stdout.readline() == "LIVE_READY\n"
+        yield process, argv
+    finally:
+        process.terminate()
+        process.wait()
+        process.stdout.close()
+
+
 def test_selected_local_ngspice_identity_comes_from_current_resolver(monkeypatch):
     selected = Path(sys.executable).resolve()
     monkeypatch.setattr(shutil, "which", lambda name: str(selected) if name == "ngspice" else None)
@@ -535,9 +552,7 @@ def test_running_native_work_is_retained_without_duplicate_launch(project, monke
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: selected)
     log = tmp_path / "native.log"
     log.write_text("running\n")
-    argv = [str(executable), "-c", "import time; time.sleep(30)", "-b", str(deck), "-o", str(log)]
-    process = subprocess.Popen(argv)
-    try:
+    with _live_process(executable, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(executable.resolve()),
                   "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
@@ -549,9 +564,6 @@ def test_running_native_work_is_retained_without_duplicate_launch(project, monke
         assert result["executions"] == [{**record, "transport_identity": "VERIFIED",
                                          "selected_tool": selected}]
         assert "existing native jobs" in result["detail"]
-    finally:
-        process.terminate()
-        process.wait()
 
 
 def test_unrelated_live_pid_cannot_suppress_native_launch(project):
@@ -570,7 +582,7 @@ def test_unrelated_live_pid_cannot_suppress_native_launch(project):
     assert calls and calls[0][0][0] == "@ngspice"
 
 
-@pytest.mark.parametrize("mutation", ["starttime", "argv", "log", "selected_tool", "container"])
+@pytest.mark.parametrize("mutation", ["starttime", "argv", "log", "selected_tool", "container", "cmdline_unobservable"])
 def test_active_run_requires_complete_live_transport_identity(project, monkeypatch, tmp_path, mutation):
     deck = project / "phase3/analog/stage/tb_stage.sp"
     executable = Path("/proc/self/exe").resolve()
@@ -579,9 +591,7 @@ def test_active_run_requires_complete_live_transport_identity(project, monkeypat
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: selected)
     log = tmp_path / "native.log"
     log.write_text("running\n")
-    argv = [str(executable), "-c", "import time; time.sleep(30)", "-b", str(deck), "-o", str(log)]
-    process = subprocess.Popen(argv)
-    try:
+    with _live_process(executable, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(executable.resolve()),
                   "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
@@ -600,15 +610,17 @@ def test_active_run_requires_complete_live_transport_identity(project, monkeypat
         elif mutation == "selected_tool":
             monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: {
                 **selected, "sha256": "0" * 64})
+        elif mutation == "cmdline_unobservable":
+            read_bytes = Path.read_bytes
+            cmdline = Path("/proc") / str(process.pid) / "cmdline"
+            monkeypatch.setattr(Path, "read_bytes", lambda path:
+                b"" if path == cmdline else read_bytes(path))
         else:
             changed["container"] = "claimed-container"
             changed["cid"] = "claimed-cid"
         changed_options = _options(container=("required-container" if mutation == "container" else ""),
                                    config={"active_runs": {"stage": [changed]}})
         assert sim._active_runs(changed_options, "stage") == []
-    finally:
-        process.terminate()
-        process.wait()
 
 
 def test_copied_python_named_ngspice_is_not_selected_native_tool(project, monkeypatch, tmp_path):
@@ -621,9 +633,7 @@ def test_copied_python_named_ngspice_is_not_selected_native_tool(project, monkey
     shutil.copy2(sys.executable, renamed)
     log = tmp_path / "renamed.log"
     log.write_text("not native ngspice\n")
-    argv = [str(renamed), "-c", "import time; time.sleep(30)", "-b", str(deck), "-o", str(log)]
-    process = subprocess.Popen(argv)
-    try:
+    with _live_process(renamed, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(renamed.resolve()),
                   "executable_sha256": hashlib.sha256(renamed.read_bytes()).hexdigest(),
@@ -631,9 +641,6 @@ def test_copied_python_named_ngspice_is_not_selected_native_tool(project, monkey
                   "log": str(log)}
         options = _options(container="", config={"active_runs": {"stage": [record]}})
         assert sim._active_runs(options, "stage") == []
-    finally:
-        process.terminate()
-        process.wait()
 
 
 def test_unobservable_selected_tool_protects_plausible_active_job_without_verifying_it(
@@ -643,9 +650,7 @@ def test_unobservable_selected_tool_protects_plausible_active_job_without_verify
     monkeypatch.setattr(sim, "_selected_ngspice_identity", lambda options: None)
     log = tmp_path / "unverified.log"
     log.write_text("running\n")
-    argv = [str(executable), "-c", "import time; time.sleep(30)", "-b", str(deck), "-o", str(log)]
-    process = subprocess.Popen(argv)
-    try:
+    with _live_process(executable, deck, log) as (process, argv):
         record = {"pid": process.pid, "starttime": _process_starttime(process.pid), "argv": argv,
                   "executable": str(executable),
                   "executable_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
@@ -658,9 +663,6 @@ def test_unobservable_selected_tool_protects_plausible_active_job_without_verify
         result = sim.run_step("A07", project, {"name": "stage"}, options, _never)
         assert result["status"] == "NOT_MEASURED"
         assert result["executions"] == active
-    finally:
-        process.terminate()
-        process.wait()
 
 
 def test_a08_requires_nominal_pass_before_native_pvt(project):
