@@ -1047,6 +1047,27 @@ def account_spec_source(text: str, contract: SpecContract) -> SpecContract:
     return contract
 
 
+def _apply_interface_logic_obligations(contract: SpecContract, interface_text: str) -> None:
+    if interface_text:
+        try:
+            interface = json.loads(interface_text)
+        except (ValueError, TypeError):
+            interface = None
+        if isinstance(interface, dict) and "logic_obligations" in interface:
+            declared = logic_obligations_from_records(interface['logic_obligations'])
+            module = interface.get('module') or interface.get('top_module')
+            contract.logic_obligations = [row for row in declared
+                                          if row.module is None or module is None or row.module == module]
+
+
+def prose_emission_spec_contract(text: str, interface_text: str = "",
+                                 top: Optional[str] = None) -> SpecContract:
+    """Account a source consumed raw, including text inside JSON or YAML syntax."""
+    contract = extract_spec_contract(text, is_json=False, confirm=False, top=top)
+    _apply_interface_logic_obligations(contract, interface_text)
+    return account_spec_source(text, contract)
+
+
 def emission_spec_contract(text: str, interface_text: str = "", top: Optional[str] = None) -> SpecContract:
     try:
         data = json.loads(text)
@@ -1081,16 +1102,7 @@ def emission_spec_contract(text: str, interface_text: str = "", top: Optional[st
             raise ValueError('invalid structured reset: expected an object')
     contract = extract_spec_contract(json.dumps(data, default=str) if structured else text,
                                      is_json=structured, confirm=False, top=top)
-    if interface_text:
-        try:
-            interface = json.loads(interface_text)
-        except (ValueError, TypeError):
-            interface = None
-        if isinstance(interface, dict) and "logic_obligations" in interface:
-            declared = logic_obligations_from_records(interface['logic_obligations'])
-            module = interface.get('module') or interface.get('top_module')
-            contract.logic_obligations = [row for row in declared
-                                          if row.module is None or module is None or row.module == module]
+    _apply_interface_logic_obligations(contract, interface_text)
     return contract if structured else account_spec_source(text, contract)
 
 
