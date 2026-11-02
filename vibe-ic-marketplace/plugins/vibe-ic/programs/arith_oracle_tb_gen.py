@@ -313,7 +313,8 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
     if suffix:
         descriptions.append(suffix[1])
         text = text[:suffix.start()]
-    suffix = re.search(r'\s*\(\s*(' + descriptor + r')\s*\)$', text, re.I)
+    gloss = r'(?:\w+-bit\s+)?(?:modulo\s+)?(?:arithmetic\s+)?(?:multiplication|addition|subtraction)'
+    suffix = re.search(r'\s*\(\s*(' + descriptor + '|' + gloss + r')\s*\)$', text, re.I)
     if suffix:
         descriptions.append(suffix[1])
         text = text[:suffix.start()]
@@ -358,36 +359,76 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
     return None
 
 
-def _affirmative_function_context(record: dict) -> bool:
-    """Unknown title context needs judgment; it cannot authorize a reference.
+_FUNCTION_TITLES = frozenset({
+    'function', 'functionality', 'functional description',
+    'functional requirements', 'functional specification',
+    'functional requirements specification', 'frs', 'l2_frs', 'l2 frs',
+    'arithmetic function', 'arithmetic datapath',
+    '功能', '功能定義', '功能定义', '功能描述', '功能需求', '功能規格', '功能规格',
+})
+_QUALIFYING_PROSE = re.compile(
+    r"do not|don't|must not|not implement|forbidden|prohibit|disallow|negative|example"
+    r"|saturat|clamp|overflow|\brounding\b|禁止|不得|不可|不要|不准|反例|範例|范例|飽和|饱和", re.I)
 
-    This finite domain avoids silently discarding negative or qualified titles
-    merely because a particular spelling is absent from a denial vocabulary.
-    Untitled legacy records still require a complete affirmative expression.
-    """
+
+def _title(record: dict) -> Optional[str]:
     title = record.get('title', '')
-    return isinstance(title, str) and title.strip().rstrip(':').strip().casefold() in {
-        '', 'function', 'functionality', 'functional description',
-        'functional requirements', 'functional specification',
-        'functional requirements specification', 'functional requirements specification (frs)',
-        'frs', 'l2_frs', 'l2 frs', 'arithmetic function', 'arithmetic datapath',
-        'overview', '功能', '功能描述', '功能需求', '功能規格', '功能规格',
-    }
+    return title.strip().rstrip(':').strip().casefold() if isinstance(title, str) else None
+
+
+def _names_function(title: Optional[str]) -> bool:
+    """A title names the function role only as a whole, gloss included.
+
+    Every other title has another role, so ``Function (not applicable)`` does
+    not name the function while ``功能定義 (Functional Specification)`` does.
+    """
+    if title is None:
+        return False
+    gloss = re.fullmatch(r'(.+?)\s*\((.+)\)', title)
+    return all(part in _FUNCTION_TITLES for part in (gloss.groups() if gloss else (title,)))
+
+
+def _affirmative_function_context(record: dict) -> bool:
+    """A document wrapper may be untitled, name the function, or be an overview."""
+    title = _title(record)
+    return title in ('', 'overview') or _names_function(title)
 
 
 _FUNCTION_RECORD_KEYS = frozenset({'title', 'content', 'section', 'evidence', 'heading_shape'})
 _FUNCTION_WRAPPER_KEYS = frozenset({'title', 'function', 'content', 'fields'})
 
 
-def _closed_function_record(row: dict) -> bool:
-    """Any other key can qualify a record as much as its title can, so it defers.
+def _affirmative_function_record(row: dict) -> bool:
+    """Is this record's structured role the function, with nothing qualifying it?
 
-    ``section`` is the Phase-1 heading position (h2, 1.1, unheaded), never prose.
+    Any other key can qualify a record as much as its title can.  ``section`` is
+    the Phase-1 heading position (h2, 1.1, unheaded), never prose.
     """
     section = row.get('section', 'unheaded')
-    return (row.keys() <= _FUNCTION_RECORD_KEYS and _affirmative_function_context(row)
+    return (row.keys() <= _FUNCTION_RECORD_KEYS
+            and (_title(row) == '' or _names_function(_title(row)))
             and isinstance(section, str)
             and re.fullmatch(r'h\d+|unheaded|\d+(?:\.\d+)*', section) is not None)
+
+
+def _fenced_function(content: str) -> str:
+    """Phase 1 keeps a function as one fenced expression inside its own prose.
+
+    The expression stands alone only when the prose around it is a lead-in, a
+    note, or a definition of an operand, and qualifies nothing.  Otherwise the
+    whole content goes to the complete-record parser, which refuses it.
+    """
+    fences = list(re.finditer(r'^```[^\n]*\n(.*?)^```[ \t]*$', content, re.M | re.S))
+    lines = [line for line in fences[0][1].splitlines() if line.strip()] if len(fences) == 1 else []
+    found = _extract_operator(lines[0]) if len(lines) == 1 else None
+    if not found:
+        return content
+    prose = (content[:fences[0].start()] + content[fences[0].end():]).splitlines()
+    operands = '|'.join(re.escape(name) for name in found if name and name.isidentifier())
+    bullet = r'[-*]\s+[*`]*(?:' + operands + r')\b'
+    closed = all(not line.strip() or line.rstrip().endswith((':', '：')) or line.startswith('>')
+                 or (operands and re.match(bullet, line)) for line in prose)
+    return lines[0] if closed and not _QUALIFYING_PROSE.search('\n'.join(prose)) else content
 
 
 def _function_records(project: Path) -> List[str]:
@@ -413,17 +454,32 @@ def _function_records(project: Path) -> List[str]:
                     not isinstance(row, dict) or not isinstance(row.get('content'), str)
                     for row in rows):
                 return []
-            if not all(_closed_function_record(row) for row in rows):
-                return []
-            return [row['content'] for row in rows
-                    if isinstance(row, dict) and isinstance(row.get('content'), str)
-                    and row['content'].strip()]
+            functions = [_fenced_function(row['content']) for row in rows
+                         if _affirmative_function_record(row) and row['content'].strip()]
+            # A record with another role is not read for the function, but one
+            # stating a different complete function leaves the source unresolved.
+            others = [_extract_operator(row['content']) for row in rows
+                      if not _affirmative_function_record(row)
+                      and not _QUALIFYING_PROSE.search(str(row.get('title', '')))]
+            stated = {_extract_operator(record) for record in functions}
+            return [] if any(item and item not in stated for item in others) else functions
     doc = _read_json(gd / 'L1_DATASHEET.json') or {}
     fields = doc.get('fields', doc)
     overview = fields.get('overview') if isinstance(fields, dict) else None
     if (isinstance(overview, str) and overview.strip()
             and _affirmative_function_context(doc) and _affirmative_function_context(fields)):
         return [overview]
+    return []
+
+
+def _declared_size(project: Path) -> List[object]:
+    """The declared datapath size: the N of ``mod 2^N`` when none is named N."""
+    for name in ('plugin_output/declaration.json', 'declaration.json'):
+        doc = _read_json(project / name) or {}
+        for key in ('size_param', 'size', 'width', 'data_width', 'bit_width', 'word_width'):
+            if key in doc:
+                value = doc[key]
+                return [int(value) if isinstance(value, str) and value.strip().isdigit() else value]
     return []
 
 
@@ -448,6 +504,8 @@ def _source_modulus(project: Path) -> Tuple[Optional[int], str]:
                     if isinstance(value, str) and value.strip().isdigit():
                         value = int(value.strip())
                     declared.append(value)
+            if not declared and token == 'N':
+                declared = _declared_size(project)
             if not declared:
                 if params is None:
                     from _port_width import defaults_from_sources
@@ -714,15 +772,17 @@ def extract_arith_spec(project: Path,
 
     width = _resolve_width(project, ports)
     text_l = '\n'.join(_function_records(project)).lower()
-    signed = bool(re.search(r"\bsigned\b|2'?s? ?complement|signed_2c", text_l)) \
-        and not re.search(r"\bunsigned\b|\"unsigned\"", text_l)
-    # declaration.json integer_encoding wins when present.
+    source_l = _doc_text(project).lower()
+    says_signed = bool(re.search(r"\bsigned\b|2'?s? ?complement|signed_2c", source_l))
+    says_unsigned = bool(re.search(r"\bunsigned\b", source_l))
+    encoding = None
     for cand in ("plugin_output/declaration.json", "declaration.json"):
         d = _read_json(project / cand)
         if d and isinstance(d.get("integer_encoding"), str):
             enc = d["integer_encoding"].lower()
-            signed = "signed" in enc and "unsigned" not in enc
+            encoding = "signed" in enc and "unsigned" not in enc
             break
+    signed = encoding if encoding is not None else says_signed and not says_unsigned
 
     # §4.05 (adversarial-review): the emitted TB drives operands into UNSIGNED
     # reg nets and uses Verilog's plain `>>`/`<<` (LOGICAL shift). For a SIGNED
@@ -913,6 +973,10 @@ def extract_arith_spec(project: Path,
         if any(type(value) is not bool for value in operand_signs) or len(set(operand_signs)) != 1:
             return None, 'mixed or unresolved operand signedness — defer to testbench-gen'
         signed = operand_signs[0]
+        if encoding is not None and encoding != signed:
+            return None, 'declared integer encoding conflicts with operand signedness — defer to testbench-gen'
+    elif encoding is None and says_signed:
+        return None, 'signed source without declared operand signedness — defer to testbench-gen'
     if signed and operator in ('<<', '>>'):
         return None, 'signed shift operator semantics are unresolved — defer'
     if modulus is not None and modulus != result_w:

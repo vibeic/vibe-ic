@@ -39,7 +39,7 @@ def _mk_spm(tmp: Path) -> Path:
     }}))
     (gd / "L2_FRS.json").write_text(json.dumps({"frs_sections": [
         {"title": "Function",
-         "content": "serial-parallel multiplier p = (x * y) mod 2^size"}]}))
+         "content": "serial-parallel multiplier p = (x * y) mod 2^N"}]}))
     rtl = tmp / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True)
     (rtl / "spm.v").write_text(

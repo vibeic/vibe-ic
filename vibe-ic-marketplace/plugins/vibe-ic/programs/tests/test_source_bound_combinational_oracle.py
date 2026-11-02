@@ -7,7 +7,7 @@ import pytest
 
 import arith_oracle_tb_gen as oracle
 import professional_tb_gen as professional
-from test_source_expression_authority import project
+from test_source_expression_authority import PHASE1_RECORDS, phase1_project, project, sign_project
 
 
 @pytest.mark.parametrize('op,widths', [('+', (3, 5, 6)), ('-', (5, 3, 4)), ('*', (3, 5, 4)), ('>>', (5, 3, 5))])
@@ -132,3 +132,58 @@ def test_native_review_source_authority_controls(tmp_path, case):
         assert step.extras['fallback_skill'] == 'testbench-gen'
         assert not (p / 'phase2/stage1/sim_professional').exists()
     assert all((p / name).read_bytes() == value for name, value in before.items())
+
+
+NEUTRAL_SERIAL_MUL = """module neutral_mul{suffix} #(parameter size = 8)(
+  input wire clk, input wire rst, input wire [size-1:0] x, input wire y, output wire p);
+  reg [size-1:0] s, c; reg yr, pr;
+  wire [size-1:0] m = x & {{size{{yr}}}};
+  wire [size-1:0] so = m ^ s ^ c;
+  wire [size-1:0] co = (m & s) | (m & c) | (s & c);
+  always @(posedge clk)
+    if (rst) begin s <= 0; c <= 0; yr <= 0; pr <= 0; end
+    else begin yr <= y; s <= {{1'b0, so[size-1:1]}}; c <= co; pr <= so[0]; end
+  assign p = pr;
+endmodule
+"""
+
+
+@pytest.mark.parametrize('wrong', [False, True])
+def test_native_multi_section_phase1_source_discriminates_a_wrong_multiplier(tmp_path, monkeypatch, wrong):
+    monkeypatch.setenv('VIBEIC_EDA_IMAGE', 'unused-repository@sha256:' + '0' * 64)
+    p = phase1_project(tmp_path, PHASE1_RECORDS)
+    rtl = p / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    source = NEUTRAL_SERIAL_MUL.format(suffix='_core' if wrong else '')
+    if wrong:
+        source += ('module neutral_mul #(parameter size = 8)(input clk, input rst, input [size-1:0] x, '
+                   'input y, output p); wire q; neutral_mul_core #(.size(size)) u(.clk(clk), .rst(rst), '
+                   '.x(x), .y(y), .p(q)); assign p = ~q; endmodule\n')
+    (rtl / 'neutral_mul.v').write_text(source)
+    import design_one_shot_runner as runner
+    import professional_tb_check as consumer
+    step = runner.step_professional_tb_gen(p, 'neutral_mul', 'unused')
+    report = json.loads((p / 'reports/phase2/gates/professional_tb.json').read_text())
+    assert (report['ran_cocotb'], report['reference_model_tier']) == (True, 'streaming_bounded_latency'), report
+    assert (step.status, consumer.check(p)['verdict'], report['functional_mismatch']) == (
+        ('FAIL', 'FAIL', True) if wrong else ('PASS', 'PASS', False)), report
+
+
+@pytest.mark.parametrize('case', [
+    {'overview': 'Signed 2s complement multiplier.'},
+    {'encoding': 'signed_2c', 'flags': (False, False, False)},
+])
+@pytest.mark.parametrize('dut_signed', [False, True])
+def test_native_signed_source_cannot_confirm_an_unsigned_reference(tmp_path, case, dut_signed):
+    p = sign_project(tmp_path, **case)
+    rtl = p / 'phase2/stage1/rtl'
+    rtl.mkdir(parents=True)
+    expression = '$signed(left) * $signed(right)' if dut_signed else 'left * right'
+    (rtl / 'neutral_arithmetic.v').write_text(
+        'module neutral_arithmetic(input [3:0] left, input [3:0] right, output [7:0] result); '
+        f'assign result = {expression}; endmodule\n')
+    import design_one_shot_runner as runner
+    step = runner.step_professional_tb_gen(p, 'neutral_arithmetic', 'unused')
+    report = json.loads((p / 'reports/phase2/gates/professional_tb.json').read_text())
+    assert (step.status, report['status'], report['ran_cocotb']) == ('NOT_MEASURED', 'INCOMPLETE', False), report
+    assert step.extras['fallback_skill'] == 'testbench-gen'
