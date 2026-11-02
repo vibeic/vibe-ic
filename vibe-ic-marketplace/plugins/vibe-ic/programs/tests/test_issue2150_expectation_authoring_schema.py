@@ -155,16 +155,7 @@ def test_the_answer_contract_declares_field_path_and_the_split(tmp_path):
 
 def test_a_caller_that_supplies_no_schema_keeps_the_root_half_unchanged(
         tmp_path):
-    """PAIRED, and it draws the boundary this landing keeps.
-
-    Two halves of the descriptor answer two different questions. The half
-    ABOUT THIS ROOT — the layer contract, `authoring_schema`, and the rules
-    that cite it — needs a root to derive it from, so a caller that supplies
-    none must get exactly the pre-#2150 descriptor: otherwise a change here is
-    indistinguishable from drift somewhere else. The half ABOUT THE COMPARATOR
-    — the split grammar — is true of every run whether or not a root could be
-    read, and hiding it from a schema-less caller would leave the grammar
-    invisible exactly where an author has least help."""
+    """No schema means no root-specific vocabulary; scope is always required."""
     h = PACK.assemble(
         prompt="Review the generated L documents against this design input.",
         iface=None, target=None, expert_skills=[],
@@ -177,7 +168,7 @@ def test_a_caller_that_supplies_no_schema_keeps_the_root_half_unchanged(
     assert "authoring_schema" not in h
     assert not (tmp_path / "authoring_schema.json").exists()
     assert h["answer_contract"]["shape"]["expectations"][0]["field_path"] == \
-        "optional field path"
+        "required: a resolvable field path"
     assert not any("authoring_schema.json" in r
                    for r in h["answer_contract"]["rules"])
     # about THE COMPARATOR — present either way
@@ -239,15 +230,12 @@ def test_two_layers_sharing_a_numeric_prefix_resolve_to_themselves(tmp_path):
         schema, "L8_RTL_CONSTANTS", "waveforms") is not None
 
 
-def test_an_omitted_field_path_is_not_an_authoring_error(tmp_path):
-    """The schema must not be STRICTER than the guard it is the other reading
-    of: an expectation about the whole layer is a weaker claim, not a
-    mistake."""
+def test_an_omitted_field_path_is_an_unscoped_authoring_refusal(tmp_path):
     p = _project(tmp_path)
     schema = T.authoring_schema(p)
     for empty in (None, "", "   "):
-        assert T.refuse_undeclared_field_path(
-            schema, "L9_INTEGRATION_SPEC", empty) is None
+        assert "UNSCOPED" in T.refuse_undeclared_field_path(
+            schema, "L9_INTEGRATION_SPEC", empty)
 
 
 def test_a_truncated_enumeration_refuses_nothing(tmp_path):
