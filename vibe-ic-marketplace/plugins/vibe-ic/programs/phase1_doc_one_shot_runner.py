@@ -67455,6 +67455,14 @@ def main() -> int:
                   f"PDK targets {targets!r} at {source}:{line}", file=sys.stderr)
             return 2
 
+    # The per-step watchdog turns a raised refusal into a stub, which the L13
+    # gate reads as "no hardware in scope" and passes. Refuse before it runs.
+    try:
+        _l13_operator_contract(project)
+    except ValueError as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
+
     # Step 1: text extraction
     print(f"[1/15] Extracting text from input/docs/ ...")
     extracted = extract_text_pipeline(project, force=not args.skip_text_extract)

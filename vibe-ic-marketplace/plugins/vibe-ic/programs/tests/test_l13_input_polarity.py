@@ -168,3 +168,27 @@ def test_producer_uses_live_consumer_registry(tmp_path, monkeypatch):
     _operator_answers(tmp_path, {"L13.criterion": "neutral_future_kind"})
     doc = _emit(tmp_path, "")
     assert doc["criterion"] == "neutral_future_kind"
+
+
+@pytest.mark.parametrize("answers_text, named", [
+    (json.dumps({"answers": {"L13.criterion": "unregistered_neutral_kind"}}), "L13_CRITERION_UNKNOWN"),
+    (json.dumps({"answers": {"L13.criterion_params": 7}}), "L13_CRITERION_PARAMS_INVALID"),
+    ("{not json", "L13_OPERATOR_ANSWERS_INVALID"),
+])
+def test_refused_answer_stops_the_runner_and_keeps_the_prior_document(
+        tmp_path, monkeypatch, capsys, answers_text, named):
+    from _submission_template import DESIGN_ANSWERS_REL
+
+    (tmp_path / "input" / "docs").mkdir(parents=True)
+    (tmp_path / "input" / "docs" / "calibration.md").write_text(
+        "1. Sweep the input and record output samples.\n", encoding="utf-8")
+    (tmp_path / DESIGN_ANSWERS_REL).write_text(answers_text, encoding="utf-8")
+    prior = tmp_path / "phase1" / "generated_docs" / "L13_LAB_CALIBRATION.json"
+    prior.parent.mkdir(parents=True)
+    prior.write_text('{"criterion": "monotonic_adc_sweep"}', encoding="utf-8")
+    monkeypatch.setattr("sys.argv", ["phase1_doc_one_shot_runner", str(tmp_path)])
+
+    assert p1.main() == 2
+    assert named in capsys.readouterr().err
+    assert prior.read_text(encoding="utf-8") == '{"criterion": "monotonic_adc_sweep"}'
+    assert not (tmp_path / "extracted_docs").exists()
