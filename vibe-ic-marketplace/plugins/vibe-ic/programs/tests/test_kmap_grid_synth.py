@@ -212,12 +212,21 @@ def test_closed_world_structured_spec_cannot_bypass_source_accounting(tmp_path, 
         result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
     else:
         result = runner._try_deterministic_rtl_dispatch(tmp_path, time.time())
+    if declaration == 'description':
+        import truth_table_rtl_gen as truth_table
+
+        assert result.status == 'PASS', result
+        assert Path(result.output_files[0]).read_text() == truth_table.generate(spec)
+        assert not result.extras.get('fallback_skill')
+        return
     assert result.status == 'PASS_WITH_WAIVERS', result
     assert result.extras['fallback_skill'] == 'spec-to-rtl'
     assert result.extras['spec_source'] == 'input/rtl_spec.json'
-    assert result.extras['unaccounted_source_spans']
-    if declaration == 'logic_obligations':
-        assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
+    assert not result.extras['unaccounted_source_spans']
+    assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
+    obligation = result.extras['logic_obligations'][0]
+    assert obligation['source_sentence'] == sentence
+    assert tuple(obligation['source_span']) == (0, len(sentence))
     assert {p.relative_to(tmp_path): p.read_bytes()
             for p in tmp_path.rglob('*') if p.is_file()} == before
 
@@ -237,15 +246,88 @@ def test_closed_world_l9_only_spec_cannot_bypass_author_handoff(tmp_path, declar
     source.write_text(text)
     before = {p.relative_to(tmp_path): p.read_bytes()
               for p in tmp_path.rglob('*') if p.is_file()}
+    if not declared:
+        import time
+
+        assert runner._declared_logic_author_handoff(tmp_path, time.time(), '') is None
     result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
     assert result.status == 'PASS_WITH_WAIVERS', result
     assert result.extras['fallback_skill'] == 'spec-to-rtl'
+    if not declared:
+        assert 'SPEC_SENTENCES_UNACCOUNTED' not in result.detail
+        assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' not in result.detail
+        return
     assert result.extras.get('spec_source') == 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
-    marker = 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' if declared else 'SPEC_SENTENCES_UNACCOUNTED'
-    assert marker in result.detail
-    for row in result.extras['unaccounted_source_spans']:
-        lo, hi = row['source_span']
-        assert text[lo:hi] == row['source_sentence']
+    assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
+    assert not result.extras['unaccounted_source_spans']
+    obligation = result.extras['logic_obligations'][0]
+    assert obligation['source_sentence'] == sentence
+    assert tuple(obligation['source_span']) == (0, len(sentence))
+    assert {p.relative_to(tmp_path): p.read_bytes()
+            for p in tmp_path.rglob('*') if p.is_file()} == before
+
+
+@pytest.mark.parametrize('entry', ['ordinary', 'structured_dispatch'])
+@pytest.mark.parametrize('kind', [None, 'logic_basis', 'logic_minimization'])
+def test_ruling100b_yaml_uses_only_typed_obligations(tmp_path, entry, kind):
+    import time
+    import yaml
+    import design_one_shot_runner as runner
+    import truth_table_rtl_gen as truth_table
+
+    sentence = 'Use NAND gates alone.' if kind != 'logic_minimization' else 'Minimize the number of gates.'
+    spec = {'module': 'top', 'inputs': [{'name': 'a'}], 'outputs': [{'name': 'y'}],
+            'rows': [{'in': '0', 'out': '0'}, {'in': '1', 'out': '1'}],
+            'description': sentence}
+    if kind is not None:
+        spec['logic_obligations'] = [{'kind': kind,
+            'family': ['nand'] if kind == 'logic_basis' else ['gates'],
+            'source_sentence': sentence, 'source_span': [0, len(sentence)]}]
+    source = tmp_path / 'input/rtl_spec.yaml'
+    source.parent.mkdir(parents=True)
+    source.write_text(yaml.safe_dump(spec))
+    before = {p.relative_to(tmp_path): p.read_bytes()
+              for p in tmp_path.rglob('*') if p.is_file()}
+    result = (runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
+              if entry == 'ordinary' else runner._try_deterministic_rtl_dispatch(tmp_path, time.time()))
+    if kind is None:
+        assert result.status == 'PASS', result
+        assert Path(result.output_files[0]).read_text() == truth_table.generate(spec)
+    else:
+        assert result.status == 'PASS_WITH_WAIVERS', result
+        assert result.extras['fallback_skill'] == 'spec-to-rtl'
+        assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
+        assert not result.extras['unaccounted_source_spans']
+        assert result.extras['logic_obligations'][0]['source_sentence'] == sentence
+        assert {p.relative_to(tmp_path): p.read_bytes()
+                for p in tmp_path.rglob('*') if p.is_file()} == before
+
+
+@pytest.mark.parametrize('obligation_source', ['l9', 'rtl_spec'])
+def test_ruling100b_structured_sources_cannot_erase_each_others_obligations(tmp_path, obligation_source):
+    import json
+    import time
+    import design_one_shot_runner as runner
+
+    sentence = 'Use NAND gates alone.'
+    rows = [{'kind': 'logic_basis', 'family': ['nand'],
+             'source_sentence': sentence, 'source_span': [0, len(sentence)]}]
+    l9 = tmp_path / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+    l9.parent.mkdir(parents=True)
+    l9.write_text(json.dumps({'top_module': 'top',
+        'logic_obligations': rows if obligation_source == 'l9' else []}))
+    spec = tmp_path / 'input/rtl_spec.json'
+    spec.parent.mkdir(parents=True)
+    spec.write_text(json.dumps({'module': 'top', 'inputs': [{'name': 'a'}], 'outputs': [{'name': 'y'}],
+        'rows': [{'in': '0', 'out': '0'}, {'in': '1', 'out': '1'}],
+        'logic_obligations': rows if obligation_source == 'rtl_spec' else []}))
+    before = {p.relative_to(tmp_path): p.read_bytes()
+              for p in tmp_path.rglob('*') if p.is_file()}
+    result = runner._try_deterministic_rtl_dispatch(tmp_path, time.time())
+    assert result.status == 'PASS_WITH_WAIVERS', result
+    assert result.extras['fallback_skill'] == 'spec-to-rtl'
+    assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
+    assert result.extras['logic_obligations'][0]['source_sentence'] == sentence
     assert {p.relative_to(tmp_path): p.read_bytes()
             for p in tmp_path.rglob('*') if p.is_file()} == before
 
