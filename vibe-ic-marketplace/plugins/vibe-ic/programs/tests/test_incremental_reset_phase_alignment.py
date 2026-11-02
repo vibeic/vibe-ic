@@ -193,3 +193,26 @@ def test_delayed_summer_reset_follows_the_actual_comparator_event(tmp_path):
     assert rows["mp_sumrb"]["nets"][1] == evaluation
     assert rows["mn_sumr"]["nets"][1] == "nsumrb"
     assert rows["mp_sumr"]["nets"][1] == "nsumrb"
+
+
+def test_normal_charge_reader_excludes_only_the_actual_reset_controls(tmp_path):
+    from test_analog_a3_netlist_emit import _emit_modulator_text, sc_integrator_report
+    text = _emit_modulator_text(tmp_path)
+    _, branches = sc_integrator_report(text)
+    assert branches and all(b["complementary"] for b in branches.values())
+    top = next(iter(branches.values()))["top_plate"]
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        fields = line.split()
+        if (fields and fields[0].startswith("xmn_conversion_clear_")
+                and fields[1] == top):
+            assert fields[2] == "nall"
+            fields[2] = "nwrong_reset"
+            lines[index] = " ".join(fields)
+            break
+    else:
+        pytest.fail("no physical parallel reset switch was challenged")
+    mutant = "\n".join(lines)
+    assert mutant != text
+    _, broken = sc_integrator_report(mutant)
+    assert any(not b["complementary"] for b in broken.values()), broken
