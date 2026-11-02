@@ -1,0 +1,77 @@
+type: enhancement
+component: program:benchmark_dispatch
+title: Complete same-RTL verification and source review through an immutable producer-bound continuation
+plugin_version: 1.35.51
+plugin_version_role: filing-time plugin version
+target_repository: vibeic/vibe-ic
+status: SUBMITTED_OPEN
+issue_url: https://github.com/vibeic/vibe-ic/issues/3783
+source_snapshot:
+  plugin_base: 95a3be2b31bb3fe17c0e5bdbf3f654be020ee078
+  plugin_version: 1.35.51
+  eda_base: 0af058989303d36f3d79ced703b5da3ad0fea7c8
+capture_ids:
+- resume_owed_source_authority_without_candidate_reauthoring
+- bind_complete_source_authority_epoch_at_journal_consumer
+- RESUMED-006
+- PLUGIN-005
+- PLUGIN-006
+- PLUGIN-007
+- PLUGIN-008
+- RESUMED-007
+- RESUMED-005
+- AI4-POST-PRODUCER-CONTINUATION
+body_sha256: e964a0220ecfdee88fca3488581314b8ef73eeb3b91189d9435d9fddfbf618d3
+body_contract: pattern is the exact complete Markdown issue body; title and all acceptance commands are included without rewriting
+pattern: |
+  # Complete same-RTL verification and source review through an immutable producer-bound continuation
+
+  ## General capability gap
+
+  The ordinary owner needs a source-bound continuation for an unchanged, unaccepted RTL candidate when newly authored verification inputs, an owed original-source review, or a post-producer semantic judgement are still required. Tool execution and semantic judgement occur at different points: a judgement prepared before a professional report exists cannot sign the later report's exact readset. Collecting a report successfully must not convert a native failure or unsigned result into eligibility.
+
+  This groups PLUGIN-005/006/007/008, RESUMED-005/006/007, the two source-owner-continuation records, and the developing post-producer AI4 continuation. The local prototype modules `programs/verification_completion.py`, `programs/source_owner_continuation.py`, `programs/_native_oracle_evidence.py` and local `program_runtime_identity` API are not present in the filing source. This issue requests a scoped capability in the existing upstream owners; it does not claim those prototype APIs are shipped or prescribe importing them wholesale.
+
+  ## Neutral minimal reproduction
+
+  Start with an ordinary completed producer checkpoint for a tiny independently specified design, unchanged RTL and a genuine pending semantic review. Require an authored test hook or source-owner answer that did not exist at the frozen candidate boundary. Execute the normal producer, then obtain an attributed judgement over the exact completed readset. Resume through the ordinary consumer without reauthoring the RTL, changing the original snapshot, forging tool results, or reopening an immutable failed journal.
+
+  Pair that case with unsigned/stale/FAIL review, changed source/route/window/RTL, missing or edited native output, summary-only observations, replayed old question/answer, unrelated task identity and a fresh failed attempt beside an old PASS receipt.
+
+  ## Required lifecycle boundaries
+
+  1. **Author and source roles:** a verification-only control has an exact non-design namespace and remains bound in the runner/native material. Generated coverage build products may be excluded only within the exact producer-owned directory after symlink checks. Authored files and same-named directories elsewhere remain sensitive. If runtime source identity is introduced, its retained-tree and live-tree populations must agree; test-corpus-only omission cannot create an executable identity mismatch, while executable/configuration changes still invalidate it.
+  2. **Original-source review:** retain the complete original source, current D1/source/route/window/material identity, original invocation and immutable candidate snapshot. A continuation must bind the complete authority epoch, actual current source questions and attributed answer. Partial validation or coordinated rehashing cannot admit unrelated questions or historical functional credit.
+  3. **Native evidence:** retain real distinct expected/actual sample bytes, complete input/context/readmem/toolchain closure, true compiler/run return codes, output hashes and nonzero denominators. Summary totals or vector ordinals cannot substitute for observations. Archive prior evidence and expose the current attempt's terminal failure; an old PASS must never survive as current credit.
+  4. **Post-producer review:** use an explicitly supported checkpoint/continuation state or a new sibling journal; preserve old failed journals and producer outputs byte-for-byte. Accept only the exact attributed current semantic-review input, never arbitrary tool-report files. Preserve actual producer attribution and record a consumer-only continuation truthfully. Cross-version producer reuse requires a proven compatibility contract; otherwise prepare a new checkpoint through the corrected source.
+  5. **Admission:** preserve the existing ordinary consumer and conservative required-result fold. Unsigned, stale, FAIL, missing, zero, skipped or failing required obligations still block. Keep candidate acceptance false until the independent acceptance stage and preserve inherited challenges. Never make admission by deleting required ownership or accepting any passing sibling.
+
+  ## Evidence and overlap
+
+  - The initial local completion capture reports scoped/native controls but explicitly leaves complete canonical owner promotion NOT_MEASURED.
+  - The local source-role/build-role/runtime-population repairs have bounded independent acceptance. They are prototype contracts, not evidence that the upstream source already supports the same transaction.
+  - The separately frozen source-owner core reports unchanged candidate/source documents and actual ordinary D1 activation under neutral controls; retained metadata records 25 independent journal controls. This is not AI4/native/whole-flow acceptance.
+  - The post-producer AI4 prototype at frozen local source `e10f5aa42b69adc01c9d7ac29568c56467074cb4` has independent review **HOLD**. In a neutral transport control, after finalization only the promoted current `results.xml` was changed from one passing result to one failing result; the old staged XML and original `runner_result` bytes stayed unchanged. The shipped `cpu_functional_oracle_waiver_check._evaluate(current)` changed from PASS/rc0 to INCOMPLETE/rc1 with one test and one failure, but ordinary guard, verified readback, reentry and freshness still returned `ACCEPT` / `true` / `None` / `[]`. Those readers therefore retained old acceptance without binding the current consumer proof bytes. This is a current-proof closure defect in the local prototype, not a shipped upstream repair. Correction and fresh independent review remain pending. A genuine native-plus-semantic positive transaction remains **NOT_MEASURED**; neutral transport controls do not provide that acceptance.
+  - Open #3773 already works on native-owner review handoffs and producer-declared reference-model completion. Coordinate or extend that owner; this issue's complete same-RTL/source-epoch/post-producer transaction is related, not proven solved by that PR.
+  - Merged #3771 already repairs current professional-reference evidence consumption. Preserve it instead of reopening the old generic reference-row defect. New continuation tests must also prove unsigned semantic review cannot gain eligibility through ownership reconciliation.
+  - Runtime gate companions/historical bundle compatibility are being submitted separately. Do not duplicate those changes here or weaken current-source launch validation.
+
+  ## 驗收
+
+  Deliver neutral source fixtures through the actual ordinary owner, not a route-admission mock standing in for the canonical path. Prove each lifecycle stage independently and then one complete native-plus-semantic positive transaction. Save exact before/after IDs and substantive wrong-admission controls. Include at least: source/control/build role separation; complete source-owner epoch; old-question/task rejection; genuine sample versus summary-only evidence; failed-attempt stale-receipt rejection; post-producer current judgement; unsigned/stale/FAIL rejection; immutable failed journal; unchanged RTL/snapshot; executable/configuration drift; unrelated required failure retention. For current-proof closure, finalize the neutral transport, mutate the promoted JUnit from one PASS to one FAIL, and require the union, continuation journal and ordinary freshness consumer all to refuse the old PASS. Also cover missing/truncated/replaced current output, changed output population and coordinated metadata rehashing; preserved old producer receipts cannot hide changed current proof bytes. Retain the original HOLD control and compare it on the repaired exact source.
+
+  After porting or implementing the focused suites, run from repository root:
+
+  ```bash
+  cd vibe-ic-marketplace/plugins/vibe-ic
+  python3 -m pytest -q programs/tests/test_verification_completion.py programs/tests/test_verification_completion_source_role.py programs/tests/test_verification_completion_build_role.py programs/tests/test_program_runtime_identity_retention.py
+  python3 -m pytest -q programs/tests/test_source_owner_continuation.py programs/tests/test_verification_post_producer_review.py programs/tests/test_native_oracle_receipt_lifecycle.py
+  ```
+
+  These test modules are port/implementation deliverables; the final three names identify proposed neutral integration suites. Their absence or an import failure is not a behavioral negative control. Canonical native-plus-semantic positive completion is a separate required receipt, currently unmeasured, and cannot be inferred from mocked/focused test success.
+
+  ## Evidence and submission boundary
+
+  This is a general enhancement backlog, not a benchmark result. Filing source: plugin 1.35.51, main `95a3be2b31bb3fe17c0e5bdbf3f654be020ee078`. The owning source presence and related public submissions were inspected at this snapshot. The behavioral findings below come from retained local capture metadata; the complete implementation has not been ported or freshly reproduced on this upstream snapshot. No benchmark solution, official reference, private transcript, or local machine path is included.
+
+  Local candidate implementation and focused acceptance are distinct from upstream delivery. No new native run, full-suite result, source-semantic approval, or benchmark PASS is claimed by filing this issue. The commands under acceptance are implementation deliverables, not filing-time execution claims. Any named new test module must be added before its command can supply evidence; missing-module errors do not count as negative controls.
