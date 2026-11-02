@@ -57,6 +57,7 @@ def test_retained_extraction_requires_final_state_physical_view(tmp_path, monkey
     state = json.loads(path.read_text())
     state.pop(view)
     path.write_text(json.dumps(state))
+    publish_finished_gds(tmp_path / 'owner')
     with pytest.raises(ValueError, match='CURRENT_FINAL_STATE_VIEW_MISSING: ' + view):
         D._retained_geometry(tmp_path, manifest)
 
@@ -72,6 +73,7 @@ def test_retained_extraction_selects_final_state_odb_and_def(tmp_path, monkeypat
         state[view] = str(final)
         expected[view] = final
     path.write_text(json.dumps(state))
+    publish_finished_gds(tmp_path / 'owner')
     result = D._retained_geometry(tmp_path, manifest)
     for role, view in (('odb', 'odb'), ('filled_def', 'def')):
         assert D.files._bound(tmp_path, result[role]) == expected[view]
