@@ -78,3 +78,27 @@ def test_release_docs_remain_unmeasured_for_an_unbound_upstream(tmp_path, monkey
     audit = release.run_audit(tmp_path, 'ic')
     assert audit.verdict_tier == 'NOT_MEASURED'
     assert audit.summary['upstream_blockage']['zzdie']['blocked'] is True
+
+
+@pytest.mark.parametrize('invocation', [None, '', 'earlier', 'current'])
+def test_unresolved_output_requires_the_current_invocation(tmp_path, monkeypatch, invocation):
+    import test_a_producers_stated_refusal_is_not_a_documentation_defect as fixture
+
+    monkeypatch.setenv('VIBEIC_FCC_INVOCATION', 'current')
+    monkeypatch.setattr(execution_policy, '_ordinary_runtime', None)
+    fixture._blocked_upstream(tmp_path)
+    fixture._step_status(tmp_path, '37', 'NOT_MEASURED')
+    row = {'id': '37', 'required_outputs': [GDS]}
+    result = fcc.check_step(tmp_path, row, {})
+    fcc._emit_step_output_record(tmp_path, row, result)
+    path = _path_layout.step_output_record_path(tmp_path, '37')
+    record = json.loads(path.read_text())
+    record.pop('invocation')
+    if invocation is not None:
+        record['invocation'] = invocation
+    path.write_text(json.dumps(record))
+
+    assert release.upstream_blockage_is_about(
+        tmp_path, '37', 'phase3/stage4/gds/chip.gds')[0] == (invocation == 'current')
+    assert release.run_audit(tmp_path, 'ic').verdict_tier == (
+        'NOT_MEASURED' if invocation == 'current' else 'FAIL')
