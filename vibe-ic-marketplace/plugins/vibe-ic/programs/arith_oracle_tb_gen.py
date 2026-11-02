@@ -293,7 +293,8 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
         return None  # ast.parse discards comments, including functional caveats
     # These are descriptions of the supported arithmetic shape, not arbitrary
     # suffixes. Anything else (including overflow policy) remains unconsumed.
-    descriptor = r'(?:(?:unsigned|signed|parallel|serial|serial-parallel)\s+)*(?:multiplier|adder|subtractor)'
+    descriptor = (r'(?:(?:unsigned|signed|parallel|serial|serial-parallel|binary)\s+)*'
+                  r'(?:multiplier|adder|subtractor|bitwise arithmetic|arithmetic datapath)')
     if re.fullmatch(descriptor, text, re.I):
         for rx, op in _WORD_OPERATOR:
             if rx.search(text) and op in ('*', '+'):
@@ -308,7 +309,7 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
     if prefix:
         descriptions.append(prefix[1])
         text = text[prefix.end():]
-    suffix = re.search(r'(?:,?\s+)(?:a\s+)?(?:\d+-bit\s+)?(' + descriptor + r')$', text, re.I)
+    suffix = re.search(r'(?:[,;]\s*|\s+)(?:a\s+)?(?:\d+-bit\s+)?(' + descriptor + r')$', text, re.I)
     if suffix:
         descriptions.append(suffix[1])
         text = text[:suffix.start()]
@@ -332,9 +333,14 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
                          ast.BitAnd: '&', ast.BitOr: '|', ast.BitXor: '^',
                          ast.LShift: '<<', ast.RShift: '>>'}
             op = operators.get(type(stmt.value.op))
-            if any(not any(rx.search(desc) and declared == op
+            def compatible(description):
+                if description.lower().endswith('bitwise arithmetic'):
+                    return op in ('&', '|', '^')
+                if description.lower().endswith('arithmetic datapath'):
+                    return op in _OPERATORS
+                return any(rx.search(description) and declared == op
                            for rx, declared in _WORD_OPERATOR)
-                   for desc in descriptions):
+            if any(not compatible(desc) for desc in descriptions):
                 return None
             if op and stmt.value.left.id != stmt.value.right.id:
                 return (stmt.targets[0].id, stmt.value.left.id, op,

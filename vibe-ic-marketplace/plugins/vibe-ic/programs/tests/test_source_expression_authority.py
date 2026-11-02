@@ -163,3 +163,20 @@ def test_existing_function_field_has_the_same_source_boundary(tmp_path, source, 
     assert bool(spec) is accepted, (spec, reason)
     if accepted:
         assert (spec['operand_a'], spec['operand_b'], spec['result_width']) == ('left', 'right', 6)
+
+
+@pytest.mark.parametrize('description,accepted', [
+    ('serial-parallel bitwise arithmetic', True),
+    ('Saturate on overflow', False),
+])
+def test_existing_serial_record_keeps_only_supported_shape_annotations(tmp_path, description, accepted):
+    from test_serial_parallel_declared_function_oracle import _declared_scenario_project
+    p = tmp_path / 'serial_contract'
+    _declared_scenario_project(p)
+    doc = p / 'phase1/generated_docs/L2_FRS.json'
+    doc.write_text(json.dumps({'frs_sections': [{
+        'content': 'p = (x & y) mod 2^8; ' + description}]}))
+    spec, reason = oracle.extract_serial_arith_spec(p, 'digital_arithmetic_primitive')
+    assert bool(spec) is accepted, (spec, reason)
+    if accepted:
+        assert (spec['operator'], spec['parallel'], spec['serial_in'], spec['serial_out']) == ('&', 'x', 'y', 'p')
