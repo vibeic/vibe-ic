@@ -297,6 +297,18 @@ and stays load-bearing:
   way, redo it yourself inline with proper `run_in_background: true` +
   notification tracking rather than trusting a half-finished subagent
   report.
+- **Never run the same verification twice.** An independent reviewer may
+  have already run this fork's own gate on exactly this PR head and base:
+  the full regression suite, base versus candidate, plus the offline Nix
+  build, with the same toolchain/image digest and `NEW_FAILED = []`. When the
+  reviewer APPROVED that exact head, ship on that run. Rerun only when:
+  - the head or the base moved, and the moved files intersect the
+    change or the tests the run covered;
+  - the digest differs;
+  - the reviewer's run was narrower than the gate (an upstream merge still
+    needs the FULL suite; see the first bullet).
+  Measured 2026-11-02: re-running an already-verified head was the landing
+  bottleneck. The owner made this standing doctrine.
 
 ## Where the doctrine actually lives (do not duplicate it here)
 
