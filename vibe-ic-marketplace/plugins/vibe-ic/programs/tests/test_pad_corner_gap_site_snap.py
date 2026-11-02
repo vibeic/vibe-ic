@@ -85,3 +85,15 @@ def test_existing_centred_integer_def_bytes_are_unchanged(tmp_path):
     assert ring._gen(root) == 0
     assert ring._ring_def(root).read_bytes() == expected
     assert ring._chk(root) == 0
+
+
+def test_snap_does_not_admit_an_offsite_fixed_pad_pitch(tmp_path):
+    root = ring._project(
+        tmp_path,
+        config=ring._config(PAD_FILLERS=["pad_fill1"]),
+        floorplan=ring._floorplan(die=2_002_000),
+        site_w=2.0,
+    )
+    assert ring._gen(root) == 1
+    assert "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE" in ring._rules(root)
+    assert not ring._ring_def(root).exists()

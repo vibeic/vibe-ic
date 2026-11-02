@@ -2088,10 +2088,11 @@ class IoLibrary:
 # ── abutment ────────────────────────────────────────────────────────────────
 def side_spacing(total_width: int, pad_count: int, available: int,
                  site_width: int) -> Optional[Tuple[int, int]]:
-    """Return (between, to_corner) under the ring placer's exact DBU rule.
+    """Return (between, start_corner_gap) on the row's site grid.
 
     A missing result is a width or site-grid refusal.  The chip-top supply
     allocator and pad_ring_gen must use the same rule on every PnR pass.
+    An extra remaining site goes to the gap at the low-coordinate end.
     """
     if (pad_count <= 0 or site_width <= 0 or total_width > available
             or total_width < 0):
@@ -2099,10 +2100,10 @@ def side_spacing(total_width: int, pad_count: int, available: int,
     free = available - total_width
     between = (free // (pad_count + 1) // site_width) * site_width
     rest = free - between * (pad_count - 1)
-    corner, odd = divmod(rest, 2)
-    if odd or corner % site_width:
+    sites, off_grid = divmod(rest, site_width)
+    if off_grid:
         return None
-    return between, corner
+    return between, ((sites + 1) // 2) * site_width
 
 
 def gap_is_fillable(gap: int, filler_widths: Sequence[int]) -> bool:

@@ -2486,6 +2486,7 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
                              for name in filler_names if name in sizes]
             legal: Dict[str, List[int]] = {}
             final_widths: Dict[str, Dict[int, int]] = {}
+            centered_counts: Dict[str, Dict[int, bool]] = {}
             for side in SIDES:
                 corner = corner_size[0] if side in ("S", "N") else corner_size[1]
                 available = int(round((die - 2 * (corner + edge)) * units))
@@ -2495,20 +2496,33 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
                                  for entry in supply_group]
                 legal[side] = []
                 final_widths[side] = {}
+                centered_counts[side] = {}
                 for count in range(pair_count + 1):
                     widths = base_widths + supply_widths * count
                     total = sum(widths)
+                    centered = True
                     if not widths:
                         good = PR.gap_is_fillable(available, filler_widths)
                     else:
                         spacing = PR.side_spacing(total, len(widths),
                                                   available, site_w)
-                        good = (spacing is not None and all(
-                            PR.gap_is_fillable(gap, filler_widths)
-                            for gap in spacing))
+                        good = False
+                        if spacing is not None:
+                            between, start = spacing
+                            end = available - total - between * (len(widths) - 1) - start
+                            centered = start == end
+                            # Groups reach the final bucket only after outnumbering signals.
+                            pitch_widths = (base_widths[:-1] + supply_widths * count
+                                            if 0 < count <= len(base_widths) else widths[:-1])
+                            grid_aligned = (start == end or all(
+                                width % site_w == 0 for width in pitch_widths))
+                            good = grid_aligned and all(
+                                PR.gap_is_fillable(gap, filler_widths)
+                                for gap in (between, start, end))
                     if good:
                         legal[side].append(count)
                         final_widths[side][count] = total
+                        centered_counts[side][count] = centered
             # Search complete legal side counts; a greedy pair-at-a-time move
             # can get stuck when count+1 is illegal but count+2 is legal.
             states = {0: ()}
@@ -2524,7 +2538,10 @@ def run(project: Path, pdk_root: Optional[str], pdk: Optional[str],
                         def rank(values):
                             widths = [final_widths[s][n]
                                       for s, n in zip(SIDES[:len(values)], values)]
-                            return (max(widths), sum(w * w for w in widths), values)
+                            # Preserve an existing centered allocation before using new snapped sites.
+                            snapped = sum(not centered_counts[s][n]
+                                          for s, n in zip(SIDES[:len(values)], values))
+                            return (snapped, max(widths), sum(w * w for w in widths), values)
                         if old is None or rank(candidate) < rank(old):
                             next_states[total] = candidate
                 states = next_states
