@@ -42,6 +42,7 @@ if str(PROGRAMS_DIR) not in sys.path:
     sys.path.insert(0, str(PROGRAMS_DIR))
 
 import design_one_shot_runner as R  # noqa: E402
+from _prose_handoff_assertions import assert_prose_handoff  # noqa: E402
 
 STUB_NAME = "_zz_test_authored_guard_stub_gen.py"
 
@@ -562,6 +563,22 @@ def test_origin_survives_actual_producer_finalization_and_handoff(
         _input_state, _terminal_report_only)
     import flow_phase_attribution as attribution
     import ai_signed_judgement
+
+    if declared["id"] == "sequence":
+        project = tmp_path / declared["id"]
+        for rel, text in declared["input_files"].items():
+            path = project / rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+        handoff = R.step_rtl_gen(project, "digital_arithmetic_primitive")
+        assert_prose_handoff(
+            handoff, declared["input_files"]["phase1/input_doc/design.md"])
+        assert [span["source_span"] for span in
+                handoff.extras["unaccounted_source_spans"]] == [
+                    (0, 44), (45, 97), (98, 143), (144, 221)]
+        assert handoff.output_files == []
+        assert not _rtl(project).exists()
+        return
 
     project, emitted = _origin_project(tmp_path, declared)
     original_ledger = R._rtl_prov.load_ledger(project)

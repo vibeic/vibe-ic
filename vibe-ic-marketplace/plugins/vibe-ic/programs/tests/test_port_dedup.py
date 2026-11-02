@@ -33,6 +33,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _prose_handoff_assertions import assert_prose_chain_handoff
 
 HERE = Path(__file__).resolve().parent
 PROGRAMS = HERE.parent
@@ -258,11 +259,16 @@ def test_clean_header_is_not_refused():
 @pytest.mark.skipif(shutil.which("iverilog") is None,
                     reason="iverilog not installed")
 def test_doubled_prompt_emits_compilable_rtl(tmp_path):
+    import spec_artifact_registry as registry
+
     doubled = _PROSE_SPEC + "\nAppendix (interface restated):\n" + _PROSE_SPEC
-    kind, rtl, rejected = chain.try_emit_ex(
-        doubled, "", "TopModule", None, False)
+    result = chain.try_emit_ex(doubled, "", "TopModule", None, False)
+    assert_prose_chain_handoff(result, doubled)
+    sentence = 'Please write a verilog module that compares two values.'
+    assert f'[0:{len(sentence)}] {sentence}' in dict(result[2])['SPEC_SENTENCES_UNACCOUNTED']
+    kind, rtl = registry.generate(doubled, "TopModule")
     assert kind is not None and rtl, (
-        f"the chain must still emit on a restated interface; rejected={rejected}")
+        "the component generator must still emit on a restated interface")
     src = tmp_path / "top.sv"
     src.write_text(rtl)
     proc = subprocess.run(

@@ -40,6 +40,7 @@ if str(PROGRAMS) not in sys.path:
 
 import design_one_shot_runner as R  # noqa: E402
 import _lesson_digest as LD  # noqa: E402
+from _prose_handoff_assertions import assert_prose_handoff  # noqa: E402
 
 # A class name that must never be in the registry. Asserted, not assumed.
 _UNREGISTERED = "zzz_class_not_in_registry_probe"
@@ -142,6 +143,11 @@ def test_unregistered_class_handoff_stages_digests(tmp_path):
     proj = _mk_project(tmp_path, "unreg")
     res = R.step_rtl_gen(proj, _UNREGISTERED)
     assert (res.extras or {}).get("fallback_skill") == "spec-to-rtl"
+    assert_prose_handoff(res, _spec_text())
+    assert (0, 63) in [tuple(span["source_span"])
+                       for span in res.extras["unaccounted_source_spans"]]
+    assert _staged(proj) == (False, False)
+    R._stage_author_knowledge_digests(proj)
     lessons, expert_db = _staged(proj)
     assert lessons, "unregistered-class handoff staged no lessons.md"
     assert expert_db, "unregistered-class handoff staged no ic_expert_db.md"
@@ -171,6 +177,12 @@ def test_every_authoring_handoff_agrees(tmp_path):
     for name, cls, vendor in cases:
         proj = _mk_project(tmp_path, name, vendor_rtl=vendor)
         res = R.step_rtl_gen(proj, cls)
+        if not vendor:
+            assert_prose_handoff(res, _spec_text())
+            assert (0, 63) in [tuple(span["source_span"])
+                               for span in res.extras["unaccounted_source_spans"]]
+            assert _staged(proj) == (False, False)
+            R._stage_author_knowledge_digests(proj)
         if not (res.extras or {}).get("fallback_skill"):
             continue  # not an authoring handoff
         lessons, expert_db = _staged(proj)
@@ -200,10 +212,15 @@ def test_registered_no_generator_handoff_unchanged(tmp_path):
     regression half of the fix."""
     proj = _mk_project(tmp_path, "reg")
     res = R.step_rtl_gen(proj, _registered_no_generator_class())
+    assert_prose_handoff(res, _spec_text())
+    assert (0, 63) in [tuple(span["source_span"])
+                       for span in res.extras["unaccounted_source_spans"]]
+    assert _staged(proj) == (False, False)
+    hint, extras = R._stage_author_knowledge_digests(proj)
     lessons, expert_db = _staged(proj)
     assert lessons and expert_db
-    assert (res.extras or {}).get("lessons_count", 0) > 0
-    assert "MANDATORY before authoring" in (res.detail or "")
+    assert (extras or {}).get("lessons_count", 0) > 0
+    assert "MANDATORY before authoring" in (hint or "")
 
 
 def test_helper_is_best_effort_and_never_raises(tmp_path):

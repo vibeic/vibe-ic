@@ -30,6 +30,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _prose_handoff_assertions import assert_prose_handoff
+
 PROG = Path(__file__).resolve().parent.parent / \
     "design_one_shot_runner.py"
 
@@ -248,12 +250,15 @@ def test_emitted_candidate_states_the_declared_timescale(tmp_path):
     _seed_tb(project, "`timescale 1ns / 1ps\nmodule tb; endmodule\n")
     mod = _load_runner()
     res, out = _emit_candidate(project, mod)
-    assert res.status == "PASS"
-    text = out.read_text()
+    assert_prose_handoff(res, "a parse-complete prompt")
+    assert [tuple(span["source_span"]) for span in
+            res.extras["unaccounted_source_spans"]] == [(0, 23)]
+    assert not out.exists()
+    text, _, extras = mod._emit_states_declared_timescale(project, _EMITTED_RTL)
     # RED on main: the emitter published `_EMITTED_RTL` verbatim, stating no unit.
     assert text.startswith("`timescale 1ns/1ps\n")
     assert text.endswith(_EMITTED_RTL)
-    assert res.extras["declared_timescale"] == "1ns/1ps"
+    assert extras["declared_timescale"] == "1ns/1ps"
     assert mod._declared_timescale(text) == "1ns/1ps"
 
 
@@ -262,9 +267,15 @@ def test_emitted_candidate_takes_the_unit_the_testbench_declares(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
     _seed_tb(project, "`timescale 10ps / 1ps\nmodule tb; endmodule\n")
-    res, out = _emit_candidate(project, _load_runner())
-    assert out.read_text().startswith("`timescale 10ps/1ps\n")
-    assert res.extras["declared_timescale"] == "10ps/1ps"
+    mod = _load_runner()
+    res, out = _emit_candidate(project, mod)
+    assert_prose_handoff(res, "a parse-complete prompt")
+    assert [tuple(span["source_span"]) for span in
+            res.extras["unaccounted_source_spans"]] == [(0, 23)]
+    assert not out.exists()
+    text, _, extras = mod._emit_states_declared_timescale(project, _EMITTED_RTL)
+    assert text.startswith("`timescale 10ps/1ps\n")
+    assert extras["declared_timescale"] == "10ps/1ps"
 
 
 def test_no_declared_unit_leaves_the_candidate_unchanged_and_refuses_by_name(tmp_path):
@@ -273,22 +284,33 @@ def test_no_declared_unit_leaves_the_candidate_unchanged_and_refuses_by_name(tmp
     project = tmp_path / "proj"
     project.mkdir()
     _seed_tb(project, "module tb; endmodule\n")
-    res, out = _emit_candidate(project, _load_runner())
-    assert res.status == "PASS"
-    assert out.read_text() == _EMITTED_RTL
-    assert "declared_timescale" not in res.extras
-    assert res.extras["timescale_refusal"].startswith(
+    mod = _load_runner()
+    res, out = _emit_candidate(project, mod)
+    assert_prose_handoff(res, "a parse-complete prompt")
+    assert [tuple(span["source_span"]) for span in
+            res.extras["unaccounted_source_spans"]] == [(0, 23)]
+    assert not out.exists()
+    text, detail, extras = mod._emit_states_declared_timescale(project, _EMITTED_RTL)
+    assert text == _EMITTED_RTL
+    assert "declared_timescale" not in extras
+    assert extras["timescale_refusal"].startswith(
         "RTL_TIMESCALE_NOT_DECLARED")
-    assert "RTL_TIMESCALE_NOT_DECLARED" in res.detail
+    assert "RTL_TIMESCALE_NOT_DECLARED" in detail
 
 
 def test_a_commented_out_timescale_is_prose_not_a_declaration(tmp_path):
     project = tmp_path / "proj"
     project.mkdir()
     _seed_tb(project, "// `timescale 1ns / 1ps\nmodule tb; endmodule\n")
-    res, out = _emit_candidate(project, _load_runner())
-    assert out.read_text() == _EMITTED_RTL
-    assert res.extras["timescale_refusal"].startswith(
+    mod = _load_runner()
+    res, out = _emit_candidate(project, mod)
+    assert_prose_handoff(res, "a parse-complete prompt")
+    assert [tuple(span["source_span"]) for span in
+            res.extras["unaccounted_source_spans"]] == [(0, 23)]
+    assert not out.exists()
+    text, _, extras = mod._emit_states_declared_timescale(project, _EMITTED_RTL)
+    assert text == _EMITTED_RTL
+    assert extras["timescale_refusal"].startswith(
         "RTL_TIMESCALE_NOT_DECLARED")
 
 
@@ -297,9 +319,15 @@ def test_disagreeing_declarations_are_refused_by_name(tmp_path):
     project.mkdir()
     _seed_tb(project, "`timescale 1ns / 1ps\nmodule a; endmodule\n", "tb_a.v")
     _seed_tb(project, "`timescale 10ps / 1ps\nmodule b; endmodule\n", "tb_b.v")
-    res, out = _emit_candidate(project, _load_runner())
-    assert out.read_text() == _EMITTED_RTL
-    ref = res.extras["timescale_refusal"]
+    mod = _load_runner()
+    res, out = _emit_candidate(project, mod)
+    assert_prose_handoff(res, "a parse-complete prompt")
+    assert [tuple(span["source_span"]) for span in
+            res.extras["unaccounted_source_spans"]] == [(0, 23)]
+    assert not out.exists()
+    text, _, extras = mod._emit_states_declared_timescale(project, _EMITTED_RTL)
+    assert text == _EMITTED_RTL
+    ref = extras["timescale_refusal"]
     assert ref.startswith("RTL_TIMESCALE_DECLARATIONS_DISAGREE")
     assert "1ns/1ps" in ref and "10ps/1ps" in ref
     assert "tb_a.v" in ref and "tb_b.v" in ref

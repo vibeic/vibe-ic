@@ -12,6 +12,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _prose_handoff_assertions import assert_prose_chain_handoff, assert_prose_handoff
 
 _PROGRAMS = Path(__file__).resolve().parents[1]
 if str(_PROGRAMS) not in sys.path:
@@ -404,8 +405,11 @@ def test_explicit_empty_contract_survives_nested_emitters():
     expected = K.synth(_KMAP_2IN, 'TopModule')
     assert K.synth(prompt, 'TopModule', contract=contract) == expected
     assert registry.generate(prompt, 'TopModule', contract=contract) == ('karnaugh_map', expected)
-    assert chain.try_emit_ex(prompt, interface, 'TopModule', check=False) == (
-        'karnaugh_map', expected, [])
+    result = chain.try_emit_ex(prompt, interface, 'TopModule', check=False)
+    assert_prose_chain_handoff(result, prompt)
+    sentence = 'Use NAND gates exclusively.'
+    lo = prompt.index(sentence)
+    assert f'[{lo}:{lo + len(sentence)}] {sentence}' in dict(result[2])['SPEC_SENTENCES_UNACCOUNTED']
 
 
 def test_ordinary_step_consumes_the_declared_field_without_prose_reclassification(tmp_path):
@@ -570,12 +574,32 @@ def test_inactive_logic_mentions_preserve_unrestricted_bytes(tmp_path, obligatio
     expected = K.synth(_KMAP_2IN, 'TopModule')
     assert K.synth(prompt, 'TopModule') == expected
     assert registry.generate(prompt, 'TopModule') == ('karnaugh_map', expected)
-    assert chain.try_emit_ex(prompt, top='TopModule', check=False) == (
-        'karnaugh_map', expected, [])
+    chain_result = chain.try_emit_ex(prompt, top='TopModule', check=False)
+    accounted_obligations = (
+        '',
+        'Use only AND, OR and NOT gates.',
+        'Use only AND, OR and NOT gates; sum-of-products is allowed.',
+    )
+    if obligation in accounted_obligations:
+        assert chain_result == ('karnaugh_map', expected, [])
+    else:
+        assert_prose_chain_handoff(chain_result, prompt)
+        sentence = {
+            'Use only NAND gates. This restriction is withdrawn.': 'Use only NAND gates.',
+            '/* Use a minimum number of NAND gates. */': '/* Use a minimum number of NAND gates.',
+            'initial $display("Use only NAND gates.");': 'initial $display("Use only NAND gates.',
+        }.get(obligation, obligation)
+        lo, hi = prompt.index(sentence), prompt.index(sentence) + len(sentence)
+        assert f'[{lo}:{hi}] {sentence}' in dict(chain_result[2])['SPEC_SENTENCES_UNACCOUNTED']
     result = runner._try_spec_artifact_registry_rtl(
         tmp_path, time.time(), phase1_plain_text=prompt)
-    assert result.status == 'PASS', result.detail
-    assert Path(result.output_files[0]).read_text() == K.synth(_KMAP_2IN, 'chip_top')
+    if obligation in accounted_obligations:
+        assert result.status == 'PASS', result.detail
+        assert Path(result.output_files[0]).read_text() == K.synth(_KMAP_2IN, 'chip_top')
+    else:
+        assert_prose_handoff(result, prompt)
+        assert any(tuple(row['source_span']) == (lo, hi) and row['source_sentence'] == sentence
+                   for row in result.extras['unaccounted_source_spans'])
 
 
 @pytest.mark.parametrize('obligation', _DECLARED_LOGIC_REQUESTS[:2])
