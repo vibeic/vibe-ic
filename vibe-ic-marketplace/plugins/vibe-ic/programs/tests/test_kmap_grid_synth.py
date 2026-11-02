@@ -34,6 +34,28 @@ The module should implement the function shown in the Karnaugh map below.
   1 | 1 | 0 |
 """
 
+def _assert_handoff_stages_author_inputs_only(project, before, result, *, expert=None):
+    staged = {Path('phase2/stage1') / name for name in (
+        'fallback_skill.md', 'lessons.md', 'lessons_scoring_record.json',
+        'declaration_contract.json')}
+    expect_expert = (any(path.parts[0] == 'phase1' for path in before)
+                     if expert is None else expert)
+    if expect_expert:
+        staged.add(Path('phase2/stage1/ic_expert_db.md'))
+    after = {path.relative_to(project): path.read_bytes()
+             for path in project.rglob('*') if path.is_file()}
+    assert {path: after[path] for path in before} == before
+    assert set(after) == set(before) | staged
+    assert all(after[path] for path in staged)
+    assert result.extras['fallback_skill_staged'] is True
+    assert after[Path('phase2/stage1/fallback_skill.md')] == Path(
+        result.extras['fallback_skill_source']).read_bytes()
+    assert 'READ THE SKILL AT THIS PATH' in result.detail
+    assert 'MANDATORY before authoring' in result.detail
+    if expect_expert:
+        assert result.extras['ic_expert_db_count'] > 0
+
+
 _BASIS_PARAPHRASES = [
     'The implementation must be NAND-only.',
     'Use NAND gates exclusively.',
@@ -118,8 +140,7 @@ def test_closed_world_hands_off_unaccounted_sentences(tmp_path, sentence, entry)
     for row in result.extras['unaccounted_source_spans']:
         lo, hi = row['source_span']
         assert prompt[lo:hi] == row['source_sentence']
-    assert {p.relative_to(tmp_path): p.read_bytes()
-            for p in tmp_path.rglob('*') if p.is_file()} == before
+    _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
 
 
 @pytest.mark.parametrize('sentence', [
@@ -228,8 +249,7 @@ def test_closed_world_structured_spec_cannot_bypass_source_accounting(tmp_path, 
     obligation = result.extras['logic_obligations'][0]
     assert obligation['source_sentence'] == sentence
     assert tuple(obligation['source_span']) == (0, len(sentence))
-    assert {p.relative_to(tmp_path): p.read_bytes()
-            for p in tmp_path.rglob('*') if p.is_file()} == before
+    _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
 
 
 @pytest.mark.parametrize('declared', [False, True])
@@ -264,8 +284,7 @@ def test_closed_world_l9_only_spec_cannot_bypass_author_handoff(tmp_path, declar
     obligation = result.extras['logic_obligations'][0]
     assert obligation['source_sentence'] == sentence
     assert tuple(obligation['source_span']) == (0, len(sentence))
-    assert {p.relative_to(tmp_path): p.read_bytes()
-            for p in tmp_path.rglob('*') if p.is_file()} == before
+    _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
 
 
 @pytest.mark.parametrize('entry', ['ordinary', 'structured_dispatch'])
@@ -300,8 +319,7 @@ def test_ruling100b_yaml_uses_only_typed_obligations(tmp_path, entry, kind):
         assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
         assert not result.extras['unaccounted_source_spans']
         assert result.extras['logic_obligations'][0]['source_sentence'] == sentence
-        assert {p.relative_to(tmp_path): p.read_bytes()
-                for p in tmp_path.rglob('*') if p.is_file()} == before
+        _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
 
 
 @pytest.mark.parametrize('obligation_source', ['l9', 'rtl_spec'])
@@ -329,8 +347,8 @@ def test_ruling100b_structured_sources_cannot_erase_each_others_obligations(tmp_
     assert result.extras['fallback_skill'] == 'spec-to-rtl'
     assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
     assert result.extras['logic_obligations'][0]['source_sentence'] == sentence
-    assert {p.relative_to(tmp_path): p.read_bytes()
-            for p in tmp_path.rglob('*') if p.is_file()} == before
+    _assert_handoff_stages_author_inputs_only(
+        tmp_path, before, result, expert=obligation_source == 'l9')
 
 
 @pytest.mark.parametrize('sentence', _BASIS_PARAPHRASES + _MINIMIZATION_PARAPHRASES)
@@ -362,8 +380,7 @@ def test_sentence_family_obligations_precede_all_author_paths(tmp_path, sentence
     assert observed == 'PASS_WITH_WAIVERS', result
     assert result.extras['fallback_skill'] == 'spec-to-rtl'
     assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
-    assert {p.relative_to(tmp_path): p.read_bytes()
-            for p in tmp_path.rglob('*') if p.is_file()} == before
+    _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
 
 
 @pytest.mark.parametrize('sentence', [
@@ -434,8 +451,7 @@ def test_ordinary_step_consumes_the_declared_field_without_prose_reclassificatio
     result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
     assert result.status == 'PASS_WITH_WAIVERS', result.detail
     assert result.extras['fallback_skill'] == 'spec-to-rtl'
-    assert {p.relative_to(tmp_path): p.read_bytes()
-            for p in tmp_path.rglob('*') if p.is_file()} == before
+    _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
 
 
 def test_gate_family_normalization_is_independent_of_sentence_case():
@@ -478,8 +494,7 @@ def test_gate_role_and_source_scoped_field_survive_the_author_boundary(tmp_path,
     result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
     assert result.status == 'PASS_WITH_WAIVERS', result.detail
     assert result.extras['fallback_skill'] == 'spec-to-rtl'
-    assert {p.relative_to(tmp_path): p.read_bytes()
-            for p in tmp_path.rglob('*') if p.is_file()} == before
+    _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
 
 
 def test_kmap_fires_and_is_correct():
@@ -535,7 +550,7 @@ def test_declared_logic_obligation_hands_off_before_sop(tmp_path, obligation, en
         assert Path(result.extras['fallback_skill_source']).is_file()
         assert runner._rtl_gen_handoff([result]) == 'spec-to-rtl'
         assert result.output_files == []
-        assert list(tmp_path.iterdir()) == []
+        _assert_handoff_stages_author_inputs_only(tmp_path, {}, result)
         return
     observed = 'DECLINED' if rtl is None else 'SOP' if '&' in rtl else 'OTHER_RTL'
     assert observed == 'DECLINED', {'observed': observed, 'rtl': rtl}
@@ -617,8 +632,12 @@ def test_ordinary_logic_handoff_precedes_all_producers_and_preserves_case(
     rtl_dir.mkdir(parents=True)
     (rtl_dir / 'operator.txt').write_bytes(b'operator-owned\x00bytes\n')
     if structured:
+        minimized = obligation == _DECLARED_LOGIC_REQUESTS[1]
         (tmp_path / 'input/rtl_spec.json').write_text(json.dumps({
-            'module': 'TopModule', 'rows': [
+            'module': 'TopModule', 'logic_obligations': [{
+                'kind': 'logic_minimization' if minimized else 'logic_basis',
+                'family': ['gates'] if minimized else ['nand'],
+                'source_span': [0, len(obligation)], 'source_sentence': obligation}], 'rows': [
                 {'inputs': {'a': 0, 'b': 0}, 'outputs': {'q': 0}},
                 {'inputs': {'a': 0, 'b': 1}, 'outputs': {'q': 1}},
                 {'inputs': {'a': 1, 'b': 0}, 'outputs': {'q': 1}},
@@ -629,8 +648,7 @@ def test_ordinary_logic_handoff_precedes_all_producers_and_preserves_case(
     assert result.status == 'PASS_WITH_WAIVERS', result.detail
     assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
     assert result.extras['fallback_skill'] == 'spec-to-rtl'
-    assert {p.relative_to(tmp_path): p.read_bytes()
-            for p in tmp_path.rglob('*') if p.is_file()} == before
+    _assert_handoff_stages_author_inputs_only(tmp_path, before, result)
     assert result.output_files == []
 
 
@@ -871,3 +889,146 @@ def test_permitted_gate_exceptions_preserve_sop_across_wrapping(restriction, wra
                 if all(token in rtl for token in ('~', '&', '|')) else 'OTHER_RTL')
     assert observed == 'SOP', {'observed': observed, 'rtl': rtl}
     assert rtl == expected
+
+
+@pytest.mark.parametrize('sentence', [
+    'Golden cross-check (verify stage only): the fabricated reference GDS + layout-extracted\n'
+    '  technology netlist (chip-level; per-block sub-netlist is NOT published upstream → cross-check is\n'
+    '  spec-level + chip-GDS-DRC level, not per-block device-LVS).',
+    'Reference comparison is for verification only; the source is NOT published.',
+    'The reference is NOT available and is used for checking only.',
+    'Only the released report is public; the internal report is NOT published.',
+    'Verification only, not per-block device checking.',
+    'Only the internal AND external reports are public.',
+])
+def test_verification_only_with_uppercase_negation_is_not_a_gate_basis(sentence):
+    from _specrtl_common import extract_spec_contract
+
+    contract = extract_spec_contract(sentence, confirm=False)
+    assert contract.logic_obligations == []
+
+
+@pytest.mark.parametrize('sentence,family', [
+    ('Use only NOT gates.', ('not',)),
+    ('Use only NOT.', ('not',)),
+    ('Only NOT is allowed.', ('not',)),
+    ('Use only AND-OR.', ('and', 'or')),
+    ('Use only AND, OR and NOT gates.', ('and', 'not', 'or')),
+])
+def test_function_words_in_gate_noun_positions_remain_typed(sentence, family):
+    from _specrtl_common import extract_spec_contract
+
+    contract = extract_spec_contract(sentence, confirm=False)
+    assert [row.family for row in contract.logic_obligations] == [family]
+    assert contract.logic_obligations[0].source_sentence == sentence
+
+
+@pytest.mark.parametrize('encoding', ['json', 'yaml'])
+@pytest.mark.parametrize('typed', [False, True])
+def test_direct_structured_contract_uses_only_typed_logic_fields(encoding, typed):
+    import json
+    import yaml
+    import deterministic_emit_chain as chain
+    from _specrtl_common import emission_spec_contract
+
+    sentence = 'Use only NAND gates.'
+    spec = {'module': 'TopModule', 'ports': [], 'description': sentence}
+    if typed:
+        spec['logic_obligations'] = [{'kind': 'logic_basis', 'family': ['nand'],
+            'source_span': [0, len(sentence)], 'source_sentence': sentence}]
+    text = json.dumps(spec) if encoding == 'json' else yaml.safe_dump(spec)
+    contract = emission_spec_contract(text)
+    assert contract.source == 'json'
+    assert contract.unaccounted_source_spans == []
+    assert [row.family for row in contract.logic_obligations] == ([('nand',)] if typed else [])
+    kind, rtl, rejected = chain.try_emit_ex(text, check=False)
+    assert (kind, rtl) == (None, None)
+    assert [row[0] for row in rejected] == (['DECLARED_LOGIC_OBLIGATION_UNSUPPORTED'] if typed else [])
+
+
+@pytest.mark.parametrize('extra', [
+    'Use only NAND gates. {"module": "TopModule", "logic_obligations": []}',
+    '{"module": "TopModule", "logic_obligations": []} Use the smallest circuit.',
+    'Use only NAND gates: {"module": "TopModule", "logic_obligations": []}',
+    '```json\n{"module": "TopModule", "logic_obligations": []}\n```\nUse only NAND gates.',
+])
+def test_embedded_json_does_not_turn_free_prose_into_a_structured_contract(extra):
+    import deterministic_emit_chain as chain
+    from _specrtl_common import emission_spec_contract
+
+    prompt = _KMAP_2IN + '\n' + extra
+    contract = emission_spec_contract(prompt)
+    assert contract.source != 'json'
+    assert contract.unaccounted_source_spans
+    assert_prose_chain_handoff(chain.try_emit_ex(prompt, check=False), prompt)
+
+
+@pytest.mark.parametrize('text', ['No interface is declared.', _KMAP_2IN])
+def test_contract_extraction_supports_package_import_without_programs_on_path(tmp_path, text):
+    import json
+    import subprocess
+
+    plugin_root = _PROGRAMS.parent
+    code = ("import json,sys; sys.path.insert(0, sys.argv[1]); "
+            "import programs._specrtl_common as common; "
+            "contract = common.extract_spec_contract(sys.argv[2], confirm=False); "
+            "print(json.dumps({'module': contract.module, 'function': contract.function}))")
+    result = subprocess.run([sys.executable, '-I', '-c', code, str(plugin_root), text],
+                            cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    observed = json.loads(result.stdout)
+    assert observed['module'] == ('TopModule' if text == _KMAP_2IN else None)
+    assert (observed['function'] is not None) == (text == _KMAP_2IN)
+
+
+def test_inline_json_with_a_prose_key_is_not_a_typed_contract():
+    import deterministic_emit_chain as chain
+    from _specrtl_common import emission_spec_contract
+
+    text = 'Use only NAND gates: {"module": "TopModule", "logic_obligations": []}'
+    contract = emission_spec_contract(text)
+    assert contract.source != 'json'
+    assert contract.unaccounted_source_spans
+    assert_prose_chain_handoff(chain.try_emit_ex(text, check=False), text)
+
+
+@pytest.mark.parametrize('instruction', ['Keep the circuit as small as possible.', 'Use only NAND gates.'])
+def test_direct_yaml_block_scalar_cannot_enter_prose_emitters(instruction):
+    import textwrap
+    import deterministic_emit_chain as chain
+    from _specrtl_common import emission_spec_contract
+
+    text = ('module: TopModule\ndescription: |\n'
+            + textwrap.indent(_KMAP_2IN.strip(), '  ')
+            + '\ninstructions: ' + instruction + '\n')
+    contract = emission_spec_contract(text)
+    assert contract.source == 'json'
+    assert contract.logic_obligations == []
+    assert contract.unaccounted_source_spans == []
+    assert chain.try_emit_ex(text, check=False) == (None, None, [])
+
+
+def test_direct_yaml_date_metadata_does_not_crash_typed_contract():
+    import deterministic_emit_chain as chain
+    from _specrtl_common import emission_spec_contract
+
+    text = 'module: Foo\ndate: 2026-11-03\nports: []\n'
+    contract = emission_spec_contract(text)
+    assert contract.source == 'json'
+    assert contract.module == 'Foo'
+    assert contract.logic_obligations == []
+    assert contract.unaccounted_source_spans == []
+    assert chain.try_emit_ex(text, check=False) == (None, None, [])
+
+
+@pytest.mark.parametrize('text,marker', [
+    ('- hello\n- world\n', 'SPEC_SENTENCES_UNACCOUNTED'),
+    ('module: Foo\nports: null\n', 'DECLARED_LOGIC_OBLIGATION_INVALID'),
+    ('module: Foo\nreset: [a, b]\n', 'DECLARED_LOGIC_OBLIGATION_INVALID'),
+])
+def test_direct_yaml_noncontract_lists_and_malformed_fields_do_not_crash(text, marker):
+    import deterministic_emit_chain as chain
+
+    kind, rtl, rejected = chain.try_emit_ex(text, check=False)
+    assert (kind, rtl) == (None, None)
+    assert [name for name, _ in rejected] == [marker]

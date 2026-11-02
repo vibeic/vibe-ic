@@ -1,0 +1,208 @@
+"""The selected generator source owns its contract and author handoff."""
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+PROGRAMS = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROGRAMS))
+
+import ai_signed_judgement as judgement
+import design_one_shot_runner as runner
+import rtl_provenance
+
+
+PROSE = "Every primitive in the final netlist has to be a Sheffer stroke.\n"
+TABLE = {
+    "module": "selected_table",
+    "inputs": [{"name": "a"}], "outputs": [{"name": "q"}],
+    "rows": [{"in": "0", "out": "1"}, {"in": "1", "out": "0"}],
+    "default": "0",
+}
+KMAP = """Implement a module named TopModule.
+ - input a
+ - input b
+ - output q
+The module should implement the function shown in the Karnaugh map below.
+       a
+  b   0   1
+  0 | 0 | 1 |
+  1 | 1 | 0 |
+"""
+
+
+def _reset_session():
+    if runner._RTL_SESSION_BINDING is not None:
+        runner._RTL_SESSION_BINDING.close()
+    runner._RTL_SESSION_BINDING = None
+    runner._RTL_SESSION_OWNED = False
+    runner._RTL_SESSION_PROJECT = None
+
+
+@pytest.fixture(autouse=True)
+def _isolated_session():
+    _reset_session()
+    yield
+    _reset_session()
+
+
+def _write(project, rel, text):
+    path = project / rel
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text)
+    return path
+
+
+def _json(project, rel, data):
+    return _write(project, rel, json.dumps(data))
+
+
+@pytest.mark.parametrize("rel", [
+    "phase2/stage1/rtl_spec.json", "phase2/rtl_spec.json", "input/rtl_spec.json",
+    "phase2/stage1/rtl_spec.yaml", "phase2/rtl_spec.yaml", "input/rtl_spec.yaml"])
+def test_selected_structured_source_ignores_unconsumed_prose(tmp_path, rel):
+    import yaml
+    data = yaml.safe_dump(TABLE) if rel.endswith("yaml") else json.dumps(TABLE)
+    _write(tmp_path, rel, data)
+    _write(tmp_path, "phase1/input_doc/design.md", PROSE)
+    result = runner.step_rtl_gen(tmp_path, "__neutral_logic__")
+    assert result.status == "PASS", result.detail
+    assert result.extras["deterministic_generator"] == "truth-table"
+    assert (tmp_path / "phase2/stage1/rtl/selected_table.sv").is_file()
+    assert not (tmp_path / "phase2/stage1/fallback_skill.md").exists()
+
+
+def test_typed_canonical_description_is_consumed_without_operator_prose(tmp_path):
+    description = (
+        "Module name: pulse_detect. "
+        "Pulse detection: when data_in changes from 0 to 1 to 0 this is a pulse. "
+        "clk (input), rst_n (input), data_in (input), data_out (output).")
+    _json(tmp_path, "phase1/generated_docs/L2_FRS.json", {"description": description})
+    _json(tmp_path, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", {
+        "top_module": "pulse_detect", "top_ports": [
+            {"name": name, "direction": direction, "width": 1}
+            for name, direction in (("clk", "input"), ("rst_n", "input"),
+                                    ("data_in", "input"), ("data_out", "output"))]})
+    _write(tmp_path, "phase1/input_doc/design.md", PROSE)
+    result = runner.step_rtl_gen(tmp_path, "__neutral_logic__")
+    assert result.status == "PASS", result.detail
+    assert result.extras["deterministic_generator"] == "canonical_primitive_synth"
+    assert (tmp_path / "phase2/stage1/rtl/pulse_detect.v").is_file()
+    assert not (tmp_path / "phase2/stage1/fallback_skill.md").exists()
+
+
+@pytest.mark.parametrize("rel", ["phase1/input_doc/design.md", "phase1/input_prompt/prompt.txt"])
+def test_l9_serial_source_precedes_unconsumed_prose(tmp_path, rel):
+    _json(tmp_path, "phase1/generated_docs/L2_FRS.json", {
+        "ic_name": "serial_product", "frs_sections": [{"content":
+            "serial-parallel multiplier: p = (x * y) mod 2^N; synchronous active-high reset"}]})
+    _json(tmp_path, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", {
+        "top_module": "serial_product", "top_ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "rst", "direction": "input", "width": 1},
+            {"name": "x", "direction": "input", "width": "size-1:0",
+             "width_symbolic": "size-1:0", "msb": "size-1", "lsb": "0"},
+            {"name": "y", "direction": "input", "width": 1},
+            {"name": "p", "direction": "output", "width": 1}]})
+    _write(tmp_path, rel, PROSE)
+    result = runner.step_rtl_gen(tmp_path, "digital_arithmetic_primitive")
+    assert result.status == "PASS", result.detail
+    assert result.extras["deterministic_generator"] == "serial_parallel_mul_synth"
+    assert (tmp_path / "phase2/stage1/rtl/serial_product.v").is_file()
+
+
+def test_malformed_selected_structured_source_keeps_named_fail(tmp_path):
+    _write(tmp_path, "input/rtl_spec.json", "{invalid json")
+    _write(tmp_path, "phase1/input_doc/design.md", PROSE)
+    result = runner.step_rtl_gen(tmp_path, "__neutral_logic__")
+    assert result.status == "FAIL", result.detail
+    assert "deterministic_rtl_dispatcher rejected rtl_spec.json" in result.detail
+
+
+def test_author_handoff_stages_existing_inputs_and_requires_signature(tmp_path):
+    text = ("A bit-serial arithmetic datapath computes p = (x * y) mod 2^N.\n" + PROSE)
+    _write(tmp_path, "phase1/input_doc/design.md", text)
+    _write(tmp_path, "phase1/generated_docs/L7_VERIFICATION_PLAN.md", """The Plugin MUST declare `plugin_output/declaration.json` before authoring:
+| Field | Required | Example |
+|---|---|---|
+| `bit_order` | Yes | `"LSB_first"` |
+""")
+    result = runner.step_rtl_gen(tmp_path, "__neutral_logic__")
+    assert result.status == "PASS_WITH_WAIVERS", result.detail
+    stage = tmp_path / "phase2/stage1"
+    for name in ("fallback_skill.md", "lessons.md", "ic_expert_db.md",
+                 "lessons_scoring_record.json", "declaration_contract.json"):
+        assert (stage / name).is_file(), name
+    assert "READ THE SKILL AT THIS PATH" in result.detail
+    assert "MANDATORY before authoring" in result.detail
+    _write(tmp_path, "phase2/stage1/rtl/authored.sv", "module authored; endmodule\n")
+    accepted, why = judgement.check(tmp_path, "1")
+    assert not accepted, why
+    assert "awaiting_signed_judgement" in why
+
+
+def test_escaping_project_link_precedes_prose_handoff(tmp_path):
+    project = tmp_path / "project"
+    _write(project, "phase1/input_doc/design.md", PROSE)
+    (project / "escape").symlink_to(tmp_path)
+    result = runner.step_rtl_gen(project, "__neutral_logic__")
+    assert result.status == "NOT_MEASURED", result.detail
+    assert "PROJECT_SYMLINK_NOT_ISOLATABLE" in result.detail
+    assert not (project / "phase2/stage1/fallback_skill.md").exists()
+
+
+def test_named_adc_generator_refusal_stays_fail_with_prose(tmp_path):
+    _write(tmp_path, "phase1/input_doc/design.md", PROSE)
+    _json(tmp_path, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", {
+        "top_module": "converter", "top_ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "rst", "direction": "input", "width": 1},
+            {"name": "data", "direction": "input", "width": 1},
+            {"name": "result", "direction": "output", "width": 16}]})
+    _json(tmp_path, "phase1/generated_docs/L5_ADI_SPEC.json", {
+        "analog_blocks": [{"spec": {"specs": [{"name": "osr", "target": 64}]}}]})
+    result = runner.step_rtl_gen(tmp_path, "data_converter")
+    assert result.status == "FAIL", result.detail
+    assert "does not state the number of decimator stages" in result.detail
+
+
+def test_typed_adc_generator_still_emits_with_unconsumed_prose(tmp_path):
+    _write(tmp_path, "phase1/input_doc/design.md", PROSE)
+    _json(tmp_path, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", {
+        "top_module": "converter", "top_ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "rst", "direction": "input", "width": 1},
+            {"name": "data", "direction": "input", "width": 1},
+            {"name": "result", "direction": "output", "width": 16}]})
+    _json(tmp_path, "phase1/generated_docs/L5_ADI_SPEC.json", {
+        "analog_blocks": [{"spec": {"specs": [
+            {"name": "osr", "target": 64},
+            {"name": "decimator_stages", "target": 3},
+            {"name": "decimator_differential_delay", "target": 1},
+            {"name": "bitstream_width", "target": 1}]}}]})
+    result = runner.step_rtl_gen(tmp_path, "data_converter")
+    assert result.status == "PASS", result.detail
+    assert "data_converter_rtl_gen.py" in result.detail
+    assert (tmp_path / "phase2/stage1/rtl/cic_decimator.sv").is_file()
+    assert not (tmp_path / "phase2/stage1/fallback_skill.md").exists()
+
+
+def test_changed_prose_keeps_old_rtl_and_requires_signature_after_authorship(tmp_path):
+    source = _write(tmp_path, "phase1/input_doc/design.md", KMAP)
+    initial = runner.step_rtl_gen(tmp_path, "__neutral_logic__")
+    assert initial.status == "PASS", initial.detail
+    rtl = tmp_path / "phase2/stage1/rtl/chip_top.sv"
+    old = rtl.read_bytes()
+    rtl_provenance.stamp(tmp_path, "deterministic_emit_chain")
+    _reset_session()
+    source.write_text(KMAP + PROSE)
+    result = runner.step_rtl_gen(tmp_path, "__neutral_logic__")
+    assert result.status == "PASS_WITH_WAIVERS", result.detail
+    assert rtl.read_bytes() == old
+    rtl.write_bytes(old + b"// AI authored revision after handoff\n")
+    accepted, why = judgement.check(tmp_path, "1")
+    assert not accepted, why
+    assert "awaiting_signed_judgement" in why

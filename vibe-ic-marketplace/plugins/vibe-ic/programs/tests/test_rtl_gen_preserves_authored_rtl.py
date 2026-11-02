@@ -42,7 +42,6 @@ if str(PROGRAMS_DIR) not in sys.path:
     sys.path.insert(0, str(PROGRAMS_DIR))
 
 import design_one_shot_runner as R  # noqa: E402
-from _prose_handoff_assertions import assert_prose_handoff  # noqa: E402
 
 STUB_NAME = "_zz_test_authored_guard_stub_gen.py"
 
@@ -518,6 +517,36 @@ def test_guard_ignores_ic_class_identity(tmp_path, monkeypatch):
 # Public, independently declared source inputs; no HDL tools or field captures.
 _ORIGIN_INPUT = Path(__file__).parent / "data" / "origin_finalizer.json"
 _ORIGIN_CASES = json.loads(_ORIGIN_INPUT.read_text())["producers"]
+# The legacy sequence parameter still exercises every finalizer/consumer arm.
+# Free-prose FSMs now hand off, so use a second neutral typed producer input.
+_ORIGIN_CASES[1] = {
+    "id": "sequence",
+    "origin": "serial_parallel_mul_synth",
+    "input_files": {
+        "input/phase1_prompt.md": "Serial-parallel arithmetic metadata with synchronous active-high reset.\n",
+        "phase1/generated_docs/L2_FRS.json": json.dumps({
+            "ic_name": "neutral_sequence", "frs_sections": [{"content":
+                "serial-parallel multiplier: p = (x * y) mod 2^N; synchronous active-high reset"}],
+        }),
+        "phase1/generated_docs/L9_INTEGRATION_SPEC.json": json.dumps({
+            "top_module": "neutral_sequence", "top_ports": [
+                {"name": "clk", "direction": "input", "width": 1},
+                {"name": "rst", "direction": "input", "width": 1},
+                {"name": "x", "direction": "input", "width": "size-1:0",
+                 "width_symbolic": "size-1:0", "msb": "size-1", "lsb": "0"},
+                {"name": "y", "direction": "input", "width": 1},
+                {"name": "p", "direction": "output", "width": 1},
+            ],
+        }),
+    },
+    "handoff_input_files": {
+        "input/phase1_prompt.md": "Retain the existing implementation; no replacement behavior is specified.\n",
+        "phase1/generated_docs/L2_FRS.json": json.dumps({
+            "ic_name": "neutral_sequence", "frs_sections": [{"content":
+                "Retain the existing implementation; no replacement behavior is specified."}],
+        }),
+    },
+}
 
 
 @pytest.fixture
@@ -547,6 +576,8 @@ def _origin_observed(tmp_path, record_property, observed):
     import hashlib
     observed["input_sha256"] = hashlib.sha256(
         _ORIGIN_INPUT.read_bytes()).hexdigest()
+    observed["effective_cases_sha256"] = hashlib.sha256(
+        json.dumps(_ORIGIN_CASES, sort_keys=True).encode()).hexdigest()
     record_property("observed", json.dumps(observed, sort_keys=True))
     (tmp_path / "origin_observed.json").write_text(
         json.dumps(observed, indent=2, sort_keys=True) + "\n")
@@ -563,22 +594,6 @@ def test_origin_survives_actual_producer_finalization_and_handoff(
         _input_state, _terminal_report_only)
     import flow_phase_attribution as attribution
     import ai_signed_judgement
-
-    if declared["id"] == "sequence":
-        project = tmp_path / declared["id"]
-        for rel, text in declared["input_files"].items():
-            path = project / rel
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text)
-        handoff = R.step_rtl_gen(project, "digital_arithmetic_primitive")
-        assert_prose_handoff(
-            handoff, declared["input_files"]["phase1/input_doc/design.md"])
-        assert [span["source_span"] for span in
-                handoff.extras["unaccounted_source_spans"]] == [
-                    (0, 44), (45, 97), (98, 143), (144, 221)]
-        assert handoff.output_files == []
-        assert not _rtl(project).exists()
-        return
 
     project, emitted = _origin_project(tmp_path, declared)
     original_ledger = R._rtl_prov.load_ledger(project)
@@ -715,6 +730,10 @@ def test_origin_finalization_refuses_a_replaced_held_project(
         tmp_path, origin_session):
     from test_flow_phase_attribution_is_general import _input_state
     project, _ = _origin_project(tmp_path, _ORIGIN_CASES[0])
+    # Give finalization real runner work to stamp; an unchanged ledger is an
+    # idempotent no-op even when the project-inode refusal is removed.
+    (_rtl(project) / "runner_owned_alias.v").write_text(
+        "module runner_owned_alias; endmodule\n")
     displaced = project.with_name("held-original")
     project.rename(displaced)
     project.mkdir()

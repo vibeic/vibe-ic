@@ -55,6 +55,20 @@ CANONICAL_PULSE = (
     " data_in: One-bit input.\n"
     "Output ports:\n data_out: pulse indicator.\n")
 
+_ACCOUNTED_OPERATOR_SPEC = """
+Implement a module named TopModule.
+ - input  a
+ - input  b
+ - output q
+
+The module should implement the function shown in the Karnaugh map below.
+
+       a
+  b   0   1
+  0 | 0 | 1 |
+  1 | 1 | 0 |
+"""
+
 _DIRECTIONAL_UNACCOUNTED_SPANS = [
     (0, 65), (66, 192), (194, 297), (298, 378), (379, 436),
     (437, 475), (476, 555), (556, 621), (622, 712), (713, 811),
@@ -76,6 +90,39 @@ def _project(tmp_path, text=COMPLETE_DIRECTIONAL_FALL, source="input_doc"):
     source_dir = tmp_path / "phase1" / source
     source_dir.mkdir(parents=True)
     (source_dir / "design.md").write_text(text)
+    return tmp_path
+
+
+def _canonical_project(tmp_path):
+    """Use the canonical consumer's generated-L-doc source, not free prose."""
+    docs = tmp_path / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L2_FRS.json").write_text(json.dumps({
+        "description": "Module name: pulse_detect. Pulse detection: data_in changes from 0 to 1 to 0.",
+        "interface": "clk (input), rst_n (input), data_in (input), data_out (output)",
+    }))
+    return tmp_path
+
+
+def _publication_project(tmp_path):
+    """A consumed typed arithmetic contract reaches the same step transaction."""
+    docs = tmp_path / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L2_FRS.json").write_text(json.dumps({
+        "ic_name": "TopModule", "frs_sections": [{"content":
+            "serial-parallel multiplier: p = (x * y) mod 2^N; synchronous active-high reset"}],
+    }))
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": "TopModule",
+        "top_ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "rst", "direction": "input", "width": 1},
+            {"name": "x", "direction": "input", "width": "size-1:0",
+             "width_symbolic": "size-1:0", "msb": "size-1", "lsb": "0"},
+            {"name": "y", "direction": "input", "width": 1},
+            {"name": "p", "direction": "output", "width": 1},
+        ],
+    }))
     return tmp_path
 
 
@@ -478,7 +525,7 @@ def test_unreadable_project_directory_is_named_blocked_without_writes(
 
 def test_finalize_retries_cleanup_without_downgrading_committed_success(
         tmp_path, monkeypatch):
-    project = _project(tmp_path)
+    project = _publication_project(tmp_path)
     stage1 = project / "phase2" / "stage1"
     stage1.mkdir(parents=True)
     (stage1 / "sentinel.txt").write_text("original\n")
@@ -496,15 +543,13 @@ def test_finalize_retries_cleanup_without_downgrading_committed_success(
         runner, "_phase1_remove_owned_entry_fd", _fail_backup_cleanup_once)
 
     result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+        project, "digital_arithmetic_primitive")
 
-    assert_prose_handoff(result, COMPLETE_DIRECTIONAL_FALL)
-    assert [span["source_span"] for span in
-            result.extras["unaccounted_source_spans"]] == _DIRECTIONAL_UNACCOUNTED_SPANS
-    assert not injected
+    assert injected
+    assert result.status == "PASS"
     assert "transaction_cleanup_warning" not in result.extras
-    assert result.output_files == []
-    assert not (project / "phase2" / "stage1" / "rtl").exists()
+    assert (project / "phase2" / "stage1" / "rtl" /
+            "TopModule.v").is_file()
     assert not any(p.name.startswith(".vibeic-rtl-txn.")
                    for p in project.iterdir())
 
@@ -542,28 +587,28 @@ def test_finalize_removes_backup_with_nontraversable_nested_modes(
 
 def test_irreversible_finalize_residue_is_warning_not_false_blocked(
         tmp_path, monkeypatch):
-    project = _project(tmp_path)
+    project = _publication_project(tmp_path)
 
     monkeypatch.setattr(
         runner._Phase1StagedTreeTransaction, "_drain",
         lambda self: "injected persistent cleanup residue")
 
     result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+        project, "digital_arithmetic_primitive")
 
-    assert_prose_handoff(result, COMPLETE_DIRECTIONAL_FALL)
-    assert [span["source_span"] for span in
-            result.extras["unaccounted_source_spans"]] == _DIRECTIONAL_UNACCOUNTED_SPANS
-    assert "transaction_cleanup_warning" not in result.extras
-    assert result.output_files == []
-    assert not (project / "phase2" / "stage1" / "rtl").exists()
+    assert result.status == "PASS"
+    assert result.extras["transaction_cleanup_warning"] == (
+        "RTL_TRANSACTION_DRAIN_CLEANUP_FAILED: "
+        "injected persistent cleanup residue")
+    assert (project / "phase2" / "stage1" / "rtl" /
+            "TopModule.v").is_file()
     assert not any(p.name.startswith(".vibeic-rtl-txn.")
                    for p in project.iterdir())
 
 
 def test_alias_cleanup_error_after_drain_is_named_pass_warning(
         tmp_path, monkeypatch):
-    project = _project(tmp_path)
+    project = _publication_project(tmp_path)
     real_commit = runner._phase1_commit_staged_tree
     captured = []
 
@@ -582,21 +627,25 @@ def test_alias_cleanup_error_after_drain_is_named_pass_warning(
         _fail_alias_cleanup)
 
     result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+        project, "digital_arithmetic_primitive")
 
-    assert_prose_handoff(result, COMPLETE_DIRECTIONAL_FALL)
-    assert [span["source_span"] for span in
-            result.extras["unaccounted_source_spans"]] == _DIRECTIONAL_UNACCOUNTED_SPANS
-    assert "transaction_cleanup_warning" not in result.extras
-    assert result.output_files == []
-    assert not (project / "phase2" / "stage1" / "rtl").exists()
+    assert result.status == "PASS"
+    assert result.extras["transaction_cleanup_warning"] == (
+        "RTL_TRANSACTION_ALIAS_CLEANUP_FAILED: "
+        "injected post-drain alias cleanup failure")
+    assert (project / "phase2" / "stage1" / "rtl" /
+            "TopModule.v").is_file()
     transaction = captured[-1]
     assert transaction.closed
     assert transaction.container_fd == -1
     residue = [
         p for p in project.iterdir()
         if p.name.startswith(".vibeic-rtl-txn.")]
-    assert residue == []
+    # The injected operation is the only reason this already-drained empty
+    # container cannot be unlinked. Production retries remain covered above.
+    assert len(residue) == 1
+    assert not list(residue[0].iterdir())
+    residue[0].rmdir()
 
 
 def test_rollback_is_exception_total_and_releases_the_held_container(
@@ -760,20 +809,18 @@ def test_returned_alias_error_is_reported_not_only_a_raised_one(
     and no warning, and nothing would notice. The symmetric drain case IS
     covered, so this closes a one-sided gap.
     """
-    project = _project(tmp_path)
+    project = _publication_project(tmp_path)
     monkeypatch.setattr(
         runner._Phase1StagedTreeTransaction, "_remove_container_aliases",
         lambda _self: "injected returned alias residue")
 
     result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+        project, "digital_arithmetic_primitive")
 
-    assert_prose_handoff(result, COMPLETE_DIRECTIONAL_FALL)
-    assert [span["source_span"] for span in
-            result.extras["unaccounted_source_spans"]] == _DIRECTIONAL_UNACCOUNTED_SPANS
-    assert "transaction_cleanup_warning" not in result.extras
-    assert result.output_files == []
-    assert not (project / "phase2" / "stage1" / "rtl").exists()
+    assert result.status == "PASS"
+    assert result.extras["transaction_cleanup_warning"] == (
+        "RTL_TRANSACTION_ALIAS_CLEANUP_FAILED: injected returned alias residue")
+    assert (project / "phase2" / "stage1" / "rtl" / "TopModule.v").is_file()
     for residue in [p for p in project.iterdir()
                     if p.name.startswith(".vibeic-rtl-txn.")]:
         shutil.rmtree(residue, ignore_errors=True)
@@ -786,7 +833,7 @@ def test_both_cleanup_warnings_are_reported_not_only_the_first(
     Replacing it with `warnings[0]` kept every suite green, so the second
     warning was free to disappear.
     """
-    project = _project(tmp_path)
+    project = _publication_project(tmp_path)
     monkeypatch.setattr(
         runner._Phase1StagedTreeTransaction, "_drain",
         lambda _self: "injected drain residue")
@@ -795,13 +842,12 @@ def test_both_cleanup_warnings_are_reported_not_only_the_first(
         lambda _self: "injected alias residue")
 
     result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+        project, "digital_arithmetic_primitive")
 
-    assert_prose_handoff(result, COMPLETE_DIRECTIONAL_FALL)
-    assert [span["source_span"] for span in
-            result.extras["unaccounted_source_spans"]] == _DIRECTIONAL_UNACCOUNTED_SPANS
-    assert "transaction_cleanup_warning" not in result.extras
-    assert result.output_files == []
+    assert result.status == "PASS"
+    assert result.extras["transaction_cleanup_warning"] == (
+        "RTL_TRANSACTION_DRAIN_CLEANUP_FAILED: injected drain residue; "
+        "RTL_TRANSACTION_ALIAS_CLEANUP_FAILED: injected alias residue")
     for residue in [p for p in project.iterdir()
                     if p.name.startswith(".vibeic-rtl-txn.")]:
         shutil.rmtree(residue, ignore_errors=True)
@@ -818,17 +864,13 @@ def test_finalize_on_an_already_closed_transaction_is_a_silent_no_op(
     That branch is hit on ordinary no-change runs; deleting the guard left the
     whole suite green.
     """
-    project = _project(tmp_path)
-    first = runner.step_rtl_gen(project, "deliberately_unregistered_class")
-    assert_prose_handoff(first, COMPLETE_DIRECTIONAL_FALL)
-    assert [span["source_span"] for span in
-            first.extras["unaccounted_source_spans"]] == _DIRECTIONAL_UNACCOUNTED_SPANS
+    project = _publication_project(tmp_path)
+    first = runner.step_rtl_gen(project, "digital_arithmetic_primitive")
+    assert first.status == "PASS"
 
-    second = runner.step_rtl_gen(project, "deliberately_unregistered_class")
+    second = runner.step_rtl_gen(project, "digital_arithmetic_primitive")
 
-    assert_prose_handoff(second, COMPLETE_DIRECTIONAL_FALL)
-    assert [span["source_span"] for span in
-            second.extras["unaccounted_source_spans"]] == _DIRECTIONAL_UNACCOUNTED_SPANS
+    assert second.status == "PASS"
     assert "transaction_cleanup_warning" not in second.extras
 
 
@@ -1004,7 +1046,7 @@ def test_step_preflight_blocks_symlink_before_earlier_canonical_writer(
 
 def test_valid_canonical_dispatch_reuses_one_immutable_operator_read(
         tmp_path, monkeypatch):
-    project = _project(tmp_path, CANONICAL_PULSE)
+    project = _project(_canonical_project(tmp_path), _ACCOUNTED_OPERATOR_SPEC)
     source = project / "phase1" / "input_doc" / "design.md"
     original_read_text = Path.read_text
     source_reads = 0
@@ -1022,17 +1064,17 @@ def test_valid_canonical_dispatch_reuses_one_immutable_operator_read(
     monkeypatch.setattr(Path, "read_text", _read_text)
     result = runner.step_rtl_gen(project, "deliberately_unregistered_class")
 
-    assert_prose_handoff(result, CANONICAL_PULSE)
-    assert [span["source_span"] for span in
-            result.extras["unaccounted_source_spans"]] == _PULSE_UNACCOUNTED_SPANS
+    assert result.status == "PASS"
+    assert result.extras["deterministic_generator"] == (
+        "canonical_primitive_synth")
     assert source_reads == 1
-    assert result.output_files == []
-    assert not (project / "phase2" / "stage1" / "rtl").exists()
+    assert (project / "phase2" / "stage1" / "rtl" /
+            "pulse_detect.v").is_file()
 
 
 def test_canonical_writer_refuses_root_replaced_after_emit_before_write(
         tmp_path, monkeypatch):
-    project = _project(tmp_path / "project", CANONICAL_PULSE)
+    project = _canonical_project(tmp_path / "project")
     displaced = tmp_path / "project.displaced"
     real_emit = canonical_primitive.emit_rtl
 
@@ -1050,12 +1092,12 @@ def test_canonical_writer_refuses_root_replaced_after_emit_before_write(
     result = runner.step_rtl_gen(
         project, "deliberately_unregistered_class")
 
-    assert_prose_handoff(result, CANONICAL_PULSE)
-    assert [span["source_span"] for span in
-            result.extras["unaccounted_source_spans"]] == _PULSE_UNACCOUNTED_SPANS
+    assert result.status == "NOT_MEASURED"
+    assert result.extras["output_refusal"]["reason"] == (
+        "PROJECT_BOUNDARY_REPLACED_DURING_PUBLICATION")
+    assert result.extras["write_performed"] is False
     assert result.output_files == []
-    assert not (project / "phase2").exists()
-    assert not displaced.exists()
+    assert not list(project.rglob("*"))
     assert not (displaced / "phase2").exists()
 
 
