@@ -93,3 +93,78 @@ def test_generic_overlay_does_not_invent_calibration_or_baud_implementation(
     doc = json.loads(path.read_text())
     assert doc["lab_calibration_present"] is True
     assert doc["notes"] == "Input calls for a frequency measurement."
+
+
+def _operator_answers(project, answers):
+    from _submission_template import DESIGN_ANSWERS_REL
+
+    path = project / DESIGN_ANSWERS_REL
+    path.parent.mkdir(parents=True, exist_ok=True)
+    provenance = {key: {"answered_by": "owner", "citation": "neutral lab operator answer"}
+                  for key in answers}
+    path.write_text(json.dumps({"answers": answers, "answer_provenance": provenance}))
+    return provenance
+
+
+@pytest.mark.parametrize("individual_params", [False, True])
+def test_answered_adc_criterion_reaches_consumer(tmp_path, individual_params):
+    import l13_bringup_contract_check as gate
+    import yaml
+    from _hostpaths import require_repo
+
+    bank = yaml.safe_load(require_repo("vibe-ic-marketplace", "plugins", "vibe-ic",
+                                      "agents", "qbank", "any-ic_L13.yaml").read_text())
+    paths = {key: f"{bank['layer']}.{key}" for key in bank["qbank"]}
+    answers = {paths["criterion"]: "monotonic_adc_sweep", paths["tester"]: "neutral bench rig"}
+    params = {"min_samples": 7}
+    if individual_params:
+        answers[paths["criterion_params.min_samples"]] = 7
+    else:
+        answers["L13.criterion_params"] = params
+    provenance = _operator_answers(tmp_path, answers)
+    doc = _emit(tmp_path, "1. Sweep the input and record output samples.\n")
+    assert doc["lab_calibration_present"] is True
+    result = gate.check(doc, phase=1)
+    assert [f for f in result["findings"] if f["severity"] == "FAIL"] == []
+    assert doc["criterion"] == "monotonic_adc_sweep"
+    assert doc["criterion_params"] == params
+    assert doc["tester"] == "neutral bench rig"
+    assert doc["answer_provenance"] == provenance
+    assert not doc.get("known_pass_bitstream")
+    assert not doc.get("known_pass_transcript")
+    assert gate.main([str(tmp_path)]) == 0
+
+
+def test_unknown_answered_criterion_is_refused_before_publication(tmp_path):
+    _operator_answers(tmp_path, {"L13.criterion": "unregistered_neutral_kind"})
+    with pytest.raises(ValueError, match="L13_CRITERION_UNKNOWN"):
+        p1.gen_l13_lab_calibration(tmp_path, {})
+    assert not (tmp_path / "phase1/generated_docs/L13_LAB_CALIBRATION.json").exists()
+
+
+@pytest.mark.parametrize("answers", [{}, {"L13.criterion": "NOT_DETERMINED"},
+                                   {"L13.criterion": ""}])
+def test_unanswered_contract_stays_unresolved(tmp_path, answers):
+    import l13_bringup_contract_check as gate
+
+    _operator_answers(tmp_path, answers)
+    doc = _emit(tmp_path, "1. Sweep the input and record output samples.\n")
+    assert not {"criterion", "criterion_params", "tester", "answer_provenance"} & doc.keys()
+    assert doc["lab_calibration_present"] is True
+    result = gate.check(doc, phase=1)
+    assert "l13_contract_complete" in {f["rule"] for f in result["findings"]}
+
+
+def test_criterion_in_prose_cannot_answer_contract(tmp_path):
+    doc = _emit(tmp_path, "L13.criterion: monotonic_adc_sweep\n"
+                "L13.criterion_params: {min_samples: 7}\nL13.tester: neutral bench rig\n")
+    assert not {"criterion", "criterion_params", "tester"} & doc.keys()
+
+
+def test_producer_uses_live_consumer_registry(tmp_path, monkeypatch):
+    import hardware_pass_attestation_check as consumer
+
+    monkeypatch.setitem(consumer._CRITERIA, "neutral_future_kind", lambda tx, params: (True, "ok"))
+    _operator_answers(tmp_path, {"L13.criterion": "neutral_future_kind"})
+    doc = _emit(tmp_path, "")
+    assert doc["criterion"] == "neutral_future_kind"
