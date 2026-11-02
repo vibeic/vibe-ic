@@ -65,6 +65,126 @@ _MINIMIZATION_PARAPHRASES = [
     'Use the minimum area.',
 ]
 
+_CLOSED_WORLD_SENTENCES = [
+    'The implementation must be NAND-only.',
+    'Minimize the number of gates.',
+    'Use NAND gates exclusively.',
+    'Use NAND gates alone.',
+    'Implement this function entirely with NAND gates.',
+    'Use as few logic gates as possible.',
+    'Reduce the gate count to the lowest achievable value.',
+    'Build it from NANDs only.',
+    'Only use NAND.',
+    'Keep the circuit as small as you can.',
+    'Choose the leanest realization.',
+    'Do the job with nothing beyond complemented conjunctions.',
+    'Spend no silicon on redundant structure.',
+    'Make every primitive an inverted product.',
+    'Shun surplus building blocks.',
+    'Trim whatever is dispensable.',
+    'Let every composition be a negated conjunction.',
+]
+
+
+@pytest.mark.parametrize('sentence', _CLOSED_WORLD_SENTENCES)
+@pytest.mark.parametrize('entry', ['chain', 'ordinary', 'late'])
+def test_closed_world_hands_off_unaccounted_sentences(tmp_path, sentence, entry):
+    import deterministic_emit_chain as chain
+    import design_one_shot_runner as runner
+    import time
+
+    prompt = _KMAP_2IN + '\n' + sentence
+    if entry == 'chain':
+        kind, rtl, rejected = chain.try_emit_ex(prompt, top='TopModule', check=False)
+        observed = 'HANDOFF' if rtl is None and rejected else 'SILENT_ACCEPT'
+        assert observed == 'HANDOFF', {'kind': kind, 'rtl': rtl, 'rejected': rejected}
+        return
+    if entry == 'ordinary':
+        source = tmp_path / 'phase1/input_prompt/design.md'
+        source.parent.mkdir(parents=True)
+        source.write_text(prompt)
+        before = {p.relative_to(tmp_path): p.read_bytes()
+                  for p in tmp_path.rglob('*') if p.is_file()}
+        result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
+    else:
+        before = {}
+        result = runner._try_spec_artifact_registry_rtl(
+            tmp_path, time.time(), phase1_plain_text=prompt)
+    observed = result.status if result else 'NO_HANDOFF'
+    assert observed == 'PASS_WITH_WAIVERS', result
+    assert result.extras['fallback_skill'] == 'spec-to-rtl'
+    assert result.extras.get('unaccounted_source_spans'), result.extras
+    for row in result.extras['unaccounted_source_spans']:
+        lo, hi = row['source_span']
+        assert prompt[lo:hi] == row['source_sentence']
+    assert {p.relative_to(tmp_path): p.read_bytes()
+            for p in tmp_path.rglob('*') if p.is_file()} == before
+
+
+@pytest.mark.parametrize('sentence', [
+    'Implement a NAND flash controller.',
+    'Minimize latency.',
+    'Only NAND and NOR are characterized in the library.',
+])
+def test_closed_world_negatives_do_not_invent_logic_obligations(sentence):
+    from _specrtl_common import extract_spec_contract
+
+    contract = extract_spec_contract(_KMAP_2IN + '\n' + sentence, confirm=False)
+    assert contract.logic_obligations == []
+
+
+def test_closed_world_complete_interface_and_function_keep_exact_rtl(tmp_path):
+    import deterministic_emit_chain as chain
+    import design_one_shot_runner as runner
+    from _specrtl_common import emission_spec_contract
+    import time
+
+    contract = emission_spec_contract(_KMAP_2IN, top='TopModule')
+    assert not getattr(contract, 'unaccounted_source_spans', ['NOT_ACCOUNTED'])
+    assert {row.kind for row in contract.accounted_source_spans} >= {'interface', 'function'}
+    expected = K.synth(_KMAP_2IN, 'TopModule')
+    assert chain.try_emit_ex(_KMAP_2IN, top='TopModule', check=False) == (
+        'karnaugh_map', expected, [])
+    result = runner._try_spec_artifact_registry_rtl(
+        tmp_path, time.time(), phase1_plain_text=_KMAP_2IN)
+    assert result.status == 'PASS', result.detail
+    assert Path(result.output_files[0]).read_text() == K.synth(_KMAP_2IN, 'chip_top')
+    ordinary = tmp_path / 'ordinary'
+    source = ordinary / 'phase1/input_prompt/design.md'
+    source.parent.mkdir(parents=True)
+    source.write_text(_KMAP_2IN)
+    result = runner.step_rtl_gen(ordinary, '__neutral_logic__', force_regen=True)
+    assert result.status == 'PASS', result.detail
+    assert Path(result.output_files[0]).read_text() == K.synth(_KMAP_2IN, 'chip_top')
+
+
+@pytest.mark.parametrize('extra', [
+    'Keep it lean',
+    '"Build it from NANDs only"',
+    'The function shown in the Karnaugh map below must use the leanest realization.',
+])
+def test_closed_world_empty_or_forged_coverage_cannot_waive_unparsed_source(extra):
+    import json
+    import deterministic_emit_chain as chain
+
+    prompt = _KMAP_2IN + '\n' + extra
+    interface = json.dumps({'module': 'TopModule', 'logic_obligations': [],
+                            'accounted_source_spans': [{'kind': 'function',
+                                'source_span': [0, len(prompt)], 'source_sentence': prompt,
+                                'contract_field': 'function'}], 'unaccounted_source_spans': []})
+    kind, rtl, rejected = chain.try_emit_ex(prompt, interface, 'TopModule', check=False)
+    assert ('HANDOFF' if rtl is None else 'SILENT_ACCEPT') == 'HANDOFF', (kind, rtl, rejected)
+    assert 'SPEC_SENTENCES_UNACCOUNTED' in str(rejected)
+
+
+def test_closed_world_port_prefix_does_not_account_for_unparsed_tail():
+    import deterministic_emit_chain as chain
+
+    prompt = _KMAP_2IN.replace(' - input  a', ' - input  a   Keep the implementation lean')
+    kind, rtl, rejected = chain.try_emit_ex(prompt, top='TopModule', check=False)
+    assert ('HANDOFF' if rtl is None else 'SILENT_ACCEPT') == 'HANDOFF', (kind, rtl, rejected)
+    assert 'SPEC_SENTENCES_UNACCOUNTED' in str(rejected)
+
 
 @pytest.mark.parametrize('sentence', _BASIS_PARAPHRASES + _MINIMIZATION_PARAPHRASES)
 @pytest.mark.parametrize('entry', ['chain', 'ordinary', 'late'])
