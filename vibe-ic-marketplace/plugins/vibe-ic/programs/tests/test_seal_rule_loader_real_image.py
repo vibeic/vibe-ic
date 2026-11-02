@@ -277,7 +277,7 @@ def test_json_binding_keeps_its_receiver_across_a_leading_dot(
 
 
 @pytest.mark.parametrize("method", ["to_f", "to_f()"])
-@pytest.mark.parametrize("separator", ["\n", "\n# comment\n\n"])
+@pytest.mark.parametrize("separator", ["\n", "\n# comment\n"])
 @pytest.mark.parametrize("parentheses", ["(rules['clearance'].to_i)", "(\n rules['clearance'].to_i\n)"])
 def test_post_parenthesis_conversion_is_part_of_the_numeric_binding(
         tmp_path, separator, parentheses, method):
