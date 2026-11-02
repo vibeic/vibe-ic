@@ -111,6 +111,39 @@ def test_one_shape_difference_is_fail(tmp_path):
     assert aggregate._xor(tmp_path).value == 1
 
 
+@needs_native
+@pytest.mark.parametrize("swap_timing", ["before_native", "after_native"])
+def test_signoff_gds_replaced_during_native_run_is_not_measured(tmp_path, monkeypatch, swap_timing):
+    import _klayout_launch as kl
+    project = _carrier(tmp_path, extra_shape=True)
+    control = g.native_delivered_xor(project)
+    assert (control["verdict"], control["design__xor_difference__count"]) == ("FAIL", 1)
+    runner = kl.find_runner(project=project)
+    run = runner.run_argv
+
+    def replace_signoff():
+        (project / SIGNOFF).write_bytes((project / DELIVERED).read_bytes())
+
+    def swap_at_native_run(argv, env, *, timeout=1800):
+        if argv[:2] == ["python3", "-c"]:
+            return run(argv, env, timeout=timeout)
+        if swap_timing == "before_native":
+            replace_signoff()
+        result = run(argv, env, timeout=timeout)
+        if swap_timing == "after_native":
+            replace_signoff()
+        return result
+
+    monkeypatch.setattr(runner, "run_argv", swap_at_native_run)
+    report = g.native_delivered_xor(project, runner=runner)
+    assert report["native"]["rc"] == 0
+    assert not admission.admitted_gds(project, project / SIGNOFF)
+    assert (report["verdict"], report["rc"]) == ("NOT_MEASURED", 2)
+    assert "signoff GDS changed after admission" in report["reason"]
+    assert "design__xor_difference__count" not in report
+    assert aggregate._xor(project).value == aggregate.NOT_MEASURED
+
+
 class _BrokenKLayout:
     """Resolves the deck, then the tool run fails."""
     kind, detail = "host", "stub"

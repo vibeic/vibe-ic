@@ -1592,8 +1592,14 @@ def native_delivered_xor(project: Path, *, container: Optional[str] = None,
                                          "this project; an unrun XOR is not a zero")
     report["runner"] = {"kind": runner.kind, "detail": runner.detail}
     try:
-        return finish(*_run_native_xor(project, report, runner, delivered, signoff,
-                                       top, timeout))
+        verdict, rc, reason = _run_native_xor(project, report, runner, delivered,
+                                              signoff, top, timeout)
+        import _gds_admission as admission
+        if not admission.admitted_gds(project, signoff):
+            report.pop("design__xor_difference__count", None)
+            return finish("NOT_MEASURED", 2,
+                          "XOR_SIGNOFF_GDS_CHANGED: signoff GDS changed after admission")
+        return finish(verdict, rc, reason)
     except (OSError, ValueError, KeyError, TypeError, SyntaxError) as exc:
         return finish("NOT_MEASURED", 2, f"XOR_NATIVE_FAILED: {type(exc).__name__}: {exc}")
 
