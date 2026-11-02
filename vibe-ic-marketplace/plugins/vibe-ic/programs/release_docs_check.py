@@ -1605,6 +1605,8 @@ def upstream_blockage_is_about(project: Path, sid: str, rel: str) -> Tuple[bool,
             f"step {sid}'s output record was written by invocation {wrote}, not this one "
             f"({mine}), so it describes an earlier run")
     for field_ in ("missing", "unusable", "unresolved"):
+        if field_ == "unresolved" and mine and wrote != mine:
+            continue
         for entry in (rec.get(field_) or []):
             if isinstance(entry, str) and _entry_covers(entry, rel):
                 return True, (
