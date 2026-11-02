@@ -102,6 +102,9 @@ def _copy_outputs(project: Path, sdir: Path, outputs) -> Tuple[list, list]:
     """Copy bytes, never aliases to a mutable working file. Keep empty files too."""
     present, errors = [], []
     for output in outputs:
+        if output.get('resolution_error'):
+            errors.append(output['resolution_error'])
+            continue
         src = Path(str(output.get('abs') or ''))
         if not output.get('exists') or not src.is_file():
             continue
@@ -824,6 +827,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.split("\n", 1)[0])
     ap.add_argument("project", type=Path)
     ap.add_argument("--json", type=Path, default=None)
+    ap.add_argument("--top", help="Invocation logical/file top for GDS output selection")
     ap.add_argument("--only-steps", default=None,
                     help="Comma-separated canonical step ids: refresh ONLY "
                          "these steps' folders and carry every other row from "
@@ -837,7 +841,9 @@ def main(argv=None) -> int:
             print("REFUSED: --only-steps was given but names no step id",
                   file=sys.stderr)
             return 2
-    res = materialize(a.project, only_steps=only)
+    from flow_artifact_paths import gate_parameters
+    with gate_parameters(a.project, {'top': a.top} if a.top is not None else None):
+        res = materialize(a.project, only_steps=only)
     txt = json.dumps(res, indent=2)
     if a.json:
         a.json.parent.mkdir(parents=True, exist_ok=True)

@@ -102,17 +102,18 @@ def _native_output_identity(path):
         return None
 
 
-def _native_current_step_output_snapshot(project, step_id):
+def _native_current_step_output_snapshot(project, step_id, params=None):
     """Capture output identities before the native producer is invoked."""
     try:
         from execution_adapters_backend import ROWS
         specs = ROWS[str(step_id)]['canonical_row'].get('required_outputs', ())
     except (KeyError, OSError, TypeError, ValueError):
         return {}
+    from flow_artifact_paths import resolve
     before = {}
     for spec in specs:
         for pattern in str(spec).split(' OR '):
-            for path in sorted(Path(project).glob(pattern.strip())):
+            for path in sorted(Path(project).glob(resolve(project, pattern.strip(), params))):
                 identity = _native_output_identity(path)
                 if identity is not None:
                     before[str(path.relative_to(project))] = identity
@@ -2706,7 +2707,7 @@ def _native_current_step_receipt(project, step_id, params, result,
         from execution_adapters_backend import ROWS
         row = ROWS[sid]['canonical_row']
         from execution_backend_gates import contracts
-        contract = contracts(Path(project), row)
+        contract = contracts(Path(project), row, parameters=params)
     except (KeyError, OSError, ValueError, TypeError, em.Refusal) as exc:
         receipt['verdict'] = 'NOT_MEASURED'
         receipt['reason'] = f'NATIVE_CURRENT_OUTPUT_CONTRACT_UNAVAILABLE: {exc}'
@@ -2871,9 +2872,17 @@ def _current_step_producer_authority(record, project=None):
     return True, "", "PASS"
 
 def produce(project, params):
+    if str(params.get('step_id')) != '37':
+        return _produce(project, params)
+    from flow_artifact_paths import gate_parameters
+    with gate_parameters(project, params):
+        return _produce(project, params)
+
+
+def _produce(project, params):
     started_ns = time.time_ns()
     sid = str(params['step_id'])
-    prior_outputs = _native_current_step_output_snapshot(Path(project), sid)
+    prior_outputs = _native_current_step_output_snapshot(Path(project), sid, params)
     if params['step_id'] in ('15', '15.5ic', '17', '18', '19', '20', '21'):
         result = produce_pnr(project, params)
     else:

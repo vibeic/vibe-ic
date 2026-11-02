@@ -84,6 +84,7 @@ from typing import (Any, Callable, Dict, FrozenSet, Iterable, List, Mapping,
                     NamedTuple, Optional, Sequence, Set, Tuple, Union)
 import _audit_scope
 import _path_layout as _pl
+import flow_artifact_paths as _artifact_paths
 import _gds_admission as _ga
 import verdict as _V  # declared step verdicts + the one cascade rule
 import _runner_summary as _rsum  # noqa: E402  vibe-ic#2081
@@ -79835,6 +79836,7 @@ def _phase3_window_full_gate_audit(project: Path, step_ids: Set[str]
     flow = yaml.safe_load(_fcc.DEFAULT_FLOW_DEF.read_text()) or {}
     steps = {str(step.get("id")): step for step in flow.get("steps", [])
              if str(step.get("id")) in step_ids}
+    parameters = _artifact_paths.current_parameters(project)
     with tempfile.TemporaryDirectory(prefix="phase3-gates-",
                                      dir=project.parent) as temp:
         isolated = Path(temp) / project.name
@@ -79846,7 +79848,8 @@ def _phase3_window_full_gate_audit(project: Path, step_ids: Set[str]
                 results[sid] = {"status": "NOT_MEASURED",
                                 "reason": "step absent from canonical flow"}
                 continue
-            result = _fcc.check_step(isolated, steps[sid], waivers)
+            result = _fcc.check_step(isolated, steps[sid], waivers,
+                                     **({'parameters': parameters} if parameters is not None else {}))
             results[sid] = asdict(result)
         return results
 
@@ -79927,7 +79930,8 @@ def _direct_flow_window(project: Path, top: str, pdk: PdkConfig,
         for step in steps:
             for spec in step.get("required_outputs") or []:
                 for pattern in str(spec).split(" OR "):
-                    for source in isolated.glob(pattern.strip()):
+                    from flow_artifact_paths import resolve
+                    for source in isolated.glob(resolve(isolated, pattern.strip(), {'top': top})):
                         if source.is_file():
                             if site == "gds" and row.status != "PASS" and source.suffix.lower() == ".gds":
                                 continue
@@ -80363,7 +80367,8 @@ def _phase3_window_enclosing(project: Path, top: str, pdk: PdkConfig,
         for step in steps:
             for spec in step.get("required_outputs") or []:
                 for pattern in str(spec).split(" OR "):
-                    for source in isolated.glob(pattern.strip()):
+                    from flow_artifact_paths import resolve
+                    for source in isolated.glob(resolve(isolated, pattern.strip(), {'top': top})):
                         if source.is_file():
                             target = project / source.relative_to(isolated)
                             if (not target.is_file() or
@@ -80473,6 +80478,7 @@ def _step32_lets_the_chain_continue(status: str) -> bool:
     return status in ("PASS", "WAIVED", "NOT_APPLICABLE")
 
 
+@_artifact_paths.with_top
 def _run_phase3_window(project: Path, top: str, pdk: PdkConfig,
                        args, selected: List[str]) -> int:
     """Dispatch only selected sites and publish a bounded audit of this run.
@@ -83102,7 +83108,7 @@ def main() -> int:
         import subprocess as _sp_fc
         _fc = _sp_fc.run(
             [sys.executable, str(PROGRAMS_DIR / "flow_compliance_check.py"),
-             str(project), "--strict"],
+             str(project), "--strict", "--top", effective_top],
             timeout=_pl.audit_timeout_s(project) + 120,
             check=False, capture_output=True, text=True)
         if _fc.returncode != 0:

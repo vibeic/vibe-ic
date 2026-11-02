@@ -680,8 +680,9 @@ def _fixed_inputs(runtime, step_id: str, *, parameters=None) -> dict:
     for spec in patterns:
         if not isinstance(spec, str):
             raise Refusal('ORDINARY_INPUT_CONTRACT_INVALID', repr(spec))
+        from flow_artifact_paths import resolve
         for pattern in str(spec).split(' OR '):
-            pattern = pattern.strip()
+            pattern = resolve(root, pattern.strip(), runtime.get('parameters'))
             if not pattern or Path(pattern).is_absolute() or '..' in Path(pattern).parts:
                 raise Refusal('ORDINARY_INPUT_PATH_UNSAFE', pattern)
             for match in root.glob(pattern):
@@ -703,7 +704,8 @@ def _fixed_inputs(runtime, step_id: str, *, parameters=None) -> dict:
             name: _snapshot.sha(path) for name, path in sorted(inputs.items())
         }
         missing = resolve_input_contract(
-            root, declarations, {'files': manifest_files, 'missing': []})
+            root, declarations, {'files': manifest_files, 'missing': []},
+            parameters=runtime.get('parameters'))
     else:
         missing = []
     if parameters is not None:
@@ -755,7 +757,8 @@ def _manifest_for_explicit_inputs(runtime, step_id: str, parameters, supplied):
             except OSError:
                 shutil.copyfile(Path(source), target)
         checked = _resolve_input_contract(
-            staged, issued['declarations'], {'files': files})
+            staged, issued['declarations'], {'files': files},
+            parameters=runtime.get('parameters'))
     parameters['resolved_input_manifest'] = {
         'declarations': checked['declarations'],
         'files': files,

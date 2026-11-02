@@ -931,8 +931,9 @@ def _run_audit(project: Path,
         return ("(flow_compliance_check.py unavailable)", AUDIT_NOT_RUN_VERDICT)
     eff_timeout = _resolve_audit_timeout(project, timeout_s)
     try:
+        from flow_artifact_paths import top_arguments
         res = _wd.run_host_supervised(
-            [sys.executable, str(COMPLIANCE_TOOL), str(project), "--strict"],
+            [sys.executable, str(COMPLIANCE_TOOL), str(project), "--strict"] + top_arguments(project),
             stall_grace_s=float(eff_timeout))
     except Exception as exc:                            # noqa: BLE001
         return (f"(audit failed: {exc})", AUDIT_NOT_RUN_VERDICT)
@@ -2905,6 +2906,7 @@ def main(argv: Optional[List[str]] = None) -> int:
         "Generate canonical chip-AGNOSTIC final_summary.md from Phase 2+3 artefacts."
     ))
     ap.add_argument("project_dir")
+    ap.add_argument("--top", help="Invocation logical/file top for GDS output selection")
     ap.add_argument("--out", default=None,
                     help="Output path (default: <project>/reports/final_summary.md)")
     ap.add_argument("--no-audit", action="store_true",
@@ -2998,9 +3000,11 @@ def main(argv: Optional[List[str]] = None) -> int:
               f"exit_code={_att_record.get('evidence', {}).get('exit_code')} "
               f"skip_kind={_att_record.get('evidence', {}).get('skip_kind') or '-'}")
 
-    md = _render(project, run_audit=not args.no_audit,
-                 audit_timeout_s=args.audit_timeout,
-                 prior_marker=prior_marker)
+    from flow_artifact_paths import gate_parameters
+    with gate_parameters(project, {'top': args.top} if args.top is not None else None):
+        md = _render(project, run_audit=not args.no_audit,
+                     audit_timeout_s=args.audit_timeout,
+                     prior_marker=prior_marker)
     out_path.write_text(md, encoding="utf-8")
     # NOTE: legacy plugin gate writers still write to reports/<flat>
     # paths. Auto-sweep was disabled because it conflicts with legacy

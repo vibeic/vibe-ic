@@ -116,10 +116,16 @@ def _copy_input_tree(inputs: Path, project: Path) -> None:
         shutil.copytree(inputs, project)
 
 
-def resolve_contract(project: Path, patterns) -> tuple[dict, list[str]]:
+def resolve_contract(project: Path, patterns, parameters=None) -> tuple[dict, list[str]]:
+    from flow_artifact_paths import resolve
     found, missing = {}, []
     for raw in patterns:
-        alternatives = [part.strip() for part in str(raw).split(" OR ")]
+        try:
+            alternatives = [resolve(project, part.strip(), parameters)
+                            for part in str(raw).split(" OR ")]
+        except ValueError as exc:
+            missing.append(str(raw) + ": " + str(exc))
+            continue
         paths = sorted({p for pattern in alternatives for p in project.glob(pattern)
                         if p.is_file() and not p.is_symlink() and p.stat().st_size})
         if not paths:
@@ -129,9 +135,9 @@ def resolve_contract(project: Path, patterns) -> tuple[dict, list[str]]:
     return found, missing
 
 
-def resolve_input_contract(project: Path, declarations, manifest=None) -> list[str]:
+def resolve_input_contract(project: Path, declarations, manifest=None, parameters=None) -> list[str]:
     """Return the aggregate missing set used by issuer and worker preflight."""
-    return _resolve_input_contract(project, declarations, manifest)["missing"]
+    return _resolve_input_contract(project, declarations, manifest, parameters)["missing"]
 
 
 def _valid_manifest_declaration(entry) -> bool:
@@ -183,7 +189,7 @@ def _valid_resolved_manifest(manifest) -> bool:
     return True
 
 
-def _resolve_input_contract(project: Path, declarations, manifest=None) -> dict:
+def _resolve_input_contract(project: Path, declarations, manifest=None, parameters=None) -> dict:
     """Resolve the issuer's one contract without dropping declaration shapes.
 
     The result is deliberately aggregate: every absent declaration is returned
@@ -243,7 +249,13 @@ def _resolve_input_contract(project: Path, declarations, manifest=None) -> dict:
                     files.append(child)
             return bool(files)
 
+        from flow_artifact_paths import resolve
         for alternative in (part.strip() for part in str(spec).split(' OR ')):
+            try:
+                alternative = resolve(project, alternative, parameters)
+            except ValueError as exc:
+                add(str(exc))
+                return False
             if not alternative:
                 continue
             path = Path(alternative)
@@ -312,7 +324,7 @@ def _resolve_input_contract(project: Path, declarations, manifest=None) -> dict:
             'missing': missing}
 
 
-def _declared_input_files(project: Path, declarations) -> dict[str, str]:
+def _declared_input_files(project: Path, declarations, parameters=None) -> dict[str, str]:
     """Derive a direct caller's input identity from declared paths only."""
     import hashlib
     from step_required_inputs_check import expand
@@ -338,7 +350,7 @@ def _declared_input_files(project: Path, declarations) -> dict[str, str]:
             specs.extend(spec for _, spec in expanded if isinstance(spec, str))
         elif isinstance(entry.get('path'), str):
             specs.append(entry['path'])
-    found, _ = resolve_contract(project, specs)
+    found, _ = resolve_contract(project, specs, parameters)
     return {name: digest for name, digest in found.items()
             if isinstance(digest, str) and digest}
 
@@ -453,7 +465,7 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
     else:
         input_contract = (manifest.get('declarations') if manifest_supplied
                           else params.get("input_contract", row.get("required_inputs", ())))
-        resolved = _resolve_input_contract(project, input_contract, manifest)
+        resolved = _resolve_input_contract(project, input_contract, manifest, params)
     input_contract = resolved['declarations']
     missing_inputs = resolved['missing']
     # The resolved declaration contract is the only producer input identity.
@@ -461,7 +473,7 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
     # project tree: that would admit stale outputs and unrelated inputs.
     producer_manifest = dict(resolved)
     if not manifest_supplied:
-        producer_manifest['files'] = _declared_input_files(project, input_contract)
+        producer_manifest['files'] = _declared_input_files(project, input_contract, params)
     producer = {"verdict": "NOT_MEASURED", "detail": "producer did not run"}
     gate_result = {"status": "NOT_MEASURED", "ledger": []}
     admission_result = None
@@ -508,12 +520,13 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
             # consumer exception must not prevent the canonical gate from being
             # represented in the digest-bound result.
             try:
-                gate_result = evaluate(project, row)
+                gate_result = (evaluate(project, row, parameters=params)
+                               if str(step_id) == "37" else evaluate(project, row))
             except BaseException as exc:
                 gate_result = {"status": "NOT_MEASURED", "ledger": [{
                     "gate": "backend_consumer", "verdict": "NOT_MEASURED",
                     "reason": f"{type(exc).__name__}: {exc}"}]}
-    files, missing = resolve_contract(project, row.get("required_outputs", ()))
+    files, missing = resolve_contract(project, row.get("required_outputs", ()), params)
     # Publish only exact current producer/gate bytes; no placeholder output is
     # created for a missing canonical contract.
     for name in files:

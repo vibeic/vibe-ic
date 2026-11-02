@@ -405,7 +405,9 @@ def audit(project: Optional[Path], gds_file: Optional[Path],
           def_file: Optional[Path],
           pdk_tech: Optional[str] = None) -> Tuple[str, List[Dict]]:
     if gds_file is not None:
-        defs = [def_file] if def_file else []
+        defs = ([def_file] if def_file else
+                sorted(p for p in project.glob(_DEF_GLOB) if p.is_file())
+                if project is not None else [])
         recs = [census_one(gds_file, [d for d in defs if d and d.is_file()],
                            pdk_tech=pdk_tech)]
     else:

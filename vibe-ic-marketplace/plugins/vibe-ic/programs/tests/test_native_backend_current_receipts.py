@@ -359,6 +359,9 @@ def _retained_default_stream(tmp_path, monkeypatch, *, native_only_provenance=Fa
               'execution_mode': 'default',
               'resolved_input_manifest': _manifest(
                   project, 'phase3/stage3/pnr/routed.def')}
+    import execution_policy
+    monkeypatch.setattr(execution_policy, '_ordinary_runtime', {
+        'project': project, 'policy': {'mode': 'default'}, 'parameters': params})
     return project, params, first, calls
 
 

@@ -51,6 +51,7 @@ from metal_fill_config_gen import (build_metal_fill_config,
                                    density_rule_layer_identifiers)
 import die_level_deck_rule_attribution as _dla
 import step_preflight as _spf
+import flow_artifact_paths as _artifact_paths
 import librelane_contract as _lc
 from librelane_contract import (PDK_GUEST_ROOT, PROBE_DEADLINE_S, Refusal, _load, digest,  # noqa: E402
                                 DECLARATION_REL, declaration_config, resolve_step_configs,
@@ -1825,6 +1826,7 @@ def _validate_fill_stream_authority(project: Path, record: dict) -> None:
             raise Refusal('LL_FILL_STREAM_AUTHORITY_CHANGED', 'derived mapping recipe')
 
 
+@_artifact_paths.with_top
 @_spf.retained_step('37')
 def default_stream(project: Path, top: str, pdk: Any, container: str) -> dict:
     """One Default KLayout stream of the current filled DEF, then real fill.

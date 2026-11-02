@@ -2039,6 +2039,8 @@ def _glob_first(project: Path, pattern: str) -> List[str]:
     generate sweep that moves flat reports/ artefacts into category
     subdirs (sourced by `_REPORTS_SUBDIR_FALLBACK`).
     """
+    from flow_artifact_paths import resolve
+    pattern = resolve(project, pattern)
     matches = _glob_real(project, pattern)
     if not matches and pattern.startswith("reports/"):
         rest = pattern[len("reports/"):]
@@ -2467,11 +2469,16 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
     `si_crosstalk.rpt OR .json`, step 34's `filled.def OR metal_fill.done`),
     so collapsing to one would have quietly reduced what gets scanned.
     """
-    alts = [a.strip() for a in str(spec).split(" OR ") if a.strip()]
+    from flow_artifact_paths import resolve
+    try:
+        selected = resolve(project, spec)
+    except ValueError as exc:
+        return False, [], "project_glob", str(exc), _bind_detail("output_top_unbound", reason=str(exc))
+    alts = [a.strip() for a in str(selected).split(" OR ") if a.strip()]
     glob_ev: List[str] = []       # exactly what the pre-change loop collected
     glob_hits: List[str] = []     # every hit, for classification
     literal_hits: List[str] = []  # hits a NON-wildcard alternative NAMED
-    n_wild = 0
+    n_wild = int(selected != spec)
     for sp in alts:
         if _alt_is_wildcard(sp):
             n_wild += 1
@@ -2479,7 +2486,7 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
         if hits:
             glob_ev.append(hits[0])
             glob_hits.extend(hits)
-            if not _alt_is_wildcard(sp):
+            if selected == spec and not _alt_is_wildcard(sp):
                 literal_hits.extend(hits)
     glob_sat = bool(glob_hits)
 
@@ -2496,6 +2503,8 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
     #     one that survives is evidence, for the reason in the docstring.
     live_rec: List[str] = []
     for rel in rec["produced"]:
+        if selected != spec and rel != selected:
+            continue
         if _live_artefact_state(project / rel)[0] and rel not in live_rec:
             live_rec.append(rel)
     if live_rec:
@@ -2533,7 +2542,8 @@ def _resolve_required_output(project: Path, sid: Any, spec: str,
         # large SoC for a number nobody's verdict depends on.
         _seen_rec: set = set()
         _recorded = [r for r in rec["produced"]
-                     if not (r in _seen_rec or _seen_rec.add(r))]
+                     if (selected == spec or r == selected)
+                     and not (r in _seen_rec or _seen_rec.add(r))]
         _live_set = set(live_rec)
         _lost = [r for r in _recorded if r not in _live_set]
         if _lost:
@@ -3311,7 +3321,13 @@ def _expand_globs(args: List[str], cwd: Path) -> List[str]:
     multiple optional source globs like `phase2/stage1/rtl/*.sv
     phase2/stage1/rtl/*.v`. Non-glob args pass through unchanged."""
     out: List[str] = []
+    from flow_artifact_paths import resolve
     for a in args:
+        option, separator, value = a.partition("=")
+        if a.startswith("-") and separator:
+            a = option + "=" + resolve(cwd, value)
+        else:
+            a = resolve(cwd, a)
         if any(c in a for c in ["*", "?", "["]) and not a.startswith("-"):
             matches = sorted(str(p.relative_to(cwd)) for p in cwd.glob(a))
             if matches:
@@ -3340,6 +3356,17 @@ def _resolve_program_cmd(cmd_str: str, cwd: Path | None = None) -> List[str]:
     args = parts[1:]
     if cwd is not None:
         args = _expand_globs(args, cwd)
+        if prog_path.stem in ('flow_compliance_check', 'stage1_compliance',
+                              'stage2_compliance', 'stage3_compliance', 'stage4_compliance'):
+            from flow_artifact_paths import top_arguments
+            forwarded = top_arguments(cwd)
+            if forwarded:
+                explicit = [args[index + 1] for index, value in enumerate(args[:-1]) if value == '--top']
+                explicit.extend(value.partition('=')[2] for value in args if value.startswith('--top='))
+                if any(top != forwarded[1] for top in explicit):
+                    raise ValueError('OUTPUT_TOP_CONFLICT: nested audit top differs')
+                if not explicit:
+                    args.extend(forwarded)
     return [sys.executable, str(prog_path)] + args
 
 
@@ -16570,7 +16597,9 @@ def _with_child_gate_step(fn):
     def _judge(project, step, *args, **kwargs):
         token = _CHILD_GATE_STEP.set(str((step or {}).get("id") or ""))
         try:
-            return fn(project, step, *args, **kwargs)
+            from flow_artifact_paths import gate_parameters
+            with gate_parameters(project, kwargs.pop("parameters", None)):
+                return fn(project, step, *args, **kwargs)
         finally:
             _CHILD_GATE_STEP.reset(token)
     return _judge
@@ -20447,6 +20476,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("project_dir", nargs="?",
                    help="Project directory to audit (omit when using "
                         "--list-structural-gates)")
+    p.add_argument("--top", help="Invocation logical/file top for GDS output selection")
     p.add_argument("--flow", default="phase1_phase2_phase3", help="Flow name (default: phase1_phase2_phase3)")
     p.add_argument("--flow-def", help="Override path to flow YAML")
     p.add_argument("--strict", action="store_true", help="Strict mode (default). Non-waived MISSING/FAIL → exit 1.")
@@ -20645,6 +20675,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     project = Path(args.project_dir).resolve()
+    from flow_artifact_paths import current_parameters, gate_parameters
+    parameters = ({'top': args.top} if args.top is not None else current_parameters(project))
     if not project.is_dir():
         print(f"flow_compliance_check: not a directory: {project}", file=sys.stderr)
         return 2
@@ -20721,6 +20753,11 @@ def main(argv: Optional[List[str]] = None) -> int:
         import atexit as _atexit
         _atexit.register(_shutil.rmtree, str(_ro_scratch), True)
 
+    with gate_parameters(project, parameters):
+        return _audit_project(args, project)
+
+
+def _audit_project(args, project):
     # ── the design this verdict is about, measured BEFORE anything judges it ──
     #
     # The tally this program publishes carried no record of its own
@@ -21212,13 +21249,17 @@ def main(argv: Optional[List[str]] = None) -> int:
         and not (suppress_yaml_step14 and step.get("id") == 14)
     ]
     _workers = _compliance_workers(len(_eval_steps))
+    from flow_artifact_paths import current_parameters
+    _parameters = current_parameters(project)
+    _parameter_args = ({'parameters': _parameters}
+                       if _parameters is not None and 'top' in _parameters else {})
     if _workers <= 1:
         for step in _eval_steps:
             _r = check_step(
                 project, step, waivers,
                 skip_analog=skip_analog, skip_hardware=skip_hardware,
                 strict_audit_evidence=strict_audit_evidence,
-                strict_step_binding=strict_step_binding)
+                strict_step_binding=strict_step_binding, **_parameter_args)
             _emit_step_metrics(project, step, _r)
             _emit_step_output_record(project, step, _r)
             results.append(_r)
@@ -21249,7 +21290,7 @@ def main(argv: Optional[List[str]] = None) -> int:
                                skip_analog=skip_analog,
                                skip_hardware=skip_hardware,
                                strict_audit_evidence=strict_audit_evidence,
-                               strict_step_binding=strict_step_binding)
+                               strict_step_binding=strict_step_binding, **_parameter_args)
                     for step in _wave
                 ]
                 # THE SAME EMIT ON BOTH BRANCHES. A metrics row that appears only
