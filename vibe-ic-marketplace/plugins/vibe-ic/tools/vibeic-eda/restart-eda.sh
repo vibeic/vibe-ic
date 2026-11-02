@@ -439,6 +439,11 @@ def options(name):
         else:
             settings.pop("BindOptions", None)
         result[mount["Target"]] = settings
+    # Explicit legacy declarations override inherited specifications too.
+    for binding in read(name, ".HostConfig.Binds") or []:
+        parts = binding.split(":")
+        settings = {"VolumeOptions": {"NoCopy": True}} if len(parts) > 2 and "nocopy" in parts[2].split(",") else {}
+        result[parts[1] if len(parts) > 1 else parts[0]] = settings
     return result
 try:
     if read(source, ".Id") != source_id:
