@@ -48,6 +48,7 @@ direction is printed — the caller keeps the #654 cap); 1 = error.
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import math
 import re
@@ -281,28 +282,114 @@ def _doc_text(project: Path) -> str:
     return "\n".join(blob)
 
 
-# `p = x * y`, `c = a + b`, `result = op1 OP op2`, also unicode `×` for `*`.
-_EXPR_RE = re.compile(
-    r"([A-Za-z_]\w*)\s*=\s*\(?\s*([A-Za-z_]\w*)\s*"
-    r"(\*|×|\+|-|&|\||\^|<<|>>)\s*([A-Za-z_]\w*)",
-    re.UNICODE)
-
-
 def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
-    """Return (result_name, lhs_name, operator, rhs_name) from an explicit
-    closed-form expression, else fall back to an arithmetic word-token. Returns
-    None when no recognised operator is present (→ DEFER)."""
-    for m in _EXPR_RE.finditer(text):
-        res, lhs, op, rhs = m.group(1), m.group(2), m.group(3), m.group(4)
-        op = "*" if op == "×" else op
-        # distinct operand names so the corner-pair driver binds two real ports
-        if op in _OPERATORS and lhs != rhs:
-            return (res, lhs, op, rhs)
-    for rx, op in _WORD_OPERATOR:
-        if rx.search(text):
-            # word-token: operand/result names unknown — resolved from ports
-            return (None, None, op, None)  # type: ignore[return-value]
+    """Parse one complete affirmative function record, never an executable prefix.
+
+    The supported domain remains one binary operation over two named operands.
+    Unknown residual prose and larger ASTs require the expert reference hook.
+    """
+    text = text.strip().rstrip('.;').strip().replace('×', '*')
+    if '#' in text:
+        return None  # ast.parse discards comments, including functional caveats
+    # These are descriptions of the supported arithmetic shape, not arbitrary
+    # suffixes. Anything else (including overflow policy) remains unconsumed.
+    descriptor = r'(?:(?:unsigned|signed|parallel|serial|serial-parallel)\s+)*(?:multiplier|adder|subtractor)'
+    if re.fullmatch(descriptor, text, re.I):
+        for rx, op in _WORD_OPERATOR:
+            if rx.search(text) and op in ('*', '+'):
+                return (None, None, op, None)
+    descriptions = []
+    introduction = re.match(
+        r'^Implement\s+(?:an?\s+)?(?:\d+-bit\s+)?(' + descriptor + r')\.\s+', text, re.I)
+    if introduction:
+        descriptions.append(introduction[1])
+        text = text[introduction.end():]
+    prefix = re.match(r'^(' + descriptor + r')\s+(?=[A-Za-z_]\w*\s*=)', text, re.I)
+    if prefix:
+        descriptions.append(prefix[1])
+        text = text[prefix.end():]
+    suffix = re.search(r'(?:,?\s+)(?:a\s+)?(?:\d+-bit\s+)?(' + descriptor + r')$', text, re.I)
+    if suffix:
+        descriptions.append(suffix[1])
+        text = text[:suffix.start()]
+    suffix = re.search(r'\s*\(\s*(' + descriptor + r')\s*\)$', text, re.I)
+    if suffix:
+        descriptions.append(suffix[1])
+        text = text[:suffix.start()]
+    text = re.sub(r'\s+mod\s+2\s*\^\s*(?:\d+|[A-Za-z_]\w*)$', '', text)
+    try:
+        tree = ast.parse(text, mode='exec')
+    except (SyntaxError, ValueError):
+        tree = None
+    if tree is not None and len(tree.body) == 1:
+        stmt = tree.body[0]
+        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
+                and isinstance(stmt.targets[0], ast.Name)
+                and isinstance(stmt.value, ast.BinOp)
+                and isinstance(stmt.value.left, ast.Name)
+                and isinstance(stmt.value.right, ast.Name)):
+            operators = {ast.Mult: '*', ast.Add: '+', ast.Sub: '-',
+                         ast.BitAnd: '&', ast.BitOr: '|', ast.BitXor: '^',
+                         ast.LShift: '<<', ast.RShift: '>>'}
+            op = operators.get(type(stmt.value.op))
+            if any(not any(rx.search(desc) and declared == op
+                           for rx, declared in _WORD_OPERATOR)
+                   for desc in descriptions):
+                return None
+            if op and stmt.value.left.id != stmt.value.right.id:
+                return (stmt.targets[0].id, stmt.value.left.id, op,
+                        stmt.value.right.id)
+    prose = re.fullmatch(
+        r'(?:The\s+)?([A-Za-z_]\w*)\s+is\s+the\s+'
+        r'(sum|product|difference|bitwise XOR|bitwise AND|bitwise OR)\s+of\s+'
+        r'([A-Za-z_]\w*)\s+and\s+([A-Za-z_]\w*)', text, re.I)
+    if prose and prose[3] != prose[4]:
+        op = {'sum': '+', 'product': '*', 'difference': '-',
+              'bitwise xor': '^', 'bitwise and': '&', 'bitwise or': '|'}[prose[2].lower()]
+        return prose[1], prose[3], op, prose[4]
     return None
+
+
+def _function_records(project: Path) -> List[str]:
+    """Read function content from structured L2 records, excluding metadata.
+
+    An existing L2 is authoritative; incidental L1 descriptions or copied raw
+    input must not override it. Do not concatenate separate records into code.
+    """
+    gd = _pl.generated_docs_dir(project)
+    for name in ('L2_FRS.json', 'L2.json'):
+        doc = _read_json(gd / name)
+        if doc is not None:
+            fields = doc.get('fields', doc)
+            if not isinstance(fields, dict):
+                return []
+            rows = fields.get('frs_sections') or []
+            if not rows and isinstance(fields.get('function'), str):
+                return [fields['function']]
+            if not rows and isinstance(fields.get('content'), str):
+                return [fields['content']]
+            if not isinstance(rows, list) or any(
+                    not isinstance(row, dict) or not isinstance(row.get('content'), str)
+                    for row in rows):
+                return []
+            return [row['content'] for row in rows
+                    if isinstance(row, dict) and isinstance(row.get('content'), str)
+                    and row['content'].strip()]
+    doc = _read_json(gd / 'L1_DATASHEET.json') or {}
+    fields = doc.get('fields', doc)
+    overview = fields.get('overview') if isinstance(fields, dict) else None
+    if isinstance(overview, str) and overview.strip():
+        return [overview]
+    return []
+
+
+def _function_operator(project: Path) -> Optional[Tuple[str, str, str, str]]:
+    records = _function_records(project)
+    parsed = [_extract_operator(record) for record in records]
+    if not parsed or any(item is None for item in parsed):
+        return None
+    first = parsed[0]
+    return first if all(item == first for item in parsed) else None
 
 
 def _resolve_width(project: Path, ports: List[dict]) -> int:
@@ -357,10 +444,11 @@ def _port_numeric_width(p: dict) -> Optional[int]:
     if isinstance(msb, int) and isinstance(lsb, int):
         return abs(msb - lsb) + 1
     w = p.get("width")
-    if isinstance(w, int) and w >= 1:
+    if type(w) is int and w >= 1:
         return w
     if isinstance(w, str) and w.strip().isdigit():
-        return int(w.strip())
+        numeric = int(w.strip())
+        return numeric if numeric >= 1 else None
     return None
 
 
@@ -429,7 +517,7 @@ def _load_top_ports(project: Path) -> Tuple[Optional[str], List[dict]]:
 
 def extract_arith_spec(project: Path,
                        ic_class: Optional[str]) -> Tuple[Optional[dict], str]:
-    """Resolve {operator, width, signed, operands, result_port, top}, or
+    """Resolve the named operand_a/operand_b/result and their exact widths, or
     (None, reason) to DEFER.
 
     DEFER (§4.05 fail-closed) when: not the arithmetic-primitive family; no
@@ -446,14 +534,27 @@ def extract_arith_spec(project: Path,
         return None, "no usable L9 top ports — cannot bind operands"
 
     text = _doc_text(project)
-    found = _extract_operator(text)
+    found = _function_operator(project)
     if not found:
+        topology = ', '.join(sorted({p['name'] for p in ports
+            if is_clock_or_reset_port(p['name'])
+            or p['name'].lower() in (_HANDSHAKE_NAMES | _STATUS_OUT_NAMES)}))
+        data_inputs = [p for p in ports if p['dir'] == 'input'
+                       and not is_clock_or_reset_port(p['name'])]
+        extra = (len(data_inputs) != 2
+                 or sum(p['dir'] == 'output' for p in ports) != 1)
         return None, ("no recognised closed-form operator (* + - & | ^ << >>) "
-                      "found in L1/L2 — defer (don't guess)")
+                      "in a complete affirmative L2 function record; unsupported "
+                      "expression or residual semantics — defer to testbench-gen"
+                      + (f"; clock/handshake/status ports: {topology}" if topology else "")
+                      + ('; a clock input is present' if any(
+                          p['dir'] == 'input' and is_clock_or_reset_port(p['name'])
+                          for p in ports) else '')
+                      + ('; additional input controls or output functions require a reference' if extra else ''))
     res_name, lhs_name, operator, rhs_name = found
 
     width = _resolve_width(project, ports)
-    text_l = text.lower()
+    text_l = '\n'.join(_function_records(project)).lower()
     signed = bool(re.search(r"\bsigned\b|2'?s? ?complement|signed_2c", text_l)) \
         and not re.search(r"\bunsigned\b|\"unsigned\"", text_l)
     # declaration.json integer_encoding wins when present.
@@ -498,10 +599,14 @@ def extract_arith_spec(project: Path,
 
     op_a = _by_name(lhs_name, inputs) if lhs_name else None
     op_b = _by_name(rhs_name, inputs) if rhs_name else None
+    if (lhs_name and op_a is None) or (rhs_name and op_b is None):
+        return None, 'source expression operand is not a declared data input — defer'
     if op_a is None or op_b is None:
         ranked = sorted(inputs, key=_rank_key, reverse=True)
         op_a, op_b = ranked[0], ranked[1]
     result = _by_name(res_name, outputs) if res_name else None
+    if res_name and result is None:
+        return None, 'source expression result is not a declared output — defer'
     if result is None:
         result = max(outputs, key=_rank_key)
 
@@ -619,9 +724,42 @@ def extract_arith_spec(project: Path,
     # truncation width is the RESULT port's physical width — that is the bit
     # pattern the DUT output actually carries (e.g. a 16-bit product net for an
     # 8x8 multiplier), so the `===` compare is exact.
-    op_a_w = op_a.get("numeric_width") or width
-    op_b_w = op_b.get("numeric_width") or width
-    result_w = result.get("numeric_width") or width
+    for port, role in roles:
+        if port.get('numeric_width') is None:
+            # Symbolic parallel widths must resolve over the defaults of the
+            # module the emitted bare instantiation will actually elaborate.
+            # Reuse the existing resolver; the conventional 32-bit fallback is
+            # not a declaration of a parameter's value.
+            raw = port.get('raw') or {}
+            cell = raw.get('width_decl') or raw.get('width_symbolic')
+            if not cell:
+                match = re.search(r'\[[^\]]+\]', str(raw.get('width') or ''))
+                cell = match[0] if match else None
+            if not cell:
+                return None, f'{role} width is unresolved — defer to testbench-gen'
+            from _port_width import defaults_from_sources, resolve
+            sources = [(path, path.read_text(errors='replace'))
+                       for path in sorted(_pl.rtl_dir(project).rglob('*'))
+                       if path.suffix in ('.v', '.sv') and path.is_file()]
+            params = defaults_from_sources(sources, top)
+            cell = cell if cell.strip().startswith('[') else '[' + cell + ']'
+            resolved, why = resolve(cell, params)
+            numeric = _port_numeric_width({'width_decl': (resolved or '').strip()})
+            if numeric is None:
+                return None, f'{role} width is unresolved: {why} — defer to testbench-gen'
+            port['numeric_width'] = numeric
+    op_a_w, op_b_w, result_w = (port['numeric_width'] for port, _ in roles)
+    operand_signs = [(p.get('raw') or {}).get('signed') for p in (op_a, op_b)]
+    if any(value is not None for value in operand_signs):
+        if any(type(value) is not bool for value in operand_signs) or len(set(operand_signs)) != 1:
+            return None, 'mixed or unresolved operand signedness — defer to testbench-gen'
+        signed = operand_signs[0]
+    if signed and operator in ('<<', '>>'):
+        return None, 'signed shift operator semantics are unresolved — defer'
+    for record in _function_records(project):
+        modulus = re.search(r'\bmod\s+2\s*\^\s*(\d+)\b', record)
+        if modulus and int(modulus[1]) != result_w:
+            return None, 'source modulus differs from declared result width — defer'
 
     spec = {
         "top": top,
@@ -643,6 +781,45 @@ def extract_arith_spec(project: Path,
 def _twos(val: int, width: int) -> int:
     """Logical int → unsigned width-bit two's-complement bit pattern."""
     return val & ((1 << width) - 1)
+
+
+def parallel_golden(spec: dict, a: int, b: int) -> int:
+    """Interpret each driven bit pattern at its own declared operand width."""
+    values = []
+    for value, key in ((a, 'operand_a_width'), (b, 'operand_b_width')):
+        width = spec[key]
+        value = _twos(value, width)
+        if spec['signed'] and value & (1 << (width - 1)):
+            value -= 1 << width
+        values.append(value)
+    if spec['operator'] == '<<' and values[1] >= spec['result_width']:
+        return 0
+    if spec['operator'] == '>>' and values[1] >= spec['operand_a_width']:
+        return 0
+    return compute_golden(spec['operator'], *values, spec['result_width'], spec['signed'])
+
+
+def parallel_operand_pairs(spec: dict, count: int = 300,
+                           exclude=()) -> List[Tuple[int, int]]:
+    """Distinct deterministic pairs over the actual rectangular input domain.
+
+    A full-period odd-stride permutation avoids duplicate pairs and reaches
+    large shift amounts too. Output truncation never changes the input domain.
+    """
+    aw, bw = spec['operand_a_width'], spec['operand_b_width']
+    mask = (1 << (aw + bw)) - 1
+    bmask = (1 << bw) - 1
+    seen = set(exclude)
+    out = []
+    index = 0
+    while len(out) < count and index <= mask:
+        value = (index * 0x9E3779B97F4A7C15 + 0xD1B54A32D192ED03) & mask
+        pair = value >> bw, value & bmask
+        index += 1
+        if pair not in seen:
+            out.append(pair)
+            seen.add(pair)
+    return out
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -795,7 +972,7 @@ def extract_serial_arith_spec(
     top, ports = _load_top_ports(project)
     if not top or not ports:
         return None, "no usable L9 top ports"
-    found = _extract_operator(_doc_text(project))
+    found = _function_operator(project)
     if not found:
         return None, "no recognised closed-form operator"
     res_name, lhs_name, operator, rhs_name = found
@@ -2254,7 +2431,8 @@ def _emit_tb(spec: dict, module_name: "str | None" = None,
     # Enumerate operand pairs over operand_a's width (the corner space); each
     # operand is two's-complement-truncated to ITS OWN port width when driven.
     if pairs is None:
-        pairs = enumerate_operand_pairs(a_w, signed, operator)
+        pairs = (enumerate_operand_pairs(a_w, signed, operator) if a_w == b_w
+                 else parallel_operand_pairs(spec, 64))
     role_w = {a_name: a_w, b_name: b_w, r_name: r_w}
 
     def _rng(w):
@@ -2302,7 +2480,7 @@ def _emit_tb(spec: dict, module_name: "str | None" = None,
         bu = _twos(b, b_w)
         # The DUT output bit pattern is (a OP b) truncated to the RESULT port
         # width; signedness only re-interprets the operand inputs.
-        golden = compute_golden(operator, a, b, r_w, signed)
+        golden = parallel_golden(spec, a, b)
         lines.append(f"    // vector {idx}: {a_name}={a} {operator} "
                      f"{b_name}={b} => golden={golden} (mod 2^{r_w})")
         lines.append(f"    {a_name} = {a_w}'d{au};")
@@ -2382,8 +2560,8 @@ def generate(project: Path,
     tb_path = sim_dir / f"tb_{spec['top']}_oracle.v"
     tb_path.write_text(tb_text)
     n_vec = len(enumerate_operand_pairs(
-        spec.get("operand_a_width") or spec["width"], spec["signed"],
-        spec["operator"]))
+        spec['operand_a_width'], spec['signed'], spec['operator'])) if (
+        spec['operand_a_width'] == spec['operand_b_width']) else len(parallel_operand_pairs(spec, 64))
     manifest = {
         "program": "arith_oracle_tb_gen",
         "verdict": "TB_EMITTED",

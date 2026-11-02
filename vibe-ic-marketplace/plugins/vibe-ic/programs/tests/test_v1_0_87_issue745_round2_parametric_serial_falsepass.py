@@ -183,6 +183,13 @@ def test_noleak_fully_parametric_parallel_multiplier_emits(tmp_path):
     ]
     project = _mk_project(tmp_path, top="pmul", ports=ports,
                           l2="c = a * b parallel multiplier")
+    # The bare oracle instance elaborates the DUT's declared default. Supply
+    # that default explicitly; an absent parameter value cannot imply 32 bits.
+    rtl = project / "phase2/stage1/rtl"
+    rtl.mkdir(parents=True)
+    (rtl / "pmul.v").write_text(
+        "module pmul #(parameter WIDTH=32)(input [WIDTH-1:0] a,b, "
+        "output [2*WIDTH-1:0] c); assign c=a*b; endmodule\n")
     rep, rc = aotg.generate(project, "digital_arithmetic_primitive")
     assert rc == 0 and rep["verdict"] == "TB_EMITTED"
     assert rep["width"] != 1            # resolved to the param default, not 1
