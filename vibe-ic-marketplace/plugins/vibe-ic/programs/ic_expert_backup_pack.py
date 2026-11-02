@@ -609,10 +609,9 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
         shape = {
             "id": "stable rule-and-subject identifier",
             "layer": "generated L-layer name",
-            "field_path": ("a field path THIS LAYER DECLARES, per "
-                           "authoring_schema.json — or omitted, which states "
-                           "that the expectation is about the whole layer"
-                           if derived else "optional field path"),
+            "field_path": ("required: a field path THIS LAYER DECLARES, per "
+                           "authoring_schema.json; missing scope is UNSCOPED"
+                           if derived else "required: a resolvable field path"),
             "requirement": "what the input requires the layer to carry",
             "evidence": ["input-only evidence supporting the expectation"],
             "expected_tokens": (
@@ -629,7 +628,7 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
             "evidence": ["input-only evidence supporting the expectation"],
             "sub_expectations": [{
                 "layer": "generated L-layer name",
-                "field_path": "a field path THAT layer declares, or omitted",
+                "field_path": "required: a resolvable field path THAT layer declares",
                 "expected_tokens": (
                     derived.get("expected_tokens_rule")
                     or ["one or more tokens to compare"]),
@@ -658,10 +657,9 @@ def assemble(prompt: str, iface: Optional[List[Dict[str, Any]]], target: Optiona
                 "address a layer this pack's generated_layer_contract names — "
                 "it lists EVERY layer this project emitted, not a subset",
                 "a `field_path` must be one authoring_schema.json lists for "
-                "the layer you address, or be omitted; an undeclared path is "
-                "refused by name at review time and the reading then falls "
-                "back to the whole layer, so the finding would describe a "
-                "field nothing looked at",
+                "the layer you address; missing scope is UNSCOPED and an "
+                "undeclared path is refused by name. Neither performs a "
+                "whole-layer comparison or can be counted as met",
                 "state one fact per expectation; when its halves live in "
                 "different layers use split_shape rather than naming one "
                 "layer and listing every token",

@@ -231,7 +231,7 @@ def test_the_refusals_above_are_not_vacuous(token, blob):
 # ── 5. every other token is matched exactly as before ──────────────────────
 
 @pytest.mark.parametrize("token", [
-    "REFHI", "TRIM_SEL", "power domain", "0xc", "2 clocks", "16-bit 4-to-1",
+    "REFHI", "TRIM_SEL", "power domain", "0xc", "2 clocks",
     "v1.5.5", "lib7x2", "false",
 ])
 def test_a_token_that_is_not_a_number_is_matched_as_before(token):

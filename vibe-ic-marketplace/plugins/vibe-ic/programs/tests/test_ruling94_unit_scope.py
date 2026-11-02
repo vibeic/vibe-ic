@@ -4,6 +4,7 @@ import pytest
 
 import phase1_expert_parse_track as track
 import flow109_metric_acceptance as metrics
+import ic_expert_backup_pack as pack
 from programs.tests._hostpaths import require_repo
 
 
@@ -98,3 +99,85 @@ def test_checked_in_typed_voltage_supports_only_its_dimension(tmp_path):
     value = quantity["target"]
     assert track.converge_ai_expectation(case, expectation([f"{value} V"]))["met"] is True
     assert track.converge_ai_expectation(case, expectation([f"{value} °C"]))["met"] is False
+
+
+@pytest.mark.parametrize("token, scalar", [
+    ("5.5 [ns]", "55 ns"), ("5.5 ns(cycle)", "55 ns cycle"),
+    ("1e+", "prose 1e"), ("1.2.3", "prose 123"), ("--40", "prose 40"),
+    ("1e9999999999999999999", "irrelevant"),
+    ("16-bit 4-to-1", "16-bit 4-to-1"),
+])
+def test_malformed_numeric_tokens_are_refused_without_text_matching(tmp_path, token, scalar):
+    result = track.converge_ai_expectation(
+        project(tmp_path, {"quantity": scalar}), expectation([token]))
+    assert result["met"] is False
+    assert result["tokens_unaskable"]
+
+
+@pytest.mark.parametrize("blob, path", [
+    ({"unit": "V", "quantity": {"target": 2}}, "/quantity"),
+    ({"quantity_v": {"target": 2}}, "/quantity_v"),
+    ({"quantity": {"target": 2, "units": "V"}}, "/quantity"),
+])
+def test_dimensionless_consumer_keeps_the_selectors_unit_context(tmp_path, blob, path):
+    case = project(tmp_path, blob)
+    item = expectation(["2"], path)
+    assert track.converge_ai_expectation(case, item)["met"] is False
+    actual, _, _ = metrics._d0102_compare(case, {"expectations": [item]}, {})
+    assert actual == []
+
+
+@pytest.mark.parametrize("declared", [None, 42, ["mV"]])
+def test_malformed_unit_metadata_cannot_borrow_outer_units(tmp_path, declared):
+    case = project(tmp_path, {"unit": "V", "quantity": {"target": 2, "unit": declared}})
+    result = track.converge_ai_expectation(case, expectation(["2 V"]))
+    assert result["met"] is False
+
+
+@pytest.mark.parametrize("declarations", [{"unit": "", "units": "V"},
+                                        {"units": "V", "unit": ""}])
+def test_conflicting_unit_aliases_do_not_depend_on_object_order(tmp_path, declarations):
+    case = project(tmp_path, {"quantity": {"target": 2, **declarations}})
+    assert track.converge_ai_expectation(case, expectation(["2"]))["met"] is False
+
+
+def test_split_number_and_unit_tokens_are_an_authoring_refusal(tmp_path):
+    case = project(tmp_path, {"quantity": {"target": 1, "unit": "V"}})
+    result = track.converge_ai_expectation(case, expectation(["1", "V"]))
+    assert result["usable"] is False
+    assert {x["reason"] for x in result["tokens_unaskable"]} == {"SEPARATE_UNIT_TOKEN"}
+    actual, unresolved, _ = metrics._d0102_compare(
+        case, {"expectations": [expectation(["1", "V"])]}, {})
+    assert actual == [] and len(unresolved) == 1
+
+
+def test_large_exponent_unit_normalization_does_not_raise(tmp_path):
+    token = "1e999999999999999999 GV"
+    case = project(tmp_path, {"quantity": token})
+    assert track.converge_ai_expectation(case, expectation([token]))["met"] is True
+
+
+def test_an_invalid_observed_number_does_not_abort_a_text_expectation(tmp_path):
+    case = project(tmp_path, {"quantity": {"label": "TT", "value": "1e9999999999999999999"}})
+    assert track.converge_ai_expectation(case, expectation(["TT"]))["met"] is True
+
+
+def test_split_refusal_retains_the_scope_of_each_branch(tmp_path):
+    case = project(tmp_path, {"quantity": 2})
+    result = track.converge_ai_expectation(case, {
+        "id": "split", "sub_expectations": [expectation(["2"], None), expectation(["2"])],
+    })
+    assert result["usable"] is False and result["met"] is False
+    assert [child["scope"] for child in result["sub_results"]] == ["UNSCOPED", "json_pointer"]
+
+
+def test_expert_handoff_requires_scopes_for_single_and_split_branches(tmp_path):
+    case = project(tmp_path, {"quantity": 1})
+    handoff = pack.assemble("Review this typed quantity.", None, None, [], [],
+                            tmp_path / "handoff", k=0, output_target="l_doc_expectations.json",
+                            authoring_schema=track.authoring_schema(case))
+    contract = handoff["answer_contract"]
+    paths = [contract["shape"]["expectations"][0]["field_path"],
+             contract["split_shape"]["expectations"][0]["sub_expectations"][0]["field_path"]]
+    assert all("required" in path.lower() for path in paths)
+    assert all("or omitted" not in rule for rule in contract["rules"])

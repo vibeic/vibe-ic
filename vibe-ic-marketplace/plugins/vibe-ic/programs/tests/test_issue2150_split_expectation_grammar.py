@@ -228,14 +228,13 @@ def test_each_branch_is_scoped_independently(tmp_path):
     c = T.converge_ai_expectation(p, _SPLIT)
     assert [b["scope"] for b in c["sub_results"]] == \
         ["field_path", "field_path"]
-    # PAIRED: a branch whose path does not resolve falls back to the whole
-    # layer, and says so — exactly as a single expectation does.
     exp = json.loads(json.dumps(_SPLIT))
     exp["id"] = "e-unscoped-branch"
     exp["sub_expectations"][0]["field_path"] = "not.a.declared.path"
     c2 = T.converge_ai_expectation(p, exp)
     assert [b["scope"] for b in c2["sub_results"]] == \
-        ["whole_layer", "field_path"]
+        ["field_path_refused", "field_path"]
+    assert c2["usable"] is False and c2["met"] is False
 
 
 def test_the_field_path_guard_fires_per_branch_and_moves_no_verdict(tmp_path):

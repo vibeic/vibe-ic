@@ -1324,6 +1324,7 @@ TOKEN_LANGUAGE = {
 TOKEN_NO_MATCHABLE_CHARACTER = "NO_MATCHABLE_CHARACTER"
 TOKEN_ELLIPSIS_ERASED = "ELLIPSIS_ERASED"
 TOKEN_NUMERIC_UNIT_UNSUPPORTED = "NUMERIC_UNIT_UNSUPPORTED"
+TOKEN_SEPARATE_UNIT = "SEPARATE_UNIT_TOKEN"
 
 
 def unaskable_tokens(tokens: Any) -> List[Dict[str, Any]]:
@@ -1373,6 +1374,16 @@ def unaskable_tokens(tokens: Any) -> List[Dict[str, Any]]:
                         "asked_instead": None,
                         "why": "the numeric token has an unsupported unit or number format; "
                                "it is never compared as prose"})
+    physical_units = [t for t in (tokens or []) if isinstance(t, str)
+                      and parse_unit(t) not in (None, ("dimensionless", 0))]
+    if physical_units:
+        for text in (tokens or []):
+            quantity = _token_quantity(text) if isinstance(text, str) else None
+            if quantity is not None and quantity.dimension is None:
+                out.append({"token": text, "reason": TOKEN_SEPARATE_UNIT,
+                            "asked_instead": None,
+                            "why": "write the number and physical unit in the same token; "
+                                   "separate tokens do not declare their pairing"})
     return out
 
 
@@ -1536,7 +1547,6 @@ _QUANTITY = re.compile(
     r"([-+]?(?:(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]*)?"
     r"|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)"
     r"(?:\s*-?\s*(\S.*))?", re.S)
-_UNIT_EXPRESSION = re.compile(r"[A-Za-zµμΩΩ°℃%√]+(?:\^?[-+]?[0-9]+)?")
 
 
 class Quantity(NamedTuple):
@@ -1556,10 +1566,16 @@ class Quantity(NamedTuple):
         requires the same dimension and an equal normalized value."""
         if (typed.dimension or "dimensionless") != (self.dimension or "dimensionless"):
             return False
-        left = self.value.as_tuple()
-        right = typed.value.as_tuple()
-        return Decimal((left.sign, left.digits, left.exponent + self.exp10)) == \
-            Decimal((right.sign, right.digits, right.exponent + typed.exp10))
+        def canonical(quantity):
+            sign, digits, exponent = quantity.value.as_tuple()
+            if not any(digits):
+                return 0, (0,), 0
+            end = len(digits)
+            while digits[end - 1] == 0:
+                end -= 1
+            return sign, digits[:end], exponent + len(digits) - end + quantity.exp10
+
+        return canonical(self) == canonical(typed)
 
 
 def parse_unit(text: str) -> Optional[Tuple[str, int]]:
@@ -1605,7 +1621,10 @@ def parse_quantity(text: Any) -> Optional[Quantity]:
         if unit is None:
             return None
         dimension, exp10 = unit
-    value = Decimal(m.group(1).replace(",", ""))
+    try:
+        value = Decimal(m.group(1).replace(",", ""))
+    except (ArithmeticError, ValueError):
+        return None
     return Quantity(value, dimension, exp10) if value.is_finite() else None
 
 
@@ -1621,11 +1640,8 @@ def _unsupported_numeric_token(token: str) -> bool:
     text = token.strip().replace("\u2212", "-")
     if re.fullmatch(r"0[xX][0-9a-fA-F]+", text):
         return False
-    numeric = _QUANTITY.fullmatch(text)
-    suffix = re.sub(r"\s+", "", numeric.group(2) or "") if numeric else ""
-    return bool(suffix and (_UNIT_EXPRESSION.fullmatch(suffix)
-                           or any(char in suffix for char in "/^√²*·")
-                           or suffix.startswith(",")))
+    return bool(re.match(r"(?:[0-9]|\.[0-9])", text.lstrip("+-"))
+                or re.fullmatch(r"[-+]?(?:inf(?:inity)?|nan)", text, re.I))
 
 
 def _key_unit(key: Any) -> Optional[Tuple[str, int]]:
@@ -1641,10 +1657,14 @@ def _record_unit(record: Dict[Any, Any],
     "unit": "V"}`), else the one it inherits. The NEAREST statement wins,
     including one that cannot be parsed: an unknown unit is unknown, never
     permission to reach for an outer one."""
-    for k, v in record.items():
-        if isinstance(v, str) and str(k).strip().lower() in ("unit", "units"):
-            return parse_unit(v) or ("unknown", 0)
-    return inherited
+    declarations = [parse_unit(v) if isinstance(v, str) else None
+                    for k, v in record.items()
+                    if str(k).strip().lower() in ("unit", "units")]
+    if not declarations:
+        return inherited
+    unit = declarations[0]
+    return unit if unit is not None and all(v == unit for v in declarations) \
+        else ("unknown", 0)
 
 
 def _source_position_key(key: Any) -> bool:
@@ -2661,14 +2681,8 @@ def _converge_split(project: Path, base: Dict[str, Any], exp: Any,
             "expected_tokens": sub.get("expected_tokens"),
         }
         res = converge_ai_expectation(project, child)
-        if not res["usable"]:
-            return _split_refusal(
-                base, f"branch {i} ({child['id']}) cannot be converged: "
-                      f"{res['observed']}. A split is decided only when every "
-                      f"branch is")
         branches.append(res)
 
-    base["usable"] = True
     base["sub_results"] = branches
     base["sub_layers"] = [b["layer"] for b in branches]
     # #2150 item 2. The parent states no tokens of its own, so its unaskable
@@ -2678,6 +2692,12 @@ def _converge_split(project: Path, base: Dict[str, Any], exp: Any,
     base["tokens_unaskable"] = [
         {**u, "branch": b["id"]}
         for b in branches for u in (b.get("tokens_unaskable") or [])]
+    refused = [(i, branch) for i, branch in enumerate(branches) if not branch["usable"]]
+    if refused:
+        return _split_refusal(base, "; ".join(
+            f"branch {i} ({branch['id']}) cannot be converged: {branch['observed']}"
+            for i, branch in refused) + ". A split is decided only when every branch is")
+    base["usable"] = True
 
     # A branch addressing a layer this Phase-1 root does not contain (#2150,
     # first commit) makes the whole conjunction undecidable about the DESIGN:
@@ -3230,6 +3250,12 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
 
     base["usable"] = True
     base["tokens_unaskable"] = unaskable_tokens(base["expected_tokens"])
+    if any(t["reason"] in (TOKEN_NUMERIC_UNIT_UNSUPPORTED, TOKEN_SEPARATE_UNIT)
+           for t in base["tokens_unaskable"]):
+        base.update(usable=False, scope="TOKEN_REFUSED",
+                    observed="numeric expectation refused: " + ", ".join(
+                        t["reason"] for t in base["tokens_unaskable"]))
+        return base
     path = resolve_layer_file(project, base["layer"])
     if path is None:
         # #2150 — the LAYER is absent from the Phase-1 root. Recorded as its
@@ -3290,10 +3316,12 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
         base["usable"] = False
         base["scope"] = "json_pointer_refused" if _is_json_pointer(base["field_path"]) \
             else "field_path_refused"
+        selector_kind = "the RFC6901 JSON Pointer" if _is_json_pointer(base["field_path"]) \
+            else "field_path"
         base["observed"] = (
-            f"{base['layer']} does not resolve field_path "
+            f"{base['layer']} does not resolve {selector_kind} "
             f"{base['field_path']!r} unambiguously. This is an authoring "
-            "refusal; no whole-layer reading occurred.")
+            "refusal, not a design comparison; no whole-layer reading occurred.")
         return base
 
     subtree = _scoped_nodes_at(blob, base["field_path"], base["layer"])
