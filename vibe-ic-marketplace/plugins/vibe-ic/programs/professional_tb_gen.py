@@ -333,7 +333,8 @@ def classify_dut(project: Path, ic_class: str
     spec, _why = _aog.extract_arith_spec(project, ic_class)
     if spec:
         return ({"kind": "parallel_arith", "top": top, "cr": cr,
-                 "spec": spec, "width": width, "ports": ports}, None)
+                 "spec": spec, "width": spec['result_width'], "ports": ports}, None)
+    reference_refusal = _why if ic_class in _aog._ARITH_CLASSES else None
 
     # serial-streaming multiply/datapath: one parallel operand + a 1-bit serial
     # operand + a 1-bit serial output. This is the shape arith_oracle DEFERs on.
@@ -368,14 +369,20 @@ def classify_dut(project: Path, ic_class: str
     op = _detect_stream_operator(project, ic_class)
     if (len(parallel_ins) >= 1 and len(serial_ins) >= 1
             and len(serial_outs) >= 1 and op):
-        return ({"kind": "serial_stream", "top": top, "cr": cr,
-                 "operator": op, "width": width, "ports": ports,
-                 "x_port": parallel_ins[0]["name"],
-                 "y_port": serial_ins[0]["name"],
-                 "p_port": serial_outs[0]["name"]}, None)
+        function, reference_refusal = _aog.declared_function(project)
+        if function:
+            reference_refusal = _aog.serial_function_role_refusal(
+                function, parallel_ins[0]['name'], serial_ins[0]['name'], serial_outs[0]['name'])
+            if not reference_refusal:
+                return ({"kind": "serial_stream", "top": top, "cr": cr,
+                         "operator": op, "width": width, "ports": ports,
+                         "x_port": parallel_ins[0]["name"],
+                         "y_port": serial_ins[0]["name"],
+                         "p_port": serial_outs[0]["name"]}, None)
 
     return ({"kind": "generic", "top": top, "cr": cr, "ports": ports,
-             "width": width}, None)
+             "width": width,
+             **({'reference_refusal': reference_refusal} if reference_refusal else {})}, None)
 
 
 # ── #140: register-map / control-status structural guards (chip-AGNOSTIC) ────
@@ -445,21 +452,18 @@ def _is_register_mapped(ins: List[dict], outs: List[dict]) -> bool:
 
 def _detect_stream_operator(project: Path,
                             ic_class: Optional[str] = None) -> Optional[str]:
-    """Operator for a serial datapath from L2/L3 prose (multiply is by far the
-    common serial primitive). Returns a python-eval operator token or None.
+    """Use the same typed function field as the arithmetic producer.
 
-    §4.05 GENERAL (#140): fires only on genuine arithmetic-datapath evidence — an
-    explicit `x*y` / `p = x` datapath equation, a real multiplier / multiply
-    (-accumulate) noun-verb (NOT `multiplexer`), or a partial-product term. Bare
-    metadata / crypto tokens are EXCLUDED: `product` false-fires on `product_name`
-    / `product_family` / "Product & Tapeout Metadata" (L1 metadata), and `mac`
-    false-fires on a crypto Message-Authentication-Code — neither is arithmetic.
-    Also never fires for a register-mapped / command-driven / crypto ic_class."""
+    Serial classification must not recover an operator from prose. Register-
+    mapped/protocol/crypto classes still defer as before.
+    """
     if ic_class and str(ic_class).strip().lower() in _NON_DATAPATH_CLASSES:
         return None
-    txt = _aog._doc_text(project).lower()
-    if _STREAM_MUL_RE.search(txt):
-        return "*"
+    function, _ = _aog.declared_function(project)
+    if function and function['operator'] == '*':
+        _, ports = _aog._load_top_ports(project)
+        if function['modulus_bits'] == _resolve_tb_width(project, ports):
+            return "*"
     return None
 
 
@@ -498,8 +502,8 @@ def build_coverage_model(shape: dict) -> dict:
     data_inputs = []
     if shape["kind"] == "parallel_arith":
         sp = shape["spec"]
-        for nm in (sp.get("operands") or []):
-            data_inputs.append((nm, width))
+        for role in ('operand_a', 'operand_b'):
+            data_inputs.append((sp[role], sp[role + '_width']))
     elif shape["kind"] == "serial_stream":
         data_inputs.append((shape["x_port"], width))
         data_inputs.append((shape["y_port"], width))  # value fed serially
@@ -641,8 +645,11 @@ def arithmetic_random_goal_plan(project: Path, shape: dict) -> Optional[dict]:
             'goals': selected, 'binding': binding, 'width': int(shape['width']),
             'operator': shape.get('operator') or shape['spec']['operator'],
             'requested_random_pairs': max(g['requested_random_pairs'] for g in selected),
-            'seed': 0x9E3779B97F4A7C15 ^ int(shape['width']),
-            'sampler': 'arith_oracle_tb_gen._distinct_population_pairs / SplitMix64',
+            'seed': (0xD1B54A32D192ED03 if shape['kind'] == 'parallel_arith'
+                     else 0x9E3779B97F4A7C15 ^ int(shape['width'])),
+            'sampler': ('arith_oracle_tb_gen.parallel_operand_pairs / odd-stride permutation'
+                        if shape['kind'] == 'parallel_arith' else
+                        'arith_oracle_tb_gen._distinct_population_pairs / SplitMix64'),
             'framing': framing}
 
 
@@ -967,21 +974,25 @@ def emit_parallel_arith_tb(shape: dict) -> str:
     constrained-random, functional coverage on each operand."""
     sp = shape["spec"]
     top = shape["top"]
-    N = int(shape["width"])
+    N = int(sp['result_width'])
     op = sp["operator"]
-    a, b = (sp.get("operands") + ["a", "b"])[:2]
-    res = sp.get("result_port") or "out"
+    a, b = sp['operand_a'], sp['operand_b']
+    res = sp['result']
     signed = bool(sp.get("signed"))
-    hi = (1 << N) - 1
+    ahi, bhi = (1 << sp['operand_a_width']) - 1, (1 << sp['operand_b_width']) - 1
+    corners = list(dict.fromkeys([(0, 0), (0, bhi), (ahi, 0), (1, 1),
+                                 (ahi, bhi), (ahi >> 1, min(3, bhi)), (ahi, min(2, bhi))]))
     plan = shape.get('random_goal_plan')
     header = _emit_common_header(shape) + _random_measurement_support(plan)
-    random_pairs = (repr(_aog._distinct_population_pairs(
-        N, min(plan['requested_random_pairs'], _aog.MAX_CASE_VECTORS), op,
-        {(0, 0), (0, hi), (hi, 0), (1, 1), (hi, hi), (hi >> 1, 3), (hi, 2)}))
-        if plan else f'[(random.randint(0, {hi}), random.randint(0, {hi})) for _ in range(300)]')
+    random_pairs = _aog.parallel_operand_pairs(
+        sp, min(plan['requested_random_pairs'], _aog.MAX_CASE_VECTORS) if plan else 300,
+        corners)
+    goldens = {(av, bv): _aog.parallel_golden(sp, av, bv)
+               for av, bv in corners + random_pairs}
     return header + f'''
-import arith_oracle_tb_gen as _aog  # reference golden (single source of truth)
+# Golden constants computed by arith_oracle_tb_gen from the declared function.
 N = {N}; A = "{a}"; B = "{b}"; R = "{res}"; OP = "{op}"; SIGNED = {signed}
+GOLDENS = {goldens!r}
 
 
 @cocotb.test()
@@ -989,17 +1000,15 @@ async def professional_arith_test(dut):
     random.seed(SEED)
     _start_clock(dut)
     await _reset(dut)
-    corners = [(0, 0), (0, {hi}), ({hi}, 0), (1, 1), ({hi}, {hi}),
-               ({hi} >> 1, 3), ({hi}, 2)]
+    corners = {corners!r}
     rand = {random_pairs}
     fails = 0; total = 0
     random_executed = 0; random_failures = 0
     for (av, bv) in corners + rand:
         getattr(dut, A).value = av
         getattr(dut, B).value = bv
-        await RisingEdge(getattr(dut, CLK))
-        await Timer(1, units="ns")
-        exp = _aog.compute_golden(OP, av, bv, N, SIGNED)
+        await _wait_cycles(dut, 1)
+        exp = GOLDENS[(av, bv)]
         try:
             act = int(getattr(dut, R).value)
         except Exception:
@@ -1219,6 +1228,18 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
         return {"status": "SKIP", "reason": why, "ic_class": ic_class}
     top = shape["top"]
     out = out_dir or (_pl.rtl_dir(project).parent / "sim_professional" / top)
+    expert_tb = (_load_expert_reference_tb(out)
+                 if shape["kind"] == "generic" else None)
+    # Bind the source loaded for this generation, before instrumentation or
+    # another writer can change the persistent author file.
+    expert_sha256 = (hashlib.sha256(expert_tb.encode()).hexdigest()
+                     if expert_tb is not None else None)
+    if shape.get('reference_refusal') and expert_tb is None:
+        return {'status': 'INCOMPLETE', 'reason': shape['reference_refusal'],
+                'ic_class': ic_class, 'fallback_skill': 'testbench-gen',
+                'out_dir': str(out), 'reference_model_tier': 'hook_unfilled',
+                'reference_model_sha256': expert_sha256,
+                'reference_model_handoff': reference_model_handoff(out)}
     out.mkdir(parents=True, exist_ok=True)
 
     random_plan = (arithmetic_random_goal_plan(project, shape)
@@ -1226,12 +1247,6 @@ def generate(project: Path, out_dir: Optional[Path] = None) -> dict:
     if random_plan:
         shape['random_goal_plan'] = random_plan
 
-    expert_tb = (_load_expert_reference_tb(out)
-                 if shape["kind"] == "generic" else None)
-    # Bind the source loaded for this generation, before instrumentation or
-    # another writer can change the persistent author file.
-    expert_sha256 = (hashlib.sha256(expert_tb.encode()).hexdigest()
-                     if expert_tb is not None else None)
     memory_cases = []
     if _memory_signature_rows(project):
         try:

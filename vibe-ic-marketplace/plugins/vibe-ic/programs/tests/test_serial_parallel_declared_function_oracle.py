@@ -28,6 +28,7 @@ Contract halves pinned here:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -116,7 +117,10 @@ def _mk_project(tmp: Path, *, declare: bool, bit_order: str = "LSB_first",
         (root / "plugin_output" / "declaration.json").write_text(json.dumps({
             "bit_order": bit_order, "latency_cycles": 2,
             "integer_encoding": encoding, "reset_polarity": "active_high",
-            "size_param": 8}))
+            "size_param": 8, "function": {"result": "y", "operands": ["a", "b"], "operator": "*", "modulus_bits": 8}}))
+    (root / "declaration.json").write_text(json.dumps({
+        **({"integer_encoding": encoding} if not declare else {}),
+        "function": {"result": "y", "operands": ["a", "b"], "operator": "*", "modulus_bits": 8}}))
     if with_l10:
         (gd / "L10_TEST_CASES.json").write_text(
             json.dumps(_L10, ensure_ascii=False))
@@ -136,6 +140,108 @@ def test_serial_spec_extracted_from_declaration(tmp_path):
     # declared conventions are read as INFORMATIONAL annotations (the oracle
     # self-calibrates framing and does not depend on them being correct).
     assert spec["declared_bit_order"] == "LSB" and spec["declared_latency"] == 2
+
+
+@pytest.mark.parametrize('result,operands', [
+    pytest.param('a', ['b', 'y'], id='parallel-input-result'),
+    pytest.param('b', ['a', 'y'], id='serial-input-result'),
+])
+def test_serial_reader_rejects_declared_input_result(tmp_path, result, operands):
+    proj = _mk_project(tmp_path, declare=True)
+    path = proj / 'plugin_output/declaration.json'
+    doc = json.loads(path.read_text())
+    doc['function'].update(result=result, operands=operands)
+    path.write_text(json.dumps(doc))
+    (proj / 'declaration.json').write_text(json.dumps({'function': doc['function']}))
+    spec, reason = aotg.extract_serial_arith_spec(proj, 'digital_arithmetic_primitive')
+    assert spec is None and reason, (spec, reason)
+
+
+@pytest.mark.parametrize('operands,parallel_is_lhs', [
+    pytest.param(['a', 'b'], True, id='parallel-lhs'),
+    pytest.param(['b', 'a'], False, id='serial-lhs'),
+])
+def test_serial_reader_preserves_noncommutative_operand_order(tmp_path, operands, parallel_is_lhs):
+    proj = _mk_project(tmp_path, declare=True)
+    path = proj / 'plugin_output/declaration.json'
+    doc = json.loads(path.read_text())
+    doc['function'].update(operator='-', operands=operands)
+    path.write_text(json.dumps(doc))
+    (proj / 'declaration.json').write_text(json.dumps({'function': doc['function']}))
+    spec, reason = aotg.extract_serial_arith_spec(proj, 'digital_arithmetic_primitive')
+    assert spec is not None, reason
+    assert spec['operator'] == '-'
+    assert spec['parallel_is_lhs'] is parallel_is_lhs
+
+
+def _ordinary_professional_step(proj, monkeypatch):
+    import design_one_shot_runner as runner
+    import professional_tb_check as consumer
+    reports = proj / 'reports'
+    reports.mkdir(exist_ok=True)
+    (reports / 'ic_class.json').write_text(json.dumps({'ic_class': 'digital_arithmetic_primitive'}))
+    monkeypatch.setenv('PYTHONPATH', str(PROGRAMS) + os.pathsep + os.environ.get('PYTHONPATH', ''))
+    step = runner.step_professional_tb_gen(proj, 'serpar_mul', '')
+    (proj / 'native-step.json').write_text(json.dumps(step.__dict__, default=str, indent=2))
+    report = json.loads((reports / 'phase2/gates/professional_tb.json').read_text())
+    return step, report, consumer.check(proj)
+
+
+@pytest.mark.parametrize('result,operands', [
+    pytest.param('ghost_y', ['ghost_a', 'ghost_b'], id='ghost-ports'),
+    pytest.param('a', ['b', 'y'], id='parallel-input-result'),
+    pytest.param('b', ['a', 'y'], id='serial-input-result'),
+])
+def test_ordinary_professional_hook_rejects_unbound_serial_function(
+        tmp_path, monkeypatch, result, operands):
+    proj = _mk_project(tmp_path, declare=True)
+    path = proj / 'plugin_output/declaration.json'
+    doc = json.loads(path.read_text())
+    doc['function'].update(result=result, operands=operands)
+    path.write_text(json.dumps(doc))
+    (proj / 'declaration.json').write_text(json.dumps({'function': doc['function']}))
+    step, report, check = _ordinary_professional_step(proj, monkeypatch)
+    assert step.status == 'NOT_MEASURED', (step.detail, report, check)
+    assert report['status'] == 'INCOMPLETE' and report['ran_cocotb'] is False, report
+    assert report['reason'] and report['fallback_skill'] == 'testbench-gen', report
+    assert check['verdict'] == 'NOT_CHECKED', check
+    assert not (proj / 'phase2/stage1/sim_professional').exists()
+
+
+@pytest.mark.parametrize('operator', [
+    pytest.param(['*'], id='operator-list'),
+    pytest.param({'symbol': '*'}, id='operator-dict'),
+])
+def test_ordinary_professional_hook_names_malformed_operator(tmp_path, monkeypatch, operator):
+    proj = _mk_project(tmp_path, declare=True)
+    path = proj / 'plugin_output/declaration.json'
+    doc = json.loads(path.read_text())
+    doc['function']['operator'] = operator
+    path.write_text(json.dumps(doc))
+    step, report, check = _ordinary_professional_step(proj, monkeypatch)
+    assert step.status == 'NOT_MEASURED', (step.detail, report, check)
+    assert report['status'] == 'INCOMPLETE' and report['ran_cocotb'] is False, report
+    assert 'malformed' in report['reason'], report
+    assert check['verdict'] == 'NOT_CHECKED', check
+    assert not (proj / 'phase2/stage1/sim_professional').exists()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize('dut,status,mismatch', [
+    pytest.param(_GENERIC_DUT, 'PASS', False, id='correct-dut'),
+    pytest.param(_BROKEN_DUT, 'FAIL', True, id='wrong-output'),
+])
+def test_ordinary_professional_hook_measures_valid_serial_function(
+        tmp_path, monkeypatch, dut, status, mismatch):
+    proj = _mk_project(tmp_path, declare=True, dut=dut)
+    step, report, check = _ordinary_professional_step(proj, monkeypatch)
+    assert step.status == status, (step.detail, report, check)
+    assert report['status'] == status and report['ran_cocotb'] is True, report
+    assert report['functional_mismatch'] is mismatch, report
+    assert check['verdict'] == status, check
+    out = proj / 'phase2/stage1/sim_professional/serpar_mul'
+    assert (out / 'cocotb_run.log').stat().st_size > 0
+    assert (out / 'results.xml').stat().st_size > 0
 
 
 def test_conventions_read_from_rtl_header_when_no_declaration_json(tmp_path):
@@ -189,6 +295,10 @@ def test_unrecognised_operator_defers_fail_closed(tmp_path):
     (proj / "phase1" / "generated_docs" / "L2_FRS.json").write_text(json.dumps({
         "ic_name": "serpar_mul",
         "frs_sections": [{"content": "a bit-serial scrambler of x and y"}]}))
+    declaration = proj / "plugin_output" / "declaration.json"
+    declaration.write_text(json.dumps({key: value for key, value in
+                                       json.loads(declaration.read_text()).items() if key != "function"}))
+    (proj / "declaration.json").write_text('{}')
     spec, reason = aotg.extract_serial_arith_spec(
         proj, "digital_arithmetic_primitive")
     assert spec is None and "operator" in reason.lower()
@@ -262,6 +372,10 @@ def test_testbench_gen_fail_closed_keeps_scaffold_when_function_undecidable(
     (proj / "phase1" / "generated_docs" / "L2_FRS.json").write_text(json.dumps({
         "ic_name": "serpar_mul",
         "frs_sections": [{"content": "a bit-serial scrambler of x and y"}]}))
+    declaration = proj / "plugin_output" / "declaration.json"
+    declaration.write_text(json.dumps({key: value for key, value in
+                                       json.loads(declaration.read_text()).items() if key != "function"}))
+    (proj / "declaration.json").write_text('{}')
     tbg.emit_unit_tbs(proj, "serpar_mul", kind="functional_vector", report={})
     tb_dir = proj / "phase2" / "stage1" / "sim" / "tb"
     for case in ("random_multiplication_functional_equivalence",
@@ -331,7 +445,10 @@ def _declared_scenario_project(root, *, width=8, order="LSB_first",
         "bit_order":order, "latency_cycles":latency,
         "latency_cycles_origin":"settled_edge_offset", "integer_encoding":"unsigned",
         "reset_polarity":"active_high", "transaction_rearm":rearm,
-        "rearm_reset_cycles":1, "parallel_hold":"through_final_product_bit"}))
+        "rearm_reset_cycles":1, "parallel_hold":"through_final_product_bit",
+        "function":{"result":"p", "operands":["x","y"], "operator":"&", "modulus_bits":width}}))
+    root.joinpath("declaration.json").write_text(json.dumps({"function": {
+        "result":"p", "operands":["x","y"], "operator":"&", "modulus_bits":width}}))
     bit = "idx" if order == "LSB_first" else f"{width-1}-idx"
     reset = "rst" if mode != "ignored_reset" else "1'b0"
     inv = "~" if mode == "wrong_product" else ""
@@ -349,7 +466,7 @@ endmodule
         names={"clk":"i_clk", "rst":"i_rst", "x":"operand_word",
                "y":"serial_bit", "p":"result_bit"}
         for path in [gd/"L9_INTEGRATION_SPEC.json",gd/"L2_FRS.json",
-                     rtl/"neutral_serial.v"]:
+                     root/"plugin_output/declaration.json",root/"declaration.json",rtl/"neutral_serial.v"]:
             text=path.read_text()
             for before,after in names.items():
                 text=re.sub(r"\b"+before+r"\b",after,text)

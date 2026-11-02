@@ -21,11 +21,12 @@ actually on disk. It reads the step's own report
     -> FAIL (exit 1). See below.
   * a DECLARED bundle whose whole tree is absent from this copy of the project
     -> NOT_CHECKED (exit 2), the disclosed-skip tier. See below.
-  * status PASS/WAIVED/SKIP with functional_mismatch false and a complete
+  * status PASS/WAIVED with functional_mismatch false and a complete
     bundle -> PASS (exit 0): either functional verification CLOSED (cocotb ran,
     0 mismatches), or the TB was honestly generated with the run deferred
-    (tooling unreachable / generic reference-hook class), or the class exposes
-    no derivable reference.
+    (tooling unreachable / generic reference-hook class).
+  * status SKIP without a valid independently executed L10 track
+    -> NOT_CHECKED (exit 2): no functional measurement to certify.
   * report absent -> NOT_APPLICABLE (exit 0): the step did not run for this
     project, so there is nothing to judge — never a false FAIL. (The gate is
     wired UNCONDITIONALLY in Step 4 for exactly this reason, vibe-ic#236: a
@@ -582,10 +583,17 @@ def check(project: Path) -> Dict[str, Any]:
     # track is the shipped alternative; it may supersede only that unrun /
     # incomplete producer state, never a functional mismatch above or a
     # declared-bundle defect below.
+    unit_track = None
     if str(rec.get("status") or "").upper() in {"SKIP", "INCOMPLETE"}:
         unit_track = l10_unit_tb_track(project)
-        if unit_track is not None:
-            return unit_track
+    if (str(rec.get("status") or "").upper() in {"INCOMPLETE", "NOT_MEASURED"}
+            and unit_track is None):
+        # The design was not measured, so the gate has nothing to certify.
+        return {"gate": "professional_tb", "verdict": "NOT_CHECKED",
+                "reason_class": _reason_taxonomy.BLOCKED_BY_UPSTREAM,
+                "status": rec.get("status"), "dut_kind": rec.get("dut_kind"),
+                "ran_cocotb": rec.get("ran_cocotb"),
+                "reason": "professional step was not measured: " + str(rec.get("reason"))}
 
     bundle = _bundle_report(project, rec)
     res: Dict[str, Any] = {
@@ -630,6 +638,12 @@ def check(project: Path) -> Dict[str, Any]:
                 "disk: missing=" + json.dumps(bundle["missing"])
                 + " empty=" + json.dumps(bundle["empty"])
                 + " (declared out_dir " + bundle["declared_out_dir"] + ")")
+    if unit_track is not None and res["verdict"] != "FAIL":
+        return unit_track
+    if str(rec.get("status") or "").upper() == "SKIP" and res["verdict"] == "PASS":
+        res.update({"verdict": "NOT_CHECKED",
+                    "reason_class": _reason_taxonomy.BLOCKED_BY_UPSTREAM,
+                    "reason": "professional step was not measured: " + str(rec.get("reason"))})
     if memory_cases and res["verdict"] == "PASS":
         if bundle is None or not bundle.get("resolved_out_dir"):
             return memory_unmeasured("memory_signature execution bundle missing")

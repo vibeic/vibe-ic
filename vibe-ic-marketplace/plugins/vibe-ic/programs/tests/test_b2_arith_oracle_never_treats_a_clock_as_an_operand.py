@@ -43,7 +43,7 @@ def test_real_operands_are_not_mistaken_for_clocks():
 _ARITH_CLASS = "digital_arithmetic_primitive"
 
 
-def _spec(tmp_path, ports, doc):
+def _spec(tmp_path, ports, doc, function=None):
     import json
     proj = tmp_path / "proj"
     (proj / "phase1" / "generated_docs").mkdir(parents=True)
@@ -51,6 +51,9 @@ def _spec(tmp_path, ports, doc):
         json.dumps({"top_module": "dut", "top_ports": ports}))
     (proj / "phase1" / "generated_docs" / "L1_DATASHEET.json").write_text(
         json.dumps({"ic_name": "dut", "overview": doc}))
+    if function:
+        (proj / "declaration.json").write_text(json.dumps({
+            "integer_encoding": "unsigned", "function": function}))
     return G.extract_arith_spec(proj, _ARITH_CLASS)
 
 
@@ -65,7 +68,8 @@ def test_a_clocked_design_defers_however_its_clocks_are_named(tmp_path):
         _p("winc", "input", 1), _p("rinc", "input", 1),
         _p("wdata", "input", 1), _p("wfull", "output", 1),
         _p("rdata", "output", 1),
-    ], "The full flag is the exclusive or ^ of the pointers.")
+    ], "The full flag is the exclusive or ^ of the pointers.",
+        {"result": "wfull", "operands": ["winc", "rinc"], "operator": "^", "modulus_bits": 1})
     assert spec is None, spec
     # The port widths here are the ones the real L9 carried -- every port 1 bit,
     # because the data buses are parameter-wide and no numeric width survives --
@@ -80,7 +84,8 @@ def test_a_combinational_adder_still_gets_its_oracle(tmp_path):
     spec, why = _spec(tmp_path, [
         _p("a", "input", 8), _p("b", "input", 8),
         _p("sum", "output", 8),
-    ], "Implement an 8-bit adder. sum = a + b.")
+    ], "Implement an 8-bit adder. sum = a + b.",
+        {"result": "sum", "operands": ["a", "b"], "operator": "+", "modulus_bits": 8})
     assert spec is not None, why
     assert spec["operator"] == "+"
     assert {spec["operand_a"], spec["operand_b"]} == {"a", "b"}
