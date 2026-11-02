@@ -12,6 +12,7 @@ import math
 import os
 import re
 import shlex
+from decimal import Decimal
 from pathlib import Path
 
 
@@ -54,15 +55,22 @@ def final_state(project: Path, *, streamed: bool = False) -> Path | None:
             return direct.resolve()
     if streamed:
         streams = []
-        for candidate in sorted((project / 'phase3/librelane').glob('**/state_out.json')):
+        base = project / 'phase3/librelane'
+        for candidate in sorted(base.glob('**/state_out.json')):
             meta = load(candidate.parent / 'config.json').get('meta')
             if isinstance(meta, dict) and meta.get('step') in (
                     'KLayout.StreamOut', 'Magic.StreamOut', 'Vibeic.FillAwareStreamOut'):
-                streams.append(candidate)
-        if len(streams) > 1:
-            raise ValueError('CURRENT_FINAL_STATE_AMBIGUOUS: ' + ', '.join(map(str, streams)))
-        if streams:
-            return streams[0]
+                ordinal = tuple(Decimal(match.group(1))
+                                for folder in candidate.parent.relative_to(base).parts
+                                if (match := re.match(r'^(\d+(?:\.\d+)?)(?:ic)?(?:-|$)', folder)))
+                streams.append((ordinal, candidate))
+        if not streams:
+            return None
+        latest = max(ordinal for ordinal, _ in streams)
+        finals = [candidate for ordinal, candidate in streams if ordinal == latest]
+        if len(finals) > 1:
+            raise ValueError('CURRENT_FINAL_STATE_AMBIGUOUS: ' + ', '.join(map(str, finals)))
+        return finals[0]
     selected = load(project / 'reports/phase3/sta_postpnr_signoff.json').get('sta_state')
     if isinstance(selected, str):
         p = path(project, selected)
