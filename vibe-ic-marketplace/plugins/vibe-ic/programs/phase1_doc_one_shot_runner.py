@@ -56688,6 +56688,10 @@ def _l13_operator_contract(project: Path) -> Dict[str, Any]:
         raise ValueError(f"L13_CRITERION_UNKNOWN: criterion {criterion!r} is not registered by hardware_pass_attestation_check")
     if "criterion_params" in contract and not isinstance(contract["criterion_params"], dict):
         raise ValueError("L13_CRITERION_PARAMS_INVALID: expected a parameter mapping")
+    if "criterion_params" in contract:
+        contract["criterion_params"] = {
+            key: value for key, value in contract["criterion_params"].items()
+            if td.is_answered(value)}
     prefix = "L13.criterion_params."
     for key in sorted(doc.get("answers", {})):
         if key.startswith(prefix) and key[len(prefix):]:

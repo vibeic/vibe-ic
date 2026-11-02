@@ -155,6 +155,55 @@ def test_unanswered_contract_stays_unresolved(tmp_path, answers):
     assert "l13_contract_complete" in {f["rule"] for f in result["findings"]}
 
 
+@pytest.mark.parametrize("individual_params", [False, True])
+@pytest.mark.parametrize("unanswered", [None, "NOT_DETERMINED", "", "   "])
+def test_unanswered_parameter_stays_unresolved(tmp_path, individual_params, unanswered):
+    import l13_bringup_contract_check as gate
+
+    answers = {"L13.criterion": "monotonic_adc_sweep", "L13.tester": "neutral bench rig"}
+    if individual_params:
+        answers["L13.criterion_params.min_samples"] = unanswered
+    else:
+        answers["L13.criterion_params"] = {"min_samples": unanswered}
+    _operator_answers(tmp_path, answers)
+    doc = _emit(tmp_path, "1. Sweep the input and record output samples.\n")
+
+    result = gate.check(doc, phase=1)
+    assert "l13_contract_complete" in {
+        finding["rule"] for finding in result["findings"] if finding["severity"] == "FAIL"}
+    assert "min_samples" not in doc.get("criterion_params", {})
+    assert gate.main([str(tmp_path)]) == 1
+
+
+@pytest.mark.parametrize("mapping_answered", [False, True])
+@pytest.mark.parametrize("unanswered", [None, "NOT_DETERMINED", "", "   "])
+def test_unanswered_parameter_does_not_conflict_with_an_answer(
+        tmp_path, mapping_answered, unanswered):
+    import l13_bringup_contract_check as gate
+
+    answers = {
+        "L13.criterion": "monotonic_adc_sweep", "L13.tester": "neutral bench rig",
+        "L13.criterion_params": {"min_samples": 7 if mapping_answered else unanswered},
+        "L13.criterion_params.min_samples": unanswered if mapping_answered else 7,
+    }
+    _operator_answers(tmp_path, answers)
+    doc = _emit(tmp_path, "1. Sweep the input and record output samples.\n")
+
+    assert doc["criterion_params"] == {"min_samples": 7}
+    assert gate.main([str(tmp_path)]) == 0
+
+
+def test_conflicting_answered_parameters_are_refused_before_publication(tmp_path):
+    _operator_answers(tmp_path, {
+        "L13.criterion": "monotonic_adc_sweep",
+        "L13.criterion_params": {"min_samples": 7},
+        "L13.criterion_params.min_samples": 9,
+    })
+    with pytest.raises(ValueError, match="L13_CRITERION_PARAMS_CONFLICT"):
+        p1.gen_l13_lab_calibration(tmp_path, {})
+    assert not (tmp_path / "phase1/generated_docs/L13_LAB_CALIBRATION.json").exists()
+
+
 def test_criterion_in_prose_cannot_answer_contract(tmp_path):
     doc = _emit(tmp_path, "L13.criterion: monotonic_adc_sweep\n"
                 "L13.criterion_params: {min_samples: 7}\nL13.tester: neutral bench rig\n")
