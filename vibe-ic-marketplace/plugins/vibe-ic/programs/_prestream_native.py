@@ -286,7 +286,8 @@ def padring(project: Path, state_path: Path, *, container: str | None = None) ->
             failures.append(f'PADRING_DECLARED_PAD_MISSING_FROM_NATIVE:{name}')
         elif not inst['is_pad'] or inst['master'] in auxiliary:
             failures.append(f'PADRING_DECLARED_PAD_ROLE_MISMATCH:{name}:master={inst["master"]}; type={inst["type"]}')
-    pads = [inst for inst in census if inst['is_pad'] and inst['master'] not in auxiliary]
+    pads = [inst for inst in census if inst['is_pad']
+            and (inst['master'] not in auxiliary or inst['type'] not in ('PAD', 'PAD_SPACER'))]
     evidence['native_pads'] = len(pads)
     sides = {side: [] for side in pr.SIDES}
     for inst in pads:
