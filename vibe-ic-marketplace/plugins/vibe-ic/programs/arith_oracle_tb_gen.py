@@ -253,21 +253,13 @@ def _read_json(p: Path) -> Optional[dict]:
 _FUNCTION_FIELDS = frozenset({'result', 'operands', 'operator', 'modulus_bits'})
 
 
-def declared_function(project: Path) -> Tuple[Optional[dict], str]:
-    """The typed ``function`` field of declaration.json, or (None, reason).
-
-    This field is the oracle's only source for its operator, operands and
-    modulus. Prose may help an author fill it in; it never stands in for it.
-    """
-    found = []
+def _function_declarations(project: Path) -> Tuple[Dict[str, dict], str]:
+    found = {}
     for name in ('plugin_output/declaration.json', 'declaration.json'):
         doc = _read_json(project / name) or {}
         if 'function' in doc:
-            found.append(doc['function'])
-    if not found:
-        return None, ('declaration.json has no typed function field '
-                      '{result, operands, operator, modulus_bits} — defer to testbench-gen')
-    for function in found:
+            found[name] = doc['function']
+    for function in found.values():
         operands = function.get('operands') if isinstance(function, dict) else None
         names = [function.get('result'), *operands] if isinstance(operands, list) else []
         if (not isinstance(function, dict) or function.keys() != _FUNCTION_FIELDS
@@ -275,10 +267,27 @@ def declared_function(project: Path) -> Tuple[Optional[dict], str]:
                 or not all(isinstance(name, str) and name.isidentifier() for name in names)
                 or not isinstance(function['operator'], str) or function['operator'] not in _OPERATORS
                 or type(function['modulus_bits']) is not int or function['modulus_bits'] < 1):
-            return None, 'declared function field is malformed — defer to testbench-gen'
-    if any(other != found[0] for other in found):
-        return None, 'declaration files state different function fields — defer to testbench-gen'
-    return found[0], ''
+            return {}, 'declared function field is malformed — defer to testbench-gen'
+    functions = list(found.values())
+    if any(other != functions[0] for other in functions[1:]):
+        return {}, 'declaration files state different function fields — defer to testbench-gen'
+    return found, ''
+
+
+def declared_function(project: Path) -> Tuple[Optional[dict], str]:
+    """Read typed function intent from the input ``declaration.json``.
+
+    Plugin output can corroborate input; it cannot supply missing intent.
+    Prose may help an author fill the input field, never stand in for it.
+    """
+    declarations, reason = _function_declarations(project)
+    if reason:
+        return None, reason
+    function = declarations.get('declaration.json')
+    if function is None:
+        return None, ('input declaration.json has no typed function field '
+                      '{result, operands, operator, modulus_bits} — defer to testbench-gen')
+    return function, ''
 
 
 def serial_function_role_refusal(function: dict, parallel: str, serial_in: str,

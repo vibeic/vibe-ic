@@ -2105,6 +2105,7 @@ module PUBLIC_OUT(input A, output Y); buf #{od}(Y,A); endmodule
     if refusal == 'missing':
         declaration['verification_stimuli'] = {}
     (root / 'plugin_output/declaration.json').write_text(json.dumps(declaration, sort_keys=True))
+    (root / 'declaration.json').write_text(json.dumps({'function': declaration['function']}))
     return cases
 
 

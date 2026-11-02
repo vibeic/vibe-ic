@@ -63,6 +63,8 @@ def _mk_project(root: Path, *, top: str, ports: list, l2: str,
         (proj / "plugin_output").mkdir()
         (proj / "plugin_output" / "declaration.json").write_text(
             json.dumps(decl))
+    if function is None:
+        function = (decl or {}).get("function")
     if function is not None:
         (proj / "declaration.json").write_text(json.dumps({
             "integer_encoding": "unsigned", "function": function}))

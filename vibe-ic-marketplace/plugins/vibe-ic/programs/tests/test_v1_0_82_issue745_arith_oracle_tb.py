@@ -40,6 +40,8 @@ def _mk_project(tmp_path: Path, *, top: str, ports: list, l2: str,
         (root / "plugin_output").mkdir()
         (root / "plugin_output" / "declaration.json").write_text(
             json.dumps(decl))
+        if "function" in decl:
+            (root / "declaration.json").write_text(json.dumps({"function": decl["function"]}))
     return root
 
 
@@ -63,6 +65,9 @@ def test_binary_oracle_defers_unmodelled_controls_and_outputs(tmp_path, extra_po
     project = _mk_project(tmp_path, top="selected_datapath",
                           ports=ports + extra_ports,
                           l2="value = left + right; a binary arithmetic datapath.")
+    (project / "declaration.json").write_text(json.dumps({
+        "integer_encoding": "unsigned", "function": {
+            "result": "value", "operands": ["left", "right"], "operator": "+", "modulus_bits": 6}}))
     report, rc = aotg.generate(project, "digital_arithmetic_primitive")
     assert rc == 2, report
     assert report["verdict"] == "DEFER"

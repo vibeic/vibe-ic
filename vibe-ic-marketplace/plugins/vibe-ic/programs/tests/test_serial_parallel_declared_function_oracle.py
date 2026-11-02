@@ -118,9 +118,9 @@ def _mk_project(tmp: Path, *, declare: bool, bit_order: str = "LSB_first",
             "bit_order": bit_order, "latency_cycles": 2,
             "integer_encoding": encoding, "reset_polarity": "active_high",
             "size_param": 8, "function": {"result": "y", "operands": ["a", "b"], "operator": "*", "modulus_bits": 8}}))
-    else:
-        (root / "declaration.json").write_text(json.dumps({
-            "integer_encoding": encoding, "function": {"result": "y", "operands": ["a", "b"], "operator": "*", "modulus_bits": 8}}))
+    (root / "declaration.json").write_text(json.dumps({
+        **({"integer_encoding": encoding} if not declare else {}),
+        "function": {"result": "y", "operands": ["a", "b"], "operator": "*", "modulus_bits": 8}}))
     if with_l10:
         (gd / "L10_TEST_CASES.json").write_text(
             json.dumps(_L10, ensure_ascii=False))
@@ -152,6 +152,7 @@ def test_serial_reader_rejects_declared_input_result(tmp_path, result, operands)
     doc = json.loads(path.read_text())
     doc['function'].update(result=result, operands=operands)
     path.write_text(json.dumps(doc))
+    (proj / 'declaration.json').write_text(json.dumps({'function': doc['function']}))
     spec, reason = aotg.extract_serial_arith_spec(proj, 'digital_arithmetic_primitive')
     assert spec is None and reason, (spec, reason)
 
@@ -166,6 +167,7 @@ def test_serial_reader_preserves_noncommutative_operand_order(tmp_path, operands
     doc = json.loads(path.read_text())
     doc['function'].update(operator='-', operands=operands)
     path.write_text(json.dumps(doc))
+    (proj / 'declaration.json').write_text(json.dumps({'function': doc['function']}))
     spec, reason = aotg.extract_serial_arith_spec(proj, 'digital_arithmetic_primitive')
     assert spec is not None, reason
     assert spec['operator'] == '-'
@@ -197,6 +199,7 @@ def test_ordinary_professional_hook_rejects_unbound_serial_function(
     doc = json.loads(path.read_text())
     doc['function'].update(result=result, operands=operands)
     path.write_text(json.dumps(doc))
+    (proj / 'declaration.json').write_text(json.dumps({'function': doc['function']}))
     step, report, check = _ordinary_professional_step(proj, monkeypatch)
     assert step.status == 'NOT_MEASURED', (step.detail, report, check)
     assert report['status'] == 'INCOMPLETE' and report['ran_cocotb'] is False, report
@@ -295,6 +298,7 @@ def test_unrecognised_operator_defers_fail_closed(tmp_path):
     declaration = proj / "plugin_output" / "declaration.json"
     declaration.write_text(json.dumps({key: value for key, value in
                                        json.loads(declaration.read_text()).items() if key != "function"}))
+    (proj / "declaration.json").write_text('{}')
     spec, reason = aotg.extract_serial_arith_spec(
         proj, "digital_arithmetic_primitive")
     assert spec is None and "operator" in reason.lower()
@@ -371,6 +375,7 @@ def test_testbench_gen_fail_closed_keeps_scaffold_when_function_undecidable(
     declaration = proj / "plugin_output" / "declaration.json"
     declaration.write_text(json.dumps({key: value for key, value in
                                        json.loads(declaration.read_text()).items() if key != "function"}))
+    (proj / "declaration.json").write_text('{}')
     tbg.emit_unit_tbs(proj, "serpar_mul", kind="functional_vector", report={})
     tb_dir = proj / "phase2" / "stage1" / "sim" / "tb"
     for case in ("random_multiplication_functional_equivalence",
@@ -442,6 +447,8 @@ def _declared_scenario_project(root, *, width=8, order="LSB_first",
         "reset_polarity":"active_high", "transaction_rearm":rearm,
         "rearm_reset_cycles":1, "parallel_hold":"through_final_product_bit",
         "function":{"result":"p", "operands":["x","y"], "operator":"&", "modulus_bits":width}}))
+    root.joinpath("declaration.json").write_text(json.dumps({"function": {
+        "result":"p", "operands":["x","y"], "operator":"&", "modulus_bits":width}}))
     bit = "idx" if order == "LSB_first" else f"{width-1}-idx"
     reset = "rst" if mode != "ignored_reset" else "1'b0"
     inv = "~" if mode == "wrong_product" else ""
@@ -459,7 +466,7 @@ endmodule
         names={"clk":"i_clk", "rst":"i_rst", "x":"operand_word",
                "y":"serial_bit", "p":"result_bit"}
         for path in [gd/"L9_INTEGRATION_SPEC.json",gd/"L2_FRS.json",
-                     root/"plugin_output/declaration.json",rtl/"neutral_serial.v"]:
+                     root/"plugin_output/declaration.json",root/"declaration.json",rtl/"neutral_serial.v"]:
             text=path.read_text()
             for before,after in names.items():
                 text=re.sub(r"\b"+before+r"\b",after,text)

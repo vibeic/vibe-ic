@@ -301,6 +301,9 @@ def phase1_project(root, records=PHASE1_RECORDS, *, size=8, declare=True):
         'size_param': size, 'transaction_rearm': 'clocked_reset', 'rearm_reset_cycles': 1,
         'parallel_hold': 'through_final_product_bit',
         **({'function': function('*', size, 'p', ('x', 'y'))} if declare else {})}))
+    if declare:
+        (root / 'declaration.json').write_text(json.dumps({
+            'function': function('*', size, 'p', ('x', 'y'))}))
     return root
 
 
@@ -332,6 +335,7 @@ def test_serial_function_field_must_agree_with_ports_and_word_width(tmp_path, fi
     p = phase1_project(tmp_path)
     path = p / 'plugin_output/declaration.json'
     path.write_text(json.dumps({**json.loads(path.read_text()), 'function': field}))
+    (p / 'declaration.json').write_text(json.dumps({'function': field}))
     spec, why = serial_spec(p)
     assert spec is None and reason in why, (spec, why)
 
@@ -425,6 +429,8 @@ def test_serial_producer_preserves_source_function_and_native_falsifiability(
         tmp_path, location, broken):
     field = function('*', 32, 'p', ('y', 'x'))
     p = producer_project(tmp_path, location, field)
+    if location == 'plugin_output/declaration.json':
+        (p / 'declaration.json').write_text(json.dumps({'function': field}))
     source = (p / location).read_bytes()
     result = emit_serial(p)
     assert result.returncode == 0, result.stdout + result.stderr
