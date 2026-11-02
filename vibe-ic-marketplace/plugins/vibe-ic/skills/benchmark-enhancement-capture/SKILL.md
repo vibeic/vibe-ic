@@ -516,6 +516,31 @@ authoring. Canonical acceptance follows the review/prove/repair sequence above.
 
 ## Procedure
 
+### Capture destination and completion
+
+Capture contributes the reusable improvement to the plugin repository:
+submit a program or skill fix as a version-less PR, or a general capability
+gap as a GitHub issue through `community-backlog-submit`. The contribution
+path in step 5 determines who reviews and lands it. Local edits, notes,
+archives, backlog drafts, and emitted `TODO` sketches prepare that submission;
+they do not establish upstream delivery or absorption.
+
+Check for an existing implementation first. When a recovery is already in
+the local plugin, link that implementation, its regression tests, and its
+retained verification receipts instead of applying a duplicate sketch.
+Record implementation state (`APPLIED_LOCAL`, `CANDIDATE`, or `PENDING`)
+separately from upstream submission state. A candidate or pending item remains
+unimplemented. Once the user has authorized submission, carry it through to
+the actual PR or issue and return its URL. A local commit alone is not a
+submitted capture. An open issue or proposed PR is not a merged fix,
+installed release, or benchmark acceptance.
+
+When the user pauses a design run but requests capture, finish these plugin
+edits and the authorized PR/issue submission while the design run remains
+paused. Preserve incomplete reviews and failed receipts. Resume the benchmark only on a new
+explicit instruction. Capture validation has its own scope and cannot turn
+an unfinished design review into PASS.
+
 1. **Collect recovery records**. Input: pairs `(<design>, <prior-fail-sample>, <recovered-pass-sample>, <AI-reasoning>)`. Source = the close-loop agents' final reports + git diff between samples/.
 
 2. **Per record, classify** into Bucket A/B/C/D. The 80/20 heuristic:

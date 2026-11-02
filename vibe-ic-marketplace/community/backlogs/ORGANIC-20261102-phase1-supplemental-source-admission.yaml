@@ -1,0 +1,33 @@
+type: enhancement
+severity: P1
+component: program:flow109_metric_acceptance
+title: Admit and bind typed Phase 1 supplemental sources across actual producer and consumer paths
+pattern: When original design documents are supplemented by delivery answers, feature provenance or
+  block-local interface declarations, a fixed original-document census omits valid source facts and
+  their hashes. The expert reader and canonical D1 input issuer can then disagree about which bytes
+  were consumed. A source control must not itself become citable design authority.
+suggested_fix: Introduce a closed source-kind admission contract with complete enumeration, exact hashes
+  and explicit authority ceilings. Reuse it in the expert reader, metric census, actual frontend worker,
+  producer identity and checkpoint/retry currentness. Preserve absent-control legacy behavior; refuse
+  malformed, nonregular, unreadable, stale or partial typed sources before publication. Requirements
+  approval remains independent.
+plugin_version: 1.35.51
+id: ORGANIC-20261102-phase1-supplemental-source-admission
+submitted_at: '2026-11-02T07:35:10.068675+00:00'
+session_context: Capture-only handoff from a paused real-case run; no benchmark or native jobs resumed.
+observed_local_plugin_version: 1.35.35 with unpublished source candidates
+upstream_base: 95a3be2b31bb3fe17c0e5bdbf3f654be020ee078
+local_recovery: 'Local source-admission candidate 869ee144d06e4365234bdc170013f19ab8ddeff8 after tests-first
+  d08915a0090460fa375e372253d5c73d2d942c7a. These are unpublished local identities, not upstream commits.
+  Focused retained comparison: candidate 68 pass; baseline 63 fail and 5 pass, including 21 baseline
+  value failures. Four later exact postcommit checks passed. Separate layered evidence: 233 pass and
+  43 skip, not an atomic final-source run.'
+acceptance: Add neutral source-admission fixtures covering every supported kind and the actual copied
+  worker seam. Prove valid supplements are citable with classification preserved, controls are bound
+  but noncitable, omitted/edited bytes refuse, absent-control behavior is preserved, and pending requirements
+  authority never becomes approved. Run exact before/after node sets and retain value-sensitive negative
+  controls.
+sanitization: NOT_MEASURED for the optional private NDA-token rule because detector configuration is
+  absent; all available content rules report zero hard violations and zero soft warnings.
+github_issue: https://github.com/vibeic/vibe-ic/issues/3775
+submission_status: SUBMITTED_NOT_IMPLEMENTED_UPSTREAM

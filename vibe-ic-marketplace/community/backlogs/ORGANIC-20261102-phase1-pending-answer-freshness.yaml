@@ -1,0 +1,33 @@
+type: bug
+severity: P1
+component: program:vibe_ic_one_shot_runner
+title: Check typed document producer freshness before selecting pending expert-answer retry
+pattern: A pending expert answer is found beside a usable historical extraction summary and existing
+  generated documents. The early retry branch selects expert_second_pass before checking document producer
+  freshness, so the answer can be consumed while a changed typed source/control set requires document
+  regeneration.
+suggested_fix: For typed source admission with available design input and a usable historical first
+  pass, consult the existing freshness assessor before pending-answer retry. REFUSE must preserve the
+  existing refusal decision. REGENERATE plus historical PASS or PASS_WITH_WAIVERS must select document
+  extraction. Keep known first-pass failures diagnostic, preserve current/checkpoint revalidation behavior,
+  explicit skip controls, and absent-manifest legacy routing. Do not infer end-to-end halted-flow behavior
+  from the decision alone.
+plugin_version: 1.35.51
+id: ORGANIC-20261102-phase1-pending-answer-freshness
+submitted_at: '2026-11-02T07:35:10.068675+00:00'
+session_context: Capture-only handoff from a paused real-case run; no benchmark or native jobs resumed.
+observed_local_plugin_version: 1.35.35 with unpublished source candidates
+upstream_base: 95a3be2b31bb3fe17c0e5bdbf3f654be020ee078
+local_recovery: 'Local candidate 0d912833eb24a912c7d13cf81fa4f1515ac7dbbd after tests-first 5203edaf5f682837df8b92eeba9c955ad17dad65.
+  Unpublished local identities. Retained focused comparison: 19 pass versus 10 value failures and 9
+  passes before. Existing exact 52-node set retained the same 50 pass and two FLOW109_MANIFEST_REQUIRED
+  fixture failures in both arms; neither failure is waived.'
+acceptance: 'Extend existing pending-answer behavioral tests: stale typed producer selects docs with
+  one freshness assessment; fresh or checkpoint-revalidated input preserves expert retry; refusal preserves
+  the refusal decision; known failure stays diagnostic; force-skip, input-only L documents, absent first-pass
+  recovery and no-manifest controls retain their behavior. Separately prove the bounded caller halts
+  on refusal before claiming blocking.'
+sanitization: NOT_MEASURED for the optional private NDA-token rule because detector configuration is
+  absent; all available content rules report zero hard violations and zero soft warnings.
+github_issue: https://github.com/vibeic/vibe-ic/issues/3776
+submission_status: SUBMITTED_NOT_IMPLEMENTED_UPSTREAM
