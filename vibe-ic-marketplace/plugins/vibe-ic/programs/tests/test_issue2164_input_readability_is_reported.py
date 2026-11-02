@@ -143,8 +143,10 @@ def test_input_text_returns_exactly_what_it_always_returned(tmp_path):
 
 
 def test_truncation_is_reported_rather_than_silent(tmp_path):
+    # Context, not a design document: ruling #82(5) never cuts input/docs
+    # (test_expert_frame_reads_design_documents_first.py).
     big = "x" * (T._INPUT_TEXT_CAP + 10)
-    d = _project(tmp_path, {"input/docs/big.md": big})
+    d = _project(tmp_path, {"input/big.md": big})
     r = T.input_text_report(d)
     assert r["truncated"] is True
     assert r["chars"] == T._INPUT_TEXT_CAP
