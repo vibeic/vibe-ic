@@ -2749,7 +2749,7 @@ def _native_current_step_receipt(project, step_id, params, result,
     return receipt
 
 
-def _current_step_producer_authority(record, project=None):
+def _current_step_producer_authority(record, project=None, *, execution_mode=None):
     """Classify the current-step producer census before consumer evaluation."""
 
     def _execution_result_is_acceptable(row):
@@ -2800,15 +2800,13 @@ def _current_step_producer_authority(record, project=None):
                     return False, f"native current producer output changed: {raw}", "NOT_MEASURED"
             except OSError:
                 return False, f"native current producer output absent: {raw}", "NOT_MEASURED"
-        if sid == '37':
-            import execution_policy as policy
-            if policy.request().get('mode') == 'default':
-                try:
-                    import librelane_fill_dfm as fill
-                    _step37_retained_output_sources(
-                        project, str(Path(project) / fill.DEFAULT_STREAM_REL))
-                except (OSError, ValueError, KeyError, TypeError, em.Refusal, LibrelaneRefusal) as exc:
-                    return False, f"native retained stream refused: {exc}", "NOT_MEASURED"
+        if sid == '37' and execution_mode == 'default':
+            try:
+                import librelane_fill_dfm as fill
+                _step37_retained_output_sources(
+                    project, str(Path(project) / fill.DEFAULT_STREAM_REL))
+            except (OSError, ValueError, KeyError, TypeError, em.Refusal, LibrelaneRefusal) as exc:
+                return False, f"native retained stream refused: {exc}", "NOT_MEASURED"
         adoption = record.get('retained_outputs')
         if adoption is not None:
             try:
@@ -2893,7 +2891,7 @@ def _produce(project, params):
             current = _native_current_step_receipt(
                 Path(project), sid, params, result, started_ns, prior_outputs)
             allowed, reason, authority_verdict = _current_step_producer_authority(
-                current, project=Path(project))
+                current, project=Path(project), execution_mode=params.get('execution_mode'))
             current['consumer_allowed'] = allowed
             current['authority_verdict'] = authority_verdict
             current['authority_detail'] = reason
@@ -2919,7 +2917,7 @@ def _produce(project, params):
         current = _run_current_step_declared_producers(
             project, sid, params.get('resolved_input_manifest'))
     allowed, reason, authority_verdict = _current_step_producer_authority(
-        current, project=Path(project))
+        current, project=Path(project), execution_mode=params.get('execution_mode'))
     current['consumer_allowed'] = allowed
     current['authority_verdict'] = authority_verdict
     current['authority_detail'] = reason

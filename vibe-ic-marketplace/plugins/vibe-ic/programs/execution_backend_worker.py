@@ -405,7 +405,7 @@ def execute_current_step(project: Path, *, step_id: str,
     producer_verdict = producer.get("verdict", "NOT_MEASURED")
     current = producer.get("current_step_declared_producers")
     allowed, reason, authority_verdict = _current_step_producer_authority(
-        current, project=project)
+        current, project=project, execution_mode="default")
     if not allowed:
         if producer_verdict != "FAIL":
             producer_verdict = authority_verdict
@@ -508,7 +508,7 @@ def execute(inputs: Path, outputs: Path, *, step_id: str, params: dict) -> dict:
         # consumer manufacture a PASS from pre-existing/audit-authored files.
         current = producer.get("current_step_declared_producers")
         allowed, reason, authority_verdict = _current_step_producer_authority(
-            current, project=project)
+            current, project=project, execution_mode=params.get('execution_mode'))
         if not allowed:
             if producer.get('verdict') != 'FAIL':
                 producer['verdict'] = authority_verdict
