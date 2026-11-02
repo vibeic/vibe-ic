@@ -40,7 +40,7 @@ def test_real_producer_topology_is_reused(tmp_path):
 
 
 @pytest.mark.parametrize("dependency", [
-    "analog_a2_topology_emit.py", "analog_ciff.py", "analog_ota1_options.py",
+    "analog_a2_topology_emit.py", "analog_ciff.py", "analog_incremental_startup.py", "analog_ota1_options.py",
     "_analog_producer_fingerprint.py", "analog_ota_bias.py",
 ])
 def test_changed_producer_dependency_invalidates_real_topology(
@@ -48,7 +48,7 @@ def test_changed_producer_dependency_invalidates_real_topology(
     source = Path(a2.__file__).resolve().parent
     shadow = tmp_path / "programs"
     shadow.mkdir()
-    for name in ("analog_a2_topology_emit.py", "analog_ciff.py",
+    for name in ("analog_a2_topology_emit.py", "analog_ciff.py", "analog_incremental_startup.py",
                  "analog_ota1_options.py", "_analog_producer_fingerprint.py",
                  "analog_ota_bias.py"):
         (shadow / name).write_bytes((source / name).read_bytes())
@@ -85,7 +85,7 @@ def test_real_a3_artifact_reuses_until_its_dependency_changes(tmp_path, monkeypa
     shadow = tmp_path / "programs"
     shadow.mkdir()
     for name in ("analog_a3_netlist_emit.py", "analog_a2_topology_emit.py",
-                 "analog_ciff.py", "analog_ota1_options.py", "analog_ota_bias.py",
+                 "analog_ciff.py", "analog_incremental_startup.py", "analog_ota1_options.py", "analog_ota_bias.py",
                  "analog_mos_geometry.py", "_analog_producer_fingerprint.py"):
         (shadow / name).write_bytes((source / name).read_bytes())
     monkeypatch.setattr(runner, "PROGRAMS_DIR", shadow)

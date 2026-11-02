@@ -5,10 +5,10 @@ from pathlib import Path
 
 _DEPENDENCIES = {
     "analog_a2_topology_emit.py": (
-        "analog_ciff.py", "analog_ota1_options.py", "analog_ota_bias.py",
+        "analog_ciff.py", "analog_incremental_startup.py", "analog_ota1_options.py", "analog_ota_bias.py",
         "_analog_producer_fingerprint.py"),
     "analog_a3_netlist_emit.py": (
-        "analog_a2_topology_emit.py", "analog_ciff.py", "analog_ota1_options.py",
+        "analog_a2_topology_emit.py", "analog_ciff.py", "analog_incremental_startup.py", "analog_ota1_options.py",
         "analog_ota_bias.py", "analog_mos_geometry.py", "_analog_producer_fingerprint.py"),
 }
 

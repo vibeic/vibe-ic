@@ -144,6 +144,7 @@ import analog_incremental_resolution as _res  # noqa: E402
 import analog_incremental_decimator as _dec  # noqa: E402
 import analog_resolution_stimulus as _stim  # noqa: E402
 import analog_ciff as _ciff  # noqa: E402
+import analog_incremental_startup as _startup  # noqa: E402
 import analog_ota1_options as _ota1  # noqa: E402
 import analog_ota_bias as _ota_bias  # noqa: E402
 from _analog_producer_fingerprint import producer_fingerprint as _source_fingerprint
@@ -7105,6 +7106,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
             param_exprs, non_overlap_phase_devices, cap_l_expr)
     except ValueError as exc:
         raise SizingInputsInvalid(str(exc)) from exc
+    incremental_startup = _startup.realize(
+        lib, spec_values, stage_rec, devices, internal_nets, startup_reset)
     folded = expand_folded_first_stage(
         lib, spec_values, knobs, devices, internal_nets, sizing_inputs, project)
     cascodes = expand_input_drain_cascodes(
@@ -7460,6 +7463,8 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         ir["loop_declaration"] = loop_declaration
     if startup_reset:
         ir["startup_reset"] = startup_reset
+    if incremental_startup:
+        ir["incremental_startup"] = incremental_startup
     if ota1_options:
         ir["ota1_options"] = ota1_options
     if ota_bias_network:
@@ -7495,7 +7500,7 @@ def build_ir(block: str, btype: str, entry: Dict[str, Any],
         for _key in ("ports", "rails", "internal_nets", "devices",
                      "constants", "device_param_exprs", "measurements",
                      "testbench", "stimulus", "input_drain_cascodes", "folded_first_stage", "miller_nulling",
-                     "loop_declaration", "startup_reset", "ota1_options", "ota_bias_network"):
+                     "loop_declaration", "startup_reset", "incremental_startup", "ota1_options", "ota_bias_network"):
             if _key in ir:
                 ir[_key] = _rename_nets(ir[_key], _renames)
     ir["port_binding"] = {

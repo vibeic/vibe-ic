@@ -660,11 +660,12 @@ def legacy_declaration(stages, devices, exprs, env, delay, evaluate):
 
 
 def add_startup_reset(lib, values, stages, devices, nets, exprs, cap_length, sampling_cap_expr):
-    """Optional RC + six-transistor Schmitt POR, counter clear and reset OR.
+    """Optional RC + six-transistor Schmitt POR and safely released counter.
 
     Uses only the existing resistor/capacitor/CMOS roles. The low-clock-phase
     release latch prevents an RC threshold crossing from creating a spurious
     rising counter edge. Both counter storage nodes are preset before release.
+    analog_incremental_startup owns the final conversion-reset signal.
     """
     option = lib.get("startup_reset_template")
     if not option or values.get(option["enable_spec"], 0) == 0:
@@ -677,8 +678,6 @@ def add_startup_reset(lib, values, stages, devices, nets, exprs, cap_length, sam
     for d in devices:
         if d["name"] in counter_names:
             d["nets"] = ["npor_clk" if n == counter["first_in"] else n for n in d["nets"]]
-        if d["name"] in option["reset_driver_devices"]:
-            d["nets"][0] = "nwindow_reset"
     def mos(name, role, drain, gate, source, width=2.):
         body = "vss" if role == "nmos" else "vdd"
         devices.append({"name": name, "role": role, "function": "incremental startup reset",
@@ -720,14 +719,7 @@ def add_startup_reset(lib, values, stages, devices, nets, exprs, cap_length, sam
     for i in range(1, counter_rec["stages"]+1):
         for j, node in enumerate(option["counter_storage_high"]):
             mos(f"mp_por_clear{i}_{j}", "pmos", node.format(i=i), "npor_run", "vdd", 8.)
-    # OR window reset with startup reset; the existing reset-complement
-    # inverter and every integrator reset switch now see the combined reset.
     reset = option["reset_net"]
-    mos("mp_por_or1", "pmos", "npor_ors", "nwindow_reset", "vdd", 4.)
-    mos("mp_por_or2", "pmos", "npor_orb", "npor_runb", "npor_ors", 4.)
-    mos("mn_por_or1", "nmos", "npor_orb", "nwindow_reset", "vss")
-    mos("mn_por_or2", "nmos", "npor_orb", "npor_runb", "vss")
-    inv("por_or", reset, "npor_orb")
     nets[:] = sorted({n for d in devices for n in d["nets"]} - set(lib["ports"]))
     return {"enabled": True, "kind": "RC_Schmitt", "tau_ns": tau,
             "rc_net": "npor_rc", "por_net": "npor", "reset_net": reset,
