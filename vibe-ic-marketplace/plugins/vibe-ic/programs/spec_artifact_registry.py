@@ -784,18 +784,21 @@ def _public_port_order(text: str, top: str, rtl: str) -> Optional[str]:
     return reordered
 
 
-def generate(text: str, top: str = "TopModule") -> Tuple[Optional[str], Optional[str]]:
+def generate(text: str, top: str = "TopModule", *, contract=None) -> Tuple[Optional[str], Optional[str]]:
     """Deterministic RTL from the first artifact type whose generator fires.
     Returns (artifact_type, rtl) or (None, None). The benchmark §4.2 absorption
     chain and Phase-2 short-circuit both route through here."""
-    from _specrtl_common import declared_logic_obligations
-    if declared_logic_obligations(text, top):
+    from _specrtl_common import emission_spec_contract, unsupported_logic_obligations
+    if contract is None:
+        contract = emission_spec_contract(text, top=top)
+    if unsupported_logic_obligations(contract):
         return None, None
     for a in REGISTRY:
         if not a.generate:
             continue
         try:
-            rtl = a.generate(text, top)
+            rtl = (a.generate(text, top, contract=contract) if a.key == 'karnaugh_map'
+                   else a.generate(text, top))
             if rtl:
                 rtl = _public_port_order(text, top, rtl)
         except Exception:
@@ -866,13 +869,15 @@ def generate_from_record(record: dict, text_fallthrough=None) -> Optional[str]:
     import copy as _copy
     if not isinstance(record, dict):
         return None
-    from _specrtl_common import declared_logic_obligations
+    from _specrtl_common import emission_spec_contract, unsupported_logic_obligations
     from record_prompt_context_bridge import toplevel_name
     supplied = record.get('input') or {}
     if isinstance(supplied, dict):
         prompt = record.get('prompt') or supplied.get('prompt') or ''
-        if isinstance(prompt, str) and declared_logic_obligations(prompt, toplevel_name(record)):
-            return None
+        if isinstance(prompt, str):
+            contract = emission_spec_contract(prompt, top=toplevel_name(record))
+            if unsupported_logic_obligations(contract):
+                return None
     for _solver in _load_record_solvers():
         try:
             _rtl = _solver.solve(_copy.deepcopy(record))

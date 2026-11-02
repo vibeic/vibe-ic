@@ -234,11 +234,13 @@ def _synth_mux_decomp(prompt: str, top: str, ports, out: str, out_w: int):
     return f"module {top} (\n" + ",\n".join(decl) + "\n);\n\n" + body + "\nendmodule\n"
 
 
-def synth(prompt: str, top: str = "TopModule") -> Optional[str]:
+def synth(prompt: str, top: str = "TopModule", *, contract=None) -> Optional[str]:
     if "karnaugh" not in prompt.lower():
         return None
-    from _specrtl_common import declared_logic_obligations
-    if declared_logic_obligations(prompt, top):
+    from _specrtl_common import emission_spec_contract, unsupported_logic_obligations
+    if contract is None:
+        contract = emission_spec_contract(prompt, top=top)
+    if unsupported_logic_obligations(contract):
         return None
     ports = parse_ports(prompt)
     if not ports:

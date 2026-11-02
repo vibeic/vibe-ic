@@ -188,6 +188,30 @@ def test_structured_foreign_module_obligation_does_not_constrain_the_target():
         'karnaugh_map', expected, [])
 
 
+@pytest.mark.parametrize('sentence', [
+    'NOT gates must be replaced with NAND-only logic.',
+    'For module TopModule, no constraints are requested.\nUse NAND gates exclusively.',
+])
+def test_gate_role_and_source_scoped_field_survive_the_author_boundary(tmp_path, sentence):
+    import deterministic_emit_chain as chain
+    import design_one_shot_runner as runner
+
+    prompt = _KMAP_2IN.replace('TopModule', 'neutral') + '\n' + sentence
+    kind, rtl, rejected = chain.try_emit_ex(prompt, top='neutral', check=False)
+    observed = 'HANDOFF' if rtl is None and rejected else 'SILENT_ACCEPT'
+    assert observed == 'HANDOFF', {'kind': kind, 'rtl': rtl, 'rejected': rejected}
+    source = tmp_path / 'phase1/input_prompt/design.md'
+    source.parent.mkdir(parents=True)
+    source.write_text(prompt)
+    before = {p.relative_to(tmp_path): p.read_bytes()
+              for p in tmp_path.rglob('*') if p.is_file()}
+    result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
+    assert result.status == 'PASS_WITH_WAIVERS', result.detail
+    assert result.extras['fallback_skill'] == 'spec-to-rtl'
+    assert {p.relative_to(tmp_path): p.read_bytes()
+            for p in tmp_path.rglob('*') if p.is_file()} == before
+
+
 def test_kmap_fires_and_is_correct():
     rtl = K.synth(_KMAP_2IN, "TopModule")
     assert rtl is not None

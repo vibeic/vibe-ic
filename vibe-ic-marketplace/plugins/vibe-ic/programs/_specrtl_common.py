@@ -661,6 +661,7 @@ class SpecContract:
     # gate on their own; spec_conformance_check re-emits them as INFO findings so a
     # silent 0-port skip on a table-only interface spec is visible.
     notes: List[str] = field(default_factory=list)
+    logic_obligations: List["LogicObligation"] = field(default_factory=list)
 
 
 DECLARED_LOGIC_OBLIGATION_UNSUPPORTED = "DECLARED_LOGIC_OBLIGATION_UNSUPPORTED"
@@ -668,146 +669,178 @@ DECLARED_LOGIC_OBLIGATION_UNSUPPORTED = "DECLARED_LOGIC_OBLIGATION_UNSUPPORTED"
 
 @dataclass(frozen=True)
 class LogicObligation:
-    module: Optional[str]
     kind: str
-    clause: str
+    family: Tuple[str, ...]
+    source_span: Tuple[int, int]
+    source_sentence: str
+    module: Optional[str] = None
+
+    @property
+    def clause(self) -> str:
+        return " ".join(self.source_sentence.split())
 
 
-def declared_logic_obligations(text: str, top: Optional[str] = None, *,
-                               source_module: Optional[str] = None
-                               ) -> Tuple[LogicObligation, ...]:
-    """Unsupported source-owned implementation requests, before any producer runs.
+_LOGIC_FAMILIES = frozenset({"nand", "nor", "xor", "xnor", "and", "or", "not", "mux"})
+_COST_FAMILIES = frozenset({"gates", "literals", "cells", "transistors", "area", "expression"})
+_EXCLUSIVE = re.compile(r"\bonly\b|\b(?:exclusively|solely|purely)\b|\bnothing\s+but\b|\brestricted\s+to\b", re.I)
+_MINIMIZE = re.compile(r"\bminimi[sz](?:e[sd]?|ing|ation)\b|\bfewest\b|\b(?:minimum|least|smallest)(?:\s+number)?\b|\bsimplif(?:y|ied)\b", re.I)
+_COST_TERM = re.compile(r"\b(gates?|literals?|cells?|transistors?|area|expressions?)\b", re.I)
+_GATE_TERM = re.compile(r"\b(nand|nor|xor|xnor|multiplexers?|mux(?:es)?|inverters?|and|or|not)\b", re.I)
 
-    These are author obligations, not claims about the candidate RTL. A complete
-    truth table does not establish a restricted basis or optimal implementation.
-    JSON strings, HDL comments and HDL strings are not prose declarations.
-    """
-    try:
-        data = json.loads(text)
-    except (ValueError, TypeError):
-        data = None
-    if isinstance(data, (dict, list)):
-        return ()  # no existing structured basis/minimization field is defined
+
+def logic_obligations_from_records(rows, source_text: Optional[str] = None) -> List[LogicObligation]:
+    """Read the shared structured field, preserving its exact source sentence."""
+    if not isinstance(rows, (list, tuple)):
+        raise ValueError("logic_obligations must be a list")
+    result = []
+    for row in rows:
+        if isinstance(row, LogicObligation):
+            row = {"kind": row.kind, "family": row.family, "source_span": row.source_span,
+                   "source_sentence": row.source_sentence, "module": row.module}
+        if not isinstance(row, dict):
+            raise ValueError("logic obligation must be an object")
+        kind = row.get("kind")
+        allowed = _LOGIC_FAMILIES if kind == "logic_basis" else _COST_FAMILIES if kind == "logic_minimization" else None
+        family = row.get("family")
+        span, sentence = row.get("source_span"), row.get("source_sentence")
+        module = row.get("module")
+        if (allowed is None or not isinstance(family, (list, tuple)) or not family
+                or any(not isinstance(v, str) or v not in allowed for v in family)
+                or not isinstance(span, (list, tuple)) or len(span) != 2
+                or any(type(v) is not int for v in span)
+                or not 0 <= span[0] < span[1]
+                or not isinstance(sentence, str) or not sentence.strip()
+                or span[1] - span[0] != len(sentence)
+                or (module is not None and (not isinstance(module, str)
+                    or re.fullmatch(r"[A-Za-z_]\w*", module) is None))):
+            raise ValueError("invalid structured logic obligation")
+        if source_text is not None and (span[1] > len(source_text)
+                                       or source_text[span[0]:span[1]] != sentence):
+            raise ValueError("logic obligation source span does not match the spec")
+        obligation = LogicObligation(kind, tuple(sorted(set(family))), tuple(span), sentence, module)
+        if obligation not in result:
+            result.append(obligation)
+    return result
+
+
+def unsupported_logic_obligations(contract: SpecContract) -> Tuple[LogicObligation, ...]:
+    return tuple(row for row in contract.logic_obligations
+                 if (contract.source != 'json' or row.module is None
+                     or contract.module is None or row.module == contract.module)
+                 and (row.kind == "logic_minimization" or not {"and", "or", "not"}.issubset(row.family)))
+
+
+def _gate_families(sentence: str) -> Tuple[str, ...]:
+    families = set()
+    for match in _GATE_TERM.finditer(sentence):
+        raw, term = match.group(0), match.group(0).lower()
+        if term == "nand" and re.match(r"\s+flash\b", sentence[match.end():], re.I):
+            continue
+        if term in {"and", "or", "not"} and not (raw.isupper()
+                or re.match(r"\s+(?:logic\s+)?gates?\b|\s*[,/\-]", sentence[match.end():], re.I)
+                or re.search(r"[,/\-]\s*$", sentence[:match.start()])):
+            continue
+        families.add("mux" if term.startswith(("mux", "multiplexer")) else
+                     "not" if term.startswith("inverter") else term)
+    return tuple(sorted(families))
+
+
+def _detect_logic_obligations(text: str, top: Optional[str] = None, *,
+                              source_module: Optional[str] = None) -> List[LogicObligation]:
     from _hdl_code_text import strip_hdl_comments_and_strings
-    clean = strip_hdl_comments_and_strings(text or "")
-    if not re.search(r"\bonly\b|\bminim\w*\b|\bfewest\b|\bsmallest\b|\bsimplify\b", clean, re.I):
-        return ()
+    clean = strip_hdl_comments_and_strings(text)
     declarations = list(re.finditer(
         r"(?im)^\s*module\s+name\s*:\s*`?([A-Za-z_]\w*)`?"
         r"|\bmodule\s+(?:is\s+)?named\s+`?([A-Za-z_]\w*)`?"
         r"|^\s*module\s+([A-Za-z_]\w*)\s*(?:#\s*\(|\()", clean))
     names = {next(g for g in m.groups() if g) for m in declarations}
-    owner = source_module or (top if top in names else
-                              next(iter(names)) if len(names) == 1 else top)
-    sections = list(re.finditer(
-        r"(?im)^\s*module\s+name\s*:\s*`?([A-Za-z_]\w*)`?", clean))
+    owner = source_module or (top if top in names else next(iter(names)) if len(names) == 1 else top)
+    sections = list(re.finditer(r"(?im)^\s*module\s+name\s*:\s*`?([A-Za-z_]\w*)`?", clean))
+    prose = re.sub(r"(?m)^[ \t]*(?:[01]+\s*\|[^\n]*|[-*]\s*(?:input|output|inout)\b[^\n]*)$",
+                   lambda m: '.' + ' ' * (len(m.group(0)) - 1), clean)
+    for section in reversed(sections):
+        prose = prose[:section.start()] + '.' + ' ' * (section.end() - section.start() - 1) + prose[section.end():]
     obligations: List[LogicObligation] = []
-    gate_word = r"(?:NAND|NOR|XNOR|XOR|AND|OR|NOT|inverters?|multiplexers?|mux(?:es)?)"
-    gate_unit = re.compile(
-        r"(?:(?:[0-9]+|two|three|four)[ -]+input\s+)?(" + gate_word + r")"
-        r"(?:\s+(?:logic\s+)?gates?)?", re.I)
-
-    def allowed_basis(basis: str) -> Optional[Set[str]]:
-        """Read the complete primitive list; a forbidden/explanatory tail grants nothing."""
-        first = gate_unit.match(basis)
-        if first is None:
-            return None
-        tail = basis[first.end():].strip()
-        if not tail:
-            return {first.group(1).lower()}
-        for separator in (r",\s*", r",?\s*(?:and|or)\s+"):
-            join = re.match(separator, tail, re.I)
-            if join is not None:
-                rest = allowed_basis(tail[join.end():].strip())
-                if rest is not None:
-                    return {first.group(1).lower()} | rest
-        return None
-
-    basis_patterns = (
-        r"(?:(?:you|the\s+(?:module|implementation|circuit))\s+)?"
-        r"(?:(?:must|shall|should|may|can)\s+)?(?:use\s+only|only\s+use)\s+(.+)",
-        r"(?:implement|build)(?:\s+(?:the|this)\s+(?:module|function|circuit))?"
-        r"\s+using\s+only\s+(.+)",
-        r"the\s+(?:module|implementation|circuit)\s+(?:must|shall|should)\s+be\s+"
-        r"(?:implemented|built)\s+using\s+only\s+(.+)",
-        r"only\s+(.+?)\s+(?:may|can|shall)\s+be\s+used",
-        r"use\s+(.+?)\s+only",
-        r"(.+?)-only\s+(?:implementation|circuit|logic)\s+(?:is\s+)?required",
-    )
-    minimization = re.compile(
-        r"(?:(?:you|the\s+(?:module|implementation))\s+)?"
-        r"(?:(?:must|shall|should)\s+)?(?:"
-        r"(?:minimi[sz]e|simplify)\s+(?:the\s+|this\s+|a\s+)?"
-        r"(?:Boolean\s+|logic\s+)?(?:expression|function|circuit|logic|implementation)\b.*"
-        r"|(?:use|implement\s+using)\s+(?:a\s+|the\s+)?"
-        r"(?:(?:minimum|fewest|smallest)\s+(?:possible\s+)?(?:number\s+of\s+)?.*?gates?"
-        r"|minimi[sz]ed\s+(?:Boolean\s+|logic\s+|sum-of-products\s+)?expression).*)", re.I)
-    clause_start = re.compile(
-        r"(?im)^[ \t]*(?:[-*][ \t]*)?(?=(?:for\s+module\b|"
-        r"module\s+(?!name\s*:)[A-Za-z_]\w*\s+(?:must|shall|should|may|can)\b|"
-        r"use\b|only\b|you\b|the\b|this\b|that\b|previous\b|do\b|does\b|"
-        r"never\b|implement\b|build\b|minimi[sz]e\b|simplify\b|"
-        + gate_word + r"-only\b))")
-    prose = re.sub(
-        r"(?m)^[ \t]*(?:[01]+\s*\|[^\n]*|[-*]\s*(?:input|output|inout)\b[^\n]*)$",
-        lambda m: '.' + ' ' * (len(m.group(0)) - 1), clean)
-    for sentence in re.finditer(r"[^.!?;]+", prose):
-        # Ignore table/header rows before prose; retain soft-wrapped ownership
-        # and denial prefixes as part of the complete directive clause.
-        start = clause_start.search(sentence.group(0))
-        if start is None:
+    for match in re.finditer(r"[^.!?]+", prose):
+        raw = match.group(0)
+        lo, hi = match.start() + len(raw) - len(raw.lstrip()), match.end() - len(raw) + len(raw.rstrip())
+        if lo >= hi:
             continue
-        clause = " ".join(sentence.group(0)[start.end():].split()).strip('` ')
-        position = sentence.start() + start.end()
+        if match.end() < len(prose) and prose[match.end()] in ".!?":
+            hi = match.end() + 1
+        sentence = " ".join(prose[lo:hi].split())
         scoped_owner = owner
         for section in sections:
-            if section.start() <= position:
+            if section.start() <= lo:
                 scoped_owner = section.group(1)
-        explicit = re.match(
-            r"(?:for\s+module\s+`?([A-Za-z_]\w*)`?\s*[:,]?\s*"
-            r"|module\s+`?([A-Za-z_]\w*)`?\s+)", clause, re.I)
+        explicit = re.search(r"\bfor\s+module\s+`?([A-Za-z_]\w*)`?"
+                             r"|^module\s+`?([A-Za-z_]\w*)`?\s+(?:must|shall|should|may|can)\b", sentence, re.I)
         if explicit:
             scoped_owner = explicit.group(1) or explicit.group(2)
-            clause = clause[explicit.end():]
-        postfix = re.search(r"\s+for\s+module\s+`?([A-Za-z_]\w*)`?\s*$", clause, re.I)
-        if postfix:
-            scoped_owner = postfix.group(1)
-            clause = clause[:postfix.start()]
         if scoped_owner != owner:
             continue
-        retired = re.search(
-            r"\b(?:withdrawn|removed|obsolete|superseded|no\s+longer\s+required)\b"
-            r"|\b(?:is|are)\s+not\s+(?:required|a\s+requirement|applicable)\b", clause, re.I)
-        if re.search(r"\bnot\s+(?:withdrawn|removed|obsolete|superseded)\b", clause, re.I):
+        family = _gate_families(sentence)
+        costs = tuple(sorted({"expression" if m.group(1).lower().startswith("expression")
+                              else "area" if m.group(1).lower() == "area"
+                              else m.group(1).lower().rstrip('s') + 's' for m in _COST_TERM.finditer(sentence)}))
+        minimized = _MINIMIZE.search(sentence) is not None and bool(costs)
+        retired = re.search(r"\b(?:withdrawn|removed|obsolete|superseded|no\s+longer\s+required)\b"
+                            r"|\b(?:is|are)\s+not\s+(?:required|a\s+requirement|applicable)\b", sentence, re.I)
+        if re.search(r"\bnot\s+(?:withdrawn|removed|obsolete|superseded)\b", sentence, re.I):
             retired = None
         if retired:
-            if re.search(r"\b(?:minim\w*|fewest|smallest)\b", clause, re.I):
-                obligations = [o for o in obligations if o.kind != 'logic_minimization']
-            elif re.search(gate_word + r"\b|\bbasis\b", clause, re.I):
-                retired_basis = {m.group(0).lower() for m in re.finditer(gate_word + r"\b", clause, re.I)}
-                obligations = [o for o in obligations if o.kind != 'logic_basis' or
-                               retired_basis != {m.group(0).lower() for m in
-                                                 re.finditer(gate_word + r"\b", o.clause, re.I)}]
-            elif re.search(r"\b(?:this|that|previous)\s+(?:requirement|restriction|request)\b", clause, re.I):
+            if minimized:
+                obligations = [o for o in obligations if o.kind != "logic_minimization"]
+            elif family:
+                obligations = [o for o in obligations if o.kind != "logic_basis" or o.family != family]
+            elif re.search(r"\b(?:this|that|previous)\s+(?:requirement|restriction|request)\b", sentence, re.I):
                 obligations = obligations[:-1]
             continue
-        if minimization.fullmatch(clause):
-            obligation = LogicObligation(owner, 'logic_minimization', clause)
-            if obligation not in obligations:
-                obligations.append(obligation)
+        exclusive = _EXCLUSIVE.search(sentence)
+        if exclusive:
+            prefix = sentence[max(sentence.rfind(';', 0, exclusive.start()), 0):exclusive.start()]
+            polarity = re.sub(r"\bnot(?=\s+(?:logic\s+)?gates?\b)", 'gate', prefix, flags=re.I)
+            if re.search(r"\b(?:not|never)\b", polarity, re.I):
+                exclusive = None
+            elif re.match(r"\s+(?:the\s+)?(?:data\s+)?(?:inputs?|outputs?|ports?|pins?|selectors?|bits?|signals?)\b",
+                          sentence[exclusive.end():], re.I):
+                exclusive = None
+        request = re.search(r"\b(?:must|shall|should|required|requirement)\b", sentence, re.I)
+        directive = re.search(r"(?:^|[,;])\s*(?:use|implement|build|realize|construct|compose|design|make|limit|restrict|minimi[sz]e|simplify)\b", sentence, re.I)
+        fact = re.search(r"\b(?:library|libraries|characteri[sz]ed|catalog|examples?)\b", sentence, re.I)
+        if fact and not (request or directive):
             continue
-        for pattern in basis_patterns:
-            basis_match = re.fullmatch(pattern, clause, re.I)
-            if basis_match is None:
-                continue
-            basis = basis_match.group(1)
-            gates = allowed_basis(basis)
-            if gate_unit.match(basis) and (gates is None or not {'and', 'or', 'not'}.issubset(gates)):
-                obligation = LogicObligation(owner, 'logic_basis', clause)
-                if obligation not in obligations:
-                    obligations.append(obligation)
-            break
-    return tuple(obligations)
+        if minimized and not re.search(r"\b(?:do|does|must|shall|should)\s+not\b", sentence, re.I):
+            obligations.append(LogicObligation("logic_minimization", costs, (lo, hi), text[lo:hi], owner))
+        if exclusive and family:
+            allowed_clause = re.split(r"\b(?:do|must|shall|should)\s+not\b", sentence, maxsplit=1, flags=re.I)[0]
+            allowed = _gate_families(allowed_clause)
+            if allowed:
+                obligations.append(LogicObligation("logic_basis", allowed, (lo, hi), text[lo:hi], owner))
+    return obligations
+
+
+def declared_logic_obligations(text: str, top: Optional[str] = None, *,
+                               source_module: Optional[str] = None) -> Tuple[LogicObligation, ...]:
+    contract = emission_spec_contract(text, top=top)
+    if source_module is not None and contract.source != "json":
+        contract.logic_obligations = _detect_logic_obligations(text, top, source_module=source_module)
+    return unsupported_logic_obligations(contract)
+
+
+def emission_spec_contract(text: str, interface_text: str = "", top: Optional[str] = None) -> SpecContract:
+    if interface_text:
+        try:
+            interface = json.loads(interface_text)
+        except (ValueError, TypeError):
+            interface = None
+        if isinstance(interface, dict) and "logic_obligations" in interface:
+            return extract_spec_contract(interface_text, is_json=True, confirm=False)
+    try:
+        data = json.loads(text)
+    except (ValueError, TypeError):
+        data = None
+    return extract_spec_contract(text, is_json=isinstance(data, (dict, list)), confirm=False, top=top)
 
 
 # Natural-language interface bullet:  " - input  d   (8 bits)"  /  " - output q"
@@ -1797,7 +1830,8 @@ def _json_port_width(d: dict) -> int:
 
 def extract_spec_contract(text: str, is_json: bool = False,
                           confirm: bool = True, client_factory=None,
-                          project: Optional[Path] = None) -> SpecContract:
+                          project: Optional[Path] = None,
+                          top: Optional[str] = None) -> SpecContract:
     """Extract a declared contract from spec text.
 
     SEMANTIC double-confirm: prose-inferred fields (reset mode/polarity, output latency,
@@ -1850,7 +1884,9 @@ def extract_spec_contract(text: str, is_json: bool = False,
                             latency_registered=lat,
                             fsm_output_style=(data.get('fsm_output_style')
                                               if isinstance(data, dict) else None),
-                            source='json')
+                            source='json',
+                            logic_obligations=logic_obligations_from_records(
+                                data.get('logic_obligations', []) if isinstance(data, dict) else []))
 
     clean = strip_comments(text)
     ports = _parse_nl_ports(clean)
@@ -1915,7 +1951,8 @@ def extract_spec_contract(text: str, is_json: bool = False,
                             reset_polarity=polarity, reset_signal=signal,
                             latency_registered=_detect_latency(text),
                             fsm_output_style=_detect_fsm_output_style(text), source=source,
-                            notes=table_notes)
+                            notes=table_notes,
+                            logic_obligations=_detect_logic_obligations(text, top or mod))
     if confirm:
         # program PROPOSES (above) -> LLM CONFIRMS/CORRECTS the semantic candidates.
         try:

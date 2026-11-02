@@ -2752,18 +2752,23 @@ def _declared_logic_author_handoff(project: Path, t0: float,
     if not text.strip() or _design_supplied_build_rtl(project):
         return None
     from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
-                                 declared_logic_obligations)
-    source_module = None
+                                 emission_spec_contract, unsupported_logic_obligations)
+    interface_text = ''
     if _pl.rtl_input(project) != "original":
         interface_path = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
         if interface_path.is_file():
             try:
-                interface = json.loads(interface_path.read_text())
-                if isinstance(interface, dict):
-                    source_module = interface.get('top_module') or interface.get('module')
+                interface_text = interface_path.read_text()
             except (OSError, ValueError):
                 pass
-    obligations = declared_logic_obligations(text, source_module=source_module)
+    try:
+        contract = emission_spec_contract(text, interface_text)
+    except ValueError as exc:
+        return StepResult(
+            'rtl_gen', 'NOT_MEASURED', time.time() - t0,
+            f'DECLARED_LOGIC_OBLIGATION_INVALID: {exc}; no RTL was generated or changed.',
+            reason_class=_V.ReasonClass.NOT_EXECUTED)
+    obligations = unsupported_logic_obligations(contract)
     if not obligations:
         return None
     rules = [f"{o.kind}: {o.clause}" for o in obligations]

@@ -43,6 +43,10 @@ def _registry(prompt: str, ifc: str, top: str) -> Tuple[Optional[str], Optional[
         import spec_artifact_registry as _reg
     except ImportError:
         return None, None
+    from _specrtl_common import emission_spec_contract
+    contract = emission_spec_contract(prompt, ifc, top)
+    if contract.source == 'json' and ifc:
+        return _reg.generate(prompt, top, contract=contract)
     return _reg.generate(prompt, top)
 
 
@@ -249,17 +253,12 @@ def try_emit_ex(prompt_text: str, ifc_text: str = "", top: str = "TopModule",
     if not (prompt_text or "").strip():
         return None, None, rejected
     from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
-                                 declared_logic_obligations)
-    source_module = None
-    if ifc_text:
-        import json
-        try:
-            interface = json.loads(ifc_text)
-            if isinstance(interface, dict):
-                source_module = interface.get('top_module') or interface.get('module')
-        except ValueError:
-            pass
-    obligations = declared_logic_obligations(prompt_text, top, source_module=source_module)
+                                 emission_spec_contract, unsupported_logic_obligations)
+    try:
+        contract = emission_spec_contract(prompt_text, ifc_text, top)
+    except ValueError as exc:
+        return None, None, [('DECLARED_LOGIC_OBLIGATION_INVALID', [str(exc)])]
+    obligations = unsupported_logic_obligations(contract)
     if obligations:
         return None, None, [(DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
                             [f"{o.kind}: {o.clause}" for o in obligations])]
