@@ -742,7 +742,8 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
     import analog_real_corner_sweep as ars
     import ams_analysis_select
     import analog_meas_from_spec_gen as meas
-    import _designs_root as dr
+    from analog_native_flow import NativeCommands
+    from analog_native_sim import _attempt
     from corner_yield_vs_spec_check import _spec_limits, _violates
 
     bdir, work = _paths(project, name)
@@ -776,7 +777,6 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
             for binding in pre_state["bindings"]["measurements"].values()):
         return _result("NOT_MEASURED", "post-layout OP study requires a mapped internal DUT probe",
                        metrics={"pre": pre_state})
-    host_root = dr.resolve_host_root(project, container)
     rows, records, outputs = [], [], []
     ports = a7.subckt_ports(net.read_text(), name)
     if not ports:
@@ -797,6 +797,8 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
               if normalize(key) in required_outputs}
     if not limits:
         return _result("NOT_MEASURED", "post-layout acceptance has no declared numeric spec bounds")
+    runner = (NativeCommands(project, _attempt(project, "A14", name), container, image)
+              if not study_pre else None)
     for corner in corners:
         extracted = Path(corner["extracted_netlist"])
         if not extracted.is_file() or corner.get("sha256") != _sha(extracted):
@@ -851,22 +853,34 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
             logpath = next((Path(e["log"]) for e in state.get("executions", []) if e.get("log")), result_path)
         else:
             ok, post, log, state = ars._run_ngspice(container,
-                ars._container_path(container, host_root, post_tb),
-                deck_text=post_tb.read_text(), run_to_completion=True)
+                str(post_tb), cwd=str(post_tb.parent), deck_text=post_tb.read_text(),
+                run_to_completion=True, run=runner)
             logpath = post_tb.with_suffix(".ngspice.log")
             atomic_write_text(logpath, log or "")
             outputs += [post_tb, logpath]
             if declared_pre:
+                consumed_inputs.update({"post:" + slug + ":startup:" + str(i):
+                    {"path": path, "sha256": digest}
+                    for i, (path, digest) in enumerate(runner.native_inputs.items())})
                 consumed_inputs.update({"post:" + slug + ":" + role: {"path": str(path), "sha256": _sha(path)}
                     for role, path in (("testbench", post_tb), ("netlist", post_net),
                                        ("log", logpath), ("extracted", extracted))})
         if not ok:
+            execution = state.get("native_execution") or {}
+            if execution.get("returncode") == 127:
+                return _result("NOT_MEASURED", "A14_RESIM_EXECUTION_UNAVAILABLE: "
+                    + ("container " + container if container else "LOCAL")
+                    + ": " + execution.get("stderr", ""), outputs,
+                    metrics={"pre": pre_state, "simulation": state, "corners": records})
             status = state["status"] if study_pre else ("NOT_MEASURED" if (
                 state.get("stopped") or state.get("progress_stalled") or _interrupted(state.get("rc"))) else "FAIL")
             if study_meta:
                 records.append({"style": corner["style"], "native_measurement_study": study_meta,
                                 "simulation": state})
-            return _result(status, f"native resimulation failed: {logpath}", outputs,
+            detail = f"native resimulation failed: {logpath}"
+            if execution.get("stderr"):
+                detail += "; " + ("container " + container if container else "LOCAL") + ": " + execution["stderr"]
+            return _result(status, detail, outputs,
                            metrics={"pre": pre_state, "simulation": state, "corners": records},
                            **({"native_inputs": consumed_inputs} if study_pre or declared_pre else {}))
         declared = pre_state["bindings"]["measurements"] if study_pre else a7.declared_measurements(source_tb.read_text())
@@ -888,6 +902,8 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
                         "not_comparable": dropped, "missing_pre": absent_pre, "lost_post": lost})
         if study_meta:
             records[-1]["native_measurement_study"] = study_meta
+        elif state.get("native_execution"):
+            records[-1]["simulation"] = state
     from analog_a7_post_layout_resim_check import _check_specs, DEFAULT_MAX_DELTA_PCT
     deltas, _ = _check_specs(rows)
     measured_failure = any(c["violations"] for c in records) or any(
