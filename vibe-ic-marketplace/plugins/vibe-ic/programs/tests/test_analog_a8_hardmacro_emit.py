@@ -1006,3 +1006,76 @@ def test_native_dc_zero_uses_the_same_inventory_rule(tmp_path, monkeypatch, role
         loaded, why = E.load_native_measurement(project, "blk", b / "blk.gds", topo)
         assert loaded is not None, why
         assert loaded["value"] == 0.0
+
+
+def _moved_model_fixture(tmp_path, monkeypatch):
+    from _hostpaths import require_repo
+    registry = json.loads(require_repo(
+        'vibe-ic-marketplace/plugins/vibe-ic/programs/pdk_registry.json').read_text())
+    family = next(row['name'] for row in registry['pdks'] if row['name'] != 'custom_auto_detect')
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    root = tmp_path / 'image-pdk' / family
+    records, lines, assets = [], [], []
+    for index, directive in enumerate(('.lib', '.include', '.inc')):
+        suffix = Path('libs.tech/ngspice/models') / f'neutral{index}.lib'
+        original = tmp_path / 'old-carrier' / family / suffix
+        runtime = root / suffix
+        runtime.parent.mkdir(parents=True, exist_ok=True)
+        runtime.write_text('* identical recorded model content\n')
+        section = 'nom' if directive == '.lib' else None
+        lines.append(f'{directive} {original}' + (' nom' if section else ''))
+        records.append({'path': str(original), 'section': section, 'sha256': E._sha256(runtime)})
+        assets.append(runtime)
+    (b / E._A8_MEASUREMENT).write_text(json.dumps({'model_bindings': records}))
+    (b / 'blk.sp').write_text('\n'.join(lines) + '\n.subckt blk vp vn control out\nR1 vp out 11k\n.ends blk\n')
+    monkeypatch.setenv('PDK_ROOT', str(root))
+    monkeypatch.setattr(E, '_remote_sha256', lambda container, path:
+        ('c' * 64, '') if path == '/usr/bin/ngspice' else
+        (E._sha256(Path(path)), '') if Path(path).is_file() else (None, 'absent'))
+    return project, b, topo, root, records, assets
+
+
+def test_native_models_same_content_moved_path_is_consumed_and_reloadable(tmp_path, monkeypatch):
+    project, b, topo, root, original, assets = _moved_model_fixture(tmp_path, monkeypatch)
+    before = (b / 'blk.sp').read_bytes()
+    rec, why = E._native_measurement_produce(project, 'blk', '', str(root), b / 'blk.gds', topo)
+    assert why == ''
+    assert rec is not None, why
+    deck = (b / 'a8_native_measurement.sp').read_text()
+    assert all(str(asset) in deck for asset in assets)
+    assert all(row['path'] not in deck for row in original)
+    assert [row['sha256'] for row in rec['model_bindings']] == [row['sha256'] for row in original]
+    assert [row['path'] for row in rec['model_bindings']] == [row['path'] for row in original]
+    assert [row['resolved_path'] for row in rec['model_bindings']] == list(map(str, assets))
+    loaded, why = E.load_native_measurement(project, 'blk', b / 'blk.gds', topo)
+    assert loaded is not None, why
+    assert (b / 'blk.sp').read_bytes() == before
+    assert all(not Path(row['path']).exists() for row in original)
+    assets[0].write_text('* model changed after measurement\n')
+    loaded, why = E.load_native_measurement(project, 'blk', b / 'blk.gds', topo)
+    assert loaded is None
+    assert 'A8_MODEL_ASSET_UNRESOLVED' in why
+
+
+@pytest.mark.parametrize('damage', ['changed', 'two_candidates', 'missing', 'no_hash'])
+def test_native_models_unproven_rebind_refuses_before_op(tmp_path, monkeypatch, damage):
+    project, b, topo, root, original, assets = _moved_model_fixture(tmp_path, monkeypatch)
+    if damage == 'changed':
+        assets[0].write_text('* a different model\n')
+    elif damage == 'two_candidates':
+        second = root / root.name / assets[0].relative_to(root)
+        second.parent.mkdir(parents=True)
+        second.write_bytes(assets[0].read_bytes())
+    elif damage == 'missing':
+        assets[0].unlink()
+    else:
+        original[0]['sha256'] = None
+        (b / E._A8_MEASUREMENT).write_text(json.dumps({'model_bindings': original}))
+    before = (b / E._A8_MEASUREMENT).read_bytes()
+    attempts = []
+    rec, why = E._native_measurement_produce(project, 'blk', '', str(root), b / 'blk.gds', topo,
+                                             native_attempts=attempts)
+    assert rec is None
+    assert 'A8_MODEL_ASSET_UNRESOLVED' in why
+    assert not any(row['tool'] == 'ngspice' for row in attempts)
+    assert (b / E._A8_MEASUREMENT).read_bytes() == before

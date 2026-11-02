@@ -65,6 +65,7 @@ import _eda_pin as _pin  # noqa: E402 — the ONE place the pin is stated
 import magic_extract_spice_emit as _mx  # noqa: E402 — ordinary A7 extraction producer
 import analog_a7_post_layout_emit as _a7  # noqa: E402 — source model/TB relocation
 import _analog_a8_extraction_wrapper as _aw  # noqa: E402
+from librelane_contract import resolve_state_pdk_asset  # noqa: E402
 from _analog_a_check_common import (  # noqa: E402
     DESIGN_CONTENT_FIELD, content_disclosed, load_block_list,
 )
@@ -725,7 +726,8 @@ def _terminal_voltage_expression(positive: str, negative: str) -> str:
 
 def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
                                 ports: List[str], subckt: str,
-                                topology: Dict, wrapper: Optional[Path] = None
+                                topology: Dict, wrapper: Optional[Path] = None, *,
+                                models: Optional[List[Dict]] = None
                                 ) -> Tuple[str, Dict]:
     """Replace the DUT in its delivered stimulus; run only native OP power.
 
@@ -819,8 +821,19 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
     includes = [f".include {json.dumps(str(extracted))}"]
     if wrapper is not None:
         includes.append(f".include {json.dumps(str(wrapper))}")
+    runtime_paths = {row["path"]: row.get("resolved_path", row["path"]) for row in (models or [])}
+    runtime_bindings = []
+    for line in bindings:
+        fields = shlex.split(line)
+        original = Path(fields[1])
+        if not original.is_absolute():
+            original = (bdir / original).resolve()
+        runtime = Path(runtime_paths.get(str(original), str(original)))
+        runtime_bindings.append(line if runtime == original else
+                                f"{fields[0]} {json.dumps(str(runtime))}" +
+                                (f" {fields[2]}" if len(fields) > 2 else ""))
     text = "\n".join(["* A8 native OP from delivered A3 stimulus and model bindings.",
-                        *bindings, *includes, *cards, *precision_cards, *method_cards,
+                        *runtime_bindings, *includes, *cards, *precision_cards, *method_cards,
                         f"XU {' '.join(nodes)} {subckt}", ".control", "set noaskquit", "set num_threads=1", "op",
                         f"let idd = {current}", f"let pwr = {power}",
                         "print idd pwr", "quit", ".endc", ".end", ""])
@@ -865,6 +878,33 @@ def _native_op_solver(cards: List[str]) -> Tuple[List[str], Dict]:
         "num_threads": 1, "omp_wait_policy": "PASSIVE", "gomp_spincount": 0}
 
 
+def _runtime_model_path(path: Path, directory: Path) -> Path:
+    """Rebind absent model carriers using the case's recorded content only.
+
+    The shared State resolver owns PDK containment, mount precedence, digest
+    validation and candidate uniqueness. Never discover a replacement model.
+    """
+    if path.is_file():
+        return path
+    receipt = directory / _A8_MEASUREMENT
+    if not receipt.is_file():
+        return path
+    rec = json.loads(receipt.read_text())
+    hashes = {row.get("sha256") for row in rec.get("model_bindings", [])
+              if isinstance(row, dict) and row.get("path") == str(path)}
+    if not hashes:
+        return path
+    if len(hashes) != 1:
+        raise ValueError(f"A8_MODEL_ASSET_UNRESOLVED: conflicting model hashes: {path}")
+    family = next((path.parts[i - 1] for i, part in enumerate(path.parts)
+                   if i > 0 and part in ("libs.tech", "libs.ref")), None)
+    resolved = resolve_state_pdk_asset(path, pdk=family,
+        fingerprint={"config_files": {str(path): next(iter(hashes))}})
+    if resolved is None:
+        raise ValueError(f"A8_MODEL_ASSET_UNRESOLVED: missing, changed or ambiguous model: {path}")
+    return resolved
+
+
 def _bound_models(container: str, lines: List[str], directory: Path) -> List[Dict]:
     records = []
     for line in lines:
@@ -874,11 +914,18 @@ def _bound_models(container: str, lines: List[str], directory: Path) -> List[Dic
         path = Path(fields[1])
         if not path.is_absolute():
             path = (directory / path).resolve()
+        runtime = path
         digest = _sha256(path) if path.is_file() else _remote_sha256(container, str(path))[0]
+        if digest is None and not container:
+            runtime = _runtime_model_path(path, directory)
+            digest = _sha256(runtime) if runtime.is_file() else None
         if digest is None:
-            raise ValueError(f"A8 delivered model source cannot be read: {path}")
-        records.append({"path": str(path), "section": fields[2] if len(fields) > 2 else None,
-                        "sha256": digest})
+            raise ValueError(f"A8_MODEL_ASSET_UNRESOLVED: A8 delivered model source cannot be read: {path}")
+        record = {"path": str(path), "section": fields[2] if len(fields) > 2 else None,
+                  "sha256": digest}
+        if runtime != path:
+            record["resolved_path"] = str(runtime)
+        records.append(record)
     return records
 
 
@@ -962,12 +1009,16 @@ def _native_measurement_produce(project: Path, block: str, container: str,
         deck_text, source_contract = _delivered_measurement_deck(
             project, block, extracted, ports, subckt, topology, wrapper_path)
         models = _bound_models(container, source_contract["model_binding_lines"], bdir)
+        if any("resolved_path" in model for model in models):
+            deck_text, source_contract = _delivered_measurement_deck(
+                project, block, extracted, ports, subckt, topology, wrapper_path, models=models)
         model_path, model_section = models[0]["path"], models[0]["section"]
         deck.write_text(deck_text)
         # Freeze the files actually consumed. Refuse any mutation during the
         # native call, rather than stamping its result with post-call inputs.
         consumed = [extracted, layout, gds, deck, bdir / f"{block}.sp", bdir / f"tb_{block}.sp"]
-        consumed += [Path(model["path"]) for model in models if Path(model["path"]).is_file()]
+        consumed += [Path(model.get("resolved_path", model["path"])) for model in models
+                     if Path(model.get("resolved_path", model["path"])).is_file()]
         if wrapper_path is not None:
             consumed.append(wrapper_path)
         frozen = {p: _sha256(p) for p in consumed}
@@ -1336,7 +1387,7 @@ def load_native_measurement(project: Path, block: str, gds: Path,
                 return None, "measurement_deck is not the ordinary A8 deck"
             wanted = (_delivered_measurement_deck(
                 project, block, source_netlist_path, list(topology.get("ports") or []),
-                expected["wrapper_subckt"], topology, wrapper_path)[0] if source_based else
+                expected["wrapper_subckt"], topology, wrapper_path, models=rec.get("model_bindings"))[0] if source_based else
                 _measurement_deck_text(source_netlist_path, list(topology.get("ports") or []),
                     expected["wrapper_subckt"], rec.get("model_source"), rec.get("model_section"), wrapper_path))
             if (deck.read_bytes() != wanted.encode() or
@@ -1354,7 +1405,8 @@ def load_native_measurement(project: Path, block: str, gds: Path,
             wrapper_path = project / wrapper["path"] if isinstance(wrapper, dict) else None
             wanted, source_contract = _delivered_measurement_deck(
                 project, block, source_netlist_path, list(topology.get("ports") or []),
-                wrapper["wrapper_subckt"] if isinstance(wrapper, dict) else block, topology, wrapper_path)
+                wrapper["wrapper_subckt"] if isinstance(wrapper, dict) else block, topology, wrapper_path,
+                models=rec.get("model_bindings"))
             if any(rec.get(key) != value for key, value in source_contract.items()):
                 return None, "delivered A3 testbench/model/power source binding is stale"
             deck, why = _project_file(project, rec.get("measurement_deck"), field="measurement_deck")
@@ -1371,10 +1423,13 @@ def load_native_measurement(project: Path, block: str, gds: Path,
                 path = Path(fields[1])
                 if not path.is_absolute():
                     path = (bdir / path).resolve()
+                runtime = (_runtime_model_path(path, bdir)
+                           if isinstance(model, dict) and "resolved_path" in model else path)
                 if (not isinstance(model, dict) or model.get("path") != str(path)
+                        or model.get("resolved_path", str(path)) != str(runtime)
                         or model.get("section") != (fields[2] if len(fields) > 2 else None)
                         or not re.fullmatch(r"[0-9a-f]{64}", str(model.get("sha256", "")))
-                        or (path.is_file() and _sha256(path) != model["sha256"])):
+                        or (runtime.is_file() and _sha256(runtime) != model["sha256"])):
                     return None, "native measurement model closure binding is stale or incomplete"
     except (OSError, ValueError, TypeError) as exc:
         return None, f"native extraction/wrapper group refused: {exc}"
