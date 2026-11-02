@@ -31,21 +31,17 @@ The skill is **mandatory** after every `/vibe-ic-phase1` /
 `/vibe-ic-phase2` / `/vibe-ic-phase23` / `/vibe-ic-all` run before
 the agent may claim Overall PASS.
 
-## Typed sources — residual semantic review
+## Source documents — residual semantic review
 
-When `input/phase1_source_manifest.json` is present and typed source
-admission is supported, use its authoritative source census
-(`phase1_sources.admit(project)` in the implementation candidate), including
-admitted owner requests and supplements. If the installed plugin lacks that
-capability, report the unsupported input contract and capture the program
-gap; a legacy census cannot establish complete typed source coverage.
-Read each admitted member's actual source bytes;
-do not substitute a generated digest or the legacy document search.
-The admission control is bound input metadata, not a citable semantic
-source. A named admission refusal remains a refusal.
+Use the existing document census for `input/docs/**`, including supplements
+staged there. Include `input/owner_request.md` only when the requirements
+source explicitly references it. Read each source's actual bytes; do not
+substitute a generated digest for the source. Controls and approval records
+remain outside the citable design-document population. Preserve existing
+source-census refusals and the independent requirements approval.
 
 This review supplies the semantic judgment left after deterministic
-source admission and binding. It does not replace that program, approve
+document enumeration and binding. It does not replace those programs, approve
 requirements, or grant design decisions that the source leaves open.
 
 1. Before reading generated values, read the complete admitted source

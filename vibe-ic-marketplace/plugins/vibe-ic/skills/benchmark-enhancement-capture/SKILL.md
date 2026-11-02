@@ -321,7 +321,8 @@ harness, golden, or prior-result access.
 > Compiler, PrimeTime, Spectre, Xcelium, HSPICE, or Formality as a hard requirement
 > is the SAME forbidden excuse. The commercial tool is also software; we own the
 > fork's source and enhance ours until it reaches parity. A commercial-tool
-> capability gap is a fork-and-enhance BACKLOG item (this bucket), never a hard
+> capability gap is a fork enhancement to implement and submit as a PR
+> (this bucket), never a hard
 > limitation or a WAIVE excuse. **Proven exemplar:** foundry Calibre/SVRF sign-off
 > DRC — an admitted "needs a Calibre license" gap — CLOSED by forking KLayout into
 > the native `svrfdrc` C++ buddy (`db::SVRFEngine`), byte-identical to the reference
@@ -338,7 +339,7 @@ touching fixed pin edges). The fix belongs in **forked OpenROAD's `drt`**
 would have been the WRONG place (fixing the detector, not the generator).
 
 **MANDATORY identification fields for EVERY Bucket-T item** (in the recoveries
-record AND the community backlog / PR — enforced by `enhancement_emit.py`):
+record AND the owning fork PR — enforced by `enhancement_emit.py`):
 
 1. **`step`** — which canonical flow step produced the bad output (e.g.
    `phase3.detailed_route`, `phase3.gds_streamout`, `phase2.synth`). This
@@ -374,10 +375,13 @@ low-regression change (prefer additive; keep the reported-DRC/marker path
 byte-identical so existing PDKs don't regress); (d) rebuild the tool (the fork's
 build tree is configured — incremental builds are fast); (e) re-run the step and
 verify against the golden/DRC ground truth (svrf-native DRC gives a free,
-license-less oracle); (f) commit to the forked-tool repo (`vibe-ic-forks/<tool>`)
-with the step/problem/golden/enhancement recorded; (g) file the community
-backlog / PR carrying fields 1–4. The forked-tool roadmap of known gaps lives in
-`benchmark-data/ic/OSS_EDA_FORK_ROADMAP.md` — add every new Bucket-T item there.
+license-less oracle); (f) commit on a branch in the owning VibeIC fork with the
+step/problem/golden/enhancement recorded; (g) submit a version-less PR there
+carrying fields 1–4 and return its URL. The fork-gatekeeper owns review,
+landing, and image adoption. Fork fixes are delivered as PRs, never as reports
+or issues to the original upstream project. The forked-tool roadmap of known
+gaps lives in `benchmark-data/ic/OSS_EDA_FORK_ROADMAP.md`; a roadmap entry alone
+does not deliver a fix.
 
 **Bucket T vs the plugin buckets:** Bucket T is the ROOT-CAUSE-LAYER answer (the
 defect is in a forked tool). Buckets A/B/C/D are for defects in the plugin's own
@@ -516,14 +520,22 @@ authoring. Canonical acceptance follows the review/prove/repair sequence above.
 
 ## Procedure
 
-### Capture destination and completion
+### Contributor capture destination and completion
 
-Capture contributes the reusable improvement to the plugin repository:
-submit a program or skill fix as a version-less PR, or a general capability
-gap as a GitHub issue through `community-backlog-submit`. The contribution
-path in step 5 determines who reviews and lands it. Local edits, notes,
-archives, backlog drafts, and emitted `TODO` sketches prepare that submission;
-they do not establish upstream delivery or absorption.
+Contributors deliver each reusable capture to its owning VibeIC repository
+and return the actual PR or issue URL:
+
+- **Plugin program or skill fix (Buckets A/B):** submit a version-less PR to
+  `vibeic/vibe-ic`. The repo-gatekeeper reviews, assigns the release version,
+  and lands it. General plugin capability gaps (Bucket C) go through
+  `community-backlog-submit` as issues in that repository.
+- **Fork fix (Bucket T):** submit a version-less PR to the owning VibeIC fork
+  for the fork-gatekeeper. Follow the Bucket-T procedure above; do not report
+  it to the original upstream project.
+
+The maintainer's own landing path remains the one specified in step 5.
+Local edits, notes, archives, backlog drafts, and emitted `TODO` sketches
+prepare a submission; they do not establish delivery or absorption.
 
 Check for an existing implementation first. When a recovery is already in
 the local plugin, link that implementation, its regression tests, and its
