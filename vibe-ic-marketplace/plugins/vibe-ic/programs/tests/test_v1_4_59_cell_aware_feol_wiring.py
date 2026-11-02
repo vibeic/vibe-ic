@@ -65,14 +65,16 @@ def test_caf_probe_false_on_exec_error(monkeypatch):
 def test_build_cfg_none_when_config_absent(tmp_path):
     pdk = _mk_pdk(cell_aware_feol=None, cell_gds="/lib.gds")
     assert R._build_cell_aware_feol_cfg(
-        tmp_path, "top", pdk, "c", "svrfdrc", "/deck.rule") is None
+        tmp_path, "top", pdk, "c", "svrfdrc", "/deck.rule",
+        routed_def=tmp_path / "selected.def") is None
 
 
 def test_build_cfg_none_when_cell_gds_absent(tmp_path):
     pdk = _mk_pdk(cell_aware_feol={"feol_gds": ["2/0"], "feol_rules": ["NW.S"]},
                   cell_gds=None)
     assert R._build_cell_aware_feol_cfg(
-        tmp_path, "top", pdk, "c", "svrfdrc", "/deck.rule") is None
+        tmp_path, "top", pdk, "c", "svrfdrc", "/deck.rule",
+        routed_def=tmp_path / "selected.def") is None
 
 
 def test_build_cfg_none_when_placed_def_missing(tmp_path):
@@ -80,4 +82,5 @@ def test_build_cfg_none_when_placed_def_missing(tmp_path):
     pdk = _mk_pdk(cell_aware_feol={"feol_gds": ["2/0"], "feol_rules": ["NW.S"]},
                   cell_gds="/lib.gds")
     assert R._build_cell_aware_feol_cfg(
-        tmp_path, "top", pdk, "c", "svrfdrc", "/deck.rule") is None
+        tmp_path, "top", pdk, "c", "svrfdrc", "/deck.rule",
+        routed_def=tmp_path / "selected.def") is None

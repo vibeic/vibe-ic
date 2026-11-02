@@ -82,10 +82,12 @@ EXIT CODES
 from __future__ import annotations
 
 import argparse
+import ast
 import inspect
 import json
 import re
 import sys
+import textwrap
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -124,6 +126,50 @@ def consumer_required_params(criterion: str) -> List[str]:
     except (OSError, TypeError):     # pragma: no cover - frozen import
         return []
     return sorted(set(_PARAMS_GET_RE.findall(src)))
+
+
+def consumer_invalid_params(criterion: str, params: Dict[str, Any]) -> List[str]:
+    """Check supplied values for direct int(params.get(...)) consumer calls.
+
+    Keep the consumer's conversion semantics and leave stored values intact.
+    This does not validate arbitrary computations in future validators.
+    """
+    fn = getattr(_hpa, "_CRITERIA", {}).get(criterion)
+    if fn is None or not params:
+        return []
+    unavailable = [f"{criterion}: parameter conversion source unavailable"]
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(fn)))
+        body = next(node for node in tree.body
+                    if isinstance(node, ast.FunctionDef) and node.name == fn.__name__)
+    except (OSError, TypeError, SyntaxError, StopIteration):
+        return unavailable
+    invalid = set()
+    pending = list(body.body)
+    while pending:
+        node = pending.pop()
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda, ast.ClassDef)):
+            continue
+        pending.extend(ast.iter_child_nodes(node))
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "int" and node.args):
+            continue
+        read = node.args[0]
+        if not (isinstance(read, ast.Call) and isinstance(read.func, ast.Attribute)
+                and isinstance(read.func.value, ast.Name)
+                and read.func.value.id == "params" and read.func.attr == "get"
+                and read.args and isinstance(read.args[0], ast.Constant)
+                and isinstance(read.args[0].value, str)):
+            continue
+        if len(node.args) != 1 or node.keywords or read.keywords:
+            return unavailable
+        key = read.args[0].value
+        if key in params:
+            try:
+                int(params[key])
+            except (TypeError, ValueError, OverflowError):
+                invalid.add(key)
+    return sorted(invalid)
 
 
 # --------------------------------------------------------------------------
@@ -260,6 +306,10 @@ def check(l13: Optional[Dict[str, Any]], *, phase: int = 1) -> Dict[str, Any]:
                          f"would silently come from another design's "
                          f"threshold, so the pass/fail line is not this "
                          f"part's.")
+                invalid = consumer_invalid_params(crit, params)
+                if invalid:
+                    fail("l13_contract_complete",
+                         f"criterion `{crit}` cannot consume criterion_params: {invalid}.")
         tester = contract.get("tester")
         if not (isinstance(tester, str) and tester.strip()):
             fail("l13_contract_complete",

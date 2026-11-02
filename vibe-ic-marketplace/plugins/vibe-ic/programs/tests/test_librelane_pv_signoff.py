@@ -14,6 +14,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from _finished_gds_fixture import publish_finished_gds
 
 PROGRAMS = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROGRAMS))
@@ -427,14 +428,15 @@ def _published_half(tmp_path, runner, monkeypatch, half, record, files, *, extra
     monkeypatch.setattr(contract, "resolve_pdk_root", lambda *a, **k: tmp_path)
     monkeypatch.setattr(pv, "run_half", lambda *a, **k: _put(
         project / pv.RECORD_REL.format(half=half), record) and record)
+    selected = {}
+    for key, name in (("gds", "current.gds"), ("def", "current.def"),
+                      ("nl", "current.v"), ("sdc", "current.sdc")):
+        selected[key] = project / name
+        selected[key].write_text(name)
+    _put(project / "state_out.json", {key: str(path) for key, path in selected.items()})
+    publish_finished_gds(project)
     pdk = SimpleNamespace(name="procA")
     if half == "lvs":
-        current = importlib.import_module("_physical_current")
-        selected = {}
-        for key, name in (("gds", "current.gds"), ("def", "current.def"),
-                          ("netlist", "current.v")):
-            selected[key] = project / name; selected[key].write_text(name)
-        monkeypatch.setattr(current, "default_signoff_inputs", lambda p: selected)
         monkeypatch.setattr(runner, "_streamout_top", lambda *a: ("chip", None))
         monkeypatch.setattr(runner, "_stage_padring_io_lefs_for_lvs", lambda *a: [])
         monkeypatch.setattr(runner._lvs_pa, "emit_to_file",
@@ -448,15 +450,16 @@ def _published_half(tmp_path, runner, monkeypatch, half, record, files, *, extra
                                                                (True, True)])
 def test_librelane_lvs_caller_uses_current_final_and_well_tied_reference(
         tmp_path, runner, monkeypatch, current_available, provider_release):
-    current = importlib.import_module("_physical_current")
     pnr = tmp_path / "phase3/stage3/pnr"; pnr.mkdir(parents=True)
     (pnr / "core.gds").write_text("old unadopted stream")
     selected = {}
     for key, name in (("gds", "current-final.gds"), ("def", "filled.def"),
-                      ("netlist", "physical.v")):
+                      ("netlist", "physical.v"), ("sdc", "current.sdc")):
         selected[key] = tmp_path / name; selected[key].write_text(name)
-    monkeypatch.setattr(current, "default_signoff_inputs",
-                        lambda p: selected if current_available else None)
+    if current_available:
+        _put(tmp_path / "state_out.json", {
+            "nl" if key == "netlist" else key: str(path) for key, path in selected.items()})
+        publish_finished_gds(tmp_path)
     provider_gds = None
     if provider_release:
         import die_finishing_gen
@@ -494,6 +497,68 @@ def test_librelane_lvs_caller_uses_current_final_and_well_tied_reference(
         assert consumed["powered_netlist"] == emitted["output"]
         assert emitted["rails_as_ports"] is True
         assert emitted["tie_wells_to_rails"] is True
+
+
+def test_librelane_lvs_reads_reference_views_from_the_release_source_project(
+        tmp_path, runner, monkeypatch):
+    import die_finishing_gen
+    source = tmp_path / "source"; assembly = tmp_path / "assembly"
+    selected = {}
+    for key, name in (("gds", "unsealed.gds"), ("def", "filled.def"),
+                      ("nl", "physical.v"), ("sdc", "current.sdc")):
+        selected[key] = source / name; selected[key].parent.mkdir(exist_ok=True)
+        selected[key].write_text(name)
+    _put(source / "state_out.json", {key: str(path) for key, path in selected.items()})
+    publish_finished_gds(source)
+    extract_lef = runner._pl.extracted_dir(source) / "macro.extract.lef"
+    extract_lef.parent.mkdir(parents=True); extract_lef.write_text("lef")
+    record = assembly / "reports/phase3/provider_die_assembly.json"
+    record.parent.mkdir(parents=True); record.write_text("producer release")
+    sealed = assembly / "sealed.gds"; sealed.write_text("sealed")
+    monkeypatch.setattr(die_finishing_gen, "read_admitted_release",
+                        lambda project, path: {"gds": sealed, "source_project": source})
+    monkeypatch.setattr(contract, "resolve_image", lambda p: "img")
+    monkeypatch.setattr(contract, "resolve_pdk_root", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(runner, "_streamout_top", lambda *a: ("physical_chip", None))
+    monkeypatch.setattr(runner, "_stage_padring_io_lefs_for_lvs", lambda *a: [])
+    emitted, consumed = {}, {}
+    def emit(netlist, pdk, output, **kwargs):
+        emitted.update(netlist=netlist, **kwargs)
+        output.write_text("reference")
+    def run(*args, **kwargs):
+        consumed.update(kwargs)
+        return {"verdict": "PASS", "reasons": [], "metrics": {}}
+    monkeypatch.setattr(runner._lvs_pa, "emit_to_file", emit)
+    monkeypatch.setattr(pv, "run_half", run)
+    pdk = SimpleNamespace(name="procA", cell_lef="cells.lef")
+    result = runner._step31_librelane(assembly, "core", pdk, "lvs", publish=False)
+    assert result.status == "PASS"
+    assert consumed["gds"] == sealed
+    assert consumed["routed_def"] == selected["def"]
+    assert consumed["sdc"] == selected["sdc"]
+    assert emitted["netlist"] == selected["nl"]
+    assert extract_lef in emitted["additional_lefs"]
+
+
+def test_librelane_lvs_refuses_an_unadmitted_provider_release(tmp_path, runner, monkeypatch):
+    selected = {}
+    for key, name in (("gds", "unsealed.gds"), ("def", "filled.def"),
+                      ("nl", "physical.v"), ("sdc", "current.sdc")):
+        selected[key] = tmp_path / name; selected[key].write_text(name)
+    _put(tmp_path / "state_out.json", {key: str(path) for key, path in selected.items()})
+    publish_finished_gds(tmp_path)
+    record = tmp_path / "reports/phase3/provider_die_assembly.json"
+    _put(record, {"producer": "die_finishing_gen", "kind": "provider_die_assembly",
+                  "verdict": "FAIL"})
+    consumed = {}
+    monkeypatch.setattr(contract, "resolve_image", lambda p: "img")
+    monkeypatch.setattr(contract, "resolve_pdk_root", lambda *a, **k: tmp_path)
+    monkeypatch.setattr(pv, "run_half", lambda *a, **k: consumed.update(k) or {})
+    result = runner._step31_librelane(tmp_path, "core", SimpleNamespace(name="procA"),
+                                      "lvs", publish=False)
+    assert result.status == "NOT_MEASURED"
+    assert "provider assembly was not admitted" in result.detail
+    assert consumed == {}
 
 
 _DECK_LYRDB = ("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<report-database>\n"

@@ -58,6 +58,7 @@ import phase3_one_shot_runner as R  # noqa: E402
 import _signoff_drc_format as SDF  # noqa: E402
 import eda_report_audit as A  # noqa: E402
 import l24_signoff_evidence_backed_check as L24  # noqa: E402
+from _finished_gds_fixture import publish_finished_gds
 
 #: The transcript the deck wrote on the real IC, as evidence and as a fixture.
 #: Absent on a host that has not been handed it; the tests that need it skip
@@ -310,6 +311,10 @@ def _bind_current_drc_fixture(proj):
     put("reports/phase3/technology_units.json", b'{"pdk":"open_fixture"}\n')
     put("phase3/stage3/pnr/chip_top.def", b"DESIGN chip_top ;\nEND DESIGN\n")
     put("phase3/stage3/pnr/chip_top_pnr.v", b"module chip_top(); endmodule\n")
+    put("state_out.json", json.dumps({
+        "gds": str(proj / "phase3/stage3/pnr/chip_top.gds"),
+        "def": str(proj / "phase3/stage3/pnr/chip_top.def")}).encode())
+    publish_finished_gds(proj)
     report = proj / R._MAGIC_SIGNOFF_DRC_REL
     native = put("phase3/reports/drc.rpt", report.read_bytes())
     put("reports/phase3/drc_signoff.rpt", report.read_bytes())

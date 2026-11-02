@@ -139,10 +139,8 @@ field, running by hand, implicitly avoided.
   fresh `bash -lc` per call, env does not persist). *Input delta = shell scope.*
 - **#509** — the LVS schematic side used the PRE-PnR synth netlist (spare=0,
   clkbuf=0) while the field used the POST-PnR netlist (spare=18, clkbuf=89).
-  *Input delta = netlist choice.* The fix is itself programmable + chip-AGNOSTIC:
-  prefer the post-PnR netlist and sanity-check the pre-vs-post signature (a
-  layout DEF carrying spare/PnR-inserted cells must be compared against a
-  schematic netlist that also has them) — see `_v0_3_15_select_lvs_netlist`.
+  *Input delta = netlist choice.* Signoff now selects the paired DEF and `nl`
+  views from the final LibreLane State through `_prestream_native.signoff_inputs`.
 
 Neither root cause is visible in the failure text; both surface INSTANTLY from a
 field-input-vs-runner-input diff — short-circuiting N rounds of surface fixes.

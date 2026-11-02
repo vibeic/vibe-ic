@@ -172,9 +172,6 @@ def _geometry_scene(tmp_path, monkeypatch, *, gap=False):
     text = 'UNITS DISTANCE MICRONS 1000 ;\nDIEAREA ( 0 0 ) ( 400000 400000 ) ;\n'+text
     original = original_transport(tmp_path, monkeypatch, project, folder)
     original['def'].write_text(text)
-    record = json.loads(original['record'].read_text())
-    record['odb']['tool']['filled_def_sha256'] = contract.digest(original['def'])
-    original['record'].write_text(json.dumps(record))
     state_path = folder / 'state_out.json'
     state = json.loads(state_path.read_text())
     state.update(odb=str(original['odb']), **{'def': str(original['def'])}, nl=str(original['netlist']), sdc=str(original['sdc']))

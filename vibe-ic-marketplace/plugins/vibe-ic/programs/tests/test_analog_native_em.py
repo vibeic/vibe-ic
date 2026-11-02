@@ -179,6 +179,41 @@ def test_real_consumer_recomputes_native_current_and_pg_ranges(measured_case):
     assert str(project/'phase3/analog/unit/unit.gds') in views
 
 
+@pytest.mark.parametrize('copy_kind',['relative','absolute'])
+@pytest.mark.parametrize('damage',[None,'missing','changed'])
+def test_limit_pdf_copy_is_resolved_from_project(
+        measured_case, monkeypatch, tmp_path_factory, copy_kind, damage):
+    project,case,_=measured_case
+    original='source-owned limit bytes'
+    pdf=put(project/'current-density.pdf',original)
+    copy=str(pdf.relative_to(project)) if copy_kind=='relative' else str(pdf)
+    source=put(project/'current-density-source.json',
+               {'copy':copy,'sha256':em._sha(pdf)})
+    cwd=tmp_path_factory.mktemp('unrelated-cwd')
+    put(cwd/pdf.name,original if damage else 'unrelated working-directory PDF')
+    if damage=='missing':
+        pdf.unlink()
+    elif damage=='changed':
+        pdf.write_text('changed project PDF')
+    monkeypatch.chdir(cwd)
+    converted=type('Converted',(),{'stdout':TABLE})()
+    monkeypatch.setattr(em.subprocess,'run',lambda *a,**k:converted)
+    monkeypatch.setattr(em,'read_technology',lambda *a,**k:(TECH,{}))
+    result=em.run(project,'unit',{
+        'limits_source':str(source.relative_to(project)),
+        'magic_tech':'source.tech','cases':[case]})
+    assert result['status']==('NOT_MEASURED' if damage else 'PASS'),result
+    if damage:
+        assert result['cases']==[]
+        if damage=='missing':
+            assert str(pdf) in result['detail']
+        else:
+            assert result['detail']=='foundry limit PDF differs from source receipt'
+    else:
+        assert result['cases'][0]['graded_segments']==1
+        assert result['native_inputs'][str(pdf)]['sha256']==em._sha(pdf)
+
+
 def test_a16_real_consumer_runs_native_em_case_without_promoting_missing_mission(
         measured_case, monkeypatch):
     import analog_native_physical as physical
