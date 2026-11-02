@@ -534,7 +534,7 @@ def test_only_the_shipped_degree_refusal_is_a_measurement(returncode, stderr):
     assert d69._measured_degree(SimpleNamespace(returncode=returncode, stderr=stderr)) is None
 
 
-def _neutral_native_geometry(tmp_path, monkeypatch, *, missing_label=False):
+def _neutral_native_geometry(tmp_path, monkeypatch, *, missing_label=False, missing_conductor=False):
     """Two named conductors plus floating fill; maps come from the native deck."""
     import importlib.util
     import re
@@ -574,6 +574,8 @@ def _neutral_native_geometry(tmp_path, monkeypatch, *, missing_label=False):
     layout.dbu = 0.001
     top = layout.create_cell('neutral')
     for name, y in [('A', 1000), ('B', 9000)]:
+        if missing_conductor and name == 'B':
+            continue
         top.shapes(layout.layer(*layer(masks[0]))).insert(pya.Box(0, y - 1000, 10000, y + 1000))
         if not (missing_label and name == 'B'):
             top.shapes(layout.layer(*layer(masks[-1]))).insert(pya.Text(name, 1000, y))
@@ -592,44 +594,97 @@ def _neutral_native_geometry(tmp_path, monkeypatch, *, missing_label=False):
 
 
 @needs_reducer
-@pytest.mark.parametrize('missing_label,expected', [(False, 'PASS'), (True, 'FAIL')])
-def test_routed_def_primary_native_outcome_reaches_existing_consumer(
-        tmp_path, monkeypatch, missing_label, expected):
+@pytest.mark.parametrize('missing_label', [False, True])
+def test_tool_named_routed_def_reaches_the_existing_consumer(tmp_path, monkeypatch, missing_label):
+    # A finished stream carries few net labels; the tool names routes itself.
     _neutral_native_geometry(tmp_path, monkeypatch, missing_label=missing_label)
-    result = d69.execute(tmp_path, {'context_sha256': 'neutral-primary-control'})
-    assert result['component_status'] == expected, result
-    if expected == 'FAIL':
-        assert result['reason'] == 'D69_NATIVE_EXTRACT_FAILED', result
-        assert '1 keep nets are absent from raw SPEF: B' in d69._bound(
-            tmp_path, result['native_execution']['log']).read_text()
-        with pytest.raises(AdmissionRefusal, match='D69_COMPONENT_NOT_ACCEPTED'):
-            d69.validate_final_parasitics(tmp_path, result['receipt'])
-        return
+    result = d69.execute(tmp_path, {'context_sha256': 'neutral-routed-control'})
+    assert result['component_status'] == 'PASS', result
+    assert '--max-degree' not in result['native_execution']['argv']
     native = d69._read(d69._bound(tmp_path, result['native_receipt']))
-    assert native['status'] == 'PASS'
-    assert {row['status'] for row in native['corners'].values()} == {'PASS'}
+    assert native['status'] == 'DIAGNOSTIC_ONLY' and native['d69_credit'] is False
     assert all(row['eliminated_floating_net_count'] > 0 for row in native['corners'].values())
     assert d69.validate_final_parasitics(tmp_path, result['receipt'])['final_spefs'] == result['final_spefs']
 
 
 @needs_reducer
-def test_shipped_routed_def_adoption_stays_diagnostic_and_uncredited(tmp_path, monkeypatch):
-    paths = _neutral_native_geometry(tmp_path, monkeypatch)
-    output = tmp_path / 'adoption'
-    completed = _RUN([_REDUCER, 'extract', '--gds', str(paths['final.gds']),
-                      '--def', str(paths['filled.def']), '--top', 'neutral',
-                      '--output-dir', str(output)], capture_output=True, text=True)
-    assert completed.returncode == 0, completed.stdout + completed.stderr
-    native_path = output / 'FINAL_FILL_EXTRACTION.json'
-    native = json.loads(native_path.read_text())
-    assert native['status'] == 'DIAGNOSTIC_ONLY'
-    assert native['d69_credit'] is False
-    assert {row['status'] for row in native['corners'].values()} == {'DIAGNOSTIC_ONLY'}
-    assert all(row['d69_credit'] is False for row in native['corners'].values())
+def test_route_with_no_final_gds_conductor_stays_a_tool_refusal(tmp_path, monkeypatch):
+    _neutral_native_geometry(tmp_path, monkeypatch, missing_conductor=True)
+    result = d69.execute(tmp_path, {'context_sha256': 'neutral-open-route-control'})
+    assert result['component_status'] == 'FAIL', result
+    assert result['reason'] == 'D69_NATIVE_EXTRACT_FAILED', result
+    assert 'REFUSED:' in d69._bound(tmp_path, result['native_execution']['log']).read_text()
+    with pytest.raises(AdmissionRefusal, match='D69_COMPONENT_NOT_ACCEPTED'):
+        d69.validate_final_parasitics(tmp_path, result['receipt'])
+
+
+def _rewrite_receipt(root, result, change):
+    path = d69._bound(root, result['native_receipt'])
+    native = json.loads(path.read_text())
+    change(native, path)
+    path.write_text(json.dumps(native))
+    return d69.files._record(root, path)
+
+
+def _foreign_query(native, path):
+    foreign = path.parent.parent / 'caller-query.json'
+    source = Path(native['corners']['nom']['native_binding']['query']['path'])
+    foreign.write_text(source.read_text())
+    native['corners']['nom']['native_binding']['query']['path'] = str(foreign)
+
+
+def _damage_identity(key, value):
+    def change(native, _):
+        native['native_adoption'][key] = value
+    return change
+
+
+def _damage_pin(role):
+    def change(native, _):
+        native['native_adoption']['pins'][role]['sha256'] = '0' * 64
+    return change
+
+
+def _damage_corner(key, value):
+    def change(native, _):
+        native['corners']['max'][key] = value
+    return change
+
+
+@needs_reducer
+@pytest.mark.parametrize('change', [
+    _foreign_query, _damage_identity('method', 'caller-binding'),
+    _damage_identity('expected_names', ['A']), _damage_pin('producer_source'),
+    _damage_pin('geometry'), _damage_pin('routed_def'),
+    _damage_corner('native_binding', {}), _damage_corner('native_authority', {}),
+    _damage_corner('expected_name_count', 1),
+    lambda native, _: native.pop('native_adoption'),
+    lambda native, _: native.pop('d69_credit'),
+    lambda native, _: native['corners']['min'].pop('d69_credit'),
+    lambda native, _: native['corners']['min'].update(status='PASS'),
+])
+def test_names_not_produced_by_this_tool_run_are_refused(tmp_path, monkeypatch, change):
+    _neutral_native_geometry(tmp_path, monkeypatch)
+    result = d69.execute(tmp_path, {'context_sha256': 'neutral-routed-control'})
+    assert result['component_status'] == 'PASS', result
+    ref = _rewrite_receipt(tmp_path, result, change)
+    with pytest.raises(AdmissionRefusal):
+        d69._native_outputs(tmp_path, ref, result['final_gds'], result['final_def'])
+
+
+@needs_reducer
+def test_producer_source_must_be_what_the_released_tool_runs(tmp_path, monkeypatch):
+    _neutral_native_geometry(tmp_path, monkeypatch)
+    result = d69.execute(tmp_path, {'context_sha256': 'neutral-routed-control'})
+    assert result['component_status'] == 'PASS', result
+    copy = tmp_path / 'copied_tool.py'
+    def change(native, _):
+        source = Path(native['native_adoption']['pins']['producer_source']['path'])
+        copy.write_bytes(source.read_bytes())
+        native['native_adoption']['pins']['producer_source']['path'] = str(copy)
+    ref = _rewrite_receipt(tmp_path, result, change)
     with pytest.raises(AdmissionRefusal, match='D69_NATIVE_RECEIPT_MISMATCH'):
-        d69._native_outputs(tmp_path, d69.files._record(tmp_path, native_path),
-                            d69.files._record(tmp_path, paths['final.gds']),
-                            d69.files._record(tmp_path, paths['filled.def']))
+        d69._native_outputs(tmp_path, ref, result['final_gds'], result['final_def'])
 
 
 @pytest.mark.parametrize('where', ['receipt', 'corner'])
@@ -646,11 +701,10 @@ def test_explicit_no_credit_cannot_be_overridden_by_a_pass_string(tmp_path, monk
 
 
 @needs_reducer
-def test_primary_owner_refuses_caller_supplied_adoption(tmp_path, monkeypatch):
+def test_caller_supplied_bindings_are_refused_before_the_tool_starts(tmp_path, monkeypatch):
     _neutral_native_geometry(tmp_path, monkeypatch)
     monkeypatch.setenv('VIBEIC_FINAL_FILL_ADOPTION', '{"bindings": {}}')
     result = d69.execute(tmp_path, {'context_sha256': 'external-adoption-control'})
     assert result['component_status'] == 'FAIL', result
-    assert result['reason'] == 'D69_NATIVE_EXTRACT_FAILED', result
-    assert 'primary extraction does not accept native adoption' in d69._bound(
-        tmp_path, result['native_execution']['log']).read_text()
+    assert result['reason'] == 'D69_CALLER_BINDINGS_REFUSED', result
+    assert result['native_started'] is False
