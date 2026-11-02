@@ -41,6 +41,7 @@ import rtl_provenance  # noqa: E402
 # was invisible.
 _PROD_RTL_PROV = runner._rtl_prov
 from _hostpaths import require_repo  # noqa: E402
+from _prose_handoff_assertions import assert_prose_handoff  # noqa: E402
 
 
 COMPLETE_DIRECTIONAL_FALL = (
@@ -54,6 +55,29 @@ CANONICAL_PULSE = (
     " data_in: One-bit input.\n"
     "Output ports:\n data_out: pulse indicator.\n")
 
+_ACCOUNTED_OPERATOR_SPEC = """
+Implement a module named TopModule.
+ - input  a
+ - input  b
+ - output q
+
+The module should implement the function shown in the Karnaugh map below.
+
+       a
+  b   0   1
+  0 | 0 | 1 |
+  1 | 1 | 0 |
+"""
+
+_DIRECTIONAL_UNACCOUNTED_SPANS = [
+    (0, 65), (66, 192), (194, 297), (298, 378), (379, 436),
+    (437, 475), (476, 555), (556, 621), (622, 712), (713, 811),
+    (813, 873), (874, 965), (967, 1143),
+]
+_PULSE_UNACCOUNTED_SPANS = [
+    (0, 101), (102, 127), (129, 142), (144, 167), (168, 209),
+]
+
 
 @pytest.fixture(autouse=True)
 def _isolated_runner_session(monkeypatch):
@@ -66,6 +90,39 @@ def _project(tmp_path, text=COMPLETE_DIRECTIONAL_FALL, source="input_doc"):
     source_dir = tmp_path / "phase1" / source
     source_dir.mkdir(parents=True)
     (source_dir / "design.md").write_text(text)
+    return tmp_path
+
+
+def _canonical_project(tmp_path):
+    """Use the canonical consumer's generated-L-doc source, not free prose."""
+    docs = tmp_path / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L2_FRS.json").write_text(json.dumps({
+        "description": "Module name: pulse_detect. Pulse detection: data_in changes from 0 to 1 to 0.",
+        "interface": "clk (input), rst_n (input), data_in (input), data_out (output)",
+    }))
+    return tmp_path
+
+
+def _publication_project(tmp_path):
+    """A consumed typed arithmetic contract reaches the same step transaction."""
+    docs = tmp_path / "phase1" / "generated_docs"
+    docs.mkdir(parents=True)
+    (docs / "L2_FRS.json").write_text(json.dumps({
+        "ic_name": "TopModule", "frs_sections": [{"content":
+            "serial-parallel multiplier: p = (x * y) mod 2^N; synchronous active-high reset"}],
+    }))
+    (docs / "L9_INTEGRATION_SPEC.json").write_text(json.dumps({
+        "top_module": "TopModule",
+        "top_ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "rst", "direction": "input", "width": 1},
+            {"name": "x", "direction": "input", "width": "size-1:0",
+             "width_symbolic": "size-1:0", "msb": "size-1", "lsb": "0"},
+            {"name": "y", "direction": "input", "width": 1},
+            {"name": "p", "direction": "output", "width": 1},
+        ],
+    }))
     return tmp_path
 
 
@@ -188,9 +245,11 @@ def test_step_rtl_gen_calls_phase1_flowback_before_class_fallback(tmp_path):
 
     result = runner.step_rtl_gen(project, "deliberately_unregistered_class")
 
-    assert result.status == "PASS"
-    assert result.extras["artifact_type"] == "behavioral_fsm"
-    assert (project / "phase2" / "stage1" / "rtl" / "TopModule.v").is_file()
+    assert_prose_handoff(result, COMPLETE_DIRECTIONAL_FALL)
+    assert [span["source_span"] for span in
+            result.extras["unaccounted_source_spans"]] == _DIRECTIONAL_UNACCOUNTED_SPANS
+    assert result.output_files == []
+    assert not (project / "phase2" / "stage1" / "rtl").exists()
 
 
 def test_step_behavioral_classify_is_bound_across_live_root_swap_restore(
@@ -219,11 +278,35 @@ def test_step_behavioral_classify_is_bound_across_live_root_swap_restore(
     monkeypatch.setattr(
         _PROD_RTL_PROV, "classify", _classify_while_live_root_is_replaced)
 
-    result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+    binding = runner._Phase1ProjectBinding.open(project)
+    stage_project = tmp_path / "stage"
+    stage_binding = None
+    transaction = None
+    try:
+        baseline = runner._phase1_snapshot_to_stage(binding, stage_project)
+        stage_binding = runner._Phase1ProjectBinding.open(stage_project)
+        stage_binding.isolated_rtl_stage = True
+        stage_binding.rtl_source_binding = binding
+        result = runner._try_phase1_behavioral_fsm_rtl(
+            stage_project, 0.0, project_binding=stage_binding)
 
-    assert result.status == "PASS"
-    assert len(seen) == 1
+        assert result.status == "PASS"
+        assert len(seen) == 1
+        final = runner._phase1_tree_manifest_fd(
+            stage_binding.project_fd, project)
+        transaction = runner._phase1_commit_staged_tree(
+            binding, stage_binding, baseline, final)
+        binding.require_current()
+        transaction.finalize()
+        transaction = None
+    finally:
+        if transaction is not None:
+            transaction.rollback()
+        runner._phase1_replace_session_binding(None)
+        if stage_binding is not None:
+            stage_binding.close()
+        binding.close()
+
     assert (project / "phase2" / "stage1" / "rtl" /
             "TopModule.v").is_file()
     assert not (project / "phase2" / "stage1" / "rtl" /
@@ -464,7 +547,7 @@ def test_unreadable_project_directory_is_named_blocked_without_writes(
 
 def test_finalize_retries_cleanup_without_downgrading_committed_success(
         tmp_path, monkeypatch):
-    project = _project(tmp_path)
+    project = _publication_project(tmp_path)
     stage1 = project / "phase2" / "stage1"
     stage1.mkdir(parents=True)
     (stage1 / "sentinel.txt").write_text("original\n")
@@ -482,7 +565,7 @@ def test_finalize_retries_cleanup_without_downgrading_committed_success(
         runner, "_phase1_remove_owned_entry_fd", _fail_backup_cleanup_once)
 
     result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+        project, "digital_arithmetic_primitive")
 
     assert injected
     assert result.status == "PASS"
@@ -526,14 +609,14 @@ def test_finalize_removes_backup_with_nontraversable_nested_modes(
 
 def test_irreversible_finalize_residue_is_warning_not_false_blocked(
         tmp_path, monkeypatch):
-    project = _project(tmp_path)
+    project = _publication_project(tmp_path)
 
     monkeypatch.setattr(
         runner._Phase1StagedTreeTransaction, "_drain",
         lambda self: "injected persistent cleanup residue")
 
     result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+        project, "digital_arithmetic_primitive")
 
     assert result.status == "PASS"
     assert result.extras["transaction_cleanup_warning"] == (
@@ -547,7 +630,7 @@ def test_irreversible_finalize_residue_is_warning_not_false_blocked(
 
 def test_alias_cleanup_error_after_drain_is_named_pass_warning(
         tmp_path, monkeypatch):
-    project = _project(tmp_path)
+    project = _publication_project(tmp_path)
     real_commit = runner._phase1_commit_staged_tree
     captured = []
 
@@ -566,7 +649,7 @@ def test_alias_cleanup_error_after_drain_is_named_pass_warning(
         _fail_alias_cleanup)
 
     result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+        project, "digital_arithmetic_primitive")
 
     assert result.status == "PASS"
     assert result.extras["transaction_cleanup_warning"] == (
@@ -748,13 +831,13 @@ def test_returned_alias_error_is_reported_not_only_a_raised_one(
     and no warning, and nothing would notice. The symmetric drain case IS
     covered, so this closes a one-sided gap.
     """
-    project = _project(tmp_path)
+    project = _publication_project(tmp_path)
     monkeypatch.setattr(
         runner._Phase1StagedTreeTransaction, "_remove_container_aliases",
         lambda _self: "injected returned alias residue")
 
     result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+        project, "digital_arithmetic_primitive")
 
     assert result.status == "PASS"
     assert result.extras["transaction_cleanup_warning"] == (
@@ -772,7 +855,7 @@ def test_both_cleanup_warnings_are_reported_not_only_the_first(
     Replacing it with `warnings[0]` kept every suite green, so the second
     warning was free to disappear.
     """
-    project = _project(tmp_path)
+    project = _publication_project(tmp_path)
     monkeypatch.setattr(
         runner._Phase1StagedTreeTransaction, "_drain",
         lambda _self: "injected drain residue")
@@ -781,7 +864,7 @@ def test_both_cleanup_warnings_are_reported_not_only_the_first(
         lambda _self: "injected alias residue")
 
     result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+        project, "digital_arithmetic_primitive")
 
     assert result.status == "PASS"
     assert result.extras["transaction_cleanup_warning"] == (
@@ -803,11 +886,11 @@ def test_finalize_on_an_already_closed_transaction_is_a_silent_no_op(
     That branch is hit on ordinary no-change runs; deleting the guard left the
     whole suite green.
     """
-    project = _project(tmp_path)
-    first = runner.step_rtl_gen(project, "deliberately_unregistered_class")
+    project = _publication_project(tmp_path)
+    first = runner.step_rtl_gen(project, "digital_arithmetic_primitive")
     assert first.status == "PASS"
 
-    second = runner.step_rtl_gen(project, "deliberately_unregistered_class")
+    second = runner.step_rtl_gen(project, "digital_arithmetic_primitive")
 
     assert second.status == "PASS"
     assert "transaction_cleanup_warning" not in second.extras
@@ -985,7 +1068,7 @@ def test_step_preflight_blocks_symlink_before_earlier_canonical_writer(
 
 def test_valid_canonical_dispatch_reuses_one_immutable_operator_read(
         tmp_path, monkeypatch):
-    project = _project(tmp_path, CANONICAL_PULSE)
+    project = _project(_canonical_project(tmp_path), _ACCOUNTED_OPERATOR_SPEC)
     source = project / "phase1" / "input_doc" / "design.md"
     original_read_text = Path.read_text
     source_reads = 0
@@ -1013,7 +1096,7 @@ def test_valid_canonical_dispatch_reuses_one_immutable_operator_read(
 
 def test_canonical_writer_refuses_root_replaced_after_emit_before_write(
         tmp_path, monkeypatch):
-    project = _project(tmp_path / "project", CANONICAL_PULSE)
+    project = _canonical_project(tmp_path / "project")
     displaced = tmp_path / "project.displaced"
     real_emit = canonical_primitive.emit_rtl
 

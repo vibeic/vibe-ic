@@ -43,6 +43,7 @@ for _p in (str(_PROGRAMS), str(_TESTS)):
         sys.path.insert(0, _p)
 
 import design_one_shot_runner as R  # noqa: E402
+from _prose_handoff_assertions import assert_prose_handoff  # noqa: E402
 from test_serial_parallel_mul_synth import _SPM_PORTS, _mk_project  # noqa: E402
 from test_b4_every_deterministic_emit_states_its_time_unit import (  # noqa: E402
     BEHAVIORAL_PROSE, CANONICAL_PULSE)
@@ -173,6 +174,15 @@ def test_without_supplied_rtl_the_generator_still_emits(
     never generates would pass every case below."""
     p = build(tmp_path)
     gen = R.step_rtl_gen(p, ARITH)
+    if generator in {"canonical_primitive_synth", "spec_artifact_registry"}:
+        source = (p / "phase1/input_doc/design.md").read_text()
+        assert_prose_handoff(gen, source)
+        expected_span = {"canonical_primitive_synth": (0, 101),
+                         "spec_artifact_registry": (0, 65)}[generator]
+        assert expected_span in [tuple(span["source_span"])
+                                 for span in gen.extras["unaccounted_source_spans"]]
+        assert _rtl_sources(p) == []
+        return
     assert gen.status == "PASS", gen
     assert gen.extras.get("deterministic_generator") == generator, gen.extras
     assert _rtl_sources(p), "the generator emitted nothing"
@@ -233,6 +243,12 @@ DIRECT = [
 def test_each_generator_emits_when_nothing_is_supplied(tmp_path, drive):
     p, call = drive(tmp_path)
     res = call()
+    if drive is _direct_registry_emit:
+        assert_prose_handoff(res, BEHAVIORAL_PROSE)
+        assert (0, 65) in [tuple(span["source_span"])
+                           for span in res.extras["unaccounted_source_spans"]]
+        assert _rtl_sources(p) == []
+        return
     assert res is not None and res.status == "PASS", res
     assert _rtl_sources(p)
 

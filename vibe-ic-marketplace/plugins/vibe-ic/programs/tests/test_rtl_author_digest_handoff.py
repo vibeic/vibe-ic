@@ -40,6 +40,7 @@ if str(PROGRAMS) not in sys.path:
 
 import design_one_shot_runner as R  # noqa: E402
 import _lesson_digest as LD  # noqa: E402
+from _prose_handoff_assertions import assert_prose_handoff  # noqa: E402
 
 # A class name that must never be in the registry. Asserted, not assumed.
 _UNREGISTERED = "zzz_class_not_in_registry_probe"
@@ -142,9 +143,35 @@ def test_unregistered_class_handoff_stages_digests(tmp_path):
     proj = _mk_project(tmp_path, "unreg")
     res = R.step_rtl_gen(proj, _UNREGISTERED)
     assert (res.extras or {}).get("fallback_skill") == "spec-to-rtl"
+    assert_prose_handoff(res, _spec_text())
+    assert (0, 63) in [tuple(span["source_span"])
+                       for span in res.extras["unaccounted_source_spans"]]
     lessons, expert_db = _staged(proj)
     assert lessons, "unregistered-class handoff staged no lessons.md"
     assert expert_db, "unregistered-class handoff staged no ic_expert_db.md"
+
+
+
+def test_prose_handoff_preserves_step1_signature_requirement(tmp_path):
+    """An ordinary authoring handoff cannot credit unsigned authored RTL."""
+    import ai_signed_judgement
+
+    proj = _mk_project(tmp_path, "unsigned_handoff")
+    res = R.step_rtl_gen(proj, _UNREGISTERED)
+    assert (res.extras or {}).get("fallback_skill") == "spec-to-rtl"
+    stage = proj / "phase2" / "stage1"
+    for name in ("fallback_skill.md", "lessons.md", "ic_expert_db.md",
+                 "lessons_scoring_record.json", "declaration_contract.json"):
+        assert (stage / name).is_file(), name
+    assert "READ THE SKILL AT THIS PATH" in res.detail
+    assert "MANDATORY before authoring" in res.detail
+    assert ai_signed_judgement._requested(proj, "1") is True
+    rtl = stage / "rtl"
+    rtl.mkdir()
+    (rtl / "unsigned.v").write_text("module neutral_authored; endmodule\n")
+    accepted, detail = ai_signed_judgement.check(proj, "1")
+    assert accepted is False
+    assert "awaiting_signed_judgement: Step 1 requires a PASS AI judgement" in detail
 
 
 def test_vendor_rtl_handoff_stages_digests(tmp_path):
@@ -171,6 +198,10 @@ def test_every_authoring_handoff_agrees(tmp_path):
     for name, cls, vendor in cases:
         proj = _mk_project(tmp_path, name, vendor_rtl=vendor)
         res = R.step_rtl_gen(proj, cls)
+        if not vendor:
+            assert_prose_handoff(res, _spec_text())
+            assert (0, 63) in [tuple(span["source_span"])
+                               for span in res.extras["unaccounted_source_spans"]]
         if not (res.extras or {}).get("fallback_skill"):
             continue  # not an authoring handoff
         lessons, expert_db = _staged(proj)
@@ -200,6 +231,9 @@ def test_registered_no_generator_handoff_unchanged(tmp_path):
     regression half of the fix."""
     proj = _mk_project(tmp_path, "reg")
     res = R.step_rtl_gen(proj, _registered_no_generator_class())
+    assert_prose_handoff(res, _spec_text())
+    assert (0, 63) in [tuple(span["source_span"])
+                       for span in res.extras["unaccounted_source_spans"]]
     lessons, expert_db = _staged(proj)
     assert lessons and expert_db
     assert (res.extras or {}).get("lessons_count", 0) > 0
