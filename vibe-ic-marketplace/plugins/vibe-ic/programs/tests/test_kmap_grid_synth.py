@@ -33,6 +33,160 @@ The module should implement the function shown in the Karnaugh map below.
   1 | 1 | 0 |
 """
 
+_BASIS_PARAPHRASES = [
+    'The implementation must be NAND-only.',
+    'Use NAND gates exclusively.',
+    'The circuit shall consist solely of NOR gates.',
+    'Realize the network purely with XOR gates.',
+    'Nothing but NAND gates may implement this module.',
+    'The permitted basis is restricted to NAND gates.',
+    'Build the design using exclusively NOR gates.',
+    'Only mux cells may realize the function.',
+    'The logic must be composed of NAND gates only.',
+    'Implement the circuit solely in XNOR gates.',
+    'Select a purely NAND gate implementation.',
+    'Every output must be realized with nothing but NOR gates.',
+    'The design logic basis is exclusively AND-OR.',
+]
+
+_MINIMIZATION_PARAPHRASES = [
+    'Minimize the number of gates.',
+    'Minimise the literal count.',
+    'Use the fewest cells.',
+    'Achieve the minimum number of transistors.',
+    'Choose the least number of gates.',
+    'The implementation area must be minimized.',
+    'Optimize the circuit for the fewest literals.',
+    'Select a realization with minimum number of cells.',
+    'The design must contain the least number of transistors.',
+    'Minimization of gate area is required.',
+    'Use a gate-count-minimized implementation.',
+    'Find the smallest number of gates.',
+    'Use the minimum area.',
+]
+
+
+@pytest.mark.parametrize('sentence', _BASIS_PARAPHRASES + _MINIMIZATION_PARAPHRASES)
+@pytest.mark.parametrize('entry', ['chain', 'ordinary', 'late'])
+def test_sentence_family_obligations_precede_all_author_paths(tmp_path, sentence, entry):
+    import deterministic_emit_chain as chain
+    import design_one_shot_runner as runner
+    import time
+
+    prompt = _KMAP_2IN + '\n' + sentence
+    if entry == 'chain':
+        kind, rtl, rejected = chain.try_emit_ex(prompt, top='TopModule', check=False)
+        observed = 'HANDOFF' if rtl is None and rejected else 'SILENT_ACCEPT'
+        assert observed == 'HANDOFF', {'kind': kind, 'rtl': rtl, 'rejected': rejected}
+        assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in str(rejected)
+        return
+    if entry == 'ordinary':
+        source = tmp_path / 'phase1/input_prompt/design.md'
+        source.parent.mkdir(parents=True)
+        source.write_text(prompt)
+        before = {p.relative_to(tmp_path): p.read_bytes()
+                  for p in tmp_path.rglob('*') if p.is_file()}
+        result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
+    else:
+        before = {}
+        result = runner._try_spec_artifact_registry_rtl(
+            tmp_path, time.time(), phase1_plain_text=prompt)
+    observed = result.status if result else 'NO_HANDOFF'
+    assert observed == 'PASS_WITH_WAIVERS', result
+    assert result.extras['fallback_skill'] == 'spec-to-rtl'
+    assert 'DECLARED_LOGIC_OBLIGATION_UNSUPPORTED' in result.detail
+    assert {p.relative_to(tmp_path): p.read_bytes()
+            for p in tmp_path.rglob('*') if p.is_file()} == before
+
+
+@pytest.mark.parametrize('sentence', [
+    'Implement a NAND flash controller.',
+    'Minimize latency.',
+    'Only NAND and NOR are characterized in the library.',
+    'Use only AND, OR and NOT gates.',
+    'The permitted basis consists exclusively of AND, OR and NOT gates.',
+])
+def test_sentence_family_non_obligations_and_supported_basis_keep_bytes(tmp_path, sentence):
+    test_inactive_logic_mentions_preserve_unrestricted_bytes(tmp_path, sentence)
+
+
+@pytest.mark.parametrize('sentence', _BASIS_PARAPHRASES + _MINIMIZATION_PARAPHRASES)
+def test_sentence_obligation_is_a_structured_source_bound_field(sentence):
+    from _specrtl_common import extract_spec_contract
+
+    prompt = _KMAP_2IN + '\n' + sentence
+    contract = extract_spec_contract(prompt, confirm=False)
+    rows = getattr(contract, 'logic_obligations', [])
+    assert len(rows) == 1, rows
+    row = rows[0]
+    assert row.kind == ('logic_basis' if sentence in _BASIS_PARAPHRASES else 'logic_minimization')
+    assert row.family
+    lo, hi = row.source_span
+    assert prompt[lo:hi] == row.source_sentence
+    assert sentence.rstrip('.') in row.source_sentence
+
+
+def test_explicit_empty_contract_survives_nested_emitters():
+    import json
+    import deterministic_emit_chain as chain
+    import spec_artifact_registry as registry
+    from _specrtl_common import extract_spec_contract
+
+    prompt = _KMAP_2IN + '\nUse NAND gates exclusively.'
+    interface = json.dumps({'module': 'TopModule', 'logic_obligations': []})
+    contract = extract_spec_contract(interface, is_json=True)
+    expected = K.synth(_KMAP_2IN, 'TopModule')
+    assert K.synth(prompt, 'TopModule', contract=contract) == expected
+    assert registry.generate(prompt, 'TopModule', contract=contract) == ('karnaugh_map', expected)
+    assert chain.try_emit_ex(prompt, interface, 'TopModule', check=False) == (
+        'karnaugh_map', expected, [])
+
+
+def test_ordinary_step_consumes_the_declared_field_without_prose_reclassification(tmp_path):
+    import json
+    import design_one_shot_runner as runner
+    import _path_layout as layout
+
+    sentence = 'Use the negated-conjunction building blocks, with all other elements excluded.'
+    prompt = _KMAP_2IN + '\n' + sentence
+    source = tmp_path / 'phase1/input_prompt/design.md'
+    source.parent.mkdir(parents=True)
+    source.write_text(prompt)
+    start = prompt.index(sentence)
+    interface = {'top_module': 'TopModule', 'ports': [], 'logic_obligations': [{
+        'kind': 'logic_basis', 'family': ['nand'],
+        'source_span': [start, start + len(sentence)], 'source_sentence': sentence}]}
+    l9 = layout.generated_docs_dir(tmp_path) / 'L9_INTEGRATION_SPEC.json'
+    l9.parent.mkdir(parents=True, exist_ok=True)
+    l9.write_text(json.dumps(interface))
+    before = {p.relative_to(tmp_path): p.read_bytes()
+              for p in tmp_path.rglob('*') if p.is_file()}
+    result = runner.step_rtl_gen(tmp_path, '__neutral_logic__', force_regen=True)
+    assert result.status == 'PASS_WITH_WAIVERS', result.detail
+    assert result.extras['fallback_skill'] == 'spec-to-rtl'
+    assert {p.relative_to(tmp_path): p.read_bytes()
+            for p in tmp_path.rglob('*') if p.is_file()} == before
+
+
+def test_gate_family_normalization_is_independent_of_sentence_case():
+    from _specrtl_common import extract_spec_contract
+
+    contract = extract_spec_contract('The implementation must be and-or-only.', confirm=False)
+    assert [row.family for row in getattr(contract, 'logic_obligations', [])] == [('and', 'or')]
+
+
+def test_structured_foreign_module_obligation_does_not_constrain_the_target():
+    import json
+    import deterministic_emit_chain as chain
+
+    sentence = 'Use NAND gates exclusively for module helper.'
+    interface = json.dumps({'module': 'TopModule', 'logic_obligations': [{
+        'kind': 'logic_basis', 'family': ['nand'], 'module': 'helper',
+        'source_span': [0, len(sentence)], 'source_sentence': sentence}]})
+    expected = K.synth(_KMAP_2IN, 'TopModule')
+    assert chain.try_emit_ex(_KMAP_2IN, interface, 'TopModule', check=False) == (
+        'karnaugh_map', expected, [])
+
 
 def test_kmap_fires_and_is_correct():
     rtl = K.synth(_KMAP_2IN, "TopModule")
