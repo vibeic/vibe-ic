@@ -2091,6 +2091,16 @@ def _complete_retained_submission_input(project: Path) -> None:
                     'observed_canonical_consumer': observed, 'canonical_consumer': consumer})
 
 
+def _record_rtl_submission_scope(project: Path, scope: dict) -> None:
+    """Record current physical inapplicability, never native submission PASS."""
+    scope_record = {"name": "submission_template", "status": "NOT_APPLICABLE",
+                    "reason": "bounded RTL request has no physical submission obligation",
+                    "delivery_scope": scope}
+    scope_path = project / "reports/phase1/submission_scope.json"
+    scope_path.parent.mkdir(parents=True, exist_ok=True)
+    scope_path.write_text(json.dumps(scope_record, indent=2) + "\n")
+
+
 def complete_retained_metrics(project: Path) -> dict | None:
     """Publish selected Step 1/2 completion from retained Phase1 evidence.
 
@@ -2114,10 +2124,14 @@ def complete_retained_metrics(project: Path) -> dict | None:
         raise flow109.Flow109Error('D0102_WINDOW_DIFFERS', 'Phase1 Step 1/2 only')
     submission_refusal = None
     if any(row['id'] == 'D02' for row in selected):
-        try:
-            _complete_retained_submission_input(project)
-        except metrics.MetricRefusal as exc:
-            submission_refusal = exc
+        scope = flow109.active_rtl_scope(project)
+        if scope is not None:
+            _record_rtl_submission_scope(project, scope)
+        else:
+            try:
+                _complete_retained_submission_input(project)
+            except metrics.MetricRefusal as exc:
+                submission_refusal = exc
     steps = []
     for row in selected:
         current = flow109.component_context(context, requested_step=row['id'])
@@ -2137,7 +2151,13 @@ def complete_retained_metrics(project: Path) -> dict | None:
             'completed': status == 'PASS', 'metric_acceptance': acceptance,
             'metric_acceptance_status': status, 'qualification': acceptance['qualification'],
             'reason': acceptance['reason']}})
-    return flow109.finish_native_window(project, {'steps': steps})
+    completed = flow109.finish_native_window(project, {'steps': steps})
+    if flow109.active_rtl_scope(project) is not None:
+        # Refresh the native input action after the actual current consumer;
+        # preserve its result and every reviewer-authored source/authority.
+        from phase1_base_requirements import publish
+        publish(project)
+    return completed
 
 
 def _project_arg() -> Optional[Path]:
@@ -2280,12 +2300,7 @@ def main() -> int:
         # Applicability comes from this parent's source-bound RTL request;
         # neither a fake owner declaration nor a template absence is needed.
         print("[phase1] step 0.5ic — NOT_APPLICABLE: source-bound RTL request")
-        scope_record = {"name": "submission_template", "status": "NOT_APPLICABLE",
-                        "reason": "bounded RTL request has no physical submission obligation",
-                        "delivery_scope": rtl_scope}
-        scope_path = project / "reports/phase1/submission_scope.json"
-        scope_path.parent.mkdir(parents=True, exist_ok=True)
-        scope_path.write_text(json.dumps(scope_record, indent=2) + "\n")
+        _record_rtl_submission_scope(project, rtl_scope)
         rc_route = 0
     else:
         print("[phase1] step 0.5ic — submission template + tape-out declaration ...")

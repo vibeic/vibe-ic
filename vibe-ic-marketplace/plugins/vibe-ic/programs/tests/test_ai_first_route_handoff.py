@@ -23,7 +23,8 @@ from _hostpaths import require_repo  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _matching_pair(monkeypatch):
+def _matching_pair(monkeypatch, tmp_path):
+    monkeypatch.setenv("VIBE_IC_DELIVERY_AUTHORITY_ROOT", str(tmp_path.parent / (tmp_path.name + "-authority")))
     runtime_pair.assume_matching_runtime_pair(monkeypatch)
 
 
@@ -65,6 +66,16 @@ def _answer(task: dict, nature: str, disposition: str = "CONFIRM") -> dict:
 
 
 def _write_answer(task: dict, answer: dict) -> None:
+    # Nature tests use a separately collected synthetic delivery fixture.
+    # Genuine model-action controls are exercised outside this unit suite.
+    from _delivery_review_fixture import accept_review
+    import delivery_intent
+    try:
+        current = delivery_intent.resolve_project_delivery(Path(task['project']))
+    except delivery_intent.DeliveryRefusal:
+        current = None  # Mutation tests retain the original controller authority.
+    if current is not None and current.outcome == 'unresolved':
+        accept_review(Path(task['project']))
     path = Path(task["response_path"])
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(answer))
@@ -648,7 +659,8 @@ def test_route_resume_rejects_co_mutated_run_root_even_when_self_hashes_match(
     }]
     _write_answer(forged, response)
     legacy_decision, legacy_reasons = bd._validate_ai_route(forged, run)
-    assert legacy_decision is not None, legacy_reasons
+    assert legacy_decision is None
+    assert any('DELIVERY_REVIEW_STALE' in reason for reason in legacy_reasons)
     assert bd.cmd_resume("verilogeval-human", str(dataset), str(run)) == 2
     assert calls == []
     assert original_prompt != forged_prompt

@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "_comment": "AUTHORITATIVE AI-skill inventory \u2014 generated from the skills/ folders by programs/gen_skill_inventory.py. Do NOT hand-edit; the website skill count must read `total` from here.",
-  "total": 70,
+  "total": 71,
   "by_tier": {
     "debug": 13,
-    "judgment": 7,
+    "judgment": 8,
     "nl_primary": 34,
     "unclassified": 8,
     "verification": 8
@@ -32,6 +32,7 @@
     "community-backlog-submit",
     "compliance-gate-spot-check",
     "core-agent-loop",
+    "delivery-ownership-review",
     "design-for-eco",
     "drc-fix",
     "eco-plan",
@@ -191,6 +192,11 @@
       "name": "core-agent-loop",
       "frontmatter_name": "core-agent-loop",
       "tier": "nl_primary"
+    },
+    {
+      "name": "delivery-ownership-review",
+      "frontmatter_name": "delivery-ownership-review",
+      "tier": "judgment"
     },
     {
       "name": "design-for-eco",

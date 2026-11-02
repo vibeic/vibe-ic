@@ -7255,6 +7255,29 @@ def _d0102_submission_lineage(project: Path, record: Mapping, reads: dict) -> di
 
 
 def _d0102_qualification(project: Path, context: Mapping, step: str, reads: dict) -> dict:
+    """Qualify endpoint observations without inventing physical execution."""
+    import flow109
+    if step == 'D02':
+        scope = flow109.active_rtl_scope(project)
+        if scope is not None:
+            if ({key: value for key, value in scope.items() if key != 'context_sha256'}
+                    != context.get('rtl_scope')):
+                raise MetricRefusal('D02_RTL_SCOPE_DIFFERS', 'current endpoint request')
+            relative = 'reports/phase1/submission_scope.json'
+            disposition = _d0102_read(project, relative, reads)
+            if (disposition.get('name') != 'submission_template'
+                    or disposition.get('status') != 'NOT_APPLICABLE'
+                    or disposition.get('delivery_scope') != scope):
+                raise MetricRefusal('D02_RTL_SUBMISSION_SCOPE_UNBOUND', relative)
+            qualified = _d0102_canonical_qualification(project, context, 'D01', reads)
+            return {**qualified, 'reason': 'CURRENT_SOURCE_QUALIFIED_RTL_ENDPOINT',
+                    'submission_disposition': {'path': relative, 'sha256': reads[relative],
+                                               'native_step': '0.5ic', 'status': 'NOT_APPLICABLE'},
+                    'scope': 'RTL endpoint source/checker acceptance; no physical submission or tool grant'}
+    return _d0102_canonical_qualification(project, context, step, reads)
+
+
+def _d0102_canonical_qualification(project: Path, context: Mapping, step: str, reads: dict) -> dict:
     """Reuse current retained full canonical acceptance, not component PASS."""
     import _flow_yaml
     import _path_layout as layout
@@ -7351,7 +7374,9 @@ def _d0102_qualification(project: Path, context: Mapping, step: str, reads: dict
                 if expected != actual or not ai.check(project, 'D1')[0]:
                     raise MetricRefusal('D0102_PHASE1_QUALIFICATION_PENDING', native)
                 reads[judgement] = actual
-        # Preserve all declared checks, including advisory results and genuine
+    if producer_completed or checkpoint_completed:
+        # Both paths retain the full canonical consumer. Preserve all declared
+        # checks, including advisory results and genuine
         # conditional non-execution. Required commands alone are only a subset.
         if not isinstance(consumer.get('ledger'), list):
             raise MetricRefusal('D0102_CANONICAL_CHECKS_INCOMPLETE', native)

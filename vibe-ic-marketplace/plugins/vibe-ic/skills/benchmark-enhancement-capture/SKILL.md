@@ -516,6 +516,17 @@ authoring. Canonical acceptance follows the review/prove/repair sequence above.
 
 ## Procedure
 
+Capture changes the plugin. An emitted candidate directory or a session-local
+`CAPTURE.md` is an intermediate artifact. Put accepted Bucket A changes in the
+program that the general flow consumes, together with regression controls.
+Put Bucket B knowledge in the relevant shipped skill. Preserve the pattern,
+implementation paths, source identities, evidence and remaining obligations
+under `docs/enhancements/<topic>/` inside the plugin. Report the actual changed
+plugin paths and contribution commit or PR. Pending review remains pending;
+local packaging alone does not complete absorption. When the user pauses a
+benchmark and requests capture, keep benchmark execution paused while preparing
+this plugin contribution through the ownership and review path below.
+
 1. **Collect recovery records**. Input: pairs `(<design>, <prior-fail-sample>, <recovered-pass-sample>, <AI-reasoning>)`. Source = the close-loop agents' final reports + git diff between samples/.
 
 2. **Per record, classify** into Bucket A/B/C/D. The 80/20 heuristic:

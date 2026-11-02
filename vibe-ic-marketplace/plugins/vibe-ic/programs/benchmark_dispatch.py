@@ -289,7 +289,7 @@ def _bind_runner_report(summary: dict, project: Path, producer: str,
             or report_name not in _RUNNER_REPORT_NAMES):
         raise ValueError("RUNNER_REPORT_UNBOUND: producer context/source differs")
     producer_path = Path(producer).resolve(strict=True)
-    return {**summary, "runner_binding": {
+    binding = {
         "schema": "vibeic.runner_report_binding.v1",
         "invocation_id": context["invocation_id"],
         "project": str(project), "argv": context["argv"],
@@ -297,7 +297,9 @@ def _bind_runner_report(summary: dict, project: Path, producer: str,
         "producer": {"path": str(producer_path),
                      "sha256": hashlib.sha256(producer_path.read_bytes()).hexdigest()},
         "material": _runner_material_snapshot(project),
-    }}
+    }
+    _runner_child_bind(binding, context)
+    return {**summary, "runner_binding": binding}
 
 
 def _runner_report_snapshot(project: Path) -> dict:
@@ -335,6 +337,273 @@ def _runner_fresh_reports(before: dict, after: dict) -> list[str]:
     """
     return [name for name, record in after.items() if record["valid"]
             and record["sha256"] != before.get(name, {}).get("sha256")]
+
+
+_RUNNER_CHILD_COMPLETIONS = {}
+
+
+def _runner_child_reference(project: Path, path: Path) -> dict:
+    if (not path.is_file()
+            or any(parent.is_symlink() for parent in (path, *path.parents))):
+        raise ValueError('child evidence reference is not a regular file')
+    return {'path': path.relative_to(project).as_posix(),
+            'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
+
+
+def _runner_child_read(project: Path, reference: dict, directory: Path) -> dict:
+    relative = reference['path']
+    path = project / relative
+    if (not isinstance(relative, str) or Path(relative).is_absolute()
+            or Path(relative).as_posix() != relative or not path.is_file()
+            or '..' in Path(relative).parts or path.parent != directory
+            or any(p.is_symlink() for p in (path, *path.parents))):
+        raise ValueError('child evidence path escapes its invocation')
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != reference['sha256']:
+        raise ValueError('child evidence bytes changed')
+    return _strict_json_loads(raw)
+
+
+def _runner_child_directory(project: Path, parent: dict, child: dict) -> Path:
+    if any(not isinstance(c['invocation_id'], str)
+           or not re.fullmatch('[A-Za-z0-9][A-Za-z0-9._-]*', c['invocation_id']) for c in (parent, child)):
+        raise ValueError('invalid child or parent invocation identity')
+    path = (project / 'reports/orchestrator/runner_invocations' /
+            parent['invocation_id'] / 'children' / child['invocation_id'])
+    if any(p.is_symlink() for p in (path, *path.parents)):
+        raise ValueError('linked child evidence directory')
+    return path
+
+
+def _runner_child_option(argv: list[str], name: str) -> str:
+    values = [arg.split('=', 1)[1] if '=' in arg else argv[index + 1]
+              for index, arg in enumerate(argv) if arg.split('=', 1)[0] == name]
+    if len(values) != 1:
+        raise ValueError('child owner window option absent or repeated')
+    return values[0]
+
+
+def _runner_child_owner_launch_current(project: Path, reference: dict,
+                                       selection: dict, row: str) -> None:
+    import flow109
+    path = project / reference['path']
+    if path.parent.parent != project / 'reports/flow109/attempts':
+        raise ValueError('owner launch is outside project attempts')
+    body = _runner_child_read(project, reference, path.parent)
+    current = flow109.component_context(selection, requested_step=row)
+    parent = flow109._bound_attempt(project, selection, body['parent_attempt'])
+    attempt = flow109._bound_attempt(project, current, body['child_attempt'])
+    if (body.get('schema') != 'vibeic.flow109.owner-launch.v1'
+            or body['parent_context'] != selection or body['child_context'] != current
+            or path.parent != parent or path.name != 'owner-' + attempt.name + '.json'):
+        raise ValueError('child selection differs from the native owner launch')
+
+
+def _runner_child_selection_current(selection: dict, parent: dict, child: dict, *,
+                                    project: Path, owner_launch: dict | None) -> tuple[dict | None, dict]:
+    import flow109
+    context = flow109.validate_execution_context(selection)
+    entry = context.get('requested_step', context.get('requested_entry'))
+    exit_ = context.get('requested_step', context.get('requested_exit'))
+    if (_runner_child_option(parent['argv'], '--entry-step') != entry
+            or _runner_child_option(parent['argv'], '--exit-step') != exit_):
+        raise ValueError('child selection differs from the outer window')
+    rows = context.get('resolved_rows') or [context['resolved_row']]
+    child_entry = _runner_child_option(child['argv'], '--entry-step')
+    child_exit = _runner_child_option(child['argv'], '--exit-step')
+    if Path(child['argv'][1]).stem == 'vibe_ic_one_shot_runner':
+        if (context.get('dispatch_kind') != 'canonical_owner_sequence'
+                or child_entry != child_exit or child_entry not in {row['id'] for row in rows}
+                or owner_launch is None):
+            raise ValueError('front-door child is not a selected native owner')
+        _runner_child_owner_launch_current(project, owner_launch, context, child_entry)
+        selected = flow109.component_context(context, requested_step=child_entry)
+        owner = flow109._canonical_owner_dispatch(selected['resolved_row'])
+        return selected, {'entry_step': owner['owner_entry_step'],
+                          'exit_step': owner['owner_exit_step']}
+    owners = [flow109._canonical_owner_dispatch(row) for row in rows]
+    if not all(owners) or len({owner['owner_runner'] for owner in owners}) != 1:
+        raise ValueError('child selection has no single canonical owner')
+    owner = owners[0]['owner_runner']
+    runner = 'phase2_one_shot_runner' if owner == 'design_one_shot_runner' else owner
+    native_entry = context.get('native_entry_step', owners[0]['owner_entry_step'])
+    native_exit = context.get('native_exit_step', owners[-1]['owner_exit_step'])
+    if (Path(child['argv'][1]).stem != runner
+            or child_entry != native_entry or child_exit != native_exit):
+        raise ValueError('child command differs from its selected owner window')
+    return None, {'entry_step': child_entry, 'exit_step': child_exit}
+
+
+def _runner_child_begin(project: Path, child: dict, parent: str | None,
+                        env: Mapping[str, str]) -> dict | None:
+    if parent is None:
+        return None
+    import flow109
+    parent = _strict_json_loads(parent)
+    project = Path(project).resolve()
+    if child['project'] != str(project) or parent['project'] != str(project):
+        raise ValueError('child launch names another project')
+    selection = _strict_json_loads(Path(env[flow109.CONTEXT_ENV]).read_bytes())
+    owner_launch = (_runner_child_reference(project, Path(env[flow109.OWNER_LAUNCH_ENV]))
+                    if Path(child['argv'][1]).stem == 'vibe_ic_one_shot_runner' else None)
+    _runner_child_selection_current(selection, parent, child,
+                                   project=project, owner_launch=owner_launch)
+    directory = _runner_child_directory(project, parent, child)
+    launch = {'schema': 'vibeic.runner_child_launch.v1', 'parent_invocation': parent,
+              'child_invocation': child, 'selection': selection,
+              'owner_launch': owner_launch,
+              'started_ns': time.time_ns(),
+              'reports_before': _runner_report_snapshot(project),
+              'material_before': _runner_material_snapshot(project)}
+    path = directory / 'launch.json'
+    _write_immutable_json(path, launch)
+    return _runner_child_reference(project, path)
+
+
+def _runner_child_finish(project: Path, child: dict, launch_ref: dict | None, rc: int) -> None:
+    if launch_ref is None:
+        return
+    project = Path(project).resolve()
+    directory = project / launch_ref['path']
+    launch = _runner_child_read(project, launch_ref, directory.parent)
+    parent = launch['parent_invocation']
+    directory = _runner_child_directory(project, parent, child)
+    if (launch_ref['path'] != (directory / 'launch.json').relative_to(project).as_posix()
+            or launch['child_invocation'] != child):
+        raise ValueError('child completion differs from issued launch')
+    reports = _runner_report_snapshot(project)
+    archived = {}
+    for name in _runner_fresh_reports(launch['reports_before'], reports):
+        binding = reports[name].get('runner_binding') or {}
+        if binding.get('invocation_id') == child['invocation_id']:
+            path = directory / name
+            raw = (project / 'reports/orchestrator' / name).read_bytes()
+            _write_immutable_bytes(path, raw)
+            archived[name] = _runner_child_reference(project, path)
+    completion = {'schema': 'vibeic.runner_child_completion.v1', 'launch': launch_ref,
+                  'child_invocation': child, 'rc': rc, 'finished_ns': time.time_ns(),
+                  'source_after': _runner_source_snapshot(child['argv']),
+                  'material_after': _runner_material_snapshot(project),
+                  'reports_after': reports, 'owner_reports': archived}
+    path = directory / 'completion.json'
+    _write_immutable_json(path, completion)
+    reference = _runner_child_reference(project, path)
+    _RUNNER_CHILD_COMPLETIONS.setdefault(parent['invocation_id'], []).append(reference)
+
+
+def _runner_child_bind(binding: dict, context: dict) -> None:
+    active = os.environ.get(_RUNNER_CONTEXT_ENV)
+    parent = os.environ.get(_RUNNER_PARENT_CONTEXT_ENV)
+    if parent is not None and active is not None and _strict_json_loads(active) == context:
+        binding['parent_invocation'] = _strict_json_loads(parent)
+    if context['invocation_id'] in _RUNNER_CHILD_COMPLETIONS:
+        binding['child_invocations'] = list(_RUNNER_CHILD_COMPLETIONS[context['invocation_id']])
+
+
+def _runner_report_material_matches(name: str, material: dict, current: dict, *,
+                                    require_phase2: bool) -> bool:
+    if material == current:
+        return True
+    if name != 'phase1_one_shot.json' or not require_phase2:
+        return False
+    # Later RTL authoring may change outputs, but never Phase 1's source inputs.
+    output_keys = {'output_rtl', 'output_rtl_sha256'}
+    return ({key: value for key, value in material.items() if key not in output_keys}
+            == {key: value for key, value in current.items() if key not in output_keys})
+
+
+def _runner_child_report_current(project: Path, receipt: dict, name: str, record: dict, *,
+                                 require_phase2: bool = False) -> None:
+    project = Path(project).resolve()
+    canonical = project / 'reports/orchestrator' / name
+    if any(path.is_symlink() for path in (canonical, *canonical.parents)):
+        raise ValueError('linked canonical child report')
+    binding = record['runner_binding']
+    parent = {'invocation_id': receipt['invocation_id'], 'argv': receipt['argv'],
+              'project': receipt['project'], 'source': receipt['source_before']}
+    if receipt.get('d1_snapshot_sha256') is not None:
+        parent['d1_snapshot_sha256'] = receipt['d1_snapshot_sha256']
+    if 'vibe_ic_one_shot.json' not in _runner_fresh_reports(
+            receipt['reports_before'], receipt['reports_after']):
+        raise ValueError('child has no fresh outer publication')
+    publication = receipt['reports_after']['vibe_ic_one_shot.json']['runner_binding']
+    started, finished = receipt['started_ns'], receipt['finished_ns']
+    seen = {parent['invocation_id']}
+    expected_selection = None
+    while True:
+        if (publication.get('schema') != 'vibeic.runner_report_binding.v1'
+                or publication.get('report_name') != 'vibe_ic_one_shot.json'
+                or any(publication.get(key) != value for key, value in parent.items()
+                       if key != 'd1_snapshot_sha256')):
+            raise ValueError('child has no bound parent publication')
+        matches = []
+        for reference in publication.get('child_invocations', []):
+            child_id = Path(reference['path']).parent.name
+            directory = _runner_child_directory(project, parent, {'invocation_id': child_id})
+            if reference['path'] != (directory / 'completion.json').relative_to(project).as_posix():
+                raise ValueError('parent publication names another completion')
+            completion = _runner_child_read(project, reference, directory)
+            if (completion['reports_after'].get(name) == record
+                    and name in _runner_fresh_reports(
+                        _runner_child_read(project, completion['launch'], directory)['reports_before'],
+                        completion['reports_after'])):
+                matches.append((directory, completion))
+        if len(matches) != 1:
+            raise ValueError('report has no unique parent-issued child completion')
+        directory, completion = matches[0]
+        child = completion['child_invocation']
+        launch_ref = completion['launch']
+        if launch_ref['path'] != (directory / 'launch.json').relative_to(project).as_posix():
+            raise ValueError('completion names another launch')
+        launch = _runner_child_read(project, launch_ref, directory)
+        if (completion['schema'] != 'vibeic.runner_child_completion.v1'
+                or launch['schema'] != 'vibeic.runner_child_launch.v1'
+                or launch['parent_invocation'] != parent or launch['child_invocation'] != child
+                or child['invocation_id'] != directory.name or child['invocation_id'] in seen
+                or child['project'] != str(project)
+                or not started <= launch['started_ns'] <= completion['finished_ns'] <= finished
+                or type(completion['rc']) is not int or completion['rc'] not in (0, 1, 2)
+                or completion['source_after'] != child['source']
+                or child['source'] != _runner_source_snapshot(
+                    child['argv'], consumer=child['source']['consumer']['path'])
+                or str(Path(child['argv'][2]).resolve()) != str(project)
+                or not _runner_report_material_matches(
+                    name, completion['material_after'], receipt['material_after'],
+                    require_phase2=require_phase2)):
+            raise ValueError('child launch/completion source, generation or material differs')
+        if expected_selection is not None and launch['selection'] != expected_selection:
+            raise ValueError('descendant selection differs from its issued owner context')
+        selected, expected_window = _runner_child_selection_current(
+            launch['selection'], parent, child, project=project,
+            owner_launch=launch.get('owner_launch'))
+        direct = binding['invocation_id'] == child['invocation_id']
+        owner_name = name if direct else 'vibe_ic_one_shot.json'
+        reference = completion['owner_reports'][owner_name]
+        if reference['path'] != (directory / owner_name).relative_to(project).as_posix():
+            raise ValueError('completion names another owner report')
+        owner = _runner_child_read(project, reference, directory)
+        owned = owner['runner_binding']
+        declared_project = owner.get('project')
+        if (reference['sha256'] != completion['reports_after'][owner_name]['sha256']
+                or owned['material'] != completion['material_after']
+                or owned.get('parent_invocation') != parent
+                or any(owned.get(key) != value for key, value in child.items())
+                or any(owner.get('declared_window', {}).get(key) != value
+                       for key, value in expected_window.items())
+                or declared_project is not None and (not isinstance(declared_project, str)
+                    or Path(declared_project).resolve() != project)):
+            raise ValueError('child owner bytes or immediate parent differ')
+        if direct:
+            if reference['sha256'] != record['sha256'] or owned != binding:
+                raise ValueError('child report bytes differ')
+            return
+        producer = owned['producer']
+        if (producer != child['source']['runner']
+                or hashlib.sha256(Path(producer['path']).read_bytes()).hexdigest() != producer['sha256']):
+            raise ValueError('intermediate report producer changed')
+        seen.add(child['invocation_id'])
+        parent, publication, expected_selection = child, owned, selected
+        started, finished = launch['started_ns'], completion['finished_ns']
 
 
 def _runner_owner_report_current(project: Path, binding: dict, receipt: dict) -> None:
@@ -394,22 +663,25 @@ def _runner_report_binding_reason(receipt: dict, *, require_phase2: bool) -> str
             return "RUNNER_REPORT_UNBOUND: fresh report has no producer generation binding"
         try:
             if (binding["schema"] != "vibeic.runner_report_binding.v1"
-                    or binding["invocation_id"] != receipt["invocation_id"]
                     or binding["project"] != receipt["project"]
-                    or binding["argv"] != receipt["argv"]
-                    or binding["source"] != receipt["source_before"]
                     or binding["report_name"] != name):
-                raise ValueError("report invocation/source differs")
+                raise ValueError("report subject differs")
+            if binding["invocation_id"] == receipt["invocation_id"]:
+                if (binding["argv"] != receipt["argv"]
+                        or binding["source"] != receipt["source_before"]):
+                    raise ValueError("report invocation/source differs")
+            else:
+                _runner_child_report_current(Path(receipt["project"]), receipt, name, record,
+                                             require_phase2=require_phase2)
             _runner_owner_report_current(Path(receipt["project"]), binding, receipt)
             producer = binding["producer"]
             if hashlib.sha256(Path(producer["path"]).read_bytes()).hexdigest() != producer["sha256"]:
                 raise ValueError("report producer source changed")
-            # Phase 1 can precede legitimate RTL generation in the same run.
-            # Its historical output population is not phase 2's measurement.
-            if (name != "phase1_one_shot.json" or not require_phase2):
-                if binding["material"] != receipt["material_after"]:
-                    raise ValueError("report input/output material differs")
-        except (OSError, ValueError, KeyError, TypeError, IndexError):
+            if not _runner_report_material_matches(
+                    name, binding["material"], receipt["material_after"],
+                    require_phase2=require_phase2):
+                raise ValueError("report input/output material differs")
+        except (OSError, ValueError, KeyError, TypeError, IndexError, AttributeError):
             return "RUNNER_REPORT_UNBOUND: report generation/source/material does not bind this invocation"
     return None
 
@@ -6477,6 +6749,9 @@ def _stage_product_manifest(run_p: Path, source: str | Path | None) -> None:
 
 
 def _forward_product_manifest(run_p: Path, project: Path, receipt: dict | None = None) -> None:
+    if receipt is not None:
+        import delivery_intent
+        delivery_intent.validate_current_delivery_binding(project, receipt.get('delivery_binding'))
     source = Path(run_p) / "input" / "flow109-manifest.json"
     if source.is_file():
         _write_immutable_bytes(Path(project) / "input" / "flow109-manifest.json",
@@ -6489,13 +6764,8 @@ def _forward_product_manifest(run_p: Path, project: Path, receipt: dict | None =
 
 def _rtl_delivery_target(receipt: dict | None) -> str | None:
     """Forward explicit RTL delivery only for the admitted RTL proof window."""
-    import task_nature_route as tnr
-    receipt = receipt or {}
-    if (receipt.get("delivery_target") == "rtl"
-            and tnr.is_rtl_only_evidence(receipt.get("requested_evidence"),
-                                         exit_step=receipt.get("verify_through"))):
-        return "rtl"
-    return None
+    import route_decision as rd
+    return "rtl" if rd.is_rtl_only_route_receipt(receipt) else None
 
 
 def _solver_argv(runner: Path, proj: Path, entry, exit_step,
@@ -6516,6 +6786,11 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
     if delivery_route not in {"ic", "ip"}:
         raise ValueError(f"invalid delivery runner route: {delivery_route!r}")
     import flow109
+    import delivery_intent
+    current_delivery = delivery_intent.require_compatible_target(
+        delivery_intent.resolve_project_delivery(proj), delivery_target)
+    if current_delivery.route != delivery_route:
+        raise ValueError('DELIVERY_LAUNCH_ROUTE_CHANGED')
     selected = flow109.resolve_task_manifest(proj, entry or "D1", exit_step,
                                              delivery_target, delivery_route)
     if selected is not None:
@@ -7382,20 +7657,25 @@ def _validated_route_reentry_state(*, bench: str, dataset: str | Path | None,
             raise ValueError('ROUTE_REENTRY_ROUTE_RECEIPT_MISSING' + (": " + "result.route_receipt and result.routing_verdict.route_receipt are absent or not objects at route reentry"))
         if stored_receipt.get("receipt_sha256") != receipt.get("receipt_sha256"):
             raise ValueError("ROUTE_REENTRY_ROUTE_RECEIPT_STALE")
-        errors = _rd.validate_route_receipt(receipt)
+        errors = _rd.validate_route_receipt(receipt, project=Path(task["project"]))
         if errors:
             raise ValueError("ROUTE_REENTRY_ROUTE_INVALID: " + ", ".join(errors))
     except (OSError, ValueError, TypeError, KeyError) as exc:
         return {"status": "REFUSED", "reason": str(exc)}
 
     expected_exit = str(receipt["verify_through"])
-    rtl_only = (receipt.get("delivery_target") == "rtl"
+    rtl_only = ((receipt.get('delivery_binding') or {}).get('outcome') == 'source'
+                and receipt.get("delivery_target") == "rtl"
                 and _tnr.is_rtl_only_evidence(
                     receipt.get("requested_evidence"), exit_step=expected_exit))
     # Preserve the issued delivery family independently of the evidence window.
-    expected_route = _tnr.delivery_route_for_target(
-        str(receipt["delivery_target"]),
-        (task.get("prompt_delivery_requirements") or {}).get("route_family"))
+    try:
+        import delivery_intent
+        expected_route = delivery_intent.require_compatible_target(
+            delivery_intent.resolve_project_delivery(Path(task['project'])),
+            receipt['delivery_target']).route
+    except delivery_intent.DeliveryRefusal as exc:
+        return {'status': 'REFUSED', 'reason': str(exc)}
     if result.get("exit") is not None and str(result.get("exit")) != expected_exit:
         return {"status": "REFUSED", "reason": "ROUTE_REENTRY_EXIT_MUTATION"}
     if (result.get("delivery_route") is not None
@@ -7532,12 +7812,14 @@ def _route_contract_sha256() -> str:
     """Bind an AI decision to the general nature-to-flow mapping it selects."""
     import task_nature_route as tnr                       # noqa: PLC0415
     import route_decision as rd                            # noqa: PLC0415
+    import delivery_intent
     return _sha256_text(json.dumps(
         {"nature_entry": tnr.NATURE_ENTRY,
          "evidence_exit": tnr.EVIDENCE_EXIT,
          "delivery_targets": tnr.DELIVERY_TARGETS,
          "prompt_delivery_requirements_schema": tnr.PROMPT_DELIVERY_REQUIREMENTS_SCHEMA,
          "prompt_delivery_rules_version": tnr.PROMPT_DELIVERY_RULES_VERSION,
+         "delivery_policy_sha256": delivery_intent.policy_sha256(),
          "canonical_dag_sha256": rd.canonical_dag()["sha256"]},
         sort_keys=True))
 
@@ -7551,6 +7833,10 @@ def _make_ai_route_task(problem_id: str, project: Path, staged: dict,
     import route_decision as rd                            # noqa: PLC0415
     import benchmark_io_adapter as bio                  # noqa: PLC0415
     project, run_p = Path(project).resolve(), Path(run_p).resolve()
+    import delivery_intent
+    if delivery_intent._authority_dir(project).resolve().is_relative_to(run_p):
+        raise ValueError('DELIVERY_AUTHORITY_INVALID: controller authority is inside worker run')
+    delivery_review = delivery_intent.issue_review(project)
     prompt = project / "input" / "phase1_prompt.md"
     prompt_sha = _sha256_text(prompt.read_text(errors="replace"))
     safe = _safe_problem_id(str(problem_id))
@@ -7598,6 +7884,7 @@ def _make_ai_route_task(problem_id: str, project: Path, staged: dict,
         "semantic_payload": semantic_payload,
         "semantic_payload_sha256": semantic_payload["semantic_payload_sha256"],
         "prompt_delivery_requirements": prompt_delivery,
+        "delivery_review": delivery_review,
         "coordinator_binding": coordinator_binding,
         "routing_contract_sha256": _route_contract_sha256(),
         "allowed_natures": sorted(tnr.NATURE_ENTRY),
@@ -7763,6 +8050,9 @@ def _seal_route_admission(run_p: Path, task: dict, decision: dict) -> None:
     A changed response requires a new issued task/anchor and a fresh typed D1
     call. Publishing a replacement route, mode or activation is insufficient.
     """
+    import delivery_intent
+    delivery_intent.validate_current_delivery_binding(
+        Path(task['project']), decision['route_receipt'].get('delivery_binding'))
     anchor = _read_route_input_anchor(run_p)
     _, capability_path = _route_anchor_paths(run_p)
     body = {
@@ -7787,7 +8077,9 @@ def _seal_route_admission(run_p: Path, task: dict, decision: dict) -> None:
 def _require_route_admission(run_p: Path, task: dict, receipt: dict,
                               *, require_d1: bool = True) -> None:
     """BLOCKING: writable receipts never create AI or user mode authority."""
+    import delivery_intent
     anchor = _read_route_input_anchor(run_p)
+    delivery_intent.validate_current_delivery_binding(Path(task['project']), receipt.get('delivery_binding'))
     task_hash = task.get("task_sha256")
     task_body = {k: v for k, v in task.items() if k != "task_sha256"}
     if _sha256_text(json.dumps(task_body, sort_keys=True)) != task_hash:
@@ -7942,6 +8234,10 @@ def _validate_ai_route(task: dict, run_p: Path, *,
         if _sha256_text(prompt_text) != task["prompt_sha256"]:
             raise ValueError("route prompt changed after issue")
         prompt_delivery = tnr.prompt_delivery_requirements(prompt_text)
+        import delivery_intent
+        if task.get('delivery_review') != delivery_intent.issue_review(project):
+            raise ValueError('DELIVERY_REVIEW_ISSUANCE_CHANGED')
+        delivery = delivery_intent.resolve_project_delivery(project)
         if task.get("prompt_delivery_requirements") != prompt_delivery:
             raise ValueError("prompt delivery requirements changed after issue")
         if benchmark is not None and dataset is not None:
@@ -8048,11 +8344,10 @@ def _validate_ai_route(task: dict, run_p: Path, *,
                 reasons.append("AI_ROUTE_INVALID: ai_nature is not a product nature")
             if requested_evidence is not None and requested_evidence not in tnr.EVIDENCE_EXIT:
                 reasons.append("AI_ROUTE_INVALID: requested_evidence is not a product evidence class")
-            resolved_delivery = tnr.resolve_prompt_delivery_target(
-                prompt_delivery, delivery_target)
-            if not resolved_delivery.get("ok"):
-                reasons.append("AI_ROUTE_INVALID: " + str(
-                    resolved_delivery.get("reason") or "delivery target refused"))
+            try:
+                selection = delivery_intent.require_compatible_target(delivery, delivery_target)
+            except delivery_intent.DeliveryRefusal as exc:
+                reasons.append(str(exc))
             if (disposition == "CONFIRM"
                     and nature != task["program_proposal"].get("entry_nature")):
                 reasons.append("AI_ROUTE_INVALID: CONFIRM differs from proposal")
@@ -8084,14 +8379,8 @@ def _validate_ai_route(task: dict, run_p: Path, *,
             return None, ["AI_ROUTE_NEEDS_CLARIFICATION: AI could not select a route"]
         entry = tnr.NATURE_ENTRY[nature]
         requested_evidence = requested_evidence or entry["default_evidence"]
-        resolved_delivery = tnr.resolve_prompt_delivery_target(
-            prompt_delivery, delivery_target)
-        if not resolved_delivery.get("ok"):
-            return None, reasons + ["AI_ROUTE_INVALID: " + str(
-                resolved_delivery.get("reason") or "delivery target refused")]
-        delivery_target = str(resolved_delivery["target"])
-        delivery_route = tnr.delivery_route_for_target(
-            delivery_target, resolved_delivery.get("route_family"))
+        selection = delivery_intent.require_compatible_target(delivery, delivery_target)
+        delivery_target, delivery_route = selection.target, selection.route
         # The prompt itself is the only user-owned source available at this
         # boundary. Reviewer prose and benchmark metadata are never Ultra
         # evidence. The Program derives all flow steps from this receipt.
@@ -8105,7 +8394,7 @@ def _validate_ai_route(task: dict, run_p: Path, *,
             # alter the route decision; public-input identity remains sealed
             # separately by the task/coordinator binding and its digest.
             source_sha256=str(task["prompt_sha256"]),
-            explicit_user_evidence=explicit_ultra,
+            explicit_user_evidence=explicit_ultra, delivery_binding=selection.binding,
             context=semantic_payload.get("context"))
         return {
             "nature": nature, "entry_nature": nature,
@@ -8230,11 +8519,56 @@ def _archive_backup_completion(item: dict, record: dict, run_p: Path) -> dict:
             "public_original_input": item["public_original_input"]}
 
 
+def _pending_input_review_action(project: Path) -> dict | None:
+    """Forward only a current normal producer declaration, never infer a task."""
+    import phase1_base_requirements as producer
+    report = producer.layout.report_path(project, producer.REPORT)
+    if not report.exists():
+        return None
+    result = _read_json_regular(report)
+    action = result.get('pending_action')
+    if action is None:
+        return None
+    if (result.get('program') != 'phase1_base_requirements'
+            or result.get('status') != 'PENDING'):
+        raise ValueError(str(result.get('reason') or 'INPUT_REVIEW_PRODUCER_DECLARATION_INVALID')
+                         + ': ' + str(result.get('detail') or ''))
+    producer.read_review_action(project, action)
+    return action
+
+
+def _input_review_completion(item: dict, run_p: Path) -> tuple[bool, list[str]]:
+    """Transport freshness and output change only; native gates judge review."""
+    import phase1_base_requirements as producer
+    try:
+        project = Path(item['project']).resolve()
+        if project != Path(run_p).resolve() / 'projects' / _safe_problem_id(str(item['id'])):
+            raise ValueError('INPUT_REVIEW_PROJECT_INVALID')
+        body = {key: value for key, value in item.items() if key != 'task_sha256'}
+        if _sha256_text(json.dumps(body, sort_keys=True)) != item['task_sha256']:
+            raise ValueError('INPUT_REVIEW_TASK_STALE')
+        issued = Path(run_p) / 'ai_backup_tasks' / f"{item['task_sha256']}.json"
+        if _read_json_regular(issued) != item:
+            raise ValueError('INPUT_REVIEW_TASK_UNISSUED')
+        reasons = _public_input_reasons(item)
+        if reasons:
+            return False, reasons
+        action = _pending_input_review_action(project)
+        if action != item['pending_action']:
+            raise ValueError('INPUT_REVIEW_DECLARATION_STALE')
+        if producer.review_output_manifest(project) == item['initial_review_outputs']:
+            return False, ['INPUT_REVIEW_OUTPUTS_PENDING']
+        return True, []
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        return False, [str(exc)]
+
+
 def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
                          source: str, detail: str, bench: str,
                          dataset: Path, run_p: Path,
                          required_top: str | None = None,
-                         expected_public_input: dict | None = None) -> dict:
+                         expected_public_input: dict | None = None,
+                         pending_action: dict | None = None) -> dict:
     """Build one prompt-bound handoff into the runner-owned RTL directory.
 
     `required_top` carries the module name the benchmark's SCORER will
@@ -8269,7 +8603,8 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
         "public_original_input": bio.public_original_input(
             project, problem_id, _sha256_text(prompt_text),
             expected=expected_public_input),
-        "initial_output_manifest": _backup_output_manifest(project),
+        "initial_output_manifest": (None if pending_action is not None
+                                    else _backup_output_manifest(project)),
         "write_rtl_to": str(project / "phase2" / "stage1" / "rtl"),
         "read_docs_from": str(project / "phase1" / "generated_docs"),
         "read_prompt_from": str(prompt),
@@ -8304,6 +8639,18 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
         "resume_with": (f"benchmark_dispatch.py {bench} --resume "
                         f"--dataset {dataset} --run {run_p}"),
     }
+    if pending_action is not None:
+        import phase1_base_requirements as producer
+        producer.read_review_action(project, pending_action)
+        for key in ('initial_output_manifest', 'write_rtl_to', 'regate_entry_step',
+                    'completion_record_path', 'completion_record_contract',
+                    'required_top_module', 'required_top_module_note'):
+            task.pop(key, None)
+        task.update(action_kind='INPUT_REVIEW', pending_action=pending_action,
+                    initial_review_outputs=producer.review_output_manifest(project),
+                    skill='vibe-ic:ic-expert-agent',
+                    declared_skills=['vibe-ic:ic-expert-agent'],
+                    normal_reentry='original declared Program window; supplied_rtl=False')
     task["public_original_input_paths"] = [
         str(project / "input" / "public_original" / "files" / row["relative_path"])
         for row in task["public_original_input"]["files"]]
@@ -8674,7 +9021,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             route_receipt = verdict.get("route_receipt")
             if not isinstance(route_receipt, dict):
                 raise ValueError('ROUTE_RECEIPT_MISSING' + f": route_decisions[{pid!r}].route_receipt is absent or not an object")
-            receipt_errors = rd.validate_route_receipt(route_receipt)
+            receipt_errors = rd.validate_route_receipt(route_receipt, project=proj)
             if receipt_errors:
                 raise ValueError("ROUTE_RECEIPT_INVALID: " + ", ".join(receipt_errors))
             run_scope = uuid.uuid4().hex
@@ -8695,10 +9042,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
             route_backup = _declared_route_ai_backup(verdict)
             # RTL authoring uses the original source-authorized normal entry.
             # Full-design delivery still qualifies D1 before its later span.
-            rtl_delivery = (
-                route_receipt.get("delivery_target") == "rtl"
-                and tnr.is_rtl_only_evidence(
-                    route_receipt.get("requested_evidence"), exit_step=exit_step))
+            rtl_delivery = _rtl_delivery_target(route_receipt) == "rtl"
             input_contract = str(route_receipt.get("input_contract") or "structured")
             admitted_steps = []
             if input_contract == "original":
@@ -8818,6 +9162,12 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                     backup_source = "route_declaration"
                     backup_skills = list(route_backup["skills"])
                     backup_detail = str(got.get("reason") or "")
+            input_review_action = (None if got.get('ok') else
+                                   _pending_input_review_action(proj))
+            if input_review_action is not None:
+                backup_source = 'normal_input_review'
+                backup_skills = ['vibe-ic:ic-expert-agent']
+                backup_detail = 'Normal Program requests source-bound requirements review.'
             awaiting_backup = bool(backup_source)
             phases = fpa.attribute(
                 proj, routing=verdict, entry=entry, evidence=ev,
@@ -8874,7 +9224,8 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                     pid, proj, backup_skills, str(backup_source),
                     backup_detail, bench, ds, run_p,
                     required_top=_required_scorer_top(_entry(bench), fmt),
-                    expected_public_input=staged["public_original_input"])
+                    expected_public_input=staged["public_original_input"],
+                    pending_action=input_review_action)
             state = ("candidate->AI-review" if got.get("ok")
                      else ("WAIVE->AI" if backup_source == "rtl_gen_waive"
                            else ("route-declared->AI" if awaiting_backup
@@ -8924,10 +9275,23 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
                 diagnostic = _runner_diagnostics(process, argv, proj)
                 if diagnostic:
                     result["runner_diagnostics"] = diagnostic
+            backup_task = None
+            try:
+                action = _pending_input_review_action(proj)
+                if action is not None:
+                    backup_task = _make_ai_backup_task(
+                        pid, proj, ['vibe-ic:ic-expert-agent'], 'normal_input_review',
+                        error, bench, ds, run_p,
+                        expected_public_input=staged['public_original_input'], pending_action=action)
+                    result.update(worker_retryable=False, awaiting_ai_backup=True,
+                                  awaiting_ai=True, input_review_pending=True)
+            except (OSError, ValueError, TypeError, KeyError) as transport_error:
+                result['input_review_transport_error'] = str(transport_error)
             return _SolveWorkerOutcome(
                 index=index, problem_id=pid,
                 result_json=json.dumps(result),
-                review_task_json=None, backup_task_json=None,
+                review_task_json=None,
+                backup_task_json=json.dumps(backup_task) if backup_task else None,
                 log_line=(f"  {pid:44s} NOT_MEASURED worker ERROR: {error}"))
 
     outcomes = _checkpointed_solve_map(
@@ -8961,7 +9325,7 @@ def _cmd_solve_locked(bench: str, dataset: str, run: str, limit: int = 0,
         bl = run_p / _BACKUP_WORKLIST
         _write_jsonl(bl, backlog)
         print(f"\n{len(backlog)} problem(s) handed to a declared AI skill -> {bl}")
-        print(f"  author RTL into each project's phase2/stage1/rtl/, then:")
+        print("  service each runner-declared action and its output contract, then:")
         print(f"    python3 {Path(__file__).name} {bench} --resume "
               f"--dataset {ds} --run {run_p}")
     else:
@@ -9511,6 +9875,11 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             backup_source = "route_declaration"
             backup_skills = list(route_backup["skills"])
             backup_detail = str(got.get("reason") or "")
+        input_review_action = _pending_input_review_action(proj)
+        if input_review_action is not None:
+            backup_source = 'normal_input_review'
+            backup_skills = ['vibe-ic:ic-expert-agent']
+            backup_detail = 'Normal Program requests source-bound requirements review.'
         result.update({
             "route_ai_backup": route_backup,
             "candidate_origin": (
@@ -9523,7 +9892,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             backup.append(_make_ai_backup_task(
                 pid, proj, backup_skills, str(backup_source), backup_detail,
                 bench, Path(dataset).resolve(), run_p,
-                required_top=_required_scorer_top(_entry(bench), fmt)))
+                required_top=_required_scorer_top(_entry(bench), fmt),
+                pending_action=input_review_action))
             existing_backup_ids.add(pid)
         print(f"  {pid:44s} Program worker retry completed (rc={rc})")
 
@@ -9573,6 +9943,20 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 },
             })
             continue
+        if item.get('action_kind') == 'INPUT_REVIEW':
+            ready, reasons = _input_review_completion(item, run_p)
+            if not ready:
+                backup_plans.append({'kind': 'no_rtl', 'item': item, 'id': pid,
+                                     'result': result, 'reasons': reasons})
+                continue
+            state = _route_reentry_state(pid, result, allow_d1_only=True)
+            if state.get('status') not in ('ACTIVE', 'D1_ONLY'):
+                backup_plans.append({'kind': 'route_blocked', 'item': item, 'id': pid,
+                    'result': result, 'reasons': [str(state.get('reason'))]})
+                continue
+            backup_plans.append({'kind': 'run_input_review', 'item': item, 'id': pid,
+                'result': result, 'project': proj, 'reentry_state': state})
+            continue
         rtl_dir = proj / "phase2" / "stage1" / "rtl"
         completion, completion_reasons = _validate_backup_completion(item, run_p)
         if completion is None:
@@ -9602,7 +9986,8 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             "reentry_state": reentry_state,
         })
 
-    backup_run_plans = [p for p in backup_plans if p["kind"] == "run"]
+    backup_run_plans = [p for p in backup_plans
+                        if p['kind'] in ('run', 'run_input_review')]
     gate_rc = _runtime_pair_before_fan_out(backup_run_plans, run_p,
                                            "resume:ai-backup")
     if gate_rc is not None:
@@ -9610,6 +9995,12 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
     def _run_completed_backup(job):
         pid = job[0]
         plan = next(p for p in backup_run_plans if p["id"] == pid)
+        if plan['kind'] == 'run_input_review':
+            ready, reasons = _input_review_completion(plan['item'], run_p)
+            if not ready:
+                return _ResumeRunnerOutcome(problem_id=pid, rc=None,
+                    collected_json=None, error='; '.join(reasons))
+            return _run_and_collect(job)
         completion, reasons = _validate_backup_completion(plan["item"], run_p)
         if completion != plan["provenance"]["author_record"]:
             return _ResumeRunnerOutcome(problem_id=pid, rc=None,
@@ -9618,8 +10009,10 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         return _run_and_collect(job)
 
     backup_outcomes = iter(_ordered_parallel_map(
-        [(p["id"], p["project"], True, None, p["result"].get("exit"),
-          p["result"].get("delivery_route", "ip"))
+        [(p['id'], p['project'], p['kind'] != 'run_input_review',
+          p['result'].get('entry'), p['result'].get('exit'),
+          p['result'].get('delivery_route', 'ip'),
+          p['kind'] == 'run_input_review' and p['reentry_state']['status'] == 'D1_ONLY')
          for p in backup_run_plans],
         _run_completed_backup, jobs))
     for plan in backup_plans:
@@ -9661,7 +10054,16 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             result.pop("runner_diagnostics", None)
             if outcome.diagnostics_json:
                 result["runner_diagnostics"] = _strict_json_loads(outcome.diagnostics_json)
-            remaining_backup.append(item)
+            next_item = item
+            if kind == 'run_input_review':
+                action = _pending_input_review_action(plan['project'])
+                next_item = (_make_ai_backup_task(
+                    pid, plan['project'], ['vibe-ic:ic-expert-agent'], 'normal_input_review',
+                    str(outcome.error), bench, Path(dataset), run_p,
+                    expected_public_input=item['public_original_input'], pending_action=action)
+                    if action is not None else None)
+            if next_item is not None:
+                remaining_backup.append(next_item)
             repairs.append({
                 "schema": "vibeic.benchmark.ai_repair_task.v2",
                 "id": pid, "project": str(plan["project"]),
@@ -9675,8 +10077,9 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 "rc": outcome.rc, "worker_status": "ERROR",
                 "runner_invocation": outcome.invocation, "ok": False,
                 "worker_error": outcome.error, "accepted": False,
-                "candidate_ready": False, "awaiting_ai_backup": True,
-                "awaiting_ai_review": False, "awaiting_ai": True,
+                "candidate_ready": False, "awaiting_ai_backup": next_item is not None,
+                "awaiting_ai_review": False, "awaiting_ai": next_item is not None,
+                "worker_retryable": kind != 'run_input_review',
                 "ai_repair_required": False,
             })
             print(f"  {pid:44s} AI backup worker ERROR: {outcome.error}")
@@ -9686,6 +10089,29 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
         proj = plan["project"]
         _refresh_result(result, proj, rc, got)
         result["runner_invocation"] = outcome.invocation
+        if kind == 'run_input_review':
+            action = _pending_input_review_action(proj) if not got.get('ok') else None
+            waive = _rtl_gen_waive(proj) if action is None and not got.get('ok') else None
+            if action is not None or waive:
+                remaining_backup.append(_make_ai_backup_task(
+                    pid, proj, ['vibe-ic:ic-expert-agent'] if action else [str(waive['fallback_skill'])],
+                    'normal_input_review' if action else 'rtl_gen_waive',
+                    str(got.get('reason') or ''), bench, Path(dataset), run_p,
+                    expected_public_input=item['public_original_input'], pending_action=action))
+                result.update(awaiting_ai_backup=True, awaiting_ai=True)
+            if got.get('ok'):
+                task = _make_ai_review_task(
+                    pid, proj, got, result.get('routing_verdict') or {}, rc,
+                    run_p, 'PROGRAM', program_phases=result.get('phases'),
+                    runner_invocation=outcome.invocation,
+                    expected_public_input=item['public_original_input'])
+                task_by_id[pid] = task
+                result.update(review_task=task['review_path'], candidate_origin='PROGRAM')
+                refreshed.add(pid)
+            elif action is None and not waive:
+                repairs.append({'id': pid, 'status': 'PROGRAM_INPUT_REVIEW_REENTRY_BLOCKED',
+                                'reasons': [str(got.get('reason') or 'normal Program did not release RTL authoring')]})
+            continue
         if got.get("ok"):
             task = _make_ai_review_task(
                 pid, proj, got, result.get("routing_verdict") or {}, rc,

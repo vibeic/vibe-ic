@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import ast
 import copy
+from dataclasses import dataclass
 import hashlib
 import json
 import os
@@ -21,6 +22,7 @@ if str(HERE) not in sys.path:
 REGISTRY = HERE.parent / "flow" / "flow109.json"
 CONTEXT_ENV = "VIBEIC_FLOW109_CONTEXT"
 ATTEMPT_ENV = "VIBEIC_FLOW109_ATTEMPT"
+OWNER_LAUNCH_ENV = "VIBEIC_FLOW109_OWNER_LAUNCH"
 
 
 class Flow109Error(ValueError):
@@ -1511,22 +1513,28 @@ def resolve_execution_window(plan: Mapping, entry: str | None, exit_: str | None
         kind = "canonical_backend_window"
     elif not any(adapters) and all(dispatch.get("kind") == "canonical_owner_window"
                                    for dispatch in dispatches):
-        owners = [_canonical_owner_dispatch(row)["owner_runner"] for row in rows]
-        if len(set(owners)) != 1:
-            raise Flow109Error("FLOW109_WINDOW_OWNER_CROSSING_UNSUPPORTED",
-                               " -> ".join(owners))
-        kind = "canonical_owner_window"
+        owners = [_canonical_owner_dispatch(row)['owner_runner'] for row in rows]
+        if plan['features'].get('rtl_only') is True:
+            # Bounded RTL finalizers consume one registered row, including
+            # distinct producers sharing a runner/native entry (D09 and D10).
+            # Runtime additionally requires current source-bound RTL scope.
+            kind = 'canonical_owner_sequence'
+        else:
+            if len(set(owners)) != 1:
+                raise Flow109Error('FLOW109_WINDOW_OWNER_CROSSING_UNSUPPORTED',
+                                   ' -> '.join(owners))
+            kind = 'canonical_owner_window'
     elif _selected_native_sequence(rows) is not None:
         kind = "selected_native_sequence"
     else:
         raise Flow109Error(
             "FLOW109_WINDOW_DISPATCH_UNSUPPORTED",
             "a window may not cross adapter and canonical-backend ownership")
-    native_entry = (dispatches[0].get("owner_entry_step") if kind == "canonical_owner_window"
+    native_entry = (dispatches[0].get("owner_entry_step") if kind in ("canonical_owner_window", "canonical_owner_sequence")
                     else dispatches[0]["native_step_id"])
     native_exit = (dispatches[-1].get("owner_exit_step") if kind == "canonical_owner_window"
                    else dispatches[-1]["native_step_id"])
-    if kind == "canonical_owner_window":
+    if kind in ("canonical_owner_window", "canonical_owner_sequence"):
         # A selected producer may own checks beyond the last selected row
         # (RTL authoring owns 1..4). Never truncate its native closure when a
         # later semantic row, such as lint, has an earlier native endpoint.
@@ -1646,38 +1654,12 @@ def component_context(context: Mapping, *, native_step_id: str | None = None,
 
 
 def _rtl_scope_inputs(project: Path) -> list[dict]:
-    """Bind the ordinary original request and supplied RTL without changing it."""
-    from _path_layout import original_input_sources
-
-    def supplied_files(relative):
-        root = project / relative
-        entries = [root, *root.rglob("*")] if root.exists() or root.is_symlink() else []
-        if any(path.is_symlink() for path in [*root.parents, *entries]):
-            raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", "linked supplied source")
-        return {path for path in entries if path.is_file()}
-
-    prompt = project / "input/phase1_prompt.md"
+    """Shared complete original-source inventory."""
+    import delivery_intent
     try:
-        if prompt.exists() or prompt.is_symlink():
-            files = set(original_input_sources(project))
-        else:
-            # Both raw docs and canonical input_doc are normal front doors.
-            # Neither requires synthesizing a prompt that the owner never gave.
-            files = supplied_files("input/docs") or supplied_files("phase1/input_doc")
-        original_hashes = {_file_digest(path) for path in files}
-        for relative in ("input/docs", "input/rtl", "input/vendor_rtl"):
-            # The ordinary front door materializes byte-identical source copies.
-            # These add no authority; new or changed content still changes this set.
-            files.update(path for path in supplied_files(relative)
-                         if path in files or _file_digest(path) not in original_hashes)
-        if not files or not any(path.read_bytes().strip() for path in files):
-            raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", "no nonempty original design input")
-        return [{"path": path.relative_to(project).as_posix(), "sha256": _file_digest(path)}
-                for path in sorted(files)]
-    except (OSError, ValueError) as exc:
-        if isinstance(exc, Flow109Error):
-            raise
-        raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", str(exc)) from exc
+        return delivery_intent.capture_sources(project).inputs()
+    except delivery_intent.DeliveryRefusal as exc:
+        raise Flow109Error(exc.code, str(exc)) from exc
 
 
 def _rtl_scope_window(context: Mapping) -> None:
@@ -1695,24 +1677,28 @@ def _rtl_scope_window(context: Mapping) -> None:
         native = str(dispatch.get("native_step_id"))
         owner = dispatch.get("owner_runner")
         if not (dispatch.get("kind") == "canonical_owner_window"
-                and ((native == "D1" and owner == "phase1_one_shot_runner")
+                and (((native == "D1" or row['id'] == 'D02' and native == '0.5ic')
+                      and owner == "phase1_one_shot_runner")
                      or (owner == "design_one_shot_runner"
                          and (native == "P0" or native.isdigit() and 1 <= int(native) <= last)))):
             raise Flow109Error("FLOW109_RTL_SCOPE_CONFLICT", "window is outside RTL owners")
 
 
 def _rtl_source_inputs(project: Path) -> list[dict]:
-    """The existing RTL scope's source-bound delivery check, shared at selection."""
-    inputs = _rtl_scope_inputs(project)
-    from task_nature_route import prompt_delivery_requirements, resolve_prompt_delivery_target
-    for source in inputs:
-        text = (project / source["path"]).read_text(encoding="utf-8", errors="replace")
-        demand = prompt_delivery_requirements(text)
-        resolved = resolve_prompt_delivery_target(demand, "rtl")
-        if not resolved["ok"] or demand["route_family"] is not None:
-            raise Flow109Error("FLOW109_RTL_SCOPE_CONFLICT",
-                               "original source requests physical delivery: " + source["path"])
-    return inputs
+    """BLOCKING applicability from current complete-source ownership."""
+    import delivery_intent
+    try:
+        decision = delivery_intent.resolve_project_delivery(project)
+        if decision.outcome == 'unresolved':
+            task = delivery_intent.issue_review(project)
+            raise delivery_intent.DeliveryRefusal('DELIVERY_OWNERSHIP_UNRESOLVED',
+                                                  'review task: ' + task['task_path'])
+        return delivery_intent.require_source_delivery(decision).bundle.inputs()
+    except delivery_intent.DeliveryRefusal as exc:
+        if exc.code == 'DELIVERY_OWNERSHIP_PHYSICAL':
+            raise Flow109Error('FLOW109_RTL_SCOPE_CONFLICT',
+                               'original source requests physical delivery') from exc
+        raise Flow109Error(exc.code, str(exc)) from exc
 
 
 def resolve_task_manifest(project: Path, entry_step: str | None, exit_step: str | None,
@@ -1722,6 +1708,8 @@ def resolve_task_manifest(project: Path, entry_step: str | None, exit_step: str 
 
     This is applicability, not acceptance. Explicit manifests are never changed;
     unresolved/physical scope retains the normal BLOCKING admission refusal.
+    Explicit selected-row windows retain named planner refusals; native
+    windows may still decline automatic profile selection.
     No feature is guessed from a task name, dataset or absent Boolean.
     """
     project = project.resolve()
@@ -1753,6 +1741,15 @@ def resolve_task_manifest(project: Path, entry_step: str | None, exit_step: str 
     try:
         first, last = flow109_product_window(manifest, entry_step, exit_step, "ip")
         context = execution_context(plan, first, last)
+    except ValueError as exc:
+        # Explicit selected-row requests own their planner refusal. Native
+        # windows still probe RTL applicability and may decline the default.
+        selected = {row["id"] for row in plan["rows"]}
+        if (isinstance(exc, Flow109Error)
+                and entry_step in selected and exit_step in selected):
+            raise
+        return None
+    try:
         _rtl_scope_window(context)
         terminal = (context.get("resolved_rows") or [context["resolved_row"]])[-1]
         native_exit = terminal["profile"]["dispatch"]["native_step_id"]
@@ -1761,9 +1758,11 @@ def resolve_task_manifest(project: Path, entry_step: str | None, exit_step: str 
         if native_exit != "D1" and not is_rtl_only_evidence(exit_step=native_exit):
             return None
         _rtl_source_inputs(project)
+    except Flow109Error as exc:
+        if exc.code.startswith('DELIVERY_'):
+            raise
+        return None
     except ValueError:
-        # Unsupported windows, absent original inputs and physical source
-        # demands cannot create a default; ordinary admission remains blocking.
         return None
     if existing:
         # Recheck current sources/window on every invocation; the same input
@@ -1784,9 +1783,36 @@ def resolve_task_manifest(project: Path, entry_step: str | None, exit_step: str 
 
 def prepare_task_features(args, project: Path) -> None:
     """Resolve bounded RTL applicability before the general IC/IP question."""
-    if (args.flow != "109" or args.flow109_manifest
-            or args.execution_mode not in (None, "default")
+    if (args.flow != "109" or args.execution_mode not in (None, "default")
             or getattr(args, "resume_request", None)):
+        return
+    if args.flow109_manifest:
+        # Explicit optional features are authoritative input, not a request to
+        # replace them with the shipped default. Bind their bounded RTL source
+        # before legacy --route ip could create a physical owner declaration.
+        if (getattr(args, 'delivery_target', None) is not None
+                or getattr(args, 'route', None) != 'ip'
+                or not args.entry_step or not args.exit_step):
+            return
+        for relative in ('input/step_0_5ic_answers.json',
+                         'input/submission_template/tapeout_declaration.json'):
+            path = project / relative
+            if path.exists() or path.is_symlink():
+                return  # retained physical declarations require explicit scope
+        try:
+            path = Path(args.flow109_manifest).absolute()
+            manifest, _ = _bound_project_json(project, path.relative_to(project),
+                                               'FLOW109_MANIFEST_INVALID')
+            plan = resolve_plan(manifest.get('features'), manifest.get('step_profiles'))
+            context = execution_context(plan, args.entry_step, args.exit_step,
+                runtime_tool_uses=manifest.get('runtime_tool_uses', manifest.get('tool_uses')),
+                qualification_registry=manifest.get('qualification_registry'))
+            if context.get('dispatch_kind') != 'canonical_owner_sequence':
+                return
+            _rtl_scope_binding(project, path, context)
+        except (OSError, ValueError, TypeError, KeyError):
+            return  # ordinary admission retains its named refusal
+        args.delivery_target = 'rtl'
         return
     selected = resolve_task_manifest(project, args.entry_step, args.exit_step,
                                      getattr(args, "delivery_target", None),
@@ -1797,6 +1823,7 @@ def prepare_task_features(args, project: Path) -> None:
 
 
 def _rtl_scope_binding(project: Path, manifest: Path, context: Mapping) -> dict:
+    import delivery_intent
     project = project.resolve()
     manifest = manifest.absolute()
     if (manifest.is_symlink() or not manifest.is_file()
@@ -1816,10 +1843,13 @@ def _rtl_scope_binding(project: Path, manifest: Path, context: Mapping) -> dict:
                                                       if isinstance(answers, Mapping) else None),
                              "scope_authority": False,
                              "disposition": "retained unchanged; current RTL scope comes from original sources and explicit request"})
-    return {"delivery_target": "rtl", "project": str(project),
+    return {"schema": "vibeic.flow109.rtl-scope.v2",
+            "delivery_target": "rtl", "project": str(project),
             "manifest": {"path": manifest.relative_to(project).as_posix(),
                          "sha256": _file_digest(manifest)},
             "inputs": inputs, "retained_delivery_declarations": retained,
+            "delivery_binding": delivery_intent.require_source_delivery(
+                delivery_intent.resolve_project_delivery(project)).binding,
             "issuer_sources": {name: _file_digest(HERE / name) for name in
                 ("flow109.py", "_delivery_route.py", "vibe_ic_one_shot_runner.py",
                  "phase1_one_shot_runner.py")}}
@@ -1858,6 +1888,8 @@ def active_rtl_scope(project: Path) -> dict | None:
         return {**scope, "context_sha256": context["context_sha256"]}
     except (OSError, ValueError, TypeError, KeyError) as exc:
         if isinstance(exc, Flow109Error):
+            if exc.code == 'DELIVERY_REVIEW_STALE':
+                raise Flow109Error('FLOW109_RTL_SCOPE_STALE', str(exc)) from exc
             raise
         raise Flow109Error("FLOW109_RTL_SCOPE_INVALID", str(exc)) from exc
 
@@ -2006,6 +2038,97 @@ def _finish_attempt(attempt: Path, result: Mapping) -> Path:
         json.dump(dict(result), handle, sort_keys=True, indent=2)
         handle.write("\n")
     return path
+
+
+@dataclass(frozen=True)
+class NativeOwnerLaunch:
+    """A single registered row's complete native closure and unique attempt."""
+    context: dict
+    attempt: Path
+    request: Path
+
+
+def _require_native_owner_scope(project: Path, context: Mapping) -> None:
+    """BLOCKING: a feature profile alone is not execution authority."""
+    if (context.get('dispatch_kind') != 'canonical_owner_sequence'
+            or context.get('features', {}).get('rtl_only') is not True):
+        raise Flow109Error('FLOW109_RTL_SCOPE_REQUIRED', 'bounded RTL sequence required')
+    scope = active_rtl_scope(project)
+    if scope is None or scope.get('context_sha256') != context.get('context_sha256'):
+        raise Flow109Error('FLOW109_RTL_SCOPE_REQUIRED', 'current source-bound RTL request required')
+
+
+def native_owner_launch(project: Path, context: Mapping, row_id: str) -> NativeOwnerLaunch:
+    """Bind a child to this live sequence, without minting native acceptance."""
+    context = validate_execution_context(context)
+    _require_native_owner_scope(project, context)
+    parent = _bound_attempt(project, context, os.environ.get(ATTEMPT_ENV))
+    if (parent / 'result.json').exists():
+        raise Flow109Error('FLOW109_ATTEMPT_COMPLETED', str(parent))
+    current = component_context(context, requested_step=row_id)
+    _canonical_owner_dispatch(current['resolved_row'])
+    attempt = _new_attempt(project, current)
+    request = parent / ('owner-' + attempt.name + '.json')
+    body = {'schema': 'vibeic.flow109.owner-launch.v1',
+            'parent_context': context, 'child_context': current,
+            'child_attempt': str(attempt), 'parent_attempt': str(parent)}
+    with request.open('x', encoding='utf-8') as handle:
+        json.dump(body, handle, sort_keys=True)
+    return NativeOwnerLaunch(current, attempt, request)
+
+
+def _owner_attempt(project: Path, context: Mapping) -> Path:
+    """Consume only the exact fresh child attempt allocated by this sequence."""
+    raw = os.environ.get(OWNER_LAUNCH_ENV)
+    if not raw:
+        return _new_attempt(project, context)
+    try:
+        path = Path(raw)
+        body, _ = _bound_project_json(project, path.relative_to(project),
+                                      'FLOW109_OWNER_LAUNCH_INVALID')
+        parent_context = validate_execution_context(body['parent_context'])
+        _require_native_owner_scope(project, parent_context)
+        parent = _bound_attempt(project, parent_context, body['parent_attempt'])
+        if (body.get('schema') != 'vibeic.flow109.owner-launch.v1'
+                or parent_context.get('dispatch_kind') != 'canonical_owner_sequence'
+                or path.parent != parent or (parent / 'result.json').exists()
+                or dict(context) != body['child_context']
+                or component_context(parent_context, requested_step=context['requested_step']) != context):
+            raise ValueError('owner selection or parent differs')
+        attempt = _bound_attempt(project, context, body['child_attempt'])
+        if path.name != 'owner-' + attempt.name + '.json' or (attempt / 'result.json').exists():
+            raise ValueError('owner attempt already completed or launch differs')
+        return attempt
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise Flow109Error('FLOW109_OWNER_LAUNCH_INVALID', str(exc)) from exc
+
+
+def native_owner_result(project: Path, launch: NativeOwnerLaunch) -> dict:
+    """Reopen the exact child's existing finalizer result; rc is not evidence."""
+    context = validate_execution_context(launch.context)
+    attempt = _bound_attempt(project, context, str(launch.attempt))
+    result, reference = _bound_project_json(project, (attempt / 'result.json').relative_to(project),
+                                            'FLOW109_OWNER_RESULT_INVALID')
+    components = result.get('components')
+    if (result.get('schema') != 'vibeic.flow109.window-attempt-result.v1'
+            or result.get('context_sha256') != context['context_sha256']
+            or result.get('flow109_acceptance') != 'NOT_MEASURED'
+            or result.get('whole_flow_acceptance') != 'NOT_MEASURED'
+            or result.get('delivery_accepted') is not False
+            or not isinstance(components, list) or len(components) != 1
+            or result.get('component_status') != components[0].get('component_status')
+            or result.get('default_row_status') != components[0].get('default_row_status')
+            or components[0].get('step_id') != context['requested_step']
+            or components[0].get('context_sha256') != context['context_sha256']
+            or components[0].get('component_status') not in ('PASS', 'FAIL', 'NOT_MEASURED')
+            or components[0].get('default_row_status') not in ('PASS', 'FAIL', 'NOT_MEASURED')
+            or components[0].get('whole_flow_acceptance') != 'NOT_MEASURED'
+            or components[0].get('delivery_accepted') is not False
+            or components[0].get('default_row_status') == 'PASS'
+               and (components[0].get('completed') is not True
+                    or components[0].get('component_status') != 'PASS')):
+        raise Flow109Error('FLOW109_OWNER_RESULT_INVALID', context['requested_step'])
+    return dict(components[0], owner_result=reference)
 
 
 def _not_executed_component(context: Mapping, row: Mapping, reason: str) -> dict:
@@ -2589,6 +2712,16 @@ def prepare_front_door(args, project: Path) -> int | None:
     if getattr(args, "container", None):
         os.environ["VIBEIC_ANALOG_CONTAINER"] = str(args.container)
     if context["schema"] == "vibeic.flow109.execution-window.v1":
+        if context['dispatch_kind'] == 'canonical_owner_sequence':
+            if 'rtl_scope' not in context:
+                raise Flow109Error('FLOW109_RTL_SCOPE_REQUIRED', 'current source-bound RTL request required')
+            path = destination / 'requests' / (context['context_sha256'] + '.json')
+            write_json(path, context)
+            os.environ[CONTEXT_ENV] = str(path.resolve())
+            _require_native_owner_scope(project, context)
+            attempt = _new_attempt(project, context)
+            os.environ[ATTEMPT_ENV] = str(attempt.resolve())
+            return None
         if context["dispatch_kind"] == "canonical_owner_window":
             attempt = _new_attempt(project, context)
             path = destination / "requests" / (context["context_sha256"] + ".json")
@@ -2742,7 +2875,7 @@ def prepare_front_door(args, project: Path) -> int | None:
         return None
     owner_dispatch = _canonical_owner_dispatch(context["resolved_row"])
     if owner_dispatch is not None:
-        attempt = _new_attempt(project, context)
+        attempt = _owner_attempt(project, context)
         path = destination / "requests" / (context["context_sha256"] + ".json")
         write_json(path, context)
         os.environ[CONTEXT_ENV] = str(path.resolve())

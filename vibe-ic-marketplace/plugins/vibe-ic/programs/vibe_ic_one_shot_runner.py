@@ -112,6 +112,122 @@ def _write_runner_summary(out: Path, summary: dict, project: Path) -> None:
     out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n")
 
 
+def _run_native_owner_sequence(args, project: Path, context: Mapping, lock) -> int:
+    """BLOCKING ordered native owners; each child keeps its existing finalizer.
+
+    Native engineering success is preserved without granting qualified row
+    completion. A later owner still performs its own current-input admission.
+    """
+    import flow109
+    from _atomic_artefact import write_json
+    parent = flow109._bound_attempt(project, context, os.environ.get(flow109.ATTEMPT_ENV))
+    components, launches = [], []
+    outcome = 0
+    try:
+        for row in context['resolved_rows']:
+            try:
+                launch = flow109.native_owner_launch(project, context, row['id'])
+            except flow109.Flow109Error as exc:
+                components.append(flow109._not_executed_component(context, row, str(exc)))
+                outcome = 2
+                break
+            # Keep the original public options; only this child's selected
+            # window and private launch binding differ from the parent.
+            child_args, index = [], 0
+            original = list(args._frontdoor_argv)
+            replace = {'--entry-step', '--exit-step', '--resume-request', '--flow109-manifest'}
+            phase1 = row['profile']['dispatch']['owner_runner'] == 'phase1_one_shot_runner'
+            staged_input = (args.rtl_input == 'original' and not phase1
+                            and row['profile']['dispatch']['owner_entry_step'] not in ('1', '2'))
+            adopted = None
+            if staged_input:
+                import flow109_metric_acceptance as metrics
+                try:
+                    # The original prompt remains in the source-bound context;
+                    # later verification consumes only the accepted author's
+                    # exact current working RTL through the normal contract.
+                    adopted = metrics.d10_adopted_rtl(project)
+                except (metrics.MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
+                    components.append(flow109._not_executed_component(context, row, str(exc)))
+                    outcome = 2
+                    break
+            if phase1 or staged_input:
+                replace.add('--rtl-input')
+            while index < len(original):
+                option = original[index].split('=', 1)[0]
+                if option in replace:
+                    index += 1 if '=' in original[index] else 2
+                    continue
+                if option == '--flow109-plan-only':
+                    index += 1
+                    continue
+                child_args.append(original[index])
+                index += 1
+            # Automatic source-bound RTL admission may have resolved the
+            # target after parsing; carry that authority into the exact child.
+            if not any(option.split('=', 1)[0] == '--delivery-target' for option in child_args):
+                child_args += ['--delivery-target', 'rtl']
+            child_args += ['--flow109-manifest', str(args.flow109_manifest),
+                           '--entry-step', row['id'], '--exit-step', row['id']]
+            child_env = _runner_lock.child_env(project, held_lock=lock)
+            child_env[flow109.OWNER_LAUNCH_ENV] = str(launch.request)
+            command = [sys.executable, str(PROGRAMS_DIR / 'vibe_ic_one_shot_runner.py'), *child_args]
+            _verify_runtime_command(command)
+            invocation = {'argv': command, 'request': str(launch.request.relative_to(project)),
+                          'context_sha256': launch.context['context_sha256'],
+                          **({'adopted_rtl': adopted} if adopted is not None else {})}
+            # Retain the actual command before it can start; child receipt and
+            # the original outer producer binding remain separate authorities.
+            write_json(parent / (row['id'] + '-launch.json'), invocation)
+            try:
+                rc = _run_phase('Selected native owner ' + row['id'], Path(command[1]),
+                                child_args, env=child_env, invocation={})
+                component = flow109.native_owner_result(project, launch)
+            except (OSError, flow109.Flow109Error) as exc:
+                rc = 2
+                component = flow109._not_executed_component(context, row, str(exc))
+                # The child may have started native work before losing its
+                # receipt. Absence of a result cannot prove it never started.
+                component.pop('native_started', None)
+                component['owner_process_attempted'] = True
+            launches.append({**invocation, 'rc': rc})
+            components.append(component)
+            status = component.get('component_status')
+            completed = (component.get('default_row_status') == 'PASS'
+                         and component.get('completed') is True)
+            engineering = (args.rtl_input == 'original'
+                           and component.get('qualification_status') == 'NOT_CLAIMED'
+                           and component.get('completed') is False
+                           and (component.get('engineering_evidence') or {}).get('scope')
+                               == 'existing_native_component_only')
+            if rc != 0 or status != 'PASS' or not (completed or engineering):
+                outcome = 1 if status == 'FAIL' else 2
+                break
+        for row in context['resolved_rows'][len(components):]:
+            components.append(flow109._not_executed_component(
+                context, row, 'not executed: an earlier native owner stopped'))
+        result = flow109._attempt_result(context, components)
+        if outcome == 2 and result['default_row_status'] == 'PASS':
+            result['default_row_status'] = 'NOT_MEASURED'
+            result['reason'] = 'FLOW109_OWNER_PROCESS_RESULT_DISAGREEMENT'
+        result['owner_launches'] = launches
+        flow109._finish_attempt(parent, result)
+        out = _pl.report_path(project, 'vibe_ic_one_shot.json')
+        out.parent.mkdir(parents=True, exist_ok=True)
+        _write_runner_summary(out, {
+            'program': 'vibe_ic_one_shot_runner', 'project': str(project),
+            'bounded': True, 'delivery_route': 'RTL',
+            'delivery_scope': context.get('rtl_scope'),
+            'declared_window': {'entry_step': context['requested_entry'],
+                                'exit_step': context['requested_exit']},
+            'verdict': 'PASS' if outcome == 0 else 'FAIL' if outcome == 1 else 'NOT_MEASURED',
+            'default_row_status': result['default_row_status'],
+            'owner_sequence': result, 'whole_flow_verdict': 'NOT_MEASURED'}, project)
+        return outcome
+    finally:
+        lock.release()
+
+
 def _propagatable_image(container: str,
                         rec: Dict[str, Any]) -> Tuple[Optional[str], str]:
     """`(reference, why_not)` — what to export as `VIBEIC_EDA_IMAGE` for a child
@@ -3302,6 +3418,7 @@ def _run_phase(label: str, runner: Path, args: List[str],
         command = [sys.executable, str(runner), *args]
         _verify_runtime_command(command)
         child_env = env
+        child_launch = None
         if invocation is not None:
             import benchmark_dispatch as dispatch
 
@@ -3320,9 +3437,12 @@ def _run_phase(label: str, runner: Path, args: List[str],
                 child_env[dispatch._RUNNER_PARENT_CONTEXT_ENV] = parent
             child_env[dispatch._RUNNER_CONTEXT_ENV] = json.dumps(
                 context, sort_keys=True)
+            child_launch = dispatch._runner_child_begin(Path(args[0]), context, parent, child_env)
         cp = subprocess.run(command, env=child_env,
                             pass_fds=(_execution.child_pass_fds()
                                        if supports_execution_policy else ()))
+        if child_launch is not None:
+            dispatch._runner_child_finish(Path(args[0]), context, child_launch, cp.returncode)
         return cp.returncode
     finally:
         if history is not None and report.is_file():
@@ -5021,6 +5141,7 @@ def _main() -> int:
     p.add_argument('--receipt-channel-fd', type=int, help=argparse.SUPPRESS)
     _execution.add_arguments(p)
     args = p.parse_args()
+    args._frontdoor_argv = tuple(sys.argv[1:])
     if args.resume_request and (args.entry_step or args.exit_step):
         p.error("--resume-request cannot be combined with explicit --entry-step/--exit-step")
     if bool(args.area_receipt) != bool(args.area_run_manifest):
@@ -5157,7 +5278,12 @@ def _main() -> int:
         return 2
 
     try:
-        _pl.select_rtl_input(project, args.rtl_input, args.entry_step, args.exit_step)
+        _selected_context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_bytes())) if os.environ.get(flow109.CONTEXT_ENV) else None
+        _owner_sequence = (_selected_context is not None
+                           and _selected_context.get('dispatch_kind') == 'canonical_owner_sequence')
+        if not _owner_sequence:
+            _pl.select_rtl_input(project, args.rtl_input, args.entry_step, args.exit_step)
         _activate_runtime_program_tree(project)
     except Exception as exc:
         print(f"REFUSED: runtime program tree: {exc}", file=sys.stderr)
@@ -5241,6 +5367,9 @@ def _main() -> int:
         advisory = (f"container image identity: {_img_rec.get('verdict')} — "
                     f"{_img_rec.get('reason', '')}")
         print(f"⚠ {advisory}")
+
+    if _owner_sequence:
+        return _run_native_owner_sequence(args, project, _selected_context, lock)
 
     # ---------------- Live dashboard (CLI + web, DEFAULT ON) ----------------
     # Every run gets BOTH dashboard front-ends by default (opt out with

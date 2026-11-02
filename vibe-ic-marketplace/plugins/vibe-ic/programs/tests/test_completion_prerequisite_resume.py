@@ -163,12 +163,11 @@ def test_original_input_route_retains_no_prerequisite_and_exact_closure(tmp_path
     assert not bd._receipt_current_pointer(project, 'd1_activation').exists()
 
 
-def test_actual_mixed_owner_window_is_still_unsupported():
+def test_rtl_completion_window_retains_requirements_and_native_validation():
     import task_nature_route as tnr
     manifest = {'features': next(p['features'] for p in flow109.load_registry()['reference_profiles']
                                if p['name'] == 'RTL-only')}
-    with pytest.raises(ValueError, match='FLOW109_WINDOW_OWNER_CROSSING_UNSUPPORTED'):
-        tnr.flow109_product_window(manifest, 'D1', '2', 'ip')
+    assert tnr.flow109_product_window(manifest, 'D1', '2', 'ip') == ('D01', 'D11')
 
 
 def test_legacy_completion_without_product_manifest_keeps_existing_entry(tmp_path, monkeypatch):

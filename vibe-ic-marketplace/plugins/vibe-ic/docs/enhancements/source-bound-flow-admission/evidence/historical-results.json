@@ -1,0 +1,79 @@
+{
+  "scope": "Historical authored evidence, parsed without executing product tests. Not evidence for the rebased contribution.",
+  "checks": {
+    "author-head-owning.xml": {
+      "cases": 284,
+      "passed": 278,
+      "failures": [
+        "programs.tests.test_ai_first_route_handoff::test_unique_byte_equivalent_route_control_reaches_public_frontdoor[default-control]",
+        "programs.tests.test_ai_first_route_handoff::test_unique_byte_equivalent_route_control_reaches_public_frontdoor[ultra-control]",
+        "programs.tests.test_ai_first_route_handoff::test_confirmed_ai_route_enters_only_its_derived_product_path",
+        "programs.tests.test_ai_first_route_handoff::test_ai_override_selects_derived_midflow_entry",
+        "programs.tests.test_ai_first_route_handoff::test_grounded_override_with_short_rationale_is_accepted",
+        "programs.tests.test_ai_first_route_handoff::test_untyped_legacy_frontdoor_cannot_activate_d1"
+      ],
+      "errors": 0,
+      "skipped": 0
+    },
+    "baseline-owning.xml": {
+      "cases": 108,
+      "passed": 102,
+      "failures": [
+        "programs.tests.test_ai_first_route_handoff::test_unique_byte_equivalent_route_control_reaches_public_frontdoor[default-control]",
+        "programs.tests.test_ai_first_route_handoff::test_unique_byte_equivalent_route_control_reaches_public_frontdoor[ultra-control]",
+        "programs.tests.test_ai_first_route_handoff::test_confirmed_ai_route_enters_only_its_derived_product_path",
+        "programs.tests.test_ai_first_route_handoff::test_ai_override_selects_derived_midflow_entry",
+        "programs.tests.test_ai_first_route_handoff::test_grounded_override_with_short_rationale_is_accepted",
+        "programs.tests.test_ai_first_route_handoff::test_untyped_legacy_frontdoor_cannot_activate_d1"
+      ],
+      "errors": 0,
+      "skipped": 0
+    },
+    "red.xml": {
+      "cases": 5,
+      "passed": 2,
+      "failures": [
+        "programs.tests.test_delivery_ownership::test_unreviewed_prose_cannot_select_source_profile[Implement a module that computes the XOR of two inputs.]",
+        "programs.tests.test_delivery_ownership::test_unreviewed_prose_cannot_select_source_profile[Implement a module. Ship the packaged units.]",
+        "programs.tests.test_delivery_ownership::test_unreviewed_prose_cannot_select_source_profile[Implement a module. Build it.]"
+      ],
+      "errors": 0,
+      "skipped": 0
+    },
+    "canonical-red.xml": {
+      "cases": 3,
+      "passed": 1,
+      "failures": [
+        "programs.tests.test_delivery_ownership::test_independent_canonical_document_is_included_at_profile_boundary[False]",
+        "programs.tests.test_delivery_ownership::test_independent_canonical_document_is_included_at_profile_boundary[True]"
+      ],
+      "errors": 0,
+      "skipped": 0
+    },
+    "physical-receipt-red.xml": {
+      "cases": 2,
+      "passed": 0,
+      "failures": [
+        "programs.tests.test_delivery_ownership::test_die_family_without_target_floor_retains_structured_admission[receipt]",
+        "programs.tests.test_delivery_ownership::test_die_family_without_target_floor_retains_structured_admission[coordinator]"
+      ],
+      "errors": 0,
+      "skipped": 0
+    },
+    "physical-receipt-green.xml": {
+      "cases": 2,
+      "passed": 2,
+      "failures": [],
+      "errors": 0,
+      "skipped": 0
+    }
+  },
+  "reviewed_f196_integration": {
+    "passed": 338,
+    "failures": 0,
+    "writeguard": "PASS"
+  },
+  "real_importer_probe": "EARLIER_CHECKPOINT_POLICY_ONLY",
+  "current_policy_semantic_actions": "NOT_RUN",
+  "benchmark_score": "NOT_MEASURED"
+}

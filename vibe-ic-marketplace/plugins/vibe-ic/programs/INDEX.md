@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1518
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1518)
+- **Total programs (excluding helpers / shims):** 1519
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1519)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1509 |
+| `any` | 1510 |
 
 ## Alphabetical listing
 
@@ -351,6 +351,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `defect_artifact_fixture_check` | any | v0.2.98 | Deterministic pre-close gate for the core-agent loop (issue #478, Bucket A |
 | `defect_artifact_snapshot` | any | v0.2.98 | Filing-side helper for the field-agent / community-backlog filing flow |
 | `deliverable_verdict_consistency_check` | any | — | a deliverable may not contradict the orchestrator it claims to summarise. |
+| `delivery_intent` | any | — | BLOCKING source-bound delivery ownership under a cooperative operator. |
 | `denial_that_constitutes_the_value_it_appears_to_negate` | any | — | A blanket denial check on an extractor whose subject IS the denial. |
 | `derived_clock_sdc_required_check` | any | — | Verify any register-divided clock in the RTL has a matching `create_generated_clock` entry in the SDC. |
 | `derived_corpus_figure_check` | any | — | A checker's docstring may not state a corpus funnel it does not compute. |
@@ -1590,7 +1591,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1509 programs)
+### `any` (1510 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1914,6 +1915,7 @@ _(no programs in this group)_
 - `defect_artifact_fixture_check` — Deterministic pre-close gate for the core-agent loop (issue #478, Bucket A  _[v0.2.98]_
 - `defect_artifact_snapshot` — Filing-side helper for the field-agent / community-backlog filing flow  _[v0.2.98]_
 - `deliverable_verdict_consistency_check` — a deliverable may not contradict the orchestrator it claims to summarise.
+- `delivery_intent` — BLOCKING source-bound delivery ownership under a cooperative operator.
 - `denial_that_constitutes_the_value_it_appears_to_negate` — A blanket denial check on an extractor whose subject IS the denial.
 - `derived_clock_sdc_required_check` — Verify any register-divided clock in the RTL has a matching `create_generated_clock` entry in the SDC.
 - `derived_corpus_figure_check` — A checker's docstring may not state a corpus funnel it does not compute.

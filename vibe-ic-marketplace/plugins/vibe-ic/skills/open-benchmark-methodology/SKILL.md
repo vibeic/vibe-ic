@@ -5,6 +5,13 @@ description: "Mandatory for VerilogEval, VerilogEval-v2, VerilogEval-Human, CVDP
 
 # Open-Benchmark Methodology
 
+A nature answer cannot authorize source-only delivery. Each issued routing task
+also names a `delivery_review` task. Follow
+[delivery ownership review](../delivery-ownership-review/SKILL.md) and collect its
+actual fresh-agent action before resume. The same action may answer both explicit
+tasks using distinct response files and a final map of both exact task/response
+digests. Old nature-only responses carry no delivery authority.
+
 The benchmark measures the Vibe-IC product path, not a benchmark-tuned agent.
 Every runnable RTL evaluation uses the same solve core as an ordinary IC-design
 request. Dataset differences are allowed only at the input/output boundary.
@@ -19,6 +26,7 @@ benchmark_dispatch.py <bench> --solve
   -> benchmark_io_adapter.stage           (input translation only)
   -> task_nature_route                     (input-only advisory proposal)
   -> needs_ai_routing.jsonl                (AI judges task nature before runner)
+  -> delivery_review task                 (separate complete-source ownership review)
   -> benchmark_dispatch.py <bench> --resume (hash-bound AI route validation)
   -> vibe_ic_one_shot_runner --flow 109 --flow109-manifest ...
        --entry-step <stable-ID> --exit-step <stable-ID>

@@ -28,10 +28,10 @@ except ImportError:  # pragma: no cover - the plugin's canonical parser requires
 PROGRAMS = Path(__file__).resolve().parent
 FLOW = PROGRAMS.parent / "flow" / "phase1_phase2_phase3.yaml"
 
-ROUTE_RECEIPT_SCHEMA = "vibeic.route_decision_receipt.v1"
+ROUTE_RECEIPT_SCHEMA = "vibeic.route_decision_receipt.v2"
 # Semantic derivation changes must invalidate the existing routing-contract
 # digest even when the structured dependency edges themselves are unchanged.
-ROUTE_DERIVATION_RULES_VERSION = "3-bounded-original-rtl-input"
+ROUTE_DERIVATION_RULES_VERSION = "4-source-bound-delivery-ownership"
 SEMANTIC_PAYLOAD_SCHEMA = "vibeic.route_semantic_payload.v1"
 COORDINATOR_BINDING_SCHEMA = "vibeic.route_coordinator_binding.v1"
 D1_ACTIVATION_SCHEMA = "vibeic.route_d1_activation.v1"
@@ -329,8 +329,9 @@ def _contract_dag(dag: dict | None, input_contract: str) -> dict:
 
 def _derive_route(*, nature: str, requested_evidence: str, delivery_target: str,
                   nature_table: Mapping[str, Any], evidence_table: Mapping[str, Any],
-                  delivery_table: Mapping[str, Any], dag: dict | None = None) -> dict:
-    """Derive source authority from trusted semantics, never receipt metadata."""
+                  delivery_table: Mapping[str, Any], dag: dict | None = None,
+                  delivery_binding: Mapping[str, Any] | None = None) -> dict:
+    """Derive consumer closure; execution also validates current delivery authority."""
     entry, evidence_min, target_min, answer = _minimum_from_maps(
         nature, requested_evidence, delivery_target,
         nature_table, evidence_table, delivery_table)
@@ -341,7 +342,9 @@ def _derive_route(*, nature: str, requested_evidence: str, delivery_target: str,
     # modification consume the supplied original request just as generation
     # does; their task nature and authored interface remain unchanged. A
     # debug/simulation entry or a deeper proof still consumes structured docs.
-    if (delivery_target == "rtl" and entry in {"D1", "1", "2"}
+    source_delivery = (delivery_binding is None or
+                       isinstance(delivery_binding, Mapping) and delivery_binding.get('outcome') == 'source')
+    if (source_delivery and delivery_target == "rtl" and entry in {"D1", "1", "2"}
             and joined["step"] in {"1", "2"}):
         input_contract = "original"
         entry = "1" if entry == "D1" else entry
@@ -368,6 +371,7 @@ class RouteDecisionReceipt:
     source_sha256: str
     dag_sha256: str
     receipt_sha256: str
+    delivery_binding: dict | None = None
     schema: str = ROUTE_RECEIPT_SCHEMA
     input_contract: str = "structured"
     derivation_rules_version: str = ROUTE_DERIVATION_RULES_VERSION
@@ -385,6 +389,7 @@ class RouteDecisionReceipt:
             "task_nature": self.task_nature,
             "requested_evidence": self.requested_evidence,
             "delivery_target": self.delivery_target,
+            "delivery_binding": self.delivery_binding,
             "mode_intent": self.mode_intent,
             "semantic_payload_sha256": self.semantic_payload_sha256,
             "source_sha256": self.source_sha256,
@@ -486,13 +491,14 @@ def make_route_receipt(*, nature: str, requested_evidence: str,
                        source_sha256: str, nature_table: Mapping[str, Any],
                        evidence_table: Mapping[str, Any],
                        delivery_table: Mapping[str, Any],
-                       explicit_user_evidence: Any = None,
+                       explicit_user_evidence: Any = None, delivery_binding: dict | None = None,
                        dag: dict | None = None) -> dict:
     """Derive all executable steps; semantic AI never supplies step ids."""
     derived = _derive_route(
         nature=nature, requested_evidence=requested_evidence,
         delivery_target=delivery_target, nature_table=nature_table,
-        evidence_table=evidence_table, delivery_table=delivery_table, dag=dag)
+        evidence_table=evidence_table, delivery_table=delivery_table, dag=dag,
+        delivery_binding=delivery_binding)
     dag, joined = derived["dag"], derived["joined"]
     mode = mode_intent(
         semantic_request={"nature": nature, "requested_evidence": requested_evidence,
@@ -511,6 +517,7 @@ def make_route_receipt(*, nature: str, requested_evidence: str,
         "task_nature": nature,
         "requested_evidence": requested_evidence,
         "delivery_target": delivery_target,
+        "delivery_binding": delivery_binding,
         "mode_intent": mode,
         "semantic_payload_sha256": semantic_payload_sha256,
         "source_sha256": source_sha256,
@@ -519,8 +526,14 @@ def make_route_receipt(*, nature: str, requested_evidence: str,
     return {**body, "receipt_sha256": sha256_json(body)}
 
 
-def validate_route_receipt(receipt: Mapping[str, Any], *, dag: dict | None = None) -> list[str]:
+def validate_route_receipt(receipt: Mapping[str, Any], *, dag: dict | None = None, project: Path | None = None) -> list[str]:
     errors: list[str] = []
+    if project is not None:
+        import delivery_intent
+        try:
+            delivery_intent.validate_current_delivery_binding(project, receipt.get('delivery_binding'))
+        except delivery_intent.DeliveryRefusal as exc:
+            errors.append(str(exc))
     if receipt.get("schema") != ROUTE_RECEIPT_SCHEMA:
         errors.append("ROUTE_RECEIPT_SCHEMA")
     if receipt.get("derivation_rules_version") != ROUTE_DERIVATION_RULES_VERSION:
@@ -534,7 +547,8 @@ def validate_route_receipt(receipt: Mapping[str, Any], *, dag: dict | None = Non
             requested_evidence=str(receipt.get("requested_evidence")),
             delivery_target=str(receipt.get("delivery_target")),
             nature_table=_tnr.NATURE_ENTRY, evidence_table=_tnr.EVIDENCE_EXIT,
-            delivery_table=_tnr.DELIVERY_TARGETS, dag=dag)
+            delivery_table=_tnr.DELIVERY_TARGETS, dag=dag,
+            delivery_binding=receipt.get('delivery_binding'))
         dag, trusted_join = derived["dag"], derived["joined"]
     except (ImportError, KeyError, TypeError, ValueError):
         errors.append("ROUTE_RECEIPT_TRUSTED_TABLES_INVALID")
@@ -564,7 +578,7 @@ def validate_route_receipt(receipt: Mapping[str, Any], *, dag: dict | None = Non
         "schema", "input_contract", "derivation_rules_version",
         "entry_step", "answer_step", "verify_through",
         "verify_closed_steps", "minimum_steps", "task_nature", "requested_evidence",
-        "delivery_target", "mode_intent", "semantic_payload_sha256",
+        "delivery_target", "delivery_binding", "mode_intent", "semantic_payload_sha256",
         "source_sha256", "dag_sha256")}
     if receipt.get("receipt_sha256") != sha256_json(body):
         errors.append("ROUTE_RECEIPT_DIGEST_MISMATCH")
@@ -615,6 +629,25 @@ def validate_route_receipt(receipt: Mapping[str, Any], *, dag: dict | None = Non
             if binding_digest != sha256_json(ebody):
                 errors.append("ROUTE_RECEIPT_ULTRA_BINDING_DIGEST_MISMATCH")
     return errors
+
+
+def is_rtl_only_route_receipt(receipt: Mapping[str, Any] | None) -> bool:
+    """Classify a validated joined closure without changing requested proof.
+
+    Nature may raise verification above the requested evidence's own exit.
+    Both ends must remain RTL evidence; native scope and acceptance gates
+    still decide whether the request can run and what its outputs prove.
+    """
+    if not isinstance(receipt, Mapping) or receipt.get("delivery_target") != "rtl":
+        return False
+    if validate_route_receipt(receipt):
+        return False
+    binding = receipt.get('delivery_binding')
+    if binding is not None and (not isinstance(binding, Mapping) or binding.get('outcome') != 'source'):
+        return False
+    import task_nature_route as tnr  # noqa: PLC0415
+    return (tnr.is_rtl_only_evidence(receipt["requested_evidence"])
+            and tnr.is_rtl_only_evidence(exit_step=receipt["verify_through"]))
 
 
 def write_d1_pending(path: Path, *, route_receipt: Mapping[str, Any],

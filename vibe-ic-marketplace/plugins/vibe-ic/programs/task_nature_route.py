@@ -239,8 +239,8 @@ DELIVERY_TARGETS: Dict[str, Dict[str, Any]] = {
 # a small vocabulary of explicit delivery phrases: category, mode and benchmark
 # metadata never select a physical route, and vague prose must not silently
 # upgrade or downgrade a run.
-PROMPT_DELIVERY_REQUIREMENTS_SCHEMA = "vibeic.prompt_delivery_requirements.v1"
-PROMPT_DELIVERY_RULES_VERSION = "r5"
+PROMPT_DELIVERY_REQUIREMENTS_SCHEMA = "vibeic.prompt_delivery_requirements.v2"
+PROMPT_DELIVERY_RULES_VERSION = "r6-source-ownership"
 _DELIVERY_ORDER = {
     "rtl": 0,
     "gds": 1,
@@ -270,7 +270,7 @@ _REQUESTED_DIE = re.compile(
     r"\b(?:design|build|create|deliver|produce|complete|need|want|"
     r"output(?=\s+(?:is|a|an|the|complete|whole|full|standalone)\b|\s+"
     + _DIE_OBJECT + r"\b(?!\s*[,;)]))(?:\s+is)?)\s+"
-    r"(?:(?:a|an|the)\s+)?(?:(?:complete|whole|full|standalone)\s+)?"
+    r"(?:(?:a|an|the)\s+)?(?:(?:complete|whole|full|standalone|final)\s+)?"
     + _DIE_OBJECT + r"\b", re.I)
 _REQUESTED_RTL = re.compile(
     r"\b(?:implement|write|design|build|create|complete|finish|modify|update|"
@@ -283,12 +283,6 @@ _REQUESTED_RTL = re.compile(
     r"\b(?:implement|write|design|build|create)\b[^.;]*\bas\s+"
     r"(?:(?:a|an|the|synthesizable|verilog|systemverilog|hdl|rtl)\s+)*"
     r"module\b", re.I)
-_RTL_DIE_REFERENCE = re.compile(
-    r"\b(?:model(?:s|ing|ling)?|describ(?:e|es|ing)|emulat(?:e|es|ing)|"
-    r"reproduc(?:e|es|ing)|simulat(?:e|es|ing)|"
-    r"(?:truth\s+table|behavio[u]?r)\s+of|(?:module|rtl)\s+for)\s+"
-    r"(?:(?:a|an|the|this|that|small|simple|logic|digital)\s+)*"
-    + _DIE_OBJECT + r"\b", re.I)
 # A separate delivery act cannot disappear with its antecedent. Only an
 # explicitly requested RTL artifact discharges it here; unknown objects stay
 # conservative without enumerating pronouns or descriptions of the device.
@@ -297,21 +291,6 @@ _RTL_PHYSICAL_PACKAGE = re.compile(
     r"physically\s+packag(?:e|es|ed|ing))\b", re.I)
 _RTL_DELIVERY_ACT = re.compile(
     r"\b(?:deliver(?:ed|ing|y)?|produc(?:e|es|ed|ing|tion))\b", re.I)
-_RTL_PHYSICAL_CONTEXT = re.compile(
-    r"\b(?:fabricat(?:e|es|ed|ing|ion)|manufactur(?:e|es|ed|ing)|"
-    r"foundr(?:y|ies)|wafers?|silicon)\b", re.I)
-_RTL_IO_FIELD = (
-    r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|"
-    r"several|multiple|some|many)\s+(?:inputs?|outputs?)")
-_RTL_IO_DESCRIPTION = re.compile(
-    r"\s*it\s+has\s+" + _RTL_IO_FIELD + r"(?:\s+and\s+" + _RTL_IO_FIELD
-    + r")?\s*[.!?;:]?\s*", re.I)
-_RTL_FUNCTION_REFERENCE = re.compile(
-    r"\bsame\s+(?:functionality|behavio[u]?r)\s+as\s+(?:the\s+)?"
-    r"(?P<name>\w+)(?:\s+(?:device|" + _DIE_OBJECT + r"))?\b", re.I)
-_NAMED_DIE_BACKGROUND = re.compile(
-    r"\b(?:the\s+)?(?P<name>\w+)(?:\s+device)?\s+is\s+"
-    r"(?:a|an)\s+" + _DIE_OBJECT + r"\b", re.I)
 _REQUESTED_IP = re.compile(
     r"\b(?:deliver|produce|output(?:\s+is)?)\s+"
     r"(?:(?:a|an|the|separate)\s+)*(?:standalone\s+)?"
@@ -447,40 +426,9 @@ def _delivered_object_families(text: str) -> list[str]:
         if re.search(r"\b" + _DIE_OBJECT + r"\b", text, re.I):
             return ["DIE", "HARDMACRO"]
         return ["HARDMACRO"]
-    if _REQUESTED_RTL.search(text) and not any(
-            rx.search(text) for _, rx in _PROMPT_DELIVERY_PATTERNS):
-        unresolved_reference = any(
-            re.search(r"\b(?:it|them|they)\b", clause, re.I)
-            and not _RTL_IO_DESCRIPTION.fullmatch(clause)
-            for clause in _SENTENCE_SPLIT.split(text))
-        unresolved_delivery = any(
-            not _REQUESTED_RTL.match(text, action.start())
-            for action in _RTL_DELIVERY_ACT.finditer(text))
-        if (not unresolved_reference and not unresolved_delivery
-                and not _physical_package_obligations(text)
-                and not _RTL_PHYSICAL_CONTEXT.search(text)):
-            references = {match.group("name").casefold()
-                          for match in _RTL_FUNCTION_REFERENCE.finditer(text)}
-            # Descriptive subject/property clauses supply background, rather
-            # than naming a delivered object. Unmatched named references and
-            # statements of identity/obligation remain unresolved.
-            clauses = []
-            for start, end, kind in _clause_spans(text):
-                clause = text[start:end]
-                names = {match.group("name").casefold()
-                         for match in _NAMED_DIE_BACKGROUND.finditer(clause)}
-                if kind == "narration" and not (names - references):
-                    clause = re.sub(r"\b" + _DIE_OBJECT +
-                                    r"\b(?=\s+(?:has|contains)\b)",
-                                    "", clause, flags=re.I)
-                clauses.append(clause)
-            text = " ".join(clauses)
-            text = _NAMED_DIE_BACKGROUND.sub(
-                lambda match: "" if match.group("name").casefold() in references
-                else match.group(), text)
-            text = _RTL_FUNCTION_REFERENCE.sub("", text)
-            text = _RTL_DIE_REFERENCE.sub("", text)
-    return ["DIE"] if _DIE_ROUTE.search(text) else []
+    # Bare die/chip nouns are ownership candidates, never physical floors.
+    # GDS, tapeout and shuttle requirements retain their existing floor.
+    return ["DIE"] if re.search(r"\b(?:tape[- ]?out|shuttle|gdsii?)\b", text, re.I) else []
 
 
 def _positive_delivery_prose(text: str) -> str:
@@ -591,7 +539,7 @@ def prompt_delivery_requirements(prompt: str) -> Dict[str, Any]:
         if requirement["target"] is not None:
             matches.append({"target": requirement["target"], "excerpt": requirement["excerpt"]})
     route_family = None
-    status = "UNSPECIFIED"
+    status = "UNRESOLVED"
     minimum_target = None
     reasons = []
     if len(set(route_hits)) > 1:
@@ -604,8 +552,9 @@ def prompt_delivery_requirements(prompt: str) -> Dict[str, Any]:
     if ordered_matches:
         strongest = max(ordered_matches, key=lambda row: _DELIVERY_ORDER[row["target"]])
         minimum_target = strongest["target"]
-        if status == "UNSPECIFIED":
-            status = "DELIVERY_ONLY"
+        if status == "UNRESOLVED":
+            route_family = 'DIE'
+            status = 'EXPLICIT_ROUTE'
         if route_family == "HARDMACRO":
             # GDS/GDSII and similar tokens are valid hardmacro view names.
             # The family decision above already separated them from DIE.
@@ -651,6 +600,8 @@ def resolve_prompt_delivery_target(requirements: Dict[str, Any],
         return {"ok": False, "reason": "prompt delivery requirements digest invalid"}
     if requirements.get("status") == "CONFLICT":
         return {"ok": False, "reason": "prompt delivery requirements conflict"}
+    if requirements.get('status') == 'UNRESOLVED':
+        return {'ok': False, 'reason': 'DELIVERY_OWNERSHIP_UNRESOLVED: complete-source review required'}
     target = requested_target
     if target is not None and not isinstance(target, str):
         return {"ok": False, "reason": "delivery_target must be a string"}
@@ -1392,7 +1343,8 @@ def route_decision_receipt(prompt: str, *, nature: str,
                            delivery_target: str = "rtl",
                            source_sha256: Optional[str] = None,
                            context: Optional[Dict[str, Any]] = None,
-                           explicit_user_evidence: Any = None) -> Dict[str, Any]:
+                           explicit_user_evidence: Any = None,
+                           delivery_binding: dict | None = None) -> Dict[str, Any]:
     """Derive a typed route receipt from semantic facts, never AI step ids."""
     from route_decision import make_route_receipt  # noqa: PLC0415
     payload = semantic_routing_payload(
@@ -1406,7 +1358,7 @@ def route_decision_receipt(prompt: str, *, nature: str,
         source_sha256=source_sha256 or payload["prompt_sha256"],
         nature_table=NATURE_ENTRY, evidence_table=EVIDENCE_EXIT,
         delivery_table=DELIVERY_TARGETS,
-        explicit_user_evidence=explicit_user_evidence)
+        explicit_user_evidence=explicit_user_evidence, delivery_binding=delivery_binding)
 
 
 def main(argv: Optional[List[str]] = None) -> int:

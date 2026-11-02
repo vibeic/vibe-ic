@@ -27,6 +27,23 @@ def write(project, name, value):
     return {'path': name, 'sha256': hashlib.sha256(path.read_bytes()).hexdigest()}
 
 
+def synthetic_canonical_consumer(project, native):
+    """Synthetic passing receipt shape, not execution of its declared checks.
+
+    Read the complete current canonical metadata, including advisory roles and
+    duplicate invocations. A genuinely inactive conditional call has no ledger
+    entry, matching the existing canonical consumer's non-execution contract.
+    """
+    ledger = []
+    for invocation in gates.program_invocations(native):
+        conditions = invocation['condition_files_exist']
+        if conditions and not any(any(project.glob(pattern)) for pattern in conditions):
+            continue
+        ledger.append({'cmd': invocation['command'], 'rc': 0, 'verdict': 'PASS'})
+    return {'status': 'PASS', 'required_commands': gates.required_commands(native),
+            'ledger': ledger, 'outputs': gates.contracts(project, native)}
+
+
 def case(project, monkeypatch, *, analog=False):
     profile = 'Analog IC external trim' if analog else 'Small digital IC without DFT'
     feature = next(p['features'] for p in flow109.load_registry()['reference_profiles']
@@ -74,10 +91,7 @@ def case(project, monkeypatch, *, analog=False):
     for native in ('D1', '0.5ic'):
         inputs = {source['path']: source['sha256']}
         attempt = versions.begin_step(project, native, inputs)
-        commands = gates.required_commands(rows[native])
-        consumer = {'status': 'PASS', 'required_commands': commands,
-                    'ledger': [{'cmd': cmd, 'rc': 0, 'verdict': 'PASS'} for cmd in commands],
-                    'outputs': gates.contracts(project, rows[native])}
+        consumer = synthetic_canonical_consumer(project, rows[native])
         versions.finish_step(project, attempt, verdict='PASS', canonical_pass=True,
             result={'runner': 'phase1_one_shot_runner', 'producer_return': 0,
                     'canonical_consumer': consumer})
@@ -165,7 +179,9 @@ def test_actual_publication_refuses_incomplete_or_contradictory_evidence(tmp_pat
         if change == 'forged_component':
             value['result']['canonical_consumer'] = {'status': 'PASS'}
         else:
-            value['result']['canonical_consumer']['ledger'].pop()
+            consumer = value['result']['canonical_consumer']
+            consumer['ledger'] = [item for item in consumer['ledger']
+                                  if item['cmd'] != consumer['required_commands'][-1]]
         write(tmp_path, p.relative_to(tmp_path).as_posix(), value)
     elif change == 'missing_population_item':
         payload['requirements_trace']['expectations'] = []; approve(tmp_path, payload)

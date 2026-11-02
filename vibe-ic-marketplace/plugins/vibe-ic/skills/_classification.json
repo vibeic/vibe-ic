@@ -20,6 +20,7 @@
       "description": "Programs cannot determine subjective quality. AI invokes when output needs domain interpretation.",
       "skills": [
         "architecture-explore",
+        "delivery-ownership-review",
         "layer-contract-doctrine",
         "ppa-predict",
         "rtl-review",
@@ -534,6 +535,12 @@
           "stage_analog"
         ],
         "why": "Scope capture + FPGA ADC read for analog blocks; the analog HIL measurement step."
+      },
+      "delivery-ownership-review": {
+        "stages": [
+          "stage_phase1"
+        ],
+        "why": "Interprets complete original design prose before source profile admission. The program checks source membership, exact spans, physical floors and current observed action evidence."
       }
     },
     "stage_all": {

@@ -24,9 +24,9 @@ import task_nature_route as route
 def test_rtl_artifact_does_not_inherit_a_background_or_identifier(prompt):
     requirements = route.prompt_delivery_requirements(prompt)
     resolved = route.resolve_prompt_delivery_target(requirements, 'rtl')
-    assert resolved['ok'] is True, resolved
-    actual = route.delivery_route_for_target(resolved['target'], resolved['route_family'])
-    assert actual == 'ip', requirements
+    assert resolved['ok'] is False, resolved
+    assert requirements['status'] == 'UNRESOLVED'
+    assert requirements['route_family'] is None
     assert requirements['minimum_target'] is None
     assert not route.resolve_prompt_delivery_target(requirements, 'gds')['ok']
 
@@ -60,21 +60,21 @@ def test_independent_package_predicate_keeps_the_physical_floor(prompt):
 def test_model_description_or_denied_package_does_not_invent_a_floor(prompt):
     requirements = route.prompt_delivery_requirements(prompt)
     assert requirements['minimum_target'] is None, requirements
-    assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is True
+    assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is False
 
 
 @pytest.mark.parametrize('prompt,target,family,minimum', [
-    ('Write a module for a chip. Deliver the modeled device.', 'rtl', 'DIE', None),
-    ('Write a module for a chip. The modeled device must be delivered.', 'rtl', 'DIE', None),
-    ('Write a module for a chip. Production of the modeled device is required.', 'rtl', 'DIE', None),
-    ('The RefA device is a chip. Write a module with the same functionality as the RefB device.', 'rtl', 'DIE', None),
-    ('Write a module for a chip. Fabricate it.', 'rtl', 'DIE', None),
+    ('Write a module for a chip. Deliver the modeled device.', None, None, None),
+    ('Write a module for a chip. The modeled device must be delivered.', None, None, None),
+    ('Write a module for a chip. Production of the modeled device is required.', None, None, None),
+    ('The RefA device is a chip. Write a module with the same functionality as the RefB device.', None, None, None),
+    ('Write a module for a chip. Fabricate it.', None, None, None),
     ('Deliver the final chip. Write its module.', 'rtl', 'DIE', None),
-    ('Write a module for a chip. The chip is the final deliverable.', 'rtl', 'DIE', None),
+    ('Write a module for a chip. The chip is the final deliverable.', None, None, None),
     ('Complete this RTL module.\nmodule CoreBlock(output chip\nDeliver the final chip.', 'rtl', 'DIE', None),
     ('Complete this RTL module.\nmodule CoreBlock(output chip\nDeliver the final chip.\nmodule helper; endmodule', 'rtl', 'DIE', None),
-    ('Write RTL.\nmodule must be integrated into the final chip;', 'rtl', 'DIE', None),
-    ('Write a module for a chip. See https://example.invalid/spec. Fabricate the device.', 'rtl', 'DIE', None),
+    ('Write RTL.\nmodule must be integrated into the final chip;', None, None, None),
+    ('Write a module for a chip. See https://example.invalid/spec. Fabricate the device.', None, None, None),
     ('Write a module for a chip and deliver GDS.', 'gds', 'DIE', 'gds'),
     ('Write a module for a chip and deliver shippable GDS.', 'shippable_gds', 'DIE', 'shippable_gds'),
     ('Write a module for a chip. Foundry handoff is required.', 'foundry_handoff', 'DIE', 'foundry_handoff'),
@@ -86,6 +86,10 @@ def test_explicit_or_unresolved_delivery_keeps_its_public_contract(prompt, targe
     requirements = route.prompt_delivery_requirements(prompt)
     assert requirements['route_family'] == family, requirements
     assert requirements['minimum_target'] == minimum
+    if family is None:
+        assert requirements['status'] == 'UNRESOLVED'
+        assert route.resolve_prompt_delivery_target(requirements, target)['ok'] is False
+        return
     resolved = route.resolve_prompt_delivery_target(requirements, target)
     assert resolved['ok'] is True, resolved
     assert route.delivery_route_for_target(resolved['target'], resolved['route_family']) == (
@@ -164,13 +168,13 @@ def test_denied_physical_delivery_does_not_override_an_rtl_request(prompt):
     requirements = route.prompt_delivery_requirements(prompt)
     assert requirements['route_family'] is None
     assert requirements['minimum_target'] is None
-    assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is True
+    assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is False
 
 
-def test_unchanged_delivery_payload_retains_issued_r5_identity():
+def test_old_delivery_identity_is_not_silently_upgraded():
     requirements = route.prompt_delivery_requirements('Debug the supplied RTL; return corrected Verilog.')
-    assert requirements['rules_version'] == 'r5'
-    assert requirements['requirements_sha256'] == '07c41201e7ecb110bef04f6d3632399c3023f4b71101ce00a2368aee60aa457d'
+    assert requirements['rules_version'] == 'r6-source-ownership'
+    assert requirements['requirements_sha256'] != '07c41201e7ecb110bef04f6d3632399c3023f4b71101ce00a2368aee60aa457d'
 
 
 @pytest.mark.parametrize('prompt,family', [
@@ -191,6 +195,8 @@ def _source_scope_request(tmp_path, monkeypatch, text):
     context = tmp_path / 'input/docs/context.md'
     context.parent.mkdir(parents=True, exist_ok=True)
     context.write_text(text)
+    from _delivery_review_fixture import accept_review
+    accept_review(tmp_path, fresh=True)
     return args, context
 
 
@@ -217,7 +223,7 @@ def test_native_input_identity_and_unspecified_implementation_are_not_delivery(c
         issuance = exc.code
     assert issuance == 'ISSUED'
     requirements = route.prompt_delivery_requirements(context)
-    assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is True
+    assert route.resolve_prompt_delivery_target(requirements, 'rtl')['ok'] is False
     assert requirements['route_family'] is None
     assert requirements['minimum_target'] is None
     assert flow109.active_rtl_scope(tmp_path)['project'] == str(tmp_path.resolve())

@@ -717,6 +717,97 @@ def _input_projection(text: str) -> tuple[str, dict, str]:
         if all(isinstance(doc.get(k), str) for k in fields):
             for key in fields:
                 context[key] = semantic.pop(key)
+    elif doc.get("schema") == "vibeic.phase1.base-requirements-source.v1":
+        def strings(value):
+            return isinstance(value, list) and all(isinstance(v, str) for v in value)
+
+        def record(value, required, validators, children=None):
+            if (not isinstance(value, dict) or not required <= value.keys()
+                    or any(key in required and not validate(value[key])
+                           for key, validate in validators.items() if key in value)):
+                raise ValueError("unsupported derived record")
+            known, remaining = {}, dict(value)
+            for key, validate in validators.items():
+                if key in value and validate(value[key]):
+                    known[key] = remaining.pop(key)
+            for key, project in (children or {}).items():
+                if key in value and key not in known:
+                    if value[key] is None and key not in required:
+                        known[key] = remaining.pop(key)
+                        continue
+                    try:
+                        projected, extension = project(value[key])
+                    except ValueError:
+                        if key in required:
+                            raise
+                        continue
+                    known[key] = projected
+                    if extension:
+                        remaining[key] = extension
+                    else:
+                        remaining.pop(key)
+            return known, remaining
+
+        def rows(value, project):
+            if not isinstance(value, list):
+                raise ValueError("unsupported derived collection")
+            projected = [project(row) for row in value]
+            known = [row[0] for row in projected]
+            extensions = [row[1] for row in projected]
+            return known, extensions if any(extensions) else []
+
+        def expectation(value, *, branch=False):
+            validators = {key: nullable_string for key in
+                          ("layer", "field_path", "requirement", "expert_source")}
+            validators.update(expected_tokens=nullable_strings, evidence=nullable_strings)
+            required = set()
+            children = {}
+            if not branch:
+                children[SPLIT_KEY] = lambda v: rows(v, lambda r: expectation(r, branch=True))
+                required.add("id")
+                validators["id"] = lambda v: isinstance(v, str)
+                validators["withdrawn"] = lambda v: v is None or isinstance(v, (str, bool))
+                children["withdrawn"] = lambda v: record(v, set(), {"reason": nullable_string})
+                children["qualified_by"] = lambda v: record(v, set(), {
+                    key: nullable_string for key in ("output", "port", "active_level")})
+                children["basis"] = lambda v: rows(v, lambda r: record(r, set(), {
+                    "file": nullable_string, "line": lambda x: x is None or type(x) is int,
+                    "quote": nullable_string}))
+            return record(value, required, validators, children)
+
+        def nullable_string(value):
+            return value is None or isinstance(value, str)
+
+        def nullable_strings(value):
+            return value is None or strings(value)
+
+        records = {
+            "required_items": ({"id"}, {"id": lambda v: isinstance(v, str)}),
+            "source_documents": ({"path", "sha256"}, {
+                "path": lambda v: isinstance(v, str),
+                "sha256": lambda v: isinstance(v, str) and bool(re.fullmatch(r"[0-9a-f]{64}", v))}),
+            "features": ({"feature"}, {
+                "feature": lambda v: isinstance(v, str), "layer": nullable_string,
+                "field_path": nullable_string, "declared": lambda v: v is None or type(v) is bool,
+                "evidence": nullable_strings}),
+            "assignments": ({"id"}, {
+                "id": lambda v: isinstance(v, str),
+                **{k: nullable_string for k in ("endpoint", "layer", "field_path")}}),
+        }
+        populations = {
+            "requirements_trace": ("required_items", "source_documents", "expectations", "features"),
+            "endpoint_delivery_items": ("required_items", "source_documents", "expectations", "assignments"),
+        }
+        collections = {key: lambda v, spec=spec: rows(v, lambda r: record(r, *spec))
+                       for key, spec in records.items()}
+        collections["expectations"] = lambda v: rows(v, expectation)
+        try:
+            context, semantic = record(doc, {"schema", *populations}, {"schema": lambda v: True}, {
+                name: lambda v, fields=fields: record(v, set(fields), {}, {
+                    field: collections[field] for field in fields})
+                for name, fields in populations.items()})
+        except ValueError:
+            return text, {}, "unresolved-possible-requirements"
     elif "schema" not in doc:
         source = doc.get("source_reference")
         mode = doc.get("mode_assumptions")

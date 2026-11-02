@@ -4,19 +4,25 @@ Neutral visible task only; no dataset, RTL answer, hidden harness, native
 qualification, score or fabricated semantic route approval.
 """
 import json
+import os
+import subprocess
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import benchmark_dispatch as dispatch
 import flow109
 import task_nature_route as routing
 import vibe_ic_one_shot_runner as public
+import delivery_intent
+from _delivery_review_fixture import accept_review
 from _hostpaths import require_repo
 
 
 @pytest.fixture
-def subject(tmp_path):
+def subject(tmp_path, monkeypatch):
+    monkeypatch.setenv("VIBE_IC_DELIVERY_AUTHORITY_ROOT", str(tmp_path / "authority"))
     prompt = ('Deliver only a soft-IP RTL module. Inputs a and b drive q as their '
               'bitwise conjunction. Request lint validation only; no analog, '
               'netlist, hardware, physical delivery or other optional work.')
@@ -31,6 +37,7 @@ def subject(tmp_path):
     (project / 'input/phase1_prompt.md').write_text(prompt)
     manifest = {'features': features}
     (project / 'input/flow109-manifest.json').write_text(json.dumps(manifest))
+    accept_review(project)
     return project, manifest
 
 
@@ -43,16 +50,43 @@ def observe_public(argv, monkeypatch, capsys):
     class OwnerBoundary(Exception):
         pass
     observed = {}
+    import execution_policy
+    parent_rows = []
     def owner_boundary(args):
+        context = flow109.validate_execution_context(json.loads(
+            Path(os.environ[flow109.CONTEXT_ENV]).read_bytes()))
+        if context.get('dispatch_kind') == 'canonical_owner_sequence':
+            parent_rows[:] = [row['id'] for row in context['resolved_rows']]
+            assert flow109.active_rtl_scope(args.project)['context_sha256'] == context['context_sha256']
+            return execution_policy.configure(args)
         record = json.loads((args.project / 'reports/flow109/owner_route.json').read_text())
         import _path_layout
         _path_layout.select_rtl_input(args.project,args.rtl_input,args.entry_step,args.exit_step)
+        if parent_rows:
+            assert context['requested_step'] == parent_rows[0]
+            assert os.environ[flow109.OWNER_LAUNCH_ENV]
         observed.update(outcome='OWNER_REACHED', owner=record['owner_runner'],
                         entry=args.entry_step, exit=args.exit_step)
         raise OwnerBoundary
+    def child(command, *, env, **kwargs):
+        # Substitute process transport only. The real parent constructs the
+        # command and the real child parser consumes its exact launch binding.
+        assert Path(command[1]).name == 'vibe_ic_one_shot_runner.py'
+        with monkeypatch.context() as child_patch:
+            for key, value in env.items():
+                child_patch.setenv(key, value)
+            child_patch.setattr(sys, 'argv', command[1:])
+            return SimpleNamespace(returncode=public.main())
     monkeypatch.setattr(public, '_configure_execution_policy', owner_boundary)
+    monkeypatch.setattr(public, '_activate_runtime_program_tree', lambda project: None)
+    monkeypatch.setattr(public, '_RUNTIME_PROGRAM_TREE', None)
+    monkeypatch.setattr(public, '_capture_container_image',
+                        lambda *a, **kw: {'scope': 'SOFTWARE_NO_NATIVE_EXECUTION'})
+    monkeypatch.setattr(public.subprocess, 'run', child)
     monkeypatch.setattr(sys, 'argv', argv[1:])
-    for key in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV):monkeypatch.delenv(key, raising=False)
+    for key in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV, flow109.OWNER_LAUNCH_ENV):
+        monkeypatch.setenv(key, os.environ.get(key, ''))
+        monkeypatch.delenv(key)
     try:
         rc = public.main()
         observed.update(outcome='REFUSED', rc=rc)
@@ -64,7 +98,7 @@ def observe_public(argv, monkeypatch, capsys):
 
 
 @pytest.mark.parametrize('nature,entry,terminal,supplied,owner,native_entry,native_exit', [
-    ('generation','1','2',False,'design_one_shot_runner','1','4'),
+    ('generation','1','2',False,'design_one_shot_runner','1','1'),
     ('completion_phase1','D1','D1',False,'phase1_one_shot_runner','D1','D1'),
     ('completion_validation','1','2',True,'design_one_shot_runner','2','2'),
     ('debug','2','2',True,'design_one_shot_runner','2','2'),
@@ -108,6 +142,7 @@ def test_bounded_rtl_request_resolves_shipped_profile(subject, monkeypatch, caps
     (project / 'input/phase1_prompt.md').write_text(
         'Implement a Verilog module with inputs a and b and output q. '
         'Set q to the bitwise conjunction of the inputs; validate RTL lint only.')
+    accept_review(project, fresh=True)
     if front_door == 'general':
         argv = [sys.executable, str(Path(public.__file__)), str(project),
                 '--flow', '109', '--entry-step', 'D09', '--exit-step', 'D11',
@@ -118,7 +153,7 @@ def test_bounded_rtl_request_resolves_shipped_profile(subject, monkeypatch, caps
     observed = observe_public(argv, monkeypatch, capsys)
     assert observed['outcome'] == 'OWNER_REACHED', observed
     assert (observed['owner'], observed['entry'], observed['exit']) == (
-        'design_one_shot_runner', '1', '2')
+        'design_one_shot_runner', '1', '1')
     manifest = json.loads((project / 'input/flow109-manifest.json').read_text())
     registry = json.loads(require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
                                       'flow', 'flow109.json').read_text())
@@ -129,6 +164,8 @@ def test_bounded_rtl_request_resolves_shipped_profile(subject, monkeypatch, caps
     assert plan['features']['physical'] is False
     assert plan['features']['rtl_only'] is True
     assert not (project / 'input/step_0_5ic_answers.json').exists()
+    context = json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_bytes())
+    assert [row['id'] for row in context['resolved_rows']] == ['D09', 'D10', 'D11']
 
 
 @pytest.mark.parametrize('obligation', [
@@ -142,6 +179,7 @@ def test_missing_manifest_cannot_default_physical_sources(subject, monkeypatch, 
     path.unlink()
     (project / 'input/phase1_prompt.md').write_text(
         'Implement a Verilog module with inputs a and b and output q. ' + obligation)
+    delivery_intent.issue_review(project, fresh=True)
     argv = [sys.executable, str(Path(public.__file__)), str(project),
             '--flow', '109', '--entry-step', 'D09', '--exit-step', 'D11',
             '--delivery-target', 'rtl', '--rtl-input', 'original', '--no-dashboard']
@@ -193,7 +231,8 @@ def test_confirmed_rtl_receipt_materializes_the_same_general_profile(subject, tm
     (project / 'input/flow109-manifest.json').unlink()
     prompt = (project / 'input/phase1_prompt.md').read_text()
     receipt = routing.route_decision_receipt(prompt, nature='spec_generation',
-        requested_evidence='lint_validated', delivery_target='rtl')
+        requested_evidence='lint_validated', delivery_target='rtl',
+        delivery_binding=delivery_intent.resolve_project_delivery(project).binding)
     dispatch._forward_product_manifest(tmp_path / 'run', project, receipt)
     path = project / 'input/flow109-manifest.json'
     before = path.read_bytes()
@@ -293,17 +332,17 @@ def test_named_module_background_reaches_soft_ip_owner(subject, monkeypatch, cap
               'The RefUnit is a chip with a logic gate. '
               'The module should implement the same functionality as the RefUnit chip.')
     (project / 'input/phase1_prompt.md').write_text(prompt)
-    requirements = routing.prompt_delivery_requirements(prompt)
-    resolved = routing.resolve_prompt_delivery_target(requirements, 'rtl')
-    assert resolved['ok'] is True
-    delivery = routing.delivery_route_for_target(resolved['target'], resolved['route_family'])
-    assert delivery == 'ip', requirements
+    accept_review(project, fresh=True)
+    selection = delivery_intent.require_compatible_target(
+        delivery_intent.resolve_project_delivery(project), 'rtl')
+    delivery = selection.route
+    assert delivery == 'ip'
     assert routing.flow109_product_window(manifest, '1', '2', delivery) == ('D09', 'D11')
     argv = dispatch._solver_argv(Path(public.__file__), project, '1', '2', delivery, 'original')
     observed = observe_public(argv, monkeypatch, capsys)
     assert observed['outcome'] == 'OWNER_REACHED', observed
     assert observed['owner'] == 'design_one_shot_runner'
-    assert observed['entry'] == '1' and observed['exit'] == '4'
+    assert observed['entry'] == '1' and observed['exit'] == '1'
 
 
 @pytest.mark.parametrize('obligation', [
@@ -349,7 +388,7 @@ def test_authoring_purpose_and_requested_evidence_keep_owner_closure(subject,ter
     observed={'rows':[r['id'] for r in rows],
               'producer':rows[0]['profile']['dispatch']['producer'],
               'native_exit':context.get('native_exit_step') or rows[0]['profile']['dispatch']['owner_exit_step']}
-    assert observed=={'rows':expected,'producer':'design_one_shot_runner.py:step_rtl_gen','native_exit':'4'}
+    assert observed=={'rows':expected,'producer':'design_one_shot_runner.py:step_rtl_gen','native_exit':terminal}
 
 
 def test_actual_solve_initializes_fresh_run_then_resume_keeps_unapproved_route_pending(subject,tmp_path,monkeypatch):
@@ -389,12 +428,102 @@ def test_original_owner_closure_does_not_authorize_a_broad_raw_request(subject,m
     with pytest.raises(ValueError,match='bounded Step 1/2'):
         layout.select_rtl_input(project,'original','1','4')
     argv=dispatch._solver_argv(Path(public.__file__),project,'1','4','ip','original')
-    with pytest.raises(ValueError,match='bounded Step 1/2'):
-        observe_public(argv,monkeypatch,capsys)
+    observed = observe_public(argv,monkeypatch,capsys)
+    assert observed['outcome'] == 'OWNER_REACHED', observed
+    assert (observed['entry'], observed['exit']) == ('1', '1')
     assert layout._original_author_owner_closure(project,'1','4') is False
+    with pytest.raises(ValueError,match='bounded Step 1/2'):
+        layout.select_rtl_input(project,'original','1','4')
 
 
 def test_unreadable_explicit_feature_input_is_named_refusal(tmp_path):
     with pytest.raises(ValueError,match='FLOW109_MANIFEST_INVALID'):
         dispatch._stage_product_manifest(tmp_path/'run',tmp_path/'missing.json')
     assert not (tmp_path/'run/input/flow109-manifest.json').exists()
+
+
+def test_public_reversed_rtl_window_reports_its_order_conflict(subject):
+    project, _ = subject
+    (project / 'input/flow109-manifest.json').unlink()
+    runner = require_repo('vibe-ic-marketplace', 'plugins', 'vibe-ic',
+                          'programs', 'vibe_ic_one_shot_runner.py')
+    observed = subprocess.run(
+        [sys.executable, str(runner), str(project), '--entry-step', 'D13',
+         '--exit-step', 'D09', '--delivery-target', 'rtl', '--route', 'ip',
+         '--flow109-plan-only', '--no-dashboard'],
+        capture_output=True, text=True)
+    assert observed.returncode == 2, observed.stdout + observed.stderr
+    assert observed.stderr.startswith('REFUSED: '), observed.stderr
+    refusal_code = observed.stderr.split(': ', 2)[1]
+    assert refusal_code == 'FLOW109_WINDOW_REVERSED'
+
+
+@pytest.mark.parametrize('damage', ['missing_source', 'physical_source', 'physical_owner'])
+def test_explicit_optional_rtl_manifest_cannot_infer_scope_from_features_alone(
+        subject, monkeypatch, capsys, damage):
+    project, manifest = subject
+    manifest['features']['requires_security'] = True
+    path = project / 'input/flow109-manifest.json'
+    path.write_text(json.dumps(manifest))
+    if damage == 'missing_source':
+        (project / 'input/phase1_prompt.md').unlink()
+    elif damage == 'physical_source':
+        (project / 'input/phase1_prompt.md').write_text('Deliver GDS for fabrication.')
+    else:
+        import _delivery_route
+        monkeypatch.delenv(flow109.CONTEXT_ENV, raising=False)
+        assert _delivery_route.admit(project, 'ip', allow_rtl_scope=False) is None
+    argv = [sys.executable, str(Path(public.__file__)), str(project),
+            '--flow', '109', '--flow109-manifest', str(path), '--route', 'ip',
+            '--entry-step', 'D09', '--exit-step', 'D11', '--rtl-input', 'original',
+            '--no-dashboard']
+    observed = observe_public(argv, monkeypatch, capsys)
+    assert observed['outcome'] == 'REFUSED' and observed['rc'] == 2, observed
+    assert not list((project / 'reports/flow109/attempts').glob('*/owner-*.json'))
+
+
+def test_implicit_explicit_manifest_scope_reaches_real_child_input_consumer(subject):
+    project, manifest = subject
+    manifest['features']['requires_security'] = True
+    path = project / 'input/flow109-manifest.json'
+    path.write_text(json.dumps(manifest))
+    argv = [sys.executable, str(Path(public.__file__)), str(project),
+            '--flow', '109', '--flow109-manifest', str(path), '--route', 'ip',
+            '--entry-step', 'D10', '--exit-step', 'D11', '--rtl-input', 'original',
+            '--skip-phase1', '--skip-phase3', '--skip-analog', '--no-dashboard']
+    binding = {'invocation_id': 'neutral-implicit-scope', 'argv': argv,
+               'project': str(project), 'source': dispatch._runner_source_snapshot(argv)}
+    env = dict(os.environ)
+    for key in (flow109.CONTEXT_ENV, flow109.ATTEMPT_ENV, flow109.OWNER_LAUNCH_ENV):
+        env.pop(key, None)
+    env[dispatch._RUNNER_CONTEXT_ENV] = json.dumps(binding)
+    executed = subprocess.run(argv, env=env, capture_output=True, text=True)
+    assert executed.returncode == 2, executed.stdout + executed.stderr
+    parent = next((project / 'reports/flow109/attempts').glob('*/D10-launch.json')).parent
+    result = json.loads((parent / 'result.json').read_bytes())
+    first, second = result['components']
+    assert first['step_id'] == 'D10' and first['component_status'] == 'NOT_MEASURED'
+    assert 'owner_result' in first, first
+    assert first['evidence']['input_refusal']['reason'] == 'D10_D09_INPUT_UNAVAILABLE'
+    assert second['step_id'] == 'D11' and second['native_started'] is False
+    command = result['owner_launches'][0]['argv']
+    assert command[command.index('--delivery-target') + 1] == 'rtl'
+    summary = json.loads((project / 'reports/orchestrator/vibe_ic_one_shot.json').read_bytes())
+    assert all(summary['runner_binding'][key] == value for key, value in binding.items())
+    assert not (project / 'input/step_0_5ic_answers.json').exists()
+
+
+def test_default_native_proof_window_keeps_canonical_translation(subject, monkeypatch, capsys):
+    import _path_layout as layout
+    project, _ = subject
+    (project / 'input/flow109-manifest.json').unlink()
+    argv = dispatch._solver_argv(Path(public.__file__), project, '1', '4', 'ip', 'original')
+    assert argv[argv.index('--entry-step') + 1] == 'D09'
+    assert argv[argv.index('--exit-step') + 1] == 'D13'
+    observed = observe_public(argv, monkeypatch, capsys)
+    assert observed['outcome'] == 'OWNER_REACHED', observed
+    assert (observed['entry'], observed['exit']) == ('1', '1')
+    context = json.loads(Path(os.environ[flow109.CONTEXT_ENV]).read_bytes())
+    assert [row['id'] for row in context['resolved_rows']] == ['D09', 'D10', 'D11', 'D12', 'D13']
+    with pytest.raises(ValueError, match='bounded Step 1/2'):
+        layout.select_rtl_input(project, 'original', '1', '4')

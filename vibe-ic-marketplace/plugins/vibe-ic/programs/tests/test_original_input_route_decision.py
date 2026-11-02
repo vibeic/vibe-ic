@@ -204,7 +204,12 @@ def test_unknown_input_contract_is_rejected():
 
 
 @pytest.mark.parametrize("nature", ["spec_generation", "completion", "debug"])
-def test_explicit_rtl_delivery_reaches_initial_and_resume_runner(tmp_path, nature):
+def test_explicit_rtl_delivery_reaches_initial_and_resume_runner(tmp_path, nature, monkeypatch):
+    from _delivery_review_fixture import accept_review
+    monkeypatch.setenv('VIBE_IC_DELIVERY_AUTHORITY_ROOT', str(tmp_path.parent / (tmp_path.name + '-authority')))
+    (tmp_path / 'input').mkdir()
+    (tmp_path / 'input/phase1_prompt.md').write_text(PROMPT)
+    accept_review(tmp_path)
     import benchmark_dispatch as dispatch
     evidence = "behaviour" if nature == "debug" else "lint_validated"
     receipt = _receipt(nature=nature, evidence=evidence)
@@ -218,7 +223,7 @@ def test_explicit_rtl_delivery_reaches_initial_and_resume_runner(tmp_path, natur
             delivery_target=target)
         assert argv.count("--delivery-target") == 1
         assert argv[argv.index("--delivery-target") + 1] == "rtl"
-        assert argv[argv.index("--exit-step") + 1] == receipt["verify_through"]
+        assert argv[argv.index("--exit-step") + 1] == {"2": "D11", "4": "D13"}[receipt["verify_through"]]
 
 
 @pytest.mark.parametrize("target,evidence", [
@@ -230,7 +235,8 @@ def test_physical_evidence_never_acquires_rtl_scope(target, evidence):
     assert dispatch._rtl_delivery_target(_receipt(target=target, evidence=evidence)) is None
 
 
-def test_unscoped_runner_keeps_existing_delivery_admission(tmp_path):
+def test_unscoped_runner_refuses_missing_original_sources(tmp_path):
     import benchmark_dispatch as dispatch
     runner = Path(__file__).resolve().parents[1] / "vibe_ic_one_shot_runner.py"
-    assert "--delivery-target" not in dispatch._solver_argv(runner, tmp_path, "D1", "D1")
+    with pytest.raises(ValueError, match="DELIVERY_SOURCE_INVALID"):
+        dispatch._solver_argv(runner, tmp_path, "D1", "D1")

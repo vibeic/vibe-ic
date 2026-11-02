@@ -1,0 +1,99 @@
+{
+  "schema_version": 1,
+  "source": "Preserved local packets identified by packet, artifact and SHA-256. External packets are not bundled. No private input, raw model response or runtime export is included.",
+  "artifacts": [
+    {
+      "packet": "capture-update",
+      "artifact": "recoveries.json",
+      "sha256": "1c4ca299c491f94924049f126a5da523d5cccbc0c8e9ee9616acf25f8cac3e5e"
+    },
+    {
+      "packet": "capture-followup",
+      "artifact": "recoveries.json",
+      "sha256": "f337922f9e6e3987221d9140b24205ecd95ab1d37063675e0df18edf973e1762"
+    },
+    {
+      "packet": "capture-paused-delivery",
+      "artifact": "recoveries.json",
+      "sha256": "daff5b1dabe0c747e6cabd0a5a90bb8d25388f624c2983972fabc1228221f1cb"
+    },
+    {
+      "packet": "delivery-ownership-implementation",
+      "artifact": "baseline-delta.json",
+      "sha256": "d526586bc48d1f730a3fb9796e871bf36d8c92c9aa033616d2884f2f8fbcb696",
+      "bundled_path": "evidence/baseline-delta.json"
+    },
+    {
+      "packet": "delivery-ownership-implementation",
+      "artifact": "author-head-owning.xml",
+      "sha256": "917ab8db519bfbbc6a837c61a04692ed61051dc86902795a82b3c84b784e5b0d",
+      "scope": "external immutable historical evidence, aggregate bundled in historical-results.json"
+    },
+    {
+      "packet": "delivery-ownership-implementation",
+      "artifact": "baseline-owning.xml",
+      "sha256": "0ab47575948c6ca5016ac01ab82624426aa34433e6d1265566afe2951ede1416",
+      "scope": "external immutable historical evidence, aggregate bundled in historical-results.json"
+    },
+    {
+      "packet": "delivery-ownership-implementation",
+      "artifact": "red.xml",
+      "sha256": "dddb00802a8e14a263cfc185f4960ecb273da23e50be3bbcd6c20d4a64acc946",
+      "scope": "external immutable historical evidence, aggregate bundled in historical-results.json"
+    },
+    {
+      "packet": "delivery-ownership-implementation",
+      "artifact": "canonical-red.xml",
+      "sha256": "be9a46147f0ea51c3176fe890eb1b946672ee32bd4b06cfc7c3fdf912d7ea99e",
+      "scope": "external immutable historical evidence, aggregate bundled in historical-results.json"
+    },
+    {
+      "packet": "delivery-ownership-implementation",
+      "artifact": "physical-receipt-red.xml",
+      "sha256": "146552270a8c8e8c10f1b5164a0f0e1cc7f670f21be5769871b9cb69d71ecc0d",
+      "scope": "external immutable historical evidence, aggregate bundled in historical-results.json"
+    },
+    {
+      "packet": "delivery-ownership-implementation",
+      "artifact": "physical-receipt-green.xml",
+      "sha256": "81b866682df011c6b7578d4dd78e35cdeb31a6645f04afd5cd603b5370f50772",
+      "scope": "external immutable historical evidence, aggregate bundled in historical-results.json"
+    },
+    {
+      "packet": "capture-update",
+      "artifact": "CAPTURE.md",
+      "sha256": "2bae5265ae58177a04c7895d24a06d4b14ada392c81575fed77562a530ed4fbb",
+      "scope": "external historical packet; not rerun by this contribution"
+    },
+    {
+      "packet": "capture-update",
+      "artifact": "validation.json",
+      "sha256": "ac65aaac517dd2282b613b8d262fe9986cec37ec4542ee5654360e485c3ba1ce",
+      "scope": "external historical packet; not rerun by this contribution"
+    },
+    {
+      "packet": "capture-followup",
+      "artifact": "CAPTURE.md",
+      "sha256": "f7825c24684d4def82b62f981a9f1d9de4f6e1423b38729dc1cf1716d8e76fbe",
+      "scope": "external historical packet; not rerun by this contribution"
+    },
+    {
+      "packet": "capture-followup",
+      "artifact": "validation.json",
+      "sha256": "4370440891325586dddfe0a801f6d29d5780315f8db3c84776aec2b622a90561",
+      "scope": "external historical packet; not rerun by this contribution"
+    },
+    {
+      "packet": "capture-paused-delivery",
+      "artifact": "CAPTURE.md",
+      "sha256": "bfe8756a758e0397dde5cdf9ec0105a6f052f0c7e0228e9365972bb59c092435",
+      "scope": "external historical packet; not rerun by this contribution"
+    },
+    {
+      "packet": "capture-paused-delivery",
+      "artifact": "validation.json",
+      "sha256": "777075994762f216b5fd36d755254c520b64090efffe329c3fd513de1aa4f85e",
+      "scope": "external historical packet; not rerun by this contribution"
+    }
+  ]
+}

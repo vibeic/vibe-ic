@@ -1,0 +1,276 @@
+{
+  "schema_version": 1,
+  "topic": "source-bound-flow-admission",
+  "status": "PROPOSED_PLUGIN_CHANGE_PENDING_INDEPENDENT_REVIEW",
+  "program_first": true,
+  "benchmark_execution": "PAUSED_BY_USER",
+  "integration_base": "503cb0592",
+  "historical_release_base": "fc7dd0572bf72163ea30ab1801bf54e23da199cd",
+  "reviewed_source_snapshot": "f196a49b466d4e3484db3bb9d2441381deea6d16",
+  "authored_source_snapshot": "bbf0292bbf3e0d27810e6f74d69be5ecd88edc82",
+  "consumers": {
+    "ordinary_entry": "programs/flow109.py",
+    "public_runner": "programs/vibe_ic_one_shot_runner.py",
+    "coordinator": "programs/benchmark_dispatch.py",
+    "delivery_semantics": "skills/delivery-ownership-review/SKILL.md"
+  },
+  "records": [
+    {
+      "id": "retain-explicit-admission-diagnostic",
+      "packet": "capture-update",
+      "bucket": "A",
+      "pattern": "When explicit canonical window endpoints fail planning, automatic feature selection catches that named refusal and replaces it with a missing-manifest diagnostic.",
+      "corpus_sweep_recipe": "Rerun the owning and adjacent exact-ID suites listed in the linked reports. Preserve physical, changed-source, missing-ledger, native-invalid and unknown-field opposite controls. Full repository and fresh released benchmark validation remain pending.",
+      "implementation_paths": [
+        "programs/flow109.py"
+      ],
+      "status": "PREVIOUSLY_SCOPED_VERIFIED_PENDING_CURRENT_INTEGRATION_REVIEW"
+    },
+    {
+      "id": "source-bound-registered-owner-sequence",
+      "packet": "capture-update",
+      "bucket": "A",
+      "pattern": "When a bounded source-owned RTL window spans registered native owners, a same-owner planner rejects composition or dispatch bypasses singleton native finalizers.",
+      "corpus_sweep_recipe": "Rerun the owning and adjacent exact-ID suites listed in the linked reports. Preserve physical, changed-source, missing-ledger, native-invalid and unknown-field opposite controls. Full repository and fresh released benchmark validation remain pending.",
+      "implementation_paths": [
+        "programs/flow109.py",
+        "programs/vibe_ic_one_shot_runner.py"
+      ],
+      "status": "PREVIOUSLY_SCOPED_VERIFIED_PENDING_CURRENT_INTEGRATION_REVIEW"
+    },
+    {
+      "id": "rtl-endpoint-qualification-keeps-obligations",
+      "packet": "capture-update",
+      "bucket": "A",
+      "pattern": "When approved RTL endpoint assignments are valid and physical delivery is source-bound inapplicable, unconditional physical-submission qualification blocks the generic endpoint obligations.",
+      "corpus_sweep_recipe": "Rerun the owning and adjacent exact-ID suites listed in the linked reports. Preserve physical, changed-source, missing-ledger, native-invalid and unknown-field opposite controls. Full repository and fresh released benchmark validation remain pending.",
+      "implementation_paths": [
+        "programs/flow109_metric_acceptance.py",
+        "programs/phase1_one_shot_runner.py"
+      ],
+      "status": "PREVIOUSLY_SCOPED_VERIFIED_PENDING_CURRENT_INTEGRATION_REVIEW"
+    },
+    {
+      "id": "complete-retained-canonical-ledger",
+      "packet": "capture-update",
+      "bucket": "A",
+      "pattern": "When a direct producer receipt includes required checker observations alone, an acceptor that checks the full ledger only for checkpoint receipts grants qualification without every applicable observation.",
+      "corpus_sweep_recipe": "Rerun the owning and adjacent exact-ID suites listed in the linked reports. Preserve physical, changed-source, missing-ledger, native-invalid and unknown-field opposite controls. Full repository and fresh released benchmark validation remain pending.",
+      "implementation_paths": [
+        "programs/flow109_metric_acceptance.py"
+      ],
+      "status": "PREVIOUSLY_SCOPED_VERIFIED_PENDING_CURRENT_INTEGRATION_REVIEW"
+    },
+    {
+      "id": "retain-requirements-first-native-refusal",
+      "packet": "capture-update",
+      "bucket": "A",
+      "pattern": "When structurally present review files fail the selected native requirements consumer, a publisher that removes the input-review action releases authoring before semantic acceptance.",
+      "corpus_sweep_recipe": "Rerun the owning and adjacent exact-ID suites listed in the linked reports. Preserve physical, changed-source, missing-ledger, native-invalid and unknown-field opposite controls. Full repository and fresh released benchmark validation remain pending.",
+      "implementation_paths": [
+        "programs/phase1_base_requirements.py",
+        "programs/phase1_one_shot_runner.py",
+        "programs/benchmark_dispatch.py"
+      ],
+      "status": "PREVIOUSLY_SCOPED_VERIFIED_PENDING_CURRENT_INTEGRATION_REVIEW"
+    },
+    {
+      "id": "typed-derived-source-responsibility",
+      "packet": "capture-update",
+      "bucket": "A",
+      "pattern": "When a required derived review population enters the original input directory without an explicit role, the source reader treats its known transport fields as new semantic requirements and invalidates the answer frame.",
+      "corpus_sweep_recipe": "Rerun the owning and adjacent exact-ID suites listed in the linked reports. Preserve physical, changed-source, missing-ledger, native-invalid and unknown-field opposite controls. Full repository and fresh released benchmark validation remain pending.",
+      "implementation_paths": [
+        "programs/phase1_base_requirements.py",
+        "programs/phase1_expert_parse_track.py"
+      ],
+      "status": "PREVIOUSLY_SCOPED_VERIFIED_PENDING_CURRENT_INTEGRATION_REVIEW"
+    },
+    {
+      "id": "reset-coreference-wrapped-synchrony",
+      "packet": "capture-update",
+      "bucket": "C",
+      "pattern": "When a sole reset is declared by port name and a later wrapped sentence describes that reset by reference, line-local extraction drops the unnamed clauses and leaves a stated synchrony unknown.",
+      "why_not_bucket_a": "The target is deterministic product behavior. This is a local engineering escalation because the general source-bound producer and consumer contract needs implementation and matched behavioral validation. No repair or forward recovery for this gap is measured.",
+      "implementation_paths": [],
+      "status": "OPEN"
+    },
+    {
+      "id": "reviewed-clockless-native-applicability",
+      "packet": "capture-update",
+      "bucket": "C",
+      "pattern": "When complete reviewed prose explicitly excludes clocks, timing checks require a clock denominator or a specialized source form and report incomplete execution instead of a source-bound applicability disposition.",
+      "why_not_bucket_a": "The target is deterministic product behavior. This is a local engineering escalation because the general source-bound producer and consumer contract needs implementation and matched behavioral validation. No repair or forward recovery for this gap is measured.",
+      "implementation_paths": [],
+      "status": "OPEN"
+    },
+    {
+      "id": "coverage-denominator-producer-consumer",
+      "packet": "capture-update",
+      "bucket": "C",
+      "pattern": "When a producer credits extraction coverage against one population but the canonical audit reads a different empty pattern population, the visible coverage ratio and native qualification disagree.",
+      "why_not_bucket_a": "The target is deterministic product behavior. This is a local engineering escalation because the general source-bound producer and consumer contract needs implementation and matched behavioral validation. No repair or forward recovery for this gap is measured.",
+      "implementation_paths": [],
+      "status": "OPEN"
+    },
+    {
+      "id": "plain-prose-interface-native-correction",
+      "packet": "capture-update",
+      "bucket": "C",
+      "pattern": "When ordinary prose names module and port directions without a hardware header, extraction can retain the text only as notes and emit an empty interface. The issued review task diagnoses conflicts but provides no native correction admission contract.",
+      "why_not_bucket_a": "The target is deterministic product behavior. This is a local engineering escalation because the general source-bound producer and consumer contract needs implementation and matched behavioral validation. No repair or forward recovery for this gap is measured.",
+      "implementation_paths": [],
+      "status": "OPEN"
+    },
+    {
+      "id": "validated-joined-rtl-closure",
+      "packet": "capture-followup",
+      "bucket": "A",
+      "pattern": "When a valid RTL route joins requested evidence to a later owning verification closure, exact evidence-to-exit identity falsely rejects RTL applicability.",
+      "corpus_sweep_recipe": "Rerun the exact owning tests in the integrated patch, the 338-control integration selection and the adjacent public, scope, material, owner-generation and D11 suites. Preserve physical and malformed closure negatives, exact child identity and current Phase2 material, changed input, forged completion, stale output and strict historical-material negatives. Resolve disclosed baseline failures and execute unavailable native D11 cases before broader shipping claims. Full repository and fresh released blind benchmark validation remain pending.",
+      "implementation_paths": [
+        "programs/route_decision.py",
+        "programs/benchmark_dispatch.py"
+      ],
+      "status": "PREVIOUSLY_SCOPED_VERIFIED_PENDING_CURRENT_INTEGRATION_REVIEW"
+    },
+    {
+      "id": "exact-child-report-lineage",
+      "packet": "capture-followup",
+      "bucket": "A",
+      "pattern": "When a public owner launch creates distinct nested runner identities, a collector that accepts only flat outer-owned reports rejects genuine children or tempts identity relabeling.",
+      "corpus_sweep_recipe": "Rerun the exact owning tests in the integrated patch, the 338-control integration selection and the adjacent public, scope, material, owner-generation and D11 suites. Preserve physical and malformed closure negatives, exact child identity and current Phase2 material, changed input, forged completion, stale output and strict historical-material negatives. Resolve disclosed baseline failures and execute unavailable native D11 cases before broader shipping claims. Full repository and fresh released blind benchmark validation remain pending.",
+      "implementation_paths": [
+        "programs/benchmark_dispatch.py",
+        "programs/vibe_ic_one_shot_runner.py"
+      ],
+      "status": "PREVIOUSLY_SCOPED_VERIFIED_PENDING_CURRENT_INTEGRATION_REVIEW"
+    },
+    {
+      "id": "phase1-own-completion-history",
+      "packet": "capture-followup",
+      "bucket": "A",
+      "pattern": "When later RTL output changes the final inventory, comparing every historical Phase1 report to final output material rejects legitimate unchanged-source history.",
+      "corpus_sweep_recipe": "Rerun the exact owning tests in the integrated patch, the 338-control integration selection and the adjacent public, scope, material, owner-generation and D11 suites. Preserve physical and malformed closure negatives, exact child identity and current Phase2 material, changed input, forged completion, stale output and strict historical-material negatives. Resolve disclosed baseline failures and execute unavailable native D11 cases before broader shipping claims. Full repository and fresh released blind benchmark validation remain pending.",
+      "implementation_paths": [
+        "programs/benchmark_dispatch.py"
+      ],
+      "status": "PREVIOUSLY_SCOPED_VERIFIED_PENDING_CURRENT_INTEGRATION_REVIEW"
+    },
+    {
+      "id": "delivery-object-obligation-ownership",
+      "packet": "capture-followup",
+      "bucket": "C",
+      "pattern": "When source prose requests a controller for another object, whole-span noun suppression can erase physical obligations embedded in that object phrase or linked by a later reference. A broad noun scan can conversely label unresolved references as explicit physical delivery.",
+      "why_not_bucket_a": "The eventual validators are deterministic, but complete ownership across varied natural-language clauses needs a new typed evidence/adjudication contract, shared consumers, provenance and freshness binding, and independent adversarial controls. Neither existing parser patch safely implements that work.",
+      "implementation_paths": [],
+      "status": "AUTHORED_NOT_ACCEPTED",
+      "followup_packet": "capture-paused-delivery"
+    },
+    {
+      "id": "shared-delivery-admission-and-genuine-action-import",
+      "packet": "capture-paused-delivery",
+      "bucket": "A",
+      "pattern": "When source-only applicability follows from scanner silence or an unobserved answer, a physical obligation or unresolved source can receive a source profile without complete-source review.",
+      "before": "Three public controls selected SOURCE_PROFILE_SELECTED without current separate review.",
+      "after": "Authored controls refuse no-review admission; final independent full-head review is pending.",
+      "corpus_sweep_recipe": [
+        "After explicit resume, run ordinary and coordinator source admission against source-only, physical, unresolved and conflict plain-doc controls.",
+        "Run genuine final-policy action import, stale source/policy, wrong-model and missing-completion controls before shipping.",
+        "Run owning source panel and full repository gates with zero new failures; retain the six inherited failures separately."
+      ],
+      "implementation_paths": [
+        "programs/delivery_intent.py",
+        "programs/flow109.py",
+        "programs/benchmark_dispatch.py",
+        "programs/task_nature_route.py",
+        "programs/route_decision.py"
+      ],
+      "status": "AUTHORED_PENDING_INDEPENDENT_REVIEW"
+    },
+    {
+      "id": "complete-raw-and-canonical-source-inventory",
+      "packet": "capture-paused-delivery",
+      "bucket": "A",
+      "pattern": "When raw documents and nonidentical canonical intake documents coexist, choosing only one intake hides obligations from source ownership admission.",
+      "before": "Two value controls selected source profiles while omitting canonical physical requirements.",
+      "after": "Authored mixed-intake controls cover the omission. No final independent re-review is claimed.",
+      "corpus_sweep_recipe": [
+        "After explicit resume, exercise prompt-present and docs-only dual intake, byte-identical staged copies, distinct canonical obligations and generated-layer exclusion.",
+        "Require fresh independent review and replay of exact current source membership before release."
+      ],
+      "implementation_paths": [
+        "programs/delivery_intent.py",
+        "programs/flow109.py"
+      ],
+      "status": "AUTHORED_PENDING_INDEPENDENT_REVIEW"
+    },
+    {
+      "id": "physical-ownership-preserves-structured-admission",
+      "packet": "capture-paused-delivery",
+      "bucket": "A",
+      "pattern": "When a physical delivery owner has target rtl without a stronger minimum target, deriving receipt admission from the target string grants original-source privileges to a physical task.",
+      "before": "Two direct and coordinator value controls received original instead of structured.",
+      "after": "Both authored caller controls pass in retained results. Final exact-head independent review is pending.",
+      "corpus_sweep_recipe": [
+        "After explicit resume, test DIE with rtl target and no explicit minimum, source-only rtl, HARDMACRO, conflicting floors and physical reentry.",
+        "Preserve structured D1 and owner requirements; no blanket native completion credit."
+      ],
+      "implementation_paths": [
+        "programs/route_decision.py",
+        "programs/task_nature_route.py",
+        "programs/benchmark_dispatch.py"
+      ],
+      "status": "AUTHORED_PENDING_INDEPENDENT_REVIEW"
+    },
+    {
+      "id": "capture-paused-delivery-b-4",
+      "packet": "capture-paused-delivery",
+      "bucket": "B",
+      "pattern": "A requested artifact can describe an external chip as behavior context or impose delivery of that chip, and nearby noun matching cannot decide ownership across unrestricted prose.",
+      "why_not_bucket_a": "Given complete unrestricted prose and all mechanically retained floors, a program cannot establish whether an indirect reference assigns artifact ownership or leaves a semantic ambiguity. All byte membership, schema, provenance and receipt checks remain Bucket A.",
+      "implementation_paths": [
+        "skills/delivery-ownership-review/SKILL.md",
+        "skills/phase1/SKILL.md",
+        "skills/open-benchmark-methodology/SKILL.md"
+      ],
+      "status": "AUTHORED_PENDING_INDEPENDENT_REVIEW"
+    },
+    {
+      "id": "capture-paused-delivery-c-5",
+      "packet": "capture-paused-delivery",
+      "bucket": "C",
+      "pattern": "When an implementation changes after provisional review, earlier findings or partial reviewer work cannot establish acceptance of the final source.",
+      "why_not_bucket_a": "The missing result is an independent human or agent judgment over the exact authored source, not another deterministic program repair. User pause forbids that review now.",
+      "implementation_paths": [],
+      "status": "OPEN"
+    },
+    {
+      "id": "capture-paused-delivery-c-6",
+      "packet": "capture-paused-delivery",
+      "bucket": "C",
+      "pattern": "When a real runtime import was proven on an earlier policy, reusing it after source membership or policy changes would grant authority without testing the current contract.",
+      "why_not_bucket_a": "The current missing evidence requires genuine independent semantic actions and native execution under exact policy, beyond a deterministic artifact audit. User pause forbids execution now.",
+      "implementation_paths": [],
+      "status": "OPEN"
+    },
+    {
+      "id": "capture-paused-delivery-c-7",
+      "packet": "capture-paused-delivery",
+      "bucket": "C",
+      "pattern": "When a general product repair has only scoped author controls, treating those controls as a full benchmark result conceals unmeasured native and corpus behavior.",
+      "why_not_bucket_a": "The missing evidence is a fresh authorized complete benchmark run and normal release qualification, not a new deterministic source rule. User pause forbids the run now.",
+      "implementation_paths": [],
+      "status": "OPEN"
+    }
+  ],
+  "evidence_index": "evidence/index.json",
+  "pending": [
+    "exact final-source independent implementation and comment review",
+    "fresh current-policy semantic and native controls",
+    "original-source replay",
+    "fresh complete benchmark validation",
+    "genuine private token scan and maintainer landing"
+  ],
+  "claim_boundary": "Actual program, skill and regression changes are in this contribution. Historical scoped evidence is retained separately. There is no current integration approval, native acceptance, release or official benchmark score."
+}

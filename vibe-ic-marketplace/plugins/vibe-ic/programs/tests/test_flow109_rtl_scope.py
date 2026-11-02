@@ -7,15 +7,16 @@ import pytest
 
 import flow109
 import _delivery_route
+from _delivery_review_fixture import accept_review
 
 
-def _request(tmp_path, monkeypatch):
+def _request(tmp_path, monkeypatch, prompt='Debug the supplied RTL; return corrected Verilog.\n'):
     registry = flow109.load_registry()
     features = {key: False for key in registry['predicate_names']
                 if key not in registry['predicate_definitions']}
     features.update(always=True, has_digital=True, soft_ip=True)
     (tmp_path / 'input/rtl').mkdir(parents=True)
-    (tmp_path / 'input/phase1_prompt.md').write_text('Debug the supplied RTL; return corrected Verilog.\n')
+    (tmp_path / 'input/phase1_prompt.md').write_text(prompt)
     (tmp_path / 'input/rtl/unit.v').write_text('module Unit(input a, output y); assign y=a; endmodule\n')
     manifest = tmp_path / 'input/flow109-manifest.json'
     manifest.write_text(json.dumps({'features': features, 'step_profiles': {}}))
@@ -24,6 +25,8 @@ def _request(tmp_path, monkeypatch):
                      delivery_target='rtl', route=None)
     monkeypatch.setenv(flow109.CONTEXT_ENV, "")
     monkeypatch.setenv(flow109.ATTEMPT_ENV, "")
+    monkeypatch.setenv('VIBE_IC_DELIVERY_AUTHORITY_ROOT', str(tmp_path.parent / (tmp_path.name + '-authority')))
+    accept_review(tmp_path)
     return args
 
 
@@ -119,8 +122,7 @@ def test_frontdoor_prompt_copy_does_not_change_original_authority(tmp_path, monk
     'Deliver a standalone hardmacro with LEF, Liberty and GDS.',
 ])
 def test_scope_cannot_override_physical_source_request(tmp_path, monkeypatch, physical_request):
-    args = _request(tmp_path, monkeypatch)
-    (tmp_path / 'input/phase1_prompt.md').write_text(physical_request)
+    args = _request(tmp_path, monkeypatch, physical_request)
     with pytest.raises(flow109.Flow109Error, match='original source requests physical delivery'):
         flow109.prepare_front_door(args, tmp_path)
 
@@ -143,9 +145,8 @@ def test_scope_preserves_prior_declaration_without_using_it_as_authority(tmp_pat
 
 
 def test_current_owner_physical_request_is_not_overridden(tmp_path, monkeypatch):
-    args = _request(tmp_path, monkeypatch)
     quotation = 'Deliver a standalone hardmacro with LEF, Liberty and GDS.'
-    (tmp_path / 'input/phase1_prompt.md').write_text(quotation)
+    args = _request(tmp_path, monkeypatch, quotation)
     owner = tmp_path / 'input/step_0_5ic_answers.json'
     owner.write_text(json.dumps({'answers': {'deliverable': 'HARDMACRO'},
                                 'answer_provenance': {'deliverable': {
@@ -163,6 +164,7 @@ def test_docs_only_scope_uses_the_normal_document_input(tmp_path, monkeypatch, s
     document = tmp_path / source_root / 'spec.md'
     document.parent.mkdir(parents=True, exist_ok=True)
     document.write_text('Implement a module whose output equals its input. Return RTL.\n')
+    accept_review(tmp_path, fresh=True)
     flow109.prepare_front_door(args, tmp_path)
     scope = flow109.active_rtl_scope(tmp_path)
     assert any(row['path'] == source_root + '/spec.md' for row in scope['inputs'])
@@ -210,8 +212,7 @@ def test_docs_only_scope_refuses_an_empty_design_source(tmp_path, monkeypatch):
 def test_public_rtl_scope_refuses_additional_physical_deliverables(tmp_path, monkeypatch, physical_request):
     import subprocess
     import sys
-    args = _request(tmp_path, monkeypatch)
-    (tmp_path / 'input/phase1_prompt.md').write_text(physical_request)
+    args = _request(tmp_path, monkeypatch, physical_request)
     command = [sys.executable, str(Path(flow109.__file__).with_name('vibe_ic_one_shot_runner.py')),
                str(tmp_path), '--flow', '109', '--flow109-manifest', str(args.flow109_manifest),
                '--entry-step', 'D01', '--exit-step', 'D01', '--delivery-target', 'rtl',
@@ -229,6 +230,7 @@ def test_public_rtl_scope_accepts_docs_without_a_synthetic_prompt(tmp_path, monk
     docs = tmp_path / 'input/docs'
     docs.mkdir()
     (docs / 'spec.md').write_text('Implement a module whose output equals its input. Return RTL.\n')
+    accept_review(tmp_path, fresh=True)
     command = [sys.executable, str(Path(flow109.__file__).with_name('vibe_ic_one_shot_runner.py')),
                str(tmp_path), '--flow', '109', '--flow109-manifest', str(args.flow109_manifest),
                '--entry-step', 'D01', '--exit-step', 'D01', '--delivery-target', 'rtl',
