@@ -10,89 +10,100 @@ import re
 _COLUMNS = ('pin', 'condition', 'nominal', 'min', 'max', 'unit',
             'consumer_blocks', 'basis')
 _NUMBER = re.compile(r'[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?\Z')
-_HEADING = re.compile(r'^ {0,3}(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$')
+_HEADING = re.compile(r'^(#{1,6})[ \t]+(.+?)(?:[ \t]+#+)?[ \t]*$')
 
 
 def _refuse(reason, detail):
     raise ValueError(f'PIN_INTERFACE_CONDITION_{reason}: {detail}')
 
 
-def _sections(text):
-    """One boundary model for masking and parsing the strict protocol.
+# Header detection is deliberately container-agnostic. Prefixes/suffixes do
+# not make a copied protocol header disappear from the declared source set.
+_HEADER = re.compile(r'\|' + r'\|'.join(r'[ \t]*' + re.escape(c) + r'[ \t]*' for c in _COLUMNS) + r'\|', re.I)
+_TEXT = re.compile(r'[^\W_][^<>`~|\t]*\Z')
+_FORBIDDEN = re.compile(r'[<>`~]')
 
-    Fences use CommonMark's character, length, indentation and trailing-space
-    rules. Ambiguous/unclosed fences anywhere in the declared document set
-    refuse; hidden or quoted protocol copies never become authority or silent
-    skips. Validation finishes before any section can authorize a typed row.
+
+def _validate_fences(text):
+    """Delimiter integrity only; this never decides table authority.
+
+    Recognize delimiters after punctuation-only container prefixes without
+    classifying block types. An unknown/mismatched delimiter refuses rather
+    than making a following header live. Authority uses the allowlist below.
     """
-    lines = text.splitlines(keepends=True)
-    sections = []
-    start = level = None
     fence = None
-    errors = []
-    for index, raw in enumerate(lines):
-        line = raw.rstrip('\r\n')
-        # Blockquotes are containers, not top-level protocol authority. Strip
-        # their markers only to detect a forbidden copy, never to parse rows.
-        unquoted = line
-        quoted = False
-        while re.match(r'^ {0,3}>', unquoted):
-            unquoted = re.sub(r'^ {0,3}>[ \t]?', '', unquoted, count=1)
-            quoted = True
-        heading = _HEADING.fullmatch(unquoted)
-        title = heading[2] if heading else None
-        header = tuple(c.strip() for c in unquoted.strip().strip('|').split('|'))
-        candidate = title == 'Pin interface conditions' or header == _COLUMNS
-        if candidate:
-            if quoted or fence is not None:
-                errors.append(('HIDDEN_TABLE', index + 1))
-        if quoted:
+    for number, line in enumerate(text.splitlines(), 1):
+        marker = re.fullmatch(r'([^\w`~]*)(`{3,}|~{3,})(.*)', line)
+        if not marker:
             continue
-        marker = re.fullmatch(r'([ \t]*)(`{3,}|~{3,})(.*)', line)
-        fence_indent = marker is not None and '\t' not in marker[1] and len(marker[1]) <= 3
+        prefix, token, tail = marker.groups()
+        container = ''.join(prefix.split())
+        indentation_valid = bool(container) or ('\t' not in prefix and len(prefix) <= 3)
         if fence is not None:
-            if marker:
-                _, token, tail = marker.groups()
-                if fence_indent and token[0] == fence[0] and len(token) >= fence[1] and not tail.strip(' \t'):
-                    fence = None
-                else:
-                    # CommonMark keeps this line inside the fence. The strict
-                    # authority protocol additionally refuses that ambiguity.
-                    errors.append(('INVALID_FENCE', index + 1))
-            continue
-        if marker and fence_indent:
-            _, token, tail = marker.groups()
-            # Backticks are forbidden in a backtick fence's info string.
-            if token[0] != '`' or '`' not in tail:
-                fence = (token[0], len(token), index + 1)
-            continue
-        if heading:
-            depth = len(heading[1])
-            if start is not None and depth <= level:
-                sections.append((start, index, lines))
-                start = level = None
-            if title == 'Pin interface conditions':
-                if start is not None:
-                    _refuse('TABLE_MALFORMED', 'nested condition section')
-                start, level = index, depth
-    if errors:
-        reason, line = errors[0]
-        _refuse(reason, f'line {line}: hidden or ambiguous protocol boundary')
+            if (indentation_valid and container == fence[2] and token[0] == fence[0]
+                    and len(token) >= fence[1] and not tail.strip(' \t')):
+                fence = None
+            else:
+                _refuse('INVALID_FENCE', f'line {number}')
+        elif indentation_valid and (token[0] != '`' or '`' not in tail):
+            fence = (token[0], len(token), container, number)
     if fence is not None:
-        _refuse('UNCLOSED_FENCE', f'line {fence[2]}')
-    if start is not None:
-        sections.append((start, len(lines), lines))
-    return sections
+        _refuse('UNCLOSED_FENCE', f'line {fence[3]}')
 
 
 def _document_sections(extracted):
-    """Exactly one authoritative table section in the entire document set."""
-    sections = []
+    """Strict allowlist, not a Markdown block/context interpreter.
+
+    Exactly one zero-indented declared heading and one bare protocol header
+    may authorize a table. Its section admits blank lines and bare table rows
+    only. To prove that this heading cannot inherit a hidden container, its
+    document also admits only plain unindented preamble text, root headings,
+    and bare unrelated table rows outside the section. Markup delimiters are
+    forbidden there, not parsed. Other documents retain their own content,
+    but any protocol header anywhere else is a named hidden-copy refusal.
+    """
+    documents = {doc: text.splitlines(keepends=True) for doc, text in (extracted or {}).items()}
+    roots, headers = [], []
     for doc, text in (extracted or {}).items():
-        sections.extend((doc, start, end, lines) for start, end, lines in _sections(text))
-    if len(sections) > 1:
-        _refuse('MULTIPLE_TABLES', str([(doc, start + 1) for doc, start, _, _ in sections]))
-    return sections
+        _validate_fences(text)
+        for index, raw in enumerate(documents[doc]):
+            line = raw.rstrip('\r\n')
+            heading = _HEADING.fullmatch(line)
+            if heading and heading[2] == 'Pin interface conditions':
+                roots.append((doc, index, len(heading[1])))
+            for match in _HEADER.finditer(line):
+                headers.append((doc, index, match.span()))
+    if len(roots) > 1 or len(headers) > 1:
+        _refuse('MULTIPLE_TABLES', str([(doc, line + 1) for doc, line, _ in headers]))
+    if not roots:
+        if headers:
+            _refuse('HIDDEN_TABLE', str([(doc, line + 1) for doc, line, _ in headers]))
+        return []
+    doc, start, level = roots[0]
+    lines = documents[doc]
+    end = len(lines)
+    for index in range(start + 1, len(lines)):
+        heading = _HEADING.fullmatch(lines[index].rstrip('\r\n'))
+        if heading and len(heading[1]) <= level:
+            end = index
+            break
+    if headers:
+        owner, index, span = headers[0]
+        raw = documents[owner][index].rstrip('\r\n')
+        if owner != doc or not start < index < end or span != (0, len(raw.rstrip(' \t'))):
+            _refuse('HIDDEN_TABLE', f'{owner}:{index + 1}')
+    for index, raw in enumerate(lines):
+        line = raw.rstrip('\r\n')
+        if not line.strip() or index == start:
+            continue
+        bare = line == line.lstrip(' \t') and not _FORBIDDEN.search(line)
+        row = bare and line.startswith('|') and line.rstrip(' \t').endswith('|')
+        if start < index < end:
+            if not row:
+                _refuse('TABLE_MALFORMED', f'{doc}:{index + 1}: section permits only bare rows and blanks')
+        elif not bare or not (row or _HEADING.fullmatch(line) or _TEXT.fullmatch(line)):
+            _refuse('HIDDEN_TABLE', f'{doc}:{index + 1}: document outside the authority allowlist')
+    return [(doc, start, end, lines)]
 
 
 def without_condition_tables(extracted):

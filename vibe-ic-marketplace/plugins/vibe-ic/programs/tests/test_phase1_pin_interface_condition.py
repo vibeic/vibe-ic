@@ -90,10 +90,9 @@ def test_multiple_rows_are_independent(tmp_path):
     assert len(block_rows(l5))==1
 
 @pytest.mark.parametrize('text',[table().replace('Pin interface conditions','Proposed interface conditions')])
-def test_only_exact_real_section_is_parsed(tmp_path,text):
-    l1,l5=generate(tmp_path,text)
-    assert not any(r.get('kind')=='input_condition' for r in pin_rows(l1))
-    assert block_rows(l5)==[]
+def test_header_outside_exact_declared_section_refuses(tmp_path,text):
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_HIDDEN_TABLE'):
+        generate(tmp_path,text)
 
 def test_unknown_consumer_without_any_analog_block_refuses(tmp_path):
     interface=INTERFACE.split('## Block A')[0]
@@ -157,9 +156,9 @@ def test_ambiguous_fences_fail_closed(tmp_path,opener,closer):
         generate(tmp_path,opener+'\n'+closer+'\n'+table())
 
 @pytest.mark.parametrize('opener,closer',[('```markdown','````'),('~~~text','~~~~'),('   ```','  ```\t')])
-def test_valid_fence_before_live_table_preserves_authority(tmp_path,opener,closer):
-    l1,l5=generate(tmp_path,opener+'\nordinary example\n'+closer+'\n'+table())
-    assert len(pin_rows(l1))==1 and block_rows(l5)==pin_rows(l1)
+def test_protocol_document_disallows_code_even_before_heading(tmp_path,opener,closer):
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_HIDDEN_TABLE'):
+        generate(tmp_path,opener+'\nordinary example\n'+closer+'\n'+table())
 
 @pytest.mark.parametrize('text',['```markdown\n'+table()+'```','> '+table().replace('\n','\n> ')])
 def test_hidden_tables_are_named_refusals(tmp_path,text):
@@ -177,9 +176,9 @@ def test_nonclosing_indented_fence_like_line_refuses_even_before_a_real_close(tm
         generate(tmp_path,'```markdown\n    ```\n```\n'+table())
 
 
-def test_non_commonmark_heading_does_not_authorize_a_table(tmp_path):
-    l1,l5=generate(tmp_path,table().replace('Pin interface conditions','Pin interface conditions###'))
-    assert not pin_rows(l1) and not block_rows(l5)
+def test_header_with_non_declared_heading_refuses(tmp_path):
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_HIDDEN_TABLE'):
+        generate(tmp_path,table().replace('Pin interface conditions','Pin interface conditions###'))
 
 
 @pytest.mark.parametrize('text',['```markdown\nunclosed','```markdown\n```not-a-closer\n```\n'])
@@ -189,3 +188,17 @@ def test_fence_refusal_covers_the_entire_declared_set(tmp_path,text,with_table):
     if with_table:docs['conditions.md']=table()
     with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_(UNCLOSED|INVALID)_FENCE'):
         generate_docs(tmp_path,docs)
+
+
+ALLOWLIST_CASES=json.loads((Path(__file__).parent/'fixtures/phase1_pin_interface_allowlist.json').read_text())
+@pytest.mark.parametrize('case',ALLOWLIST_CASES,ids=[c['case'] for c in ALLOWLIST_CASES])
+def test_allowlist_review_and_own_specimens_refuse(tmp_path,case):
+    with pytest.raises(ValueError,match='PIN_INTERFACE_CONDITION_'):
+        generate_docs(tmp_path,case['docs'])
+
+
+def test_allowlist_preserves_plain_signed_preamble_and_row_whitespace(tmp_path):
+    text='# Signed addendum\n\nSigner: requirements owner\nSigned: 2026-11-02.\n\n'+table().replace('| nominal |','|\tnominal\t|').replace(' |\n',' |  \n')
+    l1,l5=generate(tmp_path,text)
+    assert pin_rows(l1)[0]['min_typ_max']=={'typ':2.,'min':1.96,'max':2.04}
+    assert block_rows(l5)==pin_rows(l1)
