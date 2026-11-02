@@ -28,6 +28,7 @@ Contract halves pinned here:
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -139,6 +140,105 @@ def test_serial_spec_extracted_from_declaration(tmp_path):
     # declared conventions are read as INFORMATIONAL annotations (the oracle
     # self-calibrates framing and does not depend on them being correct).
     assert spec["declared_bit_order"] == "LSB" and spec["declared_latency"] == 2
+
+
+@pytest.mark.parametrize('result,operands', [
+    pytest.param('a', ['b', 'y'], id='parallel-input-result'),
+    pytest.param('b', ['a', 'y'], id='serial-input-result'),
+])
+def test_serial_reader_rejects_declared_input_result(tmp_path, result, operands):
+    proj = _mk_project(tmp_path, declare=True)
+    path = proj / 'plugin_output/declaration.json'
+    doc = json.loads(path.read_text())
+    doc['function'].update(result=result, operands=operands)
+    path.write_text(json.dumps(doc))
+    spec, reason = aotg.extract_serial_arith_spec(proj, 'digital_arithmetic_primitive')
+    assert spec is None and reason, (spec, reason)
+
+
+@pytest.mark.parametrize('operands,parallel_is_lhs', [
+    pytest.param(['a', 'b'], True, id='parallel-lhs'),
+    pytest.param(['b', 'a'], False, id='serial-lhs'),
+])
+def test_serial_reader_preserves_noncommutative_operand_order(tmp_path, operands, parallel_is_lhs):
+    proj = _mk_project(tmp_path, declare=True)
+    path = proj / 'plugin_output/declaration.json'
+    doc = json.loads(path.read_text())
+    doc['function'].update(operator='-', operands=operands)
+    path.write_text(json.dumps(doc))
+    spec, reason = aotg.extract_serial_arith_spec(proj, 'digital_arithmetic_primitive')
+    assert spec is not None, reason
+    assert spec['operator'] == '-'
+    assert spec['parallel_is_lhs'] is parallel_is_lhs
+
+
+def _ordinary_professional_step(proj, monkeypatch):
+    import design_one_shot_runner as runner
+    import professional_tb_check as consumer
+    reports = proj / 'reports'
+    reports.mkdir(exist_ok=True)
+    (reports / 'ic_class.json').write_text(json.dumps({'ic_class': 'digital_arithmetic_primitive'}))
+    monkeypatch.setenv('PYTHONPATH', str(PROGRAMS) + os.pathsep + os.environ.get('PYTHONPATH', ''))
+    step = runner.step_professional_tb_gen(proj, 'serpar_mul', '')
+    (proj / 'native-step.json').write_text(json.dumps(step.__dict__, default=str, indent=2))
+    report = json.loads((reports / 'phase2/gates/professional_tb.json').read_text())
+    return step, report, consumer.check(proj)
+
+
+@pytest.mark.parametrize('result,operands', [
+    pytest.param('ghost_y', ['ghost_a', 'ghost_b'], id='ghost-ports'),
+    pytest.param('a', ['b', 'y'], id='parallel-input-result'),
+    pytest.param('b', ['a', 'y'], id='serial-input-result'),
+])
+def test_ordinary_professional_hook_rejects_unbound_serial_function(
+        tmp_path, monkeypatch, result, operands):
+    proj = _mk_project(tmp_path, declare=True)
+    path = proj / 'plugin_output/declaration.json'
+    doc = json.loads(path.read_text())
+    doc['function'].update(result=result, operands=operands)
+    path.write_text(json.dumps(doc))
+    step, report, check = _ordinary_professional_step(proj, monkeypatch)
+    assert step.status == 'NOT_MEASURED', (step.detail, report, check)
+    assert report['status'] == 'INCOMPLETE' and report['ran_cocotb'] is False, report
+    assert report['reason'] and report['fallback_skill'] == 'testbench-gen', report
+    assert check['verdict'] == 'NOT_CHECKED', check
+    assert not (proj / 'phase2/stage1/sim_professional').exists()
+
+
+@pytest.mark.parametrize('operator', [
+    pytest.param(['*'], id='operator-list'),
+    pytest.param({'symbol': '*'}, id='operator-dict'),
+])
+def test_ordinary_professional_hook_names_malformed_operator(tmp_path, monkeypatch, operator):
+    proj = _mk_project(tmp_path, declare=True)
+    path = proj / 'plugin_output/declaration.json'
+    doc = json.loads(path.read_text())
+    doc['function']['operator'] = operator
+    path.write_text(json.dumps(doc))
+    step, report, check = _ordinary_professional_step(proj, monkeypatch)
+    assert step.status == 'NOT_MEASURED', (step.detail, report, check)
+    assert report['status'] == 'INCOMPLETE' and report['ran_cocotb'] is False, report
+    assert 'malformed' in report['reason'], report
+    assert check['verdict'] == 'NOT_CHECKED', check
+    assert not (proj / 'phase2/stage1/sim_professional').exists()
+
+
+@pytest.mark.timeout(120)
+@pytest.mark.parametrize('dut,status,mismatch', [
+    pytest.param(_GENERIC_DUT, 'PASS', False, id='correct-dut'),
+    pytest.param(_BROKEN_DUT, 'FAIL', True, id='wrong-output'),
+])
+def test_ordinary_professional_hook_measures_valid_serial_function(
+        tmp_path, monkeypatch, dut, status, mismatch):
+    proj = _mk_project(tmp_path, declare=True, dut=dut)
+    step, report, check = _ordinary_professional_step(proj, monkeypatch)
+    assert step.status == status, (step.detail, report, check)
+    assert report['status'] == status and report['ran_cocotb'] is True, report
+    assert report['functional_mismatch'] is mismatch, report
+    assert check['verdict'] == status, check
+    out = proj / 'phase2/stage1/sim_professional/serpar_mul'
+    assert (out / 'cocotb_run.log').stat().st_size > 0
+    assert (out / 'results.xml').stat().st_size > 0
 
 
 def test_conventions_read_from_rtl_header_when_no_declaration_json(tmp_path):

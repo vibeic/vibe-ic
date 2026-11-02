@@ -94,6 +94,19 @@ def test_malformed_function_field_defers(tmp_path, field):
 
 
 @pytest.mark.parametrize('field', [
+    pytest.param(function(operator=['*']), id='operator-list'),
+    pytest.param(function(operator={'symbol': '*'}), id='operator-dict'),
+    pytest.param({**function(), 'operands': 2}, id='operands-int'),
+    pytest.param({**function(), 'operands': {'left': 0, 'right': 1}}, id='operands-dict'),
+])
+def test_function_field_types_have_named_malformed_refusal(tmp_path, field):
+    p = project(tmp_path)
+    update_declaration(p, function=field)
+    spec, reason = extract(p)
+    assert spec is None and 'malformed' in reason, (spec, reason)
+
+
+@pytest.mark.parametrize('field', [
     function(operands=('other', 'right')),
     function(operands=('left', 'other')),
     function(result='other'),
