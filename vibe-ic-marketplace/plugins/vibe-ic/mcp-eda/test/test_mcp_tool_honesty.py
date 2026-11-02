@@ -64,7 +64,7 @@ def _invoke_registered_tool(name, params, gds_result=None):
     start = src.rfind('server.tool(', 0, marker)
     end = src.find('server.tool(', marker)
     block = src[start:end] if end >= 0 else src[start:]
-    script = r'''
+    script = 'import {containerToolCommand} from ' + json.dumps((INDEX_JS.parent / 'lib/tool_path.mjs').as_uri()) + ';\n' + r'''
 const calls = [];
 let handler;
 const chain = new Proxy(() => chain, { get: () => chain });
@@ -92,6 +92,142 @@ console.log(JSON.stringify({result,calls}));
     r = _pr.run([NODE, '--input-type=module', '-e', script], capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
+
+
+def _invoke_actual_dft_script(tmp_path, *, fail_stage=None, missing=False, missing_dependency=None):
+    """Run the registered handler's assembled script with neutral tools.
+
+    This checks quote transport and returned verdicts without running ATPG.
+    PATH is restricted so a missing fixture tool cannot borrow a host binary.
+    """
+    native = tmp_path / "native"
+    native.mkdir()
+    for name in ("mkdir", "cat"):
+        (native / name).symlink_to(shutil.which(name))
+    for name in ("iverilog", "yosys"):
+        if name == missing_dependency:
+            continue
+        path = native / name
+        path.write_text("#!/bin/sh\nexit 0\n")
+        path.chmod(0o755)
+    if not missing:
+        path = native / "fault"
+        path.write_text("#!/bin/sh\nprintf called > '" + str(tmp_path / "fault-called") + "'\n" + """
+test -x "$FAULT_IVERILOG" && test -x "$FAULT_YOSYS" || exit 39
+test "$1" != "$FAIL_STAGE" || { echo 'Error: requested Fault stage failed'; exit 42; }
+case "$1" in
+ chain) echo 'Total scan-chain length: 3';;
+ atpg) echo 'Coverage 91.0%'; echo 'Compacted TV Count: 5';;
+esac
+""")
+        path.chmod(0o755)
+    src = _src()
+    start = src.rfind("server.tool(", 0, src.index('"eda_dft"'))
+    block = src[start:src.index("// ─── Tool: eda_ic_search", start)]
+    script = r'''
+import {spawnSync} from 'node:child_process';
+import {containerToolCommand} from HELPER;
+import * as safe from SAFETY;
+let handler;
+const chain = new Proxy(() => chain, {get: () => chain});
+const z=chain, server={tool: (...args) => {handler=args.at(-1);}};
+const {assertSafePath,assertSafeIdent,optPath,optNoShellMeta}=safe;
+const guardError=e=>({success:false,error:String(e)});
+const TOOLS=TOOLS_ROOT;
+const pdkConfig=()=>({});
+const manifests=[], calls=[];
+const writeManifest=(dir,entry)=>manifests.push(entry);
+function dockerExec(cmd) {
+ calls.push(cmd);
+ // Model the container's private /tmp with this test's own temporary root.
+ const isolated=cmd.replaceAll('/tmp/combined_cells.v',COMBINED_CELLS);
+ const r=spawnSync(BASH,['-c',isolated],{encoding:'utf8',env:{...process.env,PATH:NATIVE,FAIL_STAGE:FAIL_STAGE}});
+ return {success:r.status===0,output:(r.stdout||'')+(r.stderr||'')};
+}
+BLOCK
+const response=await handler(PARAMS);
+console.log(JSON.stringify({metrics:JSON.parse(response.content[0].text),manifests,calls}));
+'''
+    values = {
+        "HELPER": (INDEX_JS.parent / "lib/tool_path.mjs").as_uri(),
+        "SAFETY": (INDEX_JS.parent / "lib/shell_safety.mjs").as_uri(),
+        "TOOLS_ROOT": str(tmp_path / "absent-legacy"),
+        "BASH": shutil.which("bash"), "NATIVE": str(native),
+        "COMBINED_CELLS": str(tmp_path / "combined_cells.v"),
+        "FAIL_STAGE": fail_stage or "",
+        "PARAMS": {"netlist": "/neutral/netlist.v", "clock": "clk", "reset": "rst_n",
+                   "reset_active_low": True, "pdk": "custom", "tv_count": 5,
+                   "add_jtag": True, "output_dir": str(tmp_path / "dft"),
+                   "custom_lib": "/neutral/cells.lib", "custom_dff_names": "NEUTRAL_DFF"},
+    }
+    # Substitute whole placeholders, so FAIL_STAGE in the JavaScript property
+    # name and the literal fixture script remains intact.
+    for key in ("HELPER", "SAFETY", "TOOLS_ROOT", "BASH", "NATIVE", "PARAMS", "COMBINED_CELLS"):
+        script = script.replace(key, json.dumps(values[key]))
+    script = script.replace("FAIL_STAGE:FAIL_STAGE", "FAIL_STAGE:" + json.dumps(values["FAIL_STAGE"]))
+    script = script.replace("BLOCK", block)
+    result = _pr.run([NODE, "--input-type=module", "-e", script], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    return json.loads(result.stdout)
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_dft_actual_script_resolves_native_tools_and_preserves_shell_quotes(tmp_path):
+    got = _invoke_actual_dft_script(tmp_path)
+    assert got["metrics"]["success"] is True
+    assert got["metrics"]["coverage_pct"] == 91.0
+    assert got["metrics"]["jtag_added"] is True
+    assert len(got["manifests"]) == 1
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+@pytest.mark.parametrize("stage", ["chain", "cut", "atpg", "tap", None])
+def test_dft_actual_script_missing_or_failed_fault_cannot_report_pass(tmp_path, stage):
+    got = _invoke_actual_dft_script(tmp_path, fail_stage=stage, missing=stage is None)
+    assert got["metrics"]["success"] is False
+    assert got["manifests"] == []
+    if stage != "tap":
+        assert "ATPG_DONE" not in got["metrics"]["log_tail"]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+@pytest.mark.parametrize("dependency", ["iverilog", "yosys"])
+def test_dft_missing_dependency_stops_before_fault_runs(tmp_path, dependency):
+    got = _invoke_actual_dft_script(tmp_path, missing_dependency=dependency)
+    assert got["metrics"]["success"] is False
+    assert got["manifests"] == []
+    assert not (tmp_path / "fault-called").exists()
+    assert "tool unavailable in container: " + dependency in got["metrics"]["log_tail"]
+
+
+@pytest.mark.skipif(NODE is None, reason="node not installed")
+def test_operator_explicit_missing_path_is_not_replaced_by_native_path(tmp_path):
+    native = tmp_path / "native"
+    native.mkdir()
+    marker = tmp_path / "native-called"
+    path = native / "yosys"
+    path.write_text("#!/bin/sh\nprintf called > '" + str(marker) + "'\n")
+    path.chmod(0o755)
+    command = "'" + str(tmp_path / "operator-missing/yosys") + "' -V"
+    source = _src()
+    start = source.index("function dockerExec(")
+    consumer = source[start:source.index("\n}\n", start) + 3]
+    script = "\n".join([
+        "import {spawnSync} from 'node:child_process';",
+        "const CONTAINER='neutral'; const _UNREACHABLE_HINTS=[]; const calls=[];",
+        "const _probeDocker=()=>({ok:true}), _containerHasTimeout=()=>false;",
+        "function _invalidateDockerProbe() {}",
+        "function _spawnSync(bin,argv,opts) {calls.push(argv); return spawnSync(" + json.dumps(shutil.which("bash")) + ",['-c',argv.at(-1)],{...opts,env:{...process.env,PATH:" + json.dumps(str(native)) + "}});}",
+        consumer,
+        "const result=dockerExec(" + json.dumps(command) + "); console.log(JSON.stringify({result,calls}));",
+    ])
+    run = _pr.run([NODE, "--input-type=module", "-e", script], capture_output=True, text=True)
+    assert run.returncode == 0, run.stderr
+    got = json.loads(run.stdout)
+    assert got["calls"][0][-1] == command
+    assert got["result"]["success"] is False
+    assert got["result"]["exitCode"] == 127
+    assert not marker.exists()
 
 
 @pytest.mark.skipif(NODE is None, reason='node not installed')

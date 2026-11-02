@@ -5,6 +5,8 @@ import hashlib
 import inspect
 import json
 from pathlib import Path
+import shutil
+import sys
 
 import pytest
 
@@ -353,7 +355,7 @@ def test_checked_in_public_doc_supplies_real_correction_evidence(tmp_path, monke
     # implementing the document; no acceptance validator is bypassed in product.
 
 
-def _clarification_case(tmp_path, supplemental=False, public_doc=None):
+def _clarification_case(tmp_path, supplemental=False, public_doc=None, *, issue_run=True):
     prompt = public_doc or (
         "Design module dut with input a and output y. assign y = a.\n"
         "Acknowledge after the prescribed delay.\n")
@@ -382,7 +384,8 @@ def _clarification_case(tmp_path, supplemental=False, public_doc=None):
         test = fixtures._write_direct_assignment_challenge(task)
         review["measured_defined_subset"] = {"path": test["path"], "sha256": test["sha256"]}
     fixtures._write_review(task, review)
-    fixtures._solve_report(run, task)
+    if issue_run:
+        fixtures._solve_report(run, task)
     request = {
         "schema": bd._REVIEW_CORRECTION_SCHEMA, "id": task["id"],
         "task_sha256": bd._review_task_digest(task),
@@ -405,6 +408,147 @@ def _optional_protected(task):
     return {str(path): Path(path).read_bytes() if Path(path).is_file() else None
             for path in [task["prompt_path"], task["review_path"], task["challenge_path"],
                          *task["rtl_paths"], *task["working_rtl_paths"]]}
+
+
+def _correction_batch_case(tmp_path):
+    """Two real immutable correction transitions in one neutral run."""
+    import benchmark_io_adapter as bio
+    run, first, path, first_request, review = _clarification_case(tmp_path, issue_run=False)
+    project = run / "projects/p2"
+    shutil.copytree(first["project"], project)
+    prompt = (project / "input/phase1_prompt.md").read_text()
+    bio._stage_public_original("p2", prompt, {}, project)
+    second = bd._make_ai_review_task(
+        "p2", project, bio.collect("rtllm", "p2", project), fixtures.ROUTING,
+        0, run, "PROGRAM")
+    review = {**review, "id": "p2", "prompt_sha256": second["prompt_sha256"],
+              "rtl_sha256": second["rtl_sha256"],
+              "source_sha256": second["public_original_input"]["source_sha256"]}
+    fixtures._write_review(second, review)
+    route = bd._make_ai_route_task(
+        "p2", project, {"public_original_input": second["public_original_input"]},
+        fixtures.ROUTING, run, "rtllm", benchmark="rtllm", dataset_path=Path("/unused"))
+    fixtures._solve_report(run, first, extra_routes=[route])
+    first_request["task_sha256"] = bd._review_task_digest(first)
+    first_path = path.with_name("first_correction.json")
+    first_path.write_text(json.dumps(first_request))
+    request = {**first_request, "id": "p2",
+               "task_sha256": bd._review_task_digest(second),
+               "prompt_sha256": second["prompt_sha256"], "rtl_sha256": second["rtl_sha256"],
+               "review_sha256": _digest(second["review_path"]), "challenge_sha256": None}
+    second_path = first_path.with_name("second_correction.json")
+    second_path.write_text(json.dumps(request))
+    bd._write_jsonl(run / bd._REVIEW_WORKLIST, [first, second])
+    solve = bd._read_json_regular(run / "solve_report.json")
+    solve["results"].append({**solve["results"][0], "id": "p2"})
+    solve["total"] = 2
+    bd._atomic_write_json(run / "solve_report.json", solve)
+    return run, [first, second], [first_path, second_path]
+
+
+def _count_normal_resume(monkeypatch):
+    consume = bd._cmd_resume_locked
+    calls = []
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return consume(*args, **kwargs)
+    monkeypatch.setattr(bd, "_cmd_resume_locked", counted)
+    return calls
+
+
+def test_repeated_cli_corrections_apply_all_before_one_normal_resume(tmp_path, monkeypatch):
+    run, old, paths = _correction_batch_case(tmp_path)
+    protected = [_optional_protected(task) for task in old]
+    apply = bd._apply_review_correction
+    applied = []
+    def record(run_p, request):
+        with pytest.raises(bd._CoordinatorBusy):
+            with bd._run_root_coordinator_lock(run_p, "cannot-interleave"):
+                pass
+        applied.append(request.name)
+        return apply(run_p, request)
+    monkeypatch.setattr(bd, "_apply_review_correction", record)
+    monkeypatch.setattr(bd, "_install_orphan_guard", lambda: None)
+    calls = _count_normal_resume(monkeypatch)
+    monkeypatch.setattr(sys, "argv", [bd.__file__, "rtllm", "--resume", "--dataset",
+        "/unused", "--run", str(run), "--review-correction", str(paths[0]),
+        "--review-correction", str(paths[1])])
+    with pytest.raises(SystemExit) as exit:
+        bd.main()
+    assert applied == [path.name for path in paths], applied
+    assert len(calls) == 1
+    assert exit.value.code == 2
+    new = bd._read_jsonl(run / bd._REVIEW_WORKLIST)
+    assert [task["id"] for task in new] == ["p1", "p2"]
+    assert all(task["review_path"] != prior["review_path"] for task, prior in zip(new, old))
+    assert [_optional_protected(task) for task in old] == protected
+    assert all(bd._validate_ai_review(task)["status"] == "PENDING" for task in new)
+    assert all(not Path(task["response_path"]).exists() for task in old)
+
+
+def test_legacy_single_correction_still_runs_one_normal_consumer(tmp_path, monkeypatch):
+    run, old, path, _, _ = _clarification_case(tmp_path)
+    calls = _count_normal_resume(monkeypatch)
+    assert bd.cmd_resume("rtllm", "/unused", str(run), review_correction=str(path)) == 2
+    assert len(calls) == 1
+    assert bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]["review_path"] != old["review_path"]
+
+
+@pytest.mark.parametrize("damage", ["malformed", "stale"])
+def test_later_correction_refusal_preserves_pending_prefix_and_retry(tmp_path, monkeypatch, damage):
+    run, old, paths = _correction_batch_case(tmp_path)
+    raw = paths[1].read_bytes()
+    if damage == "malformed":
+        paths[1].write_text('{invalid')
+    else:
+        request = json.loads(raw)
+        request["task_sha256"] = "0" * 64
+        paths[1].write_text(json.dumps(request))
+    calls = _count_normal_resume(monkeypatch)
+    assert bd.cmd_resume("rtllm", "/unused", str(run),
+                         review_correction=[str(path) for path in paths]) == 2
+    new = bd._read_jsonl(run / bd._REVIEW_WORKLIST)
+    assert [task["review_path"] == prior["review_path"] for task, prior in zip(new, old)] == [False, True]
+    assert calls == []
+    assert bd._validate_ai_review(new[0])["status"] == "PENDING"
+    archive = Path(new[0]["review_correction"]["archive_path"])
+    preserved = {str(p): p.read_bytes() for p in archive.rglob("*") if p.is_file()}
+    assert all(not Path(task["response_path"]).exists() for task in old)
+    assert all(row["accepted"] is False for row in bd._read_json_regular(run / "solve_report.json")["results"])
+    paths[1].write_bytes(raw)
+    assert bd.cmd_resume("rtllm", "/unused", str(run),
+                         review_correction=[str(path) for path in paths]) == 2
+    retried = bd._read_jsonl(run / bd._REVIEW_WORKLIST)
+    assert len(calls) == 1 and retried[0] == new[0]
+    assert retried[1]["review_path"] != old[1]["review_path"]
+    assert all(p.read_bytes() == data for path, data in preserved.items() for p in [Path(path)])
+    assert all(bd._validate_ai_review(task)["status"] == "PENDING" for task in retried)
+
+
+def test_duplicate_request_in_batch_reuses_one_immutable_transition(tmp_path, monkeypatch):
+    run, old, path, _, _ = _clarification_case(tmp_path)
+    calls = _count_normal_resume(monkeypatch)
+    assert bd.cmd_resume("rtllm", "/unused", str(run),
+                         review_correction=[str(path), str(path)]) == 2
+    assert len(calls) == 1
+    new = bd._read_jsonl(run / bd._REVIEW_WORKLIST)[0]
+    assert new["review_path"] != old["review_path"]
+    assert len(list((run / "review_corrections/p1").glob("*/transition.json"))) == 1
+    assert bd._validate_ai_review(new)["status"] == "PENDING"
+
+
+@pytest.mark.parametrize("corrections", [[], ["one.json"], "one.json"])
+def test_empty_or_mixed_correction_batch_never_enters_operations(tmp_path, monkeypatch, capsys, corrections):
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid correction combination entered an operation")
+    for name in ("_apply_review_correction", "_apply_program_regate", "_cmd_resume_locked"):
+        monkeypatch.setattr(bd, name, forbidden)
+    kwargs = {"review_correction": corrections}
+    if corrections:
+        kwargs["program_regate"] = "regate.json"
+    assert bd.cmd_resume("rtllm", "/unused", str(tmp_path / "run"), **kwargs) == 2
+    error = capsys.readouterr().err
+    assert "PROGRAM_REGATE_REFUSED" in error if corrections else "correction list must not be empty" in error
 
 
 @pytest.mark.parametrize("supplemental", [False, True])

@@ -1,0 +1,28 @@
+[
+  {
+    "step": "benchmark.spec_adjudication",
+    "design": "general autonomous evaluation source question",
+    "bucket": "A",
+    "rule_name": "route_evaluation_source_question_to_independent_ic_expert",
+    "docstring": "An autonomous evaluation source question first receives independent IC-expert adjudication; ordinary source-bound review correction and proof still own acceptance.",
+    "pattern": "A deterministic evaluation handoff names a human owner as the only next actor even when the evaluation role already delegates contextual hardware interpretation to an independent expert.",
+    "fix_action": "Update the existing dispatcher handoff and issued-review guidance to name the independent IC expert, whole visible contract, discrepancy preservation and existing review correction. Retain honest unmeasured status, frozen input and all normal acceptance guards.",
+    "expected_signal": "AUTO-FIX",
+    "before_state": "The actual resume consumer asks the specification owner for a missing definition and provides no autonomous expert-adjudication direction.",
+    "after_state": "The same waiting task directs independent IC-expert adjudication and existing review correction without granting acceptance, repair or input mutation.",
+    "generality": "The responsibility follows the evaluation role and whole visible contract. No design label, hidden reference or automatic semantic decision selects the result.",
+    "evidence": "CAPTURE.md; external actual-resume red.xml/red-substance.json and matched owning receipts."
+  },
+  {
+    "step": "benchmark.spec_adjudication",
+    "design": "general contextual hardware contract interpretation",
+    "bucket": "B",
+    "skill_title": "Independent IC-expert adjudication during autonomous evaluation",
+    "why_not_bucket_a": "Whether conflicting visible hardware clauses support a defensible interpretation is contextual IC design judgment. No regex, clause vote, universal source priority or benchmark lookup can decide it.",
+    "pattern": "A visible contract contains conflicting or incomplete clauses, and an automated evaluation must distinguish a defensible source-bound engineering interpretation from behavior that the source cannot justify.",
+    "when": "A source-bound review question interrupts an autonomous hardware evaluation.",
+    "what": "An independent IC expert considers the entire visible contract, preserves the discrepancy, explains the defensible interpretation and alternatives, and uses existing hash-bound review correction followed by fresh independent proof when justified. Do not ask the human to solve each evaluation case. Preserve unmeasured status when no interpretation is defensible.",
+    "example": "A state diagram and its functional description disagree. Consider every visible grant, reset and priority constraint without a universal diagram or prose preference; preserve the original edge and justify the engineering reading before a fresh independent review.",
+    "generality": "This role guidance applies to any visible hardware contract and grants no hidden-oracle authority, automatic acceptance, test waiver or direct RTL repair."
+  }
+]

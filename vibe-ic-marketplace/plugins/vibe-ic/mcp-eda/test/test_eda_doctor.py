@@ -10,8 +10,86 @@ Edge   : skip_versions=true short-circuits per-tool version queries.
 SKIP   : when docker is unreachable, doc_* probes are still skipped.
 """
 from pathlib import Path
+import json
+import shutil
+import subprocess
+from shlex import quote
 
 INDEX_JS = Path(__file__).resolve().parent.parent / "src" / "index.js"
+
+
+def _run_version_probe(tmp_path, *, legacy=None, native=True):
+    """Execute the shipped version consumer, with a controlled container PATH.
+
+    The dockerExec stand-in runs bash locally; it never resolves a tool on the
+    host's ordinary PATH. Live immutable-image proof is retained separately.
+    """
+    binary_dir = tmp_path / "native"
+    binary_dir.mkdir()
+    for utility in ("head", "grep"):
+        (binary_dir / utility).symlink_to(shutil.which(utility))
+    native_called = tmp_path / "native-called"
+    if native:
+        path = binary_dir / "yosys"
+        path.write_text(f"#!/bin/sh\nprintf native > {quote(str(native_called))}\nprintf 'native 2.3.4\\n'\n")
+        path.chmod(0o755)
+    tools = tmp_path / "legacy"
+    if legacy:
+        path = tools / "yosys/bin/yosys"
+        path.parent.mkdir(parents=True)
+        path.write_text("#!/bin/sh\n" + legacy)
+        path.chmod(0o755)
+    source = INDEX_JS.read_text()
+    start = source.index("function getToolVersion(name)")
+    consumer = source[start:source.index("\n}\n", start) + 3]
+    start = source.index("const _ERR_PATTERNS =")
+    errors = source[start:source.index("\n];", start) + 3]
+    script = "\n".join([
+        "import {spawnSync} from 'node:child_process';",
+        "import {containerToolCommand} from " + json.dumps((INDEX_JS.parent / "lib/tool_path.mjs").as_uri()) + ";",
+        "const TOOLS = " + json.dumps(str(tools)) + ";",
+        "const _versionCache = new Map(); const calls=[];",
+        "function _ensureVersionCacheFresh() {}",
+        "function dockerExec(cmd) {calls.push(cmd); const r=spawnSync(" + json.dumps(shutil.which("bash")) + ",['-c',cmd],{encoding:'utf8',env:{...process.env,PATH:" + json.dumps(str(binary_dir)) + "}}); return {success:r.status===0,output:(r.stdout||'')+(r.stderr||''),error:r.stderr};}",
+        errors, consumer,
+        "console.log(JSON.stringify({version:getToolVersion('yosys'),calls}));",
+    ])
+    result = subprocess.run(["node", "--input-type=module", "-e", script], capture_output=True, text=True, check=True)
+    return json.loads(result.stdout), native_called.exists()
+
+
+def test_native_container_path_replaces_an_absent_builtin_legacy_default(tmp_path):
+    got, called = _run_version_probe(tmp_path)
+    assert got["version"] == "native 2.3.4"
+    assert called
+
+
+def test_executable_legacy_default_has_priority_over_container_path(tmp_path):
+    got, called = _run_version_probe(tmp_path, legacy="printf 'legacy 1.2.3\\n'\n")
+    assert got["version"] == "legacy 1.2.3"
+    assert not called
+
+
+def test_failing_executable_legacy_default_does_not_fall_back(tmp_path):
+    got, called = _run_version_probe(tmp_path, legacy="printf 'Error: legacy rejected\\n'\nexit 23\n")
+    assert got["version"].startswith("unavailable:")
+    assert "legacy rejected" in got["version"]
+    assert not called
+
+
+def test_absent_legacy_and_native_tool_remains_unavailable(tmp_path):
+    got, called = _run_version_probe(tmp_path, native=False)
+    assert got["version"].startswith("unavailable:")
+    assert not called
+
+
+def test_legacy_path_is_one_shell_word_even_with_metacharacters(tmp_path):
+    unusual = tmp_path / "space ' $(touch INJECTED)"
+    unusual.mkdir()
+    got, called = _run_version_probe(unusual, legacy="printf 'legacy 1.2.3\\n'\n")
+    assert got["version"] == "legacy 1.2.3"
+    assert not called
+    assert not (Path.cwd() / "INJECTED").exists()
 
 
 def _slice():
@@ -93,7 +171,7 @@ def test_magic_probe_uses_version_flag_not_broken_tcl_global():
     returned EMPTY (the global isn't set at that point) and false-FAILed an
     otherwise healthy magic (present at /foss/tools/bin/magic, v8.3.671)."""
     src = INDEX_JS.read_text()
-    assert "${TOOLS}/bin/magic --version" in src, "magic probe must use --version"
+    assert 'magic: `${containerToolCommand("magic", `${TOOLS}/bin/magic`)} --version' in src, "magic probe must resolve its built-in default and use --version"
     # The old broken probe's distinctive executable signature (tech-file /dev/null
     # + heredoc into the tcl interpreter). Only live probe code had this exact
     # token; the fix comment does not.
@@ -103,20 +181,14 @@ def test_magic_probe_uses_version_flag_not_broken_tcl_global():
     )
 
 
-def test_fault_probe_uses_deterministic_foss_bin_path():
-    """Regression (2026-07-11): the vibeic-eda image is self-contained — every
-    tool must resolve at a deterministic /foss/tools/bin path, never via ambient
-    PATH (the docker-exec PATH we don't control). fault ships from the base at
-    /usr/local/bin/fault; the Dockerfile symlinks it into ${TOOLS}/bin/fault, so
-    the probe must hit ${TOOLS}/bin/fault like every other tool."""
+def test_fault_probe_resolves_the_same_legacy_default_as_the_consumer():
+    """Legacy images keep their executable default; native images use their
+    own container PATH. Neither probe may ask the host for the binary."""
     src = INDEX_JS.read_text()
-    assert "fault: `${TOOLS}/bin/fault --version" in src, (
-        "fault probe must use the deterministic ${TOOLS}/bin/fault path"
-    )
-    # Must NOT fall back to bare-PATH `fault` (ambient PATH is uncontrolled).
-    assert "fault: `fault --version" not in src, (
-        "fault probe must not rely on ambient PATH — use ${TOOLS}/bin/fault"
-    )
+    command = '${containerToolCommand("fault", `${TOOLS}/bin/fault`)}'
+    assert 'fault: `' + command + ' --version' in src
+    assert command + ' chain ' in src
+    assert "dockerExec(probe" in src
 
 
 def test_fault_symlinked_into_foss_bin_by_dockerfile():

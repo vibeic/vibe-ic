@@ -693,8 +693,8 @@ def prompt_rtl_source_facts(prompt: str) -> Dict[str, Any]:
     import task_nature_route as routing
     unsupported = lambda reason: {"kind": "UNSUPPORTED", "reason": reason}
     try:
-        mask = audit.lexical_mask(prompt, attributes=True)
         plain_mask = audit.lexical_mask(prompt)
+        mask = audit.lexical_mask(plain_mask, attributes=True)
         if plain_mask != mask:
             return unsupported("supplied HDL attributes need a wider source contract")
         if re.search(r"(?m)^[ \t]*`[A-Za-z_]\w*(?![\w`])", mask):
@@ -839,6 +839,42 @@ def validate_header_completion(candidate_path: Path, contract: Mapping[str, Any]
             "findings": header["findings"]}
 
 
+def _native_port_observation(module: Mapping[str, Any]) -> Dict[str, Any]:
+    """Read declaration indices from native wire metadata, never signal ids.
+
+    Yosys JSON omits zero offset, descending ``upto=0`` and unsigned
+    ``signed=0``. Ports and their same-name netnames must agree. JSON port
+    order is the native port-id order; netnames are sorted independently.
+    """
+    ports, wires = module["ports"], module["netnames"]
+    if not isinstance(ports, Mapping) or not ports or not isinstance(wires, Mapping):
+        raise ValueError("native top lacks a nonempty port map or wire metadata")
+    result = {}
+    for name, port in ports.items():
+        wire = wires.get(name)
+        if not isinstance(port, Mapping) or not isinstance(wire, Mapping):
+            raise ValueError(f"native port {name!r} lacks its corresponding wire")
+        bits = port.get("bits")
+        if (not isinstance(bits, list) or not bits or wire.get("bits") != bits
+                or port.get("direction") not in ("input", "output", "inout")):
+            raise ValueError(f"native port {name!r} has invalid direction or connectivity")
+        metadata = {}
+        for key in ("offset", "upto", "signed"):
+            value = wire.get(key, 0)
+            other = port.get(key, 0)
+            if (not isinstance(value, int) or isinstance(value, bool)
+                    or value != other or key != "offset" and value not in (0, 1)):
+                raise ValueError(f"native port {name!r} has inconsistent {key} metadata")
+            metadata[key] = value
+        width = len(bits)
+        low, high = metadata["offset"], metadata["offset"] + width - 1
+        result[name] = {"direction": port["direction"], "width": width,
+            **metadata, "left": low if metadata["upto"] else high,
+            "right": high if metadata["upto"] else low,
+            "single_bit_vector": wire.get("attributes", {}).get("single_bit_vector") == "0" * 31 + "1"}
+    return {"ordered_ports": list(ports), "ports": result}
+
+
 def run_structural_contract(
     candidate_path: Path,
     declaration: Any,
@@ -846,11 +882,13 @@ def run_structural_contract(
     original_source: Optional[str],
     requirement_sources: Optional[Mapping[str, str]] = None,
     timeout: int = 300,
+    require_header_preservation: bool = False,
 ) -> Dict[str, Any]:
     """Replay a source-bound structural observation with a fixed Yosys recipe.
 
-    The author declares cell-type expectations, but cannot provide a Yosys
-    script or synthesis mapping.  Absent structure is handled as not applicable
+    The author declares cell-type expectations or selects the exact public
+    header's native port metadata, but cannot provide a Yosys script, mapping,
+    or invented port ranges. Absent structure is handled as not applicable
     by the outer consumer; ambiguous declared scope is blocking NOT_MEASURED.
     """
     report: Dict[str, Any] = {
@@ -874,11 +912,15 @@ def run_structural_contract(
     if declaration.get("abstraction") != STRUCTURAL_ABSTRACTION:
         return finish("NOT_MEASURED", "STRUCTURAL_SCOPE_AMBIGUOUS",
                       "structural abstraction must be RTLIL_AFTER_PROC_OPT")
-    if declaration.get("scope") != "top_module_cells":
+    port_scope = declaration.get("scope") == "top_module_ports"
+    if declaration.get("scope") not in ("top_module_cells", "top_module_ports"):
         return finish("NOT_MEASURED", "STRUCTURAL_SCOPE_AMBIGUOUS",
-                      "structural scope must explicitly be top_module_cells")
+                      "structural scope must explicitly be top_module_cells or top_module_ports")
 
     prompt_only = declaration.get("schema") == SCHEMA_PROMPT_STRUCTURAL
+    if port_scope and not prompt_only:
+        return finish("NOT_MEASURED", "STRUCTURAL_SCOPE_AMBIGUOUS",
+                      "port observation requires a unique source-bound public prompt header")
     if prompt_only:
         report["schema"] = SCHEMA_PROMPT_STRUCTURAL
         if (original_source is not None or "source_path" in declaration
@@ -928,7 +970,52 @@ def run_structural_contract(
         return finish("NOT_MEASURED", "STRUCTURAL_REQUIREMENT_AMBIGUOUS",
                       "structural requirement quote is stale, absent, or ambiguous")
 
-    if prompt_only:
+    header_source = None
+    if port_scope:
+        # This lexer does not consume escaped identifiers. Inspect raw source
+        # before masking: an escaped name can contain comment/string tokens
+        # that would otherwise hide a later author-written metadata attribute.
+        if "\\" in candidate_source or "\\" in requirement_text:
+            return finish("NOT_MEASURED", "STRUCTURAL_PORT_METADATA_UNTRUSTED",
+                          "port metadata proof does not support raw backslashes in candidate or requirement source")
+        facts = prompt_rtl_source_facts(requirement_text)
+        if facts["kind"] != "HEADER_ONLY":
+            return finish("NOT_MEASURED", "STRUCTURAL_PROMPT_SOURCE_UNSUPPORTED",
+                          "port observation requires one unique header-only public prompt")
+        if (declaration.get("prompt_header_preservation") != prompt_header_preservation(facts)
+                or quote != facts["header"] or declaration.get("top") != facts["module"]):
+            return finish("REFUSED", "STRUCTURAL_PROMPT_HEADER_UNBOUND",
+                          "port observation must bind the exact original header, quote, hashes and module")
+        # Default-parameter elaboration cannot stand for an unspecified public
+        # configuration space. Keep this first interface ABI unparameterized.
+        if "#" in _header_tokens(facts["header"]):
+            return finish("NOT_MEASURED", "STRUCTURAL_PROMPT_SOURCE_UNSUPPORTED",
+                          "parameterized header ports require a public configuration contract")
+        # Native declaration attributes (notably single_bit_vector) are also
+        # writable source attributes. Do not credit them when explicit or
+        # preprocessed attributes could override the frontend's own facts.
+        import module_port_audit as audit
+        try:
+            candidate_mask = audit.lexical_mask(candidate_source)
+            attributes_masked = audit.lexical_mask(candidate_mask, attributes=True)
+        except ValueError as exc:
+            return finish("NOT_MEASURED", "STRUCTURAL_PORT_METADATA_UNTRUSTED", str(exc))
+        if candidate_mask != attributes_masked or "`" in candidate_mask:
+            return finish("NOT_MEASURED", "STRUCTURAL_PORT_METADATA_UNTRUSTED",
+                          "port metadata proof does not support candidate attributes or preprocessing")
+        header_source = facts["header"] + "\nendmodule\n"
+        report["prompt_header_preservation"] = prompt_header_preservation(facts)
+        report["requirement_source"] = dict(requirement)
+        report["candidate_sha256"] = candidate_hash
+        report["scope"] = "top_module_ports"
+        if require_header_preservation:
+            header = validate_prompt_header(candidate_source, requirement_text,
+                declaration.get("prompt_header_preservation"), top=declaration.get("top"),
+                require_header=True)
+            if header["verdict"] != "PASS":
+                report.update(verdict=header["verdict"], findings=header["findings"])
+                return report
+    elif prompt_only:
         header = validate_prompt_header(candidate_source, requirement_text,
             declaration.get("prompt_header_preservation"), top=declaration.get("top"))
         if header["verdict"] != "PASS":
@@ -945,10 +1032,14 @@ def run_structural_contract(
     if not isinstance(expectations, Mapping):
         return finish("NOT_MEASURED", "STRUCTURAL_EXPECTATION_AMBIGUOUS",
                       "structural contract lacks typed expectations")
+    if port_scope and (set(expectations) != {"ports_from_prompt_header"}
+                       or expectations["ports_from_prompt_header"] is not True):
+        return finish("REFUSED", "STRUCTURAL_EXPECTATION_AMBIGUOUS",
+                      "port expectations must derive exclusively from the bound original header")
     required = expectations.get("required_cell_types")
     forbidden = expectations.get("forbidden_cell_types")
     allow_other = expectations.get("allow_other_cell_types")
-    if (not isinstance(required, Mapping) or not required
+    if not port_scope and (not isinstance(required, Mapping) or not required
             or any(not isinstance(name, str) or not name.startswith("$")
                    or not isinstance(count, int) or isinstance(count, bool) or count < 1
                    for name, count in required.items())
@@ -957,7 +1048,7 @@ def run_structural_contract(
             or not isinstance(allow_other, bool)):
         return finish("NOT_MEASURED", "STRUCTURAL_EXPECTATION_AMBIGUOUS",
                       "cell expectations require positive minima, a forbidden list, and allow_other_cell_types")
-    if set(required) & set(forbidden):
+    if not port_scope and set(required) & set(forbidden):
         return finish("REFUSED", "STRUCTURAL_EXPECTATION_CONTRADICTORY",
                       "a cell type cannot be both required and forbidden")
 
@@ -984,19 +1075,29 @@ def run_structural_contract(
     script = (f"read_verilog -sv /work/candidate.sv; "
               f"hierarchy -check -top {top}; proc; opt; "
               "write_json /out/rtlil.json")
+    if port_scope:
+        script += ("; design -reset; read_verilog -sv /work/prompt_header.sv; "
+                   f"hierarchy -check -top {top}; proc; opt; "
+                   "write_json /out/prompt_header.json")
     with tempfile.TemporaryDirectory(prefix="rtl_structural_") as temp_dir:
         root = Path(temp_dir)
         frozen = root / "candidate.sv"
         output = root / "out"
         output.mkdir()
         frozen.write_text(candidate_source)
+        header_mount = []
+        if header_source is not None:
+            frozen_header = root / "prompt_header.sv"
+            frozen_header.write_text(header_source)
+            header_mount = ["-v", f"{frozen_header}:/work/prompt_header.sv:ro"]
+        memory = "2g" if port_scope else "4g"
         command = [
             docker, "run", "--rm", "--user", f"{os.getuid()}:{os.getgid()}",
-            "--cpus=2", "--memory=4g",
+            "--cpus=2", f"--memory={memory}",
             "--pids-limit=128", "--network=none", "--read-only",
             "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m",
             "-v", f"{frozen}:/work/candidate.sv:ro",
-            "-v", f"{output}:/out:rw", image,
+            *header_mount, "-v", f"{output}:/out:rw", image,
             "--skip", "yosys", "-Q", "-p", script,
         ]
         try:
@@ -1020,7 +1121,7 @@ def run_structural_contract(
             "script": script, "script_sha256": sha256_text(script),
             "candidate_sha256": candidate_hash, "image": image,
             "image_id": actual_image_id,
-            "limits": {"cpus": 2, "memory": "4g",
+            "limits": {"cpus": 2, "memory": memory,
                        "timeout_seconds": min(max(timeout, 1), 300),
                        "network": "none"},
         }
@@ -1031,8 +1132,31 @@ def run_structural_contract(
         if sha256_text(frozen.read_text(errors="replace")) != candidate_hash:
             return finish("REFUSED", "STRUCTURAL_CANDIDATE_CHANGED_DURING_EXECUTION",
                           "frozen structural input changed during native proof")
+        if header_source is not None and frozen_header.read_text() != header_source:
+            return finish("REFUSED", "STRUCTURAL_PROMPT_HEADER_UNBOUND",
+                          "frozen original header changed during native proof")
         try:
-            netlist = json.loads((output / "rtlil.json").read_text())
+            native_json = (output / "rtlil.json").read_text()
+            netlist = json.loads(native_json)
+            if port_scope:
+                header_json = (output / "prompt_header.json").read_text()
+                expected_module = json.loads(header_json)["modules"][top]
+                candidate_module = netlist["modules"][top]
+                observed = _native_port_observation(candidate_module)
+                expected = _native_port_observation(expected_module)
+                report["execution"].update(rtlil_json_sha256=sha256_text(native_json),
+                    prompt_header_json_sha256=sha256_text(header_json),
+                    prompt_header_source_sha256=sha256_text(header_source))
+                report["observation"] = {"top": top, **observed}
+                report["expected_observation"] = {"top": top, **expected}
+                report["native_port_metadata"] = {
+                    label: {"ports": module["ports"], "netnames": {
+                        name: module["netnames"][name] for name in module["ports"]}}
+                    for label, module in (("candidate", candidate_module), ("prompt_header", expected_module))}
+                if observed != expected:
+                    return finish("FAIL", "STRUCTURAL_CONTRACT_VIOLATION",
+                                  "native port declarations differ from the bound original header")
+                return report
             cells = netlist["modules"][top].get("cells", {})
         except (OSError, ValueError, KeyError, TypeError) as exc:
             return finish("NOT_MEASURED", "STRUCTURAL_OUTPUT_INVALID", str(exc))
@@ -1146,7 +1270,7 @@ def validate_normal_repair_contract(
         else:
             result["structural"] = run_structural_contract(
                 candidate_path, structural, original_source=original_source,
-                requirement_sources=requirement_sources)
+                requirement_sources=requirement_sources, require_header_preservation=True)
         if result["structural"]["verdict"] != "PASS" and result["verdict"] == "PASS":
             result["verdict"] = result["structural"]["verdict"]
         result["findings"].extend(result["structural"].get("findings", []))
