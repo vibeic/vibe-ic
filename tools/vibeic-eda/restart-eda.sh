@@ -24,6 +24,8 @@
 #
 # Env overrides:
 #   NAME=vibeic-eda            container name to manage
+#   SOURCE_CONTAINER=<name> ENSURE_ONLY=1  create NAME from this source, or
+#                              verify and reuse NAME without replacing either
 #   IMAGE_REPO=<repo>          repo prepended to a bare tag argument; defaults to
 #                              $VIBEIC_EDA_IMAGE_REPO, else ghcr.io/vibeic/vibeic-eda
 #                              (the repository `_eda_pin` resolves, R-0915-96)
@@ -47,6 +49,16 @@
 set -euo pipefail
 
 NAME="${NAME:-vibeic-eda}"
+ENSURE_ONLY="${ENSURE_ONLY:-0}"
+SOURCE_CONTAINER="${SOURCE_CONTAINER:-}"
+if [[ "$ENSURE_ONLY" == 1 || -n "$SOURCE_CONTAINER" ]]; then
+  [[ "$ENSURE_ONLY" == 1 && -n "$SOURCE_CONTAINER" ]] || {
+    echo "restart-eda: SOURCE_CONTAINER requires ENSURE_ONLY=1" >&2; exit 2;
+  }
+  [[ "$NAME" != "$SOURCE_CONTAINER" && "${PULL:-0}" != 1 ]] || {
+    echo "restart-eda: ensure requires a distinct target and never pulls images" >&2; exit 2;
+  }
+fi
 # THE REPOSITORY IS CONFIGURATION, AND THE ONE CONFIG POINT IS ALREADY NAMED.
 # R-0915-96: the DIGEST is the image's identity and the REPOSITORY is where a
 # deployment happens to serve it from, resolved through `VIBEIC_EDA_IMAGE_REPO`
@@ -222,17 +234,24 @@ if (str(root.resolve()) == str(root) and re.fullmatch(
         pass  # No verified current install identity: preserve all old mounts.
 PY
 )"
-  add_mount "$PLUGIN_ROOT" "$PLUGIN_ROOT" ro bind
+  # Ensure preserves the source's effective mount set, including its bundle.
+  if [[ "$ENSURE_ONLY" != 1 ]]; then
+    add_mount "$PLUGIN_ROOT" "$PLUGIN_ROOT" ro bind
+  else
+    SERVING_CACHE_FAMILY=""
+  fi
 fi
 
-if docker container inspect "$NAME" >/dev/null 2>&1; then
-  HAVE_OLD=1
-  OLD_IMG="$(docker inspect "$NAME" --format '{{.Config.Image}}')"
-  echo "== existing container '${NAME}' found (image: ${OLD_IMG}) — cloning its config"
+CONFIG_CONTAINER="${SOURCE_CONTAINER:-$NAME}"
+if docker container inspect "$CONFIG_CONTAINER" >/dev/null 2>&1; then
+  [[ "$ENSURE_ONLY" == 1 ]] || HAVE_OLD=1
+  OLD_IMG="$(docker inspect "$CONFIG_CONTAINER" --format '{{.Config.Image}}')"
+  echo "== cloning config from '${CONFIG_CONTAINER}' (image: ${OLD_IMG})"
 
   # in-flight EDA job guard (skip idle sleep/startup/VNC).  Capture the
   # producer's stdout and status independently: a failed `docker top` is not
   # evidence that the container is idle, even under `set -euo pipefail`.
+  if [[ "$ENSURE_ONLY" != 1 ]]; then
   _top_rc=0
   _top_output="$(docker top "$NAME" -o pid,args 2>/dev/null)" || _top_rc=$?
   _top_failure=""
@@ -269,6 +288,7 @@ if docker container inspect "$NAME" >/dev/null 2>&1; then
     fi
     echo "-- FORCE=1: recreating despite a running EDA job."
   fi
+  fi
 
   # legacy `-v` declarations: SOURCE:DESTINATION[:OPTIONS]
   while IFS= read -r b; do
@@ -276,7 +296,7 @@ if docker container inspect "$NAME" >/dev/null 2>&1; then
     _bsrc="${b%%:*}"; _brest="${b#*:}"; _bdst="${_brest%%:*}"
     if [[ "$_brest" == *:* ]]; then _bopts="${_brest#*:}"; else _bopts=""; fi
     add_mount "$_bsrc" "$_bdst" "$_bopts" bind
-  done < <(docker inspect "$NAME" --format '{{range .HostConfig.Binds}}{{println .}}{{end}}')
+  done < <(docker inspect "$CONFIG_CONTAINER" --format '{{range .HostConfig.Binds}}{{println .}}{{end}}')
 
   # structured `--mount` declarations, which leave `Binds` null.
   while IFS='|' read -r _mtype _msrc _mdst _mro _mprop; do
@@ -287,13 +307,14 @@ if docker container inspect "$NAME" >/dev/null 2>&1; then
       _mopts="${_mopts:+${_mopts},}${_mprop}"
     fi
     add_mount "$_msrc" "$_mdst" "$_mopts" "${_mtype:-bind}"
-  done < <(docker inspect "$NAME" --format '{{range .HostConfig.Mounts}}{{.Type}}|{{.Source}}|{{.Target}}|{{.ReadOnly}}|{{if .BindOptions}}{{.BindOptions.Propagation}}{{end}}{{println}}{{end}}')
+  done < <(docker inspect "$CONFIG_CONTAINER" --format '{{range .HostConfig.Mounts}}{{.Type}}|{{.Source}}|{{.Target}}|{{.ReadOnly}}|{{if .BindOptions}}{{.BindOptions.Propagation}}{{end}}{{println}}{{end}}')
 
-  USER_SPEC="$(docker inspect "$NAME" --format '{{.Config.User}}')"
-  WORKDIR="$(docker inspect "$NAME"  --format '{{.Config.WorkingDir}}')"
+  USER_SPEC="$(docker inspect "$CONFIG_CONTAINER" --format '{{.Config.User}}')"
+  WORKDIR="$(docker inspect "$CONFIG_CONTAINER"  --format '{{.Config.WorkingDir}}')"
   while IFS= read -r c; do [[ -n "$c" ]] && CMD+=( "$c" ); done \
-    < <(docker inspect "$NAME" --format '{{range .Config.Cmd}}{{println .}}{{end}}')
+    < <(docker inspect "$CONFIG_CONTAINER" --format '{{range .Config.Cmd}}{{println .}}{{end}}')
 else
+  [[ "$ENSURE_ONLY" != 1 ]] || die "source container '${SOURCE_CONTAINER}' is absent" 2
   echo "== no existing container '${NAME}' — using canonical vibeic-eda defaults"
   # Path-portability: NEVER default a designs dir under $HOME — docker would
   # create a missing bind-mount source root-owned (the phantom-directory bug).
@@ -379,6 +400,52 @@ declare -a RUN=( docker run -d --name "$NAME" )
 [[ ${#BINDS[@]} -gt 0 ]] && RUN+=( "${BINDS[@]}" )
 RUN+=( "$IMAGE" )
 [[ ${#CMD[@]} -gt 0 ]] && RUN+=( "${CMD[@]}" )
+
+# Ensure never enters the recreate/rollback path. Read only the needed inspect
+# fields, not Config.Env, so source credentials are neither copied nor logged.
+if [[ "$ENSURE_ONLY" == 1 ]]; then
+  ensure_readback() {
+    python3 - "$SOURCE_CONTAINER" "$1" "$TARGET_ID" "$TARGET_ENTRYPOINT" <<'PY'
+import json, subprocess, sys
+source, target, image, entrypoint = sys.argv[1:]
+def read(name, field):
+    return json.loads(subprocess.check_output(
+        ["docker", "inspect", name, "--format", "{{json " + field + "}}"], text=True))
+def mounts(name):
+    return sorted((m["Type"], m.get("Source", ""), m["Destination"],
+                   m["RW"], m.get("Propagation", "")) for m in read(name, ".Mounts"))
+try:
+    if read(source, ".Image") != image:
+        raise ValueError("source image differs from requested immutable image")
+    if read(source, ".Config.Entrypoint") != json.loads(entrypoint):
+        raise ValueError("source entrypoint differs from image entrypoint")
+    if any(m[0] != "bind" for m in mounts(source)):
+        raise ValueError("ensure cannot preserve non-bind source mounts")
+    if target:
+        if read(target, ".Image") != image or not read(target, ".State.Running"):
+            raise ValueError("target image differs or target is not running")
+        if mounts(target) != mounts(source):
+            raise ValueError("target effective mounts differ from source")
+        for field in (".Config.User", ".Config.WorkingDir", ".Config.Cmd", ".Config.Entrypoint"):
+            if read(target, field) != read(source, field):
+                raise ValueError("target " + field + " differs from source")
+except (ValueError, KeyError, TypeError, subprocess.CalledProcessError) as exc:
+    sys.exit("restart-eda: ensure readback refused: " + str(exc))
+PY
+  }
+  ensure_readback "" || die "source cannot supply the requested runtime" 3
+  if docker container inspect "$NAME" >/dev/null 2>&1; then
+    ensure_readback "$NAME" || die "existing target is incompatible; nothing was changed" 3
+    echo "== OK: reusing existing '${NAME}' without recreation"
+    exit 0
+  fi
+  # Docker's atomic name reservation refuses competing creators. Never remove
+  # a target that appeared after inspect, including after an unsuccessful run.
+  "${RUN[@]}" >/dev/null || die "ensure creation failed; no container was removed" 6
+  ensure_readback "$NAME" || die "created target failed readback; retained for inspection" 3
+  echo "== OK: ensured '${NAME}' from '${SOURCE_CONTAINER}'"
+  exit 0
+fi
 
 # --- recreate, keeping the old container until readback passes --------------
 ROLLBACK=""
