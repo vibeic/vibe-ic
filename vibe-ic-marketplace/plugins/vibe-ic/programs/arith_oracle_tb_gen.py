@@ -389,9 +389,52 @@ def _function_records(project: Path) -> List[str]:
     return []
 
 
+def _supports_function_reset(project: Path, polarity: str) -> bool:
+    """Consume a finite reset clause only through its structured L9 contract.
+
+    Both serial consumers assert reset across complete clock cycles. An absent
+    or conflicting reset domain cannot be discarded as arithmetic metadata.
+    """
+    _, ports = _load_top_ports(project)
+    clocks = [p['name'] for p in ports if p['dir'] == 'input'
+              and p['name'].lower() in _CLK_NAMES and p.get('numeric_width') == 1]
+    resets = [p['name'] for p in ports if p['dir'] == 'input'
+              and p['name'].lower() in _RST_NAMES and p.get('numeric_width') == 1]
+    if len(clocks) != 1 or len(resets) != 1:
+        return False
+    l9 = _read_json(_pl.generated_docs_dir(project) / 'L9_INTEGRATION_SPEC.json') or {}
+    fields = l9.get('fields', l9)
+    domains = fields.get('reset_domains') or []
+    selected = [r for r in domains if isinstance(r, dict) and r.get('name') == resets[0]]
+    if len(selected) != 1:
+        return False
+    domain = selected[0]
+    if (domain.get('sync') not in ('sync', 'synchronous')
+            or domain.get('polarity') != 'active_' + polarity):
+        return False
+    from _reset_input_semantics import admit_reset_phases
+    try:
+        phases = admit_reset_phases(project, [l9], {p['name'] for p in ports})
+    except ValueError:
+        return False
+    if resets[0] in phases and not any(
+            b['clock'] == clocks[0] and b['assertion'] == 'synchronous'
+            and b['polarity'] == 'active_' + polarity for b in phases[resets[0]]):
+        return False
+    conventions = read_declared_conventions(project, ports)
+    if conventions is not None and conventions['reset_active_low'] != (polarity == 'low'):
+        return False
+    return True
+
+
 def _function_operator(project: Path) -> Optional[Tuple[str, str, str, str]]:
     records = _function_records(project)
-    parsed = [_extract_operator(record) for record in records]
+    parsed = []
+    for record in records:
+        reset = re.search(r';\s*synchronous active-(high|low) reset[.;]?\s*$', record, re.I)
+        if reset and _supports_function_reset(project, reset[1].lower()):
+            record = record[:reset.start()]
+        parsed.append(_extract_operator(record))
     if not parsed or any(item is None for item in parsed):
         return None
     first = parsed[0]

@@ -201,3 +201,25 @@ def test_shape_label_colon_preserves_the_complete_expression(source, accepted):
     assert bool(parsed) is accepted, parsed
     if accepted:
         assert parsed == ('result', 'left', '*', 'right')
+
+
+@pytest.mark.parametrize('polarity,sync,physical,accepted', [
+    (None, None, True, False),
+    ('active_high', 'sync', True, True),
+    ('active_low', 'sync', True, False),
+    ('active_high', 'async', True, False),
+    ('active_high', 'sync', False, False),
+])
+def test_reset_clause_requires_its_actual_structured_contract(tmp_path, polarity, sync, physical, accepted):
+    p = project(tmp_path, 'multiplier: result = left * right; synchronous active-high reset')
+    path = p / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+    l9 = json.loads(path.read_text())
+    if physical:
+        l9['top_ports'] += [{'name': n, 'direction': 'input', 'width': 1} for n in ('clk', 'rst')]
+    if polarity is not None:
+        l9['reset_domains'] = [{'name': 'rst', 'polarity': polarity, 'sync': sync}]
+    path.write_text(json.dumps(l9))
+    parsed = oracle._function_operator(p)
+    assert bool(parsed) is accepted, parsed
+    if accepted:
+        assert parsed == ('result', 'left', '*', 'right')
