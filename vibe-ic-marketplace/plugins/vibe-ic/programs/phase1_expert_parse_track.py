@@ -859,10 +859,8 @@ def input_text_report(project: Path) -> Dict[str, Any]:
                 "unsupported_suffixes": {}, "truncated": False,
                 "design_documents": [], "truncation": None,
                 "input_root": str(root)}
-    # Each half keeps the sorted order, so the frame stays deterministic and a
-    # tree whose design documents already sort first reads exactly as before.
-    # The skip account stays in plain sorted order, so moving the documents to
-    # the head of the reading changes no skip list and hence no binding.
+    # Priority decides which files survive the budget, never their output
+    # order (#98). Both the retained reading and its binding keep sorted order.
     design = _design_document_files(project)
     files = [q for q in sorted(root.rglob("*")) if q.is_file()]
     position = {str(q.relative_to(root)): i for i, q in enumerate(files)}
@@ -914,16 +912,43 @@ def input_text_report(project: Path) -> Dict[str, Any]:
         members.append({"path": str(rel), "sha256": hashlib.sha256(raw).hexdigest(),
                         "bytes": len(raw), "text": t})
         total += len(t)
-    # The design documents are the head of `parts`; a limit that covers them
-    # keeps every one whole, and context is cut where the budget always cut it.
     design_chars = len("\n".join(parts[:len(design_read)]))
-    retained = "\n".join(parts)[:max(_INPUT_TEXT_CAP, design_chars)]
+    members.sort(key=lambda member: position[member["path"]])
+    limit = max(_INPUT_TEXT_CAP, design_chars)
+    retained = "\n".join(member["text"] for member in members)[:limit]
+    parts = []
     offset = 0
+    for member in members:
+        parts.append(retained[offset:offset + len(member["text"])])
+        offset += len(member["text"]) + 1
+    if any(member["path"] in design_read and included != member["text"]
+           for member, included in zip(members, parts)):
+        # An earlier context file must yield space to a later design document.
+        # Reserve the document bytes and separators, then keep the context
+        # prefix. Whole documents are emitted at their original sorted places.
+        document_chars = sum(len(member["text"]) for member in members
+                             if member["path"] in design_read)
+        while document_chars + len(members) - 1 > limit:
+            member = next(member for member in reversed(members)
+                          if member["path"] not in design_read)
+            members.remove(member)
+            skipped.append({"path": member["path"],
+                            "suffix": Path(member["path"]).suffix.lower(),
+                            "bytes": member["bytes"], "reason": SKIP_FRAME_BUDGET})
+        available = limit - document_chars - max(0, len(members) - 1)
+        parts = []
+        for member in members:
+            included = member["text"]
+            if member["path"] not in design_read:
+                included = included[:available]
+                available -= len(included)
+            parts.append(included)
+        retained = "\n".join(parts)
+    read = [member["path"] for member in members]
     semantic_parts = []
     cut: List[Dict[str, Any]] = []
-    for member in members:
+    for member, included in zip(members, parts):
         original = member["text"]
-        included = retained[offset:offset + len(original)]
         member["text"] = included
         member["complete"] = len(included) == len(original)
         if not member["complete"]:
@@ -934,10 +959,9 @@ def input_text_report(project: Path) -> Dict[str, Any]:
         member.update(qualification_context=context, responsibility=role,
                       semantic_text=projection)
         semantic_parts.append(projection)
-        offset += len(original) + 1
     skipped.sort(key=lambda sk: position[sk["path"]])
     left_out = [sk["path"] for sk in skipped if sk["reason"] == SKIP_FRAME_BUDGET]
-    truncated = bool(cut or left_out)
+    truncated = bool(cut or left_out or total >= _INPUT_TEXT_CAP)
     truncation = ({"budget_chars": _INPUT_TEXT_CAP, "design_document_chars": design_chars,
                    "cut": cut, "left_out": left_out} if truncated else None)
     text = "\n".join(p for p in semantic_parts if p)
@@ -957,7 +981,13 @@ def input_text_report(project: Path) -> Dict[str, Any]:
         status = INPUT_READ_AND_EMPTY
     else:
         status = INPUT_UNREADABLE_FORMAT
-    frame = _source_frame(members, text, status, skipped, truncated,
+    # Only skips encountered within the retained reading belong to its
+    # existing binding. The full walk's later accounting remains visible in
+    # the report; budget omissions are also named in the frame's truncation.
+    frontier = max((position[member["path"]] for member in members), default=-1)
+    frame_skipped = ([sk for sk in skipped if sk["reason"] != SKIP_FRAME_BUDGET
+                      and position[sk["path"]] <= frontier] if truncated else skipped)
+    frame = _source_frame(members, text, status, frame_skipped, truncated,
                           design_read, truncation)
     return {"text": text, "chars": len(retained), "status": status,
             "source_frame": frame, "semantic_chars": len(text),

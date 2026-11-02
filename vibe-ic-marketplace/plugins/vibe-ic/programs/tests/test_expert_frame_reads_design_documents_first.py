@@ -20,6 +20,7 @@ shapes stay small.
 """
 from __future__ import annotations
 
+import copy
 import json
 import sys
 from pathlib import Path
@@ -75,11 +76,11 @@ def test_design_documents_that_used_to_be_dropped_are_in_the_frame(tmp_path):
     r = T.input_text_report(d)
     members = r["source_frame"]["members"]
     assert r["design_documents"] == ["docs/L1_DATASHEET.md", "docs/L9_CONSTRAINTS.md"]
-    assert [m["path"] for m in members[:2]] == r["design_documents"]
-    assert all(m["complete"] for m in members[:2])
+    assert [m["path"] for m in members] == sorted(m["path"] for m in members)
+    assert all(m["complete"] for m in members if m["path"] in r["design_documents"])
     assert "DOC_MARKER_ONE" in r["text"] and "DOC_MARKER_TWO" in r["text"]
-    # Context follows in sorted order and is what the budget cuts.
-    assert [m["path"] for m in members[2:]] == [
+    # Context yields space, but keeps its original sorted position (#98).
+    assert [m["path"] for m in members if m["path"] not in r["design_documents"]] == [
         "a_requirement_authority.json", "authority_sources/answers.json"]
     assert r["truncated"] is True
 
@@ -154,13 +155,13 @@ def test_a_design_document_larger_than_the_budget_is_never_cut(tmp_path):
     big = "x" * (CAP + 10)
     d = _tree(tmp_path, {"input/docs/big.md": big, "input/context.md": "ctx"})
     r = T.input_text_report(d)
-    first = r["source_frame"]["members"][0]
+    first = next(m for m in r["source_frame"]["members"] if m["path"] == "docs/big.md")
     assert first["path"] == "docs/big.md" and first["complete"] is True
     assert first["text"] == big and r["chars"] == len(big)
     assert r["truncated"] is True
     assert r["truncation"]["cut"] == [] and r["truncation"]["left_out"] == ["context.md"]
     alone = T.input_text_report(_tree(tmp_path, {"input/docs/big.md": big}, "alone"))
-    assert alone["truncated"] is False and alone["truncation"] is None
+    assert alone["truncated"] is True and alone["truncation"] is not None
     assert alone["chars"] == len(big)
 
 
@@ -170,10 +171,10 @@ def test_a_frame_that_fits_reports_no_truncation(tmp_path):
     r = T.input_text_report(d)
     assert r["truncated"] is False and r["truncation"] is None
     assert not [s for s in r["files_skipped"] if s["reason"] == T.SKIP_FRAME_BUDGET]
-    assert r["files_read"] == ["docs/L1.md", "authority.json"]
+    assert r["files_read"] == ["authority.json", "docs/L1.md"]
 
 
-def test_order_is_design_documents_then_context_each_sorted(tmp_path):
+def test_selected_files_keep_the_original_sorted_order(tmp_path):
     d = _tree(tmp_path, {
         "input/aaa.json": "{}", "input/owner_request.md": "owner",
         "input/zzz.md": "z", "input/design_input.txt": "di",
@@ -182,9 +183,10 @@ def test_order_is_design_documents_then_context_each_sorted(tmp_path):
     })
     r = T.input_text_report(d)
     assert r["files_read"] == [
-        "design_input.txt", "docs/sub/deep.md", "phase1_prompt.md",
-        "phase1_structured.yaml", "aaa.json", "owner_request.md", "zzz.md"]
-    assert r["design_documents"] == r["files_read"][:4]
+        "aaa.json", "design_input.txt", "docs/sub/deep.md", "owner_request.md",
+        "phase1_prompt.md", "phase1_structured.yaml", "zzz.md"]
+    assert r["design_documents"] == ["design_input.txt", "docs/sub/deep.md",
+                                      "phase1_prompt.md", "phase1_structured.yaml"]
     assert T.input_text_report(d) == r
 
 
@@ -207,7 +209,7 @@ def test_the_design_tier_is_the_d1_judgement_population(tmp_path, monkeypatch):
                         J.DESIGN_INPUT_GLOBS + ("input/extra_spec.md",))
     r = T.input_text_report(d)
     assert r["design_documents"] == ["docs/L1.md", "extra_spec.md"]
-    assert r["files_read"] == ["docs/L1.md", "extra_spec.md", "a_context.json"]
+    assert r["files_read"] == ["a_context.json", "docs/L1.md", "extra_spec.md"]
 
 
 def test_the_track_record_and_the_agent_handoff_carry_the_truncation(tmp_path):
@@ -221,4 +223,43 @@ def test_the_track_record_and_the_agent_handoff_carry_the_truncation(tmp_path):
                       source_frame=r["source_frame"])["handoff"]
     assert h["source_frame"]["truncation"] == r["truncation"]
     reading = (tmp_path / "pack" / h["read_design_input_from"]).read_text()
-    assert reading.index("DOC_MARKER_ONE") < reading.index("A" * 700)
+    assert reading.index("A" * 700) < reading.index("DOC_MARKER_ONE")
+
+
+def test_complete_reading_keeps_the_original_sorted_frame_and_binding(tmp_path):
+    context, document = "Context declaration.", "Design requirement."
+    project = _tree(tmp_path, {"input/a_context.md": context,
+                               "input/docs/spec.md": document})
+    report = T.input_text_report(project)
+    original = copy.deepcopy(report["source_frame"])
+    original["members"].sort(key=lambda member: member["path"])
+    original["semantic_text"] = context + "\n" + document
+    original_reading, original_binding = T._pack.phase1_frame(
+        original["semantic_text"], original)
+    reading, binding = T._pack.phase1_frame(report["text"], report["source_frame"])
+    assert report["files_read"] == ["a_context.md", "docs/spec.md"]
+    assert report["text"] == context + "\n" + document
+    assert reading == original_reading
+    assert binding == original_binding
+
+
+def test_unused_budget_account_does_not_change_the_retained_frame_binding(tmp_path):
+    project = _tree(tmp_path, {"input/docs/spec.md": "Design requirement.",
+        "input/m_context.md": "x" * (CAP + 10),
+        "input/zz/remaining.md": "Unused context.",
+        "input/zz/answer_ref.md": "Neutral forbidden fixture.",
+        "input/zz/unsupported.pdf": "%PDF"})
+    report = T.input_text_report(project)
+    original = copy.deepcopy(report["source_frame"])
+    # Main stopped inside m_context.md: these later paths were not part of
+    # that reading. They still belong in the complete operator-facing account.
+    original["files_skipped"] = []
+    _, original_binding = T._pack.phase1_frame(report["text"], original)
+    _, binding = T._pack.phase1_frame(report["text"], report["source_frame"])
+    assert binding == original_binding
+    assert {entry["path"]: entry["reason"] for entry in report["files_skipped"]} == {
+        "zz/answer_ref.md": T.SKIP_ORACLE_PATH,
+        "zz/remaining.md": T.SKIP_FRAME_BUDGET,
+        "zz/unsupported.pdf": T.SKIP_UNSUPPORTED_FORMAT}
+    assert report["truncation"]["left_out"] == ["zz/remaining.md"]
+    assert report["source_frame"]["truncation"] == report["truncation"]
