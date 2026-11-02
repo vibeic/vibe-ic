@@ -207,6 +207,9 @@ def _lex_liberty(text: str | _LibertySource) -> _LibertySource:
                 i = len(text) if close < 0 else close
             blank = ["\n" if c == "\n" else " " for c in text[start:i]]
             syntax[start:i] = blank
+        elif text.startswith(("\\\r\n", "\\\n"), i):
+            i += 3 if text.startswith("\\\r\n", i) else 2
+            syntax[start:i] = [" "] * (i - start)
         elif text[i].isspace():
             i += 1
         elif text[i] in punctuation:

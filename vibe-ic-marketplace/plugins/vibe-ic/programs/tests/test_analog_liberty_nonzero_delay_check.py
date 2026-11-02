@@ -615,3 +615,15 @@ def test_r63_quoted_escapes_are_decoded_once_and_unknown_escapes_retained():
     source = mod._lex_liberty(r'pin(out) { direction : "out\put"; }')
     assert mod._attribute(source, "direction") == r'out\put'
     assert not mod._has_signal_output(source)
+
+
+@pytest.mark.parametrize("ending", ["\n", "\r\n"], ids=["LF", "CRLF"])
+def test_r63_continuation_between_attribute_tokens_cannot_hide_output(tmp_path, ending):
+    _, lib = _native_passive_case(tmp_path)
+    text = lib.read_text().replace('    pg_pin (TOP)',
+        'pin(out) { direction : \\' + ending + '"output"; } pg_pin (TOP)')
+    lib.write_bytes(text.encode())
+    result = mod.run_audit(tmp_path)
+    assert not result.passed
+    assert "LIB_NO_TIMING" in {f.rule for f in result.findings}
+    assert mod._has_signal_output(text)
