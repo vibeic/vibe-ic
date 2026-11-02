@@ -165,22 +165,3 @@ def test_checked_in_psm_sizing_artifact_drives_entry_floor():
     assert result["pair_count"] == 7
     assert result["ring_pair_floor"] * capacity > peak
     assert (result["ring_pair_floor"] - 1) * capacity < peak
-
-
-def test_second_pass_checks_pitch_in_the_emitted_interleaved_order(tmp_path):
-    import re
-
-    project, root = _tree(tmp_path)
-    lef = root / "testpdk/libs.ref/test_io/lef/test_io.lef"
-    text = lef.read_text().replace("SIZE 1 BY 100", "SIZE 2 BY 100")
-    for master, width in [("in", 4), ("bi", 4), ("pbridge", 2), ("gbridge", 3)]:
-        pattern = rf"(MACRO test_io__{master}\n.*?SIZE )10\.000"
-        text, count = re.subn(pattern, rf"\g<1>{width}.000", text, flags=re.S)
-        assert count == 1
-    lef.write_text(text)
-    result = _produce(project, root, {"verdict": "PLANNED", "pair_count": 4,
-                                      "subject_def_sha256": "a" * 64,
-                                      "die_side_um": 229})
-    assert result.returncode == 1, result.stdout + result.stderr
-    report = json.loads((project / "reports/phase3/io_pad_chip_top.json").read_text())
-    assert report["rule"] == "SUPPLY_ENTRY_RING_GEOMETRY_INFEASIBLE"

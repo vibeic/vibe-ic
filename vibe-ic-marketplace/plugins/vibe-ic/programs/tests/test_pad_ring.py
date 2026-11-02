@@ -433,9 +433,12 @@ def test_the_corner_grid_refusal_names_every_feasible_uniform_pad_count(
         tmp_path, capsys):
     """The refusal must answer the arithmetic question it already solved.
 
-    A side one DEF unit beyond 1_300 microns cannot be tiled by the
-    declared 1-micron sites, regardless of the count of 80-micron pads.
-    An odd number of whole sites is handled by asymmetric corner gaps.
+    This neutral geometry is the issue's exact discriminating shape: a
+    1_300-unit side, 180-unit corners, 80-unit uniform pads and a 1-unit site.
+    Six pads leave an odd corner remainder, while 4, 5 and 7 are among the
+    feasible positive counts.  Naming only the refusal makes an author rerun
+    the full flow once per guess; publishing the complete set makes the same
+    deterministic arithmetic actionable without weakening the refusal.
     """
     count = 6
     signals = {s: [f"{s.lower()}_signal_{i}" for i in range(count)]
@@ -456,14 +459,14 @@ def test_the_corner_grid_refusal_names_every_feasible_uniform_pad_count(
         config=config,
         floorplan=_floorplan(
             pins=[n for side in PR.SIDES for n in signals[side]],
-            instances=list(pads.values()), die=1_300_001),
+            instances=list(pads.values()), die=1_300_000),
         site_w=1.0, pad_w=80.0, corner_w=180.0)
 
     assert _gen(root) == 1
     refusals = [f for f in _report(root)["findings"]
                 if f["rule"] == "PAD_CORNER_SPACING_NOT_SITE_MULTIPLE"]
     assert len(refusals) == 4
-    expected = []
+    expected = [1, 2, 3, 4, 5, 7, 9, 10, 11]
     for finding in refusals:
         assert f"feasible positive per-side counts are {expected}" in (
             finding["message"]), finding["message"]
