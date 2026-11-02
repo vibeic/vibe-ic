@@ -226,7 +226,12 @@ def _local_ngspice_startup(project, cwd, image):
         init = Path(selected['pdk_root']) / 'libs.tech/ngspice/.spiceinit'
     environment = {'PDK_ROOT': root, 'PDK': selected['matched_dir']}
     if not init.is_file():
-        return environment, None  # An absent optional init is not a model verdict.
+        # Compiled models need the PDK's startup to register their device types.
+        # Built-in SPICE models can still run without an optional startup.
+        osdi = next((path for path in init.parent.rglob('*.osdi') if path.is_file()), None)
+        if osdi is not None:
+            raise ValueError(f'NGSPICE_NATIVE_INIT_MISSING: {init} (required by {osdi})')
+        return environment, None
     environment['SPICE_USERINIT_DIR'] = str(init.parent)
     return environment, {'path': str(init), 'sha256': _sha(init)}
 

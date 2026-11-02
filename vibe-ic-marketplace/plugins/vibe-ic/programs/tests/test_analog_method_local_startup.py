@@ -58,6 +58,38 @@ def test_staged_models_do_not_select_an_undeclared_installed_startup(tmp_path, m
     assert native._local_ngspice_startup(project, project, 'test-runtime') == ({}, None)
 
 
+@pytest.mark.parametrize('startup', ['builtin', 'missing', 'cwd'])
+def test_installed_model_startup_requirement(tmp_path, monkeypatch, startup):
+    import analog_pdk_availability as availability
+    project = tmp_path / 'project'
+    declaration = project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json'
+    declaration.parent.mkdir(parents=True)
+    family = 'process_alpha'
+    declaration.write_text(json.dumps({'fields': {'pdk_target': family}}))
+    root = tmp_path / 'runtime-pdks'
+    init = root / family / 'libs.tech/ngspice/.spiceinit'
+    init.parent.mkdir(parents=True)
+    (init.parent / 'device.lib').write_text('.model neutral_diode D\n')
+    if startup != 'builtin':
+        osdi = init.parent / 'osdi/device_alpha.osdi'
+        osdi.parent.mkdir()
+        osdi.write_bytes(b'synthetic compiled-model asset')
+    monkeypatch.setattr(availability, 'local_pdks_root', lambda *a: str(root))
+    if startup == 'missing':
+        with pytest.raises(ValueError, match='NGSPICE_NATIVE_INIT_MISSING') as refused:
+            native._local_ngspice_startup(project, project, 'test-runtime')
+        assert str(init) in str(refused.value)
+    else:
+        cwd_init = project / '.spiceinit'
+        if startup == 'cwd':
+            cwd_init.write_text('* existing working-directory startup\n')
+        environment, source = native._local_ngspice_startup(project, project, 'test-runtime')
+        assert environment == {'PDK_ROOT': str(root), 'PDK': family,
+            **({'SPICE_USERINIT_DIR': str(project)} if startup == 'cwd' else {})}
+        assert source == ({'path': str(cwd_init), 'sha256': native._sha(cwd_init)}
+                          if startup == 'cwd' else None)
+
+
 @pytest.fixture
 def psp_runtime():
     import analog_pdk_availability as availability
@@ -142,6 +174,31 @@ def test_real_declared_psp_unknown_model_remains_failure(tmp_path, psp_runtime):
     row = report['steps'][0]
     assert row['status'] == 'FAIL'
     assert row['executions'][0]['returncode'] != 0
+
+
+def test_missing_psp_startup_refuses_before_ngspice(tmp_path, psp_runtime, monkeypatch):
+    image, family, init = psp_runtime
+    project, _ = _psp_project(tmp_path, family, 'declared')
+    is_file = Path.is_file
+    # Hide only the selected startup, leaving the real PDK/model population intact.
+    monkeypatch.setattr(Path, 'is_file', lambda path: False if path == init else is_file(path))
+    calls = []
+    run = native.subprocess.run
+
+    def observe(argv, *args, **kwargs):
+        if Path(argv[0]).name == 'ngspice':
+            calls.append(argv)
+        return run(argv, *args, **kwargs)
+
+    monkeypatch.setattr(native.subprocess, 'run', observe)
+    report = native.run_window(project, SimpleNamespace(entry_step='A07', exit_step='A07',
+        blocks='device_alpha', container='', image=image, transport='LOCAL', pdk=family))
+    row = report['steps'][0]
+    assert row['status'] == 'NOT_MEASURED', row
+    assert 'NGSPICE_NATIVE_INIT_MISSING' in row['detail']
+    assert str(init) in row['detail']
+    assert calls == []
+    assert not row.get('executions')
 
 
 def test_undeclared_staged_case_keeps_coverage_refusal(tmp_path, psp_runtime):
