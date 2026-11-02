@@ -69,6 +69,24 @@ def test_missing_finishing_record_is_named(canonical):
         native.signoff_inputs(project, 'gds')
 
 
+@pytest.mark.parametrize('value', [123, ['finished.gds'], {'path': 'finished.gds'}])
+@pytest.mark.parametrize('half', ['drc', 'lvs'])
+def test_malformed_finished_gds_path_is_not_measured(canonical, value, half):
+    import phase3_one_shot_runner as runner
+
+    project, _, _, _, _, record = canonical
+    doc = json.loads(record.read_text())
+    doc['canonical'] = value
+    put(record, doc)
+    try:
+        row = runner._step31_librelane(project, 'unit', None, half, publish=False)
+        observed = row.status, row.detail
+    except TypeError as exc:
+        observed = type(exc).__name__, str(exc)
+    assert observed[0] == 'NOT_MEASURED'
+    assert 'CURRENT_FINISHED_GDS_RECORD_INVALID: canonical' in observed[1]
+
+
 def test_views_other_than_gds_do_not_need_the_finishing_record(canonical):
     project, views, _, _, _, record = canonical
     record.unlink()
