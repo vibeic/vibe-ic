@@ -207,3 +207,70 @@ def test_review_receiver_continues_across_comments_and_blank_lines(
     # Neither method is in the bounded numeric model. In particular ceil(4.9)
     # is 5, so accepting a declared 4.95 edge using the truncated 4.9 is unsafe.
     assert_unreadable(tmp_path)
+
+
+@pytest.mark.parametrize("geometry", [
+    "active.width(2.um)\n .output('width', 'minimum width')\n",
+    "active.width(2.um)\n# comment\n\n .output('width', 'minimum width')\n",
+    "active.width(\n 2.um\n)\n .output('width', 'minimum width')\n",
+])
+@pytest.mark.parametrize("before_binding", [True, False])
+def test_review_unrelated_multiline_geometry_keeps_numeric_clearance(
+        tmp_path, geometry, before_binding):
+    binding = "spacing = rules['clearance'].to_f\n"
+    (tmp_path / "rules.json").write_text(json.dumps({"rules": {"clearance": 4.9}}))
+    (tmp_path / "main.drc").write_text(
+        "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\n"
+        + (geometry + binding if before_binding else binding + geometry)
+        + 'active.separation(guard_ring, spacing.um).output("seal", "space")\n'
+    )
+    value, basis = read(tmp_path)
+    assert value == pytest.approx(4.9), basis
+    merged, _ = pads.apply_pdk_declarations(
+        {"PAD_EDGE_SPACING": 4.95},
+        SimpleNamespace(values={"PAD_EDGE_SPACING": 140}),
+        seal_ring_placement="outside",
+        seal_clearance_um=value,
+        seal_clearance_basis=basis,
+    )
+    assert merged["PAD_EDGE_SPACING"] == 4.95
+
+
+def test_unrelated_geometry_can_read_the_tracked_number_in_its_output(tmp_path):
+    (tmp_path / "rules.json").write_text(json.dumps({"rules": {"clearance": 4.9}}))
+    (tmp_path / "main.drc").write_text(
+        "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\n"
+        "spacing = rules['clearance'].to_f\n"
+        'active.width(2.um)\n .output("width", "clearance #{spacing}")\n'
+        'active.separation(guard_ring, spacing.um).output("seal", "space")\n'
+    )
+    value, basis = read(tmp_path)
+    assert value == pytest.approx(4.9), basis
+
+
+@pytest.mark.parametrize("receiver", ["(\n 4.9\n)", "(\n rules['clearance'].to_f\n)"])
+@pytest.mark.parametrize("method", ["ceil", "unknown"])
+def test_multiline_numeric_receiver_still_refuses_unsupported_continuation(
+        tmp_path, receiver, method):
+    (tmp_path / "rules.json").write_text(json.dumps({"rules": {"clearance": 4.9}}))
+    (tmp_path / "main.drc").write_text(
+        "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\n"
+        + f"spacing = {receiver}\n# comment\n\n .{method}\n"
+        + 'active.width(2.um)\n .output("width", "minimum width")\n'
+        + 'active.separation(guard_ring, spacing.um).output("seal", "space")\n'
+    )
+    assert_unreadable(tmp_path)
+
+
+@pytest.mark.parametrize("method", ["clear", "unknown"])
+@pytest.mark.parametrize("separator", ["# comment\n", "\n"])
+def test_json_binding_keeps_its_receiver_across_a_leading_dot(
+        tmp_path, method, separator):
+    (tmp_path / "rules.json").write_text(json.dumps({"rules": {"clearance": 4.9}}))
+    (tmp_path / "main.drc").write_text(
+        "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\n"
+        + f"{separator} .{method}\n"
+        + "spacing = rules['clearance'].to_f\n"
+        + 'active.separation(guard_ring, spacing.um).output("seal", "space")\n'
+    )
+    assert_unreadable(tmp_path)

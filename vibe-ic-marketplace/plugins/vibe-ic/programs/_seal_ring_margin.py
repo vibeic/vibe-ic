@@ -423,7 +423,7 @@ class _NumericExpression:
             return False
         raise ValueError(f"unsupported numeric syntax {type(node).__name__}")
 
-    def audit(self, text):
+    def audit(self, text, *, receiver=""):
         """Check related statements, retaining scalar aliases without executing Ruby."""
         body, code = _clearance_code(text)
         # The lexer has already blanked comments. Look ahead across those and
@@ -431,6 +431,11 @@ class _NumericExpression:
         significant = [(line, masked) for line, masked in
                        zip(body.splitlines(keepends=True), code.splitlines(keepends=True))
                        if line.strip()]
+        if (receiver and significant
+                and significant[0][1].lstrip().startswith((".", "&.", "::"))):
+            line, masked = significant[0]
+            significant[0] = (receiver + " " + line.lstrip(),
+                              receiver + " " + masked.lstrip())
         lines = [line for line, _ in significant]
         code_lines = [masked for _, masked in significant]
         pending = ""
@@ -438,12 +443,8 @@ class _NumericExpression:
         for index, line in enumerate(lines):
             masked = code_lines[index]
             delta = sum(masked.count(c) for c in "([{") - sum(masked.count(c) for c in ")]}")
-            related = any(re.search(r"\b" + re.escape(n) + r"\b", line)
-                          for n in self.tables | self.names | self.opaque)
-            if not pending and masked.lstrip().startswith((".", "&.", "::")):
-                return "unsupported incomplete numeric receiver"
-            if not pending and not related and not (delta > 0 and re.search(r"\.\w+\(", masked)):
-                continue
+            # Assemble the whole receiver before deciding whether it touches
+            # tracked numbers; unrelated geometry may also continue with a dot.
             pending += line
             depth += delta
             following = lines[index + 1].lstrip() if index + 1 < len(lines) else ""
@@ -586,7 +587,7 @@ def _table_sources(table: str, assignment, text: str, source_path: str,
     tail = text[offset:before]
     first_line_end = tail.find("\n")
     tail = tail[first_line_end + 1:] if first_line_end >= 0 else ""
-    audit_error = _NumericExpression(tables=(table,)).audit(tail)
+    audit_error = _NumericExpression(tables=(table,)).audit(tail, receiver=table)
     if audit_error:
         return [], audit_error
     return list(sources or []), error
@@ -598,17 +599,20 @@ def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None,
     assignments = list(_RE_CLEAR_ASSIGN.finditer(code))
     out: List[Dict[str, Any]] = []
 
-    def assigned(name, before):
-        found = [a for a in assignments if a.start() < before and a.group(1) == name]
-        if not found:
-            return None
-        assignment = found[-1]
+    def assignment_end(assignment):
         end = assignment.end(2)
         while (code[assignment.start(2):end].count("(")
                > code[assignment.start(2):end].count(")") and end < len(code)):
             next_line = code.find("\n", end + 1)
             end = len(code) if next_line < 0 else next_line
-        return body[assignment.start(2):end].strip(), assignment.start()
+        return end
+
+    def assigned(name, before):
+        found = [a for a in assignments if a.start() < before and a.group(1) == name]
+        if not found:
+            return None
+        assignment = found[-1]
+        return body[assignment.start(2):assignment_end(assignment)].strip(), assignment.start()
 
     def marker(expression, before, seen=(), intersected=False):
         if re.fullmatch(_IDENT, expression):
@@ -646,8 +650,10 @@ def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None,
             source = assigned(value_expression, before)
             if not source:
                 break
+            # Seed the tail with its actual tracked receiver. A leading-dot
+            # continuation belongs to this value only until that statement ends.
             local_error = _NumericExpression(names=(value_expression,)).audit(
-                body[bindings[0].end(2):before])
+                body[assignment_end(bindings[0]):before], receiver=value_expression)
             if local_error:
                 break
             value_expression, before = source
