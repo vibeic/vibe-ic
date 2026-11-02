@@ -192,6 +192,75 @@ def test_ambiguous_native_streams_refuse_selection(subject):
         native.signoff_inputs(project, 'gds')
 
 
+def test_canonical_stream_history_selects_the_final_flow_step(subject):
+    project, views, direct, _, _ = subject
+    state = json.loads(direct.read_text())
+    direct.unlink()
+    stream_state(project, '15-floorplan/47-magic-streamout', state, 'Magic.StreamOut')
+    stream_state(project, '15-floorplan/48-klayout-streamout', state)
+    state['klayout_gds'] = state.pop('gds')
+    expected = stream_state(project, '37-default-stream/01-klayout-streamout', state)
+    try:
+        selected = native.final_state(project, streamed=True)
+    except ValueError as exc:
+        selected = str(exc)
+    assert selected == expected
+    assert native.signoff_inputs(project, 'gds', 'def', 'netlist', 'sdc', 'odb') == {
+        ('netlist' if name == 'nl' else name): view for name, view in views.items()}
+
+
+@pytest.mark.parametrize('earlier,later', [
+    ('9-stream/99-klayout-streamout', '10-stream/01-klayout-streamout'),
+    ('37-stream/01-magic-streamout', '37-stream/02-klayout-streamout'),
+    ('37-stream/01-klayout-streamout', '37.3-stream/01-klayout-streamout'),
+])
+def test_native_streams_follow_numeric_flow_order(subject, earlier, later):
+    project, _, direct, _, _ = subject
+    state = json.loads(direct.read_text())
+    direct.unlink()
+    stream_state(project, earlier, state)
+    expected = stream_state(project, later, state)
+    assert native.final_state(project, streamed=True) == expected
+
+
+def test_only_a_tie_at_the_highest_stream_ordinal_is_ambiguous(subject):
+    project, _, direct, _, _ = subject
+    state = json.loads(direct.read_text())
+    direct.unlink()
+    old = stream_state(project, '15-floorplan/48-klayout-streamout', state)
+    final = stream_state(project, '37-default-stream/01-klayout-streamout', state)
+    competing = stream_state(project, '37-recovery-stream/01-magic-streamout', state,
+                             'Magic.StreamOut')
+    with pytest.raises(ValueError, match='CURRENT_FINAL_STATE_AMBIGUOUS') as exc:
+        native.signoff_inputs(project, 'gds')
+    assert str(final) in str(exc.value)
+    assert str(competing) in str(exc.value)
+    assert str(old) not in str(exc.value)
+
+
+def test_signoff_without_a_stream_does_not_fall_back_to_prestream_state(subject):
+    project, _, direct, _, _ = subject
+    state = json.loads(direct.read_text())
+    direct.unlink()
+    sta = put(project / 'phase3/librelane/23-sta/state_out.json', state)
+    put(project / 'reports/phase3/sta_postpnr_signoff.json', {'sta_state': str(sta)})
+    assert native.final_state(project) == sta
+    assert native.final_state(project, streamed=True) is None
+    with pytest.raises(ValueError, match='CURRENT_FINAL_STATE_MISSING: state_out.json'):
+        native.signoff_inputs(project, 'gds')
+
+
+def test_latest_stream_missing_view_does_not_borrow_from_history(subject):
+    project, _, direct, _, _ = subject
+    state = json.loads(direct.read_text())
+    direct.unlink()
+    stream_state(project, '15-floorplan/48-klayout-streamout', state)
+    state.pop('nl')
+    stream_state(project, '37-default-stream/01-klayout-streamout', state)
+    with pytest.raises(ValueError, match='CURRENT_FINAL_STATE_VIEW_MISSING: nl'):
+        native.signoff_inputs(project, 'netlist')
+
+
 def test_explicit_root_does_not_merge_a_missing_view_from_another_state(subject):
     project, _, direct, _, _ = subject
     state = json.loads(direct.read_text())
