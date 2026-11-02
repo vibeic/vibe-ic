@@ -529,6 +529,25 @@ def density_rule_layer_identifiers(deck_text: str) -> Dict[str, List[str]]:
     return out
 
 
+def density_check_only_rules(deck_text: str) -> List[str]:
+    """Upper-bound-only executable checks have no fill obligation.
+
+    Read Ruby direction symbols and conditional comparisons, never rule prose.
+    Unknown or mixed-direction code retains its coverage obligation.
+    """
+    family = density_rule_layer_identifiers(deck_text)
+    die_names, _why = _dla.die_area_identifiers(deck_text)
+    from _density_bound_direction import DensityDirections
+    reader = DensityDirections(_dla.deck_code_only(deck_text), die_names)
+    directions_by_rule = {}
+    for rid, _where, body in _dla._rule_blocks(deck_text):
+        if rid in family:
+            directions_by_rule.setdefault(rid, set()).update(
+                reader.modes(_dla.deck_code_only(body), family[rid]))
+    return sorted(rid for rid, modes in directions_by_rule.items() if modes == {'max'})
+
+
+
 def density_rule_coverage(deck_text: str, layers: List[dict]
                           ) -> Tuple[Dict[str, List[str]], Dict[str, List[str]]]:
     """(covered, uncovered) — {rule: identifiers} split by whether THIS config
@@ -552,7 +571,10 @@ def density_rule_coverage(deck_text: str, layers: List[dict]
     names = {str(sp.get("name")) for sp in layers if sp.get("name")}
     covered: Dict[str, List[str]] = {}
     uncovered: Dict[str, List[str]] = {}
+    check_only = set(density_check_only_rules(deck_text))
     for rid, idents in sorted(density_rule_layer_identifiers(deck_text).items()):
+        if rid in check_only:
+            continue
         (covered if (set(idents) & names) else uncovered)[rid] = idents
     return covered, uncovered
 
@@ -663,6 +685,8 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
             # "this config was built before the concept existed" are
             # distinguishable to a consumer — the same rule the keep-out list
             # above already follows.
+            **({"density_rules_check_only": density_check_only_rules(deck_text)}
+               if density_check_only_rules(deck_text) else {}),
             "density_rules_covered": _dens_covered,
             "density_rules_without_fill_entry": _dens_uncovered,
             # The deck's own NAME for each keep-out, so a reader can check the

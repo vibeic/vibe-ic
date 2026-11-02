@@ -508,7 +508,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `flow109_analog_floorplan` | any | — | D31 analog-die placement of real macro views; BLOCKING geometry checks. |
 | `flow109_analog_model_check` | any | — | Consume current A02 ngspice model-smoke receipts without granting signoff. |
 | `flow109_clock_plan` | any | — | D34 adapter for the existing special Default clock-plan producer. |
-| `flow109_density_fill` | any | — | Blocking D62 ODB density-fill component, not a density/tapeout signoff. |
+| `flow109_density_fill` | any | — | Blocking D62 density-fill component, not a density/tapeout signoff. |
 | `flow109_engineering` | any | — | Source-owned bounded engineering evidence; no qualified row or delivery credit. |
 | `flow109_final_electrical` | any | — | D70 Default bounded component: final RCX SPEFs -> STAPostPNR and SDF. |
 | `flow109_final_extract` | any | — | D69 native owner: final GDS/DEF -> released floating-fill Magic SPEF tool. |
@@ -2066,7 +2066,7 @@ _(no programs in this group)_
 - `flow109_analog_floorplan` — D31 analog-die placement of real macro views; BLOCKING geometry checks.
 - `flow109_analog_model_check` — Consume current A02 ngspice model-smoke receipts without granting signoff.
 - `flow109_clock_plan` — D34 adapter for the existing special Default clock-plan producer.
-- `flow109_density_fill` — Blocking D62 ODB density-fill component, not a density/tapeout signoff.
+- `flow109_density_fill` — Blocking D62 density-fill component, not a density/tapeout signoff.
 - `flow109_engineering` — Source-owned bounded engineering evidence; no qualified row or delivery credit.
 - `flow109_final_electrical` — D70 Default bounded component: final RCX SPEFs -> STAPostPNR and SDF.
 - `flow109_final_extract` — D69 native owner: final GDS/DEF -> released floating-fill Magic SPEF tool.
