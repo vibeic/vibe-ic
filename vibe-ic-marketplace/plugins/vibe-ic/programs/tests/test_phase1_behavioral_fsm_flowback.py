@@ -278,15 +278,37 @@ def test_step_behavioral_classify_is_bound_across_live_root_swap_restore(
     monkeypatch.setattr(
         _PROD_RTL_PROV, "classify", _classify_while_live_root_is_replaced)
 
-    result = runner.step_rtl_gen(
-        project, "deliberately_unregistered_class")
+    binding = runner._Phase1ProjectBinding.open(project)
+    stage_project = tmp_path / "stage"
+    stage_binding = None
+    transaction = None
+    try:
+        baseline = runner._phase1_snapshot_to_stage(binding, stage_project)
+        stage_binding = runner._Phase1ProjectBinding.open(stage_project)
+        stage_binding.isolated_rtl_stage = True
+        stage_binding.rtl_source_binding = binding
+        result = runner._try_phase1_behavioral_fsm_rtl(
+            stage_project, 0.0, project_binding=stage_binding)
 
-    assert_prose_handoff(result, COMPLETE_DIRECTIONAL_FALL)
-    assert [span["source_span"] for span in
-            result.extras["unaccounted_source_spans"]] == _DIRECTIONAL_UNACCOUNTED_SPANS
-    assert seen == []
-    assert result.output_files == []
-    assert not (project / "phase2" / "stage1" / "rtl").exists()
+        assert result.status == "PASS"
+        assert len(seen) == 1
+        final = runner._phase1_tree_manifest_fd(
+            stage_binding.project_fd, project)
+        transaction = runner._phase1_commit_staged_tree(
+            binding, stage_binding, baseline, final)
+        binding.require_current()
+        transaction.finalize()
+        transaction = None
+    finally:
+        if transaction is not None:
+            transaction.rollback()
+        runner._phase1_replace_session_binding(None)
+        if stage_binding is not None:
+            stage_binding.close()
+        binding.close()
+
+    assert (project / "phase2" / "stage1" / "rtl" /
+            "TopModule.v").is_file()
     assert not (project / "phase2" / "stage1" / "rtl" /
                 "foreign.v").exists()
     assert not displaced.exists()

@@ -32,6 +32,57 @@ The module should implement the function shown in the Karnaugh map below.
   0 | 0 | 1 |
   1 | 1 | 0 |
 """
+CLASSES = (
+    "data_converter", "mixed_signal_otp", "aid_class_half_duplex_single_wire",
+    "zzz_unregistered", "digital_arithmetic_primitive",
+)
+RAW_PATHS = ("phase1/input_doc/design.md", "phase1/input_prompt/prompt.txt")
+CANONICAL_PULSE = (
+    "Module name:\n    pulse_detect\n"
+    "Pulse detection: when data_in changes from 0 to 1 to 0 this is a pulse.\n"
+    "Input ports:\n clk: Clock.\n rst_n: Reset.\n"
+    " data_in: One-bit input.\n"
+    "Output ports:\n data_out: pulse indicator.\n")
+REVIEWER_YAML = """description: |
+  Module name:
+      pulse_detect
+  Pulse detection: when data_in changes from 0 to 1 to 0 this is a pulse.
+  Input ports:
+   clk: Clock.
+   rst_n: Reset.
+   data_in: One-bit input.
+  Output ports:
+   data_out: pulse indicator.
+  Keep the silicon footprint as tiny as you possibly can.
+"""
+BEHAVIORAL_FSM = (
+    PROGRAMS / "tests/fixtures/real_benchmark/directional_bump_fall_moore_prompt.md"
+).read_text()
+RESET_PULSE = """Implement a module named TopModule.
+ - input clk
+ - input reset
+ - output shift_ena
+The reset is synchronous and active-high.
+Assert shift_ena for exactly 4 clock cycles, then 0 forever until reset.
+"""
+HALF_ADDER = """I would like you to implement a module named TopModule with the following
+interface. All input and output ports are one bit unless otherwise
+specified.
+
+ - input  a
+ - input  b
+ - output sum
+ - output cout
+
+The module should implement a half adder. A half adder adds two bits
+(with no carry-in) and produces a sum and carry-out.
+"""
+RESTRICTIONS = (
+    ("", "SPEC_SENTENCES_UNACCOUNTED"),
+    ("Use only NAND gates.\n", "DECLARED_LOGIC_OBLIGATION_UNSUPPORTED"),
+    ("Minimize the number of gates.\n", "DECLARED_LOGIC_OBLIGATION_UNSUPPORTED"),
+    (PROSE, "SPEC_SENTENCES_UNACCOUNTED"),
+)
 
 
 def _reset_session():
@@ -75,7 +126,10 @@ def test_selected_structured_source_ignores_unconsumed_prose(tmp_path, rel):
     assert not (tmp_path / "phase2/stage1/fallback_skill.md").exists()
 
 
-def test_typed_canonical_description_is_consumed_without_operator_prose(tmp_path):
+@pytest.mark.parametrize("ic_class", CLASSES)
+@pytest.mark.parametrize("include_prose", [False, True], ids=["structured-only", "mixed"])
+def test_typed_canonical_description_is_consumed_without_operator_prose(
+        tmp_path, ic_class, include_prose):
     description = (
         "Module name: pulse_detect. "
         "Pulse detection: when data_in changes from 0 to 1 to 0 this is a pulse. "
@@ -86,11 +140,141 @@ def test_typed_canonical_description_is_consumed_without_operator_prose(tmp_path
             {"name": name, "direction": direction, "width": 1}
             for name, direction in (("clk", "input"), ("rst_n", "input"),
                                     ("data_in", "input"), ("data_out", "output"))]})
-    _write(tmp_path, "phase1/input_doc/design.md", PROSE)
-    result = runner.step_rtl_gen(tmp_path, "__neutral_logic__")
+    if include_prose:
+        _write(tmp_path, "phase1/input_doc/design.md", PROSE)
+    result = runner.step_rtl_gen(tmp_path, ic_class)
     assert result.status == "PASS", result.detail
     assert result.extras["deterministic_generator"] == "canonical_primitive_synth"
     assert (tmp_path / "phase2/stage1/rtl/pulse_detect.v").is_file()
+    assert not (tmp_path / "phase2/stage1/fallback_skill.md").exists()
+
+
+@pytest.mark.parametrize("ic_class", CLASSES)
+@pytest.mark.parametrize("rel", RAW_PATHS)
+def test_fully_accounted_raw_kmap_keeps_program_first_pass(tmp_path, ic_class, rel):
+    _write(tmp_path, rel, KMAP)
+    result = runner.step_rtl_gen(tmp_path, ic_class)
+    assert result.status == "PASS", result.detail
+    assert result.extras["deterministic_generator"]
+    assert (tmp_path / "phase2/stage1/rtl/chip_top.sv").is_file()
+    assert not (tmp_path / "phase2/stage1/fallback_skill.md").exists()
+
+
+@pytest.mark.parametrize("ic_class", CLASSES)
+@pytest.mark.parametrize("rel", RAW_PATHS)
+@pytest.mark.parametrize("text", [CANONICAL_PULSE, REVIEWER_YAML],
+                         ids=["raw-canonical", "reviewer-yaml"])
+def test_unaccounted_raw_canonical_source_requires_named_handoff(
+        tmp_path, ic_class, rel, text):
+    _write(tmp_path, rel, text)
+    result = runner.step_rtl_gen(tmp_path, ic_class)
+    assert result.status == "PASS_WITH_WAIVERS", result.detail
+    assert "SPEC_SENTENCES_UNACCOUNTED" in result.detail
+    assert result.extras["fallback_skill"] == "spec-to-rtl"
+    assert result.extras["spec_source"] == "phase1_plain_text"
+    assert result.extras["unaccounted_source_spans"]
+    assert not any(path.suffix in (".v", ".sv")
+                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
+    assert (tmp_path / "phase2/stage1/fallback_skill.md").is_file()
+
+
+@pytest.mark.parametrize("ic_class", CLASSES)
+@pytest.mark.parametrize("rel", RAW_PATHS)
+@pytest.mark.parametrize("restriction,marker", RESTRICTIONS,
+                         ids=["plain", "nand", "minimize", "sheffer"])
+def test_unaccounted_raw_behavioral_source_requires_named_handoff(
+        tmp_path, ic_class, rel, restriction, marker):
+    _write(tmp_path, rel, RESET_PULSE + "\n" + restriction)
+    result = runner.step_rtl_gen(tmp_path, ic_class)
+    assert result.status == "PASS_WITH_WAIVERS", result.detail
+    assert marker in result.detail
+    assert result.extras["fallback_skill"] == "spec-to-rtl"
+    assert result.extras["unaccounted_source_spans"]
+    assert not any(path.suffix in (".v", ".sv")
+                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
+
+
+@pytest.mark.parametrize("ic_class", CLASSES)
+@pytest.mark.parametrize("rel", RAW_PATHS)
+def test_unaccounted_closed_behavioral_source_requires_named_handoff(
+        tmp_path, ic_class, rel):
+    _write(tmp_path, rel, BEHAVIORAL_FSM)
+    result = runner.step_rtl_gen(tmp_path, ic_class)
+    assert result.status == "PASS_WITH_WAIVERS", result.detail
+    assert "SPEC_SENTENCES_UNACCOUNTED" in result.detail
+    assert result.extras["fallback_skill"] == "spec-to-rtl"
+    assert result.extras["unaccounted_source_spans"]
+    assert not any(path.suffix in (".v", ".sv")
+                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
+
+
+@pytest.mark.parametrize("ic_class", CLASSES)
+@pytest.mark.parametrize("rel", RAW_PATHS)
+@pytest.mark.parametrize("restriction,marker", RESTRICTIONS,
+                         ids=["plain", "nand", "minimize", "sheffer"])
+def test_unaccounted_raw_registry_source_requires_named_handoff(
+        tmp_path, ic_class, rel, restriction, marker):
+    _write(tmp_path, rel, HALF_ADDER + "\n" + restriction)
+    result = runner.step_rtl_gen(tmp_path, ic_class)
+    assert result.status == "PASS_WITH_WAIVERS", result.detail
+    assert marker in result.detail
+    assert result.extras["fallback_skill"] == "spec-to-rtl"
+    assert result.extras["unaccounted_source_spans"]
+    assert not any(path.suffix in (".v", ".sv")
+                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
+
+
+@pytest.mark.parametrize("ic_class", CLASSES[:3])
+@pytest.mark.parametrize("declaration", ["empty", "foreign"])
+def test_typed_prose_uses_l9_logic_field_override(tmp_path, ic_class, declaration):
+    clause = "Use only NAND gates."
+    declared = [] if declaration == "empty" else [{
+        "kind": "logic_basis", "family": ["nand"],
+        "source_span": [0, len(clause)], "source_sentence": clause,
+        "module": "foreign_module"}]
+    _write(tmp_path, "phase1/input_doc/design.md", KMAP + clause + "\n")
+    _json(tmp_path, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", {
+        "top_module": "TopModule", "logic_obligations": declared})
+    result = runner.step_rtl_gen(tmp_path, ic_class)
+    assert result.status == "PASS_WITH_WAIVERS", result.detail
+    assert "SPEC_SENTENCES_UNACCOUNTED" in result.detail
+    assert result.extras["logic_obligations"] == []
+    assert result.extras["unaccounted_source_spans"]
+    assert not any(path.suffix in (".v", ".sv")
+                   for path in (tmp_path / "phase2/stage1/rtl").rglob("*"))
+
+
+@pytest.mark.parametrize("complete", [False, True], ids=["named-fail", "typed-pass"])
+def test_prose_applicability_error_preserves_typed_adc_result(
+        tmp_path, monkeypatch, capsys, complete):
+    import spec_artifact_registry as registry
+    _write(tmp_path, "phase1/input_doc/design.md", PROSE)
+    _json(tmp_path, "phase1/generated_docs/L9_INTEGRATION_SPEC.json", {
+        "top_module": "converter", "top_ports": [
+            {"name": "clk", "direction": "input", "width": 1},
+            {"name": "rst", "direction": "input", "width": 1},
+            {"name": "data", "direction": "input", "width": 1},
+            {"name": "result", "direction": "output", "width": 16}]})
+    specs = [{"name": "osr", "target": 64}]
+    if complete:
+        specs += [{"name": "decimator_stages", "target": 3},
+                  {"name": "decimator_differential_delay", "target": 1},
+                  {"name": "bitstream_width", "target": 1}]
+    _json(tmp_path, "phase1/generated_docs/L5_ADI_SPEC.json", {
+        "analog_blocks": [{"spec": {"specs": specs}}]})
+
+    def unavailable(*args, **kwargs):
+        raise RuntimeError("injected pure applicability failure")
+
+    monkeypatch.setattr(registry, "generate", unavailable)
+    result = runner.step_rtl_gen(tmp_path, "data_converter")
+    assert result.status == ("PASS" if complete else "FAIL"), result.detail
+    if complete:
+        assert "data_converter_rtl_gen.py" in result.detail
+        assert (tmp_path / "phase2/stage1/rtl/cic_decimator.sv").is_file()
+    else:
+        assert "does not state the number of decimator stages" in result.detail
+    assert "RTL_PROSE_APPLICABILITY_UNAVAILABLE" in capsys.readouterr().err
     assert not (tmp_path / "phase2/stage1/fallback_skill.md").exists()
 
 
@@ -167,6 +351,7 @@ def test_named_adc_generator_refusal_stays_fail_with_prose(tmp_path):
     result = runner.step_rtl_gen(tmp_path, "data_converter")
     assert result.status == "FAIL", result.detail
     assert "does not state the number of decimator stages" in result.detail
+    assert not (tmp_path / "phase2/stage1/fallback_skill.md").exists()
 
 
 def test_typed_adc_generator_still_emits_with_unconsumed_prose(tmp_path):
