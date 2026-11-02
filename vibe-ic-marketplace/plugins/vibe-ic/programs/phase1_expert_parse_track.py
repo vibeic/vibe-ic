@@ -1443,7 +1443,7 @@ def _haystack_units(blob: Any, key: Any = None,
             unit = _record_unit(node, unit)
             for k, v in node.items():
                 out.append(str(k))
-                walk(v, k, _key_unit(k) or unit)
+                walk(v, k, _key_unit(k, unit))
         elif isinstance(node, list):
             for v in node:
                 walk(v, key, unit)
@@ -1528,6 +1528,7 @@ _KEY_SUFFIX_UNITS = {
     "db": ("dB", 0), "dbm": ("dBm", 0), "bit": ("bit", 0), "bits": ("bit", 0),
     "sps": ("sps", 0), "ksps": ("sps", 3), "msps": ("sps", 6),
 }
+_INVALID_FIELD_UNIT = ("invalid_field_unit", 0)
 #: Fields that say WHERE in a source document something was read — a citation
 #: line, a clause position. Their numbers are positions, not values. MEASURED
 #: on 707 emitted L-docs: `line`, `header_line`, `alignment_line`, `row_line`
@@ -1650,15 +1651,20 @@ def _unsupported_numeric_token(token: str) -> bool:
                 or re.match(r"(?:inf(?:inity)?|nan)(?:$|[^A-Za-z0-9_])", unwrapped, re.I))
 
 
-def _key_unit(key: Any) -> Optional[Tuple[str, int]]:
-    """The unit a field NAME states (`pad_edge_spacing_um` -> um), or None."""
+def _key_unit(key: Any, inherited: Optional[Tuple[str, int]] = None
+              ) -> Optional[Tuple[str, int]]:
+    """A field-name unit or its inherited unit; invalid field units stay invalid."""
+    if inherited == _INVALID_FIELD_UNIT:
+        return inherited
     k = str(key).strip()
     if "_" not in k:
-        return None
+        return inherited
     suffix = k.rsplit("_", 1)[1]
     if suffix in _KEY_SUFFIX_UNITS:
         return _KEY_SUFFIX_UNITS[suffix]
-    return parse_unit(suffix) if suffix.lower() in _KEY_SUFFIX_UNITS else None
+    if suffix.lower() in _KEY_SUFFIX_UNITS:
+        return parse_unit(suffix) or _INVALID_FIELD_UNIT
+    return inherited
 
 
 def _record_unit(record: Dict[Any, Any],
@@ -1668,6 +1674,8 @@ def _record_unit(record: Dict[Any, Any],
     "unit": "V"}`), else the one it inherits. The NEAREST statement wins,
     including one that cannot be parsed: an unknown unit is unknown, never
     permission to reach for an outer one."""
+    if inherited == _INVALID_FIELD_UNIT:
+        return inherited
     declarations = [parse_unit(v) if isinstance(v, str) else None
                     for k, v in getattr(record, "member_pairs", record.items())
                     if str(k).strip().lower() in ("unit", "units")]
@@ -1687,6 +1695,8 @@ def _source_position_key(key: Any) -> bool:
 def _typed_quantity(node: Any, key: Any,
                     unit: Optional[Tuple[str, int]]) -> Optional[Quantity]:
     """The typed numeric VALUE this scalar is, or None when it is not one."""
+    if unit == _INVALID_FIELD_UNIT:
+        return None
     if key is not None and _source_position_key(key):
         return None
     if isinstance(node, bool):
@@ -1792,7 +1802,7 @@ def _pointer_at(blob: Any, pointer: str, *, with_context=False) -> Optional[list
         if isinstance(node, dict):
             if token not in node or token in getattr(node, "duplicate_keys", ()):
                 return None
-            unit = _key_unit(token) or _record_unit(node, unit)
+            unit = _key_unit(token, _record_unit(node, unit))
             node, key = node[token], token
         elif isinstance(node, list):
             if not re.fullmatch(r"0|[1-9][0-9]*", token):
@@ -1846,7 +1856,7 @@ def _walk_field_path(blob: Any, key: str, *, with_context=False) -> Optional[lis
                     unit = _record_unit(cur.value, cur.unit)
                     for k, v in cur.value.items():
                         if str(k).lower() == seg:
-                            nxt.append(_ScopedNode(v, k, _key_unit(k) or unit))
+                            nxt.append(_ScopedNode(v, k, _key_unit(k, unit)))
         if not nxt:
             return None
         nodes = nxt
@@ -2442,7 +2452,7 @@ def _ownership_units(blob: Any) -> List[str]:
                         out.extend(_evidence_units(entry))
                     continue
                 out.append(str(key))
-                walk(value, path + [str(key)], key, _key_unit(key) or unit)
+                walk(value, path + [str(key)], key, _key_unit(key, unit))
         elif isinstance(node, list):
             for value in node:
                 walk(value, path, at, unit)
@@ -2464,7 +2474,7 @@ def _evidence_units(node: Any) -> List[str]:
                 if k in _EVIDENCE_PROVENANCE_KEYS:
                     continue
                 out.append(str(k))
-                walk(v, k, _key_unit(k) or unit)
+                walk(v, k, _key_unit(k, unit))
         elif isinstance(cur, list):
             for v in cur:
                 walk(v, at, unit)
@@ -2866,7 +2876,7 @@ def token_paths(blob: Any, token: str) -> List[str]:
             for k, v in node.items():
                 if _negative_status_key(k):
                     continue
-                walk(v, path + [str(k)], k, _key_unit(k) or unit)
+                walk(v, path + [str(k)], k, _key_unit(k, unit))
         elif isinstance(node, list):
             for v in node:
                 walk(v, path, at, unit)
