@@ -324,6 +324,7 @@ import _path_layout as _pl  # noqa: E402
 import ic_expert_backup_pack as _pack  # noqa: E402
 import nvm_program_supply_intent as _nps  # noqa: E402
 import _reference_flow_boundary as _rfb  # noqa: E402  §4.05 authority (FX_405)
+import ai_signed_judgement as _asj  # noqa: E402  the D1 design-input population
 
 PROGRAM = "phase1_expert_parse_track"
 VERSION = "1.0.0"
@@ -649,7 +650,10 @@ def answer_schema_mismatch(data: Any) -> Optional[Dict[str, Any]]:
 
 # Text extensions that count as design INPUT for expert retrieval.
 _INPUT_TEXT_EXTS = (".md", ".txt", ".rst", ".adoc", ".yaml", ".yml", ".json")
-_INPUT_TEXT_CAP = 200_000     # keep retrieval bounded on a large spec
+#: The frame's character budget. It bounds CONTEXT, never the design documents
+#: (ruling #82(5)): `input_text_report` reads the design documents first and in
+#: full, and only the rest of `input/` shares what they leave of this budget.
+_INPUT_TEXT_CAP = 200_000
 
 
 # ── expert assets ───────────────────────────────────────────────────────────
@@ -688,6 +692,15 @@ INPUT_READ_AND_EMPTY = "READ_AND_EMPTY"   #: readable files, all of them empty
 SKIP_UNSUPPORTED_FORMAT = "UNSUPPORTED_FORMAT"
 SKIP_ORACLE_PATH = "ORACLE_PATH"          #: deliberate §4.05 exclusion
 SKIP_UNREADABLE = "UNREADABLE"            #: the file exists and would not open
+SKIP_FRAME_BUDGET = "FRAME_BUDGET"        #: readable context the budget left out
+
+
+def _design_document_files(project: Path) -> set:
+    """The design documents under `input/`: the D1 design-input population
+    exactly as D1's signed judgement binds it (`DESIGN_INPUT_GLOBS`), so the
+    frame and the D1 evidence cannot disagree about what the design input is."""
+    return {p for pattern in _asj.DESIGN_INPUT_GLOBS if pattern.startswith("input/")
+            for p in project.glob(pattern) if p.is_file()}
 
 
 def _input_projection(text: str) -> tuple[str, dict, str]:
@@ -788,13 +801,15 @@ def _input_projection(text: str) -> tuple[str, dict, str]:
             context, "supported-consumer-context-with-remaining-possible-requirements")
 
 
-def _source_frame(members, text, status, skipped, truncated):
+def _source_frame(members, text, status, skipped, truncated,
+                  design=(), truncation=None):
     import inspect
     return {"members": members, "semantic_text": text,
             "reader_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
             "responsibility_mapping_sha256": hashlib.sha256(
                 inspect.getsource(_input_projection).encode()).hexdigest(),
-            "status": status, "files_skipped": skipped, "truncated": truncated}
+            "status": status, "files_skipped": skipped, "truncated": truncated,
+            "design_documents": list(design), "truncation": truncation}
 
 
 def input_text_report(project: Path) -> Dict[str, Any]:
@@ -816,13 +831,25 @@ def input_text_report(project: Path) -> Dict[str, Any]:
     account is what makes a zero legible: a caller can say WHICH formats it
     could not read instead of reporting an empty query as an empty design.
     INPUT only (§4.05) — the oracle exclusion is itself recorded, as a
-    deliberate skip rather than as a failure."""
+    deliberate skip rather than as a failure.
+
+    DESIGN DOCUMENTS FIRST AND WHOLE, MEASURED (ruling #82(5)). The walk was
+    one sorted pass that STOPPED at the budget. On the ADC D1 case two
+    authority JSON files and `analog_flow.json` sort before `docs/` and hold
+    197,480 bytes, so the frame closed inside `authority_sources/` and
+    `input/docs` — the six design documents — never entered it. The expert
+    answer was authored without the design, and every file after the stop was
+    missing from the account as well, so nothing said so. Now the design
+    documents (`design_documents`) are read first and never cut; the rest of
+    `input/` shares what they leave of `_INPUT_TEXT_CAP`, in sorted order; and
+    every readable file the budget leaves out is skipped BY NAME
+    (`FRAME_BUDGET`). `truncation` names what was cut and what was left out,
+    and is None exactly when every readable file is in the frame whole."""
     parts: List[str] = []
     members: List[Dict[str, Any]] = []
     read: List[str] = []
     skipped: List[Dict[str, Any]] = []
     total = 0
-    truncated = False
     root = project / "input"
     if not root.is_dir():
         return {"text": "", "chars": 0, "status": INPUT_NO_TREE,
@@ -830,12 +857,19 @@ def input_text_report(project: Path) -> Dict[str, Any]:
                 "semantic_chars": 0,
                 "files_read": [], "files_skipped": [],
                 "unsupported_suffixes": {}, "truncated": False,
+                "design_documents": [], "truncation": None,
                 "input_root": str(root)}
-    n_files = 0
-    for q in sorted(root.rglob("*")):
-        if not q.is_file():
-            continue
-        n_files += 1
+    # Each half keeps the sorted order, so the frame stays deterministic and a
+    # tree whose design documents already sort first reads exactly as before.
+    # The skip account stays in plain sorted order, so moving the documents to
+    # the head of the reading changes no skip list and hence no binding.
+    design = _design_document_files(project)
+    files = [q for q in sorted(root.rglob("*")) if q.is_file()]
+    position = {str(q.relative_to(root)): i for i, q in enumerate(files)}
+    files = [q for q in files if q in design] + [q for q in files if q not in design]
+    n_files = len(files)
+    design_read: List[str] = []
+    for q in files:
         try:
             rel = q.relative_to(root)
         except ValueError:
@@ -862,6 +896,10 @@ def input_text_report(project: Path) -> Dict[str, Any]:
             skipped.append({"path": str(rel), "suffix": q.suffix.lower(),
                             "bytes": size, "reason": SKIP_ORACLE_PATH})
             continue
+        if q not in design and total >= _INPUT_TEXT_CAP:
+            skipped.append({"path": str(rel), "suffix": q.suffix.lower(),
+                            "bytes": size, "reason": SKIP_FRAME_BUDGET})
+            continue
         try:
             raw = q.read_bytes()
             t = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
@@ -870,27 +908,38 @@ def input_text_report(project: Path) -> Dict[str, Any]:
                             "bytes": size, "reason": SKIP_UNREADABLE})
             continue
         read.append(str(rel))
+        if q in design:
+            design_read.append(str(rel))
         parts.append(t)
         members.append({"path": str(rel), "sha256": hashlib.sha256(raw).hexdigest(),
                         "bytes": len(raw), "text": t})
         total += len(t)
-        if total >= _INPUT_TEXT_CAP:
-            truncated = True
-            break
-    retained = "\n".join(parts)[:_INPUT_TEXT_CAP]
+    # The design documents are the head of `parts`; a limit that covers them
+    # keeps every one whole, and context is cut where the budget always cut it.
+    design_chars = len("\n".join(parts[:len(design_read)]))
+    retained = "\n".join(parts)[:max(_INPUT_TEXT_CAP, design_chars)]
     offset = 0
     semantic_parts = []
+    cut: List[Dict[str, Any]] = []
     for member in members:
         original = member["text"]
         included = retained[offset:offset + len(original)]
         member["text"] = included
         member["complete"] = len(included) == len(original)
+        if not member["complete"]:
+            cut.append({"path": member["path"], "chars": len(original),
+                        "included_chars": len(included)})
         projection, context, role = (_input_projection(included) if member["complete"]
                                     else (included, {}, "truncated-possible-requirements"))
         member.update(qualification_context=context, responsibility=role,
                       semantic_text=projection)
         semantic_parts.append(projection)
         offset += len(original) + 1
+    skipped.sort(key=lambda sk: position[sk["path"]])
+    left_out = [sk["path"] for sk in skipped if sk["reason"] == SKIP_FRAME_BUDGET]
+    truncated = bool(cut or left_out)
+    truncation = ({"budget_chars": _INPUT_TEXT_CAP, "design_document_chars": design_chars,
+                   "cut": cut, "left_out": left_out} if truncated else None)
     text = "\n".join(p for p in semantic_parts if p)
     unsupported: Dict[str, int] = {}
     for sk in skipped:
@@ -908,11 +957,13 @@ def input_text_report(project: Path) -> Dict[str, Any]:
         status = INPUT_READ_AND_EMPTY
     else:
         status = INPUT_UNREADABLE_FORMAT
-    frame = _source_frame(members, text, status, skipped, truncated)
+    frame = _source_frame(members, text, status, skipped, truncated,
+                          design_read, truncation)
     return {"text": text, "chars": len(retained), "status": status,
             "source_frame": frame, "semantic_chars": len(text),
             "files_read": read, "files_skipped": skipped,
             "unsupported_suffixes": unsupported, "truncated": truncated,
+            "design_documents": design_read, "truncation": truncation,
             "input_root": str(root)}
 
 
@@ -3956,6 +4007,8 @@ def evaluate(project: Path) -> Dict[str, Any]:
             "files_read": len(input_report["files_read"]),
             "files_skipped": input_report["files_skipped"],
             "truncated": input_report["truncated"],
+            "design_documents": input_report["design_documents"],
+            "truncation": input_report["truncation"],
         },
         # WHICH classes the expert DB was allowed to offer, and why. Without
         # this a reader sees a list of db_classes with no way to tell whether
