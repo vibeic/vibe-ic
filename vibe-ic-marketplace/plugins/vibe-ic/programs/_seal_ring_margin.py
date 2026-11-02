@@ -45,6 +45,7 @@ process.
 """
 from __future__ import annotations
 
+import ast
 import json
 import math
 import posixpath
@@ -333,6 +334,217 @@ def _loader_methods(text: str, origins: List[Tuple[int, int, str, int]], source_
     return methods, ranges
 
 
+class _NumericExpression:
+    """A bounded, non-executing model of numeric Ruby receivers and reads."""
+
+    methods = {"to_f", "to_i", "um", "um2"}
+    operators = (ast.Add, ast.Sub, ast.Mult, ast.Div, ast.Mod, ast.Pow)
+
+    def __init__(self, tables=(), names=()):
+        self.tables = set(tables)
+        self.names = set(names)
+        self.opaque = set()
+
+    @staticmethod
+    def parse(expression, mode="eval"):
+        for literal in reversed(list(_RE_DECK_LITERAL.finditer(expression))):
+            raw = literal.group()
+            if not raw.startswith("#") and "\n" in raw:
+                expression = expression[:literal.start()] + repr(raw[1:-1]) + expression[literal.end():]
+        _, code = _clearance_code(expression)
+        for keyword in reversed(list(re.finditer(r"\b([A-Za-z_]\w*)\s*:(?![:=])", code))):
+            expression = (expression[:keyword.start()] + "_" + keyword.group(1)
+                          + "=" + expression[keyword.end():])
+        _, code = _clearance_code(expression)
+        edits = [(m.start(1), "_") for m in re.finditer(r"\.(and|or|not)\b", code)]
+        edits.extend((m.end(1), " ") for m in re.finditer(r"(?<![\w.])([0-9]+)\.(?=[A-Za-z_])", code))
+        for offset, addition in sorted(edits, reverse=True):
+            expression = expression[:offset] + addition + expression[offset:]
+        tree = ast.parse(expression.strip(), mode=mode)
+        if sum(1 for _ in ast.walk(tree)) > 512:
+            raise ValueError("numeric expression exceeds the node bound")
+        return tree.body if mode == "eval" else tree.body
+
+    def read(self, node, depth=0):
+        if depth > 32:
+            raise ValueError("numeric expression exceeds the nesting bound")
+        descend = lambda child: self.read(child, depth + 1)
+        if isinstance(node, ast.Constant):
+            if isinstance(node.value, str):
+                for interpolation in re.findall(r"#\{([^}]*)\}", node.value):
+                    if any(re.search(r"\b" + re.escape(n) + r"\b", interpolation)
+                           for n in self.tables | self.names | self.opaque):
+                        descend(self.parse(interpolation))
+                return False
+            return isinstance(node.value, (int, float)) and not isinstance(node.value, bool)
+        if isinstance(node, ast.Name):
+            if node.id in self.tables:
+                raise ValueError(f"unsupported bare JSON table {node.id}")
+            return None if node.id in self.opaque else node.id in self.names
+        if isinstance(node, ast.Subscript):
+            if (not isinstance(node.value, ast.Name) or node.value.id not in self.tables
+                    or not isinstance(node.slice, ast.Constant)
+                    or not isinstance(node.slice.value, str) or "#{" in node.slice.value):
+                raise ValueError("unsupported numeric lookup")
+            return True
+        if isinstance(node, ast.Attribute):
+            numeric = descend(node.value)
+            if numeric is None:
+                raise ValueError("unsupported method on an opaque numeric consumer result")
+            if numeric and node.attr not in self.methods:
+                raise ValueError(f"unsupported numeric method {node.attr}")
+            return numeric
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Attribute):
+                numeric = descend(node.func.value)
+                if numeric is None:
+                    raise ValueError("unsupported method on an opaque numeric consumer result")
+                if numeric and (node.func.attr not in self.methods or node.args or node.keywords):
+                    raise ValueError(f"unsupported numeric method {node.func.attr}")
+            else:
+                if isinstance(node.func, ast.Name) and node.func.id in self.tables | self.names | self.opaque:
+                    raise ValueError("unsupported numeric call")
+                numeric = False
+            arguments = [descend(child) for child in [*node.args, *(k.value for k in node.keywords)]]
+            if (not isinstance(node.func, ast.Attribute)
+                    and any(isinstance(child, ast.Name) and child.id in self.tables | self.names | self.opaque
+                            for arg in node.args for child in ast.walk(arg))):
+                return None
+            return numeric
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub, ast.Not)):
+            return descend(node.operand)
+        if isinstance(node, ast.BinOp) and isinstance(node.op, self.operators):
+            left, right = descend(node.left), descend(node.right)
+            return left or right
+        if isinstance(node, (ast.Compare, ast.BoolOp, ast.List, ast.Tuple, ast.Dict)):
+            for child in ast.iter_child_nodes(node):
+                if not isinstance(child, (ast.cmpop, ast.boolop)):
+                    descend(child)
+            return False
+        raise ValueError(f"unsupported numeric syntax {type(node).__name__}")
+
+    def audit(self, text):
+        """Check related statements, retaining scalar aliases without executing Ruby."""
+        body, code = _clearance_code(text)
+        lines = body.splitlines(keepends=True)
+        code_lines = code.splitlines(keepends=True)
+        pending = ""
+        depth = 0
+        for index, line in enumerate(lines):
+            masked = code_lines[index]
+            delta = sum(masked.count(c) for c in "([{") - sum(masked.count(c) for c in ")]}")
+            related = any(re.search(r"\b" + re.escape(n) + r"\b", line)
+                          for n in self.tables | self.names | self.opaque)
+            if not pending and not related and not (delta > 0 and re.search(r"\.\w+\(", masked)):
+                continue
+            pending += line
+            depth += delta
+            following = lines[index + 1].lstrip() if index + 1 < len(lines) else ""
+            if depth > 0 or masked.rstrip().endswith("\\"):
+                continue
+            if following.startswith((".", "&.", "::")):
+                pending = pending.rstrip() + " "
+                continue
+            statement, pending = pending.strip(), ""
+            if not any(re.search(r"\b" + re.escape(n) + r"\b", statement)
+                       for n in self.tables | self.names | self.opaque):
+                continue
+            statement = re.sub(r"^(?:if|unless|elsif|while|until|return)\s+", "", statement)
+            try:
+                for node in self.parse(statement, "exec"):
+                    if isinstance(node, ast.Assign):
+                        if (len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name)
+                                or node.targets[0].id in self.tables | self.names | self.opaque):
+                            raise ValueError("unsupported numeric write or rebinding")
+                        numeric = self.read(node.value)
+                        if numeric is True:
+                            self.names.add(node.targets[0].id)
+                        elif numeric is None:
+                            self.opaque.add(node.targets[0].id)
+                    elif isinstance(node, ast.Expr):
+                        self.read(node.value)
+                    else:
+                        raise ValueError("unsupported numeric write or statement")
+            except (SyntaxError, ValueError, RecursionError) as exc:
+                return f"unsupported numeric expression: {exc}"
+        if pending and any(re.search(r"\b" + re.escape(n) + r"\b", pending)
+                           for n in self.tables | self.names | self.opaque):
+            return "unsupported incomplete numeric expression"
+        return ""
+
+    @classmethod
+    def references(cls, node, assigned, before, seen=()):
+        if isinstance(node, ast.Subscript):
+            if (not isinstance(node.value, ast.Name) or not isinstance(node.slice, ast.Constant)
+                    or not isinstance(node.slice.value, str) or "#{" in node.slice.value):
+                raise ValueError("unsupported numeric lookup")
+            return [(node.value.id, node.slice.value, before)]
+        if isinstance(node, ast.Name):
+            if node.id in seen:
+                raise ValueError("cyclic numeric binding")
+            source = assigned(node.id, before)
+            if source is None:
+                raise ValueError(f"unbound numeric local {node.id}")
+            return cls.references(cls.parse(source[0]), assigned, source[1], (*seen, node.id))
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
+            return []
+        if isinstance(node, ast.Attribute) and node.attr in cls.methods:
+            return cls.references(node.value, assigned, before, seen)
+        if (isinstance(node, ast.Call) and not node.args and not node.keywords
+                and isinstance(node.func, ast.Attribute) and node.func.attr in cls.methods):
+            return cls.references(node.func, assigned, before, seen)
+        if isinstance(node, (ast.UnaryOp, ast.BinOp)):
+            children = [node.operand] if isinstance(node, ast.UnaryOp) else [node.left, node.right]
+            return [ref for child in children for ref in cls.references(child, assigned, before, seen)]
+        raise ValueError("unsupported numeric clearance expression")
+
+    @classmethod
+    def evaluate(cls, node, assigned, lookup, before, seen=()):
+        if len(seen) > 32:
+            raise ValueError("numeric binding exceeds the nesting bound")
+        evaluate = lambda child: cls.evaluate(child, assigned, lookup, before, seen)
+        if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)) and not isinstance(node.value, bool):
+            value = node.value
+        elif isinstance(node, ast.Name):
+            if node.id in seen:
+                raise ValueError("cyclic numeric binding")
+            source = assigned(node.id, before)
+            if source is None:
+                raise ValueError(f"unbound numeric local {node.id}")
+            value = cls.evaluate(cls.parse(source[0]), assigned, lookup, source[1], (*seen, node.id))
+        elif (isinstance(node, ast.Call) and not node.args and not node.keywords
+              and isinstance(node.func, ast.Attribute) and node.func.attr in cls.methods):
+            return evaluate(node.func)
+        elif isinstance(node, ast.Attribute) and node.attr in cls.methods:
+            if node.attr == "um2":
+                raise ValueError("area units cannot state a linear clearance")
+            if isinstance(node.value, ast.Subscript):
+                ref = cls.references(node.value, assigned, before)[0]
+                value = lookup(*ref, node.attr)
+            else:
+                value = evaluate(node.value)
+                value = float(value) if node.attr == "to_f" else math.trunc(value) if node.attr == "to_i" else value
+        elif isinstance(node, ast.UnaryOp) and isinstance(node.op, (ast.UAdd, ast.USub)):
+            value = evaluate(node.operand)
+            value = -value if isinstance(node.op, ast.USub) else value
+        elif isinstance(node, ast.BinOp) and isinstance(node.op, cls.operators):
+            left, right = evaluate(node.left), evaluate(node.right)
+            if isinstance(node.op, ast.Add): value = left + right
+            elif isinstance(node.op, ast.Sub): value = left - right
+            elif isinstance(node.op, ast.Mult): value = left * right
+            elif isinstance(node.op, ast.Div): value = left // right if isinstance(left, int) and isinstance(right, int) else left / right
+            elif isinstance(node.op, ast.Mod): value = left % right
+            else:
+                if abs(right) > 4096 or (isinstance(left, int) and isinstance(right, int) and right > 0 and left.bit_length() * right > 4096):
+                    raise ValueError("numeric power exceeds the resource bound")
+                value = left ** right
+        else:
+            raise ValueError("unsupported numeric clearance expression")
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            raise ValueError("nonfinite or nonnumeric clearance")
+        return value
+
+
 def _table_sources(table: str, assignment, text: str, source_path: str,
                    origins: List[Tuple[int, int, str, int]], before: int):
     if not assignment:
@@ -340,6 +552,9 @@ def _table_sources(table: str, assignment, text: str, source_path: str,
     expression, offset = assignment
     methods, ranges = _loader_methods(text, origins, source_path)
     _, code = _clearance_code(text)
+    if sum(m.group(1) == table and m.start() < before
+           for m in _RE_CLEAR_ASSIGN.finditer(code)) != 1:
+        return [], f"unsupported reassigned JSON table {table}"
     depth = _ruby_scope_depth(code, offset)
     if depth != 0:
         return [], f"unsupported conditional or ambiguous JSON binding for {table}"
@@ -361,22 +576,12 @@ def _table_sources(table: str, assignment, text: str, source_path: str,
     if any(re.search(r"\b" + re.escape(table) + r"\b", interpolation)
            for interpolation in re.findall(r"#\{([^}]*)\}", text[offset:before])):
         return [], f"unsupported interpolated use of JSON table {table}"
-    tail = code[offset:before]
+    tail = text[offset:before]
     first_line_end = tail.find("\n")
     tail = tail[first_line_end + 1:] if first_line_end >= 0 else ""
-    start = offset + first_line_end + 1
-    for use in re.finditer(r"\b" + re.escape(table) + r"\b", tail):
-        reference = _RE_RULE_VALUE.match(text, start + use.start(), before)
-        suffix = code[reference.end():before] if reference else ""
-        suffix = re.sub(r"^\s*\.\s*um\b", "", suffix, count=1)
-        # Arithmetic on a converted copy cannot mutate the JSON table.
-        suffix = re.sub(rf"^(?:[ \t]*(?:\*\*|[+*/%-])[ \t]*[+-]?{_RE_NUMBER.pattern})+",
-                        "", suffix, count=1)
-        # A newline can continue a Ruby receiver; only a completed read is authority.
-        read_end = re.match(r"[ \t]*(?:[,;)]|\n(?=\s*(?:[A-Za-z_]|$))|$)", suffix)
-        if (not reference or "#{" in reference.group(2)
-                or not read_end):
-            return [], f"unsupported mutation or use of JSON table {table}"
+    audit_error = _NumericExpression(tables=(table,)).audit(tail)
+    if audit_error:
+        return [], audit_error
     return list(sources or []), error
 
 def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None,
@@ -434,25 +639,53 @@ def clearance_declarations(text: str, *, files: Optional[Dict[str, str]] = None,
             source = assigned(value_expression, before)
             if not source:
                 break
-            interval = code[bindings[0].end(2):before]
-            local_pattern = r"\b" + re.escape(value_expression) + r"\b"
-            interpolations = re.findall(r"#\{([^}]*)\}", body[bindings[0].end(2):before])
-            if (re.search(local_pattern, interval)
-                    or any(re.search(local_pattern, interpolation) for interpolation in interpolations)):
-                local_error = f"unsupported mutation or use of clearance local {value_expression}"
+            local_error = _NumericExpression(names=(value_expression,)).audit(
+                body[bindings[0].end(2):before])
+            if local_error:
                 break
             value_expression, before = source
         sources = []
-        binding_error = ""
-        reference_match = _RE_RULE_VALUE.fullmatch(value_expression)
-        if reference_match:
-            table = reference_match.group(1)
-            sources, binding_error = _table_sources(table, assigned(table, before), body,
-                                                    source_path, origins or [], match.start())
-        value, basis, reference = _clearance_value(value_expression, files or {}, sources) if um else (
-            None, f"clearance `{expression}` has no readable um value", None)
-        if local_error or binding_error:
-            value, basis = None, local_error or binding_error
+        basis = ""
+        reference = None
+        value = None
+        try:
+            expression_node = _NumericExpression.parse(value_expression)
+            refs = _NumericExpression.references(expression_node, assigned, before)
+            identities = {(table, key) for table, key, _ in refs}
+            if len(identities) > 1:
+                raise ValueError("unsupported multiple JSON clearance references")
+            source_tables = {}
+            for table, key, binding_before in refs:
+                table_sources, binding_error = _table_sources(
+                    table, assigned(table, binding_before), body, source_path,
+                    origins or [], match.start())
+                if binding_error:
+                    raise ValueError(binding_error)
+                source_tables[table] = table_sources
+                sources.extend(source for source in table_sources if source not in sources)
+                reference = (table, key)
+
+            def lookup(table, key, binding_before, method):
+                nonlocal basis
+                if method not in ("to_f", "to_i"):
+                    raise ValueError("JSON lookup requires a numeric conversion")
+                number, evidence, _ = _clearance_value(
+                    f"{table}[{key!r}].{method}", files or {}, source_tables[table])
+                basis = evidence
+                if number is None:
+                    raise ValueError(evidence)
+                return math.trunc(number) if method == "to_i" else number
+
+            if not um:
+                raise ValueError(f"clearance `{expression}` has no readable um value")
+            if local_error:
+                raise ValueError(local_error)
+            value = _NumericExpression.evaluate(expression_node, assigned, lookup, before)
+            if value < 0:
+                raise ValueError("negative clearance")
+            value = float(value)
+        except (SyntaxError, ValueError, TypeError, ZeroDivisionError, OverflowError, RecursionError) as exc:
+            value, basis = None, str(exc)
         tail = _RE_RULE_ID.search(body, match.start(3), min(len(body), match.start(3) + 400))
         origin_path, origin_line = _source_at(match.start(), origins or [], source_path)
         segment = next((start for start, end, path, line in origins or [] if start <= match.start() < end), 0)

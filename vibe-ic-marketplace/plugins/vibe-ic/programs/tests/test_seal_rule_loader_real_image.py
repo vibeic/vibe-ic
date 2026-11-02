@@ -169,3 +169,25 @@ def test_review_numeric_expression_and_readonly_reuse(tmp_path, probe):
     else:
         value, basis = read(tmp_path)
         assert value == pytest.approx(probe["expected"]), basis
+
+
+@pytest.mark.parametrize("statements,expected", [
+    ("number = 4.9\nspacing = number()\n", None),
+    ("number = rules['clearance'].to_f\nspacing = number()\n", None),
+    ("area = rules['clearance'].to_f\nunit = area.um2\nspacing = rules['clearance'].to_f\n", 4.9),
+    ("area = rules['clearance'].to_f\nspacing = area.um2\n", None),
+    ("number = rules['clearance'].to_i\nspacing = number / 2\n", 2),
+    ("number = rules['clearance'].to_f\nspacing = number / 2\n", 2.45),
+], ids=["literal_call", "json_call", "area_read", "area_not_linear", "integer_division", "float_division"])
+def test_numeric_model_calls_units_and_division(tmp_path, statements, expected):
+    (tmp_path / "rules.json").write_text(json.dumps({"rules": {"clearance": 4.9}}))
+    (tmp_path / "main.drc").write_text(
+        "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\n"
+        + statements
+        + 'active.separation(guard_ring, spacing.um).output("seal", "space")\n'
+    )
+    if expected is None:
+        assert_unreadable(tmp_path)
+    else:
+        value, basis = read(tmp_path)
+        assert value == pytest.approx(expected), basis
