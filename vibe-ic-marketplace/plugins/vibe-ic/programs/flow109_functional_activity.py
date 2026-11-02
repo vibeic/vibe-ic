@@ -311,6 +311,8 @@ def prepare(project, context):
     requirements = _read(paths['requirements'])
     if (requirements.get('approval', {}).get('status') != 'APPROVED'
             or requirements.get('approval', {}).get('authority') != 'requirements_owner'
+            or not isinstance(requirements.get('approval', {}).get('approver'), str)
+            or not requirements['approval']['approver'].strip()
             or not requirements.get('approval', {}).get('source_reference')):
         _fail('D55_REQUIREMENTS_NOT_APPROVED', 'mode/window/load requirements need source authority')
     required = requirements.get('modes')

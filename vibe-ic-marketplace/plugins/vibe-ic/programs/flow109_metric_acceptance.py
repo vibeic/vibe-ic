@@ -514,7 +514,9 @@ def d19_admission(project: Path, context: Mapping[str, Any], *, publish: bool = 
         approval = body.get("approval")
         if (body.get("schema") != schema or not isinstance(approval, Mapping)
                 or approval.get("status") != "APPROVED"
-                or approval.get("authority") != "requirements_owner"):
+                or approval.get("authority") != "requirements_owner"
+                or not isinstance(approval.get("approver"), str)
+                or not approval["approver"].strip()):
             raise MetricRefusal("D19_PLAN_UNAPPROVED", relative)
         ref = _d19_ref(project, approval.get("source_reference"), name + " approval")
         if (not ref["path"].startswith("input/")
