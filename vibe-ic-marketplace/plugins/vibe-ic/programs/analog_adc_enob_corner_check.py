@@ -390,6 +390,8 @@ def sndr_db_from_transient(deck_text: str, dump_text: str,
             continue                      # a header row, not a sample
         times.append(t)
         vals.append(v)
+        if reset_node:
+            reset_values.append(reset_v)
     if len(times) < 64:
         return None, {"reason": _UNMEASURABLE_NO_ROWS, "rows": len(times)}
 
@@ -585,12 +587,19 @@ def sndr_db_incremental(deck_text: str, dump_text: str, column: int = 1
     model = decl.get("loop_model")
     encoding = (model or {}).get("decision_encoding")
     decision_columns = None
+    reset_node = decl.get("reset_release_node")
+    reset_column = None
+    reset_values = []
     for line in (dump_text or "").splitlines():
         parts = line.split()
         if len(parts) <= column:
             continue
         try:
             t = float(parts[0])
+            if reset_node:
+                if reset_column is None:
+                    return None, {"reason": "incremental_reset_release_header_absent"}
+                reset_v = float(parts[reset_column])
             if encoding:
                 if decision_columns is None:
                     return None, {"reason": "incremental_decision_header_absent"}
@@ -598,6 +607,12 @@ def sndr_db_incremental(deck_text: str, dump_text: str, column: int = 1
             else:
                 v = float(parts[column])
         except ValueError:
+            if reset_node and parts and parts[0].casefold() == "time":
+                names = [field.casefold() for field in parts]
+                label = f"v({reset_node})".casefold()
+                if names.count(label) != 1:
+                    return None, {"reason": "incremental_reset_release_header_mismatch"}
+                reset_column = names.index(label)
             if encoding and parts and parts[0].casefold() == "time":
                 names = [field.casefold() for field in parts]
                 wanted = [f"v({node})".casefold() for node in encoding["output_nodes"]]
@@ -609,18 +624,24 @@ def sndr_db_incremental(deck_text: str, dump_text: str, column: int = 1
             return None, {"reason": "incremental_decision_columns_incomplete"}
         times.append(t)
         vals.append(v)
+        if reset_node:
+            reset_values.append(reset_v)
     if len(times) < 64:
         return None, {"reason": _UNMEASURABLE_NO_ROWS, "rows": len(times)}
 
-    bits, bmeta = _inc.sample_decisions(times, vals, td, period, v_high / 2.0, encoding=encoding)
+    bits, bmeta = _inc.sample_decisions(
+        times, vals, td, period, v_high / 2.0, encoding=encoding,
+        reset_release_values=reset_values if reset_node else None,
+        window_clocks=int(decl["window_clocks"]) if reset_node else None)
     if not bits:
         return None, bmeta
     window = int(decl["window_clocks"])
-    if len(bits) < 2 * window:
+    updates = int(decl["active_transfers"]) if reset_node else window
+    if len(bits) < 2 * updates:
         return None, {"reason": _INC_SHORT_RECORD, "clocks": len(bits),
                       "window": window}
     samples, dmeta = _inc.decimate(
-        bits, window, order=int(decl["order"]), coeff=float(decl["coeff"]),
+        bits, updates, order=int(decl["order"]), coeff=float(decl["coeff"]),
         feedback_delay=int(decl["feedback_delay_clocks"]),
         topology=decl.get("loop_topology", "cifb"), loop_model=model)
     if samples is None:
@@ -665,7 +686,8 @@ def sndr_db_incremental(deck_text: str, dump_text: str, column: int = 1
         "signal_hz": f_sig, "signal_bin": cycles, "cycles": cycles,
         "decimated_rate_hz": f_dec, "windows_decoded": dmeta["windows"],
         "windows_graded": n, "clocks_sampled": bmeta["clocks"],
-        "first_clock_s": td, "sample_clock_hz": 1.0 / period,
+        "first_clock_s": bmeta["first_clock_s"], "sample_clock_hz": 1.0 / period,
+        "decision_alignment": bmeta["alignment"], "active_transfers": updates,
         "rows_read": len(times),
         "grid_rule": "one_sample_per_conversion_window_matched_decode",
     }

@@ -98,8 +98,7 @@ def test_declared_startup_reset_reaches_counter_and_all_integrators(tmp_path, ci
                   startup_reset_tau_ns=100, startup_reset_cap_ff=1000)
     por = ir["startup_reset"]
     assert por["kind"] == "RC_Schmitt" and por["tau_ns"] == 100
-    assert set(por["clears"]) == {"window_counter", "all_integrators",
-                                  "decision_latch", "sc_sampling_plates"}
+    assert por["clears"] == ["window_counter", "all_integrators"]
     devs = {d["name"]: d for d in ir["devices"]}
     assert devs["mn_cki1"]["nets"][1] == por["counter_clock_net"]
     assert devs["mp_por_clear1_0"]["nets"][0] == "nm1"

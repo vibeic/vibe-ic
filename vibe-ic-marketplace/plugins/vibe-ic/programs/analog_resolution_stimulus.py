@@ -567,6 +567,10 @@ def incremental_decode(spec: Any, topology: Any, *, decision_encoding=None) -> D
         rec.update({"declared": True, "window_clocks": window, "order": order,
                     "coeff": 1., "feedback_delay_clocks": delay, "loop_model": model})
         rec["stamp"] = _inc.stamp(mode, window, order, 1., delay, loop_model=model)
+        control = topology.get("incremental_startup")
+        if control:
+            rec["reset_release_net"] = control["reset_bar_net"]
+            rec["active_transfers"] = control["active_transfers"]
         return rec
     # Original A2/A3 records describe the CIFB recurrence. New topologies
     # declare constants.loop_topology; the existing topology prose is also
@@ -635,6 +639,10 @@ def incremental_decode(spec: Any, topology: Any, *, decision_encoding=None) -> D
                 "feedback_delay_clocks": int(delay)})
     rec["stamp"] = _inc.stamp(mode, int(window), int(order), float(coeffs[0]),
                               int(delay), kind)
+    control = topology.get("incremental_startup")
+    if control:
+        rec["reset_release_net"] = control["reset_bar_net"]
+        rec["active_transfers"] = control["active_transfers"]
     return rec
 
 
@@ -893,9 +901,30 @@ def apply(deck_text: str, spec: Any, topology: Any, dump_ref: str
         f"{_num(record['fclk_hz'])} Hz; band edge "
         f"{record['band_bins']} bin(s) at OSR {record['osr']:g}.")
     lines.insert(record["source_line"], note)
-    dump = f"wrdata {dump_ref} " + " ".join(f"v({node})" for node in
-        record.get("output_nodes", [record["output_node"]]))
-    if (record.get("incremental_decode", {}).get("loop_model") or {}).get("decision_encoding"):
+    probes = list(record.get("output_nodes", [record["output_node"]]))
+    _dec = record.get("incremental_decode") or {}
+    if _dec.get("reset_release_net"):
+        # The top-level instance connected to the declared signal port owns
+        # the internal controller net; never infer it from a fixed DUT name.
+        instances = []
+        depth = 0
+        for line in deck_text.splitlines():
+            if _SUBCKT_RE.match(line):
+                depth += 1
+            elif _ENDS_RE.match(line):
+                depth -= 1
+            elif depth == 0 and (match := _XINST_RE.match(line)):
+                fields = match.group(2).split()
+                if record["signal_input_port"] in fields[:-1]:
+                    instances.append(match.group(1))
+        if len(instances) != 1:
+            return deck_text, dict(record, applied=False, reason="incremental_controller_instance_ambiguous")
+        reset_node = instances[0] + "." + _dec["reset_release_net"]
+        probes.append(reset_node)
+        _dec["stamp"] += (f" reset_release_node={reset_node}"
+                          f" active_transfers={_dec['active_transfers']}")
+    dump = f"wrdata {dump_ref} " + " ".join(f"v({node})" for node in probes)
+    if _dec.get("reset_release_net") or (_dec.get("loop_model") or {}).get("decision_encoding"):
         dump = "set wr_singlescale\nset wr_vecnames\n" + dump
     lines.insert(record["tran_line"] + 2, dump)
     # The decode declaration travels ON THE DECK, beside the tone note, so the

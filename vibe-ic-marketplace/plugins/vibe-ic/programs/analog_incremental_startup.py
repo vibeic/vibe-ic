@@ -149,7 +149,7 @@ def realize(lib, values, stages, devices, nets, startup=None):
         cells.or_("conversion_window_boot", "nconversion_reset_pending", window, bootstrap)
         cells.or_("conversion_reset", "nall", "nconversion_reset_pending", "npor_runb")
         startup.update(reset_net="nall", window_reset_net=window,
-                       clears=["window_counter", "all_integrators", "decision_latch", "sc_sampling_plates"])
+                       clears=["window_counter", "all_integrators"])
 
     for phase in (1, 2):
         p = by_name[f"mp_no{phase}b"]
