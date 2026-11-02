@@ -321,3 +321,42 @@ def test_upper_plane_wire_keeps_its_larger_pdk_floor():
     wires = [row["box"] for row in plan.shapes if row["net"] == "a" and row["layer"] == "metal6"
              and row["box"][2] - row["box"][0] > 200]
     assert wires and min(box[3] - box[1] for box in wires) >= 164
+
+
+def test_intent_cut_spacing_rounds_pdk_minimum_up_and_preserves_legacy():
+    geo = geometry()
+    geo.rules["via_space_um"][2] = .045
+    assert geo.rules_via_space(2) == 4
+    legacy, _ = a5._pin_stack_boxes(0, 0, 2, 3, geo, 2)
+    old_cuts = [box for layer, box in legacy if layer == "via2"]
+    assert old_cuts[1][0] - old_cuts[0][2] == 4
+    geo.intent_strict = True
+    geo.intent_cuts = {"p": 2}
+    assert geo.rules_via_space(2) == 5
+    plan = a5.Plan()
+    a5._via_stack(plan, "p", 0, 0, 2, geo, top=3)
+    cuts = [row["box"] for row in plan.shapes if row["layer"] == "via2"]
+    assert len(cuts) == 2
+    assert cuts[1][0] - cuts[0][2] == 5
+    assert (cuts[1][0] - cuts[0][2]) / geo.lam >= .045
+
+
+def test_intent_cut_width_rounds_up_without_changing_legacy_geometry():
+    rules = copy.deepcopy(geometry().rules)
+    rules["via_width_um"][2] = .045
+    geo = a5.Geo(rules, .2, 100, .3, .01)
+    assert geo.via_pad[2] == geo.via_pad_min[2] == 2
+    before = {name: getattr(geo, name)[2] for name in ("short_half", "long_half", "enc_half", "patch")}
+    legacy = a5.Plan()
+    a5._via_stack(legacy, "p", 0, 0, 2, geo, top=3)
+    assert [row["box"][2] - row["box"][0] for row in legacy.shapes if row["layer"] == "via2"] == [4]
+    geo.intent_strict = True
+    assert geo.via_pad[2] == geo.via_pad_min[2] == 3
+    assert all(getattr(geo, name)[2] == value + 1 for name, value in before.items())
+    geo.intent_cuts = {"p": 2}
+    plan = a5.Plan()
+    a5._via_stack(plan, "p", 0, 0, 2, geo, top=3)
+    cuts = [row["box"] for row in plan.shapes if row["layer"] == "via2"]
+    assert len(cuts) == 2
+    assert min(min(box[2] - box[0], box[3] - box[1]) / geo.lam for box in cuts) >= .045
+    assert rules["via_width_um"][2] == .045

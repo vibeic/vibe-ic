@@ -1406,6 +1406,22 @@ class Geo:
             # via, because `pitch()` sizes its corridors from it.
             self.patch[k] = self.long_half[k]
 
+    @property
+    def intent_strict(self) -> bool:
+        return getattr(self, "_intent_strict", False)
+
+    @intent_strict.setter
+    def intent_strict(self, enabled: bool) -> None:
+        self._intent_strict = enabled
+        if enabled:
+            for level, width_um in self.rules["via_width_um"].items():
+                floor = max(1, int(math.ceil(width_um * self.lam / 2)))
+                increase = max(0, floor - self.via_pad[level])
+                self.via_pad[level] += increase
+                self.via_pad_min[level] = max(self.via_pad_min[level], floor)
+                for sizes in (self.short_half, self.long_half, self.enc_half, self.patch):
+                    sizes[level] += increase
+
     def for_net(self, net: str) -> "Geo":
         return getattr(self, "intent_profiles", {}).get(net, self)
 
@@ -1441,6 +1457,8 @@ class Geo:
 
     def rules_via_space(self, k: int) -> int:
         um = self.rules["via_space_um"].get(k)
+        if um and getattr(self, "intent_strict", False):
+            return max(1, int(math.ceil(um * self.lam)))
         return (max(1, int(round(um * self.lam))) if um
                 else self.default_space)
 
