@@ -426,8 +426,13 @@ class _NumericExpression:
     def audit(self, text):
         """Check related statements, retaining scalar aliases without executing Ruby."""
         body, code = _clearance_code(text)
-        lines = body.splitlines(keepends=True)
-        code_lines = code.splitlines(keepends=True)
+        # The lexer has already blanked comments. Look ahead across those and
+        # empty lines before deciding whether a Ruby receiver is complete.
+        significant = [(line, masked) for line, masked in
+                       zip(body.splitlines(keepends=True), code.splitlines(keepends=True))
+                       if line.strip()]
+        lines = [line for line, _ in significant]
+        code_lines = [masked for _, masked in significant]
         pending = ""
         depth = 0
         for index, line in enumerate(lines):
@@ -435,6 +440,8 @@ class _NumericExpression:
             delta = sum(masked.count(c) for c in "([{") - sum(masked.count(c) for c in ")]}")
             related = any(re.search(r"\b" + re.escape(n) + r"\b", line)
                           for n in self.tables | self.names | self.opaque)
+            if not pending and masked.lstrip().startswith((".", "&.", "::")):
+                return "unsupported incomplete numeric receiver"
             if not pending and not related and not (delta > 0 and re.search(r"\.\w+\(", masked)):
                 continue
             pending += line
