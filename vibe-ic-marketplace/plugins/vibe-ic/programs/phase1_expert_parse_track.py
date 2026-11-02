@@ -1483,7 +1483,8 @@ _PREFIXABLE_LONGEST_FIRST = sorted(_PREFIXABLE_UNITS.items(),
                                    key=lambda kv: -len(kv[0]))
 #: Symbols no prefix may precede.
 _PLAIN_UNITS = {"%": "%", "ppm": "ppm", "dB": "dB", "dBm": "dBm",
-                "dBc": "dBc", "dBFS": "dBFS", "C": "degC", "LSB": "LSB"}
+                "dBc": "dBc", "dBFS": "dBFS", "C": "degC", "LSB": "LSB",
+                "cycle": "cycle", "cycles": "cycle", "clocks": "cycle"}
 #: A unit carried by a field NAME (`pad_edge_spacing_um`, `freq_mhz`,
 #: `temperature_c`), lower-case as field names are written — so `mhz` is MHz,
 #: the only reading that spelling has in practice. The suffixes measured on
@@ -1521,8 +1522,10 @@ _SOURCE_POSITION_SUFFIXES = ("_line", "_lineno", "_line_no", "_line_number")
 #: number. The digest word must END the name: `digest_bits` is a width.
 _DIGEST_KEY = re.compile(r"(?:^|_)(?:sha\d*|digest|hash|checksum)$")
 _QUANTITY = re.compile(
-    r"([-+]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)"
-    r"(?:\s*-?\s*(\S.{0,15}))?", re.S)
+    r"([-+]?(?:(?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]*)?"
+    r"|\.[0-9]+)(?:[eE][-+]?[0-9]+)?)"
+    r"(?:\s*-?\s*(\S.*))?", re.S)
+_UNIT_EXPRESSION = re.compile(r"[A-Za-zµμΩΩ°℃%√/()*^]+[0-9]*(?:[-+][0-9]+)?")
 
 
 class Quantity(NamedTuple):
@@ -1595,7 +1598,7 @@ def parse_quantity(text: Any) -> Optional[Quantity]:
         if unit is None:
             return None
         dimension, exp10 = unit
-    value = Decimal(m.group(1))
+    value = Decimal(m.group(1).replace(",", ""))
     return Quantity(value, dimension, exp10) if value.is_finite() else None
 
 
@@ -1638,10 +1641,7 @@ def _typed_quantity(node: Any, key: Any,
     if isinstance(node, bool):
         return None
     if isinstance(node, (int, float)):
-        # 15 significant digits is what a double carries, so emitter
-        # arithmetic noise (0.30000000000000004) is not a different value.
-        value = Decimal(node) if isinstance(node, int) \
-            else Decimal(format(node, ".15g"))
+        value = Decimal(node) if isinstance(node, int) else Decimal(str(node))
         if not value.is_finite():
             return None
         return Quantity(value, *unit) if unit else Quantity(value)
@@ -1676,6 +1676,11 @@ def token_in_unit(token: str, unit: str) -> bool:
     as before. The one predicate behind `met`, ownership and carriage."""
     want = _token_quantity(token)
     if want is None:
+        numeric = _QUANTITY.fullmatch(token.strip().replace("\u2212", "-"))
+        if (numeric and numeric.group(2)
+                and _UNIT_EXPRESSION.fullmatch(re.sub(r"\s+", "", numeric.group(2)))
+                and not re.fullmatch(r"0[xX][0-9a-fA-F]+", token.strip())):
+            return False
         return phrase_present(token, unit)
     have = getattr(unit, "quantity", None)
     return have is not None and want.matches(have)
@@ -1687,29 +1692,23 @@ def present_in_units(phrase: str, units: List[str]) -> bool:
     return any(token_in_unit(phrase, u) for u in units)
 
 
-def _scope_context(blob: Any, field_path: Any, layer: Any = None
-                   ) -> Tuple[Any, Optional[Tuple[str, int]]]:
-    """The `(key, unit)` a RESOLVED field_path's nodes are reached under.
+class _ScopedNode(NamedTuple):
+    value: Any
+    key: Any = None
+    unit: Optional[Tuple[str, int]] = None
 
-    A value the expectation addresses directly keeps the unit its own field
-    name or its record states, and a position stays a position — exactly the
-    context the whole-layer walk would have given the same node."""
-    try:
-        if _is_json_pointer(field_path):
-            node, key, unit = blob, None, None
-            for raw in field_path[1:].split("/"):
-                token = raw.replace("~1", "/").replace("~0", "~")
-                if isinstance(node, dict):
-                    unit = _record_unit(node, unit)
-                    node, key = node[token], token
-                    unit = _key_unit(token) or unit
-                else:
-                    node = node[int(token)]
-            return key, unit
-        key = _normalise_field_path(field_path, layer).rsplit(".", 1)[-1]
-        return key, _key_unit(key)
-    except (KeyError, IndexError, TypeError, ValueError):
-        return None, None
+
+def _scoped_nodes_at(blob: Any, field_path: Any,
+                     layer: Any = None) -> Optional[list]:
+    if _is_json_pointer(field_path):
+        return _pointer_at(blob, field_path, with_context=True)
+    key = _normalise_field_path(field_path, layer)
+    if key:
+        for candidate in _field_path_spellings(key):
+            nodes = _walk_field_path(blob, candidate, with_context=True)
+            if nodes is not None:
+                return nodes
+    return None
 
 
 class _PointerObject(dict):
@@ -1728,7 +1727,7 @@ def _is_json_pointer(field_path: Any) -> bool:
     return isinstance(field_path, str) and field_path.startswith("/")
 
 
-def _pointer_at(blob: Any, pointer: str) -> Optional[list]:
+def _pointer_at(blob: Any, pointer: str, *, with_context=False) -> Optional[list]:
     """RFC6901 string representation, exact root/case; never legacy fallback.
 
     An unresolved/invalid selector returns None, including ambiguous object
@@ -1736,6 +1735,7 @@ def _pointer_at(blob: Any, pointer: str) -> Optional[list]:
     [None], not an absent selector. URI-fragment syntax is not enabled here.
     """
     node = blob
+    key, unit = None, None
     for raw in pointer[1:].split("/"):
         if re.search(r"~(?:[^01]|$)", raw):
             return None
@@ -1743,7 +1743,8 @@ def _pointer_at(blob: Any, pointer: str) -> Optional[list]:
         if isinstance(node, dict):
             if token not in node or token in getattr(node, "duplicate_keys", ()):
                 return None
-            node = node[token]
+            unit = _key_unit(token) or _record_unit(node, unit)
+            node, key = node[token], token
         elif isinstance(node, list):
             if not re.fullmatch(r"0|[1-9][0-9]*", token):
                 return None
@@ -1756,7 +1757,7 @@ def _pointer_at(blob: Any, pointer: str) -> Optional[list]:
             node = node[index]
         else:
             return None
-    return [node]
+    return [_ScopedNode(node, key, unit)] if with_context else [node]
 
 
 def subtree_at(blob: Any, field_path: Any, layer: Any = None) -> Optional[list]:
@@ -1769,22 +1770,8 @@ def subtree_at(blob: Any, field_path: Any, layer: Any = None) -> Optional[list]:
     "the path is there and empty" are different answers and this repo has
     measured what happens when a program supplies one for the other.
     """
-    if _is_json_pointer(field_path):
-        return _pointer_at(blob, field_path)
-    key = _normalise_field_path(field_path, layer)
-    if not key:
-        return None
-    # The emitter nests the payload under `fields`; some protocol synthesizers
-    # write it flat (`l_doc_consumer_contract.l_doc_fields` accepts both). An
-    # expectation may spell either, and a spelling difference between a schema
-    # and an expectation is not a defect — this repo has measured what scoring
-    # one as a defect does to an advisory channel. Both spellings are tried,
-    # HERE and only here, so the resolver and the status can never disagree.
-    for candidate in _field_path_spellings(key):
-        nodes = _walk_field_path(blob, candidate)
-        if nodes is not None:
-            return nodes
-    return None
+    nodes = _scoped_nodes_at(blob, field_path, layer)
+    return [node.value for node in nodes] if nodes is not None else None
 
 
 def _field_path_spellings(key: str) -> List[str]:
@@ -1794,25 +1781,27 @@ def _field_path_spellings(key: str) -> List[str]:
     return [key, "fields." + key]
 
 
-def _walk_field_path(blob: Any, key: str) -> Optional[list]:
+def _walk_field_path(blob: Any, key: str, *, with_context=False) -> Optional[list]:
     """One literal walk of one spelling. `None` when a segment is absent."""
-    nodes: List[Any] = [blob]
+    nodes = [_ScopedNode(blob)]
     for seg in key.split("."):
         nxt: List[Any] = []
         for node in nodes:
             stack = [node]
             while stack:
                 cur = stack.pop()
-                if isinstance(cur, list):
-                    stack.extend(cur)
-                elif isinstance(cur, dict):
-                    for k, v in cur.items():
+                if isinstance(cur.value, list):
+                    stack.extend(_ScopedNode(v, cur.key, cur.unit)
+                                 for v in cur.value)
+                elif isinstance(cur.value, dict):
+                    unit = _record_unit(cur.value, cur.unit)
+                    for k, v in cur.value.items():
                         if str(k).lower() == seg:
-                            nxt.append(v)
+                            nxt.append(_ScopedNode(v, k, _key_unit(k) or unit))
         if not nxt:
             return None
         nodes = nxt
-    return nodes
+    return nodes if with_context else [node.value for node in nodes]
 
 
 def resolve_layer_file(project: Path, layer: str) -> Optional[Path]:
@@ -3318,15 +3307,15 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
     # decision than this one and would need its own landing — but the scope is
     # RECORDED, so a `met` obtained without scoping is visibly the weaker
     # claim it is rather than passing for a reading at the named field.
-    subtree = subtree_at(blob, base["field_path"], base["layer"])
+    subtree = _scoped_nodes_at(blob, base["field_path"], base["layer"])
     if subtree is None:
         base["scope"] = "whole_layer"
         units = _haystack_units(blob)
     else:
         base["scope"] = "json_pointer" if _is_json_pointer(base["field_path"]) \
             else "field_path"
-        at, unit = _scope_context(blob, base["field_path"], base["layer"])
-        units = [u for node in subtree for u in _haystack_units(node, at, unit)]
+        units = [u for node in subtree
+                 for u in _haystack_units(node.value, node.key, node.unit)]
 
     missing = [t for t in base["expected_tokens"]
                if not present_in_units(t, units)]

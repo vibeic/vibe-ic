@@ -240,3 +240,31 @@ def test_a_token_that_is_not_a_number_is_matched_as_before(token):
     assert T.present_in_units(token, units) == any(
         T.phrase_present(token, str(u)) for u in units)
     assert T.present_in_units(token, units) is True
+
+
+@pytest.mark.parametrize("token, blob, expected", [
+    ("4,735", {"limit": 4735}, True),
+    ("4,735", {"cite": "input/docs/a.md:4735"}, False),
+    ("5.5 ns/cycle", {"notes": "55 ns/cycle"}, False),
+])
+def test_numeric_formats_never_fall_back_to_citation_or_prose(token, blob, expected):
+    assert T.present_in_units(token, _units(blob)) is expected
+
+
+def test_dotted_selector_preserves_each_records_unit(tmp_path):
+    p = _project(tmp_path, {"L5_ADI_SPEC": {"specs": [
+        {"target": 1.0, "unit": "V"},
+        {"target": 2.0, "unit": "mV"},
+    ]}})
+    for token in ("1000 mV", "0.002 V"):
+        result = T.converge_ai_expectation(p, {
+            "id": "voltage", "layer": "L5_ADI_SPEC",
+            "field_path": "specs.target", "expected_tokens": [token],
+        })
+        assert result["met"] is True
+
+
+def test_float_round_trip_value_is_not_rounded_to_another_number():
+    units = _units({"gain": 1.000000000000001})
+    assert T.present_in_units("1.000000000000001", units) is True
+    assert T.present_in_units("1", units) is False
