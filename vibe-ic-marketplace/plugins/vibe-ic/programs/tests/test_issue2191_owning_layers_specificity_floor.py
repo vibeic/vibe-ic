@@ -475,9 +475,9 @@ def test_a_split_branch_whose_ownership_was_refused_refuses_the_parent(
         "evidence": ["input spec"],
         "sub_expectations": [
             {"id": "b1", "layer": "L9_INTEGRATION_SPEC",
-             "field_path": "fields.absent", "expected_tokens": ["deferred"]},
+             "field_path": "fields.top_ports", "expected_tokens": ["deferred"]},
             {"id": "b2", "layer": "L9_INTEGRATION_SPEC",
-             "field_path": "fields.absent", "expected_tokens": ["TRIM_WORD"]},
+             "field_path": "fields.top_ports", "expected_tokens": ["TRIM_WORD"]},
         ]}
     c = T.converge_ai_expectation(p, parent)
     assert c["usable"] is True and c["met"] is False, c
@@ -498,9 +498,9 @@ def test_a_split_whose_branches_all_discriminate_is_still_decided(tmp_path):
         "evidence": ["input spec"],
         "sub_expectations": [
             {"id": "b1", "layer": "L9_INTEGRATION_SPEC",
-             "field_path": "fields.absent", "expected_tokens": ["TRIM_WORD"]},
+             "field_path": "fields.top_ports", "expected_tokens": ["TRIM_WORD"]},
             {"id": "b2", "layer": "L9_INTEGRATION_SPEC",
-             "field_path": "fields.absent", "expected_tokens": [_STAMP]},
+             "field_path": "fields.top_ports", "expected_tokens": [_STAMP]},
         ]}
     c = T.converge_ai_expectation(p, parent)
     assert c["usable"] is True and c["met"] is False, c
