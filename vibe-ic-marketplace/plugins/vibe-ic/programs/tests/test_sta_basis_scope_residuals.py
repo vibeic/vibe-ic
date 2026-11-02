@@ -595,7 +595,9 @@ def test_the_landed_drc_gate_on_an_unopenable_certificate_still_fires(tmp_path):
         "spacing / width / density / antenna / via / enclosure checked\n"
         "violation count summary: 0 violation(s) found\n" + _PAD)
     (steps / "drc_signoff.rpt").symlink_to(proj / "reports" / "gone.rpt")
-    res = ERA._check_drc(proj)
+    with ERA.named_subjects([proj / "reports/drc_router.rpt",
+                            steps / "drc_signoff.rpt"]):
+        res = ERA._check_drc(proj)
     assert "DRC_REPORT_NOT_READABLE" in [f.rule for f in res.findings
                                          if f.severity == "ERROR"]
     assert res.passed is False

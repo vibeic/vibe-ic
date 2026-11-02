@@ -248,16 +248,22 @@ def test_legacy_ir_receipt_still_requires_shared_ir_emitter_source(
 @pytest.mark.parametrize("changed", [
     "_librelane_step24_record", "_step24_adopt_primary", "librelane_ir_antenna.py",
 ])
-def test_current_ir_still_refuses_changed_actual_ir_owner(
+def test_final_state_ir_judges_changed_actual_ir_owner_natively(
         tmp_path, monkeypatch, changed):
     project, _, _, _, _ = _external_current_primary(tmp_path, monkeypatch)
+    # #62b: source-only edits do not revoke final-State native IR. Non-final
+    # refusal remains in test_nonfinal_ir_retains_source_refusal and the legacy test above.
+    import _prestream_native as native
+    assert native.final_state(project) is not None
+    primary = json.loads((project / "reports/phase3/ir_drop_librelane.json").read_text())
+    measured = json.loads((project / "reports/phase3/ir_drop.json").read_text())
+    assert measured["worst_ir_uv"] <= 0.05 * primary["record"]["lib_voltage_v"] * 1e6
     current = emc.native_source_identity()
     current[changed] = "0" * 64
     monkeypatch.setattr(emc, "native_source_identity", lambda: dict(current))
     result = emc.validate_primary_ir(project)
-    assert result["valid"] is False, result
-    assert result["verdict"] == "NOT_MEASURED", result
-    assert "not adopted by current source" in result["reason"]
+    assert result["valid"] is True, result
+    assert result["verdict"] == "PASS", result
 
 
 def test_current_ir_rebinds_intact_project_relative_native_paths(tmp_path, monkeypatch):

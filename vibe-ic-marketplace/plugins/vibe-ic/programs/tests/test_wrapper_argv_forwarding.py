@@ -109,6 +109,14 @@ def _project(tmp: Path) -> Path:
     rp = tmp / "reports" / "phase3"
     rp.mkdir(parents=True, exist_ok=True)
     (rp / "drc_router.rpt").write_text(_DRC_RPT)
+    # Discovery identity only; this reconstructed publication claims no native run.
+    (tmp / "provenance.jsonl").write_text(json.dumps({
+        "record": "declared_transform", "tool": "phase3_one_shot_runner",
+        "producing_step": "drc:signoff", "exit_code": 0,
+        "reconstructed": True, "duration_ms": None, "inputs": {},
+        "outputs": {"reports/phase3/drc_router.rpt":
+                    "sha256:" + __import__("hashlib").sha256(_DRC_RPT.encode()).hexdigest()},
+    }) + "\n")
     (rp / "ir_drop.rpt").write_text(_IR_RPT)
     (rp / "antenna.rpt").write_text(_ANT_RPT)
     (rp / "ir_drop.json").write_text(json.dumps(_IR_MEASUREMENT))

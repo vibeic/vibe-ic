@@ -300,33 +300,83 @@ COEFFICIENT_RATIO_TOLERANCE = 0.02
 
 def run_loop(window: int, b1: float, a: Sequence[float], c: Sequence[float],
              feedback_delay: int, stimulus, offsets: Sequence[float] = (),
-             windows: int = 1) -> Dict[str, Any]:
+             windows: int = 1, *, feedforward: Sequence[float] = (),
+             input_feedforward: float = 0.0, feedback_compensation: float = 0.0,
+             state_limits: Sequence[float] = (),
+             loop_model: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Run the per-stage loop for `windows` conversion windows, each from a
     reset state. `stimulus(n)` is the input at clock n. Returns the per-stage
     peak and the bitstream (so two coefficient sets can be compared for
-    bit-identity). `c[0]` is unused (stage 1 takes `b1`)."""
+    bit-identity). `c[0]` is unused (stage 1 takes `b1`).
+
+    `a` declares DAC injection at each stage; CIFF uses a[1:] = 0 and
+    declares the quantiser's state/input feedforward and delayed-decision
+    compensation separately. Empty feedforward keeps the CIFB quantiser.
+    Declared physical state limits clip the states and report saturation;
+    bounded clipping must never masquerade as loop stability."""
+    if loop_model is not None:
+        model = _dec.validate_loop_model(loop_model)
+        a = [-x for x in model["feedback_vector"]]
+        c = [0.] + [model["transition"][i][i-1] for i in range(1, len(a))]
+        feedback_delay = model["feedback_delay_clocks"]
+        feedforward = model["feedforward_weights"]
+        input_feedforward, feedback_compensation = model["input_feedforward"], model["feedback_compensation"]
     order = len(a)
+    if (order < 1 or len(c) != order or feedback_delay < 0
+            or (feedforward and len(feedforward) != order)
+            or (state_limits and (len(state_limits) != order or
+                any(not math.isfinite(x) or x <= 0 for x in state_limits)))):
+        raise ValueError(BAD_INPUT)
     off = list(offsets) + [0.0] * (order - len(offsets))
     peak = [0.0] * order
     bits: List[int] = []
+    decisions: List[float] = []
+    saturated = False
     for win in range(windows):
         st = [0.0] * order
         pipe = [0.0] * max(feedback_delay, 0)
+        previous = 0.0
         for k in range(window):
             n = win * window + k
             u = stimulus(n)
-            v = 1.0 if st[order - 1] > 0.0 else -1.0
+            y = (input_feedforward * u + sum(g * x for g, x in zip(feedforward, st))
+                 - feedback_compensation * previous) if feedforward else st[order - 1]
+            if loop_model is None:
+                v = 1.0 if y > 0.0 else -1.0
+            else:
+                levels = model["quantizer_levels"]
+                thresholds = model.get("quantizer_thresholds", [(x + z) / 2 for x,z in zip(levels, levels[1:])])
+                index = sum(y > threshold for threshold in thresholds)
+                v = levels[index]
+                if index < len(thresholds) and y == thresholds[index]:
+                    v = min(levels[index:index+2], key=abs)
             d = v if feedback_delay == 0 else pipe[0]
-            for s in range(order - 1, 0, -1):
-                st[s] += c[s] * st[s - 1] - a[s] * d + off[s]
-            st[0] += b1 * u - a[0] * d + off[0]
+            if loop_model is None:
+                for s in range(order - 1, 0, -1):
+                    st[s] += c[s] * st[s - 1] - a[s] * d + off[s]
+                st[0] += b1 * u - a[0] * d + off[0]
+            else:
+                st = [sum(g*x for g,x in zip(row, st)) + model["input_vector"][i]*u
+                      + model["feedback_vector"][i]*d + off[i]
+                      for i,row in enumerate(model["transition"])]
+            if not all(math.isfinite(x) for x in st) or not math.isfinite(y):
+                return {"peak_per_stage": [math.inf] * order, "bits": bits,
+                        "saturated": saturated, "unbounded": True}
+            if state_limits:
+                saturated |= any(abs(x) >= limit for x, limit in zip(st, state_limits))
+                st = [max(-limit, min(limit, x)) for x, limit in zip(st, state_limits)]
             for s in range(order):
                 if abs(st[s]) > peak[s]:
                     peak[s] = abs(st[s])
             if feedback_delay:
                 pipe = pipe[1:] + [v]
+            previous = v
             bits.append(1 if v > 0 else 0)
-    return {"peak_per_stage": peak, "bits": bits}
+            decisions.append(v)
+    result = {"peak_per_stage": peak, "bits": bits, "saturated": saturated, "unbounded": False}
+    if loop_model is not None:
+        result["decisions"] = decisions
+    return result
 
 
 def _dc(u: float):
@@ -364,9 +414,13 @@ def loop_peaks(window: int, b1: float, a: Sequence[float],
 
 
 def stable_input_limit(b1: float, a: Sequence[float], c: Sequence[float],
-                       feedback_delay: int, window: int, reference_window: int,
+                       feedback_delay: int, window: int, reference_window: Optional[int] = None,
                        step: float = 0.01, top: float = 1.0,
-                       tolerance: float = N_DEPENDENCE_TOLERANCE) -> float:
+                       tolerance: float = N_DEPENDENCE_TOLERANCE, *,
+                       feedforward: Sequence[float] = (), input_feedforward: float = 0.0,
+                       feedback_compensation: float = 0.0,
+                       state_limits: Sequence[float] = (),
+                       loop_model: Optional[Dict[str, Any]] = None) -> float:
     """The largest DC input level (on a `step` grid, in units of the loop's
     own full scale b1 = a1) below which the loop's swing does not grow with
     the window length.
@@ -378,10 +432,20 @@ def stable_input_limit(b1: float, a: Sequence[float], c: Sequence[float],
     loop is perfectly bounded, and at u = 0.92 the two windows happen to
     agree although the envelope has already grown by 23 %. So the quantity
     compared is the ENVELOPE E_N(u) = max over |u'| <= u of the per-stage
-    peak, at `window` against `reference_window`, and the limit is the last
-    grid level before any stage's envelope grows by more than `tolerance`.
-    Overload is unmistakable on it: at u = 1.00 the stage-2 envelope is 11.8
-    at N = 64 and 95.7 at N = 512."""
+    peak. Compare N with at least 4*N: a bounded higher-order loop can need
+    more than 64 clocks to reach its envelope. `reference_window` may request
+    a longer observation, but cannot shorten that reference. The limit is
+    the last grid level before any stage grows by more than `tolerance`,
+    becomes non-finite, or reaches a declared physical state limit."""
+    if (window < 1 or step <= 0 or top < 0 or tolerance < 0
+            or (reference_window is not None and reference_window < 1)):
+        raise ValueError(BAD_INPUT)
+    long_window = max(4 * window, reference_window or 0)
+    options = {"feedforward": feedforward, "input_feedforward": input_feedforward,
+               "feedback_compensation": feedback_compensation, "state_limits": state_limits,
+               "loop_model": loop_model}
+    if loop_model is not None:
+        a = _dec.validate_loop_model(loop_model)["feedback_vector"]
     env_w = [0.0] * len(a)
     env_r = [0.0] * len(a)
     last = 0.0
@@ -389,10 +453,11 @@ def stable_input_limit(b1: float, a: Sequence[float], c: Sequence[float],
     for i in range(0, n + 1):
         u = i * step
         for sgn in ((1.0,) if i == 0 else (1.0, -1.0)):
-            p1 = run_loop(window, b1, a, c, feedback_delay,
-                          _dc(sgn * u))["peak_per_stage"]
-            p0 = run_loop(reference_window, b1, a, c, feedback_delay,
-                          _dc(sgn * u))["peak_per_stage"]
+            short = run_loop(window, b1, a, c, feedback_delay, _dc(sgn * u), **options)
+            long = run_loop(long_window, b1, a, c, feedback_delay, _dc(sgn * u), **options)
+            if any(r["saturated"] or r["unbounded"] for r in (short, long)):
+                return last
+            p1, p0 = long["peak_per_stage"], short["peak_per_stage"]
             env_w = [max(x, y) for x, y in zip(env_w, p1)]
             env_r = [max(x, y) for x, y in zip(env_r, p0)]
         if any(x > (1.0 + tolerance) * max(y, 1e-12)
@@ -400,6 +465,14 @@ def stable_input_limit(b1: float, a: Sequence[float], c: Sequence[float],
             return last
         last = u
     return last
+
+
+def declared_stable_input_limit(loop_model: Dict[str, Any], window: int, **options) -> float:
+    """Stability consumer of the SAME canonical model used by the decoder."""
+    model = _dec.validate_loop_model(loop_model)
+    order = len(model["input_vector"])
+    return stable_input_limit(0., [0.] * order, [0.] * order,
+        model["feedback_delay_clocks"], window, loop_model=model, **options)
 
 
 def scale_states(b1: float, a: Sequence[float], c: Sequence[float],
@@ -450,7 +523,7 @@ def swing_design(window: int, reference_window: int, feedback_delay: int,
     ratio = (u_stable - margin_u - abs(offset_u)) / float(u_decl)
     rec: Dict[str, Any] = {
         "producer": PRODUCER, "window_clocks": window,
-        "reference_window_clocks": reference_window,
+        "reference_window_clocks": max(4 * window, reference_window),
         "feedback_delay_clocks": feedback_delay,
         "u_decl": float(u_decl), "x_lim": float(x_lim),
         "u_stable": u_stable, "input_stability_margin": margin_u,

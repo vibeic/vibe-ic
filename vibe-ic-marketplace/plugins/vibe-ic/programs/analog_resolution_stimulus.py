@@ -460,7 +460,78 @@ _INC_UNEQUAL_COEFF = "incremental_cascade_coefficients_unequal"
 FEEDBACK_DELAY_CONSTANT = "feedback_delay_clocks"
 
 
-def incremental_decode(spec: Any, topology: Any) -> Dict[str, Any]:
+def incremental_loop_adapter(topology: Any, *, decision_encoding=None) -> Optional[Dict[str, Any]]:
+    """Map loop_declaration schema 1 to the shared decoder/stability model.
+
+    Field names follow the landed docs/analog-ciff.md and
+    analog_ciff.declaration(). A/input_vector/
+    feedback_vector own the state equations, including optimized-zero paths.
+    Schema 1 emits two levels; future multilevel measurement methods must
+    supply their explicit output codebook via decision_encoding, not infer
+    it from captured values or add guessed fields to the producer contract.
+    """
+    if not isinstance(topology, dict) or "loop_declaration" not in topology:
+        return None
+    raw = topology["loop_declaration"]
+    try:
+        order, delay, count = raw["order"], raw["D"], raw["quantizer_levels"]
+        if (raw["schema"] != 1 or raw["family"] not in ("CIFF", "CIFB")
+                or not isinstance(order, int) or isinstance(order, bool) or order < 1
+                or not isinstance(delay, int) or isinstance(delay, bool) or delay not in (0, 1)
+                or not isinstance(count, int) or isinstance(count, bool) or count < 2
+                or any(len(raw[key]) != order for key in ("a", "b", "c", "state_nets", "input_vector", "feedback_vector"))
+                or any(isinstance(x, bool) or not isinstance(x, (int, float)) or not math.isfinite(x)
+                       for key in ("a", "b", "c") for x in raw[key])
+                or any(x == 0 for x in raw["a"])
+                or raw["feedback_vector"] != [-b for b in raw["b"]]
+                or raw["dac_stages"] != [i+1 for i,b in enumerate(raw["b"]) if b]
+                or not raw["dac_stages"] or len(set(raw["state_nets"])) != order):
+            raise ValueError(_inc.BAD_STATE_EQUATIONS)
+        normalization = raw["normalization"]
+        levels, scale = normalization["dac_output_levels"], normalization["full_scale_over_reference"]
+        if len(levels) != count or not math.isfinite(scale) or scale <= 0:
+            raise ValueError(_inc.BAD_STATE_EQUATIONS)
+        paths = raw["paths"]
+        dac_paths = [path for path in paths if path["kind"] in ("dac", "dac_shared")]
+        gains_by_stage = {}
+        for path in dac_paths:
+            gains_by_stage.setdefault(path["destination_stage"], []).append(path["gain"])
+        if (sorted(gains_by_stage) != raw["dac_stages"]
+                or any(math.fsum(gains) != raw["feedback_vector"][stage-1]
+                       for stage, gains in gains_by_stage.items())
+                or any(path["delay_clocks"] != delay or
+                       path["destination"] != raw["state_nets"][path["destination_stage"]-1]
+                       for path in dac_paths)):
+            raise ValueError(_inc.BAD_STATE_EQUATIONS)
+        k0_path = raw["k0_path"]
+        if raw["k0"] and (delay != 1 or not k0_path or
+                k0_path["delay_clocks"] != 1 or k0_path["gain"] != -raw["k0"]):
+            raise ValueError(_inc.BAD_STATE_EQUATIONS)
+        encoding = decision_encoding
+        if encoding is None and count == 2:
+            sources = {path["source"] for path in dac_paths}
+            if len(sources) != 1:
+                raise ValueError(_inc.BAD_DECISION)
+            encoding = {"output_nodes": [next(iter(sources))],
+                        "codes": [[[0], levels[0]], [[1], levels[1]]]}
+        if encoding is not None:
+            encoding = {"output_nodes": encoding["output_nodes"], "codes": encoding["codes"],
+                        "threshold_fractions": encoding.get("threshold_fractions", [.5]*len(encoding["output_nodes"]))}
+        model = {"transition": raw["A"], "input_vector": raw["input_vector"],
+                 "feedback_vector": raw["feedback_vector"], "feedback_delay_clocks": delay,
+                 "feedforward_weights": raw["c"], "input_feedforward": raw["c0"],
+                 "feedback_compensation": raw["k0"], "quantizer_levels": levels,
+                 "decision_encoding": encoding, "normalization": normalization,
+                 "state_nets": raw["state_nets"],
+                 "state_paths": [path for path in paths if path["kind"] in
+                                 ("input", "integrator", "dac", "dac_shared", "zero_feedback")],
+                 "producer_schema": raw["schema"], "family": raw["family"]}
+        return _inc.validate_loop_model(model)
+    except (KeyError, TypeError, IndexError, AttributeError) as exc:
+        raise ValueError(_inc.BAD_STATE_EQUATIONS) from exc
+
+
+def incremental_decode(spec: Any, topology: Any, *, decision_encoding=None) -> Dict[str, Any]:
     """The decode declaration for this block, or a NAMED refusal.
 
     Always a dict; `declared` is the one field a caller must read. A block
@@ -477,6 +548,39 @@ def incremental_decode(spec: Any, topology: Any) -> Dict[str, Any]:
         rec["detail"] = "no topology IR beside the block"
         return rec
     consts = topology.get("constants") or {}
+    try:
+        model = incremental_loop_adapter(topology, decision_encoding=decision_encoding)
+    except ValueError as exc:
+        rec["reason"] = str(exc)
+        rec["loop_model_invalid"] = True
+        return rec
+    if model is not None:
+        window = consts.get("window_clocks")
+        if (not isinstance(window, (int, float)) or isinstance(window, bool)
+                or not math.isfinite(window) or window < 1 or int(window) != window):
+            rec["reason"] = _INC_NO_WINDOW
+            return rec
+        window = int(window)
+        order, delay = len(model["input_vector"]), model["feedback_delay_clocks"]
+        # Topology labels do not select the weights in this path: the
+        # complete declared equations own the input and DAC impulses.
+        rec.update({"declared": True, "window_clocks": window, "order": order,
+                    "coeff": 1., "feedback_delay_clocks": delay, "loop_model": model})
+        rec["stamp"] = _inc.stamp(mode, window, order, 1., delay, loop_model=model)
+        return rec
+    # Original A2/A3 records describe the CIFB recurrence. New topologies
+    # declare constants.loop_topology; the existing topology prose is also
+    # a declaration (and must not contradict the structured field).
+    named = re.findall(r"\b(CIFF|CIFB)\b", str(topology.get("topology", "")), re.I)
+    kinds = {value.lower() for value in named}
+    if "loop_topology" in consts:
+        kinds.add(str(consts["loop_topology"]).lower())
+    try:
+        kind = _inc.loop_topology(next(iter(kinds)) if len(kinds) == 1 else
+                                  ("cifb" if not kinds else "conflicting_declarations"))
+    except ValueError as exc:
+        rec["reason"] = str(exc)
+        return rec
     window = consts.get("window_clocks")
     if not isinstance(window, (int, float)) or int(window) < 1:
         rec["reason"] = _INC_NO_WINDOW
@@ -498,12 +602,12 @@ def incremental_decode(spec: Any, topology: Any) -> Dict[str, Any]:
         return rec
     coeffs = [c for c in (stage.get("coefficients") or [])
               if isinstance(c, (int, float)) and not isinstance(c, bool)]
-    if len(coeffs) != order:
+    if len(coeffs) != order or any(not math.isfinite(c) or c <= 0 for c in coeffs):
         rec["reason"] = _INC_NO_COEFF
         rec["detail"] = (f"the cascade declares {len(coeffs)} coefficient(s) "
                          f"for {order} stage(s)")
         return rec
-    if any(abs(c - coeffs[0]) > 1e-12 * max(1.0, abs(coeffs[0]))
+    if kind == "cifb" and any(abs(c - coeffs[0]) > 1e-12 * max(1.0, abs(coeffs[0]))
            for c in coeffs):
         # NOT decoded on the first one. The flat DAC term carries `a2` where
         # the triangular term carries `a1*a2`, so unequal coefficients need
@@ -527,9 +631,10 @@ def incremental_decode(spec: Any, topology: Any) -> Dict[str, Any]:
 
     rec.update({"declared": True, "window_clocks": int(window),
                 "order": int(order), "coeff": float(coeffs[0]),
+                "loop_topology": kind,
                 "feedback_delay_clocks": int(delay)})
     rec["stamp"] = _inc.stamp(mode, int(window), int(order), float(coeffs[0]),
-                              int(delay))
+                              int(delay), kind)
     return rec
 
 
@@ -609,7 +714,7 @@ def incremental_record_windows() -> int:
     raise AssertionError("no conversion-window count admits a gradable tone")
 
 
-def plan(deck_text: str, spec: Any, topology: Any) -> Dict[str, Any]:
+def plan(deck_text: str, spec: Any, topology: Any, *, decision_encoding=None) -> Dict[str, Any]:
     """The record of what this transform would do to `deck_text`, applied or
     refused. Always a dict; `applied` is the one field a caller must read."""
     record: Dict[str, Any] = {"producer": PRODUCER, "applied": False}
@@ -647,7 +752,17 @@ def plan(deck_text: str, spec: Any, topology: Any) -> Dict[str, Any]:
             f"put there and does not author one")
         return record
 
-    node, why = _output_node(facts)
+    dec = incremental_decode(spec, topology, decision_encoding=decision_encoding)
+    if dec.get("loop_model_invalid"):
+        record["reason"] = dec["reason"]
+        return record
+    encoding = (dec.get("loop_model") or {}).get("decision_encoding")
+    if encoding:
+        nodes = encoding["output_nodes"]
+        node, why = nodes[0], None
+        record["output_nodes"] = nodes
+    else:
+        node, why = _output_node(facts)
     if node is None:
         record["reason"] = ("output_node_ambiguous" if facts["measured_nodes"]
                             else "output_node_not_measured")
@@ -664,7 +779,6 @@ def plan(deck_text: str, spec: Any, topology: Any) -> Dict[str, Any]:
 
     # THE DECODE DECLARATION IS READ BEFORE THE TONE, because for an
     # incremental converter it decides which domain the tone is coherent in.
-    dec = incremental_decode(spec, topology)
     record["incremental_decode"] = dec
 
     stop_s = facts["tran"]["stop_s"]
@@ -779,7 +893,10 @@ def apply(deck_text: str, spec: Any, topology: Any, dump_ref: str
         f"{_num(record['fclk_hz'])} Hz; band edge "
         f"{record['band_bins']} bin(s) at OSR {record['osr']:g}.")
     lines.insert(record["source_line"], note)
-    dump = f"wrdata {dump_ref} v({record['output_node']})"
+    dump = f"wrdata {dump_ref} " + " ".join(f"v({node})" for node in
+        record.get("output_nodes", [record["output_node"]]))
+    if (record.get("incremental_decode", {}).get("loop_model") or {}).get("decision_encoding"):
+        dump = "set wr_singlescale\nset wr_vecnames\n" + dump
     lines.insert(record["tran_line"] + 2, dump)
     # The decode declaration travels ON THE DECK, beside the tone note, so the
     # gate that reads the dump reads it off the same file. A SPICE comment.

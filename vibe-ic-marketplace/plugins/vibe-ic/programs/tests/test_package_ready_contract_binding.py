@@ -220,6 +220,123 @@ def test_positive_bare_die(sample):
     assert completed['whole_flow_acceptance'] == 'NOT_MEASURED'
 
 
+def _self_tapeout_absence(sample):
+    project, _, component = sample
+    (project / d75.PROVIDER_TARGET).unlink()
+    decl = d75.declaration.blank_declaration()
+    decl['answers']['deliverable'] = d75.declaration.DELIVERABLE_DIE
+    decl[d75.declaration.PROVENANCE_KEY] = {'deliverable': {
+        'answered_by': d75.declaration.ANSWERED_BY_OWNER_VALUE,
+        'citation': 'Neutral owner explicitly selects an independent bare DIE.'}}
+    own = copy.deepcopy(decl)
+    own['operator_template'] = {'path': None, 'slot': None,
+                               'absent_reason': 'Owner selected independent bare-die tapeout.'}
+    write(project / d75.DECLARATION, decl)
+    write(project / d75.DESIGN_ANSWERS, own)
+    write(project / d75.OPERATOR_ANSWERS, own)
+    write(project / d75.declaration.SELF_TAPEOUT_REL,
+          d75.declaration.SELF_TAPEOUT_MARKER + '\n')
+    owed, scope = d75._provider_scope(project, decl, [])
+    assert owed is False
+    check(sample, 'provider_bond_pad_edge').update(status='NOT_APPLICABLE', detail=scope)
+    component['provider_identity'] = None
+    reason = 'Owner-certified independent bare DIE needs no provider bond-pad limit.'
+    absence = project / 'input/package_contracts/self_tapeout_absence.json'
+    write(absence, {'reason': reason})
+    payload = {'required_items': [], 'when': {'route': 'SELF_TAPEOUT', 'deliverable': 'DIE'},
+        'validated_absence': {'status': 'VALIDATED', 'authority': 'requirements_owner',
+            'reason': reason, 'source_reference': {
+                'path': absence.relative_to(project).as_posix(),
+                'sha256': hashlib.sha256(absence.read_bytes()).hexdigest()}}}
+    source = project / 'input/package_contracts/escape_bond_feasibility.json'
+    write(source, {NAMES[1]: payload})
+    path = project / 'requirements/package_ready/escape_bond_feasibility.json'
+    write(path, {'schema': metrics.AUTHORITY_SCHEMA, **payload,
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+            'source_reference': {'path': source.relative_to(project).as_posix(),
+                                 'sha256': hashlib.sha256(source.read_bytes()).hexdigest()}}})
+    rebind(project, component)
+    return path
+
+
+def test_self_tapeout_escape_bond_accepts_approved_reasoned_absence(sample):
+    path = _self_tapeout_absence(sample)
+    result = item(consume(sample), NAMES[1])
+    assert result['status'] == 'NOT_APPLICABLE'
+    assert result['skip_reason'] == json.loads(path.read_text())['validated_absence']['reason']
+    assert len(result['authority']['bound_inputs']) == 3
+
+
+@pytest.mark.parametrize('damage,code', [
+    ('missing', 'METRIC_AUTHORITY_ABSENT'),
+    ('unapproved', 'METRIC_AUTHORITY_UNAPPROVED'),
+    ('empty_reason', 'D75_REASONED_ABSENCE_REQUIRED'),
+    ('different_reason', 'D75_REASONED_ABSENCE_REQUIRED'),
+    ('stale_reason', 'METRIC_EMPTY_SET_UNVALIDATED'),
+    ('wrong_when', 'D75_SELF_TAPEOUT_ABSENCE_UNPROVEN'),
+    ('unbound_owner', 'D75_OBSERVATION_INPUT_UNBOUND'),
+])
+def test_self_tapeout_escape_bond_refuses_missing_or_unbound_authority(sample, damage, code):
+    path = _self_tapeout_absence(sample)
+    project = sample[0]
+    body = json.loads(path.read_text())
+    if damage == 'missing':
+        path.unlink()
+    elif damage == 'unbound_owner':
+        sample[2]['inputs'] = [r for r in sample[2]['inputs']
+                               if r['path'] != str(d75.DESIGN_ANSWERS)]
+    elif damage == 'stale_reason':
+        write(project / body['validated_absence']['source_reference']['path'],
+              {'reason': 'Changed after approval.'})
+    else:
+        if damage == 'unapproved':
+            body['approval']['status'] = 'PENDING'
+        elif damage in ('empty_reason', 'different_reason'):
+            body['validated_absence']['reason'] = '' if damage == 'empty_reason' else 'Different reason.'
+        else:
+            body['when']['deliverable'] = 'HARDMACRO'
+        source = project / body['approval']['source_reference']['path']
+        write(source, {NAMES[1]: {k: v for k, v in body.items() if k not in ('schema', 'approval')}})
+        body['approval']['source_reference']['sha256'] = hashlib.sha256(source.read_bytes()).hexdigest()
+        write(path, body)
+    result = item(consume(sample), NAMES[1])
+    assert result['status'] == 'NOT_MEASURED'
+    assert code in (result.get('reason', '') + result.get('detail', ''))
+
+
+@pytest.mark.parametrize('damage,code', [
+    ('provider_present', 'D75_PROVIDER_IDENTITY_MISMATCH'),
+    ('missing_marker', '[Errno 2]'),
+    ('unattested', '[Errno 2]'),
+    ('forged_detail', 'D75_PROVIDER_SCOPE_MISMATCH'),
+])
+def test_provider_na_without_current_self_tapeout_proof_is_refused(sample, damage, code):
+    _self_tapeout_absence(sample)
+    project = sample[0]
+    if damage == 'provider_present':
+        write(project / d75.PROVIDER_TARGET, {'provider': 'neutral_selected_provider'})
+    elif damage == 'missing_marker':
+        (project / d75.declaration.SELF_TAPEOUT_REL).unlink()
+    elif damage == 'unattested':
+        path = project / d75.DESIGN_ANSWERS
+        doc = json.loads(path.read_text())
+        doc[d75.declaration.PROVENANCE_KEY] = {}
+        write(path, doc)
+    else:
+        check(sample, 'provider_bond_pad_edge')['detail']['owner_self_tapeout'] = False
+    rebind(project, sample[2])
+    result = item(consume(sample), NAMES[1])
+    assert result['status'] == 'NOT_MEASURED'
+    assert code in result['reason']
+
+
+def test_provider_pass_escape_bond_retains_all_four_declared_bounds(sample):
+    result = item(consume(sample), NAMES[1])
+    assert result['status'] == 'PASS'
+    assert {r['side'] for r in result['comparisons']} == {'left', 'bottom', 'right', 'top'}
+    assert all(r['status'] == 'PASS' for r in result['comparisons'])
+
+
 def test_wildcard_connectivity_keeps_the_native_pad_identity(sample):
     project = sample[0]
     path = project / d75.PAD_DEF

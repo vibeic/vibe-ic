@@ -94,10 +94,12 @@ seemed sensible.
       which side) and the three rotations are one decision (the orientations).
       The grouping is stated here so the 13:8 gap is a recorded reading and not
       a miscount.
-  SECTION 2C — SEAL RING (3).
+  SECTION 2C — SEAL RING (4).
       The three inputs `sealring/sealring_verify.py` and `die_finishing_gen.py`
       already take: whether a ring is required, which PDK script builds it, and
       which marker layer must end up carrying geometry (`SEAL_MARKER`).
+      `seal_ring_placement` additionally selects an outside frame; unanswered
+      retains the existing inside placement.
 
 TWO CONTRACT FIELDS, AND WHY THEY ARE NOT IN THE 18
 ===================================================
@@ -470,9 +472,16 @@ _2B: Tuple[Question, ...] = (
 )
 
 # --------------------------------------------------------------------------- #
-# SECTION 2C — SEAL RING (3)
+# SECTION 2C — SEAL RING (4)
 # --------------------------------------------------------------------------- #
 _2C: Tuple[Question, ...] = (
+    Question(
+        "seal_ring_placement", SECTION_SEAL_RING,
+        "Is the seal ring inside the declared die, or outside it with an enlarged frame?",
+        "enum", "die_finishing_gen", (DELIVERABLE_DIE,),
+        choices=("outside", "inside"),
+        note="Absent or inside retains the existing die frame. Outside grows "
+             "the frame by the measured PDK frame-to-ring-inner-edge footprint."),
     Question(
         "seal_ring_required", SECTION_SEAL_RING,
         "Does the party that takes this layout require a seal ring?",
@@ -505,17 +514,17 @@ _2C: Tuple[Question, ...] = (
 
 QUESTIONS: Tuple[Question, ...] = _2A + _2B + _2C
 
-#: 9 + 8 + 3. Asserted at import so a question added to a section without the
+#: 9 + 8 + 4. Asserted at import so a question added to a section without the
 #: section's count being revisited is a loud failure, not a silent drift.
 #: 2A went 7 -> 9 with `macro_area_um` / `macro_origin_um` (vibe-ic#2118).
-SECTION_COUNTS = {SECTION_DIE_SIZE: 9, SECTION_PAD_RING: 8, SECTION_SEAL_RING: 3}
+SECTION_COUNTS = {SECTION_DIE_SIZE: 9, SECTION_PAD_RING: 8, SECTION_SEAL_RING: 4}
 for _sec, _n in SECTION_COUNTS.items():
     _have = sum(1 for q in QUESTIONS if q.section == _sec)
     if _have != _n:                                            # pragma: no cover
         raise AssertionError(
             f"section {_sec} declares {_n} question(s) but carries {_have}")
 
-#: Contract fields outside the 20 physical-deliverable questions. See the
+#: Contract fields outside the 21 physical-deliverable questions. See the
 #: module-level explanation above.
 FORBIDDEN_LAYERS_KEY = "forbidden_layers"
 SYNTHESIS_AREA_BUDGET_KEY = "synthesis_area_budget"
@@ -562,7 +571,7 @@ def question(key: str) -> Optional[Question]:
 
 
 def blank_declaration() -> Dict[str, Any]:
-    """All 20 questions plus contract fields, all `NOT_DETERMINED`.
+    """All 21 questions plus contract fields, all `NOT_DETERMINED`.
 
     This is the ONLY constructor. There is no variant that pre-fills anything,
     because the moment one exists somebody calls it.
@@ -1041,9 +1050,10 @@ def validate(doc: Any) -> List[Dict[str, Any]]:
     produces a NOT_DETERMINED at the consuming check, which is a non-pass in
     the place where the reader can see WHICH check went without. A field that
     is ABSENT, or present with a value of the wrong shape, is refused here,
-    because that is a declaration nobody can read — except the additive
-    `synthesis_area_budget` field, whose absence in a legacy declaration is
-    deliberately the UNSET state. A present malformed value is always refused.
+    because that is a declaration nobody can read — except additive fields:
+    absent `synthesis_area_budget` remains UNSET, and absent
+    `seal_ring_placement` retains the legacy inside frame. A present malformed
+    value is always refused.
     """
     out: List[Dict[str, Any]] = []
     if not isinstance(doc, dict):
@@ -1062,7 +1072,7 @@ def validate(doc: Any) -> List[Dict[str, Any]]:
         return out
 
     for q in QUESTIONS:
-        if q.key not in answers:
+        if q.key not in answers and q.key != "seal_ring_placement":
             out.append(_refusal(
                 RULE_FIELD_MISSING,
                 f"question {q.key!r} ({q.section}) is absent. Every question "

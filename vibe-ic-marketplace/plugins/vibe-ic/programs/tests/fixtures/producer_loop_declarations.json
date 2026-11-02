@@ -1,0 +1,505 @@
+{
+  "producer_sha": "2fa48ba7ea31ab77d5dc7ac47f2cdb0ab63aa063",
+  "producer_path": "vibe-ic-marketplace/plugins/vibe-ic/programs/analog_ciff.py",
+  "producer_source_sha256": "6a65b6f685b09ff61c28479763f7295037a27e73d060f05216dc47258693562e",
+  "scope": "Actual published declaration() output with synthetic model gains; no design oracle",
+  "records": [
+    {
+      "kind": "ciff",
+      "D": 0,
+      "declaration": {
+        "schema": 1,
+        "family": "CIFF",
+        "order": 3,
+        "a": [
+          0.2,
+          0.35,
+          0.25
+        ],
+        "b": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "c": [
+          3.3342237548832045,
+          2.92325400265245,
+          1.5766195530896177
+        ],
+        "c0": 1.0,
+        "D": 0,
+        "k0": 0.0,
+        "k0_path": null,
+        "dac_stages": [
+          1
+        ],
+        "quantizer_levels": 2,
+        "state_nets": [
+          "state1",
+          "state2",
+          "state3"
+        ],
+        "paths": [
+          {
+            "kind": "input",
+            "source": "input",
+            "destination": "state1",
+            "gain": 0.2,
+            "capacitor": "cs1"
+          },
+          {
+            "kind": "dac",
+            "source": "bit_out",
+            "destination": "state1",
+            "gain": -0.2,
+            "capacitor": "cf1",
+            "destination_stage": 1,
+            "delay_clocks": 0
+          },
+          {
+            "kind": "feedforward",
+            "source": "state1",
+            "destination": "quantizer",
+            "gain": 3.3342237548832045,
+            "capacitor": "cff1"
+          },
+          {
+            "kind": "integrator",
+            "source": "state1",
+            "destination": "state2",
+            "gain": 0.35,
+            "capacitor": "cs2"
+          },
+          {
+            "kind": "feedforward",
+            "source": "state2",
+            "destination": "quantizer",
+            "gain": 2.92325400265245,
+            "capacitor": "cff2"
+          },
+          {
+            "kind": "integrator",
+            "source": "state2",
+            "destination": "state3",
+            "gain": 0.25,
+            "capacitor": "cs3"
+          },
+          {
+            "kind": "feedforward",
+            "source": "state3",
+            "destination": "quantizer",
+            "gain": 1.5766195530896177,
+            "capacitor": "cff3"
+          },
+          {
+            "kind": "input_feedforward",
+            "source": "input",
+            "destination": "quantizer",
+            "gain": 1.0,
+            "capacitor": "cff0"
+          }
+        ],
+        "A": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.35,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.25,
+            1.0
+          ]
+        ],
+        "input_vector": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "feedback_vector": [
+          -0.2,
+          -0.0,
+          -0.0
+        ],
+        "quantizer_input_net": "nqz",
+        "quantizer_strobe_device": "mn_qtail",
+        "normalization": {
+          "state_and_input": "relative to vcm, divided by DAC full scale",
+          "dac_output_levels": [
+            -1,
+            1
+          ],
+          "full_scale_over_reference": 1.3
+        },
+        "coefficient_source": "synthetic model gains",
+        "verification": "offline generator only"
+      }
+    },
+    {
+      "kind": "ciff",
+      "D": 1,
+      "declaration": {
+        "schema": 1,
+        "family": "CIFF",
+        "order": 3,
+        "a": [
+          0.2,
+          0.35,
+          0.25
+        ],
+        "b": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "c": [
+          4.357362655811551,
+          3.317408890924814,
+          1.5766195530896112
+        ],
+        "c0": 1.0,
+        "D": 1,
+        "k0": 0.6668447509766401,
+        "k0_path": {
+          "kind": "k0",
+          "source": "bit_out",
+          "destination": "quantizer",
+          "gain": -0.6668447509766401,
+          "capacitor": "cffk0",
+          "delay_clocks": 1
+        },
+        "dac_stages": [
+          1
+        ],
+        "quantizer_levels": 2,
+        "state_nets": [
+          "state1",
+          "state2",
+          "state3"
+        ],
+        "paths": [
+          {
+            "kind": "input",
+            "source": "input",
+            "destination": "state1",
+            "gain": 0.2,
+            "capacitor": "cs1"
+          },
+          {
+            "kind": "dac",
+            "source": "bit_out",
+            "destination": "state1",
+            "gain": -0.2,
+            "capacitor": "cf1",
+            "destination_stage": 1,
+            "delay_clocks": 1
+          },
+          {
+            "kind": "feedforward",
+            "source": "state1",
+            "destination": "quantizer",
+            "gain": 4.357362655811551,
+            "capacitor": "cff1"
+          },
+          {
+            "kind": "integrator",
+            "source": "state1",
+            "destination": "state2",
+            "gain": 0.35,
+            "capacitor": "cs2"
+          },
+          {
+            "kind": "feedforward",
+            "source": "state2",
+            "destination": "quantizer",
+            "gain": 3.317408890924814,
+            "capacitor": "cff2"
+          },
+          {
+            "kind": "integrator",
+            "source": "state2",
+            "destination": "state3",
+            "gain": 0.25,
+            "capacitor": "cs3"
+          },
+          {
+            "kind": "feedforward",
+            "source": "state3",
+            "destination": "quantizer",
+            "gain": 1.5766195530896112,
+            "capacitor": "cff3"
+          },
+          {
+            "kind": "input_feedforward",
+            "source": "input",
+            "destination": "quantizer",
+            "gain": 1.0,
+            "capacitor": "cff0"
+          },
+          {
+            "kind": "k0",
+            "source": "bit_out",
+            "destination": "quantizer",
+            "gain": -0.6668447509766401,
+            "capacitor": "cffk0",
+            "delay_clocks": 1
+          }
+        ],
+        "A": [
+          [
+            1.0,
+            0.0,
+            0.0
+          ],
+          [
+            0.35,
+            1.0,
+            0.0
+          ],
+          [
+            0.0,
+            0.25,
+            1.0
+          ]
+        ],
+        "input_vector": [
+          0.2,
+          0.0,
+          0.0
+        ],
+        "feedback_vector": [
+          -0.2,
+          -0.0,
+          -0.0
+        ],
+        "quantizer_input_net": "nqz",
+        "quantizer_strobe_device": "mn_qtail",
+        "normalization": {
+          "state_and_input": "relative to vcm, divided by DAC full scale",
+          "dac_output_levels": [
+            -1,
+            1
+          ],
+          "full_scale_over_reference": 1.3
+        },
+        "coefficient_source": "synthetic model gains",
+        "verification": "offline generator only"
+      }
+    },
+    {
+      "kind": "cifb",
+      "D": 0,
+      "declaration": {
+        "schema": 1,
+        "family": "CIFB",
+        "order": 2,
+        "a": [
+          0.21,
+          0.37
+        ],
+        "b": [
+          0.21,
+          0.37
+        ],
+        "c": [
+          0.0,
+          1.0
+        ],
+        "c0": 0.0,
+        "D": 0,
+        "k0": 0.0,
+        "k0_path": null,
+        "dac_stages": [
+          1,
+          2
+        ],
+        "quantizer_levels": 2,
+        "state_nets": [
+          "state1",
+          "state2"
+        ],
+        "paths": [
+          {
+            "kind": "input",
+            "source": "input",
+            "destination": "state1",
+            "gain": 0.21,
+            "capacitor": "cs1"
+          },
+          {
+            "kind": "dac",
+            "source": "bit_out",
+            "destination": "state1",
+            "gain": -0.21,
+            "capacitor": "cf1",
+            "destination_stage": 1,
+            "delay_clocks": 0
+          },
+          {
+            "kind": "integrator",
+            "source": "state1",
+            "destination": "state2",
+            "gain": 0.37,
+            "capacitor": "cs2"
+          },
+          {
+            "kind": "dac",
+            "source": "bit_out",
+            "destination": "state2",
+            "gain": -0.37,
+            "capacitor": "cf2",
+            "destination_stage": 2,
+            "delay_clocks": 0
+          },
+          {
+            "kind": "feedforward",
+            "source": "state2",
+            "destination": "quantizer",
+            "gain": 1.0,
+            "capacitor": "cff2"
+          }
+        ],
+        "A": [
+          [
+            1.0,
+            0.0
+          ],
+          [
+            0.37,
+            1.0
+          ]
+        ],
+        "input_vector": [
+          0.21,
+          0.0
+        ],
+        "feedback_vector": [
+          -0.21,
+          -0.37
+        ],
+        "quantizer_input_net": "nqz",
+        "quantizer_strobe_device": "mn_qtail",
+        "normalization": {
+          "state_and_input": "relative to vcm, divided by DAC full scale",
+          "dac_output_levels": [
+            -1,
+            1
+          ],
+          "full_scale_over_reference": 1.3
+        },
+        "coefficient_source": "synthetic model gains",
+        "verification": "offline generator only"
+      }
+    },
+    {
+      "kind": "cifb",
+      "D": 1,
+      "declaration": {
+        "schema": 1,
+        "family": "CIFB",
+        "order": 2,
+        "a": [
+          0.21,
+          0.37
+        ],
+        "b": [
+          0.21,
+          0.37
+        ],
+        "c": [
+          0.0,
+          1.0
+        ],
+        "c0": 0.0,
+        "D": 1,
+        "k0": 0.0,
+        "k0_path": null,
+        "dac_stages": [
+          1,
+          2
+        ],
+        "quantizer_levels": 2,
+        "state_nets": [
+          "state1",
+          "state2"
+        ],
+        "paths": [
+          {
+            "kind": "input",
+            "source": "input",
+            "destination": "state1",
+            "gain": 0.21,
+            "capacitor": "cs1"
+          },
+          {
+            "kind": "dac",
+            "source": "bit_out",
+            "destination": "state1",
+            "gain": -0.21,
+            "capacitor": "cf1",
+            "destination_stage": 1,
+            "delay_clocks": 1
+          },
+          {
+            "kind": "integrator",
+            "source": "state1",
+            "destination": "state2",
+            "gain": 0.37,
+            "capacitor": "cs2"
+          },
+          {
+            "kind": "dac",
+            "source": "bit_out",
+            "destination": "state2",
+            "gain": -0.37,
+            "capacitor": "cf2",
+            "destination_stage": 2,
+            "delay_clocks": 1
+          },
+          {
+            "kind": "feedforward",
+            "source": "state2",
+            "destination": "quantizer",
+            "gain": 1.0,
+            "capacitor": "cff2"
+          }
+        ],
+        "A": [
+          [
+            1.0,
+            0.0
+          ],
+          [
+            0.37,
+            1.0
+          ]
+        ],
+        "input_vector": [
+          0.21,
+          0.0
+        ],
+        "feedback_vector": [
+          -0.21,
+          -0.37
+        ],
+        "quantizer_input_net": "nqz",
+        "quantizer_strobe_device": "mn_qtail",
+        "normalization": {
+          "state_and_input": "relative to vcm, divided by DAC full scale",
+          "dac_output_levels": [
+            -1,
+            1
+          ],
+          "full_scale_over_reference": 1.3
+        },
+        "coefficient_source": "synthetic model gains",
+        "verification": "offline generator only"
+      }
+    }
+  ]
+}

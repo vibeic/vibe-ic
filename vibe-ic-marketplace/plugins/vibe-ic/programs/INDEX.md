@@ -6,8 +6,8 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 
 ## Stats
 
-- **Total programs (excluding helpers / shims):** 1512
-- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1512)
+- **Total programs (excluding helpers / shims):** 1513
+- **Programs with explicit `_APPLICABLE_CLASSES`:** 9 (of 1513)
 
 ### Per-class applicability counts
 
@@ -19,7 +19,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `pure_analog` | 0 |
 | `bare_fpga` | 0 |
 | `unknown` | 1 |
-| `any` | 1503 |
+| `any` | 1504 |
 
 ## Alphabetical listing
 
@@ -129,6 +129,7 @@ Auto-generated catalog of every `*.py` under `vibe-ic-marketplace/plugins/vibe-i
 | `analog_one_shot_runner` | any | Wave 90 | A1-A9 analog flow (parallel to Phase 2 digital). |
 | `analog_oracle_compare` | any | — | deterministic analog-benchmark comparator. |
 | `analog_ota1_options` | any | — | Declared OTA1 cell and internal chopper options; no transistor sizing. |
+| `analog_ota_bias` | any | — | Declared SC loads and independently ratioed OTA bias branches. |
 | `analog_pdk_availability` | any | — | native PDK availability resolver / ladder (headline analog-track honesty fix). |
 | `analog_pdk_deck_context` | any | — | family-agnostic ngspice deck-emission context. |
 | `analog_per_block_pv_completeness_check` | any | Wave 93 | strict per-block deliverable completeness gate for the analog A1-A9 track. |
@@ -1584,7 +1585,7 @@ _(no programs in this group)_
 
 - `rig_firmware_capability_check` — Wave 58 / BACKLOG-v12 P0.5 plugin gate.  _[Wave 58]_
 
-### `any` (1503 programs)
+### `any` (1504 programs)
 
 - `a2b_protocol_synth` — Automotive Audio Bus (A2B) protocol synth helper.
 - `absence_verdict_names_its_search_space_check` — "not found" must say WHERE it looked.
@@ -1689,6 +1690,7 @@ _(no programs in this group)_
 - `analog_one_shot_runner` — A1-A9 analog flow (parallel to Phase 2 digital).  _[Wave 90]_
 - `analog_oracle_compare` — deterministic analog-benchmark comparator.
 - `analog_ota1_options` — Declared OTA1 cell and internal chopper options; no transistor sizing.
+- `analog_ota_bias` — Declared SC loads and independently ratioed OTA bias branches.
 - `analog_pdk_availability` — native PDK availability resolver / ladder (headline analog-track honesty fix).
 - `analog_pdk_deck_context` — family-agnostic ngspice deck-emission context.
 - `analog_per_block_pv_completeness_check` — strict per-block deliverable completeness gate for the analog A1-A9 track.  _[Wave 93]_

@@ -1,0 +1,3 @@
+# SHA-locked IHP vendor fixtures (see SHA256.json): the bytes must stay identical
+# to the upstream PDK files, so git whitespace checks do not apply here.
+* -whitespace

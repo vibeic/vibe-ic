@@ -74,6 +74,8 @@ def _run_and_emit(caller_argv):
     """
     argv = build_argv(caller_argv)
     project = Path(argv[0])
+    from _prestream_native import final_state
+    final = final_state(project) is not None
     primary = project / "reports/phase3/ir_drop_librelane.json"
     import em_current_density_check as emc
     try:
@@ -85,8 +87,19 @@ def _run_and_emit(caller_argv):
     expects_primary = (str(ir.get("producer", "")).startswith("librelane:")
                        or (emc.native_project(project / "reports/phase3/em_segments.csv") is not None
                            and steps.get("24") != "direct"))
-    if expects_primary or (primary.is_file() and steps.get("24") != "direct"):
+    if final or expects_primary or (primary.is_file() and steps.get("24") != "direct"):
         binding = emc.validate_primary_ir(project)
+        if final:
+            # #62b: use the native checker verdict, not the writer's budget.
+            rc = (0 if binding["verdict"] == "PASS" else 1) if binding["valid"] else 2
+            if "--json" in argv:
+                path = Path(argv[argv.index("--json") + 1])
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(json.dumps({"program": "ir_drop_report_check",
+                    "verdict": binding["verdict"], "primary_ir": binding}, indent=2) + "\n")
+            import step_metrics
+            step_metrics.emit_gate_outcome(Path(__file__).stem, argv, rc)
+            return rc
         if not binding["valid"]:
             # Preserve a separately bound measured FAIL from the EM session's
             # IR cross-check. An incomplete primary must not dilute that FAIL.

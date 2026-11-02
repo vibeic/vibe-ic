@@ -211,6 +211,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 import argparse
 import json
 import re
+import subprocess
 import sys
 from math import gcd, isfinite
 from pathlib import Path
@@ -222,6 +223,8 @@ from _atomic_artefact import write_text as atomic_write_text
 import _pad_ring as PR
 import _source_record_merge as _srm     # noqa: E402
 import _declared_die as _dd                                    # noqa: E402
+import _seal_ring_margin as _srm_margin
+from _tapeout_declaration import DECLARATION_REL
 
 PROGRAM = "pad_ring_gen"
 
@@ -1330,8 +1333,11 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     inputs = {"floorplan_def": PR.FLOORPLAN_DEF_REL,
               "pad_assignment": PR.ASSIGNMENT_REL}
+    edge_spacing_seal_keepout = None
 
     def _fail(rule: str, message: str, **kw: Any) -> int:
+        if edge_spacing_seal_keepout is not None:
+            kw["edge_spacing_seal_keepout"] = edge_spacing_seal_keepout
         rep = _report("FAIL", f"{rule}: {message}", inputs=inputs,
                       io_cell_library=lib.as_dict(),
                       pdk_declarations=decls.as_dict(),
@@ -1396,7 +1402,51 @@ def main(argv: Optional[List[str]] = None) -> int:
         # for. A CONTRADICTION raised here is an `AssignmentError` like any
         # other and lands in the same `_fail` below, with its own rule.
         if isinstance(raw_cfg, dict):
-            raw_cfg, adopted_vars = PR.apply_pdk_declarations(raw_cfg, decls)
+            placement = "inside"
+            clearance, clearance_basis = None, ""
+            edge_spacing = raw_cfg.get("PAD_EDGE_SPACING")
+            if ("PAD_EDGE_SPACING" in decls.values
+                    and edge_spacing is not None and edge_spacing != ""
+                    and edge_spacing != []
+                    and not PR._declarations_agree(
+                        "PAD_EDGE_SPACING", edge_spacing,
+                        decls.values["PAD_EDGE_SPACING"])):
+                try:
+                    declaration = json.loads((project / DECLARATION_REL).read_text())
+                except (OSError, ValueError):
+                    declaration = {}
+                answers = (declaration.get("answers")
+                           if isinstance(declaration, dict) else None)
+                if (isinstance(answers, dict)
+                        and answers.get("seal_ring_placement") == "outside"):
+                    placement = "outside"
+
+                    def read_pdk(command):
+                        result = subprocess.run(
+                            ["sh", "-c", command], capture_output=True,
+                            text=True, timeout=60)
+                        return result.returncode, result.stdout
+
+                    try:
+                        trees = PR._pdk_trees(args.pdk_root, args.pdk)
+                    except OSError as exc:
+                        trees = []
+                        clearance_basis = f"PDK deck tree could not be read: {exc}"
+                    if len(trees) == 1:
+                        clearance, clearance_basis = _srm_margin.guard_ring_clearance_um(
+                            str(trees[0]), read_pdk)
+                    elif not clearance_basis:
+                        clearance_basis = (
+                            f"cannot resolve one PDK deck tree from "
+                            f"PDK_ROOT={args.pdk_root!r}, PDK={args.pdk!r}: {trees}")
+            raw_cfg, adopted_vars = PR.apply_pdk_declarations(
+                raw_cfg, decls, seal_ring_placement=placement,
+                seal_clearance_um=clearance,
+                seal_clearance_basis=clearance_basis)
+            if placement == "outside":
+                edge_spacing_seal_keepout = {
+                    "accepted_spacing_um": float(edge_spacing),
+                    "clearance_um": clearance, "basis": clearance_basis}
         else:
             adopted_vars = []
         if (isinstance(raw_cfg, dict)
@@ -1756,6 +1806,8 @@ def main(argv: Optional[List[str]] = None) -> int:
         fillers_declared=cfg["fillers"],
         fillers_placed=len(fillers),
         unperformed=unperformed, bterms=bterms, findings=notes)
+    if edge_spacing_seal_keepout is not None:
+        rep["edge_spacing_seal_keepout"] = edge_spacing_seal_keepout
     skip_marker = project / PR.PADRING_SKIPPED_REL
     try:
         skip_marker.unlink(missing_ok=True)
@@ -1800,6 +1852,7 @@ json.dump({name:{'present':layout.cell(name) is not None,'nonempty':layout.cell(
 
 def _d32_inputs(project):
     import hashlib
+    from _tapeout_declaration import DECLARATION_REL
     from flow109_analog_floorplan import bound_file
     from declared_pdk_is_the_pdk_used_check import declared_target
     import analog_pdk_availability as resolver
@@ -1827,6 +1880,11 @@ def _d32_inputs(project):
     available_gds={p for lef in lefs for p in (lef.parent.parent/'gds').glob('*.gds')}
     techs=set(tree.glob('libs.ref/*/lef/*tech*.lef'))
     records={str(p):digest(p) for p in (config,floor,assignment,logical)}
+    tapeout = project / DECLARATION_REL
+    if tapeout.exists() or tapeout.is_symlink():
+        if any(path.is_symlink() for path in (tapeout, *tapeout.parents)):
+            raise ValueError('D32_DECLARATION_SOURCE_UNBOUND')
+        records[str(tapeout)] = digest(tapeout)
     if not isinstance(target_source, str):raise ValueError('D32_PDK_DECLARATION_SOURCE_ABSENT')
     declaration = Path(target_source.rsplit(':',1)[0])
     declarations = [base / declaration for base in (project,project/'run')
@@ -1865,6 +1923,7 @@ def execute(project,context):
     import hashlib,json,shlex,shutil,uuid
     import librelane_contract as launch
     import pad_ring_check as checker
+    from _tapeout_declaration import DECLARATION_REL
     from analog_hardmacro_gds_emit import Stage
     from flow109_admission import require_launch_admission,AdmissionRefusal
     project=Path(project).resolve(strict=True);work=project/'reports/flow109/D32'/uuid.uuid4().hex;work.mkdir(parents=True)
@@ -1884,6 +1943,16 @@ def execute(project,context):
         result['metric_sources'] = _d32_metric_sources()
         case=work/'case';(case/PR.FLOORPLAN_DEF_REL).parent.mkdir(parents=True)
         shutil.copyfile(data['floorplan'],case/PR.FLOORPLAN_DEF_REL);shutil.copyfile(data['assignment'],case/PR.ASSIGNMENT_REL)
+        declaration = project / DECLARATION_REL
+        if str(declaration) in data['inputs']:
+            if any(path.is_symlink() for path in (declaration, *declaration.parents)):
+                raise ValueError('D32_DECLARATION_SOURCE_UNBOUND')
+            raw = declaration.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != data['inputs'][str(declaration)]:
+                raise ValueError('D32_INPUT_OR_LAUNCH_CHANGED')
+            target = case / DECLARATION_REL
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
         args=[str(case),'--pdk-root',data['pdk_root'],'--pdk',data['pdk']]
         for lef in data['io_lefs']:args+=['--io-lef',lef]
         rc=main(args);report=case/PR.REPORT_REL

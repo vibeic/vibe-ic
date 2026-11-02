@@ -444,8 +444,7 @@ def test_current_external_subject_same_bytes_wrong_owner_refuses(
     assert refused["native_density"]["valid"] is False
 
 
-@pytest.mark.parametrize("damage", ["changed_geometry", "missing_geometry",
-                                    "stale_source"])
+@pytest.mark.parametrize("damage", ["changed_geometry", "missing_geometry"])
 def test_current_external_geometry_reader_refuses_damaged_evidence(
         tmp_path, monkeypatch, damage):
     test_current_vsrc_producer_validates_from_absolute_and_project_dot(
@@ -458,11 +457,27 @@ def test_current_external_geometry_reader_refuses_damaged_evidence(
         geometry.write_text(geometry.read_text() + "VDD\twireA\t9\t9\t10\t9\tforeign\n")
     elif damage == "missing_geometry":
         geometry.unlink()
-    else:
-        density["source_identity"]["em_peak_current_authority_check.py"] = "0" * 64
-        density_path.write_text(json.dumps(density))
     refused = A.jmax_tier(
         Path("."), None, Path(density["authority"]["snapshot"]),
         E._DEFAULT_MARGIN)
     assert refused["verdict"] == "NOT_MEASURED", (damage, refused)
     assert refused["native_density"]["valid"] is False, (damage, refused)
+
+
+def test_final_state_stale_source_is_judged_natively(tmp_path, monkeypatch):
+    test_current_vsrc_producer_validates_from_absolute_and_project_dot(
+        tmp_path, monkeypatch)
+    project = Path.cwd()
+    # #62b: screen intact final-State currents/geometry against PDK Jmax.
+    # Non-final source refusal remains in test_nonfinal_em_retains_source_refusal.
+    import _prestream_native as native
+    assert native.final_state(project) is not None
+    density_path = project / "reports/phase3/em_openroad_density.json"
+    density = json.loads(density_path.read_text())
+    density["source_identity"]["em_peak_current_authority_check.py"] = "0" * 64
+    density_path.write_text(json.dumps(density))
+    judged = A.jmax_tier(
+        Path("."), None, Path(density["authority"]["snapshot"]),
+        E._DEFAULT_MARGIN)
+    assert judged["verdict"] == "PASS", judged
+    assert judged["native_density"]["valid"] is True, judged

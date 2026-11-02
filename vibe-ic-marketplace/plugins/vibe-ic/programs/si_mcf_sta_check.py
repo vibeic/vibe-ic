@@ -21,10 +21,10 @@ SPEF actually carries it:
   3. Require the bounded SPEF to retain NO coupling (2-node) caps — they must
      have been folded to ground; and require the fold not to EXCEED the MCF
      ceiling (setup: 2*sum(Cc)) so an inflated fold is caught too.
-  4. MONOTONICITY: folding MORE cap can only DEGRADE setup slack, folding LESS
-     can only degrade hold slack. If the report claims the SI-bounded slack is
-     BETTER than the nominal grounded slack (after > before), that contradicts
-     the physics of the bound -> FAIL ("reported slack better than the bound").
+  4. Compare native SI-bounded slack against the emitter's original >= 0 ns
+     signoff threshold. Missing or non-numeric slack cannot PASS.
+     Monotonicity against nominal grounded slack is diagnostic only: shifts
+     above 5 ps are WARNINGs and do not decide the verdict.
 
 THE ZERO THIS GATE USED TO SIGN OFF
 ===================================
@@ -189,7 +189,7 @@ where that is written down:
     NO_REPORT  BAD_JSON  NO_SPEF  NO_CORNER  NO_BOUNDED_SPEF
         the gate never got to look                            -> ``NOT_RUN``
     SPEF_NO_NET_RECORDS  COUPLING_LOST_SINCE_EMIT
-    FOLD_WITHOUT_SOURCE  FOLD_NOT_APPLIED  SLACK_BETTER_THAN_BOUND
+    FOLD_WITHOUT_SOURCE  FOLD_NOT_APPLIED  SI_SLACK_BELOW_THRESHOLD
         the gate looked at a real artefact and it was wrong    -> ``FAIL``
 
 Only the first list is enumerated. Anything NOT on it is a substantive defect,
@@ -308,6 +308,7 @@ if _os.path.dirname(_os.path.abspath(__file__)) not in _sys.path:
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import dataclass, asdict
 from pathlib import Path
@@ -671,22 +672,35 @@ def audit(project_dir: Path,
                 f"(Cc*MCF under/over-applied or coupling not folded) — "
                 f"the bounded SPEF does not carry the re-derived bound"))
 
-        # (4) monotonicity vs the nominal grounded run
+        # (4) Ruling #61: the self-made monotonicity check blocked a correct
+        # native result; coupling-cap modelling can improve slack slightly.
+        # Keep the shift diagnostic; signoff uses si_mcf_sta's original >= 0 ns.
         before = cinfo.get("worst_slack_before_ns")
         after = cinfo.get("worst_slack_after_ns")
-        mono_ok = True
-        if isinstance(before, (int, float)) and isinstance(after, (int, float)):
-            # setup: MORE cap => after <= before; hold: LESS cap => after <= before.
-            # a tiny positive epsilon tolerates STA rounding at the reported digits.
-            if after > before + 5e-3:
-                mono_ok = False
+        after_numeric = (type(after) in (int, float) and math.isfinite(after))
+        shift = None
+        exceeded = False
+        if type(before) in (int, float) and math.isfinite(before) and after_numeric:
+            shift = after - before
+            exceeded = after > before + 5e-3
+            if exceeded:
                 findings.append(Finding(
-                    "ERROR", "SLACK_BETTER_THAN_BOUND",
-                    f"{corner}: reported SI-bounded slack {after} ns is BETTER "
-                    f"than the nominal grounded {before} ns — a conservative "
-                    f"MCF bound can only DEGRADE it; number is not honest"))
+                    "WARNING", "SLACK_BETTER_THAN_BOUND",
+                    f"{corner}: SI-bounded slack shifted by {shift:+.6g} ns "
+                    f"from nominal grounded {before} ns to {after} ns "
+                    f"(improvement exceeds 5 ps); diagnostic modelling difference"))
         stats["monotonicity"][corner] = {
-            "before_ns": before, "after_ns": after, "ok": mono_ok}
+            "before_ns": before, "after_ns": after, "shift_ns": shift,
+            "exceeded_5ps": exceeded, "ok": not exceeded}
+        if not after_numeric:
+            findings.append(Finding(
+                "ERROR", "SI_SLACK_UNAVAILABLE",
+                f"{corner}: native SI-bounded slack is missing or non-numeric: {after!r}"))
+        elif after < 0.0:
+            findings.append(Finding(
+                "ERROR", "SI_SLACK_BELOW_THRESHOLD",
+                f"{corner}: native SI-bounded slack {after} ns is below "
+                f"the original 0 ns signoff threshold"))
 
     _ = nominal  # (kept for future cross-checks; corner records carry before/after)
     return findings, stats

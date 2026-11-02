@@ -107,6 +107,7 @@ def _drc(proj: Path):
     """(rc, audit payload) for the router-DRC gate as step 21 wires it."""
     r = _run(DRC_GATE, [".", "--mode", "drc",
                         "--under", "reports/phase3/drc_router.rpt",
+                        "--subject", "reports/phase3/drc_router.rpt",
                         "--json", "reports/phase3/drc_router.json"], cwd=proj)
     try:
         return r.returncode, json.loads(r.stdout)
