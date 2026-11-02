@@ -51,6 +51,10 @@ _DECLARED_LOGIC_REQUESTS = [
     'Minimize the Boolean expression.',
     'Use a minimized sum-of-products expression.',
     'Use only\nNAND gates; no other gates are allowed.',
+    'The module must be implemented using only NAND gates.',
+    'For module TopModule, use only NAND gates.',
+    'Use only NAND gates. The NOR-only restriction is withdrawn.',
+    'Use only NAND gates. This restriction is not withdrawn.',
 ]
 
 
@@ -93,11 +97,15 @@ def test_declared_logic_obligation_hands_off_before_sop(tmp_path, obligation, en
     'NAND gates are an example of universal logic.',
     'You may use NAND gates or sum-of-products.',
     'Do not use only NAND gates.',
+    'Do not\nuse only NAND gates.',
     'NAND-only logic is not required.',
     'The NAND-only restriction is withdrawn.',
     'Use only NAND gates. This restriction is withdrawn.',
     'A minimum number of NAND gates is not required.',
     'For module helper, use only NAND gates.',
+    'For module helper,\nuse only NAND gates.',
+    'Use only NAND gates for module helper.',
+    'Module name: helper\nUse only NAND gates.',
     'Module helper must use only NAND gates.',
     '// Use only NAND gates.',
     '/* Use a minimum number of NAND gates. */',
@@ -130,7 +138,9 @@ def test_ordinary_logic_handoff_precedes_all_producers_and_preserves_case(
     import design_one_shot_runner as runner
 
     (tmp_path / 'input').mkdir()
-    (tmp_path / 'input/phase1_prompt.md').write_text(_KMAP_2IN + '\n' + obligation)
+    source_dir = tmp_path / 'phase1/input_prompt'
+    source_dir.mkdir(parents=True)
+    (source_dir / 'design.md').write_text(_KMAP_2IN + '\n' + obligation)
     rtl_dir = tmp_path / 'phase2/stage1/rtl'
     rtl_dir.mkdir(parents=True)
     (rtl_dir / 'operator.txt').write_bytes(b'operator-owned\x00bytes\n')
