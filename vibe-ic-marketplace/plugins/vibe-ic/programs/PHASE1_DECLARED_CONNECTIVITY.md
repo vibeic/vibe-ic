@@ -7,13 +7,20 @@ internal net, with two explicitly related clocks.
 
 - `analog_blocks`: each block supplies `type` and an explicit `instances` list.
   Alternatively, `instances` may appear at the root, with each row declaring
-  `name`, `block_type`, and `ports`.
+  `name`, `block_type`, and `ports`. Nested instances retain the enclosing
+  declared `block` name. Root instances may supply the same explicit `block`
+  reference; `block_type` alone never establishes block membership.
 - Each port declares `name`, `type`, `direction`, and `net`. Supported types are
   analog, digital, power, ground, clock, and reset; directions are input, output,
   and inout. Nets must resolve to a declared top port, internal wire, or `nets`
   entry. A `nets` entry is a name string or an object with `name`.
 - `clock_groups`: each row declares `name`, a list of at least two distinct
   `clocks`, and `relationship` (synchronous, asynchronous, or exclusive).
+
+Tables and JSON must agree on every port name, type, direction and resolved
+net. Incomplete table ports and conflicting sources leave a named refusal and
+remove that instance and its wires. Port order and evidence formatting do not
+change the typed contract.
 
 The normal L9 emitter produces typed `ports`, `port_map`, `connections`, and
 `internal_wires`. Only explicitly supplied `master` and `placement` fields
@@ -24,7 +31,11 @@ alone does not authorize SDC timing cuts.
 Missing or conflicting declarations leave named records in
 `declared_instance_refusals` or `declared_clock_group_refusals`. Conflicting
 identities are removed, rather than selecting the first or last declaration.
-L5 blocks whose typed instance count is incomplete also receive an unresolved
-record; a block count alone cannot create an instance name or terminal map.
-Existing document-table and timing extraction behavior remains supported.
-This addition projects structured fields without extending prose inference.
+L5 blocks whose declared instances are missing also receive an unresolved
+record, naming the missing instance when its identity is declared. Coverage
+uses explicit instance identities or block membership, never a shared type
+count. An instance requested by two blocks covers neither.
+
+Clock relationships require an explicit group name in JSON or a structured
+table. The emitters do not create clock groups from prose or generate group
+names. Prose-only relationship statements remain named unresolved evidence.

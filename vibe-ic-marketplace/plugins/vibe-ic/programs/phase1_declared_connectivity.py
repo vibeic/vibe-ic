@@ -18,6 +18,22 @@ def _identifier(value):
     return isinstance(value, str) and bool(_IDENTIFIER.fullmatch(value))
 
 
+def port_contract(ports):
+    """Compare complete typed bindings, independent of order and provenance."""
+    if not isinstance(ports, list) or not ports:
+        return None
+    result = {}
+    for port in ports:
+        if (not isinstance(port, dict) or not _identifier(port.get("name"))
+                or not _identifier(port.get("net")) or port.get("type") not in
+                ("analog", "digital", "power", "ground", "clock", "reset")
+                or port.get("direction") not in ("input", "output", "inout")
+                or port["name"] in result):
+            return None
+        result[port["name"]] = (port["type"], port["direction"], port["net"])
+    return result
+
+
 def documents(extracted, is_current):
     """Yield only explicit JSON objects, retaining source and line provenance."""
     for filename, text in (extracted or {}).items():
@@ -67,7 +83,10 @@ def project(extracted, is_current):
         name = row["name"]
         if name in blocked:
             return
-        if name in target and any(target[name].get(k) != v for k, v in row.items() if k != "evidence"):
+        if name in target and any(
+                (port_contract(target[name].get(k)) != port_contract(v) if k == "ports"
+                 else target[name].get(k) != v)
+                for k, v in row.items() if k != "evidence"):
             target.pop(name)
             blocked.add(name)
             refuse(failures, kind + "_CONFLICT", evidence, name)
@@ -98,7 +117,13 @@ def project(extracted, is_current):
                 continue
             for row in declared:
                 if isinstance(row, dict):
-                    rows.append({"block_type": block.get("type"), **row})
+                    if row.get("block", block.get("name")) != block.get("name"):
+                        refuse(instance_refusals, "L9_DECLARED_INSTANCE_BLOCK_CONFLICT", evidence, row.get("name"))
+                        if _identifier(row.get("name")):
+                            blocked_instances.add(row["name"])
+                            instances.pop(row["name"], None)
+                        continue
+                    rows.append({"block_type": block.get("type"), **row, "block": block.get("name")})
                 else:
                     rows.append(row)
         for row in rows:
@@ -107,12 +132,7 @@ def project(extracted, is_current):
                 continue
             name = row["name"]
             ports = row.get("ports")
-            if (not isinstance(ports, list) or not ports
-                    or any(not isinstance(p, dict) or not _identifier(p.get("name"))
-                           or not _identifier(p.get("net")) or p.get("type") not in
-                           ("analog", "digital", "power", "ground", "clock", "reset")
-                           or p.get("direction") not in ("input", "output", "inout") for p in ports)
-                    or len({p["name"] for p in ports}) != len(ports)):
+            if port_contract(ports) is None:
                 blocked_instances.add(name)
                 instances.pop(name, None)
                 refuse(instance_refusals, "L9_DECLARED_INSTANCE_PORT_UNRESOLVED", evidence, name)
@@ -127,7 +147,7 @@ def project(extracted, is_current):
                          "ports": copy.deepcopy(ports), "port_map": bindings,
                          "connections": bindings.copy(), "parameters": copy.deepcopy(row.get("parameters", {}))}
             # Physical master/placement must be supplied explicitly by the design.
-            for key in ("master", "placement"):
+            for key in ("block", "master", "placement"):
                 if key in row:
                     projected[key] = copy.deepcopy(row[key])
             accept(instances, blocked_instances, projected, instance_refusals, "L9_DECLARED_INSTANCE", evidence)
