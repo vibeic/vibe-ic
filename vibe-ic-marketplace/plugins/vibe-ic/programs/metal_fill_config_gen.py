@@ -708,7 +708,8 @@ def build_metal_fill_config(layermap_text: str, techlef_text: str, deck_text: st
             # "this config was built before the concept existed" are
             # distinguishable to a consumer — the same rule the keep-out list
             # above already follows.
-            "density_rules_check_only": density_check_only_rules(deck_text),
+            **({"density_rules_check_only": density_check_only_rules(deck_text)}
+               if density_check_only_rules(deck_text) else {}),
             "density_rules_covered": _dens_covered,
             "density_rules_without_fill_entry": _dens_uncovered,
             # The deck's own NAME for each keep-out, so a reader can check the

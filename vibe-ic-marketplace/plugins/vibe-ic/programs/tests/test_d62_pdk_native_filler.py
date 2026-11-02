@@ -94,19 +94,33 @@ def test_max_words_in_comments_or_strings_do_not_exempt_minimum():
     assert 'FLOOR.a' in config.density_rule_coverage(deck,[])[1]
 
 
-def test_native_drc_minimum_shortfall_remains_failure(tmp_path):
-    # Real KLayout density evaluation of the existing GDS fixture. Native
-    # DRC returns rc=0 even for violations; grade its actual RDB items.
-    manifest=case(tmp_path)
-    report=tmp_path/'density.lyrdb';deck=tmp_path/'density.drc'
+def _density_shortfall(project, gds):
+    # Native DRC returns rc=0 even for violations; grade actual RDB items.
+    report=project/'density.lyrdb';deck=project/'density.drc'
     deck.write_text('source($input)\nreport("Density control", $report)\n'
                     'sample = input(999,0)\n'
                     'if sample.area / extent.area < 0.35\n'
                     '  extent.output("FLOOR.a", "minimum density shortfall")\nend\n')
-    proc=subprocess.run(['klayout','-b','-r',str(deck),'-rd','input='+str(tmp_path/manifest['input_gds']['path']),'-rd','report='+str(report)],capture_output=True,text=True)
+    proc=subprocess.run(['klayout','-b','-r',str(deck),'-rd','input='+str(gds),'-rd','report='+str(report)],capture_output=True,text=True)
     assert proc.returncode==0,proc.stderr
     items=ET.parse(report).findall('.//items/item')
     assert items and all('FLOOR.a' in x.findtext('category','') for x in items)
+
+
+def test_native_drc_minimum_shortfall_remains_failure(tmp_path):
+    manifest=case(tmp_path)
+    _density_shortfall(tmp_path,tmp_path/manifest['input_gds']['path'])
+
+
+def test_native_filled_output_shortfall_does_not_gain_row_pass(tmp_path):
+    native_case(tmp_path)
+    rc,result=invoke(tmp_path)
+    assert result['native_started'] is True,result
+    assert result['execution']['returncode']==0
+    assert result['default_row_status']=='NOT_MEASURED' and not result['completed']
+    assert rc==2
+    filled=tmp_path/result['outputs']['filled.gds']['path']
+    _density_shortfall(tmp_path,filled)
 
 
 def test_native_kit_cannot_silently_use_odb_fallback_without_a_stream(tmp_path,monkeypatch):
