@@ -1,0 +1,34 @@
+[
+  {
+    "step": "mcp_eda.tool_resolution",
+    "design": "general containerized native EDA command resolution",
+    "bucket": "A",
+    "rule_name": "resolve_builtin_legacy_defaults_on_container_path",
+    "docstring": "Keep an executable built-in legacy tool default; otherwise discover that command on the container PATH, while preserving explicit operator commands and missing-tool refusal.",
+    "pattern": "A container image provides a native EDA binary on PATH, but the MCP adapter invokes a built-in absolute legacy path that no longer exists, causing doctor and native consumers to report an unavailable tool.",
+    "fix_action": "Augment the existing MCP index adapter with a shared deterministic resolver for built-in legacy defaults: use an executable legacy path when present, otherwise resolve its bare command inside the selected container. Preserve explicit operator commands byte-for-byte and propagate missing-command failures. Use the resolved commands in existing doctor and native consumers without a new per-tool environment framework or acceptance gate. Preserve shell quoting in the actual assembled DFT script and stop before success markers or PASS manifests when required dependencies or a Fault operation fail.",
+    "expected_signal": "AUTO-FIX",
+    "before_state": "REAL: fresh Codex and Claude MCP clients connected with 56 tools and alive health; both eda_doctor calls returned success=false and 8/17 checks passed, with all nine native EDA tool checks unavailable through stale /foss paths. The actual DFT registered-handler control could also publish success/PASS after missing commands; quote reversion breaks the neutral positive control.",
+    "after_state": "MEASURED BOUNDED SOURCE: exact patch e9c10b32e819df1f41ee734d3be3b1f44129801af4a3bdee9aee81d1bc12599b changes source doctor from 8/17 to 17/17 and real native KLayout fixture parsing from unavailable to 10 GDS cells. All 13 matched candidate controls PASS; legacy priority, failing legacy no-fallback, true absence and explicit missing operator commands preserve refusal. Actual DFT scripts preserve quotes and emit no PASS manifest on dependency or Fault failure. Installed Codex/Claude proof remains PENDING_ROOT_INSTALL; their actual prior doctor 8/17 is preserved.",
+    "ai_reasoning": "NATIVE_PATH_READBACK.json records all nine image binaries present on container PATH, while the fresh MCP doctor receipts select unavailable legacy paths. Executability checks and container-side command discovery are deterministic adapter responsibilities, so this is Bucket A at the existing MCP owner rather than a forked-tool enhancement or skill-only guidance. Availability readback does not qualify native tool behavior.",
+    "generality": "The rule depends on configured command origin, executability and container PATH; it does not branch on a design, PDK, benchmark identifier, score, oracle or image-specific installation prefix.",
+    "capture_scope": "Actual local MCP path defect and bounded adapter repair. Native probes cover nine version checks and actual KLayout ten-cell fixture parsing; DFT controls execute actual scripts using neutral tool fixtures. Full native ATPG, end-to-end flow qualification and benchmark scores are NOT_RUN here; final installed-client qualification belongs to root.",
+    "evidence": "CAPTURE.md; source-bound terminal receipts and patch identity under /home/reyerchu/codex_tasks/out/ve-human-parallel-continue-20261102T0134Z/native-tool-fix: SOURCE_IDENTITY.json SHA256 e750290da893f1fb4b42b2dfca37d2635314d2d5c85f4f11faa8d0fa077be42d; TERMINAL_PACKET.json SHA256 e87583ac495d3b39edb4961ff311fc8266403aaa52a5792b12e0e073c4764868; predecessor-native.json SHA256 6f17cba3850a1046c73e6c0fd7a341899d416cb2a9e1512dd35a1cab788660cf; candidate-native.json SHA256 1ef1e5ccc7b5be70c1841893df3bd6a41063a880b9a1019787a3dd6e9bc762c0; matched-controls.json SHA256 0cb9a8b46775f6971687f0709b79402dc1fa47af0ffe9fea1ea58c96ca912398; dft-controls.json SHA256 eb6d95985929e3f91c37361978ac5b842399c216fc72c7fd345440465f4c7888. Original fresh installed-client and root PATH-readback receipt hashes remain in CAPTURE.md.",
+    "verification": {
+      "component_candidate": {
+        "pass": 53,
+        "fail": 0,
+        "error": 0,
+        "existing_skip": 1
+      },
+      "matched_cases": 13,
+      "predecessor_fail": 9,
+      "candidate_fail": 0,
+      "substantive_observed_value": 8,
+      "undecided": 1,
+      "presence_only": 0,
+      "quote_reversion_fail": 1,
+      "installed_clients": "PENDING_ROOT_INSTALL"
+    }
+  }
+]

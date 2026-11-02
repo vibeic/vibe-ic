@@ -1,0 +1,18 @@
+[
+  {
+    "step": "phase2.rtl_repair.public_port_metadata",
+    "design": "neutral three-bit public-header port metadata",
+    "bucket": "A",
+    "rule_name": "observe_source_bound_native_public_port_metadata",
+    "docstring": "Derive expected native port declaration metadata from the exact unique public header in the existing structural contract owner.",
+    "pattern": "A supplied header fixes a public packed port range, but generation shifts its index base while preserving width and ordinary whole-vector functionality; a cell-only native structural proof cannot measure the declared interface mismatch.",
+    "fix_action": "Add a source-derived port-observation scope to the existing fixed native Yosys JSON contract. Bind original header, quote, source/candidate hashes and pinned backend; compare corresponding native port/netname width, bounds, orientation, signedness and order. Preserve normal repair header fidelity, inherited proof replay, functional PASS and fresh review. Refuse explicit candidate attributes and preprocessing in the port scope when frontend metadata provenance cannot be established; ignore comments, strings and event wildcards with the existing lexer. Refuse raw backslashes in candidate or requirement source before masking because escaped identifiers can contain comment/string tokens that hide later attributes; this lexical scope remains explicitly unsupported.",
+    "expected_signal": "ERROR",
+    "before_state": "Existing native structural scope returns NOT_MEASURED for port observation; changed headers in cell scope are refused before native measurement.",
+    "after_state": "Neutral native shifted-range candidate gives measured STRUCTURAL_CONTRACT_VIOLATION; restored header and matching ascending header PASS; both whole-vector functional tests PASS; removing index metadata falsely accepts the bad declaration. Independent adversarial scalar/vector attribute spoof is blocked as NOT_MEASURED without native credit; provenance-clean scalar/vector declarations remain discriminating.",
+    "ai_reasoning": "Native JSON already retains wire declaration metadata, so the narrow missing behavior belongs in its current structural contract consumer, not a new checker or a functional introspection test.",
+    "generality": "Uses only original header source, native port metadata and source/tool identity. No benchmark identifier, reference design, golden, score, oracle or chip fixture enters the rule.",
+    "capture_scope": "Generic source and native interface-contract controls only; benchmark acceptance and full-flow qualification are not measured.",
+    "evidence": "CAPTURE.md; native-interface-fix/native-receipts; port-tests-final.xml"
+  }
+]

@@ -248,3 +248,27 @@ across different agents.
 **Why this is GENERAL**: Applies to request/acknowledgement interfaces with source-supported payload stability, legal bounded timing and independently observable progress. It establishes the measured public behavior and selected branch, not complete internal consumption, clock-domain signoff or whole-design qualification.
 
 _Captured by benchmark-enhancement-capture 2026-10-21._
+
+# Bucket B — skill sections to APPEND to skills/testbench-gen/SKILL.md
+
+### Skill: Derive event phases before an executable timing challenge
+
+**Pattern**: A timestamped table is silently treated as either pre-edge input values or post-edge drives, so an executable challenge shifts acceptance and completion by one cycle while appearing precise.
+
+**When to apply**: Reviewing a generated reference model, waveform replay or proposed executable challenge whose visible prose and timing rows must jointly define synchronous behavior.
+
+**What to do**: Keep Program First: run `professional_tb_gen.py` through the normal producer and freeze its exact output and raw evidence. An independent IC expert then derives from the whole visible contract the input drive phase, capture edge, settled sample point, output-valid interval, transaction overlap, reset behavior and any condition-specific don't-care. Cite the source for each decision and distinguish requirements from assumptions. Where a timestamp admits pre-edge values and post-edge drives, explain both schedules and their observable consequences; choose the best source-bound interpretation using all visible prose, diagrams and tables before declaring ambiguity. Neither a table timestamp alone nor simulator scheduling, a DUT trace, prior score or hidden oracle supplies normative authority. Encode the chosen phase explicitly in the challenge, avoiding a drive/sample race and observing settled outputs. A disagreement still needs a prompt-derived executable proof that fails the frozen Program output; repair must pass the same unchanged challenge, normal gates and a fresh independent review. Do not apply a universal one-cycle correction or grant automatic PASS. If independent adjudication leaves two interpretations equally supported, preserve both and report the affected timing claim `NOT_MEASURED` with the exact missing convention; keep separately determined checks in scope. This review guidance prevents an error and does not itself prove a functional recovery.
+
+**Worked pattern** (anonymized): A neutral contract has a 10 ns clock, a request row at a rising timestamp of 40 ns, and completion two full periods after request acceptance. If the row describes the value present before the edge, acceptance is at 40 ns and completion at 60 ns. If it describes a drive after the edge, acceptance is at 50 ns and completion at 70 ns. Visible prose saying the request is stable before the listed edge selects the first schedule; a table without that statement requires the rest of the contract to adjudicate. Define the settled observation point and valid interval in either schedule instead of shifting every expectation by one cycle.
+
+**Why this is GENERAL**: Timestamped synchronous specifications occur in controllers, pipelines and streaming interfaces. The reasoning concerns event semantics and source authority, not any design identifier or stored solution. Existing generators and execution consumers retain their proof responsibilities.
+
+_Captured by benchmark-enhancement-capture 2026-11-02._
+
+### Skill: Complete the declared expert reference fallback
+
+**Pattern and application**: A skipped professional testbench can expose an unfilled expert reference hook without proving an RTL defect. When `professional_tb_gen.py` reports `NOT_MEASURED` with a `testbench-gen` fallback, inspect the actual skip cause and producer evidence. The IC expert resolves evaluation semantics from the visible contract instead of asking the human to supply the model.
+
+**Model derivation**: After the producer's typed handoff, fill only its declared `expert_reference_tb.py` with an independent input-derived model. Derive operand and result widths, signedness, overflow and flag ordering, reset behavior, deassertion and settled observation phases from that contract. For a wrapping result, determine whether the flag observes the width-limited value; for selection, establish the specified bit significance. Check source-promised known values and latch behavior after deassertion: an X-only check can miss a wrong known value. Expected results must not come from DUT behavior or a hidden oracle. Preserve the prior candidate, receipts and reviews.
+
+**Worked pattern and scope**: An absent hook produced one genuine JUnit skip and no passes or failures. Filling the declared hook with an independent model allowed the same frozen RTL to execute; substantive wrong-behavior controls failed without skipping and exact restoration passed. These are component proofs. Rerun the normal producer and require actual non-skipped JUnit comparisons, its success markers, discriminating wrong-behavior controls and a fresh independent review. Retain required gates and do not perturb RTL to force entry. Model derivation from arbitrary visible prose requires engineering judgment; existing programs own handoff and execution validation. Component evidence cannot credit canonical handoff, regating, whole-flow acceptance or a benchmark score. _Captured by benchmark-enhancement-capture 2026-11-02._

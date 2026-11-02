@@ -160,17 +160,36 @@ def _ordered_parallel_map(items: Iterable[T], worker: Callable[[T], R],
     ordered: list[R | None] = [None] * len(rows)
     pool = concurrent.futures.ThreadPoolExecutor(max_workers=jobs)
     futures = {}
+    delivered = set()
     try:
         futures = {pool.submit(worker, row): i for i, row in enumerate(rows)}
         for future in concurrent.futures.as_completed(futures):
             result = future.result()
+            delivered.add(future)
             if on_complete is not None:
                 on_complete(result)
             ordered[futures[future]] = result
-    except BaseException:
-        for future in futures:
-            future.cancel()
+    except BaseException as original:
+        cancelled = {future for future in futures if future.cancel()}
         pool.shutdown(wait=True, cancel_futures=True)
+        # Running workers can finish while shutdown waits. Their successful
+        # outcomes still belong to the coordinator's transaction callback.
+        # Mark delivery before calling it: a callback that rejected an invalid
+        # outcome must never be retried as if it had not seen that outcome.
+        drain_error = None
+        for future in futures:
+            if future in delivered or future in cancelled:
+                continue
+            try:
+                result = future.result()
+                delivered.add(future)
+                if on_complete is not None:
+                    on_complete(result)
+            except BaseException as exc:
+                if exc is not original and drain_error is None:
+                    drain_error = exc
+        if drain_error is not None:
+            raise original from drain_error
         raise
     else:
         pool.shutdown(wait=True)
@@ -256,7 +275,7 @@ def _historical_runner_sources_match(receipt: dict) -> bool:
         if retained:
             if any(digest != record["sha256"] for digest in retained):
                 return False
-        elif ((label == "consumer" and path != Path(__file__).resolve())
+        elif ((trees and label == "consumer" and path != Path(__file__).resolve())
               or not path.is_file()
               or hashlib.sha256(path.read_bytes()).hexdigest() != record["sha256"]):
             return False
@@ -505,6 +524,111 @@ def _material_matches_repaired_output(expected: dict, current: dict) -> bool:
             != current.get("output_rtl_sha256"))
 
 
+def _stored_duplicate_scene(original: dict, later: dict, wrapper: dict,
+                            project: Path) -> dict | None:
+    """Reopen the native admission identity without appending to its ledger."""
+    import canonical_run_admission as admission
+    from datetime import datetime, timezone
+    phases = wrapper.get("phases") or []
+    phase2 = [row for row in phases if row.get("name") == "phase2"]
+    if (len(phase2) != 1
+            or phase2[0].get("verdict") != "REFUSED-CANONICAL-ADMISSION"
+            or phase2[0].get("rc") != 2
+            or any(row.get("verdict") != "SKIPPED"
+                   for row in phases if row.get("name") != "phase2")
+            or wrapper.get("halted_at") != "phase2"
+            or wrapper.get("verdict") != "NOT_MEASURED"):
+        return None
+    if (type(original.get("finished_ns")) is not int
+            or type(later.get("started_ns")) is not int
+            or later["started_ns"] < original["finished_ns"]):
+        return None
+    image = wrapper.get("container_image") or {}
+    ref = image.get("image_ref") or ""
+    if (not re.fullmatch(r".+@sha256:[0-9a-f]{64}", ref)
+            or not re.fullmatch(r"sha256:[0-9a-f]{64}", image.get("image_id") or "")
+            or image.get("status") != "ok"
+            or image.get("image_match") is not True
+            or image.get("require_image") != ref
+            or image.get("require_image_id") != image.get("image_id")):
+        return None
+    # LOCAL admission records the verified content ID; Docker admission keeps
+    # its registry-portable digest. Compare in the domain that was recorded.
+    admitted_image = (image["image_id"] if image.get("execution_route") == "local"
+                      else ref.rsplit("@", 1)[1])
+    producer = original["reports_after"]["phase2_one_shot.json"]["runner_binding"]["producer"]
+    programs = Path(producer["path"]).parent
+    window = wrapper["declared_window"]
+    matches = []
+    ledger = admission.ledger_path(project)
+    if ledger.is_symlink():
+        return None
+    for row in _read_jsonl(ledger):
+        identity = row.get("identity") or {}
+        config = identity.get("dispatch_config") or {}
+        if (row.get("status") != "ADMITTED" or identity.get("span") != "phase2"
+                or config.get("entry_step") != window.get("entry_step")
+                or config.get("exit_step") != window.get("exit_step")
+                or config.get("rtl_input", "structured") != _invocation_rtl_input(original)
+                or row.get("identity_sha256") != admission.identity_sha256(identity)):
+            continue
+        event_ns = int(datetime.strptime(row["admitted_at"], "%Y-%m-%dT%H:%M:%SZ")
+                       .replace(tzinfo=timezone.utc).timestamp()) * 1_000_000_000
+        # Native admission records UTC seconds. Use that recorded event's
+        # precision, never a newest-file guess, to bind it to this invocation.
+        if (type(original.get("started_ns")) is not int
+                or type(original.get("finished_ns")) is not int
+                or event_ns > original["finished_ns"]
+                or event_ns + 1_000_000_000 <= original["started_ns"]):
+            continue
+        current = admission.build_identity(
+            project, "phase2", container_image=identity["container_image"],
+            config=config, program_paths=admission.canonical_program_paths(programs))
+        if current == identity:
+            if identity.get("container_image") != admitted_image:
+                return None
+            matches.append(row["identity_sha256"])
+    return {"admission_identity_sha256": sorted(set(matches))} if matches else None
+
+
+
+def _stored_duplicate_observation(original: dict, latest: dict,
+                                  project: Path) -> dict | None:
+    """A later refusal may retain an earlier measurement, never replace it."""
+    archive = project / "reports/orchestrator/runner_invocations"
+    later_path = archive / (str(latest["invocation_id"]) + ".json")
+    later = _read_json_regular(later_path)
+    current = _runner_report_snapshot(project)
+    phase2 = "phase2_one_shot.json"
+    wrapper_name = "vibe_ic_one_shot.json"
+    if (original.get("status") != "COMPLETED" or original.get("error")
+            or original.get("rc") not in (0, 1)
+            or later.get("status") != "COMPLETED" or later.get("error")
+            or later.get("invocation_id") != latest["invocation_id"]
+            or later.get("rc") != 1 or later.get("argv") != original["argv"]
+            or later.get("project") != original["project"]
+            or later.get("record_path") != str(later_path)
+            or "DUPLICATE_NO_NEW_EVIDENCE" not in (later.get("stderr") or "")
+            or original["reports_after"].get(phase2) != current.get(phase2)
+            or phase2 not in _runner_fresh_reports(original["reports_before"], original["reports_after"])
+            or {k:v for k,v in original["reports_after"].items() if k != wrapper_name}
+                != {k:v for k,v in current.items() if k != wrapper_name}):
+        return None
+    diagnostic = _stored_runner_diagnostics(later)
+    if (not diagnostic or diagnostic.get("status") != "STALE_RUNNER_REPORT"
+            or diagnostic.get("reason_class") != "RUNNER_REPORT_NOT_FRESH"):
+        return None
+    wrapper = _read_json_regular(project / "reports/orchestrator" / wrapper_name)
+    scene = _stored_duplicate_scene(original, later, wrapper, project)
+    if scene is None:
+        return None
+    return {"invocation_id": later["invocation_id"], "receipt_path": str(later_path),
+            "receipt_sha256": hashlib.sha256(later_path.read_bytes()).hexdigest(),
+            "status": "STALE_RUNNER_REPORT", "reason_class": "DUPLICATE_NO_NEW_EVIDENCE",
+            **scene}
+
+
+
 def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
                         project: Path, *, require_phase2: bool = True,
                         historical: bool = False,
@@ -529,14 +653,20 @@ def _runner_diagnostics(process: _ProcessOutcome, argv: list[str],
         _runner_receipt_paths(project, receipt)
         latest = _strict_json_loads((project / "reports" / "orchestrator" / "runner_invocations"
                              / "latest.json").read_bytes())
+        retained = None
+        if historical and receipt["invocation_id"] != latest["invocation_id"]:
+            retained = _stored_duplicate_observation(receipt, latest, project)
         if not (hashlib.sha256(raw).hexdigest() == process.receipt_sha256
-                and receipt["invocation_id"] == process.invocation_id == latest["invocation_id"]
+                and receipt["invocation_id"] == process.invocation_id
+                and (receipt["invocation_id"] == latest["invocation_id"] or retained)
                 and receipt["argv"] == latest["argv"] == list(argv)
                 and receipt["project"] == latest["project"] == str(project)
                 and receipt["rc"] == process.rc and receipt["error"] == process.error
                 and receipt["stdout"] == process.stdout and receipt["stderr"] == process.stderr
-                and receipt["reports_after"] == _runner_report_snapshot(project)):
+                and (receipt["reports_after"] == _runner_report_snapshot(project) or retained)):
             raise ValueError("runner binding changed")
+        if retained:
+            diagnostic["retained_after_duplicate"] = retained
         current_material = _runner_material_snapshot(project)
         if (allow_repaired_output
                 and (not isinstance(repaired_output_sha256, str)
@@ -2631,10 +2761,14 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                         "source_sha256": prompt_sha,
                         "excerpt": "<verbatim prompt obligation needing a missing definition>",
                         "missing_information": "<concrete missing definition; at least 16 characters>",
-                        "question": "<specific question for the spec owner; at least 16 characters>",
+                        "question": "<specific source-contract question for independent IC-expert adjudication; at least 16 characters>",
                     }],
                     "_effect": (
-                        "hold acceptance and scoring; no RTL repair is authorized. "
+                        "hold acceptance and scoring; first route ambiguity to an "
+                        "independent IC expert using the entire visible contract. "
+                        "Record conflicting clauses and the source-bound interpretation; "
+                        "use --review-correction for a fresh independent review when justified. "
+                        "No automatic acceptance or RTL repair is authorized. "
                         "Do not infer a predicate from a standard or hidden oracle. "
                         "A clarified prompt requires a fresh canonical run/review; "
                         "never rewrite the frozen prompt or waive inherited tests."),
@@ -2737,6 +2871,20 @@ def _make_ai_review_task(problem_id: str, project: Path, got: dict,
                     "top": "<one legal top module>",
                     "abstraction": "RTLIL_AFTER_PROC_OPT",
                     "scope": "top_module_cells",
+                    "_port_observation_alternative": (
+                        "For one unique unparameterized HEADER_ONLY public prompt, the existing "
+                        "prompt_structural_contract schema also supports scope='top_module_ports' "
+                        "with expectations={'ports_from_prompt_header': true}. Bind requirement_source.quote "
+                        "to the exact original header and carry its exact prompt_header_preservation. "
+                        "The pinned native backend derives all port names, declaration order, directions, "
+                        "widths, bounds, orientation and signedness from that header; caller-authored "
+                        "port expectations are refused. Initial header differences may be natively measured; "
+                        "Candidate attributes or preprocessing are NOT_MEASURED because they can override "
+                        "native declaration metadata. Raw backslashes in candidate or requirement source "
+                        "are also NOT_MEASURED because escaped identifier provenance is unsupported. "
+                        "normal repair must restore every significant original header token and replay "
+                        "this same contract. Independent functional PASS and fresh review remain required. "
+                        "This additive capability does not rewrite previously issued tasks."),
                     "requirement_source": {
                         "path": "input/phase1_prompt.md",
                         "sha256": prompt_sha,
@@ -6500,7 +6648,8 @@ def _rtl_delivery_target(receipt: dict | None) -> str | None:
 
 def _solver_argv(runner: Path, proj: Path, entry, exit_step,
                  delivery_route: str = "ip", input_contract: str = "structured",
-                 delivery_target: str | None = None) -> list:
+                 delivery_target: str | None = None, *,
+                 resolve_manifest: bool = True) -> list:
     """One problem's runner argv, assembled from the routing verdict.
 
     Open RTL evaluations deliver IP/module evidence, so explicitly choose the
@@ -6516,8 +6665,9 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
     if delivery_route not in {"ic", "ip"}:
         raise ValueError(f"invalid delivery runner route: {delivery_route!r}")
     import flow109
-    selected = flow109.resolve_task_manifest(proj, entry or "D1", exit_step,
-                                             delivery_target, delivery_route)
+    selected = (flow109.resolve_task_manifest(proj, entry or "D1", exit_step,
+                                              delivery_target, delivery_route)
+                if resolve_manifest else None)
     if selected is not None:
         delivery_target = "rtl"
     argv = [sys.executable, str(runner), str(proj),
@@ -6559,7 +6709,8 @@ def _solver_argv(runner: Path, proj: Path, entry, exit_step,
 def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
                         entry, exit_step, delivery_route: str = "ip",
                         input_contract: str = "structured",
-                        delivery_target: str | None = None) -> list:
+                        delivery_target: str | None = None, *,
+                        resolve_manifest: bool = True) -> list:
     """Re-enter one routed problem without losing its declared exit.
 
     AI backup/repair supplies RTL, so it resumes at the first RTL-validation
@@ -6568,7 +6719,7 @@ def _resume_solver_argv(runner: Path, proj: Path, supplied_rtl: bool,
     """
     effective_entry = "2" if supplied_rtl and str(exit_step) != "1" else entry
     return _solver_argv(runner, proj, effective_entry, exit_step, delivery_route,
-                        input_contract, delivery_target)
+                        input_contract, delivery_target, resolve_manifest=resolve_manifest)
 
 
 def _ensure_phase1_frontdoor(runner: Path, project: Path, runner_budget,
@@ -8313,6 +8464,101 @@ def _make_ai_backup_task(problem_id: str, project: Path, skills: list[str],
     return task
 
 
+def _recover_retained_handoff(bench: str, dataset: Path, fmt: str,
+                               run_p: Path, result: dict, state: dict):
+    """Recover an unaccepted handoff from its unique native report owner.
+
+    BLOCKING on missing or changed evidence. This is metadata consumption;
+    the existing collector/builders retain all gate and acceptance decisions.
+    """
+    import benchmark_io_adapter as bio
+    import flow_phase_attribution as fpa
+    pid = str(result["id"])
+    project = state["project"]
+    report = _read_json_regular(project / "reports/orchestrator/phase2_one_shot.json")
+    owner = report["runner_binding"]["invocation_id"]
+    if not isinstance(owner, str) or not re.fullmatch(r"[0-9a-f]{32}", owner):
+        raise ValueError("RETAINED_HANDOFF_OWNER_INVALID")
+    archive = project / "reports/orchestrator/runner_invocations"
+    matches = [path for path in archive.glob("*.json") if path.name != "latest.json"
+               and _read_json_regular(path).get("invocation_id") == owner]
+    if matches != [archive / f"{owner}.json"]:
+        raise ValueError("RETAINED_HANDOFF_OWNER_MISSING_OR_AMBIGUOUS")
+    invocation = _read_json_regular(matches[0])
+    receipt = state["route_receipt"]
+    diagnostic = _stored_runner_diagnostics(invocation)
+    if not diagnostic or diagnostic.get("reason"):
+        raise ValueError(str((diagnostic or {}).get("reason")
+                             or "RETAINED_HANDOFF_NOT_MEASURED"))
+    if not (project / "input/flow109-manifest.json").is_file():
+        raise ValueError("RETAINED_HANDOFF_FLOW_MANIFEST_MISSING")
+    expected = _solver_argv(
+        Path(invocation["argv"][1]), project, state["effective_entry"],
+        state["exit_step"], state["delivery_route"],
+        str(receipt.get("input_contract") or "structured"),
+        _rtl_delivery_target(receipt), resolve_manifest=False)
+    expected[0] = invocation["argv"][0]  # its recorded interpreter is checked below
+    if (invocation.get("status") != "COMPLETED" or invocation.get("error")
+            or invocation.get("rc") not in (0, 1)
+            or invocation.get("project") != str(project)
+            or invocation.get("record_path") != str(matches[0])
+            or invocation.get("argv") != expected
+            or invocation.get("prompt_sha256") != state["task"]["prompt_sha256"]
+            or result.get("public_original_input") != state["task"]["public_original_input"]):
+        raise ValueError("RETAINED_HANDOFF_INVOCATION_MISMATCH")
+    got = bio.collect(fmt, pid, project,
+                      required_top=_required_scorer_top(_entry(bench), fmt))
+    after = _stored_runner_diagnostics(invocation)
+    if after != diagnostic:
+        raise ValueError("RETAINED_HANDOFF_CHANGED_DURING_COLLECTION")
+    routing, route_errors = _validate_ai_route(
+        state["task"], run_p, benchmark=bench, dataset=Path(dataset).resolve())
+    if routing is None or routing.get("route_receipt") != receipt:
+        raise ValueError("RETAINED_HANDOFF_ROUTE_MISMATCH: " + "; ".join(route_errors))
+    phases = fpa.attribute(
+        project, routing=routing, entry=result.get("entry"),
+        evidence=result.get("evidence"), exit_step=result.get("exit"),
+        rtl_present=fpa.rtl_present_at_input(project), artefact_collected=bool(got.get("ok")))
+    review, backup = None, None
+    public = state["task"]["public_original_input"]
+    if got.get("ok"):
+        review = _make_ai_review_task(
+            pid, project, got, routing, invocation["rc"], run_p, "PROGRAM",
+            program_phases=phases, runner_invocation=invocation,
+            expected_public_input=public)
+    else:
+        waive = _rtl_gen_waive(project)
+        declared = _declared_route_ai_backup(routing)
+        if not waive and declared.get("status") != "DECLARED":
+            raise ValueError("RETAINED_HANDOFF_NO_AUTHORIZED_BACKUP")
+        backup = _make_ai_backup_task(
+            pid, project, [str(waive["fallback_skill"])] if waive else declared["skills"],
+            "rtl_gen_waive" if waive else "route_declaration",
+            str(waive.get("detail") or "") if waive else str(got.get("reason") or ""),
+            bench, Path(dataset), run_p,
+            required_top=_required_scorer_top(_entry(bench), fmt),
+            expected_public_input=public)
+    observed = result.get("runner_invocation")
+    result.update(
+        runner_invocation=invocation, runner_diagnostics=diagnostic,
+        rc=invocation["rc"], ok=bool(got.get("ok")), candidate_ready=bool(got.get("ok")),
+        accepted=False, phases=phases,
+        routing_verdict=routing,
+        candidate_origin="PROGRAM" if review else "AI_BACKUP_PENDING",
+        awaiting_ai=True, awaiting_ai_review=bool(review), awaiting_ai_backup=bool(backup),
+        retained_handoff_recovery={
+            "status": "RECOVERED", "invocation_id": owner,
+            "observed_runner_invocation": observed,
+            "consumer": {"path": str(Path(__file__).resolve()),
+                         "sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest()}})
+    if review:
+        result["review_task"] = review["review_path"]
+    for key in ("worker_status", "worker_error", "worker_retryable"):
+        result.pop(key, None)
+    return review, backup
+
+
+
 def _prepare_general_solve_run(bench: str, dataset: Path, run_p: Path,
                                fmt: str, limit: int) -> None:
     """Create the clean-room envelope owned by the one general solve entry.
@@ -9180,6 +9426,36 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
             result=result, route_worklist=list(route_worklist),
             allow_d1_only=allow_d1_only, supplied_rtl=False,
             snapshot_sink=planned_d1_snapshots, d1_snapshot=d1_snapshot)
+
+    queued = set(task_by_id) | {str(row.get("id")) for row in backup}
+    for result in results:
+        pid = str(result.get("id"))
+        if (pid in queued or result.get("accepted") is not False
+                or result.get("candidate_ready") or result.get("ok")
+                or result.get("candidate_origin") not in (None, "NONE")
+                or result.get("awaiting_ai")
+                or not isinstance(result.get("runner_invocation"), dict)):
+            continue
+        try:
+            acceptance = _read_json_regular(run_p / _ACCEPTANCE_REPORT)
+            if (pid in (acceptance.get("accepted_ids") or [])
+                    or (run_p / "responses" / f"{_safe_problem_id(pid)}.json").exists()):
+                raise ValueError("RETAINED_HANDOFF_ALREADY_PUBLISHED")
+            state = _route_reentry_state(pid, result, allow_d1_only=False)
+            if state.get("status") != "ACTIVE":
+                raise ValueError(str(state.get("reason") or "ROUTE_REENTRY_REFUSED"))
+            review, recovered_backup = _recover_retained_handoff(
+                bench, Path(dataset), fmt, run_p, result, state)
+            if review:
+                task_by_id[pid] = review
+                review_tasks.append(review)
+            if recovered_backup:
+                backup.append(recovered_backup)
+            print(f"  {pid}: retained native handoff recovered; acceptance pending")
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            result["retained_handoff_recovery"] = {
+                "status": "BLOCKED", "reason": str(exc)}
+            print(f"  {pid}: retained handoff BLOCKED: {exc}")
 
     refreshed_obligation_ids = [
         pid for pid, task in task_by_id.items()
@@ -10156,14 +10432,19 @@ def _cmd_resume_locked(bench: str, dataset: str, run: str,
                 "reviewed_rtl_sha256": task.get("rtl_sha256"),
                 "spec_clarification": verdict["spec_clarification"],
                 "required_next": (
-                    "obtain the spec owner's missing definition; keep this frozen "
-                    "run intact. A changed prompt must enter a fresh canonical "
-                    "run and review. No repair, test waiver, or scoring is authorized."),
+                    "route autonomous evaluation to an independent IC expert using "
+                    "the entire visible contract; preserve conflicting clauses and "
+                    "explain the defensible source-bound interpretation. When that "
+                    "adjudication corrects the prior question, use --review-correction "
+                    "and a fresh independent review without changing the frozen input. "
+                    "Irreducibly underdetermined input remains NOT_MEASURED. A changed "
+                    "prompt needs a fresh canonical run and review. No automatic "
+                    "acceptance, repair, test waiver, or scoring is authorized."),
             })
             result.update({"accepted": False, "awaiting_ai": False,
                            "awaiting_ai_review": False, "ai_repair_required": False,
                            "not_measured": False, "awaiting_spec_clarification": True})
-            print(f"  {pid:44s} SPEC_CLARIFICATION_REQUIRED -- obtain the missing definition")
+            print(f"  {pid:44s} SPEC_CLARIFICATION_REQUIRED -- independent IC-expert adjudication required")
             continue
         if verdict["status"] == _NOT_MEASURED:
             # Not accepted -- nothing was established, so nothing is scored --
@@ -11412,7 +11693,7 @@ def _apply_program_regate(bench: str, dataset: str | Path, run_p: Path,
 def cmd_resume(bench: str, dataset: str, run: str, jobs: int = 1,
                heavy_jobs: int | None = None,
                worker_threads: int = 0,
-               review_correction: str | None = None,
+               review_correction: str | list[str] | None = None,
                program_regate: str | None = None,
                program_retry: str | None = None,
                flow109_manifest: str | None = None) -> int:
@@ -11428,8 +11709,17 @@ def cmd_resume(bench: str, dataset: str, run: str, jobs: int = 1,
     same operation, under the same refusal token, and prints a deprecation
     line, so a caller written against the old front door does not break
     silently. Giving both names at once is refused rather than ordered.
+
+    Review corrections may be a legacy single path or a nonempty ordered list.
+    Each uses the existing immutable transition under this lock; normal resume
+    runs once after all succeed. A refusal leaves earlier transitions pending,
+    so the same batch can be safely retried without accepting anything.
     """
     try:
+        corrections = (tuple(review_correction) if isinstance(review_correction, list)
+                       else () if review_correction is None else (review_correction,))
+        if review_correction is not None and not corrections:
+            raise ValueError(f"{_CORRECTION_REFUSED}: correction list must not be empty")
         if program_regate is not None and program_retry is not None:
             raise ValueError(f"{_REGATE_REFUSED}: --program-retry is the "
                              "deprecated alias of --program-regate; give one")
@@ -11450,7 +11740,8 @@ def cmd_resume(bench: str, dataset: str, run: str, jobs: int = 1,
             _guard_program_regate_journals(Path(run).resolve())
             if review_correction is not None:
                 try:
-                    _apply_review_correction(Path(run).resolve(), Path(review_correction))
+                    for request in corrections:
+                        _apply_review_correction(Path(run).resolve(), Path(request))
                 except (KeyError, TypeError, AttributeError) as exc:
                     raise ValueError("REVIEW_CORRECTION_REFUSED: malformed evidence: "
                                      f"{type(exc).__name__}: {exc}") from exc
@@ -11506,11 +11797,12 @@ def main():
                          "proves the frozen candidate wrong, then is re-gated "
                          "and must pass the same test plus fresh AI review; "
                          f"repeat until {_ACCEPTANCE_REPORT} is COMPLETE.")
-    ap.add_argument("--review-correction", metavar="REQUEST.json",
+    ap.add_argument("--review-correction", metavar="REQUEST.json", action="append",
                     help="with --resume: explicitly archive and advance one "
                          "unaccepted review on unchanged RTL; requires "
                          "hash-bound blind AI correction evidence; never "
-                         "accepts, supersedes a challenge, or permits repair")
+                         "accepts, supersedes a challenge, or permits repair. "
+                         "Repeat for ordered corrections, followed by one resume")
     ap.add_argument("--program-regate", metavar="REQUEST.json",
                     help="with --resume: the ONE Program re-entry operation. "
                          "Re-run the FIXED Program on one preserved, signed "

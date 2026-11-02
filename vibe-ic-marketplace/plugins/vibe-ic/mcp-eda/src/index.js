@@ -48,6 +48,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { execSync } from "child_process";
 import { registerDevices } from "./devices/_registry.js";
+import { containerToolCommand } from "./lib/tool_path.mjs";
 import { parseYosysSynthStats } from "./lib/yosys_synth_stats.mjs";
 import { cocotbJunitScript, cocotbJunitResult } from "./lib/cocotb_results.mjs";
 // Shell-safety validators (command-injection hardening). The argv-based
@@ -1229,26 +1230,20 @@ function getToolVersion(name) {
   _ensureVersionCacheFresh();
   if (_versionCache.has(name)) return _versionCache.get(name);
   const probes = {
-    yosys: `${TOOLS}/yosys/bin/yosys -V 2>&1 | head -1`,
-    openroad: `${TOOLS}/openroad/bin/openroad -version 2>&1 | head -1`,
-    klayout: `${TOOLS}/klayout/klayout -v 2>&1 | head -1`,
-    iverilog: `${TOOLS}/iverilog/bin/iverilog -V 2>&1 | head -1`,
-    verilator: `${TOOLS}/bin/verilator --version 2>&1 | head -1`,
+    yosys: `${containerToolCommand("yosys", `${TOOLS}/yosys/bin/yosys`)} -V 2>&1 | head -1`,
+    openroad: `${containerToolCommand("openroad", `${TOOLS}/openroad/bin/openroad`)} -version 2>&1 | head -1`,
+    klayout: `${containerToolCommand("klayout", `${TOOLS}/klayout/klayout`)} -v 2>&1 | head -1`,
+    iverilog: `${containerToolCommand("iverilog", `${TOOLS}/iverilog/bin/iverilog`)} -V 2>&1 | head -1`,
+    verilator: `${containerToolCommand("verilator", `${TOOLS}/bin/verilator`)} --version 2>&1 | head -1`,
     // magic: `--version` prints the bare `<maj>.<min>.<rev>` string (e.g. 8.3.671)
     // to stdout and exits 0 on the vibeic/magic build. The older `-dnull -noconsole
     // <<< 'puts $::magic_version'` tcl probe returned EMPTY (the global isn't set at
     // that point), false-FAILing an otherwise healthy magic — see 2026-07-11 fix.
     magic: `${TOOLS}/bin/magic --version 2>&1 | grep -E '^[0-9]+\\.' | head -1`,
-    netgen: `${TOOLS}/bin/netgen -batch source /dev/null 2>&1 | head -2 | tail -1`,
-    ngspice: `${TOOLS}/bin/ngspice --version 2>&1 | head -1`,
-    // fault (AUCOHL DFT toolchain): the vibeic-eda image is self-contained — every
-    // tool resolves at a deterministic /foss/tools/bin path, never via ambient PATH
-    // (a docker-exec PATH we don't control). The base ships fault at
-    // /usr/local/bin/fault; the Dockerfile symlinks it into ${TOOLS}/bin/fault so
-    // the probe (and any caller) hits the same deterministic path as every other
-    // tool. `--version` emits env warnings on stderr then the bare version, so grep
-    // the version line. (2026-07-11: was hardcoded-but-wrong, then briefly PATH,
-    // now deterministic path backed by the Dockerfile symlink.)
+    netgen: `${containerToolCommand("netgen", `${TOOLS}/bin/netgen`)} -batch source /dev/null 2>&1 | head -2 | tail -1`,
+    ngspice: `${containerToolCommand("ngspice", `${TOOLS}/bin/ngspice`)} --version 2>&1 | head -1`,
+    // Fault may print environment warnings before its bare version line.
+    // Resolve the same built-in default used by the DFT consumer below.
     fault: `${TOOLS}/bin/fault --version 2>&1 | grep -E '^[0-9]+\\.' | head -1`,
   };
   const probe = probes[name];
@@ -2229,7 +2224,7 @@ else:
         print('GDS_DESIGN_CELLS=' + str(cell_count_after - cell_count_before))
 `;
 
-    const gdsCmd = `echo '${pyScript.replace(/'/g, "'\\''")}' > /tmp/gen_gds.py && QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -z -r /tmp/gen_gds.py 2>&1`;
+    const gdsCmd = `echo '${pyScript.replace(/'/g, "'\\''")}' > /tmp/gen_gds.py && QT_QPA_PLATFORM=offscreen ${containerToolCommand("klayout", `${TOOLS}/klayout/klayout`)} -z -r /tmp/gen_gds.py 2>&1`;
     const t0gds = Date.now();
     const result = dockerExec(gdsCmd);
     const durationGdsMs = Date.now() - t0gds;
@@ -3375,7 +3370,7 @@ server.tool(
     if (pdk === "custom") {
       if (custom_drc_script) {
         // Use user-supplied .drc deck
-        const drcCmdC = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${custom_drc_script} -rd input=${gds_file} -rd report=${rdbPath} -rd threads=${_edaThreadsToken()} 2>&1`;
+        const drcCmdC = `QT_QPA_PLATFORM=offscreen ${containerToolCommand("klayout", `${TOOLS}/klayout/klayout`)} -b -r ${custom_drc_script} -rd input=${gds_file} -rd report=${rdbPath} -rd threads=${_edaThreadsToken()} 2>&1`;
         const t0drcC = Date.now();
         const resultC = dockerExec(drcCmdC, 600000);
         const durationDrcMsC = Date.now() - t0drcC;
@@ -3491,7 +3486,7 @@ print('STRUCTURAL_DRC_GENERATED=' + out)
               output: sg.output.slice(-1500),
             }) }] };
           }
-          const drcStructCmd = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${structuralScript} 2>&1`;
+          const drcStructCmd = `QT_QPA_PLATFORM=offscreen ${containerToolCommand("klayout", `${TOOLS}/klayout/klayout`)} -b -r ${structuralScript} 2>&1`;
           const tS = Date.now();
           const rS = dockerExec(drcStructCmd, 300000);
           const durS = Date.now() - tS;
@@ -3520,7 +3515,7 @@ print('STRUCTURAL_DRC_GENERATED=' + out)
             output_summary: genRes.output.slice(-500),
           }) }] };
         }
-        const drcCmdAuto = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${autoScript} -rd threads=${_edaThreadsToken()} 2>&1`;
+        const drcCmdAuto = `QT_QPA_PLATFORM=offscreen ${containerToolCommand("klayout", `${TOOLS}/klayout/klayout`)} -b -r ${autoScript} -rd threads=${_edaThreadsToken()} 2>&1`;
         const tA = Date.now();
         const rA = dockerExec(drcCmdAuto, 600000);
         const durA = Date.now() - tA;
@@ -3598,7 +3593,7 @@ print('STRUCTURAL_DRC_GENERATED=' + out)
     // (*.lydrc) is NOT under our control, so it may or may not honor $threads —
     // harmless if unread. Getting the SVRF/foundry engine to thread is a separate
     // item, tracked outside this change.
-    const drcCmd = `QT_QPA_PLATFORM=offscreen ${TOOLS}/klayout/klayout -b -r ${deckPath} ` +
+    const drcCmd = `QT_QPA_PLATFORM=offscreen ${containerToolCommand("klayout", `${TOOLS}/klayout/klayout`)} -b -r ${deckPath} ` +
                    `-rd input=${gds_file} -rd report=${rdbPath} -rd top_cell=${top_cell} -rd threads=${_edaThreadsToken()} 2>&1`;
     const t0drc = Date.now();
     const result = dockerExec(drcCmd, 900000);
@@ -4563,15 +4558,16 @@ server.tool(
       : `${cellVerilog}/${cfg.scl}.v`;
 
     const script = `
-export FAULT_IVERILOG=${TOOLS}/iverilog/bin/iverilog
-export FAULT_YOSYS=${TOOLS}/yosys/bin/yosys
+set -e
+FAULT_IVERILOG=${containerToolCommand("iverilog", `${TOOLS}/iverilog/bin/iverilog`)}
+FAULT_YOSYS=${containerToolCommand("yosys", `${TOOLS}/yosys/bin/yosys`)}
+export FAULT_IVERILOG FAULT_YOSYS
 export PATH=${TOOLS}/iverilog/bin:${TOOLS}/yosys/bin:${TOOLS}/bin:$PATH
 export LD_LIBRARY_PATH=${TOOLS}/iverilog/lib:$LD_LIBRARY_PATH
 mkdir -p ${output_dir}
 
 # Scan chain
-# Every tool is called by its deterministic /foss/tools/bin path — the image is
-# self-contained; we never lean on ambient PATH resolution.
+# Probe and workload resolve the same built-in defaults inside the container.
 ${TOOLS}/bin/fault chain --liberty ${lib} --clock ${clock} --reset ${reset} ${resetFlag} --dff '${dffNames}' --output ${output_dir}/scanchained.v ${netlist} 2>&1
 echo CHAIN_DONE
 
@@ -4585,12 +4581,12 @@ ${add_jtag ? `${TOOLS}/bin/fault tap --liberty ${lib} --clock ${clock} --reset $
 echo JTAG_DONE` : "echo JTAG_SKIPPED"}
 `;
 
-    const result = dockerExec(script.replace(/"/g, '\\"'), 600000);
+    const result = dockerExec(script, 600000);
 
     const coverageMatch = result.output.match(/Coverage\s+([\d.]+)%/);
     const chainMatch = result.output.match(/Total scan-chain length:\s+(\d+)/);
     const tvMatch = result.output.match(/Compacted TV Count:\s+(\d+)/);
-    const atpgDone = result.output.includes("ATPG_DONE");
+    const atpgDone = result.success && result.output.includes("ATPG_DONE");
 
     const metrics = {
       success: atpgDone,
@@ -6921,7 +6917,7 @@ print('GDS_CELL_SAMPLE=' + ','.join(names[:10]))
       const gdsB64 = Buffer.from(gdsScript, "utf-8").toString("base64");
       const gdsWrite = dockerExec(`echo '${gdsB64}' | base64 -d > ${gdsTmp}`, 30000);
       const gdsRes = gdsWrite.success
-        ? dockerExec(`${TOOLS}/klayout/klayout -b -r ${gdsTmp} 2>&1`, 60000)
+        ? dockerExec(`${containerToolCommand("klayout", `${TOOLS}/klayout/klayout`)} -b -r ${gdsTmp} 2>&1`, 60000)
         : gdsWrite;
       const gdsMatch = (gdsRes.output || "").match(/^GDS_CELL_COUNT=(\d+)[ \t]*$/m);
       const gdsCount = gdsMatch ? Number(gdsMatch[1]) : null;

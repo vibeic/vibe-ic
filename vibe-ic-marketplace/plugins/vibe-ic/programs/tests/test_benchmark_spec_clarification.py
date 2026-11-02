@@ -46,6 +46,26 @@ def test_existing_validator_distinguishes_question_from_rejected_review(tmp_path
     assert outcome["verified_challenge"] is None
 
 
+def test_autonomous_evaluation_handoff_routes_question_to_independent_ic_expert(
+        tmp_path, monkeypatch, capsys):
+    run, task, _ = _case(tmp_path)
+    protected = {p: Path(p).read_bytes() for p in
+                 [task["prompt_path"], task["review_path"], *task["rtl_paths"]]}
+    monkeypatch.setattr(bd, "_run_verification_challenge",
+                        lambda *args: pytest.fail("a question cannot be simulated"))
+    assert bd.cmd_resume("rtllm", "/unused", str(run)) == 2
+    handoff = bd._read_jsonl(run / "needs_spec_clarification.jsonl")[0]["required_next"]
+    assert "independent IC expert" in handoff, handoff
+    assert "entire visible contract" in handoff, handoff
+    assert "--review-correction" in handoff, handoff
+    assert "NOT_MEASURED" in handoff, handoff
+    assert "independent IC-expert adjudication" in capsys.readouterr().out
+    assert {p: Path(p).read_bytes() for p in protected} == protected
+    acceptance = json.loads((run / bd._ACCEPTANCE_REPORT).read_text())
+    assert acceptance["status"] == "PENDING" and acceptance["accepted"] == 0
+    assert bd._read_jsonl(run / bd._REPAIR_WORKLIST) == []
+
+
 def test_real_resume_waits_on_spec_without_repair_acceptance_or_score(tmp_path, monkeypatch):
     run, task, _ = _case(tmp_path)
     protected = {p: Path(p).read_bytes() for p in
