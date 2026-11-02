@@ -944,7 +944,7 @@ def run(project: Path, block: str, setting: dict, *, container: str='', output_d
     work=Path(work);work.mkdir(parents=True,exist_ok=True)
     try:
         source=_path(project,setting.get('limits_source'));meta=_read(source)
-        pdf=Path(meta['copy']);expected=meta['sha256']
+        pdf=_path(project,meta['copy']);expected=meta['sha256']
         if _sha(pdf)!=expected:raise ValueError('foundry limit PDF differs from source receipt')
         for p in [source,pdf]:views[str(p)]={'path':str(p),'sha256':_sha(p)}
         document,extraction_views=_limit_document_text(pdf,expected,work)
