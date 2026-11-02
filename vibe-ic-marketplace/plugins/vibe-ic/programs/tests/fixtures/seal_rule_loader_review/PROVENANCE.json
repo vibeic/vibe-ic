@@ -1,0 +1,9 @@
+{
+  "reviewed_head": "74041df29e0f3717885c25d13752c38720cfbe6d",
+  "reviewer_sources": {
+    "own-probes.json": "98172bd7b45fa0bd35e07c4423fdacebc72907a468d95c44e21d649677f091ad",
+    "own-reuse-probes.json": "9cd76416b3735ead7e570def9bc85651dc3547b9e69835e904f04ea2ceea8219"
+  },
+  "reviewer_cases": 17,
+  "readonly_reuse_cases": 3
+}

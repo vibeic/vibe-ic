@@ -1,0 +1,46 @@
+{
+  "image": "ghcr.io/vibeic/vibeic-eda@sha256:633a70faf4236d8eb107faf22e424457aa14d4d2441d7b55c85e7db48b15210a",
+  "pdk_revision": "9acd975e1594",
+  "files": [
+    {
+      "fixture_path": "libs.tech/klayout/tech/drc/ihp-sg13g2.drc",
+      "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/tech/drc/ihp-sg13g2.drc",
+      "sha256": "22a570bfb43d564b7ce3de9d7df0795197be79f86c8a484b4959932c8dd75961"
+    },
+    {
+      "fixture_path": "libs.tech/klayout/tech/drc/rule_decks/beol/6_10_sealring.drc",
+      "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/tech/drc/rule_decks/beol/6_10_sealring.drc",
+      "sha256": "15802b4d6e32ceb262c1a0c042660f667cf93f804491d73151c4a24de05aa5d4"
+    },
+    {
+      "fixture_path": "libs.tech/klayout/tech/drc/rule_decks/sg13g2_tech_default.json",
+      "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/tech/drc/rule_decks/sg13g2_tech_default.json",
+      "sha256": "07930b016cdffe14c2cb82b47fbec193643347607db6d44aa1abfdece056cd2f"
+    },
+    {
+      "fixture_path": "libs.tech/klayout/python/sg13g2_pycell_lib/sg13g2_tech_mod.json",
+      "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/python/sg13g2_pycell_lib/sg13g2_tech_mod.json",
+      "sha256": "229029e23785f3ae58c9645d47acfe326c56f0ec41d940bf9383c7063380f9ff"
+    },
+    {
+      "fixture_path": "libs.tech/klayout/tech/drc/rule_decks/feol/6_1_npnsubstratetie.drc",
+      "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/tech/drc/rule_decks/feol/6_1_npnsubstratetie.drc",
+      "sha256": "4826fe274df4f16f8310bee5f3933375fa8a675de691283ae28675fb512e6bfc"
+    },
+    {
+      "fixture_path": "libs.tech/klayout/tech/drc/rule_decks/beol/5_16_metal1.drc",
+      "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/tech/drc/rule_decks/beol/5_16_metal1.drc",
+      "sha256": "82a0ffa3d6412e88de6caf103c3b1eb1a4cf09b6cfa1857da8c67740f56c5ed0"
+    },
+    {
+      "fixture_path": "libs.tech/klayout/tech/drc/rule_decks/beol/5_17_metaln.drc",
+      "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/tech/drc/rule_decks/beol/5_17_metaln.drc",
+      "sha256": "0023b4dfc61eb71e14d2d4b3b003078d3f8121c732445ad80a9bca187279fb6e"
+    },
+    {
+      "fixture_path": "libs.tech/klayout/tech/drc/rule_decks/beol/5_25_topmetal2.drc",
+      "image_path": "/nix/store/pqpx8qk2wwb8q339mldry6nn29i96mjx-vibeic-ihp-pdk-pair-9acd975e1594/ihp-sg13g2/libs.tech/klayout/tech/drc/rule_decks/beol/5_25_topmetal2.drc",
+      "sha256": "356c09fdb4963e8157b9ee60efabf0d521474cd8c70a8ae17b4a2cd61eaff42e"
+    }
+  ]
+}

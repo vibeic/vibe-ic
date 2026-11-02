@@ -1,0 +1,122 @@
+[
+  {
+    "name": "float",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": 4.9,
+    "missing_key": false
+  },
+  {
+    "name": "integer",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nspacing = rules['clearance'].to_i\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": 4.0,
+    "missing_key": false
+  },
+  {
+    "name": "arithmetic",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nhalf = rules['clearance'].to_f / 2\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": 4.9,
+    "missing_key": false
+  },
+  {
+    "name": "um",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nunit = rules['clearance'].to_f.um\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": 4.9,
+    "missing_key": false
+  },
+  {
+    "name": "array_assignment",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nrules['clearance'] = 9\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "store",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nrules.store('clearance',9)\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "delete",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nrules.delete('clearance')\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "merge_bang",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nrules.merge!({'clearance'=>9})\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "local_rebinding",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nspacing = rules['clearance'].to_f\nspacing = 9\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "unknown",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\njunk = rules['clearance'].to_f.unknown\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "setter",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\njunk = rules['clearance'].to_i = 9\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "interpolation",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nputs \"#{rules.clear}\"\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "continuation",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\njunk = rules['clearance'].to_f \\\n .unknown\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "parenthesized_unknown",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\njunk = (rules['clearance'].to_f).unknown\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "parenthesized_setter",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\njunk = (rules['clearance'].to_f).setting = 9\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "arithmetic_unknown",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\njunk = (rules['clearance'].to_f / 2).unknown\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": false
+  },
+  {
+    "name": "missing_key",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal\", \"space\")\n",
+    "expected": null,
+    "missing_key": true
+  },
+  {
+    "name": "reuse_two_layers",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nspacing = rules['clearance'].to_f\nactive.separation(guard_ring, spacing.um).output(\"seal_one\", \"space\")\nmetal.separation(guard_ring, spacing.um).output(\"seal_two\", \"space\")\n",
+    "expected": 4.9,
+    "missing_key": false
+  },
+  {
+    "name": "copy_arithmetic",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nspacing = rules['clearance'].to_f\nhalf = spacing / 2\nactive.separation(guard_ring, spacing.um).output(\"seal_one\", \"space\")\n",
+    "expected": 4.9,
+    "missing_key": false
+  },
+  {
+    "name": "copy_units",
+    "source": "rules = JSON.parse(File.read(File.join(__dir__, 'rules.json')))['rules']\nspacing = rules['clearance'].to_f\nunit = spacing.um\nactive.separation(guard_ring, spacing.um).output(\"seal_one\", \"space\")\n",
+    "expected": 4.9,
+    "missing_key": false
+  }
+]
