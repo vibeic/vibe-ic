@@ -145,28 +145,39 @@ def layout_tech(bdir: Path) -> Optional[str]:
     return None
 
 
+class MagicrcRefusal(ValueError):
+    """The declared PDK variant has no unambiguous native Magic startup."""
+
+
 def magicrc_for(pdk_root: str, container: str, tech: Optional[str] = None
-                ) -> Optional[str]:
-    """The PDK's own magicrc, LOCATED (never reconstructed), on the side the
-    tools are on. `tech` selects among several installed technologies; without
-    it, ambiguity is REFUSED rather than resolved by sort order."""
-    rc, out, _err = _docker_exec(
-        container,
-        f"ls {shlex.quote(pdk_root)}/libs.tech/magic/*.magicrc 2>/dev/null; "
-        f"ls {shlex.quote(pdk_root)}/*/libs.tech/magic/*.magicrc 2>/dev/null")
-    hits = [l.strip() for l in (out or "").splitlines() if l.strip()]
-    own = [h for h in hits if h.startswith(pdk_root.rstrip("/") + "/libs.tech/")]
-    if own:
-        return sorted(own)[0]
-    if tech:
-        named = [h for h in hits
-                 if Path(h).stem == tech or f"/{tech}/" in h]
-        if len(named) == 1:
-            return named[0]
-        if named:
-            return sorted(named)[0]
-        return None
-    return sorted(hits)[0] if len(hits) == 1 else None
+                ) -> str:
+    """Locate only the layout-declared variant in the selected runtime.
+
+    Its exact startup name wins over auxiliary files. A missing exact file
+    or ambiguous alternatives is a named refusal, never a sibling fallback.
+    """
+    if not pdk_root:
+        raise MagicrcRefusal("selected runtime declares no PDK_ROOT")
+    if not tech or Path(tech).name != tech or tech in (".", ".."):
+        raise MagicrcRefusal(
+            f"layout declares no usable PDK variant under {pdk_root}: {tech!r}")
+    magic_dir = f"{pdk_root.rstrip('/')}/{tech}/libs.tech/magic"
+    expected = f"{magic_dir}/{tech}.magicrc"
+    _rc, out, _err = _docker_exec(
+        container, f"for magicrc_candidate in {shlex.quote(magic_dir)}/*.magicrc; do "
+        '[ -f "$magicrc_candidate" ] && printf "%s\\n" "$magicrc_candidate"; done')
+    candidates = sorted({line.strip() for line in (out or "").splitlines()
+                         if line.strip().startswith(magic_dir + "/")})
+    if expected in candidates:
+        return expected
+    if len(candidates) > 1:
+        raise MagicrcRefusal(
+            f"ambiguous magicrc for the layout-declared variant {tech}; "
+            f"expected {expected}; candidates: " + ", ".join(candidates))
+    raise MagicrcRefusal(
+        f"no magicrc under {pdk_root} for the technology the layout declares "
+        f"({tech}); expected {expected}"
+        + ("; candidate: " + candidates[0] if candidates else ""))
 
 
 def block_ports(topology: Dict) -> Tuple[List[str], List[str]]:
@@ -977,8 +988,6 @@ def _native_measurement_produce(project: Path, block: str, container: str,
     if not tech:
         return None, "A5 layout declares no Magic technology"
     rcfile = magicrc_for(pdk_root, container, tech)
-    if rcfile is None:
-        return None, f"no Magic rcfile for A5 technology {tech!r}"
     native_binary, why = _selected_native_binary(container, ngspice_bin)
     if native_binary is None:
         return None, why
@@ -1552,6 +1561,8 @@ def emit_block(project: Path, block: str, container: str, pdk_root: str, *, ngsp
     try:
         result = _emit_block(project, block, container, pdk_root,
                              ngspice_bin=ngspice_bin, native_attempts=native_attempts)
+    except MagicrcRefusal as exc:
+        result = {"block": block, "emitted": False, "rc": 2, "reason": str(exc)}
     except (OSError, subprocess.SubprocessError) as exc:
         result = {"block": block, "emitted": False, "rc": 2,
                   "reason": f"native export transport unavailable: {exc}"}
@@ -1615,10 +1626,6 @@ def _emit_block(project: Path, block: str, container: str, pdk_root: str, *,
                 "reason": f"declared subject binding refused: {subject_reason}"}
     tech = layout_tech(bdir)
     rcfile = magicrc_for(pdk_root, container, tech)
-    if rcfile is None:
-        return {"block": block, "emitted": False, "rc": 2,
-                "reason": (f"no magicrc under {pdk_root} for the technology the "
-                           f"layout declares ({tech or 'undeclared'})")}
     hdir.mkdir(parents=True, exist_ok=True)
     tcl = hdir / f"{block}_lef.tcl"
     lef = hdir / f"{block}.lef"

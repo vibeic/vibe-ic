@@ -1205,7 +1205,7 @@ def test_cli_uses_runtime_pdk_root_with_existing_magicrc_resolver(
         assert rc == 2 and result["emitted"] is False
         assert result["reason"] == (
             f"no magicrc under {root} for the technology the layout declares "
-            f"({rcfile.stem})")
+            f"({rcfile.stem}); expected {rcfile}")
         assert "A8_EMIT blk: REFUSED" in capsys.readouterr().out
         assert exports == []
     else:
@@ -1236,4 +1236,70 @@ def test_cli_without_declared_pdk_root_refuses_before_export(
     assert result["emitted"] is False
     assert result["reason"] == "selected runtime declares no PDK_ROOT"
     assert "A8_EMIT blk: REFUSED" in capsys.readouterr().out
+    assert exports == []
+
+
+@pytest.mark.parametrize("cached", [True, False], ids=["cached", "uncached"])
+@pytest.mark.parametrize("foreign", ["root_startup", "sibling_variant", "sibling_same_filename"])
+def test_cli_refuses_other_variant_and_names_expected_path(
+        runtime_magicrc_case, foreign, cached):
+    project, root, rcfile, exports = runtime_magicrc_case
+    rcfile.unlink()
+    if foreign == "root_startup":
+        other = root / "libs.tech/magic/foreign.magicrc"
+    elif foreign == "sibling_variant":
+        other = root / "foreign/libs.tech/magic/foreign.magicrc"
+    else:
+        other = root / "foreign/libs.tech/magic" / rcfile.name
+    other.parent.mkdir(parents=True, exist_ok=True)
+    other.write_text("# a different variant\n")
+    if not cached:
+        (project / "phase3/analog/blk" / E._A8_MEASUREMENT).unlink()
+    report = project / "refused.json"
+    rc = E.main([str(project), "--block", "blk", "--container", "",
+                 "--json", str(report)])
+    result = json.loads(report.read_text())["blocks"][0]
+    assert rc == 2 and result["emitted"] is False, result
+    assert str(rcfile) in result["reason"]
+    assert exports == []
+
+
+@pytest.mark.parametrize("exact", [False, True], ids=["ambiguous", "exact_declared"])
+def test_cli_never_resolves_magicrc_ambiguity_by_order(runtime_magicrc_case, exact):
+    project, _root, rcfile, exports = runtime_magicrc_case
+    alternatives = [rcfile.with_name(name) for name in ("aaa.magicrc", "zzz.magicrc")]
+    for path in alternatives:
+        path.write_text("# another startup candidate\n")
+    if not exact:
+        rcfile.unlink()
+    report = project / "ambiguity.json"
+    rc = E.main([str(project), "--block", "blk", "--container", "",
+                 "--json", str(report)])
+    result = json.loads(report.read_text())["blocks"][0]
+    if exact:
+        assert rc == 0 and result["emitted"] is True, result
+        assert result["magicrc"] == str(rcfile)
+        assert len(exports) == 1 and str(rcfile) in exports[0]
+    else:
+        assert rc == 2 and result["emitted"] is False, result
+        assert "ambiguous" in result["reason"]
+        assert str(rcfile) in result["reason"]
+        assert all(str(path) in result["reason"] for path in alternatives)
+        assert exports == []
+
+
+@pytest.mark.parametrize("entry", ["directory", "dangling_link"])
+def test_cli_requires_the_exact_magicrc_to_be_a_file(runtime_magicrc_case, entry):
+    project, _root, rcfile, exports = runtime_magicrc_case
+    rcfile.unlink()
+    if entry == "directory":
+        rcfile.mkdir()
+    else:
+        rcfile.symlink_to(rcfile.with_name("absent-target"))
+    report = project / "missing-file.json"
+    rc = E.main([str(project), "--block", "blk", "--container", "",
+                 "--json", str(report)])
+    result = json.loads(report.read_text())["blocks"][0]
+    assert rc == 2 and result["emitted"] is False, result
+    assert str(rcfile) in result["reason"]
     assert exports == []
