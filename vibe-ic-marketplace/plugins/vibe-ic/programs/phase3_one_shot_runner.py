@@ -49449,7 +49449,8 @@ def step_pad_ring_final_evidence(project: Path, top: str,
     """BLOCKING proof that the routed DEF and streamed GDS carry the ring.
 
     The proof re-parses the producer's pad/corner/filler population from all three
-    hand-off DEFs, requires the live OpenROAD consumer marker, and binds the
+    hand-off DEFs, checks the native final-State pads (or the legacy live
+    OpenROAD consumer marker), and binds the
     exact final DEF bytes to the exact GDS bytes and stream-out engine.  It is
     executed immediately after `step_gds`, before any downstream sign-off.
     """
@@ -49472,6 +49473,7 @@ def step_pad_ring_final_evidence(project: Path, top: str,
         records = []
         findings.append(f"PADRING_REPORT_UNREADABLE: {exc}")
         _pr = None
+        producer = {}
     if not records:
         findings.append("PADRING_EXPECTED_POPULATION_EMPTY")
 
@@ -49518,11 +49520,21 @@ def step_pad_ring_final_evidence(project: Path, top: str,
             findings.append(f"PADRING_DEF_STAGE_UNREADABLE:{path.name}:{exc}")
 
     import librelane_contract as _ll
+    import _prestream_native as native
+    state_path = native.final_state(project)
+    native_pad_evidence = None
+    not_measured: List[str] = []
     ll_ring: Optional[Dict[str, Any]] = None
     native_chain = any((project / "reports/phase3" /
                         f"execution-backend-{sid}.json").is_file()
                        for sid in ("17", "21"))
-    if native_chain and _ll.selected_mode(project, "21") == "librelane":
+    if state_path is not None:
+        native_pad_evidence = native.padring(
+            project, state_path, producer, container=container)
+        findings.extend(native_pad_evidence["failures"])
+        not_measured.extend(native_pad_evidence["not_measured"])
+        routing_consumer = "OpenROAD final-State ODB pad placement"
+    elif native_chain and _ll.selected_mode(project, "21") == "librelane":
         ll_findings, ll_ring = _default_librelane_ring_evidence(
             project, pnr_dir, records, _pr)
         findings.extend(ll_findings)
@@ -49646,10 +49658,11 @@ def step_pad_ring_final_evidence(project: Path, top: str,
                      "reachable_structure_references": gds_refs}
                     if gds.is_file() and gds.stat().st_size > 0 else None)
 
+    status = "FAIL" if findings else "NOT_MEASURED" if not_measured else "PASS"
     payload = {
         "schema": "vibe-ic/pad-ring-route-evidence/1",
         "enforcement": "BLOCKING",
-        "verdict": "FAIL" if findings else "PASS",
+        "verdict": status,
         "expected_pad_corner_count": len(pad_corner_records),
         "expected_filler_count": len(filler_records),
         "expected_ring_cell_count": len(records),
@@ -49668,19 +49681,22 @@ def step_pad_ring_final_evidence(project: Path, top: str,
             if (pnr_dir / f"{top}.def").is_file() else None),
         "routing_consumer": routing_consumer,
         "librelane_ring_evidence": ll_ring,
+        "native_pad_evidence": native_pad_evidence,
+        "not_measured": not_measured,
         "findings": findings,
     }
     out_path.parent.mkdir(parents=True, exist_ok=True)
     _aa.write_text(out_path, json.dumps(payload, indent=2) + "\n")
     return StepResult(
-        "pad_ring_route_evidence", "FAIL" if findings else "PASS",
+        "pad_ring_route_evidence", status,
         time.time() - t0,
-        ("; ".join(findings) if findings else
+        ("; ".join(findings + not_measured) if findings or not_measured else
          f"{len(records)} pad/corner/filler instances persist through padring.def, "
-         f"routed.def and {top}.def; live routing consumer observed; GDS "
+         f"routed.def and {top}.def; {routing_consumer}; GDS "
          f"hierarchy rooted at {physical_top} retains every expected pad/corner "
          "reference; exact final "
-         "DEF and GDS hashes recorded"), [str(out_path)])
+         "DEF and GDS hashes recorded"), [str(out_path)],
+        reason_class=_V.ReasonClass.EXECUTION_ERROR if status == "NOT_MEASURED" else "")
 
 
 def _pad_ring_route_cache_valid(project: Path, top: str) -> bool:
