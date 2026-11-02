@@ -223,3 +223,17 @@ def test_reset_clause_requires_its_actual_structured_contract(tmp_path, polarity
     assert bool(parsed) is accepted, parsed
     if accepted:
         assert parsed == ('result', 'left', '*', 'right')
+
+
+@pytest.mark.parametrize('source,accepted', [
+    ('result is the sum of left and right adder', True),
+    ('result is the sum of left and right multiplier', False),
+    ('Implement a multiplier. The result is the sum of left and right.', False),
+    ('result is the sum of left and right bitwise arithmetic', False),
+])
+def test_affirmative_prose_requires_consistent_shape_labels(tmp_path, source, accepted):
+    p = project(tmp_path, source)
+    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+    assert bool(spec) is accepted, (spec, reason)
+    if accepted:
+        assert spec['operator'] == '+'

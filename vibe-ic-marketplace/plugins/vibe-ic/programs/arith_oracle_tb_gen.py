@@ -318,6 +318,13 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
         descriptions.append(suffix[1])
         text = text[:suffix.start()]
     text = re.sub(r'\s+mod\s+2\s*\^\s*(?:\d+|[A-Za-z_]\w*)$', '', text)
+    def compatible(description, op):
+        if description.lower().endswith('bitwise arithmetic'):
+            return op in ('&', '|', '^')
+        if description.lower().endswith('arithmetic datapath'):
+            return op in _OPERATORS
+        return any(rx.search(description) and declared == op
+                   for rx, declared in _WORD_OPERATOR)
     try:
         tree = ast.parse(text, mode='exec')
     except (SyntaxError, ValueError):
@@ -333,14 +340,7 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
                          ast.BitAnd: '&', ast.BitOr: '|', ast.BitXor: '^',
                          ast.LShift: '<<', ast.RShift: '>>'}
             op = operators.get(type(stmt.value.op))
-            def compatible(description):
-                if description.lower().endswith('bitwise arithmetic'):
-                    return op in ('&', '|', '^')
-                if description.lower().endswith('arithmetic datapath'):
-                    return op in _OPERATORS
-                return any(rx.search(description) and declared == op
-                           for rx, declared in _WORD_OPERATOR)
-            if any(not compatible(desc) for desc in descriptions):
+            if any(not compatible(desc, op) for desc in descriptions):
                 return None
             if op and stmt.value.left.id != stmt.value.right.id:
                 return (stmt.targets[0].id, stmt.value.left.id, op,
@@ -352,6 +352,8 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
     if prose and prose[3] != prose[4]:
         op = {'sum': '+', 'product': '*', 'difference': '-',
               'bitwise xor': '^', 'bitwise and': '&', 'bitwise or': '|'}[prose[2].lower()]
+        if any(not compatible(desc, op) for desc in descriptions):
+            return None
         return prose[1], prose[3], op, prose[4]
     return None
 
