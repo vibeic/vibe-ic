@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from functools import wraps
 from pathlib import Path
+import json
 import re
 
 GDS_SPEC = 'phase3/stage4/gds/*.gds'
@@ -48,6 +49,28 @@ def current_parameters(project):
     return None
 
 
+def acceptance_parameters(project, top=None):
+    if top is not None:
+        return {'top': top}
+    parameters = current_parameters(project)
+    if parameters is not None and 'top' in parameters:
+        return parameters
+    # Layout configs can name a pad wrapper. Synthesis owns the logical top
+    # that the runner uses for output filenames.
+    source = Path(project) / 'phase3/librelane/synthesis_resolved.json'
+    if not source.exists():
+        return parameters
+    try:
+        config = json.loads(source.read_text())
+    except (OSError, ValueError) as exc:
+        raise OutputTopUnbound(f'OUTPUT_TOP_UNBOUND: unreadable {source}: {exc}') from exc
+    top = config.get('DESIGN_NAME') if isinstance(config, dict) else None
+    if not isinstance(top, str) or not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_$.-]*', top):
+        raise OutputTopUnbound(
+            f'OUTPUT_TOP_UNBOUND: {source}.DESIGN_NAME is absent or unsafe')
+    return {**(parameters or {}), 'top': top}
+
+
 def top_arguments(project):
     parameters = current_parameters(project)
     if parameters is None or 'top' not in parameters:
@@ -74,7 +97,9 @@ def resolve(project, pattern, parameters=None):
         sources.append(scoped[1])
     runtime = execution_policy._ordinary_runtime
     if runtime is not None and Path(runtime['project']).resolve() == project:
-        sources.append(runtime.get('parameters', {}))
+        runtime_parameters = runtime.get('parameters', {})
+        if 'top' in runtime_parameters:
+            sources.append(runtime_parameters)
     tops = [source.get('top') for source in sources]
     if not tops or any(not isinstance(top, str) or not re.fullmatch(
             r'[A-Za-z_][A-Za-z0-9_$.-]*', top) for top in tops):

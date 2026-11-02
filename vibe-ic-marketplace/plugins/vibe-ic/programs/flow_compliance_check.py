@@ -20548,7 +20548,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     p.add_argument("project_dir", nargs="?",
                    help="Project directory to audit (omit when using "
                         "--list-structural-gates)")
-    p.add_argument("--top", help="Invocation logical/file top for GDS output selection")
+    p.add_argument("--top", help="Logical output top; defaults to the project's typed synthesis config")
     p.add_argument("--flow", default="phase1_phase2_phase3", help="Flow name (default: phase1_phase2_phase3)")
     p.add_argument("--flow-def", help="Override path to flow YAML")
     p.add_argument("--strict", action="store_true", help="Strict mode (default). Non-waived MISSING/FAIL → exit 1.")
@@ -20747,10 +20747,15 @@ def main(argv: Optional[List[str]] = None) -> int:
         return 2
 
     project = Path(args.project_dir).resolve()
-    from flow_artifact_paths import current_parameters, gate_parameters
-    parameters = ({'top': args.top} if args.top is not None else current_parameters(project))
+    from flow_artifact_paths import (
+        acceptance_parameters, gate_parameters, OutputTopUnbound)
     if not project.is_dir():
         print(f"flow_compliance_check: not a directory: {project}", file=sys.stderr)
+        return 2
+    try:
+        parameters = acceptance_parameters(project, args.top)
+    except OutputTopUnbound as exc:
+        print(f"flow_compliance_check: {exc}", file=sys.stderr)
         return 2
 
     # ── --read-only: audit a COPY, never the tree the caller handed us ──────
