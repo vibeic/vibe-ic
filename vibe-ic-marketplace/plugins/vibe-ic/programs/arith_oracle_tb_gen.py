@@ -267,18 +267,18 @@ def declared_function(project: Path) -> Tuple[Optional[dict], str]:
     if not found:
         return None, ('declaration.json has no typed function field '
                       '{result, operands, operator, modulus_bits} — defer to testbench-gen')
-    function = found[0]
-    if any(other != function for other in found):
+    for function in found:
+        operands = function.get('operands') if isinstance(function, dict) else None
+        names = [function.get('result'), *operands] if isinstance(operands, list) else []
+        if (not isinstance(function, dict) or function.keys() != _FUNCTION_FIELDS
+                or not isinstance(operands, list) or len(operands) != 2 or operands[0] == operands[1]
+                or not all(isinstance(name, str) and name.isidentifier() for name in names)
+                or not isinstance(function['operator'], str) or function['operator'] not in _OPERATORS
+                or type(function['modulus_bits']) is not int or function['modulus_bits'] < 1):
+            return None, 'declared function field is malformed — defer to testbench-gen'
+    if any(other != found[0] for other in found):
         return None, 'declaration files state different function fields — defer to testbench-gen'
-    operands = function.get('operands') if isinstance(function, dict) else None
-    names = [function.get('result'), *operands] if isinstance(operands, list) else []
-    if (not isinstance(function, dict) or function.keys() != _FUNCTION_FIELDS
-            or not isinstance(operands, list) or len(operands) != 2 or operands[0] == operands[1]
-            or not all(isinstance(name, str) and name.isidentifier() for name in names)
-            or not isinstance(function['operator'], str) or function['operator'] not in _OPERATORS
-            or type(function['modulus_bits']) is not int or function['modulus_bits'] < 1):
-        return None, 'declared function field is malformed — defer to testbench-gen'
-    return function, ''
+    return found[0], ''
 
 
 def serial_function_role_refusal(function: dict, parallel: str, serial_in: str,
@@ -653,7 +653,8 @@ def extract_arith_spec(project: Path,
             params = defaults_from_sources(sources, top)
             cell = cell if cell.strip().startswith('[') else '[' + cell + ']'
             resolved, why = resolve(cell, params)
-            numeric = _port_numeric_width({'width_decl': (resolved or '').strip()})
+            numeric = (1 if resolved == '' else
+                       _port_numeric_width({'width_decl': (resolved or '').strip()}))
             if numeric is None:
                 return None, f'{role} width is unresolved: {why} — defer to testbench-gen'
             port['numeric_width'] = numeric
