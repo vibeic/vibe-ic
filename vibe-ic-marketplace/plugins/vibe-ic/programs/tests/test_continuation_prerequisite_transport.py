@@ -10,19 +10,31 @@ import librelane_contract as contract
 import submission_template_check as catalogue
 import tapeout_declaration_check as declaration
 import _submission_template as template
+import _default_backend_fixtures as fixtures
 from test_d59_current_perc_subject import _geometry_scene, _reseal
 from test_owner_self_tapeout_catalogue import _relocated_owner_tree
 
 
 def scene(tmp_path, monkeypatch):
     project, folder, native_def, _ = _geometry_scene(tmp_path, monkeypatch)
-    owner = next(parent for parent in native_def.parents if (parent/fill.RECORD_REL).is_file())
+    owner = next(parent for parent in native_def.parents if (parent/'state_out.json').is_file())
     base=tmp_path/'cat';base.mkdir();issued=_relocated_owner_tree(base)
     for dst in (owner,project):shutil.copytree(issued,dst,dirs_exist_ok=True)
     io='reports/phase3/io_pad_chip_top.json';(owner/io).parent.mkdir(parents=True,exist_ok=True)
     shutil.copyfile(project/io,owner/io)
     native_def.write_text(native_def.read_text()+'\nNETS 1 ;\n- external ( r0 B ) ;\nEND NETS\n')
-    record=json.loads((owner/fill.RECORD_REL).read_text());record['odb']['tool']['filled_def_sha256']=contract.digest(native_def);(owner/fill.RECORD_REL).write_text(json.dumps(record));_reseal(folder)
+    views = json.loads((owner/'state_out.json').read_text())
+    filled, _ = fixtures.producer(owner, fill.ODB_FILL_STEP,
+        {key: views[key] for key in ('odb', 'def')},
+        {key: views[key] for key in ('odb', 'def')},
+        lane='34/01-openroad-fillinsertion')
+    record = owner/fill.RECORD_REL
+    record.parent.mkdir(parents=True, exist_ok=True)
+    record.write_text(json.dumps({'odb': {'tool': {
+        'state': str(filled/'state_out.json'),
+        'state_sha256': contract.digest(filled/'state_out.json'),
+        'filled_def_sha256': contract.digest(native_def)}}}))
+    _reseal(folder)
     pad=owner/'phase3/stage3/pnr/padring.def';pad.parent.mkdir(parents=True,exist_ok=True)
     shutil.copyfile(native_def,pad)
     (project/template.REPORT_REL).unlink()
@@ -116,6 +128,7 @@ def test_sc_library_endcap_is_not_an_io_ring_instance(tmp_path,monkeypatch):
     record=json.loads((owner/fill.RECORD_REL).read_text())
     record['odb']['tool']['filled_def_sha256']=contract.digest(native_def)
     (owner/fill.RECORD_REL).write_text(json.dumps(record));_reseal(folder)
+    _reseal(native_def.parent)
     restored=adapters.restore_continuation_prerequisites(project)
     assert len(restored['inputs'])==2
     assert catalogue.catalogue_selects_self_tapeout(project)[0] is True
