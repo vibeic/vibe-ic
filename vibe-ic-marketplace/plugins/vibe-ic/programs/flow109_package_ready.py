@@ -732,9 +732,11 @@ def execute(project: Path, context: Mapping) -> dict:
         rc, pads = pad_bterm_coincidence_check.run(
             def_path.read_text(errors="replace"),
             tech.read_text(errors="replace"), io_lefs)
-        if rc != 0 or pads.get("undecided_nets"):
+        if pads.get("not_connected_nets"):
+            pad_status = "FAIL"
+        elif rc != 0 or pads.get("undecided_nets"):
             pad_status = "NOT_MEASURED"
-        elif pads.get("not_connected_nets") or not pads.get("connected_nets"):
+        elif not pads.get("connected_nets"):
             pad_status = "FAIL"
         else:
             pad_status = "PASS"

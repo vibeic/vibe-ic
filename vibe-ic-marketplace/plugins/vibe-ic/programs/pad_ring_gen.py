@@ -1855,7 +1855,7 @@ def _d32_inputs(project):
         raise ValueError('D32_DECLARED_PORT_POPULATION_MISMATCH')
     target,target_source=declared_target(project)
     if not isinstance(target,str) or not target.strip():raise ValueError('D32_DECLARED_PDK_ABSENT')
-    facts=resolver.resolve_pdk(target,project=project)
+    facts=resolver.resolve_pdk(target)
     if facts.get('source')!='container_installed' or not facts.get('available'):
         raise ValueError('D32_INSTALLED_PDK_UNAVAILABLE')
     tree=Path(facts['pdk_root']);lefs=PR.discover_io_lefs(str(tree.parent),tree.name)
