@@ -115,6 +115,7 @@ import time
 from dataclasses import dataclass, field, asdict, fields as _dc_fields
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from _specrtl_common import SpecContract
 import _path_layout as _pl
 import verdict as _V  # R-0915-85: the five step verdicts + the one cascade rule
 import _audit_verdict  # the ONE reader of the compliance audit's verdict + exit code
@@ -2751,10 +2752,7 @@ def _declared_logic_author_handoff(project: Path, t0: float,
     """Read-only author handoff before unsupported deterministic implementation."""
     if _design_supplied_build_rtl(project):
         return None
-    from dataclasses import asdict
-    from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
-                                 SPEC_SENTENCES_UNACCOUNTED, emission_spec_contract,
-                                 unsupported_logic_obligations, unaccounted_spec_sentences)
+    from _specrtl_common import emission_spec_contract, structured_logic_contract
     interface_text = ''
     if _pl.rtl_input(project) != "original":
         interface_path = _pl.generated_docs_dir(project) / "L9_INTEGRATION_SPEC.json"
@@ -2764,18 +2762,31 @@ def _declared_logic_author_handoff(project: Path, t0: float,
             except (OSError, ValueError):
                 pass
     spec_source = "phase1_plain_text"
-    if not text.strip():
-        if not interface_text.strip():
-            return None
-        text = interface_text
-        spec_source = str(interface_path.relative_to(project))
     try:
-        contract = emission_spec_contract(text, interface_text)
+        if text.strip():
+            contract = emission_spec_contract(text, interface_text)
+        else:
+            try:
+                interface = json.loads(interface_text)
+            except (ValueError, TypeError):
+                return None
+            if not isinstance(interface, dict):
+                return None
+            contract = structured_logic_contract(interface)
+            spec_source = str(interface_path.relative_to(project))
     except ValueError as exc:
         return StepResult(
             'rtl_gen', 'NOT_MEASURED', time.time() - t0,
             f'DECLARED_LOGIC_OBLIGATION_INVALID: {exc}; no RTL was generated or changed.',
             reason_class=_V.ReasonClass.NOT_EXECUTED)
+    return _spec_contract_author_handoff(t0, contract, spec_source)
+
+
+def _spec_contract_author_handoff(t0: float, contract: SpecContract,
+                                  spec_source: str) -> Optional[StepResult]:
+    from _specrtl_common import (DECLARED_LOGIC_OBLIGATION_UNSUPPORTED,
+                                 SPEC_SENTENCES_UNACCOUNTED,
+                                 unsupported_logic_obligations, unaccounted_spec_sentences)
     obligations = unsupported_logic_obligations(contract)
     unaccounted = unaccounted_spec_sentences(contract)
     if not obligations and not unaccounted:
@@ -2784,12 +2795,14 @@ def _declared_logic_author_handoff(project: Path, t0: float,
     unknown_rules = [f"[{row.source_span[0]}:{row.source_span[1]}] {row.source_sentence}"
                      for row in unaccounted]
     marker = DECLARED_LOGIC_OBLIGATION_UNSUPPORTED if obligations else SPEC_SENTENCES_UNACCOUNTED
+    explanation = ("Deterministic producers do not establish this implementation obligation. "
+                   if obligations else "The parsed contract does not account for the complete prose spec. ")
     skill_source = SKILLS_DIR / "spec-to-rtl" / "SKILL.md"
     return StepResult(
         "rtl_gen", "PASS_WITH_WAIVERS", time.time() - t0,
         f"{marker}: " + "; ".join(rules + unknown_rules)
-        + ". The parsed contract does not account for the complete spec. "
-        f"AI invokes `spec-to-rtl` from {skill_source} and reads the full spec; "
+        + ". " + explanation
+        + f"AI invokes `spec-to-rtl` from {skill_source} and reads the full spec; "
         "no RTL was generated or changed.",
         extras={"fallback_skill": "spec-to-rtl",
                 "fallback_skill_source": str(skill_source),
@@ -2913,10 +2926,31 @@ def _structured_spec_author_handoff(project: Path, t0: float) -> Optional[StepRe
             return StepResult("rtl_gen", "FAIL", time.time() - t0,
                               f"STRUCTURED_RTL_SPEC_UNREADABLE: {name}: {exc}; no RTL was changed.",
                               reason_class=_V.ReasonClass.NOT_EXECUTED)
-        handoff = _declared_logic_author_handoff(project, t0, text)
-        if handoff is not None:
-            handoff.extras["spec_source"] = name
-        return handoff
+        if spec.suffix.lower() in (".yaml", ".yml"):
+            try:
+                import yaml
+            except ImportError:
+                return None
+            try:
+                data = yaml.safe_load(text)
+            except yaml.YAMLError:
+                return None
+        else:
+            try:
+                data = json.loads(text)
+            except ValueError:
+                return None
+        if not isinstance(data, dict):
+            return None
+        from _specrtl_common import structured_logic_contract
+        try:
+            contract = structured_logic_contract(data)
+        except ValueError as exc:
+            return StepResult(
+                'rtl_gen', 'NOT_MEASURED', time.time() - t0,
+                f'DECLARED_LOGIC_OBLIGATION_INVALID: {exc}; no RTL was generated or changed.',
+                reason_class=_V.ReasonClass.NOT_EXECUTED)
+        return _spec_contract_author_handoff(t0, contract, name)
     return None
 
 
@@ -2986,6 +3020,9 @@ def _try_deterministic_rtl_dispatch(project: Path, t0: float) -> Optional[StepRe
                     "declined_spec": str(spec.relative_to(project)),
                     "design_rtl_sample": _rel}, declared_by=f"the design ships its own build RTL ({len(_own)} file(s), e.g. {_rel})")
 
+    handoff = _declared_logic_author_handoff(project, t0, '')
+    if handoff is not None:
+        return handoff
     handoff = _structured_spec_author_handoff(project, t0)
     if handoff is not None:
         return handoff

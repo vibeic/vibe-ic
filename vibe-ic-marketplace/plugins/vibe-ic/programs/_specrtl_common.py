@@ -743,6 +743,13 @@ def logic_obligations_from_records(rows, source_text: Optional[str] = None) -> L
     return result
 
 
+def structured_logic_contract(data: dict) -> SpecContract:
+    """Project only the shared typed obligations, without a producer's schema."""
+    return SpecContract(
+        module=data.get('module') or data.get('top_module'), source='json',
+        logic_obligations=logic_obligations_from_records(data.get('logic_obligations', [])))
+
+
 def unsupported_logic_obligations(contract: SpecContract) -> Tuple[LogicObligation, ...]:
     return tuple(row for row in contract.logic_obligations
                  if (contract.source != 'json' or row.module is None
@@ -2089,7 +2096,7 @@ def extract_spec_contract(text: str, is_json: bool = False,
                             source='json',
                             logic_obligations=logic_obligations_from_records(
                                 data.get('logic_obligations', []) if isinstance(data, dict) else []))
-        return account_spec_source(text, contract)
+        return contract
 
     clean = strip_comments(text)
     ports = _parse_nl_ports(clean)
