@@ -397,7 +397,8 @@ def _function_records(project: Path) -> List[str]:
     doc = _read_json(gd / 'L1_DATASHEET.json') or {}
     fields = doc.get('fields', doc)
     overview = fields.get('overview') if isinstance(fields, dict) else None
-    if isinstance(overview, str) and overview.strip():
+    if (isinstance(overview, str) and overview.strip()
+            and _affirmative_function_context(doc) and _affirmative_function_context(fields)):
         return [overview]
     return []
 

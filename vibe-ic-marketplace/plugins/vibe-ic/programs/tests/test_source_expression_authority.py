@@ -277,3 +277,13 @@ def test_function_wrapper_cannot_restore_a_prohibited_record(tmp_path, wrapper):
     (p / 'phase1/generated_docs/L2_FRS.json').write_text(json.dumps(doc))
     spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
     assert spec is None, (spec, reason)
+
+
+@pytest.mark.parametrize('title,accepted', [('Function', True), ('Forbidden example: do not implement', False)])
+def test_existing_overview_fallback_keeps_its_title_polarity(tmp_path, title, accepted):
+    p = project(tmp_path, 'result = left + right.')
+    docs = p / 'phase1/generated_docs'
+    (docs / 'L2_FRS.json').unlink()
+    (docs / 'L1_DATASHEET.json').write_text(json.dumps({'title': title, 'overview': 'result = left + right.'}))
+    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+    assert bool(spec) is accepted, (spec, reason)
