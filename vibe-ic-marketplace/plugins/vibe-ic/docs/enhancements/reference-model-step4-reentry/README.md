@@ -2,7 +2,7 @@
 
 ## Summary
 
-**STATUS**: IMPLEMENTED_PENDING_INDEPENDENT_REVIEW. A route whose evidence window includes Step 4 could reach a state it could never leave. Program cannot derive the reference, so the first re-gate reports `sim` FAIL on the unfilled hook and asks for a model and a re-run. The dispatcher then has no way to re-run: unchanged RTL is a no-op, changed RTL without a proven failure is `UNPROVEN_AI_EDIT_REJECTED`, and `--program-regate` accepts only `AI_REPAIR`. A semantic PASS does not discharge the failure, so the run stays PENDING and can never be scored.
+**STATUS**: IMPLEMENTED_BOUNDED_REVIEW_COMPLETE_FULL_VALIDATION_PENDING. A route whose evidence window includes Step 4 could reach a state it could never leave. Program cannot derive the reference, so the first re-gate reports `sim` FAIL on the unfilled hook and asks for a model and a re-run. The dispatcher then has no way to re-run: unchanged RTL is a no-op, changed RTL without a proven failure is `UNPROVEN_AI_EDIT_REJECTED`, and `--program-regate` accepts only `AI_REPAIR`. A semantic PASS does not discharge the failure, so the run stays PENDING and can never be scored.
 
 Three small changes close it, reusing what exists:
 
@@ -35,6 +35,12 @@ Focused tests: 26 new, all passing. Matched panel of the 134 test files that nam
 
 These are component controls. They do not establish benchmark acceptance or a score.
 
+## Follow-up review and validation
+
+Independent review of the original candidate found model-source hash skew, incomplete memory-signature exits, a malformed-model crash, replacement of established semantic failure, and misleading non-simulation repair guidance. These were repaired before publication. A legacy report without its model hash now receives one measured retry, then stops when unchanged.
+
+The final source passed 43 focused controls with no failures or skips. The original candidate failed six of the 34 matching cases; not every failure is a substantive decision control. A separately measured legacy-report case and a reverse decision mutant both failed on observed KEEP-versus-REGATE behavior. The source guard passed. The coordinator reviewed the final producer snapshot and ordinary-regate boundaries; native and full-suite validation of this final revision remain pending. The older broad panel above describes the original candidate, not a remeasurement of the final revision.
+
 ## Next
 
-Proceed to independent review.
+Maintainer review and required integration validation. No benchmark acceptance or score follows from this component correction.
