@@ -63,6 +63,27 @@ def context():
     raise AssertionError('real registry has no selected analog D32 reference profile')
 
 
+@pytest.mark.parametrize('value', [[], None, 'invalid', 7, True])
+def test_nonobject_declaration_returns_named_refusal_before_native(tmp_path, monkeypatch, value):
+    import flow109_admission as admission
+    import librelane_contract as launch
+    path = tmp_path / 'input/flow109/D32.json'
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps(value))
+    monkeypatch.setattr(admission, 'require_launch_admission', lambda *a, **k: {})
+    monkeypatch.setattr(launch, 'local_image_attestation', lambda: {})
+    try:
+        observed = ('returned', owner.execute(tmp_path, context()))
+    except Exception as exc:
+        observed = ('raised', type(exc).__name__, str(exc))
+    assert observed[0] == 'returned'
+    result = observed[1]
+    assert result['component_status'] == 'NOT_MEASURED'
+    assert result['reason'] == 'D32_INPUT_INVALID: object required'
+    assert result['native_started'] is False and result['executions'] == []
+    assert result['completed'] is False and result['delivery_accepted'] is False
+
+
 def consume(project, monkeypatch, observation, *, component_status='PASS', unavailable=False, prior_metric_fail=False):
     current = context()
     if hasattr(owner, '_d32_metric_observation'):
