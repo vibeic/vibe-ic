@@ -1751,3 +1751,53 @@ def test_state_pdk_asset_nix_links_require_original_content(tmp_path, monkeypatc
         assert resolved.resolve() == target
         assert contract.config_file_hashes({'PDK': family, 'LIB': str(recorded)}, [],
                                          fingerprint=fingerprint) == fingerprint['config_files']
+
+
+@pytest.mark.parametrize('nested', [False, True])
+@pytest.mark.parametrize('with_fingerprint', [False, True])
+def test_config_hashes_mount_precedes_existing_guest(tmp_path, nested, with_fingerprint):
+    guest = tmp_path / 'guest'
+    host = tmp_path / 'host'
+    guest.mkdir()
+    host.mkdir()
+    recorded = guest / 'shared.lib'
+    mounted = host / 'shared.lib'
+    recorded.write_text('unrelated visible guest content\n')
+    mounted.write_text('actual mounted host content\n')
+    mounts = [(host, guest)]
+    if nested:
+        parent = tmp_path / 'parent-host'
+        parent.mkdir()
+        (parent / 'shared.lib').write_text('less specific mount content\n')
+        mounts.insert(0, (parent, tmp_path))
+    fingerprint = {'config_files': {str(recorded): contract.digest(recorded)}}
+    kwargs = {'fingerprint': fingerprint} if with_fingerprint else {}
+    actual = contract.config_file_hashes({'LIB': str(recorded)}, mounts, **kwargs)
+    assert actual == {str(recorded): contract.digest(mounted)}
+    assert actual[str(recorded)] != contract.digest(recorded)
+
+
+def test_config_hashes_missing_mapped_file_does_not_hash_visible_guest(tmp_path):
+    guest = tmp_path / 'guest'
+    host = tmp_path / 'host'
+    guest.mkdir()
+    host.mkdir()
+    recorded = guest / 'shared.lib'
+    recorded.write_text('not mounted by the tool\n')
+    assert contract.config_file_hashes({'LIB': str(recorded)}, [(host, guest)]) == {}
+
+
+def test_config_hashes_rebinds_only_missing_mapped_pdk_asset(tmp_path, monkeypatch):
+    family, root, asset, recorded, fingerprint = _carrier_asset(tmp_path, monkeypatch)
+    recorded.parent.mkdir(parents=True)
+    recorded.write_text('unrelated visible guest content\n')
+    host = tmp_path / 'mounted'
+    host.mkdir()
+    mounted = host / recorded.name
+    mounts = [(host, recorded.parent)]
+    config = {'PDK': family, 'LIB': str(recorded)}
+    assert contract.config_file_hashes(config, mounts, fingerprint=fingerprint) == fingerprint['config_files']
+    mounted.write_text('actual mounted bytes differ from recorded bytes\n')
+    assert contract.config_file_hashes(config, mounts, fingerprint=fingerprint) == {
+        str(recorded): contract.digest(mounted)}
+    assert contract.digest(mounted) != contract.digest(asset)

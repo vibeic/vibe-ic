@@ -2197,15 +2197,15 @@ def resolve_state_pdk_asset(value: str | Path, *, pdk: str | None,
     path = Path(value)
     if '..' in path.parts:
         return None
-    if path.is_file():
-        return path
-    # Declared mounts are the existing guest/host contract, not a carrier move.
+    # Select the mounted source before testing existence: a visible guest file
+    # may contain different bytes from the file the tool actually mounts.
+    source = path
     for host, guest in sorted(mounts, key=lambda m: len(str(m[1])), reverse=True):
         if path.is_relative_to(guest):
-            mounted = Path(host) / path.relative_to(guest)
-            if mounted.is_file():
-                return mounted
+            source = Path(host) / path.relative_to(guest)
             break
+    if source.is_file():
+        return source
     try:
         registry = json.loads(Path(__file__).with_name('pdk_registry.json').read_text())
         if not pdk or pdk not in {entry['name'] for entry in registry['pdks']}:
