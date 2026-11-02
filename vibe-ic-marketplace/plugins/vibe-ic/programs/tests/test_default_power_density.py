@@ -324,3 +324,30 @@ def test_selected_rule_refuses_unsupported_cut_dimensions(tmp_path, monkeypatch)
         "RECT -0.13 -0.13 0.13 0.13", "RECT -0.14 -0.14 0.14 0.14"))
     with pytest.raises(ValueError, match="cut geometry is unsupported"):
         build(tmp_path, monkeypatch, direct=True, per_cut=True)
+
+
+@pytest.mark.parametrize('change,expected', [('digest_only', True), ('other_pdk', True),
+                                           ('value', False), ('source', False), ('temperature', False)])
+def test_native_per_cut_authority_binds_cited_content_not_registry_digest(tmp_path, monkeypatch, change, expected):
+    from programs.tests._hostpaths import require_repo
+    project, pdk, _ = build(tmp_path, monkeypatch, direct=True, per_cut=True)
+    registry = json.loads(require_repo(
+        'vibe-ic-marketplace/plugins/vibe-ic/programs/pdk_registry.json').read_text())
+    selected = next(row for row in registry['pdks'] if row['name'] == pdk.name)
+    if change == 'digest_only':
+        registry['unrelated_description'] = 'changed outside the cited per-cut authority'
+    elif change == 'other_pdk':
+        next(row for row in registry['pdks'] if row['name'] != pdk.name)['unrelated_note'] = 'changed'
+    elif change == 'value':
+        layer = next(iter(selected['em_current_limits']['layers'].values()))
+        layer['jmax_mA_per_cut'] *= 1.01
+    elif change == 'source':
+        selected['em_current_limits']['source']['section'] += ' changed'
+    else:
+        selected['em_current_limits']['temperature_c'] -= 1
+    current = tmp_path / 'current-registry.json'
+    current.write_text(json.dumps(registry))
+    monkeypatch.setattr(E, '_PDK_REGISTRY', current)
+    observed = E.validate_native_density(project)
+    assert observed['valid'] == expected, observed
+    assert authority(project, pdk)[0] == ('PASS' if expected else 'INCOMPLETE')

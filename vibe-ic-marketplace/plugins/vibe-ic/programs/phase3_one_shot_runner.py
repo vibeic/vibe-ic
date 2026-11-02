@@ -81687,7 +81687,30 @@ def main() -> int:
     # is a compute reservation for a run that can actually execute; a missing
     # local image attestation must fail before it consumes the project's
     # source/config identity (SPM r29 exposed this ordering defect).
-    pdk = _detect_pdk(project, args.pdk)
+    # Configuration and D03 use this same case-owned declaration boundary.
+    # Resolve it before discovery, so AUTO cannot select an installed default.
+    import declared_pdk_is_the_pdk_used_check as _declared_pdk
+    import pdk_family_identity as _pdk_identity
+    try:
+        declared_pdk, _ = _declared_pdk.declared_distribution(project)
+        requested = args.pdk
+        if requested and requested != "auto":
+            canonical, _ = _pdk_identity.canonical_entry(requested, exact_distribution=True)
+            if (canonical or requested) != declared_pdk:
+                raise _declared_pdk.PDKDeclarationError(
+                    "PDK_DECLARATION_CONFLICT", "CLI PDK differs from the case declaration")
+        pdk = _detect_pdk(project, declared_pdk)
+        if pdk is None:
+            raise _declared_pdk.PDKDeclarationError(
+                "PDK_UNRESOLVED", "declared case PDK could not be resolved")
+        canonical, _ = _pdk_identity.canonical_entry(pdk.name, exact_distribution=True)
+        if (canonical or pdk.name) != declared_pdk:
+            raise _declared_pdk.PDKDeclarationError(
+                "PDK_DECLARATION_CONFLICT", "resolved PDK differs from the case declaration")
+        args.pdk = declared_pdk
+    except ValueError as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr)
+        return 2
     backend_parameters = {}
     if pdk is not None:
         import librelane_contract as _ll

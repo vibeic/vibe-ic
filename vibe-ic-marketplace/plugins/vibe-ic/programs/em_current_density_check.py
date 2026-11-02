@@ -1501,13 +1501,19 @@ def validate_native_density(project: Path, margin: float = _DEFAULT_MARGIN,
             raise ValueError("declared PDK identity disagrees")
         text = authority.read_text()
         table, per_cut_authority = native_jmax_table(text, doc["pdk"]["name"])
-        if doc["authority"].get("per_cut") != per_cut_authority:
+        recorded_per_cut = doc["authority"].get("per_cut")
+        # Registry byte identity is diagnostic; the cited rules are authority.
+        # Keep the original snapshot byte-bound to its native invocation below.
+        def cited_content(value):
+            return ({key: item for key, item in value.items() if key != "registry_sha256"}
+                    if isinstance(value, dict) else value)
+        if cited_content(recorded_per_cut) != cited_content(per_cut_authority):
             raise ValueError("selected PDK per-cut authority changed")
         if per_cut_authority is not None:
             per_cut_path = local(doc["authority"]["per_cut_snapshot"])
             relative = str(per_cut_path.relative_to(project))
             if (relative not in doc["outputs"] or "per_cut_authority" not in doc["inputs"]
-                    or json.loads(per_cut_path.read_text()) != per_cut_authority
+                    or json.loads(per_cut_path.read_text()) != recorded_per_cut
                     or doc["inputs"]["per_cut_authority"]["sha256"] != _native_sha(per_cut_path)):
                 raise ValueError("per-cut authority was not bound to the native invocation")
         if doc["margin"] != margin:
