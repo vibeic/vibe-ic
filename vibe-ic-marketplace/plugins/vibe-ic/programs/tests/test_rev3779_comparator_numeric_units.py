@@ -109,4 +109,3 @@ def test_unrepresentable_json_decimal_is_refused_without_aborting(tmp_path):
     assert track.token_carriage(case, ["1 V"])["verdict"] == track.CARRIAGE_NOWHERE
     actual, _, _ = metrics._d0102_compare(case, {"expectations": [item]}, {})
     assert actual == []
-

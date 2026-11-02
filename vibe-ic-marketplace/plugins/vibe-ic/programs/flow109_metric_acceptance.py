@@ -7023,10 +7023,14 @@ def accept_d70(project: Path, context: Mapping[str, Any], component: Mapping[str
     return final.accept_metric_obligations(project, context, component)
 
 
-def _d0102_read(project: Path, relative: str, reads: dict) -> dict:
+def _d0102_read(project: Path, relative: str, reads: dict, *, exact_numbers=False) -> dict:
     import phase1_expert_parse_track as expert
     raw = _safe_project_file(project, relative).read_bytes()
-    value = json.loads(raw, object_pairs_hook=expert._PointerObject)
+    try:
+        value = json.loads(raw, parse_float=Decimal if exact_numbers else float,
+                           object_pairs_hook=expert._PointerObject)
+    except ArithmeticError as exc:
+        raise MetricRefusal('D0102_INPUT_INVALID', relative) from exc
     if not isinstance(value, dict):
         raise MetricRefusal('D0102_INPUT_INVALID', relative)
     reads[relative] = _sha(raw)
@@ -7135,7 +7139,8 @@ def _d0102_dimensionless(project: Path, expectation: dict, reads: dict) -> dict 
         return item
     try:
         path = expert.resolve_layer_file(project, expectation['layer'])
-        document = _d0102_read(project, path.relative_to(project).as_posix(), reads)
+        document = _d0102_read(project, path.relative_to(project).as_posix(), reads,
+                                exact_numbers=True)
         selected = expert._scoped_nodes_at(document, expectation.get('field_path'),
                                            expectation['layer'])
         if not selected:
@@ -7156,7 +7161,7 @@ def _d0102_dimensionless(project: Path, expectation: dict, reads: dict) -> dict 
         item.update(usable=False, met=False, observed='Expected a dimensionless quantity record.')
         return item
     observed = {key: values[0][key] for key in quantity_fields
-                if type(values[0].get(key)) in (int, float)}
+                if type(values[0].get(key)) in (int, float, Decimal)}
     if not observed or any(not Decimal(str(value)).is_finite() for value in observed.values()):
         item.update(usable=False, met=False, observed='Dimensionless quantity has no finite numeric value.')
         return item

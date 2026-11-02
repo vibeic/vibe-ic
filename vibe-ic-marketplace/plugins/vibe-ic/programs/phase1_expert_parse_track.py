@@ -1507,9 +1507,9 @@ _PLAIN_UNITS = {"%": "%", "ppm": "ppm", "dB": "dB", "dBm": "dBm",
                 "dBc": "dBc", "dBFS": "dBFS", "C": "degC", "LSB": "LSB",
                 "cycle": "cycle", "cycles": "cycle", "clocks": "cycle",
                 "": "dimensionless", "—": "dimensionless", "-": "dimensionless"}
-#: A unit carried by a field NAME (`pad_edge_spacing_um`, `freq_mhz`,
-#: `temperature_c`), lower-case as field names are written — so `mhz` is MHz,
-#: the only reading that spelling has in practice. The suffixes measured on
+#: Lowercase field-name aliases (`pad_edge_spacing_um`, `freq_mhz`,
+#: `temperature_c`). SI symbols keep their case; these legacy aliases are
+#: explicit, so `mhz` is MHz while `mHz` is millihertz. The suffixes measured on
 #: emitted L-docs plus their unambiguous siblings; a suffix that also names
 #: something else (`_ff` is a process corner; a lone `_s`, `_a`, `_w` is as
 #: often a plural or a label) states no unit.
@@ -1581,9 +1581,14 @@ class Quantity(NamedTuple):
 def parse_unit(text: str) -> Optional[Tuple[str, int]]:
     """`(dimension, power of ten)` for one unit spelling, or None."""
     u = str(text).strip()
+    if u in ("°C", "℃"):
+        return "degC", 0
+    if u in ("°F", "℉"):
+        return "degF", 0
+    if "°" in u:
+        return None
     for glyph, ascii_ in (("\u00b5", "u"), ("\u03bc", "u"), ("\u2126", "ohm"),
-                          ("\u03a9", "ohm"), ("\u00b2", "2"), ("^2", "2"),
-                          ("\u2103", "C"), ("\u00b0", "")):
+                          ("\u03a9", "ohm"), ("\u00b2", "2"), ("^2", "2")):
         u = u.replace(glyph, ascii_)
     u = re.sub(r"(?i)ohms?$", "ohm", re.sub(r"^deg\s*C$", "C", u.strip()))
     u = re.sub(r"bits$", "bit", u)
@@ -1647,8 +1652,13 @@ def _unsupported_numeric_token(token: str) -> bool:
 
 def _key_unit(key: Any) -> Optional[Tuple[str, int]]:
     """The unit a field NAME states (`pad_edge_spacing_um` -> um), or None."""
-    k = str(key).strip().lower()
-    return _KEY_SUFFIX_UNITS.get(k.rsplit("_", 1)[1]) if "_" in k else None
+    k = str(key).strip()
+    if "_" not in k:
+        return None
+    suffix = k.rsplit("_", 1)[1]
+    if suffix in _KEY_SUFFIX_UNITS:
+        return _KEY_SUFFIX_UNITS[suffix]
+    return parse_unit(suffix) if suffix.lower() in _KEY_SUFFIX_UNITS else None
 
 
 def _record_unit(record: Dict[Any, Any],
@@ -1681,8 +1691,8 @@ def _typed_quantity(node: Any, key: Any,
         return None
     if isinstance(node, bool):
         return None
-    if isinstance(node, (int, float)):
-        value = Decimal(node) if isinstance(node, int) else Decimal(str(node))
+    if isinstance(node, (int, float, Decimal)):
+        value = Decimal(str(node)) if isinstance(node, float) else Decimal(node)
         if not value.is_finite():
             return None
         return Quantity(value, *unit) if unit else Quantity(value)
@@ -2535,8 +2545,9 @@ def owning_layers_answer(project: Path, tokens: List[str],
         if exclude is not None and p == exclude:
             continue
         try:
-            blob = json.loads(p.read_text(errors="replace"), object_pairs_hook=_PointerObject)
-        except (OSError, ValueError):
+            blob = json.loads(p.read_text(errors="replace"), parse_float=Decimal,
+                              object_pairs_hook=_PointerObject)
+        except (OSError, ValueError, ArithmeticError):
             continue          # unreadable content is not content
         searched.append((p.stem, _ownership_units(blob)))
     answer["searched_layers"] = len(searched)
@@ -2886,8 +2897,9 @@ def token_carriage(project: Path, tokens: List[str],
         if exclude is not None and p == exclude:
             continue
         try:
-            blob = json.loads(p.read_text(errors="replace"), object_pairs_hook=_PointerObject)
-        except (OSError, ValueError):
+            blob = json.loads(p.read_text(errors="replace"), parse_float=Decimal,
+                              object_pairs_hook=_PointerObject)
+        except (OSError, ValueError, ArithmeticError):
             continue          # unreadable content is not content
         for tok in tokens:
             paths = token_paths(blob, tok)
@@ -3302,9 +3314,9 @@ def converge_ai_expectation(project: Path, exp: Any) -> Dict[str, Any]:
         return base
     base["layer_present"] = True
     try:
-        blob = json.loads(path.read_text(errors="replace"),
+        blob = json.loads(path.read_text(errors="replace"), parse_float=Decimal,
                           object_pairs_hook=_PointerObject)
-    except (OSError, ValueError) as exc:
+    except (OSError, ValueError, ArithmeticError) as exc:
         base["observed"] = (f"{base['layer']} exists but does not parse "
                             f"({exc.__class__.__name__}); unreadable content "
                             f"is not content")
