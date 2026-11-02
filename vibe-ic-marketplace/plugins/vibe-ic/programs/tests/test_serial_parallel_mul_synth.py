@@ -221,6 +221,7 @@ def test_emit_writes_the_l7_required_declaration(tmp_path):
         "L7 #7.0 requires plugin_output/declaration.json and --emit must write it"
     decl = json.loads(decl_path.read_text())
     # L7's framing fields plus the fixed transaction semantics of emit_rtl.
+    assert decl.pop("function") == {"result": "p", "operands": ["x", "y"], "operator": "*", "modulus_bits": 32}
     assert decl == {
         "bit_order": "LSB_first",
         "reset_polarity": "active_high",

@@ -15,9 +15,9 @@ golden is a ONE-LINE Python computation — that over-broad deferral left the
 EASIEST-oracle class with zero in-pipeline functional verification.
 
 WHAT THIS DOES (chip-AGNOSTIC, Bucket A):
-  * Recognise the closed-form operator + bit-width ``N`` + signedness from
-    the design's own L2/declaration/L9 docs (the operator TOKEN, never a
-    design SKU).
+  * Take the operator, operands and modulus from the typed ``function`` field
+    of declaration.json, and signedness from the declared encoding and port
+    types. Prose never supplies a reference; without the field, hand off.
   * In a PURE Python function (testable WITHOUT iverilog) ENUMERATE corner
     operand pairs + a handful of deterministic pseudo-random pairs and
     COMPUTE the golden per recognised operator (``* + - & | ^ << >>``) with
@@ -48,7 +48,6 @@ direction is printed — the caller keeps the #654 cap); 1 = error.
 from __future__ import annotations
 
 import argparse
-import ast
 import json
 import math
 import re
@@ -153,18 +152,6 @@ _OPERATORS: Dict[str, Tuple[Any, str]] = {
 # Natural-language / algorithm-token → canonical operator. Keyed on GENERIC
 # arithmetic vocabulary (no chip SKU); the explicit `p = x * y` symbol in the
 # spec always wins over these when present.
-_WORD_OPERATOR = [
-    (re.compile(r"\bmultipl|\bproduct\b|\bmultiplier\b|\bmac\b", re.I), "*"),
-    (re.compile(r"\bsubtract|\bdifference\b|\bsubtractor\b", re.I), "-"),
-    (re.compile(r"\baddition\b|\badder\b|\bsum\b|\baccumulat", re.I), "+"),
-    (re.compile(r"\bxor\b|\bexclusive[ -]or\b", re.I), "^"),
-    (re.compile(r"\bbitwise and\b|\bAND gate\b", re.I), "&"),
-    (re.compile(r"\bbitwise or\b|\bOR gate\b", re.I), "|"),
-    (re.compile(r"\bleft shift\b|\bshift left\b", re.I), "<<"),
-    (re.compile(r"\bright shift\b|\bshift right\b", re.I), ">>"),
-]
-
-
 # ── pure golden compute (testable WITHOUT iverilog) ──────────────────────────
 def compute_golden(operator: str, a: int, b: int, width: int,
                    signed: bool) -> int:
@@ -263,332 +250,45 @@ def _read_json(p: Path) -> Optional[dict]:
         return None
 
 
-def _doc_text(project: Path) -> str:
-    """Concatenate the closed-form-bearing L docs (L1/L2 FRS + input_doc) into
-    one searchable blob — generic arithmetic vocabulary only."""
-    blob: List[str] = []
-    gd = _pl.generated_docs_dir(project)
-    for cand in ("L2_FRS.json", "L1_DATASHEET.json", "L2.json"):
-        d = _read_json(gd / cand)
-        if d:
-            blob.append(json.dumps(d, ensure_ascii=False))
-    idoc = project / "phase1" / "input_doc"
-    if idoc.is_dir():
-        for f in sorted(idoc.glob("L*.txt")):
-            try:
-                blob.append(f.read_text(errors="replace"))
-            except OSError:
-                pass
-    return "\n".join(blob)
+_FUNCTION_FIELDS = frozenset({'result', 'operands', 'operator', 'modulus_bits'})
 
 
-def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
-    """Parse one complete affirmative function record, never an executable prefix.
+def declared_function(project: Path) -> Tuple[Optional[dict], str]:
+    """The typed ``function`` field of declaration.json, or (None, reason).
 
-    The supported domain remains one binary operation over two named operands.
-    Unknown residual prose and larger ASTs require the expert reference hook.
+    This field is the oracle's only source for its operator, operands and
+    modulus. Prose may help an author fill it in; it never stands in for it.
     """
-    text = text.strip().rstrip('.;').strip().replace('×', '*')
-    if '#' in text:
-        return None  # ast.parse discards comments, including functional caveats
-    # These are descriptions of the supported arithmetic shape, not arbitrary
-    # suffixes. Anything else (including overflow policy) remains unconsumed.
-    descriptor = (r'(?:(?:unsigned|signed|parallel|serial|serial-parallel|binary)\s+)*'
-                  r'(?:multiplier|multiply|adder|subtractor|bitwise arithmetic|arithmetic datapath)')
-    if re.fullmatch(descriptor, text, re.I):
-        for rx, op in _WORD_OPERATOR:
-            if rx.search(text) and op in ('*', '+'):
-                return (None, None, op, None)
-    descriptions = []
-    introduction = re.match(
-        r'^Implement\s+(?:an?\s+)?(?:\d+-bit\s+)?(' + descriptor + r')\.\s+', text, re.I)
-    if introduction:
-        descriptions.append(introduction[1])
-        text = text[introduction.end():]
-    prefix = re.match(r'^(' + descriptor + r')(?:\s*:\s*|\s+)(?=[A-Za-z_]\w*\s*=)', text, re.I)
-    if prefix:
-        descriptions.append(prefix[1])
-        text = text[prefix.end():]
-    suffix = re.search(r'(?:[,;]\s*|\s+)(?:a\s+)?(?:\d+-bit\s+)?(' + descriptor + r')$', text, re.I)
-    if suffix:
-        descriptions.append(suffix[1])
-        text = text[:suffix.start()]
-    gloss = r'(?:\w+-bit\s+)?(?:modulo\s+)?(?:arithmetic\s+)?(?:multiplication|addition|subtraction)'
-    suffix = re.search(r'\s*\(\s*(' + descriptor + '|' + gloss + r')\s*\)$', text, re.I)
-    if suffix:
-        descriptions.append(suffix[1])
-        text = text[:suffix.start()]
-    text = re.sub(r'\s+mod\s+2\s*\^\s*(?:\d+|[A-Za-z_]\w*)$', '', text)
-    def compatible(description, op):
-        if description.lower().endswith('bitwise arithmetic'):
-            return op in ('&', '|', '^')
-        if description.lower().endswith('arithmetic datapath'):
-            return op in _OPERATORS
-        return any(rx.search(description) and declared == op
-                   for rx, declared in _WORD_OPERATOR)
-    try:
-        tree = ast.parse(text, mode='exec')
-    except (SyntaxError, ValueError):
-        tree = None
-    if tree is not None and len(tree.body) == 1:
-        stmt = tree.body[0]
-        if (isinstance(stmt, ast.Assign) and len(stmt.targets) == 1
-                and isinstance(stmt.targets[0], ast.Name)
-                and isinstance(stmt.value, ast.BinOp)
-                and isinstance(stmt.value.left, ast.Name)
-                and isinstance(stmt.value.right, ast.Name)):
-            operators = {ast.Mult: '*', ast.Add: '+', ast.Sub: '-',
-                         ast.BitAnd: '&', ast.BitOr: '|', ast.BitXor: '^',
-                         ast.LShift: '<<', ast.RShift: '>>'}
-            op = operators.get(type(stmt.value.op))
-            if any(not compatible(desc, op) for desc in descriptions):
-                return None
-            if op and stmt.value.left.id != stmt.value.right.id:
-                return (stmt.targets[0].id, stmt.value.left.id, op,
-                        stmt.value.right.id)
-    prose = re.fullmatch(
-        r'(?:The\s+)?([A-Za-z_]\w*)\s+is\s+the\s+'
-        r'(sum|product|difference|bitwise XOR|bitwise AND|bitwise OR)\s+of\s+'
-        r'([A-Za-z_]\w*)\s+and\s+([A-Za-z_]\w*)', text, re.I)
-    if prose and prose[3] != prose[4]:
-        op = {'sum': '+', 'product': '*', 'difference': '-',
-              'bitwise xor': '^', 'bitwise and': '&', 'bitwise or': '|'}[prose[2].lower()]
-        if any(not compatible(desc, op) for desc in descriptions):
-            return None
-        return prose[1], prose[3], op, prose[4]
-    return None
-
-
-_FUNCTION_TITLES = frozenset({
-    'function', 'functionality', 'functional description',
-    'functional requirements', 'functional specification',
-    'functional requirements specification', 'frs', 'l2_frs', 'l2 frs',
-    'arithmetic function', 'arithmetic datapath',
-    '功能', '功能定義', '功能定义', '功能描述', '功能需求', '功能規格', '功能规格',
-})
-_PROHIBITING_PROSE = (r"do not|don't|must not|not implement|forbidden|prohibit|disallow|negative|example"
-                      r"|禁止|不得|不可|不要|不准|反例|範例|范例")
-_ARITHMETIC_QUALIFIER = re.compile(
-    r"saturat|clamp|overflow|underflow|\brounding\b|飽和|饱和|溢位|溢出|四捨五入", re.I)
-_QUALIFYING_PROSE = re.compile(_PROHIBITING_PROSE + '|' + _ARITHMETIC_QUALIFIER.pattern, re.I)
-
-
-def _title(record: dict) -> Optional[str]:
-    title = record.get('title', '')
-    return title.strip().rstrip(':').strip().casefold() if isinstance(title, str) else None
-
-
-def _names_function(title: Optional[str]) -> bool:
-    """A title names the function role only as a whole, gloss included.
-
-    Every other title has another role, so ``Function (not applicable)`` does
-    not name the function while ``功能定義 (Functional Specification)`` does.
-    """
-    if title is None:
-        return False
-    gloss = re.fullmatch(r'(.+?)\s*\((.+)\)', title)
-    return all(part in _FUNCTION_TITLES for part in (gloss.groups() if gloss else (title,)))
-
-
-def _affirmative_function_context(record: dict) -> bool:
-    """A document wrapper may be untitled, name the function, or be an overview."""
-    title = _title(record)
-    return title in ('', 'overview') or _names_function(title)
-
-
-_FUNCTION_RECORD_KEYS = frozenset({'title', 'content', 'section', 'evidence', 'heading_shape'})
-_FUNCTION_WRAPPER_KEYS = frozenset({'title', 'function', 'content', 'fields'})
-
-
-def _affirmative_function_record(row: dict) -> bool:
-    """Is this record's structured role the function, with nothing qualifying it?
-
-    Any other key can qualify a record as much as its title can.  ``section`` is
-    the Phase-1 heading position (h2, 1.1, unheaded), never prose.
-    """
-    section = row.get('section', 'unheaded')
-    return (row.keys() <= _FUNCTION_RECORD_KEYS
-            and (_title(row) == '' or _names_function(_title(row)))
-            and isinstance(section, str)
-            and re.fullmatch(r'h\d+|unheaded|\d+(?:\.\d+)*', section) is not None)
-
-
-def _fenced_function(content: str) -> str:
-    """Phase 1 keeps a function as one fenced expression inside its own prose.
-
-    The expression stands alone only when the prose around it is a lead-in, a
-    note, or a definition of an operand, and qualifies nothing.  Otherwise the
-    whole content goes to the complete-record parser, which refuses it.
-    """
-    fences = list(re.finditer(r'^```[^\n]*\n(.*?)^```[ \t]*$', content, re.M | re.S))
-    lines = [line for line in fences[0][1].splitlines() if line.strip()] if len(fences) == 1 else []
-    found = _extract_operator(lines[0]) if len(lines) == 1 else None
-    if not found:
-        return content
-    prose = (content[:fences[0].start()] + content[fences[0].end():]).splitlines()
-    operands = '|'.join(re.escape(name) for name in found if name and name.isidentifier())
-    bullet = r'[-*]\s+[*`]*(?:' + operands + r')\b'
-    closed = all(not line.strip() or line.rstrip().endswith((':', '：')) or line.startswith('>')
-                 or (operands and re.match(bullet, line)) for line in prose)
-    return lines[0] if closed and not _QUALIFYING_PROSE.search('\n'.join(prose)) else content
-
-
-def _function_records(project: Path) -> List[str]:
-    """Read affirmative function records, retaining their title's authority.
-
-    An existing L2 is authoritative; incidental L1 descriptions or copied raw
-    input must not override it. Do not concatenate separate records into code.
-    """
-    gd = _pl.generated_docs_dir(project)
-    for name in ('L2_FRS.json', 'L2.json'):
-        doc = _read_json(gd / name)
-        if doc is not None:
-            fields = doc.get('fields', doc)
-            if (not isinstance(fields, dict) or not _affirmative_function_context(doc)
-                    or not _affirmative_function_context(fields)):
-                return []
-            rows = fields.get('frs_sections') or []
-            for key in ('function', 'content'):
-                if not rows and isinstance(fields.get(key), str):
-                    closed = doc.keys() <= _FUNCTION_WRAPPER_KEYS and fields.keys() <= _FUNCTION_WRAPPER_KEYS
-                    return [fields[key]] if closed else []
-            if not isinstance(rows, list) or any(
-                    not isinstance(row, dict) or not isinstance(row.get('content'), str)
-                    for row in rows):
-                return []
-            functions = [_fenced_function(row['content']) for row in rows
-                         if _affirmative_function_record(row) and row['content'].strip()]
-            # A record with another role is not read for the function, but one
-            # stating a different function or an arithmetic rule such as overflow
-            # handling leaves the source unresolved. A prohibiting title states neither.
-            others = [row for row in rows if not _affirmative_function_record(row)
-                      and not re.search(_PROHIBITING_PROSE, str(row.get('title', '')), re.I)]
-            stated = {_extract_operator(record) for record in functions}
-            unresolved = any(
-                _extract_operator(row['content']) not in (None, *stated)
-                or _ARITHMETIC_QUALIFIER.search(f"{row.get('title', '')}\n{row['content']}")
-                for row in others)
-            return [] if unresolved else functions
-    doc = _read_json(gd / 'L1_DATASHEET.json') or {}
-    fields = doc.get('fields', doc)
-    overview = fields.get('overview') if isinstance(fields, dict) else None
-    if (isinstance(overview, str) and overview.strip()
-            and _affirmative_function_context(doc) and _affirmative_function_context(fields)):
-        return [overview]
-    return []
-
-
-def _declared_size(project: Path) -> List[object]:
-    """The declared datapath size: the N of ``mod 2^N`` when none is named N."""
+    found = []
     for name in ('plugin_output/declaration.json', 'declaration.json'):
         doc = _read_json(project / name) or {}
-        for key in ('size_param', 'size', 'width', 'data_width', 'bit_width', 'word_width'):
-            if key in doc:
-                value = doc[key]
-                return [int(value) if isinstance(value, str) and value.strip().isdigit() else value]
-    return []
+        if 'function' in doc:
+            found.append(doc['function'])
+    if not found:
+        return None, ('declaration.json has no typed function field '
+                      '{result, operands, operator, modulus_bits} — defer to testbench-gen')
+    function = found[0]
+    if any(other != function for other in found):
+        return None, 'declaration files state different function fields — defer to testbench-gen'
+    operands = function.get('operands') if isinstance(function, dict) else None
+    names = [function.get('result'), *operands] if isinstance(operands, list) else []
+    if (not isinstance(function, dict) or function.keys() != _FUNCTION_FIELDS
+            or len(operands or []) != 2 or operands[0] == operands[1]
+            or not all(isinstance(name, str) and name.isidentifier() for name in names)
+            or function['operator'] not in _OPERATORS
+            or type(function['modulus_bits']) is not int or function['modulus_bits'] < 1):
+        return None, 'declared function field is malformed — defer to testbench-gen'
+    return function, ''
 
 
-def _source_modulus(project: Path) -> Tuple[Optional[int], str]:
-    """Bind source exponents to exact declared names; never to a width guess."""
-    tokens = [m[1] for record in _function_records(project)
-              for m in re.finditer(r'\bmod\s+2\s*\^\s*(\d+|[A-Za-z_]\w*)\b', record)]
-    if not tokens:
-        return None, ''
-    values = []
-    params = None
-    top, _ = _load_top_ports(project)
-    for token in tokens:
-        declared = []
-        if token.isdigit():
-            declared = [int(token)]
-        else:
-            for name in ('plugin_output/declaration.json', 'declaration.json'):
-                doc = _read_json(project / name) or {}
-                if token in doc:
-                    value = doc[token]
-                    if isinstance(value, str) and value.strip().isdigit():
-                        value = int(value.strip())
-                    declared.append(value)
-            if not declared and token == 'N':
-                declared = _declared_size(project)
-            if not declared:
-                if params is None:
-                    from _port_width import defaults_from_sources
-                    sources = [(p, p.read_text(errors='replace'))
-                               for p in sorted(_pl.rtl_dir(project).rglob('*'))
-                               if p.is_file() and p.suffix in ('.v', '.sv')]
-                    params = defaults_from_sources(sources, top)
-                if token in params:
-                    declared.append(params[token])
-        if not declared:
-            return None, f'source modulus exponent {token} is unbound — defer to testbench-gen'
-        if any(type(v) is not int or v < 1 for v in declared):
-            return None, f'source modulus exponent {token} has no positive integer declaration — defer'
-        if len(set(declared)) != 1:
-            return None, f'source modulus exponent {token} has conflicting declarations — defer'
-        values.append((token, declared[0]))
-    if len({value for _, value in values}) > 1:
-        return None, f'conflicting source modulus exponents {values} — defer'
-    return (values[0][1], ', '.join(f'{name}={value}' for name, value in values)) if values else (None, '')
-
-
-def _supports_function_reset(project: Path, polarity: str) -> bool:
-    """Consume a finite reset clause only through its structured L9 contract.
-
-    Both serial consumers assert reset across complete clock cycles. An absent
-    or conflicting reset domain cannot be discarded as arithmetic metadata.
-    """
-    _, ports = _load_top_ports(project)
-    clocks = [p['name'] for p in ports if p['dir'] == 'input'
-              and p['name'].lower() in _CLK_NAMES and p.get('numeric_width') == 1]
-    resets = [p['name'] for p in ports if p['dir'] == 'input'
-              and p['name'].lower() in _RST_NAMES and p.get('numeric_width') == 1]
-    if len(clocks) != 1 or len(resets) != 1:
-        return False
-    l9 = _read_json(_pl.generated_docs_dir(project) / 'L9_INTEGRATION_SPEC.json') or {}
-    fields = l9.get('fields', l9)
-    if not isinstance(fields, dict):
-        return False
-    domains = fields.get('reset_domains') or []
-    if not isinstance(domains, list):
-        return False
-    selected = [r for r in domains if isinstance(r, dict) and r.get('name') == resets[0]]
-    if len(selected) != 1:
-        return False
-    domain = selected[0]
-    if (domain.get('sync') not in ('sync', 'synchronous')
-            or domain.get('polarity') != 'active_' + polarity):
-        return False
-    from _reset_input_semantics import admit_reset_phases
-    try:
-        phases = admit_reset_phases(project, [l9], {p['name'] for p in ports})
-    except ValueError:
-        return False
-    if resets[0] in phases and not any(
-            b['clock'] == clocks[0] and b['assertion'] == 'synchronous'
-            and b['polarity'] == 'active_' + polarity for b in phases[resets[0]]):
-        return False
-    conventions = read_declared_conventions(project, ports)
-    active_low = (conventions['reset_active_low'] if conventions is not None
-                  else resets[0].lower().rstrip('i').endswith('n'))
-    if active_low != (polarity == 'low'):
-        return False
-    return True
-
-
-def _function_operator(project: Path) -> Optional[Tuple[str, str, str, str]]:
-    records = _function_records(project)
-    parsed = []
-    for record in records:
-        reset = re.search(r';\s*synchronous active-(high|low) reset[.;]?\s*$', record, re.I)
-        if reset and _supports_function_reset(project, reset[1].lower()):
-            record = record[:reset.start()]
-        parsed.append(_extract_operator(record))
-    if not parsed or any(item is None for item in parsed):
-        return None
-    first = parsed[0]
-    return first if all(item == first for item in parsed) else None
+def _declared_encoding(project: Path) -> Optional[bool]:
+    """Is the declared integer_encoding signed? None when undeclared or unknown."""
+    for name in ('plugin_output/declaration.json', 'declaration.json'):
+        encoding = (_read_json(project / name) or {}).get('integer_encoding')
+        if isinstance(encoding, str):
+            encoding = encoding.strip().lower()
+            return {'unsigned': False, 'signed': True, 'signed_2c': True}.get(encoding)
+    return None
 
 
 def _resolve_width(project: Path, ports: List[dict]) -> int:
@@ -753,9 +453,8 @@ def extract_arith_spec(project: Path,
     if not top or not ports:
         return None, "no usable L9 top ports — cannot bind operands"
 
-    text = _doc_text(project)
-    found = _function_operator(project)
-    if not found:
+    function, why = declared_function(project)
+    if not function:
         topology = ', '.join(sorted({p['name'] for p in ports
             if is_clock_or_reset_port(p['name'])
             or p['name'].lower() in (_HANDSHAKE_NAMES | _STATUS_OUT_NAMES)}))
@@ -763,32 +462,18 @@ def extract_arith_spec(project: Path,
                        and not is_clock_or_reset_port(p['name'])]
         extra = (len(data_inputs) != 2
                  or sum(p['dir'] == 'output' for p in ports) != 1)
-        return None, ("no recognised closed-form operator (* + - & | ^ << >>) "
-                      "in a complete affirmative L2 function record; unsupported "
-                      "expression or residual semantics — defer to testbench-gen"
+        return None, (why
                       + (f"; clock/handshake/status ports: {topology}" if topology else "")
                       + ('; a clock input is present' if any(
                           p['dir'] == 'input' and is_clock_or_reset_port(p['name'])
                           for p in ports) else '')
                       + ('; additional input controls or output functions require a reference' if extra else ''))
-    res_name, lhs_name, operator, rhs_name = found
-    modulus, modulus_binding = _source_modulus(project)
-    if modulus is None and modulus_binding:
-        return None, modulus_binding
+    res_name, operator = function['result'], function['operator']
+    lhs_name, rhs_name = function['operands']
 
     width = _resolve_width(project, ports)
-    text_l = '\n'.join(_function_records(project)).lower()
-    source_l = _doc_text(project).lower()
-    says_signed = bool(re.search(r"\bsigned\b|2'?s? ?complement|signed_2c", source_l))
-    says_unsigned = bool(re.search(r"\bunsigned\b", source_l))
-    encoding = None
-    for cand in ("plugin_output/declaration.json", "declaration.json"):
-        d = _read_json(project / cand)
-        if d and isinstance(d.get("integer_encoding"), str):
-            enc = d["integer_encoding"].lower()
-            encoding = "signed" in enc and "unsigned" not in enc
-            break
-    signed = encoding if encoding is not None else says_signed and not says_unsigned
+    encoding = _declared_encoding(project)
+    signed = bool(encoding)
 
     # §4.05 (adversarial-review): the emitted TB drives operands into UNSIGNED
     # reg nets and uses Verilog's plain `>>`/`<<` (LOGICAL shift). For a SIGNED
@@ -822,18 +507,12 @@ def extract_arith_spec(project: Path,
     def _rank_key(p):
         return (1 if p.get("is_parametric") else 0, p.get("numeric_width") or 0)
 
-    op_a = _by_name(lhs_name, inputs) if lhs_name else None
-    op_b = _by_name(rhs_name, inputs) if rhs_name else None
-    if (lhs_name and op_a is None) or (rhs_name and op_b is None):
-        return None, 'source expression operand is not a declared data input — defer'
+    op_a, op_b = _by_name(lhs_name, inputs), _by_name(rhs_name, inputs)
     if op_a is None or op_b is None:
-        ranked = sorted(inputs, key=_rank_key, reverse=True)
-        op_a, op_b = ranked[0], ranked[1]
-    result = _by_name(res_name, outputs) if res_name else None
-    if res_name and result is None:
-        return None, 'source expression result is not a declared output — defer'
+        return None, 'declared function operand is not a declared data input — defer'
+    result = _by_name(res_name, outputs)
     if result is None:
-        result = max(outputs, key=_rank_key)
+        return None, 'declared function result is not a declared output — defer'
 
     # SERIAL-shape DEFER (§4.05) — REOPEN #745 HARDENED: the closed-form PARALLEL
     # oracle requires every operand input AND the result to be a FULL-WIDTH
@@ -877,11 +556,7 @@ def extract_arith_spec(project: Path,
     # false-PASS. DEFER when every data role is 1-bit/serial but the spec datapath
     # is wider than 1.
     all_serial = all(_is_literal_1bit(p) for p, _ in roles)
-    spec_width_gt1 = bool(
-        re.search(r"\bmod\s*2\s*\^\s*[a-zA-Z]", text)        # p = x*y mod 2^N
-        or re.search(r"\b(\d{2,})\s*[- ]?bit\b", text_l)     # "32-bit"
-        or re.search(r"\bparameter\b[^\n]*\b(width|size|n)\b", text_l))
-    if all_serial and spec_width_gt1:
+    if all_serial and function['modulus_bits'] > 1:
         return None, (
             "fully bit-serial datapath: the spec declares an N>1-bit "
             "multiplier but every operand/result port is 1-bit/serial — the "
@@ -981,12 +656,12 @@ def extract_arith_spec(project: Path,
         signed = operand_signs[0]
         if encoding is not None and encoding != signed:
             return None, 'declared integer encoding conflicts with operand signedness — defer to testbench-gen'
-    elif encoding is None and says_signed:
-        return None, 'signed source without declared operand signedness — defer to testbench-gen'
+    elif encoding is None:
+        return None, 'operand signedness is undeclared — defer to testbench-gen'
     if signed and operator in ('<<', '>>'):
         return None, 'signed shift operator semantics are unresolved — defer'
-    if modulus is not None and modulus != result_w:
-        return None, (f'source modulus {modulus_binding} differs from declared '
+    if function['modulus_bits'] != result_w:
+        return None, (f"declared modulus_bits {function['modulus_bits']} differs from "
                       f'result width {result_w} — defer to testbench-gen')
 
     spec = {
@@ -1200,13 +875,14 @@ def extract_serial_arith_spec(
     top, ports = _load_top_ports(project)
     if not top or not ports:
         return None, "no usable L9 top ports"
-    found = _function_operator(project)
-    if not found:
-        return None, "no recognised closed-form operator"
-    res_name, lhs_name, operator, rhs_name = found
-    modulus, modulus_binding = _source_modulus(project)
-    if modulus is None and modulus_binding:
-        return None, modulus_binding
+    function, why = declared_function(project)
+    if not function:
+        return None, why
+    res_name, operator = function['result'], function['operator']
+    lhs_name, rhs_name = function['operands']
+    encoding = _declared_encoding(project)
+    if encoding is None:
+        return None, 'operand signedness is undeclared — defer to testbench-gen'
 
     names_lc = {str(p.get("name", "")).lower() for p in ports}
     clk = next((p["name"] for p in ports if p["dir"] == "input"
@@ -1252,12 +928,9 @@ def extract_serial_arith_spec(
     # depth) can neither block the oracle nor false-FAIL a correct DUT.
     conv = read_declared_conventions(project, ports) or {}
     width = _resolve_width(project, ports)
-    if modulus is not None and modulus != width:
-        return None, f'source modulus {modulus_binding} differs from serial word width {width} — defer'
-    text_l = _doc_text(project).lower()
-    signed = bool(conv.get("signed")) or bool(
-        re.search(r"\bsigned\b|2'?s? ?complement|signed_2c", text_l)
-        and not re.search(r"\bunsigned\b", text_l))
+    if function['modulus_bits'] != width:
+        return None, f"declared modulus_bits {function['modulus_bits']} differs from serial word width {width} — defer"
+    signed = encoding
 
     parallel = max(parallel_ins,
                    key=lambda p: (p.get("numeric_width") or width))
@@ -1267,9 +940,10 @@ def extract_serial_arith_spec(
     # spec-named operands when available so a NON-commutative op (- << >>) drives
     # the right side serially; commutative ops are order-invariant anyway.
     parallel_is_lhs = True
-    if lhs_name and rhs_name:
-        if serial_in["name"] == lhs_name and parallel["name"] == rhs_name:
-            parallel_is_lhs = False
+    if {serial_in["name"], parallel["name"], serial_out["name"]} != {lhs_name, rhs_name, res_name}:
+        return None, 'declared function does not name the serial and parallel data ports — defer'
+    if serial_in["name"] == lhs_name:
+        parallel_is_lhs = False
     other_inputs = [p["name"] for p in data_in
                     if p["name"] not in (parallel["name"], serial_in["name"])]
     # reset polarity: prefer the declared value, else infer from an active-low

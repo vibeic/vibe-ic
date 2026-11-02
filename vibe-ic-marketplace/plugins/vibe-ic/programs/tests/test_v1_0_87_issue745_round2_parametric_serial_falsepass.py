@@ -48,7 +48,7 @@ import arith_oracle_tb_gen as aotg  # noqa: E402
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 def _mk_project(root: Path, *, top: str, ports: list, l2: str,
-                decl: dict | None = None) -> Path:
+                decl: dict | None = None, function: dict | None = None) -> Path:
     """Write a minimal L2/L9 doc set. When ``decl`` is None NO declaration.json
     is written — that is the PRODUCTION shape the runner actually emits and the
     one the round-13 masking test never exercised."""
@@ -63,7 +63,13 @@ def _mk_project(root: Path, *, top: str, ports: list, l2: str,
         (proj / "plugin_output").mkdir()
         (proj / "plugin_output" / "declaration.json").write_text(
             json.dumps(decl))
+    if function is not None:
+        (proj / "declaration.json").write_text(json.dumps({
+            "integer_encoding": "unsigned", "function": function}))
     return proj
+
+
+SPM_FUNCTION = {"result": "p", "operands": ["x", "y"], "operator": "*", "modulus_bits": 32}
 
 
 def _oracle_tbs(project: Path) -> list:
@@ -108,7 +114,7 @@ _SPM_PORTS = [
 
 
 # ── (1) NEW-PATH: production parametric-serial shape → REAL self-cal oracle ──
-def test_production_no_declaration_parametric_serial_emits_real_oracle(tmp_path):
+def test_prose_only_parametric_serial_hands_off_and_typed_function_emits_real_oracle(tmp_path):
     """CAPABILITY UPGRADE: the exact reopen repro — spm L9 with a parametric
     ``x`` bus + 1-bit serial ``y``/``p`` and NO declaration.json — now emits a
     REAL, self-calibrating N=32 oracle (functional_verified path), NOT the
@@ -116,12 +122,18 @@ def test_production_no_declaration_parametric_serial_emits_real_oracle(tmp_path)
     invariant is preserved by _assert_real_serial_oracle (N=32, non-vacuous,
     falsifiable), so a regression that re-collapsed the width to 1 still fails."""
     project = _mk_project(tmp_path, top="spm", ports=_SPM_PORTS,
-                          l2="p = (x * y) mod 2^32 serial multiplier")
+                          l2="p = (x * y) mod 2^N serial multiplier")
     # production path writes no declaration.json — the oracle self-calibrates
     # the serial framing, so no declaration is needed.
     assert not (project / "plugin_output" / "declaration.json").exists()
     assert not (project / "declaration.json").exists()
 
+    # Ruling #105: without the typed function field this hands off.
+    rep, _ = aotg.generate(project, "digital_arithmetic_primitive")
+    assert rep["verdict"] == "DEFER" and rep["fallback_skill"] == "testbench-gen", rep
+
+    (project / "declaration.json").write_text(json.dumps({
+        "integer_encoding": "unsigned", "function": SPM_FUNCTION}))
     rep, rc = aotg.generate(project, "digital_arithmetic_primitive")
     assert rc == 0, rep
     assert rep["verdict"] == "TB_EMITTED"
@@ -133,7 +145,7 @@ def test_resolve_width_does_not_collapse_to_one_with_parametric_bus(tmp_path):
     """Root-cause pin: with only 1-bit numeric ports + a parametric bus,
     _resolve_width must NOT return 1 (the collapse that disarmed the guard)."""
     project = _mk_project(tmp_path, top="spm", ports=_SPM_PORTS,
-                          l2="p = (x * y) mod 2^32 serial multiplier")
+                          l2="p = (x * y) mod 2^N serial multiplier")
     _top, ports = aotg._load_top_ports(project)
     # x is recognized as a parametric (non-numeric, symbolic) bus, not None-only
     xp = next(p for p in ports if p["name"] == "x")
@@ -155,7 +167,9 @@ def test_noleak_parallel_multiplier_still_emits_real_oracle(tmp_path):
     ]
     project = _mk_project(tmp_path, top="mult8", ports=ports,
                           l2="p = x * y mod 2^N parallel multiplier",
-                          decl={"size_param": 8, "N": 16, "integer_encoding": "unsigned"})
+                          decl={"size_param": 8, "integer_encoding": "unsigned",
+                                "function": {"result": "p", "operands": ["x", "y"],
+                                             "operator": "*", "modulus_bits": 16}})
     rep, rc = aotg.generate(project, "digital_arithmetic_primitive")
     assert rc == 0, rep
     assert rep["verdict"] == "TB_EMITTED"
@@ -182,7 +196,9 @@ def test_noleak_fully_parametric_parallel_multiplier_emits(tmp_path):
          "width": "2WIDTH-bit([2*WIDTH-1:0])", "width_symbolic": "2*WIDTH-1:0"},
     ]
     project = _mk_project(tmp_path, top="pmul", ports=ports,
-                          l2="c = a * b parallel multiplier")
+                          l2="c = a * b parallel multiplier",
+                          function={"result": "c", "operands": ["a", "b"],
+                                    "operator": "*", "modulus_bits": 64})
     # The bare oracle instance elaborates the DUT's declared default. Supply
     # that default explicitly; an absent parameter value cannot imply 32 bits.
     rtl = project / "phase2/stage1/rtl"
@@ -217,7 +233,8 @@ def test_478_endstate_subprocess_production_serial_emits(tmp_path):
     calibrating oracle on disk (never the vacuous N=1 PASS the round-2 guard
     protects against)."""
     project = _mk_project(tmp_path, top="spm", ports=_SPM_PORTS,
-                          l2="p = (x * y) mod 2^32 serial multiplier")
+                          l2="p = (x * y) mod 2^N serial multiplier",
+                          function=SPM_FUNCTION)
     prog = PROGRAMS / "arith_oracle_tb_gen.py"
     r = subprocess.run(
         [sys.executable, str(prog), str(project),
@@ -238,7 +255,9 @@ def test_478_endstate_subprocess_parallel_emits(tmp_path):
     ]
     project = _mk_project(tmp_path, top="mult8", ports=ports,
                           l2="p = x * y mod 2^N parallel multiplier",
-                          decl={"size_param": 8, "N": 16, "integer_encoding": "unsigned"})
+                          decl={"size_param": 8, "integer_encoding": "unsigned",
+                                "function": {"result": "p", "operands": ["x", "y"],
+                                             "operator": "*", "modulus_bits": 16}})
     prog = PROGRAMS / "arith_oracle_tb_gen.py"
     r = subprocess.run(
         [sys.executable, str(prog), str(project),
@@ -265,7 +284,8 @@ def test_745r2_prose_serial_operand_emits_real_oracle(tmp_path):
         {"name": "p", "direction": "output", "width": "serial"},
     ]
     proj = _mk_project(tmp_path, top="psm",
-                       ports=ports, l2="p = (x * y) mod 2^32, 32-bit multiplier")
+                       ports=ports, l2="p = (x * y) mod 2^N, 32-bit multiplier",
+                       function=SPM_FUNCTION)
     rep, rc = aotg.generate(proj, "digital_arithmetic_primitive")
     assert rc == 0 and rep.get("verdict") == "TB_EMITTED", (rc, rep)
     assert rep.get("topology") == "serial_parallel"
@@ -282,7 +302,7 @@ def test_745r2_fully_serial_multiplier_defers(tmp_path):
         {"name": "p", "direction": "output", "width": 1},
     ]
     proj = _mk_project(tmp_path, top="fsm",
-                       ports=ports, l2="p = (x * y) mod 2^32, a 32-bit multiplier")
+                       ports=ports, l2="p = (x * y) mod 2^N, a 32-bit multiplier")
     rep, rc = aotg.generate(proj, "digital_arithmetic_primitive")
     assert rc == 2 and rep.get("verdict") == "DEFER", (rc, rep)
     assert _oracle_tbs(proj) == []

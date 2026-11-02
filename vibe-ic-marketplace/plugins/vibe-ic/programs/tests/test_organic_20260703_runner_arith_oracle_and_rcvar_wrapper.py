@@ -96,7 +96,9 @@ def test_pure_combinational_multiplier_still_accepted(tmp_path):
         {"name": "p", "direction": "output", "width": 16},
     ]
     project = _mk_project(tmp_path, "mult8", ports,
-                          "p = x * y mod 2^16 parallel multiplier")
+                          "p = x * y mod 2^N parallel multiplier")
+    (project / "declaration.json").write_text(json.dumps({
+        "integer_encoding": "unsigned", "function": {"result": "p", "operands": ["x", "y"], "operator": "*", "modulus_bits": 16}}))
     spec, reason = aotg.extract_arith_spec(project, "digital_arithmetic_primitive")
     assert spec is not None, reason
     assert spec["operator"] == "*"

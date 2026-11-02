@@ -446,22 +446,18 @@ def _is_register_mapped(ins: List[dict], outs: List[dict]) -> bool:
 
 def _detect_stream_operator(project: Path,
                             ic_class: Optional[str] = None) -> Optional[str]:
-    """Use the same complete function record as the arithmetic producer.
+    """Use the same typed function field as the arithmetic producer.
 
-    Serial classification must not recover an operator from prose the producer
-    refused. Register-mapped/protocol/crypto classes still defer as before.
+    Serial classification must not recover an operator from prose. Register-
+    mapped/protocol/crypto classes still defer as before.
     """
     if ic_class and str(ic_class).strip().lower() in _NON_DATAPATH_CLASSES:
         return None
-    found = _aog._function_operator(project)
-    if found and found[2] == '*':
-        modulus, why = _aog._source_modulus(project)
-        if modulus is None and why:
-            return None
+    function, _ = _aog.declared_function(project)
+    if function and function['operator'] == '*':
         _, ports = _aog._load_top_ports(project)
-        if modulus is not None and modulus != _resolve_tb_width(project, ports):
-            return None
-        return "*"
+        if function['modulus_bits'] == _resolve_tb_width(project, ports):
+            return "*"
     return None
 
 

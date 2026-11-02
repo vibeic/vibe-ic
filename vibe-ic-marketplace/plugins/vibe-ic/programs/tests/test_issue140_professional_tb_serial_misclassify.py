@@ -69,7 +69,9 @@ def _mk_spm(tmp: Path) -> Path:
         "reset_domains": [{"name": "rst", "polarity": "active_high"}]}}))
     (gd / "L2_FRS.json").write_text(json.dumps({"frs_sections": [
         {"title": "Function",
-         "content": "serial-parallel multiplier p = (x * y) mod 2^size"}]}))
+         "content": "serial-parallel multiplier p = (x * y) mod 2^N"}]}))
+    (tmp / "declaration.json").write_text(json.dumps({
+        "integer_encoding": "unsigned", "function": {"result": "p", "operands": ["x", "y"], "operator": "*", "modulus_bits": 32}}))
     rtl = tmp / "phase2" / "stage1" / "rtl"
     rtl.mkdir(parents=True)
     (rtl / "spm.v").write_text(

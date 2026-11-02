@@ -493,6 +493,10 @@ def plugin_declaration(spec: Dict[str, Any]) -> Dict[str, Any]:
             emit_rtl(spec), spec["serial_in"], spec["serial_out"]),
         "latency_cycles_origin": "pre_nba_sample_offset",
         "integer_encoding": "unsigned",
+        # The function emit_rtl() implements, typed for the arithmetic oracle.
+        "function": {"result": spec["serial_out"],
+                     "operands": [spec["parallel"], spec["serial_in"]],
+                     "operator": "*", "modulus_bits": spec["size_default"]},
         # Fixed properties of emit_rtl(): every independent operation is
         # re-armed by the synchronous reset branch, one asserted edge clears
         # all state, and x is consumed on every product cycle.

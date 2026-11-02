@@ -586,6 +586,13 @@ def check(project: Path) -> Dict[str, Any]:
         unit_track = l10_unit_tb_track(project)
         if unit_track is not None:
             return unit_track
+    if str(rec.get("status") or "").upper() in {"INCOMPLETE", "NOT_MEASURED"}:
+        # The design was not measured, so the gate has nothing to certify.
+        return {"gate": "professional_tb", "verdict": "NOT_CHECKED",
+                "reason_class": _reason_taxonomy.BLOCKED_BY_UPSTREAM,
+                "status": rec.get("status"), "dut_kind": rec.get("dut_kind"),
+                "ran_cocotb": rec.get("ran_cocotb"),
+                "reason": "professional step was not measured: " + str(rec.get("reason"))}
 
     bundle = _bundle_report(project, rec)
     res: Dict[str, Any] = {

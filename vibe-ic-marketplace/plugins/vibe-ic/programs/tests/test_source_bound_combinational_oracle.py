@@ -7,13 +7,13 @@ import pytest
 
 import arith_oracle_tb_gen as oracle
 import professional_tb_gen as professional
-from test_source_expression_authority import PHASE1_RECORDS, phase1_project, project, sign_project
+from test_source_expression_authority import PHASE1_RECORDS, function, phase1_project, project, update_declaration
 
 
 @pytest.mark.parametrize('op,widths', [('+', (3, 5, 6)), ('-', (5, 3, 4)), ('*', (3, 5, 4)), ('>>', (5, 3, 5))])
 @pytest.mark.parametrize('wrong', [False, True])
 def test_native_professional_consumer_checks_actual_schema(tmp_path, op, widths, wrong):
-    p = project(tmp_path, f'result = left {op} right.', widths=widths)
+    p = project(tmp_path, widths=widths, operator=op)
     a, b, r = widths
     rtl = p / 'phase2/stage1/rtl'
     rtl.mkdir(parents=True)
@@ -39,25 +39,18 @@ def test_native_professional_consumer_checks_actual_schema(tmp_path, op, widths,
     assert [max(v for bin in cp['bins'] for v in bin['values']) for cp in cps] == [(1 << a)-1, (1 << b)-1]
 
 
-def test_real_checked_in_oracle_consumer_contract(tmp_path):
-    from _hostpaths import repo_path
-    # Read an existing caller artifact rather than restating its source contract.
-    caller = repo_path('vibe-ic-marketplace/plugins/vibe-ic/programs/tests/test_v1_0_82_issue745_arith_oracle_tb.py')
-    assert caller.is_file()
-    text = caller.read_text()
-    import re
-    source = re.search(r'l2="(p = x \* y mod 2\^N parallel multiplier)"', text).group(1)
-    p = project(tmp_path, source.replace('p = x * y', 'result = left * right'))
+def test_generated_consumer_compiles_and_uses_the_declared_function(tmp_path):
+    p = project(tmp_path, widths=(3, 5, 4), operator='*')
     spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
     assert spec is not None, reason
     generated = professional.emit_parallel_arith_tb(professional.classify_dut(p, 'digital_arithmetic_primitive')[0])
     compile(generated, '<generated arithmetic consumer>', 'exec')
-    assert oracle.compute_golden(spec['operator'], 7, 31, spec['result_width'], False) == 25
+    assert oracle.compute_golden(spec['operator'], 7, 31, spec['result_width'], False) == (7 * 31) % 16
 
 
 @pytest.mark.parametrize('wrong', [False, True])
 def test_existing_expert_reference_resumes_an_unsupported_function(tmp_path, wrong):
-    p = project(tmp_path, 'result = left + right. Saturate on overflow.', widths=(3, 5, 4))
+    p = project(tmp_path, 'result = left + right. Saturate on overflow.', widths=(3, 5, 4), declare=False)
     shape, _ = professional.classify_dut(p, 'digital_arithmetic_primitive')
     assert shape['kind'] == 'generic'
     out = p / 'phase2/stage1/sim_professional/neutral_arithmetic'
@@ -95,45 +88,6 @@ async def saturated_reference(dut):
     assert expert.read_bytes() == before
 
 
-@pytest.mark.parametrize('case', ['modulus_three', 'modulus_three_masked', 'modulus_unbound',
-                                 'forbidden_title', 'forbidden_heading', 'positive_title', 'modulus_six'])
-def test_native_review_source_authority_controls(tmp_path, case):
-    source = 'result = left + right' + (' mod 2^N' if case.startswith('modulus') else '.')
-    p = project(tmp_path, source)
-    declaration = p / 'declaration.json'
-    d = json.loads(declaration.read_text())
-    if case == 'modulus_unbound':
-        d.pop('N')
-    elif case.startswith('modulus_three'):
-        d['N'] = 3
-    declaration.write_text(json.dumps(d))
-    if case == 'forbidden_title':
-        doc = p / 'phase1/generated_docs/L2_FRS.json'
-        doc.write_text(json.dumps({'frs_sections': [{
-            'title': 'Forbidden example: do not implement', 'content': source}]}))
-    if case == 'forbidden_heading':
-        doc = p / 'phase1/generated_docs/L2_FRS.json'
-        doc.write_text(json.dumps({'frs_sections': [{
-            'heading': 'Forbidden example: do not implement', 'content': source}]}))
-    rtl = p / 'phase2/stage1/rtl'
-    rtl.mkdir(parents=True)
-    expression = "(left + right) & 6'd7" if case == 'modulus_three_masked' else 'left + right'
-    (rtl / 'neutral_arithmetic.v').write_text(
-        'module neutral_arithmetic(input [2:0] left, input [4:0] right, output [5:0] result); '
-        'assign result = ' + expression + '; endmodule\n')
-    before = {f.relative_to(p): f.read_bytes() for f in p.rglob('*') if f.is_file()}
-    import design_one_shot_runner as runner
-    step = runner.step_professional_tb_gen(p, 'neutral_arithmetic', 'unused')
-    report = json.loads((p / 'reports/phase2/gates/professional_tb.json').read_text())
-    if case in ('positive_title', 'modulus_six'):
-        assert (step.status, report['status'], report['ran_cocotb']) == ('PASS', 'PASS', True), report
-    else:
-        assert (step.status, report['status'], report['ran_cocotb']) == ('NOT_MEASURED', 'INCOMPLETE', False), report
-        assert step.extras['fallback_skill'] == 'testbench-gen'
-        assert not (p / 'phase2/stage1/sim_professional').exists()
-    assert all((p / name).read_bytes() == value for name, value in before.items())
-
-
 NEUTRAL_SERIAL_MUL = """module neutral_mul{suffix} #(parameter size = 8)(
   input wire clk, input wire rst, input wire [size-1:0] x, input wire y, output wire p);
   reg [size-1:0] s, c; reg yr, pr;
@@ -148,10 +102,9 @@ endmodule
 """
 
 
-@pytest.mark.parametrize('wrong', [False, True])
-def test_native_multi_section_phase1_source_discriminates_a_wrong_multiplier(tmp_path, monkeypatch, wrong):
+def run_serial(tmp_path, monkeypatch, wrong, declare):
     monkeypatch.setenv('VIBEIC_EDA_IMAGE', 'unused-repository@sha256:' + '0' * 64)
-    p = phase1_project(tmp_path, PHASE1_RECORDS)
+    p = phase1_project(tmp_path, PHASE1_RECORDS, declare=declare)
     rtl = p / 'phase2/stage1/rtl'
     rtl.mkdir(parents=True)
     source = NEUTRAL_SERIAL_MUL.format(suffix='_core' if wrong else '')
@@ -164,45 +117,65 @@ def test_native_multi_section_phase1_source_discriminates_a_wrong_multiplier(tmp
     import professional_tb_check as consumer
     step = runner.step_professional_tb_gen(p, 'neutral_mul', 'unused')
     report = json.loads((p / 'reports/phase2/gates/professional_tb.json').read_text())
+    return step, report, consumer.check(p)
+
+
+@pytest.mark.parametrize('wrong', [False, True])
+def test_native_typed_multi_section_design_discriminates_a_wrong_multiplier(tmp_path, monkeypatch, wrong):
+    step, report, check = run_serial(tmp_path, monkeypatch, wrong, True)
     assert (report['ran_cocotb'], report['reference_model_tier']) == (True, 'streaming_bounded_latency'), report
-    assert (step.status, consumer.check(p)['verdict'], report['functional_mismatch']) == (
+    assert (step.status, check['verdict'], report['functional_mismatch']) == (
         ('FAIL', 'FAIL', True) if wrong else ('PASS', 'PASS', False)), report
 
 
-@pytest.mark.parametrize('case', [
-    {'overview': 'Signed 2s complement multiplier.'},
-    {'encoding': 'signed_2c', 'flags': (False, False, False)},
-])
-@pytest.mark.parametrize('dut_signed', [False, True])
-def test_native_signed_source_cannot_confirm_an_unsigned_reference(tmp_path, case, dut_signed):
-    p = sign_project(tmp_path, **case)
+@pytest.mark.parametrize('wrong', [False, True])
+def test_native_prose_only_multi_section_design_is_not_certified(tmp_path, monkeypatch, wrong):
+    step, report, check = run_serial(tmp_path, monkeypatch, wrong, False)
+    assert (step.status, report['status'], report['ran_cocotb']) == ('NOT_MEASURED', 'INCOMPLETE', False), report
+    assert check['verdict'] == 'NOT_CHECKED', check
+
+
+REVIEW_RULES = [
+    ('Output limits', 'The output is limited to the value 7; larger sums stay at 7.'),
+    ('輸出限制', '輸出上限為 7，超過時維持 7。'),
+    ('Function', '> The output is limited to 7; larger sums stay at 7.\n\n```\nresult = left + right\n```'),
+    ('Output behavior', 'The output is the bitwise inverse of the computed value.'),
+    ('Function', '> The output is the bitwise inverse of this value.\n\n```\nresult = left + right\n```'),
+    ('Function', '```\nresult = left + right\n```\n- result is inverted before it leaves the block'),
+    ('Overflow', 'Saturate on overflow.'),
+]
+
+
+@pytest.mark.parametrize('title,rule', REVIEW_RULES)
+@pytest.mark.parametrize('expression', ['left + right', "(left + right > 7) ? 4'd7 : left + right", '~(left + right)'])
+def test_native_stated_rules_cannot_reach_a_prose_reference(tmp_path, title, rule, expression):
+    p = project(tmp_path, widths=(3, 3, 4), declare=False)
+    (p / 'phase1/generated_docs/L2_FRS.json').write_text(json.dumps({'frs_sections': [
+        {'title': 'Function', 'content': 'result = left + right.'}, {'title': title, 'content': rule}]}))
     rtl = p / 'phase2/stage1/rtl'
     rtl.mkdir(parents=True)
-    expression = '$signed(left) * $signed(right)' if dut_signed else 'left * right'
     (rtl / 'neutral_arithmetic.v').write_text(
-        'module neutral_arithmetic(input [3:0] left, input [3:0] right, output [7:0] result); '
+        'module neutral_arithmetic(input [2:0] left, input [2:0] right, output [3:0] result); '
         f'assign result = {expression}; endmodule\n')
     import design_one_shot_runner as runner
+    import professional_tb_check as consumer
     step = runner.step_professional_tb_gen(p, 'neutral_arithmetic', 'unused')
     report = json.loads((p / 'reports/phase2/gates/professional_tb.json').read_text())
     assert (step.status, report['status'], report['ran_cocotb']) == ('NOT_MEASURED', 'INCOMPLETE', False), report
     assert step.extras['fallback_skill'] == 'testbench-gen'
+    assert consumer.check(p)['verdict'] == 'NOT_CHECKED'
 
 
-@pytest.mark.parametrize('expression', ['left + right', "({1'b0, left} + {1'b0, right}) > 4'd7 ? 3'd7 : left + right"])
-def test_native_arithmetic_rule_in_another_record_blocks_the_wrapping_reference(tmp_path, expression):
-    p = project(tmp_path, 'result = left + right.', widths=(3, 3, 3))
-    path = p / 'phase1/generated_docs/L2_FRS.json'
-    doc = json.loads(path.read_text())
-    doc['frs_sections'].append({'title': 'Overflow policy', 'content': 'The result saturates on overflow.'})
-    path.write_text(json.dumps(doc))
+@pytest.mark.parametrize('modulus,accepted', [(6, True), (3, False)])
+def test_native_declared_modulus_must_match_the_result_port(tmp_path, modulus, accepted):
+    p = project(tmp_path)
+    update_declaration(p, function=function('+', modulus))
     rtl = p / 'phase2/stage1/rtl'
     rtl.mkdir(parents=True)
     (rtl / 'neutral_arithmetic.v').write_text(
-        'module neutral_arithmetic(input [2:0] left, input [2:0] right, output [2:0] result); '
-        f'assign result = {expression}; endmodule\n')
+        'module neutral_arithmetic(input [2:0] left, input [4:0] right, output [5:0] result); '
+        'assign result = left + right; endmodule\n')
     import design_one_shot_runner as runner
     step = runner.step_professional_tb_gen(p, 'neutral_arithmetic', 'unused')
     report = json.loads((p / 'reports/phase2/gates/professional_tb.json').read_text())
-    assert (step.status, report['status'], report['ran_cocotb']) == ('NOT_MEASURED', 'INCOMPLETE', False), report
-    assert step.extras['fallback_skill'] == 'testbench-gen'
+    assert (step.status, report['ran_cocotb']) == (('PASS', True) if accepted else ('NOT_MEASURED', False)), report

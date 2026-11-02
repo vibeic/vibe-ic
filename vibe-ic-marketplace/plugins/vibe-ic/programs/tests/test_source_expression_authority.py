@@ -1,4 +1,4 @@
-"""Arithmetic source records must describe a complete affirmative function."""
+"""The arithmetic oracle's function comes from the typed declaration field alone."""
 import json
 from pathlib import Path
 
@@ -8,7 +8,12 @@ import arith_oracle_tb_gen as oracle
 import professional_tb_gen as professional
 
 
-def project(root, content, *, widths=(3, 5, 6), signed=None):
+def function(operator='+', modulus_bits=6, result='result', operands=('left', 'right')):
+    return {'result': result, 'operands': list(operands), 'operator': operator, 'modulus_bits': modulus_bits}
+
+
+def project(root, content='A neutral arithmetic block.', *, widths=(3, 5, 6), signed=None,
+            operator='+', declare=True):
     docs = root / 'phase1/generated_docs'
     docs.mkdir(parents=True)
     records = content if isinstance(content, list) else [content]
@@ -22,71 +27,91 @@ def project(root, content, *, widths=(3, 5, 6), signed=None):
     (docs / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps({
         'top_module': 'neutral_arithmetic', 'top_ports': ports,
         'ic_class': 'digital_arithmetic_primitive'}))
-    (root / 'declaration.json').write_text(json.dumps({
-        'ic_class': 'digital_arithmetic_primitive', 'N': widths[2]}))
+    declaration = {'ic_class': 'digital_arithmetic_primitive'}
+    if signed is None:
+        declaration['integer_encoding'] = 'unsigned'
+    if declare:
+        declaration['function'] = function(
+            operator, widths[2] if type(widths[2]) is int else 1)
+    (root / 'declaration.json').write_text(json.dumps(declaration))
     return root
+
+
+def update_declaration(root, **fields):
+    path = root / 'declaration.json'
+    path.write_text(json.dumps({**json.loads(path.read_text()), **fields}))
+
+
+def extract(p):
+    return oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+
+
+@pytest.mark.parametrize('operator,widths', [('+', (3, 5, 6)), ('-', (5, 3, 4)), ('*', (3, 5, 4)), ('>>', (5, 3, 5))])
+def test_typed_function_supplies_operator_operands_and_exact_widths(tmp_path, operator, widths):
+    spec, reason = extract(project(tmp_path, widths=widths, operator=operator))
+    assert spec is not None, reason
+    assert (spec['operator'], spec['operand_a'], spec['operand_b'], spec['result']) == (
+        operator, 'left', 'right', 'result')
+    assert [spec[k] for k in ('operand_a_width', 'operand_b_width', 'result_width')] == list(widths)
 
 
 @pytest.mark.parametrize('source', [
     'result = left + right.',
-    'result = (left + right);',
-    'result = ((left) + (right)).',
+    'result = left + right mod 2^N',
     'The result is the sum of left and right.',
-    'parallel adder result = left + right.',
+    '```\nresult = left + right\n```',
 ])
-def test_complete_affirmative_expression_and_exact_widths(tmp_path, source):
-    p = project(tmp_path, source)
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert spec is not None, reason
-    assert (spec['operator'], spec['operand_a'], spec['operand_b'], spec['result']) == (
-        '+', 'left', 'right', 'result')
-    assert [spec[k] for k in ('operand_a_width', 'operand_b_width', 'result_width')] == [3, 5, 6]
-
-
-@pytest.mark.parametrize('source', [
-    'result = left + right * left.',
-    'result = left + right + left.',
-    'result = left + right[1:0].',
-    'result = left + right ? left : right.',
-    'result = left + right >>> 1.',
-    'result = left + right garbage.',
-    'result = (left + right.',
-    'Do not implement result = left + right.',
-    'Forbidden example: result = left + right.',
-    'Example: result = left + right.',
-    'result = left + right. Saturate on overflow.',
-    'result = left + right. Apply a correction.',
-    'result = left + right # Saturate on overflow.',
-    '# Do not implement\nresult = left + right.',
-    'multiplier result = left + right.',
-    ['result = left + right.', 'Saturate instead of wrapping on overflow.'],
-    ['result = left +', 'right.'],
-    ['result = left + right.', 'result = left - right.'],
-    'result = other + right.',
-    'result = left + left.',
-    'result = left + right mod 2^4.',
-    'subtractor',
-])
-def test_unsupported_or_nonaffirmative_function_refuses_without_writes(tmp_path, source):
-    p = project(tmp_path, source)
-    out = p / 'phase2/stage1/sim_full_stack'
-    out.mkdir(parents=True)
-    existing = out / 'tb_neutral_arithmetic_oracle.v'
-    existing.write_bytes(b'operator-owned existing testbench\n')
+def test_prose_alone_never_supplies_a_reference(tmp_path, source):
+    p = project(tmp_path, source, declare=False)
     before = {f.relative_to(p): f.read_bytes() for f in p.rglob('*') if f.is_file()}
-    report, rc = oracle.generate(p, 'digital_arithmetic_primitive')
-    assert (rc, report['verdict']) == (2, 'DEFER'), report
-    assert report['fallback_skill'] == 'testbench-gen'
-    assert {f.relative_to(p): f.read_bytes() for f in p.rglob('*') if f.is_file()} == before
+    spec, reason = extract(p)
+    assert spec is None and 'function field' in reason, (spec, reason)
+    assert all((p / name).read_bytes() == value for name, value in before.items())
 
 
-def test_function_records_outweigh_incidental_metadata(tmp_path):
-    p = project(tmp_path, 'result = left + right.')
-    doc = p / 'phase1/generated_docs/L1_DATASHEET.json'
-    doc.write_text(json.dumps({'description': 'Forbidden example: result = left - right.'}))
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert spec is not None, reason
-    assert spec['operator'] == '+'
+@pytest.mark.parametrize('field', [
+    'p = x * y',
+    [],
+    {**function(), 'extra': 1},
+    {k: v for k, v in function().items() if k != 'modulus_bits'},
+    function(operator='%'),
+    function(operator='**'),
+    function(modulus_bits=0),
+    function(modulus_bits='6'),
+    function(modulus_bits=True),
+    function(modulus_bits='N'),
+    function(operands=('left',)),
+    function(operands=('left', 'left')),
+    function(operands=('left', 'right', 'carry')),
+    function(operands=('left', 7)),
+    function(result='not an identifier'),
+])
+def test_malformed_function_field_defers(tmp_path, field):
+    p = project(tmp_path)
+    update_declaration(p, function=field)
+    spec, reason = extract(p)
+    assert spec is None and 'malformed' in reason, (spec, reason)
+
+
+@pytest.mark.parametrize('field', [
+    function(operands=('other', 'right')),
+    function(operands=('left', 'other')),
+    function(result='other'),
+    function(modulus_bits=3),
+])
+def test_function_field_must_agree_with_the_actual_ports(tmp_path, field):
+    p = project(tmp_path)
+    update_declaration(p, function=field)
+    spec, reason = extract(p)
+    assert spec is None and reason, (spec, reason)
+
+
+def test_declaration_files_must_agree(tmp_path):
+    p = project(tmp_path)
+    (p / 'plugin_output').mkdir()
+    (p / 'plugin_output/declaration.json').write_text(json.dumps({'function': function('-')}))
+    spec, reason = extract(p)
+    assert spec is None and 'different function' in reason, (spec, reason)
 
 
 @pytest.mark.parametrize('widths,signs', [
@@ -94,14 +119,42 @@ def test_function_records_outweigh_incidental_metadata(tmp_path):
     (('0', 5, 6), None), ((0, 5, 6), None), ((True, 5, 6), None),
 ])
 def test_unresolved_width_or_mixed_sign_has_truthful_handoff(tmp_path, widths, signs):
-    p = project(tmp_path, 'result = left + right.', widths=widths, signed=signs)
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+    p = project(tmp_path, widths=widths, signed=signs)
+    spec, reason = extract(p)
     assert spec is None, (spec, reason)
     assert reason
 
 
+@pytest.mark.parametrize('encoding,flags,accepted', [
+    (None, None, False),
+    ('signed_2c', (False, False, False), False),
+    ('unsigned', (True, True, True), False),
+    ('two_complement_ish', None, False),
+    ('signed_2c', None, True),
+    ('unsigned', (False, False, False), True),
+    (None, (True, True, True), True),
+    (None, (False, False, False), True),
+])
+def test_sign_comes_from_declared_types_and_undeclared_refuses(tmp_path, encoding, flags, accepted):
+    p = project(tmp_path, 'Signed 2s complement multiplier.', widths=(4, 4, 8), operator='*', signed=flags or (None,) * 3)
+    path = p / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
+    l9 = json.loads(path.read_text())
+    if flags is None:
+        for port in l9['top_ports']:
+            port.pop('signed')
+    path.write_text(json.dumps(l9))
+    if encoding:
+        update_declaration(p, integer_encoding=encoding)
+    spec, reason = extract(p)
+    assert bool(spec) is accepted, (spec, reason)
+    if accepted:
+        assert spec['signed'] is (flags[0] if flags else encoding == 'signed_2c')
+    else:
+        assert 'sign' in reason or 'encoding' in reason, reason
+
+
 def test_professional_refusal_preserves_existing_bundle(tmp_path):
-    p = project(tmp_path, 'result = left + right. Saturate on overflow.')
+    p = project(tmp_path, declare=False)
     out = p / 'existing_bundle'
     out.mkdir()
     (out / 'expert_reference_tb.py').write_bytes(b'operator reference\n')
@@ -112,8 +165,8 @@ def test_professional_refusal_preserves_existing_bundle(tmp_path):
     assert {f.relative_to(p): f.read_bytes() for f in p.rglob('*') if f.is_file()} == before
 
 
-def test_serial_classifier_cannot_bypass_source_refusal(tmp_path):
-    p = project(tmp_path, 'result = left * right. Saturate on overflow.', widths=(8, 1, 1))
+def test_serial_classifier_cannot_recover_an_operator_from_prose(tmp_path):
+    p = project(tmp_path, 'result = left * right', widths=(8, 1, 1), declare=False)
     shape, _ = professional.classify_dut(p, 'digital_arithmetic_primitive')
     assert shape['kind'] == 'generic', shape
     assert professional.generate(p)['status'] == 'INCOMPLETE'
@@ -121,15 +174,15 @@ def test_serial_classifier_cannot_bypass_source_refusal(tmp_path):
 
 @pytest.mark.parametrize('declared', [False, True])
 def test_parameter_width_requires_the_actual_declared_default(tmp_path, declared):
-    p = project(tmp_path, 'result = left * right.',
-                widths=('[W-1:0]', '[W-1:0]', '[2*W-1:0]'))
+    p = project(tmp_path, widths=('[W-1:0]', '[W-1:0]', '[2*W-1:0]'), operator='*')
+    update_declaration(p, function=function('*', 14))
     if declared:
         rtl = p / 'phase2/stage1/rtl'
         rtl.mkdir(parents=True)
         (rtl / 'neutral_arithmetic.v').write_text(
             'module neutral_arithmetic #(parameter W=7)(input [W-1:0] left,right, '
             'output [2*W-1:0] result); assign result=left*right; endmodule\n')
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
+    spec, reason = extract(p)
     if declared:
         assert spec is not None, reason
         assert [spec[k] for k in ('operand_a_width', 'operand_b_width', 'result_width')] == [7, 7, 14]
@@ -137,8 +190,8 @@ def test_parameter_width_requires_the_actual_declared_default(tmp_path, declared
         assert spec is None, (spec, reason)
 
 
-def test_actual_runner_propagates_source_handoff_without_simulation(tmp_path):
-    p = project(tmp_path, 'result = left + right. Saturate on overflow.')
+def test_actual_runner_propagates_handoff_without_simulation(tmp_path):
+    p = project(tmp_path, declare=False)
     before = {f.relative_to(p): f.read_bytes() for f in p.rglob('*') if f.is_file()}
     import design_one_shot_runner as runner
     step = runner.step_professional_tb_gen(p, 'neutral_arithmetic', 'unused')
@@ -147,196 +200,6 @@ def test_actual_runner_propagates_source_handoff_without_simulation(tmp_path):
     assert step.extras['fallback_skill'] == 'testbench-gen'
     assert not (p / 'phase2').exists()
     assert all((p / name).read_bytes() == content for name, content in before.items())
-
-
-@pytest.mark.parametrize('source,accepted', [
-    ('result = left + right mod 2^N (parallel adder)', True),
-    ('result = left + right * left.', False),
-    ('Do not implement result = left + right.', False),
-    ('result = left + right. Saturate on overflow.', False),
-])
-def test_existing_function_field_has_the_same_source_boundary(tmp_path, source, accepted):
-    p = project(tmp_path, source)
-    doc = p / 'phase1/generated_docs/L2_FRS.json'
-    doc.write_text(json.dumps({'function': source}))
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert bool(spec) is accepted, (spec, reason)
-    if accepted:
-        assert (spec['operand_a'], spec['operand_b'], spec['result_width']) == ('left', 'right', 6)
-
-
-@pytest.mark.parametrize('description,accepted', [
-    ('serial-parallel bitwise arithmetic', True),
-    ('Saturate on overflow', False),
-])
-def test_existing_serial_record_keeps_only_supported_shape_annotations(tmp_path, description, accepted):
-    from test_serial_parallel_declared_function_oracle import _declared_scenario_project
-    p = tmp_path / 'serial_contract'
-    _declared_scenario_project(p)
-    doc = p / 'phase1/generated_docs/L2_FRS.json'
-    doc.write_text(json.dumps({'frs_sections': [{
-        'content': 'p = (x & y) mod 2^8; ' + description}]}))
-    spec, reason = oracle.extract_serial_arith_spec(p, 'digital_arithmetic_primitive')
-    assert bool(spec) is accepted, (spec, reason)
-    if accepted:
-        assert (spec['operator'], spec['parallel'], spec['serial_in'], spec['serial_out']) == ('&', 'x', 'y', 'p')
-
-
-def test_existing_timed_serial_source_keeps_declared_multiply(tmp_path):
-    from test_fullstacktb_functional_population import _timed_fixture
-    p = _timed_fixture(tmp_path, 'core4')
-    spec, reason = oracle.extract_serial_arith_spec(p, 'digital_arithmetic_primitive')
-    assert spec is not None, reason
-    assert (spec['operator'], spec['width']) == ('*', 4)
-
-
-@pytest.mark.parametrize('source,accepted', [
-    ('serial-parallel multiplier: result = left * right mod 2^N', True),
-    ('serial-parallel multiplier: result = left * right + left', False),
-    ('serial-parallel multiplier: Do not implement result = left * right', False),
-    ('serial-parallel multiplier: result = left * right. Saturate on overflow.', False),
-])
-def test_shape_label_colon_preserves_the_complete_expression(source, accepted):
-    parsed = oracle._extract_operator(source)
-    assert bool(parsed) is accepted, parsed
-    if accepted:
-        assert parsed == ('result', 'left', '*', 'right')
-
-
-@pytest.mark.parametrize('polarity,sync,physical,accepted', [
-    (None, None, True, False),
-    ('active_high', 'sync', True, True),
-    ('active_low', 'sync', True, False),
-    ('active_high', 'async', True, False),
-    ('active_high', 'sync', False, False),
-])
-def test_reset_clause_requires_its_actual_structured_contract(tmp_path, polarity, sync, physical, accepted):
-    p = project(tmp_path, 'multiplier: result = left * right; synchronous active-high reset')
-    path = p / 'phase1/generated_docs/L9_INTEGRATION_SPEC.json'
-    l9 = json.loads(path.read_text())
-    if physical:
-        l9['top_ports'] += [{'name': n, 'direction': 'input', 'width': 1} for n in ('clk', 'rst')]
-    if polarity is not None:
-        l9['reset_domains'] = [{'name': 'rst', 'polarity': polarity, 'sync': sync}]
-    path.write_text(json.dumps(l9))
-    parsed = oracle._function_operator(p)
-    assert bool(parsed) is accepted, parsed
-    if accepted:
-        assert parsed == ('result', 'left', '*', 'right')
-
-
-@pytest.mark.parametrize('source,accepted', [
-    ('result is the sum of left and right adder', True),
-    ('result is the sum of left and right multiplier', False),
-    ('Implement a multiplier. The result is the sum of left and right.', False),
-    ('result is the sum of left and right bitwise arithmetic', False),
-])
-def test_affirmative_prose_requires_consistent_shape_labels(tmp_path, source, accepted):
-    p = project(tmp_path, source)
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert bool(spec) is accepted, (spec, reason)
-    if accepted:
-        assert spec['operator'] == '+'
-
-
-@pytest.mark.parametrize('declared,accepted', [(None, False), (3, False), (6, True), (True, False)])
-def test_symbolic_modulus_uses_its_named_declaration(tmp_path, declared, accepted):
-    p = project(tmp_path, 'result = left + right mod 2^LIMIT.')
-    declaration = p / 'declaration.json'
-    data = json.loads(declaration.read_text())
-    if declared is not None:
-        data['LIMIT'] = declared
-    declaration.write_text(json.dumps(data))
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert bool(spec) is accepted, (spec, reason)
-    if not accepted:
-        assert 'LIMIT' in reason, reason
-
-
-@pytest.mark.parametrize('title,accepted', [
-    ('Function', True), ('Forbidden example: do not implement', False),
-    ('Negative example', False), ('Prohibited implementation', False),
-    ('Function (not applicable)', False),
-    ('Negative examples', False), ('Disallowed example', False),
-    ('Illustrative example', False),
-])
-def test_frs_record_title_retains_its_authority(tmp_path, title, accepted):
-    p = project(tmp_path, 'result = left + right.')
-    path = p / 'phase1/generated_docs/L2_FRS.json'
-    path.write_text(json.dumps({'frs_sections': [{'title': title, 'content': 'result = left + right.'}]}))
-    before = {f.relative_to(p): f.read_bytes() for f in p.rglob('*') if f.is_file()}
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert bool(spec) is accepted, (spec, reason)
-    assert all((p / name).read_bytes() == value for name, value in before.items())
-
-
-@pytest.mark.parametrize('wrapper', ['document', 'fields'])
-def test_function_wrapper_cannot_restore_a_prohibited_record(tmp_path, wrapper):
-    p = project(tmp_path, 'result = left + right.')
-    fields = {'function': 'result = left + right.'}
-    doc = {'fields': fields}
-    (doc if wrapper == 'document' else fields)['title'] = 'Forbidden example: do not implement'
-    (p / 'phase1/generated_docs/L2_FRS.json').write_text(json.dumps(doc))
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert spec is None, (spec, reason)
-
-
-@pytest.mark.parametrize('title,accepted', [('Function', True), ('Forbidden example: do not implement', False)])
-def test_existing_overview_fallback_keeps_its_title_polarity(tmp_path, title, accepted):
-    p = project(tmp_path, 'result = left + right.')
-    docs = p / 'phase1/generated_docs'
-    (docs / 'L2_FRS.json').unlink()
-    (docs / 'L1_DATASHEET.json').write_text(json.dumps({'title': title, 'overview': 'result = left + right.'}))
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert bool(spec) is accepted, (spec, reason)
-
-
-@pytest.mark.parametrize('metadata', [
-    {'heading': 'Forbidden example: do not implement'},
-    {'name': 'Negative example'},
-    {'section': 'Forbidden example: do not implement'},
-    {'section': 3},
-    {'title': 'Function', 'kind': 'negative_example'},
-    {'title': 'Function', 'negative': True},
-    {'title': 'Function', 'section': 'Negative examples'},
-])
-def test_frs_record_authority_outside_its_title_defers(tmp_path, metadata):
-    p = project(tmp_path, 'result = left + right.')
-    (p / 'phase1/generated_docs/L2_FRS.json').write_text(json.dumps({
-        'frs_sections': [{**metadata, 'content': 'result = left + right.'}]}))
-    before = {f.relative_to(p): f.read_bytes() for f in p.rglob('*') if f.is_file()}
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert spec is None, (spec, reason)
-    assert all((p / name).read_bytes() == value for name, value in before.items())
-
-
-@pytest.mark.parametrize('metadata', [
-    {'section': 'h2', 'title': 'Function', 'evidence': 'input/docs/spec.md', 'heading_shape': 'md_atx'},
-    {'section': '1.1', 'title': 'Function'},
-    {'section': 'unheaded', 'title': 'Functional requirements', 'evidence': 'input/docs/spec.md'},
-    {},
-])
-def test_phase1_record_shapes_keep_their_reference(tmp_path, metadata):
-    p = project(tmp_path, 'result = left + right.')
-    (p / 'phase1/generated_docs/L2_FRS.json').write_text(json.dumps({
-        'frs_sections': [{**metadata, 'content': 'result = left + right.'}]}))
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert spec and spec['operator'] == '+', (spec, reason)
-
-
-@pytest.mark.parametrize('key', ['function', 'content'])
-@pytest.mark.parametrize('nested', [False, True])
-def test_function_wrapper_metadata_outside_its_title_defers(tmp_path, key, nested):
-    p = project(tmp_path, 'result = left + right.')
-    fields = {key: 'result = left + right.', 'heading': 'Forbidden example: do not implement'}
-    path = p / 'phase1/generated_docs/L2_FRS.json'
-    path.write_text(json.dumps({'fields': fields} if nested else fields))
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert spec is None, (spec, reason)
-    fields.pop('heading')
-    path.write_text(json.dumps({'fields': fields} if nested else fields))
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert spec and spec['operator'] == '+', (spec, reason)
 
 
 # The record shape Phase 1 actually writes for a multi-section design document.
@@ -372,7 +235,7 @@ PHASE1_RECORDS = [(title, content) for title, content in (
 )]
 
 
-def phase1_project(root, records=PHASE1_RECORDS, *, size=8):
+def phase1_project(root, records=PHASE1_RECORDS, *, size=8, declare=True):
     docs = root / 'phase1/generated_docs'
     docs.mkdir(parents=True)
     (docs / 'L2_FRS.json').write_text(json.dumps({
@@ -391,111 +254,54 @@ def phase1_project(root, records=PHASE1_RECORDS, *, size=8):
         'bit_order': 'LSB_first', 'integer_encoding': 'unsigned', 'latency_cycles': 2,
         'latency_cycles_origin': 'pre_nba_sample_offset', 'reset_polarity': 'active_high',
         'size_param': size, 'transaction_rearm': 'clocked_reset', 'rearm_reset_cycles': 1,
-        'parallel_hold': 'through_final_product_bit'}))
+        'parallel_hold': 'through_final_product_bit',
+        **({'function': function('*', size, 'p', ('x', 'y'))} if declare else {})}))
     return root
 
 
-def test_multi_section_phase1_function_record_keeps_its_serial_reference(tmp_path):
+def serial_spec(p):
+    return oracle.extract_serial_arith_spec(p, 'digital_arithmetic_primitive')
+
+
+def test_multi_section_phase1_design_keeps_its_serial_reference_through_the_typed_field(tmp_path):
     p = phase1_project(tmp_path)
-    assert oracle._function_operator(p) == ('p', 'x', '*', 'y')
-    assert oracle._source_modulus(p) == (8, 'N=8')
-    spec, reason = oracle.extract_serial_arith_spec(p, 'digital_arithmetic_primitive')
+    spec, reason = serial_spec(p)
     assert spec, reason
     assert (spec['operator'], spec['width'], spec['signed']) == ('*', 8, False)
     assert professional._detect_stream_operator(p, 'digital_arithmetic_primitive') == '*'
 
 
-@pytest.mark.parametrize('narrative', [
-    'Saturate on overflow.', 'Apply a correction.', 'Do not implement:', 'Negative example:',
-    '> 此範例禁止實作', '- **other** is an unrelated rule', '飽和運算:',
+def test_multi_section_prose_without_the_typed_field_hands_off(tmp_path):
+    p = phase1_project(tmp_path, declare=False)
+    spec, reason = serial_spec(p)
+    assert spec is None and 'function field' in reason, (spec, reason)
+    assert professional._detect_stream_operator(p, 'digital_arithmetic_primitive') is None
+
+
+@pytest.mark.parametrize('field,reason', [
+    (function('*', 6, 'p', ('x', 'y')), 'modulus_bits'),
+    (function('*', 8, 'q', ('x', 'y')), 'data ports'),
+    (function('*', 8, 'p', ('x', 'z')), 'data ports'),
 ])
-def test_prose_around_a_fenced_function_cannot_qualify_it(tmp_path, narrative):
-    records = [('功能定義', narrative + '\n\n```\np = (x * y) mod 2^N\n```\n')]
-    p = phase1_project(tmp_path, records)
-    assert oracle._function_operator(p) is None
-    spec, reason = oracle.extract_serial_arith_spec(p, 'digital_arithmetic_primitive')
-    assert spec is None, reason
+def test_serial_function_field_must_agree_with_ports_and_word_width(tmp_path, field, reason):
+    p = phase1_project(tmp_path)
+    path = p / 'plugin_output/declaration.json'
+    path.write_text(json.dumps({**json.loads(path.read_text()), 'function': field}))
+    spec, why = serial_spec(p)
+    assert spec is None and reason in why, (spec, why)
 
 
-@pytest.mark.parametrize('content', [
-    '```\np = x * y\n```\n```\np = x + y\n```',
-    '```\np = x * y\np = x + y\n```',
-    '```\nnot an expression\n```',
-    '```\np = (x * y) mod 2^N\n',
-])
-def test_a_function_record_needs_exactly_one_complete_fenced_expression(tmp_path, content):
-    p = phase1_project(tmp_path, [('功能定義', content)])
-    assert oracle._function_operator(p) is None
+def test_serial_sign_must_be_declared(tmp_path):
+    p = phase1_project(tmp_path)
+    path = p / 'plugin_output/declaration.json'
+    doc = json.loads(path.read_text())
+    doc.pop('integer_encoding')
+    path.write_text(json.dumps(doc))
+    spec, why = serial_spec(p)
+    assert spec is None and 'sign' in why, (spec, why)
 
 
-@pytest.mark.parametrize('records,operator', [
-    ([('Product metadata', 'A neutral datapath.'), ('Function', 'p = x * y')], '*'),
-    ([('Forbidden example: do not implement', 'p = x + y'), ('Function', 'p = x * y')], '*'),
-    ([('Negative example', 'p = x + y'), ('功能定義 (Functional Specification)', 'p = x * y')], '*'),
-    ([('Forbidden example: do not implement', 'p = x * y')], None),
-    ([('Product metadata', 'p = x * y')], None),
-    ([('Algorithm', 'p = x + y'), ('Function', 'p = x * y')], None),
-    ([('功能定義 (negative example)', 'p = x * y')], None),
-    ([('Function', 'p = x * y'), ('Function', 'Saturate on overflow.')], None),
-    ([('Function', 'p = x * y'), ('Overflow policy', 'Wraps.')], None),
-    ([('Function', 'p = x * y'), ('Datapath notes', 'The result saturates at its maximum.')], None),
-    ([('Function', 'p = x * y'), ('溢位行為', '結果飽和。')], None),
-    ([('Function', 'p = x * y'), ('Forbidden example: saturate on overflow', 'p = x + y')], '*'),
-])
-def test_function_role_selects_records_and_a_stated_conflict_defers(tmp_path, records, operator):
-    found = oracle._function_operator(phase1_project(tmp_path, records))
-    assert (found[2] if found else None) == operator
-
-
-@pytest.mark.parametrize('declared_n,modulus,accepted', [(None, 8, True), (8, 8, True), (6, 6, False)])
-def test_mod_2_n_binds_the_declared_size_unless_n_is_itself_declared(tmp_path, declared_n, modulus, accepted):
-    p = phase1_project(tmp_path, [('Function', 'p = x * y mod 2^N')])
-    if declared_n is not None:
-        path = p / 'plugin_output/declaration.json'
-        path.write_text(json.dumps({**json.loads(path.read_text()), 'N': declared_n}))
-    assert oracle._source_modulus(p)[0] == modulus
-    spec, reason = oracle.extract_serial_arith_spec(p, 'digital_arithmetic_primitive')
-    assert bool(spec) is accepted, (spec, reason)
-
-
-def test_only_the_symbol_n_means_the_declared_size(tmp_path):
-    p = phase1_project(tmp_path, [('Function', 'p = x * y mod 2^LIMIT')])
-    modulus, why = oracle._source_modulus(p)
-    assert modulus is None and 'LIMIT' in why
-
-
-def sign_project(root, *, overview=None, encoding=None, flags=None):
-    p = project(root, 'result = left * right.', widths=(4, 4, 8), signed=flags)
-    if overview:
-        (p / 'phase1/generated_docs/L1_DATASHEET.json').write_text(json.dumps({'overview': overview}))
-    if encoding:
-        path = p / 'declaration.json'
-        path.write_text(json.dumps({**json.loads(path.read_text()), 'integer_encoding': encoding}))
-    return p
-
-
-@pytest.mark.parametrize('case', [
-    {'overview': 'Signed 2s complement multiplier.'},
-    {'overview': 'Handles signed and unsigned integers.'},
-    {'encoding': 'signed_2c', 'flags': (False, False, False)},
-    {'encoding': 'unsigned', 'flags': (True, True, True)},
-])
-def test_unresolved_or_conflicting_sign_defers(tmp_path, case):
-    p = sign_project(tmp_path, **case)
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert spec is None and 'sign' in reason, (spec, reason)
-
-
-@pytest.mark.parametrize('case,signed', [
-    ({'overview': 'Signed 2s complement multiplier.', 'encoding': 'signed_2c'}, True),
-    ({'overview': 'Signed 2s complement multiplier.', 'flags': (True, True, True)}, True),
-    ({'encoding': 'unsigned', 'flags': (False, False, False)}, False),
-    ({'encoding': 'signed_2c'}, True),
-    ({'overview': 'An unsigned multiplier.'}, False),
-    ({}, False),
-])
-def test_declared_operand_types_set_the_sign(tmp_path, case, signed):
-    p = sign_project(tmp_path, **case)
-    spec, reason = oracle.extract_arith_spec(p, 'digital_arithmetic_primitive')
-    assert spec, reason
-    assert spec['signed'] is signed
+def test_generated_serial_multiplier_declares_the_function_it_implements():
+    import serial_parallel_mul_synth as synth
+    source = Path(synth.__file__).read_text()
+    assert '"operands": [spec["parallel"], spec["serial_in"]]' in source

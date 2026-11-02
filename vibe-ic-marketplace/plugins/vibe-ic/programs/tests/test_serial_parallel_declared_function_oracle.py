@@ -116,7 +116,10 @@ def _mk_project(tmp: Path, *, declare: bool, bit_order: str = "LSB_first",
         (root / "plugin_output" / "declaration.json").write_text(json.dumps({
             "bit_order": bit_order, "latency_cycles": 2,
             "integer_encoding": encoding, "reset_polarity": "active_high",
-            "size_param": 8}))
+            "size_param": 8, "function": {"result": "y", "operands": ["a", "b"], "operator": "*", "modulus_bits": 8}}))
+    else:
+        (root / "declaration.json").write_text(json.dumps({
+            "integer_encoding": encoding, "function": {"result": "y", "operands": ["a", "b"], "operator": "*", "modulus_bits": 8}}))
     if with_l10:
         (gd / "L10_TEST_CASES.json").write_text(
             json.dumps(_L10, ensure_ascii=False))
@@ -189,6 +192,9 @@ def test_unrecognised_operator_defers_fail_closed(tmp_path):
     (proj / "phase1" / "generated_docs" / "L2_FRS.json").write_text(json.dumps({
         "ic_name": "serpar_mul",
         "frs_sections": [{"content": "a bit-serial scrambler of x and y"}]}))
+    declaration = proj / "plugin_output" / "declaration.json"
+    declaration.write_text(json.dumps({key: value for key, value in
+                                       json.loads(declaration.read_text()).items() if key != "function"}))
     spec, reason = aotg.extract_serial_arith_spec(
         proj, "digital_arithmetic_primitive")
     assert spec is None and "operator" in reason.lower()
@@ -262,6 +268,9 @@ def test_testbench_gen_fail_closed_keeps_scaffold_when_function_undecidable(
     (proj / "phase1" / "generated_docs" / "L2_FRS.json").write_text(json.dumps({
         "ic_name": "serpar_mul",
         "frs_sections": [{"content": "a bit-serial scrambler of x and y"}]}))
+    declaration = proj / "plugin_output" / "declaration.json"
+    declaration.write_text(json.dumps({key: value for key, value in
+                                       json.loads(declaration.read_text()).items() if key != "function"}))
     tbg.emit_unit_tbs(proj, "serpar_mul", kind="functional_vector", report={})
     tb_dir = proj / "phase2" / "stage1" / "sim" / "tb"
     for case in ("random_multiplication_functional_equivalence",
@@ -331,7 +340,8 @@ def _declared_scenario_project(root, *, width=8, order="LSB_first",
         "bit_order":order, "latency_cycles":latency,
         "latency_cycles_origin":"settled_edge_offset", "integer_encoding":"unsigned",
         "reset_polarity":"active_high", "transaction_rearm":rearm,
-        "rearm_reset_cycles":1, "parallel_hold":"through_final_product_bit"}))
+        "rearm_reset_cycles":1, "parallel_hold":"through_final_product_bit",
+        "function":{"result":"p", "operands":["x","y"], "operator":"&", "modulus_bits":width}}))
     bit = "idx" if order == "LSB_first" else f"{width-1}-idx"
     reset = "rst" if mode != "ignored_reset" else "1'b0"
     inv = "~" if mode == "wrong_product" else ""
@@ -349,7 +359,7 @@ endmodule
         names={"clk":"i_clk", "rst":"i_rst", "x":"operand_word",
                "y":"serial_bit", "p":"result_bit"}
         for path in [gd/"L9_INTEGRATION_SPEC.json",gd/"L2_FRS.json",
-                     rtl/"neutral_serial.v"]:
+                     root/"plugin_output/declaration.json",rtl/"neutral_serial.v"]:
             text=path.read_text()
             for before,after in names.items():
                 text=re.sub(r"\b"+before+r"\b",after,text)
