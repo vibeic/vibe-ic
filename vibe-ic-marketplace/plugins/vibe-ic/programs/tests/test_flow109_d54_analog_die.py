@@ -7,6 +7,7 @@ import pytest
 import _path_layout as layout
 import analog_native_flow as native
 import flow109
+import step_output_collector as versions
 from programs.tests._hostpaths import require_repo
 
 
@@ -41,7 +42,11 @@ def carrier(tmp_path):
     rows = []
     for block in blocks:
         name = block['name']
-        put(layout.analog_dir(project) / name / 'spec.json', block['spec'])
+        bdir = layout.analog_dir(project) / name
+        put(bdir / 'spec.json', block['spec'])
+        put(bdir / (name + '.gds'), {'layout': 'original'})
+        put(bdir / 'native/A13.json', {'extraction': 'original'})
+        put(bdir / 'native/extracted.spice', {'pex': 'original'})
         metrics = {'pre': {'measurements': {'vout': 1.2}},
                    'corners': [{'style': 'native_rc', 'measurements': {'vout': 1.21},
                                 'missing': [], 'violations': []}],
@@ -55,12 +60,35 @@ def carrier(tmp_path):
                      'output_views': {str(output): native._sha(output)}})
     report = {'attempt': str(attempt), 'steps': rows}
     save(project, report)
+    publish_current_a14(project)
     return project
 
 
 def save(project, report):
     put(project / 'reports/analog_native/status.json', report)
     put(__import__('pathlib').Path(report['attempt']) / 'result.json', report)
+
+
+def publish_current_a14(project):
+    """Use the real collector with a synthetic canonical A14 catalog row.
+
+    Native-result/current-input protocol controls, not native qualification.
+    Only the row catalog is supplied; latest_pass and its hashing are real.
+    """
+    from unittest.mock import patch
+    inputs = {}
+    for name in ('unit_a', 'unit_b'):
+        inputs.update({str(__import__('pathlib').Path(p).relative_to(project)): h
+                       for p, h in native._input_views(project, name, 'A14').items()})
+        bdir = layout.analog_dir(project) / name
+        for path in (bdir / (name + '.gds'), bdir / 'native/A13.json',
+                     bdir / 'native/extracted.spice'):
+            inputs[str(path.relative_to(project))] = native._sha(path)
+    row = ('A14', 'Analog post-layout performance', 'PASS', 'phase3', 'stage4', [])
+    with patch.object(versions, '_iter_step_records', lambda _: iter([row])):
+        attempt = versions.begin_step(project, 'A14', inputs)
+        versions.finish_step(project, attempt, verdict='PASS', canonical_pass=True)
+    assert versions.latest_pass(project, 'A14')['current_inputs'] is True
 
 
 def invoke(project):
@@ -143,6 +171,46 @@ def test_original_l5_label_alias_keeps_native_numeric_limits(carrier):
     for row in report['steps']:
         row['input_views'] = native._input_views(carrier, row['block'], 'A14')
     save(carrier, report)
+    publish_current_a14(carrier)
     rc, result = invoke(carrier)
     assert result['default_row_status'] == 'PASS', result
     assert rc == 0
+
+
+@pytest.mark.parametrize('physical', ['layout', 'extraction', 'pex'])
+def test_stale_a14_physical_result_never_passes(carrier, physical):
+    """Reviewer HIGH: A14's old input_views omit physical extraction inputs."""
+    bdir = layout.analog_dir(carrier) / 'unit_b'
+    path = {'layout': bdir / 'unit_b.gds', 'extraction': bdir / 'native/A13.json',
+            'pex': bdir / 'native/extracted.spice'}[physical]
+    original = json.loads((carrier / 'reports/analog_native/status.json').read_text())
+    assert versions.latest_pass(carrier, 'A14')['canonical_pass'] is True
+    put(path, {'physical': 'changed after A14 PASS'})
+    # The old guard still agrees with every saved native input_view, while
+    # the flow's existing resolved input manifest detects stale physical bytes.
+    for row in original['steps']:
+        assert all(row['input_views'].get(p) == h for p, h in
+                   native._input_views(carrier, row['block'], 'A14').items())
+    assert versions.latest_pass(carrier, 'A14')['current_inputs'] is False
+    rc, result = invoke(carrier)
+    assert result['default_row_status'] == 'NOT_MEASURED', result
+    assert rc == 2
+
+
+@pytest.mark.parametrize('case', ['missing', 'not_canonical', 'capture_error'])
+def test_a14_requires_existing_current_canonical_result(carrier, case):
+    root = versions._versions_root(carrier)
+    pointer = json.loads((root / 'latest_pass.json').read_text())['steps']['A14']
+    if case == 'missing':
+        (root / 'latest_pass.json').unlink()
+    else:
+        record_path = root / pointer['folder'] / 'outputs.json'
+        record = json.loads(record_path.read_text())
+        if case == 'not_canonical':
+            record['canonical_pass'] = False
+        else:
+            record['capture_errors'] = ['native output capture incomplete']
+        put(record_path, record)
+    rc, result = invoke(carrier)
+    assert result['default_row_status'] == 'NOT_MEASURED', result
+    assert rc == 2

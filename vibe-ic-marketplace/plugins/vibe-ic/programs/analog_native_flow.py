@@ -1460,6 +1460,7 @@ def _d54_correlation(project: Path, context: dict) -> dict:
     threshold, receipt, or whole-flow acceptance is introduced here.
     """
     import flow109
+    import step_output_collector as versions
     from corner_yield_vs_spec_check import _spec_limits
     from analog_real_corner_sweep import normalize_spec_label
 
@@ -1501,6 +1502,15 @@ def _d54_correlation(project: Path, context: dict) -> dict:
         if (not attempt.resolve().is_relative_to(project / "reports/analog_native")
                 or json.loads((attempt / "result.json").read_text()) != report):
             raise ValueError("D54_A14_NATIVE_ATTEMPT_UNAVAILABLE")
+        # The native block readset omits physical inputs. Reuse the flow's
+        # canonical current-result decision rather than infer freshness here.
+        current = versions.latest_pass(project, "A14")
+        if (not isinstance(current, dict) or current.get("id") != "A14"
+                or current.get("status") != "PASS"
+                or current.get("canonical_pass") is not True
+                or current.get("current_inputs") is not True
+                or current.get("capture_errors")):
+            raise ValueError("D54_A14_CURRENT_CANONICAL_RESULT_ABSENT")
         rows = [r for r in report["steps"] if r.get("step") == "A14"]
         for block in blocks:
             name = block.get("name") or block.get("block")
