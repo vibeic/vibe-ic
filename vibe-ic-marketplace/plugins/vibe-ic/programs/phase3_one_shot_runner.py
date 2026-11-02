@@ -53340,7 +53340,16 @@ def _step31_librelane(project: Path, top: str, pdk: PdkConfig, half: str,
     from librelane_contract import Refusal, tool_stop_reason, resolve_image, resolve_pdk_root
     try:
         from _prestream_native import signoff_inputs
-        views = signoff_inputs(project, "gds", "def", "netlist", "sdc")
+        reference_project = project
+        release = None
+        release_record = project / "reports/phase3/provider_die_assembly.json"
+        if half == "lvs" and release_record.is_file():
+            from die_finishing_gen import read_admitted_release
+            release = read_admitted_release(project, release_record)
+            reference_project = release["source_project"]
+        views = signoff_inputs(reference_project, "gds", "def", "netlist", "sdc")
+        if release:
+            views["gds"] = release["gds"]
     except (OSError, ValueError, KeyError, RuntimeError) as exc:
         return StepResult(half, "NOT_MEASURED", time.time() - t0, str(exc),
                           reason_class=_V.ReasonClass.INPUT_ABSENT)
@@ -53363,7 +53372,7 @@ def _step31_librelane(project: Path, top: str, pdk: PdkConfig, half: str,
             job.mkdir(parents=True)
             powered = job / "reference.v"
             additional_lefs = sorted({
-                *_pl.extracted_dir(project).glob("*.extract.lef"),
+                *_pl.extracted_dir(reference_project).glob("*.extract.lef"),
                 *_stage_padring_io_lefs_for_lvs(project, pdk, image)}, key=str)
             _lvs_pa.emit_to_file(views["netlist"], pdk.name, powered,
                                 top=physical_top, rails_as_ports=True,
