@@ -152,6 +152,54 @@ def _run(project):
     return run_legacy_component(project, 'A02')
 
 
+@pytest.mark.parametrize('approver', [
+    pytest.param({}, id='missing'),
+    pytest.param({'approver': None}, id='null'),
+    pytest.param({'approver': ''}, id='empty'),
+    pytest.param({'approver': ' \t\n'}, id='blank'),
+    pytest.param({'approver': 17}, id='nonstring'),
+    pytest.param({'approver': 'neutral-requirements-reviewer'}, id='named'),
+])
+def test_a02_requirements_need_named_approver(tmp_path, approver):
+    selection, registry, _model = _case(tmp_path)
+    manifest = json.loads((tmp_path / analog.INPUT).read_text())
+    requirements = json.loads((tmp_path / manifest['requirements']['path']).read_text())
+    requirements['approval'].pop('approver', None)
+    requirements['approval'].update(approver)
+    manifest['requirements'] = _put(tmp_path, manifest['requirements']['path'], requirements)
+    config = _put(tmp_path, analog.INPUT, manifest)
+    record = registry['uses'][0]
+    record['identity'].update(config=config, deck=manifest['requirements'])
+    _put(tmp_path, 'qualifications.json', registry)
+    uses = [{**record['identity'], 'qualification_sha256': admission.canonical_sha(record)}]
+    plan = flow109.resolve_plan(selection['features'])
+    context = flow109.execution_context(plan, 'A02', 'A02', runtime_tool_uses=uses,
+                                        qualification_registry='qualifications.json')
+    observed = 'ADMITTED'
+    try:
+        analog.prepare(tmp_path, context)
+    except admission.AdmissionRefusal as exc:
+        observed = exc.code
+    expected = ('ADMITTED' if approver.get('approver') == 'neutral-requirements-reviewer'
+                else 'A02_REQUIREMENTS_NOT_APPROVED')
+    assert observed == expected
+
+
+def test_a02_named_approver_does_not_admit_stale_requirements(tmp_path):
+    selection, _registry, _model = _case(tmp_path)
+    context = flow109.execution_context(flow109.resolve_plan(selection['features']), 'A02', 'A02',
+        runtime_tool_uses=selection['runtime_tool_uses'], qualification_registry='qualifications.json')
+    manifest = json.loads((tmp_path / analog.INPUT).read_text())
+    requirements = tmp_path / manifest['requirements']['path']
+    requirements.write_text(requirements.read_text() + '\n')
+    observed = 'ADMITTED'
+    try:
+        analog.prepare(tmp_path, context)
+    except admission.AdmissionRefusal as exc:
+        observed = exc.code
+    assert observed == 'QUALIFICATION_STALE'
+
+
 def test_actual_a02_runs_declared_model_device_smoke_and_keeps_signoff_unmeasured(tmp_path):
     _case(tmp_path)
     result = _run(tmp_path)

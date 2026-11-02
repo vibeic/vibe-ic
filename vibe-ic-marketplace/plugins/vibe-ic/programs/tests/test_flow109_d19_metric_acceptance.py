@@ -111,6 +111,60 @@ def test_registry_denominator_is_read_from_real_contract():
             assert all(obligation['expectation'][key] == value for key, value in spec.items())
 
 
+@pytest.mark.parametrize('name', ['scenario_constraints', 'mode_library_rc_mapping'])
+@pytest.mark.parametrize('approval_fields', [
+    {}, {'approver': None}, {'approver': ''}, {'approver': ' \t\n'},
+    {'approver': 37}, {'approver': False}, {'approver': []}, {'approver': {}},
+], ids=['missing', 'null', 'empty', 'whitespace', 'number', 'boolean', 'list', 'mapping'])
+def test_inline_authority_requires_named_approver(tmp_path, monkeypatch, name, approval_fields):
+    context, fields = _case(tmp_path, monkeypatch)
+    approval = copy.deepcopy(fields[name]['approval'])
+    approval.pop('approver')
+    approval.update(approval_fields)
+    fields[name]['approval'] = approval
+    _write(tmp_path / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': fields})
+    try:
+        metrics.d19_admission(tmp_path, context, publish=True)
+        observed = 'ADMITTED'
+    except metrics.MetricRefusal as exc:
+        observed = exc.code
+    assert observed == 'D19_PLAN_UNAPPROVED'
+    assert not (tmp_path / 'requirements/base_10/scenario_constraints.json').exists()
+    assert not (tmp_path / 'adopted/base_10/mode_library_rc_mapping.json').exists()
+
+
+@pytest.mark.parametrize('name', ['scenario_constraints', 'mode_library_rc_mapping'])
+@pytest.mark.parametrize('source_state,expected', [
+    ('current', 'ADMITTED'),
+    ('stale', 'D19_INPUT_STALE'),
+    ('payload_mismatch', 'D19_APPROVED_FIELDS_DIFFER'),
+], ids=['current', 'stale', 'payload_mismatch'])
+def test_inline_named_approval_remains_source_bound(tmp_path, monkeypatch, name,
+                                                   source_state, expected):
+    context, fields = _case(tmp_path, monkeypatch)
+    fields[name]['approval'] = copy.deepcopy(fields[name]['approval'])
+    fields[name]['approval']['approver'] = 'neutral-delegated-reviewer'
+    if source_state == 'stale':
+        fields[name]['approval']['source_reference']['sha256'] = '0' * 64
+    elif source_state == 'payload_mismatch':
+        if name == 'scenario_constraints':
+            fields[name]['required_checks'].append('unapproved_check')
+        else:
+            fields[name]['reference'].pop()
+    _write(tmp_path / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': fields})
+    try:
+        produced = metrics.d19_admission(tmp_path, context, publish=True)
+        observed = 'ADMITTED'
+    except metrics.MetricRefusal as exc:
+        observed = exc.code
+    assert observed == expected
+    if source_state == 'current':
+        accepted = metrics.accept_d19(tmp_path, context, {'d19_plan_admission': produced})
+        assert [item['status'] for item in accepted['obligations']] == [
+            'PASS', 'PASS', 'NOT_MEASURED']
+        assert accepted['status'] == 'NOT_MEASURED' and accepted['delivery_blocked'] is True
+
+
 @pytest.mark.parametrize('damage,reason', [
     ('hold', 'D19_REQUIRED_SCENARIO_MISSING'),
     ('capture', 'D19_REQUIRED_SCENARIO_MISSING'),

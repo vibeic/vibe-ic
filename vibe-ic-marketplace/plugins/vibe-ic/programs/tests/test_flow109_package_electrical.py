@@ -98,6 +98,50 @@ def _cli(project):
         env=env, capture_output=True, text=True, timeout=60)
 
 
+@pytest.mark.parametrize('document', ['requirements', 'port_reference'])
+@pytest.mark.parametrize('approver', [
+    pytest.param({}, id='missing'),
+    pytest.param({'approver': None}, id='null'),
+    pytest.param({'approver': ''}, id='empty'),
+    pytest.param({'approver': ' \t\n'}, id='blank'),
+    pytest.param({'approver': 17}, id='nonstring'),
+    pytest.param({'approver': 'neutral-requirements-reviewer'}, id='named'),
+])
+def test_d67_authorities_need_named_approver(tmp_path, document, approver):
+    context, requirements, reference = _case(tmp_path)
+    target = requirements if document == 'requirements' else reference
+    target['approval'] = dict(target['approval'])
+    target['approval'].pop('approver', None)
+    target['approval'].update(approver)
+    _bind(tmp_path, requirements, reference)
+    observed = 'ADMITTED'
+    try:
+        d67.prepare(tmp_path, context)
+    except d67.AdmissionRefusal as exc:
+        observed = exc.code
+    expected = ('ADMITTED' if approver.get('approver') == 'neutral-requirements-reviewer'
+                else 'D67_REQUIREMENTS_NOT_APPROVED')
+    assert observed == expected
+
+
+@pytest.mark.parametrize('document', ['requirements', 'port_reference'])
+def test_d67_named_approver_does_not_admit_stale_source(tmp_path, document):
+    context, requirements, reference = _case(tmp_path)
+    target = requirements if document == 'requirements' else reference
+    original = Path(target['approval']['source_reference']['path']).read_text()
+    source = _put(tmp_path, 'input/current-owner.md', original)
+    target['approval'] = {**target['approval'], 'source_reference': source}
+    _bind(tmp_path, requirements, reference)
+    d67.prepare(tmp_path, context)
+    (tmp_path / source['path']).write_text(original + '\n')
+    observed = 'ADMITTED'
+    try:
+        d67.prepare(tmp_path, context)
+    except d67.AdmissionRefusal as exc:
+        observed = exc.code
+    assert observed == 'D67_INPUT_STALE_OR_MISSING'
+
+
 def test_selected_default_d67_normal_consumer_runs_real_models(tmp_path):
     project = tmp_path / 'case'
     context, requirements, reference = _case(project, make_context=False)
