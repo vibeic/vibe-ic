@@ -118,7 +118,7 @@ def test_package_compile_order_does_not_replace_the_top_parameter_width(tmp_path
     l9 = {'fields': {'top_module': 'spm', 'top_ports': [{'name': 'clk', 'dir': 'input', 'width': 1}, {'name': 'rst', 'dir': 'input', 'width': 1}, {'name': 'x', 'dir': 'input', 'width': 'size'}, {'name': 'y', 'dir': 'input', 'width': 1}, {'name': 'p', 'dir': 'output', 'width': 1}], 'clocks': [{'name': 'clk', 'period_ns': 10}], 'reset_domains': [{'name': 'rst', 'polarity': 'active_high', 'sync': 'sync'}]}}
     (gd / 'L9_INTEGRATION_SPEC.json').write_text(json.dumps(l9))
     (gd / 'L2_FRS.json').write_text(json.dumps({'frs_sections': [
-        {'title': 'Function', 'content': 'serial-parallel multiplier p = (x * y) mod 2^N'}]}))
+        {'title': 'Function', 'content': 'serial-parallel multiplier p = (x * y) mod 2^size'}]}))
     rtl = root / 'phase2/stage1/rtl'
     rtl.mkdir(parents=True)
     sources = {'a_spm.sv': 'import z_defs::*;\nmodule spm #(parameter size = 32)(input logic clk, rst, input logic [size-1:0] x, input logic y, output logic p);\nendmodule\n', 'z_defs.sv': 'package z_defs;\n  parameter AUX_WIDTH = 4;\nendpackage\n'}

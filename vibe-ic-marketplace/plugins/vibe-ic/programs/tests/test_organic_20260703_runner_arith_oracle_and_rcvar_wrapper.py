@@ -96,7 +96,7 @@ def test_pure_combinational_multiplier_still_accepted(tmp_path):
         {"name": "p", "direction": "output", "width": 16},
     ]
     project = _mk_project(tmp_path, "mult8", ports,
-                          "p = x * y mod 2^N parallel multiplier")
+                          "p = x * y mod 2^16 parallel multiplier")
     spec, reason = aotg.extract_arith_spec(project, "digital_arithmetic_primitive")
     assert spec is not None, reason
     assert spec["operator"] == "*"
