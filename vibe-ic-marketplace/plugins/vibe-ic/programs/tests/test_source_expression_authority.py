@@ -193,6 +193,20 @@ def test_professional_refusal_preserves_existing_bundle(tmp_path):
     assert {f.relative_to(p): f.read_bytes() for f in p.rglob('*') if f.is_file()} == before
 
 
+def test_missing_source_handoff_keeps_existing_expert_resume_metadata(tmp_path):
+    p = project(tmp_path, declare=False)
+    import design_one_shot_runner as runner
+    step = runner.step_professional_tb_gen(p, 'neutral_arithmetic', '')
+    report = json.loads((p / 'reports/phase2/gates/professional_tb.json').read_text())
+    out = p / 'phase2/stage1/sim_professional/neutral_arithmetic'
+    assert (step.status, report['status'], report['ran_cocotb']) == (
+        'NOT_MEASURED', 'INCOMPLETE', False), (step.detail, report)
+    assert report.get('reference_model_tier') == 'hook_unfilled', report
+    assert report.get('out_dir') == str(out), report
+    assert report.get('reference_model_handoff') == professional.reference_model_handoff(out), report
+    assert not out.exists()
+
+
 def test_serial_classifier_cannot_recover_an_operator_from_prose(tmp_path):
     p = project(tmp_path, 'result = left * right', widths=(8, 1, 1), declare=False)
     shape, _ = professional.classify_dut(p, 'digital_arithmetic_primitive')
