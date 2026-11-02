@@ -156,6 +156,152 @@ def placement(project: Path, state_path: Path, *, container: str | None = None) 
                   density_pct=density, density_source=density_source)
 
 
+def padring(project: Path, state_path: Path, producer: dict, *,
+            container: str | None = None) -> dict:
+    """BLOCKING #86: measure declared pads in the final ODB, without modifying it.
+
+    Native violations FAIL; an unreadable database or incomplete tool execution
+    is NOT_MEASURED. Positions and edge setback come from the pad producer.
+    """
+    import _atomic_artefact as aa
+    import _pad_ring as pr
+    import phase3_one_shot_runner as runner
+
+    failures, missing = [], []
+    log = project / 'reports/phase3/padring_final_state.log'
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.unlink(missing_ok=True)
+    odb = path(project, str(load(state_path).get('odb', '')))
+    assignment_path = project / pr.ASSIGNMENT_REL
+    assignment, declared = None, {}
+    try:
+        assignment = json.loads(assignment_path.read_text())
+    except OSError as exc:
+        missing.append(f'PADRING_PAD_ASSIGNMENT_UNREADABLE:{assignment_path}:{exc}')
+    except ValueError as exc:
+        failures.append(f'PADRING_PAD_ASSIGNMENT_MALFORMED:{assignment_path}:{exc}')
+    else:
+        if not isinstance(assignment, dict):
+            failures.append(f'PADRING_PAD_ASSIGNMENT_MALFORMED:{assignment_path}:not an object')
+        else:
+            for side in pr.SIDES:
+                names = assignment.get(pr.SIDE_VAR[side])
+                if not isinstance(names, list):
+                    failures.append(f'PADRING_PAD_ASSIGNMENT_MALFORMED:{pr.SIDE_VAR[side]}:{names!r}')
+                    continue
+                for order, name in enumerate(names):
+                    if not isinstance(name, str) or not name.strip():
+                        failures.append(f'PADRING_PAD_ASSIGNMENT_MALFORMED:{pr.SIDE_VAR[side]}[{order}]:{name!r}')
+                    elif name in declared:
+                        failures.append(f'PADRING_DECLARED_PAD_DUPLICATED:{name}')
+                    else:
+                        declared[name] = (side, order)
+            if not declared:
+                failures.append('PADRING_DECLARED_PAD_POPULATION_EMPTY')
+
+    records = producer.get('pads') or []
+    by_name = {}
+    side_orders = dict.fromkeys(pr.SIDES, 0)
+    if not isinstance(records, list):
+        failures.append('PADRING_PRODUCER_PAD_POPULATION_MALFORMED:not a list')
+        records = []
+    for pad in records:
+        name = pad.get('instance') if isinstance(pad, dict) else None
+        if not isinstance(name, str) or not name.strip():
+            failures.append(f'PADRING_PRODUCER_PAD_POPULATION_MALFORMED:{name!r}')
+            continue
+        if name in by_name:
+            failures.append(f'PADRING_PRODUCER_PAD_DUPLICATED:{name}')
+            continue
+        by_name[name] = pad
+        if assignment is None:
+            continue
+        if name not in declared:
+            failures.append(f'PADRING_PRODUCER_PAD_UNDECLARED:{name}')
+            continue
+        side, order = declared[name]
+        if (pad.get('side') != side or type(pad.get('order')) is not int
+                or pad['order'] != order):
+            failures.append(f'PADRING_PRODUCER_PAD_SIDE_ORDER_MISMATCH:{name}:expected={side}/{order}')
+        if side_orders[side] != order:
+            failures.append(f'PADRING_PRODUCER_PAD_ORDER_MISMATCH:{name}:expected={order}; observed={side_orders[side]}')
+        side_orders[side] += 1
+    failures.extend(f'PADRING_DECLARED_PAD_MISSING_FROM_PRODUCER:{name}'
+                    for name in declared if name not in by_name)
+    if not records:
+        failures.append('PADRING_EXPECTED_PAD_POPULATION_EMPTY')
+    evidence = dict(state=str(state_path), odb=str(odb),
+                    expected_pads=len(declared) if assignment is not None else None,
+                    output_files=[str(log)])
+    if failures or missing:
+        return result(failures, missing, **evidence)
+    if not odb.is_file():
+        return result(missing=[f'PADRING_NATIVE_ODB_UNREADABLE:{odb}'], **evidence)
+    pads = [by_name[name] for name in declared]
+    route = container if container is not None else (
+        os.environ.get('EDA_CONTAINER') or runner._pin.default_container_name())
+
+    def word(value):
+        return '"' + re.sub(r'([\\"$\[\]])', r'\\\1', str(value)) + '"'
+
+    try:
+        units = producer['die']['units']
+        edge = producer['config']['PAD_EDGE_SPACING']
+        if not count(units) or units <= 0 or type(edge) not in (int, float) or not math.isfinite(edge) or edge < 0:
+            raise ValueError('invalid producer units/edge spacing')
+        deck = [f'read_db {word(runner._to_container_path(str(odb), route))}',
+                'set b [ord::get_db_block]', 'set dbu [$b getDbUnitsPerMicron]',
+                'set die [$b getDieArea]',
+                f'set edge [expr {{round({edge} * $dbu)}}]']
+        orientations = {v: k for k, v in pr.ORIENT_ALIASES.items()}
+        for i, pad in enumerate(pads):
+            x, y = pad['x'], pad['y']
+            if type(x) is not int or type(y) is not int:
+                raise ValueError('invalid producer coordinates')
+            side = pad['side']
+            gap = {'W': '[$box xMin] - [$die xMin]',
+                   'E': '[$die xMax] - [$box xMax]',
+                   'S': '[$box yMin] - [$die yMin]',
+                   'N': '[$die yMax] - [$box yMax]'}[side]
+            deck += [f'set inst [$b findInst {word(pad["instance"])}]',
+                     'set ok 0', 'if {$inst != "NULL"} {',
+                     '  set box [$inst getBBox]',
+                     # DEF and producer positions are the placed bbox lower left,
+                     # not the transformed master origin for rotated pads.
+                     '  lassign [$inst getLocation] x y',
+                     f'  set ok [expr {{[$inst getPlacementStatus] eq "FIRM" && '
+                     f'[[$inst getMaster] getName] eq {word(pad["master"])} && '
+                     f'[$inst getOrient] eq {word(orientations[pad["orient"]])} && '
+                     f'$x == round({x} * double($dbu) / {units}) && '
+                     f'$y == round({y} * double($dbu) / {units}) && '
+                     '[$box xMin] >= [$die xMin] && [$box yMin] >= [$die yMin] && '
+                     '[$box xMax] <= [$die xMax] && [$box yMax] <= [$die yMax] && '
+                     f'{gap} == $edge}}]', '}',
+                     f'puts "PADRING_NATIVE_PAD {i} $ok"']
+        deck.append(f'puts "PADRING_NATIVE_COMPLETE {len(pads)}"')
+        tcl = log.with_suffix('.tcl')
+        aa.write_text(tcl, '\n'.join(deck) + '\n')
+        tcl_c = runner._to_container_path(str(tcl), route)
+        rc, out, err = runner._docker_exec(
+            route, f'openroad -no_init -exit {shlex.quote(tcl_c)}',
+            marker=tcl_c, inputs=[odb], transcript_path=log)
+        body = (out or '') + '\n' + (err or '')
+        aa.write_text(log, body)
+        rows = re.findall(r'^PADRING_NATIVE_PAD (\d+) ([01])\s*$', body, re.M)
+        complete = re.findall(r'^PADRING_NATIVE_COMPLETE (\d+)\s*$', body, re.M)
+        if (rc or complete != [str(len(pads))]
+                or [int(i) for i, ok in rows] != list(range(len(pads)))
+                or re.search(r'^\s*(?:\[ERROR\b|Error:)', body, re.M)):
+            missing.append(f'PADRING_NATIVE_CHECK_INCOMPLETE:rc={rc}; {log}')
+        else:
+            failures.extend(f'PADRING_NATIVE_PAD_MISSING_OR_MISPLACED:{pads[int(i)]["instance"]}'
+                            for i, ok in rows if ok == '0')
+    except Exception as exc:
+        missing.append(f'PADRING_NATIVE_CHECK_UNAVAILABLE:{exc}; {log}')
+        aa.write_text(log, missing[-1] + '\n')
+    return result(failures, missing, **evidence)
+
+
 def route(project: Path, state_path: Path) -> dict:
     state = load(state_path)
     final_def = path(project, str(state.get('def', '')))
