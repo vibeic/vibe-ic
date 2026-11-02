@@ -2867,17 +2867,17 @@ def _try_spec_artifact_registry_rtl(
 
     if handoff_contract is not None:
         try:
-            import spec_artifact_registry as _reg
-            # This candidate establishes functional applicability only. The
-            # original contract must hand off before any candidate is published.
-            kind, rtl = _reg.generate(
-                text, top, contract=replace(handoff_contract, logic_obligations=[]))
+            kind, rejected = _chain.functional_applicability(
+                text, ifc, top, handoff_contract)
         except Exception as exc:
             print("[rtl_gen] RTL_PROSE_APPLICABILITY_UNAVAILABLE: "
                   f"{type(exc).__name__}: {exc}; deferring to the typed class producer",
                   file=sys.stderr)
             return None
-        if not kind or not rtl:
+        if not kind:
+            if rejected:
+                print("[rtl_gen] RTL_PROSE_APPLICABILITY_UNAVAILABLE: "
+                      f"{rejected}; deferring to the typed class producer", file=sys.stderr)
             return None
         return _spec_contract_author_handoff(
             project, t0, handoff_contract, "phase1_plain_text")

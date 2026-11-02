@@ -37,12 +37,14 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 
-def _registry(prompt: str, ifc: str, top: str) -> Tuple[Optional[str], Optional[str]]:
+def _registry(prompt: str, ifc: str, top: str, *, contract=None) -> Tuple[Optional[str], Optional[str]]:
     """The canonical recognisers. Broad coverage, mutual-exclusion checked."""
     try:
         import spec_artifact_registry as _reg
     except ImportError:
         return None, None
+    if contract is not None:
+        return _reg.generate(prompt, top, contract=contract)
     from _specrtl_common import emission_spec_contract
     contract = emission_spec_contract(prompt, ifc, top)
     if ifc:
@@ -278,9 +280,18 @@ def try_emit_ex(prompt_text: str, ifc_text: str = "", top: str = "TopModule",
         return None, None, rejected
     if contract.source == 'json':
         return None, None, rejected
+    return _try_emitters(prompt_text, ifc_text, top, verify, check)
+
+
+def _try_emitters(prompt_text, ifc_text, top, verify, check, registry_contract=None):
+    """Run the ordinary producer order and its existing acceptance checks."""
+    rejected: List[Tuple[str, List[str]]] = []
     for name, fn in EMITTERS:
         try:
-            kind, rtl = fn(prompt_text, ifc_text, top)
+            if registry_contract is not None and fn is _registry:
+                kind, rtl = _registry(prompt_text, ifc_text, top, contract=registry_contract)
+            else:
+                kind, rtl = fn(prompt_text, ifc_text, top)
         except Exception as exc:                       # noqa: BLE001
             # An emitter that raises must not take the chain down; the next one
             # and ultimately the AI backup are the designed fallbacks. But a
@@ -299,6 +310,21 @@ def try_emit_ex(prompt_text: str, ifc_text: str = "", top: str = "TopModule",
             continue
         return (kind or name), rtl, rejected
     return None, None, rejected
+
+
+def functional_applicability(prompt_text, ifc_text, top, contract):
+    """Probe the same chain for an author handoff; never return publishable RTL.
+
+    The caller retains the strict contract. Only this probe omits implementation
+    obligations, so a functional match can route that contract to its author.
+    """
+    if not (prompt_text or "").strip():
+        return None, []
+    from dataclasses import replace
+    kind, rtl, rejected = _try_emitters(
+        prompt_text, ifc_text, top, None, True,
+        registry_contract=replace(contract, logic_obligations=[]))
+    return (kind if rtl else None), rejected
 
 
 def try_emit(prompt_text: str, ifc_text: str = "",
