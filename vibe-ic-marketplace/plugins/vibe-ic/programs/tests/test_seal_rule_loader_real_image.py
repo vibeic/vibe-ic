@@ -154,3 +154,18 @@ def test_numeric_lookup_rejects_intervening_or_hidden_mutation(tmp_path, stateme
         + 'active.sep(guard_ring, spacing.um).output("clearance", "space")\n'
     )
     assert_unreadable(tmp_path)
+
+
+REVIEW_PROBES = json.loads((FIXTURE.parent / "seal_rule_loader_review/PROBES.json").read_text())
+
+
+@pytest.mark.parametrize("probe", REVIEW_PROBES, ids=lambda probe: probe["name"])
+def test_review_numeric_expression_and_readonly_reuse(tmp_path, probe):
+    rules = {} if probe["missing_key"] else {"clearance": 4.9}
+    (tmp_path / "rules.json").write_text(json.dumps({"rules": rules}))
+    (tmp_path / "main.drc").write_text(probe["source"])
+    if probe["expected"] is None:
+        assert_unreadable(tmp_path)
+    else:
+        value, basis = read(tmp_path)
+        assert value == pytest.approx(probe["expected"]), basis
