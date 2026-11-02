@@ -344,7 +344,7 @@ def test_existing_d71_prepare_consumes_the_export_and_declared_scenario_populati
     scenario_source = put(tmp_path, 'requirements/scenario-source.json',
                           {'scope': 'SOFTWARE_ONLY declared scenario', 'scenarios': ['functional']})
     requirements = put(tmp_path, 'requirements/gls.json', {
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': scenario_source},
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': scenario_source},
         'required_corners': [CORNER], 'required_scenarios': ['functional'],
         'required_timing_behaviors': sorted(gls.SUPPORTED_REQUIRED_BEHAVIORS)})
     bench = put(tmp_path, 'functional.v', f'module final_tb; reg A; wire Y; {top} dut(.A(A),.Y(Y));\n'

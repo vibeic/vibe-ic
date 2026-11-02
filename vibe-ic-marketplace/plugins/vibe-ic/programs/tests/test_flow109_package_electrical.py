@@ -30,7 +30,7 @@ def _case(project, *, make_context=True):
     # Read an existing neutral interface; do not create or edit RTL/DEF/GDS.
     netlist = d67._record(project, require_repo('vibe-ic-marketplace', 'plugins',
         'vibe-ic', 'programs', 'tests', 'fixtures', 'flow109_final_lec', 'rtl.v'))
-    approval = {'status': 'APPROVED', 'authority': 'requirements_owner',
+    approval = {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                 'source_reference': owner}
     case = {'id': 'nominal_step', 'corner': 'nominal', 'mission_mode': 'step',
             'model': model, 'subckt': 'neutral_package',

@@ -131,7 +131,7 @@ def _case(project):
     d70_doc['sdf_provenance']['sta_state'] = state
     d70 = _put(project, 'reports/flow109/D70/component.json', d70_doc)
     requirements = _put(project, 'requirements/final_gls.json', {
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': 'neutral D71 native component contract'},
         'required_corners': ['tt'], 'required_scenarios': ['functional'],
         'required_timing_behaviors': ['sdf_delay_annotation', 'functional_self_check']})

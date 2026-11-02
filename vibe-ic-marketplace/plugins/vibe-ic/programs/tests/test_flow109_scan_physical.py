@@ -135,7 +135,7 @@ def software_case(tmp_path, monkeypatch):
         ('mode_library_rc_mapping','adopted/base_10/mode_library_rc_mapping.json','vibeic.flow109.adopted-reference.v1')]:
         payload={'software_upstream_fixture':True}
         src=write(p,'input/'+name+'.json',{name:payload})
-        d19.append(write(p,rel,{'schema':schema,**payload,'approval':{'status':'APPROVED','authority':'requirements_owner','source_reference':src}}))
+        d19.append(write(p,rel,{'schema':schema,**payload,'approval':{'status':'APPROVED','authority':'requirements_owner', 'approver': 'neutral-requirements-reviewer','source_reference':src}}))
     manifest = {'schema':'vibeic.flow109.d36-input.v1','top':'unit','upstream':prior,'scan_period_ns':17,
         'scan_protocol':'positive_edge_zero_one_alternating_full_chain','test_output_change':{'port':'sout','purpose':'software source fixture'},
         'liberty':lib,'models':models,'defines':['FUNCTIONAL'],'scan_cells':SCAN,
@@ -149,7 +149,7 @@ def software_case(tmp_path, monkeypatch):
         'qualification_scope':{'purpose':native.PURPOSE,'clock_mixing':'no_mix','edge':'rising','planned_chain_count':1,'scan_protocol':manifest['scan_protocol']}}
     def approve(relative,payload,schema,tag):
         source=write(p,'input/'+tag+'.json',{**scope,'D36':{relative:payload}})
-        return write(p,relative,{'schema':schema,**payload,'approval':{'status':'APPROVED','authority':'requirements_owner','source_reference':source}}),source
+        return write(p,relative,{'schema':schema,**payload,'approval':{'status':'APPROVED','authority':'requirements_owner', 'approver': 'neutral-requirements-reviewer','source_reference':source}}),source
     req='requirements/scan_physical/scan_flush_errors.json'
     _,qsource=approve(req,{'value':0,'unit':'count'},metrics.AUTHORITY_SCHEMA,'qualification-software-fixture')
     directory=p/'reports/flow109/attempts/software-fixture/D36-native';directory.mkdir(parents=True)

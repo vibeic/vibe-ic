@@ -27,7 +27,7 @@ def approved(project, name, **payload):
     source = put(project, 'input/authority-' + name + '.json', payload)
     return put(project, 'requirements/final_electrical/' + name + '.json', {
         'schema': metrics.AUTHORITY_SCHEMA, **payload,
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': source}})
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': source}})
 
 
 def software_mission(tmp_path, monkeypatch, upper=0.7, **features):

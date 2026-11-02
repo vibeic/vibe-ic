@@ -81,7 +81,7 @@ def _case(project: Path) -> tuple[dict, dict]:
                  "Approved D62 fixture limits and adopted geometry.\n")
     _put(project, "requirements/base_43/fill_density_rules.json", json.dumps({
         "schema": metrics.AUTHORITY_SCHEMA,
-        "approval": {"status": "APPROVED", "authority": "requirements_owner",
+        "approval": {"status": "APPROVED", "authority": "requirements_owner", 'approver': 'neutral-requirements-reviewer',
                      "source_reference": owner},
         "limits": {"M1": {"min": 0.30, "max": 0.70}}, "units": "ratio",
         "scope": {"kind": "tiled_windows", "area": "core",
@@ -91,7 +91,7 @@ def _case(project: Path) -> tuple[dict, dict]:
         "pdk_sha256": manifest["pdk"]["sha256"]}))
     _put(project, "requirements/base_43/fill_keepout_violations.json", json.dumps({
         "schema": metrics.AUTHORITY_SCHEMA,
-        "approval": {"status": "APPROVED", "authority": "requirements_owner",
+        "approval": {"status": "APPROVED", "authority": "requirements_owner", 'approver': 'neutral-requirements-reviewer',
                      "source_reference": owner},
         "expected": 0, "unit": "count",
         "checker_semantics": "opendb_fill_obstruction_overlap",

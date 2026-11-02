@@ -343,7 +343,7 @@ def _case(project):
         'y': {'rail': 'core', 'capacitance_library_units': 0.05},
         'z': {'rail': 'core', 'capacitance_library_units': 0.07}}}
     requirement = _put(project, 'inputs/requirements.json', {
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': 'neutral developer fixture, not a product requirement'},
         'modes': {'mission': {'required_ports': ['a', 'b', 'c', 'y', 'z'],
                              'window': {'start_tick': 0, 'end_tick': 45008, 'timescale': '1ps'}}},
@@ -706,7 +706,7 @@ def _approved(project, relative, schema, body, source_relative, source_key=None)
     source_body = ({source_key: body} if source_key else {'doc': 'L-layer requirement excerpt'})
     source = _put(project, source_relative, source_body)
     _put(project, relative, {'schema': schema, 'approval': {
-        'status': 'APPROVED', 'authority': 'requirements_owner',
+        'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
         'source_reference': {'path': source['path'], 'sha256': source['sha256']}}, **body})
 
 

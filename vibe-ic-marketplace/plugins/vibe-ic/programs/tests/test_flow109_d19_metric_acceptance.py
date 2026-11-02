@@ -46,7 +46,7 @@ def _case(project, monkeypatch, *, scan=True):
                                       'required_checks': checks, 'required_items': required},
               'mode_library_rc_mapping': {'reference': mapping}}
     source_ref = _ref(project, 'input/approved-constraints.json', json.dumps(source))
-    approval = {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': source_ref}
+    approval = {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': source_ref}
     fields = {name: {'schema': (metrics.AUTHORITY_SCHEMA if name == 'scenario_constraints'
                                else 'vibeic.flow109.adopted-reference.v1'),
                      'approval': approval, **payload} for name, payload in source.items()}
@@ -75,7 +75,7 @@ def _portable_case(project, monkeypatch, *, l20=False):
     source_ref = _ref(project, 'input/approved-constraints.json', json.dumps(source))
     fields = {name: {'schema': metrics.AUTHORITY_SCHEMA if name == 'scenario_constraints'
                      else 'vibeic.flow109.adopted-reference.v1',
-                    'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+                    'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                                  'source_reference': source_ref}, **payload}
               for name, payload in source.items()}
     _write(project / 'phase1/generated_docs/L19_CONSTRAINTS_PDK.json', {'fields': fields})

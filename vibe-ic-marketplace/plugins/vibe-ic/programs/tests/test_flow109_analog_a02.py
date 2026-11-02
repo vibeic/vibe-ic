@@ -104,7 +104,7 @@ def _case(project, *, broken=False, missing_corner=False, transitive=False,
                        'required_measurements': ['drain_current']})
     requirements = _put(project, 'input/flow109/A02-requirements.json', {
         'schema': analog.SCHEMA,
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': 'developer open-model A02 control'},
         'required_smokes': smokes})
     declared_models = [model] + dependencies
