@@ -24,10 +24,10 @@ import flow109_density_fill as density
 import librelane_fill_stream as files
 from librelane_contract import Refusal
 from spef_extraction_check import scan_spef
-import _final_fill_primary as primary
 
 SCHEMA = 'vibeic.flow109.final-extract.v1'
 INPUT = 'input/flow109/D69.json'
+NATIVE_NAMING_METHOD = 'final-GDS-native-conductor-route-coverage'
 
 
 def _sha(path):
@@ -143,7 +143,7 @@ def operation_sources():
     paths = (Path(__file__), Path(files.__file__),
              Path(density.__file__), Path(__file__).with_name('spef_extraction_check.py'),
              Path(__file__).with_name('librelane_fill_dfm.py'),
-             Path(__file__).with_name('_physical_current.py'), Path(primary.__file__))
+             Path(__file__).with_name('_physical_current.py'))
     return {str(path.resolve()): _sha(path) for path in paths}
 
 
@@ -197,10 +197,48 @@ def _require_net_population(required, names, corner, artifact):
             'unexpected': sorted(actual - required), 'duplicates': duplicates}, sort_keys=True), status='FAIL')
 
 
+def _tool_named(project, receipt_ref, native, gds_ref, def_ref, required):
+    """Tell the tool's own routed-DEF naming from bindings a caller supplied.
+
+    The tool writes DIAGNOSTIC_ONLY on both (ruling #90b credits only its own),
+    so the difference is read from the run: the query sits in this receipt's
+    output directory and the producer is the released tool source.
+    """
+    identity = native.get('native_adoption') or {}
+    pins = identity.get('pins') or {}
+    source = (pins.get('producer_source') or {}).get('path') or ''
+    binary = shutil.which('vibeic-final-fill-spef')
+    if (identity.get('method') != NATIVE_NAMING_METHOD
+            or identity.get('expected_names') != sorted(required)
+            or not binary or not source or source not in Path(binary).resolve().read_text(errors='replace')
+            or not Path(source).is_file() or _sha(source) != pins['producer_source'].get('sha256')):
+        return False
+    bound = {'geometry': _bound(project, gds_ref), 'routed_def': _bound(project, def_ref)}
+    if any(not pins.get(role) or Path(pins[role].get('path') or '') != path.resolve()
+           or pins[role].get('sha256') != _sha(path) for role, path in bound.items()):
+        return False
+    directory = _bound(project, receipt_ref).parent.resolve()
+    for reduction in native['corners'].values():
+        binding, authority = reduction.get('native_binding') or {}, reduction.get('native_authority') or {}
+        query = binding.get('query') or {}
+        path = Path(query.get('path') or '')
+        if (any(binding.get(role) != pins[role] for role in ('geometry', 'routed_def', 'producer_source'))
+                or not path.is_file() or not path.resolve().is_relative_to(directory)
+                or _sha(path) != query.get('sha256') or authority.get('query') != query.get('sha256')
+                or authority.get('raw') != reduction.get('raw_spef_sha256')
+                or reduction.get('expected_name_count') != len(required)):
+            return False
+    return True
+
+
 def _native_outputs(project, receipt_ref, gds_ref, def_ref):
     """Block incomplete nets using the normal producer's already bound DEF."""
     native = _read(_bound(project, receipt_ref))
-    if (native.get('status') != 'PASS' or native.get('d69_credit') is False
+    # A routed DEF takes the tool's naming path, which labels itself this way;
+    # an already-named input takes the direct path and reports PASS.
+    named_by_tool = native.get('status') == 'DIAGNOSTIC_ONLY'
+    if ((native.get('d69_credit') is not False if named_by_tool
+         else native.get('status') != 'PASS' or native.get('d69_credit') is False)
             or native.get('geometry') != {'path': str(_bound(project, gds_ref)), 'sha256': gds_ref['sha256']}
             or native.get('routed_def') != {'path': str(_bound(project, def_ref)), 'sha256': def_ref['sha256']}
             or native.get('top') != files.fill_records(_bound(project, def_ref))['top']
@@ -212,9 +250,12 @@ def _native_outputs(project, receipt_ref, gds_ref, def_ref):
         raise AdmissionRefusal('D69_NATIVE_RECEIPT_MISMATCH', str(receipt_ref))
     required = _normal_required_nets(_bound(project, def_ref))
     _bound(project, native.get('fill_aware_tech'))
+    if named_by_tool and not _tool_named(project, receipt_ref, native, gds_ref, def_ref, required):
+        raise AdmissionRefusal('D69_NATIVE_RECEIPT_MISMATCH', 'names not produced by this tool run')
     spefs, scans = {}, {}
     for corner, reduction in native['corners'].items():
-        if (reduction.get('status') != 'PASS' or reduction.get('d69_credit') is False
+        if ((reduction.get('status') != 'DIAGNOSTIC_ONLY' or reduction.get('d69_credit') is not False
+             if named_by_tool else reduction.get('status') != 'PASS' or reduction.get('d69_credit') is False)
                 or reduction.get('method') != 'exact-capacitance-matrix-schur-complement'
                 or reduction.get('floating_boundary_condition') != 'zero-net-charge'
                 or reduction.get('grounded_fill_approximation') is not False
@@ -289,19 +330,19 @@ def execute(project, context):
             raise AdmissionRefusal('D69_NATIVE_TOOL_ABSENT', 'released vibeic-final-fill-spef required')
         tool = files._record(project, Path(binary))
         top = files.fill_records(routed_def)['top']
-        launcher = primary.make_launcher(attempt / 'primary-extract', binary)
-        primary_executable = files._record(project, launcher)
+        if os.environ.get('VIBEIC_FINAL_FILL_ADOPTION') is not None:
+            raise AdmissionRefusal('D69_CALLER_BINDINGS_REFUSED',
+                                   'caller-supplied native bindings stay diagnostic', status='FAIL')
 
         def launch(name, *bound):
             argv = [binary, 'extract', '--gds', str(final_gds), '--def', str(routed_def),
                     '--top', top, '--output-dir', str(attempt / name), *bound]
             started = time.monotonic()
-            completed = subprocess.run(argv, executable=str(launcher), cwd=project,
-                                       capture_output=True, text=True)
+            completed = subprocess.run(argv, cwd=project, capture_output=True, text=True)
             log = attempt / f'{name}.log'; log.write_text(completed.stdout + completed.stderr)
             return completed, log, {'argv': argv, 'returncode': completed.returncode,
                 'elapsed_seconds': time.monotonic() - started, 'log': files._record(project, log),
-                'tool': tool, 'primary_executable': primary_executable}
+                'tool': tool}
         result['native_started'] = True
         native = 'native'
         completed, log, execution = launch(native)
