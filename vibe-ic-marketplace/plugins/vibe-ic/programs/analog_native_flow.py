@@ -118,7 +118,8 @@ def _input_views(project, name, step=None):
             paths.append(Path(selected["ngspice_bin"]))
     # A configured nominal/calibration deck can live outside the canonical
     # block directory. Retain the actual selected inputs, not only defaults.
-    from analog_native_sim import _config, _inputs, _included_paths
+    from analog_native_sim import (_config, _inputs, _included_paths,
+                                   _testbench_inputs_path, _declared_testbench)
     config = _read(project / "input" / "analog_flow.json", {})
     for selected_step in STEPS[5:10]:
         selected = _config({"config": config}, {"name": name}, selected_step)
@@ -129,6 +130,18 @@ def _input_views(project, name, step=None):
         netlist, deck, spec = _inputs(project, name, selected)
         paths.extend([netlist, deck, spec])
         paths.extend(_included_paths(deck))
+        if selected_step == "A07":
+            try:
+                declaration = _testbench_inputs_path(project, name, selected)
+            except ValueError:
+                declaration = None  # The producer reports the invalid declaration.
+            if declaration is not None:
+                paths += [declaration, netlist.parent / "netlist_provenance.json"]
+                try:
+                    _text, views = _declared_testbench(project, name, selected, netlist.parent)
+                    paths.extend(Path(view["path"]) for view in views.values())
+                except ValueError:
+                    pass  # The producer reports the invalid declaration.
     if step in ("A06", "A07"):
         # The declaration names real study inputs outside input/. Changing
         # one of those inputs must invalidate its retained measurement too.
@@ -202,7 +215,10 @@ def _local_ngspice_startup(project, cwd, image):
     if root is None:
         return {}, None
     target, _ = declared_target(project)
-    selected = availability.resolve_pdk(target, project=project, container='')
+    # Staged model libraries do not replace the runtime technology's startup.
+    # Use the same installed-PDK selection as the default path; keep model
+    # resolution and its project-first precedence unchanged.
+    selected = availability.resolve_pdk(target, container='')
     if not selected.get('available') or selected.get('source') != 'container_installed':
         return {}, None  # Project-staged/builtin models keep their existing startup.
     init = Path(cwd) / '.spiceinit'
@@ -210,7 +226,12 @@ def _local_ngspice_startup(project, cwd, image):
         init = Path(selected['pdk_root']) / 'libs.tech/ngspice/.spiceinit'
     environment = {'PDK_ROOT': root, 'PDK': selected['matched_dir']}
     if not init.is_file():
-        return environment, None  # An absent optional init is not a model verdict.
+        # Compiled models need the PDK's startup to register their device types.
+        # Built-in SPICE models can still run without an optional startup.
+        osdi = next((path for path in init.parent.rglob('*.osdi') if path.is_file()), None)
+        if osdi is not None:
+            raise ValueError(f'NGSPICE_NATIVE_INIT_MISSING: {init} (required by {osdi})')
+        return environment, None
     environment['SPICE_USERINIT_DIR'] = str(init.parent)
     return environment, {'path': str(init), 'sha256': _sha(init)}
 

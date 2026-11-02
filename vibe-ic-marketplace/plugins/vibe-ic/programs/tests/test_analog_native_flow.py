@@ -389,6 +389,108 @@ def test_alternate_nominal_deck_change_invalidates_retained_measurement(tmp_path
     assert "A07" not in observed[-1]
 
 
+@pytest.mark.parametrize("source", ["config", "sidecar"])
+def test_declared_testbench_change_invalidates_retained_measurement(tmp_path, monkeypatch, source):
+    root = project(tmp_path)
+    declaration = root / "phase3/analog/cell_alpha/testbench_inputs.json"
+    if source == "config":
+        declaration = root / "declarations/measurement.json"
+        declaration.parent.mkdir()
+        (root / "input/analog_flow.json").write_text(json.dumps({"blocks": {"cell_alpha": {
+            "testbench_inputs": str(declaration.relative_to(root))}}}))
+    declaration.write_text('{"testbench": {"control": ["op"]}}')
+    before = native._input_views(root, "cell_alpha", "A07")
+    declaration.write_text('{"testbench": {"control": ["ac dec 10 1 1Meg"]}}')
+    after = native._input_views(root, "cell_alpha", "A07")
+    assert before != after
+
+
+def test_normal_a07_window_consumes_declared_inputs_and_retains_actual_deck(tmp_path, monkeypatch):
+    root = project(tmp_path)
+    bdir = root / "phase3/analog/cell_alpha"
+    (bdir / "spec.json").write_text(json.dumps({"specs": [{"name": "vout", "min": 0.9, "max": 1.1}]}))
+    (bdir / "testbench_inputs.json").write_text(json.dumps({"block": "cell_alpha", "ports": ["p", "n"],
+        "testbench": {"supply_exprs": ["1"], "stimulus": ["v1 p 0 {supply}"],
+        "control": ["op", "let sensed = v(p)", 'echo "MEAS vout=" $&sensed']}}))
+    calls = []
+    def run(self, program, argv, **kwargs):
+        calls.append((program, argv))
+        log = Path(argv[argv.index("-o") + 1])
+        log.write_text("MEAS vout=1.0\n")
+        capture = log.parent / "capture.log"
+        capture.write_text("ngspice batch mode\n")
+        return {"returncode": 0, "log": str(capture), "log_sha256": native._sha(capture),
+                "outputs": {str(log): native._sha(log)}}
+    monkeypatch.setattr(native.NativeCommands, "__call__", run)
+    report = native.run_window(root, args("A07", "A07"))
+    assert report["verdict"] == "PASS"
+    assert len(calls) == 1 and calls[0][0] == "@ngspice"
+    row = report["steps"][0]
+    assert row["metrics"]["vout"] == 1.0
+    assert row["native_inputs"]["testbench"]["path"] != str(bdir / "tb_cell_alpha.sp")
+
+
+def _declared_include_project(tmp_path):
+    import shutil
+    if not shutil.which("ngspice"):
+        pytest.skip("native ngspice is required for the declared include control")
+    root = project(tmp_path)
+    bdir = root / "phase3/analog/cell_alpha"
+    dependency = bdir / "load_detail.sp"
+    dependency.write_text("rload n 0 1k\n")
+    (bdir / "load.sp").write_text('.include "' + str(dependency) + '"\n')
+    (bdir / "spec.json").write_text(json.dumps({"specs": [{"name": "vout", "min": 0.4, "max": 0.6}]}))
+    (bdir / "testbench_inputs.json").write_text(json.dumps({"block": "cell_alpha", "ports": ["p", "n"],
+        "testbench": {"supply_exprs": ["1"], "stimulus": ["v1 p 0 {supply}"],
+        "cards": [".include load.sp"],
+        "control": ["op", "let sensed = v(n)", 'echo "MEAS vout=" $&sensed', "quit"]}}))
+    return root, dependency
+
+
+def test_real_declared_include_change_invalidates_a07_continuation_and_pre(tmp_path, monkeypatch):
+    import analog_native_physical as physical
+    root, dependency = _declared_include_project(tmp_path)
+    report = native.run_window(root, args("A07", "A07"))
+    assert report["window_verdict"] == "PASS", report
+    state = next(row for row in report["steps"] if row["step"] == "A07")
+    assert state["metrics"]["vout"] == pytest.approx(0.5)
+    before = native._input_views(root, "cell_alpha", "A07")
+    dispatch = native._dispatch
+    observed = []
+    def continuation(step, _project, _block, options, _run):
+        observed.append(set(options["previous_results"]))
+        return {"status": "NOT_MEASURED", "outputs": []}
+    monkeypatch.setattr(native, "_dispatch", continuation)
+    native.run_window(root, args("A08", "A08"))
+    assert "A07" in observed[-1]
+    dependency.write_text("rload n 0 2k\n")
+    native.run_window(root, args("A09", "A09"))
+    assert "A07" not in observed[-1]
+    assert before != native._input_views(root, "cell_alpha", "A07")
+    values, record = physical._pre_layout_measurements(root, "cell_alpha", {"_pre_result": state})
+    assert values == {}, record
+    monkeypatch.setattr(native, "_dispatch", dispatch)
+    rerun = native.run_window(root, args("A07", "A07"))
+    current = next(row for row in rerun["steps"] if row["step"] == "A07")
+    assert current["status"] == "FAIL"
+    assert current["metrics"]["vout"] == pytest.approx(2 / 3, abs=1e-6)
+
+
+def test_declared_include_change_during_real_a07_removes_pass(tmp_path, monkeypatch):
+    root, dependency = _declared_include_project(tmp_path)
+    execute = native.NativeCommands.__call__
+    def changed_after_native(self, program, argv, **kwargs):
+        execution = execute(self, program, argv, **kwargs)
+        dependency.write_text("rload n 0 2k\n")
+        return execution
+    monkeypatch.setattr(native.NativeCommands, "__call__", changed_after_native)
+    report = native.run_window(root, args("A07", "A07"))
+    row = report["steps"][0]
+    assert row["status"] == "NOT_MEASURED", row
+    assert row["metrics"]["vout"] == pytest.approx(0.5)
+    assert "consumed inputs changed during execution" in row["detail"]
+
+
 def test_independent_block_advances_while_another_native_step_is_waiting(tmp_path, monkeypatch):
     root = project(tmp_path)
     declared = root / "phase3/analog/analog_block_list.json"

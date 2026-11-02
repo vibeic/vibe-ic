@@ -156,6 +156,171 @@ def placement(project: Path, state_path: Path, *, container: str | None = None) 
                   density_pct=density, density_source=density_source)
 
 
+def padring(project: Path, state_path: Path, *, container: str | None = None) -> dict:
+    """BLOCKING #99: compare assignment side/order with final-State ODB geometry."""
+    import _atomic_artefact as aa
+    import _pad_ring as pr
+    import phase3_one_shot_runner as runner
+
+    log = project / 'reports/phase3/padring_final_state.log'
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.unlink(missing_ok=True)
+    odb = path(project, str(load(state_path).get('odb', '')))
+    evidence = dict(state=str(state_path), odb=str(odb), expected_pads=None,
+                    output_files=[str(log)])
+    if not odb.is_file():
+        return result(missing=[f'PADRING_NATIVE_ODB_UNREADABLE:{odb}'], **evidence)
+    route = container if container is not None else (
+        os.environ.get('EDA_CONTAINER') or runner._pin.default_container_name())
+
+    def word(value):
+        return '"' + re.sub(r'([\\"$\[\]])', r'\\\1', str(value)) + '"'
+
+    try:
+        deck = [f'read_db {word(runner._to_container_path(str(odb), route))}',
+                'set b [ord::get_db_block]', 'set die [$b getDieArea]',
+                'set instances [$b getInsts]',
+                'puts "PADRING_NATIVE_DIE [$b getDbUnitsPerMicron] '
+                '[$die xMin] [$die yMin] [$die xMax] [$die yMax] [llength $instances]"',
+                'set n 0', 'foreach inst $instances {',
+                '  set master [$inst getMaster]', '  set box [$inst getBBox]',
+                '  set name [binary encode hex [encoding convertto utf-8 [$inst getName]]]',
+                '  set cell [binary encode hex [encoding convertto utf-8 [$master getName]]]',
+                '  puts "PADRING_NATIVE_INST $n $name $cell [$master isPad] '
+                '[$master getType] [$inst getPlacementStatus] '
+                '[$box xMin] [$box yMin] [$box xMax] [$box yMax]"',
+                '  incr n', '}', 'puts "PADRING_NATIVE_COMPLETE $n"']
+        tcl = log.with_suffix('.tcl')
+        aa.write_text(tcl, '\n'.join(deck) + '\n')
+        tcl_c = runner._to_container_path(str(tcl), route)
+        rc, out, err = runner._docker_exec(
+            route, f'openroad -no_init -exit {shlex.quote(tcl_c)}',
+            marker=tcl_c, inputs=[odb], transcript_path=log)
+        body = (out or '') + '\n' + (err or '')
+        aa.write_text(log, body)
+        headers = re.findall(r'^PADRING_NATIVE_DIE (.*)$', body, re.M)
+        rows = re.findall(r'^PADRING_NATIVE_INST (.*)$', body, re.M)
+        complete = re.findall(r'^PADRING_NATIVE_COMPLETE (.*)$', body, re.M)
+        if (rc or len(headers) != 1 or len(complete) != 1
+                or re.search(r'^\s*(?:\[ERROR\b|Error:)', body, re.M)):
+            return result(missing=[f'PADRING_NATIVE_CHECK_INCOMPLETE:rc={rc}; {log}'], **evidence)
+        dbu, llx, lly, urx, ury, population = map(int, headers[0].split())
+        if (dbu <= 0 or llx >= urx or lly >= ury or population < 0
+                or len(rows) != population or int(complete[0]) != population):
+            raise ValueError('native census dimensions/counts invalid')
+        census = []
+        for index, row in enumerate(rows):
+            ordinal, name, master, is_pad, kind, status, *box = row.split()
+            if (int(ordinal) != index or is_pad not in ('0', '1') or len(box) != 4):
+                raise ValueError(f'native census row {index} invalid')
+            census.append(dict(instance=bytes.fromhex(name).decode('utf-8'),
+                               master=bytes.fromhex(master).decode('utf-8'),
+                               is_pad=is_pad == '1', type=kind, status=status,
+                               bbox=tuple(map(int, box))))
+    except Exception as exc:
+        missing = f'PADRING_NATIVE_CHECK_UNAVAILABLE:{exc}; {log}'
+        if not log.is_file():
+            aa.write_text(log, missing + '\n')
+        return result(missing=[missing], **evidence)
+
+    evidence.update(native_instances=len(census), dbu=dbu, die=[llx, lly, urx, ury])
+    failures, declared = [], {}
+    assignment_path = project / pr.ASSIGNMENT_REL
+    try:
+        assignment = json.loads(assignment_path.read_text())
+    except OSError as exc:
+        return result(missing=[f'PADRING_PAD_ASSIGNMENT_UNREADABLE:{assignment_path}:{exc}'], **evidence)
+    except ValueError as exc:
+        return result([f'PADRING_PAD_ASSIGNMENT_MALFORMED:{assignment_path}:{exc}'], **evidence)
+    if not isinstance(assignment, dict):
+        return result([f'PADRING_PAD_ASSIGNMENT_MALFORMED:{assignment_path}:not an object'], **evidence)
+    for side in pr.SIDES:
+        names = assignment.get(pr.SIDE_VAR[side])
+        if not isinstance(names, list):
+            failures.append(f'PADRING_PAD_ASSIGNMENT_MALFORMED:{pr.SIDE_VAR[side]}:{names!r}')
+            continue
+        for order, name in enumerate(names):
+            if not isinstance(name, str) or not name.strip():
+                failures.append(f'PADRING_PAD_ASSIGNMENT_MALFORMED:{pr.SIDE_VAR[side]}[{order}]:{name!r}')
+            elif name in declared:
+                failures.append(f'PADRING_DECLARED_PAD_DUPLICATED:{name}')
+            else:
+                declared[name] = (side, order)
+    if not declared:
+        failures.append('PADRING_DECLARED_PAD_POPULATION_EMPTY')
+    evidence['expected_pads'] = len(declared)
+    try:
+        value = assignment.get('PAD_EDGE_SPACING')
+        if type(value) not in (str, int, float):
+            raise ValueError('not a number or numeric string')
+        edge_um = float(value)
+        scaled = edge_um * dbu
+        if not math.isfinite(scaled) or edge_um < 0:
+            raise ValueError('not finite and nonnegative')
+        # Tcl round used by the native placer rounds halves away from zero.
+        edge = math.floor(scaled)
+        if scaled - edge >= 0.5:
+            edge += 1
+    except (ValueError, OverflowError) as exc:
+        failures.append(f'PADRING_PAD_ASSIGNMENT_EDGE_INVALID:{value!r}:{exc}')
+    fillers = assignment.get('PAD_FILLERS', [])
+    corner = assignment.get('PAD_CORNER')
+    if (not isinstance(fillers, list)
+            or any(not isinstance(name, str) or not name.strip() for name in fillers)
+            or corner is not None and (not isinstance(corner, str) or not corner.strip())):
+        failures.append('PADRING_PAD_ASSIGNMENT_AUXILIARY_MASTERS_MALFORMED')
+    if failures:
+        return result(failures, **evidence)
+    auxiliary = set(fillers)
+    if corner is not None:
+        auxiliary.add(corner)
+    by_name = {}
+    for inst in census:
+        name = inst['instance']
+        if name in by_name:
+            failures.append(f'PADRING_NATIVE_PAD_DUPLICATED:{name}')
+        by_name.setdefault(name, inst)
+    for name in declared:
+        inst = by_name.get(name)
+        if inst is None:
+            failures.append(f'PADRING_DECLARED_PAD_MISSING_FROM_NATIVE:{name}')
+        elif not inst['is_pad'] or inst['master'] in auxiliary:
+            failures.append(f'PADRING_DECLARED_PAD_ROLE_MISMATCH:{name}:master={inst["master"]}; type={inst["type"]}')
+    pads = [inst for inst in census if inst['is_pad']
+            and (inst['master'] not in auxiliary or inst['type'] not in ('PAD', 'PAD_SPACER'))]
+    evidence['native_pads'] = len(pads)
+    sides = {side: [] for side in pr.SIDES}
+    for inst in pads:
+        name = inst['instance']
+        if name not in declared:
+            failures.append(f'PADRING_NATIVE_PAD_UNDECLARED:{name}')
+        if inst['status'] != 'FIRM':
+            failures.append(f'PADRING_NATIVE_PAD_NOT_FIXED:{name}:{inst["status"]}')
+        x0, y0, x1, y1 = inst['bbox']
+        if not (llx <= x0 < x1 <= urx and lly <= y0 < y1 <= ury):
+            failures.append(f'PADRING_NATIVE_PAD_OUTSIDE_DIE_OR_INVALID_BBOX:{name}:{inst["bbox"]}')
+            continue
+        gaps = dict(S=y0 - lly, E=urx - x1, N=ury - y1, W=x0 - llx)
+        observed = [side for side, gap in gaps.items() if gap == edge]
+        if len(observed) != 1:
+            failures.append(f'PADRING_NATIVE_PAD_SIDE_AMBIGUOUS:{name}:edge={edge}; gaps={gaps}')
+            continue
+        side = observed[0]
+        sides[side].append((x0 if side in ('S', 'N') else y0, name))
+        if name in declared and declared[name][0] != side:
+            failures.append(f'PADRING_NATIVE_PAD_SIDE_MISMATCH:{name}:expected={declared[name][0]}; observed={side}')
+    for side, members in sides.items():
+        members.sort(key=lambda member: member[0])
+        for order, (coordinate, name) in enumerate(members):
+            tied = (order > 0 and members[order - 1][0] == coordinate
+                    or order + 1 < len(members) and members[order + 1][0] == coordinate)
+            if tied:
+                failures.append(f'PADRING_NATIVE_PAD_ORDER_AMBIGUOUS:{name}:side={side}; coordinate={coordinate}')
+            elif name in declared and declared[name] != (side, order):
+                failures.append(f'PADRING_NATIVE_PAD_ORDER_MISMATCH:{name}:expected={declared[name]}; observed={side}/{order}')
+    return result(failures, **evidence)
+
+
 def route(project: Path, state_path: Path) -> dict:
     state = load(state_path)
     final_def = path(project, str(state.get('def', '')))

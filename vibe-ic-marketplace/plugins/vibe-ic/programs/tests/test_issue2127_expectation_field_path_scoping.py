@@ -224,18 +224,7 @@ def test_an_expectation_naming_no_field_path_is_not_refused(tmp_path):
     assert _rules(_report(p), T.RULE_AI_FIELD_PATH_UNDECLARED) == []
 
 
-def test_the_refusal_does_not_move_the_verdict(tmp_path):
-    """The REFUSAL is additive, isolated from the SCOPE.
-
-    Two expectations that are both read at whole-layer scope — one naming no
-    field_path at all, one naming a path that resolves nowhere — converge
-    identically. Only one of them is refused. So the refusal changes what the
-    report SAYS and never what it DECIDES.
-
-    (Scope is a different axis and it does move verdicts, by design: that is
-    `test_an_unrelated_field_cannot_satisfy_a_scoped_token`. The two are
-    separated here on purpose — a landing that moved both at once could not
-    say which one moved a row.)"""
+def test_missing_and_unresolved_paths_never_report_agreement(tmp_path):
     p = _two_layer_project(tmp_path)
     none_ = T.converge_ai_expectation(
         p, _exp("e", "L4_REGMAP", None, ["STATUS_WORD"]))
@@ -243,9 +232,10 @@ def test_the_refusal_does_not_move_the_verdict(tmp_path):
         p, _exp("e", "L4_REGMAP", "no.such.path.here", ["STATUS_WORD"]))
     assert none_["field_path_status"] == "ABSENT"
     assert fab["field_path_status"] == "UNDECLARED"
-    assert none_["scope"] == fab["scope"] == "whole_layer"
-    assert none_["met"] is fab["met"] is True
-    assert none_["missing_tokens"] == fab["missing_tokens"] == []
+    assert none_["scope"] == "UNSCOPED"
+    assert fab["scope"] == "field_path_refused"
+    assert none_["met"] is fab["met"] is False
+    assert none_["usable"] is fab["usable"] is False
 
 
 def test_a_layer_that_was_never_written_is_not_reported_as_declared(tmp_path):
@@ -443,20 +433,17 @@ def test_the_same_token_at_the_named_field_does_score(tmp_path):
     assert c["met"] is True, c
 
 
-def test_an_unscoped_reading_is_recorded_as_unscoped(tmp_path):
-    """The whole-layer fallback is kept, and it SAYS SO. A `met` reached
-    without scoping is a weaker claim than one reached at the named field, and
-    the report must not spell the two the same way."""
+def test_an_unresolved_path_is_refused_without_a_layer_reading(tmp_path):
     p = _scoped_project(tmp_path)
     c = T.converge_ai_expectation(p, {
         "id": "e-unscoped", "layer": "L19",
         "field_path": "constraints.parameters.masking",   # resolves nowhere
         "requirement": "the layer states the masking disposition",
         "evidence": ["input spec"], "expected_tokens": ["false"]})
-    assert c["scope"] == "whole_layer"
+    assert c["scope"] == "field_path_refused"
     assert c["field_path_status"] == "UNDECLARED"
-    assert c["met"] is True          # unchanged from before this landing
-    assert "UNSCOPED" in c["observed"]
+    assert c["met"] is False
+    assert c["usable"] is False
     assert "does not resolve" in c["observed"]
 
 

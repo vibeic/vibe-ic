@@ -8,6 +8,8 @@ import pytest
 
 import _plugin_tree
 import analog_native_physical as physical
+from _hostpaths import require_repo
+from test_analog_method_local_startup import psp_runtime, _psp_project
 
 
 def put(path, data):
@@ -24,6 +26,135 @@ def project(tmp_path):
     put(block / "tb_unit.sp", ".include unit.sp\nX1 a b 0 unit\n.control\nop\necho \"MEAS vout=\" $&v(b)\n.endc\n.end\n")
     put(block / "spec.json", {"specs": [{"name": "vout", "min": 1.1, "max": 1.3}]})
     return project
+
+
+def _resim_extraction(project, name, raw):
+    """Supply synthetic RC/A13 prerequisites; no PV/extraction qualification."""
+    bdir, work = physical._paths(project, name)
+    gds = put(bdir / f"{name}.gds", "synthetic layout prerequisite")
+    extracted = put(work / "extracted.spice", raw)
+    put(work / "A13.json", {"status": "PASS", "metrics": {
+        "netlist_sha256": physical._sha(bdir / f"{name}.sp"),
+        "layout_sha256": physical._sha(gds), "corners": [{"style": "ngspice()",
+        "extracted_netlist": str(extracted), "sha256": physical._sha(extracted)}]}})
+
+
+def _real_windows(project, name, image, family):
+    import analog_native_flow as native
+    args = SimpleNamespace(entry_step="A07", exit_step="A07", blocks=name,
+                           container="", image=image, transport="LOCAL", pdk=family)
+    pre = native.run_window(project, args)["steps"][0]
+    assert pre["status"] == "PASS", pre
+    args.entry_step = args.exit_step = "A14"
+    report = native.run_window(project, args)
+    post = next(row for row in report["steps"] if row["step"] == "A14")
+    return pre, post
+
+
+def test_real_a14_local_uses_repo_declared_context_without_optional_init(tmp_path, psp_runtime):
+    from declared_pdk_is_the_pdk_used_check import declared_target
+    image, _, _ = psp_runtime
+    project = tmp_path / "project"
+    declaration = require_repo("vibe-ic-marketplace", "plugins", "vibe-ic", "programs",
+        "tests", "fixtures", "m4_native_top", "phase1", "generated_docs", "L19_CONSTRAINTS_PDK.json")
+    put(project / "phase1/generated_docs/L19_CONSTRAINTS_PDK.json", declaration.read_text())
+    family, _ = declared_target(project)
+    bdir = project / "phase3/analog/unit"
+    circuit = ".subckt unit a b vss\nR1 a b 1k\nR2 b vss 2k\n.ends unit\n"
+    put(bdir / "unit.sp", circuit)
+    put(bdir / "tb_unit.sp", "* preserved canonical input\n")
+    put(bdir / "spec.json", {"specs": [{"name": "vout", "min": 1.1, "max": 1.3}]})
+    put(bdir / "testbench_inputs.json", {"block": "unit", "ports": ["a", "b", "vss"],
+        "rails": {"vss": "vss"}, "testbench": {"supply_exprs": ["1.8"],
+        "stimulus": ["v_force a 0 {supply}"],
+        "control": ["op", "let sensed = v(b)", 'echo "MEAS vout=" $&sensed', "quit"]}})
+    put(project / "phase3/analog/analog_block_list.json", {"blocks": [{"name": "unit"}]})
+    _resim_extraction(project, "unit", circuit.replace(".ends unit", "Rpex b sense 10\nCpex sense vss 1p\n.ends unit"))
+    pre, post = _real_windows(project, "unit", image, family)
+    assert post["status"] == "PASS", post
+    assert post["metrics"]["pre"]["measurements"]["vout"] == pre["metrics"]["vout"]
+    corner = post["metrics"]["corners"][0]
+    assert corner["measurements"]["vout"] == pytest.approx(1.2)
+    execution = corner["simulation"]["native_execution"]
+    assert execution["argv"][0] == "ngspice"
+    assert execution["native_init"] is None
+    assert execution["native_environment"]["PDK"] == family
+    assert (bdir / "tb_unit.sp").read_text() == "* preserved canonical input\n"
+
+
+@pytest.mark.parametrize("bad_model", [False, True])
+def test_real_a14_local_reuses_a07_psp_startup(tmp_path, psp_runtime, bad_model):
+    image, family, init = psp_runtime
+    project, canonical = _psp_project(tmp_path, family, "declared")
+    before = canonical.read_bytes()
+    model = "unavailable_model_alpha" if bad_model else "model_alpha"
+    raw = (".subckt device_alpha d g vss\nn_active core g vss vss " + model +
+           " w=1u l=1u\nRpex d core 2\nCpex core vss 1p\n.ends device_alpha\n")
+    _resim_extraction(project, "device_alpha", raw)
+    if not bad_model:
+        record = physical._paths(project, "device_alpha")[1] / "A13.json"
+        extraction = json.loads(record.read_text())
+        extraction["metrics"]["corners"].append(
+            {**extraction["metrics"]["corners"][0], "style": "ngspice(hrhc)"})
+        put(record, extraction)
+    pre, post = _real_windows(project, "device_alpha", image, family)
+    assert post["status"] == ("FAIL" if bad_model else "PASS"), post
+    simulation = post["metrics"]["simulation"] if bad_model else post["metrics"]["corners"][0]["simulation"]
+    execution = simulation["native_execution"]
+    assert execution["argv"][0] == "ngspice"
+    assert execution["native_init"] == pre["executions"][0]["native_init"]
+    assert execution["native_environment"] == pre["executions"][0]["native_environment"]
+    assert execution["native_init"]["path"] == str(init)
+    assert canonical.read_bytes() == before
+    if bad_model:
+        assert simulation["rc"] != 0
+        assert "*" in simulation["failed_analyses"]
+    else:
+        assert post["metrics"]["corners"][0]["measurements"]["device_current"] > 0
+        assert any(view.get("path") == str(init) for view in post["native_inputs"].values())
+        executions = [c["simulation"]["native_execution"] for c in post["metrics"]["corners"]]
+        assert len(executions) == len({e["log"] for e in executions}) == 2
+        assert all(e["log_sha256"] == physical._sha(Path(e["log"])) for e in executions)
+
+
+@pytest.mark.parametrize("outcome", ["success", "missing_docker", "missing_container"])
+def test_a14_requested_container_never_falls_back_to_local(project, monkeypatch, outcome):
+    import analog_native_flow as native
+    import subprocess
+    _extraction_project(project, monkeypatch)
+    put(physical._paths(project, "unit")[1] / "A13.json",
+        physical._extract(project, "unit", "requested_alpha", "image", "process", {}))
+    state = _declared_pre_state(project)
+    calls = []
+
+    def execute(argv, **kwargs):
+        calls.append(argv)
+        if outcome == "missing_docker":
+            raise FileNotFoundError(2, "No such file or directory", "docker")
+        if outcome == "missing_container":
+            return subprocess.CompletedProcess(argv, 1, "", "No such container: requested_alpha")
+        if argv[:2] != ["docker", "exec"] or "analog-native" not in argv:
+            raise FileNotFoundError(2, "Only the declared native context is available", "docker")
+        return subprocess.CompletedProcess(argv, 0,
+            "MEAS vout=1.19 rising_min=1.14 falling_peak=1.26\n", "")
+
+    monkeypatch.setattr(native.subprocess, "run", execute)
+    monkeypatch.setattr(native, "_local_ngspice_startup",
+        lambda *a: pytest.fail("a requested container must never select LOCAL startup"))
+    destination = project / "result.json"
+    rc = physical.main(["resim", str(project), "--block", "unit", "--container", "requested_alpha",
+        "--image", "image", "--pdk", "process", "--settings", json.dumps({"_pre_result": state}),
+        "--json", str(destination)])
+    result = json.loads(destination.read_text())
+    expected = {"success": (0, "PASS"), "missing_docker": (2, "NOT_MEASURED"),
+                "missing_container": (2, "NOT_MEASURED")}[outcome]
+    assert (rc, result["status"]) == expected, result
+    assert len(calls) == (3 if outcome == "success" else 1)
+    assert all(argv[:2] == ["docker", "exec"] and "requested_alpha" in argv for argv in calls)
+    if outcome != "success":
+        assert "requested_alpha" in result["detail"]
+        if outcome == "missing_docker":
+            assert "NGSPICE_NATIVE_EXECUTION_UNAVAILABLE" in result["detail"]
 
 
 def test_layout_executes_producer_and_requires_actual_outputs(project):
@@ -386,6 +517,144 @@ def test_a14_reuses_explicit_actual_canonical_inputs_without_legacy_argv(project
     values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
     assert values == {"vout": 1.2}
     assert record["source"] == "A07"
+
+
+def _declared_pre_state(project, source="sidecar"):
+    import analog_native_sim as sim
+    bdir, _ = physical._paths(project, "unit")
+    nested = put(bdir / "load_detail.sp", "* declared load model\n")
+    put(bdir / "load.sp", '.include "' + str(nested) + '"\n')
+    declaration = bdir / "testbench_inputs.json" if source == "sidecar" else project / "declared/inputs.json"
+    put(declaration, {"block": "unit", "ports": ["a", "b", "vss"],
+        "rails": {"vss": "vss"}, "testbench": {"supply_exprs": ["1.8"],
+        "stimulus": ["v1 a 0 {supply}"], "cards": [".include load.sp", "i_load b 0 PULSE(0 1m 2n 1p 1p 4n 10n)"],
+        "control": ["op", "let sensed = v(b)", 'echo "MEAS vout=" $&sensed',
+            "tran 1p 10n", "meas tran rising_min MIN v(b) FROM=2n TO=5n",
+            "meas tran falling_peak MAX v(b) FROM=6n TO=9n"]}})
+    config = {} if source == "sidecar" else {"blocks": {"unit": {
+        "testbench_inputs": str(declaration.relative_to(project))}}}
+    if config:
+        put(project / "input/analog_flow.json", config)
+    def run(program, argv, **kwargs):
+        log = put(Path(argv[argv.index("-o") + 1]), "MEAS vout=1.2 rising_min=1.15 falling_peak=1.25\n")
+        capture = put(log.parent / "capture.log", "ngspice batch mode\n")
+        return {"returncode": 0, "log": str(capture), "log_sha256": physical._sha(capture),
+                "outputs": {str(log): physical._sha(log)},
+                "argv": ["ngspice", *argv]}
+    return sim.run_step("A07", project, {"name": "unit"}, {"config": config}, run)
+
+
+@pytest.mark.parametrize("source", ["config", "sidecar"])
+def test_a14_reuses_declared_pre_and_substitutes_pex_without_new_pre_run(project, monkeypatch, source):
+    import analog_real_corner_sweep as ars
+    import _designs_root as dr
+    _extraction_project(project, monkeypatch)
+    extraction = physical._extract(project, "unit", "container", "image", "process", {})
+    _, work = physical._paths(project, "unit")
+    put(work / "A13.json", extraction)
+    state = _declared_pre_state(project, source)
+    assert state["status"] == "PASS"
+    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
+    monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
+    calls = []
+    def spice(container, deck, **kwargs):
+        calls.append(Path(deck))
+        assert "v1 a 0 1.8" in calls[-1].read_text()
+        assert "unit_post_" in calls[-1].read_text()
+        assert "PULSE(0 1m 2n 1p 1p 4n 10n)" in calls[-1].read_text()
+        assert "meas tran rising_min MIN v(b) FROM=2n TO=5n" in calls[-1].read_text()
+        assert "meas tran falling_peak MAX v(b) FROM=6n TO=9n" in calls[-1].read_text()
+        return True, {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}, "MEAS vout=1.19 rising_min=1.14 falling_peak=1.26\n", {}
+    monkeypatch.setattr(ars, "_run_ngspice", spice)
+    result = physical._resim(project, "unit", "container", "image", "process", {"_pre_result": state})
+    assert result["status"] == "PASS"
+    assert len(calls) == 1
+    assert result["metrics"]["pre"]["measurements"] == {"vout": 1.2, "rising_min": 1.15, "falling_peak": 1.25}
+    assert result["metrics"]["corners"][0]["measurements"] == {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}
+
+
+@pytest.mark.parametrize("changed", ["declaration", "deck", "spec", "removed", "different_selection", "include", "nested_include"])
+def test_a14_rejects_stale_declared_pre_without_simulation(project, monkeypatch, changed):
+    import analog_real_corner_sweep as ars
+    state = _declared_pre_state(project)
+    bdir, _ = physical._paths(project, "unit")
+    declaration = bdir / "testbench_inputs.json"
+    if changed == "removed":
+        declaration.unlink()
+    elif changed == "different_selection":
+        other = put(project / "other.json", json.loads(declaration.read_text()))
+        put(project / "input/analog_flow.json", {"blocks": {"unit": {"testbench_inputs": str(other)}}})
+    elif changed in ("include", "nested_include"):
+        path = bdir / ("load.sp" if changed == "include" else "load_detail.sp")
+        path.write_text(path.read_text() + "* changed dependency\n")
+    else:
+        path = declaration if changed == "declaration" else Path(state["native_inputs"]["testbench"]["path"]) if changed == "deck" else bdir / "spec.json"
+        path.write_text(path.read_text() + "\n")
+    monkeypatch.setattr(ars, "_run_ngspice", lambda *a, **k: pytest.fail("stale PRE must not run"))
+    values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
+    assert values == {}
+    assert "no completed source-bound" in record["detail"]
+
+
+@pytest.mark.parametrize("changed", ["declaration", "pre_log", "include", "nested_include"])
+def test_a14_declared_pre_change_during_post_keeps_unmeasured(project, monkeypatch, changed):
+    import analog_real_corner_sweep as ars
+    import _designs_root as dr
+    _extraction_project(project, monkeypatch)
+    extraction = physical._extract(project, "unit", "container", "image", "process", {})
+    bdir, work = physical._paths(project, "unit")
+    put(work / "A13.json", extraction)
+    state = _declared_pre_state(project)
+    monkeypatch.setattr(dr, "resolve_host_root", lambda *a: str(project))
+    monkeypatch.setattr(ars, "_container_path", lambda c, root, p: str(p))
+    def spice(*args, **kwargs):
+        path = {"declaration": bdir / "testbench_inputs.json",
+                "pre_log": Path(state["executions"][0]["stdout_path"]),
+                "include": bdir / "load.sp", "nested_include": bdir / "load_detail.sp"}[changed]
+        path.write_text(path.read_text() + "\n")
+        return True, {"vout": 1.19, "rising_min": 1.14, "falling_peak": 1.26}, "MEAS vout=1.19\n", {}
+    monkeypatch.setattr(ars, "_run_ngspice", spice)
+    result = physical._resim(project, "unit", "container", "image", "process", {"_pre_result": state})
+    assert result["status"] == "NOT_MEASURED"
+    assert "changed during POST" in result["detail"]
+
+
+@pytest.mark.parametrize("changed", [None, "bytes", "digest", "missing"])
+def test_a14_reuses_real_a07_output_stream_only_while_current(project, changed):
+    import shutil
+    import analog_native_flow as native
+    import analog_native_sim as sim
+    if not shutil.which("ngspice"):
+        pytest.skip("native ngspice is required for the A07 to A14 stream control")
+    bdir, _ = physical._paths(project, "unit")
+    put(bdir / "unit.sp", ".subckt unit a b vss\nr1 a b 1k\nr2 b vss 1k\n.ends unit\n")
+    put(bdir / "spec.json", {"specs": [{"name": "vout", "min": 0.9, "max": 1.1}]})
+    put(bdir / "testbench_inputs.json", {"block": "unit", "ports": ["a", "b", "vss"],
+        "rails": {"vss": "vss"},
+        "testbench": {"supply_exprs": ["2"], "stimulus": ["v1 a 0 {supply}"],
+        "control": ["op", "let sensed = v(b)", 'echo "MEAS vout=" $&sensed', "quit"]}})
+    destination = project / "native-capture"
+    destination.mkdir()
+    state = sim.run_step("A07", project, {"name": "unit"}, {"config": {}},
+                         native.NativeCommands(project, destination, ""))
+    assert state["status"] == "PASS", state
+    execution = state["executions"][0]
+    output = Path(execution["stdout_path"])
+    assert output != Path(execution["log"])
+    assert "MEAS vout=" in output.read_text()
+    assert "MEAS vout=" not in Path(execution["log"]).read_text()
+    if changed == "bytes":
+        output.write_text(output.read_text() + "\n")
+    elif changed == "digest":
+        execution["outputs"].pop(str(output))
+    elif changed == "missing":
+        output.unlink()
+    values, record = physical._pre_layout_measurements(project, "unit", {"_pre_result": state})
+    assert values == ({} if changed else {"vout": pytest.approx(1.0)})
+    if changed is None:
+        assert record["reused"] is True
+        assert record["log"] == str(output)
+        assert record["log_sha256"] == execution["outputs"][str(output)]
 
 
 @pytest.mark.parametrize("kind", ["alternate_actual_tb", "changed_actual_input", "legacy_no_argv", "legacy_alternate_tb"])

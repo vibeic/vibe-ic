@@ -253,7 +253,7 @@ def _historical_runner_sources_match(receipt: dict) -> bool:
                 or manifest.get("retained_plugin_root") != str(root / "plugin")):
             raise ValueError("retained source tree identity differs")
         try:
-            trees[root] = rpt._load_retained(root / "manifest.json")
+            trees[root] = rpt.load_historical(root / "manifest.json")
         except rpt.RuntimeTreeError as exc:
             raise ValueError(str(exc)) from exc
 

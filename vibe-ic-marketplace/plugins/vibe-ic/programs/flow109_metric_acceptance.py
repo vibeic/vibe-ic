@@ -7023,9 +7023,14 @@ def accept_d70(project: Path, context: Mapping[str, Any], component: Mapping[str
     return final.accept_metric_obligations(project, context, component)
 
 
-def _d0102_read(project: Path, relative: str, reads: dict) -> dict:
+def _d0102_read(project: Path, relative: str, reads: dict, *, exact_numbers=False) -> dict:
+    import phase1_expert_parse_track as expert
     raw = _safe_project_file(project, relative).read_bytes()
-    value = json.loads(raw)
+    try:
+        value = json.loads(raw, parse_float=Decimal if exact_numbers else float,
+                           object_pairs_hook=expert._PointerObject)
+    except ArithmeticError as exc:
+        raise MetricRefusal('D0102_INPUT_INVALID', relative) from exc
     if not isinstance(value, dict):
         raise MetricRefusal('D0102_INPUT_INVALID', relative)
     reads[relative] = _sha(raw)
@@ -7119,8 +7124,9 @@ def _d0102_dimensionless(project: Path, expectation: dict, reads: dict) -> dict 
             or str(expectation.get('id', '')).startswith('qualified_by:')):
         return None
     numbers = [t for t in tokens if t not in ('', '—', '-')]
-    if not numbers or any(not isinstance(t, str) or not re.fullmatch(
-            r'[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?', t) for t in numbers):
+    quantities = [expert.parse_quantity(token) for token in numbers]
+    if not numbers or any(quantity is None or quantity.dimension not in (None, 'dimensionless')
+                          for quantity in quantities):
         return None
     explicit_unit = any(t in ('', '—', '-') for t in tokens)
     quantity_fields = ('value', 'target', 'typ', 'min', 'max')
@@ -7132,24 +7138,35 @@ def _d0102_dimensionless(project: Path, expectation: dict, reads: dict) -> dict 
             item.update(usable=False, met=False)
         return item
     try:
-        values = _d0102_value(project, expectation, reads)
+        path = expert.resolve_layer_file(project, expectation['layer'])
+        document = _d0102_read(project, path.relative_to(project).as_posix(), reads,
+                                exact_numbers=True)
+        selected = expert._scoped_nodes_at(document, expectation.get('field_path'),
+                                           expectation['layer'])
+        if not selected:
+            raise MetricRefusal('D0102_OBSERVATION_UNRESOLVED', str(expectation))
+        values = [node.value for node in selected]
     except (MetricRefusal, OSError, ValueError, KeyError, TypeError) as exc:
         item.update(usable=False, met=False, observed=str(exc))
         return item
+    unit = expert._record_unit(values[0], selected[0].unit) \
+        if len(values) == 1 and isinstance(values[0], dict) else None
+    dimensionless = unit in (None, ('dimensionless', 0))
     if not explicit_unit and (len(values) != 1 or not isinstance(values[0], dict)
-                             or values[0].get('unit') not in (None, '', '—', '-')
+                             or not dimensionless
                              or not any(key in values[0] for key in quantity_fields)):
         return None
     if (len(values) != 1 or not isinstance(values[0], dict)
-            or values[0].get('unit') not in (None, '', '—', '-')):
+            or not dimensionless):
         item.update(usable=False, met=False, observed='Expected a dimensionless quantity record.')
         return item
-    observed = [Decimal(str(values[0][key])) for key in quantity_fields
-                if type(values[0].get(key)) in (int, float)]
-    if not observed or any(not value.is_finite() for value in observed):
+    observed = {key: values[0][key] for key in quantity_fields
+                if type(values[0].get(key)) in (int, float, Decimal)}
+    if not observed or any(not Decimal(str(value)).is_finite() for value in observed.values()):
         item.update(usable=False, met=False, observed='Dimensionless quantity has no finite numeric value.')
         return item
-    missing = [token for token in numbers if Decimal(token) not in observed]
+    units = expert._haystack_units(observed, selected[0].key, unit)
+    missing = [token for token in numbers if not expert.present_in_units(token, units)]
     item.update(met=not missing, missing_tokens=missing,
                 observed=f'Dimensionless numeric values {observed} compared with {numbers}.')
     return item

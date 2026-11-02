@@ -1,0 +1,114 @@
+{
+  "schema": "vibeic.enhancement_publication.v1",
+  "plugin_base": "95a3be2b31bb3fe17c0e5bdbf3f654be020ee078",
+  "plugin_version": "1.35.51",
+  "runtime_pr": "https://github.com/vibeic/vibe-ic/pull/3779",
+  "runtime_capture_ids": [
+    "retain_declared_gate_companion_assets",
+    "verify_historical_bundle_without_granting_launch"
+  ],
+  "issues": [
+    {
+      "capture_ids": [
+        "PLUGIN-001",
+        "PLUGIN-009",
+        "source-owned-module-intent",
+        "RESUMED-001",
+        "RESUMED-002",
+        "source-owned-verification-intent"
+      ],
+      "title": "Preserve complete source authority in Phase 1 declarations, intent and clock applicability",
+      "repository": "vibeic/vibe-ic",
+      "issue_url": "https://github.com/vibeic/vibe-ic/issues/3780",
+      "body_sha256": "30215f88587aa4fef0fa752ee2e30de0576925a404226fc7cc2e0705e88acefd",
+      "mirror": "vibe-ic-marketplace/community/backlogs/ORGANIC-20261102-source-authority.yaml"
+    },
+    {
+      "capture_ids": [
+        "PLUGIN-002",
+        "PLUGIN-011"
+      ],
+      "title": "Complete reviewed typed Phase 1 facts through the ordinary producer with renewed source authority",
+      "repository": "vibeic/vibe-ic",
+      "issue_url": "https://github.com/vibeic/vibe-ic/issues/3781",
+      "body_sha256": "20d4d5ae263cecd00f9e3bc38fd70f588000d4e962a8f0d3371b879a27fea70c",
+      "mirror": "vibe-ic-marketplace/community/backlogs/ORGANIC-20261102-typed-fact-completion.yaml"
+    },
+    {
+      "capture_ids": [
+        "PLUGIN-003",
+        "PLUGIN-004",
+        "PLUGIN-010",
+        "RESUMED-003"
+      ],
+      "title": "Bind arithmetic reference generation to complete affirmative source expressions and current schema",
+      "repository": "vibeic/vibe-ic",
+      "issue_url": "https://github.com/vibeic/vibe-ic/issues/3782",
+      "body_sha256": "830d3afbcbc6fc33b9d14697e670be795b2b3448198d9f79bd92b3081fb25636",
+      "mirror": "vibe-ic-marketplace/community/backlogs/ORGANIC-20261102-oracle-contract.yaml"
+    },
+    {
+      "capture_ids": [
+        "resume_owed_source_authority_without_candidate_reauthoring",
+        "bind_complete_source_authority_epoch_at_journal_consumer",
+        "RESUMED-006",
+        "PLUGIN-005",
+        "PLUGIN-006",
+        "PLUGIN-007",
+        "PLUGIN-008",
+        "RESUMED-007",
+        "RESUMED-005",
+        "AI4-POST-PRODUCER-CONTINUATION"
+      ],
+      "title": "Complete same-RTL verification and source review through an immutable producer-bound continuation",
+      "repository": "vibeic/vibe-ic",
+      "issue_url": "https://github.com/vibeic/vibe-ic/issues/3783",
+      "body_sha256": "e964a0220ecfdee88fca3488581314b8ef73eeb3b91189d9435d9fddfbf618d3",
+      "mirror": "vibe-ic-marketplace/community/backlogs/ORGANIC-20261102-verification-owner-lifecycle.yaml"
+    },
+    {
+      "capture_ids": [
+        "RESUMED-004"
+      ],
+      "title": "Finalize Phase 1 report binding after its own producer identity is durably written",
+      "repository": "vibeic/vibe-ic",
+      "issue_url": "https://github.com/vibeic/vibe-ic/issues/3784",
+      "body_sha256": "771bb08c20fce79f4ad961414be685c1792ad73bd73f3f73390ef73fcdd25435",
+      "mirror": "vibe-ic-marketplace/community/backlogs/ORGANIC-20261102-report-finalization.yaml"
+    },
+    {
+      "capture_ids": [
+        "declared-logic-basis-truthful-author-handoff"
+      ],
+      "title": "Route unsupported declared logic-basis and minimization obligations to a truthful author handoff",
+      "repository": "vibeic/vibe-ic",
+      "issue_url": "https://github.com/vibeic/vibe-ic/issues/3785",
+      "body_sha256": "08d6059a7bff7654c44444ff1c4009ca6fd2223d6a62045b827ce30aadd440b8",
+      "mirror": "vibe-ic-marketplace/community/backlogs/ORGANIC-20261102-declared-logic-basis.yaml"
+    },
+    {
+      "capture_ids": [
+        "filtered-agent-list-schema-coverage"
+      ],
+      "title": "Recognize the closed optional filter schema for metadata-only agent-list audit calls",
+      "repository": "vibeic/vibe-ic",
+      "issue_url": "https://github.com/vibeic/vibe-ic/issues/3786",
+      "body_sha256": "c0a9e5ff621133ea625b3c9e168ea2148eb9de0e7a3038cb02567e3ee442d1f6",
+      "mirror": "vibe-ic-marketplace/community/backlogs/ORGANIC-20261102-filtered-agent-list.yaml"
+    },
+    {
+      "capture_ids": [
+        "EDA-001",
+        "EDA-002",
+        "EDA-003"
+      ],
+      "title": "Extend existing EDA release validation with offline tool identity and neutral compatibility seeds",
+      "repository": "vibeic/vibeic-eda",
+      "issue_url": "https://github.com/vibeic/vibeic-eda/issues/455",
+      "body_sha256": "e903b01b2d6d694b66f48a58d928a7e13ddae81aeb0c683c6ab75848f1a7019b",
+      "mirror": "vibe-ic-marketplace/community/backlogs/ORGANIC-20261102-eda-release-validation.yaml"
+    }
+  ],
+  "status": "SUBMITTED_NOT_MERGED",
+  "benchmark_qualification": "NOT_CLAIMED"
+}

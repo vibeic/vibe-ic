@@ -735,6 +735,15 @@
       "bucket_A_program": null,
       "bucket_B_skill_file": "skills/catalog-glue-author/SKILL.md",
       "bucket_B_section_anchor": "Synchronous reset at an external memory interface"
+    },
+    "runtime.retained_integrity": {
+      "description": "Retention of runtime companion assets and read-only verification of historical producer bundles; capture routing only, not a new flow step or gate.",
+      "bucket_A_program": "programs/runtime_program_tree.py",
+      "bucket_A_related": [
+        "programs/phase1_gate_contract_check.py",
+        "programs/benchmark_dispatch.py"
+      ],
+      "bucket_B_skill_file": "skills/open-benchmark-methodology/SKILL.md"
     }
   },
   "default_routing": {

@@ -5,6 +5,9 @@ This module is an execution adapter, not a qualification system.  A missing
 tool, deck or measurement is NOT_MEASURED; a native violation is FAIL.  The
 caller must propagate both outcomes rather than admitting a completed flow.
 A13 extracts only. A14 reuses that extraction without extracting again.
+A14 also reuses A07's declared testbench input selection, requiring current
+declaration/spec/deck hashes and identical re-rendered text before substituting
+PEX. It never launches a replacement PRE simulation.
 
 Optional settings are ordinary design inputs in options['config'][step_id],
 with optional per-block entries in its 'blocks' map. No settings are needed
@@ -175,6 +178,8 @@ def run_step(step_id: str, project: Path, block: dict, options: dict,
             return _result("NOT_MEASURED", "post_mc_samples must be an integer >= 2")
         cfg["samples"] = samples
     if step_id == "A14":
+        from analog_native_sim import _config
+        cfg["_pre_testbench_config"] = _config(options, block, "A07")
         current = ((options.get("previous_results") or {}).get("A07") or {}).get(name)
         if isinstance(current, dict):
             # Transfer only the already-produced input state and transcript
@@ -597,6 +602,14 @@ def _pre_layout_measurements(project: Path, name: str, cfg: dict) -> tuple[dict,
     net, tb = bdir / f"{name}.sp", bdir / f"tb_{name}.sp"
     if not net.is_file():
         return {}, {"detail": "pre-layout circuit input is absent"}
+    from analog_native_sim import _config, _testbench_inputs_path, _declared_testbench
+    selected = cfg.get("_pre_testbench_config")
+    if not isinstance(selected, dict):
+        selected = _config({"config": _read(project / "input/analog_flow.json")}, {"name": name}, "A07")
+    try:
+        declaration = _testbench_inputs_path(project, name, selected)
+    except ValueError as exc:
+        return {}, {"detail": "no completed source-bound A07: " + str(exc)}
 
     def measured_log(text: str) -> dict:
         if any(ars._scan_analysis_failures(text)) or re.search(
@@ -615,20 +628,33 @@ def _pre_layout_measurements(project: Path, name: str, cfg: dict) -> tuple[dict,
     state = _read(project / "reports" / "analog_native" / "status.json")
     candidates += [row for row in state.get("steps", []) if isinstance(row, dict)
                    and row.get("step") == "A07" and row.get("block") == name]
-    study = _pre_measurement_study(project, net, candidates, measured_log)
+    study = _pre_measurement_study(project, net, candidates, measured_log) if declaration is None else None
     if study is not None:
         return study
-    if not tb.is_file():
+    if declaration is None and not tb.is_file():
         return {}, {"detail": "pre-layout canonical testbench input is absent"}
     refusal_reasons = []
     for record in candidates:
         bound = record.get("input_views") or {}
         consumed = record.get("native_inputs")
+        expected_tb = tb
+        if declaration is not None:
+            try:
+                if not isinstance(consumed, dict) or not isinstance(consumed.get("testbench"), dict):
+                    raise ValueError("declared testbench PRE inputs were not recorded")
+                expected_tb = Path(consumed["testbench"]["path"])
+                text, declared_views = _declared_testbench(project, name, selected, expected_tb.parent)
+                if (text != expected_tb.read_text() or any(consumed.get(role) != view
+                        for role, view in declared_views.items())):
+                    raise ValueError("declared testbench PRE inputs changed")
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                refusal_reasons.append(str(exc))
+                continue
         if consumed is not None:
             if not isinstance(consumed, dict) or any(
                     not isinstance(consumed.get(role), dict)
                     or Path(str(consumed[role].get("path", ""))).resolve() != path.resolve()
-                    for role, path in (("netlist", net), ("testbench", tb))):
+                    for role, path in (("netlist", net), ("testbench", expected_tb))):
                 refusal_reasons.append("recorded nominal netlist/testbench differs from the canonical PRE comparison")
                 continue
             if any(not isinstance(view, dict) or not view.get("path")
@@ -662,14 +688,25 @@ def _pre_layout_measurements(project: Path, name: str, cfg: dict) -> tuple[dict,
                 if actual_deck.resolve() != tb.resolve():
                     refusal_reasons.append("legacy A07 executed a different testbench from the canonical PRE comparison")
                     continue
-            path = Path(execution.get("log") or execution.get("log_path") or "")
-            if not path.is_file() or (execution.get("log_sha256") and
-                                      execution["log_sha256"] != _sha(path)):
-                continue
+            if execution.get("stdout_path"):
+                # A07 records ngspice's -o stream as an existing output.
+                # NativeCommands.log captures a different stdout/stderr stream.
+                path = Path(execution["stdout_path"])
+                digest = (execution.get("outputs") or {}).get(str(path))
+                if not digest or not path.is_file() or digest != _sha(path):
+                    continue
+            else:
+                path = Path(execution.get("log") or execution.get("log_path") or "")
+                if not path.is_file() or (execution.get("log_sha256") and
+                                          execution["log_sha256"] != _sha(path)):
+                    continue
             values = measured_log(path.read_text(errors="replace"))
             # Read the actual native transcript, even when nominal acceptance
             # was NOT_MEASURED because other required metrics were absent.
             if values:
+                if declaration is not None:
+                    return values, {"source": "A07 declared testbench", "log": str(path),
+                        "log_sha256": _sha(path), "reused": True, "native_inputs": consumed}
                 return values, {"source": "A07", "log": str(path),
                                 "log_sha256": _sha(path), "reused": True}
 
@@ -677,7 +714,7 @@ def _pre_layout_measurements(project: Path, name: str, cfg: dict) -> tuple[dict,
     # its unmodified nominal sizing run separately from the corner variants.
     retained_path = bdir / "corner_results.json"
     retained = _read(retained_path)
-    if (retained.get("_provenance") == "real_ngspice" and retained.get("deck_source") == "a3_netlist"
+    if (declaration is None and retained.get("_provenance") == "real_ngspice" and retained.get("deck_source") == "a3_netlist"
             and retained.get("netlist_sha256") == _sha(net)
             and retained.get("netlist_testbench_sha256") == _sha(tb)):
         for row in retained.get("all_runs", []):
@@ -705,7 +742,8 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
     import analog_real_corner_sweep as ars
     import ams_analysis_select
     import analog_meas_from_spec_gen as meas
-    import _designs_root as dr
+    from analog_native_flow import NativeCommands
+    from analog_native_sim import _attempt
     from corner_yield_vs_spec_check import _spec_limits, _violates
 
     bdir, work = _paths(project, name)
@@ -724,18 +762,21 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
     if not pre:
         return _result(pre_state.get("status", "NOT_MEASURED"), pre_state["detail"], metrics={"pre": pre_state})
     study_pre = pre_state.get("source") == "A07 native measurement study"
+    declared_pre = pre_state.get("source") == "A07 declared testbench"
     consumed_inputs = ({"pre:" + role: view for role, view in
-        {**pre_state["native_inputs"], **pre_state["comparison_inputs"]}.items()} if study_pre else {})
-    if study_pre:
+        {**pre_state["native_inputs"], **pre_state.get("comparison_inputs", {})}.items()}
+        if study_pre or declared_pre else {})
+    if study_pre or declared_pre:
         consumed_inputs.update({role: {"path": str(path), "sha256": _sha(path)} for role, path in
             (("extraction_record", work / "A13.json"), ("layout", gds))})
-    source_tb = Path(pre_state["native_inputs"]["testbench"]["path"]) if study_pre else tb
+    if declared_pre:
+        consumed_inputs["pre:log"] = {"path": pre_state["log"], "sha256": pre_state["log_sha256"]}
+    source_tb = Path(pre_state["native_inputs"]["testbench"]["path"]) if study_pre or declared_pre else tb
     if study_pre and any(re.search(r"(?i)\b(?:v(?:db|p|m)?|i)\([^)]*\bxdut[.:]",
             str(binding.get("expression", "")))
             for binding in pre_state["bindings"]["measurements"].values()):
         return _result("NOT_MEASURED", "post-layout OP study requires a mapped internal DUT probe",
                        metrics={"pre": pre_state})
-    host_root = dr.resolve_host_root(project, container)
     rows, records, outputs = [], [], []
     ports = a7.subckt_ports(net.read_text(), name)
     if not ports:
@@ -756,6 +797,8 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
               if normalize(key) in required_outputs}
     if not limits:
         return _result("NOT_MEASURED", "post-layout acceptance has no declared numeric spec bounds")
+    runner = (NativeCommands(project, _attempt(project, "A14", name), container, image)
+              if not study_pre else None)
     for corner in corners:
         extracted = Path(corner["extracted_netlist"])
         if not extracted.is_file() or corner.get("sha256") != _sha(extracted):
@@ -810,20 +853,36 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
             logpath = next((Path(e["log"]) for e in state.get("executions", []) if e.get("log")), result_path)
         else:
             ok, post, log, state = ars._run_ngspice(container,
-                ars._container_path(container, host_root, post_tb),
-                deck_text=post_tb.read_text(), run_to_completion=True)
+                str(post_tb), cwd=str(post_tb.parent), deck_text=post_tb.read_text(),
+                run_to_completion=True, run=runner)
             logpath = post_tb.with_suffix(".ngspice.log")
             atomic_write_text(logpath, log or "")
             outputs += [post_tb, logpath]
+            if declared_pre:
+                consumed_inputs.update({"post:" + slug + ":startup:" + str(i):
+                    {"path": path, "sha256": digest}
+                    for i, (path, digest) in enumerate(runner.native_inputs.items())})
+                consumed_inputs.update({"post:" + slug + ":" + role: {"path": str(path), "sha256": _sha(path)}
+                    for role, path in (("testbench", post_tb), ("netlist", post_net),
+                                       ("log", logpath), ("extracted", extracted))})
         if not ok:
+            execution = state.get("native_execution") or {}
+            if execution.get("returncode") == 127:
+                return _result("NOT_MEASURED", "A14_RESIM_EXECUTION_UNAVAILABLE: "
+                    + ("container " + container if container else "LOCAL")
+                    + ": " + execution.get("stderr", ""), outputs,
+                    metrics={"pre": pre_state, "simulation": state, "corners": records})
             status = state["status"] if study_pre else ("NOT_MEASURED" if (
                 state.get("stopped") or state.get("progress_stalled") or _interrupted(state.get("rc"))) else "FAIL")
             if study_meta:
                 records.append({"style": corner["style"], "native_measurement_study": study_meta,
                                 "simulation": state})
-            return _result(status, f"native resimulation failed: {logpath}", outputs,
+            detail = f"native resimulation failed: {logpath}"
+            if execution.get("stderr"):
+                detail += "; " + ("container " + container if container else "LOCAL") + ": " + execution["stderr"]
+            return _result(status, detail, outputs,
                            metrics={"pre": pre_state, "simulation": state, "corners": records},
-                           **({"native_inputs": consumed_inputs} if study_pre else {}))
+                           **({"native_inputs": consumed_inputs} if study_pre or declared_pre else {}))
         declared = pre_state["bindings"]["measurements"] if study_pre else a7.declared_measurements(source_tb.read_text())
         absent_pre = [m for m in declared if pre.get(m) is None]
         lost = []
@@ -843,6 +902,8 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
                         "not_comparable": dropped, "missing_pre": absent_pre, "lost_post": lost})
         if study_meta:
             records[-1]["native_measurement_study"] = study_meta
+        elif state.get("native_execution"):
+            records[-1]["simulation"] = state
     from analog_a7_post_layout_resim_check import _check_specs, DEFAULT_MAX_DELTA_PCT
     deltas, _ = _check_specs(rows)
     measured_failure = any(c["violations"] for c in records) or any(
@@ -850,12 +911,15 @@ def _resim(project: Path, name: str, container: str, image: str, pdk: str,
     incomplete = any(c["missing"] or c["missing_pre"] or c["not_comparable"] or
                      c["lost_post"] for c in records) or not rows
     status = "FAIL" if measured_failure else "NOT_MEASURED" if incomplete else "PASS"
+    if declared_pre and status != "FAIL" and not _current_native_views(consumed_inputs):
+        return _result("NOT_MEASURED", "declared testbench inputs changed during POST", outputs,
+                       metrics={"pre": pre_state, "corners": records})
     return _result(status, "post-layout native performance and pre/post comparison",
                    outputs, metrics={"pre": {**pre_state, "measurements": pre},
                                      "corners": records, "specs": rows,
                                      "max_delta_pct": max(deltas) if deltas else None},
                    **({"native_inputs": _portable_native_views(project, consumed_inputs)}
-                      if study_pre else {}))
+                      if study_pre or declared_pre else {}))
 
 
 def _statistics(project: Path, name: str, container: str, image: str, pdk: str,

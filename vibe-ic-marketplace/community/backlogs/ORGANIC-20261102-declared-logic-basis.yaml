@@ -1,0 +1,55 @@
+type: enhancement
+component: program:deterministic_emit_chain
+title: Route unsupported declared logic-basis and minimization obligations to a truthful author handoff
+plugin_version: 1.35.51
+plugin_version_role: filing-time plugin version
+target_repository: vibeic/vibe-ic
+status: SUBMITTED_OPEN
+issue_url: https://github.com/vibeic/vibe-ic/issues/3785
+source_snapshot:
+  plugin_base: 95a3be2b31bb3fe17c0e5bdbf3f654be020ee078
+  plugin_version: 1.35.51
+  eda_base: 0af058989303d36f3d79ced703b5da3ad0fea7c8
+capture_ids:
+- declared-logic-basis-truthful-author-handoff
+body_sha256: 08d6059a7bff7654c44444ff1c4009ca6fd2223d6a62045b827ce30aadd440b8
+body_contract: pattern is the exact complete Markdown issue body; title and all acceptance commands are included without rewriting
+pattern: |
+  # Route unsupported declared logic-basis and minimization obligations to a truthful author handoff
+
+  ## General gap
+
+  A functionally correct truth-table implementation does not prove an explicitly requested implementation basis or minimization obligation. The existing deterministic chain should identify the active source-owned structural obligation before claiming it has completed the requested design. If its producer cannot establish that obligation, emit the ordinary author handoff truthfully. Withdrawn/denied text, foreign-module references and opaque HDL strings must not become active restrictions.
+
+  This is declared-logic-basis-truthful-author-handoff.
+
+  ## Existing repair and remaining extension
+
+  Merged #3768 already makes the external K-map decomposition branch decline forbidden SOP for the narrow mux-only restriction. **Do not refile or undo that repair.** This enhancement extends the same contract to declared positive basis/minimization obligations, both normal author-boundary and late-emitter paths, with explicit source ownership. The general common-layer proposal is not proof that the deterministic producer can synthesize a restricted optimal topology.
+
+  Current owners: `programs/_specrtl_common.py`, `programs/deterministic_emit_chain.py`, `programs/kmap_grid_synth.py`, and the ordinary author handoff in `programs/design_one_shot_runner.py`.
+
+  Local candidate `75af5baa73d3f0e1325e214218fb901b2f3aec9b` has retained bounded independent metadata: a 40-case matrix, 22 declared handoffs and 18 unrestricted emissions; disabling only the declared-basis boundary restores the same 22 substantive failing IDs. This is local evidence, not an upstream replay, topology optimality proof or completed AI author execution.
+
+  ## Neutral minimal reproduction
+
+  Create a fresh small truth table and pair identical function requirements with: an affirmative restricted-basis request; a minimization requirement unsupported by the generator; an unrestricted request; a withdrawn restriction; a restriction on another named module; and lexical mentions inside HDL strings/comments. Invoke both the ordinary author entry and the late deterministic emitter. Active unsupported obligations must take the declared handoff, while unrestricted/withdrawn/foreign lexical controls retain their valid generation behavior.
+
+  ## 驗收
+
+  Preserve #3768's existing permission/exception controls. Verify current source ownership, complete restriction clauses, truthful handoff reason/skill attribution and unchanged unrestricted RTL bytes. Keep functional checks for the unrestricted cases separate from structural/minimization proof. No invented circuit topology or unsupported optimality claim is allowed.
+
+  Run from repository root after extending the existing neutral suite:
+
+  ```bash
+  cd vibe-ic-marketplace/plugins/vibe-ic
+  python3 -m pytest -q programs/tests/test_kmap_grid_synth.py
+  ```
+
+  This existing suite must gain the new declared-basis/normal-author controls; running the old suite alone does not close this enhancement.
+
+  ## Evidence and submission boundary
+
+  This is a general enhancement backlog, not a benchmark result. Filing source: plugin 1.35.51, main `95a3be2b31bb3fe17c0e5bdbf3f654be020ee078`. The owning source presence and related public submissions were inspected at this snapshot. The behavioral findings below come from retained local capture metadata; the complete implementation has not been ported or freshly reproduced on this upstream snapshot. No benchmark solution, official reference, private transcript, or local machine path is included.
+
+  Local candidate implementation and focused acceptance are distinct from upstream delivery. No new native run, full-suite result, source-semantic approval, or benchmark PASS is claimed by filing this issue. The commands under acceptance are implementation deliverables, not filing-time execution claims. Any named new test module must be added before its command can supply evidence; missing-module errors do not count as negative controls.
