@@ -359,11 +359,20 @@ def _extract_operator(text: str) -> Optional[Tuple[str, str, str, str]]:
 
 
 def _affirmative_function_context(record: dict) -> bool:
-    from _prose_polarity import is_denied
+    """Unknown title context needs judgment; it cannot authorize a reference.
+
+    This finite domain avoids silently discarding negative or qualified titles
+    merely because a particular spelling is absent from a denial vocabulary.
+    Untitled legacy records still require a complete affirmative expression.
+    """
     title = record.get('title', '')
-    return (isinstance(title, str) and not is_denied(title, ignore_bracketed=False)
-            and not re.search(r'\b(?:forbid\w*|prohibit\w*|negative[ -]+example|counterexample)\b',
-                              title, re.I))
+    return isinstance(title, str) and title.strip().rstrip(':').strip().casefold() in {
+        '', 'function', 'functionality', 'functional description',
+        'functional requirements', 'functional specification',
+        'functional requirements specification', 'functional requirements specification (frs)',
+        'frs', 'l2_frs', 'l2 frs', 'arithmetic function', 'arithmetic datapath',
+        'overview', '功能', '功能描述', '功能需求', '功能規格', '功能规格',
+    }
 
 
 def _function_records(project: Path) -> List[str]:

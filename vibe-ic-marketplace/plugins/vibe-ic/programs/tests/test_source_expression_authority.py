@@ -257,6 +257,8 @@ def test_symbolic_modulus_uses_its_named_declaration(tmp_path, declared, accepte
     ('Function', True), ('Forbidden example: do not implement', False),
     ('Negative example', False), ('Prohibited implementation', False),
     ('Function (not applicable)', False),
+    ('Negative examples', False), ('Disallowed example', False),
+    ('Illustrative example', False),
 ])
 def test_frs_record_title_retains_its_authority(tmp_path, title, accepted):
     p = project(tmp_path, 'result = left + right.')
