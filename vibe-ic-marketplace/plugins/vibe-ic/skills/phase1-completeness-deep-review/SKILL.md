@@ -1,6 +1,6 @@
 ---
 name: phase1-completeness-deep-review
-description: After phase1_one_shot_runner emits L*.json, AI does a STRONG double-check that every fact present in input documents (input_doc/ + input/docs/) lands somewhere in generated_docs/L*.json. If anything is missing, AI patches the L doc directly AND evaluates whether the gap is systematic — if so, submits a community-backlog entry so a future plugin/program iteration absorbs it. Mandatory after every phase1 / phase2 / phase23 run before claiming PASS.
+description: After phase1_one_shot_runner emits L*.json, AI checks that admitted source facts retain their meaning, classification, authority, and owning fields in the generated documents. Record documentary additions in the durable review sidecar, never by directly patching generated L documents; capture systematic producer gaps for plugin repair. Mandatory after every phase1 / phase2 / phase23 run before claiming PASS.
 tier: verification
 paired_program: phase1_doc_input_completeness_check.py
 mandatory_after: [vibe-ic-phase1, vibe-ic-phase2, vibe-ic-phase23, vibe-ic-all]
@@ -30,6 +30,43 @@ This skill closes that loop with a **two-tier strong check**:
 The skill is **mandatory** after every `/vibe-ic-phase1` /
 `/vibe-ic-phase2` / `/vibe-ic-phase23` / `/vibe-ic-all` run before
 the agent may claim Overall PASS.
+
+## Source documents — residual semantic review
+
+Use the existing document census for `input/docs/**`, including supplements
+staged there. Include `input/owner_request.md` only when the requirements
+source explicitly references it. Read each source's actual bytes; do not
+substitute a generated digest for the source. Controls and approval records
+remain outside the citable design-document population. Preserve existing
+source-census refusals and the independent requirements approval.
+
+This review supplies the semantic judgment left after deterministic
+document enumeration and binding. It does not replace those programs, approve
+requirements, or grant design decisions that the source leaves open.
+
+1. Before reading generated values, read the complete admitted source
+   set and freeze its semantic obligations. Record source path, hash,
+   location, classification, authority, and the owning fields needed to
+   preserve each obligation. Include explicit undecided matters.
+2. Inspect the owning typed fields and their provenance, not just token
+   matches. Names or aliases can survive while role, direction, width,
+   order, classification, or authority is lost. Record each supported
+   attribute separately; a lexical PASS does not discharge these duties.
+3. Distinguish a block-local prototype from an adopted instance or
+   external connection. A source that declares no external binding or
+   leaves integration undecided must retain that scope. Check derived
+   supply or interface entries and their consumers before concluding
+   that a classification establishes a connection.
+4. A missing owning field remains a producer gap even if a review
+   sidecar restores its words to a token check. Preserve the finding and
+   capture the reusable producer fix; do not hand-edit generated documents
+   or waive the gap to obtain PASS. Documentary sidecars retain their
+   existing limited role below.
+5. Report source and output coverage, unresolved obligations, and skipped
+   checks explicitly. Aggregate PASS, lexical coverage, warnings, or
+   skipped checks cannot establish semantic PASS. If review is interrupted
+   or incomplete, report `INCOMPLETE`, preserve the checkpoint, and leave
+   semantic approval unsigned. A paused review does not authorize reruns.
 
 ## Workflow
 
@@ -186,7 +223,7 @@ Write `<project>/reports/phase1_completeness_deep_review.md` with:
 ```
 # Phase 1 Completeness Deep Review
 
-**Verdict**: PASS / WARN / FAIL
+**Verdict**: PASS / WARN / FAIL / INCOMPLETE
 **Deterministic gate verdict (before AI patch)**: <verdict>
 **Deterministic gate verdict (after AI patch)**:  <verdict>
 
@@ -223,14 +260,15 @@ Write `<project>/reports/phase1_completeness_deep_review.md` with:
 
 ## What this skill does NOT do
 
-* It does not invent values. Every fact patched into L*.json
-  must be traceable to a substring of a real input doc.
+* It does not invent values. Every documentary sidecar addition
+  must be traceable to a real admitted input source.
 * It does not waive the deterministic gate. If after AI patches
   the deterministic gate is still FAIL, the project is FAIL —
   AI cannot waive its way to PASS.
 * It does not modify input docs.
 * It does not touch `extraction_patterns.json` (that belongs to
-  `phase1_coverage_report_gen`); it only edits `generated_docs/`.
+  `phase1_coverage_report_gen`) or directly edit generated L documents;
+  documentary additions go in the durable review sidecar.
 
 ## Reference
 
