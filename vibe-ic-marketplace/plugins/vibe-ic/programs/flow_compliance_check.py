@@ -16410,9 +16410,24 @@ def _emit_step_output_record(project: Path, step: Dict[str, Any],
     reasons = " \n".join(str(r) for r in (getattr(result, "reasons", None) or []))
     missing: List[str] = []
     unusable: List[str] = []
+    unresolved: List[str] = []
+    from flow_artifact_paths import OutputTopUnbound
     for pat in outputs:
         try:
             _ok, _found, _miss = _check_files_exist(project, [pat], any_of=False)
+        except OutputTopUnbound:
+            if status == "NOT_MEASURED" and "OUTPUT_TOP_UNBOUND" in reasons:
+                unresolved.append(pat)
+            if status in _NOT_SATISFIED_STATUSES:
+                try:
+                    for alternative in pat.split(" OR "):
+                        if any(str(path.relative_to(project)) in reasons
+                               for path in project.glob(alternative.strip()) if path.is_file()):
+                            unusable.append(pat)
+                            break
+                except Exception:
+                    pass
+            continue
         except Exception:                                      # pragma: no cover
             continue
         if _miss:
@@ -16444,9 +16459,10 @@ def _emit_step_output_record(project: Path, step: Dict[str, Any],
             "declared": outputs,
             "missing": sorted(missing),
             "unusable": sorted(unusable),
+            "unresolved": sorted(unresolved),
             "note": ("what THIS step's own gate found wanting among its declared "
                      "outputs; a consumer asking whether an upstream blockage is about "
-                     "a given artefact reads these two lists and nothing else"),
+                     "a given artefact reads these lists and nothing else"),
         }, indent=1) + "\n", lock=False)
     # ONE handler, not two. r1 of this change left a duplicated `except OSError:` on this try --
     # the second clause is unreachable, so the effective behaviour was the first one's `pass`,

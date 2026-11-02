@@ -680,9 +680,12 @@ def _fixed_inputs(runtime, step_id: str, *, parameters=None) -> dict:
     for spec in patterns:
         if not isinstance(spec, str):
             raise Refusal('ORDINARY_INPUT_CONTRACT_INVALID', repr(spec))
-        from flow_artifact_paths import resolve
+        from flow_artifact_paths import OutputTopUnbound, resolve
         for pattern in str(spec).split(' OR '):
-            pattern = resolve(root, pattern.strip(), runtime.get('parameters'))
+            try:
+                pattern = resolve(root, pattern.strip(), runtime.get('parameters'))
+            except OutputTopUnbound as exc:
+                raise Refusal('OUTPUT_TOP_UNBOUND', str(exc)) from exc
             if not pattern or Path(pattern).is_absolute() or '..' in Path(pattern).parts:
                 raise Refusal('ORDINARY_INPUT_PATH_UNSAFE', pattern)
             for match in root.glob(pattern):
