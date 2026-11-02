@@ -7,6 +7,9 @@ skills and regression tests. [capture.json](capture.json) maps each general
 failure pattern to the code that handles it. The records preserve three
 historical snapshots and their different validation limits.
 
+The upstream handoff is [draft PR #3774](https://github.com/vibeic/vibe-ic/pull/3774).
+It carries the program and skill changes for maintainer review.
+
 ## Program changes
 
 Ordinary entry and the coordinator share delivery ownership through

@@ -521,9 +521,10 @@ Capture changes the plugin. An emitted candidate directory or a session-local
 program that the general flow consumes, together with regression controls.
 Put Bucket B knowledge in the relevant shipped skill. Preserve the pattern,
 implementation paths, source identities, evidence and remaining obligations
-under `docs/enhancements/<topic>/` inside the plugin. Report the actual changed
-plugin paths and contribution commit or PR. Pending review remains pending;
-local packaging alone does not complete absorption. When the user pauses a
+under `docs/enhancements/<topic>/` inside the plugin. Submit the change through
+an upstream PR, or file an issue when the repair is not ready. Report that URL
+and the actual plugin paths. Pending review remains pending; a local commit or
+capture package alone does not complete the handoff. When the user pauses a
 benchmark and requests capture, keep benchmark execution paused while preparing
 this plugin contribution through the ownership and review path below.
 
