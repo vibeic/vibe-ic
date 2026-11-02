@@ -493,10 +493,6 @@ def plugin_declaration(spec: Dict[str, Any]) -> Dict[str, Any]:
             emit_rtl(spec), spec["serial_in"], spec["serial_out"]),
         "latency_cycles_origin": "pre_nba_sample_offset",
         "integer_encoding": "unsigned",
-        # The function emit_rtl() implements, typed for the arithmetic oracle.
-        "function": {"result": spec["serial_out"],
-                     "operands": [spec["parallel"], spec["serial_in"]],
-                     "operator": "*", "modulus_bits": spec["size_default"]},
         # Fixed properties of emit_rtl(): every independent operation is
         # re-armed by the synchronous reset branch, one asserted edge clears
         # all state, and x is consumed on every product cycle.
@@ -578,6 +574,19 @@ def planned_declaration(project: Path, spec: Dict[str, Any]) -> Tuple[dict, Opti
     """Pure author-preserving plan shared with the normal emit/refresh writer."""
     source_decl = project / "plugin_output/declaration.json"
     declaration = plugin_declaration(spec)
+    for name in ("plugin_output/declaration.json", "declaration.json"):
+        source = _load_json(project / name)
+        if isinstance(source, dict) and "function" in source:
+            from arith_oracle_tb_gen import declared_function, serial_function_role_refusal
+            function, reason = declared_function(project)
+            if function is None:
+                raise ValueError(reason)
+            if (function["operator"] != "*"
+                    or function["modulus_bits"] != spec["size_default"]
+                    or serial_function_role_refusal(function, spec["parallel"],
+                                                    spec["serial_in"], spec["serial_out"])):
+                raise ValueError("source function conflicts with serial RTL — defer to testbench-gen")
+            break
     prior_declaration = None
     populations = _declared_scenario_populations(project, spec)
     if source_decl.exists():
