@@ -31,7 +31,7 @@ def approved(root, name, **body):
     path = root / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({'schema': metrics.AUTHORITY_SCHEMA,
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': {'path': 'input.bin', 'sha256': sha(root / 'input.bin')}}, **body}))
     return path
 

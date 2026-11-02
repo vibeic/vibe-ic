@@ -118,7 +118,7 @@ def test_d12_public_entry_retains_actual_native_fail_beside_missing_obligations(
     sp = p / 'input/flow109/D12/source.json';sp.parent.mkdir(parents=True);sp.write_text(json.dumps(source))
     rp = p / 'requirements/base_06/clock_reset_crossing_census.json';rp.parent.mkdir(parents=True)
     rp.write_text(json.dumps({'schema': metrics.AUTHORITY_SCHEMA, **source['clock_reset_crossing_census'],
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner',
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer',
                      'source_reference': {'path': str(sp.relative_to(p)), 'sha256': hashlib.sha256(sp.read_bytes()).hexdigest()}}}))
     context = qualified_context(p)  # Explicit SOFTWARE qualification/authority isolation.
     runner = setup_public(p, context, monkeypatch)

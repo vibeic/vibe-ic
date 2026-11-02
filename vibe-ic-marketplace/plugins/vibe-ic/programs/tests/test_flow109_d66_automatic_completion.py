@@ -54,7 +54,7 @@ def case(project, monkeypatch, *, qualified=True, canonical=True, physics=None):
     source = _put(project, 'test-inputs/required-categories.txt', 'synthetic category requirements')
     _put(project, 'requirements/final_perc/final_esd_supply_topology.json', {
         'schema': 'vibeic.flow109.requirement-authority.v1',
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': source},
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': source},
         'required_items': [{'category': name} for name in (
             'ESD protection presence', 'io_supply_pad_sufficiency',
             'ESD discharge-path topology (connectivity)', 'Native CVC electrical rules')],

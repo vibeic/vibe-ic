@@ -50,7 +50,7 @@ def carrier(tmp_path):
     source = put(root, "input/route-source.txt", "synthetic-control limit VREF length <= 10 um")
     put(root, "requirements/analog_top_route/analog_sensitive_route_constraints.json", {
         "schema": "vibeic.flow109.requirement-authority.v1", "approval": {
-            "status": "APPROVED", "authority": "requirements_owner", "source_reference": view(source)},
+            "status": "APPROVED", "authority": "requirements_owner", 'approver': 'neutral-requirements-reviewer', "source_reference": view(source)},
         "limits": {"VREF": {"max": 10}}, "units": {"VREF": "um"}})
     evidence = {"component_status": "PASS", "core_embedded_unchanged": True,
         "core_inputs_sha256": {str(core): digest(core)}, "outputs": {str(path): digest(path) for path in (top, extracted)},

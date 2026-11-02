@@ -79,7 +79,7 @@ def software(tmp_path, monkeypatch):
     for name, body, relative, schema in (
         ('scenario_constraints',scenarios,'requirements/base_10/scenario_constraints.json',metrics.AUTHORITY_SCHEMA),
         ('mode_library_rc_mapping',mapping,'adopted/base_10/mode_library_rc_mapping.json','vibeic.flow109.adopted-reference.v1')):
-        put(p/relative, {'schema':schema, **body, 'approval':{'status':'APPROVED', 'authority':'requirements_owner','source_reference':source}})
+        put(p/relative, {'schema':schema, **body, 'approval':{'status':'APPROVED', 'authority':'requirements_owner', 'approver': 'neutral-requirements-reviewer','source_reference':source}})
     failures = {}
     # Explicit SOFTWARE stand-in for the existing host-CID live-launch seam.
     # No host/native attestation or platform qualification is being authored.

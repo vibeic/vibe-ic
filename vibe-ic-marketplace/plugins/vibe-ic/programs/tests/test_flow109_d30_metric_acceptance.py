@@ -96,7 +96,7 @@ def _case(project, monkeypatch):
     _write(source, {"adopted_netlist_sdc_library": payload})
     authority = project / "adopted/base_19/adopted_netlist_sdc_library.json"
     _write(authority, {"schema": "vibeic.flow109.adopted-reference.v1", **payload,
-        "approval": {"status": "APPROVED", "authority": "requirements_owner",
+        "approval": {"status": "APPROVED", "authority": "requirements_owner", 'approver': 'neutral-requirements-reviewer',
                      "source_reference": _ref(project, source)}})
     return context, library, timing_path, authority
 
@@ -268,7 +268,7 @@ def _independent_empty_changes(project, monkeypatch):
     authority = project / 'requirements/base_19/post_synth_crossing_power_changes.json'
     _write(authority, {'schema': metrics.AUTHORITY_SCHEMA, **payload,
         'validated_absence': {**payload['validated_absence'], 'source_reference': reference},
-        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'source_reference': reference}})
+        'approval': {'status': 'APPROVED', 'authority': 'requirements_owner', 'approver': 'neutral-requirements-reviewer', 'source_reference': reference}})
     observed = {'status': 'MEASURED', 'value': [], 'subject': subject, 'has_power_intent': False,
         'population': {'scope': 'SOURCE CONTROL DOUBLE; actual graph reader tested separately'},
         'consumed_inputs': {str(source): _sha(source)},

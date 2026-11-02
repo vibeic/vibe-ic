@@ -373,8 +373,11 @@ def _approved_authority(project: Path, reference: str,
     approval = body.get("approval")
     source = approval.get("source_reference") if isinstance(approval, dict) else None
     if (body.get("schema") != AUTHORITY_SCHEMA
+            or not isinstance(approval, dict)
             or approval.get("status") != "APPROVED"
             or approval.get("authority") != "requirements_owner"
+            or not isinstance(approval.get("approver"), str)
+            or not approval["approver"].strip()
             or not isinstance(source, dict)
             or not isinstance(source.get("path"), str)
             or not _HEX.fullmatch(str(source.get("sha256", "")))):
@@ -430,6 +433,9 @@ def _approved_document(project: Path, relative: str, *, authority: str,
             or not isinstance(approval, dict)
             or approval.get("status") != "APPROVED"
             or approval.get("authority") != authority
+            or (authority == "requirements_owner" and (
+                not isinstance(approval.get("approver"), str)
+                or not approval["approver"].strip()))
             or not isinstance(source, dict)
             or not isinstance(source.get("path"), str)
             or not _HEX.fullmatch(str(source.get("sha256", "")))):
@@ -508,7 +514,9 @@ def d19_admission(project: Path, context: Mapping[str, Any], *, publish: bool = 
         approval = body.get("approval")
         if (body.get("schema") != schema or not isinstance(approval, Mapping)
                 or approval.get("status") != "APPROVED"
-                or approval.get("authority") != "requirements_owner"):
+                or approval.get("authority") != "requirements_owner"
+                or not isinstance(approval.get("approver"), str)
+                or not approval["approver"].strip()):
             raise MetricRefusal("D19_PLAN_UNAPPROVED", relative)
         ref = _d19_ref(project, approval.get("source_reference"), name + " approval")
         if (not ref["path"].startswith("input/")
