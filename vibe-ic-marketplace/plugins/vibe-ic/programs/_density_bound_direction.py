@@ -51,6 +51,13 @@ class DensityDirections:
             self.definitions.setdefault(name, []).append(expression)
 
     def modes(self, code, layers):
+        # A guard's direction proves a violation direction only while its
+        # report path is understood. Alternate branches and early exits can
+        # report on the guard's complement. This expression reader does not
+        # resolve those Ruby paths, so retain the fill obligation for the
+        # entire rule instead of inferring maximum-only from any guard.
+        if re.search(r'\b(?:else|elsif|next|break|return|redo|retry)\b', code):
+            return {'unknown'}
         layers = set(layers)
 
         def references(expression):

@@ -184,3 +184,31 @@ def test_reviewed_density_bound_cases(case):
 def test_all_density_checks_have_a_proven_direction(body,check_only):
     deck='chip_area = extent.sized(0.0).area\n# Rule LIMIT.a: density\n'+body+'\n'
     assert ('LIMIT.a' not in config.density_rule_coverage(deck,[])[1]) is check_only
+
+
+@pytest.mark.parametrize('body',[
+    "if sample.area / chip_area >= 0.35\n"
+    "  logger.info('minimum density satisfied')\n"
+    "else\n"
+    "  extent.output('FLOOR.a', 'minimum density below original 35 percent')\n"
+    "end\n",
+    "if sample.area / chip_area >= 0.35\n  next\nend\n"
+    "extent.output('FLOOR.a', 'minimum density below original 35 percent')\n",
+    "next if sample.area / chip_area >= 0.35\n"
+    "extent.output('FLOOR.a', 'minimum density below original 35 percent')\n",
+    "if sample.area / chip_area >= 0.35\n  logger.info('satisfied')\n"
+    "elsif enabled\n  extent.output('FLOOR.a', 'too low')\nend\n",
+    "unless sample.area / chip_area < 0.35\n  logger.info('satisfied')\n"
+    "else\n  extent.output('FLOOR.a', 'too low')\nend\n",
+    "break if sample.area / chip_area >= 0.35\n"
+    "extent.output('FLOOR.a', 'too low')\n",
+    "return if sample.area / chip_area >= 0.35\n"
+    "extent.output('FLOOR.a', 'too low')\n",
+],ids=['if_else','block_next','postfix_next','elsif','unless_else','break','return'])
+def test_unproven_report_control_flow_keeps_density_obligation(body):
+    deck='chip_area = extent.sized(0.0).area\n# Rule FLOOR.a: density\n'+body
+    covered,gaps=config.density_rule_coverage(deck,[])
+    assert covered=={}
+    assert gaps=={'FLOOR.a':['sample']}
+    assert config.density_check_only_rules(deck)==[]
+    assert 'FLOOR.a' in config.density_coverage_refusal(gaps)
