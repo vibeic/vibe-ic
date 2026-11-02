@@ -1079,3 +1079,75 @@ def test_native_models_unproven_rebind_refuses_before_op(tmp_path, monkeypatch, 
     assert 'A8_MODEL_ASSET_UNRESOLVED' in why
     assert not any(row['tool'] == 'ngspice' for row in attempts)
     assert (b / E._A8_MEASUREMENT).read_bytes() == before
+
+
+_MALFORMED_MODEL_RECEIPTS = (
+    'invalid_json', 'invalid_utf8', 'oversized_number', 'top_null', 'top_array', 'top_string', 'top_number', 'top_bool',
+    'missing_bindings', 'bindings_null', 'bindings_object', 'bindings_string',
+    'bindings_number', 'bindings_bool', 'bindings_empty',
+    'row_null', 'row_array', 'row_string', 'row_number', 'row_bool', 'row_empty',
+    'missing_path', 'path_null', 'path_array', 'path_object', 'path_number', 'path_empty',
+    'missing_sha256', 'sha256_null', 'sha256_array', 'sha256_object', 'sha256_number',
+    'sha256_invalid', 'missing_section', 'section_array', 'section_object',
+    'section_number', 'section_empty', 'resolved_path_null', 'resolved_path_array',
+    'resolved_path_object', 'resolved_path_number', 'resolved_path_empty',
+)
+
+
+def _malformed_model_receipt(rec, damage):
+    rec = json.loads(json.dumps(rec))
+    values = {'null': None, 'array': [], 'object': {}, 'string': 'invalid',
+              'number': 17, 'bool': False, 'empty': '', 'invalid': 'not-a-sha256'}
+    if damage == 'invalid_json':
+        return '{'
+    if damage == 'invalid_utf8':
+        return b'\xff'
+    if damage == 'oversized_number':
+        return '9' * 5000
+    if damage.startswith('top_'):
+        rec = values[damage.removeprefix('top_')]
+    elif damage == 'missing_bindings':
+        del rec['model_bindings']
+    elif damage.startswith('bindings_'):
+        rec['model_bindings'] = ([] if damage == 'bindings_empty' else
+                                 values[damage.removeprefix('bindings_')])
+    elif damage.startswith('row_'):
+        rec['model_bindings'][0] = ({} if damage == 'row_empty' else
+                                    values[damage.removeprefix('row_')])
+    elif damage.startswith('missing_'):
+        del rec['model_bindings'][0][damage.removeprefix('missing_')]
+    else:
+        field, kind = damage.rsplit('_', 1)
+        rec['model_bindings'][0][field] = values[kind]
+    return json.dumps(rec)
+
+
+@pytest.mark.parametrize('damage', _MALFORMED_MODEL_RECEIPTS)
+def test_model_receipt_consumer_refuses_malformed_shapes(tmp_path, monkeypatch, damage):
+    project, b, topo = _source_power_fixture(tmp_path, monkeypatch)
+    rec, why = E._native_measurement_produce(project, 'blk', '', '/pdk', b / 'blk.gds', topo)
+    assert rec is not None, why
+    receipt = b / E._A8_MEASUREMENT
+    payload = _malformed_model_receipt(rec, damage)
+    receipt.write_bytes(payload if isinstance(payload, bytes) else payload.encode())
+    before = receipt.read_bytes()
+    loaded, why = E.load_native_measurement(project, 'blk', b / 'blk.gds', topo)
+    assert loaded is None
+    assert 'A8_MODEL_ASSET_UNRESOLVED' in why
+    assert receipt.read_bytes() == before
+
+
+@pytest.mark.parametrize('damage', _MALFORMED_MODEL_RECEIPTS)
+def test_model_rebind_producer_refuses_malformed_shapes_before_op(tmp_path, monkeypatch, damage):
+    project, b, topo, root, records, assets = _moved_model_fixture(tmp_path, monkeypatch)
+    receipt = b / E._A8_MEASUREMENT
+    payload = _malformed_model_receipt({'model_bindings': records}, damage)
+    receipt.write_bytes(payload if isinstance(payload, bytes) else payload.encode())
+    before = receipt.read_bytes()
+    attempts = []
+    rec, why = E._native_measurement_produce(project, 'blk', '', str(root), b / 'blk.gds', topo,
+                                             native_attempts=attempts)
+    assert rec is None
+    assert 'A8_MODEL_ASSET_UNRESOLVED' in why
+    assert not any(row['tool'] == 'ngspice' for row in attempts)
+    assert receipt.read_bytes() == before

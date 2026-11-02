@@ -821,7 +821,8 @@ def _delivered_measurement_deck(project: Path, block: str, extracted: Path,
     includes = [f".include {json.dumps(str(extracted))}"]
     if wrapper is not None:
         includes.append(f".include {json.dumps(str(wrapper))}")
-    runtime_paths = {row["path"]: row.get("resolved_path", row["path"]) for row in (models or [])}
+    runtime_paths = {row["path"]: row.get("resolved_path", row["path"])
+                     for row in (_validated_model_bindings(models) if models is not None else [])}
     runtime_bindings = []
     for line in bindings:
         fields = shlex.split(line)
@@ -878,6 +879,29 @@ def _native_op_solver(cards: List[str]) -> Tuple[List[str], Dict]:
         "num_threads": 1, "omp_wait_policy": "PASSIVE", "gomp_spincount": 0}
 
 
+def _validated_model_bindings(value: object) -> List[Dict]:
+    """Validate receipt rows before paths, hashes or mapping keys are read."""
+    error = "A8_MODEL_ASSET_UNRESOLVED: malformed model_bindings"
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"{error}: expected a non-empty list")
+    for index, row in enumerate(value):
+        if not isinstance(row, dict):
+            raise ValueError(f"{error}[{index}]: expected an object")
+        for field in ("path", "resolved_path"):
+            if field == "resolved_path" and field not in row:
+                continue
+            path = row.get(field)
+            if not isinstance(path, str) or not path.strip() or "\x00" in path:
+                raise ValueError(f"{error}[{index}].{field}: expected a path string")
+        sha = row.get("sha256")
+        if not isinstance(sha, str) or not re.fullmatch(r"[0-9a-f]{64}", sha):
+            raise ValueError(f"{error}[{index}].sha256: expected a SHA256 string")
+        if "section" not in row or (row["section"] is not None and
+                (not isinstance(row["section"], str) or not row["section"].strip())):
+            raise ValueError(f"{error}[{index}].section: expected a string or null")
+    return value
+
+
 def _runtime_model_path(path: Path, directory: Path) -> Path:
     """Rebind absent model carriers using the case's recorded content only.
 
@@ -889,9 +913,14 @@ def _runtime_model_path(path: Path, directory: Path) -> Path:
     receipt = directory / _A8_MEASUREMENT
     if not receipt.is_file():
         return path
-    rec = json.loads(receipt.read_text())
-    hashes = {row.get("sha256") for row in rec.get("model_bindings", [])
-              if isinstance(row, dict) and row.get("path") == str(path)}
+    try:
+        rec = json.loads(receipt.read_text())
+    except (OSError, ValueError) as exc:
+        raise ValueError(f"A8_MODEL_ASSET_UNRESOLVED: unreadable model receipt: {exc}") from exc
+    if not isinstance(rec, dict):
+        raise ValueError("A8_MODEL_ASSET_UNRESOLVED: model receipt must contain an object")
+    models = _validated_model_bindings(rec.get("model_bindings"))
+    hashes = {row["sha256"] for row in models if row["path"] == str(path)}
     if not hashes:
         return path
     if len(hashes) != 1:
@@ -1283,10 +1312,10 @@ def load_native_measurement(project: Path, block: str, gds: Path,
                       "required for the Liberty leakage contract")
     try:
         rec = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        return None, f"{_A8_MEASUREMENT} is unreadable JSON: {exc}"
+    except (OSError, ValueError) as exc:
+        return None, f"A8_MODEL_ASSET_UNRESOLVED: {_A8_MEASUREMENT} is unreadable JSON: {exc}"
     if not isinstance(rec, dict):
-        return None, f"{_A8_MEASUREMENT} must contain an object"
+        return None, f"A8_MODEL_ASSET_UNRESOLVED: {_A8_MEASUREMENT} must contain an object"
     if rec.get("schema") != _A8_MEASUREMENT_SCHEMA:
         return None, (f"{_A8_MEASUREMENT} schema is not "
                       f"{_A8_MEASUREMENT_SCHEMA!r}")
@@ -1303,6 +1332,12 @@ def load_native_measurement(project: Path, block: str, gds: Path,
         return None, (f"unsupported A8 measurement metric {rec.get('metric')!r}; "
                       "no timing arc or unmeasured power field is invented")
     source_based = rec.get("measurement_basis") == "delivered_a3_testbench_op"
+    models = None
+    if source_based:
+        try:
+            models = _validated_model_bindings(rec.get("model_bindings"))
+        except ValueError as exc:
+            return None, str(exc)
     if rec.get("measurement_basis") is not None and not source_based:
         return None, "unsupported native measurement basis"
     try:
@@ -1387,7 +1422,7 @@ def load_native_measurement(project: Path, block: str, gds: Path,
                 return None, "measurement_deck is not the ordinary A8 deck"
             wanted = (_delivered_measurement_deck(
                 project, block, source_netlist_path, list(topology.get("ports") or []),
-                expected["wrapper_subckt"], topology, wrapper_path, models=rec.get("model_bindings"))[0] if source_based else
+                expected["wrapper_subckt"], topology, wrapper_path, models=models)[0] if source_based else
                 _measurement_deck_text(source_netlist_path, list(topology.get("ports") or []),
                     expected["wrapper_subckt"], rec.get("model_source"), rec.get("model_section"), wrapper_path))
             if (deck.read_bytes() != wanted.encode() or
@@ -1406,7 +1441,7 @@ def load_native_measurement(project: Path, block: str, gds: Path,
             wanted, source_contract = _delivered_measurement_deck(
                 project, block, source_netlist_path, list(topology.get("ports") or []),
                 wrapper["wrapper_subckt"] if isinstance(wrapper, dict) else block, topology, wrapper_path,
-                models=rec.get("model_bindings"))
+                models=models)
             if any(rec.get(key) != value for key, value in source_contract.items()):
                 return None, "delivered A3 testbench/model/power source binding is stale"
             deck, why = _project_file(project, rec.get("measurement_deck"), field="measurement_deck")
@@ -1414,7 +1449,6 @@ def load_native_measurement(project: Path, block: str, gds: Path,
                 return None, why or "measurement_deck is not the ordinary A8 deck"
             if deck.read_text() != wanted or _sha256(deck) != rec.get("measurement_deck_sha256"):
                 return None, "measurement_deck does not preserve the delivered DUT testbench"
-            models = rec.get("model_bindings")
             lines = source_contract["model_binding_lines"]
             if not isinstance(models, list) or len(models) != len(lines):
                 return None, "native measurement does not bind all delivered model libraries"
