@@ -1,0 +1,19 @@
+{
+  "total_corners": 243,
+  "results_found": 243,
+  "design_content": "structure_and_geometry",
+  "spec_results": [
+    {
+      "spec": "psrr",
+      "corner": "ss_125C_1.6V_ref1.01V_i1.0mA",
+      "value": 39.00978877538971,
+      "status": "FAIL"
+    },
+    {
+      "spec": "psrr",
+      "corner": "ss_125C_1.6V_ref1.0V_i1.0mA",
+      "value": 39.903594990934415,
+      "status": "FAIL"
+    }
+  ]
+}
