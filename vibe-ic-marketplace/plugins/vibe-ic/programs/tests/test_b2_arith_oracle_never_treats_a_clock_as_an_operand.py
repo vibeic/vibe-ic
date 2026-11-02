@@ -68,7 +68,8 @@ def test_a_clocked_design_defers_however_its_clocks_are_named(tmp_path):
         _p("winc", "input", 1), _p("rinc", "input", 1),
         _p("wdata", "input", 1), _p("wfull", "output", 1),
         _p("rdata", "output", 1),
-    ], "The full flag is the exclusive or ^ of the pointers.")
+    ], "The full flag is the exclusive or ^ of the pointers.",
+        {"result": "wfull", "operands": ["winc", "rinc"], "operator": "^", "modulus_bits": 1})
     assert spec is None, spec
     # The port widths here are the ones the real L9 carried -- every port 1 bit,
     # because the data buses are parameter-wide and no numeric width survives --

@@ -129,6 +129,19 @@ def test_declaration_files_must_agree(tmp_path):
     assert spec is None and 'different function' in reason, (spec, reason)
 
 
+@pytest.mark.parametrize('width,malformed', [(8, 8.0), (1, True)])
+@pytest.mark.parametrize('malformed_location', ['declaration.json', 'plugin_output/declaration.json'])
+def test_each_function_field_is_validated_before_declaration_agreement(
+        tmp_path, width, malformed, malformed_location):
+    p = project(tmp_path)
+    (p / 'plugin_output').mkdir()
+    for location in ('declaration.json', 'plugin_output/declaration.json'):
+        field = function(modulus_bits=malformed if location == malformed_location else width)
+        (p / location).write_text(json.dumps({'function': field}))
+    field, reason = oracle.declared_function(p)
+    assert field is None and 'malformed' in reason, (field, reason)
+
+
 @pytest.mark.parametrize('widths,signs', [
     ((None, 5, 6), None), ((3, 5, 6), (True, False, False)),
     (('0', 5, 6), None), ((0, 5, 6), None), ((True, 5, 6), None),
@@ -203,6 +216,23 @@ def test_parameter_width_requires_the_actual_declared_default(tmp_path, declared
         assert [spec[k] for k in ('operand_a_width', 'operand_b_width', 'result_width')] == [7, 7, 14]
     else:
         assert spec is None, (spec, reason)
+
+
+@pytest.mark.parametrize('declared', [False, True])
+def test_parameter_width_one_is_resolved_only_from_a_declared_default(tmp_path, declared):
+    p = project(tmp_path, widths=('[W-1:0]',) * 3, operator='^')
+    if declared:
+        rtl = p / 'phase2/stage1/rtl'
+        rtl.mkdir(parents=True)
+        (rtl / 'neutral_arithmetic.v').write_text(
+            'module neutral_arithmetic #(parameter W=1)(input [W-1:0] left,right, '
+            'output [W-1:0] result); assign result=left^right; endmodule\n')
+    spec, reason = extract(p)
+    if declared:
+        assert spec is not None, reason
+        assert [spec[k] for k in ('operand_a_width', 'operand_b_width', 'result_width')] == [1, 1, 1]
+    else:
+        assert spec is None and 'unresolved' in reason, (spec, reason)
 
 
 def test_actual_runner_propagates_handoff_without_simulation(tmp_path):

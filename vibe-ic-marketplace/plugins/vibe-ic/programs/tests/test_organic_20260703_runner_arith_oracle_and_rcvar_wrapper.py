@@ -55,6 +55,9 @@ def test_clocked_pipelined_multiplier_defers(tmp_path):
     ]
     project = _mk_project(tmp_path, "mac", ports,
                           "result = a * b pipelined multiply-accumulate")
+    (project / "declaration.json").write_text(json.dumps({
+        "integer_encoding": "unsigned", "function": {
+            "result": "result", "operands": ["a", "b"], "operator": "*", "modulus_bits": 16}}))
     spec, reason = aotg.extract_arith_spec(project, "digital_arithmetic_primitive")
     assert spec is None
     assert "clock" in reason.lower()
@@ -69,6 +72,9 @@ def test_handshake_driven_adder_defers(tmp_path):
     ]
     project = _mk_project(tmp_path, "adder", ports,
                           "sum = a + b with a start handshake")
+    (project / "declaration.json").write_text(json.dumps({
+        "integer_encoding": "unsigned", "function": {
+            "result": "sum", "operands": ["a", "b"], "operator": "+", "modulus_bits": 9}}))
     spec, reason = aotg.extract_arith_spec(project, "digital_arithmetic_primitive")
     assert spec is None
     assert "handshake" in reason.lower()
@@ -83,6 +89,9 @@ def test_status_output_datapath_defers(tmp_path):
     ]
     project = _mk_project(tmp_path, "mul", ports,
                           "result = a * b with a valid_out flag")
+    (project / "declaration.json").write_text(json.dumps({
+        "integer_encoding": "unsigned", "function": {
+            "result": "result", "operands": ["a", "b"], "operator": "*", "modulus_bits": 16}}))
     spec, reason = aotg.extract_arith_spec(project, "digital_arithmetic_primitive")
     assert spec is None
     assert "status" in reason.lower() or "valid_out" in reason
