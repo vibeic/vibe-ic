@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import _pad_ring as pr
 import phase3_one_shot_runner as runner
 from test_f23_ll_seam_padring import _gds
 
@@ -30,7 +31,7 @@ END LIBRARY
 
 
 @pytest.fixture
-def case(tmp_path, monkeypatch):
+def case(tmp_path, monkeypatch, request):
     # Other suites reload the canonical runner during collection. Keep the
     # native helper import on the same runner whose transport this fixture owns.
     monkeypatch.setitem(sys.modules, "phase3_one_shot_runner", runner)
@@ -45,15 +46,22 @@ def case(tmp_path, monkeypatch):
                                        ('N', 50000, 108000, 'FS'),
                                        ('W', 12000, 60000, 'FW'),
                                        ('E', 98000, 80000, 'W')]]
+    if getattr(request, 'param', None) == 'two_south':
+        pads.append(dict(instance='edge_S1', master='EDGE_CELL', side='S',
+                         order=1, x=50000, y=22000, orient='N'))
+    assignment = {pr.SIDE_VAR[side]: [p['instance'] for p in pads if p['side'] == side]
+                  for side in pr.SIDES}
+    (tmp_path / pr.ASSIGNMENT_REL).write_text(json.dumps(assignment))
     components = '\n'.join(f'- {p["instance"]} {p["master"]} + FIXED ( {p["x"]} {p["y"]} ) {p["orient"]} ;' for p in pads)
     final_def = ('VERSION 5.8 ;\nDESIGN neutral_top ;\nUNITS DISTANCE MICRONS 1000 ;\n'
-                 'DIEAREA ( 10000 20000 ) ( 110000 120000 ) ;\nCOMPONENTS 4 ;\n'
+                 f'DIEAREA ( 10000 20000 ) ( 110000 120000 ) ;\nCOMPONENTS {len(pads)} ;\n'
                  + components + '\nEND COMPONENTS\nEND DESIGN\n')
     for name in ['padring.def', 'routed.def', 'neutral_top.def']:
         (pnr / name).write_text(final_def)
-    (pnr / 'neutral_top.gds').write_bytes(_gds('neutral_top', ['EDGE_CELL'] * 4))
+    (pnr / 'neutral_top.gds').write_bytes(_gds('neutral_top', ['EDGE_CELL'] * len(pads)))
     (reports / 'padring.json').write_text(json.dumps({'producer': {
-        'die': {'units': 1000}, 'config': {'PAD_EDGE_SPACING': 2},
+        'die': {'units': 1000}, 'config': {'PAD_EDGE_SPACING': 2,
+            'pads_per_side': {key: len(value) for key, value in assignment.items()}},
         'pads': pads, 'corners': [], 'fillers': []}}))
     odb = pnr / 'final.odb'
     (tmp_path / 'state_out.json').write_text(json.dumps({
@@ -188,3 +196,114 @@ def test_producer_def_units_are_converted_to_native_dbu(case):
     report.write_text(json.dumps(doc))
     row, doc = run(case)
     assert row.status == 'PASS', doc
+
+
+@pytest.mark.parametrize('damage', ['missing', 'duplicate', 'empty', 'extra', 'side', 'order'])
+def test_producer_population_must_match_every_declared_pad(case, damage):
+    project, _, pads = case
+    assert run(case)[0].status == 'PASS'
+    report = project / 'reports/phase3/padring.json'
+    doc = json.loads(report.read_text())
+    records = doc['producer']['pads']
+    expected = ['edge_S']
+    if damage == 'missing':
+        records.pop(0)
+        mutate(case, 'odb::dbInst_destroy $i')
+    elif damage == 'duplicate':
+        records[1] = dict(records[0])
+        mutate(case, 'set i [$b findInst edge_N]\nodb::dbInst_destroy $i')
+        expected.append('edge_N')
+    elif damage == 'empty':
+        records.clear()
+        expected = [pad['instance'] for pad in pads]
+    elif damage == 'extra':
+        records.append(dict(records[0], instance='edge_extra', order=1))
+        expected = ['edge_extra']
+    elif damage == 'side':
+        records[0]['side'] = 'N'
+    else:
+        records[0]['order'] = 1
+    report.write_text(json.dumps(doc))
+    row, doc = run(case)
+    assert row.status == 'FAIL', doc
+    native = doc['native_pad_evidence']
+    assert native['verdict'] == 'FAIL', native
+    for instance in expected:
+        assert any(instance in finding for finding in native['failures']), native
+    assert native['expected_pads'] == len(pads)
+
+
+@pytest.mark.parametrize('case', ['two_south'], indirect=True)
+@pytest.mark.parametrize('damage', ['sequence', 'order_fields'])
+def test_same_side_pad_order_must_match_declaration(case, damage):
+    project, _, _ = case
+    assert run(case)[0].status == 'PASS'
+    report = project / 'reports/phase3/padring.json'
+    doc = json.loads(report.read_text())
+    records = doc['producer']['pads']
+    if damage == 'sequence':
+        records[0], records[-1] = records[-1], records[0]
+    else:
+        records[0]['order'], records[-1]['order'] = 1, 0
+    report.write_text(json.dumps(doc))
+    row, doc = run(case)
+    assert row.status == 'FAIL', doc
+    native = doc['native_pad_evidence']
+    assert native['verdict'] == 'FAIL', native
+    for instance in ['edge_S', 'edge_S1']:
+        assert any(instance in finding for finding in native['failures']), native
+
+
+@pytest.mark.parametrize('case', ['two_south'], indirect=True)
+def test_producer_can_interleave_sides_preserving_each_side_order(case):
+    project, _, pads = case
+    report = project / 'reports/phase3/padring.json'
+    doc = json.loads(report.read_text())
+    records = doc['producer']['pads']
+    doc['producer']['pads'] = [records[i] for i in [1, 0, 2, 4, 3]]
+    report.write_text(json.dumps(doc))
+    row, doc = run(case)
+    assert row.status == 'PASS', doc
+    assert doc['native_pad_evidence']['expected_pads'] == len(pads)
+
+
+@pytest.mark.parametrize('damage', ['duplicate', 'side_list', 'json', 'missing'])
+def test_assignment_must_supply_unique_ordered_pad_names(case, damage):
+    project, _, _ = case
+    assignment = project / pr.ASSIGNMENT_REL
+    doc = json.loads(assignment.read_text())
+    if damage == 'duplicate':
+        doc['PAD_NORTH'].append('edge_S')
+        assignment.write_text(json.dumps(doc))
+    elif damage == 'side_list':
+        doc['PAD_SOUTH'] = 'edge_S'
+        assignment.write_text(json.dumps(doc))
+    elif damage == 'json':
+        assignment.write_text('{invalid')
+    else:
+        assignment.unlink()
+    row, doc = run(case)
+    expected = 'NOT_MEASURED' if damage == 'missing' else 'FAIL'
+    assert row.status == expected, doc
+    native = doc['native_pad_evidence']
+    assert native['verdict'] == expected, native
+    if damage in ['duplicate', 'side_list']:
+        assert any('edge_S' in finding for finding in native['failures']), native
+
+
+@pytest.mark.parametrize('unavailable', ['odb', 'tool'])
+def test_known_population_violation_fails_when_native_is_unavailable(case, monkeypatch, unavailable):
+    project, odb, _ = case
+    report = project / 'reports/phase3/padring.json'
+    doc = json.loads(report.read_text())
+    doc['producer']['pads'].pop(0)
+    report.write_text(json.dumps(doc))
+    if unavailable == 'odb':
+        odb.unlink()
+    else:
+        monkeypatch.setattr(runner, '_docker_exec', lambda *a, **k: (1, '', ''))
+    row, doc = run(case)
+    assert row.status == 'FAIL', doc
+    native = doc['native_pad_evidence']
+    assert native['verdict'] == 'FAIL', native
+    assert any('edge_S' in finding for finding in native['failures']), native
