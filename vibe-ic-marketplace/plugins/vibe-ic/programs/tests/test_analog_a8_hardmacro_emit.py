@@ -1151,3 +1151,155 @@ def test_model_rebind_producer_refuses_malformed_shapes_before_op(tmp_path, monk
     assert 'A8_MODEL_ASSET_UNRESOLVED' in why
     assert not any(row['tool'] == 'ngspice' for row in attempts)
     assert receipt.read_bytes() == before
+@pytest.fixture
+def runtime_magicrc_case(tmp_path, monkeypatch):
+    project, b, topo = _write_native_measurement_fixture(tmp_path)
+    _select_fixture_binary(monkeypatch)
+    root = tmp_path / "runtime pdks"
+    tech = E.layout_tech(b)
+    rcfile = root / tech / "libs.tech/magic" / f"{tech}.magicrc"
+    rcfile.parent.mkdir(parents=True)
+    rcfile.write_text("# runtime technology\n")
+    other = root / "another-tech/libs.tech/magic/another-tech.magicrc"
+    other.parent.mkdir(parents=True)
+    other.write_text("# different technology\n")
+    monkeypatch.setenv("PDK_ROOT", str(root))
+    execute = E._docker_exec
+    exports = []
+
+    def run(container, cmd, timeout=900, *, marker=None, log_path=None):
+        if marker is None:
+            if container:
+                assert container == "selected-runtime"
+                if "${PDK_ROOT:-}" in cmd:
+                    return 0, str(root), ""
+            return execute("", cmd, timeout)
+        exports.append(cmd)
+        hdir = project / "phase3/analog/hardmacro/blk"
+        output = Path(re.search(r"(?m)^lef write (.+) -hide$",
+                                (hdir / marker).read_text()).group(1))
+        output.write_text("MACRO blk\n" + "".join(
+            f"  PIN {port}\n    PORT\n      LAYER metal1 ;\n"
+            f"        RECT 0 0 1 1 ;\n    END\n  END {port}\n"
+            for port in topo["ports"]) + "END blk\n")
+        return 0, "", ""
+
+    monkeypatch.setattr(E, "_docker_exec", run)
+    return project, root, rcfile, exports
+
+
+@pytest.mark.parametrize("container", ["", "selected-runtime"])
+@pytest.mark.parametrize("missing", [False, True], ids=["present", "missing"])
+def test_cli_uses_runtime_pdk_root_with_existing_magicrc_resolver(
+        runtime_magicrc_case, monkeypatch, container, missing, capsys):
+    project, root, rcfile, exports = runtime_magicrc_case
+    if container:
+        monkeypatch.setenv("PDK_ROOT", "/unrelated-host-pdk")
+    if missing:
+        rcfile.unlink()
+    report = project / "a8.json"
+    rc = E.main([str(project), "--block", "blk", "--container", container,
+                 "--json", str(report)])
+    result = json.loads(report.read_text())["blocks"][0]
+    if missing:
+        assert rc == 2 and result["emitted"] is False
+        assert result["reason"] == (
+            f"no magicrc under {root} for the technology the layout declares "
+            f"({rcfile.stem}); expected {rcfile}")
+        assert "A8_EMIT blk: REFUSED" in capsys.readouterr().out
+        assert exports == []
+    else:
+        assert rc == 0 and result["emitted"] is True, result
+        assert result["magicrc"] == str(rcfile)
+        assert len(exports) == 1 and str(rcfile) in exports[0]
+
+
+def test_cli_explicit_pdk_root_overrides_runtime_declaration(
+        runtime_magicrc_case, monkeypatch):
+    project, root, rcfile, exports = runtime_magicrc_case
+    monkeypatch.setenv("PDK_ROOT", "/unrelated-runtime-pdk")
+    report = project / "a8.json"
+    assert E.main([str(project), "--block", "blk", "--container", "",
+                   "--pdk-root", str(root), "--json", str(report)]) == 0
+    result = json.loads(report.read_text())["blocks"][0]
+    assert result["magicrc"] == str(rcfile) and len(exports) == 1
+
+
+def test_cli_without_declared_pdk_root_refuses_before_export(
+        runtime_magicrc_case, monkeypatch, capsys):
+    project, _root, _rcfile, exports = runtime_magicrc_case
+    monkeypatch.delenv("PDK_ROOT")
+    report = project / "a8.json"
+    assert E.main([str(project), "--block", "blk", "--container", "",
+                   "--json", str(report)]) == 2
+    result = json.loads(report.read_text())["blocks"][0]
+    assert result["emitted"] is False
+    assert result["reason"] == "selected runtime declares no PDK_ROOT"
+    assert "A8_EMIT blk: REFUSED" in capsys.readouterr().out
+    assert exports == []
+
+
+@pytest.mark.parametrize("cached", [True, False], ids=["cached", "uncached"])
+@pytest.mark.parametrize("foreign", ["root_startup", "sibling_variant", "sibling_same_filename"])
+def test_cli_refuses_other_variant_and_names_expected_path(
+        runtime_magicrc_case, foreign, cached):
+    project, root, rcfile, exports = runtime_magicrc_case
+    rcfile.unlink()
+    if foreign == "root_startup":
+        other = root / "libs.tech/magic/foreign.magicrc"
+    elif foreign == "sibling_variant":
+        other = root / "foreign/libs.tech/magic/foreign.magicrc"
+    else:
+        other = root / "foreign/libs.tech/magic" / rcfile.name
+    other.parent.mkdir(parents=True, exist_ok=True)
+    other.write_text("# a different variant\n")
+    if not cached:
+        (project / "phase3/analog/blk" / E._A8_MEASUREMENT).unlink()
+    report = project / "refused.json"
+    rc = E.main([str(project), "--block", "blk", "--container", "",
+                 "--json", str(report)])
+    result = json.loads(report.read_text())["blocks"][0]
+    assert rc == 2 and result["emitted"] is False, result
+    assert str(rcfile) in result["reason"]
+    assert exports == []
+
+
+@pytest.mark.parametrize("exact", [False, True], ids=["ambiguous", "exact_declared"])
+def test_cli_never_resolves_magicrc_ambiguity_by_order(runtime_magicrc_case, exact):
+    project, _root, rcfile, exports = runtime_magicrc_case
+    alternatives = [rcfile.with_name(name) for name in ("aaa.magicrc", "zzz.magicrc")]
+    for path in alternatives:
+        path.write_text("# another startup candidate\n")
+    if not exact:
+        rcfile.unlink()
+    report = project / "ambiguity.json"
+    rc = E.main([str(project), "--block", "blk", "--container", "",
+                 "--json", str(report)])
+    result = json.loads(report.read_text())["blocks"][0]
+    if exact:
+        assert rc == 0 and result["emitted"] is True, result
+        assert result["magicrc"] == str(rcfile)
+        assert len(exports) == 1 and str(rcfile) in exports[0]
+    else:
+        assert rc == 2 and result["emitted"] is False, result
+        assert "ambiguous" in result["reason"]
+        assert str(rcfile) in result["reason"]
+        assert all(str(path) in result["reason"] for path in alternatives)
+        assert exports == []
+
+
+@pytest.mark.parametrize("entry", ["directory", "dangling_link"])
+def test_cli_requires_the_exact_magicrc_to_be_a_file(runtime_magicrc_case, entry):
+    project, _root, rcfile, exports = runtime_magicrc_case
+    rcfile.unlink()
+    if entry == "directory":
+        rcfile.mkdir()
+    else:
+        rcfile.symlink_to(rcfile.with_name("absent-target"))
+    report = project / "missing-file.json"
+    rc = E.main([str(project), "--block", "blk", "--container", "",
+                 "--json", str(report)])
+    result = json.loads(report.read_text())["blocks"][0]
+    assert rc == 2 and result["emitted"] is False, result
+    assert str(rcfile) in result["reason"]
+    assert exports == []
