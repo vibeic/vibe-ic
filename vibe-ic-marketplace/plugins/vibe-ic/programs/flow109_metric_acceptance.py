@@ -10290,6 +10290,20 @@ def _a0708_transcript(project, executions, deck, invocation):
     return parsed
 
 
+def _a07_declared_deck(project, row, name, config, invocation):
+    """The deck a declared testbench rendered for this row, proven by re-rendering it."""
+    import analog_native_sim as sim
+    if sim._testbench_inputs_path(project, name, config) is None:
+        return None
+    view = (row.get('native_inputs') or {}).get('testbench')
+    if not isinstance(view, dict):
+        raise MetricRefusal('A07_DECLARED_TESTBENCH_DECK_ABSENT', name)
+    deck = _a0708_file(project, view['path'], view['sha256'], invocation)
+    if deck.read_text() != sim._declared_testbench(project, name, config, deck.parent)[0]:
+        raise MetricRefusal('A07_DECLARED_TESTBENCH_DECK_CHANGED', name)
+    return deck
+
+
 def _a0708_nominal_observation(project, row, invocation):
     """Read the existing direct/study producers; never launch or invent a result."""
     import analog_native_sim as sim
@@ -10350,6 +10364,7 @@ def _a0708_nominal_observation(project, row, invocation):
                 observations[key] = {'value': _finite_number(value), 'unit': definition.get('unit'),
                                      'method': definition, 'analysis': bindings['analysis']}
     else:
+        template = _a07_declared_deck(project, row, name, config, invocation) or template
         ready, reason, required = sim._validate_deck(netlist, template, config)
         if ready != 'PASS':
             raise MetricRefusal('A07_NATIVE_DECK_INVALID', reason)
