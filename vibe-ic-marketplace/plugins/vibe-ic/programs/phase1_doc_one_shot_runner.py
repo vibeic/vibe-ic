@@ -14256,6 +14256,75 @@ def _v466_apply_block_layer_multiplicity(blocks, extracted) -> None:
             blk["multiplicity_evidence"] = proof
 
 
+TYPED_BLOCK_MULTIPLICITY_KEY = "analog_block_multiplicity"
+
+
+def _typed_block_multiplicity(project: Path) -> Dict[str, Dict[str, Any]]:
+    """The block counts stated as a structured step-0.5ic answer, by block.
+
+    Empty when unanswered, which keeps the document-derived confidence. Every
+    count needs its answer provenance: an uncited number is not an answer.
+    """
+    import _submission_template as st
+    import _tapeout_declaration as td
+
+    path = project / st.DESIGN_ANSWERS_REL
+    if not path.is_file():
+        return {}
+    doc, error = td.load(path)
+    if error or not isinstance(doc, dict):
+        raise ValueError("L5_BLOCK_MULTIPLICITY_INVALID: structured answers must be a JSON object")
+    value = td.answer(doc, TYPED_BLOCK_MULTIPLICITY_KEY)
+    if not td.is_answered(value):
+        return {}
+    if (not isinstance(value, dict) or not value
+            or any(not isinstance(name, str) or not name or type(count) is not int or count < 1
+                   for name, count in value.items())):
+        raise ValueError("L5_BLOCK_MULTIPLICITY_INVALID: expected a mapping of block "
+                         f"name to a positive integer count, got {value!r}")
+    provenance = (doc.get(td.PROVENANCE_KEY) or {}).get(TYPED_BLOCK_MULTIPLICITY_KEY)
+    citation = provenance.get("citation") if isinstance(provenance, dict) else None
+    if not isinstance(citation, str) or not citation.strip():
+        raise ValueError("L5_BLOCK_MULTIPLICITY_PROVENANCE_ABSENT: "
+                         f"answer_provenance.{TYPED_BLOCK_MULTIPLICITY_KEY}.citation is required")
+    return {name: {"count": count, "citation": citation} for name, count in value.items()}
+
+
+def _typed_block_multiplicity_refusal(typed: Dict[str, Dict[str, Any]],
+                                      extracted: Dict[str, str]) -> Optional[str]:
+    """Name a typed count the design's own Block headings contradict."""
+    for name, answer in typed.items():
+        pattern = _ANALOG_KEYWORDS.get(name)
+        if pattern is None:
+            return f"L5_BLOCK_MULTIPLICITY_UNKNOWN_BLOCK: {name}"
+        stated = _v466_block_layer_multiplicity(extracted, pattern)
+        if stated is not None and stated != answer["count"]:
+            return (f"L5_BLOCK_MULTIPLICITY_CONTRADICTION: {name}: typed answer "
+                    f"{answer['count']}, Block heading {stated}")
+    return None
+
+
+def _apply_typed_block_multiplicity(blocks: List[Dict[str, Any]],
+                                    typed: Dict[str, Dict[str, Any]]) -> None:
+    """A typed count the document does not contradict is an explicit count."""
+    by_name = {blk.get("name"): blk for blk in blocks if isinstance(blk, dict)}
+    for name, answer in typed.items():
+        blk = by_name.get(name)
+        if blk is None:
+            raise ValueError(f"L5_BLOCK_MULTIPLICITY_UNKNOWN_BLOCK: {name}")
+        count = answer["count"]
+        if blk.get("count") not in (None, count):
+            raise ValueError(f"L5_BLOCK_MULTIPLICITY_CONTRADICTION: {name}: typed answer "
+                             f"{count}, document {blk['count']}")
+        prior = blk.get("multiplicity_evidence")
+        blk["count"] = blk["multiplicity"] = count
+        blk["multiplicity_evidence"] = {
+            **(prior if isinstance(prior, dict) else {}),
+            "count": count, "low_confidence": False,
+            "typed_answer": {"answer": f"answers.{TYPED_BLOCK_MULTIPLICITY_KEY}.{name}",
+                             "citation": answer["citation"]}}
+
+
 def _v466_apply_spurious_block_guard(blocks, extracted, ic_name):
     """ORGANIC #466 R3 (field-agent second counter-evidence) —
     DETERMINISTIC emitter-side guard. When L5 explicitly enumerates the
@@ -37420,6 +37489,7 @@ def gen_l5_adi_spec(project: Path,
     # real spec table is never mistaken for a product-name hallucination.
     _v466_spurious = _v466_apply_spurious_block_guard(
         blocks, extracted, ic_name)
+    _apply_typed_block_multiplicity(blocks, _typed_block_multiplicity(project))
     # Strip the #466 private bookkeeping keys before serialisation.
     _v466_strip_internal_fields(blocks)
     _v466_strip_internal_fields(_v466_spurious)
@@ -67571,6 +67641,7 @@ def main() -> int:
     # gate reads as "no hardware in scope" and passes. Refuse before it runs.
     try:
         _l13_operator_contract(project)
+        typed_block_multiplicity = _typed_block_multiplicity(project)
     except ValueError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
@@ -67580,6 +67651,11 @@ def main() -> int:
     extracted = extract_text_pipeline(project, force=not args.skip_text_extract)
     print(f"      extracted {len(extracted)} document(s) "
           f"→ {project / 'extracted_docs'}/")
+    block_multiplicity_refusal = _typed_block_multiplicity_refusal(
+        typed_block_multiplicity, extracted)
+    if block_multiplicity_refusal:
+        print(f"ERROR: {block_multiplicity_refusal}", file=sys.stderr)
+        return 2
     # v0.1.90 — for ORGANIC-20260530-phase1-large-doc-hang. Bound the
     # per-document text size handed to the L-doc generators so a
     # pathologically large extraction (e.g. the 7.8 MB Bluetooth Core
