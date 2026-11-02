@@ -334,6 +334,7 @@ def classify_dut(project: Path, ic_class: str
     if spec:
         return ({"kind": "parallel_arith", "top": top, "cr": cr,
                  "spec": spec, "width": spec['result_width'], "ports": ports}, None)
+    reference_refusal = _why if ic_class in _aog._ARITH_CLASSES else None
 
     # serial-streaming multiply/datapath: one parallel operand + a 1-bit serial
     # operand + a 1-bit serial output. This is the shape arith_oracle DEFERs on.
@@ -368,15 +369,20 @@ def classify_dut(project: Path, ic_class: str
     op = _detect_stream_operator(project, ic_class)
     if (len(parallel_ins) >= 1 and len(serial_ins) >= 1
             and len(serial_outs) >= 1 and op):
-        return ({"kind": "serial_stream", "top": top, "cr": cr,
-                 "operator": op, "width": width, "ports": ports,
-                 "x_port": parallel_ins[0]["name"],
-                 "y_port": serial_ins[0]["name"],
-                 "p_port": serial_outs[0]["name"]}, None)
+        function, reference_refusal = _aog.declared_function(project)
+        if function:
+            reference_refusal = _aog.serial_function_role_refusal(
+                function, parallel_ins[0]['name'], serial_ins[0]['name'], serial_outs[0]['name'])
+            if not reference_refusal:
+                return ({"kind": "serial_stream", "top": top, "cr": cr,
+                         "operator": op, "width": width, "ports": ports,
+                         "x_port": parallel_ins[0]["name"],
+                         "y_port": serial_ins[0]["name"],
+                         "p_port": serial_outs[0]["name"]}, None)
 
     return ({"kind": "generic", "top": top, "cr": cr, "ports": ports,
              "width": width,
-             **({'reference_refusal': _why} if ic_class in _aog._ARITH_CLASSES else {})}, None)
+             **({'reference_refusal': reference_refusal} if reference_refusal else {})}, None)
 
 
 # ── #140: register-map / control-status structural guards (chip-AGNOSTIC) ────

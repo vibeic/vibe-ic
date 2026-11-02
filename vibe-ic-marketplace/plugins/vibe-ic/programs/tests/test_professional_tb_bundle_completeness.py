@@ -51,9 +51,6 @@ snapshot's bundle certify the OUTER project — pinned by
 TEST FAMILIES
 =============
   test_DEFECT_*  fail on origin/main (the check does not exist there).
-  test_GUARD_*   pass on BOTH trees — the pre-existing verdicts, and the
-                 "no declaration -> nothing owed" scoping that keeps this
-                 from manufacturing red.
   test_WIRING_*  DRIVE the real `flow_compliance_check` gate runner so the
                  rc -> step-status mapping is EXECUTED, not asserted from
                  source text.
@@ -309,26 +306,20 @@ def test_GUARD_complete_bundle_still_passes(tmp_path):
     assert G.main([str(tmp_path)]) == 0
 
 
-@pytest.mark.parametrize("rec", [
-    {"status": "SKIP", "reason": "class not derivable"},
-    {"status": "PASS", "dut_kind": "generic", "ran_cocotb": False,
-     "functional_mismatch": False},                      # no out_dir/files
-    {"status": "PASS", "out_dir": "", "files": [],
-     "functional_mismatch": False},                      # empty declaration
+@pytest.mark.parametrize("rec,verdict,rc", [
+    pytest.param({"status": "SKIP", "reason": "class not derivable"},
+                 "NOT_CHECKED", 2, id="rec0"),
+    pytest.param({"status": "PASS", "dut_kind": "generic", "ran_cocotb": False,
+                  "functional_mismatch": False}, "PASS", 0, id="rec1"),
+    pytest.param({"status": "PASS", "out_dir": "", "files": [],
+                  "functional_mismatch": False}, "PASS", 0, id="rec2"),
 ])
-def test_GUARD_no_declaration_means_nothing_owed(tmp_path, rec):
-    """The scoping that keeps this from manufacturing red.
-
-    `step_professional_tb_gen` SKIPs for a class with no derivable interface,
-    and older reports carry no `files`. A producer that declared nothing must
-    not be failed for not delivering it — this is the property that made a
-    `required_outputs` entry the wrong instrument.
-    """
+def test_GUARD_no_declaration_means_nothing_owed(tmp_path, rec, verdict, rc):
     _report(tmp_path, rec)
     res = G.check(tmp_path)
-    assert res["verdict"] == "PASS", json.dumps(res, indent=2)
+    assert res["verdict"] == verdict, json.dumps(res, indent=2)
     assert "bundle" not in res
-    assert G.main([str(tmp_path)]) == 0
+    assert G.main([str(tmp_path)]) == rc
 
 
 def test_GUARD_corrupt_report_is_still_io_error(tmp_path):

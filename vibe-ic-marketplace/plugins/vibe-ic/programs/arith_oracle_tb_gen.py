@@ -273,12 +273,21 @@ def declared_function(project: Path) -> Tuple[Optional[dict], str]:
     operands = function.get('operands') if isinstance(function, dict) else None
     names = [function.get('result'), *operands] if isinstance(operands, list) else []
     if (not isinstance(function, dict) or function.keys() != _FUNCTION_FIELDS
-            or len(operands or []) != 2 or operands[0] == operands[1]
+            or not isinstance(operands, list) or len(operands) != 2 or operands[0] == operands[1]
             or not all(isinstance(name, str) and name.isidentifier() for name in names)
-            or function['operator'] not in _OPERATORS
+            or not isinstance(function['operator'], str) or function['operator'] not in _OPERATORS
             or type(function['modulus_bits']) is not int or function['modulus_bits'] < 1):
         return None, 'declared function field is malformed — defer to testbench-gen'
     return function, ''
+
+
+def serial_function_role_refusal(function: dict, parallel: str, serial_in: str,
+                                 serial_out: str) -> Optional[str]:
+    """Check a validated function against the selected serial port roles."""
+    if (function['result'] != serial_out
+            or set(function['operands']) != {parallel, serial_in}):
+        return 'declared function does not name the serial and parallel data ports — defer'
+    return None
 
 
 def _declared_encoding(project: Path) -> Optional[bool]:
@@ -878,8 +887,7 @@ def extract_serial_arith_spec(
     function, why = declared_function(project)
     if not function:
         return None, why
-    res_name, operator = function['result'], function['operator']
-    lhs_name, rhs_name = function['operands']
+    operator = function['operator']
     encoding = _declared_encoding(project)
     if encoding is None:
         return None, 'operand signedness is undeclared — defer to testbench-gen'
@@ -939,11 +947,11 @@ def extract_serial_arith_spec(
     # Operand→role: golden = compute_golden(op, lhs_val, rhs_val). Map by the
     # spec-named operands when available so a NON-commutative op (- << >>) drives
     # the right side serially; commutative ops are order-invariant anyway.
-    parallel_is_lhs = True
-    if {serial_in["name"], parallel["name"], serial_out["name"]} != {lhs_name, rhs_name, res_name}:
-        return None, 'declared function does not name the serial and parallel data ports — defer'
-    if serial_in["name"] == lhs_name:
-        parallel_is_lhs = False
+    refusal = serial_function_role_refusal(
+        function, parallel['name'], serial_in['name'], serial_out['name'])
+    if refusal:
+        return None, refusal
+    parallel_is_lhs = function['operands'][0] == parallel['name']
     other_inputs = [p["name"] for p in data_in
                     if p["name"] not in (parallel["name"], serial_in["name"])]
     # reset polarity: prefer the declared value, else infer from an active-low
