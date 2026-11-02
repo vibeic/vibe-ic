@@ -49473,7 +49473,6 @@ def step_pad_ring_final_evidence(project: Path, top: str,
         records = []
         findings.append(f"PADRING_REPORT_UNREADABLE: {exc}")
         _pr = None
-        producer = {}
     if not records:
         findings.append("PADRING_EXPECTED_POPULATION_EMPTY")
 
@@ -49530,7 +49529,7 @@ def step_pad_ring_final_evidence(project: Path, top: str,
                        for sid in ("17", "21"))
     if state_path is not None:
         native_pad_evidence = native.padring(
-            project, state_path, producer, container=container)
+            project, state_path, container=container)
         findings.extend(native_pad_evidence["failures"])
         not_measured.extend(native_pad_evidence["not_measured"])
         routing_consumer = "OpenROAD final-State ODB pad placement"
