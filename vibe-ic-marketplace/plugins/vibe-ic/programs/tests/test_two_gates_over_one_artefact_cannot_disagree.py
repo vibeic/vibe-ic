@@ -360,7 +360,10 @@ def _project(root: Path, design_content, derived_content=None,
         if hardmacro:
             hm = adir / "hardmacro" / b
             hm.mkdir(parents=True, exist_ok=True)
-            lib = _LIB.format(b=b)
+            # Preserve the tier comparisons with complete native loader inputs.
+            from test_analog_liberty_nonzero_delay_check import _native_measurement
+            _native_measurement(root, b, ("nmos",), 0.0031e-6)
+            lib = _LIB.format(b=b).replace("{", '{ leakage_power_unit : "1uW";', 1)
             while len(lib.encode()) < 260:      # clear the A8 200B floor
                 lib += "/* synthetic fixture padding */\n"
             (hm / f"{b}.lib").write_text(lib)
