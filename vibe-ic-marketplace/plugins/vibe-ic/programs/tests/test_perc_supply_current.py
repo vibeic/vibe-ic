@@ -28,7 +28,7 @@ def current_project(tmp_path, power=0.002, *, em=True, width=True, rating=None, 
     report.parent.mkdir(parents=True)
     report.write_text(f'Net : upper\nTotal power : {power} W\nSupply voltage : 1.00 V\n')
     d = project / 'phase3/stage3/pnr/chip_top.def'
-    d.write_text(d.read_text() + 'PINS 1 ;\n- y + NET out + DIRECTION OUTPUT ;\nEND PINS\n')
+    d.write_text(d.read_text() + 'PINS 2 ;\n- clk + NET clk + DIRECTION INPUT ;\n- y + NET out + DIRECTION OUTPUT ;\nEND PINS\n')
     return project, pdk
 
 
@@ -87,7 +87,7 @@ def test_low_margin_adds_output_current(tmp_path, load, result, current):
     assert row['result'] == result
     for item in row['domains'][0]['comparisons']:
         assert item['per_pad_current_A'] == pytest.approx(current)
-        assert item['switching']['output_load_pf'] == {'y': load}
+        assert item['switching']['output_load_pf'] == pytest.approx({'y': load})
 
 
 def test_single_native_dc_limit_also_applies_to_declared_temperature(tmp_path):
@@ -135,3 +135,62 @@ def test_unreadable_rated_current_unit_cannot_fall_back_to_em(tmp_path):
     lib = p / 'input/pdk/libs.ref/neutral_io/lib/io.lib'
     lib.write_text(lib.read_text().replace('current_unit : "1A";', ''))
     assert supply(p, pdk)['result'] == 'NOT_MEASURED'
+
+
+@pytest.mark.parametrize('pin_kind', ['pin', 'pg_pin'])
+def test_supply_bond_rating_precedes_looser_em_limit(tmp_path, pin_kind):
+    p, pdk = current_project(tmp_path, power=0.002, rating=0.001)
+    lib = p / 'input/pdk/libs.ref/neutral_io/lib/io.lib'
+    lib.write_text(lib.read_text().replace(' pin (', f' {pin_kind} ('))
+    row = supply(p, pdk)
+    assert row['result'] == 'FAIL'
+    for item in row['domains'][0]['comparisons']:
+        assert item['limit_A'] == pytest.approx(0.001)
+        assert item['per_pad_current_A'] == pytest.approx(0.002)
+        assert item['limit_basis'] == 'IO library rated current'
+
+
+def test_conditional_sdc_load_override_uses_native_final_load(tmp_path):
+    p, pdk = current_project(tmp_path, power=0.006)
+    (p / 'phase3/stage3/pnr/constraint.sdc').write_text(
+        'create_clock -period 1000 [get_ports clk]\n'
+        'set_load 1000 [all_outputs]\n'
+        'if {1} {set_load 5000 [all_outputs]}\n')
+    row = supply(p, pdk)
+    assert row['result'] == 'FAIL'
+    for item in row['domains'][0]['comparisons']:
+        assert item['per_pad_current_A'] == pytest.approx(0.011)
+        assert item['switching']['output_load_pf'] == pytest.approx({'y': 5000})
+
+
+def test_native_final_load_can_replace_a_larger_prior_load(tmp_path):
+    p, pdk = current_project(tmp_path, power=0.006)
+    (p / 'phase3/stage3/pnr/constraint.sdc').write_text(
+        'create_clock -period 1000 [get_ports clk]\n'
+        'set_load 5000 [all_outputs]\n'
+        'set cap 1000\nforeach port [all_outputs] {set_load $cap $port}\n')
+    row = supply(p, pdk)
+    assert row['result'] == 'PASS'
+    for item in row['domains'][0]['comparisons']:
+        assert item['per_pad_current_A'] == pytest.approx(0.007)
+        assert item['switching']['output_load_pf'] == pytest.approx({'y': 1000})
+        assert 'OpenSTA' in item['switching']['native_log']
+
+
+def test_native_unresolved_internal_context_never_passes(tmp_path):
+    p, pdk = current_project(tmp_path, power=0.006)
+    (p / 'phase3/stage3/pnr/constraint.sdc').write_text(
+        'create_clock -period 1000 [get_ports clk]\n'
+        'set_load 1000 [all_outputs]\n'
+        'if {[llength [get_cells -quiet hidden]]} {set_load 5000 [all_outputs]}\n')
+    assert supply(p, pdk)['result'] == 'NOT_MEASURED'
+    assert C.audit(p)['verdict'] != 'PASS'
+
+
+def test_native_tool_absent_never_passes(tmp_path, monkeypatch):
+    p, pdk = current_project(tmp_path, power=0.006)
+    (p / 'phase3/stage3/pnr/constraint.sdc').write_text(
+        'create_clock -period 1000 [get_ports clk]\nset_load 1000 [all_outputs]\n')
+    monkeypatch.setenv('PATH', '')
+    assert supply(p, pdk)['result'] == 'NOT_MEASURED'
+    assert C.audit(p)['verdict'] != 'PASS'

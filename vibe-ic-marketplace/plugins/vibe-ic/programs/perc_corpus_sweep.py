@@ -293,7 +293,8 @@ def perc_io_evidence(design_dir: Path, pdk_dir: Optional[str]) -> Dict[str, Any]
             scale = (float(unit[1]) * {'A': 1, 'mA': 1e-3, 'uA': 1e-6, 'nA': 1e-9}[unit[2]]
                      if unit else None)
             for master, body in _liberty_blocks(text, 'cell'):
-                for pin, attrs in _liberty_blocks(body, 'pin'):
+                for pin, attrs in (_liberty_blocks(body, 'pin') +
+                                   _liberty_blocks(body, 'pg_pin')):
                     if re.search(r'\bmax_current\s*:', attrs):
                         value = _pr._liberty_number(attrs, 'max_current')
                         ratings.setdefault(master, {}).setdefault(pin, []).append({
@@ -380,50 +381,82 @@ def perc_io_evidence(design_dir: Path, pdk_dir: Optional[str]) -> Dict[str, Any]
 
 
 def _supply_switching_current(project: Path, voltage: float, def_text: str) -> dict:
-    """Read literal SDC loads on every output; unsupported selectors refuse."""
-    import fnmatch
+    """Evaluate port SDC in OpenSTA; unresolved design context cannot pass."""
+    import shutil
+    import subprocess
+    import tempfile
     from lvs_def_port_seed import parse_def_pins
-    from sdc_constraints import create_clocks_in_text
-    from sdc_validator_check import _strip_comments
-    sdc = _p._pl.pnr_dir(project) / 'constraint.sdc'
-    text = _strip_comments(sdc.read_text())
-    clocks = create_clocks_in_text(text)
-    if len(clocks) != 1 or not clocks[0]['period_ns'] or clocks[0]['period_ns'] <= 0:
-        raise ValueError('output switching requires one readable clock period')
+    from _native_postroute_timing import _q
+
+    sdc = (_p._pl.pnr_dir(project) / 'constraint.sdc').resolve(strict=True)
+    sdc_hash = hashlib.sha256(sdc.read_bytes()).hexdigest()
     pins = parse_def_pins(def_text)
-    if any(not pin.direction for pin in pins):
+    if any(p.direction not in ('INPUT', 'OUTPUT', 'INOUT') for p in pins):
         raise ValueError('output port direction unreadable')
     outputs = {p.name for p in pins if p.direction in ('OUTPUT', 'INOUT')}
-    if not outputs:
+    if not outputs or len({p.name for p in pins}) != len(pins):
         raise ValueError('output port population unreadable')
-    loads = {}
-    # Clock and port syntax use the existing readers. There is no existing
-    # set_load reader returning capacitance per output port.
-    for line in text.splitlines():
-        if re.match(r'\s*set_load\b', line):
-            match = re.fullmatch(r'\s*set_load\s+([0-9.eE+\-]+)\s+\[(all_outputs|get_ports\s+[^;]+)\]\s*', line)
-            if match is None:
-                raise ValueError('unreadable output set_load selector/value')
-            load = float(match[1])
-            if not math.isfinite(load) or load < 0:
-                raise ValueError('invalid output set_load')
-            selector = match[2]
-            if selector == 'all_outputs':
-                ports = outputs
-            else:
-                names = selector[len('get_ports'):].strip().strip('{}').split()
-                if not names or any(c in selector for c in '$\\;'):
-                    raise ValueError('unreadable output load port list')
-                ports = {p for p in outputs if any(fnmatch.fnmatchcase(p, name) for name in names)}
-            for port in ports:
-                loads[port] = max(loads.get(port, 0), load)
-    if set(loads) != outputs:
-        raise ValueError('output set_load absent for one or more outputs')
-    if re.search(r'\b(set_units|create_generated_clock)\b', text):
-        raise ValueError('unsupported SDC unit or generated-clock context')
-    current = sum(loads.values()) * 1e-12 * voltage / (clocks[0]['period_ns'] * 1e-9)
-    return {'current_A': current, 'source': str(sdc), 'output_load_pf': loads,
-            'period_ns': clocks[0]['period_ns']}
+    if any(re.search(r'\s|\\', p.name) for p in pins):
+        raise ValueError('unreadable DEF port identifier')
+    tool = shutil.which('sta')
+    if not tool:
+        raise ValueError('OpenSTA unavailable for final output load measurement')
+    # Only the DEF port interface is modeled. Internal/library selectors must
+    # refuse even with -quiet, rather than change a conditional's truth value.
+    with tempfile.TemporaryDirectory(prefix='perc-supply-sta-') as tmp:
+        root = Path(tmp)
+        netlist = root / 'ports.v'
+        netlist.write_text('module perc_supply (' + ', '.join(
+            p.direction.lower() + ' \\' + p.name + ' ' for p in pins) + '); endmodule\n')
+        script = root / 'loads.tcl'
+        script.write_text('\n'.join([
+            f'read_verilog {_q(netlist)}', 'link_design perc_supply',
+            'set_cmd_units -time ns -capacitance pF',
+            'proc perc_context {args} {error "PERC unresolved internal/library SDC context"}',
+            'foreach cmd {get_cells get_pins get_nets get_lib_cells get_lib_pins get_libs all_registers all_connected current_design} {',
+            '  if {[llength [info commands sta::$cmd]]} {trace add execution sta::$cmd enter perc_context}', '}',
+            'array set perc_loaded {}',
+            'proc perc_touch {cmd op} {',
+            '  lassign $cmd name port rf mm value',
+            '  if {$mm ne "min"} {',
+            '    foreach edge [expr {$rf eq "rise_fall" ? {rise fall} : [list $rf]}] {',
+            '      set ::perc_loaded($port,$edge) 1', '    }', '  }', '}',
+            'trace add execution sta::set_port_ext_pin_cap enter perc_touch',
+            f'read_sdc {_q(sdc)}',
+            'set clocks [all_clocks]',
+            'if {[llength $clocks] != 1} {error "PERC requires one clock"}',
+            'puts "PERC_PERIOD [expr {[get_property [lindex $clocks 0] period] * [sta::unit_scale time]}]"',
+            'foreach port [all_outputs] {',
+            '  if {![info exists perc_loaded($port,rise)] || ![info exists perc_loaded($port,fall)]} {',
+            '    error "PERC output load not explicitly determined"', '  }',
+            '  set cap [expr {[sta::port_ext_pin_cap $port max] + [sta::port_ext_wire_cap $port max]}]',
+            '  puts "PERC_LOAD [binary encode hex [get_full_name $port]] $cap"', '}',
+            'puts PERC_LOAD_DONE', 'exit', '']))
+        try:
+            run = subprocess.run([tool, '-no_init', '-exit', str(script)], cwd=sdc.parent,
+                                 capture_output=True, text=True, timeout=60)
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise ValueError(f'OpenSTA output load measurement failed: {exc}') from exc
+    if hashlib.sha256(sdc.read_bytes()).hexdigest() != sdc_hash:
+        raise ValueError('SDC changed during native output load measurement')
+    log = run.stdout + '\n' + run.stderr
+    if run.returncode or re.search(r'(?im)^\s*(?:Error|Warning):', log) or '\nPERC_LOAD_DONE\n' not in log:
+        raise ValueError('OpenSTA could not determine final output load: ' + log[-2000:])
+    periods = re.findall(r'^PERC_PERIOD (\S+)$', log, re.M)
+    loads = {bytes.fromhex(name).decode(): float(cap)
+             for name, cap in re.findall(r'^PERC_LOAD (\S+) (\S+)$', log, re.M)}
+    if len(periods) != 1 or set(loads) != outputs:
+        raise ValueError('OpenSTA output load or clock population incomplete')
+    period = float(periods[0])
+    if not math.isfinite(period) or period <= 0 or any(
+            not math.isfinite(v) or v < 0 for v in loads.values()):
+        raise ValueError('OpenSTA output load or clock value invalid')
+    return {'current_A': sum(loads.values()) * voltage / period,
+            'source': str(sdc), 'sdc_sha256': sdc_hash,
+            'output_load_pf': {p: cap / 1e-12 for p, cap in loads.items()},
+            'period_ns': period / 1e-9, 'tool': tool, 'native_log': log,
+            'context': 'DEF port interface; internal/library queries refuse',
+            'unit_basis': 'OpenSTA command units ns/pF; final values queried in SI'}
 
 
 def io_supply_pad_sufficiency(components, def_text: str, library) -> Dict[str, Any]:
